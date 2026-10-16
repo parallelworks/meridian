@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [canary]
+
+permissions:
+  contents: read
+
+# A newer push to a PR supersedes the run before it. Runs on canary are never
+# canceled, so that every merged commit keeps its own result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/canary' }}
+
+# Naming the shell adds pipefail, which the default shell leaves off.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "**/go.sum"
+      - name: Verify go.mod is tidy
+        run: make tidy-check
+      - name: Lint
+        run: make lint
+      - name: Check for known vulnerabilities
+        run: make vulncheck
+
+  # Audits the workflows themselves: unpinned actions, script injection,
+  # over-broad tokens, leaked credentials. Any finding fails the job.
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          # Fail the job on a finding rather than upload it to code scanning.
+          advanced-security: false
+
+  test:
+    runs-on: ubuntu-latest
+    # go test's own 10-minute timeout fires first and prints the goroutines.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "**/go.sum"
+      - name: Test
+        env:
+          # go.mod and the Makefile also set fips140=only; the environment makes
+          # the mode explicit so that a future edit cannot silently drop it.
+          GODEBUG: fips140=only
+        run: make test
+      - name: Build
+        run: make build
