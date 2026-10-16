@@ -120,4 +120,4 @@ A job that names no image runs in `ghcr.io/parallelworks/meridian-base`.
 
 ## License
 
-AGPL-3.0. Contributions require a contributor license agreement.
+[AGPL-3.0](LICENSE). Contributions require a contributor license agreement.
