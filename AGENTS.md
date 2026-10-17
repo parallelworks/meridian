@@ -5,8 +5,9 @@
   (`feat(compiler): ...`, `fix(ssh): ...`, `docs: ...`). PRs are squash-merged, so the
   title becomes the commit.
 - The workflow format is the contract. A change to it is an addition; a change to what
-  an existing workflow means needs a new `format:` number. Everything behind the format
-  is free to be redesigned.
+  an existing workflow means needs a new `format:` number, which comes with a
+  translation from the format before it ([docs/design.md](docs/design.md)). Everything
+  behind the format is free to be redesigned.
 - Code that comes from ACTIVATE is a starting point, not the design. Keep it only where
   it is still the best way to do the job.
 - Prefer the standard library. A new dependency needs a reason in its PR.
