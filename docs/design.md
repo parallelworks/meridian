@@ -1,0 +1,626 @@
+# Meridian design
+
+This document describes how Meridian turns a workflow file into jobs that run
+and report back. The workflow format itself is defined by its JSON Schema and
+its conformance suite; this document explains what Meridian does with it. A
+pull request that makes any part of it wrong updates it.
+
+## Terms
+
+| Term | Meaning |
+| --- | --- |
+| Workflow | A YAML file in the workflow format. |
+| Run | One execution of a workflow with a set of inputs. |
+| Job | Steps that run in order, in one place. A matrix job has one instance per combination of its matrix values. |
+| Step | A command (`run:`), or another workflow or a built-in action (`uses:`). |
+| Attempt | One try at running a job instance. Most job instances have one. |
+| Execution group | A named source of capacity: one backend, its settings and the resources it offers. |
+| Backend | How a group starts work: `local`, `ssh`, `kubernetes`, `slurm` or `pbs`. |
+| Plan | The compiled form of a run: typed, checked and stored with the run. |
+| Coordinator | The part of Meridian that schedules jobs, places them on groups and hears from workers. |
+| Worker | The process that runs one attempt's steps and reports on them: the `meridian` binary itself. |
+
+Meridian is not a hosted service, and has no web UI or user accounts; a
+platform that embeds Meridian provides those. Running GitHub Actions workflow
+files unchanged is not a goal: the format is modeled on GitHub Actions but is
+its own.
+
+## Overview
+
+```text
+ workflow.yaml + inputs
+          │
+          ▼
+       compile ◀──── resolvers: inputs, secrets, groups, sources, …
+          │
+          ▼
+        plan ───────▶ store (hopper, on SQLite or Postgres)
+                            ▲
+                            │
+                       coordinator ──── backend ────▶ starts a worker
+                            ▲                              │
+                            └──────── worker API ◀─────────┘
+                                                    runs the steps
+```
+
+Meridian is a set of Go packages:
+
+| Package | Does |
+| --- | --- |
+| `format` | Loads workflow files and validates them against the schema of their format. |
+| `expr` | Parses, checks and evaluates `${{ }}` expressions. |
+| `compile` | Turns a workflow and its inputs into a plan, through resolver interfaces. |
+| `plan` | The plan's types and encoding. |
+| `coordinator` | Stores runs, schedules and places jobs, and serves the worker API. |
+| `worker` | Runs one attempt of a job and reports on it. |
+| `backend/…` | Start workers: `local`, `ssh`, `kubernetes`, `slurm`, `pbs`. |
+| `runtime/…` | Drive container runtimes: Podman, Docker, Apptainer, Apple's `container`. |
+| `cmd/meridian` | The command. |
+
+The `meridian` command wires the packages together with local resolvers, a
+SQLite store and a coordinator in its own process. A platform wires them
+with its own resolvers, Postgres and as many coordinator replicas as it
+needs. Nothing in the packages knows which of the two it is running in.
+
+## The workflow format
+
+The format is defined by a JSON Schema (2020-12) per format number, kept in
+this repository. Format 1 is the format Parallel Works ACTIVATE runs.
+
+- **Format numbers.** A workflow may set a top-level integer `format:`.
+  Without it, a workflow is format 1. A new number is introduced only for a
+  change to what an existing workflow means, never for an addition, and every
+  release runs every earlier format. Breaking changes are collected into
+  rare new numbers rather than given one each. Tools that create a workflow,
+  such as `meridian init` and editor templates, write the latest number into
+  it.
+- **Translation.** Each format after the first is defined by how it differs
+  from the one before, and comes with a translation from it. The compiler
+  translates an older workflow into the current format right after
+  validating it, so everything after that, from the rest of the compiler to
+  the plan, coordinator and worker, sees one format. A feature a newer
+  format removes survives in older workflows as its translation: if a later
+  format drops `ssh:`, a format 1 job's `ssh:` becomes an inline execution
+  group. Translations chain, so a new format adds one, from the format
+  before it.
+- **Migration.** `meridian migrate` applies the same translations to a
+  workflow file, keeping its comments, and says what it can't change in the
+  file, such as an execution group to configure.
+- **Deprecations.** A key can be deprecated within a format. It keeps its
+  meaning, the schema marks it `deprecated`, so editors flag it, and the
+  compiler warns. Only a new format number removes it.
+- **Additions.** Format 1 gains keys without a new number, because adding a
+  key changes no workflow that was valid before:
+  - `format:` itself;
+  - workflow metadata (below);
+  - `runs-on: { execution-group: … }` and `resources:`, which name a group and
+    what a job needs from it;
+  - `needs.*` in `strategy:` and `runs-on:`, for jobs sized from what earlier
+    jobs found.
+- **Metadata.** A workflow can carry `name`, `description`, `icon` and
+  `thumbnail`. `description` is a string or `{file: <path>}`; `icon` and
+  `thumbnail` are paths. Paths are relative to the workflow file and may not
+  leave its directory tree, so a workflow in a Git repository is complete and
+  can't read files outside it.
+- **Strictness.** A workflow that needs something the environment can't
+  provide fails to compile: an input type that names platform resources, a
+  `uses:` source with no resolver, sessions without a session provider. The
+  error names the key and what would provide it. There is no flag to run the
+  workflow anyway.
+
+### Conformance
+
+The conformance suite pins the format's meaning. Each case is a workflow and
+its inputs with either the plan it compiles to or the errors it produces, and
+some cases also run, with the outputs and outcomes they must end with. Cases
+come from ACTIVATE's own tests and from public workflows, and cover expressions,
+matrix expansion, `needs`, defaults, inputs and status functions.
+
+Behavior that workflows rely on is kept, even where it is surprising. Behavior
+no workflow could rely on, such as a crash or a silently wrong result, is
+fixed, and its case records the fix.
+
+## Compiling
+
+The compiler turns a workflow, its inputs and its resolvers into a plan, in
+order:
+
+1. **Load.** Parse the YAML, keeping the source position of every node.
+   Alias expansion and file size are bounded.
+2. **Validate** against the schema of the workflow's format.
+3. **Translate** a workflow in an older format into the current one.
+4. **Resolve** through the resolver interfaces: check input values against
+   their declarations and apply defaults, look up execution groups, and fetch
+   and compile the workflows that `uses:` names, with cycle detection and a
+   depth limit.
+5. **Expand** matrices whose values are known, and link each step's
+   `cleanup:` command to the end of its job.
+6. **Check expressions.** Parse every `${{ }}`, evaluate what is already
+   known, and check every reference that is left: an input, job, step or
+   output that doesn't exist is an error with its position.
+7. **Emit** the plan.
+
+The compiler does no I/O of its own: files, networks and platforms are
+reached only through resolvers. It is deterministic, so the same workflow,
+inputs and resolver answers give a byte-identical plan. That is also what
+lets it build to WebAssembly unchanged (see
+[Editors and web UIs](#editors-and-web-uis)).
+
+Errors and warnings carry a file, line, column, code and message, and are
+reported together rather than one at a time. Warnings, such as a deprecated
+key, don't stop a run. Over HTTP they are RFC 9457 problem
+details with the list in an `errors` member.
+
+Limits on a run's size (jobs, matrix instances, expression depth, `uses:`
+depth) are set by whoever runs Meridian. The defaults are high enough for
+every workflow in the conformance suite.
+
+## The plan
+
+The plan is typed Go, encoded as JSON and stored with the run. A coordinator
+schedules from the plan alone, and a run resumed by another process or
+release continues from the same plan.
+
+It holds:
+
+- **The run:** the workflow's source and revision, its format and metadata,
+  the resolved inputs, workflow `env` and the run's timeout.
+- **Jobs**, one per job instance: dependencies (on all instances of a job,
+  or `:any` of them), matrix values, the job's `if:`, its group and
+  resources, steps, outputs, timeout and `env`.
+- **Steps:** what they run (a command, a workflow, or a built-in action), and
+  their `if:`, `env`, `with:`, shell, working directory, `retry:`, timeout,
+  `ignore-errors`, `early-cancel` and cleanup.
+
+Expressions are stored parsed, not as strings. Anything that can't be known
+until the run is underway, such as a job's `needs`, stays an expression to
+evaluate later.
+
+The plan holds no secret values. It names the secrets a run needs, and each
+attempt receives them when it is claimed.
+
+Plan encodings change the way the format does: by addition. A change that
+can't be an addition gets a new plan version, and releases keep reading the
+old one until no stored run can still use it.
+
+## Expressions
+
+Expressions are evaluated in four places, and what an expression can refer
+to depends on where it is evaluated:
+
+| When | Evaluated by | Adds these contexts | Used by |
+| --- | --- | --- | --- |
+| The run is created | Compiler | `inputs`, organization and user variables, workflow `env`, `sessions` from a session provider | Everything that is known by then |
+| A job's dependencies have finished | Coordinator | `needs`, status functions | Job `if:`, and `strategy:`, `runs-on:` and `resources:` that use `needs` |
+| A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
+| A job ends | Worker | | Job `outputs:` |
+
+`matrix` is known once a job's matrix is expanded: when the run is created,
+or, for a matrix that uses `needs`, when its dependencies have finished.
+
+The status functions are `success()`, `failure()`, `always()` and
+`cancelled()` (also spelled `canceled()`). A job's default `if:` is
+`success()`.
+
+Evaluation is pure: an expression can't read files, start processes or reach
+a network. Depth, time and the size of a result are bounded, so a workflow
+can't make the compiler or coordinator do unbounded work.
+
+Values that come from secrets are masked wherever they appear in logs,
+including inside strings built from them.
+
+## Interfaces
+
+Everything that differs between a laptop and a platform is behind an
+interface, and the compiler, coordinator and worker see only the interface:
+
+| Interface | Provides | Local implementation |
+| --- | --- | --- |
+| Inputs | Input types beyond the built-in ones, and their choices | Built-in types, plus Slurm partitions, accounts and QOS, and PBS queues, read from a group's scheduler |
+| Secrets | Secret values, by name | Environment variables and files the user names |
+| Variables | Organization and user variables | A variables file in Meridian's config directory |
+| Groups | Execution groups | The user's config |
+| Sources | Workflows that `uses:` names | Git, through the `git` command |
+| Actions | Built-in actions | `parallelworks/checkout`, and those that need no platform |
+| Sessions | Interactive sessions a workflow serves | None |
+| Logs | Storing and reading step logs | Files in Meridian's state directory |
+| Events | Run, job and step events as they happen | The command's progress display |
+
+A resolver may be missing. Then the workflow features that need it fail to
+compile, with an error saying which interface was missing.
+
+## Durable execution
+
+### On hopper
+
+Durable state is [hopper](https://github.com/parallelworks/hopper)'s.
+Meridian keeps no scheduling state of its own, and only adds run records
+that hopper doesn't model, such as the plan, in the same database.
+
+- **A run is a hopper workflow.** One transaction stores the run record and
+  inserts the workflow, its jobs and their edges, so a run is stored before
+  anything executes, and either all of it is stored or none of it is.
+- **Each job instance is a hopper job**, and `needs:` becomes hopper's
+  dependency edges.
+- **Meridian decides what a dependency's outcome means.** Its edges let a
+  dependent run whatever its dependencies' outcomes were. A job ends with
+  Meridian's outcome (success, failure, cancelled or skipped) stored with its
+  outputs, and the coordinator evaluates the dependent's `if:` against it.
+  hopper cancels nothing on Meridian's behalf.
+- **`needs: <job>:any`** waits for any one instance of a matrix job to
+  complete or be skipped. This needs an any-of edge, which hopper doesn't
+  have yet.
+
+### A job's lifecycle
+
+```text
+pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded | failed | cancelled | skipped
+ (needs)              (backend)   (worker)
+```
+
+- **pending:** waiting for its dependencies.
+- **ready:** its dependencies have finished. The coordinator evaluates its
+  `if:`, and a false `if:` skips it here. Otherwise the coordinator evaluates
+  whatever was left for this point, such as a `runs-on:` that uses `needs`,
+  and picks a group.
+- **placing:** the backend is starting a worker: a scheduler job waiting in
+  a queue, a pod being scheduled, a process starting over SSH. No user code
+  runs yet, and the time this takes doesn't count against any lease.
+- **running:** a worker has claimed the attempt and holds its lease.
+- **The end:** the worker reports the outcome, or the coordinator records
+  one when the worker is lost or the job is cancelled.
+
+### Failures and retries
+
+Meridian never runs a step again on its own. Steps are not assumed
+idempotent.
+
+- **Before the first step starts**, a failure retries automatically, with
+  backoff and a bound: placement failed, the scheduler rejected the job,
+  the image couldn't be pulled, or the worker never connected. None of the
+  workflow's code has run.
+- **The worker records that the first step is starting**, and waits for the
+  coordinator to store that, before it runs it. Whether user code may have
+  run is therefore always known.
+- **Once a step has started**, a lost worker fails the job, with the reason
+  "worker lost". It runs again only if the workflow asks: a step's `retry:`
+  reruns that step on the same worker, and a user can rerun a failed job.
+- **Batch schedulers don't rerun jobs either.** Jobs are submitted with
+  `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
+  behind Meridian's back.
+- **A worker that stops heartbeating is checked with its backend** before it
+  is declared lost: `squeue` or `qstat`, the pod's status, the process on the
+  SSH host. So a worker that is only cut off from the coordinator isn't
+  mistaken for one that is dead.
+
+### Leases and fencing
+
+A running attempt holds a lease of its own, with a token and a fencing
+number that grows with every attempt. The worker renews it with heartbeats,
+through whichever coordinator replica it reaches, and every write it makes
+(step events, logs, outputs, the result) carries the token and number. A
+write from a superseded attempt fails, and the worker that made it stops its
+job. hopper's leases today belong to the client that claimed a job; per-job
+leases are something it doesn't have yet.
+
+When the coordinator comes back after being down, its workers get a grace
+period to reconnect before their attempts count as lost. Jobs keep running
+while Meridian is down, and a laptop waking up or `meridian run` restarting
+must not make them all look lost.
+
+### Cancellation, timeouts and cleanup
+
+- **Cancelling a run is stored first.** Jobs that haven't been placed are
+  cancelled in the store; workers are told to stop and send each running
+  step SIGTERM, then SIGKILL after a grace period; placements in progress
+  are withdrawn (`scancel`, `qdel`, deleting the pod).
+- **Timeouts:** the worker enforces step and job timeouts. The coordinator
+  enforces the run's timeout, and a job's as a backstop.
+- **`early-cancel: any-job-failed`** stops a step when another job of the run
+  fails. The coordinator tells the step's worker.
+- **A step's `cleanup:` command** runs at the end of its job if the step
+  ran, whatever the job's outcome, in reverse order.
+
+### Outputs
+
+A step writes outputs to the file named by `$OUTPUTS`. A job's outputs are
+capped at 1 MB and a run's at 50 MB. When a job is claimed, it receives its
+dependencies' outcomes and outputs with it, rather than reading each one
+back. hopper keeps finalized jobs' outputs only in its history, so this,
+too, needs something hopper doesn't have yet.
+
+### Matrices from earlier results
+
+A matrix whose values come from `needs` can't be expanded until its
+dependencies have finished. It is stored as one hopper job. When that job is
+ready, the coordinator expands the matrix, inserts the instances as a hopper
+workflow of their own, and finishes the job once they have all finished,
+with their combined outcome and outputs. Jobs that need it wait for all its
+instances, as they do for any matrix. The compiler still checks that the
+jobs and outputs the matrix refers to exist; only the values wait.
+
+`fail-fast` and `max-parallel` apply to these matrices as to any other: the
+coordinator cancels the remaining instances when one fails, and places no
+more than `max-parallel` at a time.
+
+## The coordinator
+
+The coordinator is a hopper client whose handlers keep no state between
+calls: each reads the job's state, acts, and stores what it did. Any replica
+can therefore handle any job, and a replica that dies loses nothing.
+
+- **Placement is idempotent.** A placement carries its attempt's ID (in a
+  Slurm or PBS job name, a pod label, a process's arguments), and before
+  placing, the coordinator looks for one that already exists. A coordinator
+  that crashed between submitting and recording never submits twice.
+- **Group capacity and priorities** are enforced at placement.
+- **It serves the worker API** (below).
+
+Locally, `meridian run` coordinates in the foreground, with SQLite, and exits
+when the run ends. If it is interrupted or exits early, it detaches from the
+run rather than cancelling it: workers keep running and hold their reports,
+and `meridian resume` picks the run back up. `meridian cancel` cancels.
+`meridian serve` is a coordinator that keeps running, for example on a
+cluster's login node, and `meridian run` hands its run to one if it finds
+one using the same store.
+
+## Workers
+
+A worker is the `meridian` binary run as `meridian worker`. Each attempt
+records the exact version and SHA-256 digest of the worker that ran it, and
+a worker never upgrades itself.
+
+### Starting a worker
+
+The backend puts the binary where the job runs (copying it over SSH,
+verified by its digest, or using one on a shared filesystem), then starts it
+with three things:
+
+- the coordinator's address;
+- the SHA-256 hash of the coordinator's TLS public key, for a connection that
+  goes over TLS;
+- a bootstrap token: random, single-use and short-lived, valid for this one
+  attempt, and stored only as a hash. It travels in the job's environment or
+  in a file only the user can read, never on a command line, where other
+  users could see it in `ps`.
+
+The worker exchanges the bootstrap token for the attempt's credential when
+it claims the attempt.
+
+### The worker API
+
+The API is HTTP with JSON bodies, versioned in its path (`/v1/`), with
+errors as RFC 9457 problem details. Meridian's coordinator and a platform
+that embeds Meridian serve the same API.
+
+- **Claim:** exchange the bootstrap token for the attempt's credential, and
+  receive the job from the plan, its secrets, and its dependencies' outcomes
+  and outputs.
+- **Heartbeat:** renew the lease.
+- **Control:** a long poll that delivers cancellation and `early-cancel`.
+- **Step events:** a step started, or finished with its exit code.
+- **Logs:** each step's output, uploaded as a stream with byte offsets, so
+  an interrupted upload resumes without duplicating or losing lines.
+- **Complete:** the outcome and the job's outputs.
+
+Every write is idempotent and carries a sequence number, so a worker
+retrying after a dropped connection can't apply a report twice. A write
+from a superseded attempt fails with a `fenced` problem.
+
+The attempt credential is an opaque random token, stored as a hash, that
+expires unless heartbeats renew it. It lets its holder do one thing: report
+on its own attempt. A step that reads it gains nothing that its job couldn't
+already do, so on backends where steps and their worker run as the same
+user, no further separation is needed.
+
+### Connections
+
+Workers only connect out, and nothing listens on a host where jobs run.
+
+| Backend | The worker reaches the coordinator through |
+| --- | --- |
+| `local` | A Unix socket in a directory only the user can open. |
+| `ssh` | A Unix socket on the host that the coordinator forwards over its SSH connection, so no port opens on either side. |
+| `slurm`, `pbs` | TLS 1.3 to the coordinator on the login node, checked against its key's hash. |
+| `kubernetes` | TLS 1.3 to the coordinator's address, checked the same way. |
+
+A coordinator outside a cluster drives Slurm or PBS over SSH to the login
+node. There it starts `meridian relay`, the same binary, which accepts
+workers over TLS and forwards their connections to the coordinator over SSH.
+Compute nodes reach the login node but not the coordinator's machine, and
+the coordinator's machine opens no port.
+
+### Running steps
+
+- **The run directory.** Format 1 gives each run a directory (`PW_JOB_DIR`),
+  which is also where steps run by default. Jobs of a run on the same host,
+  or on a shared filesystem, see the same directory. Containers mount it at
+  the same path, so a path one job writes is valid in the next.
+- **The environment.** Steps get the environment variables format 1 defines,
+  such as `OUTPUTS`, `PW_JOB_DIR` and `PW_JOB_ID`. Variables that only a
+  platform can fill, such as an API key, are set only when one supplies them.
+- **Containers.** In a container group, the worker runs on the host,
+  outside the container. It creates the job's container, runs each step in
+  it with the runtime's `exec`, and removes the container when the job ends.
+- **Logs** are masked on the worker, before they leave the host.
+- **While the coordinator is unreachable**, a worker keeps running its steps,
+  spools logs and events to disk up to a limit, and delivers them in order
+  when it reconnects.
+
+## Backends and isolation
+
+| Backend | Starts a worker | Default isolation |
+| --- | --- | --- |
+| `local` | As a process detached from the terminal | A rootless container |
+| `ssh` | Over SSH, detached so it outlives the connection (`systemd-run --user` where there is one) | A rootless container |
+| `kubernetes` | As a pod, through the Kubernetes API | A rootless container: the pod, run as a non-root user |
+| `slurm`, `pbs` | As a batch job, submitted on the login node | The host |
+
+A group can choose stronger isolation, such as a microVM, or name host
+isolation explicitly. It never gets weaker isolation than it asked for: when
+a group's runtime is missing, its jobs fail with an error that says so.
+
+### Container runtimes
+
+Meridian drives the container runtimes a host already has, through their
+command-line tools:
+
+- **Podman**, rootless.
+- **Docker**, rootless. A rootful Docker daemon is refused.
+- **Apptainer** and **SingularityCE**, which HPC sites often provide.
+  Meridian runs them with `--containall`, so a job sees neither the user's
+  home directory nor their environment, and gets its own PID and IPC
+  namespaces. They share the host's network.
+- **Apple's `container`** on macOS, which runs each container in its own
+  lightweight VM.
+
+A group names its runtime. One that doesn't uses rootless Podman, or
+rootless Docker if the host has no Podman. Apptainer and SingularityCE
+isolate less, so they run a group's jobs only when the group names them;
+that is how a Slurm or PBS group runs jobs that name an image. MicroVMs on
+Linux come from Kata Containers with Cloud Hypervisor, set as the runtime
+under Podman, or as a Kubernetes runtime class.
+
+### `ssh:` is deprecated
+
+A format 1 job or step can name a host with `ssh:`. That ties the workflow
+to one host, while `runs-on: { execution-group: … }` names capacity that
+each environment defines for itself, with as many hosts as it has. So
+`ssh:` is deprecated in favor of execution groups:
+
+- The schema marks it `deprecated`, and the compiler warns, naming the
+  execution group that would replace it.
+- It keeps working in format 1 as it always has: its commands run on that
+  host, outside any container, because existing workflows rely on the
+  host's files and tools. To Meridian it is an inline execution group with
+  the `ssh` backend and host isolation.
+- A later format number can remove it.
+
+### Images
+
+A job that names no image runs in `ghcr.io/parallelworks/meridian-base`,
+which this repository builds. An image's tag is resolved to a digest when
+the job is placed, and the digest is what the attempt records and runs.
+
+### Resources
+
+`resources:` says what a job needs: CPUs, memory, GPUs, walltime. A job
+fits a group that offers at least that. On Slurm and PBS, resources become
+scheduler options, and `runs-on:` can add scheduler parameters of its own.
+
+## Security
+
+- **Who is trusted.** A workflow runs with the privileges of the user who
+  started it. Code that `uses:` brings in is as trusted as where it comes
+  from, so references to it should pin a commit. Untrusted code belongs in a
+  microVM group.
+- **Workers are trusted with one attempt.** A worker's credential covers
+  one attempt and expires, and the coordinator checks every write against
+  the attempt's lease.
+- **Other users on a shared host** can't reach Meridian's state: the state
+  directory is readable only by its user, sockets live in it, a listening
+  coordinator requires TLS and a token, and tokens never appear on command
+  lines.
+- **SSH host keys are checked** against the user's `known_hosts`. An unknown
+  key is an error until the user accepts it explicitly; Meridian never
+  accepts a key on first use by itself.
+- **Secrets** stay out of the plan and out of the run's records. Each
+  attempt receives the secrets it needs when it claims, and they are masked
+  in its logs. Locally, a secret a run will need later, such as the value of
+  a `password` input, is kept in a file only the user can read and deleted
+  when the run ends.
+- **Untrusted input is bounded:** workflow size, YAML aliases, expressions,
+  outputs and log volume.
+
+### FIPS 140-3
+
+Releases are built with Go's FIPS 140-3 cryptographic module
+(`GOFIPS140=certified`) and run under `GODEBUG=fips140=only`, which turns
+the use of a non-approved algorithm into an error.
+
+- **TLS 1.3**, through `crypto/tls`, with the algorithms FIPS mode allows.
+  The coordinator's certificate uses an ECDSA P-256 key.
+- **SSH**, through `golang.org/x/crypto/ssh`, which negotiates only approved
+  algorithms in FIPS mode. A server that offers none of them can't be used.
+- **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
+  digests are SHA-256.
+- **External tools** that Meridian runs (`git`, container runtimes,
+  schedulers) use the host's cryptography, which a FIPS host configures for
+  the whole system.
+
+Every binary is a pure-Go, static build (`CGO_ENABLED=0`). On macOS, Go
+binaries still link `libSystem`, as Apple requires.
+
+## Operations
+
+- **Logs:** `log/slog`, as JSON for services and as text for the command.
+- **Telemetry:** OpenTelemetry traces (a run, its jobs, their attempts and
+  steps, with the trace context passed to workers) and metrics (queue time,
+  placement time, run time, attempts by outcome). Exporting them is opt-in;
+  by default Meridian sends nothing anywhere.
+- **The audit record:** each attempt records the plan digest, the workflow's
+  source and revision, the image digest and container runtime, the worker's
+  version and digest, the backend and its placement ID (such as a Slurm job ID), its timestamps,
+  and its outcome and reason.
+- **Retention:** runs, logs and hopper's history are kept for a configured
+  time. A job's outputs are kept until every job that depends on it has
+  finished.
+- **Benchmarks:** compile time for large workflows, the time Meridian adds
+  between a job becoming ready and its placement, and job throughput on
+  SQLite and Postgres. Their thresholds live in the repository and gate
+  releases.
+
+## The `meridian` command
+
+| Command | Does |
+| --- | --- |
+| `meridian init` | Writes a new workflow in the latest format. |
+| `meridian run <workflow>` | Compiles and runs a workflow, coordinating it in the foreground. |
+| `meridian validate <workflow>` | Compiles without running, and reports every error. |
+| `meridian migrate <workflow>` | Rewrites a workflow in the latest format. |
+| `meridian status [run]` | Shows runs, or one run's jobs. |
+| `meridian logs <run> [job]` | Shows or follows logs. |
+| `meridian cancel <run>` | Cancels a run. |
+| `meridian resume <run>` | Picks up a run whose coordinator stopped. |
+| `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
+| `meridian serve` | Runs a coordinator that keeps running. |
+| `meridian worker`, `meridian relay` | Started by backends, not by people. |
+
+Execution groups and variables live in Meridian's config directory, and
+`--group` picks a group. A built-in `local` group needs no config. Groups
+are never read from the repository a workflow comes from, so cloning a
+workflow can't send its jobs to your SSH hosts.
+
+The database and logs live in Meridian's state directory. SQLite can't lock
+reliably on a network filesystem, which is where home directories on
+clusters often are, so Meridian refuses to open a database there and says
+how to choose a local path.
+
+## Editors and web UIs
+
+Editors and web UIs validate workflows, expand matrices and evaluate
+expressions with a TypeScript package built from the same Go code, as
+WebAssembly, so what they accept is what runs. The package exports typed
+functions rather than setting globals.
+
+## Open questions
+
+- **A built-in container runtime for Linux.** A runtime in pure Go is
+  possible: the worker can start a job's process in new namespaces itself,
+  and be the container's init so that nothing has to join a running
+  container. It would let an SSH host run jobs with nothing installed but
+  Meridian. Against it: container runtimes are security-critical code, and
+  hosts would still need `newuidmap`, a network helper and, on some
+  distributions, an AppArmor profile. Revisit once driving Podman and Docker
+  works.
+- **Steps that run a workflow.** A job made only of `uses:` steps could run
+  on the coordinator, with no worker. In a job that mixes them with `run:`
+  steps, the worker waits for the child run, holding capacity while it does.
+- **The Kubernetes client.** `client-go` is a large dependency for a few API
+  calls; plain HTTP against the API may be enough.
+- **Git.** Running the `git` command uses the host's credentials and
+  configuration, but its cryptography is outside Meridian's FIPS module. A
+  pure Go client would be inside it, at the cost of a large dependency.
+- **What hopper adds.** Per-job leases with fencing and a grace period after
+  a coordinator restart, an any-of edge, dependencies' outputs at claim, and
+  a SQLite driver.

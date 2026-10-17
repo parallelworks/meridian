@@ -48,8 +48,8 @@ $ meridian run ./workflow.yaml
    ACTIVATE. Only what stands behind it differs: where inputs, secrets and
    capacity come from.
 3. **Durable on a small cluster.** From one host or a login node, Meridian runs
-   jobs across SSH hosts or a Slurm or PBS scheduler, and a run survives
-   Meridian restarting, a host rebooting and the network dropping.
+   jobs across SSH hosts or a Slurm or PBS scheduler. Jobs keep running while
+   Meridian restarts or the network drops, and their results are kept.
 4. **A library first.** Meridian is a set of Go packages, and the `meridian`
    command is a thin program on top of them. ACTIVATE embeds the same packages
    and plugs its platform features, such as sessions, organization variables
@@ -74,8 +74,8 @@ $ meridian run ./workflow.yaml
   is no flag to run it anyway.
 - **Durable.** A run is stored before anything executes. Each attempt of a job
   holds a lease, and a worker that has lost its lease can no longer report a
-  result. Execution is at least once: steps are not assumed idempotent, so
-  retries are explicit. State lives in
+  result. Meridian never runs a step again on its own: a job lost after its
+  first step started fails unless the workflow asks for a retry. State lives in
   [hopper](https://github.com/parallelworks/hopper): SQLite on one machine,
   Postgres when several share it.
 - **Secure by default.** Jobs run in rootless containers, except under a batch
@@ -116,7 +116,13 @@ and the resources it offers. A job names its group and the resources it needs.
 | `kubernetes` | as a pod | a rootless container |
 | `slurm`, `pbs` | as a batch job submitted from a login node | the host |
 
-A job that names no image runs in `ghcr.io/parallelworks/meridian-base`.
+A job that names no image runs in `ghcr.io/parallelworks/meridian-base`. A
+Slurm or PBS group can run jobs that name an image in Apptainer or
+SingularityCE, which HPC sites often provide.
+
+## Design
+
+[docs/design.md](docs/design.md) describes how Meridian works.
 
 ## License
 
