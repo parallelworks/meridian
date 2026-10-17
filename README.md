@@ -106,8 +106,11 @@ $ meridian run ./workflow.yaml
 
 ## Where jobs run
 
-A job runs on an execution group: a named source of capacity with one backend
-and the resources it offers. A job names its group and the resources it needs.
+A job runs on an execution group: a named, ordered list of members, each a
+backend with the resources it offers. A job names its group and the resources
+it needs. Meridian places it on the member that can start it soonest, in the
+group's order of preference, and moves it to another member if one can't
+start it.
 
 | Backend | Runs a job | Isolated by default in |
 | --- | --- | --- |
@@ -117,7 +120,7 @@ and the resources it offers. A job names its group and the resources it needs.
 | `slurm`, `pbs` | as a batch job submitted from a login node | the host |
 
 A job that names no image runs in `ghcr.io/parallelworks/meridian-base`. A
-Slurm or PBS group can run jobs that name an image in Apptainer or
+Slurm or PBS member can run jobs that name an image in Apptainer or
 SingularityCE, which HPC sites often provide.
 
 ## Design

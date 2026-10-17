@@ -14,8 +14,9 @@ pull request that makes any part of it wrong updates it.
 | Job | Steps that run in order, in one place. A matrix job has one instance per combination of its matrix values. |
 | Step | A command (`run:`), or another workflow or a built-in action (`uses:`). |
 | Attempt | One try at running a job instance. Most job instances have one. |
-| Execution group | A named source of capacity: one backend, its settings and the resources it offers. |
-| Backend | How a group starts work: `local`, `ssh`, `kubernetes`, `slurm` or `pbs`. |
+| Execution group | A named source of capacity: an ordered list of members. |
+| Member | One place a group can run jobs: a backend, its settings and the resources it offers. |
+| Backend | How a member starts work: `local`, `ssh`, `kubernetes`, `slurm` or `pbs`. |
 | Plan | The compiled form of a run: typed, checked and stored with the run. |
 | Coordinator | The part of Meridian that schedules jobs, places them on groups and hears from workers. |
 | Worker | The process that runs one attempt's steps and reports on them: the `meridian` binary itself. |
@@ -93,10 +94,12 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   key changes no workflow that was valid before:
   - `format:` itself;
   - workflow metadata (below);
-  - `runs-on: { execution-group: … }` and `resources:`, which name a group and
-    what a job needs from it;
+  - `execution-group:` in `runs-on:`, beside format 1's `environment:`, and
+    `resources:`, which name a group and what a job needs from it;
   - `needs.*` in `strategy:` and `runs-on:`, for jobs sized from what earlier
-    jobs found.
+    jobs found;
+  - `needs.<job>.result`, a dependency's outcome;
+  - a job's `retry:`, which can rerun a job whose worker was lost.
 - **Metadata.** A workflow can carry `name`, `description`, `icon` and
   `thumbnail`. `description` is a string or `{file: <path>}`; `icon` and
   `thumbnail` are paths. Paths are relative to the workflow file and may not
@@ -114,7 +117,8 @@ The conformance suite pins the format's meaning. Each case is a workflow and
 its inputs with either the plan it compiles to or the errors it produces, and
 some cases also run, with the outputs and outcomes they must end with. Cases
 come from ACTIVATE's own tests and from public workflows, and cover expressions,
-matrix expansion, `needs`, defaults, inputs and status functions.
+matrix expansion, `needs`, defaults, inputs, status functions and step
+retries, including retries that pick another host each time.
 
 Behavior that workflows rely on is kept, even where it is surprising. Behavior
 no workflow could rely on, such as a crash or a silently wrong result, is
@@ -166,8 +170,8 @@ It holds:
 - **The run:** the workflow's source and revision, its format and metadata,
   the resolved inputs, workflow `env` and the run's timeout.
 - **Jobs**, one per job instance: dependencies (on all instances of a job,
-  or `:any` of them), matrix values, the job's `if:`, its group and
-  resources, steps, outputs, timeout and `env`.
+  or `:any` of them), matrix values, the job's `if:`, its group, resources
+  and `retry:`, steps, outputs, timeout and `env`.
 - **Steps:** what they run (a command, a workflow, or a built-in action), and
   their `if:`, `env`, `with:`, shell, working directory, `retry:`, timeout,
   `ignore-errors`, `early-cancel` and cleanup.
@@ -191,7 +195,7 @@ to depends on where it is evaluated:
 | When | Evaluated by | Adds these contexts | Used by |
 | --- | --- | --- | --- |
 | The run is created | Compiler | `inputs`, organization and user variables, workflow `env`, `sessions` from a session provider | Everything that is known by then |
-| A job's dependencies have finished | Coordinator | `needs`, status functions | Job `if:`, and `strategy:`, `runs-on:` and `resources:` that use `needs` |
+| A job's dependencies have finished | Coordinator | `needs`, status functions | Job `if:`, and `strategy:`, `runs-on:`, `resources:` and `retry:` that use `needs` |
 | A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
 | A job ends | Worker | | Job `outputs:` |
 
@@ -201,6 +205,24 @@ or, for a matrix that uses `needs`, when its dependencies have finished.
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`). A job's default `if:` is
 `success()`.
+
+`needs.<job>.result` is a dependency's outcome: `success`, `failure`,
+`cancelled` or `skipped`. For a matrix job it is `failure` if any instance
+failed, otherwise `cancelled` if any was cancelled, `skipped` if all were
+skipped, and `success` otherwise. With it, a job can run only when another
+failed, as a fallback the workflow controls:
+
+```yaml
+jobs:
+  primary:
+    steps:
+      - run: ./deploy.sh primary
+  secondary:
+    needs: [primary]
+    if: ${{ always() && needs.primary.result == 'failure' }}
+    steps:
+      - run: ./deploy.sh secondary
+```
 
 Evaluation is pure: an expression can't read files, start processes or reach
 a network. Depth, time and the size of a result are bounded, so a workflow
@@ -216,7 +238,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones, and their choices | Built-in types, plus Slurm partitions, accounts and QOS, and PBS queues, read from a group's scheduler |
+| Inputs | Input types beyond the built-in ones, and their choices | Built-in types, plus Slurm partitions, accounts and QOS, and PBS queues, read from a member's scheduler |
 | Secrets | Secret values, by name | Environment variables and files the user names |
 | Variables | Organization and user variables | A variables file in Meridian's config directory |
 | Groups | Execution groups | The user's config |
@@ -262,36 +284,92 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
 - **ready:** its dependencies have finished. The coordinator evaluates its
   `if:`, and a false `if:` skips it here. Otherwise the coordinator evaluates
   whatever was left for this point, such as a `runs-on:` that uses `needs`,
-  and picks a group.
-- **placing:** the backend is starting a worker: a scheduler job waiting in
-  a queue, a pod being scheduled, a process starting over SSH. No user code
-  runs yet, and the time this takes doesn't count against any lease.
+  and picks a member of the job's group ([Placement](#placement)).
+- **placing:** the member's backend is starting a worker: a scheduler job
+  waiting in a queue, a pod being scheduled, a process starting over SSH. No
+  user code runs yet, and the time this takes doesn't count against any
+  lease.
 - **running:** a worker has claimed the attempt and holds its lease.
 - **The end:** the worker reports the outcome, or the coordinator records
   one when the worker is lost or the job is cancelled.
 
 ### Failures and retries
 
-Meridian never runs a step again on its own. Steps are not assumed
-idempotent.
+Meridian never runs a step again unless the workflow asks it to. Steps are
+not assumed idempotent.
 
 - **Before the first step starts**, a failure retries automatically, with
   backoff and a bound: placement failed, the scheduler rejected the job,
   the image couldn't be pulled, or the worker never connected. None of the
-  workflow's code has run.
+  workflow's code has run, so the retry can go to another member of the
+  job's group ([Placement](#placement)).
 - **The worker records that the first step is starting**, and waits for the
   coordinator to store that, before it runs it. Whether user code may have
   run is therefore always known.
 - **Once a step has started**, a lost worker fails the job, with the reason
-  "worker lost". It runs again only if the workflow asks: a step's `retry:`
-  reruns that step on the same worker, and a user can rerun a failed job.
+  `worker-lost`, unless the job's `retry:` lists that reason
+  ([Job retries](#job-retries)).
+- **A step's `retry:`** reruns that step on the same worker when it fails,
+  as in format 1. It can't help when the worker itself is lost.
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
-  behind Meridian's back.
+  behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
+  places their new attempts itself, so counting, backoff and fencing work
+  the same on every backend.
 - **A worker that stops heartbeating is checked with its backend** before it
   is declared lost: `squeue` or `qstat`, the pod's status, the process on the
   SSH host. So a worker that is only cut off from the coordinator isn't
   mistaken for one that is dead.
+
+### Job retries
+
+A job's `retry:` says when Meridian may run the whole job again, from its
+first step, as a new attempt:
+
+```yaml
+jobs:
+  simulate:
+    runs-on:
+      execution-group: ${{ inputs.group }}
+    retry:
+      reasons: [worker-lost]
+      max-retries: 2
+      interval: 5m
+    steps:
+      - run: ./simulate --resume
+```
+
+- **`reasons`** lists why an attempt may be run again, and is required, so a
+  job's `retry:` can't be mistaken for one that reruns failed steps. Its
+  values are the reasons Meridian records when an attempt ends. The only one
+  for now is
+  `worker-lost`: the worker was lost after a step started, for example
+  because its node failed or the job was preempted.
+- **`max-retries` and `interval`** work as in a step's `retry:`, defaults
+  included. There is no per-attempt `timeout`, since a job has its own.
+- **The new attempt is placed again**, so it can go to another member of
+  the job's group.
+- **What the lost attempt wrote stays** in the run directory, so a job that
+  checkpoints can resume, on a member that shares that directory.
+- **The attempt number** is in `PW_WORKFLOW_JOB_CURRENT_RETRY` and
+  `PW_WORKFLOW_JOB_MAX_RETRIES`, set when a job has a `retry:` and named
+  after format 1's variables for a step's retries, so a step can tell that
+  it is resuming.
+- **Only the workflow can ask for it.** Whether a job is safe to run twice
+  depends on its code, so neither a group nor a command-line flag can turn
+  it on.
+
+### Reruns
+
+There is no retry for a whole run. It would rerun jobs that had succeeded,
+and a failure that ends a run would usually happen again.
+
+A person reruns a run with `meridian rerun`, either all of it or only its
+failed jobs and the jobs that depend on them. A rerun uses the run's stored
+plan, so it runs the same revision with the same inputs, and the jobs it
+doesn't rerun keep their outcomes and outputs. Each attempt of a job, and
+each retry of a step, keeps its own logs, so earlier attempts can still be
+read.
 
 ### Leases and fencing
 
@@ -353,7 +431,8 @@ can therefore handle any job, and a replica that dies loses nothing.
   Slurm or PBS job name, a pod label, a process's arguments), and before
   placing, the coordinator looks for one that already exists. A coordinator
   that crashed between submitting and recording never submits twice.
-- **Group capacity and priorities** are enforced at placement.
+- **It places jobs** on the members of their groups
+  ([Placement](#placement)), within each member's capacity and priorities.
 - **It serves the worker API** (below).
 
 Locally, `meridian run` coordinates in the foreground, with SQLite, and exits
@@ -363,6 +442,59 @@ and `meridian resume` picks the run back up. `meridian cancel` cancels.
 `meridian serve` is a coordinator that keeps running, for example on a
 cluster's login node, and `meridian run` hands its run to one if it finds
 one using the same store.
+
+## Execution groups
+
+An execution group is a named, ordered list of members. Each member is one
+place jobs can run: a backend with its settings, such as an SSH host, a
+Slurm partition and account, or a Kubernetes namespace, and the resources it
+offers. A job names one group, usually through an input, and the group
+decides where it runs. A group with several members is how a job falls back
+from one system to another without the workflow naming them.
+
+Groups come through the Groups interface: locally from the user's config
+directory ([The `meridian` command](#the-meridian-command)), on a platform
+from the platform.
+
+### Naming a group
+
+A job names a group with `runs-on: { execution-group: … }`. Format 1 has two
+older ways to say where a job runs, and each becomes an inline group with
+one member:
+
+- **`runs-on: { environment: … }`** names a platform's scheduler
+  environment by cluster and name, with its scheduling parameters, or takes
+  it from a `compute-target` input. Only a platform's Groups resolver
+  knows its environments, so elsewhere a workflow that uses one fails to
+  compile, naming the key.
+- **`ssh:`** names a host ([`ssh:` is deprecated](#ssh-is-deprecated)).
+
+### Placement
+
+When a job is ready, the coordinator places it on one member of its group:
+
+1. **Filter.** Members that are unhealthy, or can't offer the job's
+   `resources:`, are left out. A job that no member could ever run is
+   refused when the run is created, with each member's reason.
+2. **Rank.** The rest are ranked by whether they can start the job now,
+   then whether they have capacity for it, then whether it would queue, and
+   in the group's order within each.
+3. **Record.** The attempt records the member chosen and why each other
+   member wasn't.
+
+A job moves to another member only when none of its code has run, or when
+the workflow asked for it:
+
+- **A failure before the first step starts** places the job again, on a
+  member it hasn't failed on when there is one. When two members have
+  failed a job for the same reason, the job fails: the job, not the
+  members, is then the likelier cause.
+- **A step that fails** fails the job where it is. The failure is the
+  workflow's own, and another member would only run its code again.
+- **After a lost worker**, the job runs again only if its `retry:` asks
+  ([Job retries](#job-retries)). The new attempt is placed the same way.
+- **A job waiting in a queue** stays there. Moving it would be safe, since
+  nothing has run, but when to give up on a queue is an open question.
 
 ## Workers
 
@@ -435,13 +567,16 @@ the coordinator's machine opens no port.
 - **The run directory.** Format 1 gives each run a directory (`PW_JOB_DIR`),
   which is also where steps run by default. Jobs of a run on the same host,
   or on a shared filesystem, see the same directory. Containers mount it at
-  the same path, so a path one job writes is valid in the next.
+  the same path, so a path one job writes is valid in the next. Jobs on
+  members that share no filesystem see different directories, and Meridian
+  doesn't copy files between them.
 - **The environment.** Steps get the environment variables format 1 defines,
   such as `OUTPUTS`, `PW_JOB_DIR` and `PW_JOB_ID`. Variables that only a
   platform can fill, such as an API key, are set only when one supplies them.
-- **Containers.** In a container group, the worker runs on the host,
-  outside the container. It creates the job's container, runs each step in
-  it with the runtime's `exec`, and removes the container when the job ends.
+- **Containers.** On a member that runs containers, the worker runs on the
+  host, outside the container. It creates the job's container, runs each
+  step in it with the runtime's `exec`, and removes the container when the
+  job ends.
 - **Logs** are masked on the worker, before they leave the host.
 - **While the coordinator is unreachable**, a worker keeps running its steps,
   spools logs and events to disk up to a limit, and delivers them in order
@@ -456,9 +591,9 @@ the coordinator's machine opens no port.
 | `kubernetes` | As a pod, through the Kubernetes API | A rootless container: the pod, run as a non-root user |
 | `slurm`, `pbs` | As a batch job, submitted on the login node | The host |
 
-A group can choose stronger isolation, such as a microVM, or name host
+A member can choose stronger isolation, such as a microVM, or name host
 isolation explicitly. It never gets weaker isolation than it asked for: when
-a group's runtime is missing, its jobs fail with an error that says so.
+a member's runtime is missing, jobs fail there with an error that says so.
 
 ### Container runtimes
 
@@ -474,10 +609,10 @@ command-line tools:
 - **Apple's `container`** on macOS, which runs each container in its own
   lightweight VM.
 
-A group names its runtime. One that doesn't uses rootless Podman, or
+A member names its runtime. One that doesn't uses rootless Podman, or
 rootless Docker if the host has no Podman. Apptainer and SingularityCE
-isolate less, so they run a group's jobs only when the group names them;
-that is how a Slurm or PBS group runs jobs that name an image. MicroVMs on
+isolate less, so they run a member's jobs only when the member names them;
+that is how a Slurm or PBS member runs jobs that name an image. MicroVMs on
 Linux come from Kata Containers with Cloud Hypervisor, set as the runtime
 under Podman, or as a Kubernetes runtime class.
 
@@ -485,8 +620,8 @@ under Podman, or as a Kubernetes runtime class.
 
 A format 1 job or step can name a host with `ssh:`. That ties the workflow
 to one host, while `runs-on: { execution-group: … }` names capacity that
-each environment defines for itself, with as many hosts as it has. So
-`ssh:` is deprecated in favor of execution groups:
+each user or platform defines for itself, with as many members as it has to
+fall back between. So `ssh:` is deprecated in favor of execution groups:
 
 - The schema marks it `deprecated`, and the compiler warns, naming the
   execution group that would replace it.
@@ -505,7 +640,7 @@ the job is placed, and the digest is what the attempt records and runs.
 ### Resources
 
 `resources:` says what a job needs: CPUs, memory, GPUs, walltime. A job
-fits a group that offers at least that. On Slurm and PBS, resources become
+fits a member that offers at least that. On Slurm and PBS, resources become
 scheduler options, and `runs-on:` can add scheduler parameters of its own.
 
 ## Security
@@ -513,7 +648,7 @@ scheduler options, and `runs-on:` can add scheduler parameters of its own.
 - **Who is trusted.** A workflow runs with the privileges of the user who
   started it. Code that `uses:` brings in is as trusted as where it comes
   from, so references to it should pin a commit. Untrusted code belongs in a
-  microVM group.
+  group whose members use microVMs.
 - **Workers are trusted with one attempt.** A worker's credential covers
   one attempt and expires, and the coordinator checks every write against
   the attempt's lease.
@@ -560,8 +695,9 @@ binaries still link `libSystem`, as Apple requires.
   by default Meridian sends nothing anywhere.
 - **The audit record:** each attempt records the plan digest, the workflow's
   source and revision, the image digest and container runtime, the worker's
-  version and digest, the backend and its placement ID (such as a Slurm job ID), its timestamps,
-  and its outcome and reason.
+  version and digest, the member and why it was chosen, the backend and its
+  placement ID (such as a Slurm job ID), its timestamps, and its outcome and
+  reason.
 - **Retention:** runs, logs and hopper's history are kept for a configured
   time. A job's outputs are kept until every job that depends on it has
   finished.
@@ -621,6 +757,13 @@ functions rather than setting globals.
 - **Git.** Running the `git` command uses the host's credentials and
   configuration, but its cryptography is outside Meridian's FIPS module. A
   pure Go client would be inside it, at the cost of a large dependency.
+- **How long a job may wait in a queue** before Meridian withdraws it and
+  places it on another member, and whether the job or the group sets that.
+  An interactive session and an overnight batch job in the same group would
+  want different limits.
+- **Files between members.** A job on another member doesn't see the run
+  directory's files. Staging them, or declaring which files a job needs,
+  would let jobs of one run use members without a shared filesystem.
 - **What hopper adds.** Per-job leases with fencing and a grace period after
   a coordinator restart, an any-of edge, dependencies' outputs at claim, and
   a SQLite driver.
