@@ -10,6 +10,9 @@
 - Code that comes from ACTIVATE is a starting point, not the design. Keep it only where
   it is still the best way to do the job.
 - Prefer the standard library. A new dependency needs a reason in its PR.
+- cgo is not allowed, in Meridian or in its dependencies: every binary is a pure-Go
+  static build (`CGO_ENABLED=0`), and `make cgo-check` enforces it. The race
+  detector's tests are the one exception, because the detector needs cgo on Linux.
 - Cryptography comes from the standard library, or from `golang.org/x/crypto` where the
   standard library has no equivalent, and uses FIPS-approved algorithms only. Tests run
   with `GODEBUG=fips140=only`, set in `go.mod`, against the certified module
