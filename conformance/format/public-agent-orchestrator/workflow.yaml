@@ -205,6 +205,7 @@ jobs:
               (isolated from the system Python). Needs a little free space.
           ask_timeout:
             label: Per-cluster timeout (seconds)
-            type: integer
+            type: number
+            step: 1
             default: 300
             tooltip: How long to wait for a cluster's agent to answer a delegated question.
