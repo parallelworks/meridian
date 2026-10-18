@@ -1809,7 +1809,7 @@
                   "const": "string"
                 },
                 "default": {
-                  "type": "string"
+                  "type": ["string", "number", "boolean"]
                 },
                 "prefillDefault": {
                   "type": ["string", "boolean"],
@@ -2430,6 +2430,56 @@
               "required": ["type"]
             },
             {
+              "title": "StorageField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "storage"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "region": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "description": "The kind of storage to choose from",
+                  "type": "string"
+                },
+                "subType": {
+                  "description": "Another spelling of subtype",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
               "title": "ColorPickerField",
               "properties": {
                 "width": { "$ref": "#/$defs/inputWidth" },
@@ -2549,8 +2599,7 @@
                   "const": "slurm-accounts"
                 },
                 "default": {
-                  "type": ["string", "object"],
-                  "pattern": "^\\${{.*}}$"
+                  "type": ["string", "object"]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -2589,8 +2638,7 @@
                   "const": "slurm-partitions"
                 },
                 "default": {
-                  "type": ["string", "object"],
-                  "pattern": "^\\${{.*}}$"
+                  "type": ["string", "object"]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -2632,8 +2680,7 @@
                   "const": "slurm-qos"
                 },
                 "default": {
-                  "type": ["string", "object"],
-                  "pattern": "^\\${{.*}}$"
+                  "type": ["string", "object"]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -2680,8 +2727,7 @@
                   "const": "pbs-queues"
                 },
                 "default": {
-                  "type": ["string", "object"],
-                  "pattern": "^\\${{.*}}$"
+                  "type": ["string", "object"]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -2945,8 +2991,7 @@
     },
     "account": {
       "description": "The account to be used for slurm paritions or qos",
-      "type": "string",
-      "pattern": "^\\${{.*}}$"
+      "type": "string"
     },
     "timeout": {
       "description": "Maximum amount of time allowed, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). After the timeout passes, the running command will automatically be killed and will fail.",
