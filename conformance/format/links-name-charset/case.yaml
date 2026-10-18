@@ -1,0 +1,10 @@
+description: >-
+  A link's name uses lowercase letters, digits, hyphens and underscores.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /links/My Link
+      line: 2
+      column: 3

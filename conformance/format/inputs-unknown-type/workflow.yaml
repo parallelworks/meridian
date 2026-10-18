@@ -1,0 +1,9 @@
+'on':
+  execute:
+    inputs:
+      when:
+        type: date
+jobs:
+  main:
+    steps:
+      - run: echo hello

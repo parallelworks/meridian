@@ -1,0 +1,13 @@
+description: >-
+  A remote desktop session: bucket, slurm-accounts and slurm-qos inputs, and
+  textarea. It passes local_port to parallelworks/update-session, which takes
+  localPort, so ACTIVATE ignores it and format 1 warns.
+source: https://github.com/parallelworks/activate-sessions/blob/d733ea277d3b8f7a0aa386cb9dd3cc90701d8ef2/workflows/desktop/workflow.yaml
+license: Apache-2.0
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /jobs/update_session/steps/1/with/local_port
+      line: 146
+      column: 11

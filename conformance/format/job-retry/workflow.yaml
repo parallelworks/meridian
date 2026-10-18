@@ -1,0 +1,10 @@
+jobs:
+  simulate:
+    runs-on:
+      execution-group: hpc
+    retry:
+      reasons: [worker-lost]
+      max-retries: 2
+      interval: 5m
+    steps:
+      - run: ./simulate --resume

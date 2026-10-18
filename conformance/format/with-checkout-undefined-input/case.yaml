@@ -1,0 +1,12 @@
+description: >-
+  An input an action doesn't take is an unknown key. ACTIVATE's schema rejects
+  this, but ACTIVATE ignores the key when it runs the workflow, so format 1
+  warns and ignores it.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /jobs/main/steps/0/with/made_up
+      line: 9
+      column: 11

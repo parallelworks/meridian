@@ -1,0 +1,16 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: parallelworks/update-session
+        with:
+          name: s
+          remotePort: 8080
+          targetInfo:
+            name: c
+            namespace: n
+            resourceType: services
+            resourceName: svc
+'on':
+  execute:
+    inputs: {}

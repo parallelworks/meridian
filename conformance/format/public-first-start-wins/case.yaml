@@ -1,0 +1,5 @@
+description: >-
+  A race between clusters: a matrix over a list input, fail-fast, and matrix
+  values passed to a subworkflow.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/tutorials/endpoint-workflows/06-first-start-wins.yaml
+license: Apache-2.0

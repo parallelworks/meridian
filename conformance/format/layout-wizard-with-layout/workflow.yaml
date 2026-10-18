@@ -1,0 +1,7 @@
+jobs: {main: {steps: [{run: echo ready}]}}
+'on':
+  execute:
+    inputs:
+      $meta:
+        wizard: {mode: wizard}
+        layout: {type: stack, children: []}

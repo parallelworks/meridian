@@ -1,0 +1,11 @@
+description: >-
+  resources has no walltime: a job's timeout is how long it may run, on a
+  scheduler or anywhere else.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /jobs/main/resources/walltime
+      line: 8
+      column: 7

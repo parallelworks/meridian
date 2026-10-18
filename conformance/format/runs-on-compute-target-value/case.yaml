@@ -1,0 +1,3 @@
+description: >-
+  runs-on can take the value a compute-target input produces.
+source: ACTIVATE's workflow schema tests

@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: parallelworks/update-session
+        with:
+          name: s
+          remotePort: 8080
+          useTLS: true
+'on':
+  execute:
+    inputs: {}

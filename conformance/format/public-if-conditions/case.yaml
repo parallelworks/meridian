@@ -1,0 +1,6 @@
+description: >-
+  A tutorial of if: on jobs and steps: every status keyword (completed, error,
+  canceled, always, never, !completed), a ternary that chooses one, and
+  parallelworks/cancel-jobs.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/tutorials/if-conditions/if-conditions.yaml
+license: Apache-2.0

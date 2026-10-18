@@ -1,0 +1,13 @@
+description: >-
+  An agent that coordinates others: the organization-groups input type and a
+  top-level env:. Its ask_timeout input has type integer, which isn't an input
+  type, so ACTIVATE's launch form doesn't show it.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/workflows/agent-orchestrator/yamls/general.yaml
+license: Apache-2.0
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/service/items/ask_timeout/type
+      line: 208
+      column: 19

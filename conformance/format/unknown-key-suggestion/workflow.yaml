@@ -1,0 +1,11 @@
+sessions:
+  desktop:
+    type: tunnel
+jobs:
+  main:
+    steps:
+      - uses: parallelworks/update-session
+        with:
+          name: ${{ sessions.desktop }}
+          remotePort: 5901
+          local_port: 5901

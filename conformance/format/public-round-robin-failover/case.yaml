@@ -1,0 +1,6 @@
+description: >-
+  Round-robin failover with a step retry: a literal retry timeout,
+  PW_WORKFLOW_STEP_MAX_RETRIES, a step's if: always, and $OUTPUTS across
+  retries.
+source: https://github.com/parallelworks/interactive_session/blob/26ca7592a258ef82cb479c7bfbce5952ed7cd94b/workflow/tutorials/round-robin-failover/workflow.yaml
+license: MIT

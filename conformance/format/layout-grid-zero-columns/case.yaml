@@ -1,0 +1,10 @@
+description: >-
+  A grid has at least one column.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/columns
+      line: 9
+      column: 39

@@ -1,0 +1,9 @@
+description: >-
+  A file that isn't valid YAML is an error on the line where parsing failed.
+source: ACTIVATE's YAML loader tests
+expect:
+  diagnostics:
+    - severity: error
+      code: syntax
+      path: ""
+      line: 3

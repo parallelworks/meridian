@@ -1,0 +1,175 @@
+# One optimization iteration, invoked as a subworkflow by general.yaml's retried
+# Iterate step. Its exit status IS the loop control: completing tells the parent the
+# loop is over (converged or failed — the parent reads state/status to know which);
+# failing tells the parent's retry to fire the next iteration.
+permissions:
+  - '*'
+
+jobs:
+  # Run the optimizer: ingest the previous generation's results.out files, then
+  # either propose the next generation (status CONTINUE, N_CASES > 0) or stop
+  # (status CONVERGED/FAILED, N_CASES = 0). Small scalars travel as outputs;
+  # everything else stays in files under state_dir.
+  optimize:
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Propose or Stop
+        run: |
+          set -e
+          python3 "${{ inputs.app_dir }}/optimizer.py" \
+            --state-dir "${{ inputs.state_dir }}" \
+            --app-dir "${{ inputs.app_dir }}" \
+            --batch-size "${{ inputs.batch_size }}" \
+            --max-iterations "${{ inputs.max_iterations }}" \
+            --stall-generations "${{ inputs.stall_generations }}"
+          tee -a $OUTPUTS < "${{ inputs.state_dir }}/proposal.env"
+          source "${{ inputs.state_dir }}/proposal.env"
+          gen=$(python3 -c "import json; print(json.load(open('${{ inputs.state_dir }}/state.json'))['gen'])")
+          echo "::notice::Iterate attempt $(( ${{ inputs.attempt }} + 1 )) of $(( ${{ inputs.max_iterations }} + 1 )): generation ${gen}, status $(cat "${{ inputs.state_dir }}/status"), ${N_CASES} cases to evaluate"
+      # A proposal wider than the matrix below would silently evaluate only the
+      # first batch_size cases — fail loud instead. A persistent violation ends as
+      # FAILED: the retried attempts find the generation without results and escalate.
+      - name: Check the Proposal Fits the Matrix
+        run: |
+          n="${{ needs.optimize.outputs.N_CASES }}"
+          if [ "${n}" -gt "${{ inputs.batch_size }}" ]; then
+            echo "::error::the optimizer proposed ${n} cases but the workers matrix has ${{ inputs.batch_size }} slots (batch_size); fix the optimizer"
+            exit 1
+          fi
+
+  # The guarded matrix: a matrix can only expand over values that are concrete
+  # at submission, so it ranges over batch_size (a form input, concrete at
+  # submission): slots 1..batch_size, and the run page shows exactly that many
+  # workers. The number of cases the optimizer actually proposes is a runtime
+  # output, which no matrix can take, so the job-level if: compares each slot
+  # against N_CASES — surplus workers are skipped, and when the optimizer stops
+  # (N_CASES=0) every worker is skipped, so convergence costs nothing.
+  workers:
+    needs: [optimize]
+    strategy:
+      fail-fast: false
+      matrix:
+        job_id: ${{ 1 range inputs.batch_size + 1 }}
+    if: ${{ matrix.job_id <= needs.optimize.outputs.N_CASES }}
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Evaluate Case
+        uses: github/parallelworks/workflows@canary
+        with:
+          $yaml: workflows/script_submitter/v3.6/general.yaml
+          resource: ${{ inputs.resource }}
+          shebang: '#!/bin/bash'
+          # the submitter cds into the case dir, so run.sh's relative paths resolve there
+          rundir: ${{ needs.optimize.outputs.ITER_DIR }}/case_${{ matrix.job_id }}
+          use_existing_script: true
+          script_path: ./run.sh
+          define_cleanup_script: false
+          scheduler: ${{ inputs.scheduler }}
+          use_scheduler_agent: false
+          submit_and_exit: false
+          slurm:
+            is_enabled: ${{ inputs.slurm.is_enabled }}
+            partition: ${{ inputs.slurm.partition }}
+            time: ${{ inputs.slurm.time }}
+            scheduler_directives: ${{ inputs.slurm.scheduler_directives }}
+          pbs:
+            is_enabled: ${{ inputs.pbs.is_enabled }}
+            scheduler_directives: ${{ inputs.pbs.scheduler_directives }}
+
+  # if: always — this job must reach its verdict even when optimize crashed or a
+  # worker failed: any non-CONVERGED/FAILED state exits 1, which fails this run and
+  # makes the parent's retry re-enter the loop (a crashed attempt re-runs the same
+  # iteration off the state files — self-healing).
+  decide:
+    needs: [optimize, workers]
+    if: ${{ always }}
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Continue or Stop
+        run: |
+          status=$(cat "${{ inputs.state_dir }}/status" 2>/dev/null || echo MISSING)
+          case "${status}" in
+            CONVERGED|FAILED)
+              echo "::notice::loop ends with status ${status}"
+              ;;
+            *)
+              echo "::notice::status ${status}: exit 1 so the parent retry fires the next iteration"
+              exit 1
+              ;;
+          esac
+
+'on':
+  execute:
+    inputs:
+      attempt:
+        type: number
+        label: Attempt of the parent's retried Iterate step (0-based)
+        default: 0
+        min: 0
+      resource:
+        type: compute-clusters
+        label: Resource
+        optional: false
+      scheduler:
+        type: boolean
+        label: Schedule cases?
+        default: false
+      slurm:
+        type: group
+        label: SLURM directives
+        items:
+          is_enabled:
+            type: boolean
+            hidden: true
+            default: true
+            label: Is SLURM enabled?
+          partition:
+            type: string
+            label: SLURM partition
+            optional: true
+          time:
+            type: string
+            label: Walltime
+            default: '01:00:00'
+          scheduler_directives:
+            type: editor
+            label: Scheduler directives
+            optional: true
+      pbs:
+        type: group
+        label: PBS directives
+        items:
+          is_enabled:
+            type: boolean
+            hidden: true
+            default: true
+            label: Is PBS enabled?
+          scheduler_directives:
+            type: editor
+            label: Scheduler directives
+            optional: true
+      batch_size:
+        type: number
+        label: Cases per iteration
+        default: 8
+        min: 1
+        max: 256
+      max_iterations:
+        type: number
+        label: Generation budget
+        default: 10
+        min: 1
+      stall_generations:
+        type: number
+        label: Stagnation window
+        default: 3
+        min: 1
+      state_dir:
+        type: string
+        label: Absolute path of the optimizer state directory
+      app_dir:
+        type: string
+        label: Absolute path of the checked-out app directory

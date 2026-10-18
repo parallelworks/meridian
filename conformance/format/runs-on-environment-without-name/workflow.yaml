@@ -1,0 +1,6 @@
+jobs:
+  main:
+    runs-on:
+      environment: { cluster: my-hpc }
+    steps:
+      - run: hostname

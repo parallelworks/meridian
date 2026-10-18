@@ -1,0 +1,10 @@
+description: >-
+  runs-on can't be a plain string; a string must be an expression.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /jobs/main/runs-on
+      line: 3
+      column: 14

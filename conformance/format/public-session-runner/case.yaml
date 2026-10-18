@@ -1,0 +1,5 @@
+description: >-
+  Running a session's service: a marketplace/ subworkflow, a default that is
+  an expression, and needs on several jobs.
+source: https://github.com/parallelworks/interactive_session/blob/26ca7592a258ef82cb479c7bfbce5952ed7cd94b/workflow/session_runner/v1.3/general.yaml
+license: MIT

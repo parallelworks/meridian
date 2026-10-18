@@ -1,0 +1,9 @@
+links:
+  docs:
+    endpoint: docs
+    url: https://example.org/docs
+jobs:
+  main:
+    steps:
+      - name: Serve
+        run: pw endpoints run --name ollama-$PW_RUN_SLUG -- ollama serve

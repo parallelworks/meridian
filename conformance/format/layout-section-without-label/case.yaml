@@ -1,0 +1,10 @@
+description: >-
+  A section needs a label.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout
+      line: 9
+      column: 17

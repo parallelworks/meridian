@@ -1,0 +1,4 @@
+description: >-
+  An empty document after the first, as after a trailing separator, is no
+  warning.
+source: Meridian

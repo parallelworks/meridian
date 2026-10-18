@@ -1,0 +1,10 @@
+description: >-
+  A grid that aligns rows holds only sections.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/children/0/type
+      line: 9
+      column: 73

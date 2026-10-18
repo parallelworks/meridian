@@ -1,0 +1,10 @@
+description: >-
+  A format newer than the implementation runs is an error.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: format
+      path: /format
+      line: 1
+      column: 9

@@ -1,0 +1,5 @@
+description: >-
+  The subworkflow each racer runs: cleanup:, a step retry that reads its
+  attempt number, early-cancel, and ignore: ${{ .hidden }}.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/tutorials/endpoint-workflows/06-first-start-wins-subworkflow.yaml
+license: Apache-2.0

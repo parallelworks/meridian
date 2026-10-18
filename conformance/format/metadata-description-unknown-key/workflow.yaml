@@ -1,0 +1,7 @@
+description:
+  file: README.md
+  format: markdown
+jobs:
+  main:
+    steps:
+      - run: echo hello

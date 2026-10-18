@@ -1,0 +1,10 @@
+description: >-
+  A layout node has at most 128 children.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/children
+      line: 9
+      column: 41

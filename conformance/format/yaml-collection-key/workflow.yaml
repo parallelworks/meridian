@@ -1,0 +1,9 @@
+configurations:
+  keys:
+    inputs:
+      ? [a, b]
+      : c
+jobs:
+  main:
+    steps:
+      - run: echo hello

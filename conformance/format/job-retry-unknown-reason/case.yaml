@@ -1,0 +1,10 @@
+description: >-
+  worker-lost is the only reason a job runs again.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /jobs/simulate/retry/reasons/0
+      line: 4
+      column: 17

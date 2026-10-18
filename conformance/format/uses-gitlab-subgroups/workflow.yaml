@@ -1,0 +1,8 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: gitlab/group/sub/deeper/project@v1.2
+'on':
+  execute:
+    inputs: {}

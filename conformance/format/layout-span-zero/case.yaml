@@ -1,0 +1,10 @@
+description: >-
+  A span is at least 1.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/span
+      line: 9
+      column: 50

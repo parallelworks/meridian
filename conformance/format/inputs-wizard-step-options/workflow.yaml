@@ -1,0 +1,16 @@
+jobs: {main: {steps: [{run: echo ready}]}}
+'on':
+  execute:
+    inputs:
+      $meta:
+        wizard: {mode: wizard}
+      workers:
+        type: step
+        title: [First worker, Second worker]
+        description: [First settings, Second settings]
+        multi: true
+        min: 1
+        max: 4
+        options:
+          name: {type: string, width: '50%'}
+          size: {type: number, width: 160, anchor-below: true}

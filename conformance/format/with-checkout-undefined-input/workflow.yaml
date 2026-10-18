@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: parallelworks/checkout
+        with:
+          repo: r
+          branch: b
+          made_up: 1
+'on':
+  execute:
+    inputs: {}

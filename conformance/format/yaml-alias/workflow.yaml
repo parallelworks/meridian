@@ -1,0 +1,8 @@
+env:
+  GREETING: &greeting hello
+jobs:
+  main:
+    env:
+      GREETING: *greeting
+    steps:
+      - run: echo $GREETING

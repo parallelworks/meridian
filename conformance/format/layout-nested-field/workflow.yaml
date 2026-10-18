@@ -1,0 +1,13 @@
+jobs:
+  main:
+    steps:
+      - run: echo ready
+'on':
+  execute:
+    inputs:
+      $meta:
+        layout: {type: field, field: nested.name}
+      name:
+        type: string
+      count:
+        type: number

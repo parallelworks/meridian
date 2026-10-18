@@ -1,0 +1,10 @@
+description: >-
+  An input type the format doesn't define is an error.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/when/type
+      line: 5
+      column: 15

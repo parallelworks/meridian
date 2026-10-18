@@ -1,0 +1,7 @@
+name: Hello
+description:
+  file: README.md
+jobs:
+  main:
+    steps:
+      - run: echo hello

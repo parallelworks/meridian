@@ -1,0 +1,4 @@
+description: >-
+  A job's or step's if: can be an expression without ${{ }}, or a status
+  keyword.
+source: ACTIVATE's workflow schema tests

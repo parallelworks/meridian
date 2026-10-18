@@ -1,0 +1,10 @@
+description: >-
+  uses: can't name a local path.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /jobs/main/steps/0/uses
+      line: 5
+      column: 15

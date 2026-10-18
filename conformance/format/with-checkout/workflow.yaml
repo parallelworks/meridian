@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: parallelworks/checkout
+        with:
+          repo: https://github.com/o/r
+          branch: main
+          path: sub
+'on':
+  execute:
+    inputs: {}

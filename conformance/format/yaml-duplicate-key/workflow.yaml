@@ -1,0 +1,7 @@
+jobs:
+  main:
+    steps:
+      - run: echo first
+  main:
+    steps:
+      - run: echo second

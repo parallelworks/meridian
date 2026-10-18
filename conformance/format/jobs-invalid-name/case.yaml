@@ -1,0 +1,11 @@
+description: >-
+  A job's name uses lowercase letters, digits, hyphens and underscores. A job
+  with another name is an error, not an unknown key.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /jobs/Build
+      line: 2
+      column: 3

@@ -1,0 +1,6 @@
+description: >-
+  Submitting a script directly or to Slurm or PBS: a step's ssh: through a
+  jump host, the scheduler-agent and wait-for-agent actions, step ids and
+  needs.<job>.steps.<id>.outputs, and cleanup:.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/workflows/script_submitter/v3.6/general.yaml
+license: Apache-2.0

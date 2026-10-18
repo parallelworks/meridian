@@ -1,0 +1,6 @@
+description: >-
+  A design-of-experiments study: top-level configurations, a range matrix,
+  max-parallel, dropdowns, and subworkflows that are other workflows of the
+  same repository.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/workflows/doe-openfoam/yamls/general.yaml
+license: Apache-2.0

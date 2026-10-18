@@ -1,0 +1,6 @@
+description: >-
+  MLflow on Kubernetes: the kubernetes-clusters, kubernetes-namespaces and
+  kubernetes-pvc input types, comparisons with bare words (== New),
+  useCustomDomain, and optional: ${{ .hidden }}.
+source: https://github.com/parallelworks/interactive_session/blob/26ca7592a258ef82cb479c7bfbce5952ed7cd94b/workflow/k8s/mlflow/general.yaml
+license: MIT

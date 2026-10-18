@@ -1,0 +1,133 @@
+# if-conditions.yaml - what the `if:` keywords do, on steps and on jobs.
+#
+# Pick an Outcome in the form (succeed / fail / cancel), run the workflow, and
+# compare which steps and jobs ran with which were skipped.
+#
+#   keyword      on a STEP: looks at its own job so far      on a JOB: looks at the jobs in `needs`
+#   ----------   -----------------------------------------   ---------------------------------------
+#   always       runs                                        runs
+#   never        skipped                                     skipped
+#   completed    no earlier step failed, job not canceled    every needed job completed
+#   error        an earlier step failed                      a needed job failed
+#   canceled     this job was canceled                       a needed job was canceled
+#   !completed   a step failed or the job was canceled       a needed job failed or was canceled
+#   !error       no earlier step failed                      no needed job failed
+#   !canceled    this job was not canceled                   no needed job was canceled
+#
+# Leaving `if:` out behaves like `if: ${{ completed }}`.
+# The keywords are plain booleans, so they combine with inputs, outputs and
+# operators (&&, ||, !, ternary): see the `fallback` job.
+
+# parallelworks/cancel-jobs needs the grant.
+permissions:
+  - '*'
+
+jobs:
+  # ---- Part 1: `if:` on STEPS. Each keyword looks at what already happened in this job.
+  work:
+    steps:
+      - name: Do the work
+        run: |
+          case "${{ inputs.outcome }}" in
+            succeed) echo "The work finished." ;;
+            fail)    echo "The work hit an error."; exit 1 ;;
+            cancel)  echo "The next step cancels this job." ;;
+          esac
+
+      - name: Cancel this job (only when Outcome is cancel)
+        if: ${{ inputs.outcome == 'cancel' }}
+        uses: parallelworks/cancel-jobs
+        with:
+          jobs:
+            - work
+
+      - name: "if: completed (same as no if)"
+        if: ${{ completed }}
+        run: echo "ran because no earlier step failed and the job was not canceled"
+
+      - name: "if: error"
+        if: ${{ error }}
+        run: echo "ran because an earlier step failed"
+
+      - name: "if: canceled"
+        if: ${{ canceled }}
+        run: echo "ran because this job was canceled"
+
+      - name: "if: !completed"
+        if: ${{ !completed }}
+        run: echo "ran because a step failed OR the job was canceled"
+
+      - name: "if: always"
+        if: ${{ always }}
+        run: echo "ran no matter what happened above"
+
+      - name: "if: never"
+        if: ${{ never }}
+        run: echo "you will never see this line"
+
+  # ---- Part 2: `if:` on JOBS. Each keyword looks at the jobs listed in `needs`.
+  on-completed:
+    needs:
+      - work
+    if: ${{ completed }}
+    steps:
+      - run: echo "ran because work completed (same as leaving if out)"
+
+  on-error:
+    needs:
+      - work
+    if: ${{ error }}
+    steps:
+      - run: echo "ran because work failed"
+
+  on-canceled:
+    needs:
+      - work
+    if: ${{ canceled }}
+    steps:
+      - run: echo "ran because work was canceled"
+
+  on-not-completed:
+    needs:
+      - work
+    if: ${{ !completed }}
+    steps:
+      - run: echo "ran because work failed OR was canceled, so this is a good place for an alert"
+
+  fallback:
+    needs:
+      - work
+    # Keywords are booleans, so an expression can choose one:
+    # "if the box is ticked, run on error; otherwise never run".
+    # `${{ error && inputs.fallback }}` would mean the same thing. The quotes are
+    # for YAML, which would otherwise read the " : " of the ternary as a mapping.
+    if: "${{ inputs.fallback ? error : never }}"
+    steps:
+      - run: echo "ran because work failed and the fallback box was ticked"
+
+  report:
+    needs:
+      - work
+    if: ${{ always }}
+    steps:
+      - run: echo "ran no matter how work ended, so this is a good place for teardown or a summary"
+
+'on':
+  execute:
+    inputs:
+      outcome:
+        type: dropdown
+        label: How should the work job end?
+        default: succeed
+        tooltip: Run once with each choice and compare which steps and jobs ran.
+        options:
+          - label: succeed
+            value: succeed
+          - label: fail (its first step exits 1)
+            value: fail
+          - label: cancel (it cancels itself)
+            value: cancel
+      fallback:
+        type: boolean
+        label: Run the fallback job when work fails?
+        default: true

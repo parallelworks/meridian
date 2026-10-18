@@ -1,0 +1,10 @@
+description: >-
+  A grid's column widths are positive.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/columns/1
+      line: 9
+      column: 43

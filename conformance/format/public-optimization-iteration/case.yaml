@@ -1,0 +1,6 @@
+description: >-
+  One iteration of an optimization loop: a matrix built with range, needs on
+  several jobs, a job's if: always, and a job's if: that compares a matrix
+  value with a dependency's output.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/tutorials/optimization/iteration.yaml
+license: Apache-2.0

@@ -1,0 +1,12 @@
+description: >-
+  A layout option the format doesn't define is an unknown key. ACTIVATE's
+  schema rejects this, but ACTIVATE ignores the key when it runs the workflow,
+  so format 1 warns and ignores it.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /on/execute/inputs/$meta/layout/style
+      line: 9
+      column: 44

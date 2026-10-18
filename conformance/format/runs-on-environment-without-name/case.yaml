@@ -1,0 +1,10 @@
+description: >-
+  An environment needs a name as well as a cluster.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /jobs/main/runs-on/environment
+      line: 4
+      column: 20

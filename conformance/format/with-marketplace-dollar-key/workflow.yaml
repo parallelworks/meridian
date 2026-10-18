@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: marketplace/slug
+        with:
+          $yaml: wf.yaml
+'on':
+  execute:
+    inputs: {}

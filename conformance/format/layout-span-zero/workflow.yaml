@@ -1,0 +1,13 @@
+jobs:
+  main:
+    steps:
+      - run: echo ready
+'on':
+  execute:
+    inputs:
+      $meta:
+        layout: {type: field, field: name, span: 0}
+      name:
+        type: string
+      count:
+        type: number

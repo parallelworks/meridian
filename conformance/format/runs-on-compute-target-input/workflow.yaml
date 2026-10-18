@@ -1,0 +1,11 @@
+'on':
+  execute:
+    inputs:
+      target:
+        type: compute-target
+        label: Run on
+jobs:
+  main:
+    runs-on: ${{ inputs.target }}
+    steps:
+      - run: hostname

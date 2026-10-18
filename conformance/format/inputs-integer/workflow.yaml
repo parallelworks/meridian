@@ -1,0 +1,11 @@
+'on':
+  execute:
+    inputs:
+      ask_timeout:
+        label: Per-cluster timeout (seconds)
+        type: integer
+        default: 300
+jobs:
+  main:
+    steps:
+      - run: echo hello

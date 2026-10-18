@@ -1,0 +1,12 @@
+jobs:
+  main:
+    if: always
+    steps:
+      - run: echo notify
+        if: failure() && inputs.notify
+  report:
+    needs:
+      - main
+    if: needs.main.outputs.ok == 'true'
+    steps:
+      - run: echo report

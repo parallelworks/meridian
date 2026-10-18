@@ -1,0 +1,10 @@
+jobs:
+  main:
+    runs-on:
+      execution-group: gpus
+    resources:
+      cpu: 4
+      memory: 8Gi
+      gpu: 1
+    steps:
+      - run: nvidia-smi

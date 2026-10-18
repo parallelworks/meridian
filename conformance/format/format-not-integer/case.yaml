@@ -1,0 +1,10 @@
+description: >-
+  format is an integer.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /format
+      line: 1
+      column: 9

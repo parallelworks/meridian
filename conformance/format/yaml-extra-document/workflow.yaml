@@ -1,0 +1,9 @@
+jobs:
+  main:
+    steps:
+      - run: echo hello
+---
+jobs:
+  other:
+    steps:
+      - run: echo ignored

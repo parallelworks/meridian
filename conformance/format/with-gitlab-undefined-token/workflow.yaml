@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: gitlab/group/project@main
+        with:
+          $token: x
+'on':
+  execute:
+    inputs: {}

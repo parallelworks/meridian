@@ -1,0 +1,10 @@
+description: >-
+  A job's retry has no timeout: the job's own timeout applies to each attempt.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /jobs/simulate/retry/timeout
+      line: 6
+      column: 7

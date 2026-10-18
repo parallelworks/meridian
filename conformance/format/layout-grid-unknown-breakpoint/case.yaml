@@ -1,0 +1,15 @@
+description: >-
+  A grid's breakpoints are base, sm, md and lg.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/columns
+      line: 9
+      column: 39
+    - severity: warning
+      code: unknown-key
+      path: /on/execute/inputs/$meta/layout/columns/phone
+      line: 9
+      column: 40

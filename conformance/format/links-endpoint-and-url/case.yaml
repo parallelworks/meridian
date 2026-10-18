@@ -1,0 +1,10 @@
+description: >-
+  A link names an endpoint or a URL, not both.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /links/docs
+      line: 3
+      column: 5

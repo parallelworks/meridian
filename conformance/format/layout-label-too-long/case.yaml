@@ -1,0 +1,10 @@
+description: >-
+  A section's label is at most 256 characters.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/label
+      line: 9
+      column: 40

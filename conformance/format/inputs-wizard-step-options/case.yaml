@@ -1,0 +1,4 @@
+description: >-
+  A wizard step can repeat, with a title and description for each repetition,
+  and its fields can set their width.
+source: ACTIVATE's workflow schema tests

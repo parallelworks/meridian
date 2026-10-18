@@ -1,0 +1,12 @@
+description: >-
+  A repeated key keeps its last value, as ACTIVATE reads it, with a warning.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: duplicate-key
+      path: /jobs/main
+      line: 5
+      column: 3
+  values:
+    /jobs/main/steps/0/run: "echo second"

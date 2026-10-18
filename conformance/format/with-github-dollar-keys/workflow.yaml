@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: github/owner/repo@main
+        with:
+          $yaml: wf.yaml
+          $thumbnail: i.png
+          an_input: 1
+'on':
+  execute:
+    inputs: {}

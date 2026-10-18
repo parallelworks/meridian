@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: parallelworks/checkout
+        with:
+          repo: r
+          branch: b
+          $yaml: wf.yaml
+'on':
+  execute:
+    inputs: {}

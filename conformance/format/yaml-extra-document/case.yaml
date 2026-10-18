@@ -1,0 +1,13 @@
+description: >-
+  Only a file's first YAML document is read, as ACTIVATE reads it, with a
+  warning if there are more.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: extra-document
+      path: ""
+      line: 5
+      column: 1
+  values:
+    /jobs/main/steps/0/run: "echo hello"

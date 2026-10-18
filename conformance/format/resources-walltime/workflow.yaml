@@ -1,0 +1,10 @@
+jobs:
+  main:
+    runs-on:
+      execution-group: hpc
+    timeout: 2h
+    resources:
+      cpu: 64
+      walltime: 2h
+    steps:
+      - run: ./simulate

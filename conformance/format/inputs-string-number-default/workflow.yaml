@@ -1,0 +1,11 @@
+'on':
+  execute:
+    inputs:
+      keep_alive:
+        label: Keep models loaded
+        type: string
+        default: -1
+jobs:
+  main:
+    steps:
+      - run: echo hello
