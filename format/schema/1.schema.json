@@ -2,6 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "format": {
+      "description": "The workflow format this file is written in. A workflow without it is format 1.",
+      "const": 1
+    },
+    "name": {
+      "description": "The workflow's name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "description": "What the workflow does: the text itself, or a file beside the workflow that holds it.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/workflowFile"
+            }
+          },
+          "required": ["file"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "icon": {
+      "description": "A small image that stands for the workflow.",
+      "$ref": "#/$defs/workflowFile"
+    },
+    "thumbnail": {
+      "description": "A larger picture of the workflow, such as a screenshot.",
+      "$ref": "#/$defs/workflowFile"
+    },
     "permissions": {
       "type": "array",
       "items": {
@@ -206,7 +241,7 @@
               "type": "string"
             },
             "runs-on": {
-              "description": "Where this job runs: an environment named by cluster and name, or the value of a `compute-target` input (`${{ inputs.target }}`). An environment runs the job as a scheduler job without the user workspace. Mutually exclusive with `ssh`.",
+              "description": "Where this job runs: an environment named by cluster and name, an execution group, or the value of a `compute-target` input (`${{ inputs.target }}`). An environment runs the job as a scheduler job without the user workspace. Mutually exclusive with `ssh`.",
               "oneOf": [
                 {
                   "type": "string",
@@ -241,6 +276,18 @@
                   "additionalProperties": false
                 },
                 {
+                  "title": "RunsOnExecutionGroup",
+                  "type": "object",
+                  "properties": {
+                    "execution-group": {
+                      "description": "The execution group to run on, by name. The job runs on the member that can start it soonest, in the group's order.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["execution-group"],
+                  "additionalProperties": false
+                },
+                {
                   "title": "RunsOnComputeTarget",
                   "description": "A compute target as a `compute-target` input produces it.",
                   "type": "object",
@@ -269,6 +316,68 @@
                   "additionalProperties": false
                 }
               ]
+            },
+            "resources": {
+              "description": "What the job needs from where it runs. The job runs only where at least this much is offered, and a scheduler is asked for it.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "Cores, such as 4 or 500m.",
+                  "type": ["number", "string"]
+                },
+                "memory": {
+                  "description": "Memory with units, such as 8Gi or 512Mi.",
+                  "type": "string"
+                },
+                "gpu": {
+                  "description": "GPUs.",
+                  "type": ["integer", "string"]
+                }
+              },
+              "additionalProperties": false
+            },
+            "retry": {
+              "description": "Runs the job again, from its first step, when it fails for one of the listed reasons. A job never runs again otherwise once a step has started.",
+              "type": "object",
+              "properties": {
+                "reasons": {
+                  "description": "Why the job may run again. worker-lost: its worker stopped reporting after a step started, as when its host goes down.",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["worker-lost"]
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "max-retries": {
+                  "description": "How many times the job may run again. Defaults to 10.",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\${{.*}}$"
+                    }
+                  ]
+                },
+                "interval": {
+                  "description": "How long to wait before running the job again, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 5s.",
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "pattern": "^\\${{.*}}$"
+                    },
+                    {
+                      "pattern": "^(\\d+)(d|h|m|s)?$"
+                    }
+                  ]
+                }
+              },
+              "required": ["reasons"],
+              "additionalProperties": false
             },
             "ssh": {
               "description": "Execute this job on a remote host.",
@@ -946,6 +1055,11 @@
   "required": ["jobs"],
   "additionalProperties": false,
   "$defs": {
+    "workflowFile": {
+      "description": "A path to a file, relative to the workflow file. It may not leave the workflow's directory.",
+      "type": "string",
+      "minLength": 1
+    },
     "layoutCount": {
       "type": "integer",
       "minimum": 1,
@@ -2343,6 +2457,44 @@
                 "multi": {
                   "type": "boolean",
                   "description": "Allow selecting multiple compute resources (default: false)"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "ExecutionGroupsInputField",
+              "description": "Choose one of the execution groups the person running the workflow can use. The value is its name. Pass it to a job as `runs-on: { execution-group: ${{ inputs.<name> }} }`.",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "execution-groups"
+                },
+                "default": {
+                  "description": "The name of the execution group selected by default.",
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
                 }
               },
               "additionalProperties": false,
