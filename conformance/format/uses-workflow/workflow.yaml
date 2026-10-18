@@ -1,0 +1,8 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: workflow/my-workflow
+'on':
+  execute:
+    inputs: {}

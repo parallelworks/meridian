@@ -1,0 +1,6 @@
+description: >-
+  A quoted << is an ordinary key.
+source: ACTIVATE's YAML loader tests
+expect:
+  values:
+    /configurations/quoted/inputs/<<: "value"

@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=https://activate.parallel.works/workflow.schema.json
+---
+on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+        label: "Target Cluster"
+        autoselect: true
+      benchmark_config:
+        type: group
+        label: "Benchmark Configuration"
+        items:
+          duration:
+            type: number
+            label: "Test Duration (seconds)"
+            default: 10
+            min: 5
+            max: 60
+          run_cpu:
+            type: boolean
+            label: "Run CPU Benchmark"
+            default: true
+          run_memory:
+            type: boolean
+            label: "Run Memory Benchmark"
+            default: true
+          run_disk:
+            type: boolean
+            label: "Run Disk I/O Benchmark"
+            default: true
+
+sessions:
+  results:
+    type: tunnel
+    redirect: true
+
+permissions:
+  - "*"
+
+jobs:
+  run-benchmarks:
+    steps:
+      - name: Checkout service scripts
+        uses: parallelworks/checkout
+        ssh:
+          remoteHost: ${{ inputs.cluster.ip }}
+        with:
+          repo: https://github.com/parallelworks/activate-benchmark.git
+          branch: fix/workflow-additional
+      - name: benchmark
+        run: |
+          bash scripts/run_benchmarks.sh
+        env:
+          DURATION: ${{ inputs.benchmark_config.duration }}
+          RUN_CPU: ${{ inputs.benchmark_config.run_cpu }}
+          RUN_MEMORY: ${{ inputs.benchmark_config.run_memory }}
+          RUN_DISK: ${{ inputs.benchmark_config.run_disk }}
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    outputs:
+      results_file: ${{ steps.benchmark.outputs.RESULTS_FILE }}
+
+  visualize_results:
+    needs: [run-benchmarks]
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    steps:
+      - name: Setup and generate visualization
+        run: |
+          # Kill any existing process on port 8080
+          if lsof -ti:8080 > /dev/null 2>&1; then
+            echo "Killing existing process on port 8080..."
+            kill -9 $(lsof -ti:8080) 2>/dev/null || true
+            sleep 1
+          fi
+
+          # Create venv if it doesn't exist
+          if [ ! -d ~/venv ]; then
+            python3 -m venv ~/venv
+          fi
+          source ~/venv/bin/activate
+
+          # Install dependencies (use uv if available, fallback to pip)
+          if command -v uv &> /dev/null; then
+            uv pip install -r requirements.txt
+          else
+            pip install -r requirements.txt
+          fi
+
+          # Generate the visualization
+          python3 scripts/generate_plot.py
+
+          echo "HOSTNAME=$(hostname)" >> $OUTPUTS
+          echo "PORT=8080" >> $OUTPUTS
+      - name: Update session
+        uses: parallelworks/update-session
+        with:
+          target: ${{ inputs.cluster.id }}
+          name: ${{ sessions.results }}
+          remoteHost: ${{ needs.visualize_results.outputs.HOSTNAME }}
+          remotePort: ${{ needs.visualize_results.outputs.PORT }}
+      - name: Serve results (blocking)
+        run: |
+          source ~/venv/bin/activate
+          echo "Starting HTTP server on port 8080..."
+          echo "Session is active. Cancel the workflow to stop."
+          # Run server in foreground - this blocks and keeps session alive
+          python3 scripts/serve_results.py

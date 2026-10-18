@@ -1,0 +1,4 @@
+description: >-
+  Scheduler inputs can default to a literal account, partition or QoS, and a
+  partition input can name its account literally.
+source: Public workflows that ACTIVATE runs

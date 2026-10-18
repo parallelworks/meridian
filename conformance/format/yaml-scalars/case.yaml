@@ -1,0 +1,22 @@
+description: >-
+  Scalars are read as ACTIVATE's YAML library reads them. Booleans are YAML
+  1.2's, so on and yes are strings. 0o17 and 017 are octal, 0x1F is
+  hexadecimal, and digits can be separated by underscores. A date becomes an
+  RFC 3339 string, as ACTIVATE stores it. A key is its text.
+source: Meridian
+expect:
+  values:
+    /configurations/scalars/inputs/on: "on"
+    /configurations/scalars/inputs/yes: "yes"
+    /configurations/scalars/inputs/true: true
+    /configurations/scalars/inputs/octal: 15
+    /configurations/scalars/inputs/leading-zero: 15
+    /configurations/scalars/inputs/hex: 31
+    /configurations/scalars/inputs/underscores: 1000
+    /configurations/scalars/inputs/float: 1.5
+    /configurations/scalars/inputs/exponent: 1000
+    /configurations/scalars/inputs/date: "2001-12-14T00:00:00Z"
+    /configurations/scalars/inputs/timestamp: "2001-12-14T21:59:43.1-05:00"
+    /configurations/scalars/inputs/tilde: null
+    /configurations/scalars/inputs/empty: null
+    /configurations/scalars/inputs/quoted: "017"

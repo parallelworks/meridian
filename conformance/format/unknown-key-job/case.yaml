@@ -1,0 +1,11 @@
+description: >-
+  A key a job doesn't define is an unknown key: early-cancel belongs on a
+  step.
+source: Public workflows that ACTIVATE runs
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /jobs/main/early-cancel
+      line: 3
+      column: 5

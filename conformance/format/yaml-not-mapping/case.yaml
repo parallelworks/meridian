@@ -1,0 +1,10 @@
+description: >-
+  A workflow is a mapping.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: ""
+      line: 1
+      column: 1

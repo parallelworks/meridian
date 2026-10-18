@@ -1,0 +1,6 @@
+jobs:
+  main:
+    runs-on:
+      execution-group: gpus
+    steps:
+      - run: hostname

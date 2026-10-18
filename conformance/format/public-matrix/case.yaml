@@ -1,0 +1,6 @@
+description: >-
+  A matrix over a literal list, max-parallel from an input, a job's if: that
+  compares matrix and input values, a job's working-directory, and
+  PW_PARENT_JOB_DIR.
+source: https://github.com/parallelworks/interactive_session/blob/26ca7592a258ef82cb479c7bfbce5952ed7cd94b/workflow/tutorials/matrix/workflow.yaml
+license: MIT

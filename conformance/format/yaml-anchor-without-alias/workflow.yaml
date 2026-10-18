@@ -1,0 +1,6 @@
+env:
+  GREETING: &greeting hello
+jobs:
+  main:
+    steps:
+      - run: echo hello

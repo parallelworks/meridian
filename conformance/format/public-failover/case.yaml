@@ -1,0 +1,6 @@
+description: >-
+  Failover across clusters with a step retry: a list input with a template,
+  the get operator chained on PW_WORKFLOW_STEP_CURRENT_RETRY, max-retries and
+  timeout from expressions, arithmetic, and a github/ subworkflow with $yaml.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/tutorials/endpoint-workflows/07-failover.yaml
+license: Apache-2.0

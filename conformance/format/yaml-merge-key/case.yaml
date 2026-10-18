@@ -1,0 +1,10 @@
+description: >-
+  YAML merge keys aren't allowed, as in ACTIVATE.
+source: ACTIVATE's YAML loader tests
+expect:
+  diagnostics:
+    - severity: error
+      code: unsupported
+      path: /jobs/main
+      line: 3
+      column: 5

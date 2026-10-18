@@ -1,0 +1,8 @@
+description: >-
+  An empty file isn't a workflow.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: ""

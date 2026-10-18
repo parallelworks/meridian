@@ -1,0 +1,775 @@
+# Spack MPI Stack Builder — general variant (standard cloud/on-prem SLURM & PBS).
+#
+# Builds GCC + OpenMPI + MPICH + Intel MPI + GROMACS (per MPI) + OSU (per MPI),
+# with an optional GPU path, and publishes everything to a binary build cache.
+#
+# This is a BUILD workflow, not an endpoint service: it runs to completion and
+# exits. The pw endpoint it registers at the end serves an empty page and exists
+# only to satisfy the shared end-to-end test runner (README.md).
+#
+# Flow:
+#   preprocess -> checkout app/, write inputs.sh, bootstrap Spack + build cache
+#                 (controller.sh), decide overrides vs detection, assemble the
+#                 two submitted scripts
+#   detect     -> script_submitter, scheduler=true: runs on a WORKER node and
+#                 reports its fabric, GPU, microarchitecture and site externals
+#   build      -> script_submitter: on the LOGIN node by default (scheduler=false;
+#                 internet for source fetches, no queue walltime), or submitted
+#                 to a WORKER when cluster.build_on == 'compute'
+#   verify     -> turn a failed build into a failed run
+#   endpoint   -> a placeholder pw endpoint, and wait_for_endpoint to release the
+#                 run once it is up. The build needs neither; they exist so the
+#                 shared end-to-end test runner, which demands an endpoint, can
+#                 test this workflow at all. See README.md.
+#
+# Why detection and the build can run in different places: on many clusters only
+# the login node has internet, and it is routinely a different instance type from
+# the compute nodes, so the stack has to be described by the workers but compiled
+# on the login node. build.sh reconciles the two (see app/resolve-target.py) and
+# says out loud when the login node cannot emit the workers' target. Where the
+# workers have internet too, building on one removes that reconciliation.
+# Either way the build uses the site externals discovered on the WORKER
+# (app/find-externals.sh): the binaries run there.
+#
+# Override policy: target, fabric and cuda-arch are all-or-nothing. When all
+# three are set, detection is skipped entirely and no worker is allocated.
+
+permissions: ['*']
+
+'on':
+  execute:
+    inputs:
+      $meta:
+        labelPosition: top
+
+      cluster_header:
+        type: header
+        text: Target Cluster
+        size: 18
+
+      cluster:
+        type: group
+        label: Compute Cluster Settings
+        items:
+          resource:
+            type: compute-clusters
+            label: Compute cluster
+            include-workspace: false
+            optional: false
+            tooltip: >-
+              The cluster to build on. A worker is allocated to inspect the compute
+              hardware; the compile runs on the login node unless "Run the build
+              on" below says otherwise.
+          scheduler:
+            type: boolean
+            default: true
+            label: Inspect a compute node?
+            hidden: ${{ inputs.cluster.resource.schedulerType == '' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              Yes → a short job runs on a WORKER to report its fabric, GPU and CPU
+                    microarchitecture, so the stack is built for the right hardware.
+              No  → inspect the login node instead. Only correct when the login and
+                    compute nodes are the same instance type.
+          build_on:
+            type: dropdown
+            label: Run the build on
+            default: login
+            hidden: ${{ inputs.cluster.resource.schedulerType == '' || inputs.cluster.scheduler == false }}
+            ignore: ${{ .hidden }}
+            options:
+              - label: Login node (needs no worker internet)
+                value: login
+              - label: Compute node (worker must reach the internet)
+                value: compute
+            tooltip: |
+              Login node → compile on the head node: it has internet for source
+                           fetches and no walltime. The build targets the workers,
+                           falling back to a common target if the head cannot emit theirs.
+              Compute node → submit the build as a job in the partition inspected
+                           below. Targets the worker exactly, but the worker must
+                           reach github.com and the source mirrors, and the job must
+                           fit in the build walltime. On SLURM the job requests
+                           "Parallel build jobs" CPUs, capped at the worker's
+                           physical cores; on PBS request them in the build directives.
+          slurm:
+            type: group
+            label: SLURM Directives (hardware inspection job, and the build when it runs on a worker)
+            hidden: ${{ inputs.cluster.resource.schedulerType != 'slurm' || inputs.cluster.scheduler == false }}
+            ignore: ${{ inputs.cluster.resource.schedulerType != 'slurm' || inputs.cluster.scheduler == false }}
+            items:
+              is_enabled:
+                type: boolean
+                hidden: true
+                default: true
+                label: Is SLURM Enabled? Yes, unless the slurm section is hidden and ignored
+              partition:
+                type: slurm-partitions
+                label: SLURM partition
+                optional: true
+                resource: ${{ inputs.cluster.resource }}
+                tooltip: >-
+                  The partition holding the nodes this stack is FOR. Pick the one you
+                  will run on; a heterogeneous cluster needs one run per node type.
+              time:
+                label: Walltime
+                type: string
+                default: '00:20:00'
+                tooltip: >-
+                  Inspection takes seconds, but a cloud-burst node can take 6+ minutes
+                  to power on, so the default leaves room for that.
+              build_time:
+                label: Build walltime
+                type: string
+                default: '08:00:00'
+                hidden: ${{ inputs.cluster.build_on != 'compute' }}
+                ignore: ${{ .hidden }}
+                tooltip: >-
+                  Walltime of the build job on the worker. A cold build of the full
+                  stack takes hours; a warm build cache makes it minutes. A build that
+                  runs out of walltime is killed and the run fails.
+              gpus:
+                label: Number of GPUs
+                type: number
+                optional: true
+                min: 0
+                default: 0
+                tooltip: >-
+                  Request a GPU here when building the GPU path, so inspection lands on
+                  a node that actually has one and can report its compute capability.
+              scheduler_directives:
+                type: editor
+                optional: true
+                tooltip: |
+                  Add extra SLURM directives, one per line, using the #SBATCH prefix:
+                  #SBATCH --constraint=<feature>
+                  #SBATCH --nodelist=<node-name>
+          pbs:
+            type: group
+            label: PBS Directives (hardware inspection job, and the build when it runs on a worker)
+            hidden: ${{ inputs.cluster.resource.schedulerType != 'pbs' || inputs.cluster.scheduler == false }}
+            ignore: ${{ inputs.cluster.resource.schedulerType != 'pbs' || inputs.cluster.scheduler == false }}
+            items:
+              is_enabled:
+                type: boolean
+                hidden: true
+                default: true
+                label: Is PBS enabled? Yes, unless the pbs section is hidden and ignored
+              scheduler_directives:
+                label: Scheduler Directives
+                type: editor
+                optional: true
+                tooltip: |
+                  Add extra PBS directives, one per line, using the #PBS prefix:
+                  #PBS -l mem=16gb
+              build_scheduler_directives:
+                label: Build job directives (added to the above)
+                type: editor
+                optional: true
+                default: '#PBS -l walltime=08:00:00'
+                hidden: ${{ inputs.cluster.build_on != 'compute' }}
+                ignore: ${{ .hidden }}
+                tooltip: |
+                  Extra PBS directives for the build job only, one per line:
+                  #PBS -l walltime=08:00:00
+                  #PBS -l select=1:ncpus=8
+
+      spack_header:
+        type: header
+        text: Stack Options
+        size: 18
+
+      service:
+        type: group
+        items:
+          # Stable identifier prefix used for job and directory naming.
+          # Keep stable; do not template from other inputs.
+          name:
+            type: string
+            default: spack-builder
+            hidden: true
+          spack_version:
+            type: string
+            label: Spack version (git tag)
+            default: v1.2.2
+            tooltip: >-
+              Must be a v1.x tag. Compilers are dependencies in v1 and the
+              environment template relies on that; older tags will not concretize.
+          install_prefix:
+            type: string
+            label: Spack root
+            default: ${HOME}/spack
+            tooltip: >-
+              Must be on a filesystem shared between the login and compute nodes.
+              Kept in user space so no step needs sudo.
+          buildcache_path:
+            type: string
+            label: Binary build cache
+            default: ${HOME}/spack-buildcache
+            tooltip: >-
+              Directory-backed Spack mirror. Every package built here is pushed to it,
+              and later runs install from it instead of recompiling.
+          module_root:
+            type: string
+            label: Module tree root
+            default: ${HOME}/pw/software/modules
+            tooltip: >-
+              Where Spack writes the TCL module tree. Modules land in
+              <root>/<platform>-<os>-<target>, so stacks built for different
+              microarchitectures already land side by side; point separate stacks
+              at separate roots to keep them fully independent. Leave blank to use
+              <Spack root>/share/spack/modules.
+          build_jobs:
+            type: number
+            label: Parallel build jobs (-j)
+            default: 8
+            min: 1
+            max: 192
+            tooltip: >-
+              When the build runs on a worker, this is capped at the worker's
+              physical cores (hyperthreads are not counted) and at the CPUs the job
+              is actually given.
+          concretize_only:
+            type: boolean
+            label: Dry run
+            default: false
+            tooltip: >-
+              Build workflow stops after concretizing. Bootstrap Spack, set up the build 
+              cache, inspect the hardware, render and concretize the environment, then 
+              stop before the long compile. Use this to validate a cluster or a spec 
+              change in minutes.
+          use_public_buildcache:
+            type: boolean
+            label: Use public Spack binaries
+            default: false
+            tooltip: >-
+              Experimental. Can skip large builds when hashes match, but fabric-specific
+              variants usually prevent that, so it is off by default.
+          build_gpu:
+            type: boolean
+            label: Build the GPU path
+            default: false
+            tooltip: >-
+              Opt-in. Adds a CUDA-aware OpenMPI and a GROMACS+cuda built against it.
+              The CPU MPIs and CPU GROMACS are always built regardless.
+
+          overrides_header:
+            type: header
+            text: Manual overrides (advanced — all three together or none)
+            size: 14
+          use_overrides:
+            type: boolean
+            label: Skip hardware inspection
+            default: false
+            tooltip: >-
+              When on, you MUST set the whole profile manually including the target, 
+              fabric and cuda-arch below; mixing some overrides with inspection is 
+              rejected. With all three set, no worker node is allocated at all.
+          override_target:
+            type: string
+            label: Spack microarch target
+            placeholder: x86_64_v4
+            hidden: ${{ !inputs.service.use_overrides }}
+            tooltip: e.g. x86_64_v3, x86_64_v4, neoverse_v1, zen4, cascadelake.
+          override_fabric:
+            type: dropdown
+            label: Fabric profile
+            hidden: ${{ !inputs.service.use_overrides }}
+            options:
+              - label: AWS EFA (OFI)
+                value: aws
+              - label: Azure InfiniBand (UCX/verbs)
+                value: azure
+              - label: GCP (OFI / verbs)
+                value: gcp
+              - label: Oracle RDMA (UCX/verbs)
+                value: oracle
+              - label: Generic (TCP/shm, no RDMA)
+                value: generic
+          override_cuda_arch:
+            type: string
+            label: CUDA arch (or 'none')
+            placeholder: '90'
+            hidden: ${{ !inputs.service.use_overrides }}
+            tooltip: >-
+              Spack cuda_arch (80=A100, 90=H100, 89=L4/L40). Use 'none' to force a
+              CPU-only build even with overrides on.
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Check out app/, write inputs.sh, bootstrap Spack and the build cache on
+  #    the login node, and assemble the two scripts the submitter will run.
+  # -------------------------------------------------------------------------
+  preprocess:
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    outputs:
+      RUNDIR: ${{ needs.preprocess.steps.assemble.outputs.RUNDIR }}
+      DETECT_DIR: ${{ needs.preprocess.steps.assemble.outputs.DETECT_DIR }}
+      BUILD_DIR: ${{ needs.preprocess.steps.assemble.outputs.BUILD_DIR }}
+      ENDPOINT_DIR: ${{ needs.preprocess.steps.assemble.outputs.ENDPOINT_DIR }}
+      DETECT_SCRIPT: ${{ needs.preprocess.steps.assemble.outputs.DETECT_SCRIPT }}
+      BUILD_SCRIPT: ${{ needs.preprocess.steps.assemble.outputs.BUILD_SCRIPT }}
+      ENDPOINT_SCRIPT: ${{ needs.preprocess.steps.assemble.outputs.ENDPOINT_SCRIPT }}
+      EXEC_DIR: ${{ needs.preprocess.steps.assemble.outputs.EXEC_DIR }}
+      EXEC_SCRIPT: ${{ needs.preprocess.steps.assemble.outputs.EXEC_SCRIPT }}
+      SKIP_CLEANUP_PATH: ${{ needs.preprocess.steps.assemble.outputs.SKIP_CLEANUP_PATH }}
+      NEED_DETECT: ${{ needs.preprocess.steps.assemble.outputs.NEED_DETECT }}
+    steps:
+      - name: Checkout workflow app
+        uses: parallelworks/checkout
+        with:
+          repo: https://github.com/parallelworks/workflows.git
+          branch: canary
+          sparse_checkout:
+            - workflows/spack-builder/app
+            - tools/utils
+
+      - name: Create Inputs
+        run: |
+          set -x
+          # Write PW variables
+          env | grep '^PW_' | grep -v 'PW_API_KEY' > inputs.sh
+          # Encase values between quotes
+          sed -i 's/=\(.*\)/="\1"/' inputs.sh
+          cat <<'EOF' >> inputs.sh
+          PATH=$HOME/pw:$PATH
+          service_name="${{ inputs.service.name }}"
+          pw_endpoints_args="--name ${{ inputs.service.name }}-${PW_RUN_SLUG}"
+          service_spack_version="${{ inputs.service.spack_version }}"
+          service_install_prefix="${{ inputs.service.install_prefix }}"
+          service_buildcache_path="${{ inputs.service.buildcache_path }}"
+          service_build_jobs="${{ inputs.service.build_jobs }}"
+          service_build_gpu="${{ inputs.service.build_gpu }}"
+          service_module_root="${{ inputs.service.module_root }}"
+          service_concretize_only="${{ inputs.service.concretize_only }}"
+          service_use_public_buildcache="${{ inputs.service.use_public_buildcache }}"
+          service_build_on="${{ inputs.cluster.build_on }}"
+          OVERRIDE_TARGET="${{ inputs.service.use_overrides && inputs.service.override_target || '' }}"
+          OVERRIDE_FABRIC="${{ inputs.service.use_overrides && inputs.service.override_fabric || '' }}"
+          OVERRIDE_CUDA_ARCH="${{ inputs.service.use_overrides && inputs.service.override_cuda_arch || '' }}"
+          EOF
+          # Resolved HERE, and deliberately not inside the quoted heredoc above.
+          # Each submitted job runs in its OWN directory under this one, so a
+          # ${PWD}-relative value would expand differently in every job that
+          # sources inputs.sh: detect would write fabric.env into detect/ and the
+          # build would look for it in build/, and app_dir would point at a
+          # checkout that only exists here. That is exactly how run thorough-oryx
+          # failed with "No fabric profile at .../build/fabric.env".
+          cat <<EOF >> inputs.sh
+          app_dir="${PWD}/workflows/spack-builder/app"
+          fabric_env="${PWD}/fabric.env"
+          env_dir="${PWD}/spack-env"
+          modulepath_env="${PWD}/modulepath.env"
+          externals_head="${PWD}/externals.head.yaml"
+          externals_compute="${PWD}/externals.compute.yaml"
+          EOF
+          # Remove empty variables
+          sed -i '/=\s*$\|=undefined\s*$/d' inputs.sh
+          sed -i '/=""/d' inputs.sh
+          # Add export to all lines
+          sed -i 's/^/export /' inputs.sh
+          cat inputs.sh
+
+      - name: Controller Preprocessing
+        run: |
+          set -euo pipefail
+          set -x
+          # The login node is the one with internet: bootstrap Spack, record its
+          # site externals and register the build cache here, once, before
+          # anything is submitted. The inspection job needs this Spack to exist
+          # so it can report `spack arch -t`.
+          cp inputs.sh controller-${PW_JOB_ID}.sh
+          cat "workflows/spack-builder/app/controller.sh" >> controller-${PW_JOB_ID}.sh
+          bash controller-${PW_JOB_ID}.sh
+
+      - name: Assemble scripts
+        id: assemble
+        run: |
+          set -euo pipefail
+          set -x
+          set -a; . ./inputs.sh; set +a
+
+          # All-or-nothing override policy. When it returns NEED_DETECT=0 the
+          # fabric profile is already written and no worker is allocated.
+          bash "workflows/spack-builder/app/resolve-profile.sh" \
+               "${PWD}/profile.decision" "${PWD}/fabric.env"
+          . "${PWD}/profile.decision"
+          echo "NEED_DETECT=${NEED_DETECT}" | tee -a $OUTPUTS
+          echo "RUNDIR=${PWD}" | tee -a $OUTPUTS
+
+          # One run directory per submitted job. They must NOT share one:
+          # script_submitter streams its script's output to run.${PW_JOB_ID}.out
+          # in its rundir, and all three submissions of a run carry the same
+          # PW_JOB_ID -- so a shared directory means the endpoint job truncates
+          # the build log that explains the build. The scripts
+          # themselves are unaffected: every path they use -- inputs.sh,
+          # fabric.env, spack-env, app/ -- is absolute and still points here.
+          mkdir -p "${PWD}/detect" "${PWD}/build" "${PWD}/endpoint" "${PWD}/exec"
+          echo "DETECT_DIR=${PWD}/detect" | tee -a $OUTPUTS
+          echo "BUILD_DIR=${PWD}/build" | tee -a $OUTPUTS
+          echo "ENDPOINT_DIR=${PWD}/endpoint" | tee -a $OUTPUTS
+          echo "EXEC_DIR=${PWD}/exec" | tee -a $OUTPUTS
+
+          # script_submitter runs an existing script, so each one is inputs.sh
+          # concatenated with its body. Note this puts the script in the run
+          # directory, not in app/ -- which is why the scripts take their paths
+          # from inputs.sh rather than from $BASH_SOURCE.
+          cp inputs.sh detect-${PW_JOB_ID}.sh
+          cat "workflows/spack-builder/app/detect-fabric.sh" >> detect-${PW_JOB_ID}.sh
+          echo "DETECT_SCRIPT=${PWD}/detect-${PW_JOB_ID}.sh" | tee -a $OUTPUTS
+
+          cp inputs.sh build-${PW_JOB_ID}.sh
+          cat "workflows/spack-builder/app/build.sh" >> build-${PW_JOB_ID}.sh
+          echo "BUILD_SCRIPT=${PWD}/build-${PW_JOB_ID}.sh" | tee -a $OUTPUTS
+
+          cp inputs.sh exec-${PW_JOB_ID}.sh
+          cat "workflows/spack-builder/app/check-exec.sh" >> exec-${PW_JOB_ID}.sh
+          echo "EXEC_SCRIPT=${PWD}/exec-${PW_JOB_ID}.sh" | tee -a $OUTPUTS
+
+          # The placeholder endpoint. The trap wrapper is the one every service
+          # workflow here uses: it runs cancel.sh once and then kills the process
+          # group, which is what makes `pw endpoints delete` on teardown reliable.
+          cp inputs.sh endpoint-${PW_JOB_ID}.sh
+          cat <<'EOF' >> endpoint-${PW_JOB_ID}.sh
+
+          cleanup() {
+              trap - EXIT INT TERM HUP QUIT USR1 USR2 PIPE
+              echo "::notice::Cleaning up..."
+              if [ -f cancel.sh ]; then
+                  mv cancel.sh cancel.sh.submitted
+                  echo "echo Cleanup script was already executed" > cancel.sh
+                  bash cancel.sh.submitted
+              fi
+              kill -- -$$
+          }
+
+          trap cleanup EXIT INT TERM HUP QUIT USR1 USR2 PIPE
+          EOF
+          cat "workflows/spack-builder/app/start-template.sh" >> endpoint-${PW_JOB_ID}.sh
+          echo "ENDPOINT_SCRIPT=${PWD}/endpoint-${PW_JOB_ID}.sh" | tee -a $OUTPUTS
+          echo "SKIP_CLEANUP_PATH=${PWD}/SKIP_CLEANUP" | tee -a $OUTPUTS
+
+  # -------------------------------------------------------------------------
+  # 2. Inspect the compute hardware. Skipped entirely when complete overrides
+  #    were supplied, so no worker is allocated in that case.
+  # -------------------------------------------------------------------------
+  detect:
+    needs:
+      - preprocess
+    if: ${{ needs.preprocess.outputs.NEED_DETECT == '1' }}
+    # For the `run:` step below. The submitter step carries its own `resource:`
+    # and is unaffected; this only says where a plain `run:` executes, which for
+    # the head-node inspection must be the login node.
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    steps:
+      - name: Inspect compute node
+        uses: github/parallelworks/workflows@canary
+        early-cancel: any-job-failed
+        with:
+          $yaml: workflows/script_submitter/v3.6/general.yaml
+          resource: ${{ inputs.cluster.resource }}
+          shebang: '#!/bin/bash'
+          rundir: ${{ needs.preprocess.outputs.DETECT_DIR }}
+          use_existing_script: true
+          script_path: ${{ needs.preprocess.outputs.DETECT_SCRIPT }}
+          define_cleanup_script: true
+          cleanup_script_path: ./cancel.sh
+          scheduler: ${{ inputs.cluster.scheduler }}
+          use_scheduler_agent: false
+          submit_and_exit: false
+          skip_cleanups_file: ''
+          slurm:
+            is_enabled: ${{ inputs.cluster.slurm.is_enabled }}
+            partition: ${{ inputs.cluster.slurm.partition }}
+            scheduler_directives: ${{ inputs.cluster.slurm.scheduler_directives }}
+            time: ${{ inputs.cluster.slurm.time }}
+            gpus: ${{ inputs.cluster.slurm.gpus }}
+          pbs:
+            is_enabled: ${{ inputs.cluster.pbs.is_enabled }}
+            scheduler_directives: ${{ inputs.cluster.pbs.scheduler_directives }}
+
+      # A login-node build links against what the LOGIN node has, not what the
+      # worker has, so the worker's header inventory alone cannot predict a build
+      # failure. This records the head node's own parameters -- microarch, image,
+      # toolchain, site externals -- and fails the run when a header exists on the
+      # worker but not here (only reported when the build runs on a worker).
+      - name: Inspect head node
+        run: |
+          set -uo pipefail
+          cd "${{ needs.preprocess.outputs.RUNDIR }}"
+          set -a; . ./inputs.sh; set +a
+          bash "${app_dir}/inspect-head-node.sh" \
+               "${{ needs.preprocess.outputs.RUNDIR }}" "${app_dir}"
+
+  # -------------------------------------------------------------------------
+  # 3. Build. On the LOGIN node by default: scheduler=false sends this down
+  #    script_submitter's ssh_job path, so there is no queue walltime bounding a
+  #    multi-hour compile and source fetches have internet. With build_on ==
+  #    'compute' it is submitted to the partition, GPUs and directives of the
+  #    inspection job (so it lands on the same node type) with its own walltime.
+  #    Output streams to run.<JOBID>.out for platform log visibility either way.
+  # -------------------------------------------------------------------------
+  size_build:
+    needs:
+      - preprocess
+      - detect
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    outputs:
+      BUILD_CPUS: ${{ needs.size_build.steps.size.outputs.BUILD_CPUS }}
+    steps:
+      - name: Size the worker build job
+        id: size
+        run: |
+          set -uo pipefail
+          want="${{ inputs.service.build_jobs }}"
+          if [ "${{ inputs.cluster.build_on }}" != "compute" ]; then
+            echo "BUILD_CPUS=${want}" | tee -a $OUTPUTS
+            exit 0
+          fi
+          # Physical cores, not threads: a worker launched with hyperthreading
+          # disabled can still be configured in Slurm with the instance type's
+          # vCPU count, and a request sized from that never fits the node.
+          DETECT_CPUS_PHYSICAL=""; DETECT_CPUS_SLURM=""
+          f="${{ needs.preprocess.outputs.RUNDIR }}/fabric.env"
+          [ -f "$f" ] && . "$f"
+          caps=()
+          [ -n "$DETECT_CPUS_PHYSICAL" ] && caps+=("$DETECT_CPUS_PHYSICAL worker physical cores")
+          [ -n "$DETECT_CPUS_SLURM" ] && caps+=("$DETECT_CPUS_SLURM CPUs Slurm configures on the worker")
+          if [ "${#caps[@]}" -eq 0 ] && command -v sinfo >/dev/null 2>&1; then
+            # No worker was inspected (complete overrides): fall back to the
+            # smallest node in the partition as Slurm describes it.
+            part="${{ inputs.cluster.slurm.partition }}"
+            n="$(sinfo -h -N ${part:+-p "$part"} -o '%X %Y' 2>/dev/null \
+                 | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {c=$1*$2; if (!m || c<m) m=c} END {if (m) print m}')"
+            [ -n "$n" ] && caps+=("$n physical cores on the smallest node in the partition (sinfo)")
+          fi
+          cpus="$want"; why=""
+          for c in "${caps[@]}"; do
+            v="${c%% *}"
+            if [ "$v" -lt "$cpus" ]; then cpus="$v"; why="$c"; fi
+          done
+          (IFS=';'; echo "Parallel build jobs: ${want}; limits: ${caps[*]:-none known}")
+          if [ -n "$why" ]; then
+            echo "::notice::Worker build job requests ${cpus} CPUs: Parallel build jobs (${want}) capped at ${why}"
+          fi
+          echo "BUILD_CPUS=${cpus}" | tee -a $OUTPUTS
+
+  build:
+    needs:
+      - preprocess
+      - detect
+      - size_build
+    steps:
+      - name: Build the stack
+        uses: github/parallelworks/workflows@canary
+        early-cancel: any-job-failed
+        with:
+          $yaml: workflows/script_submitter/v3.6/general.yaml
+          resource: ${{ inputs.cluster.resource }}
+          shebang: '#!/bin/bash'
+          rundir: ${{ needs.preprocess.outputs.BUILD_DIR }}
+          use_existing_script: true
+          script_path: ${{ needs.preprocess.outputs.BUILD_SCRIPT }}
+          define_cleanup_script: true
+          cleanup_script_path: ./cancel.sh
+          scheduler: ${{ inputs.cluster.build_on == 'compute' }}
+          use_scheduler_agent: false
+          submit_and_exit: false
+          skip_cleanups_file: ''
+          slurm:
+            is_enabled: ${{ inputs.cluster.build_on == 'compute' && inputs.cluster.slurm.is_enabled == true }}
+            partition: ${{ inputs.cluster.slurm.partition }}
+            # One task holding all the build's CPUs on one node: build.sh is the
+            # batch script and Spack forks every compiler itself, never via srun.
+            # Last, so these win over a conflicting line in the shared directives.
+            scheduler_directives: |
+              ${{ inputs.cluster.slurm.scheduler_directives }}
+              #SBATCH --nodes=1
+              #SBATCH --ntasks=1
+              #SBATCH --cpus-per-task=${{ needs.size_build.outputs.BUILD_CPUS }}
+            time: ${{ inputs.cluster.slurm.build_time }}
+            gpus: ${{ inputs.cluster.slurm.gpus }}
+          pbs:
+            is_enabled: ${{ inputs.cluster.build_on == 'compute' && inputs.cluster.pbs.is_enabled == true }}
+            # script_submitter keeps only '#' lines, so an empty half is harmless.
+            scheduler_directives: |
+              ${{ inputs.cluster.pbs.scheduler_directives }}
+              ${{ inputs.cluster.pbs.build_scheduler_directives }}
+
+  # -------------------------------------------------------------------------
+  # 4. Turn a failed build into a failed RUN.
+  #    script_submitter's unscheduled path detaches the script with setsid and
+  #    then polls `kill -0`, so it observes that the process ended but never its
+  #    exit status. Without this job a build that dies half way is still 
+  #    reported as completed.
+  # -------------------------------------------------------------------------
+  verify:
+    needs:
+      - preprocess
+      - build
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    steps:
+      - name: Confirm the build succeeded
+        run: |
+          set -uo pipefail
+          STATUS_FILE="${{ needs.preprocess.outputs.BUILD_DIR }}/BUILD_STATUS"
+          st="$(cat "${STATUS_FILE}" 2>/dev/null || echo missing)"
+          echo "build.sh exit status: ${st}"
+          if [ "${st}" != "0" ]; then
+            # A job killed at its walltime gets SIGKILL, which skips build.sh's
+            # EXIT trap -- so a worker build that ran out of time leaves no status.
+            if [ "${st}" = "missing" ] && [ "${{ inputs.cluster.build_on }}" = "compute" ]; then
+              echo "::error title=Error::The build job on the worker left no exit status -- most likely it hit its walltime (cluster.slurm.build_time or the PBS build directives) or the job was cancelled. See run.*.out in ${{ needs.preprocess.outputs.BUILD_DIR }}"
+              exit 1
+            fi
+            echo "::error title=Error::Build failed (status '${st}'). See run.*.out in ${{ needs.preprocess.outputs.BUILD_DIR }}"
+            exit 1
+          fi
+          echo "::notice::Build completed successfully"
+
+  # -------------------------------------------------------------------------
+  # 5. Execute the built binaries ON A COMPUTE NODE.
+  #    A login-node build can emit a binary for the login node's ISA that runs
+  #    there perfectly, and the build exits 0 either way. Run
+  #    fair-mastodon passed every recorded criterion with three GROMACS builds
+  #    carrying AVX-512 that its zen2 worker could not execute. Nothing short of
+  #    running the result on the target hardware can see that, which is why this
+  #    is a separate submitted job rather than a step in build or verify.
+  # -------------------------------------------------------------------------
+  exec_check:
+    needs:
+      - preprocess
+      - verify
+    steps:
+      - name: Run the built binaries on a compute node
+        uses: github/parallelworks/workflows@canary
+        early-cancel: any-job-failed
+        with:
+          $yaml: workflows/script_submitter/v3.6/general.yaml
+          resource: ${{ inputs.cluster.resource }}
+          shebang: '#!/bin/bash'
+          rundir: ${{ needs.preprocess.outputs.EXEC_DIR }}
+          use_existing_script: true
+          script_path: ${{ needs.preprocess.outputs.EXEC_SCRIPT }}
+          define_cleanup_script: true
+          cleanup_script_path: ./cancel.sh
+          scheduler: ${{ inputs.cluster.scheduler }}
+          use_scheduler_agent: false
+          submit_and_exit: false
+          skip_cleanups_file: ''
+          slurm:
+            is_enabled: ${{ inputs.cluster.slurm.is_enabled }}
+            partition: ${{ inputs.cluster.slurm.partition }}
+            scheduler_directives: ${{ inputs.cluster.slurm.scheduler_directives }}
+            time: ${{ inputs.cluster.slurm.time }}
+            gpus: ${{ inputs.cluster.slurm.gpus }}
+          pbs:
+            is_enabled: ${{ inputs.cluster.pbs.is_enabled }}
+            scheduler_directives: ${{ inputs.cluster.pbs.scheduler_directives }}
+
+  # -------------------------------------------------------------------------
+  #    Same reason as job 4: script_submitter cannot report the exit status of
+  #    what it submitted, so the status file is the only signal that the check
+  #    actually passed rather than merely finished.
+  # -------------------------------------------------------------------------
+  exec_verify:
+    needs:
+      - preprocess
+      - exec_check
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    steps:
+      - name: Confirm the binaries ran on the compute node
+        run: |
+          set -uo pipefail
+          STATUS_FILE="${{ needs.preprocess.outputs.EXEC_DIR }}/EXEC_STATUS"
+          st="$(cat "${STATUS_FILE}" 2>/dev/null || echo missing)"
+          echo "check-exec.sh exit status: ${st}"
+          if [ "${st}" != "0" ]; then
+            echo "::error title=Error::Execution check failed (status '${st}'). The built binaries did not run on the compute node -- see run.*.out in ${{ needs.preprocess.outputs.EXEC_DIR }}"
+            exit 1
+          fi
+          echo "::notice::Built binaries executed successfully on a compute node"
+
+  # -------------------------------------------------------------------------
+  # 6. Serve a placeholder endpoint.
+  #    Nothing in the build needs this. The shared test runner
+  #    (tools/tests/run-workflow-test.py) passes a run only when an endpoint
+  #    named <service.name>-<run-slug> is listed and answers HTTP, so a workflow
+  #    that serves nothing cannot be tested by it. Serving an empty page is the
+  #    smaller change -- see README.md, "The placeholder endpoint".
+  #
+  #    It runs in its own directory under the run dir, like every other
+  #    submitted job here, so its ./cancel.sh and its run.<JOBID>.out cannot
+  #    collide with the build's.
+  # -------------------------------------------------------------------------
+  endpoint:
+    needs:
+      - preprocess
+      - exec_verify
+    steps:
+      - name: Serve the placeholder endpoint
+        uses: github/parallelworks/workflows@canary
+        early-cancel: any-job-failed
+        with:
+          $yaml: workflows/script_submitter/v3.6/general.yaml
+          resource: ${{ inputs.cluster.resource }}
+          shebang: '#!/bin/bash'
+          rundir: ${{ needs.preprocess.outputs.ENDPOINT_DIR }}
+          use_existing_script: true
+          script_path: ${{ needs.preprocess.outputs.ENDPOINT_SCRIPT }}
+          define_cleanup_script: true
+          cleanup_script_path: ./cancel.sh
+          scheduler: false
+          use_scheduler_agent: false
+          submit_and_exit: false
+          skip_cleanups_file: ${{ needs.preprocess.outputs.SKIP_CLEANUP_PATH }}
+          slurm:
+            is_enabled: false
+          pbs:
+            is_enabled: false
+      - name: Cancel Wait for Endpoint
+        uses: parallelworks/cancel-jobs
+        with:
+          jobs:
+            - wait_for_endpoint
+      - name: Exit Workflow with Error
+        run: |
+          echo "::error title=Error::The placeholder endpoint never came online"
+          exit 1
+
+  # -------------------------------------------------------------------------
+  # 7. Release the run once the endpoint answers, and leave it serving.
+  #    Touching SKIP_CLEANUP tells script_submitter not to run cancel.sh when
+  #    the job is cancelled, so the endpoint outlives the run -- which is what
+  #    the test runner checks before deleting it itself.
+  # -------------------------------------------------------------------------
+  wait_for_endpoint:
+    needs:
+      - preprocess
+      - verify
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    steps:
+      - name: Wait for endpoint
+        early-cancel: any-job-failed
+        run: |
+          command -v pw >/dev/null 2>&1 || export PATH="${PATH}:${HOME}/pw"
+          endpoint_name="${{ inputs.service.name }}-${PW_RUN_SLUG}"
+          echo "::notice::Waiting for endpoint ${endpoint_name} to come online"
+          until pw endpoints list | grep -qw "${endpoint_name}"; do
+            echo "$(date) Endpoint ${endpoint_name} not found yet; retrying in 10 seconds"
+            sleep 10
+          done
+          echo "::notice::Endpoint ${endpoint_name} is online"
+          touch ${{ needs.preprocess.outputs.SKIP_CLEANUP_PATH }}
+          sleep 2
+      - name: Cancel Script Submitter
+        uses: parallelworks/cancel-jobs
+        with:
+          jobs:
+            - endpoint

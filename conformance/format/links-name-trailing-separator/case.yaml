@@ -1,0 +1,10 @@
+description: >-
+  A link's name can't end in a hyphen or underscore.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /links/ollama-
+      line: 2
+      column: 3

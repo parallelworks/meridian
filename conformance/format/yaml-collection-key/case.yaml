@@ -1,0 +1,10 @@
+description: >-
+  A key must be a string, not a YAML collection.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: unsupported
+      path: /configurations/keys/inputs
+      line: 4
+      column: 9

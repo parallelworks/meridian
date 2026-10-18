@@ -1,0 +1,6 @@
+description: >-
+  A Spack build across login and compute nodes: header inputs with text and
+  size, labelPosition, placeholders, job outputs from
+  needs.<job>.steps.<id>.outputs, and the ! operator.
+source: https://github.com/parallelworks/workflows/blob/2cb4830bb71213562b90c08755cd3e063b33d752/workflows/spack-builder/yamls/general.yaml
+license: Apache-2.0

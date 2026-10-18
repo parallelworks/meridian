@@ -1,0 +1,3170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "The workflow format this file is written in. A workflow without it is format 1.",
+      "const": 1
+    },
+    "name": {
+      "description": "The workflow's name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "description": "What the workflow does: the text itself, or a file beside the workflow that holds it.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/workflowFile"
+            }
+          },
+          "required": ["file"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "icon": {
+      "description": "A small image that stands for the workflow.",
+      "$ref": "#/$defs/workflowFile"
+    },
+    "thumbnail": {
+      "description": "A larger picture of the workflow, such as a screenshot.",
+      "$ref": "#/$defs/workflowFile"
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "The permissions required to run the workflow"
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "patternProperties": {
+        "^.*$": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "prompt-for-name": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "default": {
+                          "type": "string",
+                          "description": "The default name for the session"
+                        }
+                      }
+                    }
+                  ],
+                  "description": "If null, the user will be prompted to name the session before workflow execution. If default is defined, the passed default will be used."
+                },
+                "redirect": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, the user will be redirected to this session once the workflow is executed. Only one session is allowed to have this set to true."
+                },
+                "useTLS": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, will use HTTPS to connect to the session. This should only be enabled if the app requires it."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "The type of session to be created. (default: tunnel)",
+                  "enum": ["tunnel", "link"]
+                },
+                "useCustomDomain": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, will use a custom domain to connect to the session. This should only be enabled if the app requires it."
+                },
+                "openAI": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, will mark the session as providing an OpenAI API, and connect it to the built-in chat interface."
+                },
+                "detach": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, the session will persist when the workflow run reaches a terminal status (completed, error, canceled). It will only be removed if the user manually deletes the session. Default: false."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      }
+    },
+    "links": {
+      "description": "Links the run page shows, pointing at sessions the workflow registers itself or at addresses elsewhere.",
+      "type": "object",
+      "patternProperties": {
+        "^[a-z0-9_-]*[a-z0-9]$": {
+          "type": "object",
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "endpoint": {
+                  "type": "string",
+                  "description": "Name of the endpoint session the workflow registers, resolved once it comes online."
+                },
+                "redirect": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, the user is redirected to this link once the workflow runs. Only one session or link may set it."
+                },
+                "detach": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, the session this link names outlives the run instead of being removed with it."
+                }
+              },
+              "required": ["endpoint"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "description": "An http:// or https:// address to link to directly. A value with no scheme is read as https."
+                },
+                "redirect": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, the user is redirected to this link once the workflow runs. Only one session or link may set it."
+                },
+                "detach": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, a session this link addresses outlives the run instead of being removed with it."
+                }
+              },
+              "required": ["url"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "env": {
+      "description": "environment variables to use for this workflow",
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z0-9_]+$": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "needs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "organizationVariables": {
+          "description": "Organization variables that must be set for this workflow to run",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "userVariables": {
+          "description": "User variables this workflow needs access to. Can be an object where each key is a variable name mapping to {hint: string}, or a simple array of variable name strings.",
+          "type": ["object", "array", "string"],
+          "pattern": "^\\${{.*}}$",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "patternProperties": {
+            "^[a-zA-Z0-9_-]+$": {
+              "type": "object",
+              "properties": {
+                "hint": {
+                  "type": "string",
+                  "description": "A message explaining why the workflow needs access to this variable"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "timeout": {
+      "$ref": "#/$defs/timeout"
+    },
+    "jobs": {
+      "description": "The jobs this workflow will run. Each job must define a list of steps to be executed using the `steps` field. By default, all jobs run in parallel. If a job needs to depend on the completion of another job, it can be specified using the `needs` field.",
+      "type": "object",
+      "patternProperties": {
+        "^[a-z0-9_-]{1,255}$": {
+          "description": "A job to be run in the workflow. The name of the job must be unique within the workflow.",
+          "type": "object",
+          "properties": {
+            "env": {
+              "description": "environment variables to use for this job",
+              "type": "object",
+              "patternProperties": {
+                "^[a-zA-Z0-9_]+$": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "if": {
+              "description": "prevents a job from running unless conditional evaluates to true.",
+              "type": ["boolean", "string"]
+            },
+            "working-directory": {
+              "description": "Directory that this command is run in, path will be created if it does not exist.",
+              "type": "string"
+            },
+            "runs-on": {
+              "description": "Where this job runs: an environment named by cluster and name, an execution group, or the value of a `compute-target` input (`${{ inputs.target }}`). An environment runs the job as a scheduler job without the user workspace. Mutually exclusive with `ssh`.",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\${{.*}}$"
+                },
+                {
+                  "title": "RunsOnEnvironment",
+                  "type": "object",
+                  "properties": {
+                    "environment": {
+                      "description": "The environment to run on, addressed by cluster and environment name.",
+                      "type": "object",
+                      "properties": {
+                        "cluster": {
+                          "description": "Cluster name, optionally prefixed with its owner as `owner/cluster`.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Environment name within the cluster.",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["cluster", "name"],
+                      "additionalProperties": false
+                    },
+                    "params": {
+                      "description": "Scheduling parameters, validated against the environment's parameter schema after its defaults are applied.",
+                      "type": "object"
+                    }
+                  },
+                  "required": ["environment"],
+                  "additionalProperties": false
+                },
+                {
+                  "title": "RunsOnExecutionGroup",
+                  "type": "object",
+                  "properties": {
+                    "execution-group": {
+                      "description": "The execution group to run on, by name. The job runs on the member that can start it soonest, in the group's order.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["execution-group"],
+                  "additionalProperties": false
+                },
+                {
+                  "title": "RunsOnComputeTarget",
+                  "description": "A compute target as a `compute-target` input produces it.",
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "enum": ["environment", "login", "worker"]
+                    },
+                    "targetId": {
+                      "description": "The cluster, or `user-workspace` for the user workspace.",
+                      "type": "string"
+                    },
+                    "environmentId": {
+                      "type": "string"
+                    },
+                    "schedulingParams": {
+                      "type": "object"
+                    },
+                    "newWorker": {
+                      "type": "boolean"
+                    },
+                    "workerId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["mode"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "resources": {
+              "description": "What the job needs from where it runs. The job runs only where at least this much is offered, and a scheduler is asked for it.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "Cores, such as 4 or 500m.",
+                  "type": ["number", "string"]
+                },
+                "memory": {
+                  "description": "Memory with units, such as 8Gi or 512Mi.",
+                  "type": "string"
+                },
+                "gpu": {
+                  "description": "GPUs.",
+                  "type": ["integer", "string"]
+                }
+              },
+              "additionalProperties": false
+            },
+            "retry": {
+              "description": "Runs the job again, from its first step, when it fails for one of the listed reasons. A job never runs again otherwise once a step has started.",
+              "type": "object",
+              "properties": {
+                "reasons": {
+                  "description": "Why the job may run again. worker-lost: its worker stopped reporting after a step started, as when its host goes down.",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["worker-lost"]
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "max-retries": {
+                  "description": "How many times the job may run again. Defaults to 10.",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\${{.*}}$"
+                    }
+                  ]
+                },
+                "interval": {
+                  "description": "How long to wait before running the job again, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 5s.",
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "pattern": "^\\${{.*}}$"
+                    },
+                    {
+                      "pattern": "^(\\d+)(d|h|m|s)?$"
+                    }
+                  ]
+                }
+              },
+              "required": ["reasons"],
+              "additionalProperties": false
+            },
+            "ssh": {
+              "description": "Execute this job on a remote host.",
+              "type": "object",
+              "properties": {
+                "jumpNodeHost": {
+                  "description": "The jump node's hostname or IP address for the SSH connection. Optional, defaults to no jump node.",
+                  "type": "string"
+                },
+                "jumpNodeUser": {
+                  "description": "The username we use when we attempt to connect to the jump node. Defaults to your pw username.",
+                  "type": "string"
+                },
+                "remoteHost": {
+                  "description": "The remote host's hostname or IP address for the SSH connection.",
+                  "type": "string"
+                },
+                "remoteUser": {
+                  "description": "The username we use when we attempt to connect to the remote host. Defaults to your pw username.",
+                  "type": "string"
+                },
+                "disconnect-timeout": {
+                  "description": "How long to tolerate a lost connection to the remote host before failing the step: bare seconds (300) or a suffixed duration (5m, 2h); an invalid value fails the step. Default 300s; 0 fails on the first drop; a negative value retries indefinitely. The timer resets on each successful reconnect. May be a `${{ }}` expression.",
+                  "type": ["integer", "string"]
+                }
+              },
+              "required": ["remoteHost"],
+              "additionalProperties": false
+            },
+            "outputs": {
+              "description": "Step outputs to be published such that other jobs can access them. For example, `published_name: ${{ needs.build.steps.step_id.outputs.output_name }}`",
+              "type": "object",
+              "patternProperties": {
+                "^[a-zA-Z0-9_-]+$": {
+                  "type": "string",
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "steps": {
+              "description": "A list of steps to be executed. These are executed in order, and if any step fails, the job will fail. Each step can be a command to run using the `run` field, or another workflow to run by using the `uses` field.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "uses": {
+                    "description": "Run a workflow as a step, e.g. \"marketplace/checkout\", cannot be used with `run`",
+                    "type": "string",
+                    "anyOf": [
+                      {
+                        "const": "parallelworks/checkout",
+                        "description": "Check out a git repository"
+                      },
+                      {
+                        "const": "parallelworks/scheduler-agent",
+                        "description": "Submit a scheduler (slurm or pbs) job with a PW agent that creates an SSH server, allowing you to SSH into a compute node"
+                      },
+                      {
+                        "const": "parallelworks/wait-for-agent",
+                        "description": "Wait for an agent from the scheduler-agent action"
+                      },
+                      {
+                        "const": "parallelworks/cancel-jobs",
+                        "description": "Cancel some or all jobs of a workflow run"
+                      },
+                      {
+                        "const": "parallelworks/update-session",
+                        "description": "Update a session with connection information"
+                      },
+                      {
+                        "pattern": "^marketplace/",
+                        "description": "Use a workflow from the marketplace"
+                      },
+                      {
+                        "pattern": "^workflow/",
+                        "description": "Use one of your workflows"
+                      },
+                      {
+                        "pattern": "^github/",
+                        "description": "Use a workflow from a GitHub repository"
+                      },
+                      {
+                        "pattern": "^gitlab/",
+                        "description": "Use a workflow from a GitLab project, e.g. gitlab/group/project@main with $host naming the server"
+                      }
+                    ]
+                  },
+                  "with": {
+                    "description": "The inputs passed to the action or workflow named by uses. Which keys are allowed depends on what uses names.",
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "The name of the step, which will be shown in the UI. This is optional, and if not provided, the step will be automatically named after the command or workflow being run.",
+                    "type": "string"
+                  },
+                  "if": {
+                    "description": "prevents a step from running unless conditional evaluates to true.",
+                    "type": ["boolean", "string"]
+                  },
+                  "working-directory": {
+                    "description": "Directory that this command is run in, path will be created if it does not exist. Set to null to opt out of the job's working-directory and use the default.",
+                    "type": ["string", "null"]
+                  },
+                  "ssh": {
+                    "description": "Execute this job on a remote host.",
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "jumpNodeHost": {
+                            "description": "The jump node's hostname or IP address for the SSH connection. Optional, defaults to no jump node.",
+                            "type": "string"
+                          },
+                          "jumpNodeUser": {
+                            "description": "The username we use when we attempt to connect to the jump node. Defaults to your pw username.",
+                            "type": "string"
+                          },
+                          "remoteHost": {
+                            "description": "The remote host's hostname or IP address for the SSH connection.",
+                            "type": "string"
+                          },
+                          "remoteUser": {
+                            "description": "The username we use when we attempt to connect to the remote host. Defaults to your pw username.",
+                            "type": "string"
+                          },
+                          "disconnect-timeout": {
+                            "description": "How long to tolerate a lost connection to the remote host before failing the step: bare seconds (300) or a suffixed duration (5m, 2h); an invalid value fails the step. Default 300s; 0 fails on the first drop; a negative value retries indefinitely. The timer resets on each successful reconnect. May be a `${{ }}` expression.",
+                            "type": ["integer", "string"]
+                          }
+                        },
+                        "required": ["remoteHost"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "env": {
+                    "description": "environment variables to use for this step",
+                    "type": "object",
+                    "patternProperties": {
+                      "^[a-zA-Z0-9_]+$": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "run": {
+                    "description": "The command to execute, e.g. `echo hello world`. Cannot be used with `uses`",
+                    "type": "string"
+                  },
+                  "ignore-errors": {
+                    "description": "If true, non-zero exit codes will not be counted as failures (default: false)",
+                    "type": ["string", "boolean"],
+                    "pattern": "^\\${{.*}}$"
+                  },
+                  "cleanup": {
+                    "description": "a cleanup command to be run after execution, e.g. `rm -rf /tmp/myapp`",
+                    "type": "string"
+                  },
+                  "timeout": {
+                    "$ref": "#/$defs/timeout"
+                  },
+                  "retry": {
+                    "description": "Defines how many times this job should be retried.",
+                    "type": "object",
+                    "properties": {
+                      "max-retries": {
+                        "description": "The number of retries before giving up. Defaults to 0 without a retry object, and 10 with a retry object but no max-retries field.",
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^\\${{.*}}$"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "interval": {
+                        "description": "The amount of time to wait between retries, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 5s.",
+                        "type": "string",
+                        "anyOf": [
+                          {
+                            "pattern": "^\\${{.*}}$"
+                          },
+                          {
+                            "pattern": "^(\\d+)(d|h|m|s)?$"
+                          }
+                        ]
+                      },
+                      "timeout": {
+                        "description": "The amount of time to wait before giving up on an attempt, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 30s.",
+                        "type": "string",
+                        "anyOf": [
+                          {
+                            "pattern": "^\\${{.*}}$"
+                          },
+                          {
+                            "pattern": "^(\\d+)(d|h|m|s)?$"
+                          }
+                        ]
+                      },
+                      "clean-on-retry": {
+                        "description": "Whether to delete the step's working directory before each retry so it starts clean. Defaults to true; forced off when working-directory is the parent job directory or an ancestor of it, to avoid destroying the parent run.",
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\${{.*}}$"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "early-cancel": {
+                    "description": "cancels this step early if a job fails",
+                    "type": "string",
+                    "enum": ["any-job-failed"]
+                  },
+                  "id": {
+                    "description": "an identifier for this step used for workflow outputs, must be unique within the job.",
+                    "type": "string",
+                    "pattern": "^[a-z0-9_-]{1,255}$"
+                  },
+                  "shell": {
+                    "description": "The shell used to run the step's `run` command. Must be a `bash` or `sh` invocation; the `{0}` placeholder is replaced with the path to the script file, e.g. `bash -l {0}` to use a login shell (useful on clusters whose account login shell is tcsh). Defaults to a non-login bash.",
+                    "type": "string",
+                    "pattern": "^$|^(/?([^/ ]+/)*)?(bash|sh)( .*)?$"
+                  }
+                },
+                "oneOf": [
+                  {
+                    "required": ["run"],
+                    "not": {
+                      "required": ["with"]
+                    }
+                  },
+                  {
+                    "required": ["uses"]
+                  }
+                ],
+                "not": {
+                  "required": ["run", "uses"]
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "pattern": "^github/" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "properties": {
+                            "$yaml": {
+                              "description": "Path to the workflow file inside the referenced repository (default: workflow.yaml)",
+                              "type": "string"
+                            },
+                            "$thumbnail": {
+                              "description": "Path to a thumbnail image for this subworkflow",
+                              "type": "string"
+                            }
+                          },
+                          "patternProperties": { "^[a-zA-Z0-9_-]+$": {} },
+                          "additionalProperties": false
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "pattern": "^gitlab/" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "properties": {
+                            "$yaml": {
+                              "description": "Path to the workflow file inside the referenced repository (default: workflow.yaml)",
+                              "type": "string"
+                            },
+                            "$thumbnail": {
+                              "description": "Path to a thumbnail image for this subworkflow",
+                              "type": "string"
+                            },
+                            "$host": {
+                              "description": "The registered GitLab server this project lives on (default: gitlab.com)",
+                              "type": "string"
+                            }
+                          },
+                          "patternProperties": { "^[a-zA-Z0-9_-]+$": {} },
+                          "additionalProperties": false
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "pattern": "^(marketplace|workflow)/" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "patternProperties": { "^[a-zA-Z0-9_-]+$": {} },
+                          "additionalProperties": false
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "const": "parallelworks/checkout" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "required": ["repo", "branch"],
+                          "properties": {
+                            "repo": {
+                              "description": "Git repository URL to clone",
+                              "type": "string"
+                            },
+                            "branch": {
+                              "description": "Branch or ref to check out",
+                              "type": "string"
+                            },
+                            "sparse_checkout": {
+                              "description": "Sparse checkout patterns",
+                              "type": "array",
+                              "items": { "type": "string" }
+                            },
+                            "path": {
+                              "description": "Local path for the clone, relative to job directory",
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["with"]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "const": "parallelworks/wait-for-agent" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "required": ["agentId"],
+                          "properties": {
+                            "agentId": {
+                              "description": "Agent ID from the scheduler-agent action output",
+                              "type": "string"
+                            },
+                            "schedulerJobId": {
+                              "description": "Scheduler job ID from the scheduler-agent action output. Used to monitor job health while waiting, and fail if it exits unexpectedly.",
+                              "type": "string"
+                            },
+                            "scheduler-type": {
+                              "description": "Scheduler type (slurm or pbs). Defaults to slurm.",
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["slurm", "pbs"]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\${{.*}}$"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["with"]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "const": "parallelworks/update-session" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "required": ["name"],
+                          "properties": {
+                            "name": { "description": "Session name" },
+                            "type": {
+                              "description": "Session type: 'link' or 'tunnel'",
+                              "type": "string",
+                              "enum": ["link", "tunnel"]
+                            },
+                            "url": {
+                              "description": "URL for link-type sessions",
+                              "type": "string"
+                            },
+                            "target": {
+                              "description": "Target for tunnel sessions (e.g. 'user-workspace')",
+                              "type": "string"
+                            },
+                            "remotePort": {
+                              "description": "Port on the target host"
+                            },
+                            "remoteHost": {
+                              "description": "Host on the target",
+                              "type": "string"
+                            },
+                            "localPort": {
+                              "description": "Local port for the tunnel"
+                            },
+                            "slug": {
+                              "description": "Slug appended to session URL",
+                              "type": "string"
+                            },
+                            "status": {
+                              "description": "Session status",
+                              "type": "string"
+                            },
+                            "openAI": {
+                              "description": "Whether this is an OpenAI-compatible session",
+                              "type": "boolean"
+                            },
+                            "apiKey": {
+                              "description": "API key for OpenAI-compatible sessions",
+                              "type": "string"
+                            },
+                            "targetInfo": {
+                              "description": "Kubernetes resource this session points at, instead of a port on the user workspace",
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "description": "Kubernetes cluster",
+                                  "type": "string"
+                                },
+                                "namespace": {
+                                  "description": "Namespace the resource is in",
+                                  "type": "string"
+                                },
+                                "resourceType": {
+                                  "description": "e.g. services",
+                                  "type": "string"
+                                },
+                                "resourceName": {
+                                  "description": "Name of the resource to forward to",
+                                  "type": "string"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["with"]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "const": "parallelworks/scheduler-agent" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "properties": {
+                            "scheduler-type": {
+                              "description": "Scheduler type",
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["slurm", "pbs"]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\${{.*}}$"
+                                }
+                              ]
+                            },
+                            "scheduler-flags": {
+                              "description": "Flags to pass to sbatch/qsub",
+                              "type": "object"
+                            },
+                            "wait": {
+                              "description": "Wait for the agent to start before continuing (default: true)",
+                              "type": "boolean"
+                            },
+                            "script-headers": {
+                              "description": "Custom bash script headers prepended to the agent script",
+                              "type": "string"
+                            },
+                            "debug": {
+                              "description": "Leave the scheduler job's working files in place and log more from the agent",
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "uses": { "const": "parallelworks/cancel-jobs" }
+                      },
+                      "required": ["uses"]
+                    },
+                    "then": {
+                      "properties": {
+                        "with": {
+                          "properties": {
+                            "jobs": {
+                              "description": "List of job names to cancel",
+                              "type": "array",
+                              "items": { "type": "string" }
+                            },
+                            "workflow": {
+                              "description": "Workflow name to cancel",
+                              "type": "string"
+                            },
+                            "run": {
+                              "description": "Run number to cancel",
+                              "type": "number"
+                            },
+                            "slug": {
+                              "description": "Workflow run slug to cancel by",
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      }
+                    }
+                  }
+                ],
+                "additionalProperties": false
+              }
+            },
+            "needs": {
+              "description": "A list of jobs that must complete before this job can start. If a job fails, all jobs that depend on it will not run. For matrix jobs, append ':any' to wait for any instance instead of all (e.g. 'build:any').",
+              "type": ["array", "string"],
+              "pattern": "^\\${{.*}}$",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeout": {
+              "$ref": "#/$defs/timeout"
+            },
+            "strategy": {
+              "description": "Matrix strategy for running a job with multiple configurations. The job runs once for every combination of matrix values.",
+              "type": "object",
+              "properties": {
+                "matrix": {
+                  "description": "Matrix variables. Each key maps to an array of values. The job runs for every combination of all variables.",
+                  "type": "object",
+                  "properties": {
+                    "include": {
+                      "type": ["array", "string"],
+                      "pattern": "^\\${{.*}}$",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Additional matrix combinations to include or augment. Entries matching existing combinations on all regular keys merge extra keys; non-matching entries are added as new combinations."
+                    },
+                    "exclude": {
+                      "type": ["array", "string"],
+                      "pattern": "^\\${{.*}}$",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Matrix combinations to exclude. Any combination matching all fields in an exclude entry is removed."
+                    }
+                  },
+                  "additionalProperties": {
+                    "type": ["array", "string"],
+                    "pattern": "^\\${{.*}}$",
+                    "items": {}
+                  }
+                },
+                "fail-fast": {
+                  "type": ["boolean", "string"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true (default), cancel in-progress matrix jobs when any one fails."
+                },
+                "max-parallel": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\${{.*}}$"
+                    }
+                  ],
+                  "description": "Maximum number of matrix jobs that can run simultaneously."
+                }
+              },
+              "required": ["matrix"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["steps"],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "on": {
+      "description": "Events that trigger the workflow. The workflow will run when any of the events occur.",
+      "type": "object",
+      "properties": {
+        "execute": {
+          "description": "This event is triggered when the workflow is manually executed.",
+          "type": "object",
+          "properties": {
+            "inputs": {
+              "$ref": "#/$defs/inputs"
+            }
+          },
+          "required": ["inputs"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["execute"],
+      "additionalProperties": false
+    },
+    "configurations": {
+      "description": "An array of predefined configurations to execute a workflow",
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]{1,255}$": {
+          "description": "Name of the configuration",
+          "type": "object",
+          "properties": {
+            "inputs": {
+              "type": "object",
+              "description": "The input values of the configuration. Must match inputs defined in on.execute.inputs",
+              "properties": {}
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["jobs"],
+  "additionalProperties": false,
+  "$defs": {
+    "workflowFile": {
+      "description": "A path to a file, relative to the workflow file. It may not leave the workflow's directory.",
+      "type": "string",
+      "minLength": 1
+    },
+    "layoutCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    },
+    "layoutTracks": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      ]
+    },
+    "layoutColumns": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/layoutTracks"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/layoutTracks"
+            },
+            "sm": {
+              "$ref": "#/$defs/layoutTracks"
+            },
+            "md": {
+              "$ref": "#/$defs/layoutTracks"
+            },
+            "lg": {
+              "$ref": "#/$defs/layoutTracks"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "layoutSpan": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/layoutCount"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/layoutCount"
+            },
+            "sm": {
+              "$ref": "#/$defs/layoutCount"
+            },
+            "md": {
+              "$ref": "#/$defs/layoutCount"
+            },
+            "lg": {
+              "$ref": "#/$defs/layoutCount"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "formLayout": {
+      "description": "Presentation of existing inputs. References are local to this input scope; omitted fields render afterward. Responsive values use container widths: sm 24rem, md 40rem, lg 64rem. The renderer also caps each layout scope at 1024 nodes, 64 nesting levels, and 65536 CSS code units; excessive layouts fall back to ordinary fields.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "field"
+            },
+            "css": {
+              "type": "string",
+              "maxLength": 4096,
+              "description": "Optional scoped CSS declarations for layout and appearance, applied only when the host enables them. The renderer validates supported properties and values; unsupported declarations reject the entire CSS block."
+            },
+            "span": {
+              "$ref": "#/$defs/layoutSpan"
+            },
+            "field": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "description": "Input name in this input scope. Layout containers never change value paths."
+            }
+          },
+          "required": ["type", "field"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "stack"
+            },
+            "css": {
+              "type": "string",
+              "maxLength": 4096,
+              "description": "Optional scoped CSS declarations for layout and appearance, applied only when the host enables them. The renderer validates supported properties and values; unsupported declarations reject the entire CSS block."
+            },
+            "span": {
+              "$ref": "#/$defs/layoutSpan"
+            },
+            "gap": {
+              "type": "string",
+              "enum": ["none", "sm", "md", "lg"]
+            },
+            "children": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "$ref": "#/$defs/formLayout"
+              }
+            }
+          },
+          "required": ["type", "children"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "grid"
+            },
+            "css": {
+              "type": "string",
+              "maxLength": 4096,
+              "description": "Optional scoped CSS declarations for layout and appearance, applied only when the host enables them. The renderer validates supported properties and values; unsupported declarations reject the entire CSS block."
+            },
+            "span": {
+              "$ref": "#/$defs/layoutSpan"
+            },
+            "gap": {
+              "type": "string",
+              "enum": ["none", "sm", "md", "lg"]
+            },
+            "children": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "$ref": "#/$defs/formLayout"
+              }
+            },
+            "columns": {
+              "$ref": "#/$defs/layoutColumns"
+            },
+            "align": {
+              "type": "string",
+              "enum": ["independent", "rows"],
+              "description": "Rows shares header and child row heights across adjacent sections; single-column layouts flow naturally."
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "align": { "const": "rows" } },
+                "required": ["align"]
+              },
+              "then": {
+                "properties": {
+                  "children": {
+                    "items": {
+                      "properties": { "type": { "const": "section" } }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "required": ["type", "children", "columns"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "section"
+            },
+            "css": {
+              "type": "string",
+              "maxLength": 4096,
+              "description": "Optional scoped CSS declarations for layout and appearance, applied only when the host enables them. The renderer validates supported properties and values; unsupported declarations reject the entire CSS block."
+            },
+            "span": {
+              "$ref": "#/$defs/layoutSpan"
+            },
+            "gap": {
+              "type": "string",
+              "enum": ["none", "sm", "md", "lg"]
+            },
+            "children": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "$ref": "#/$defs/formLayout"
+              }
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "required": ["type", "children", "label"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "inputWidth": {
+      "oneOf": [
+        {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^(100|[1-9]\\d?(\\.\\d+)?)%$"
+        }
+      ]
+    },
+    "inputs": {
+      "description": "The inputs for the workflow, which will be available in all jobs as the `inputs` context whenever the workflow is manually executed.",
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "description": "JSON Schema reference for IDE validation"
+        },
+        "$meta": {
+          "type": "object",
+          "properties": {
+            "labelPosition": {
+              "type": "string",
+              "enum": ["left", "top"]
+            },
+            "layout": {
+              "$ref": "#/$defs/formLayout"
+            },
+            "wizard": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "wizard",
+                  "description": "Enable wizard mode for multi-step input collection"
+                },
+                "navigation": {
+                  "type": "object",
+                  "properties": {
+                    "showSteps": {
+                      "type": ["boolean", "string"],
+                      "pattern": "^\\${{.*}}$",
+                      "description": "Show step indicator (default: true)"
+                    },
+                    "allowJump": {
+                      "type": ["boolean", "string"],
+                      "pattern": "^\\${{.*}}$",
+                      "description": "Allow jumping to visited steps (default: false)"
+                    },
+                    "hideStepNumbers": {
+                      "type": ["boolean", "string"],
+                      "pattern": "^\\${{.*}}$",
+                      "description": "Hide step numbers in indicator (default: false)"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "submitLabel": {
+                  "type": "string",
+                  "description": "Label for final submit button (default: 'Execute')"
+                },
+                "flatten": {
+                  "type": "boolean",
+                  "description": "Flatten step fields into the top-level inputs object (default: true). Set to false to preserve step keys as nested objects."
+                }
+              },
+              "required": ["mode"],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "not": { "required": ["layout", "wizard"] }
+        }
+      },
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]+$": {
+          "type": "object",
+          "oneOf": [
+            {
+              "title": "KubernetesClustersField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-clusters"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "title": "KubernetesNamespacesField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-namespaces"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "type"]
+            },
+            {
+              "title": "KubernetesPodsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-pods"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "type", "namespace"]
+            },
+            {
+              "title": "KubernetesPvcField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-pvc"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "KubernetesSecretsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-secrets"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "KubernetesConfigmapsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-configmaps"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "KubernetesStatefulsetsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-statefulsets"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "KubernetesDeploymentsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-deployments"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "KubernetesServicesField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-services"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "KubernetesWorkloadsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "kubernetes-workloads"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["clusterName", "namespace", "type"]
+            },
+            {
+              "title": "NumberField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "number"
+                },
+                "default": {
+                  "type": ["string", "number"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "min": {
+                  "$ref": "#/$defs/min"
+                },
+                "max": {
+                  "$ref": "#/$defs/max"
+                },
+                "step": {
+                  "$ref": "#/$defs/step"
+                },
+                "slider": {
+                  "description": "Whether we have a numerical slider or not for the field (default: false). When true, min, max, and step are required.",
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"],
+              "if": {
+                "properties": {
+                  "slider": {
+                    "not": {
+                      "const": false
+                    }
+                  }
+                },
+                "required": ["slider"]
+              },
+              "then": {
+                "required": ["min", "max", "step"],
+                "errorMessage": "When slider is enabled, min, max, and step are all required"
+              }
+            },
+            {
+              "title": "BooleanField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "boolean"
+                },
+                "default": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\${{.*}}$"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "StringField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "string"
+                },
+                "default": {
+                  "type": ["string", "number", "boolean"]
+                },
+                "prefillDefault": {
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$",
+                  "description": "If true, this field's default value will be prefilled in the form. If false, the default value will not be prefilled."
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "placeholder": {
+                  "$ref": "#/$defs/placeholder"
+                },
+                "textarea": {
+                  "description": "Whether a string field is a text area (default: false)",
+                  "type": "boolean"
+                },
+                "lowercase": {
+                  "description": "Lowercase what the user types (default: false)",
+                  "type": "boolean"
+                },
+                "sanitize": {
+                  "description": "Regular expression matching the characters to strip from the value as it is typed",
+                  "type": "string"
+                },
+                "minLength": {
+                  "description": "Shortest accepted value",
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxLength": {
+                  "description": "Longest accepted value",
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "DropdownField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "dropdown"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "autoselect": {
+                  "description": "Whether a dropdown field is auto selected (default: false)",
+                  "type": ["string", "object", "boolean"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "placeholder": {
+                  "$ref": "#/$defs/placeholder"
+                },
+                "options": {
+                  "description": "The options of a selection based field",
+                  "type": ["array", "string"],
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["options", "type"]
+            },
+            {
+              "title": "DynamicDropdownField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "dropdown"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "options": {
+                  "description": "The options of a dropdown",
+                  "type": ["object", "string"],
+                  "pattern": "^\\${{.*}}$",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": ["object", "string"]
+                    }
+                  }
+                },
+                "option-key": {
+                  "description": "An expression with which to select a set of options (i.e. options[option-key] is the desired set of options)",
+                  "type": "string",
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["options", "option-key", "type"]
+            },
+            {
+              "title": "RegionField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "region"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["csp", "type"]
+            },
+            {
+              "title": "ZoneField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "zone"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "region": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["csp", "region", "type"]
+            },
+            {
+              "title": "MultiDropdownField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "multi-dropdown"
+                },
+                "default": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\${{.*}}$"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "value": {}
+                        }
+                      }
+                    }
+                  ]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "options": {
+                  "description": "The options of a multi dropdown",
+                  "type": ["array", "string"],
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["options", "type"]
+            },
+            {
+              "title": "ListField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "list"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "template": {
+                  "description": "Format of items in list",
+                  "type": ["string", "object"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "items-collapsible": {
+                  "description": "Whether items are collapsible",
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "min": {
+                  "description": "Minimum number of items the list must contain",
+                  "type": ["string", "number"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "max": {
+                  "description": "Maximum number of items the list may contain",
+                  "type": ["string", "number"],
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["template", "type"]
+            },
+            {
+              "title": "EditorField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "editor"
+                },
+                "default": {
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "language": {
+                  "description": "Language of document for editor",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "GroupField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "group"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "collapsed": {
+                  "description": "Whether a group is collapsed or not (default: false)",
+                  "type": ["boolean", "string"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "items": {
+                  "$ref": "#/$defs/inputs"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["items", "type"]
+            },
+            {
+              "title": "InstanceTypeField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "instance-type"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "region": {
+                  "type": "string"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["csp", "region", "type"]
+            },
+            {
+              "title": "ComputeResourceField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "enum": ["compute-clusters", "compute-resources"]
+                },
+                "default": {
+                  "type": ["string", "object", "array"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                },
+                "include-workspace": {
+                  "description": "Include user workspace in options (default: false)",
+                  "type": ["boolean", "string"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "include-unprovisioned": {
+                  "description": "Include unprovisioned clusters in options (default: false)",
+                  "type": ["boolean", "string"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "provider": {
+                  "type": ["array", "string"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "multi": {
+                  "type": "boolean",
+                  "description": "Allow selecting multiple compute resources (default: false)"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "ExecutionGroupsInputField",
+              "description": "Choose one of the execution groups the person running the workflow can use. The value is its name. Pass it to a job as `runs-on: { execution-group: ${{ inputs.<name> }} }`.",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "execution-groups"
+                },
+                "default": {
+                  "description": "The name of the execution group selected by default.",
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "ComputeTargetInputField",
+              "description": "Choose where a job runs: the user workspace, a cluster's login node, or one of its environments with that environment's scheduling parameters. Pass it to a job as `runs-on: ${{ inputs.<name> }}`.",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "compute-target"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "BucketField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "bucket"
+                },
+                "default": {
+                  "type": ["string", "object", "array"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "generateCredentials": {
+                  "type": ["boolean", "string"],
+                  "description": "Whether to generate cloud credentials for this bucket and include them in the input value"
+                },
+                "multi": {
+                  "type": "boolean",
+                  "description": "Allow selecting multiple buckets (default: false)"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "StorageField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "storage"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "csp": {
+                  "$ref": "#/$defs/csp"
+                },
+                "region": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "description": "The kind of storage to choose from",
+                  "type": "string"
+                },
+                "subType": {
+                  "description": "Another spelling of subtype",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "ColorPickerField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "color-picker"
+                },
+                "default": {
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "HeaderField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "header"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "size": {
+                  "description": "The size of a header",
+                  "type": ["string", "number"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "text": {
+                  "description": "The text content of a header",
+                  "type": "string"
+                },
+                "bold": {
+                  "description": "Whether a header is bold (default: false)",
+                  "type": ["string", "boolean"],
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["text", "type"]
+            },
+            {
+              "title": "OrganizationGroupsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "organization-groups"
+                },
+                "default": {
+                  "type": ["string", "object"],
+                  "pattern": "^\\${{.*}}$"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "SlurmAccountsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "slurm-accounts"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "resource": {
+                  "$ref": "#/$defs/resource"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["resource", "type"]
+            },
+            {
+              "title": "SlurmPartitionsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "slurm-partitions"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "resource": {
+                  "$ref": "#/$defs/resource"
+                },
+                "account": {
+                  "$ref": "#/$defs/account"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["resource", "type"]
+            },
+            {
+              "title": "SlurmQosField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "slurm-qos"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "resource": {
+                  "$ref": "#/$defs/resource"
+                },
+                "account": {
+                  "$ref": "#/$defs/account"
+                },
+                "partition": {
+                  "description": "The partitions to be used for slurm qos",
+                  "type": "string",
+                  "pattern": "^\\${{.*}}$"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["resource", "type"]
+            },
+            {
+              "title": "PbsQueuesField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "pbs-queues"
+                },
+                "default": {
+                  "type": ["string", "object"]
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "resource": {
+                  "$ref": "#/$defs/resource"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["resource", "type"]
+            },
+            {
+              "title": "StepField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "step"
+                },
+                "multi": { "type": "boolean" },
+                "min": { "$ref": "#/$defs/min" },
+                "max": { "$ref": "#/$defs/max" },
+                "title": {
+                  "type": ["string", "array"],
+                  "items": { "type": "string" },
+                  "description": "The title of this wizard step"
+                },
+                "description": {
+                  "type": ["string", "array"],
+                  "items": { "type": "string" },
+                  "description": "The description of this wizard step"
+                },
+                "nextLabel": {
+                  "type": "string",
+                  "description": "Custom label for next button (default: 'Next →')"
+                },
+                "prevLabel": {
+                  "type": "string",
+                  "description": "Custom label for previous button (default: '← Previous')"
+                },
+                "options": {
+                  "description": "Input fields for this step",
+                  "$ref": "#/$defs/inputs"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type", "title", "options"]
+            },
+            {
+              "title": "PasswordField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "password"
+                },
+                "default": {
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "AiModelField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "ai-model",
+                  "description": "A dropdown listing the AI models the user has access to, grouped by provider. The value is the full model ID, e.g. 'org:glm/glm-5.1'"
+                },
+                "default": {
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "placeholder": {
+                  "$ref": "#/$defs/placeholder"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            },
+            {
+              "title": "AllocationsField",
+              "properties": {
+                "width": { "$ref": "#/$defs/inputWidth" },
+                "anchor-below": { "type": "boolean" },
+                "type": {
+                  "const": "allocations",
+                  "description": "A dropdown listing the allocations the user has access to. The value is the allocation name"
+                },
+                "default": {
+                  "type": "string"
+                },
+                "label": {
+                  "$ref": "#/$defs/label"
+                },
+                "description": {
+                  "$ref": "#/$defs/description"
+                },
+                "hidden": {
+                  "$ref": "#/$defs/hidden"
+                },
+                "tooltip": {
+                  "$ref": "#/$defs/tooltip"
+                },
+                "ignore": {
+                  "$ref": "#/$defs/ignore"
+                },
+                "optional": {
+                  "$ref": "#/$defs/optional"
+                },
+                "disabled": {
+                  "$ref": "#/$defs/disabled"
+                },
+                "placeholder": {
+                  "$ref": "#/$defs/placeholder"
+                },
+                "autoselect": {
+                  "$ref": "#/$defs/autoselect"
+                },
+                "includeEmpty": {
+                  "type": "boolean",
+                  "description": "Include an empty option at the top of the list (default: true)"
+                }
+              },
+              "additionalProperties": false,
+              "required": ["type"]
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "csp": {
+      "description": "Cloud Service Provider",
+      "type": "string",
+      "oneOf": [
+        {
+          "enum": ["aws", "azure", "google", "openstack"]
+        },
+        {
+          "pattern": "^\\${{.*}}$"
+        }
+      ]
+    },
+    "tooltip": {
+      "description": "A string that pops up when user hovers over field",
+      "type": "string"
+    },
+    "description": {
+      "description": "A description of the field",
+      "type": "string"
+    },
+    "optional": {
+      "description": "Whether the field is optional or not (default: false)",
+      "type": ["string", "boolean"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "ignore": {
+      "description": "Whether the value of the field is not stored on submission (default: false)",
+      "type": ["string", "boolean"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "hidden": {
+      "description": "Whether the field will be hidden in the inputs form (default: false)",
+      "type": ["string", "boolean"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "disabled": {
+      "description": "Whether the field will be disabled/locked in the inputs form (default: false)",
+      "type": ["string", "boolean"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "label": {
+      "description": "The field's label",
+      "type": "string"
+    },
+    "min": {
+      "description": "The minimum value of the field",
+      "type": ["string", "number"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "max": {
+      "description": "The maximum value of the field",
+      "type": ["string", "number"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "step": {
+      "description": "The step value of the field",
+      "type": ["string", "number"],
+      "pattern": "^\\${{.*}}$"
+    },
+    "resource": {
+      "description": "The resource from which we get options for slurm accounts, paritions, or qos",
+      "type": "string",
+      "pattern": "^\\${{.*}}$"
+    },
+    "account": {
+      "description": "The account to be used for slurm paritions or qos",
+      "type": "string"
+    },
+    "timeout": {
+      "description": "Maximum amount of time allowed, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). After the timeout passes, the running command will automatically be killed and will fail.",
+      "type": "string",
+      "anyOf": [
+        {
+          "pattern": "^\\${{.*}}$"
+        },
+        {
+          "pattern": "^(\\d+)(d|h|m|s)?$"
+        }
+      ]
+    },
+    "placeholder": {
+      "type": "string",
+      "description": "A placeholder for the field. If not specified, the default value will be used as placeholder. To opt-out, explicitly set placeholder to an empty string. (default: none)"
+    },
+    "autoselect": {
+      "description": "Whether this field will auto select the first option on the list (default: false)",
+      "type": ["string", "object", "boolean"],
+      "pattern": "^\\${{.*}}$"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+configurations:
+  "bad name":
+    inputs:
+      mystring: hello
+      someList:
+        - listProp1: one
+          listProp2: two
+        - listProp1: two
+  builtin2:
+    inputs:
+      mystring: hello2
+jobs:
+  main:
+    steps:
+      - name: Echo my string
+        run: |
+          echo "${{ inputs.mystring }}"
+'on':
+  execute:
+    inputs:
+      mystring:
+        type: string

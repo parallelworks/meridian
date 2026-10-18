@@ -1,0 +1,10 @@
+description: >-
+  A layout node's CSS is at most 4096 characters.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/css
+      line: 9
+      column: 49

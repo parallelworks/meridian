@@ -1,0 +1,10 @@
+description: >-
+  A section's description is at most 4096 characters.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/description
+      line: 9
+      column: 59

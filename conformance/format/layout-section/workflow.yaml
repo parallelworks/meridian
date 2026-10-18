@@ -1,0 +1,13 @@
+jobs:
+  main:
+    steps:
+      - run: echo ready
+'on':
+  execute:
+    inputs:
+      $meta:
+        layout: {type: section, label: Resources, description: Choose capacity, children: [{type: grid, columns: 2, children: [{type: field, field: count}]}]}
+      name:
+        type: string
+      count:
+        type: number

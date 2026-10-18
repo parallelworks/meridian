@@ -1,0 +1,11 @@
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.executionGroup }}
+'on':
+  execute:
+    inputs:
+      executionGroup:
+        type: execution-groups
+        label: Run on
+        optional: true

@@ -1,0 +1,506 @@
+# Design of experiments over the NACA 4-digit airfoil problem, assembled from
+# standalone workflows called as subworkflows: workflows/doe samples the designs
+# inside the variable bounds (Latin hypercube, Sobol, Monte Carlo, full
+# factorial, one at a time) or takes them from a pasted CSV table, every design
+# is one call of workflows/openfoam-naca, run in parallel as a matrix, and the
+# results are collected into one table. Each case is exactly a standalone
+# openfoam-naca run: its own checkout and environment check, its own submitter
+# job and, when images are wanted, its ParaView images of the fields.
+#
+# With postprocessing.generate_images (the default), preprocessing also calls
+# workflows/design-explorer, which serves a Design Explorer page over the study
+# as a pw endpoint (design-explorer-<run slug>): the inputs and the outputs (drag
+# and lift coefficients, lift-to-drag) as brushable axes, the rendered fields of
+# every design as thumbnails. The page picks up the cases as they finish, and
+# the endpoint keeps serving after the run until `pw endpoints delete` removes
+# it. The matrix mechanics (a matrix over the form's case count, guarded by the
+# count the sampler produced) come from tutorials/optimization.
+permissions:
+  - '*'
+
+# Saved inputs, offered under "Load saved inputs" on the Execute page: the
+# converged-mesh study, every case a SLURM job of 4 ranks at mesh_scale 3
+# (~1.5 min each on 4-core nodes). It pins no resource: pick the cluster in the form.
+configurations:
+  mesh3_slurm_4ranks:
+    inputs:
+      cluster:
+        scheduler: true
+        cores_per_case: 4
+        slurm:
+          is_enabled: true
+          time: '01:00:00'
+      doe:
+        method: sobol
+        n_cases: 16
+        max_parallel: 16
+        mesh_scale: 3
+
+jobs:
+  preprocessing:
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      # this workflow has no app of its own: the sampler and Design Explorer
+      # check out theirs inside their subworkflows. Checked out here: the
+      # OpenFOAM app and the shared tools, for the environment checks below
+      # (every case checks out the OpenFOAM app again inside its subworkflow),
+      # and the study reader of the Design Explorer app, for the results job
+      - name: Checkout the Installers and the Study Reader
+        uses: parallelworks/checkout
+        with:
+          repo: https://github.com/parallelworks/workflows.git
+          branch: canary
+          sparse_checkout:
+            - workflows/openfoam-naca/app
+            - workflows/design-explorer/app
+            - tools/utils
+      - name: Validate Inputs
+        run: |
+          set -e
+          n="${{ inputs.doe.n_cases }}"
+          if ! [[ "${n}" =~ ^[0-9]+$ ]] || [ "${n}" -lt 1 ]; then
+            echo "::error::n_cases must be a positive integer, got '${n}'"
+            exit 1
+          fi
+          cores="${{ inputs.cluster.cores_per_case }}"
+          if ! [[ "${cores}" =~ ^[0-9]+$ ]] || [ "${cores}" -lt 1 ]; then
+            echo "::error::cores_per_case must be a positive integer, got '${cores}'"
+            exit 1
+          fi
+          # 5400 x mesh_scale^2 cells is the C-grid of naca_blockmesh.py; the solver
+          # caps the ranks at one per 1000 cells, so say here, once, what a request
+          # above that buys (16 ranks on the base mesh diverged where 4 converged)
+          ms="${{ inputs.doe.mesh_scale }}"
+          if [[ "${ms}" =~ ^[0-9]+$ ]] && [ $(( 5400 * ms * ms / cores )) -lt 1000 ]; then
+            cells=$(( 5400 * ms * ms ))
+            echo "::warning::${cores} cores per case at mesh_scale ${ms} (${cells} cells) leave $(( cells / cores )) cells per rank: each case will run on $(( cells / 1000 > 0 ? cells / 1000 : 1 )) rank(s) and the rest of its allocation idles. Raise mesh_scale (16 ranks need 2 or more) or lower Cores per case."
+          fi
+          echo "CASES_DIR=${PWD}/cases" | tee -a $OUTPUTS
+      # the checks every case makes, made once here before any case is spent:
+      # environment commands that do not deliver the tools fail the run with the
+      # tools' own output, and with no commands given the installs (OpenFOAM from
+      # conda-forge, the ParaView binaries) happen here once, not under n_cases
+      # workers at the same time
+      - name: Check the Software Environments
+        run: |
+          set -e
+          required="blockMesh potentialFoam simpleFoam"
+          if [ "${{ inputs.cluster.cores_per_case }}" -gt 1 ]; then
+            required="${required} decomposePar reconstructPar mpirun"
+          fi
+          bash tools/utils/prepare-env.sh openfoam "${PWD}/openfoam-env.sh" \
+            workflows/openfoam-naca/app/install-openfoam.sh ${required} << 'PW_LOAD_EOF'
+          ${{ inputs.software.openfoam_load }}
+          PW_LOAD_EOF
+          if [ "${{ inputs.postprocessing.generate_images }}" = "true" ]; then
+            bash tools/utils/prepare-env.sh paraview "${PWD}/paraview-env.sh" \
+              workflows/openfoam-naca/app/install-paraview.sh pvpython << 'PW_LOAD_EOF'
+          ${{ inputs.software.paraview_load }}
+          PW_LOAD_EOF
+          fi
+      # the sampler writes cases/case_<j>/params.in for every design and
+      # doe.csv; the count it produced (the structured methods decide their
+      # own: a full factorial is L^d cases; a pasted table has as many as it has
+      # rows) is read back from its doe.env to guard the workers matrix
+      - name: DOE (Sample the Designs)
+        uses: github/parallelworks/workflows@canary
+        with:
+          $yaml: workflows/doe/yamls/general.yaml
+          resource: ${{ inputs.resource }}
+          doe:
+            method: ${{ inputs.doe.method }}
+            cases_csv: ${{ inputs.doe.cases_csv }}
+            n_cases: ${{ inputs.doe.n_cases }}
+            seed: ${{ inputs.doe.seed }}
+            variables: ${{ inputs.doe.variables }}
+            cases_dir: ${{ needs.preprocessing.outputs.CASES_DIR }}
+      - name: Publish the Designs
+        run: |
+          set -e
+          cases="${{ needs.preprocessing.outputs.CASES_DIR }}"
+          tee -a $OUTPUTS < "${cases}/doe.env"
+          n=$(awk -F= '$1 == "N_CASES" {print $2}' "${cases}/doe.env")
+          # a pasted table's size is only known now, and the matrix below was
+          # sized at submission from n_cases: the form must have left room for it
+          if [ "${n}" -gt "${{ inputs.doe.n_cases }}" ]; then
+            if [ "${{ inputs.doe.method }}" = csv ]; then
+              echo "::error::the table has ${n} cases but the workers matrix has ${{ inputs.doe.n_cases }} slots: set Number of cases to at least ${n}"
+            else
+              echo "::error::the sampler proposed ${n} cases but the workers matrix has ${{ inputs.doe.n_cases }} slots (n_cases); fix the sampler"
+            fi
+            exit 1
+          fi
+      # the page: Design Explorer over cases/, served by its own workflow,
+      # which starts the server detached on the login node, waits until the
+      # endpoint answers and removes a server that never did. Its server reads
+      # cases/ on every request, so the page is live before the first case
+      # solves and shows each one as it finishes
+      - name: Design Explorer (Serve the Study)
+        if: ${{ inputs.postprocessing.generate_images == true }}
+        uses: github/parallelworks/workflows@canary
+        with:
+          $yaml: workflows/design-explorer/yamls/general.yaml
+          resource: ${{ inputs.resource }}
+          study:
+            cases_dir: ${{ needs.preprocessing.outputs.CASES_DIR }}
+            title: NACA airfoil DOE (${{ inputs.doe.method }})
+      - name: Publish the Page
+        run: |
+          command -v pw >/dev/null 2>&1 || export PATH="${PATH}:${HOME}/pw"
+          if [ "${{ inputs.postprocessing.generate_images }}" = "true" ]; then
+            url=$(pw endpoints list 2>/dev/null | awk -F'\t' -v name="design-explorer-${PW_RUN_SLUG}" '$1 == name {print $3}')
+            echo "::notice::Design Explorer is serving at ${url}: the parallel coordinates fill in as the cases finish; remove it with: pw endpoints delete design-explorer-${PW_RUN_SLUG}"
+          else
+            echo "::notice::images off: no Design Explorer page for this run; the results table is written by the results job"
+          fi
+
+  # The guarded matrix: a matrix can only expand over values that are concrete
+  # at submission, so it ranges over n_cases (a form input; for a pasted table,
+  # whose size the form cannot know, the room left for its rows): slots
+  # 1..n_cases, and the job-level if: compares each slot against the runtime
+  # output N_CASES: a structured design or a table that produced fewer cases
+  # skips the surplus slots for free. max-parallel caps how many cases run at
+  # once (a login node has only so many cores). Each live slot is one call of
+  # the standalone OpenFOAM workflow, exactly as it runs from the platform by
+  # itself, with the images on or off as this form says.
+  workers:
+    needs: [preprocessing]
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.doe.max_parallel }}
+      matrix:
+        job_id: ${{ 1 range inputs.doe.n_cases + 1 }}
+    if: ${{ matrix.job_id <= needs.preprocessing.outputs.N_CASES }}
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: OpenFOAM (Solve the Design)
+        uses: github/parallelworks/workflows@canary
+        with:
+          $yaml: workflows/openfoam-naca/yamls/general.yaml
+          resource: ${{ inputs.resource }}
+          cluster:
+            scheduler: ${{ inputs.cluster.scheduler }}
+            cores_per_case: ${{ inputs.cluster.cores_per_case }}
+            slurm:
+              is_enabled: ${{ inputs.cluster.slurm.is_enabled }}
+              partition: ${{ inputs.cluster.slurm.partition }}
+              time: ${{ inputs.cluster.slurm.time }}
+              scheduler_directives: ${{ inputs.cluster.slurm.scheduler_directives }}
+            pbs:
+              is_enabled: ${{ inputs.cluster.pbs.is_enabled }}
+              scheduler_directives: ${{ inputs.cluster.pbs.scheduler_directives }}
+          case:
+            # params.in carries all four variables, so the case form's own
+            # design fields are never used
+            params_file: ${{ needs.preprocessing.outputs.CASES_DIR }}/case_${{ matrix.job_id }}/params.in
+            case_dir: ${{ needs.preprocessing.outputs.CASES_DIR }}/case_${{ matrix.job_id }}
+            mesh_scale: ${{ inputs.doe.mesh_scale }}
+          postprocessing:
+            generate_images: ${{ inputs.postprocessing.generate_images }}
+          software:
+            openfoam_load: ${{ inputs.software.openfoam_load }}
+            paraview_load: ${{ inputs.software.paraview_load }}
+
+  # if: always — the table is written whatever happened to the cases: a case
+  # without results.out is a FAILED row (a diverged solver is a result of the
+  # study, not an infrastructure failure), and the run fails only when no case
+  # at all solved. Fixed paths, not outputs: a canceled job publishes none.
+  results:
+    needs: [preprocessing, workers]
+    if: ${{ always }}
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Collect the Results
+        run: |
+          cd "${PW_PARENT_JOB_DIR}"
+          cases="${PW_PARENT_JOB_DIR}/cases"
+          if [ ! -d "${cases}" ]; then
+            echo "::error::no cases directory ${cases}: the designs were never sampled (read the preprocessing log)"
+            exit 1
+          fi
+          python3 workflows/design-explorer/app/study.py --cases-dir "${cases}" \
+            --results "${cases}/results.csv" --data-csv "${cases}/data.csv" --summary | tee -a $OUTPUTS
+          echo "--- ${cases}/results.csv"
+          column -t -s, "${cases}/results.csv" 2>/dev/null || cat "${cases}/results.csv"
+          echo "RESULTS_CSV=${cases}/results.csv" | tee -a $OUTPUTS
+          command -v pw >/dev/null 2>&1 || export PATH="${PATH}:${HOME}/pw"
+          if [ "${{ inputs.postprocessing.generate_images }}" = "true" ]; then
+            url=$(pw endpoints list 2>/dev/null | awk -F'\t' -v name="design-explorer-${PW_RUN_SLUG}" '$1 == name {print $3}')
+            if [ -n "${url}" ]; then
+              echo "::notice::Design Explorer keeps serving the study at ${url} (every solved design with its images); remove it with: pw endpoints delete design-explorer-${PW_RUN_SLUG}"
+            else
+              echo "::warning::the endpoint design-explorer-${PW_RUN_SLUG} is no longer listed; the study is still in ${cases}/results.csv and ${cases}/case_*/images"
+            fi
+          fi
+          ok=$(awk -F, 'NR > 1 && $2 == "OK"' "${cases}/results.csv" | wc -l)
+          failed=$(awk -F, 'NR > 1 && $2 == "FAILED" {print $1}' "${cases}/results.csv" | tr '\n' ' ')
+          pending=$(awk -F, 'NR > 1 && $2 == "PENDING" {print $1}' "${cases}/results.csv" | tr '\n' ' ')
+          if [ -n "${failed}" ]; then
+            echo "::warning::cases without results (the solver failed; their logs are case_*/run.*.out and case_*/case/log.*): ${failed}"
+          fi
+          if [ -n "${pending}" ]; then
+            echo "::warning::cases that never ran (their worker failed before the solver; read the workers' logs): ${pending}"
+          fi
+          if [ "${ok}" -eq 0 ]; then
+            echo "::error::no case solved: read the workers' logs"
+            exit 1
+          fi
+          echo "::notice::${ok} of $(( $(wc -l < "${cases}/results.csv") - 1 )) cases solved; the table is ${cases}/results.csv"
+
+'on':
+  execute:
+    inputs:
+      resource:
+        type: compute-clusters
+        label: Compute resource
+        include-workspace: false
+        tooltip: Resource where the sampler, the Design Explorer server and all OpenFOAM cases run
+      cluster:
+        type: group
+        label: Compute Cluster Settings
+        items:
+          scheduler:
+            type: boolean
+            default: false
+            label: Schedule Cases?
+            hidden: ${{ inputs.resource.schedulerType == '' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              Yes → Each OpenFOAM case is submitted to the scheduler using sbatch, qsub, etc
+              No  → Cases run on the controller or login node instead
+          cores_per_case:
+            type: number
+            label: Cores per case
+            default: 1
+            min: 1
+            max: 64
+            tooltip: |
+              MPI ranks per OpenFOAM case. 1 runs the solvers serially; more
+              decomposes the mesh into N strips and runs potentialFoam and
+              simpleFoam under mpirun. Only pays off from mesh_scale 3-4 (2-4 ranks): at the
+              default mesh a decomposed case is slower than a serial one. The solver
+              caps the ranks at one per 1000 cells (5400 x mesh_scale^2 cells per
+              case, so 16 ranks need mesh_scale 2 or more): 16 ranks on the base
+              mesh diverged where 4 converged. Scheduled
+              cases request --nodes=1 --ntasks=N (PBS: select=1:ncpus=N:mpiprocs=N),
+              so N must fit one node; on the login node, up to max_parallel x N
+              ranks run at once.
+          slurm:
+            type: group
+            label: SLURM Directives
+            hidden: ${{ inputs.resource.schedulerType != 'slurm' || inputs.cluster.scheduler == false }}
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.cluster.scheduler == false }}
+            items:
+              is_enabled:
+                type: boolean
+                hidden: true
+                default: true
+                label: Is SLURM enabled? Yes, unless the slurm section is hidden and ignored
+              partition:
+                type: slurm-partitions
+                label: SLURM partition
+                optional: true
+                resource: ${{ inputs.resource }}
+                tooltip: Select a partition from the drop down menu.
+              time:
+                label: Walltime per case
+                type: string
+                default: '01:00:00'
+                tooltip: '--time= SLURM directive to set the maximum wall-clock time limit for each case'
+              scheduler_directives:
+                type: editor
+                optional: true
+                tooltip: |
+                  Add extra SLURM directives, one per line, using the #SBATCH prefix. For example:
+                  #SBATCH --exclusive
+                  #SBATCH --nodelist=<node-name>
+                  The workflow already sets --nodes=1 and --ntasks from Cores per case;
+                  a directive here repeating one of them takes precedence.
+          pbs:
+            type: group
+            label: PBS Directives
+            hidden: ${{ inputs.resource.schedulerType != 'pbs' || inputs.cluster.scheduler == false }}
+            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.cluster.scheduler == false }}
+            items:
+              is_enabled:
+                type: boolean
+                hidden: true
+                default: true
+                label: Is PBS enabled? Yes, unless the pbs section is hidden and ignored
+              scheduler_directives:
+                label: Scheduler Directives
+                type: editor
+                optional: true
+                tooltip: |
+                  Add extra PBS directives, one per line, using the #PBS prefix. For example:
+                  #PBS -l mem=16gb
+                  #PBS -l ngpus=1
+                  The workflow already sets -l select=1:ncpus=N:mpiprocs=N from Cores per case.
+      doe:
+        type: group
+        label: Design of Experiments
+        items:
+          method:
+            type: dropdown
+            label: Sampling method
+            default: lhs
+            tooltip: |
+              How the designs are spread over the variable bounds. Latin hypercube
+              and Sobol cover the box evenly at any number of cases (the usual
+              choices for a surrogate or a sensitivity study); random is plain
+              Monte Carlo; full factorial is a regular grid of L levels per
+              variable, the largest L with L^d cases at most (d = variables with
+              different bounds); one at a time varies each variable alone across
+              its range with the others at the center of the box (a sensitivity
+              screening). The structured designs may produce fewer cases than
+              asked; the log says how many. Your own cases runs the designs of
+              a table you paste below, one row per case.
+            options:
+              - label: Latin hypercube
+                value: lhs
+              - label: Sobol sequence
+                value: sobol
+              - label: Random (Monte Carlo)
+                value: random
+              - label: Full factorial
+                value: full_factorial
+              - label: One at a time
+                value: one_at_a_time
+              - label: Your own cases (CSV)
+                value: csv
+          cases_csv:
+            type: editor
+            label: Cases (CSV)
+            hidden: ${{ inputs.doe.method != 'csv' }}
+            default: |
+              max_camber,camber_position,thickness,angle_of_attack
+              0.00,0.40,0.12,4
+              0.02,0.40,0.12,4
+              0.04,0.40,0.12,4
+              0.02,0.40,0.09,4
+              0.02,0.40,0.15,4
+            tooltip: |
+              One row per case under a header naming the variables, at most
+              Number of cases rows. Paste from a spreadsheet (tabs) or type it
+              with commas, semicolons or spaces. A variable without a column is held at the
+              middle of its bounds in Design variables; a value outside the
+              bounds runs with a warning. Columns a study table also carries
+              (case, generation, status, the coefficients, Design Explorer's
+              in:/out:/img: columns) are skipped, so a previous doe.csv,
+              results.csv or data.csv pastes as it is.
+          n_cases:
+            type: number
+            label: Number of cases
+            default: 8
+            min: 1
+            max: 256
+            tooltip: |
+              Designs to sample and solve: the width of the workers matrix, one
+              slot per case, expanded at submission. A full factorial or
+              one-at-a-time design rounds down to its own size and the surplus
+              slots are skipped for free. With your own cases, the slots the
+              table's rows run in: at least the number of rows (a longer table
+              stops the run before any case is spent).
+          max_parallel:
+            type: number
+            label: Cases at a time
+            default: 8
+            min: 1
+            max: 256
+            tooltip: |
+              How many cases run at once. On the login node, each case takes
+              Cores per case cores, so keep max_parallel x cores within the node;
+              with Schedule Cases on, this is how many scheduler jobs are queued
+              at once.
+          seed:
+            type: number
+            label: Random seed
+            default: 4242
+            min: 1
+            hidden: ${{ inputs.doe.method == 'csv' || inputs.doe.method == 'full_factorial' || inputs.doe.method == 'one_at_a_time' }}
+            tooltip: |
+              Seed of the Latin hypercube, random and Sobol (shift) samples; the
+              same seed and bounds give the same designs again. The grid designs
+              ignore it.
+          mesh_scale:
+            type: number
+            label: Mesh resolution multiplier
+            default: 2
+            min: 1
+            max: 6
+            tooltip: |
+              The cost dial of every case: multiplies every cell count of the
+              C-grid around the airfoil, and the solver's iteration budget scales
+              with it, so cost grows roughly with the cube: ~10 s per case at 1,
+              ~1 min at 2, ~10 min at 4, ~35 min at 6 (one core). The mesh is
+              essentially converged by 3-4; the openfoam-naca README has the
+              measured accuracy table.
+          variables:
+            type: editor
+            label: Design variables and bounds
+            default: |
+              max_camber       0.0   0.06
+              camber_position  0.3   0.6
+              thickness        0.08  0.18
+              angle_of_attack  0     10
+            tooltip: |
+              One line per variable: <name> <lower> <upper>. Keep the four names
+              (the OpenFOAM case reads them); narrow the bounds to focus the
+              study, or give a variable equal bounds to hold it fixed (it then
+              takes no sampling dimension). With your own cases, a variable the
+              table has no column for is held at the middle of its bounds. The camber, position and thickness
+              box is where the mesh generator was validated; the angle of attack
+              is validated from -5 to 12 degrees.
+      postprocessing:
+        type: group
+        label: Postprocessing
+        items:
+          generate_images:
+            type: boolean
+            label: Generate images and serve Design Explorer?
+            default: true
+            tooltip: |
+              Yes → every solved case renders its fields with ParaView (pressure,
+              velocity, streamlines, eddy viscosity, wake, mesh) and a Design
+              Explorer page serves the study as a pw endpoint, design-explorer-<run
+              slug>: parallel coordinates over the inputs and the coefficients,
+              the images of each design on hover. ParaView comes from the
+              commands in Software Environment or, left empty, from the official
+              binaries the workflow downloads once (no sudo, ~830 MB).
+              No → the cases only report their coefficients; the results table is
+              still written (results.csv in the cases directory).
+      software:
+        type: group
+        label: Software Environment
+        collapsed: true
+        items:
+          openfoam_load:
+            type: editor
+            label: OpenFOAM environment commands
+            optional: true
+            tooltip: |
+              Shell commands that put blockMesh, potentialFoam and simpleFoam (and
+              decomposePar, reconstructPar plus mpirun when Cores per case > 1) on
+              PATH, one per line, e.g. `module load openfoam/2412` or `source
+              /opt/openfoam2412/etc/bashrc`. Leave empty to install OpenFOAM v2412
+              from conda-forge (no sudo, ~5 min once) under
+              ${service_parent_install_dir:-$HOME/pw/software}/openfoam-naca.
+              Every case sources these commands; `export MPIRUN="srun --mpi=pmix"`
+              here replaces the default launcher `mpirun --bind-to none -np N`.
+          paraview_load:
+            type: editor
+            label: ParaView environment commands
+            optional: true
+            hidden: ${{ inputs.postprocessing.generate_images == false }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              Shell commands that put pvpython on PATH, one per line, e.g.
+              `module load paraview/5.13`. Leave empty to download the official
+              ParaView 6.1.1 Linux binaries (x86_64, no sudo, ~830 MB once, 2.7 GB
+              on disk) under
+              ${service_parent_install_dir:-$HOME/pw/software}/openfoam-naca/paraview;
+              they render without a display. A site build that needs an X server
+              is run under xvfb-run where that exists. Needs ParaView 5.10 or newer.

@@ -1,0 +1,6 @@
+jobs:
+  simulate:
+    retry:
+      reasons: [worker-lost]
+    steps:
+      - run: ./simulate --resume

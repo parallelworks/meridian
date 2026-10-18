@@ -1,0 +1,10 @@
+description: >-
+  A form is a wizard or has a layout, not both.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta
+      line: 6
+      column: 9

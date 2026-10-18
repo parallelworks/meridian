@@ -1,0 +1,8 @@
+configurations:
+  quoted:
+    inputs:
+      "<<": value
+jobs:
+  main:
+    steps:
+      - run: echo hello

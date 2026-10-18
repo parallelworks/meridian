@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.executionGroup }}
+'on':
+  execute:
+    inputs:
+      executionGroup:
+        type: execution-groups
+        default: gpu-burst

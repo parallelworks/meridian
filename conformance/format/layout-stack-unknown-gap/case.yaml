@@ -1,0 +1,10 @@
+description: >-
+  A stack's gap is none, sm, md or lg.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/gap
+      line: 9
+      column: 36

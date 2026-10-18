@@ -1,0 +1,22 @@
+jobs:
+  main:
+    steps:
+      - run: echo ready
+'on':
+  execute:
+    inputs:
+      $meta:
+        wizard: {mode: wizard}
+      setup:
+        type: step
+        title: Setup
+        options:
+          $meta:
+            layout: {type: field, field: settings}
+          settings:
+            type: group
+            items:
+              $meta:
+                layout: {type: grid, columns: {base: 1, sm: 2}, children: [{type: field, field: name}]}
+              name:
+                type: string

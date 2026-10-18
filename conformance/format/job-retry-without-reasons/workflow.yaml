@@ -1,0 +1,6 @@
+jobs:
+  simulate:
+    retry:
+      max-retries: 2
+    steps:
+      - run: ./simulate

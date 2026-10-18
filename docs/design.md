@@ -94,8 +94,9 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   key changes no workflow that was valid before:
   - `format:` itself;
   - workflow metadata (below);
-  - `execution-group:` in `runs-on:`, beside format 1's `environment:`, and
-    `resources:`, which name a group and what a job needs from it;
+  - `execution-group:` in `runs-on:`, beside format 1's `environment:`, the
+    `execution-groups` input that chooses a group, and `resources:`, which
+    says what a job needs from it;
   - `needs.*` in `strategy:` and `runs-on:`, for jobs sized from what earlier
     jobs found;
   - `needs.<job>.result`, a dependency's outcome;
@@ -110,15 +111,23 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   `uses:` source with no resolver, sessions without a session provider. The
   error names the key and what would provide it. There is no flag to run the
   workflow anyway.
+- **What ACTIVATE ignores.** ACTIVATE has never checked workflows against
+  the schema, so workflows that run there can have keys the schema doesn't
+  define, which ACTIVATE ignores. In format 1, such a key is a warning, and
+  is ignored. So is a repeated key, whose last value is used, and a second
+  YAML document in a file. A name the schema doesn't allow, such as a job's,
+  is still an error. A later format can make these warnings errors.
 
 ### Conformance
 
 The conformance suite pins the format's meaning. Each case is a workflow and
 its inputs with either the plan it compiles to or the errors it produces, and
 some cases also run, with the outputs and outcomes they must end with. Cases
-come from ACTIVATE's own tests and from public workflows, and cover expressions,
-matrix expansion, `needs`, defaults, inputs, status functions and step
-retries, including retries that pick another host each time.
+come from ACTIVATE's own tests, from public workflows and from Meridian, and
+cover loading and validation, expressions, matrix expansion, `needs`,
+defaults, inputs, status functions and step retries, including retries that
+pick another host each time. They live in `conformance/`, and each package
+runs the cases of its area.
 
 Behavior that workflows rely on is kept, even where it is surprising. Behavior
 no workflow could rely on, such as a crash or a silently wrong result, is
@@ -130,7 +139,8 @@ The compiler turns a workflow, its inputs and its resolvers into a plan, in
 order:
 
 1. **Load.** Parse the YAML, keeping the source position of every node.
-   Alias expansion and file size are bounded.
+   YAML aliases and merge keys are refused, as ACTIVATE refuses them, and
+   the file's size is bounded.
 2. **Validate** against the schema of the workflow's format.
 3. **Translate** a workflow in an older format into the current one.
 4. **Resolve** through the resolver interfaces: check input values against
@@ -152,7 +162,8 @@ lets it build to WebAssembly unchanged (see
 
 Errors and warnings carry a file, line, column, code and message, and are
 reported together rather than one at a time. Warnings, such as a deprecated
-key, don't stop a run. Over HTTP they are RFC 9457 problem
+key, don't stop a run, and are kept with it, so that they reach whoever runs
+the workflow and not only its author. Over HTTP they are RFC 9457 problem
 details with the list in an `errors` member.
 
 Limits on a run's size (jobs, matrix instances, expression depth, `uses:`
@@ -639,9 +650,30 @@ the job is placed, and the digest is what the attempt records and runs.
 
 ### Resources
 
-`resources:` says what a job needs: CPUs, memory, GPUs, walltime. A job
-fits a member that offers at least that. On Slurm and PBS, resources become
+`resources:` says what a job needs: CPUs, memory and GPUs. A job fits a
+member that offers at least that. On Slurm and PBS, resources become
 scheduler options, and `runs-on:` can add scheduler parameters of its own.
+
+A job's time limit is its `timeout:`. There is no separate walltime:
+
+- **The walltime Meridian requests** is the job's `timeout:` plus a margin
+  the member sets, for starting the worker, pulling the image, running
+  `cleanup:` commands and reporting. The worker enforces the timeout itself,
+  so the job ends as timed out, with its cleanup run and its logs delivered,
+  before the scheduler would end it.
+- **A job without a `timeout:`** gets the member's default, or else the
+  partition's. Either way, the worker reads the allocation's end time from
+  the scheduler and stops the job before it.
+- **A job the scheduler ends at its time limit timed out:** its worker
+  wasn't lost. When the scheduler reports that it ended a job at its limit,
+  such as Slurm's `TIMEOUT` state, the attempt's reason is `timeout`, so a
+  `retry:` that lists `worker-lost` doesn't run it again. A node failure or
+  a preemption is still `worker-lost` ([Job retries](#job-retries)).
+- **Placement** leaves out a member whose longest allowed walltime is
+  shorter than the one the job would request.
+- **A format 1 job that sets its time limit through `runs-on:`** keeps it.
+  The compiler warns when that limit is shorter than the job's `timeout:`
+  and the margin.
 
 ## Security
 

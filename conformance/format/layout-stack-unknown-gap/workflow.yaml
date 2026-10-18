@@ -1,0 +1,13 @@
+jobs:
+  main:
+    steps:
+      - run: echo ready
+'on':
+  execute:
+    inputs:
+      $meta:
+        layout: {type: stack, gap: enormous, children: []}
+      name:
+        type: string
+      count:
+        type: number

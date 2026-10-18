@@ -1,0 +1,13 @@
+jobs:
+  main:
+    steps:
+      - run: echo ready
+'on':
+  execute:
+    inputs:
+      $meta:
+        layout: {type: grid, columns: 2, align: rows, children: [{type: field, field: name}]}
+      name:
+        type: string
+      count:
+        type: number

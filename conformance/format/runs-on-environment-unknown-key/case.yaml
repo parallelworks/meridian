@@ -1,0 +1,12 @@
+description: >-
+  A key runs-on doesn't define is an unknown key. ACTIVATE's schema rejects
+  this, but ACTIVATE ignores the key when it runs the workflow, so format 1
+  warns and ignores it.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /jobs/main/runs-on/partition
+      line: 5
+      column: 7

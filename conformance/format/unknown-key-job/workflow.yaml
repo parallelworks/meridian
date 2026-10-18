@@ -1,0 +1,5 @@
+jobs:
+  main:
+    early-cancel: any-job-failed
+    steps:
+      - run: echo hello

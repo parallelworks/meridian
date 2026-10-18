@@ -1,0 +1,22 @@
+'on':
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+      account:
+        type: slurm-accounts
+        resource: ${{ inputs.cluster }}
+        default: ""
+      partition:
+        type: slurm-partitions
+        resource: ${{ inputs.cluster }}
+        account: ${PW_USER}
+        default: standard
+      qos:
+        type: slurm-qos
+        resource: ${{ inputs.cluster }}
+        default: standard
+jobs:
+  main:
+    steps:
+      - run: echo hello

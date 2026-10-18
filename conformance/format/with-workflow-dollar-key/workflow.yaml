@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: workflow/mine
+        with:
+          $host: gl.example.com
+'on':
+  execute:
+    inputs: {}

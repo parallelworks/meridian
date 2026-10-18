@@ -1,0 +1,8 @@
+jobs:
+  main:
+    runs-on:
+      environment: { cluster: my-hpc, name: gpu-large }
+      params:
+        walltime: "02:00:00"
+    steps:
+      - run: hostname

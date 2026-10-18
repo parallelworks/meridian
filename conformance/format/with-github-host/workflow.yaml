@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: github/owner/repo@main
+        with:
+          $host: gl.example.com
+'on':
+  execute:
+    inputs: {}

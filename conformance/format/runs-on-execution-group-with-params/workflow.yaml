@@ -1,0 +1,7 @@
+jobs:
+  main:
+    runs-on:
+      execution-group: gpus
+      params: { walltime: "01:00:00" }
+    steps:
+      - run: hostname

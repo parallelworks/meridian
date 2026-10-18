@@ -1,0 +1,10 @@
+description: >-
+  A key a description file doesn't define is an unknown key.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown-key
+      path: /description/format
+      line: 3
+      column: 3

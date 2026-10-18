@@ -1,0 +1,10 @@
+description: >-
+  A configuration's name can't have a space.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /configurations/bad name
+      line: 2
+      column: 3

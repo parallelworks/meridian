@@ -1,0 +1,3 @@
+description: >-
+  parallelworks/update-session can point at a Kubernetes resource.
+source: ACTIVATE's workflow schema tests

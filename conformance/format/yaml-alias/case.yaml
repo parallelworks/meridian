@@ -1,0 +1,11 @@
+description: >-
+  YAML aliases aren't allowed, as in ACTIVATE: a few of them can expand into a
+  very large document.
+source: ACTIVATE's YAML loader tests
+expect:
+  diagnostics:
+    - severity: error
+      code: unsupported
+      path: /jobs/main/env/GREETING
+      line: 6
+      column: 17

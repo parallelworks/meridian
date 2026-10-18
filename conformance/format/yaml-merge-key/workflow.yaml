@@ -1,0 +1,5 @@
+jobs:
+  main:
+    <<: {timeout: 1h}
+    steps:
+      - run: echo hello

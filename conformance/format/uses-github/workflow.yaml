@@ -1,0 +1,8 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: github/owner/repo@main
+'on':
+  execute:
+    inputs: {}

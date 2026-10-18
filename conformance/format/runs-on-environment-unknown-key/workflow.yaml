@@ -1,0 +1,7 @@
+jobs:
+  main:
+    runs-on:
+      environment: { cluster: my-hpc, name: gpu-large }
+      partition: gpu
+    steps:
+      - run: hostname

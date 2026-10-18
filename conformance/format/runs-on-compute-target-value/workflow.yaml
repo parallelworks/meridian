@@ -1,0 +1,9 @@
+jobs:
+  main:
+    runs-on:
+      mode: environment
+      targetId: abc
+      environmentId: def
+      schedulingParams: { qos: normal }
+    steps:
+      - run: hostname

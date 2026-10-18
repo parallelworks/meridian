@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - name: Run it
+        uses: gitlab/group/project@main
+        with:
+          $host: gl.example.com
+          $yaml: wf.yaml
+          an_input: 1
+'on':
+  execute:
+    inputs: {}

@@ -1,0 +1,10 @@
+description: >-
+  A field reference names an input in the same scope, not a nested one.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/$meta/layout/field
+      line: 9
+      column: 38

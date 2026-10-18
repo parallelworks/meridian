@@ -1,0 +1,10 @@
+description: >-
+  An endpoint link's redirect is true, false or an expression.
+source: ACTIVATE's workflow schema tests
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /links/ollama/redirect
+      line: 4
+      column: 15

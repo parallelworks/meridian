@@ -1,0 +1,4 @@
+jobs:
+  Build:
+    steps:
+      - run: make

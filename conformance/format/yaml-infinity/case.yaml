@@ -1,0 +1,10 @@
+description: >-
+  Infinity and NaN aren't allowed, because JSON can't hold them.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: unsupported
+      path: /configurations/numbers/inputs/big
+      line: 4
+      column: 12

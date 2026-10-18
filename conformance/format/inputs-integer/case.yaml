@@ -1,0 +1,12 @@
+description: >-
+  integer isn't an input type. ACTIVATE's launch form shows no field for an
+  input type it doesn't know, so the input always has its default; a number
+  input is what such a workflow means.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /on/execute/inputs/ask_timeout/type
+      line: 6
+      column: 15

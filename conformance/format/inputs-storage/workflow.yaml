@@ -1,0 +1,12 @@
+'on':
+  execute:
+    inputs:
+      dataset_bucket:
+        label: Dataset storage bucket
+        type: storage
+        default: ""
+        optional: true
+jobs:
+  main:
+    steps:
+      - run: echo hello

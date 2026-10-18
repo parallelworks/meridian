@@ -1,0 +1,17 @@
+'on':
+  execute:
+    inputs:
+      group:
+        type: execution-groups
+      cpus:
+        type: number
+        default: 2
+jobs:
+  main:
+    runs-on:
+      execution-group: ${{ inputs.group }}
+    resources:
+      cpu: ${{ inputs.cpus }}
+      memory: 512Mi
+    steps:
+      - run: nproc

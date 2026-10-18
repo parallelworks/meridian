@@ -1,0 +1,11 @@
+description: >-
+  A job's retry must list its reasons, so it can't be read as running failed
+  steps again.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: schema
+      path: /jobs/simulate/retry
+      line: 4
+      column: 7
