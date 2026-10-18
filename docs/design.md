@@ -741,6 +741,9 @@ functions rather than setting globals.
 
 ## Open questions
 
+Larger features that aren't designed yet are proposed in
+[Stories](stories.md).
+
 - **A built-in container runtime for Linux.** A runtime in pure Go is
   possible: the worker can start a job's process in new namespaces itself,
   and be the container's init so that nothing has to join a running

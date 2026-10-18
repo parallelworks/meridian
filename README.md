@@ -125,7 +125,8 @@ SingularityCE, which HPC sites often provide.
 
 ## Design
 
-[docs/design.md](docs/design.md) describes how Meridian works.
+[docs/design.md](docs/design.md) describes how Meridian works, and
+[docs/stories.md](docs/stories.md) proposes what it doesn't cover yet.
 
 ## License
 
