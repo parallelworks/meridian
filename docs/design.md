@@ -179,7 +179,10 @@ release continues from the same plan.
 It holds:
 
 - **The run:** the workflow's source and revision, its format and metadata,
-  the resolved inputs, workflow `env` and the run's timeout.
+  the resolved inputs, workflow `env` and the run's timeout. A revision names
+  the exact text that ran: a Git commit, or the SHA-256 digest of the text
+  when no commit has it, as for a file with uncommitted changes or a workflow
+  a platform stores.
 - **Jobs**, one per job instance: dependencies (on all instances of a job,
   or `:any` of them), matrix values, the job's `if:`, its group, resources
   and `retry:`, steps, outputs, timeout and `env`.
@@ -770,6 +773,12 @@ Editors and web UIs validate workflows, expand matrices and evaluate
 expressions with a TypeScript package built from the same Go code, as
 WebAssembly, so what they accept is what runs. The package exports typed
 functions rather than setting globals.
+
+The package also edits workflows. An edit sets, adds or removes the value at
+a JSON Pointer and leaves every other byte of the file as it was, so comments
+and formatting survive. `meridian migrate` changes files the same way, and a
+platform that stores a workflow's text can change it without losing what its
+author wrote.
 
 ## Open questions
 
