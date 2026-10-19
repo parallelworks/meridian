@@ -111,24 +111,33 @@ func (e *Expr) Check() []Problem {
 	return problems
 }
 
+// replacedKeywords are the if: keywords ACTIVATE once had, and what replaced
+// each. They are words now, so they decide nothing.
+var replacedKeywords = map[string]string{
+	"completed": "success()", "success": "success()", "error": "failure()", "failure": "failure()", "failed": "failure()",
+	"canceled": "cancelled()", "cancelled": "cancelled()", "never": "false",
+}
+
 // CheckCondition returns the probable mistakes of an expression that is a
 // condition, such as a job's if:, as well as those Check returns: a word
 // that decides the condition is never false, so ${{ !completed }} is always
-// false. always, the one if: keyword, is not a mistake.
+// false. The word always, whose value as a condition means always(), is the
+// older spelling of always().
 func (e *Expr) CheckCondition() []Problem {
 	problems := e.Check()
 	var walk func(n node, top bool)
 	walk = func(n node, top bool) {
 		switch n := n.(type) {
 		case *word:
-			if top && n.text == "always" {
-				return
+			msg := fmt.Sprintf("%s is the text %q, which is always true; a condition needs a comparison, or a status function such as failure()",
+				n.text, n.text)
+			switch replacement, replaced := replacedKeywords[n.text]; {
+			case top && n.text == "always":
+				msg = "always is the older spelling of always(); use always()"
+			case replaced:
+				msg = fmt.Sprintf("%s is the text %q, which is always true; the if: keyword it was is now %s", n.text, n.text, replacement)
 			}
-			problems = append(problems, Problem{
-				Offset: n.at,
-				Msg: fmt.Sprintf("%s is the text %q, which is always true; a condition needs a comparison, or a status function such as failure()",
-					n.text, n.text),
-			})
+			problems = append(problems, Problem{Offset: n.at, Msg: msg})
 		case *unary:
 			if n.op == "!" {
 				walk(n.x, false)

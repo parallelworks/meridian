@@ -72,9 +72,17 @@ func TestCheckMessages(t *testing.T) {
 	if len(problems) != 1 || !strings.Contains(problems[0].Msg, `input.type is the text "input.type", because input isn't a context`) {
 		t.Errorf("Check = %v", problems)
 	}
-	problems = mustParse(t, "!completed").CheckCondition()
-	if len(problems) != 1 || !strings.Contains(problems[0].Msg, "always true") {
-		t.Errorf("CheckCondition = %v", problems)
+	for src, want := range map[string]string{
+		"!completed":         "the if: keyword it was is now success()",
+		"error && inputs.x":  "the if: keyword it was is now failure()",
+		"inputs.x ? a : b":   `a is the text "a", which is always true; a condition needs a comparison`,
+		"always":             "always is the older spelling of always(); use always()",
+		"inputs.x && always": "always is the older spelling of always()",
+	} {
+		problems := mustParse(t, src).CheckCondition()
+		if len(problems) == 0 || !strings.Contains(problems[0].Msg, want) {
+			t.Errorf("CheckCondition(%q) = %v, want a problem containing %q", src, problems, want)
+		}
 	}
 }
 

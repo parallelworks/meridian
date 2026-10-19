@@ -219,7 +219,8 @@ or, for a matrix that uses `needs`, when its dependencies have finished.
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`). A job's default `if:` is
 `success()`, and an `if:` that calls a status function replaces it. An
-`if:` whose value is the word `always` means `always()`.
+`if:` whose value is the word `always` means `always()`: it is the older
+spelling, which the compiler warns about, and a later format can drop it.
 
 `needs.<job>.result` is a dependency's outcome: `success`, `failure`,
 `cancelled` or `skipped`. For a matrix job it is `failure` if any instance
@@ -261,6 +262,8 @@ each one means.
   compares with `"debug"`. The compiler warns about a word that looks like a
   reference, such as `input.mode`, and about a word that decides a
   condition, since a word is never false: `if: ${{ !completed }}` never runs.
+  For a word that was once one of ACTIVATE's `if:` keywords, the warning
+  names the function that replaced it.
 - **Operators**, from loosest to tightest: `? :`; `||` and `or`; `&&` and
   `and`; the comparisons `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and `>=`,
   with `??` and the word operators `in`, `includes`, `startsWith`, `endsWith`

@@ -3,8 +3,8 @@ description: >-
   success(), failure(), cancelled() (also canceled()) and always(). They are
   known only when the expression is evaluated for a job whose needed jobs have
   finished, or for a step. In a condition, a word decides nothing, because a
-  word is never false: ${{ !completed }} is always false, and only always is a
-  keyword.
+  word is never false: ${{ !completed }} is always false. The word always is
+  the older spelling of always().
 source: ACTIVATE's tests and documentation
 scope:
   contexts:
@@ -66,7 +66,9 @@ cases:
   - expr: failure
     value: failure
 
-  # In a condition, a word that decides it is a mistake, except always.
+  # In a condition, a word that decides it is a mistake. The word always,
+  # whose value as a condition means always(), is its older spelling, which
+  # is a warning too.
   - expr: "!completed"
     condition: true
     value: false
@@ -82,10 +84,15 @@ cases:
   - expr: always
     condition: true
     value: always
-    warnings: []
+    warnings: [0]
   - expr: inputs.flag && always
     condition: true
     value: always
+    warnings: [15]
+  - expr: always()
+    condition: true
+    scope: {status: {}}
+    value: true
     warnings: []
   - expr: inputs.level == error
     condition: true
