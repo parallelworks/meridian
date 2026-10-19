@@ -1,0 +1,10 @@
+description: The workflow's env is set when the run is created, so it can't read needs or call status functions.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context
+      path: /env/A
+    - severity: error
+      code: context
+      path: /env/B

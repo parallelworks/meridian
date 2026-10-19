@@ -1,0 +1,12 @@
+description: >-
+  An expression that reads an input the workflow doesn't define is a warning
+  at the reference, which suggests the nearest name. In format 1 it reads
+  null, as in ACTIVATE, unless a caller passes it.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: reference
+      path: /jobs/build/steps/0/run
+      line: 10
+      column: 23

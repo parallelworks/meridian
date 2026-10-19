@@ -1,0 +1,7 @@
+sessions:
+  desktop:
+    useTLS: false
+jobs:
+  build:
+    steps:
+      - run: echo ${{ sessions.desktop }} ${{ sessions.dekstop }}

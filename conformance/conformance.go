@@ -1,7 +1,7 @@
 // Package conformance holds the workflow format's conformance suite: cases
 // that pin what workflows mean, for any implementation of the format to run.
 //
-// In the format and inputs areas, each case is a directory, such as
+// In the format, inputs and compile areas, each case is a directory, such as
 // format/yaml-alias, with a workflow.yaml and a case.yaml that says what the
 // workflow must produce. A case's directory can hold other files the
 // workflow refers to. In the expressions area, each file holds cases that
@@ -21,7 +21,7 @@ import (
 
 // FS holds the cases.
 //
-//go:embed format expressions inputs
+//go:embed format expressions inputs compile
 var FS embed.FS
 
 // A Case is one conformance case.
@@ -63,6 +63,9 @@ type Expect struct {
 	Inputs map[string]any `yaml:"inputs,omitempty"`
 	// Secrets are the values of password inputs, by their path.
 	Secrets map[string]any `yaml:"secrets,omitempty"`
+	// Plan holds values the compiled plan must have, by JSON Pointer into
+	// its JSON encoding, in the compile area.
+	Plan map[string]any `yaml:"plan,omitempty"`
 }
 
 // A Diagnostic is an error or warning a case expects. Line and Column are

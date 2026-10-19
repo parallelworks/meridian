@@ -1,0 +1,14 @@
+on:
+  execute:
+    inputs:
+      k8s:
+        type: group
+        items:
+          namespace:
+            type: string
+            default: default
+jobs:
+  build:
+    steps:
+      - run: echo ${{ inputs.k8s.namespace }} ${{ inputs.k8s.label }}
+      - run: echo ${{ inputs.k8s.namespac }}

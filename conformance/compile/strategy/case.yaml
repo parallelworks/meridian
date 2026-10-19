@@ -1,0 +1,5 @@
+description: A job with a strategy keeps it in the plan.
+source: Meridian
+expect:
+  plan:
+    /jobs/0/strategy/maxParallel: 1

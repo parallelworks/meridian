@@ -1,0 +1,21 @@
+name: Hello
+env:
+  GREETING: hello ${{ inputs.who }}
+on:
+  execute:
+    inputs:
+      who:
+        type: string
+        default: world
+jobs:
+  build:
+    steps:
+      - id: greet
+        run: echo $GREETING
+    outputs:
+      done: ${{ steps.greet.outputs.done }}
+  test:
+    needs: [build]
+    if: ${{ needs.build.outputs.done == 'yes' }}
+    steps:
+      - run: echo testing

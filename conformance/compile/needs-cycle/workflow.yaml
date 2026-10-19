@@ -1,0 +1,13 @@
+jobs:
+  a:
+    needs: [c]
+    steps:
+      - run: echo a
+  b:
+    needs: [a]
+    steps:
+      - run: echo b
+  c:
+    needs: [b]
+    steps:
+      - run: echo c

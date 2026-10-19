@@ -1,0 +1,7 @@
+description: steps.<id> must name an earlier step of the job. A job's outputs read any of its steps.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: reference
+      path: /jobs/build/steps/0/run

@@ -1,0 +1,6 @@
+jobs:
+  build:
+    if: ${{ steps.x.outputs.ok }}
+    steps:
+      - id: x
+        run: echo ok

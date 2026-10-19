@@ -1,0 +1,14 @@
+description: >-
+  matrix.<key> needs a job with a matrix that has the key, among its values or
+  its include entries. Without one it is a warning: in a job with no matrix,
+  ACTIVATE reads matrix.os as the text "matrix.os", and a key the matrix
+  doesn't have as null.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: reference
+      path: /jobs/plain/steps/0/run
+    - severity: warning
+      code: reference
+      path: /jobs/grid/steps/0/run

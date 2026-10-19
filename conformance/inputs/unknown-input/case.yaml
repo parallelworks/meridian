@@ -1,9 +1,15 @@
-description: A value for an input the workflow doesn't define is an error that suggests the nearest name.
+description: >-
+  A value for an input the workflow doesn't define is a warning that suggests
+  the nearest name. The value is kept, as a workflow a step calls can read
+  what its caller passes without defining it.
 source: Meridian
 inputs:
   clustr_name: y
 expect:
   diagnostics:
-    - severity: error
+    - severity: warning
       code: unknown-input
       path: /on/execute/inputs
+  inputs:
+    cluster_name: x
+    clustr_name: "y"

@@ -1,0 +1,10 @@
+description: >-
+  needs.<job> must name a job this one needs: ACTIVATE fails a step that reads
+  another. A job's outputs are whatever its steps write, so their names
+  aren't checked, and a job's steps can read its own outputs so far.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: reference
+      path: /jobs/test/steps/1/run

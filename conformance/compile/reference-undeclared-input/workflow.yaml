@@ -1,0 +1,10 @@
+on:
+  execute:
+    inputs:
+      cluster_name:
+        type: string
+        default: a
+jobs:
+  build:
+    steps:
+      - run: echo ${{ inputs.clustr_name }}

@@ -1,0 +1,20 @@
+description: >-
+  An if written without ${{ }} is an expression when it has an operator, a
+  dot, parentheses or brackets, and a lone word stays a word. always, the
+  older spelling of always(), and words that decide a condition, such as the
+  removed keyword completed, are warnings.
+source: ACTIVATE's tests
+expect:
+  diagnostics:
+    - severity: warning
+      code: word
+      path: /jobs/build/steps/1/if
+      line: 13
+      column: 13
+    - severity: warning
+      code: word
+      path: /jobs/build/steps/2/if
+      line: 15
+      column: 18
+  plan:
+    /jobs/0/steps/1/if: always

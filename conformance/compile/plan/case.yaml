@@ -1,0 +1,13 @@
+description: The plan holds the run's inputs and env, and each job with its needs, steps and outputs, in the order of their names.
+source: Meridian
+expect:
+  plan:
+    /version: 1
+    /run/name: Hello
+    /run/format: 1
+    /run/inputs: {who: world}
+    /jobs/0/key: build
+    /jobs/0/steps/0/id: greet
+    /jobs/0/steps/0/path: /jobs/build/steps/0
+    /jobs/1/key: test
+    /jobs/1/needs: [{job: build}]

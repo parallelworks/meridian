@@ -1,0 +1,9 @@
+description: An expression that doesn't parse is an error at the place in it that doesn't.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: expression
+      path: /jobs/build/steps/0/run
+      line: 4
+      column: 32

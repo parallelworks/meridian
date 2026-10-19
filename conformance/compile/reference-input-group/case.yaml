@@ -1,0 +1,9 @@
+description: >-
+  A reference into a group should name one of its inputs, or a key of its
+  definition. One that doesn't is a warning, and reads null.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: reference
+      path: /jobs/build/steps/1/run

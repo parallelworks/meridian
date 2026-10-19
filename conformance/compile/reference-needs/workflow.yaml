@@ -1,0 +1,14 @@
+jobs:
+  build:
+    steps:
+      - run: make
+  deploy:
+    steps:
+      - run: deploy
+  test:
+    needs: [build]
+    steps:
+      - id: first
+        run: echo ${{ needs.build.outputs.path }} ${{ needs.build.result }}
+      - run: echo ${{ needs.deploy.outputs.x }}
+      - run: echo ${{ needs.test.outputs.y }}

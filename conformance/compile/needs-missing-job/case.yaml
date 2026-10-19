@@ -1,0 +1,9 @@
+description: needs naming a job the workflow doesn't have is an error that suggests the nearest name.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: needs
+      path: /jobs/test/needs
+      line: 6
+      column: 12

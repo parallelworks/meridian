@@ -1,0 +1,8 @@
+jobs:
+  build:
+    steps:
+      - run: make
+  test:
+    needs: [biuld]
+    steps:
+      - run: make test

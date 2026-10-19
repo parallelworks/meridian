@@ -1,0 +1,11 @@
+description: A word that looks like a reference to a context that doesn't exist is a warning, kept with the run.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: word
+      path: /jobs/build/steps/0/run
+      line: 4
+      column: 23
+  plan:
+    /warnings/0/code: word

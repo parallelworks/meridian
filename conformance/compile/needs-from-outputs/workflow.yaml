@@ -1,0 +1,8 @@
+jobs:
+  build:
+    steps:
+      - run: make
+  test:
+    needs: ${{ needs.build.outputs.x }}
+    steps:
+      - run: make test

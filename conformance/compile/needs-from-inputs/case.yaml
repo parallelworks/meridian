@@ -1,0 +1,5 @@
+description: needs can be an expression of what is known when the run is created.
+source: Meridian
+expect:
+  plan:
+    /jobs/1/needs: [{job: build}]
