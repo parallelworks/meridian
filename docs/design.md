@@ -190,16 +190,26 @@ It holds:
   their `if:`, `env`, `with:`, shell, working directory, `retry:`, timeout,
   `ignore-errors`, `early-cancel` and cleanup.
 
-Expressions are stored parsed, not as strings. Anything that can't be known
-until the run is underway, such as a job's `needs`, stays an expression to
+Expressions are stored parsed, not as strings, with their source kept for
+messages: each string in the workflow that holds a `${{ }}` is stored as its
+text and the trees of its expressions. Anything that can't be known until
+the run is underway, such as a job's `needs`, stays an expression to
 evaluate later.
+
+Each job instance has a key: the job's name, or for a matrix instance its
+name, `#` and its index, as in `build#2`. A matrix whose values come from
+`needs` can't be expanded when the run is created, so the plan holds the
+job once, with its strategy, and the coordinator expands it when the jobs it
+needs have finished.
 
 The plan holds no secret values. It names the secrets a run needs, and each
 attempt receives them when it is claimed.
 
 Plan encodings change the way the format does: by addition. A change that
 can't be an addition gets a new plan version, and releases keep reading the
-old one until no stored run can still use it.
+old one until no stored run can still use it. A release refuses a plan with
+a key it doesn't know, which a newer release wrote, rather than run it
+without that part.
 
 ## Expressions
 
