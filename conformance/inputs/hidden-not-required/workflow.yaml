@@ -1,0 +1,18 @@
+on:
+  execute:
+    inputs:
+      regular_required_field:
+        type: string
+      hidden_field_bool:
+        type: string
+        hidden: true
+      hidden_field_str:
+        type: string
+        hidden: ${{ 'True' }}
+      optional_field_str:
+        type: string
+        optional: ${{ 'true' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

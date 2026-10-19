@@ -1,0 +1,7 @@
+description: A header has no value, even one that was submitted.
+source: ACTIVATE's tests
+inputs:
+  intro: ignored
+expect:
+  inputs:
+    name: x

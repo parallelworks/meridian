@@ -1,0 +1,10 @@
+description: ignore can be an expression of the other inputs.
+source: ACTIVATE's tests
+inputs:
+  controller: true
+  on_when_controller: dropped
+  off_when_controller: kept
+expect:
+  inputs:
+    controller: true
+    off_when_controller: kept

@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      a:
+        type: boolean
+      b:
+        type: boolean
+      c:
+        type: boolean
+jobs:
+  main:
+    steps:
+      - run: echo ok

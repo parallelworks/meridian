@@ -1,0 +1,22 @@
+on:
+  execute:
+    inputs:
+      field_with_default:
+        type: string
+        default: default_value
+      field_with_empty_default:
+        type: string
+        default: ""
+      field_no_default:
+        type: string
+      hidden_field_with_default:
+        type: string
+        hidden: true
+        default: ""
+      replaced_empty:
+        type: string
+        default: filled
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,0 +1,14 @@
+on:
+  execute:
+    inputs:
+      use_gpu:
+        type: boolean
+      gpu_type:
+        type: string
+        hidden: ${{ !inputs.use_gpu }}
+        ignore: ${{ .hidden }}
+        optional: ${{ .hidden }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

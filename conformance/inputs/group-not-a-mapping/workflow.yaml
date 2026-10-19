@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      k8s:
+        type: group
+        items:
+          namespace:
+            type: string
+            default: default
+jobs:
+  main:
+    steps:
+      - run: echo ok

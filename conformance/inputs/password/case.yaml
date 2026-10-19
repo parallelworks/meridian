@@ -1,0 +1,10 @@
+description: A password input's value isn't among the run's input values, which the plan stores. It is one of the run's secrets.
+source: Meridian
+inputs:
+  user: alice
+  token: s3cret
+expect:
+  inputs:
+    user: alice
+  secrets:
+    token: s3cret

@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      intro:
+        type: header
+        text: Settings
+      name:
+        type: string
+        default: x
+jobs:
+  main:
+    steps:
+      - run: echo ok

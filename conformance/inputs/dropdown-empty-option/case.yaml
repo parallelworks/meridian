@@ -1,0 +1,10 @@
+description: "\"\" is a value for a dropdown whose options include it; otherwise, like a missing value, it takes the default."
+source: ACTIVATE's tests
+inputs:
+  with_empty: ""
+  without_empty: ""
+expect:
+  inputs:
+    with_empty: ""
+    missing: a
+    without_empty: a

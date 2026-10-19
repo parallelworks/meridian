@@ -1,11 +1,11 @@
 // Package conformance holds the workflow format's conformance suite: cases
 // that pin what workflows mean, for any implementation of the format to run.
 //
-// In the format area, each case is a directory, such as format/yaml-alias,
-// with a workflow.yaml and a case.yaml that says what the workflow must
-// produce. A case's directory can hold other files the workflow refers to.
-// In the expressions area, each file holds cases that pin what expressions
-// evaluate to.
+// In the format and inputs areas, each case is a directory, such as
+// format/yaml-alias, with a workflow.yaml and a case.yaml that says what the
+// workflow must produce. A case's directory can hold other files the
+// workflow refers to. In the expressions area, each file holds cases that
+// pin what expressions evaluate to.
 package conformance
 
 import (
@@ -21,7 +21,7 @@ import (
 
 // FS holds the cases.
 //
-//go:embed format expressions
+//go:embed format expressions inputs
 var FS embed.FS
 
 // A Case is one conformance case.
@@ -35,6 +35,18 @@ type Case struct {
 	Source string `yaml:"source"`
 	// License is the license of a workflow copied from a public repository.
 	License string `yaml:"license,omitempty"`
+	// Inputs are the input values submitted for a run, in the inputs area.
+	Inputs map[string]any `yaml:"inputs,omitempty"`
+	// Contexts are what the run's expressions read besides inputs, such as
+	// org and vars.
+	Contexts map[string]any `yaml:"contexts,omitempty"`
+	// SecretVariables names the user variables in vars that are secret,
+	// whose values the compiler doesn't have.
+	SecretVariables []string `yaml:"secret-variables,omitempty"`
+	// NoPlatform says there is no platform to provide the input types that
+	// name a platform's resources. Otherwise a platform takes every value
+	// given for one as it is.
+	NoPlatform bool `yaml:"no-platform,omitempty"`
 	// Expect is what the workflow must produce.
 	Expect Expect `yaml:"expect"`
 }
@@ -46,6 +58,11 @@ type Expect struct {
 	Diagnostics []Diagnostic `yaml:"diagnostics,omitempty"`
 	// Values are values the loaded workflow must have, by JSON Pointer.
 	Values map[string]any `yaml:"values,omitempty"`
+	// Inputs are the run's input values, in the inputs area. A value that
+	// stays an expression until the run is underway is its text.
+	Inputs map[string]any `yaml:"inputs,omitempty"`
+	// Secrets are the values of password inputs, by their path.
+	Secrets map[string]any `yaml:"secrets,omitempty"`
 }
 
 // A Diagnostic is an error or warning a case expects. Line and Column are

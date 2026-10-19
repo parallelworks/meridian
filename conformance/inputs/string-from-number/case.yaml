@@ -1,0 +1,8 @@
+description: A string input given a number or a boolean gets its text.
+source: Meridian
+inputs:
+  port: 22
+expect:
+  inputs:
+    port: "22"
+    name: "8080"

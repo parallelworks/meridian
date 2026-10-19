@@ -1,0 +1,7 @@
+description: A hidden or optional input with no value isn't required.
+source: ACTIVATE's tests
+inputs:
+  regular_required_field: provided_value
+expect:
+  inputs:
+    regular_required_field: provided_value

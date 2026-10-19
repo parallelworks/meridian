@@ -1,0 +1,16 @@
+on:
+  execute:
+    inputs:
+      dir:
+        type: string
+        default: ${{ env.PW_PARENT_JOB_DIR }}
+      token:
+        type: string
+        default: ${{ vars.TOKEN }}
+      region:
+        type: string
+        default: ${{ vars.REGION }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

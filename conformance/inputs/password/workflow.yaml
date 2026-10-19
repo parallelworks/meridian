@@ -1,0 +1,11 @@
+on:
+  execute:
+    inputs:
+      user:
+        type: string
+      token:
+        type: password
+jobs:
+  main:
+    steps:
+      - run: echo ok

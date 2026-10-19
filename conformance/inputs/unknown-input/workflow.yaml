@@ -1,0 +1,10 @@
+on:
+  execute:
+    inputs:
+      cluster_name:
+        type: string
+        default: x
+jobs:
+  main:
+    steps:
+      - run: echo ok

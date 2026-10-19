@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      required_field:
+        type: string
+        label: Required Field
+      other:
+        type: number
+jobs:
+  main:
+    steps:
+      - run: echo ok

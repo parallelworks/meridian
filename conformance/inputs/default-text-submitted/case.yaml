@@ -1,0 +1,16 @@
+description: >-
+  A submitted value that is exactly the text of the input's default, when the
+  default is an expression, means the default: a form sends that text for a
+  default it can't evaluate, such as one that reads a secret. Any other value
+  holding ${{ }} is data, and stays as it is.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+inputs:
+  region: ${{ vars.REGION }}
+  note: ${{ vars.REGION }}
+expect:
+  inputs:
+    region: us-east
+    note: ${{ vars.REGION }}

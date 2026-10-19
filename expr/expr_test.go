@@ -259,3 +259,33 @@ func TestSplitLimit(t *testing.T) {
 		t.Errorf("got %v, want the build limit", err)
 	}
 }
+
+// A value that isn't known yet, such as a secret's, makes what reads it
+// unknown, and leaves the rest of the context readable.
+func TestUnknownValues(t *testing.T) {
+	scope := expr.Scope{Contexts: map[string]any{
+		"vars":   map[string]any{"PUBLIC": "p", "TOKEN": expr.Unknown{Name: "secret"}},
+		"inputs": map[string]any{"list": []any{"a", expr.Unknown{Name: "secret"}}},
+	}}
+	for src, want := range map[string]any{
+		"vars.PUBLIC":                 "p",
+		"vars.MISSING":                "",
+		"inputs.list[0]":              "a",
+		"false && vars.TOKEN":         false,
+		"vars.TOKEN":                  nil,
+		"vars.TOKEN.x":                nil,
+		"inputs.list":                 nil,
+		"(fromJSON '[1]')[0] + 1":     2.0,
+		"format('{0}', vars.TOKEN)":   nil,
+		"inputs.list[1] ?? 'default'": nil,
+	} {
+		got, err := mustParse(t, src).Eval(scope)
+		var ue *expr.UnknownError
+		switch {
+		case want == nil && (!errors.As(err, &ue) || ue.Name != "secret"):
+			t.Errorf("%s = %v, %v; want the secret unknown", src, got, err)
+		case want != nil && (err != nil || got != want):
+			t.Errorf("%s = %v, %v; want %v", src, got, err, want)
+		}
+	}
+}

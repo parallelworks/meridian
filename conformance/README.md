@@ -6,6 +6,7 @@ These cases pin what workflows mean, in areas:
 | --- | --- |
 | `format` | Loading a workflow and validating it against its format's schema |
 | `expressions` | What `${{ }}` expressions evaluate to |
+| `inputs` | A run's input values: defaults, conditions, types and what's required |
 
 ## Format
 
@@ -29,6 +30,32 @@ expect:
   without any loads cleanly. `path` is a JSON Pointer, and `line` and `column`
   are checked when they are set.
 - `expect.values` lists values the loaded workflow must have, by JSON Pointer.
+
+## Inputs
+
+Each case is a directory like a format case, whose `case.yaml` also gives
+the values submitted for a run, and the input values the run must have:
+
+```yaml
+description: >-
+  An input with ignore true has no value, even one that was submitted.
+source: ACTIVATE's tests
+inputs:
+  regular_field: regular_value
+  ignore_field: ignore_value
+expect:
+  inputs:
+    regular_field: regular_value
+```
+
+- `expect.inputs` are the run's input values. A value that stays an
+  expression until the run is underway is its text, and `expect.secrets` are
+  the values of password inputs, by their path.
+- `contexts` are what expressions read besides inputs, such as `org` and
+  `vars`, and `secret-variables` names the variables whose values the
+  compiler doesn't have.
+- Input types that name a platform's resources take the value they're given
+  as it is, as if a platform accepted it, unless `no-platform: true`.
 
 ## Expressions
 

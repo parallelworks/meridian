@@ -1,0 +1,9 @@
+description: A group's value is a mapping of its inputs' values.
+source: Meridian
+inputs:
+  k8s: default
+expect:
+  diagnostics:
+    - severity: error
+      code: input-value
+      path: /on/execute/inputs/k8s

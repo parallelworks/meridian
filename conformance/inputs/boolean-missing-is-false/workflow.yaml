@@ -1,0 +1,9 @@
+on:
+  execute:
+    inputs:
+      flag:
+        type: boolean
+jobs:
+  main:
+    steps:
+      - run: echo ok

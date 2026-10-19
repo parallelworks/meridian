@@ -1,0 +1,36 @@
+on:
+  execute:
+    inputs:
+      targetType:
+        type: dropdown
+        default: compute-cluster
+        options: [compute-cluster, kubernetes-cluster]
+      k8s:
+        type: group
+        hidden: ${{ inputs.targetType != 'kubernetes-cluster' }}
+        items:
+          cluster:
+            type: kubernetes-clusters
+            optional: ${{ inputs.targetType != 'kubernetes-cluster' }}
+          volumes:
+            type: group
+            items:
+              pvc:
+                type: dropdown
+                default: New
+                options: [New, Existing]
+              pvc_persist:
+                type: boolean
+                default: false
+                hidden: ${{ inputs.k8s.volumes.pvc != 'New' }}
+                ignore: ${{ .hidden }}
+                optional: ${{ .hidden }}
+              pvc_name:
+                type: string
+                hidden: ${{ inputs.k8s.volumes.pvc_persist == false || inputs.k8s.volumes.pvc != New }}
+                ignore: ${{ .hidden }}
+                optional: ${{ .hidden }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

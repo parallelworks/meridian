@@ -1,0 +1,11 @@
+description: A boolean given as the text true or false is converted; any other value is an error.
+source: Meridian
+inputs:
+  a: "TRUE"
+  b: "false"
+  c: "yes"
+expect:
+  diagnostics:
+    - severity: error
+      code: input-value
+      path: /on/execute/inputs/c

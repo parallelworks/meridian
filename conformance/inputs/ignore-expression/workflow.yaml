@@ -1,0 +1,15 @@
+on:
+  execute:
+    inputs:
+      controller:
+        type: boolean
+      on_when_controller:
+        type: string
+        ignore: ${{ inputs.controller }}
+      off_when_controller:
+        type: string
+        ignore: ${{ !inputs.controller }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,0 +1,7 @@
+description: Defaults that read each other are an error.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: expression
+      path: /on/execute/inputs/a

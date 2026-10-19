@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: string
+        default: ${{ vars.REGION }}
+      note:
+        type: string
+jobs:
+  main:
+    steps:
+      - run: echo ok

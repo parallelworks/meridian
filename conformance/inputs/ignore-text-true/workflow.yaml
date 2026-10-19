@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      regular_field:
+        type: string
+      ignore_field_string:
+        type: string
+        ignore: ${{ 'TRUE' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,0 +1,9 @@
+description: A value for an input the workflow doesn't define is an error that suggests the nearest name.
+source: Meridian
+inputs:
+  clustr_name: y
+expect:
+  diagnostics:
+    - severity: error
+      code: unknown-input
+      path: /on/execute/inputs

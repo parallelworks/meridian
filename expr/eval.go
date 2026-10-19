@@ -60,6 +60,14 @@ type Resolver interface {
 	Definition(path []string) (v any, ok bool, err error)
 }
 
+// Unknown is a value in a context that exists but isn't known yet, such as a
+// secret's when the compiler evaluates an expression. An expression that
+// reads it, or reads something that holds it, returns an *UnknownError with
+// its Name.
+type Unknown struct {
+	Name string
+}
+
 // An EvalError is an expression that can't be evaluated with the values it
 // was given, such as fromJSON of text that isn't JSON.
 type EvalError struct {
@@ -160,7 +168,7 @@ func (e *evaluator) eval(n node) (any, error) {
 		if !ok {
 			return nil, nil
 		}
-		return v, nil
+		return known(n.at, v)
 	case *call:
 		return e.call(n)
 	case *slice:
@@ -343,11 +351,36 @@ func (e *evaluator) ref(r *ref) (any, error) {
 		return nil, err
 	}
 	if r.context == "inputs" {
-		return e.inputs(r, root, path)
+		v, err := e.inputs(r, root, path)
+		if err != nil {
+			return nil, err
+		}
+		return known(r.at, v)
 	}
 	v, ok := walk(root, path)
 	if !ok && emptyByDefault[r.context] {
 		return "", nil
+	}
+	return known(r.at, v)
+}
+
+// known returns v, or an *UnknownError if v is or holds an Unknown.
+func known(at int, v any) (any, error) {
+	switch v := v.(type) {
+	case Unknown:
+		return nil, &UnknownError{Offset: at, Name: v.Name}
+	case []any:
+		for _, item := range v {
+			if _, err := known(at, item); err != nil {
+				return nil, err
+			}
+		}
+	case map[string]any:
+		for _, item := range v {
+			if _, err := known(at, item); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return v, nil
 }
@@ -432,6 +465,9 @@ func (e *evaluator) names(at int, path []segment) ([]string, error) {
 // false if the path leads nowhere.
 func walk(v any, path []string) (any, bool) {
 	for i, name := range path {
+		if _, ok := v.(Unknown); ok {
+			return v, true
+		}
 		if name != "*" {
 			next, ok := property(v, name)
 			if !ok {
