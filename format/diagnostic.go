@@ -19,6 +19,27 @@ const (
 	Warning
 )
 
+// MarshalText encodes s as its name, "error" or "warning".
+func (s Severity) MarshalText() ([]byte, error) {
+	if s != Error && s != Warning {
+		return nil, fmt.Errorf("format: unknown severity %d", int(s))
+	}
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText decodes a severity's name.
+func (s *Severity) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "error":
+		*s = Error
+	case "warning":
+		*s = Warning
+	default:
+		return fmt.Errorf("format: unknown severity %q", text)
+	}
+	return nil
+}
+
 func (s Severity) String() string {
 	switch s {
 	case Error:
@@ -62,7 +83,8 @@ const (
 // Column counts characters (Unicode code points). The zero Position means
 // the whole file.
 type Position struct {
-	Line, Column int
+	Line   int `json:"line,omitempty"`
+	Column int `json:"column,omitempty"`
 }
 
 // String formats p as line:column, as line alone when the column is unknown,
@@ -84,14 +106,14 @@ func (p Position) compare(q Position) int {
 
 // A Diagnostic is an error or warning about a workflow file.
 type Diagnostic struct {
-	File     string
-	Position Position
-	Severity Severity
-	Code     Code
+	File     string   `json:"file,omitempty"`
+	Position Position `json:"position,omitzero"`
+	Severity Severity `json:"severity"`
+	Code     Code     `json:"code"`
 	// Path is the JSON Pointer (RFC 6901) of the value or key the
 	// diagnostic is about, or "" for the whole file.
-	Path    string
-	Message string
+	Path    string `json:"path,omitempty"`
+	Message string `json:"message"`
 }
 
 // String formats d as compilers do, which editors and CI systems parse:
