@@ -143,8 +143,14 @@ func (e *Expr) CheckCondition() []Problem {
 				walk(n.x, false)
 			}
 		case *binary:
-			if n.op == "&&" || n.op == "||" {
+			// A word is never false, so the left of || is the value, and the
+			// left of && decides it.
+			switch n.op {
+			case "&&":
 				walk(n.x, false)
+				walk(n.y, top)
+			case "||":
+				walk(n.x, top)
 				walk(n.y, top)
 			}
 		case *ternary:
