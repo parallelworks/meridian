@@ -1,0 +1,85 @@
+description: >-
+  How expressions are written: spaces are optional around operators, a '-' or
+  '/' between names is arithmetic, a ':' can be part of a word such as 12:30,
+  and a ternary written without spaces still parses. Mistakes are errors.
+source: ACTIVATE's tests
+scope:
+  contexts:
+    inputs:
+      count: 3
+      num: 5
+      num-1: dashed
+      my-key: 10
+      flag: true
+      "off": false
+      a: x
+      b: "y"
+      hosts: [h1, h2, h3]
+    matrix:
+      i: 2
+      gpu-type: h100
+cases:
+  - expr: inputs.count-1
+    value: 2
+  - expr: inputs.count/2
+    value: 1.5
+  - expr: inputs.count-1-1
+    value: 1
+  - expr: inputs.num-inputs.count
+    value: 2
+  - expr: "!inputs.count-1"
+    value: -1
+  - expr: matrix.i-1
+    value: 1
+  - expr: inputs.num-1
+    value: 4
+  - expr: "inputs['num-1']"
+    value: dashed
+  - expr: "inputs['my-key']-1"
+    value: 9
+  - expr: "matrix['gpu-type']"
+    value: h100
+  - expr: "inputs.flag\n  && inputs.num == 5"
+    value: true
+
+  # A ternary's ':' needs no spaces; without them, a ':' ends a word.
+  - expr: "inputs.flag ? inputs.a: inputs.b"
+    value: x
+  - expr: "inputs.flag ? 1: 2"
+    value: 1
+  - expr: inputs.flag?1:2
+    value: 1
+  - expr: inputs.off?1:2
+    value: 2
+  - expr: inputs.off?1:inputs.flag?2:3
+    value: 2
+  - expr: inputs.flag?(inputs.hosts get 0:1):inputs.a
+    value: [h1]
+  - expr: "inputs.flag ? inputs.hosts get 1:3 : inputs.a"
+    value: [h2, h3]
+  - expr: "inputs.flag ? (inputs.a):(inputs.hosts)"
+    value: x
+
+  # Errors.
+  - expr: inputs.a = true
+    error: syntax
+  - expr: inputs.a inputs.b
+    error: syntax
+  - expr: "  "
+    error: syntax
+  - expr: "inputs.a ? 1"
+    error: syntax
+  - expr: nope(1)
+    error: syntax
+  - expr: success(1)
+    error: syntax
+  - expr: 1 +
+    error: syntax
+  - expr: "'open"
+    error: syntax
+  - expr: (1 + 2
+    error: syntax
+  - expr: "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((("
+    error: syntax
+  - expr: "------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------1"
+    error: syntax

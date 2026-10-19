@@ -1,0 +1,169 @@
+description: >-
+  Operators written as a word before their operand: length (or len), upper,
+  lower, trim, keys, values, abs, floor, ceil, round, fromJSON and range. A
+  string that holds a JSON list or mapping counts as one for length, keys and
+  values. Each can also be called like a function, as in length(x). keys and
+  values list a mapping's keys in sorted order, where ACTIVATE lists them in
+  the order it holds them, which for some mappings is random.
+source: ACTIVATE's tests
+scope:
+  contexts:
+    inputs:
+      list: [a, b, c, d]
+      name: hello
+      Name: Alice
+      obj: {x: 1, y: 2, z: 3}
+      jsonArr: "[1, 2, 3]"
+      jsonObj: '{"a":1,"b":2}'
+      unicode: héllo
+      padded: "  hello  "
+      midSpaces: "  hi  there  "
+      neg: -7
+      posF: 3.7
+      negF: -3.2
+      halfUp: 2.5
+      strNeg: "-15"
+      strDec: "4.6"
+      jsonNum: "42"
+      jsonBool: "true"
+      count: 4
+      empty: {}
+    needs:
+      job: {outputs: {out: value}}
+cases:
+  - expr: length inputs.list
+    value: 4
+  - expr: length inputs.name
+    value: 5
+  - expr: length inputs.obj
+    value: 3
+  - expr: len inputs.list
+    value: 4
+  - expr: len(inputs.list)
+    value: 4
+  - expr: length inputs.jsonArr
+    value: 3
+  - expr: length inputs.jsonObj
+    value: 2
+  - expr: length inputs.unicode
+    value: 5
+  - expr: length [1, 2, 3, 4, 5]
+    value: 5
+  - expr: 'length {"a": 1, "b": 2}'
+    value: 2
+  - expr: length "abcdef"
+    value: 6
+  - expr: length []
+    value: 0
+  - expr: length inputs.notThere
+    value: 0
+  - expr: length inputs.list + 1
+    value: 5
+  - expr: length inputs.list > 3
+    value: true
+  - expr: length needs.job.outputs.out
+    value: 5
+  - expr: length 42
+    value: 0
+  - expr: length (inputs.list)
+    value: 4
+  # Without an operand, a prefix operator's name is a word.
+  - expr: "inputs.name == length"
+    value: false
+  - expr: length
+    value: length
+
+  - expr: upper inputs.Name
+    value: ALICE
+  - expr: lower inputs.Name
+    value: alice
+  - expr: upper "abc"
+    value: ABC
+  - expr: upper("abc")
+    value: ABC
+  - expr: upper inputs.unicode
+    value: HÉLLO
+  - expr: trim inputs.padded
+    value: hello
+  - expr: trim inputs.midSpaces
+    value: hi  there
+  - expr: upper inputs.Name == "ALICE"
+    value: true
+  - expr: lower (trim inputs.padded)
+    value: hello
+
+  - expr: length keys inputs.obj
+    value: 3
+  - expr: keys inputs.obj
+    value: [x, y, z]
+  - expr: values inputs.obj
+    value: [1, 2, 3]
+  - expr: length keys inputs.empty
+    value: 0
+  - expr: keys inputs.jsonObj join ","
+    value: a,b
+  - expr: length keys inputs.list
+    value: 0
+
+  - expr: abs inputs.neg
+    value: 7
+  - expr: abs 9
+    value: 9
+  - expr: abs inputs.strNeg
+    value: 15
+  - expr: floor inputs.posF
+    value: 3
+  - expr: floor inputs.negF
+    value: -4
+  - expr: ceil inputs.posF
+    value: 4
+  - expr: ceil inputs.negF
+    value: -3
+  - expr: round inputs.halfUp
+    value: 3
+  - expr: round inputs.strDec
+    value: 5
+  - expr: round inputs.negF
+    value: -3
+  - expr: abs (floor inputs.negF)
+    value: 4
+  - expr: (abs "not-a-number") + 1
+    value: .nan
+
+  - expr: fromJSON inputs.jsonArr
+    value: [1, 2, 3]
+  - expr: fromJSON(inputs.jsonArr)
+    value: [1, 2, 3]
+  - expr: fromJSON inputs.jsonObj
+    value: {a: 1, b: 2}
+  - expr: fromJSON inputs.jsonNum
+    value: 42
+  - expr: fromJSON inputs.jsonBool
+    value: true
+  - expr: fromJSON inputs.list
+    value: [a, b, c, d]
+  - expr: length (fromJSON inputs.jsonArr)
+    value: 3
+  - expr: (fromJSON inputs.jsonObj).b
+    value: 2
+  - expr: fromJSON(inputs.jsonObj).a
+    value: 1
+  - expr: fromJSON "[1, 2"
+    error: eval
+  - expr: fromJSON "01"
+    error: eval
+
+  - expr: range 3
+    value: [0, 1, 2]
+  - expr: range(inputs.count)
+    value: [0, 1, 2, 3]
+  - expr: range 0
+    value: []
+  - expr: length (range 10)
+    value: 10
+  - expr: range 10001
+    error: eval
+  - expr: range 1.5
+    error: eval
+  - expr: range "x"
+    error: eval

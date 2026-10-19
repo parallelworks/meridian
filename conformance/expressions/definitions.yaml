@@ -1,0 +1,106 @@
+description: >-
+  Expressions in input definitions, such as hidden and default, decide how the
+  launch form shows each input. inputs reads an input's value, or else what
+  its definition holds: inputs.x.type is input x's type, and inputs.x is x's
+  definition while x has no value. An input in a group without a value reads
+  its default. A last key in brackets without quotes, as in inputs.x[hidden],
+  reads the definition first. In a list's template, [index] is the index of
+  the item.
+source: ACTIVATE's documentation and tests
+workflow:
+  on:
+    execute:
+      inputs:
+        show_advanced:
+          type: boolean
+          default: false
+        advanced_setting:
+          type: string
+          hidden: ${{ inputs.show_advanced == false }}
+        option_1_input:
+          type: string
+          hidden: true
+        option_2_input:
+          type: number
+          hidden: ${{ !../option_1_input.hidden }}
+          ignore: ${{ .hidden }}
+          default: ${{ ../field_1.type }}
+        field_1:
+          type: number
+          default: 2
+        doubled:
+          type: number
+          default: ${{ inputs.field_1 * 2 }}
+        k8s:
+          type: group
+          items:
+            pvc:
+              type: dropdown
+              default: New
+            size:
+              type: string
+              hidden: ${{ inputs.k8s.pvc != New }}
+        workers:
+          type: list
+          template:
+            type: group
+            items:
+              scheduler:
+                type: boolean
+              partition:
+                type: string
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
+scope:
+  contexts:
+    inputs:
+      show_advanced: false
+      field_1: 3
+      k8s: {pvc: Existing}
+      workers:
+        - {resource: {schedulerType: slurm}, scheduler: true}
+        - {resource: {schedulerType: pbs}, scheduler: true}
+cases:
+  - at: /on/execute/inputs/advanced_setting/hidden
+    value: true
+  - at: /on/execute/inputs/advanced_setting/hidden
+    scope: {contexts: {inputs: {show_advanced: true}}}
+    value: false
+  - at: /on/execute/inputs/option_2_input/hidden
+    value: false
+  - at: /on/execute/inputs/option_2_input/ignore
+    value: false
+  - at: /on/execute/inputs/option_2_input/default
+    value: number
+  - at: /on/execute/inputs/doubled/default
+    value: 6
+  - at: /on/execute/inputs/k8s/items/size/hidden
+    value: true
+  - expr: inputs.field_1
+    value: 3
+  - expr: inputs.field_1.type
+    value: number
+  - expr: inputs[field_1]
+    value: {type: number, default: 2}
+  - expr: inputs.option_1_input[hidden]
+    value: true
+  - expr: inputs.advanced_setting[hidden]
+    value: true
+  - expr: inputs.option_1_input.hidden
+    value: true
+  - expr: inputs.doubled
+    value: {type: number, default: 6}
+  - expr: inputs.k8s.pvc
+    value: Existing
+  - expr: inputs.k8s.size
+    value: null
+  - expr: inputs.k8s.pvc
+    scope: {contexts: {inputs: {k8s: {}}}}
+    value: New
+  - at: /on/execute/inputs/workers/template/items/partition/ignore
+    scope: {index: [0]}
+    value: false
+  - at: /on/execute/inputs/workers/template/items/partition/ignore
+    scope: {index: [1]}
+    value: true
+  - at: /on/execute/inputs/workers/template/items/partition/ignore
+    unknown: index

@@ -1,0 +1,223 @@
+description: >-
+  Operators work as JavaScript's do: && and || return one of their operands,
+  == converts before comparing and === doesn't, + joins when either side is a
+  string, and the other arithmetic converts both sides to numbers.
+source: ACTIVATE's documentation and tests
+scope:
+  contexts:
+    inputs:
+      num: 5
+      flag: true
+      name: Alice
+      empty: ""
+cases:
+  # The examples in ACTIVATE's documentation.
+  - expr: "true && 'truthy value'"
+    value: truthy value
+  - expr: 0 && true
+    value: 0
+  - expr: "'truthy value' && false"
+    value: false
+  - expr: "false || 'any value'"
+    value: any value
+  - expr: "'truthy value' || 'any value'"
+    value: truthy value
+  - expr: 1 == true
+    value: true
+  - expr: 1 != true
+    value: false
+  - expr: 1 === true
+    value: false
+  - expr: 1 !== true
+    value: true
+  - expr: "'a' > 'b'"
+    value: false
+  - expr: 1.5 < 1
+    value: false
+  - expr: 1.0 >= 1
+    value: true
+  - expr: false <= true
+    value: true
+  - expr: "'a' + 'b'"
+    value: ab
+  - expr: 1 + 1.5
+    value: 2.5
+  - expr: 1 - 1.5
+    value: -0.5
+  - expr: 4 * 4
+    value: 16
+  - expr: 9 / 4
+    value: 2.25
+  - expr: 2 ** 4
+    value: 16
+  - expr: 4 // 3
+    value: 1
+  - expr: "'hello' ?? 'default'"
+    value: hello
+  - expr: "undefined ?? 'default'"
+    value: default
+  - expr: "!false"
+    value: true
+  - expr: true && (true || true) && false
+    value: false
+  - expr: 10 / (2 + 8)
+    value: 1
+  - expr: "true && false ? 'a' : 'b'"
+    value: b
+  - expr: "'truthy value' ? 'a' : 'b'"
+    value: a
+
+  # Precedence: ?: binds loosest, then ||, &&, comparisons, +, *, and **.
+  - expr: true && true || false && false
+    value: true
+  - expr: 1 + 2 * 2 ^ 3 * 2
+    value: 33
+  - expr: 500 - 400 > 499 / 5 && 500 - 400 >= 500 / 5
+    value: true
+  - expr: 500 - 400 > 500 / 5 || 500 - 400 >= 501 / 5
+    value: false
+  - expr: "!(true || false)"
+    value: false
+  - expr: "!true && '0' || 2"
+    value: 2
+  - expr: "true && '0' || 2"
+    value: "0"
+  - expr: true && 0 || 2
+    value: 2
+  - expr: (2 + 3) * 4
+    value: 20
+  - expr: 2 + 3 * 4
+    value: 14
+
+  # and and or are && and ||, in any case.
+  - expr: false or inputs.name
+    value: Alice
+  - expr: true AND inputs.num
+    value: 5
+
+  # Comparisons convert, except === and !==.
+  - expr: "'5' == 5"
+    value: true
+  - expr: "'5' === 5"
+    value: false
+  - expr: "'' == 0"
+    value: true
+  - expr: null == 0
+    value: false
+  - expr: null == undefined
+    value: true
+  - expr: "'abc' == 0"
+    value: false
+  - expr: "'true' == true"
+    value: false
+  - expr: "'1' == true"
+    value: true
+  - expr: "'b' < 'a'"
+    value: false
+  - expr: "'10' < '9'"
+    value: true
+  - expr: "'10' < 9"
+    value: false
+  - expr: "'abc' < 1"
+    value: false
+  - expr: "'abc' >= 1"
+    value: false
+  - expr: inputs.num>3
+    value: true
+  - expr: "'pbs' !=inputs.name"
+    value: true
+  - expr: inputs.num == 5&&inputs.flag
+    value: true
+
+  # Arithmetic converts to numbers; + joins if either side is a string.
+  - expr: "'44.1' - '24'"
+    value: 20.1
+  - expr: "'44.1' + 24"
+    value: "44.124"
+  - expr: 1 + true
+    value: 2
+  - expr: "'a' + null"
+    value: anull
+  - expr: "'n=' + 1.0"
+    value: n=1
+  - expr: inputs.num*2+1
+    value: 11
+  - expr: -100 - -1010
+    value: 910
+  - expr: -2 * 4
+    value: -8
+  - expr: -inputs.num
+    value: -5
+  - expr: 3 / 2
+    value: 1.5
+  - expr: 3 // 2
+    value: 1
+  - expr: 3.5 // 1
+    value: 3
+  - expr: 7 % 3
+    value: 1
+  - expr: 7 mod 3
+    value: 1
+  - expr: -7 % 3
+    value: -1
+  - expr: 2 exp 10
+    value: 1024
+  - expr: 10 / 0
+    value: .inf
+  - expr: 0 - 10 / 0
+    value: -.inf
+  - expr: 0 / 0
+    value: .nan
+  - expr: "'abc' * 2"
+    value: .nan
+  - expr: 1e19
+    value: 1e19
+  - expr: inputs.missing - 1
+    value: -1
+
+  # ! negates truthiness; any number of them.
+  - expr: "!!inputs.name"
+    value: true
+  - expr: "!!!!true"
+    value: true
+  - expr: "!!!!!false"
+    value: true
+  - expr: "!!0"
+    value: false
+  - expr: "!inputs.empty"
+    value: true
+  - expr: "!(inputs.num > 3)"
+    value: false
+  # ACTIVATE gives null when the input isn't there, as if there were no !.
+  - expr: "!inputs.missing.flag"
+    value: true
+
+  # ?? replaces only null.
+  - expr: "inputs.missing ?? 'fallback'"
+    value: fallback
+  - expr: "inputs.empty ?? 'fallback'"
+    value: ""
+  - expr: 5 ?? default
+    value: 5
+
+  # The ternary.
+  - expr: "true ? a : b"
+    value: a
+  - expr: "false ? a : b"
+    value: b
+  - expr: "true ? (false ? a : b) : (false ? c : d)"
+    value: b
+  - expr: "false ? false ? a : b : false ? c : d"
+    value: d
+  - expr: "inputs.num > 10 ? 'big' : inputs.num > 3 ? 'mid' : 'small'"
+    value: mid
+
+  # || and && don't evaluate the side they don't need.
+  - expr: inputs.flag || inputs.missing.deeper
+    value: true
+  - expr: inputs.flag || needs.build.outputs.ok
+    value: true
+  - expr: inputs.empty && needs.build.outputs.ok
+    value: ""
+  - expr: inputs.flag && needs.build.outputs.ok
+    unknown: needs

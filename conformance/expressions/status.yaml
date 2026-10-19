@@ -1,0 +1,98 @@
+description: >-
+  The status functions say how the job or step got where the expression is:
+  success(), failure(), cancelled() (also canceled()) and always(). They are
+  known only when the expression is evaluated for a job whose needed jobs have
+  finished, or for a step. In a condition, a word decides nothing, because a
+  word is never false: ${{ !completed }} is always false, and only always is a
+  keyword.
+source: ACTIVATE's tests and documentation
+scope:
+  contexts:
+    inputs: {notify: true, quiet: false, flag: true, level: error}
+cases:
+  - expr: failure() && inputs.notify
+    scope: {status: {failed: true}}
+    value: true
+  - expr: failure() && inputs.notify
+    scope: {status: {}}
+    value: false
+  - expr: failure()
+    scope: {status: {failed: true}}
+    value: true
+  - expr: always()
+    scope: {status: {cancelled: true}}
+    value: true
+  - expr: "!failure()"
+    scope: {status: {}}
+    value: true
+  - expr: success() || inputs.quiet
+    scope: {status: {failed: true}}
+    value: false
+  - expr: cancelled() || failure()
+    scope: {status: {cancelled: true}}
+    value: true
+  - expr: canceled()
+    scope: {status: {cancelled: true}}
+    value: true
+  - expr: "!success() && inputs.notify"
+    scope: {status: {cancelled: true}}
+    value: true
+  - expr: "!(failure() || cancelled()) && inputs.notify"
+    scope: {status: {}}
+    value: true
+  - template: "failed=${{ failure() }}"
+    scope: {status: {failed: true}}
+    value: failed=true
+
+  # Without a status, the status functions aren't known yet. An expression
+  # that doesn't need one has its value already: ACTIVATE waits until the
+  # status is known, and gets the same value.
+  - expr: failure() && inputs.notify
+    unknown: status
+  - expr: inputs.quiet && failure()
+    value: false
+
+  # Words aren't status checks.
+  - expr: inputs.level == error
+    value: true
+  - expr: inputs.flag && always
+    value: always
+  - expr: "inputs.flag ? error : never"
+    value: error
+  - expr: error && inputs.notify
+    value: true
+  - expr: "!completed"
+    value: false
+  - expr: failure
+    value: failure
+
+  # In a condition, a word that decides it is a mistake, except always.
+  - expr: "!completed"
+    condition: true
+    value: false
+    warnings: [1]
+  - expr: error && inputs.notify
+    condition: true
+    value: true
+    warnings: [0]
+  - expr: "inputs.flag ? error : never"
+    condition: true
+    value: error
+    warnings: [14, 22]
+  - expr: always
+    condition: true
+    value: always
+    warnings: []
+  - expr: inputs.flag && always
+    condition: true
+    value: always
+    warnings: []
+  - expr: inputs.level == error
+    condition: true
+    value: true
+    warnings: []
+  - expr: "!success()"
+    condition: true
+    scope: {status: {failed: true}}
+    value: true
+    warnings: []

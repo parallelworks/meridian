@@ -1,0 +1,73 @@
+description: >-
+  A string with expressions in it. A string that is one expression and nothing
+  else has the expression's value, of any type. Otherwise each expression is
+  replaced by its value's text: a string as it is, null as nothing, and
+  anything else as JSON. A }} in quotes or brackets doesn't end an expression,
+  and a ${{ that isn't closed is text.
+source: ACTIVATE's tests
+scope:
+  contexts:
+    inputs:
+      default: {atfault: bonsoir}
+      objtest: {hi: {hallo: hey}}
+      arrayhere: [one, two, three]
+      obj: {name: labcluster, schedulerType: slurm}
+      arr: [one, two]
+      hidden: true
+      test: ""
+      n: 3
+cases:
+  - template: "string embed: ${{ inputs.default.atfault == 'bonsoir' && inputs.default.atfault != 'bonjour' }}"
+    value: "string embed: true"
+  - template: "${{ inputs.objtest }}"
+    value: {hi: {hallo: hey}}
+  - template: "${{ inputs.arrayhere }}"
+    value: [one, two, three]
+  - template: "${{ inputs.hidden }}"
+    value: true
+  - template: "${{ inputs.test }}"
+    value: ""
+  - template: "${{ inputs.n }}"
+    value: 3
+  - template: "n=${{ inputs.n }}"
+    value: n=3
+  - template: "${{ \"exp1\" }} and ${{ \"exp2\" }}"
+    value: exp1 and exp2
+  - template: "${{ \"exp1\" in {\"exp1\" : 1, \"exp2\" : 2} }} and ${{ \"exp2\" in [\"exp1\", \"exp2\"]}}"
+    value: true and true
+  - template: "${{ {\"exp1\" : 1, \"exp2\" : 2} get \"exp2\" }} and ${{ [[\"exp1\", \"exp2\"],[\"exp3\",\"exp4\"]] get 1 get 0 }}"
+    value: 2 and exp3
+  - template: " ${{ {\"exp1\" : {\"exp1\" : 1, \"exp2\" : 2}, \"exp2\" : {\"exp1\" : 1, \"exp2\" : 2}} }}"
+    value: ' {"exp1":{"exp1":1,"exp2":2},"exp2":{"exp1":1,"exp2":2}}'
+  - template: "${{ 'string1 ' }} embed ${{' ' + string2}}"
+    value: "string1  embed  string2"
+  - template: "v=${{ inputs.obj }}"
+    value: 'v={"name":"labcluster","schedulerType":"slurm"}'
+  - template: "v=${{ inputs.arr }}"
+    value: 'v=["one","two"]'
+  - template: '${{ "v=" + inputs.obj }}'
+    value: 'v={"name":"labcluster","schedulerType":"slurm"}'
+  - template: "[${{ inputs.missing }}]"
+    value: "[]"
+  - template: "${{ 1.0 }}/${{ 0.1 + 0.2 }}"
+    value: "1/0.30000000000000004"
+  - template: 'ssh ${{ 2 + 2 }} "go run /tmp/${{ 1 + 1 }}-goserver.go" &'
+    value: 'ssh 4 "go run /tmp/2-goserver.go" &'
+  - template: 'ssh ${{ 2 + 2 + " '' " + "go run /tmp/" }}'
+    value: "ssh 4 ' go run /tmp/"
+  - template: 'ssh ${{ 2 + 2 + " }} + " + "go" }}'
+    value: "ssh 4 }} + go"
+  - template: '${{ ["}}"] }}}}'
+    value: '["}}"]}}'
+  - template: '${{ {"hello": ["}}"]} get hello }}'
+    value: ["}}"]
+  - template: '${{ {"hello": "}}"} }}'
+    value: {hello: "}}"}
+  - template: "${{ something "
+    value: "${{ something "
+  - template: "no expressions"
+    value: no expressions
+  - template: "${{ }}"
+    error: syntax
+  - template: "a ${{ 1 + }} b"
+    error: syntax

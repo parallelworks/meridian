@@ -208,7 +208,7 @@ to depends on where it is evaluated:
 
 | When | Evaluated by | Adds these contexts | Used by |
 | --- | --- | --- | --- |
-| The run is created | Compiler | `inputs`, organization and user variables, workflow `env`, `sessions` from a session provider | Everything that is known by then |
+| The run is created | Compiler | `inputs`, `org` and `vars` (organization and user variables), `remote` (the repository the workflow came from), workflow `env`, `sessions` from a session provider | Everything that is known by then |
 | A job's dependencies have finished | Coordinator | `needs`, status functions | Job `if:`, and `strategy:`, `runs-on:`, `resources:` and `retry:` that use `needs` |
 | A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
 | A job ends | Worker | | Job `outputs:` |
@@ -218,7 +218,8 @@ or, for a matrix that uses `needs`, when its dependencies have finished.
 
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`). A job's default `if:` is
-`success()`.
+`success()`, and an `if:` that calls a status function replaces it. An
+`if:` whose value is the word `always` means `always()`.
 
 `needs.<job>.result` is a dependency's outcome: `success`, `failure`,
 `cancelled` or `skipped`. For a matrix job it is `failure` if any instance
@@ -238,9 +239,60 @@ jobs:
       - run: ./deploy.sh secondary
 ```
 
+### The language
+
+Format 1's expressions are the ones ACTIVATE evaluates, as its documentation
+describes them: JavaScript's operators, with its rules for comparing and
+converting values. The `expr` package parses them into a tree, which is what
+the plan stores, and the conformance suite's `expressions` area pins what
+each one means.
+
+- **Values** are JSON's: null, booleans, numbers, strings, lists and
+  mappings. Numbers are 64-bit floats, as in JavaScript.
+- **Literals** are numbers, strings in single, double or back quotes, `true`,
+  `false`, `null`, and lists and mappings written as JSON.
+- **References** read a context by path: `inputs.cluster.ip`,
+  `inputs['my-key']`, `inputs.hosts[0]`, the slice `inputs.hosts[1:3]`, and
+  `inputs.groups.*.name` for each group's name. A path that leads nowhere is
+  null, except in `env`, `org`, `vars`, `remote`, `sessions` and outputs,
+  which hold strings, where a missing name is `""`. A string that holds JSON
+  is read as its value, since outputs are strings.
+- **Words.** A word that is none of these is a string: `inputs.mode == debug`
+  compares with `"debug"`. The compiler warns about a word that looks like a
+  reference, such as `input.mode`, and about a word that decides a
+  condition, since a word is never false: `if: ${{ !completed }}` never runs.
+- **Operators**, from loosest to tightest: `? :`; `||` and `or`; `&&` and
+  `and`; the comparisons `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and `>=`,
+  with `??` and the word operators `in`, `includes`, `startsWith`, `endsWith`
+  and `get`; `range`; `+` and `-`; `*`, `/`, `//`, `%` and `mod`; `**`, `^`
+  and `exp`; and `split` and `join`. The unary `!` and `-`, and the word
+  operators `length`, `upper`, `lower`, `trim`, `keys`, `values`, `abs`,
+  `floor`, `ceil`, `round`, `fromJSON` and `range`, bind tightest.
+- **Functions** are GitHub Actions' `contains`, `startsWith`, `endsWith`,
+  `format`, `join`, `toJSON` and `fromJSON`, with its meanings, plus the
+  status functions and `case(condition, value, ..., default)`.
+- **Strings with expressions in them.** A string that is one expression and
+  nothing else has the expression's value, of any type. Otherwise each
+  expression is replaced by its value's text: a string as it is, null as
+  nothing, and anything else as JSON. A mapping's keys are in sorted order
+  here, and wherever else their order shows.
+- **The workflow around an expression.** A relative reference reads the
+  workflow near the expression: `.hidden` is the key `hidden` beside it, and
+  each further dot, or `../`, goes up a level. `inputs.x.type` reads input
+  `x`'s definition, as its value has no type, and in a list input's
+  template, `[index]` is the index of the item.
+
+Only expressions written in the workflow are evaluated. A value an
+expression reads, such as an input's value, a variable or an output, is data
+even if it holds `${{ }}`, and so is a string an expression builds. An
+input's default is part of the workflow, so a default that is an expression
+is evaluated.
+
 Evaluation is pure: an expression can't read files, start processes or reach
 a network. Depth, time and the size of a result are bounded, so a workflow
-can't make the compiler or coordinator do unbounded work.
+can't make the compiler or coordinator do unbounded work: an expression
+nests at most 200 levels, `range` makes at most 10,000 numbers, and an
+evaluation builds at most 8 MiB of strings and lists.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.

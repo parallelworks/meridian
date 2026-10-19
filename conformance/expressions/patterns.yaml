@@ -1,0 +1,52 @@
+description: >-
+  Expressions written the way public workflows commonly write them: words
+  compared without quotes, ?? for a host that may be empty, get chains that
+  pick a worker by the retry number, ranges for matrices, and arithmetic and
+  comparisons on outputs, which are strings.
+source: Meridian, after expressions common in public workflows
+scope:
+  contexts:
+    inputs:
+      head: {resource: {ip: 10.0.0.5}}
+      batch_size: 3
+      k8s: {volumes: {pvc: New, pvc_persist: true}}
+      host: {jobschedulertype: SLURM, resource: {provider: existing, name: gpu-cluster}}
+      model: b
+      workers:
+        - {slurm: {partition: debug}, resource: {name: one}}
+        - {slurm: {partition: gpu}, resource: {name: two}}
+    env: {PW_WORKFLOW_STEP_CURRENT_RETRY: "1"}
+    matrix: {job_id: 3}
+    needs:
+      optimize: {outputs: {N_CASES: "10", NUM_WORKERS: "4"}}
+      setup: {outputs: {rundir: /home/user/run}}
+cases:
+  - expr: inputs.head.resource.ip ?? localhost
+    value: 10.0.0.5
+  - expr: inputs.missing.resource.ip ?? localhost
+    value: localhost
+  - expr: inputs.workers get env.PW_WORKFLOW_STEP_CURRENT_RETRY get slurm get partition
+    value: gpu
+  - expr: inputs.workers get env.PW_WORKFLOW_STEP_CURRENT_RETRY get resource get name
+    value: two
+  - expr: 1 range inputs.batch_size + 1
+    value: [1, 2, 3]
+  - expr: matrix.job_id <= needs.optimize.outputs.N_CASES
+    value: true
+  - expr: matrix.job_id <= needs.optimize.outputs.N_CASES
+    scope: {contexts: {matrix: {job_id: 11}}}
+    value: false
+  - expr: needs.optimize.outputs.NUM_WORKERS - 1
+    value: 3
+  - expr: "needs.setup.outputs.rundir + '/start_service.sh'"
+    value: /home/user/run/start_service.sh
+  - expr: inputs.k8s.volumes.pvc_persist == false || inputs.k8s.volumes.pvc != New
+    value: false
+  - expr: "'SLURM' !== inputs.host.jobschedulertype || 'existing' !== inputs.host.resource.provider"
+    value: false
+  - expr: "'existing' != inputs.host.resource.provider || (inputs.host.resource.name includes 'gpu')"
+    value: true
+  - expr: "inputs.model == 'a' ? 'x' : (inputs.model == 'b' ? 'y' : 'z')"
+    value: "y"
+  - expr: "inputs.model == 'a' ? 1.0 : 3.0"
+    value: 3

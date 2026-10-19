@@ -1,0 +1,167 @@
+description: >-
+  Operators written as words: in and includes test membership, startsWith and
+  endsWith test strings, get reads a key, index or slice, range makes a list
+  of whole numbers, and split and join convert between strings and lists. !
+  before in, includes, startsWith or endsWith negates it.
+source: ACTIVATE's documentation and tests
+scope:
+  contexts:
+    inputs:
+      arrayhere: [one, two, three]
+      resource: {provider: aws}
+      hosts: [h1, h2, h3]
+      idx: 1
+      name: Alice
+      path: /usr/local/bin
+      string: labtest
+      csv: a,b,c,d
+      list: [x, "y", z]
+      jsonArr: "[1, 2, 3]"
+      empty: ""
+      count: 4
+      countStr: "3"
+      workers: [w0, w1, w2]
+    env: {IDX: "2"}
+cases:
+  # From ACTIVATE's documentation.
+  - expr: '["a", "b"] get 1'
+    value: b
+  - expr: '{"a": "c", "b": "d"} get a'
+    value: c
+  - expr: "'ab' get 0"
+    value: a
+  - expr: '"a" in ["a", "b"]'
+    value: true
+  - expr: '"b" in {"a": "c", "b": "d"}'
+    value: true
+  - expr: '"d" in {"a": "c", "b": "d"}'
+    value: false
+  - expr: '"hello" !in ["hello", "goodbye"]'
+    value: false
+
+  - expr: "'two' in inputs.arrayhere"
+    value: true
+  - expr: "'z' !in inputs.list"
+    value: false
+  - expr: "'provider' in inputs.resource"
+    value: true
+  - expr: "'zone' in inputs.resource"
+    value: false
+  - expr: "'zone' !in inputs.resource"
+    value: true
+  - expr: "'provider' in (inputs.resource)"
+    value: true
+  - expr: "'x' in ['xy', 'z']"
+    error: syntax
+  - expr: '''x'' in ["xy", "z"]'
+    value: false
+  - expr: "'bt' in inputs.string"
+    value: true
+  - expr: "1 in '123'"
+    value: false
+  - expr: "inputs.arrayhere includes 'three'"
+    value: true
+  - expr: "inputs.arrayhere !includes 'three'"
+    value: false
+  - expr: "inputs.arrayhere !includes 'four'"
+    value: true
+  - expr: (inputs.resource) includes 'provider'
+    value: true
+  - expr: inputs.string includes "lab"
+    value: true
+
+  - expr: inputs.path startsWith "/usr"
+    value: true
+  - expr: inputs.path startsWith "/etc"
+    value: false
+  - expr: inputs.path endsWith "/bin"
+    value: true
+  - expr: inputs.path !startsWith "/etc"
+    value: true
+  - expr: inputs.path !endsWith ".sh"
+    value: true
+  - expr: inputs.path startsWith ""
+    value: true
+  - expr: "inputs.name startsWith 'A' == startsWith(inputs.name, 'A')"
+    value: true
+
+  - expr: inputs.hosts get inputs.idx
+    value: h2
+  - expr: inputs.hosts get (inputs.idx)
+    value: h2
+  - expr: inputs.hosts get 1.7
+    value: h2
+  - expr: inputs.hosts get 7
+    value: null
+  - expr: inputs.workers get env.IDX
+    value: w2
+  - expr: '{"exp1": 1, "exp2": 2} get "exp2"'
+    value: 2
+  - expr: '[["exp1", "exp2"], ["exp3", "exp4"]] get 1 get 0'
+    value: exp3
+  - expr: "{\"a\": 1} get 'a'"
+    value: 1
+  - expr: '"hello" get 1:4'
+    value: ell
+  - expr: '"hello" get 2:(len "hello")'
+    value: llo
+  - expr: "[1,2,3,4] get 1:3"
+    value: [2, 3]
+  - expr: inputs.hosts get 0:2
+    value: [h1, h2]
+  - expr: inputs.name get (1):(3)
+    value: li
+  - expr: "inputs.hosts get (len inputs.hosts - 2):"
+    value: [h2, h3]
+  - expr: inputs.hosts get (0):2
+    value: [h1, h2]
+  - expr: "inputs.hosts get (0 - 1):"
+    value: [h3]
+  - expr: inputs.hosts get 1:(len inputs.hosts)
+    value: [h2, h3]
+
+  - expr: 2 range 5
+    value: [2, 3, 4]
+  - expr: 1 range inputs.countStr
+    value: [1, 2]
+  - expr: 1 range inputs.count + 1
+    value: [1, 2, 3, 4]
+  - expr: -2 range 1
+    value: [-2, -1, 0]
+  - expr: 5 range 6
+    value: [5]
+  - expr: 5 range 5
+    value: []
+  - expr: 5 range 1
+    value: []
+  - expr: 1 range 2.5
+    error: eval
+  - expr: 1 range "abc"
+    error: eval
+  - expr: 5 range 10006
+    error: eval
+
+  - expr: inputs.csv split ","
+    value: [a, b, c, d]
+  - expr: inputs.path split "/"
+    value: ["", usr, local, bin]
+  - expr: inputs.empty split ","
+    value: [""]
+  - expr: '"abc" split ""'
+    value: [a, b, c]
+  - expr: inputs.list join "-"
+    value: x-y-z
+  - expr: '[] join ","'
+    value: ""
+  - expr: inputs.jsonArr join "+"
+    value: 1+2+3
+  - expr: (inputs.csv split ",") join "-"
+    value: a-b-c-d
+  - expr: length (inputs.csv split ",")
+    value: 4
+  - expr: inputs.list join "," + "!"
+    value: x,y,z!
+  - expr: (1 range 3) join ","
+    value: "1,2"
+  - expr: "'abc' join ','"
+    value: ""
