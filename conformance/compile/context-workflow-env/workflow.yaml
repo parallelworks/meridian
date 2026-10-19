@@ -1,0 +1,14 @@
+env:
+  A: ${{ needs.build.outputs.x }}
+  B: ${{ failure() }}
+  C: ${{ inputs.x }}
+on:
+  execute:
+    inputs:
+      x:
+        type: string
+        default: y
+jobs:
+  build:
+    steps:
+      - run: echo

@@ -1,0 +1,7 @@
+description: A relative reference reads the workflow around it, which the plan doesn't hold, so it can only be used in input definitions.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: reference
+      path: /jobs/build/env/B

@@ -1,0 +1,11 @@
+jobs:
+  probe:
+    strategy:
+      matrix:
+        site: [a, b]
+    steps:
+      - run: echo ${{ matrix.site }}
+  first:
+    needs: [probe:any]
+    steps:
+      - run: echo first

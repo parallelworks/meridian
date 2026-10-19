@@ -1,0 +1,9 @@
+jobs:
+  build:
+    steps:
+      - run: echo ${{ steps.later.outputs.x }}
+      - id: later
+        run: echo x=1 >> $OUTPUTS
+      - run: echo ${{ steps.later.outputs.x }}
+    outputs:
+      x: ${{ steps.later.outputs.x }}

@@ -39,6 +39,10 @@ type Document struct {
 
 	positions map[string]Position
 	keys      map[string]Position
+	// styles holds each string's YAML style, and lines the file's lines,
+	// so that a place in a string can be found in the file.
+	styles map[string]yaml.Style
+	lines  []string
 }
 
 // Position returns where the value at a JSON Pointer (RFC 6901) starts, or
@@ -70,6 +74,7 @@ func (l *Loader) Load(name string, data []byte) (*Document, Diagnostics) {
 		file:   name,
 		keys:   make(map[string]Position),
 		values: make(map[string]Position),
+		styles: make(map[string]yaml.Style),
 	}
 	value := p.parse(data, cmp.Or(l.MaxSize, DefaultMaxSize))
 	format := 0
@@ -89,6 +94,8 @@ func (l *Loader) Load(name string, data []byte) (*Document, Diagnostics) {
 		Value:     value.(map[string]any),
 		positions: p.values,
 		keys:      p.keys,
+		styles:    p.styles,
+		lines:     strings.Split(string(data), "\n"),
 	}, p.diags
 }
 
@@ -98,6 +105,7 @@ type parser struct {
 	file   string
 	keys   map[string]Position
 	values map[string]Position
+	styles map[string]yaml.Style
 	diags  Diagnostics
 }
 
@@ -236,6 +244,7 @@ func (p *parser) mapping(n *yaml.Node, path string) map[string]any {
 func (p *parser) scalar(n *yaml.Node, path string) any {
 	switch n.ShortTag() {
 	case "!!str":
+		p.styles[path] = n.Style
 		return n.Value
 	case "!!null":
 		return nil

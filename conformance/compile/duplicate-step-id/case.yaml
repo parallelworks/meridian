@@ -1,0 +1,7 @@
+description: Two steps of a job can't have the same id.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: duplicate-id
+      path: /jobs/build/steps/1/id

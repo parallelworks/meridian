@@ -11,6 +11,7 @@ import (
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/plan"
 )
 
 // passThrough is a platform that takes every value it's given as it is.
@@ -146,4 +147,76 @@ func canonical(t *testing.T, v any) string {
 		t.Fatal(fmt.Errorf("%#v: %w", v, err))
 	}
 	return string(b)
+}
+
+func TestCompileConformance(t *testing.T) {
+	cases, err := conformance.Cases("compile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		t.Run(strings.TrimPrefix(c.Name, "compile/"), func(t *testing.T) {
+			t.Parallel()
+			data, err := c.Workflow()
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := compile.Options{Contexts: contexts(c)}
+			if !c.NoPlatform {
+				opts.Inputs = passThrough{}
+			}
+			p, diags := compile.Compile("workflow.yaml", data, c.Inputs, opts)
+			checkDiagnostics(t, c.Expect.Diagnostics, diags)
+			if (p == nil) != diags.HasErrors() {
+				t.Fatalf("plan is %v with errors %v", p != nil, diags.HasErrors())
+			}
+			if p == nil {
+				if len(c.Expect.Plan) > 0 {
+					t.Errorf("no plan to check %v in", c.Expect.Plan)
+				}
+				return
+			}
+			encoded, err := plan.Encode(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc any
+			if err := json.Unmarshal(encoded, &doc); err != nil {
+				t.Fatal(err)
+			}
+			for ptr, want := range c.Expect.Plan {
+				got, ok := lookupPointer(doc, ptr)
+				if !ok {
+					t.Errorf("%s: the plan has nothing there: %s", ptr, encoded)
+					continue
+				}
+				if g, w := canonical(t, got), canonical(t, want); g != w {
+					t.Errorf("%s = %s, want %s", ptr, g, w)
+				}
+			}
+		})
+	}
+}
+
+func lookupPointer(v any, ptr string) (any, bool) {
+	unescape := strings.NewReplacer("~1", "/", "~0", "~")
+	for tok := range strings.SplitSeq(strings.TrimPrefix(ptr, "/"), "/") {
+		tok = unescape.Replace(tok)
+		switch c := v.(type) {
+		case map[string]any:
+			var ok bool
+			if v, ok = c[tok]; !ok {
+				return nil, false
+			}
+		case []any:
+			var i int
+			if _, err := fmt.Sscan(tok, &i); err != nil || i < 0 || i >= len(c) {
+				return nil, false
+			}
+			v = c[i]
+		default:
+			return nil, false
+		}
+	}
+	return v, true
 }

@@ -1,0 +1,5 @@
+description: A need written job:any waits for any one instance of a matrix job.
+source: Meridian
+expect:
+  plan:
+    /jobs/0/needs: [{job: probe, any: true}]

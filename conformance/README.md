@@ -7,6 +7,7 @@ These cases pin what workflows mean, in areas:
 | `format` | Loading a workflow and validating it against its format's schema |
 | `expressions` | What `${{ }}` expressions evaluate to |
 | `inputs` | A run's input values: defaults, conditions, types and what's required |
+| `compile` | The plan a workflow compiles to, and the problems with its jobs and expressions |
 
 ## Format
 
@@ -56,6 +57,23 @@ expect:
   compiler doesn't have.
 - Input types that name a platform's resources take the value they're given
   as it is, as if a platform accepted it, unless `no-platform: true`.
+
+## Compile
+
+Each case is a directory like an inputs case, whose `expect.plan` holds
+values the compiled plan must have, by JSON Pointer into its JSON encoding:
+
+```yaml
+description: >-
+  A need written job:any waits for any one instance of a matrix job.
+source: Meridian
+expect:
+  plan:
+    /jobs/0/needs: [{job: probe, any: true}]
+```
+
+Diagnostics list every error and warning the workflow compiles with, its
+loading's included. A case with errors has no plan.
 
 ## Expressions
 

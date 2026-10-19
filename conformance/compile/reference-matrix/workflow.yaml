@@ -1,0 +1,13 @@
+jobs:
+  plain:
+    steps:
+      - run: echo ${{ matrix.os }}
+  grid:
+    strategy:
+      matrix:
+        os: [linux, mac]
+        include:
+          - os: linux
+            arch: arm
+    steps:
+      - run: echo ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.cpu }}

@@ -150,8 +150,19 @@ order:
 5. **Expand** matrices whose values are known, and link each step's
    `cleanup:` command to the end of its job.
 6. **Check expressions.** Parse every `${{ }}`, evaluate what is already
-   known, and check every reference that is left: an input, job, step or
-   output that doesn't exist is an error with its position.
+   known, and check every reference that is left, with its position:
+   - Reading a context where it isn't known yet is an error, such as `steps`
+     in a job's `if:`, or `needs` in the workflow's `env:`. So is a relative
+     reference outside input definitions, since the plan doesn't hold the
+     workflow it would read.
+   - Reading a job's outputs is an error unless the job needs it, or is the
+     job itself. A job's outputs are whatever its steps write, so their names
+     aren't checked.
+   - In format 1, reading an input, step, matrix key or session that doesn't
+     exist is a warning: ACTIVATE reads it as null or `""` and runs, and a
+     workflow a step calls can read inputs its caller passes without
+     defining them. A step reading a step that doesn't run before it is an
+     error, since ACTIVATE fails the step.
 7. **Emit** the plan.
 
 The compiler does no I/O of its own: files, networks and platforms are
@@ -197,8 +208,8 @@ ACTIVATE's launch form and its backend do together:
   Anything else that doesn't fit the input's type is an error, as is a
   number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
-  input the workflow doesn't define is an error that suggests the nearest
-  name.
+  input the workflow doesn't define is a warning that suggests the nearest
+  name, and is kept, as ACTIVATE keeps it.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
@@ -212,8 +223,7 @@ ACTIVATE's launch form and its backend do together:
 ACTIVATE differs where its values can be incomplete, as they are from its
 API: it evaluates conditions and defaults against the submitted values
 before it fills in defaults, so a condition can read an input's definition
-in place of its default. It doesn't check values against their types, and it
-keeps values for inputs the workflow doesn't define.
+in place of its default. It doesn't check values against their types.
 
 ## The plan
 
@@ -264,7 +274,7 @@ to depends on where it is evaluated:
 | When | Evaluated by | Adds these contexts | Used by |
 | --- | --- | --- | --- |
 | The run is created | Compiler | `inputs`, `org` and `vars` (organization and user variables), `remote` (the repository the workflow came from), workflow `env`, `sessions` from a session provider | Everything that is known by then |
-| A job's dependencies have finished | Coordinator | `needs`, status functions | Job `if:`, and `strategy:`, `runs-on:`, `resources:` and `retry:` that use `needs` |
+| A job's dependencies have finished | Coordinator | `needs`, status functions, `env` | Job `if:`, and `strategy:`, `runs-on:`, `resources:`, `retry:`, `timeout:` and `working-directory:` that use them |
 | A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
 | A job ends | Worker | | Job `outputs:` |
 

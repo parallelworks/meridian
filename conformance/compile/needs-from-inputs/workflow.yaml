@@ -1,0 +1,14 @@
+on:
+  execute:
+    inputs:
+      after:
+        type: string
+        default: build
+jobs:
+  build:
+    steps:
+      - run: make
+  test:
+    needs: ${{ inputs.after }}
+    steps:
+      - run: make test

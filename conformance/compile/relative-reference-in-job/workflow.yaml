@@ -1,0 +1,7 @@
+jobs:
+  build:
+    env:
+      A: x
+      B: ${{ .A }}
+    steps:
+      - run: echo

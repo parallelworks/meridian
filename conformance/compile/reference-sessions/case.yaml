@@ -1,0 +1,9 @@
+description: >-
+  sessions.<name> should name one of the workflow's sessions. One that
+  doesn't is a warning, and reads "".
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: reference
+      path: /jobs/build/steps/0/run

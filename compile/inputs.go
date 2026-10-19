@@ -18,7 +18,8 @@ const (
 	// CodeRequired means an input that needs a value has none.
 	CodeRequired format.Code = "required"
 	// CodeUnknownInput means a value for an input the workflow doesn't
-	// define.
+	// define, which is kept, as a workflow a step calls can read what its
+	// caller passes without defining it.
 	CodeUnknownInput format.Code = "unknown-input"
 	// CodeInputValue means a value that doesn't fit its input: the wrong
 	// type, outside a number's range, or not one of a dropdown's options.
@@ -70,6 +71,9 @@ type Inputs struct {
 
 // Options are what the compiler reads besides the workflow.
 type Options struct {
+	// Source names the workflow. Without a Revision, the revision is the
+	// SHA-256 digest of the workflow's text.
+	Source plan.Source
 	// Inputs provides the input types that name a platform's resources.
 	// Nil means there is no platform.
 	Inputs InputResolver
@@ -87,6 +91,13 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // input definitions, applies defaults, and drops ignored inputs, as
 // docs/design.md describes. It reports every problem it finds.
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, format.Diagnostics) {
+	r := resolveInputs(doc, submitted, opts)
+	return &Inputs{Values: plan.Literal(r.values), Secrets: r.secrets}, r.diags
+}
+
+// resolveInputs resolves the inputs, keeping their definitions for the
+// compiler's checks of what reads them.
+func resolveInputs(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
 	r := &inputResolver{
 		doc:     doc,
 		opts:    opts,
@@ -106,7 +117,7 @@ func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 	r.applyConditions()
 	r.checkValues()
 	r.diags.Sort()
-	return &Inputs{Values: plan.Literal(r.values), Secrets: r.secrets}, r.diags
+	return r
 }
 
 // A field is an input definition.
@@ -233,7 +244,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 			if s, ok := suggest(key, names); ok {
 				msg += fmt.Sprintf("; did you mean %s?", strings.Join(appendPath(path, s), "."))
 			}
-			r.report(format.Error, CodeUnknownInput, definitionsPath, "%s", msg)
+			r.report(format.Warning, CodeUnknownInput, definitionsPath, "%s", msg)
 			continue
 		}
 		if !f.container || f.flatten || values[key] == nil {
@@ -434,13 +445,42 @@ func (r *inputResolver) evalAt(loc []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	contexts := map[string]any{"inputs": knownValues(r.values)}
-	for k, v := range r.opts.Contexts {
+	contexts := compileTimeContexts(r.opts, r.evalValues())
+	return t.Eval(r.eval.Scope(loc, expr.Scope{Contexts: contexts}))
+}
+
+// evalValues returns the values for expressions to read: each deferred
+// default unknown, and each input with no value null, or false for a
+// boolean, which is the value it gets, rather than its definition.
+func (r *inputResolver) evalValues() any {
+	values, _ := knownValues(r.values).(map[string]any)
+	for _, f := range r.fields {
+		if f.container || f.header {
+			continue
+		}
+		if _, ok := lookupPath(values, f.path); ok {
+			continue
+		}
+		var v any
+		if f.typ == "boolean" && !f.hasDefault {
+			v = false
+		}
+		setPath(values, f.path, v)
+	}
+	return values
+}
+
+// compileTimeContexts returns the contexts known when the run is created:
+// inputs, and the caller's org, vars, remote and sessions. org, vars and
+// remote default to empty, which reads every name as "".
+func compileTimeContexts(opts Options, inputs any) map[string]any {
+	contexts := map[string]any{"inputs": inputs, "org": map[string]any{}, "vars": map[string]any{}, "remote": map[string]any{}}
+	for k, v := range opts.Contexts {
 		if k != "inputs" {
 			contexts[k] = v
 		}
 	}
-	return t.Eval(r.eval.Scope(loc, expr.Scope{Contexts: contexts}))
+	return contexts
 }
 
 // knownValues copies values with each deferred default as an expr.Unknown,

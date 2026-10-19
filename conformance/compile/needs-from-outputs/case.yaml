@@ -1,0 +1,7 @@
+description: needs can't read what isn't known when the run is created.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context
+      path: /jobs/test/needs

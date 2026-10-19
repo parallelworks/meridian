@@ -1,0 +1,7 @@
+jobs:
+  build:
+    steps:
+      - id: make
+        run: make
+      - id: make
+        run: make install

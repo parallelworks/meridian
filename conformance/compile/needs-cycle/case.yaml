@@ -1,0 +1,7 @@
+description: Jobs that need each other are reported once, at the first of them.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: needs
+      path: /jobs/a/needs

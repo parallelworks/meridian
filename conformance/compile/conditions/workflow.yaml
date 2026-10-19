@@ -1,0 +1,17 @@
+on:
+  execute:
+    inputs:
+      mode:
+        type: string
+        default: debug
+jobs:
+  build:
+    steps:
+      - run: echo a
+        if: inputs.mode == 'debug'
+      - run: echo b
+        if: always
+      - run: echo c
+        if: ${{ !completed }}
+      - run: echo d
+        if: failure() && inputs.mode == 'debug'

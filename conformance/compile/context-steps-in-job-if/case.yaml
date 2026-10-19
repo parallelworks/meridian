@@ -1,0 +1,7 @@
+description: A job's if is evaluated before its steps run, so it can't read steps.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context
+      path: /jobs/build/if

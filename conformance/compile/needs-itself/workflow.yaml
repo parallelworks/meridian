@@ -1,0 +1,5 @@
+jobs:
+  a:
+    needs: [a]
+    steps:
+      - run: echo a

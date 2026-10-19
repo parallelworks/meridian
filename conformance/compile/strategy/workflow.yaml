@@ -1,0 +1,14 @@
+on:
+  execute:
+    inputs:
+      sites:
+        type: number
+        default: 2
+jobs:
+  probe:
+    strategy:
+      matrix:
+        site: ${{ 1 range inputs.sites + 1 }}
+      max-parallel: 1
+    steps:
+      - run: echo ${{ matrix.site }}
