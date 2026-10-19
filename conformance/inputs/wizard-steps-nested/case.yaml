@@ -1,0 +1,6 @@
+description: With $meta.wizard.flatten false, a step's inputs have their values under the step's key.
+source: ACTIVATE's tests
+expect:
+  inputs:
+    first:
+      name: run

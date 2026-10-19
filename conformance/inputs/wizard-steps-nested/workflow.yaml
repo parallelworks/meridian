@@ -1,0 +1,18 @@
+on:
+  execute:
+    inputs:
+      $meta:
+        wizard:
+          mode: wizard
+          flatten: false
+      first:
+        type: step
+        title: Step
+        options:
+          name:
+            type: string
+            default: run
+jobs:
+  main:
+    steps:
+      - run: echo ok

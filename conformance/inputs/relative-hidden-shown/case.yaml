@@ -1,0 +1,9 @@
+description: When .hidden is false, the input keeps its value and is required.
+source: ACTIVATE's tests
+inputs:
+  use_gpu: true
+  gpu_type: a100
+expect:
+  inputs:
+    use_gpu: true
+    gpu_type: a100

@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      size:
+        type: dropdown
+        options:
+          - {label: Small, value: s}
+          - {label: Large, value: l}
+jobs:
+  main:
+    steps:
+      - run: echo ok

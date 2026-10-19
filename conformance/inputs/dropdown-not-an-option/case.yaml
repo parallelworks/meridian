@@ -1,0 +1,9 @@
+description: A dropdown's value must be one of its options, when they are written in the workflow.
+source: Meridian
+inputs:
+  size: xl
+expect:
+  diagnostics:
+    - severity: error
+      code: input-value
+      path: /on/execute/inputs/size

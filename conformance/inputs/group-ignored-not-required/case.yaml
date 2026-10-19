@@ -1,0 +1,7 @@
+description: The inputs of an ignored group aren't required, and the group has no value, even one that was submitted.
+source: ACTIVATE's tests
+inputs:
+  k8s: {}
+expect:
+  inputs:
+    target: cluster

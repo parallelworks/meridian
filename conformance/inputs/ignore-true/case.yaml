@@ -1,0 +1,8 @@
+description: An input with ignore true has no value, even one that was submitted.
+source: ACTIVATE's tests
+inputs:
+  regular_field: regular_value
+  ignore_field: ignore_value
+expect:
+  inputs:
+    regular_field: regular_value

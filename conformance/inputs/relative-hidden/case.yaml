@@ -1,0 +1,13 @@
+description: >-
+  ignore and optional can read the input's own hidden with the relative
+  reference .hidden. Conditions read the other inputs' values with their
+  defaults: use_gpu has no value, so its default, false, hides and ignores
+  gpu_type and gpu_count. ACTIVATE reads the submitted values only, where
+  use_gpu is missing, so it reads use_gpu's definition instead, which is
+  true, and keeps both.
+source: Meridian, after ACTIVATE's tests
+inputs:
+  gpu_type: a100
+expect:
+  inputs:
+    use_gpu: false

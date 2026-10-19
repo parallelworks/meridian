@@ -1,0 +1,7 @@
+description: A default that is an expression reads the other inputs' values, defaults included, in whatever order they need.
+source: Meridian
+expect:
+  inputs:
+    base: 2
+    doubled: 4
+    label: x4

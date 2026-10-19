@@ -1,0 +1,10 @@
+description: A missing input, or one given "", takes its default. A default of "" gives no value, but an input with any default isn't required.
+source: ACTIVATE's tests
+inputs:
+  field_no_default: provided
+  replaced_empty: ""
+expect:
+  inputs:
+    field_with_default: default_value
+    field_no_default: provided
+    replaced_empty: filled

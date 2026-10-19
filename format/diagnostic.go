@@ -163,7 +163,8 @@ func (ds Diagnostics) Error() string {
 	return strings.Join(lines, "\n")
 }
 
-func (ds Diagnostics) sort() {
+// Sort orders the diagnostics by position, then path and message.
+func (ds Diagnostics) Sort() {
 	slices.SortFunc(ds, func(a, b Diagnostic) int {
 		return cmp.Or(a.Position.compare(b.Position), strings.Compare(a.Path, b.Path), strings.Compare(a.Message, b.Message))
 	})

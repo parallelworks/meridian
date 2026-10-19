@@ -170,6 +170,51 @@ Limits on a run's size (jobs, matrix instances, expression depth, `uses:`
 depth) are set by whoever runs Meridian. The defaults are high enough for
 every workflow in the conformance suite.
 
+### Inputs
+
+The compiler checks a run's input values against the workflow's input
+definitions, under `on.execute.inputs`, and fills in what is missing, as
+ACTIVATE's launch form and its backend do together:
+
+- **Defaults.** An input with no value, or with `""` when `""` isn't one of
+  its options, takes its default. A default of `""` gives no value. A
+  default that is an expression is evaluated with the other inputs' values,
+  defaults included, in whatever order they need; defaults that read each
+  other are an error. A submitted value that is exactly the text of such a
+  default means the default, since a form sends that text for a default it
+  can't evaluate itself; any other value holding `${{ }}` is data.
+- **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
+  values are complete, and are true when they are true or the text `true`.
+  An ignored input has no value, even one that was submitted. An input with
+  no value and no default is required unless it is optional, or hidden or in
+  a hidden group; a boolean with none is `false`. Every missing input is
+  reported, not only the first.
+- **Containers.** A group's values are under its name. A wizard step's
+  inputs have their values beside the step's, unless `$meta.wizard.flatten`
+  is `false`. A header has no value.
+- **Types.** A number or a boolean given as text, such as `"5"` or
+  `"true"`, is converted, and a text input given a number gets its text.
+  Anything else that doesn't fit the input's type is an error, as is a
+  number outside its `min` and `max`, or a choice that isn't one of a
+  dropdown's options when they are written in the workflow. A value for an
+  input the workflow doesn't define is an error that suggests the nearest
+  name.
+- **Platform types.** Input types that name a platform's resources, such as
+  clusters, Slurm partitions and buckets, need an Inputs resolver, which
+  checks the value and gives the run the resource's details. Without one, an
+  input of such a type that has a value is an error.
+- **What the compiler doesn't have.** A default that reads something not
+  known when the run is created, such as `env` or a secret variable, stays an
+  expression in the plan and is evaluated once the run is underway. A
+  `password` input's value isn't in the plan: it is one of the run's
+  secrets.
+
+ACTIVATE differs where its values can be incomplete, as they are from its
+API: it evaluates conditions and defaults against the submitted values
+before it fills in defaults, so a condition can read an input's definition
+in place of its default. It doesn't check values against their types, and it
+keeps values for inputs the workflow doesn't define.
+
 ## The plan
 
 The plan is typed Go, encoded as JSON and stored with the run. A coordinator

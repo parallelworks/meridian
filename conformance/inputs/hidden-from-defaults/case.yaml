@@ -1,0 +1,15 @@
+description: Conditions read the other inputs' defaults. pvc_name is hidden because pvc_persist defaults to false, so it isn't required.
+source: ACTIVATE's tests
+inputs:
+  targetType: kubernetes-cluster
+  k8s:
+    cluster: my-cluster
+    volumes: {}
+expect:
+  inputs:
+    targetType: kubernetes-cluster
+    k8s:
+      cluster: my-cluster
+      volumes:
+        pvc: New
+        pvc_persist: false

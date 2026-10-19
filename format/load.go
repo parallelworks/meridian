@@ -28,6 +28,8 @@ type Loader struct {
 
 // A Document is a workflow file that loaded without errors.
 type Document struct {
+	// File is the file's name, as Load was given it.
+	File string
 	// Format is the workflow's format: its format key, or 1 without one.
 	Format int
 	// Value is the workflow as JSON values: map[string]any, []any, string,
@@ -36,11 +38,21 @@ type Document struct {
 	Value map[string]any
 
 	positions map[string]Position
+	keys      map[string]Position
 }
 
 // Position returns where the value at a JSON Pointer (RFC 6901) starts, or
 // the zero Position if the document has no value there.
 func (d *Document) Position(pointer string) Position {
+	return d.positions[pointer]
+}
+
+// KeyPosition returns where the key of the value at a JSON Pointer is, or
+// where the value starts if it has no key, as an item of a list has none.
+func (d *Document) KeyPosition(pointer string) Position {
+	if p, ok := d.keys[pointer]; ok {
+		return p
+	}
 	return d.positions[pointer]
 }
 
@@ -66,15 +78,17 @@ func (l *Loader) Load(name string, data []byte) (*Document, Diagnostics) {
 			value = p.validate(schemas[format](), value)
 		}
 	}
-	p.diags.sort()
+	p.diags.Sort()
 	if p.diags.HasErrors() {
 		return nil, p.diags
 	}
 	// Every format's schema requires a mapping at the top.
 	return &Document{
+		File:      name,
 		Format:    format,
 		Value:     value.(map[string]any),
 		positions: p.values,
+		keys:      p.keys,
 	}, p.diags
 }
 

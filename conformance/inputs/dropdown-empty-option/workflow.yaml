@@ -1,0 +1,19 @@
+on:
+  execute:
+    inputs:
+      with_empty:
+        type: dropdown
+        default: a
+        options: ["", a, b]
+      missing:
+        type: dropdown
+        default: a
+        options: ["", a]
+      without_empty:
+        type: dropdown
+        default: a
+        options: [a, b]
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,0 +1,10 @@
+description: An input of a type that names a platform's resources needs a platform to provide it. Without one, it is an error when it has a value.
+source: Meridian
+no-platform: true
+inputs:
+  cluster: my-cluster
+expect:
+  diagnostics:
+    - severity: error
+      code: platform
+      path: /on/execute/inputs/cluster

@@ -1,0 +1,16 @@
+on:
+  execute:
+    inputs:
+      k8s:
+        type: group
+        hidden: true
+        items:
+          namespace:
+            type: string
+          image:
+            type: string
+            default: ubuntu
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+      partition:
+        type: slurm-partitions
+        resource: ${{ inputs.cluster }}
+        optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ok

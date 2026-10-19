@@ -1,0 +1,13 @@
+description: A value that isn't a number, or is outside the input's min and max, is an error.
+source: Meridian
+inputs:
+  count: 9
+  other: many
+expect:
+  diagnostics:
+    - severity: error
+      code: input-value
+      path: /on/execute/inputs/count
+    - severity: error
+      code: input-value
+      path: /on/execute/inputs/other

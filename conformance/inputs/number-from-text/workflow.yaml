@@ -1,0 +1,14 @@
+on:
+  execute:
+    inputs:
+      count:
+        type: number
+        min: 1
+        max: 8
+      ratio:
+        type: number
+        default: 0.5
+jobs:
+  main:
+    steps:
+      - run: echo ok

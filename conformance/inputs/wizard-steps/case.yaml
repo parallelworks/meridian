@@ -1,0 +1,6 @@
+description: The inputs of a wizard's steps have their values beside the steps', unless $meta.wizard.flatten is false.
+source: ACTIVATE's tests
+expect:
+  inputs:
+    name: run
+    size: 3

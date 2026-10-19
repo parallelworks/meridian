@@ -1,0 +1,6 @@
+description: The inputs of a hidden group aren't required, but still get their defaults.
+source: ACTIVATE's tests
+expect:
+  inputs:
+    k8s:
+      image: ubuntu

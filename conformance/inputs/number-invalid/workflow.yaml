@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      count:
+        type: number
+        min: 1
+        max: 8
+      other:
+        type: number
+jobs:
+  main:
+    steps:
+      - run: echo ok

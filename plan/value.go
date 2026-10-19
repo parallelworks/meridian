@@ -34,7 +34,8 @@ func ValueOf(v any) (Value, error) {
 	return Value{out}, err
 }
 
-// Literal returns a Value that holds v as it is: no string in it is parsed.
+// Literal returns a Value that holds v as it is: no string in it is parsed,
+// and an *expr.Template in it stays a template.
 func Literal(v any) Value { return Value{v} }
 
 func parseValue(v any) (any, error) {

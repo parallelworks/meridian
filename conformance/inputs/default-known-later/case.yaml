@@ -1,0 +1,12 @@
+description: A default that reads something the compiler doesn't have, such as env or a secret variable, stays an expression until the run is underway.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+    TOKEN: unused
+secret-variables: [TOKEN]
+expect:
+  inputs:
+    dir: ${{ env.PW_PARENT_JOB_DIR }}
+    token: ${{ vars.TOKEN }}
+    region: us-east

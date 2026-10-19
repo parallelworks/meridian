@@ -1,0 +1,16 @@
+on:
+  execute:
+    inputs:
+      base:
+        type: number
+        default: 2
+      doubled:
+        type: number
+        default: ${{ inputs.base * 2 }}
+      label:
+        type: string
+        default: ${{ 'x' + inputs.doubled }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

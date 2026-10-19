@@ -1,0 +1,12 @@
+description: An input with no value and no default that is neither optional nor hidden is required. Every missing input is reported.
+source: ACTIVATE's tests
+expect:
+  diagnostics:
+    - severity: error
+      code: required
+      path: /on/execute/inputs/required_field
+      line: 4
+      column: 7
+    - severity: error
+      code: required
+      path: /on/execute/inputs/other

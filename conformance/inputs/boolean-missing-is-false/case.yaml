@@ -1,0 +1,5 @@
+description: A boolean input with no value and no default is false rather than required.
+source: ACTIVATE's tests
+expect:
+  inputs:
+    flag: false

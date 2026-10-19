@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      port:
+        type: string
+      name:
+        type: string
+        default: 8080
+jobs:
+  main:
+    steps:
+      - run: echo ok

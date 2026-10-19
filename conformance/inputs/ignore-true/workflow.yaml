@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      regular_field:
+        type: string
+      ignore_field:
+        type: string
+        ignore: true
+jobs:
+  main:
+    steps:
+      - run: echo ok

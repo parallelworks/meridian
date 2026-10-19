@@ -1,0 +1,19 @@
+on:
+  execute:
+    inputs:
+      target:
+        type: dropdown
+        options: [cluster, kubernetes]
+        default: cluster
+      k8s:
+        type: group
+        ignore: ${{ inputs.target != 'kubernetes' }}
+        items:
+          namespace:
+            type: string
+          replicas:
+            type: number
+jobs:
+  main:
+    steps:
+      - run: echo ok
