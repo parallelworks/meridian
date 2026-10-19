@@ -1,0 +1,170 @@
+description: >-
+  References read contexts by path: .name, ['quoted name'], [0], slices such
+  as [1:3], and .* for each item. A path that leads nowhere is null, except in
+  the contexts that hold strings, where a missing name is "". A string that
+  holds JSON is read as its value.
+source: ACTIVATE's documentation and tests
+scope:
+  contexts:
+    inputs:
+      name: Alice
+      list: [x, "y"]
+      obj: {a: 1, k: v}
+      dashed: {my-key: dv}
+      field20: [hello, world]
+      people:
+        - {name: ann, tags: [a, b]}
+        - {name: bob, tags: [c]}
+      groups:
+        g2: {name: B}
+        g1: {name: A}
+      json: '{"a": {"b": [10, 20]}}'
+      prices: '{"m5.large": 0.096, "p3.2xlarge": 3.06}'
+      nested: '{"m5": {"large": 1}}'
+      catalog: {m5.large: 0.096}
+      s: hello
+      arr: [a, b, c, d, e]
+      jsonArr: "[10, 20, 30, 40]"
+      remote: {repo: from-inputs}
+    org: {orgKey: orgValue, api-host: h}
+    vars: {region: us-east, my-token: t}
+    remote: {repo: "https://example.com/workflows", branch: main}
+    sessions: {desktop: helloworld, jupyter-lab: s}
+    env: {FOO: bar, MY-VAR: e, IDX: "1"}
+    matrix: {os: linux, i: 2}
+    needs:
+      build: {outputs: {path: /out/bin, json: '{"k": "v"}'}, result: success}
+      prep-model: {outputs: {path: /models/x}, result: success}
+    steps:
+      build: {outputs: {path: /out/bin}}
+      my-step: {outputs: {out: dashed}}
+cases:
+  - expr: inputs.name
+    value: Alice
+  - expr: "inputs['name']"
+    value: Alice
+  - expr: "inputs.obj['a']"
+    value: 1
+  - expr: 'inputs.dashed["my-key"]'
+    value: dv
+  - expr: inputs.field20.0
+    value: hello
+  - expr: inputs.field20.[0]
+    value: hello
+  - expr: inputs.field20[0]
+    value: hello
+  - expr: inputs.[field20].0
+    value: hello
+  - expr: inputs[field20]0
+    value: hello
+  - expr: inputs.list.5
+    value: null
+  - expr: inputs.missing
+    value: null
+  - expr: inputs.missing.deeper
+    value: null
+  - expr: inputs.people.*.name
+    value: [ann, bob]
+  - expr: inputs.people.*.tags.*
+    value: [a, b, c]
+  - expr: inputs.groups.*.name
+    value: [A, B]
+
+  # A string that holds JSON is read as its value.
+  - expr: inputs.json.a.b[1]
+    value: 20
+  - expr: "inputs.catalog['m5.large']"
+    value: 0.096
+  - expr: inputs.jsonArr[1:3]
+    value: [20, 30]
+  # ACTIVATE ignores the rest of the path after an output's name, and gives
+  # the whole output.
+  - expr: needs.build.outputs.json.k
+    value: v
+
+  # Slices of strings and lists.
+  - expr: inputs.s[1:4]
+    value: ell
+  - expr: inputs.s[2:]
+    value: llo
+  - expr: inputs.s[:3]
+    value: hel
+  - expr: inputs.s[-2:]
+    value: lo
+  - expr: inputs.s[1:100]
+    value: ello
+  - expr: inputs.s.[1:4]
+    value: ell
+  - expr: inputs.s[0:1]
+    value: h
+  - expr: inputs.arr[1:3]
+    value: [b, c]
+  - expr: inputs.arr[:2]
+    value: [a, b]
+  - expr: inputs.arr[-2:]
+    value: [d, e]
+  - expr: inputs.arr[2:2]
+    value: []
+  - expr: inputs.s[abc:def]
+    value: null
+
+  # Each context.
+  - expr: org.orgKey
+    value: orgValue
+  - expr: "org.orgKey == 'orgValue'"
+    value: true
+  - expr: "org['api-host']"
+    value: h
+  - expr: org.missing
+    value: ""
+  - expr: "!org.missing"
+    value: true
+  - expr: "org.missing === ''"
+    value: true
+  - expr: vars.region
+    value: us-east
+  - expr: var.region
+    value: us-east
+  - expr: "var['my-token']"
+    value: t
+  - expr: vars.missing
+    value: ""
+  - expr: remote.branch
+    value: main
+  - expr: remote.missing
+    value: ""
+  - expr: inputs.remote.repo
+    value: from-inputs
+  - expr: sessions.desktop
+    value: helloworld
+  - expr: "sessions['jupyter-lab']"
+    value: s
+  - expr: env.FOO
+    value: bar
+  - expr: "env['MY-VAR']"
+    value: e
+  - expr: env.MISSING
+    value: ""
+  - expr: matrix.os
+    value: linux
+  - expr: needs.build.outputs.path
+    value: /out/bin
+  - expr: "needs['prep-model'].outputs.path"
+    value: /models/x
+  - expr: 'needs["prep-model"].outputs.path'
+    value: /models/x
+  - expr: needs.build.outputs.missing
+    value: ""
+  # needs.<job>.result is one of Meridian's additions to format 1.
+  - expr: needs.build.result
+    value: success
+  - expr: steps.build.outputs.path
+    value: /out/bin
+  - expr: "steps['my-step'].outputs.out"
+    value: dashed
+  - expr: "steps.build.outputs.path == '/out/bin'"
+    value: true
+  - expr: inputs.field20 get env.IDX
+    value: world
+  - template: "${{ inputs.name }}-${{ jobs.x }}"
+    value: Alice-jobs.x

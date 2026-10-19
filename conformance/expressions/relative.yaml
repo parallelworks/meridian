@@ -1,0 +1,82 @@
+description: >-
+  A relative reference reads the workflow near the expression: .x is the key x
+  beside the one the expression is in, each further dot goes up a level, and
+  so does ../ (../x is ..x). An expression it reaches is evaluated, and a path
+  that continues past it reads the expression's value. Expressions that read
+  each other are an error.
+source: ACTIVATE's tests
+workflow:
+  arrayhere: [one, two, three]
+  field17: ${{ inputs.arrayhere }}
+  field20: ${{ .field17 }}
+  field21:
+    prop: ${{ ..field17.0 }}
+  field21b:
+    prop: ${{ ..field17 get 0 }}
+  field22:
+    prop:
+      prop2: ["${{ ....field17 get 2 }}", b]
+  field23:
+    prop:
+      prop3: ${{ ...field22.prop.prop2.0 }}
+    prop4:
+      prop5: ${{ ..prop }}
+  field23b: ${{ .field23.prop }}
+  field23c:
+    prop1: a
+    prop2: ${{ .prop1 }}
+    prop3:
+      prop4: ${{ .prop5 }}
+      prop5: ${{ ..prop2 }}
+  field23d:
+    - ["${{ ../../arrayhere.1 }}", "${{ ../../.arrayhere.2 }}"]
+    - ${{ .0 get 0 }}
+  computeOn: true
+  options:
+    field1:
+      inner: ${{ !../../.computeOn }}
+      far: ${{ ../../../../../x }}
+  loop:
+    a: ${{ .b }}
+    b: ${{ .a }}
+  self: ${{ .self }}
+scope:
+  contexts:
+    inputs:
+      arrayhere: [one, two, three]
+cases:
+  - at: /field20
+    value: [one, two, three]
+  # ACTIVATE reads the 0th character of field17's text, "$", instead.
+  - at: /field21/prop
+    value: one
+  - at: /field21b/prop
+    value: one
+  - at: /field22/prop/prop2/0
+    value: three
+  - at: /field23/prop/prop3
+    value: three
+  - at: /field23/prop4/prop5
+    value: {prop3: three}
+  - at: /field23b
+    value: {prop3: three}
+  - at: /field23c/prop2
+    value: a
+  - at: /field23c/prop3/prop4
+    value: a
+  - at: /field23c/prop3/prop5
+    value: a
+  - at: /field23d/0/0
+    value: two
+  - at: /field23d/0/1
+    value: three
+  - at: /field23d/1
+    value: two
+  - at: /options/field1/inner
+    value: false
+  - at: /options/field1/far
+    value: null
+  - at: /loop/a
+    error: eval
+  - at: /self
+    error: eval

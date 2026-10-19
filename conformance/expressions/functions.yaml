@@ -1,0 +1,100 @@
+description: >-
+  GitHub Actions' functions, with its meanings: contains, startsWith,
+  endsWith, format, join, toJSON and fromJSON, and case, which picks the
+  value of its first true condition. String matching is case-sensitive.
+source: ACTIVATE's tests
+scope:
+  contexts:
+    inputs:
+      name: Alice
+      list: [x, "y"]
+      obj: {a: 1}
+      num: 5
+      regions: '["east","west"]'
+      people:
+        - {name: ann}
+        - {name: bob}
+      html: {cmd: a && b <c>}
+    steps:
+      build: {outputs: {path: /out/bin}}
+cases:
+  - expr: "contains(inputs.name, 'lic')"
+    value: true
+  - expr: "contains(inputs.name, 'alice')"
+    value: false
+  - expr: "contains(inputs.list, 'y')"
+    value: true
+  - expr: "contains(inputs.list, 'z')"
+    value: false
+  - expr: "contains('abc123', 123)"
+    value: true
+  - expr: "contains(inputs.obj, 'a')"
+    value: false
+  - expr: "startsWith(inputs.name, 'Al')"
+    value: true
+  - expr: "startsWith(inputs.name, 'al')"
+    value: false
+  - expr: "endsWith(inputs.name, 'ce')"
+    value: true
+
+  - expr: "format('{0}-{1}-{0}', inputs.name, inputs.num)"
+    value: Alice-5-Alice
+  - expr: "format('{{0}} is {0}', 'x')"
+    value: "{0} is x"
+  - expr: "format('[{0}]', inputs.missing)"
+    value: "[]"
+  - expr: "format('{0}/app', steps.build.outputs.path)"
+    value: /out/bin/app
+  - expr: "format('{1}', 'a')"
+    error: eval
+  - expr: "format('{0', 'a')"
+    error: eval
+  - expr: "format('a}', 'a')"
+    error: eval
+
+  - expr: join(inputs.list)
+    value: x,y
+  - expr: "join(inputs.list, ' + ')"
+    value: x + y
+  - expr: "join('abc', '-')"
+    value: abc
+  - expr: "join(fromJSON(inputs.regions), '|')"
+    value: east|west
+  - expr: "join(inputs.people.*.name, ', ')"
+    value: ann, bob
+
+  - expr: toJSON(inputs.obj)
+    value: "{\n  \"a\": 1\n}"
+  - expr: toJSON(inputs.html)
+    value: "{\n  \"cmd\": \"a && b <c>\"\n}"
+  - expr: "toJSON('a && b <c>')"
+    value: '"a && b <c>"'
+  - expr: toJSON(inputs.list)
+    value: "[\n  \"x\",\n  \"y\"\n]"
+
+  - expr: "case(inputs.num > 3, 'big', inputs.num > 1, 'mid', 'small')"
+    value: big
+  - expr: "case(inputs.num > 10, 'big', 'small')"
+    value: small
+  - expr: "case(false, needs.x.outputs.y, 'small')"
+    value: small
+
+  - expr: "contains(format('{0}/{1}', inputs.name, 'x'), 'e/x')"
+    value: true
+  - expr: "startsWith(inputs.name, 'A') && contains(inputs.list, 'x') ? 'yes' : 'no'"
+    value: "yes"
+
+  - expr: "contains('a')"
+    error: syntax
+  - expr: "case(true, 'a')"
+    error: syntax
+  # ACTIVATE reports this when the expression is evaluated; Meridian, when it
+  # is parsed.
+  - expr: "case(true, 'a', false, 'b')"
+    error: syntax
+  - expr: join()
+    error: syntax
+  - expr: "contains('a' 'b')"
+    error: syntax
+  - expr: "hashFiles('**/go.sum')"
+    error: syntax

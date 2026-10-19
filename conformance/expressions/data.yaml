@@ -1,0 +1,30 @@
+description: >-
+  Only expressions written in the workflow are evaluated. A value an
+  expression reads, such as an input's value, a job's output or an environment
+  variable, is data even if it holds ${{ }}, and so is a string the expression
+  builds.
+source: Meridian
+scope:
+  contexts:
+    inputs:
+      exptest: ${{ 1 + 1 }}
+      msg: ${{ vars.token }}
+    vars: {token: secret}
+    needs:
+      build: {outputs: {line: "${{ vars.token }}"}}
+    env: {GREETING: "${{ vars.token }}"}
+cases:
+  - expr: inputs.exptest
+    value: ${{ 1 + 1 }}
+  - template: echo ${{ inputs.msg }}
+    value: echo ${{ vars.token }}
+  - expr: needs.build.outputs.line
+    value: ${{ vars.token }}
+  - expr: env.GREETING
+    value: ${{ vars.token }}
+  - expr: '"${{ 1 + 1 }}"'
+    value: ${{ 1 + 1 }}
+  - expr: '"1 + 1 = " + "${{" + "1 + 1" + "}}"'
+    value: 1 + 1 = ${{1 + 1}}
+  - expr: vars.token
+    value: secret

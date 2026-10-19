@@ -1,0 +1,101 @@
+description: >-
+  Literals: numbers, strings in three kinds of quotes, true, false and null in
+  any case, and lists and mappings written as JSON. A word that is none of
+  these and doesn't start with a context is a string.
+source: ACTIVATE's documentation and tests
+scope:
+  contexts:
+    inputs:
+      type: slurm
+      pvc: New
+      currency: $
+cases:
+  - expr: "42"
+    value: 42
+  - expr: "-2.5e-3"
+    value: -0.0025
+  - expr: "2.5e-3"
+    value: 0.0025
+  - expr: 1e-2-1
+    value: -0.99
+  - expr: 0xff
+    value: 255
+  - expr: 0XFF
+    value: 255
+  - expr: 1_000
+    value: 1000
+  - expr: NaN
+    value: .nan
+  - expr: Infinity
+    value: .inf
+
+  - expr: "'it''s'"
+    value: it's
+  - expr: "''"
+    value: ""
+  - expr: '"double"'
+    value: double
+  - expr: "`back`"
+    value: back
+  - expr: '" hello ( 1 + 1 ) hello"'
+    value: " hello ( 1 + 1 ) hello"
+  - expr: '"a \n b"'
+    value: 'a \n b'
+
+  - expr: "true"
+    value: true
+  - expr: "True"
+    value: true
+  - expr: "FALSE"
+    value: false
+  - expr: "null"
+    value: null
+  - expr: "undefined"
+    value: null
+
+  - expr: '["list", "listhere"]'
+    value: [list, listhere]
+  - expr: '{"prop": 1}'
+    value: {prop: 1}
+  - expr: '{"exp1": {"exp1": 1, "exp2": 2}, "exp2": {"exp1": 1, "exp2": 2}}'
+    value: {exp1: {exp1: 1, exp2: 2}, exp2: {exp1: 1, exp2: 2}}
+  # A list or mapping that isn't JSON is an error. ACTIVATE reports it when
+  # the expression is evaluated; Meridian, when it is parsed.
+  - expr: "['a', 'b']"
+    error: syntax
+  - expr: "{a: 1}"
+    error: syntax
+  - expr: "[1, 2"
+    error: syntax
+
+  # Words are strings.
+  - expr: inputs.pvc == New
+    value: true
+  - expr: inputs.pvc != New
+    value: false
+  - expr: inputs.type == SLURM
+    value: false
+  - expr: "inputs.missing ?? localhost"
+    value: localhost
+  - expr: "inputs.currency == $"
+    value: true
+  - expr: something
+    value: something
+  - expr: "true ? ubuntu:22.04 : rocky:9"
+    value: ubuntu:22.04
+  - expr: "true ? 12:30 : 13:00"
+    value: "12:30"
+  # A '-' between words is subtraction, so this compares with NaN.
+  - expr: inputs.type == ior-standard
+    value: false
+  # A word with a dot that doesn't start with a context is text, which is
+  # probably a mistake.
+  - expr: input.type
+    value: input.type
+    warnings: [0]
+  - expr: "inputs.type == secrets.TOKEN"
+    value: false
+    warnings: [15]
+  - expr: inputs.pvc == New
+    value: true
+    warnings: []

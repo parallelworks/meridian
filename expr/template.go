@@ -1,0 +1,174 @@
+package expr
+
+import (
+	"errors"
+	"strings"
+)
+
+// A Template is a string in a workflow, with the expressions in it parsed.
+type Template struct {
+	src   string
+	parts []part
+}
+
+// A part of a template is text, or an expression.
+type part struct {
+	text string
+	expr *Expr
+	// at is the byte offset in the template of the expression's source,
+	// just after its ${{.
+	at int
+}
+
+// ParseTemplate parses the expressions in a string: each ${{ }} that is
+// closed. A }} in quotes or brackets doesn't close an expression, so
+// ${{ ['}}'] }} is one expression. Text after a ${{ that isn't closed is
+// text.
+func ParseTemplate(s string) (*Template, error) {
+	t := &Template{src: s}
+	for rest, offset := s, 0; ; {
+		start := strings.Index(rest, "${{")
+		if start < 0 {
+			t.addText(rest)
+			return t, nil
+		}
+		end := closing(rest[start+3:])
+		if end < 0 {
+			t.addText(rest)
+			return t, nil
+		}
+		t.addText(rest[:start])
+		src := rest[start+3 : start+3+end]
+		at := offset + start + 3
+		e, err := Parse(src)
+		if err != nil {
+			var se *SyntaxError
+			if errors.As(err, &se) {
+				se.Offset += at
+			}
+			return nil, err
+		}
+		t.parts = append(t.parts, part{expr: e, at: at})
+		consumed := start + 3 + end + 2
+		rest, offset = rest[consumed:], offset+consumed
+	}
+}
+
+func (t *Template) addText(s string) {
+	if s != "" {
+		t.parts = append(t.parts, part{text: s})
+	}
+}
+
+// closing returns the index of the }} that closes an expression in s, or -1
+// if there is none. A }} in quotes or brackets doesn't count.
+func closing(s string) int {
+	var quote, open byte
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"' || c == '`':
+			quote = c
+		case depth == 0:
+			switch c {
+			case '(', '[', '{':
+				open, depth = c, 1
+			case '}':
+				if i+1 < len(s) && s[i+1] == '}' {
+					return i
+				}
+			}
+		default:
+			// Only the kind of bracket that opened is counted.
+			switch c {
+			case open:
+				depth++
+			case closer(open):
+				depth--
+			}
+		}
+	}
+	return -1
+}
+
+func closer(open byte) byte {
+	switch open {
+	case '(':
+		return ')'
+	case '[':
+		return ']'
+	}
+	return '}'
+}
+
+// String returns the template's source.
+func (t *Template) String() string { return t.src }
+
+// Exprs returns the template's expressions, and the byte offset in the
+// template of each one's source.
+func (t *Template) Exprs() (exprs []*Expr, offsets []int) {
+	for _, p := range t.parts {
+		if p.expr != nil {
+			exprs = append(exprs, p.expr)
+			offsets = append(offsets, p.at)
+		}
+	}
+	return exprs, offsets
+}
+
+// IsText reports whether the template has no expressions.
+func (t *Template) IsText() bool {
+	for _, p := range t.parts {
+		if p.expr != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// Eval evaluates the template. A template that is one expression and
+// nothing else has the expression's value, of whatever type. Otherwise its
+// value is a string, with each expression replaced by its value's text: a
+// string as it is, null as nothing, and anything else as JSON.
+func (t *Template) Eval(scope Scope) (any, error) {
+	if len(t.parts) == 1 && t.parts[0].expr != nil {
+		v, err := t.parts[0].expr.Eval(scope)
+		return v, offsetError(err, t.parts[0].at)
+	}
+	ev := newEvaluator(scope)
+	var b strings.Builder
+	for _, p := range t.parts {
+		if p.expr == nil {
+			b.WriteString(p.text)
+			continue
+		}
+		v, err := ev.eval(p.expr.root)
+		if err != nil {
+			return nil, offsetError(err, p.at)
+		}
+		s := text(v)
+		if err := ev.spend(p.at, len(s)); err != nil {
+			return nil, offsetError(err, p.at)
+		}
+		b.WriteString(s)
+	}
+	return b.String(), nil
+}
+
+// offsetError moves an error's offset from its expression to the template.
+func offsetError(err error, at int) error {
+	var ee *EvalError
+	var ue *UnknownError
+	switch {
+	case errors.As(err, &ee):
+		return &EvalError{Offset: ee.Offset + at, Msg: ee.Msg}
+	case errors.As(err, &ue):
+		return &UnknownError{Offset: ue.Offset + at, Name: ue.Name}
+	}
+	return err
+}
