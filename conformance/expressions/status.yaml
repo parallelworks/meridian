@@ -89,6 +89,10 @@ cases:
     condition: true
     value: always
     warnings: [15]
+  - expr: always || inputs.flag
+    condition: true
+    value: always
+    warnings: [0]
   - expr: always()
     condition: true
     scope: {status: {}}

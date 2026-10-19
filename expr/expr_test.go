@@ -78,6 +78,7 @@ func TestCheckMessages(t *testing.T) {
 		"inputs.x ? a : b":   `a is the text "a", which is always true; a condition needs a comparison`,
 		"always":             "always is the older spelling of always(); use always()",
 		"inputs.x && always": "always is the older spelling of always()",
+		"always || inputs.x": "always is the older spelling of always()",
 	} {
 		problems := mustParse(t, src).CheckCondition()
 		if len(problems) == 0 || !strings.Contains(problems[0].Msg, want) {
