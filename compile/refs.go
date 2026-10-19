@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -23,7 +24,7 @@ var definitionKeys = map[string]bool{
 // the step or job that reads it.
 func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo) (string, format.Severity) {
 	if !ph.has(r.Context) {
-		return sprintf("%s isn't known %s", r.Context, ph.when()), format.Error
+		return fmt.Sprintf("%s isn't known %s", r.Context, ph.when()), format.Error
 	}
 	path := r.Path
 	if len(path) == 0 || path[0] == "*" || path[0] == "[index]" {
@@ -44,21 +45,29 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo) (string, format.
 	case "matrix":
 		switch {
 		case job == nil || !job.matrix:
-			return sprintf("job %s has no matrix, so matrix.%s is the text %q", jobName(job), path[0], "matrix."+path[0]), format.Warning
+			return fmt.Sprintf("job %s has no matrix, so matrix.%s is the text %q", jobName(job), path[0], "matrix."+path[0]), format.Warning
 		case job.matrixKeys != nil && !job.matrixKeys[path[0]]:
-			return withSuggestion(sprintf("job %s's matrix has no %s", job.name, path[0]), path[0], slices.Sorted(maps.Keys(job.matrixKeys))), format.Warning
+			return withSuggestion(fmt.Sprintf("job %s's matrix has no %s", job.name, path[0]), path[0], slices.Sorted(maps.Keys(job.matrixKeys))), format.Warning
 		}
 	case "sessions":
 		sessions := mapping(c.doc.Value["sessions"])
 		if _, ok := sessions[path[0]]; !ok {
-			return withSuggestion(sprintf("the workflow has no session %s", path[0]), path[0], slices.Sorted(maps.Keys(sessions))), format.Warning
+			return withSuggestion(fmt.Sprintf("the workflow has no session %s", path[0]), path[0], slices.Sorted(maps.Keys(sessions))), format.Warning
 		}
 	case "vars":
-		if u, ok := mapping(c.opts.Contexts["vars"])[path[0]].(expr.Unknown); ok && u.Name != "" {
-			c.secrets["vars."+path[0]] = true
-		}
+		c.recordSecret(r)
 	}
 	return "", 0
+}
+
+// recordSecret records the secret variable r reads, if it reads one.
+func (c *compiler) recordSecret(r expr.Ref) {
+	if r.Context != "vars" || len(r.Path) == 0 {
+		return
+	}
+	if u, ok := mapping(c.opts.Contexts["vars"])[r.Path[0]].(expr.Unknown); ok && u.Name != "" {
+		c.secrets["vars."+r.Path[0]] = true
+	}
 }
 
 func jobName(job *jobInfo) string {
@@ -70,7 +79,7 @@ func jobName(job *jobInfo) string {
 
 func withSuggestion(msg, name string, names []string) string {
 	if s, ok := suggest(name, names); ok {
-		msg += sprintf("; did you mean %s?", s)
+		msg += fmt.Sprintf("; did you mean %s?", s)
 	}
 	return msg
 }
@@ -91,7 +100,7 @@ func (c *compiler) checkInputRef(path []string) string {
 		}
 	}
 	if f == nil {
-		return withSuggestion(sprintf("there is no input %s", path[0]), path[0], top)
+		return withSuggestion(fmt.Sprintf("there is no input %s", path[0]), path[0], top)
 	}
 	for _, key := range path[1:] {
 		if !f.container || f.flatten || definitionKeys[key] || key == "*" || key == "[index]" {
@@ -106,7 +115,7 @@ func (c *compiler) checkInputRef(path []string) string {
 			}
 		}
 		if next == nil {
-			return withSuggestion(sprintf("input %s has no input %s", strings.Join(f.path, "."), key), key, names)
+			return withSuggestion(fmt.Sprintf("input %s has no input %s", strings.Join(f.path, "."), key), key, names)
 		}
 		f = next
 	}
@@ -125,9 +134,9 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) string {
 	case job == nil:
 		return "needs isn't known outside a job"
 	case !ok:
-		return withSuggestion(sprintf("there is no job %s", name), name, slices.Sorted(maps.Keys(c.jobInfos)))
+		return withSuggestion(fmt.Sprintf("there is no job %s", name), name, slices.Sorted(maps.Keys(c.jobInfos)))
 	case !job.needed[name] && !self:
-		return sprintf("job %s doesn't need %s, so it can't read its outputs; add %s to its needs", job.name, name, name)
+		return fmt.Sprintf("job %s doesn't need %s, so it can't read its outputs; add %s to its needs", job.name, name, name)
 	case len(path) == 1:
 		return ""
 	}
@@ -137,11 +146,11 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) string {
 	case "steps":
 		if len(path) >= 3 {
 			if _, ok := needed.stepIDs[path[2]]; !ok {
-				return sprintf("job %s has no step with the id %s", name, path[2])
+				return fmt.Sprintf("job %s has no step with the id %s", name, path[2])
 			}
 		}
 	default:
-		return sprintf("needs.%s has outputs, result and steps, not %s", name, path[1])
+		return fmt.Sprintf("needs.%s has outputs, result and steps, not %s", name, path[1])
 	}
 	return ""
 }
@@ -159,12 +168,12 @@ func (c *compiler) checkStepRef(path []string, job *jobInfo) string {
 		}
 		slices.Sort(earlier)
 		if ok {
-			return sprintf("step %s doesn't run before this, so its outputs aren't known here", id)
+			return fmt.Sprintf("step %s doesn't run before this, so its outputs aren't known here", id)
 		}
-		return withSuggestion(sprintf("no earlier step of job %s has the id %s", job.name, id), id, earlier)
+		return withSuggestion(fmt.Sprintf("no earlier step of job %s has the id %s", job.name, id), id, earlier)
 	}
 	if len(path) >= 2 && path[1] != "outputs" {
-		return sprintf("steps.%s has outputs, not %s", id, path[1])
+		return fmt.Sprintf("steps.%s has outputs, not %s", id, path[1])
 	}
 	return ""
 }

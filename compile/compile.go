@@ -3,8 +3,11 @@ package compile
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
@@ -56,6 +59,13 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	for k := range inputs.secrets {
 		c.secrets["inputs."+k] = true
 	}
+	for _, v := range p.Run.DeferredInputs {
+		for _, e := range v.Exprs() {
+			for _, r := range e.Refs() {
+				c.recordSecret(r)
+			}
+		}
+	}
 	p.Run.Secrets = slices.Sorted(maps.Keys(c.secrets))
 
 	c.diags.Sort()
@@ -83,7 +93,7 @@ type compiler struct {
 func (c *compiler) report(severity format.Severity, code format.Code, pos format.Position, loc []string, msg string, args ...any) {
 	c.diags = append(c.diags, format.Diagnostic{
 		File: c.doc.File, Position: pos, Severity: severity, Code: code, Path: pointer(loc),
-		Message: sprintf(msg, args...),
+		Message: fmt.Sprintf(msg, args...),
 	})
 }
 
@@ -107,9 +117,11 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		Name:      str(w["name"]),
 		Icon:      str(w["icon"]),
 		Thumbnail: str(w["thumbnail"]),
-		Inputs:    plan.Literal(c.inputs.values),
+		Inputs:    plan.DataOf(c.inputs.values),
 		Env:       c.values([]string{"env"}, runCreated, nil),
 		Timeout:   c.value([]string{"timeout"}, runCreated, nil),
+
+		DeferredInputs: c.inputs.deferred(),
 	}
 	r.Description, _ = w["description"].(string)
 	for _, p := range list(w["permissions"]) {
@@ -148,8 +160,15 @@ func (c *compiler) value(loc []string, ph phase, job *jobInfo) plan.Value {
 	if !c.check(loc, raw, ph, job) {
 		return plan.Value{}
 	}
+	return c.parsed(loc, raw)
+}
+
+// parsed returns raw, the value at loc in the workflow, as a Value, and
+// reports why if it can't be one.
+func (c *compiler) parsed(loc []string, raw any) plan.Value {
 	v, err := plan.ValueOf(raw)
 	if err != nil {
+		c.reportAt(format.Error, CodeExpression, loc, "%v", err)
 		return plan.Value{}
 	}
 	return v
@@ -196,11 +215,7 @@ func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 	if !c.checkString(loc, wrapped, shift, ph, job, true) {
 		return plan.Value{}
 	}
-	v, err := plan.ValueOf(wrapped)
-	if err != nil {
-		return plan.Value{}
-	}
-	return v
+	return c.parsed(loc, wrapped)
 }
 
 // wrapBareCondition wraps an if: written without ${{ }} as an expression,
@@ -223,7 +238,7 @@ func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) bool {
 		ok = c.checkString(loc, v, 0, ph, job, false)
 	case []any:
 		for i, item := range v {
-			ok = c.check(appendPath(loc, itoa(i)), item, ph, job) && ok
+			ok = c.check(appendPath(loc, strconv.Itoa(i)), item, ph, job) && ok
 		}
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(v)) {
@@ -246,7 +261,7 @@ func (c *compiler) checkString(loc []string, s string, shift int, ph phase, job 
 	if err != nil {
 		var se *expr.SyntaxError
 		offset := 0
-		if errorsAs(err, &se) {
+		if errors.As(err, &se) {
 			offset = se.Offset
 		}
 		c.report(format.Error, CodeExpression, at(offset), loc, "%v", err)

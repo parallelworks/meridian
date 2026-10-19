@@ -21,26 +21,30 @@ func mustValue(t *testing.T, v any) plan.Value {
 }
 
 func samplePlan(t *testing.T) *plan.Plan {
+	t.Helper()
 	return &plan.Plan{
 		Version: plan.Version,
 		Run: plan.Run{
-			Source: plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
-			Format: 1,
-			Inputs: plan.Literal(map[string]any{"name": "Alice", "n": int64(3)}),
-			Env:    map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
+			Source:         plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
+			Format:         1,
+			Inputs:         plan.DataOf(map[string]any{"name": "Alice", "n": int64(3), "note": "${{ not.parsed }}"}),
+			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
+			Env:            map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
 		},
 		Jobs: []plan.Job{{
 			Key:     "build#1",
 			Name:    "build",
-			Matrix:  plan.Literal(map[string]any{"os": "linux"}),
+			Matrix:  plan.DataOf(map[string]any{"os": "linux"}),
 			Needs:   []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
 			If:      mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
 			Timeout: mustValue(t, "1h"),
 			Steps: []plan.Step{{
-				ID:   "greet",
-				Run:  mustValue(t, "echo ${{ env.GREETING }} on ${{ matrix.os }}"),
-				With: mustValue(t, map[string]any{"count": int64(2), "list": []any{"a", "${{ inputs.n }}"}}),
-				Path: "/jobs/build/steps/0",
+				ID:               "greet",
+				Name:             mustValue(t, "greet on ${{ matrix.os }}"),
+				Run:              mustValue(t, "echo ${{ env.GREETING }} on ${{ matrix.os }}"),
+				WorkingDirectory: plan.Literal(nil),
+				With:             mustValue(t, map[string]any{"count": int64(2), "list": []any{"a", "${{ inputs.n }}"}}),
+				Path:             "/jobs/build/steps/0",
 			}},
 			Outputs: map[string]plan.Value{"out": mustValue(t, "${{ steps.greet.outputs.x }}")},
 			Path:    "/jobs/build",
@@ -72,8 +76,8 @@ func TestEncodeDecode(t *testing.T) {
 	}
 
 	// The decoded plan's values evaluate.
-	matrix, _ := back.Jobs[0].Matrix.Literal()
-	inputs, _ := back.Run.Inputs.Literal()
+	matrix := back.Jobs[0].Matrix.Get()
+	inputs := back.Run.Inputs.Get()
 	scope := expr.Scope{Contexts: map[string]any{
 		"env":    map[string]any{"GREETING": "hi"},
 		"matrix": matrix,
@@ -90,6 +94,12 @@ func TestEncodeDecode(t *testing.T) {
 	if list := with.(map[string]any)["list"].([]any); list[1] != int64(3) {
 		t.Errorf("with.list[1] = %#v, want 3", list[1])
 	}
+	if note := inputs.(map[string]any)["note"]; note != "${{ not.parsed }}" {
+		t.Errorf("an input's value is %#v, not its text", note)
+	}
+	if wd := back.Jobs[0].Steps[0].WorkingDirectory; wd.IsZero() {
+		t.Error("working-directory: null was lost")
+	}
 	if back.Warnings[0].Severity != format.Warning || !strings.Contains(string(data), `"severity":"warning"`) {
 		t.Errorf("the warning's severity didn't survive: %s", data)
 	}
@@ -101,14 +111,68 @@ func TestDecodeRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, data := range map[string]string{
-		"another version": strings.Replace(string(good), `"version":1`, `"version":2`, 1),
-		"an unknown key":  strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
-		"a bad tree":      strings.Replace(string(good), `"ref":"inputs"`, `"ref":"secrets"`, 1),
-		"not JSON":        "{",
+		"another version":       strings.Replace(string(good), `"version":1`, `"version":2`, 1),
+		"an unknown key":        strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
+		"a bad tree":            strings.Replace(string(good), `"ref":"inputs"`, `"ref":"secrets"`, 1),
+		"a node of two kinds":   strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","word":"x"`, 1),
+		"a node's unknown key":  strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","later":1`, 1),
+		"a key in another case": strings.Replace(string(good), `"jobs":`, `"JOBS":`, 1),
+		"a key twice":           strings.Replace(string(good), `"version":1`, `"version":1,"version":1`, 1),
+		"an unmarked $ key":     strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$yaml":"x"}`, 1),
+		"not JSON":              "{",
 	} {
+		if !strings.Contains(string(good), `"timeout":"1h"`) {
+			t.Fatalf("the sample plan changed: %s", good)
+		}
 		if _, err := plan.Decode([]byte(data)); err == nil {
 			t.Errorf("%s: decoded", name)
 		}
+	}
+	_, err = plan.Decode([]byte(strings.Replace(string(good), `"version":1`, `"version":2`, 1)))
+	if !errors.Is(err, plan.ErrVersion) {
+		t.Errorf("another version: %v, want ErrVersion", err)
+	}
+}
+
+// Data a run was given, and data in a workflow, are never taken for a
+// template, whatever they hold.
+func TestDataStaysData(t *testing.T) {
+	stored := []any{map[string]any{"src": " vars.KEY ", "tree": map[string]any{"ref": "vars", "path": []any{"KEY"}}}}
+	for name, v := range map[string]plan.Value{
+		"literal":    plan.Literal(map[string]any{"cfg": map[string]any{"${{": stored}}),
+		"a $ key":    plan.Literal(map[string]any{"$": map[string]any{"$yaml": "x"}}),
+		"workflow":   mustValue(t, map[string]any{"${{": "${{ inputs.x }}", "list": []any{map[string]any{"$yaml": "y"}}}),
+		"top level":  plan.Literal(map[string]any{"${{": stored}),
+		"a template": mustValue(t, map[string]any{"$out": "${{ inputs.x }}"}),
+	} {
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var back plan.Value
+		if err := json.Unmarshal(data, &back); err != nil {
+			t.Fatalf("%s: %v\n%s", name, err, data)
+		}
+		if g, w := len(back.Exprs()), len(v.Exprs()); g != w {
+			t.Errorf("%s: %d expressions after a round trip, not %d: %s", name, g, w, data)
+		}
+		again, err := json.Marshal(back)
+		if err != nil || string(again) != string(data) {
+			t.Errorf("%s: a round trip changed it:\n%s\n%s", name, data, again)
+		}
+	}
+
+	data, err := json.Marshal(plan.DataOf(map[string]any{"${{": stored, "n": int64(1) << 60}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d plan.Data
+	if err := json.Unmarshal(data, &d); err != nil {
+		t.Fatal(err)
+	}
+	m := d.Get().(map[string]any)
+	if _, ok := m["${{"].([]any); !ok || m["n"] != int64(1)<<60 {
+		t.Errorf("Data decoded as %#v", m)
 	}
 }
 
@@ -141,7 +205,25 @@ func TestValue(t *testing.T) {
 	if _, err := plan.ValueOf([]any{"ok", "${{ 1 + }}"}); !errors.As(err, &se) || !strings.HasPrefix(err.Error(), "1: ") {
 		t.Errorf("a bad expression = %v", err)
 	}
-	if _, err := plan.ValueOf(map[string]any{"${{": 1}); err == nil {
-		t.Error("a mapping whose only key is ${{ was accepted")
+	if v, err := plan.ValueOf(nil); err != nil || v.IsZero() {
+		t.Errorf("ValueOf(nil) = %v, %v; null is set", v, err)
+	}
+}
+
+// A Value's templates share one budget for what they build, as one
+// expression does.
+func TestEvalSharesABudget(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"big": big}}}
+	one := mustValue(t, "${{ inputs.big + inputs.big }}")
+	if _, err := one.Eval(scope); err != nil {
+		t.Fatalf("one template: %v", err)
+	}
+	many := mustValue(t, []any{
+		"${{ inputs.big + inputs.big }}", "${{ inputs.big + inputs.big }}", "${{ inputs.big + inputs.big }}",
+		"${{ inputs.big + inputs.big }}", "${{ inputs.big + inputs.big }}",
+	})
+	if _, err := many.Eval(scope); err == nil || !strings.Contains(err.Error(), "MiB") {
+		t.Errorf("five templates that each build 2 MiB: %v, want the budget's error", err)
 	}
 }

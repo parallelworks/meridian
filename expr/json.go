@@ -3,9 +3,12 @@ package expr
 import (
 	"bytes"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 )
 
@@ -216,8 +219,12 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		return nil, errTooDeep
 	}
 	var m map[string]json.RawMessage
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := jsonv2.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("expr: a node must be an object: %w", err)
+	}
+	kind, err := nodeKind(m)
+	if err != nil {
+		return nil, err
 	}
 	str := func(k string) (string, error) {
 		var s string
@@ -231,14 +238,14 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		}
 		return decodeNode(raw, depth+1)
 	}
-	switch {
-	case has(m, "lit"):
+	switch kind {
+	case "lit":
 		var v any
 		if err := json.Unmarshal(m["lit"], &v); err != nil {
 			return nil, err
 		}
 		return &literal{value: v}, nil
-	case has(m, "num"):
+	case "num":
 		s, err := str("num")
 		if err != nil {
 			return nil, err
@@ -248,10 +255,10 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 			return nil, fmt.Errorf("expr: %q isn't NaN or an infinity", s)
 		}
 		return &literal{value: n}, nil
-	case has(m, "word"):
+	case "word":
 		s, err := str("word")
 		return &word{text: s}, err
-	case has(m, "ref"):
+	case "ref":
 		name, err := str("ref")
 		if err != nil {
 			return nil, err
@@ -261,14 +268,14 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		}
 		path, err := decodePath(m["path"])
 		return &ref{context: name, path: path}, err
-	case has(m, "up"):
+	case "up":
 		var up int
 		if err := json.Unmarshal(m["up"], &up); err != nil || up < 1 {
 			return nil, fmt.Errorf("expr: a relative reference goes up at least one level")
 		}
 		path, err := decodePath(m["path"])
 		return &relative{up: up, path: path}, err
-	case has(m, "if"):
+	case "if":
 		cond, err := sub("if")
 		if err != nil {
 			return nil, err
@@ -279,14 +286,14 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		}
 		els, err := sub("else")
 		return &ternary{cond: cond, then: then, els: els}, err
-	case has(m, "member"):
+	case "member":
 		x, err := sub("member")
 		if err != nil {
 			return nil, err
 		}
 		path, err := decodePath(m["path"])
 		return &member{x: x, path: path}, err
-	case has(m, "call"):
+	case "call":
 		name, err := str("call")
 		if err != nil {
 			return nil, err
@@ -309,7 +316,7 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 			}
 		}
 		return &call{name: name, args: args}, nil
-	case has(m, "slice"):
+	case "slice":
 		var raw []json.RawMessage
 		if err := json.Unmarshal(m["slice"], &raw); err != nil || len(raw) != 2 {
 			return nil, errors.New("expr: a slice is [start, end]")
@@ -323,14 +330,14 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		}
 		end, err := decodeNode(raw[1], depth+1)
 		return &slice{start: start, end: end}, err
-	case has(m, "concat"):
+	case "concat":
 		prefix, err := str("concat")
 		if err != nil {
 			return nil, err
 		}
 		x, err := sub("x")
 		return &concat{prefix: prefix, x: x}, err
-	case has(m, "op"):
+	case "op":
 		op, err := str("op")
 		if err != nil {
 			return nil, err
@@ -363,7 +370,45 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		}
 		return &binary{op: op, negated: negated, x: x, y: y}, nil
 	}
-	return nil, errors.New("expr: a node has no kind")
+	return nil, fmt.Errorf("expr: can't decode a %s node", kind)
+}
+
+// nodeKinds maps the key that names each kind of node to the other keys a
+// node of that kind can have.
+var nodeKinds = map[string][]string{
+	"lit": nil, "num": nil, "word": nil,
+	"ref": {"path"}, "up": {"path"},
+	"op":     {"x", "y", "not"},
+	"if":     {"then", "else"},
+	"member": {"path"},
+	"call":   {"args"},
+	"slice":  nil,
+	"concat": {"x"},
+}
+
+// nodeKind returns the kind of the node m, which has exactly one key that
+// names a kind, and no keys that kind doesn't have.
+func nodeKind(m map[string]json.RawMessage) (string, error) {
+	keys := slices.Sorted(maps.Keys(m))
+	kind := ""
+	for _, k := range keys {
+		if _, ok := nodeKinds[k]; !ok {
+			continue
+		}
+		if kind != "" {
+			return "", fmt.Errorf("expr: a node is both %s and %s", kind, k)
+		}
+		kind = k
+	}
+	if kind == "" {
+		return "", errors.New("expr: a node has no kind")
+	}
+	for _, k := range keys {
+		if k != kind && !slices.Contains(nodeKinds[kind], k) {
+			return "", fmt.Errorf("expr: a %s node has no %q", kind, k)
+		}
+	}
+	return kind, nil
 }
 
 func has(m map[string]json.RawMessage, k string) bool {
@@ -423,9 +468,8 @@ func decodePath(data json.RawMessage) ([]segment, error) {
 	return path, nil
 }
 
-// strictUnmarshal decodes JSON, failing on keys v doesn't have.
+// strictUnmarshal decodes JSON, failing on keys v doesn't have, matched
+// exactly, and on keys given twice.
 func strictUnmarshal(data []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
+	return jsonv2.Unmarshal(data, v, jsonv2.RejectUnknownMembers(true))
 }

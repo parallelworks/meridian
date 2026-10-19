@@ -1,0 +1,20 @@
+on:
+  execute:
+    inputs:
+      name:
+        type: string
+        default: web
+      cluster:
+        type: compute-clusters
+        default:
+          name: ${{ inputs.name }}
+          labels: ["${{ inputs.name }}", fixed]
+      auth:
+        type: compute-clusters
+        default:
+          token: ${{ vars.TOKEN }}
+          user: ${{ inputs.name }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

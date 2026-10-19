@@ -39,6 +39,17 @@ type Scope struct {
 	spent *int
 }
 
+// Budgeted returns scope with one budget for what evaluations build, which
+// every evaluation with the returned scope, or a copy of it, shares: together
+// they build no more than one evaluation may. A scope that has a budget keeps
+// it.
+func (s Scope) Budgeted() Scope {
+	if s.spent == nil {
+		s.spent = new(int)
+	}
+	return s
+}
+
 // Status is how a job or step got to where an expression is evaluated: for
 // a step, how the earlier steps of its job ended, and for a job, how the
 // jobs it needs ended.
@@ -100,10 +111,7 @@ type evaluator struct {
 }
 
 func newEvaluator(scope Scope) *evaluator {
-	if scope.spent == nil {
-		scope.spent = new(int)
-	}
-	return &evaluator{scope: scope}
+	return &evaluator{scope: scope.Budgeted()}
 }
 
 func (e *evaluator) errorAt(at int, format string, args ...any) error {

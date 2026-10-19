@@ -3,6 +3,8 @@ package compile_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -49,9 +51,8 @@ func TestPlatformInputs(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	values, _ := inputs.Values.Literal()
-	if got := values.(map[string]any)["cluster"].(map[string]any)["ip"]; got != "10.0.0.1" {
-		t.Errorf("cluster = %v, want the resolver's details", values)
+	if got := inputs.Values["cluster"].(map[string]any)["ip"]; got != "10.0.0.1" {
+		t.Errorf("cluster = %v, want the resolver's details", inputs.Values)
 	}
 
 	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "missing"}, compile.Options{Inputs: platform{}})
@@ -82,12 +83,12 @@ jobs:
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	if _, ok := inputs.Values.Literal(); ok {
-		t.Error("a default that reads env is literal")
+	if _, ok := inputs.Values["dir"]; ok {
+		t.Error("a default that reads env has a value")
 	}
-	data, err := json.Marshal(inputs.Values)
-	if err != nil || !strings.Contains(string(data), `{"dir":{"${{":[{"src":" env.HOME "`) {
-		t.Errorf("Values encode as %s, %v", data, err)
+	data, err := json.Marshal(inputs.Deferred["dir"])
+	if err != nil || !strings.HasPrefix(string(data), `{"${{":[{"src":" env.HOME "`) {
+		t.Errorf("the deferred default encodes as %s, %v", data, err)
 	}
 }
 
@@ -115,5 +116,88 @@ jobs:
 	}
 	if got := submitted["group"].(map[string]any); got["n"] != "3" || len(got) != 1 {
 		t.Errorf("submitted values changed to %v", submitted)
+	}
+}
+
+// A value of the wrong type in a group drops only that value.
+func TestNestedValueError(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      g:
+        type: string
+      s:
+        type: group
+        items:
+          g:
+            type: group
+            items:
+              x:
+                type: string
+                optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, map[string]any{"g": "mine", "s": map[string]any{"g": "notamap"}}, compile.Options{})
+	if len(diags) != 1 || diags[0].Code != compile.CodeInputValue || diags[0].Path != "/on/execute/inputs/s/items/g" {
+		t.Fatalf("diagnostics = %v", diags)
+	}
+	if inputs.Values["g"] != "mine" {
+		t.Errorf("g = %#v, want the value given for it", inputs.Values["g"])
+	}
+	if s, _ := inputs.Values["s"].(map[string]any); s == nil || s["g"] != nil {
+		t.Errorf("s = %#v, want s.g dropped", inputs.Values["s"])
+	}
+}
+
+// Submitted values that aren't JSON, which a plan can't hold, are errors.
+func TestValuesMustBeJSON(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      s:
+        type: string
+        optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	for name, v := range map[string]any{
+		"NaN":         math.NaN(),
+		"infinity":    []any{math.Inf(1)},
+		"a channel":   make(chan int),
+		"bad UTF-8":   map[string]any{"k": "\xff"},
+		"a uint":      uint(1),
+		"a bad key":   map[string]any{"\xff": 1},
+		"a Go struct": struct{}{},
+	} {
+		for _, key := range []string{"s", "unknown"} {
+			inputs, diags := compile.ResolveInputs(doc, map[string]any{key: v}, compile.Options{})
+			if !diags.HasErrors() || diags[0].Code != compile.CodeInputValue {
+				t.Errorf("%s in %s: %v", name, key, diags)
+			}
+			if _, ok := inputs.Values[key]; ok {
+				t.Errorf("%s in %s: the value was kept", name, key)
+			}
+		}
+	}
+}
+
+// The expressions of all the inputs' defaults share one budget for what
+// they build.
+func TestDefaultsShareABudget(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("on:\n  execute:\n    inputs:\n      big:\n        type: string\n")
+	for i := range 5 {
+		fmt.Fprintf(&b, "      d%d:\n        type: string\n        default: ${{ inputs.big + inputs.big }}\n", i)
+	}
+	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
+	doc := load(t, b.String())
+	_, diags := compile.ResolveInputs(doc, map[string]any{"big": strings.Repeat("x", 1<<20)}, compile.Options{})
+	if !diags.HasErrors() || !strings.Contains(diags.Error(), "MiB") {
+		t.Errorf("five defaults that each build 2 MiB: %v, want the budget's error", diags)
 	}
 }

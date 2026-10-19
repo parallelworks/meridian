@@ -128,6 +128,8 @@ cases:
     value: [1, 2, 3, 4]
   - expr: -2 range 1
     value: [-2, -1, 0]
+  - expr: 9007199254740992 range 9007199254740994
+    error: eval
   - expr: 5 range 6
     value: [5]
   - expr: 5 range 5

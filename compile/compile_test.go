@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -76,5 +77,55 @@ func TestNoPlanWithErrors(t *testing.T) {
 	p, diags = compile.Compile("workflow.yaml", []byte("jobs: ["), nil, compile.Options{})
 	if p != nil || !diags.HasErrors() {
 		t.Errorf("a file that doesn't load: plan %v, %v", p, diags)
+	}
+}
+
+// What a run is given stays data in its plan, whatever it looks like: a
+// value shaped like a stored template is never evaluated.
+func TestInputsStayData(t *testing.T) {
+	stored := map[string]any{"${{": []any{map[string]any{
+		"src": " vars.KEY ", "tree": map[string]any{"ref": "vars", "path": []any{"KEY"}},
+	}}}
+	p, diags := compile.Compile("workflow.yaml", []byte(sample), map[string]any{"n": 4, "cfg": stored}, compile.Options{})
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	data, err := plan.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := plan.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := back.Run.Inputs.Get().(map[string]any)["cfg"].(map[string]any)
+	if _, ok := cfg["${{"].([]any); !ok || len(cfg) != 1 {
+		t.Errorf("cfg decoded as %#v, not the data it was given", cfg)
+	}
+}
+
+func TestStepValues(t *testing.T) {
+	src := `jobs:
+  build:
+    working-directory: /work
+    steps:
+      - name: build ${{ inputs.target }}
+        working-directory: null
+        run: make
+`
+	p, diags := compile.Compile("workflow.yaml", []byte(src), map[string]any{"target": "all"}, compile.Options{})
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	step := p.Jobs[0].Steps[0]
+	if got, err := step.Name.Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"target": "all"}}}); err != nil || got != "build all" {
+		t.Errorf("name = %v, %v; want its template evaluated", got, err)
+	}
+	if step.WorkingDirectory.IsZero() {
+		t.Error("working-directory: null was lost")
+	}
+	data, err := plan.Encode(p)
+	if err != nil || !strings.Contains(string(data), `"workingDirectory":null`) {
+		t.Errorf("the plan is %s, %v", data, err)
 	}
 }

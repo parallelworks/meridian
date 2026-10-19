@@ -1,0 +1,9 @@
+description: >-
+  A job's strategy is evaluated once its dependencies have finished, before
+  its matrix is expanded, so it can't read matrix.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context
+      path: /jobs/build/strategy/max-parallel

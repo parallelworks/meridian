@@ -60,10 +60,12 @@ var platformTypes = map[string]bool{
 // Inputs are a run's input values.
 type Inputs struct {
 	// Values are the input values, with defaults applied and ignored inputs
-	// left out. A default that reads something the compiler doesn't know,
-	// such as a secret variable or env, stays a template, which is
-	// evaluated once the run is underway.
-	Values plan.Value
+	// left out.
+	Values map[string]any
+	// Deferred are the defaults that read something the compiler doesn't
+	// know, such as a secret variable, by their input's path, as in
+	// group.name. They are evaluated once the run is underway.
+	Deferred map[string]plan.Value
 	// Secrets are the values of password inputs, by their path in the
 	// values, such as k8s.token. The plan doesn't hold them.
 	Secrets map[string]any
@@ -92,7 +94,7 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // docs/design.md describes. It reports every problem it finds.
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, format.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
-	return &Inputs{Values: plan.Literal(r.values), Secrets: r.secrets}, r.diags
+	return &Inputs{Values: r.values, Deferred: r.deferred(), Secrets: r.secrets}, r.diags
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
@@ -102,12 +104,14 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 		doc:     doc,
 		opts:    opts,
 		eval:    &expr.Document{Root: doc.Value, Definitions: definitionsPath},
+		budget:  expr.Scope{}.Budgeted(),
 		values:  copyMap(submitted),
 		secrets: map[string]any{},
 	}
 	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
 	r.collect(defs, definitionsPath, nil, nil)
-	r.checkUnknown(submitted, nil)
+	r.checkJSON(r.values)
+	r.checkUnknown(r.values, nil)
 	for _, f := range r.fields {
 		if f.header {
 			deletePath(r.values, f.path)
@@ -142,13 +146,19 @@ type field struct {
 	hidden     bool
 	ignored    bool
 	optional   bool
-	deferred   bool
+	// deferred is set for an input whose default reads something the
+	// compiler doesn't know, and dflt holds the default.
+	deferred bool
+	dflt     plan.Value
 }
 
 type inputResolver struct {
-	doc     *format.Document
-	opts    Options
-	eval    *expr.Document
+	doc  *format.Document
+	opts Options
+	eval *expr.Document
+	// budget holds the one budget that every evaluation of the inputs'
+	// expressions shares.
+	budget  expr.Scope
 	values  map[string]any
 	secrets map[string]any
 	fields  []*field
@@ -225,6 +235,17 @@ func (f *field) label() string {
 	return name
 }
 
+// checkJSON reports, and drops, submitted values that aren't JSON values,
+// which a plan can't hold.
+func (r *inputResolver) checkJSON(values map[string]any) {
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		if bad := notJSON(values[key]); bad != "" {
+			r.report(format.Error, CodeInputValue, definitionsPath, "the value of %s isn't JSON: it holds %s", key, bad)
+			delete(values, key)
+		}
+	}
+}
+
 // checkUnknown reports submitted values for inputs the workflow doesn't
 // define, at path in the values.
 func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
@@ -253,7 +274,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 		child, ok := values[key].(map[string]any)
 		if !ok {
 			r.report(format.Error, CodeInputValue, f.loc, "%s takes a mapping of its inputs' values, not %s", f.label(), describe(values[key]))
-			delete(r.values, key)
+			delete(values, key)
 			continue
 		}
 		r.checkUnknown(child, f.path)
@@ -277,6 +298,7 @@ func (r *inputResolver) fillDefaults() {
 			r.setDefault(f, v)
 			continue
 		}
+		f.dflt = def
 		pending = append(pending, f)
 	}
 	for len(pending) > 0 {
@@ -290,12 +312,9 @@ func (r *inputResolver) fillDefaults() {
 			i--
 			progress = true
 			v, err := r.evalAt(appendPath(f.loc, "default"))
-			var ue *expr.UnknownError
 			switch {
-			case errors.As(err, &ue):
-				// Known once the run is underway: the template stays.
-				t, _ := expr.ParseTemplate(f.def["default"].(string))
-				setPath(r.values, f.path, t)
+			case expr.IsUnknown(err):
+				// Known once the run is underway.
 				f.deferred = true
 			case err != nil:
 				r.report(format.Error, CodeExpression, appendPath(f.loc, "default"), "the default of %s: %v", f.label(), err)
@@ -325,12 +344,7 @@ func (r *inputResolver) setDefault(f *field, v any) {
 // readsPending reports whether f's default reads another input whose default
 // isn't known yet.
 func (r *inputResolver) readsPending(f *field, pending []*field) bool {
-	t, err := expr.ParseTemplate(f.def["default"].(string))
-	if err != nil {
-		return false
-	}
-	exprs, _ := t.Exprs()
-	for _, e := range exprs {
+	for _, e := range f.dflt.Exprs() {
 		for _, ref := range e.Refs() {
 			if ref.Context != "inputs" {
 				continue
@@ -438,24 +452,41 @@ func (r *inputResolver) drop(f *field) {
 	}
 }
 
-// evalAt evaluates the string at loc in the workflow, where it is, with the
-// values so far.
+// evalAt evaluates what is at loc in the workflow, where it is, with the
+// values so far: the expressions in a string, and in each string of a list or
+// mapping.
 func (r *inputResolver) evalAt(loc []string) (any, error) {
-	t, err := expr.ParseTemplate(lookup(r.doc.Value, loc).(string))
-	if err != nil {
-		return nil, err
+	scope := r.budget
+	scope.Contexts = compileTimeContexts(r.opts, r.evalValues())
+	return r.eval.Eval(loc, scope)
+}
+
+// deferred returns the defaults that are evaluated once the run is
+// underway, by their inputs' paths.
+func (r *inputResolver) deferred() map[string]plan.Value {
+	var out map[string]plan.Value
+	for _, f := range r.fields {
+		if f.deferred && !f.ignored {
+			if out == nil {
+				out = map[string]plan.Value{}
+			}
+			out[strings.Join(f.path, ".")] = f.dflt
+		}
 	}
-	contexts := compileTimeContexts(r.opts, r.evalValues())
-	return t.Eval(r.eval.Scope(loc, expr.Scope{Contexts: contexts}))
+	return out
 }
 
 // evalValues returns the values for expressions to read: each deferred
 // default unknown, and each input with no value null, or false for a
 // boolean, which is the value it gets, rather than its definition.
 func (r *inputResolver) evalValues() any {
-	values, _ := knownValues(r.values).(map[string]any)
+	values := copyMap(r.values)
 	for _, f := range r.fields {
 		if f.container || f.header {
+			continue
+		}
+		if f.deferred && !f.ignored {
+			setPath(values, f.path, expr.Unknown{Name: "inputs"})
 			continue
 		}
 		if _, ok := lookupPath(values, f.path); ok {
@@ -481,28 +512,6 @@ func compileTimeContexts(opts Options, inputs any) map[string]any {
 		}
 	}
 	return contexts
-}
-
-// knownValues copies values with each deferred default as an expr.Unknown,
-// so that an expression that reads one can't be evaluated yet.
-func knownValues(v any) any {
-	switch v := v.(type) {
-	case *expr.Template:
-		return expr.Unknown{Name: "inputs"}
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, item := range v {
-			out[k] = knownValues(item)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = knownValues(item)
-		}
-		return out
-	}
-	return v
 }
 
 // checkValues checks each value against its input's type, converts numbers
@@ -549,6 +558,11 @@ func (r *inputResolver) checkValue(f *field, v any) (any, error) {
 		out, err := r.opts.Inputs.ResolveInput(f.typ, f.def, v)
 		if errors.Is(err, ErrInputType) {
 			return nil, fmt.Errorf("an input of type %s %w", f.typ, errNoPlatform)
+		}
+		if err == nil {
+			if bad := notJSON(out); bad != "" {
+				return nil, fmt.Errorf("the platform gave a value that isn't JSON: %s", bad)
+			}
 		}
 		return out, err
 	case f.typ == "number":
