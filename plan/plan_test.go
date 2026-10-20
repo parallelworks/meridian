@@ -221,20 +221,39 @@ func TestValue(t *testing.T) {
 	}
 }
 
-// A Value's templates share one budget for what they build, as one
-// expression does.
-func TestEvalSharesABudget(t *testing.T) {
-	big := strings.Repeat("x", 1<<20)
-	scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"big": big}}}
-	one := mustValue(t, "${{ inputs.big + inputs.big }}")
-	if _, err := one.Eval(scope); err != nil {
-		t.Fatalf("one template: %v", err)
+// A Value's templates are one group. Each has the language's limit on what
+// it builds, 8 MiB, and together they share Meridian's budget for a group,
+// 64 MiB.
+func TestEvalGroupsTemplates(t *testing.T) {
+	scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{
+		"five": strings.Repeat("x", 5<<20),
+		"four": strings.Repeat("x", 4<<20),
+	}}}
+	two := mustValue(t, []any{"${{ inputs.five + '' }}", "${{ inputs.five + '' }}"})
+	if _, err := two.Eval(scope); err != nil {
+		t.Errorf("two templates that each build 5 MiB: %v", err)
 	}
-	many := mustValue(t, []any{
-		"${{ inputs.big + inputs.big }}", "${{ inputs.big + inputs.big }}", "${{ inputs.big + inputs.big }}",
-		"${{ inputs.big + inputs.big }}", "${{ inputs.big + inputs.big }}",
-	})
-	if _, err := many.Eval(scope); err == nil || !strings.Contains(err.Error(), "MiB") {
-		t.Errorf("five templates that each build 2 MiB: %v, want the budget's error", err)
+	nine := mustValue(t, "${{ inputs.five + inputs.four }}")
+	if _, err := nine.Eval(scope); !hasKind(err, problems.ExpressionTooLarge) {
+		t.Errorf("a template that builds 9 MiB: %v, want %s", err, problems.ExpressionTooLarge.Code())
 	}
+
+	// Eight templates that each build 8 MiB, the most one can, build the
+	// group's 64 MiB, and a byte more is too much.
+	eight := make([]any, 8)
+	for i := range eight {
+		eight[i] = "${{ inputs.four + inputs.four }}"
+	}
+	if _, err := mustValue(t, eight).Eval(scope); err != nil {
+		t.Errorf("eight templates that each build 8 MiB: %v", err)
+	}
+	_, err := mustValue(t, append(eight, "${{ 'x' + '' }}")).Eval(scope)
+	if _, ok := errors.AsType[*expr.BudgetError](err); !ok {
+		t.Errorf("and a byte more: %v, want %s", err, problems.ExpressionsBuildTooMuch.Code())
+	}
+}
+
+func hasKind(err error, k *problems.Kind) bool {
+	ee, ok := errors.AsType[*expr.EvalError](err)
+	return ok && ee.Kind == k
 }

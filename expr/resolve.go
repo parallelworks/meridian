@@ -22,7 +22,10 @@ type Workflow struct {
 }
 
 // Scope returns scope with a Resolver for expressions at location in the
-// workflow: the path of keys and list indexes that leads to them.
+// workflow: the path of keys and list indexes that leads to them. The
+// templates the expressions read through it are in their group: each has
+// its own count for the language's limit, and they share the group's
+// budget, which scope keeps if it has one.
 func (w *Workflow) Scope(location []string, scope Scope) Scope {
 	scope = scope.Budgeted()
 	ev := &workflowEval{workflow: w, scope: scope, active: map[string]bool{}, done: map[string]any{}}

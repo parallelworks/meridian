@@ -225,22 +225,10 @@ func TestFormatNumbers(t *testing.T) {
 	}
 }
 
-func TestBuildLimit(t *testing.T) {
-	big := strings.Repeat("x", 1<<20)
-	src := "inputs.s" + strings.Repeat(" + inputs.s", 20)
-	_, err := mustParse(t, src).Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Kind != problems.ExpressionTooLarge {
-		t.Errorf("got %v, want the build limit", err)
-	}
-	_, err = mustParse(t, "(range 10000) join inputs.s").Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	if _, ok := errors.AsType[*expr.EvalError](err); !ok {
-		t.Errorf("join: got %v, want the build limit", err)
-	}
-}
-
 // Expressions that read each other many times are each evaluated once. Each
 // one builds a KiB of text, so that evaluating them more than once runs into
-// the budget, which they share, rather than taking 2^60 evaluations.
+// the budget of their group, which they share, rather than taking 2^60
+// evaluations.
 func TestWorkflowEvaluatesEachExpressionOnce(t *testing.T) {
 	kib := strings.Repeat("x", 1<<10)
 	root := map[string]any{"v0": "${{ 1 }}"}
@@ -335,14 +323,6 @@ func BenchmarkEval(b *testing.B) {
 		if _, err := e.Eval(scope); err != nil {
 			b.Fatal(err)
 		}
-	}
-}
-
-func TestSplitLimit(t *testing.T) {
-	big := strings.Repeat("x", 2<<20)
-	_, err := mustParse(t, `inputs.s split ""`).Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	if _, ok := errors.AsType[*expr.EvalError](err); !ok {
-		t.Errorf("got %v, want the build limit", err)
 	}
 }
 

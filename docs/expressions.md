@@ -325,12 +325,49 @@ compiler or coordinator do unbounded work:
   `!!…x`. A stored tree is decoded by the same rule.
 - **`range`** takes whole numbers from -2^53 to 2^53, and makes at most
   10,000 of them.
-- **What an evaluation builds.** An evaluation builds at most 8 MiB of strings
-  and lists. A string counts its bytes, any other value 8 bytes, and a list or
-  mapping 8 bytes for each item as well as its items and keys. The
-  expressions of one template share the budget, and so do those the compiler
-  evaluates together: all of a run's input defaults and conditions, or every
-  expression in one value, such as a step's `with:`.
+- **What a template builds.** A template, a `${{ }}` alone or text with one
+  or more `${{ }}` in it, builds at most 8 MiB. It doesn't count what another
+  template that it reads builds, such as an input's default or a key that a
+  relative reference reads: that template has its own count.
+
+What a template builds is the size of each value that its operations make. A
+value's size is:
+
+- for a string, its bytes;
+- for a list, 8 for each item, plus each item's size;
+- for a mapping, 8 for each entry, plus each key's bytes and each value's
+  size;
+- for anything else, 8.
+
+Each operation in this table counts the size of what it makes, and nothing
+else counts: reading a value, a path, `get`, `keys`, `values` and `trim`
+count nothing.
+
+| Operation | Counts |
+| --- | --- |
+| A template with text around its `${{ }}` | Each value's text; the text around them is free |
+| `+` with a string on either side | The string it makes |
+| `format` | The string it makes, once |
+| `join`, the function and the word operator | The string it makes, before it makes it |
+| `split` | The string's bytes, plus 8 for each part, before it splits it |
+| `toJSON` | The indented JSON it makes |
+| `fromJSON` | The value it reads from the text |
+| `upper` and `lower` | The string it makes |
+| `range`, the prefix and the word operator | The list it makes: 16 for each number |
+| The slice operand `2:(end)` | The string it makes |
+
+- An operation that gives back what it was given makes nothing, and counts
+  nothing: `join` of a string, which is the string, and `fromJSON` of a value
+  that isn't a string.
+- `split` makes one part more than the times it finds the separator in the
+  string. With the separator `''`, it makes a part of each character, and
+  none of an empty string.
+- `format` counts its string's length once, however many placeholders it
+  has.
+
+Meridian bounds what it evaluates together as well, such as all of a run's
+input defaults, but that bound is its own and not part of the language:
+[the design](design.md#the-language) describes it.
 
 ## Values
 

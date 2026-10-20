@@ -1,0 +1,95 @@
+description: >-
+  A template, a ${{ }} alone or text with ${{ }} in it, builds at most 8 MiB,
+  8,388,608 bytes. Each operation counts the size of what it makes: a string
+  its bytes, and a list 8 for each item and each item's size. range counts 16
+  for each number; join, +, upper, lower and toJSON the string they make;
+  format its string, once; split the string's bytes and 8 for each part;
+  fromJSON the value it reads; and a template's text each value's text, but
+  not the text around them. keys, values and trim count nothing, and neither
+  does reading a template, which has its own count. Each case's template
+  builds exactly 8 MiB, or a byte more, which is an error.
+source: Meridian
+workflow:
+  # B, as in the cases of + below, counts 4,222,760, its text 4,165,844 and
+  # the text of 'abcd' 4: 8,388,608. The text around them is free.
+  text: "(${{ (1000 range 4011) join ((100 range 560) join '') }}, ${{ 'abcd' }})"
+  over: "(${{ (1000 range 4011) join ((100 range 560) join '') }}, ${{ 'abcde' }})"
+  # Reading .text counts nothing, as it has its own count, and + makes its
+  # 4,165,852 bytes.
+  read: ${{ length(.text + '') }}
+  read-over: ${{ length(.over) }}
+cases:
+  # 100 range 575 makes 475 numbers, 7,600 bytes, and joining them with ''
+  # makes their 3 digits each, 1,425. 1000 range 6800 makes 5,800 numbers,
+  # 92,800, and joining them with those 1,425 bytes makes their 4 digits each
+  # and 5,799 separators, 23,200 + 8,263,575 = 8,286,775. upper 'abcdefgh'
+  # makes 8. Together, 8,388,608.
+  - expr: "length(join(1000 range 6800, join(100 range 575, ''))) + length(upper 'abcdefgh')"
+    value: 8286783
+  - expr: "length(join(1000 range 6800, join(100 range 575, ''))) + length(upper 'abcdefghi')"
+    error: eval
+  - expr: "length((1000 range 6800) join ((100 range 575) join '')) + length(upper 'abcdefgh')"
+    value: 8286783
+  - expr: "length((1000 range 6800) join ((100 range 575) join '')) + length(upper 'abcdefghi')"
+    error: eval
+  - expr: >-
+      length(join(1000 range 6800, join(100 range 575, ''))) + length(upper 'abcdefgh')
+      + length(keys({"a": 1})) + length(values({"a": 1})) + length(trim ' a ')
+    value: 8286786
+
+  # B, (1000 range 4011) join ((100 range 560) join ''), counts 7,360 and
+  # 1,380 for the inner range and join, and 48,176 and 4,165,844 for the
+  # outer ones: 4,222,760. B + 'abcd' makes 4,165,848: 8,388,608.
+  - expr: "length((1000 range 4011) join ((100 range 560) join '') + 'abcd')"
+    value: 4165848
+  - expr: "length((1000 range 4011) join ((100 range 560) join '') + 'abcde')"
+    error: eval
+  # upper B and lower B make 4,165,844, and upper 'abcd' 4.
+  - expr: "length(upper((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'abcd')"
+    value: 4165848
+  - expr: "length(upper((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'abcde')"
+    error: eval
+  - expr: "length(lower((1000 range 4011) join ((100 range 560) join ''))) + length(lower 'abcd')"
+    value: 4165848
+  - expr: "length(lower((1000 range 4011) join ((100 range 560) join ''))) + length(lower 'abcde')"
+    error: eval
+  # toJSON(B) makes B in quotes, 4,165,846, and upper 'ab' 2.
+  - expr: "length(toJSON((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'ab')"
+    value: 4165848
+  - expr: "length(toJSON((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'abc')"
+    error: eval
+  - at: /read
+    value: 4165852
+  - at: /read-over
+    error: eval
+
+  # B, (1000 range 4136) join ((100 range 394) join ''), counts 4,704 + 882 +
+  # 50,176 + 2,777,614 = 2,833,376. format makes B twice and abcd, and counts
+  # that once: 5,555,232. Together, 8,388,608.
+  - expr: "length(format('{0}{0}abcd', (1000 range 4136) join ((100 range 394) join '')))"
+    value: 5555232
+  - expr: "length(format('{0}{0}abcde', (1000 range 4136) join ((100 range 394) join '')))"
+    error: eval
+  # toJSON(B) makes 2,777,616, fromJSON reads B, 2,777,614, and upper 'ab'
+  # makes 2.
+  - expr: "length(fromJSON(toJSON((1000 range 4136) join ((100 range 394) join '')))) + length(upper 'ab')"
+    value: 2777616
+  - expr: "length(fromJSON(toJSON((1000 range 4136) join ((100 range 394) join '')))) + length(upper 'abc')"
+    error: eval
+
+  # B, (1000 range 3025) join ((100 range 358) join '-'), counts 4,128 + 1,031
+  # + 32,400 + 2,094,844 = 2,132,403. B has 2,024 × 257 dashes, so split '-'
+  # makes 520,169 parts, and counts B's 2,094,844 bytes and 8 for each part:
+  # 6,256,196. upper 'abcdefghi' makes 9. Together, 8,388,608.
+  - expr: "length(((1000 range 3025) join ((100 range 358) join '-')) split '-') + length(upper 'abcdefghi')"
+    value: 520178
+  - expr: "length(((1000 range 3025) join ((100 range 358) join '-')) split '-') + length(upper 'abcdefghij')"
+    error: eval
+  # B, (1000 range 2663) join ((1000 range 1100) join '-'), counts 1,600 + 499
+  # + 26,608 + 835,990 = 864,697. split '' makes a part of each character, and
+  # counts 9 for each: 7,523,910. An empty string has no characters, so
+  # '' split '' counts nothing. upper 'a' makes 1. Together, 8,388,608.
+  - expr: "length(((1000 range 2663) join ((1000 range 1100) join '-')) split '') + length('' split '') + length(upper 'a')"
+    value: 835991
+  - expr: "length(((1000 range 2663) join ((1000 range 1100) join '-')) split '') + length('' split '') + length(upper 'ab')"
+    error: eval

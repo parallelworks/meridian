@@ -142,7 +142,8 @@ type inputResolver struct {
 	opts     Options
 	workflow *expr.Workflow
 	// budget holds the one budget that every evaluation of the inputs'
-	// expressions shares.
+	// expressions shares: they are one group, for Meridian's limit on what
+	// a group builds. Each template has the language's limit as well.
 	budget  expr.Scope
 	values  map[string]any
 	secrets map[string]any

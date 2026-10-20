@@ -106,5 +106,6 @@
   "from_json_invalid": "El texto {text} que lee fromJSON no es JSON válido.",
   "unknown_operator": "No existe el operador {op}.",
   "expression_too_large": "La expresión construye más de {limit} MiB.",
-  "expressions_read_each_other": "Las expresiones de aquí se leen entre sí, así que ninguna tiene valor."
+  "expressions_read_each_other": "Las expresiones de aquí se leen entre sí, así que ninguna tiene valor.",
+  "expressions_build_too_much": "Las expresiones que se evalúan juntas aquí construyen más de {limit} MiB entre todas."
 }

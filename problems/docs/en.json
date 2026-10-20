@@ -638,7 +638,7 @@
     ]
   },
   "expression_too_large": {
-    "why": "An expression builds more text and lists than the limit, which keeps evaluating it bounded.",
+    "why": "The expressions in one string build more text and lists than the language allows a string, 8 MiB, a limit that keeps evaluating them bounded.",
     "fix": [
       "Build less, such as by reading part of a value rather than all of it."
     ]
@@ -647,6 +647,12 @@
     "why": "Expressions in the workflow read each other's values, so none of them can be evaluated first.",
     "fix": [
       "Change one of them so that it doesn't read the others."
+    ]
+  },
+  "expressions_build_too_much": {
+    "why": "Meridian evaluates some expressions together, and bounds what they build between them as well as what each one builds. Each of these is within the language's limit, but together they build more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Build less in these expressions, such as by reading part of a value rather than all of it."
     ]
   }
 }

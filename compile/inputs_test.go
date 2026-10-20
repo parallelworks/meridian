@@ -187,18 +187,42 @@ jobs:
 	}
 }
 
-// The expressions of all the inputs' defaults share one budget for what
-// they build.
+// The expressions of all the inputs' defaults are one group, which builds
+// at most 64 MiB, though each default can build 8 MiB.
 func TestDefaultsShareABudget(t *testing.T) {
 	var b strings.Builder
-	b.WriteString("on:\n  execute:\n    inputs:\n      big:\n        type: string\n")
-	for i := range 5 {
-		fmt.Fprintf(&b, "      d%d:\n        type: string\n        default: ${{ inputs.big + inputs.big }}\n", i)
+	b.WriteString("on:\n  execute:\n    inputs:\n      half:\n        type: string\n")
+	for i := range 9 {
+		fmt.Fprintf(&b, "      d%d:\n        type: string\n        default: ${{ inputs.half + inputs.half }}\n", i)
 	}
 	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
 	doc := load(t, b.String())
-	_, diags := compile.ResolveInputs(doc, map[string]any{"big": strings.Repeat("x", 1<<20)}, compile.Options{})
-	if !diags.HasErrors() || !strings.Contains(diags.Error(), "MiB") {
-		t.Errorf("five defaults that each build 2 MiB: %v, want the budget's error", diags)
+	_, diags := compile.ResolveInputs(doc, map[string]any{"half": strings.Repeat("x", 4<<20)}, compile.Options{})
+	if len(diags) != 1 || diags[0].Code != problems.ExpressionsBuildTooMuch.Code() {
+		t.Errorf("nine defaults that each build 8 MiB: %v, want %s", diags, problems.ExpressionsBuildTooMuch.Code())
+	}
+}
+
+// A default doesn't count what the default of an input it reads built.
+func TestDefaultsCountOnTheirOwn(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      half:
+        type: string
+      a:
+        type: string
+        default: ${{ inputs.half + inputs.half }}
+      b:
+        type: string
+        default: ${{ inputs.a + inputs.half }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, map[string]any{"half": strings.Repeat("x", 5<<19)}, compile.Options{})
+	if b, _ := inputs.Values["b"].(string); len(diags) != 0 || len(b) != 15<<19 {
+		t.Errorf("b, 7.5 MiB, reads a, 5 MiB: %d bytes, %v", len(b), diags)
 	}
 }

@@ -77,8 +77,12 @@ var functions = map[string]function{
 }
 
 // format replaces {N} in tmpl with the Nth argument. {{ and }} are braces.
+// It counts the string it builds once, a piece at a time: each argument
+// before it is written, with the text written since the last count, so that
+// what it counts is the string's length.
 func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 	var b strings.Builder
+	counted := 0
 	for i := 0; i < len(tmpl); i++ {
 		c := tmpl[i]
 		switch {
@@ -98,16 +102,21 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 				return nil, e.errorAt(at, problems.FormatMissingArgument,
 					problems.Params{"template": problems.Show(tmpl), "placeholder": tmpl[i : i+end+1]})
 			}
-			b.WriteString(stringOf(args[n]))
-			if err := e.spend(at, b.Len()); err != nil {
+			s := stringOf(args[n])
+			if err := e.spend(at, b.Len()-counted+len(s)); err != nil {
 				return nil, err
 			}
+			b.WriteString(s)
+			counted = b.Len()
 			i += end
 		case c == '}':
 			return nil, e.errorAt(at, problems.FormatUnopenedBrace, problems.Params{"template": problems.Show(tmpl)})
 		default:
 			b.WriteByte(c)
 		}
+	}
+	if err := e.spend(at, b.Len()-counted); err != nil {
+		return nil, err
 	}
 	return b.String(), nil
 }

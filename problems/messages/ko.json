@@ -106,5 +106,6 @@
   "from_json_invalid": "fromJSON이 읽는 텍스트 {text} 값이 올바른 JSON이 아닙니다.",
   "unknown_operator": "{op} 연산자가 없습니다.",
   "expression_too_large": "표현식이 {limit}MiB를 넘는 데이터를 만듭니다.",
-  "expressions_read_each_other": "이곳의 표현식들이 서로를 참조하므로 어느 표현식도 값을 가질 수 없습니다."
+  "expressions_read_each_other": "이곳의 표현식들이 서로를 참조하므로 어느 표현식도 값을 가질 수 없습니다.",
+  "expressions_build_too_much": "이곳에서 함께 평가되는 표현식들이 합쳐서 {limit}MiB를 넘는 데이터를 만듭니다."
 }

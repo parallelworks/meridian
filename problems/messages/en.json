@@ -111,5 +111,7 @@
   "from_json_invalid": "The text {text} that fromJSON reads isn't valid JSON.",
   "unknown_operator": "There's no operator {op}.",
   "expression_too_large": "The expression builds more than {limit} MiB.",
-  "expressions_read_each_other": "The expressions here read each other, so none of them has a value."
+  "expressions_read_each_other": "The expressions here read each other, so none of them has a value.",
+
+  "expressions_build_too_much": "The expressions evaluated together here build more than {limit} MiB between them."
 }

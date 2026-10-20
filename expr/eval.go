@@ -7,15 +7,31 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
 
-// maxBuilt bounds the bytes of strings and lists that one evaluation can
-// build, so that an expression can't make the compiler or coordinator use
-// unbounded memory.
+// maxBuilt is the language's limit on what one template builds: a ${{ }}
+// alone, or text with ${{ }} in it. Each operation that makes a string, list
+// or mapping counts the size of what it makes, as docs/expressions.md says
+// under Limits, so that an expression can't make the compiler or coordinator
+// use unbounded memory. A template doesn't count what another template that
+// it reads builds, such as an input's default: that one has its own count.
 const maxBuilt = 8 << 20
+
+// maxGroupBuilt is Meridian's own limit on what the templates of a group,
+// which share a budget (Scope.Budgeted), build together, such as all of a
+// run's input defaults and conditions. It isn't part of the format: it is a
+// safety net that bounds what a group builds however many templates it has.
+// It is never narrower than the language's limit, so a template on its own
+// that keeps to the language's limits never reaches it.
+const maxGroupBuilt = 64 << 20
+
+// A group's limit is at least one template's: this doesn't compile if it
+// isn't.
+const _ uint = maxGroupBuilt - maxBuilt
 
 // A Scope is what an expression can read.
 type Scope struct {
@@ -36,15 +52,19 @@ type Scope struct {
 	// second Index[1].
 	Index []int
 
-	// spent counts what the evaluations that share it have built. Nil means
-	// an evaluation counts on its own.
+	// spent counts what the templates that share it have built together,
+	// for Meridian's limit on a group. Nil means a template is a group of
+	// its own.
 	spent *int
 }
 
-// Budgeted returns scope with one budget for what evaluations build, which
-// every evaluation with the returned scope, or a copy of it, shares: together
-// they build no more than one evaluation may. A scope that has a budget keeps
-// it.
+// Budgeted returns scope with one budget for what templates build, which
+// every evaluation with the returned scope, or a copy of it, shares: the
+// templates are a group, such as all of a run's input defaults and
+// conditions, or every template in one value. Each template still has the
+// language's limit on what it builds, and the group has Meridian's wider
+// one, 64 MiB, on what they build together, which isn't part of the format.
+// A scope that has a budget keeps it.
 func (s Scope) Budgeted() Scope {
 	if s.spent == nil {
 		s.spent = new(int)
@@ -111,13 +131,31 @@ type UnknownError struct {
 
 func (e *UnknownError) Error() string { return fmt.Sprintf("%s isn't known yet", e.Name) }
 
+// A BudgetError means the templates of a group, which share a budget
+// (Scope.Budgeted), built more together than Meridian allows a group. It
+// isn't a problem with any one expression, which can each be within the
+// language's limits: the budget is Meridian's own, not part of the format.
+// Its kind is problems.ExpressionsBuildTooMuch.
+type BudgetError struct {
+	// Limit is the group's limit, in MiB.
+	Limit int
+}
+
+func (e *BudgetError) Error() string {
+	return problems.ExpressionsBuildTooMuch.Message(problems.Params{"limit": e.Limit})
+}
+
 // Eval evaluates the expression in scope.
 func (e *Expr) Eval(scope Scope) (any, error) {
 	return newEvaluator(scope).eval(e.root)
 }
 
+// An evaluator evaluates one template: a ${{ }} alone, or the expressions
+// in text.
 type evaluator struct {
 	scope Scope
+	// spent counts what the template has built, for the language's limit.
+	spent int
 }
 
 func newEvaluator(scope Scope) *evaluator {
@@ -128,13 +166,18 @@ func (e *evaluator) errorAt(at int, k *problems.Kind, params problems.Params) er
 	return &EvalError{Offset: at, Kind: k, Params: params}
 }
 
-// spend counts n bytes built, and fails if the evaluation has built too
-// much.
+// spend counts n bytes built, and fails if they take the template past the
+// language's limit, or its group past Meridian's. A count that fails isn't
+// kept, since what it counts isn't built.
 func (e *evaluator) spend(at, n int) error {
-	*e.scope.spent += n
-	if *e.scope.spent > maxBuilt {
+	if e.spent+n > maxBuilt {
 		return e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
 	}
+	if *e.scope.spent+n > maxGroupBuilt {
+		return &BudgetError{Limit: maxGroupBuilt >> 20}
+	}
+	e.spent += n
+	*e.scope.spent += n
 	return nil
 }
 
@@ -283,9 +326,14 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		return e.rangeOf(n.at, a, b)
 	case "split":
 		s, sep := stringOf(a), stringOf(b)
-		// Count the list before making it: an empty separator makes a
-		// string of every character.
-		if err := e.spend(n.at, len(s)+8*(strings.Count(s, sep)+1)); err != nil {
+		// Count the list before making it, as the string's bytes and 8 for
+		// each part that strings.Split makes: an empty separator makes a
+		// part of every character, and none of an empty string.
+		count := strings.Count(s, sep) + 1
+		if sep == "" {
+			count = utf8.RuneCountInString(s)
+		}
+		if err := e.spend(n.at, len(s)+8*count); err != nil {
 			return nil, err
 		}
 		parts := strings.Split(s, sep)
@@ -444,13 +492,17 @@ func (e *evaluator) relative(r *relative) (any, error) {
 
 // resolverError reports an error from the resolver at the reference that
 // led to it: a problem in another expression of the workflow is a problem
-// evaluating this one.
+// evaluating this one. The group's budget running out, which the two
+// expressions share, isn't a problem at either, and is returned as it is.
 func (e *evaluator) resolverError(at int, err error) error {
 	if err == nil {
 		return nil
 	}
 	if u, ok := errors.AsType[*UnknownError](err); ok {
 		return &UnknownError{Offset: at, Name: u.Name}
+	}
+	if be, ok := errors.AsType[*BudgetError](err); ok {
+		return be
 	}
 	if ee, ok := errors.AsType[*EvalError](err); ok && ee.Location != "" {
 		return ee

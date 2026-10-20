@@ -415,9 +415,21 @@ Evaluation is pure: an expression can't read files, start processes or reach
 a network. Depth, time and the size of a result are bounded, so a workflow
 can't make the compiler or coordinator do unbounded work: an expression's
 tree nests at most 200 levels, `range` makes at most 10,000 numbers, none
-beyond ±2^53, and an evaluation builds at most 8 MiB of strings and lists.
-Evaluating a run's input defaults and conditions is one evaluation, as is
-evaluating every expression in one value, such as a step's `with:`.
+beyond ±2^53, and a template, a `${{ }}` alone or text with `${{ }}` in it,
+builds at most 8 MiB of strings and lists. These limits are the language's,
+and [Expressions](expressions.md#limits) says how each operation counts
+toward them. A template doesn't count what a template it reads builds, such
+as an input's default: that has its own count.
+
+Meridian adds a safety net of its own, which isn't part of the format: the
+templates it evaluates together as a group build at most 64 MiB between
+them. A group is all of a run's input defaults and conditions, or every
+template in one value, such as a step's `with:`. The net bounds what a
+group builds however many templates it has, and its cap, for every group,
+is at least one template's limit, so a template on its own that keeps to
+the language's limits never reaches it. A group that passes it fails with
+`expressions_build_too_much`, which says the group built too much together,
+rather than with an expression's error.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.
