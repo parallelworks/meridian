@@ -51,7 +51,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 		}},
 		Warnings: []problems.Diagnostic{withoutDetail(problems.UnknownKey.At(
 			"workflow.yaml", problems.Position{Line: 3, Column: 9}, "/jobs/build/x",
-			problems.Params{"key": "x", "suggested": false, "suggestion": ""},
+			problems.Params{"key": "x", "suggested": "false", "suggestion": ""},
 		))},
 	}
 }

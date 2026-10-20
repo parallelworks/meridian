@@ -114,7 +114,7 @@ func sampleParams(k *Kind) []Params {
 	for _, name := range k.Type().Params {
 		switch name {
 		case "suggested", "has_got", "exclusive":
-			branches[name] = []any{true, false}
+			branches[name] = []any{"true", "false"}
 		case "count":
 			branches[name] = []any{1, 2, 3}
 		case "what":
@@ -171,6 +171,25 @@ func TestEveryMessageRenders(t *testing.T) {
 	}
 }
 
+// TestParamsAreStringsAndNumbers checks that a diagnostic's params are what
+// foundation's clients keep: strings and numbers. A boolean would be dropped,
+// and the select it switches would take its other branch.
+func TestParamsAreStringsAndNumbers(t *testing.T) {
+	for _, k := range Kinds() {
+		for _, params := range sampleParams(k) {
+			params["suggested"] = true // as a caller might pass it
+			d := k.At("w.yaml", Position{1, 2}, "/jobs", params)
+			for name, v := range d.Params {
+				switch v.(type) {
+				case string, int, int64, float64:
+				default:
+					t.Errorf("%s's param %s is %T, not a string or a number", k.Code(), name, v)
+				}
+			}
+		}
+	}
+}
+
 func TestMessages(t *testing.T) {
 	for _, tc := range []struct {
 		kind   *Kind
@@ -183,20 +202,20 @@ func TestMessages(t *testing.T) {
 		{NotExpression, Params{"value": `"x"`}, `Must be a ${{ }} expression, not "x".`},
 		{
 			WrongType,
-			Params{"count": 2, "type1": "object", "type2": "array", "type3": "", "has_got": true, "got": "string"},
+			Params{"count": 2, "type1": "object", "type2": "array", "type3": "", "has_got": "true", "got": "string"},
 			"Must be a mapping or a list, not a string.",
 		},
 		{
 			WrongType,
-			Params{"count": 1, "type1": "boolean", "type2": "", "type3": "", "has_got": false, "got": ""},
+			Params{"count": 1, "type1": "boolean", "type2": "", "type3": "", "has_got": "false", "got": ""},
 			"Must be true or false.",
 		},
 		{
 			UnknownKey,
-			Params{"key": "nmea", "suggested": true, "suggestion": "name"},
+			Params{"key": "nmea", "suggested": "true", "suggestion": "name"},
 			`The key "nmea" isn't known here, so it's ignored. Did you mean "name"?`,
 		},
-		{UnknownKey, Params{"key": "x", "suggested": false, "suggestion": ""}, `The key "x" isn't known here, so it's ignored.`},
+		{UnknownKey, Params{"key": "x", "suggested": "false", "suggestion": ""}, `The key "x" isn't known here, so it's ignored.`},
 		{
 			WrongArgumentCount,
 			Params{"name": "contains", "arity": "exact", "min": 2, "max": 2, "count": 1},
@@ -224,7 +243,7 @@ func TestMessages(t *testing.T) {
 		{NeedsCycle, Params{"jobs": QuoteAll([]string{"a", "b"})}, `The jobs "a", "b" need each other.`},
 		{
 			UndefinedInput,
-			Params{"name": "rundir", "suggested": true, "suggestion": "run_dir"},
+			Params{"name": "rundir", "suggested": "true", "suggestion": "run_dir"},
 			`There's no input "rundir". Did you mean "run_dir"?`,
 		},
 		{FileTooLarge, Params{"size": 102401, "limit": 102400}, "The file is 102,401 bytes, more than the limit of 102,400."},
@@ -236,7 +255,7 @@ func TestMessages(t *testing.T) {
 }
 
 func TestDiagnostic(t *testing.T) {
-	d := UnknownKey.At("w.yaml", Position{3, 5}, "/jobs/a b/x~1y", Params{"key": "x/y", "suggested": false, "suggestion": ""})
+	d := UnknownKey.At("w.yaml", Position{3, 5}, "/jobs/a b/x~1y", Params{"key": "x/y", "suggested": "false", "suggestion": ""})
 	if d.Pointer != "#/jobs/a%20b/x~1y" || d.Path() != "/jobs/a b/x~1y" {
 		t.Errorf("Pointer %q, Path %q", d.Pointer, d.Path())
 	}

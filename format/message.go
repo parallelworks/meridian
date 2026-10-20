@@ -3,6 +3,7 @@ package format
 import (
 	"math/big"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -62,13 +63,13 @@ func (s *formatSchema) describe(e *jsonschema.ValidationError) finding {
 	case *kind.MaxProperties:
 		return finding{problems.TooManyKeys, problems.Params{"count": k.Got, "max": k.Want}}
 	case *kind.Minimum:
-		return finding{problems.BelowMinimum, problems.Params{"min": number(k.Want), "exclusive": false}}
+		return finding{problems.BelowMinimum, problems.Params{"min": number(k.Want), "exclusive": "false"}}
 	case *kind.ExclusiveMinimum:
-		return finding{problems.BelowMinimum, problems.Params{"min": number(k.Want), "exclusive": true}}
+		return finding{problems.BelowMinimum, problems.Params{"min": number(k.Want), "exclusive": "true"}}
 	case *kind.Maximum:
-		return finding{problems.AboveMaximum, problems.Params{"max": number(k.Want), "exclusive": false}}
+		return finding{problems.AboveMaximum, problems.Params{"max": number(k.Want), "exclusive": "false"}}
 	case *kind.ExclusiveMaximum:
-		return finding{problems.AboveMaximum, problems.Params{"max": number(k.Want), "exclusive": true}}
+		return finding{problems.AboveMaximum, problems.Params{"max": number(k.Want), "exclusive": "true"}}
 	case *kind.UniqueItems:
 		return finding{problems.DuplicateItems, nil}
 	case *kind.Not:
@@ -204,7 +205,7 @@ func mustBeType(want []string, got string) finding {
 	if len(want) == 0 || len(want) > 3 {
 		return finding{problems.NoForm, nil}
 	}
-	params := problems.Params{"count": len(want), "type1": "", "type2": "", "type3": "", "has_got": got != "", "got": got}
+	params := problems.Params{"count": len(want), "type1": "", "type2": "", "type3": "", "has_got": strconv.FormatBool(got != ""), "got": got}
 	for i, t := range want {
 		params["type"+string(rune('1'+i))] = t
 	}
