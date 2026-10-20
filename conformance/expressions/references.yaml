@@ -11,6 +11,8 @@ scope:
       list: [x, "y"]
       obj: {a: 1, k: v}
       dashed: {my-key: dv}
+      dotted: {a.b: dot, a: {b: nested}}
+      slashed: {a/b: slash, a: {b: nested}}
       field20: [hello, world]
       people:
         - {name: ann, tags: [a, b]}
@@ -47,6 +49,20 @@ cases:
     value: 1
   - expr: 'inputs.dashed["my-key"]'
     value: dv
+  # A key in brackets without quotes is one key, as it is with them: a . or
+  # / in it doesn't split it into a path.
+  - expr: inputs.dotted[a.b]
+    value: dot
+  - expr: "inputs.dotted['a.b']"
+    value: dot
+  - expr: inputs.dotted.a.b
+    value: nested
+  - expr: inputs.slashed[a/b]
+    value: slash
+  - expr: "inputs.slashed['a/b']"
+    value: slash
+  - expr: inputs.slashed.a.b
+    value: nested
   - expr: inputs.field20.0
     value: hello
   - expr: inputs.field20.[0]
@@ -69,6 +85,60 @@ cases:
     value: [a, b, c]
   - expr: inputs.groups.*.name
     value: [A, B]
+  # .* works after a group or a call, as .name already did. Format 1 refused
+  # these before.
+  - expr: (inputs.people).*.name
+    value: [ann, bob]
+  - expr: (inputs.people).*.tags.*
+    value: [a, b, c]
+  - expr: fromJSON(toJSON(inputs.people)).*.name
+    value: [ann, bob]
+  - expr: (inputs.groups).*
+    value: [{name: A}, {name: B}]
+
+  # Backticks quote a key in brackets, as they quote a string elsewhere, so
+  # these read the same key as ['name']. Format 1 read the backticks as part
+  # of the key before.
+  - expr: "inputs[`name`]"
+    value: Alice
+  - expr: "inputs.dashed[`my-key`]"
+    value: dv
+  - expr: "inputs.obj[ `a` ]"
+    value: 1
+  - expr: "(inputs.obj)[`k`]"
+    value: v
+  - expr: "inputs.people[0][`name`]"
+    value: ann
+
+  # A hyphen is a minus sign, as in JavaScript, so a name with one in it is
+  # read in brackets. A reference that subtracts a word with nothing between
+  # them, as inputs.dashed.my-key does, is NaN and probably meant the name
+  # with the hyphen, so it is a warning. A number, a reference or spaces on
+  # the right don't make one, nor does a name in brackets on the left.
+  - expr: inputs.dashed.my-key
+    value: .nan
+    warnings: [0]
+  - expr: needs.prep-model.outputs.path
+    value: .nan
+    warnings: [0, 11]
+  - expr: steps.my-step.outputs.out
+    value: .nan
+    warnings: [0, 9]
+  - expr: var.my-token
+    value: .nan
+    warnings: [0]
+  - expr: inputs.name-1
+    value: .nan
+    warnings: []
+  - expr: inputs.name - key
+    value: .nan
+    warnings: []
+  - expr: inputs.name-inputs.s
+    value: .nan
+    warnings: []
+  - expr: "inputs['name']-key"
+    value: .nan
+    warnings: []
 
   # A string that holds JSON is read as its value.
   - expr: inputs.json.a.b[1]

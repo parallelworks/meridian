@@ -129,3 +129,55 @@ func TestStepValues(t *testing.T) {
 		t.Errorf("the plan is %s, %v", data, err)
 	}
 }
+
+// A reference that subtracts a word warns, and says when the workflow has
+// the name with the hyphen that it probably meant.
+func TestHyphenatedNames(t *testing.T) {
+	src := `on:
+  execute:
+    inputs:
+      pw-user:
+        type: string
+        default: me
+jobs:
+  prep-model:
+    steps:
+      - run: echo prep
+  build:
+    needs: [prep-model]
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    steps:
+      - id: setup-go
+        run: echo go
+      - run: |
+          echo ${{ inputs.pw-user }}
+          echo ${{ needs.prep-model.outputs.path }}
+          echo ${{ steps.setup-go.outputs.version }}
+          echo ${{ matrix.python-version }}
+          echo ${{ inputs.no-such }}
+`
+	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
+	var words []string
+	for _, d := range diags {
+		if d.Code == compile.CodeWord && strings.Contains(d.Message, "which is NaN") {
+			words = append(words, d.Message)
+		}
+	}
+	want := []string{
+		"; the workflow has an input pw-user",
+		"; the workflow has a job prep-model",
+		"; job build has a step with the id setup-go",
+		"; job build's matrix has python-version",
+		"to read no-such, write inputs['no-such']",
+	}
+	if len(words) != len(want) {
+		t.Fatalf("warnings %q, want %d", words, len(want))
+	}
+	for i, w := range want {
+		if !strings.HasSuffix(words[i], w) {
+			t.Errorf("warning %d is %q, want it to end %q", i, words[i], w)
+		}
+	}
+}

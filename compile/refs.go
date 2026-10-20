@@ -70,6 +70,61 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, pos format.Posit
 	return true
 }
 
+// reportProblem reports p, a probable mistake in an expression, at pos. If
+// the mistake split a name the workflow has, such as an input pw-user in
+// inputs.pw-user, it says so.
+func (c *compiler) reportProblem(pos format.Position, loc []string, p expr.Problem, job *jobInfo) {
+	msg := p.Msg
+	if p.Meant != nil {
+		if has := c.defines(*p.Meant, job); has != "" {
+			msg += "; " + has
+		}
+	}
+	c.report(format.Warning, pos, CodeWord, loc, "%s", msg)
+}
+
+// defines says what in the workflow r names, such as "the workflow has an
+// input pw-user", or returns "" if it names nothing the workflow has.
+func (c *compiler) defines(r expr.Ref, job *jobInfo) string {
+	if len(r.Path) == 0 {
+		return ""
+	}
+	name := r.Path[0]
+	if r.Context == "inputs" {
+		for _, f := range c.inputs.fields {
+			if !f.header && slices.Equal(f.path, r.Path) {
+				return "the workflow has an input " + strings.Join(r.Path, ".")
+			}
+		}
+		return ""
+	}
+	if len(r.Path) > 1 {
+		return ""
+	}
+	switch r.Context {
+	case "needs":
+		if _, ok := c.jobInfos[name]; ok {
+			return "the workflow has a job " + name
+		}
+	case "steps":
+		if job == nil {
+			return ""
+		}
+		if _, ok := job.stepIDs[name]; ok {
+			return fmt.Sprintf("job %s has a step with the id %s", job.name, name)
+		}
+	case "matrix":
+		if job != nil && job.matrixKeys[name] {
+			return fmt.Sprintf("job %s's matrix has %s", job.name, name)
+		}
+	case "sessions":
+		if _, ok := mapping(c.doc.Value["sessions"])[name]; ok {
+			return "the workflow has a session " + name
+		}
+	}
+	return ""
+}
+
 // recordSecret records the secret variable r reads, if it reads one.
 func (c *compiler) recordSecret(r expr.Ref) {
 	if r.Context != "vars" || len(r.Path) == 0 {

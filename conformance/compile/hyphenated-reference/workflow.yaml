@@ -1,0 +1,10 @@
+on:
+  execute:
+    inputs:
+      pw-user:
+        type: string
+        default: me
+jobs:
+  build:
+    steps:
+      - run: echo ${{ inputs.pw-user }}

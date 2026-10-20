@@ -172,6 +172,10 @@ cases:
     value: 2
   - expr: fromJSON(inputs.jsonObj).a
     value: 1
+  # .* reads each value, in the order of the keys. Format 1 refused it here
+  # before.
+  - expr: fromJSON(inputs.jsonObj).*
+    value: [1, 2]
   - expr: fromJSON "[1, 2"
     error: eval
   - expr: fromJSON "01"

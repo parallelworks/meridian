@@ -571,6 +571,10 @@ func (p *parser) postfix(x node, at int) (node, error) {
 	start := p.pos
 	for p.pos < len(p.src) {
 		switch c := p.src[p.pos]; {
+		case c == '.' && p.peek(1) == '*':
+			// .* reads the rest of the path from each item, as in a
+			// reference's path.
+			p.pos += 2
 		case c == '.' && isWordByte(p.peek(1)):
 			p.pos++
 			for p.pos < len(p.src) && isWordByte(p.src[p.pos]) && p.src[p.pos] != '.' {
@@ -713,6 +717,12 @@ func (p *parser) balanced() (string, error) {
 // context, a number, true, false, null, or else a bare word.
 func operand(w string, at int) node {
 	if strings.HasPrefix(w, ".") && len(w) > 1 {
+		// A word that starts with a dot and reads as a number is one, as in
+		// JavaScript: .5 is 0.5. Any other is a relative reference: .name,
+		// ..5, .5.x. A key named with digits is read as .[5].
+		if n, ok := wordNumber(w); ok {
+			return &literal{at: at, value: n}
+		}
 		return relativeRef(w, at)
 	}
 	if name, rest, ok := contextPrefix(w); ok {
@@ -822,7 +832,7 @@ func closingBracket(s string, i int) int {
 			if c == quote {
 				quote = 0
 			}
-		case c == '\'' || c == '"':
+		case c == '\'' || c == '"' || c == '`':
 			quote = c
 		case c == ']':
 			return j
@@ -831,9 +841,11 @@ func closingBracket(s string, i int) int {
 	return len(s)
 }
 
+// bracketSegment reads what is in brackets: a key in any of the three kinds
+// of quotes, [index], a number, or a bare key.
 func bracketSegment(content string) segment {
 	content = strings.TrimSpace(content)
-	if len(content) >= 2 && (content[0] == '\'' || content[0] == '"') && content[len(content)-1] == content[0] {
+	if len(content) >= 2 && strings.IndexByte("'\"`", content[0]) >= 0 && content[len(content)-1] == content[0] {
 		return segment{name: content[1 : len(content)-1], kind: quoted}
 	}
 	if content == "index" {

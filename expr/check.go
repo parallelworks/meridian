@@ -21,17 +21,22 @@ func (e *Expr) Refs() []Ref {
 	var refs []Ref
 	visit(e.root, func(n node) {
 		if r, ok := n.(*ref); ok {
-			path := make([]string, len(r.path))
-			for i, s := range r.path {
-				path[i] = s.name
-				if s.kind == index {
-					path[i] = "[index]"
-				}
-			}
-			refs = append(refs, Ref{Offset: r.at, Context: r.context, Path: path})
+			refs = append(refs, Ref{Offset: r.at, Context: r.context, Path: refPath(r.path)})
 		}
 	})
 	return refs
+}
+
+// refPath returns a reference's path as a Ref holds it.
+func refPath(path []segment) []string {
+	out := make([]string, len(path))
+	for i, s := range path {
+		out[i] = s.name
+		if s.kind == index {
+			out[i] = "[index]"
+		}
+	}
+	return out
 }
 
 // Relative reports whether the expression has a relative reference, such
@@ -87,15 +92,24 @@ type Problem struct {
 	// Offset is the byte offset in the expression of the problem.
 	Offset int
 	Msg    string
+	// Meant, if set, is what the expression probably meant to read, up to
+	// the name the mistake split: inputs with the path pw-user for
+	// inputs.pw-user. Whoever knows the workflow can say whether it has one.
+	Meant *Ref
 }
 
 // Check returns the expression's probable mistakes: words that look like
-// references but are text, because they don't start with a context, and
-// relative references that look like numbers, such as .5.
+// references but are text, because they don't start with a context, and a
+// reference that subtracts a word, such as inputs.pw-user, which is NaN and
+// probably meant a name with a hyphen in it.
 func (e *Expr) Check() []Problem {
 	var problems []Problem
 	visit(e.root, func(n node) {
 		switch n := n.(type) {
+		case *binary:
+			if p, ok := e.hyphenated(n); ok {
+				problems = append(problems, p)
+			}
 		case *word:
 			i := strings.IndexAny(n.text, ".[")
 			if i <= 0 || !identifier(n.text[:i]) {
@@ -106,21 +120,42 @@ func (e *Expr) Check() []Problem {
 				Msg: fmt.Sprintf("%s is the text %q, because %s isn't a context; quote it if text is what you mean",
 					n.text, n.text, n.text[:i]),
 			})
-		case *relative:
-			// A dot and a digit: the source is there, as a decoded tree has it
-			// too.
-			if n.at+1 >= len(e.src) || e.src[n.at] != '.' || !isDigit(e.src[n.at+1]) {
-				return
-			}
-			key := n.path[0].name
-			msg := fmt.Sprintf(".%s reads the key %s beside this one, because a word that starts with a dot is a relative reference", key, key)
-			if _, ok := numeral("0." + key); ok {
-				msg += fmt.Sprintf("; write 0.%s for the number", key)
-			}
-			problems = append(problems, Problem{Offset: n.at, Msg: msg})
 		}
 	})
 	return problems
+}
+
+// hyphenated returns the problem with n if it subtracts a word from a
+// reference with nothing between them, as inputs.pw-user does: the text
+// "user" from inputs.pw, which is NaN. A name with a hyphen in it is read in
+// brackets, inputs['pw-user'], which the problem suggests. A decoded tree
+// has no offsets to tell whether the - had spaces, so it has no such problem.
+func (e *Expr) hyphenated(n *binary) (Problem, bool) {
+	r, isRef := n.x.(*ref)
+	w, isWord := n.y.(*word)
+	if n.op != "-" || !isRef || !isWord || n.at == 0 || n.at >= len(e.src) || e.src[n.at] != '-' ||
+		r.at >= n.at || w.at != n.at+1 {
+		return Problem{}, false
+	}
+	written := e.src[r.at:n.at]
+	last := r.path[len(r.path)-1]
+	before, isName := strings.CutSuffix(written, "."+last.name)
+	if last.kind != field || !isName {
+		return Problem{}, false
+	}
+	head, rest := w.text, ""
+	if i := strings.IndexAny(w.text, ".["); i > 0 {
+		head, rest = w.text[:i], w.text[i:]
+	}
+	name := last.name + "-" + head
+	path := refPath(r.path)
+	path[len(path)-1] = name
+	return Problem{
+		Offset: r.at,
+		Msg: fmt.Sprintf("%s-%s subtracts the text %q from %s, which is NaN; to read %s, write %s['%s']%s",
+			written, w.text, w.text, written, name, before, name, rest),
+		Meant: &Ref{Offset: r.at, Context: r.context, Path: path},
+	}, true
 }
 
 // replacedKeywords are the if: keywords ACTIVATE once had, and what replaced

@@ -86,6 +86,86 @@ func TestCheckMessages(t *testing.T) {
 	}
 }
 
+// Each word operator gives what its function gives, for every pair of
+// arguments of every kind: in and includes are contains, the one reversed,
+// and startsWith, endsWith and join are the functions of those names.
+func TestWordOperatorsMatchFunctions(t *testing.T) {
+	values := []any{
+		"abc", "a1", "", "1", "true", "null", "1e+21", "[1,2]", `{"k":1}`,
+		1.0, int64(1), 0.0, 1e21, 1e-7, math.NaN(), math.Inf(1),
+		true, false, nil,
+		[]any{1.0, "a", nil},
+		[]any{},
+		map[string]any{"k": 1.0, "1": "x"},
+	}
+	inputs := map[string]any{}
+	for i, v := range values {
+		inputs[fmt.Sprint("v", i)] = v
+	}
+	scope := expr.Scope{Contexts: map[string]any{"inputs": inputs}}
+	eval := func(src string) string {
+		v, err := mustParse(t, src).Eval(scope)
+		return fmt.Sprintf("%#v %v", v, err)
+	}
+	pairs := [][2]string{
+		{"inputs.%[1]s includes inputs.%[2]s", "contains(inputs.%[1]s, inputs.%[2]s)"},
+		{"inputs.%[1]s !includes inputs.%[2]s", "!contains(inputs.%[1]s, inputs.%[2]s)"},
+		{"inputs.%[2]s in inputs.%[1]s", "contains(inputs.%[1]s, inputs.%[2]s)"},
+		{"inputs.%[2]s !in inputs.%[1]s", "!contains(inputs.%[1]s, inputs.%[2]s)"},
+		{"inputs.%[1]s startsWith inputs.%[2]s", "startsWith(inputs.%[1]s, inputs.%[2]s)"},
+		{"inputs.%[1]s endsWith inputs.%[2]s", "endsWith(inputs.%[1]s, inputs.%[2]s)"},
+		{"inputs.%[1]s join inputs.%[2]s", "join(inputs.%[1]s, inputs.%[2]s)"},
+	}
+	for x := range values {
+		for y := range values {
+			a, b := fmt.Sprint("v", x), fmt.Sprint("v", y)
+			for _, p := range pairs {
+				word, fn := fmt.Sprintf(p[0], a, b), fmt.Sprintf(p[1], a, b)
+				if w, f := eval(word), eval(fn); w != f {
+					t.Errorf("%s with %#v, %#v: %s, but %s: %s", word, values[x], values[y], w, fn, f)
+				}
+			}
+		}
+	}
+}
+
+// A reference that subtracts a word says it is NaN, suggests the name with
+// the hyphen in brackets, and says what it meant to read.
+func TestCheckHyphenatedNames(t *testing.T) {
+	for _, tc := range []struct {
+		src, msg string
+		meant    expr.Ref
+	}{
+		{
+			"inputs.pw-user", `inputs.pw-user subtracts the text "user" from inputs.pw, which is NaN; to read pw-user, write inputs['pw-user']`,
+			expr.Ref{Context: "inputs", Path: []string{"pw-user"}},
+		},
+		{
+			"steps.setup-go.outputs.version", `to read setup-go, write steps['setup-go'].outputs.version`,
+			expr.Ref{Context: "steps", Path: []string{"setup-go"}},
+		},
+		{
+			"inputs.group.my-field[0]", `to read my-field, write inputs.group['my-field'][0]`,
+			expr.Ref{Context: "inputs", Path: []string{"group", "my-field"}},
+		},
+		{
+			"var.my-token", `to read my-token, write var['my-token']`,
+			expr.Ref{Context: "vars", Path: []string{"my-token"}},
+		},
+	} {
+		var found *expr.Problem
+		for _, p := range mustParse(t, tc.src).Check() {
+			if p.Meant != nil {
+				found = &p
+			}
+		}
+		if found == nil || found.Offset != 0 || !strings.Contains(found.Msg, tc.msg) ||
+			found.Meant.Context != tc.meant.Context || !slices.Equal(found.Meant.Path, tc.meant.Path) {
+			t.Errorf("Check(%q) = %+v, want a problem containing %q that meant %v", tc.src, found, tc.msg, tc.meant)
+		}
+	}
+}
+
 func TestTemplateOffsets(t *testing.T) {
 	_, err := expr.ParseTemplate("echo ${{ inputs.a = 1 }}")
 	if se, ok := errors.AsType[*expr.SyntaxError](err); !ok || se.Offset != 18 {

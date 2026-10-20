@@ -51,19 +51,7 @@ var functions = map[string]function{
 	"always":    {},
 	"case":      {minArgs: 3, maxArgs: -1},
 	"contains": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
-		if s, ok := a[0].(string); ok {
-			return strings.Contains(s, stringOf(a[1])), nil
-		}
-		list, ok := a[0].([]any)
-		if !ok {
-			return false, nil
-		}
-		for _, item := range list {
-			if looseEqual(item, a[1]) {
-				return true, nil
-			}
-		}
-		return false, nil
+		return contains(a[0], a[1]), nil
 	}},
 	"startsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return strings.HasPrefix(stringOf(a[0]), stringOf(a[1])), nil
@@ -78,9 +66,6 @@ var functions = map[string]function{
 		sep := ","
 		if len(a) == 2 {
 			sep = stringOf(a[1])
-		}
-		if s, ok := collection(a[0]).(string); ok {
-			return s, nil
 		}
 		return e.join(at, a[0], sep)
 	}},
@@ -124,12 +109,18 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 	return b.String(), nil
 }
 
-// join joins a list's items, as strings, with sep. Anything that isn't a
-// list joins to "". It counts what it builds before building it, because a
-// long separator is repeated for every item.
+// join joins a list's items, as strings, with sep. A string joins to itself,
+// and anything else to "". The function and the word operator share it. It
+// counts what it builds before building it, because a long separator is
+// repeated for every item.
 func (e *evaluator) join(at int, v any, sep string) (any, error) {
-	list, ok := collection(v).([]any)
-	if !ok {
+	var list []any
+	switch c := collection(v).(type) {
+	case string:
+		return c, nil
+	case []any:
+		list = c
+	default:
 		return "", nil
 	}
 	parts := make([]string, len(list))

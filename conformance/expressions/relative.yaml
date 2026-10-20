@@ -30,6 +30,7 @@ workflow:
       prop5: ${{ ..prop2 }}
   field23d:
     - ["${{ ../../arrayhere.1 }}", "${{ ../../.arrayhere.2 }}"]
+    - ${{ .[0] get 0 }}
     - ${{ .0 get 0 }}
   computeOn: true
   options:
@@ -43,6 +44,11 @@ workflow:
   numbered:
     "5": five
     half: ${{ .5 }}
+    key: ${{ .[5] }}
+    quoted: ${{ .['5'] }}
+    deeper: {"5": {x: deep}, here: "${{ .5.x }}"}
+    up:
+      key: ${{ ..5 }}
 scope:
   contexts:
     inputs:
@@ -73,8 +79,13 @@ cases:
     value: two
   - at: /field23d/0/1
     value: three
+  # The item at index 0 beside this one is written .[0]. ACTIVATE's tests
+  # wrote .0, which reads as the number 0 now, as in JavaScript, so get finds
+  # nothing in it.
   - at: /field23d/1
     value: two
+  - at: /field23d/2
+    value: null
   - at: /options/field1/inner
     value: false
   - at: /options/field1/far
@@ -83,20 +94,34 @@ cases:
     error: eval
   - at: /self
     error: eval
-  # Unlike JavaScript, .5 isn't a number: a word that starts with . is a
-  # relative reference. A relative reference that starts with a digit is
-  # probably a mistake, so it has a warning.
+  # A word that starts with a dot and reads as a number is one, as in
+  # JavaScript and as -.5 already was. Any other is a relative reference, and
+  # a key named with digits is read in brackets. Format 1 read .5 as the key 5
+  # before.
   - at: /numbered/half
+    value: 0.5
+  - at: /numbered/key
+    value: five
+  - at: /numbered/quoted
+    value: five
+  - at: /numbered/deeper/here
+    value: deep
+  - at: /numbered/up/key
     value: five
   - expr: .5
-    value: null
-    warnings: [0]
-  - expr: 1 + .5x
-    value: 1
-    warnings: [4]
-  - expr: ..5
-    value: null
+    value: 0.5
     warnings: []
+  - expr: .5e1
+    value: 5
   - expr: -.5
     value: -0.5
+  - expr: .5e-1
+    value: 0.05
+  - expr: 1 + .5
+    value: 1.5
+  - expr: 1 + .5x
+    value: 1
+    warnings: []
+  - expr: ..5
+    value: null
     warnings: []
