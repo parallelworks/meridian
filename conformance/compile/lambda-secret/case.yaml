@@ -1,0 +1,11 @@
+description: >-
+  A lambda's body reads contexts as the rest of its expression does, so the
+  plan names a secret variable that only a body reads.
+source: Meridian
+contexts:
+  vars:
+    API_KEY: unused
+secret-variables: [API_KEY]
+expect:
+  plan:
+    /run/secrets: [vars.API_KEY]

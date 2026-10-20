@@ -148,6 +148,13 @@ var (
 	UnclosedString      = define(Error, "unclosed_string", "Unclosed string", "quote")
 	UnclosedBracket     = define(Error, "unclosed_bracket", "Unclosed bracket", "bracket")
 	UnclosedTemplate    = define(Error, "unclosed_template", "${{ without }}")
+
+	// map() and filter()'s lambdas.
+	LambdaExpected          = define(Error, "lambda_expected", "Lambda expected", "name")
+	LambdaTooManyParameters = define(Error, "lambda_too_many_parameters", "Lambda with too many parameters", "name", "count")
+	LambdaParameterReserved = define(Error, "lambda_parameter_reserved", "Lambda parameter with a reserved name", "name")
+	LambdaParameterTwice    = define(Error, "lambda_parameter_twice", "Lambda parameters with the same name", "name")
+	LambdaMisplaced         = define(Error, "lambda_misplaced", "Lambda outside map() or filter()")
 )
 
 // Evaluating an expression.
@@ -162,11 +169,17 @@ var (
 	UnknownOperator          = define(Error, "unknown_operator", "Unknown operator", "op")
 	ExpressionTooLarge       = define(Error, "expression_too_large", "Expression builds too much", "limit")
 	ExpressionsReadEachOther = define(Error, "expressions_read_each_other", "Expressions read each other")
+
+	// map() and filter().
+	NotListOrMapping             = define(Error, "not_list_or_mapping", "map() or filter() of what isn't a list or mapping", "name", "value")
+	ExpressionRunsTooManyLambdas = define(Error, "expression_runs_too_many_lambdas", "Expression runs too many lambdas", "limit")
 )
 
 // Meridian's own limits on evaluating expressions, which aren't part of the
 // format: expressions that are each within the language's limits can still
 // pass them together.
 var (
-	ExpressionsBuildTooMuch = define(Error, "expressions_build_too_much", "Expressions build too much together", "limit")
+	ExpressionsBuildTooMuch      = define(Error, "expressions_build_too_much", "Expressions build too much together", "limit")
+	ExpressionsRunTooManyLambdas = define(Error, "expressions_run_too_many_lambdas", "Expressions run too many lambdas together", "limit")
+	ExpressionsTooSlow           = define(Error, "expressions_too_slow", "Expressions take too long together", "limit")
 )

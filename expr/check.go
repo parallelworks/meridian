@@ -17,7 +17,8 @@ type Ref struct {
 	Path []string
 }
 
-// Refs returns the contexts an expression reads, in the order they appear.
+// Refs returns the contexts an expression reads, in the order they appear,
+// in the bodies of its lambdas too.
 func (e *Expr) Refs() []Ref {
 	var refs []Ref
 	visit(e.root, func(n node) {
@@ -107,9 +108,10 @@ type Problem struct {
 func (p Problem) Message() string { return p.Kind.Message(p.Params) }
 
 // Check returns the expression's probable mistakes: words that look like
-// references but are text, because they don't start with a context, and a
-// reference that subtracts a word, such as inputs.pw-user, which is NaN and
-// probably meant a name with a hyphen in it.
+// references but are text, because they don't start with a context or a
+// lambda's parameter, and a reference or a parameter's path that subtracts
+// a word, such as inputs.pw-user, which is NaN and probably meant a name
+// with a hyphen in it. The bodies of lambdas are checked as the rest is.
 func (e *Expr) Check() []Problem {
 	var found []Problem
 	visit(e.root, func(n node) {
@@ -136,17 +138,27 @@ func (e *Expr) Check() []Problem {
 // hyphenated returns the problem with n if it subtracts a word from a
 // reference with nothing between them, as inputs.pw-user does: the text
 // "user" from inputs.pw, which is NaN. A name with a hyphen in it is read in
-// brackets, inputs['pw-user'], which the problem suggests. A decoded tree
-// has no offsets to tell whether the - had spaces, so it has no such problem.
+// brackets, inputs['pw-user'], which the problem suggests. A lambda's
+// parameter with a path, as in h.pw-user, has the same problem, without a
+// context it meant. A decoded tree has no offsets to tell whether the - had
+// spaces, so it has no such problem.
 func (e *Expr) hyphenated(n *binary) (Problem, bool) {
-	r, isRef := n.x.(*ref)
+	var at int
+	var path []segment
+	var r *ref
+	switch x := n.x.(type) {
+	case *ref:
+		at, path, r = x.at, x.path, x
+	case *param:
+		at, path = x.at, x.path
+	}
 	w, isWord := n.y.(*word)
-	if n.op != "-" || !isRef || !isWord || n.at == 0 || n.at >= len(e.src) || e.src[n.at] != '-' ||
-		r.at >= n.at || w.at != n.at+1 {
+	if n.op != "-" || len(path) == 0 || !isWord || n.at == 0 || n.at >= len(e.src) || e.src[n.at] != '-' ||
+		at >= n.at || w.at != n.at+1 {
 		return Problem{}, false
 	}
-	written := e.src[r.at:n.at]
-	last := r.path[len(r.path)-1]
+	written := e.src[at:n.at]
+	last := path[len(path)-1]
 	before, isName := strings.CutSuffix(written, "."+last.name)
 	if last.kind != field || !isName {
 		return Problem{}, false
@@ -156,17 +168,20 @@ func (e *Expr) hyphenated(n *binary) (Problem, bool) {
 		head, rest = w.text[:i], w.text[i:]
 	}
 	name := last.name + "-" + head
-	path := refPath(r.path)
-	path[len(path)-1] = name
-	return Problem{
-		Offset: r.at,
+	p := Problem{
+		Offset: at,
 		Kind:   problems.HyphenatedName,
 		Params: problems.Params{
 			"written": written, "word": w.text, "text": problems.Show(w.text), "name": name,
 			"fix": before + "['" + name + "']" + rest, "defines": "none", "defined": "", "job": "",
 		},
-		Meant: &Ref{Offset: r.at, Context: r.context, Path: path},
-	}, true
+	}
+	if r != nil {
+		meant := refPath(r.path)
+		meant[len(meant)-1] = name
+		p.Meant = &Ref{Offset: at, Context: r.context, Path: meant}
+	}
+	return p, true
 }
 
 // replacedKeywords are the if: keywords ACTIVATE once had, and what replaced
@@ -228,8 +243,7 @@ func (e *Expr) CheckCondition() []Problem {
 // or underscore, then letters, digits and underscores.
 func identifier(s string) bool {
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !isLetter(c) && c != '_' && (i == 0 || !isDigit(c)) {
+		if !isNameByte(s[i]) || i == 0 && isDigit(s[i]) {
 			return false
 		}
 	}
@@ -256,6 +270,8 @@ func children(n node) []node {
 		return []node{n.x}
 	case *call:
 		return n.args
+	case *lambda:
+		return []node{n.body}
 	case *slice:
 		if n.end == nil {
 			return []node{n.start}

@@ -1,0 +1,457 @@
+description: >-
+  map(list, x => expr) makes a list of what its lambda gives for each item,
+  and filter(list, x => cond) a list of the items its lambda gives true for.
+  A lambda is the last argument of map or filter and nowhere else, written
+  x => body, (x) => body or (x, i) => body, where i is a list item's index or
+  a mapping's key. Both go through a list in order, a mapping's values in the
+  order of their keys, and a string that holds a JSON list or mapping as its
+  value. null has no items, and anything else is an error. filter keeps an
+  item by an expression's truthiness, so it keeps the text "false". A
+  parameter can't be named after a context, a keyword, a word operator, NaN,
+  Infinity or index, two parameters can't have the same name, and an inner
+  lambda's parameter hides an outer one of the same name. A lambda's body
+  counts toward the 200 levels an expression nests.
+source: ACTIVATE's tests and Meridian
+workflow:
+  sep: "-"
+  label: ${{ x }}
+  joined: ${{ join(map(inputs.words, x => x + .sep), '') }}
+  own: ${{ map(inputs.words, x => .label) }}
+scope:
+  contexts:
+    inputs:
+      list: [1, 2, 3]
+      words: [a, b]
+      nested: [[1, 2], [3]]
+      hosts:
+        - {name: cpu-1, gpus: 0, enabled: true}
+        - {name: gpu-1, gpus: 4, enabled: "false"}
+        - {name: gpu-2, gpus: 2, enabled: false}
+        - {name: gpu-3, gpus: 1, enabled: "true"}
+      # The keys are out of order: map and filter go through them sorted.
+      ports: {web: 80, db: 5432, cache: 6379}
+      flags: [a, "", "false", "0", 0, false, null, [], {}]
+      groups:
+        - {name: gpu, nodes: [{host: g1}, {host: g2}]}
+        - {name: cpu, nodes: [{host: c1}]}
+      json_list: "[1, 2, 3]"
+      json_map: '{"b": 2, "a": 1}'
+      text: plain
+      count: 3
+      flag: true
+      domain: example.com
+    matrix:
+      os: linux
+    env:
+      SUFFIX: "-x"
+cases:
+  # The forms of a lambda.
+  - expr: "map(inputs.list, x => x * 2)"
+    value: [2, 4, 6]
+  - expr: "map(inputs.list, (x) => x + 1)"
+    value: [2, 3, 4]
+  - expr: "map(inputs.words, (w, i) => w + i)"
+    value: [a0, b1]
+  - expr: "map(inputs.list, x=>x)"
+    value: [1, 2, 3]
+  - expr: "map(inputs.list, ( x , i ) => i)"
+    value: [0, 1, 2]
+  # As in JavaScript, a comma can end the parameters.
+  - expr: "map(inputs.list, (x,) => x)"
+    value: [1, 2, 3]
+  - expr: "map(inputs.list, _x1 => _x1 + 1)"
+    value: [2, 3, 4]
+  - expr: "filter(inputs.list, x => x > 1)"
+    value: [2, 3]
+
+  # The index is a number for a list, and the key for a mapping, whose values
+  # come in the order of their keys.
+  - expr: "map(inputs.list, (x, i) => i + 1)"
+    value: [1, 2, 3]
+  - expr: "map(inputs.ports, (v, k) => k)"
+    value: [cache, db, web]
+  - expr: "map(inputs.ports, (v, k) => k + '=' + v)"
+    value: [cache=6379, db=5432, web=80]
+  - expr: "map(inputs.ports, v => v)"
+    value: [6379, 5432, 80]
+  - expr: "map({\"b\": 1, \"a\": 2}, (v, k) => k + v)"
+    value: [a2, b1]
+
+  # A string that holds a JSON list or mapping is read as its value, as
+  # outputs are. Null has no items. Anything else is an error, a string that
+  # isn't JSON among them.
+  - expr: "map(inputs.json_list, x => x * 10)"
+    value: [10, 20, 30]
+  - expr: "map(inputs.json_map, (v, k) => k + v)"
+    value: [a1, b2]
+  - expr: "map('[1, 2]', x => x + 1)"
+    value: [2, 3]
+  - expr: "map(' {\"b\": 1, \"a\": 2} ', (v, k) => k)"
+    value: [a, b]
+  - expr: "map([1, 2], x => x)"
+    value: [1, 2]
+  - expr: "map(inputs.missing, x => x)"
+    value: []
+  - expr: "filter(null, x => x)"
+    value: []
+  - expr: "map(inputs.list[5], x => x)"
+    value: []
+  - expr: "map(inputs.count, x => x)"
+    error: eval
+  - expr: "map(3, x => x)"
+    error: eval
+  - expr: "filter(inputs.flag, x => x)"
+    error: eval
+  - expr: "filter(true, x => x)"
+    error: eval
+  - expr: "map(inputs.text, x => x)"
+    error: eval
+  - expr: "map('', x => x)"
+    error: eval
+  - expr: "map('[1, 2', x => x)"
+    error: eval
+  - expr: "map('null', x => x)"
+    error: eval
+
+  # filter keeps what is true by an expression's truthiness, so it keeps the
+  # strings "false" and "0", [] and {}, and it keeps the items, not what the
+  # lambda gives.
+  - expr: "filter(inputs.flags, x => x)"
+    value: [a, "false", "0", [], {}]
+  - expr: "filter(inputs.list, x => x - 2)"
+    value: [1, 3]
+  - expr: "filter(inputs.hosts, h => h.enabled)"
+    value:
+      - {name: cpu-1, gpus: 0, enabled: true}
+      - {name: gpu-1, gpus: 4, enabled: "false"}
+      - {name: gpu-3, gpus: 1, enabled: "true"}
+  # To keep only a true boolean, or only the text "true", compare with it.
+  - expr: "map(filter(inputs.hosts, h => h.enabled == true), h => h.name)"
+    value: [cpu-1]
+  - expr: "map(filter(inputs.hosts, h => h.enabled === true), h => h.name)"
+    value: [cpu-1]
+  - expr: "map(filter(inputs.hosts, h => h.enabled == 'true'), h => h.name)"
+    value: [gpu-3]
+  - expr: "map(filter(inputs.hosts, h => !h.gpus), h => h.name)"
+    value: [cpu-1]
+  # Over a mapping, filter gives a list of the values it keeps, and map a
+  # list of what its lambda gives.
+  - expr: "filter(inputs.ports, v => v > 1000)"
+    value: [6379, 5432]
+  - expr: "filter(inputs.ports, (v, k) => k != 'db')"
+    value: [6379, 80]
+  - expr: "map(inputs.ports, (v, k) => v > 1000)"
+    value: [true, true, false]
+
+  # A parameter's path reads the item as a reference's reads a context.
+  - expr: "map(inputs.hosts, h => h['name'])"
+    value: [cpu-1, gpu-1, gpu-2, gpu-3]
+  - expr: "map(inputs.hosts, h => h.missing)"
+    value: [null, null, null, null]
+  - expr: "map(inputs.groups, g => g.nodes.*.host)"
+    value: [[g1, g2], [c1]]
+  - expr: "map(inputs.nested, x => x[0])"
+    value: [1, 3]
+  - expr: 'map(["{\"a\": 1}"], s => s.a)'
+    value: [1]
+  - expr: "map(inputs.list, x => !x)"
+    value: [false, false, false]
+
+  # An inner lambda reads the outer one's parameters. An inner parameter
+  # with an outer one's name hides it in the inner lambda's body, and the
+  # outer one has its value again after it.
+  - expr: "map(inputs.groups, g => map(g.nodes.*.host, h => g.name + '/' + h))"
+    value: [[gpu/g1, gpu/g2], [cpu/c1]]
+  - expr: "map(inputs.words, (w, i) => map(inputs.words, v => i))"
+    value: [[0, 0], [1, 1]]
+  - expr: "map(inputs.nested, x => map(x, x => x * 10))"
+    value: [[10, 20], [30]]
+  - expr: "map(inputs.words, (w, i) => map(inputs.list, (x, i) => i))"
+    value: [[0, 1, 2], [0, 1, 2]]
+  - expr: "map(inputs.list, x => length(map(inputs.words, x => x)) + x)"
+    value: [3, 4, 5]
+
+  # A lambda's body reads contexts and the workflow around it. A parameter
+  # is known only in its lambda's body: elsewhere, and in an expression the
+  # body reads, its name is a word.
+  - expr: "map(inputs.words, w => w + '.' + inputs.domain)"
+    value: [a.example.com, b.example.com]
+  - expr: "map(inputs.words, w => w + '-' + matrix.os)"
+    value: [a-linux, b-linux]
+  - expr: "map(inputs.words, w => w + env.SUFFIX)"
+    value: [a-x, b-x]
+  - expr: "map(inputs.words, w => needs.build.outputs.path)"
+    unknown: needs
+  - expr: "map([], w => needs.build.outputs.path)"
+    value: []
+  - at: /joined
+    value: a-b-
+  - at: /own
+    value: [x, x]
+  - expr: "format('{0} {1}', join(map(inputs.words, x => x), ','), x)"
+    value: a,b x
+  - expr: "map(inputs.words, x => y)"
+    value: ["y", "y"]
+
+  # A parameter can be named after a function, which a call still calls, and
+  # after a context, keyword or index in another case.
+  - expr: "map(inputs.words, format => format('{0}!', format))"
+    value: [a!, b!]
+  - expr: "map(inputs.list, Index => Index)"
+    value: [1, 2, 3]
+  - expr: "map(inputs.list, Inputs => Inputs)"
+    value: [1, 2, 3]
+  - expr: "map(inputs.list, (Job, i) => Job + i)"
+    value: [1, 3, 5]
+
+  # map and filter compose with the rest of the language.
+  - expr: "join(map(filter(inputs.hosts, h => h.gpus > 0), h => '--host=' + h.name), ' ')"
+    value: --host=gpu-1 --host=gpu-2 --host=gpu-3
+  - expr: "length(filter(inputs.hosts, h => h.gpus > 1))"
+    value: 2
+  - expr: "map(inputs.hosts, h => h.name)[0]"
+    value: cpu-1
+  - expr: "map(inputs.hosts, h => h.name)[1:3]"
+    value: [gpu-1, gpu-2]
+  - expr: "filter(inputs.hosts, h => h.gpus > 0).*.name"
+    value: [gpu-1, gpu-2, gpu-3]
+  - expr: "filter(inputs.hosts, h => h.gpus > 0)[0].name"
+    value: gpu-1
+  - expr: "toJSON(map(inputs.list, x => x + 1))"
+    value: "[\n  2,\n  3,\n  4\n]"
+  - expr: "map(inputs.words, w => upper w) join ','"
+    value: A,B
+  - expr: "length map(inputs.list, x => x)"
+    value: 3
+  - expr: "filter(map(inputs.list, x => x * 2), y => y > 2)"
+    value: [4, 6]
+  - expr: "map(inputs.list, x => x > 1 ? 'big' : 'small')"
+    value: [small, big, big]
+  - expr: "map(inputs.list, x => x?1:2)"
+    value: [1, 1, 1]
+  - expr: "inputs.count > 2 ? map(inputs.list, x => x ? 1 : 0) : []"
+    value: [1, 1, 1]
+  - expr: "length(filter(inputs.list, x => x > 2)) > 0 ? 'some' : 'none'"
+    value: some
+  - expr: "map(inputs.list, x => x in [2, 3])"
+    value: [false, true, true]
+  - expr: "map(inputs.list, x => range x)"
+    value: [[0], [0, 1], [0, 1, 2]]
+  - expr: "map(inputs.list, x => case(x == 1, 'one', x == 2, 'two', 'many'))"
+    value: [one, two, many]
+  - expr: "map(inputs.words, w => contains(inputs.words, w))"
+    value: [true, true]
+  - expr: "map(fromJSON(inputs.json_list), x => x)"
+    value: [1, 2, 3]
+  - expr: "map(keys inputs.ports, k => k)"
+    value: [cache, db, web]
+  - expr: "map(range 3, i => i * i)"
+    value: [0, 1, 4]
+  - template: "${{ map(inputs.list, x => x * 2) }}"
+    value: [2, 4, 6]
+  - template: "list: ${{ map(inputs.list, x => x * 2) }}"
+    value: "list: [2,4,6]"
+  - template: "hosts: ${{ join(map(inputs.words, w => w + '!'), ' ') }}"
+    value: "hosts: a! b!"
+
+  # A parameter's name isn't a word, so it isn't a word that looks like a
+  # reference.
+  - expr: "map(inputs.hosts, h => h.name)"
+    value: [cpu-1, gpu-1, gpu-2, gpu-3]
+    warnings: []
+  - expr: "map(inputs.hosts, h => host.name)"
+    value: [host.name, host.name, host.name, host.name]
+    warnings: [23]
+  - expr: "map(inputs.list, x => x) == x.y"
+    value: false
+    warnings: [28]
+  - expr: "length(filter(inputs.hosts, h => h.enabled)) > 0"
+    condition: true
+    value: true
+    warnings: []
+
+  # A parameter can't be named after a context, a keyword or a word
+  # operator, or NaN, Infinity or index, which it would hide.
+  - expr: "map(inputs.list, inputs => 1)"
+    error: syntax
+  - expr: "map(inputs.list, needs => 1)"
+    error: syntax
+  - expr: "map(inputs.list, steps => 1)"
+    error: syntax
+  - expr: "map(inputs.list, matrix => 1)"
+    error: syntax
+  - expr: "map(inputs.list, env => 1)"
+    error: syntax
+  - expr: "map(inputs.list, org => 1)"
+    error: syntax
+  - expr: "map(inputs.list, vars => 1)"
+    error: syntax
+  - expr: "map(inputs.list, var => 1)"
+    error: syntax
+  - expr: "map(inputs.list, remote => 1)"
+    error: syntax
+  - expr: "map(inputs.list, sessions => 1)"
+    error: syntax
+  - expr: "map(inputs.list, true => 1)"
+    error: syntax
+  - expr: "map(inputs.list, False => 1)"
+    error: syntax
+  - expr: "map(inputs.list, null => 1)"
+    error: syntax
+  - expr: "map(inputs.list, Undefined => 1)"
+    error: syntax
+  - expr: "map(inputs.list, and => 1)"
+    error: syntax
+  - expr: "map(inputs.list, OR => 1)"
+    error: syntax
+  - expr: "map(inputs.list, in => 1)"
+    error: syntax
+  - expr: "map(inputs.list, includes => 1)"
+    error: syntax
+  - expr: "map(inputs.list, startsWith => 1)"
+    error: syntax
+  - expr: "map(inputs.list, get => 1)"
+    error: syntax
+  - expr: "map(inputs.list, range => 1)"
+    error: syntax
+  - expr: "map(inputs.list, mod => 1)"
+    error: syntax
+  - expr: "map(inputs.list, exp => 1)"
+    error: syntax
+  - expr: "map(inputs.list, split => 1)"
+    error: syntax
+  - expr: "map(inputs.list, join => 1)"
+    error: syntax
+  - expr: "map(inputs.list, len => 1)"
+    error: syntax
+  - expr: "map(inputs.list, length => 1)"
+    error: syntax
+  - expr: "map(inputs.list, upper => 1)"
+    error: syntax
+  - expr: "map(inputs.list, trim => 1)"
+    error: syntax
+  - expr: "map(inputs.list, keys => 1)"
+    error: syntax
+  - expr: "map(inputs.list, values => 1)"
+    error: syntax
+  - expr: "map(inputs.list, round => 1)"
+    error: syntax
+  - expr: "map(inputs.list, fromJSON => 1)"
+    error: syntax
+  - expr: "map(inputs.list, NaN => 1)"
+    error: syntax
+  - expr: "map(inputs.list, Infinity => 1)"
+    error: syntax
+  # In any case, as and, or, true, false, null and undefined are.
+  - expr: "map(inputs.list, nan => 1)"
+    error: syntax
+  - expr: "map(inputs.list, INFINITY => 1)"
+    error: syntax
+  - expr: "map(inputs.list, index => 1)"
+    error: syntax
+  - expr: "map(inputs.list, (x, index) => x)"
+    error: syntax
+  # job is the context of the job a step runs in, which can't be hidden
+  # either.
+  - expr: "map(inputs.list, job => 1)"
+    error: syntax
+  - expr: "map(inputs.list, (job, i) => i)"
+    error: syntax
+  - expr: "filter(inputs.list, (x, job) => x)"
+    error: syntax
+  # As in JavaScript, two parameters can't have the same name.
+  - expr: "map(inputs.list, (x, x) => x)"
+    error: syntax
+  - expr: "filter(inputs.list, (x, x) => x)"
+    error: syntax
+
+  # A lambda takes an item and an optional index, and is the last argument
+  # of map or filter.
+  - expr: "map(inputs.list, (a, b, c) => a)"
+    error: syntax
+  - expr: "map(inputs.list, () => 1)"
+    error: syntax
+  - expr: "map(inputs.list, (a b) => a)"
+    error: syntax
+  - expr: "map(inputs.list, (x, 1) => x)"
+    error: syntax
+  - expr: "map(inputs.list, (x => x)"
+    error: syntax
+  - expr: "map(inputs.list, 1x => 1)"
+    error: syntax
+  - expr: "map(inputs.list, x.y => 1)"
+    error: syntax
+  - expr: "map(inputs.list, $x => 1)"
+    error: syntax
+  - expr: "map(inputs.list, x = > x)"
+    error: syntax
+  - expr: "map(inputs.list, x => )"
+    error: syntax
+  - expr: "map(inputs.list, x => y => 1)"
+    error: syntax
+  - expr: "map(x => x, inputs.list)"
+    error: syntax
+  - expr: "contains(inputs.list, x => x)"
+    error: syntax
+  - expr: "format('{0}', x => x)"
+    error: syntax
+  - expr: "join(map(inputs.list, x => x), y => y)"
+    error: syntax
+  - expr: "map(inputs.list)"
+    error: syntax
+  - expr: "filter(inputs.list)"
+    error: syntax
+  - expr: "map()"
+    error: syntax
+  - expr: "map(inputs.list, inputs.list)"
+    error: syntax
+  - expr: "map(inputs.list, 1)"
+    error: syntax
+  - expr: "map(inputs.list, x)"
+    error: syntax
+  - expr: "map(inputs.list, (x))"
+    error: syntax
+  - expr: "map(inputs.list, 'x => x')"
+    error: syntax
+  - expr: "map(inputs.list, )"
+    error: syntax
+  - expr: "map(inputs.list, x => x, 1)"
+    error: syntax
+  - expr: "map(inputs.list, x => x,)"
+    error: syntax
+  - expr: "map (inputs.list, x => x)"
+    error: syntax
+  - expr: "Map(inputs.list, x => x)"
+    error: syntax
+  - expr: "x => 1"
+    error: syntax
+  - expr: "(x) => x"
+    error: syntax
+  - expr: "inputs.list => 1"
+    error: syntax
+  - expr: "1 + => 2"
+    error: syntax
+  - expr: "=> 1"
+    error: syntax
+
+  # A lambda's body counts toward the 200 levels an expression nests: the
+  # call and the lambda are two levels of its tree, and the call one level of
+  # the parser's count, as for any argument. So 198 ! nest in a lambda, and
+  # 199 don't; 196 nest in a lambda in another; 198 + nest; and 199 groups
+  # nest, and 200 don't.
+  - expr: "map(inputs.list, x => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!x)"
+    value: [true, true, true]
+  - expr: "map(inputs.list, x => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!x)"
+    error: syntax
+  - expr: "map(inputs.nested, x => map(x, y => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!y))"
+    value: [[true, true], [true]]
+  - expr: "map(inputs.nested, x => map(x, y => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!y))"
+    error: syntax
+  - expr: "map(inputs.list, x => x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x)"
+    value: [199, 398, 597]
+  - expr: "map(inputs.list, x => x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x)"
+    error: syntax
+  - expr: "map(inputs.list, x => (((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
+    value: [1, 2, 3]
+  - expr: "map(inputs.list, x => ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((x)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
+    error: syntax

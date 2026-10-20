@@ -101,6 +101,11 @@
   "unclosed_string": "A string that starts with {quote} has no {quote} to end it.",
   "unclosed_bracket": "A \"{bracket}\" has no bracket to close it.",
   "unclosed_template": "The $'{{' has no '}}' to close it. Write $'{{' ''$'{{''' '}}' for the text $'{{'.",
+  "lambda_expected": "The function {name}() takes a lambda such as x => x + 1 as its last argument.",
+  "lambda_too_many_parameters": "A lambda of {name}() takes an item and an optional index, not {count} parameters.",
+  "lambda_parameter_reserved": "A lambda's parameter can't be named \"{name}\", which is reserved for a context, a keyword, an operator or a number, or for [index].",
+  "lambda_parameter_twice": "A lambda's two parameters are both named \"{name}\".",
+  "lambda_misplaced": "A lambda such as x => x + 1 can only be the last argument of map() or filter().",
 
   "format_unclosed_brace": "The format() template {template} has a '''{''' with no '''}'''.",
   "format_missing_argument": "The format() template {template} has no argument for {placeholder}.",
@@ -112,6 +117,10 @@
   "unknown_operator": "There's no operator {op}.",
   "expression_too_large": "The expression builds more than {limit} MiB.",
   "expressions_read_each_other": "The expressions here read each other, so none of them has a value.",
+  "not_list_or_mapping": "The function {name}() takes a list or a mapping, not {value}.",
+  "expression_runs_too_many_lambdas": "The expression runs the lambdas of map() and filter() more than {limit} times.",
 
-  "expressions_build_too_much": "The expressions evaluated together here build more than {limit} MiB between them."
+  "expressions_build_too_much": "The expressions evaluated together here build more than {limit} MiB between them.",
+  "expressions_run_too_many_lambdas": "The expressions evaluated together here run the lambdas of map() and filter() more than {limit} times between them.",
+  "expressions_too_slow": "The expressions evaluated together here took more than {limit, plural, one {# second} other {# seconds}} between them."
 }

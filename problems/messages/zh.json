@@ -97,6 +97,11 @@
   "unclosed_string": "以 {quote} 开头的字符串没有以 {quote} 结束。",
   "unclosed_bracket": "“{bracket}”没有对应的右括号。",
   "unclosed_template": "$'{{' 没有以 '}}' 结束。要表示文本 $'{{'，请写成 $'{{' ''$'{{''' '}}'。",
+  "lambda_expected": "函数 {name}() 的最后一个参数应为 lambda，例如 x => x + 1。",
+  "lambda_too_many_parameters": "{name}() 的 lambda 接受一个项和一个可选的索引，而不是 {count} 个参数。",
+  "lambda_parameter_reserved": "lambda 的参数不能命名为“{name}”，该名称保留给上下文、关键字、运算符、数字或 [index]。",
+  "lambda_parameter_twice": "lambda 的两个参数都命名为“{name}”。",
+  "lambda_misplaced": "x => x + 1 这样的 lambda 只能作为 map() 或 filter() 的最后一个参数。",
   "format_unclosed_brace": "format() 模板 {template} 中有一个没有对应“'}'”的“'{'”。",
   "format_missing_argument": "format() 模板 {template} 中的 {placeholder} 没有对应的参数。",
   "format_unopened_brace": "format() 模板 {template} 中有一个没有对应“'{'”的“'}'”。",
@@ -107,5 +112,9 @@
   "unknown_operator": "没有运算符 {op}。",
   "expression_too_large": "表达式生成的数据超过 {limit} MiB。",
   "expressions_read_each_other": "此处的表达式相互引用，因此它们都没有值。",
-  "expressions_build_too_much": "此处一起求值的表达式合计生成的数据超过 {limit} MiB。"
+  "not_list_or_mapping": "函数 {name}() 接受列表或映射，而不是 {value}。",
+  "expression_runs_too_many_lambdas": "表达式运行 map() 和 filter() 的 lambda 超过 {limit} 次。",
+  "expressions_build_too_much": "此处一起求值的表达式合计生成的数据超过 {limit} MiB。",
+  "expressions_run_too_many_lambdas": "此处一起求值的表达式合计运行 map() 和 filter() 的 lambda 超过 {limit} 次。",
+  "expressions_too_slow": "此处一起求值的表达式合计耗时超过 {limit} 秒。"
 }

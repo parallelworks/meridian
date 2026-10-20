@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
@@ -29,9 +30,35 @@ const maxBuilt = 8 << 20
 // that keeps to the language's limits never reaches it.
 const maxGroupBuilt = 64 << 20
 
-// A group's limit is at least one template's: this doesn't compile if it
-// isn't.
-const _ uint = maxGroupBuilt - maxBuilt
+// maxLambdaRuns is the language's limit on how many times one template runs
+// the lambdas of map() and filter(), so that lambdas in lambdas can't make
+// evaluating it take unbounded time.
+const maxLambdaRuns = 100000
+
+// maxGroupLambdaRuns is Meridian's own limit on how many times the
+// templates of a group run lambdas together: ten templates at the
+// language's limit. Like maxGroupBuilt, it isn't part of the format.
+const maxGroupLambdaRuns = 10 * maxLambdaRuns
+
+// A group's limits are at least one template's: this doesn't compile if
+// they aren't.
+const (
+	_ uint = maxGroupBuilt - maxBuilt
+	_ uint = maxGroupLambdaRuns - maxLambdaRuns
+)
+
+// maxGroupTime is Meridian's own limit on how long the templates of a group
+// spend evaluating, together. Counting what expressions build and run can't
+// bound the cost of a step that counts nothing, such as contains on a large
+// value, which a lambda can repeat 100,000 times, so this is a last resort
+// for workflows that do far more work than any real one. It isn't part of
+// the format, since how long evaluating takes depends on the machine.
+const maxGroupTime = 10 * time.Second
+
+// clockEvery is how many nodes a group's templates evaluate between reads
+// of the clock, besides the read at each run of a lambda's body, so that
+// most nodes don't read it.
+const clockEvery = 256
 
 // A Scope is what an expression can read.
 type Scope struct {
@@ -52,24 +79,71 @@ type Scope struct {
 	// second Index[1].
 	Index []int
 
-	// spent counts what the templates that share it have built together,
-	// for Meridian's limit on a group. Nil means a template is a group of
+	// budget counts what the templates that share it have done together,
+	// for Meridian's limits on a group. Nil means a template is a group of
 	// its own.
-	spent *int
+	budget *budget
 }
 
-// Budgeted returns scope with one budget for what templates build, which
-// every evaluation with the returned scope, or a copy of it, shares: the
+// A budget counts what the templates of a group have built, how many times
+// they have run lambdas, and how long they have spent evaluating. The
+// group's evaluations happen one at a time, though one can be nested in
+// another, as a template that reads another is.
+type budget struct {
+	built, runs int
+	// nodes counts the nodes the group's templates have evaluated, so that
+	// the clock is read every clockEvery of them.
+	nodes int
+	// elapsed is how long the group's templates have spent evaluating, up
+	// to last, when the clock was last read.
+	elapsed time.Duration
+	last    time.Time
+	// active counts the evaluations under way, so that the time between
+	// two of the group's evaluations doesn't count.
+	active int
+	// clock reads the time: time.Now, or a test's clock.
+	clock func() time.Time
+}
+
+// Budgeted returns scope with one budget for what templates do, which every
+// evaluation with the returned scope, or a copy of it, shares: the
 // templates are a group, such as all of a run's input defaults and
 // conditions, or every template in one value. Each template still has the
-// language's limit on what it builds, and the group has Meridian's wider
-// one, 64 MiB, on what they build together, which isn't part of the format.
+// language's limits, and the group has Meridian's wider ones, which aren't
+// part of the format: its templates build at most 64 MiB together, run
+// lambdas at most 1,000,000 times, and spend at most 10 seconds evaluating.
 // A scope that has a budget keeps it.
 func (s Scope) Budgeted() Scope {
-	if s.spent == nil {
-		s.spent = new(int)
+	if s.budget == nil {
+		s.budget = &budget{clock: time.Now}
 	}
 	return s
+}
+
+// start notes that one of the group's evaluations starts, and the time
+// counts from then if no other is under way.
+func (b *budget) start() {
+	if b.active == 0 {
+		b.last = b.clock()
+	}
+	b.active++
+}
+
+// stop notes that an evaluation ends, and counts the time since the clock
+// was last read. Its time is counted even if it passes the group's limit:
+// what the evaluation did is done, and the next check fails.
+func (b *budget) stop() {
+	b.tick()
+	b.active--
+}
+
+// tick counts the time since the clock was last read, and reports whether
+// the group has spent longer evaluating than Meridian allows.
+func (b *budget) tick() bool {
+	now := b.clock()
+	b.elapsed += now.Sub(b.last)
+	b.last = now
+	return b.elapsed > maxGroupTime
 }
 
 // Status is how a job or step got to where an expression is evaluated: for
@@ -132,34 +206,81 @@ type UnknownError struct {
 func (e *UnknownError) Error() string { return fmt.Sprintf("%s isn't known yet", e.Name) }
 
 // A BudgetError means the templates of a group, which share a budget
-// (Scope.Budgeted), built more together than Meridian allows a group. It
-// isn't a problem with any one expression, which can each be within the
-// language's limits: the budget is Meridian's own, not part of the format.
-// Its kind is problems.ExpressionsBuildTooMuch.
+// (Scope.Budgeted), built more together, ran lambdas more often, or spent
+// longer evaluating than Meridian allows a group. It isn't a problem with
+// any one expression, which can each be within the language's limits: the
+// budget is Meridian's own, not part of the format.
 type BudgetError struct {
-	// Limit is the group's limit, in MiB.
+	// Kind is the limit the group passed: problems.ExpressionsBuildTooMuch,
+	// problems.ExpressionsRunTooManyLambdas or problems.ExpressionsTooSlow.
+	Kind *problems.Kind
+	// Limit is the group's limit: in MiB for what it builds, in runs for
+	// its lambdas, and in seconds for its time.
 	Limit int
 }
 
 func (e *BudgetError) Error() string {
-	return problems.ExpressionsBuildTooMuch.Message(problems.Params{"limit": e.Limit})
+	return e.Kind.Message(problems.Params{"limit": e.Limit})
 }
 
 // Eval evaluates the expression in scope.
 func (e *Expr) Eval(scope Scope) (any, error) {
-	return newEvaluator(scope).eval(e.root)
+	ev := newEvaluator(scope)
+	defer ev.stop()
+	return ev.eval(e.root)
 }
 
 // An evaluator evaluates one template: a ${{ }} alone, or the expressions
 // in text.
 type evaluator struct {
 	scope Scope
-	// spent counts what the template has built, for the language's limit.
-	spent int
+	// spent counts what the template has built, and runs how many times it
+	// has run lambdas, for the language's limits.
+	spent, runs int
+	// frame holds the parameters of the lambda whose body is being
+	// evaluated, if any, and those of the lambdas around it.
+	frame *frame
 }
 
+// A frame holds the values of a lambda's parameters while its body is
+// evaluated for an item, and the frame of the lambda around it, if any.
+type frame struct {
+	lambda *lambda
+	// values are the item, and its index in a list or its key in a
+	// mapping.
+	values [2]any
+	outer  *frame
+}
+
+// lookup returns the value of the parameter name of the innermost lambda
+// that has one, which hides any of the same name around it.
+func (f *frame) lookup(name string) any {
+	for ; f != nil; f = f.outer {
+		if i := slices.Index(f.lambda.params, name); i >= 0 {
+			return f.values[i]
+		}
+	}
+	return nil
+}
+
+// newEvaluator returns an evaluator for a template in scope, whose time
+// counts toward its group's until stop.
 func newEvaluator(scope Scope) *evaluator {
-	return &evaluator{scope: scope.Budgeted()}
+	e := &evaluator{scope: scope.Budgeted()}
+	e.scope.budget.start()
+	return e
+}
+
+// stop ends the evaluation, and counts its time.
+func (e *evaluator) stop() { e.scope.budget.stop() }
+
+// timed reads the clock, and fails if the group has spent longer evaluating
+// than Meridian allows.
+func (e *evaluator) timed() error {
+	if e.scope.budget.tick() {
+		return &BudgetError{Kind: problems.ExpressionsTooSlow, Limit: int(maxGroupTime / time.Second)}
+	}
+	return nil
 }
 
 func (e *evaluator) errorAt(at int, k *problems.Kind, params problems.Params) error {
@@ -173,12 +294,27 @@ func (e *evaluator) spend(at, n int) error {
 	if e.spent+n > maxBuilt {
 		return e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
 	}
-	if *e.scope.spent+n > maxGroupBuilt {
-		return &BudgetError{Limit: maxGroupBuilt >> 20}
+	if e.scope.budget.built+n > maxGroupBuilt {
+		return &BudgetError{Kind: problems.ExpressionsBuildTooMuch, Limit: maxGroupBuilt >> 20}
 	}
 	e.spent += n
-	*e.scope.spent += n
+	e.scope.budget.built += n
 	return nil
+}
+
+// run counts a run of a lambda's body, and fails if it takes the template
+// past the language's limit, or its group past Meridian's. It reads the
+// clock too, since a body can do work that counts nothing.
+func (e *evaluator) run(at int) error {
+	if e.runs >= maxLambdaRuns {
+		return e.errorAt(at, problems.ExpressionRunsTooManyLambdas, problems.Params{"limit": maxLambdaRuns})
+	}
+	if e.scope.budget.runs >= maxGroupLambdaRuns {
+		return &BudgetError{Kind: problems.ExpressionsRunTooManyLambdas, Limit: maxGroupLambdaRuns}
+	}
+	e.runs++
+	e.scope.budget.runs++
+	return e.timed()
 }
 
 // built counts v as built and returns it.
@@ -190,6 +326,11 @@ func (e *evaluator) built(at int, v any) (any, error) {
 }
 
 func (e *evaluator) eval(n node) (any, error) {
+	if e.scope.budget.nodes++; e.scope.budget.nodes%clockEvery == 0 {
+		if err := e.timed(); err != nil {
+			return nil, err
+		}
+	}
 	switch n := n.(type) {
 	case *literal:
 		// A copy, so that a caller that changes the result doesn't change
@@ -199,6 +340,16 @@ func (e *evaluator) eval(n node) (any, error) {
 		return n.text, nil
 	case *ref:
 		return e.ref(n)
+	case *param:
+		path, err := e.names(n.at, n.path)
+		if err != nil {
+			return nil, err
+		}
+		v, ok := walk(e.frame.lookup(n.name), path)
+		if !ok {
+			return nil, nil
+		}
+		return v, nil
 	case *relative:
 		return e.relative(n)
 	case *unary:
@@ -392,6 +543,9 @@ func (e *evaluator) call(n *call) (any, error) {
 		}
 		return e.eval(n.args[len(n.args)-1])
 	}
+	if fn := functions[n.name]; fn.each != nil {
+		return e.each(n, fn)
+	}
 	args := make([]any, len(n.args))
 	for i, a := range n.args {
 		v, err := e.eval(a)
@@ -401,6 +555,42 @@ func (e *evaluator) call(n *call) (any, error) {
 		args[i] = v
 	}
 	return functions[n.name].eval(e, n.at, args)
+}
+
+// each evaluates n, a call to map() or filter(): it runs the lambda that is
+// the last argument for each item of the first, and makes a list of what
+// fn.each gives for each. It counts each run, and 8 for each item of the
+// list and the item's size.
+func (e *evaluator) each(n *call, fn function) (any, error) {
+	v, err := e.eval(n.args[0])
+	if err != nil {
+		return nil, err
+	}
+	keys, items, ok := entries(v)
+	if !ok {
+		return nil, e.errorAt(n.at, problems.NotListOrMapping, problems.Params{"name": n.name, "value": problems.Show(v)})
+	}
+	f := &frame{lambda: n.args[len(n.args)-1].(*lambda), outer: e.frame}
+	e.frame = f
+	defer func() { e.frame = f.outer }()
+	out := []any{}
+	for i, item := range items {
+		if err := e.run(n.at); err != nil {
+			return nil, err
+		}
+		f.values = [2]any{item, keys[i]}
+		result, err := e.eval(f.lambda.body)
+		if err != nil {
+			return nil, err
+		}
+		if kept, keep := fn.each(item, result); keep {
+			if err := e.spend(n.at, 8+size(kept)); err != nil {
+				return nil, err
+			}
+			out = append(out, kept)
+		}
+	}
+	return out, nil
 }
 
 func (e *evaluator) ref(r *ref) (any, error) {

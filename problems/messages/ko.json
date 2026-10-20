@@ -97,6 +97,11 @@
   "unclosed_string": "{quote} 기호로 시작하는 문자열에 끝을 나타내는 {quote} 기호가 없습니다.",
   "unclosed_bracket": "‘{bracket}’ 괄호를 닫는 괄호가 없습니다.",
   "unclosed_template": "$'{{' 기호를 닫는 '}}' 기호가 없습니다. 텍스트로 $'{{' 기호를 쓰려면 $'{{' ''$'{{''' '}}' 형태로 쓰세요.",
+  "lambda_expected": "{name}() 함수는 마지막 인수로 x => x + 1 같은 람다를 받습니다.",
+  "lambda_too_many_parameters": "{name}() 함수의 람다는 항목 하나와 선택적인 인덱스를 받습니다. 매개변수는 {count}개가 될 수 없습니다.",
+  "lambda_parameter_reserved": "‘{name}’ 이름은 람다의 매개변수 이름으로 쓸 수 없습니다. 이 이름은 컨텍스트, 키워드, 연산자, 숫자 또는 [index]용으로 예약되어 있습니다.",
+  "lambda_parameter_twice": "람다의 두 매개변수 이름이 모두 ‘{name}’입니다.",
+  "lambda_misplaced": "x => x + 1 같은 람다는 map() 또는 filter() 함수의 마지막 인수로만 쓸 수 있습니다.",
   "format_unclosed_brace": "format() 템플릿 {template}에 ‘'{'’ 기호에 대응하는 ‘'}'’ 기호가 없습니다.",
   "format_missing_argument": "format() 템플릿 {template}에 {placeholder}에 대응하는 인수가 없습니다.",
   "format_unopened_brace": "format() 템플릿 {template}에 대응하는 ‘'{'’ 기호가 없는 ‘'}'’ 기호가 있습니다.",
@@ -107,5 +112,9 @@
   "unknown_operator": "{op} 연산자가 없습니다.",
   "expression_too_large": "표현식이 {limit}MiB를 넘는 데이터를 만듭니다.",
   "expressions_read_each_other": "이곳의 표현식들이 서로를 참조하므로 어느 표현식도 값을 가질 수 없습니다.",
-  "expressions_build_too_much": "이곳에서 함께 평가되는 표현식들이 합쳐서 {limit}MiB를 넘는 데이터를 만듭니다."
+  "not_list_or_mapping": "{name}() 함수에는 {value} 값이 아니라 목록 또는 매핑을 지정해야 합니다.",
+  "expression_runs_too_many_lambdas": "표현식이 map() 및 filter() 함수의 람다를 {limit}번보다 많이 실행합니다.",
+  "expressions_build_too_much": "이곳에서 함께 평가되는 표현식들이 합쳐서 {limit}MiB를 넘는 데이터를 만듭니다.",
+  "expressions_run_too_many_lambdas": "이곳에서 함께 평가되는 표현식들이 합쳐서 map() 및 filter() 함수의 람다를 {limit}번보다 많이 실행합니다.",
+  "expressions_too_slow": "이곳에서 함께 평가되는 표현식들의 평가에 합쳐서 {limit}초보다 오래 걸렸습니다."
 }

@@ -390,6 +390,14 @@ conversions in full.
   `case(condition, value, ..., default)`. A word operator gives what its
   function gives for the same arguments: `in` and `includes` are `contains`,
   and `startsWith`, `endsWith` and `join` are the functions of those names.
+- **Lambdas.** `map(list, x => expr)` makes a list of what its lambda gives
+  for each item, and `filter(list, x => cond)` a list of the items it gives a
+  true value for. With `(x, i) =>` the lambda reads the index too, or the
+  key in a mapping; both go through a mapping's values in the order of its
+  keys. `filter` goes by the language's truthiness, so it keeps the text
+  `"false"`: compare, as in `h => h.enabled == true`, to keep only `true`. A
+  parameter is known only in its lambda's body, and can't take a name that a
+  word already means something by, such as a context's.
 - **Strings with expressions in them.** A string that is one expression and
   nothing else has the expression's value, of any type. Otherwise each
   expression is replaced by its value's text: a string as it is, null as
@@ -416,20 +424,33 @@ a network. Depth, time and the size of a result are bounded, so a workflow
 can't make the compiler or coordinator do unbounded work: an expression's
 tree nests at most 200 levels, `range` makes at most 10,000 numbers, none
 beyond ±2^53, and a template, a `${{ }}` alone or text with `${{ }}` in it,
-builds at most 8 MiB of strings and lists. These limits are the language's,
-and [Expressions](expressions.md#limits) says how each operation counts
-toward them. A template doesn't count what a template it reads builds, such
-as an input's default: that has its own count.
+builds at most 8 MiB of strings and lists and runs the lambdas of `map` and
+`filter` at most 100,000 times. These limits are the language's, and
+[Expressions](expressions.md#limits) says how each operation counts toward
+them. A template doesn't count what a template it reads builds or runs,
+such as an input's default: that has its own count.
 
 Meridian adds a safety net of its own, which isn't part of the format: the
 templates it evaluates together as a group build at most 64 MiB between
-them. A group is all of a run's input defaults and conditions, or every
+them, and run lambdas at most 1,000,000 times, ten templates at their
+limit. A group is all of a run's input defaults and conditions, or every
 template in one value, such as a step's `with:`. The net bounds what a
-group builds however many templates it has, and its cap, for every group,
-is at least one template's limit, so a template on its own that keeps to
-the language's limits never reaches it. A group that passes it fails with
-`expressions_build_too_much`, which says the group built too much together,
-rather than with an expression's error.
+group does however many templates it has, and each of these caps, for
+every group, is at least one template's limit, so a template on its own
+that keeps to the language's limits never reaches it. A group that passes
+one fails with `expressions_build_too_much` or
+`expressions_run_too_many_lambdas`, which say the group did too much
+together, rather than with an expression's error.
+
+The net bounds time too, as a last resort: a group's templates spend at
+most 10 seconds of wall-clock time evaluating, together. Counting what
+templates build and run can't bound a step that counts nothing, such as
+`contains` on a large value, and a lambda can repeat such a step 100,000
+times. The cap is a safeguard against workflows that do far more work than
+any real one, not a limit a workflow is written to: how long evaluating
+takes depends on the machine. The evaluator reads the clock every 256
+nodes its group evaluates and at each run of a lambda, and a group that
+passes the cap fails with `expressions_too_slow`.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.

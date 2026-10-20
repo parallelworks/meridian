@@ -1,0 +1,9 @@
+description: >-
+  A lambda's body is checked as the rest of its expression is: a job's if is
+  evaluated before its steps run, so a body in it can't read steps.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context_not_known
+      path: /jobs/build/if

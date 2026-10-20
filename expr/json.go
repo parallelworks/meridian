@@ -10,6 +10,8 @@ import (
 	"math"
 	"slices"
 	"strings"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // Expressions encode as their parsed tree, not their source, so that a
@@ -25,6 +27,8 @@ import (
 //	{"if": ..., "then": ..., "else": ...}    a ternary
 //	{"member": ..., "path": [...]}           properties of a computed value
 //	{"call": "contains", "args": [...]}      a function call
+//	{"lambda": ["x", "i"], "body": ...}      the lambda that is the last argument of map() or filter()
+//	{"param": "x", "path": [...]}            a lambda's parameter, read in its body
 //	{"slice": [start, end]}                  the operand (start):(end); end is null when open
 //	{"concat": "2:", "x": ...}               the operand 2:(end)
 //
@@ -55,7 +59,7 @@ func (e *Expr) UnmarshalJSON(data []byte) error {
 	if err := strictUnmarshal(data, &v); err != nil {
 		return err
 	}
-	root, err := decodeNode(v.Tree, 0)
+	root, err := decodeNode(v.Tree, place{})
 	if err != nil {
 		return err
 	}
@@ -157,6 +161,14 @@ func encodeNode(n node) (json.RawMessage, error) {
 			return nil, err
 		}
 		v = map[string]any{"call": n.name, "args": args}
+	case *lambda:
+		body, err := encodeNode(n.body)
+		if err != nil {
+			return nil, err
+		}
+		v = map[string]any{"lambda": n.params, "body": body}
+	case *param:
+		v = map[string]any{"param": n.name, "path": encodePath(n.path)}
 	case *slice:
 		start, err := encodeNode(n.start)
 		if err != nil {
@@ -214,8 +226,26 @@ func encodePath(path []segment) []any {
 // errTooDeep reports a tree nested more deeply than a parse allows.
 var errTooDeep = fmt.Errorf("expr: the tree nests more than %d levels deep", maxDepth)
 
-func decodeNode(data json.RawMessage, depth int) (node, error) {
-	if depth > maxDepth {
+// A place is where in a tree a node is decoded: how many levels deep, the
+// parameters of the lambdas around it, and whether it is the last argument
+// of map() or filter(), which is a lambda and the one place a lambda can be.
+type place struct {
+	depth  int
+	params []string
+	lambda bool
+}
+
+// under returns the place of a node under one at p, with the parameters of
+// the lambda that node is the body of, if any.
+func (p place) under(params ...string) place {
+	if len(params) > 0 {
+		p.params = slices.Concat(p.params, params)
+	}
+	return place{depth: p.depth + 1, params: p.params}
+}
+
+func decodeNode(data json.RawMessage, at place) (node, error) {
+	if at.depth > maxDepth {
 		return nil, errTooDeep
 	}
 	var m map[string]json.RawMessage
@@ -226,17 +256,20 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 	if err != nil {
 		return nil, err
 	}
+	if (kind == "lambda") != at.lambda {
+		return nil, errors.New("expr: a lambda is the last argument of map() and filter(), and nothing else")
+	}
 	str := func(k string) (string, error) {
 		var s string
 		err := json.Unmarshal(m[k], &s)
 		return s, err
 	}
-	sub := func(k string) (node, error) {
+	sub := func(k string, params ...string) (node, error) {
 		raw, ok := m[k]
 		if !ok {
 			return nil, fmt.Errorf("expr: a node is missing %q", k)
 		}
-		return decodeNode(raw, depth+1)
+		return decodeNode(raw, at.under(params...))
 	}
 	switch kind {
 	case "lit":
@@ -315,24 +348,51 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		}
 		args := make([]node, len(raw))
 		for i, r := range raw {
-			if args[i], err = decodeNode(r, depth+1); err != nil {
+			arg := at.under()
+			arg.lambda = fn.each != nil && i == len(raw)-1
+			if args[i], err = decodeNode(r, arg); err != nil {
 				return nil, err
 			}
 		}
 		return &call{name: name, args: args}, nil
+	case "lambda":
+		var params []string
+		if err := json.Unmarshal(m["lambda"], &params); err != nil || len(params) == 0 || len(params) > 2 {
+			return nil, errors.New("expr: a lambda has one or two parameters")
+		}
+		for _, name := range params {
+			if !identifier(name) {
+				return nil, fmt.Errorf("expr: %q isn't a parameter's name", name)
+			}
+		}
+		if i, k := paramProblem(params); k != nil {
+			return nil, fmt.Errorf("expr: %s", k.Message(problems.Params{"name": params[i]}))
+		}
+		body, err := sub("body", params...)
+		return &lambda{params: params, body: body}, err
+	case "param":
+		name, err := str("param")
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(at.params, name) {
+			return nil, fmt.Errorf("expr: %q isn't a parameter of a lambda around it", name)
+		}
+		path, err := decodePath(m["path"])
+		return &param{name: name, path: path}, err
 	case "slice":
 		var raw []json.RawMessage
 		if err := json.Unmarshal(m["slice"], &raw); err != nil || len(raw) != 2 {
 			return nil, errors.New("expr: a slice is [start, end]")
 		}
-		start, err := decodeNode(raw[0], depth+1)
+		start, err := decodeNode(raw[0], at.under())
 		if err != nil {
 			return nil, err
 		}
 		if bytes.Equal(bytes.TrimSpace(raw[1]), []byte("null")) {
 			return &slice{start: start}, nil
 		}
-		end, err := decodeNode(raw[1], depth+1)
+		end, err := decodeNode(raw[1], at.under())
 		return &slice{start: start, end: end}, err
 	case "concat":
 		prefix, err := str("concat")
@@ -386,6 +446,8 @@ var nodeKinds = map[string][]string{
 	"if":     {"then", "else"},
 	"member": {"path"},
 	"call":   {"args"},
+	"lambda": {"body"},
+	"param":  {"path"},
 	"slice":  nil,
 	"concat": {"x"},
 }

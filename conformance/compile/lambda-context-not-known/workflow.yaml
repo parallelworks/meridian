@@ -1,0 +1,6 @@
+jobs:
+  build:
+    if: ${{ length(filter([1, 2], n => steps.x.outputs.ok)) > 0 }}
+    steps:
+      - id: x
+        run: echo ok

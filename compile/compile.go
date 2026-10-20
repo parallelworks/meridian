@@ -118,7 +118,7 @@ func (r *reporter) reportError(loc []string, shift int, err error) {
 		return
 	}
 	if be, ok := errors.AsType[*expr.BudgetError](err); ok {
-		report(problems.ExpressionsBuildTooMuch, problems.Params{"limit": be.Limit}, 0, "")
+		report(be.Kind, problems.Params{"limit": be.Limit}, 0, "")
 		return
 	}
 	report(problems.ExpressionFailed, problems.Params{"reason": err.Error()}, 0, "")

@@ -589,6 +589,36 @@
       "Add the }}, or write ${{ '${{' }} where the text ${{ is meant."
     ]
   },
+  "lambda_expected": {
+    "why": "The functions map() and filter() take a list, then a lambda that they run for each item, such as x => x + 1. A lambda is a parameter, or one or two in parentheses, then => and its body.",
+    "fix": [
+      "Write the last argument as a lambda, such as h => h.name."
+    ]
+  },
+  "lambda_too_many_parameters": {
+    "why": "A lambda of map() or filter() takes the item, and optionally its index in a list or its key in a mapping, as in (h, i) => i.",
+    "fix": [
+      "Remove the parameters after the second."
+    ]
+  },
+  "lambda_parameter_reserved": {
+    "why": "A lambda's parameter can't take a name that already means something in an expression: a context, such as inputs; the keywords true, false, null and undefined, and the operators and and or, in any case; a word operator, such as in or length; NaN and Infinity, in any case; or index, which [index] reads.",
+    "fix": [
+      "Give the parameter another name, such as item."
+    ]
+  },
+  "lambda_parameter_twice": {
+    "why": "A lambda's parameters are the item and its index or key, so each needs its own name. As in JavaScript, a lambda can't give two parameters the same name.",
+    "fix": [
+      "Rename one of them, as in (h, i) => i."
+    ]
+  },
+  "lambda_misplaced": {
+    "why": "A lambda, written with =>, can only be the last argument of map() or filter(), which run it for each item. Anywhere else, => isn't part of an expression.",
+    "fix": [
+      "Move the lambda into map() or filter(), after the list it goes through."
+    ]
+  },
   "format_unclosed_brace": {
     "why": "The template of format() has a { that doesn't close. Write {{ for a literal {.",
     "fix": [
@@ -649,10 +679,34 @@
       "Change one of them so that it doesn't read the others."
     ]
   },
+  "not_list_or_mapping": {
+    "why": "The functions map() and filter() go through a list's items, or a mapping's values in the order of their keys. A string that holds a JSON list or mapping is read as its value, and null has no items. Anything else, such as a number or other text, is an error.",
+    "fix": [
+      "Check the value of the first argument, such as an input or a step's output."
+    ]
+  },
+  "expression_runs_too_many_lambdas": {
+    "why": "The expressions in one string run the lambdas of map() and filter() more often than the language allows a string, 100,000 times, a limit that keeps evaluating them bounded. A lambda in another runs for each of its items every time the other runs.",
+    "fix": [
+      "Run fewer lambdas, such as by going through part of a list rather than all of it."
+    ]
+  },
   "expressions_build_too_much": {
     "why": "Meridian evaluates some expressions together, and bounds what they build between them as well as what each one builds. Each of these is within the language's limit, but together they build more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
     "fix": [
       "Build less in these expressions, such as by reading part of a value rather than all of it."
+    ]
+  },
+  "expressions_run_too_many_lambdas": {
+    "why": "Meridian evaluates some expressions together, and bounds how often they run the lambdas of map() and filter() between them as well as how often each one does. Each of these is within the language's limit, but together they run more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Run fewer lambdas in these expressions, such as by going through part of a list rather than all of it."
+    ]
+  },
+  "expressions_too_slow": {
+    "why": "Meridian evaluates some expressions together, and stops them once evaluating them has taken 10 seconds between them. This is a safeguard against workflows that do far more work than any real one, such as lambdas that each go through a large value. It isn't a limit of the workflow format, since how long evaluating takes depends on the machine.",
+    "fix": [
+      "Do less work in these expressions, such as by going through part of a list rather than all of it, or by reading less of a large value in each lambda."
     ]
   }
 }

@@ -72,23 +72,25 @@ A `-` starts a word only as a number's sign: elsewhere it is an operator.
 
 A word is scanned whole, then read as the first of these that fits:
 
-1. **A relative reference**: a word that starts with `.` and has more after
+1. **A lambda's parameter**, in the lambda's body: the parameter's name,
+   alone or followed by a `.` or `[` and more ([Lambdas](#lambdas)).
+2. **A relative reference**: a word that starts with `.` and has more after
    it, unless it is a number ([Relative references](#relative-references)).
    `.5` and `.5e1` are numbers, as in JavaScript, while `.name`, `..5` and
    `.5.x` are relative references. A key named with digits is read in
    brackets: `.[5]`.
-2. **A reference**: a context's name, then a `.` or `[` and more
+3. **A reference**: a context's name, then a `.` or `[` and more
    ([References](#references)).
-3. **A number**: a word that is a number as a string is one
+4. **A number**: a word that is a number as a string is one
    ([Values](#values)), such as `42`, `2.5e-3`, `017` (17), `0xff`, `0o17` or
    `0b101`, and `1e400`, which is beyond a 64-bit float's range and so is
    Infinity. A `-` before a hexadecimal, octal or binary number negates it:
    `-0x10` is -16. `NaN` and `Infinity`, in that case, are numbers too, as
    JavaScript's globals are. `1_000`, `0x1p4`, `inf` and `nan` aren't
    numbers, so they are bare words.
-4. **`true`, `false`, `null`**, and `undefined`, which is `null`, in any
+5. **`true`, `false`, `null`**, and `undefined`, which is `null`, in any
    case.
-5. **A bare word**, whose value is its text: `debug`, `ubuntu:22.04`, `12:30`,
+6. **A bare word**, whose value is its text: `debug`, `ubuntu:22.04`, `12:30`,
    `10.0.0.5`, `1.5.3`, `$HOME`. The compiler warns about bare words that
    look like mistakes ([the design](design.md#the-language)).
 
@@ -181,16 +183,18 @@ Arith      = Unary { arith_op Unary } .
 Operand    = Group [ Slice | Postfix ]
            | Call
            | word "(" Expression ")"       /* the word ends in ":": 2:(len x) */
-           | Reference | Relative | string | JSON | word .
+           | Param | Reference | Relative | string | JSON | word .
 Group      = "(" Expression ")" .
 Slice      = ":" [ Group | word ] .         /* the word is a number: (start):5 */
 Postfix    = { "." name | ".*" | "[" key "]" } .
-Call       = function "(" [ Expression { "," Expression } ] ")" Postfix .
+Call       = function "(" [ Expression { "," Expression } ] ")" Postfix
+           | each "(" Expression "," Lambda ")" Postfix .
 
 prefix_op  = "length" | "len" | "upper" | "lower" | "trim" | "keys" | "values"
            | "abs" | "floor" | "ceil" | "round" | "fromJSON" .
 function   = "contains" | "startsWith" | "endsWith" | "format" | "join" | "toJSON"
            | "case" | "success" | "failure" | "cancelled" | "canceled" | "always" .
+each       = "map" | "filter" .
 ```
 
 - **No whitespace** comes before a call's `(`, the `(` after a word that
@@ -221,6 +225,7 @@ function   = "contains" | "startsWith" | "endsWith" | "format" | "join" | "toJSO
   | `toJSON` | 1 |
   | `case` | an odd number, 3 or more: conditions and values, then a default |
   | `success`, `failure`, `cancelled`, `canceled`, `always` | none |
+  | `map`, `filter` | 2: a list, then a lambda ([Lambdas](#lambdas)) |
 
   `fromJSON(x)` is the prefix operator with a group.
 
@@ -272,6 +277,61 @@ except that `range` before an operand takes arithmetic: `!inputs.count - 1` is
   `or`, which are operators in any case. A `!` directly before `in`,
   `includes`, `startsWith` or `endsWith` negates it, with nothing between.
 
+### Lambdas
+
+```
+Lambda     = ( param_name | "(" param_name [ "," param_name ] [ "," ] ")" ) "=>" Expression .
+param_name = ( letter | "_" ) { letter | digit | "_" } .
+Param      = param_name path .   /* in the lambda's body, scanned as one word; path is empty or starts with "." or "[" */
+```
+
+`map(list, x => expr)` makes a list of what its lambda gives for each item of
+`list`, and `filter(list, x => cond)` a list of the items its lambda gives a
+true value for.
+
+- **Where.** A lambda is the last argument of `map` and `filter`, and nothing
+  else. A `=>` anywhere else is a syntax error, as in `map(x => x, list)` or
+  `contains(list, x => x)`.
+- **Parameters.** A lambda has one or two: the item, and its index in a list
+  or its key in a mapping. The index is a number, and the key a string.
+  `x => x`, `(x) => x` and `(x, i) => i` are lambdas, and as in JavaScript a
+  comma can end the parameters in parentheses: `(x,) => x`. Whitespace is
+  optional around them and around `=>`.
+- **Names.** A parameter can't be named after a context, a keyword or a word
+  operator, such as `inputs`, `true`, `and`, `in` or `len`, or `NaN`,
+  `Infinity` or `index`, and two can't have the same name. The keywords,
+  `and`, `or`, `NaN` and `Infinity` are reserved in any case, so `False` and
+  `nan` can't name one, while `Inputs` and `Len` can. A function's name, such
+  as `format`, can name one, and a call to the function still calls it.
+- **The body.** In the lambda's body, a word that is a parameter's name,
+  alone or followed by a path, reads the parameter: `h`, `h.name`,
+  `h['my-key']`, `h.nodes.*.host`. The path reads it as a reference's path
+  reads a context. An inner lambda's parameter hides an outer one of the same
+  name in the inner body: `map(lists, x => map(x, x => x * 10))`. Anywhere
+  else the name is a word, so in `format('{0} {1}', map(l, x => x), x)` the
+  last `x` is `"x"`, and so is an `x` in an expression the body reads, such
+  as an input's default or a key that a relative reference reads.
+- **What they go through.** A list's items in order, or a mapping's values in
+  the order of their keys, as `keys` and `values` give them. A string that
+  holds a JSON list or mapping is read as its value, as outputs are, and null
+  has no items, so a missing input gives `[]`. Anything else, such as a
+  number, a boolean or other text, is an evaluation error. A list without
+  items runs no lambda: `map([], x => needs.a.outputs.b)` is `[]`, and reads
+  nothing.
+- **What they make.** `map` makes a list of what its lambda gives for each
+  item, of a mapping too. `filter` makes a list of the items, or a mapping's
+  values, that its lambda gives a true value for, by the language's
+  truthiness ([Values](#values)). So `filter(hosts, h => h.enabled)` keeps a
+  host whose `enabled` is the text `"false"`, which is true. To keep only
+  what is `true`, compare with it: `h => h.enabled == true` for a boolean, or
+  `h => h.enabled == 'true'` for text.
+
+The list composes like any other value:
+`join(map(filter(inputs.hosts, h => h.gpus > 0), h => '--host=' + h.name), ' ')`,
+`length(filter(inputs.hosts, h => h.gpus > 1))`,
+`map(inputs.hosts, h => h.name)[0]` and
+`filter(inputs.hosts, h => h.gpus > 0).*.name`.
+
 ### Where the grammar depends on context
 
 What some bytes mean depends on what is around them:
@@ -302,6 +362,11 @@ What some bytes mean depends on what is around them:
 - **`/` and `*`** are division and multiplication, except right after a `.`
   in a word: `../x` and `.*`. So `~/dir` is `~` divided by `dir`.
 - **Prefix operators' names** are operators only before an operand.
+- **A lambda's parameter** is a parameter only in the lambda's body, and a
+  word elsewhere.
+- **The last argument of `map` and `filter`** is a lambda, so a `(` there
+  starts its parameters rather than a group: `map(l, (x) => x)` is a lambda,
+  and `map(l, (x))` is a syntax error.
 - **`!`** before `in`, `includes`, `startsWith` or `endsWith` where an
   operator can be is a negated operator. Where an operand can be, `!in` is
   `!` applied to the bare word `in`.
@@ -322,13 +387,21 @@ compiler or coordinator do unbounded work:
   level for each group, call, operator's operand and ternary branch that an
   operand is inside, so 200 groups nest and 201 don't. The tree it builds is
   at most 200 levels deep too, which bounds chains such as `a + b + …` and
-  `!!…x`. A stored tree is decoded by the same rule.
+  `!!…x`. A stored tree is decoded by the same rule. A lambda's body counts
+  toward both: the call is a level for the parser, as it is for any of its
+  arguments, and the call and the lambda are two levels of the tree. So 199
+  groups nest in a lambda's body, and 198 `!` before an operand in it.
 - **`range`** takes whole numbers from -2^53 to 2^53, and makes at most
   10,000 of them.
 - **What a template builds.** A template, a `${{ }}` alone or text with one
   or more `${{ }}` in it, builds at most 8 MiB. It doesn't count what another
   template that it reads builds, such as an input's default or a key that a
   relative reference reads: that template has its own count.
+- **Lambdas.** A template runs the lambdas of `map` and `filter` at most
+  100,000 times. A lambda in another runs for each of its items each time the
+  other runs, so `filter(range 10, i => length(filter(range 9999, j => false)))`
+  runs 100,000 times. A template it reads has its own count, as for what it
+  builds.
 
 What a template builds is the size of each value that its operations make. A
 value's size is:
@@ -354,6 +427,8 @@ count nothing.
 | `fromJSON` | The value it reads from the text |
 | `upper` and `lower` | The string it makes |
 | `range`, the prefix and the word operator | The list it makes: 16 for each number |
+| `map` | The list it makes: 8 for each item, plus the item's size |
+| `filter` | The list it makes: 8 for each item it keeps, plus the item's size |
 | The slice operand `2:(end)` | The string it makes |
 
 - An operation that gives back what it was given makes nothing, and counts
@@ -364,10 +439,14 @@ count nothing.
   none of an empty string.
 - `format` counts its string's length once, however many placeholders it
   has.
+- `map` and `filter` count each item of their list, even one that was there
+  already, as in `map(l, x => x)`. What a lambda's body makes counts too,
+  each time it runs, and an item that `filter` doesn't keep counts nothing.
 
 Meridian bounds what it evaluates together as well, such as all of a run's
-input defaults, but that bound is its own and not part of the language:
-[the design](design.md#the-language) describes it.
+input defaults, and how long that takes, but those bounds are its own and
+not part of the language: [the design](design.md#the-language) describes
+them.
 
 ## Values
 
@@ -376,7 +455,8 @@ Numbers are 64-bit floats, as in JavaScript. `expr/value.go` has the rules;
 in short:
 
 - **Truthiness.** `false`, `0`, NaN, `""` and `null` are false. Everything
-  else is true, including `"false"`, `"0"`, `[]` and `{}`.
+  else is true, including `"false"`, `"0"`, `[]` and `{}`. Conditions, `!`,
+  `||`, `&&`, `? :` and `filter` go by it.
 - **To a number**, for arithmetic, for ordering, and for some of `==`'s
   comparisons: `null` is 0, `true` 1 and `false` 0. A string is read as
   JavaScript's `Number()` reads it:
