@@ -3,5 +3,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: reference
+      code: step_not_earlier
       path: /jobs/build/steps/0/run

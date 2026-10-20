@@ -5,7 +5,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: missing_keys
       path: /jobs/simulate/retry
       line: 4
       column: 7

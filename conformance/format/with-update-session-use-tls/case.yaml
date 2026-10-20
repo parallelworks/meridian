@@ -6,7 +6,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /jobs/main/steps/0/with/useTLS
       line: 9
       column: 11

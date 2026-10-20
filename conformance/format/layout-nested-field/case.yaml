@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: pattern_mismatch
       path: /on/execute/inputs/$meta/layout/field
       line: 9
       column: 38

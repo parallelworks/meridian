@@ -5,5 +5,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: reference
+      code: undefined_session
       path: /jobs/build/steps/0/run

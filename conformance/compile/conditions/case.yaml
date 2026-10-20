@@ -7,12 +7,12 @@ source: ACTIVATE's tests
 expect:
   diagnostics:
     - severity: warning
-      code: word
+      code: older_always
       path: /jobs/build/steps/1/if
       line: 13
       column: 13
     - severity: warning
-      code: word
+      code: replaced_keyword
       path: /jobs/build/steps/2/if
       line: 15
       column: 18

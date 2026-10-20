@@ -1,10 +1,11 @@
 package expr
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A function is one that expressions can call.
@@ -17,18 +18,19 @@ type function struct {
 	eval func(e *evaluator, at int, args []any) (any, error)
 }
 
-func (f function) arity() string {
+// arity returns the params that say how many arguments f takes: arity is
+// none, exact, at_least or range, between min and max.
+func (f function) arity() problems.Params {
+	arity := "range"
 	switch {
 	case f.maxArgs == 0:
-		return "no arguments"
+		arity = "none"
 	case f.maxArgs < 0:
-		return fmt.Sprintf("at least %d arguments", f.minArgs)
-	case f.minArgs == 1 && f.maxArgs == 1:
-		return "1 argument"
+		arity = "at_least"
 	case f.minArgs == f.maxArgs:
-		return fmt.Sprintf("%d arguments", f.minArgs)
+		arity = "exact"
 	}
-	return fmt.Sprintf("%d to %d arguments", f.minArgs, f.maxArgs)
+	return problems.Params{"arity": arity, "min": f.minArgs, "max": f.maxArgs}
 }
 
 // statusFunctions report how the job or step got here. Each is true when
@@ -89,11 +91,12 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 		case c == '{':
 			end := strings.IndexByte(tmpl[i:], '}')
 			if end < 0 {
-				return nil, e.errorAt(at, "format: %q has a '{' with no '}'", tmpl)
+				return nil, e.errorAt(at, problems.FormatUnclosedBrace, problems.Params{"template": problems.Show(tmpl)})
 			}
 			n, err := strconv.Atoi(tmpl[i+1 : i+end])
 			if err != nil || n < 0 || n >= len(args) {
-				return nil, e.errorAt(at, "format: %q has no argument for %s", tmpl, tmpl[i:i+end+1])
+				return nil, e.errorAt(at, problems.FormatMissingArgument,
+					problems.Params{"template": problems.Show(tmpl), "placeholder": tmpl[i : i+end+1]})
 			}
 			b.WriteString(stringOf(args[n]))
 			if err := e.spend(at, b.Len()); err != nil {
@@ -101,7 +104,7 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 			}
 			i += end
 		case c == '}':
-			return nil, e.errorAt(at, "format: %q has a '}' with no '{'", tmpl)
+			return nil, e.errorAt(at, problems.FormatUnopenedBrace, problems.Params{"template": problems.Show(tmpl)})
 		default:
 			b.WriteByte(c)
 		}
@@ -146,16 +149,17 @@ const maxExact = 1 << 53
 func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	s, t := toNumber(start), toNumber(end)
 	if s != math.Trunc(s) || t != math.Trunc(t) {
-		return nil, e.errorAt(at, "range takes whole numbers, not %s and %s", stringOf(start), stringOf(end))
+		return nil, e.errorAt(at, problems.RangeNotWhole, problems.Params{"start": stringOf(start), "end": stringOf(end)})
 	}
 	if math.Abs(s) > maxExact || math.Abs(t) > maxExact {
-		return nil, e.errorAt(at, "range takes numbers from -2^53 to 2^53, not %s and %s", formatNumber(s), formatNumber(t))
+		return nil, e.errorAt(at, problems.RangeOutOfBounds, problems.Params{"start": formatNumber(s), "end": formatNumber(t)})
 	}
 	if t <= s {
 		return []any{}, nil
 	}
 	if t-s > maxRange {
-		return nil, e.errorAt(at, "the range from %s to %s has more than %d numbers", formatNumber(s), formatNumber(t), maxRange)
+		return nil, e.errorAt(at, problems.RangeTooLong,
+			problems.Params{"start": formatNumber(s), "end": formatNumber(t), "max": maxRange})
 	}
 	out := make([]any, int(t-s))
 	for i := range out {
@@ -209,11 +213,11 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 		}
 		parsed, err := parseJSON(s)
 		if err != nil {
-			return nil, e.errorAt(at, "fromJSON: %q isn't valid JSON", s)
+			return nil, e.errorAt(at, problems.FromJSONInvalid, problems.Params{"text": problems.Show(s)})
 		}
 		return e.built(at, parsed)
 	case "range":
 		return e.rangeOf(at, 0.0, v)
 	}
-	return nil, e.errorAt(at, "unknown operator %s", op)
+	return nil, e.errorAt(at, problems.UnknownOperator, problems.Params{"op": op})
 }

@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: must_equal
       path: /on/execute/inputs/$meta/layout/children/0/type
       line: 9
       column: 73

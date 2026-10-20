@@ -21,15 +21,17 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: keys_not_allowed_together
       path: /links/docs
       line: 3
       column: 5
 ```
 
 - `expect.diagnostics` lists every error and warning, in any order. A case
-  without any loads cleanly. `path` is a JSON Pointer, and `line` and `column`
-  are checked when they are set.
+  without any loads cleanly. `code` is the problem's code, which says what is
+  wrong without depending on a message's wording or language; Meridian's
+  `problems` package lists them. `path` is a JSON Pointer, and `line` and
+  `column` are checked when they are set.
 - `expect.values` lists values the loaded workflow must have, by JSON Pointer.
 
 ## Inputs

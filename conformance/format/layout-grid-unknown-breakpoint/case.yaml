@@ -4,12 +4,12 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: too_few_keys
       path: /on/execute/inputs/$meta/layout/columns
       line: 9
       column: 39
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /on/execute/inputs/$meta/layout/columns/phone
       line: 9
       column: 40

@@ -4,7 +4,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: must_equal
       path: /jobs/simulate/retry/reasons/0
       line: 4
       column: 17

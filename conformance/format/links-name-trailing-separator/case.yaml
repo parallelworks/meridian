@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: invalid_name
       path: /links/ollama-
       line: 2
       column: 3

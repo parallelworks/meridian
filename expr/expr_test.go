@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 func mustParse(t *testing.T, src string) *expr.Expr {
@@ -67,21 +68,21 @@ func TestStatusChecks(t *testing.T) {
 }
 
 func TestCheckMessages(t *testing.T) {
-	problems := mustParse(t, "input.type == x").Check()
-	if len(problems) != 1 || !strings.Contains(problems[0].Msg, `input.type is the text "input.type", because input isn't a context`) {
-		t.Errorf("Check = %v", problems)
+	found := mustParse(t, "input.type == x").Check()
+	if len(found) != 1 || !strings.Contains(found[0].Message(), `The word input.type is the text "input.type", because input isn't a context`) {
+		t.Errorf("Check = %v", found)
 	}
 	for src, want := range map[string]string{
-		"!completed":         "the if: keyword it was is now success()",
-		"error && inputs.x":  "the if: keyword it was is now failure()",
-		"inputs.x ? a : b":   `a is the text "a", which is always true; a condition needs a comparison`,
-		"always":             "always is the older spelling of always(); use always()",
-		"inputs.x && always": "always is the older spelling of always()",
-		"always || inputs.x": "always is the older spelling of always()",
+		"!completed":         "The if: keyword it was is now success().",
+		"error && inputs.x":  "The if: keyword it was is now failure().",
+		"inputs.x ? a : b":   `The word a is the text "a", which is always true. A condition needs a comparison`,
+		"always":             "The word always is the older spelling of always(). Use always().",
+		"inputs.x && always": "The word always is the older spelling of always().",
+		"always || inputs.x": "The word always is the older spelling of always().",
 	} {
-		problems := mustParse(t, src).CheckCondition()
-		if len(problems) == 0 || !strings.Contains(problems[0].Msg, want) {
-			t.Errorf("CheckCondition(%q) = %v, want a problem containing %q", src, problems, want)
+		found := mustParse(t, src).CheckCondition()
+		if len(found) == 0 || !strings.Contains(found[0].Message(), want) {
+			t.Errorf("CheckCondition(%q) = %v, want a problem containing %q", src, found, want)
 		}
 	}
 }
@@ -137,19 +138,19 @@ func TestCheckHyphenatedNames(t *testing.T) {
 		meant    expr.Ref
 	}{
 		{
-			"inputs.pw-user", `inputs.pw-user subtracts the text "user" from inputs.pw, which is NaN; to read pw-user, write inputs['pw-user']`,
+			"inputs.pw-user", `The expression inputs.pw-user subtracts the text "user" from inputs.pw, which is NaN. To read pw-user, write inputs['pw-user'].`,
 			expr.Ref{Context: "inputs", Path: []string{"pw-user"}},
 		},
 		{
-			"steps.setup-go.outputs.version", `to read setup-go, write steps['setup-go'].outputs.version`,
+			"steps.setup-go.outputs.version", `To read setup-go, write steps['setup-go'].outputs.version.`,
 			expr.Ref{Context: "steps", Path: []string{"setup-go"}},
 		},
 		{
-			"inputs.group.my-field[0]", `to read my-field, write inputs.group['my-field'][0]`,
+			"inputs.group.my-field[0]", `To read my-field, write inputs.group['my-field'][0].`,
 			expr.Ref{Context: "inputs", Path: []string{"group", "my-field"}},
 		},
 		{
-			"var.my-token", `to read my-token, write var['my-token']`,
+			"var.my-token", `To read my-token, write var['my-token'].`,
 			expr.Ref{Context: "vars", Path: []string{"my-token"}},
 		},
 	} {
@@ -159,7 +160,7 @@ func TestCheckHyphenatedNames(t *testing.T) {
 				found = &p
 			}
 		}
-		if found == nil || found.Offset != 0 || !strings.Contains(found.Msg, tc.msg) ||
+		if found == nil || found.Offset != 0 || !strings.Contains(found.Message(), tc.msg) ||
 			found.Meant.Context != tc.meant.Context || !slices.Equal(found.Meant.Path, tc.meant.Path) {
 			t.Errorf("Check(%q) = %+v, want a problem containing %q that meant %v", tc.src, found, tc.msg, tc.meant)
 		}
@@ -228,7 +229,7 @@ func TestBuildLimit(t *testing.T) {
 	big := strings.Repeat("x", 1<<20)
 	src := "inputs.s" + strings.Repeat(" + inputs.s", 20)
 	_, err := mustParse(t, src).Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || !strings.Contains(ee.Msg, "builds more than") {
+	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Kind != problems.ExpressionTooLarge {
 		t.Errorf("got %v, want the build limit", err)
 	}
 	_, err = mustParse(t, "(range 10000) join inputs.s").Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
@@ -256,8 +257,9 @@ func TestWorkflowEvaluatesEachExpressionOnce(t *testing.T) {
 func TestWorkflowErrors(t *testing.T) {
 	w := &expr.Workflow{Root: map[string]any{"a": "${{ .b }}", "b": "${{ fromJSON 'x' }}", "c": "${{ needs.x.outputs.y }}"}}
 	_, err := mustParse(t, "1 + .a").Eval(w.Scope([]string{"x"}, expr.Scope{}))
-	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Offset != 4 || !strings.Contains(ee.Msg, "in /b") {
-		t.Errorf("got %#v, want an error at the reference that mentions /b", err)
+	// The error is in /b, which /a reads, and is reported there.
+	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Location != "/b" || ee.Offset != 4 || ee.Kind != problems.FromJSONInvalid {
+		t.Errorf("got %#v, want the error in /b, at its fromJSON", err)
 	}
 	_, err = mustParse(t, "1 + .c").Eval(w.Scope([]string{"x"}, expr.Scope{}))
 	if ue, ok := errors.AsType[*expr.UnknownError](err); !ok || ue.Offset != 4 || ue.Name != "needs" {

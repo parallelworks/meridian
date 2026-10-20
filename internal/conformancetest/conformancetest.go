@@ -8,19 +8,19 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/conformance"
-	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // CheckDiagnostics checks that got has each diagnostic a case expects, and
 // no others. One expected without a line matches at any position.
-func CheckDiagnostics(t testing.TB, want []conformance.Diagnostic, got format.Diagnostics) {
+func CheckDiagnostics(t testing.TB, want []conformance.Diagnostic, got problems.Diagnostics) {
 	t.Helper()
 	unmatched := slices.Clone(got)
 	for _, w := range want {
-		i := slices.IndexFunc(unmatched, func(d format.Diagnostic) bool {
-			return d.Severity.String() == w.Severity && string(d.Code) == w.Code && d.Path == w.Path &&
-				(w.Line == 0 || d.Position == format.Position{Line: w.Line, Column: w.Column})
+		i := slices.IndexFunc(unmatched, func(d problems.Diagnostic) bool {
+			return d.Severity().String() == w.Severity && string(d.Code) == w.Code && d.Path() == w.Path &&
+				(w.Line == 0 || d.Position() == problems.Position{Line: w.Line, Column: w.Column})
 		})
 		if i < 0 {
 			t.Errorf("missing %s %s at %q, line %d, column %d; got %v", w.Severity, w.Code, w.Path, w.Line, w.Column, got)
@@ -29,7 +29,7 @@ func CheckDiagnostics(t testing.TB, want []conformance.Diagnostic, got format.Di
 		unmatched = slices.Delete(unmatched, i, i+1)
 	}
 	for _, d := range unmatched {
-		t.Errorf("unexpected %s (path %q)", d, d.Path)
+		t.Errorf("unexpected %s (path %q)", d, d.Path())
 	}
 }
 

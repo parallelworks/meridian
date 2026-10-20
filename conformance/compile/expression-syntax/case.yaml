@@ -3,7 +3,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: expression
+      code: unexpected_text
       path: /jobs/build/steps/0/run
       line: 4
       column: 32

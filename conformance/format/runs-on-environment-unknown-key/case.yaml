@@ -6,7 +6,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /jobs/main/runs-on/partition
       line: 5
       column: 7

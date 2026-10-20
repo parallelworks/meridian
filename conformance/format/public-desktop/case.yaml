@@ -7,7 +7,7 @@ license: Apache-2.0
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /jobs/update_session/steps/1/with/local_port
       line: 146
       column: 11

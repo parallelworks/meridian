@@ -4,6 +4,6 @@ source: ACTIVATE's YAML loader tests
 expect:
   diagnostics:
     - severity: error
-      code: syntax
+      code: yaml_syntax
       path: ""
       line: 3

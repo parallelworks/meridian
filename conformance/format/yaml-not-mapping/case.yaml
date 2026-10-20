@@ -4,7 +4,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: wrong_type
       path: ""
       line: 1
       column: 1

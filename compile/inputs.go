@@ -14,25 +14,7 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
-)
-
-// Codes of the problems the compiler reports about inputs.
-const (
-	// CodeRequired means an input that needs a value has none.
-	CodeRequired format.Code = "required"
-	// CodeUnknownInput means a value for an input the workflow doesn't
-	// define, which is kept, as a workflow a step calls can read what its
-	// caller passes without defining it.
-	CodeUnknownInput format.Code = "unknown-input"
-	// CodeInputValue means a value that doesn't fit its input: the wrong
-	// type, outside a number's range, or not one of a dropdown's options.
-	CodeInputValue format.Code = "input-value"
-	// CodePlatform means an input of a type that only a platform provides,
-	// with no platform to provide it.
-	CodePlatform format.Code = "platform"
-	// CodeExpression means an expression that can't be evaluated, or
-	// expressions that read each other.
-	CodeExpression format.Code = "expression"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // ErrInputType is what an InputResolver returns for a type it doesn't
@@ -95,7 +77,7 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // ResolveInputs checks a run's submitted input values against the workflow's
 // input definitions, applies defaults, and drops ignored inputs, as
 // docs/design.md describes. It reports every problem it finds.
-func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, format.Diagnostics) {
+func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
 	return &Inputs{Values: r.values, Deferred: r.deferred(), Secrets: r.secrets}, r.diags
 }
@@ -226,8 +208,8 @@ func (f *field) label() string {
 // which a plan can't hold.
 func (r *inputResolver) checkJSON(values map[string]any) {
 	for key, v := range jsonvalue.Sorted(values) {
-		if bad := notJSON(v); bad != "" {
-			r.reportAt(format.Error, CodeInputValue, definitionsPath, "the value of %s isn't JSON: it holds %s", key, bad)
+		if what, bad := notJSON(v); what != "" {
+			r.reportAt(problems.InputNotJSON, definitionsPath, problems.Params{"input": key, "what": what, "value": bad})
 			delete(values, key)
 		}
 	}
@@ -247,11 +229,9 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 	for key, v := range jsonvalue.Sorted(values) {
 		f, ok := known[key]
 		if !ok {
-			msg := fmt.Sprintf("%s isn't an input of this workflow", strings.Join(appendPath(path, key), "."))
-			if s, ok := hint.Suggest(key, slices.Sorted(maps.Keys(known))); ok {
-				msg += fmt.Sprintf("; did you mean %q?", strings.Join(appendPath(path, s), "."))
-			}
-			r.reportAt(format.Warning, CodeUnknownInput, definitionsPath, "%s", msg)
+			s, ok := hint.Suggest(key, slices.Sorted(maps.Keys(known)))
+			params := problems.Params{"input": strings.Join(appendPath(path, key), ".")}
+			r.reportAt(problems.UnknownInput, definitionsPath, problems.WithSuggestion(params, strings.Join(appendPath(path, s), "."), ok))
 			continue
 		}
 		if !f.container || f.flatten || v == nil {
@@ -259,7 +239,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 		}
 		child, ok := v.(map[string]any)
 		if !ok {
-			r.reportAt(format.Error, CodeInputValue, f.loc, "%s takes a mapping of its inputs' values, not %s", f.label(), describe(v))
+			r.reportAt(problems.InputGroupNotMapping, f.loc, problems.Params{"input": f.label(), "value": problems.Show(v)})
 			delete(values, key)
 			continue
 		}
@@ -303,7 +283,7 @@ func (r *inputResolver) fillDefaults() {
 				// Known once the run is underway.
 				f.deferred = true
 			case err != nil:
-				r.reportAt(format.Error, CodeExpression, appendPath(f.loc, "default"), "the default of %s: %v", f.label(), err)
+				r.reportError(appendPath(f.loc, "default"), 0, err)
 			default:
 				r.setDefault(f, v)
 			}
@@ -313,7 +293,7 @@ func (r *inputResolver) fillDefaults() {
 			for i, f := range pending {
 				names[i] = strings.Join(f.path, ".")
 			}
-			r.reportAt(format.Error, CodeExpression, pending[0].loc, "the defaults of %s read each other", strings.Join(names, " and "))
+			r.reportAt(problems.DefaultsReadEachOther, pending[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
 			return
 		}
 	}
@@ -398,7 +378,7 @@ func (r *inputResolver) applyConditions() {
 		case f.typ == "boolean":
 			setPath(r.values, f.path, false)
 		default:
-			r.reportAt(format.Error, CodeRequired, f.loc, "%s needs a value", f.label())
+			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
 		}
 	}
 }
@@ -414,7 +394,12 @@ func (r *inputResolver) condition(f *field, key string) bool {
 	if _, isString := raw.(string); isString {
 		var err error
 		if v, err = r.evalAt(appendPath(f.loc, key)); err != nil {
-			r.reportAt(format.Error, CodeExpression, appendPath(f.loc, key), "the %s of %s: %v", key, f.label(), err)
+			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
+				r.reportAt(problems.InputConditionNotKnown, appendPath(f.loc, key),
+					problems.Params{"key": key, "input": f.label(), "name": u.Name})
+			} else {
+				r.reportError(appendPath(f.loc, key), 0, err)
+			}
 			return false
 		}
 	}
@@ -512,13 +497,10 @@ func (r *inputResolver) checkValues() {
 		if f.container {
 			continue
 		}
-		out, err := r.checkValue(f, v)
-		if err != nil {
-			code := CodeInputValue
-			if errors.Is(err, errNoPlatform) {
-				code = CodePlatform
-			}
-			r.reportAt(format.Error, code, f.loc, "%s: %v", f.label(), err)
+		out, bad := r.checkValue(f, v)
+		if bad.kind != nil {
+			bad.params["input"] = f.label()
+			r.reportAt(bad.kind, f.loc, bad.params)
 			continue
 		}
 		if f.typ == "password" {
@@ -530,103 +512,111 @@ func (r *inputResolver) checkValues() {
 	}
 }
 
-var errNoPlatform = errors.New("needs a platform that provides it")
-
-func (r *inputResolver) checkValue(f *field, v any) (any, error) {
+// checkValue checks v, the value of f, and returns it as the run sees it, or
+// what is wrong with it: a finding whose params the caller adds the input
+// to.
+func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
+	wrong := func(k *problems.Kind, params problems.Params) (any, finding) {
+		if params == nil {
+			params = problems.Params{}
+		}
+		return nil, finding{k, params}
+	}
 	switch {
 	case platformTypes[f.typ]:
 		if r.opts.Inputs == nil {
-			return nil, fmt.Errorf("an input of type %s %w", f.typ, errNoPlatform)
+			return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
 		}
 		out, err := r.opts.Inputs.ResolveInput(f.typ, f.def, v)
-		if errors.Is(err, ErrInputType) {
-			return nil, fmt.Errorf("an input of type %s %w", f.typ, errNoPlatform)
+		switch {
+		case errors.Is(err, ErrInputType):
+			return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
+		case err != nil:
+			return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
 		}
-		if err == nil {
-			if bad := notJSON(out); bad != "" {
-				return nil, fmt.Errorf("the platform gave a value that isn't JSON: %s", bad)
-			}
+		if what, bad := notJSON(out); what != "" {
+			return wrong(problems.PlatformValueNotJSON, problems.Params{"what": what, "value": bad})
 		}
-		return out, err
+		return out, finding{}
 	case f.typ == "number":
 		n, ok := toNumber(v)
 		if !ok {
-			return nil, fmt.Errorf("takes a number, not %s", describe(v))
+			return wrong(problems.InputNotNumber, problems.Params{"value": problems.Show(v)})
 		}
 		if lo, ok := toNumber(f.def["min"]); ok && n < lo {
-			return nil, fmt.Errorf("%s is less than its minimum, %s", formatNumber(n), formatNumber(lo))
+			return wrong(problems.InputBelowMin, problems.Params{"value": formatNumber(n), "min": formatNumber(lo)})
 		}
 		if hi, ok := toNumber(f.def["max"]); ok && n > hi {
-			return nil, fmt.Errorf("%s is more than its maximum, %s", formatNumber(n), formatNumber(hi))
+			return wrong(problems.InputAboveMax, problems.Params{"value": formatNumber(n), "max": formatNumber(hi)})
 		}
-		return number(n), nil
+		return number(n), finding{}
 	case f.typ == "boolean":
 		switch v := v.(type) {
 		case bool:
-			return v, nil
+			return v, finding{}
 		case string:
 			switch strings.ToLower(strings.TrimSpace(v)) {
 			case "true":
-				return true, nil
+				return true, finding{}
 			case "false":
-				return false, nil
+				return false, finding{}
 			}
 		}
-		return nil, fmt.Errorf("takes true or false, not %s", describe(v))
+		return wrong(problems.InputNotBoolean, problems.Params{"value": problems.Show(v)})
 	case f.typ == "list":
 		if _, ok := v.([]any); !ok {
-			return nil, fmt.Errorf("takes a list, not %s", describe(v))
+			return wrong(problems.InputNotList, problems.Params{"value": problems.Show(v)})
 		}
-		return v, nil
+		return v, finding{}
 	case f.typ == "multi-dropdown":
 		list, ok := v.([]any)
 		if !ok {
-			return nil, fmt.Errorf("takes a list of its options, not %s", describe(v))
+			return wrong(problems.InputNotOptionList, problems.Params{"value": problems.Show(v)})
 		}
 		for _, item := range list {
-			if err := checkOption(f, item); err != nil {
-				return nil, err
+			if bad := checkOption(f, item); bad.kind != nil {
+				return nil, bad
 			}
 		}
-		return v, nil
+		return v, finding{}
 	case f.typ == "dropdown":
-		if err := checkOption(f, v); err != nil {
-			return nil, err
+		if bad := checkOption(f, v); bad.kind != nil {
+			return nil, bad
 		}
-		return v, nil
+		return v, finding{}
 	}
 	// Text: string, password, editor, color-picker and the like.
 	switch v := v.(type) {
 	case string:
-		return v, nil
+		return v, finding{}
 	case bool:
-		return strconv.FormatBool(v), nil
+		return strconv.FormatBool(v), finding{}
 	case map[string]any, []any:
-		return nil, fmt.Errorf("takes text, not %s", describe(v))
+		return wrong(problems.InputNotText, problems.Params{"value": problems.Show(v)})
 	}
 	if n, ok := toNumber(v); ok {
-		return formatNumber(n), nil
+		return formatNumber(n), finding{}
 	}
-	return v, nil
+	return v, finding{}
 }
 
 // checkOption checks that v is one of a dropdown's options, when they are
 // written in the workflow rather than computed.
-func checkOption(f *field, v any) error {
+func checkOption(f *field, v any) finding {
 	options := optionValues(f.def["options"])
 	if len(options) == 0 || hasTemplate(f.def["options"]) {
-		return nil
+		return finding{}
 	}
 	for _, o := range options {
 		if looseEqual(o, v) {
-			return nil
+			return finding{}
 		}
 	}
 	shown := make([]string, len(options))
 	for i, o := range options {
-		shown[i] = describe(o)
+		shown[i] = problems.Show(o)
 	}
-	return fmt.Errorf("%s isn't one of its options, which are %s", describe(v), strings.Join(shown, ", "))
+	return finding{problems.InputNotOption, problems.Params{"value": problems.Show(v), "options": problems.List(shown)}}
 }
 
 // optionValues returns a dropdown's option values: its options' values, or

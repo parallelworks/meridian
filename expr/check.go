@@ -1,8 +1,9 @@
 package expr
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A Ref is a context an expression reads, and the path it reads in it.
@@ -91,38 +92,45 @@ func (e *Expr) StatusChecks() (used, afterCancel bool) {
 type Problem struct {
 	// Offset is the byte offset in the expression of the problem.
 	Offset int
-	Msg    string
+	// Kind is the kind of problem, and Params the values its message shows.
+	Kind   *problems.Kind
+	Params problems.Params
 	// Meant, if set, is what the expression probably meant to read, up to
 	// the name the mistake split: inputs with the path pw-user for
-	// inputs.pw-user. Whoever knows the workflow can say whether it has one.
+	// inputs.pw-user. Whoever knows the workflow can say whether it has one,
+	// which the params defines, defined and job say: see
+	// problems.HyphenatedName.
 	Meant *Ref
 }
+
+// Message returns the problem's message, in English.
+func (p Problem) Message() string { return p.Kind.Message(p.Params) }
 
 // Check returns the expression's probable mistakes: words that look like
 // references but are text, because they don't start with a context, and a
 // reference that subtracts a word, such as inputs.pw-user, which is NaN and
 // probably meant a name with a hyphen in it.
 func (e *Expr) Check() []Problem {
-	var problems []Problem
+	var found []Problem
 	visit(e.root, func(n node) {
 		switch n := n.(type) {
 		case *binary:
 			if p, ok := e.hyphenated(n); ok {
-				problems = append(problems, p)
+				found = append(found, p)
 			}
 		case *word:
 			i := strings.IndexAny(n.text, ".[")
 			if i <= 0 || !identifier(n.text[:i]) {
 				return
 			}
-			problems = append(problems, Problem{
+			found = append(found, Problem{
 				Offset: n.at,
-				Msg: fmt.Sprintf("%s is the text %q, because %s isn't a context; quote it if text is what you mean",
-					n.text, n.text, n.text[:i]),
+				Kind:   problems.WordNotReference,
+				Params: problems.Params{"word": n.text, "text": problems.Show(n.text), "head": n.text[:i]},
 			})
 		}
 	})
-	return problems
+	return found
 }
 
 // hyphenated returns the problem with n if it subtracts a word from a
@@ -152,8 +160,11 @@ func (e *Expr) hyphenated(n *binary) (Problem, bool) {
 	path[len(path)-1] = name
 	return Problem{
 		Offset: r.at,
-		Msg: fmt.Sprintf("%s-%s subtracts the text %q from %s, which is NaN; to read %s, write %s['%s']%s",
-			written, w.text, w.text, written, name, before, name, rest),
+		Kind:   problems.HyphenatedName,
+		Params: problems.Params{
+			"written": written, "word": w.text, "text": problems.Show(w.text), "name": name,
+			"fix": before + "['" + name + "']" + rest, "defines": "none", "defined": "", "job": "",
+		},
 		Meant: &Ref{Offset: r.at, Context: r.context, Path: path},
 	}, true
 }
@@ -171,20 +182,23 @@ var replacedKeywords = map[string]string{
 // false. The word always, whose value as a condition means always(), is the
 // older spelling of always().
 func (e *Expr) CheckCondition() []Problem {
-	problems := e.Check()
+	found := e.Check()
 	var walk func(n node, top bool)
 	walk = func(n node, top bool) {
 		switch n := n.(type) {
 		case *word:
-			msg := fmt.Sprintf("%s is the text %q, which is always true; a condition needs a comparison, or a status function such as failure()",
-				n.text, n.text)
+			p := Problem{
+				Offset: n.at,
+				Kind:   problems.ConditionWord,
+				Params: problems.Params{"word": n.text, "text": problems.Show(n.text)},
+			}
 			switch replacement, replaced := replacedKeywords[n.text]; {
 			case top && n.text == "always":
-				msg = "always is the older spelling of always(); use always()"
+				p.Kind, p.Params = problems.OlderAlways, nil
 			case replaced:
-				msg = fmt.Sprintf("%s is the text %q, which is always true; the if: keyword it was is now %s", n.text, n.text, replacement)
+				p.Kind, p.Params["replacement"] = problems.ReplacedKeyword, replacement
 			}
-			problems = append(problems, Problem{Offset: n.at, Msg: msg})
+			found = append(found, p)
 		case *unary:
 			if n.op == "!" {
 				walk(n.x, false)
@@ -207,7 +221,7 @@ func (e *Expr) CheckCondition() []Problem {
 		}
 	}
 	walk(e.root, true)
-	return problems
+	return found
 }
 
 // identifier reports whether s is a name such as inputs or my_var: a letter

@@ -3,5 +3,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: duplicate-id
+      code: duplicate_step_id
       path: /jobs/build/steps/1/id

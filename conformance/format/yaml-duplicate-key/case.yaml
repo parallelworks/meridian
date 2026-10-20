@@ -4,7 +4,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: duplicate-key
+      code: duplicate_key
       path: /jobs/main
       line: 5
       column: 3

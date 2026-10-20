@@ -1,11 +1,12 @@
 package expr
 
 import (
-	"fmt"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // maxDepth bounds how deeply an expression nests, so that parsing and
@@ -23,19 +24,27 @@ func (e *Expr) String() string { return e.src }
 
 // A SyntaxError is an expression that can't be parsed.
 type SyntaxError struct {
-	// Offset is the byte offset in the expression of the problem.
+	// Offset is the byte offset of the problem: in the expression, in the
+	// template ParseTemplate parsed, or in the string at Location.
 	Offset int
-	Msg    string
+	// Location is the JSON Pointer of the string in a workflow the problem
+	// is in, when it is in another expression than the one evaluated: one
+	// that it reads, as a relative reference or an input's definition
+	// does. It is "" for the expression itself.
+	Location string
+	// Kind is the kind of problem, and Params the values its message shows.
+	Kind   *problems.Kind
+	Params problems.Params
 }
 
-func (e *SyntaxError) Error() string { return e.Msg }
+func (e *SyntaxError) Error() string { return e.Kind.Message(e.Params) }
 
 // Parse parses an expression: the text between ${{ and }}.
 func Parse(src string) (*Expr, error) {
 	p := &parser{src: src}
 	p.skipSpace()
 	if p.pos == len(src) {
-		return nil, p.errorf("the expression is empty")
+		return nil, p.errorf(problems.ExpressionEmpty, nil)
 	}
 	root, err := p.expression(0)
 	if err != nil {
@@ -46,7 +55,7 @@ func Parse(src string) (*Expr, error) {
 		return nil, p.unexpected()
 	}
 	if n := tooDeep(root, 0); n != nil {
-		return nil, p.errorAt(n.offset(), "the expression nests more than %d levels deep", maxDepth)
+		return nil, p.errorAt(n.offset(), problems.ExpressionTooDeep, problems.Params{"max": maxDepth})
 	}
 	return &Expr{src: src, root: root}, nil
 }
@@ -166,23 +175,23 @@ type parser struct {
 	grouped map[node]bool
 }
 
-func (p *parser) errorAt(at int, format string, args ...any) error {
-	return &SyntaxError{Offset: at, Msg: fmt.Sprintf(format, args...)}
+func (p *parser) errorAt(at int, k *problems.Kind, params problems.Params) error {
+	return &SyntaxError{Offset: at, Kind: k, Params: params}
 }
 
-func (p *parser) errorf(format string, args ...any) error {
-	return p.errorAt(p.pos, format, args...)
+func (p *parser) errorf(k *problems.Kind, params problems.Params) error {
+	return p.errorAt(p.pos, k, params)
 }
 
 func (p *parser) unexpected() error {
 	if p.pos >= len(p.src) {
-		return p.errorf("the expression ends too soon")
+		return p.errorf(problems.ExpressionEndsEarly, nil)
 	}
 	end := min(p.pos+8, len(p.src))
 	if i := strings.IndexAny(p.src[p.pos:end], " \t\r\n"); i > 0 {
 		end = p.pos + i
 	}
-	return p.errorf("unexpected %q", p.src[p.pos:end])
+	return p.errorf(problems.UnexpectedText, problems.Params{"text": p.src[p.pos:end]})
 }
 
 func (p *parser) skipSpace() {
@@ -211,7 +220,7 @@ func (p *parser) peek(off int) byte {
 // maxDepth levels deep, and otherwise counts a level for what it holds.
 func (p *parser) enter() error {
 	if p.depth > maxDepth {
-		return p.errorf("the expression nests more than %d levels deep", maxDepth)
+		return p.errorf(problems.ExpressionTooDeep, problems.Params{"max": maxDepth})
 	}
 	p.depth++
 	return nil
@@ -299,7 +308,7 @@ func (p *parser) expression(minPrec int) (node, error) {
 			}
 			p.skipSpace()
 			if p.peek(0) != ':' {
-				return nil, p.errorf("expected ':' for the '?' at offset %d", at)
+				return nil, p.errorf(problems.TernaryMissingColon, problems.Params{"at": strconv.Itoa(at)})
 			}
 			p.pos++
 			els, err := p.expression(precTernary)
@@ -327,7 +336,7 @@ func (p *parser) expression(minPrec int) (node, error) {
 			return nil, err
 		}
 		if op.op == "??" && (p.logical(left) || p.logical(right)) {
-			return nil, p.errorAt(at, "?? can't be mixed with || or && without parentheses; write (a || b) ?? c or a || (b ?? c)")
+			return nil, p.errorAt(at, problems.CoalesceMixed, nil)
 		}
 		left = &binary{at: at, op: op.op, negated: op.negated, x: left, y: right}
 	}
@@ -385,7 +394,7 @@ func (p *parser) unary() (node, error) {
 		}
 		v, err := parseJSON(raw)
 		if err != nil {
-			return nil, p.errorAt(at, `%s isn't valid JSON; write lists and mappings in JSON, with double quotes, as in ["a", "b"]`, raw)
+			return nil, p.errorAt(at, problems.InvalidJSONLiteral, problems.Params{"text": raw})
 		}
 		return &literal{at: at, value: v}, nil
 	case c == ':' && isDigit(p.peek(1)) && p.colonEndsWord == 0:
@@ -432,7 +441,7 @@ func (p *parser) unary() (node, error) {
 func (p *parser) call(name string, at int) (node, error) {
 	fn, ok := functions[name]
 	if !ok {
-		return nil, p.errorAt(at, "%s isn't a function", name)
+		return nil, p.errorAt(at, problems.NotAFunction, problems.Params{"name": name})
 	}
 	p.pos++
 	var args []node
@@ -452,17 +461,19 @@ func (p *parser) call(name string, at int) (node, error) {
 				continue
 			}
 			if p.peek(0) != ')' {
-				return nil, p.errorf("expected ',' or ')' in the call to %s", name)
+				return nil, p.errorf(problems.CallMissingComma, problems.Params{"name": name})
 			}
 			p.pos++
 			break
 		}
 	}
 	if len(args) < fn.minArgs || fn.maxArgs >= 0 && len(args) > fn.maxArgs {
-		return nil, p.errorAt(at, "%s() takes %s, not %d", name, fn.arity(), len(args))
+		params := fn.arity()
+		params["name"], params["count"] = name, len(args)
+		return nil, p.errorAt(at, problems.WrongArgumentCount, params)
 	}
 	if name == "case" && len(args)%2 == 0 {
-		return nil, p.errorAt(at, "case() takes pairs of a condition and a value, then a default")
+		return nil, p.errorAt(at, problems.CaseArguments, nil)
 	}
 	return p.postfix(&call{at: at, name: name, args: args}, at)
 }
@@ -495,7 +506,7 @@ func (p *parser) group() (node, error) {
 	}
 	p.skipSpace()
 	if p.peek(0) != ')' {
-		return nil, p.errorf("expected ')'")
+		return nil, p.errorf(problems.ExpectedCloseParen, nil)
 	}
 	p.pos++
 	if p.grouped == nil {
@@ -682,7 +693,7 @@ func (p *parser) quoted(q byte) (string, error) {
 		p.pos++
 	}
 	p.pos = start
-	return "", p.errorf("the string has no closing %c", q)
+	return "", p.errorf(problems.UnclosedString, problems.Params{"quote": string(q)})
 }
 
 // balanced scans a [...] or {...}, skipping brackets in quotes.
@@ -710,7 +721,7 @@ func (p *parser) balanced() (string, error) {
 		}
 	}
 	p.pos = start
-	return "", p.errorf("the %c has no closing bracket", p.src[start])
+	return "", p.errorf(problems.UnclosedBracket, problems.Params{"bracket": string(p.src[start])})
 }
 
 // operand classifies a scanned word: a relative reference, a reference to a

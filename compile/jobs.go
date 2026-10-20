@@ -1,17 +1,17 @@
 package compile
 
 import (
-	"fmt"
+	"errors"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
-	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A phase is when a value is evaluated, which decides what it can read.
@@ -54,18 +54,20 @@ func (p phase) has(context string) bool {
 	return false
 }
 
-func (p phase) when() string {
+// name is the phase's name in a message's params: what says when a value
+// in the phase is evaluated.
+func (p phase) name() string {
 	switch p {
 	case runCreated:
-		return "when the run is created, which is when this is evaluated"
+		return "run_created"
 	case needsDone:
-		return "in a job's strategy:, which is evaluated before its matrix is expanded"
+		return "strategy"
 	case jobReady:
-		return "here, which is evaluated before the job's steps run"
+		return "job_ready"
 	case jobEnv:
-		return "in a job's env:, which is set before its steps run"
+		return "job_env"
 	}
-	return "here"
+	return "other"
 }
 
 // jobInfo is what the checks of a job's expressions need to know about it.
@@ -116,8 +118,9 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 			continue
 		}
 		if first, dup := info.stepIDs[id]; dup {
-			c.reportAt(format.Error, CodeDuplicateID, appendPath(info.loc, "steps", strconv.Itoa(i), "id"),
-				"steps %d and %d of job %s both have the id %s", first, i, name, id)
+			c.reportAt(problems.DuplicateStepID, appendPath(info.loc, "steps", strconv.Itoa(i), "id"), problems.Params{
+				"first": strconv.Itoa(first), "second": strconv.Itoa(i), "job": name, "id": id,
+			})
 			continue
 		}
 		info.stepIDs[id] = i
@@ -163,8 +166,12 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 		}
 		if t, isTemplate := parsed.(*expr.Template); isTemplate {
 			v, err := t.Eval(expr.Scope{Contexts: compileTimeContexts(c.opts, c.inputs.evalValues())})
+			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
+				c.reportAt(problems.NeedsNotKnown, loc, problems.Params{"name": u.Name})
+				return
+			}
 			if err != nil {
-				c.reportAt(format.Error, CodeNeeds, loc, "needs must be known when the run is created: %v", err)
+				c.reportError(loc, 0, err)
 				return
 			}
 			raw = v
@@ -178,23 +185,24 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 		for _, item := range v {
 			s, ok := item.(string)
 			if !ok {
-				c.reportAt(format.Error, CodeNeeds, loc, "needs lists jobs' names, not %s", describe(item))
+				c.reportAt(problems.NeedsItemNotName, loc, problems.Params{"value": problems.Show(item)})
 				return
 			}
 			list = append(list, s)
 		}
 	default:
-		c.reportAt(format.Error, CodeNeeds, loc, "needs is a job's name or a list of them, not %s", describe(raw))
+		c.reportAt(problems.NeedsNotName, loc, problems.Params{"value": problems.Show(raw)})
 		return
 	}
 	for _, need := range list {
 		job, anyInstance := strings.CutSuffix(need, ":any")
 		switch {
 		case job == info.name:
-			c.reportAt(format.Error, CodeNeeds, loc, "job %s needs itself", info.name)
+			c.reportAt(problems.NeedsItself, loc, problems.Params{"job": info.name})
 		case !slices.Contains(names, job):
-			c.reportAt(format.Error, CodeNeeds, loc, "%s",
-				withSuggestion(fmt.Sprintf("job %s needs %s, which isn't a job of this workflow", info.name, job), job, names))
+			s, ok := hint.Suggest(job, names)
+			c.reportAt(problems.NeedsUnknownJob, loc,
+				problems.WithSuggestion(problems.Params{"job": info.name, "needed": job}, s, ok))
 		case !info.needed[job]:
 			info.needed[job] = true
 			info.needs = append(info.needs, plan.Need{Job: job, Any: anyInstance})
@@ -226,8 +234,8 @@ func (c *compiler) checkCycles(infos map[string]*jobInfo, names []string) {
 				if !reported[key] {
 					reported[key] = true
 					first := slices.Min(cycle)
-					c.reportAt(format.Error, CodeNeeds, appendPath(infos[first].loc, "needs"),
-						"jobs %s need each other", hint.JoinList(slices.Sorted(slices.Values(cycle)), "and"))
+					c.reportAt(problems.NeedsCycle, appendPath(infos[first].loc, "needs"),
+						problems.Params{"jobs": problems.QuoteAll(slices.Sorted(slices.Values(cycle)))})
 				}
 			}
 		}

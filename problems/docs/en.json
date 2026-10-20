@@ -1,0 +1,652 @@
+{
+  "file_too_large": {
+    "why": "A workflow file is read whole, so there is a limit on its size.",
+    "fix": [
+      "Move long scripts out of the workflow, into files the steps run.",
+      "Split the workflow into smaller ones that call each other with uses:."
+    ]
+  },
+  "extra_document": {
+    "why": "A YAML file can hold several documents, separated by ---. A workflow is the first one; the rest is ignored.",
+    "fix": [
+      "Remove the --- and what follows it, or move it into a workflow of its own."
+    ]
+  },
+  "extra_document_invalid": {
+    "why": "The file has a second YAML document after ---, which is ignored, and that document isn't valid YAML either.",
+    "fix": [
+      "Remove the --- and what follows it."
+    ]
+  },
+  "yaml_syntax": {
+    "why": "The file isn't valid YAML, so it can't be read as a workflow.",
+    "fix": [
+      "Check the line the error names, and the indentation of the lines before it.",
+      "Quote a value that holds a colon followed by a space, or starts with a character such as {, [, * or &."
+    ]
+  },
+  "yaml_alias": {
+    "why": "YAML aliases (*name) repeat a value marked with an anchor (&name). Workflows don't allow them, because a few aliases can make a small file expand to a huge one.",
+    "fix": [
+      "Write the value out where the alias is."
+    ]
+  },
+  "yaml_collection_key": {
+    "why": "A workflow is JSON values, whose keys are strings. YAML allows a list or a mapping as a key, which JSON can't hold.",
+    "fix": [
+      "Make the key a string."
+    ]
+  },
+  "yaml_merge_key": {
+    "why": "YAML merge keys (<<) copy one mapping into another. Workflows don't allow them, as they aren't part of YAML 1.2 and readers disagree on what they mean.",
+    "fix": [
+      "Write out the keys the merge would copy."
+    ]
+  },
+  "duplicate_key": {
+    "why": "A key appears twice in the same mapping. Only its last value is used.",
+    "fix": [
+      "Remove one of the two, or rename it if both were meant."
+    ]
+  },
+  "number_not_json": {
+    "why": "The value is a number YAML allows but JSON doesn't, such as .inf or .nan.",
+    "fix": [
+      "Quote it if it is text, or write a finite number."
+    ]
+  },
+  "format_too_new": {
+    "why": "The workflow's format: names a format newer than the one this version of Meridian runs.",
+    "fix": [
+      "Run the workflow with a newer version, or write it in an older format."
+    ]
+  },
+  "schema_failed": {
+    "why": "The workflow couldn't be checked against its format's schema. This is a problem in Meridian, not in the workflow.",
+    "fix": [
+      "Report it, with the workflow that causes it."
+    ]
+  },
+  "unknown_key": {
+    "why": "The workflow has a key its format doesn't define here, so it is ignored. It is often a misspelling.",
+    "fix": [
+      "Correct the key's spelling, or remove it."
+    ]
+  },
+  "unknown_key_unresolved": {
+    "why": "The workflow has a key its format doesn't define here, alongside other errors that make it unclear what was meant.",
+    "fix": [
+      "Fix the other errors first, then correct or remove the key."
+    ]
+  },
+  "invalid_name": {
+    "why": "Names here, such as a job's or an input's, must match a pattern, so that expressions can read them.",
+    "fix": [
+      "Rename it to use only the characters the pattern allows."
+    ]
+  },
+  "input_type_unknown": {
+    "why": "An input's type: isn't one of the types the format defines.",
+    "fix": [
+      "Use one of the types the message lists."
+    ]
+  },
+  "workflow_empty": {
+    "why": "The file has no workflow in it.",
+    "fix": [
+      "Add the workflow's jobs."
+    ]
+  },
+  "wrong_type": {
+    "why": "The value has a different type from the one the format expects here, such as a list where a string goes.",
+    "fix": [
+      "Write the value as the type the message names."
+    ]
+  },
+  "missing_keys": {
+    "why": "A mapping is missing keys it must have.",
+    "fix": [
+      "Add the keys the message lists."
+    ]
+  },
+  "missing_any_key": {
+    "why": "A mapping must have one of several keys, and has none of them.",
+    "fix": [
+      "Add one of the keys the message lists."
+    ]
+  },
+  "not_expression": {
+    "why": "This value must be a ${{ }} expression, so that it is evaluated, not read as text.",
+    "fix": [
+      "Write it as ${{ ... }}."
+    ]
+  },
+  "pattern_mismatch": {
+    "why": "The value doesn't have the form the format expects here.",
+    "fix": [
+      "Write it in the form the message's pattern describes."
+    ]
+  },
+  "must_equal": {
+    "why": "Only one value is allowed here.",
+    "fix": [
+      "Use the value the message names."
+    ]
+  },
+  "value_must_equal": {
+    "why": "Only one value is allowed here.",
+    "fix": [
+      "Use the value the message names."
+    ]
+  },
+  "value_must_be_one_of": {
+    "why": "Only some values are allowed here.",
+    "fix": [
+      "Use one of the values the message lists."
+    ]
+  },
+  "value_must_equal_or_expression": {
+    "why": "Only one value is allowed here, or a ${{ }} expression that gives it.",
+    "fix": [
+      "Use the value the message names, or an expression."
+    ]
+  },
+  "value_must_be_one_of_or_expression": {
+    "why": "Only some values are allowed here, or a ${{ }} expression that gives one of them.",
+    "fix": [
+      "Use one of the values the message lists, or an expression."
+    ]
+  },
+  "value_must_match": {
+    "why": "The value doesn't have any of the forms the format allows here.",
+    "fix": [
+      "Write it in one of the forms the message's patterns describe."
+    ]
+  },
+  "too_few_keys": {
+    "why": "The mapping has fewer keys than the format requires here.",
+    "fix": [
+      "Add keys until it has the minimum."
+    ]
+  },
+  "too_many_keys": {
+    "why": "The mapping has more keys than the format allows here.",
+    "fix": [
+      "Remove keys until it is within the limit."
+    ]
+  },
+  "key_not_allowed": {
+    "why": "This key isn't allowed in this mapping, given the other keys it has.",
+    "fix": [
+      "Remove the key, or the key it conflicts with."
+    ]
+  },
+  "keys_not_allowed_together": {
+    "why": "These keys each choose a different form for the mapping, so it can't have them together.",
+    "fix": [
+      "Keep the keys of the form you mean, and remove the others."
+    ]
+  },
+  "form_not_allowed": {
+    "why": "The value has a form the format rules out here.",
+    "fix": [
+      "Check the format's documentation for what is allowed here."
+    ]
+  },
+  "several_forms": {
+    "why": "The value matches more than one of the forms allowed here, so what it means isn't clear.",
+    "fix": [
+      "Remove the keys that belong to the forms you don't mean."
+    ]
+  },
+  "no_form": {
+    "why": "The value matches none of the forms allowed here, and it isn't clear which one was meant.",
+    "fix": [
+      "Check the format's documentation for the forms allowed here."
+    ]
+  },
+  "schema_rule": {
+    "why": "The value breaks one of the rules of the workflow's schema.",
+    "fix": [
+      "Change the value as the message says."
+    ]
+  },
+  "input_not_json": {
+    "why": "A run's input values are JSON, and this one holds something JSON can't, such as NaN or text that isn't UTF-8.",
+    "fix": [
+      "Submit the value as JSON."
+    ]
+  },
+  "unknown_input": {
+    "why": "A value was submitted for an input the workflow doesn't define. It is kept, since a workflow that another calls can read inputs it doesn't define, but it is often a misspelling.",
+    "fix": [
+      "Correct the input's name, or remove the value."
+    ]
+  },
+  "input_group_not_mapping": {
+    "why": "A group of inputs takes a mapping of its inputs' values.",
+    "fix": [
+      "Submit the group's value as a mapping, keyed by its inputs' names."
+    ]
+  },
+  "defaults_read_each_other": {
+    "why": "The defaults of these inputs read each other's values, so none of them can be worked out first.",
+    "fix": [
+      "Change one of the defaults so that it doesn't read the others."
+    ]
+  },
+  "input_required": {
+    "why": "The input has no value, no default, and isn't optional.",
+    "fix": [
+      "Give the input a value, give it a default, or make it optional: true."
+    ]
+  },
+  "input_condition_not_known": {
+    "why": "An input's hidden:, ignore: or optional: is decided when the run is created, but it reads something that isn't known then, such as a secret.",
+    "fix": [
+      "Make the condition read only inputs and what is known when the run is created."
+    ]
+  },
+  "platform_input": {
+    "why": "This type of input names a platform's resources, such as its clusters, and nothing here provides them.",
+    "fix": [
+      "Run the workflow on a platform that provides the input's type."
+    ]
+  },
+  "platform_value_not_json": {
+    "why": "The platform gave a value for the input that a run can't hold, because it isn't JSON. This is a problem in the platform.",
+    "fix": [
+      "Report it to the platform's operators."
+    ]
+  },
+  "input_rejected": {
+    "why": "The platform that provides this input's type rejected its value, for the reason given.",
+    "fix": [
+      "Choose a value the platform has, such as one of its clusters."
+    ]
+  },
+  "input_not_number": {
+    "why": "A number input takes a number, or text that is one.",
+    "fix": [
+      "Submit a number."
+    ]
+  },
+  "input_below_min": {
+    "why": "The input's value is less than the min: its definition gives.",
+    "fix": [
+      "Submit a value at least as large as the minimum."
+    ]
+  },
+  "input_above_max": {
+    "why": "The input's value is more than the max: its definition gives.",
+    "fix": [
+      "Submit a value no larger than the maximum."
+    ]
+  },
+  "input_not_boolean": {
+    "why": "A boolean input takes true or false, or the text \"true\" or \"false\".",
+    "fix": [
+      "Submit true or false."
+    ]
+  },
+  "input_not_list": {
+    "why": "A list input takes a list.",
+    "fix": [
+      "Submit a list."
+    ]
+  },
+  "input_not_option_list": {
+    "why": "A multiple-choice dropdown takes a list of its options.",
+    "fix": [
+      "Submit a list of the input's options."
+    ]
+  },
+  "input_not_option": {
+    "why": "A dropdown's value must be one of its options.",
+    "fix": [
+      "Submit one of the options the message lists."
+    ]
+  },
+  "input_not_text": {
+    "why": "A text input takes text, a number or true or false, but not a list or a mapping.",
+    "fix": [
+      "Submit the value as text."
+    ]
+  },
+  "duplicate_step_id": {
+    "why": "A step's id names it for the steps after it, so two steps of a job can't share one.",
+    "fix": [
+      "Give one of the steps a different id."
+    ]
+  },
+  "needs_not_known": {
+    "why": "A job's needs: decide the order its jobs run in, so they must be known when the run is created. This needs: reads something that is known only later.",
+    "fix": [
+      "Make needs: read only inputs, variables and what else is known when the run is created."
+    ]
+  },
+  "needs_item_not_name": {
+    "why": "A job's needs: list the names of the jobs it waits for.",
+    "fix": [
+      "List jobs' names."
+    ]
+  },
+  "needs_not_name": {
+    "why": "A job's needs: is the name of the job it waits for, or a list of them.",
+    "fix": [
+      "Write a job's name, or a list of jobs' names."
+    ]
+  },
+  "needs_itself": {
+    "why": "A job can't wait for itself.",
+    "fix": [
+      "Remove the job's own name from its needs:."
+    ]
+  },
+  "needs_unknown_job": {
+    "why": "A job's needs: names a job the workflow doesn't have.",
+    "fix": [
+      "Correct the job's name, or add the job."
+    ]
+  },
+  "needs_cycle": {
+    "why": "These jobs wait for each other, so none of them can start.",
+    "fix": [
+      "Remove one of the needs: that close the cycle."
+    ]
+  },
+  "context_not_known": {
+    "why": "An expression reads a context that isn't known yet where it is evaluated, such as steps in a job's if:, which is decided before its steps run.",
+    "fix": [
+      "Read the value somewhere it is known, or pass it on through an output or env."
+    ]
+  },
+  "status_not_known": {
+    "why": "Status functions such as failure() say how the job or step got here, which isn't known where this expression is evaluated.",
+    "fix": [
+      "Use status functions only in a job's or a step's if:."
+    ]
+  },
+  "relative_outside_definitions": {
+    "why": "A relative reference, such as .name, reads a key beside it in an input's definition. Outside input definitions there is nothing for it to read.",
+    "fix": [
+      "Read the value through its context, such as inputs.name."
+    ]
+  },
+  "undefined_input": {
+    "why": "An expression reads an input the workflow doesn't define, which is null.",
+    "fix": [
+      "Correct the input's name, or define the input."
+    ]
+  },
+  "undefined_nested_input": {
+    "why": "An expression reads an input a group doesn't have, which is null.",
+    "fix": [
+      "Correct the input's name, or add it to the group."
+    ]
+  },
+  "needs_outside_job": {
+    "why": "The context needs reads the jobs a job waits for, so it is known only in a job.",
+    "fix": [
+      "Read needs only in a job's keys and steps."
+    ]
+  },
+  "undefined_job": {
+    "why": "An expression reads needs of a job the workflow doesn't have.",
+    "fix": [
+      "Correct the job's name."
+    ]
+  },
+  "job_not_needed": {
+    "why": "A job can read the outputs of the jobs it waits for, and this job doesn't wait for the one it reads.",
+    "fix": [
+      "Add the job it reads to its needs:."
+    ]
+  },
+  "needed_job_no_step": {
+    "why": "An expression reads a step of another job by an id that job's steps don't have.",
+    "fix": [
+      "Correct the step's id, or give the step that id."
+    ]
+  },
+  "needs_unknown_key": {
+    "why": "Each job in needs has outputs, result and steps, and nothing else.",
+    "fix": [
+      "Read one of outputs, result or steps."
+    ]
+  },
+  "step_not_earlier": {
+    "why": "A step can read the outputs of the steps before it, and this one comes later.",
+    "fix": [
+      "Move the step it reads before this one, or read its outputs later."
+    ]
+  },
+  "undefined_step": {
+    "why": "An expression reads a step by an id no earlier step of the job has.",
+    "fix": [
+      "Correct the step's id, or give the step that id."
+    ]
+  },
+  "output_undefined_step": {
+    "why": "A job's output reads a step by an id none of its steps has, so the output is empty.",
+    "fix": [
+      "Correct the step's id, or give the step that id."
+    ]
+  },
+  "steps_unknown_key": {
+    "why": "Each step in steps has outputs, and nothing else.",
+    "fix": [
+      "Read steps.<id>.outputs."
+    ]
+  },
+  "output_steps_unknown_key": {
+    "why": "Each step in steps has outputs, and nothing else, so this job output is empty.",
+    "fix": [
+      "Read steps.<id>.outputs."
+    ]
+  },
+  "no_matrix": {
+    "why": "The job has no matrix, so a word that starts with matrix. is text.",
+    "fix": [
+      "Give the job a strategy: with a matrix:, or remove the reference."
+    ]
+  },
+  "undefined_matrix_key": {
+    "why": "An expression reads a key the job's matrix doesn't have, which is null.",
+    "fix": [
+      "Correct the key, or add it to the matrix."
+    ]
+  },
+  "undefined_session": {
+    "why": "An expression reads a session the workflow doesn't define.",
+    "fix": [
+      "Correct the session's name, or add it to sessions:."
+    ]
+  },
+  "expression_failed": {
+    "why": "An expression failed in a way Meridian doesn't describe. This is a problem in Meridian.",
+    "fix": [
+      "Report it, with the workflow that causes it."
+    ]
+  },
+  "word_not_reference": {
+    "why": "A word in an expression that looks like a reference is text, because it doesn't start with a context, such as input.name, which is missing the s of inputs.",
+    "fix": [
+      "Correct the context's name, or quote the word if text is what you mean."
+    ]
+  },
+  "hyphenated_name": {
+    "why": "A hyphen in an expression subtracts, as in JavaScript, so a reference to a name with a hyphen in it subtracts its second half, which is NaN.",
+    "fix": [
+      "Read a name with a hyphen in brackets, as in inputs['pw-user']."
+    ]
+  },
+  "condition_word": {
+    "why": "A word in a condition is text, which is always true, so it doesn't decide anything.",
+    "fix": [
+      "Compare the value with what it should be, or use a status function such as failure()."
+    ]
+  },
+  "older_always": {
+    "why": "The word always is the older spelling of always(), which runs the job or step whatever happened before it.",
+    "fix": [
+      "Write always()."
+    ]
+  },
+  "replaced_keyword": {
+    "why": "The word was once an if: keyword. It is text now, which is always true.",
+    "fix": [
+      "Use the status function the message names."
+    ]
+  },
+  "expression_empty": {
+    "why": "There is nothing between ${{ and }}.",
+    "fix": [
+      "Write an expression, or remove the ${{ }}."
+    ]
+  },
+  "expression_too_deep": {
+    "why": "The expression nests more deeply than the limit, which keeps evaluating it bounded.",
+    "fix": [
+      "Split it into simpler expressions."
+    ]
+  },
+  "expression_ends_early": {
+    "why": "The expression stops before it is complete, such as after an operator.",
+    "fix": [
+      "Finish the expression."
+    ]
+  },
+  "unexpected_text": {
+    "why": "The expression has text where it can't be read, such as two values with no operator between them.",
+    "fix": [
+      "Check the expression near the text the message names."
+    ]
+  },
+  "ternary_missing_colon": {
+    "why": "A condition ? a : b needs its :.",
+    "fix": [
+      "Add the : and the value for when the condition is false."
+    ]
+  },
+  "coalesce_mixed": {
+    "why": "As in JavaScript, ?? can't be mixed with || or && without parentheses, because which is evaluated first isn't clear.",
+    "fix": [
+      "Add parentheses, as the message shows."
+    ]
+  },
+  "invalid_json_literal": {
+    "why": "Lists and mappings in an expression are written in JSON, which has double quotes and no trailing commas.",
+    "fix": [
+      "Write the list or mapping in JSON."
+    ]
+  },
+  "not_a_function": {
+    "why": "The expression calls a name that isn't one of the functions expressions have. Function names are case-sensitive.",
+    "fix": [
+      "Correct the function's name."
+    ]
+  },
+  "call_missing_comma": {
+    "why": "A call's arguments are separated by commas and end with ).",
+    "fix": [
+      "Add the missing , or )."
+    ]
+  },
+  "wrong_argument_count": {
+    "why": "The function is called with a different number of arguments than it takes.",
+    "fix": [
+      "Call it with the number of arguments the message names."
+    ]
+  },
+  "case_arguments": {
+    "why": "The function case() takes pairs of a condition and a value, then the value for when no condition holds.",
+    "fix": [
+      "Give case() an odd number of arguments, ending with the default."
+    ]
+  },
+  "expected_close_paren": {
+    "why": "A parenthesis is opened and never closed.",
+    "fix": [
+      "Add the missing )."
+    ]
+  },
+  "unclosed_string": {
+    "why": "A quoted string doesn't end before the expression does.",
+    "fix": [
+      "Add the closing quote."
+    ]
+  },
+  "unclosed_bracket": {
+    "why": "A bracket is opened and never closed.",
+    "fix": [
+      "Add the closing bracket."
+    ]
+  },
+  "unclosed_template": {
+    "why": "A ${{ starts an expression, which needs a }} to end it.",
+    "fix": [
+      "Add the }}, or write ${{ '${{' }} where the text ${{ is meant."
+    ]
+  },
+  "format_unclosed_brace": {
+    "why": "The template of format() has a { that doesn't close. Write {{ for a literal {.",
+    "fix": [
+      "Close the placeholder, or write {{ for a literal {."
+    ]
+  },
+  "format_missing_argument": {
+    "why": "The template of format() has a placeholder, such as {1}, with no argument for it.",
+    "fix": [
+      "Add the argument, or remove the placeholder."
+    ]
+  },
+  "format_unopened_brace": {
+    "why": "The template of format() has a } that no { opens. Write }} for a literal }.",
+    "fix": [
+      "Remove the }, or write }} for a literal }."
+    ]
+  },
+  "range_not_whole": {
+    "why": "The range operator makes a list of whole numbers, so it takes whole numbers.",
+    "fix": [
+      "Round the numbers, such as with round or floor."
+    ]
+  },
+  "range_out_of_bounds": {
+    "why": "The range operator takes numbers a JavaScript number holds exactly, from -2^53 to 2^53.",
+    "fix": [
+      "Use smaller numbers."
+    ]
+  },
+  "range_too_long": {
+    "why": "The range operator makes a list of at most 10,000 numbers.",
+    "fix": [
+      "Make the range shorter."
+    ]
+  },
+  "from_json_invalid": {
+    "why": "The function fromJSON reads JSON, and the text it was given isn't.",
+    "fix": [
+      "Check the text it reads, such as a step's output."
+    ]
+  },
+  "unknown_operator": {
+    "why": "A stored expression uses an operator this version of Meridian doesn't have.",
+    "fix": [
+      "Compile the workflow again with this version."
+    ]
+  },
+  "expression_too_large": {
+    "why": "An expression builds more text and lists than the limit, which keeps evaluating it bounded.",
+    "fix": [
+      "Build less, such as by reading part of a value rather than all of it."
+    ]
+  },
+  "expressions_read_each_other": {
+    "why": "Expressions in the workflow read each other's values, so none of them can be evaluated first.",
+    "fix": [
+      "Change one of them so that it doesn't read the others."
+    ]
+  }
+}

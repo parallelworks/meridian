@@ -5,5 +5,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: context
+      code: context_not_known
       path: /jobs/build/strategy/max-parallel

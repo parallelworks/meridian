@@ -5,7 +5,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /jobs/main/resources/walltime
       line: 8
       column: 7

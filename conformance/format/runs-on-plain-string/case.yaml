@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: not_expression
       path: /jobs/main/runs-on
       line: 3
       column: 14

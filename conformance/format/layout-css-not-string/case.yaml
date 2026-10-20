@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: wrong_type
       path: /on/execute/inputs/$meta/layout/css
       line: 9
       column: 49

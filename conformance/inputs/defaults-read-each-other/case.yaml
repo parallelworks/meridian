@@ -3,5 +3,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: expression
+      code: defaults_read_each_other
       path: /on/execute/inputs/a

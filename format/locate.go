@@ -7,6 +7,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // Locate returns where in the file a place in a string value is: offset is
@@ -14,7 +15,7 @@ import (
 // written on one line, plain or in quotes without escapes, and for a literal
 // block (|). For other strings, such as a folded block (>) or one with
 // escapes, it returns where the string starts.
-func (d *Document) Locate(pointer string, offset int) Position {
+func (d *Document) Locate(pointer string, offset int) problems.Position {
 	start := d.positions[pointer]
 	style, ok := d.styles[pointer]
 	if !ok || start.Line == 0 || start.Line > len(d.lines) {
@@ -43,7 +44,7 @@ func (d *Document) Locate(pointer string, offset int) Position {
 		if !strings.HasPrefix(line[at:], value) {
 			return start
 		}
-		return Position{start.Line, start.Column + quote + utf8.RuneCountInString(value[:offset])}
+		return problems.Position{Line: start.Line, Column: start.Column + quote + utf8.RuneCountInString(value[:offset])}
 	case yaml.LiteralStyle:
 		// Each line of a literal block is a line of the file, after the
 		// block's indentation.
@@ -61,7 +62,7 @@ func (d *Document) Locate(pointer string, offset int) Position {
 		if indent < 0 || src[indent:] != value[lineStart:lineEnd] {
 			return start
 		}
-		return Position{lineNo, 1 + utf8.RuneCountInString(src[:indent]) + utf8.RuneCountInString(value[lineStart:offset])}
+		return problems.Position{Line: lineNo, Column: 1 + utf8.RuneCountInString(src[:indent]) + utf8.RuneCountInString(value[lineStart:offset])}
 	}
 	return start
 }

@@ -7,8 +7,8 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: reference
+      code: no_matrix
       path: /jobs/plain/steps/0/run
     - severity: warning
-      code: reference
+      code: undefined_matrix_key
       path: /jobs/grid/steps/0/run

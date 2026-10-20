@@ -3,9 +3,9 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: word
+      code: word_not_reference
       path: /jobs/build/steps/0/run
       line: 4
       column: 23
   plan:
-    /warnings/0/code: word
+    /warnings/0/code: word_not_reference

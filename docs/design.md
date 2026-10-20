@@ -175,11 +175,34 @@ inputs and resolver answers give a byte-identical plan. That is also what
 lets it build to WebAssembly unchanged (see
 [Editors and web UIs](#editors-and-web-uis)).
 
-Errors and warnings carry a file, line, column, code and message, and are
-reported together rather than one at a time. Warnings, such as a deprecated
-key, don't stop a run, and are kept with it, so that they reach whoever runs
-the workflow and not only its author. Over HTTP they are RFC 9457 problem
-details with the list in an `errors` member.
+Errors and warnings are reported together rather than one at a time.
+Warnings, such as a deprecated key, don't stop a run, and are kept with it,
+so that they reach whoever runs the workflow and not only its author.
+
+Each one is a problem of a kind the `problems` package defines, built on
+the problem details that Parallel Works' services share
+(`github.com/parallelworks/foundation/problem`):
+
+- **A stable code per message**, such as `unknown_key`, which is part of the
+  contract: a code and its params are never renamed. Its type URI,
+  `/problems/workflow/<code>`, resolves to a page that says why it happens
+  and how to fix it. Checks every API shares, such as a text's length or a
+  number's range, use foundation's own rules, such as `too_long`.
+- **Params**, the values its message shows. Data from the workflow or the
+  run, such as a key or a value, is shown as data (a quoted name, compact
+  JSON), so that only the words around it are translated.
+- **Its message in every language** the catalog has, written in ICU
+  MessageFormat. A diagnostic's detail is its message in English; a platform
+  writes it in the reader's language from the code and params.
+- **Where it is**: a JSON Pointer into the workflow, and the file, line and
+  column among its params. The kind decides whether it is an error or a
+  warning.
+
+A diagnostic is a foundation `FieldError`, so over HTTP a workflow's errors
+are an RFC 9457 validation problem, one entry each, and its warnings travel
+the same way beside a successful result. A plan keeps its warnings' codes
+and params but not their text, so each reader sees them in their own
+language.
 
 Limits on a run's size (jobs, matrix instances, expression depth, `uses:`
 depth) are set by whoever runs Meridian. The defaults are high enough for

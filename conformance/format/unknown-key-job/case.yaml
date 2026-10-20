@@ -5,7 +5,7 @@ source: Public workflows that ACTIVATE runs
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /jobs/main/early-cancel
       line: 3
       column: 5

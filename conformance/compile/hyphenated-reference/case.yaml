@@ -7,15 +7,15 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: reference
+      code: hyphenated_name
       path: /jobs/build/steps/0/run
       line: 10
       column: 23
     - severity: warning
-      code: word
+      code: undefined_input
       path: /jobs/build/steps/0/run
       line: 10
       column: 23
   plan:
-    /warnings/0/code: word
-    /warnings/1/code: reference
+    /warnings/0/code: hyphenated_name
+    /warnings/1/code: undefined_input

@@ -5,5 +5,5 @@ inputs:
 expect:
   diagnostics:
     - severity: error
-      code: input-value
+      code: input_not_option
       path: /on/execute/inputs/size

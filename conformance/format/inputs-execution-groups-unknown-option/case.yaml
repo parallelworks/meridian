@@ -6,7 +6,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /on/execute/inputs/executionGroup/multi
       line: 10
       column: 9

@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: missing_keys
       path: /jobs/main/runs-on/environment
       line: 4
       column: 20

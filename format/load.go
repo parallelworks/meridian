@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"regexp"
@@ -15,6 +14,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // DefaultMaxSize is the largest workflow file a Loader accepts unless it sets
@@ -39,8 +39,8 @@ type Document struct {
 	// reported as warnings, are left out.
 	Value map[string]any
 
-	positions map[string]Position
-	keys      map[string]Position
+	positions map[string]problems.Position
+	keys      map[string]problems.Position
 	// styles holds each string's YAML style, and lines the file's lines,
 	// so that a place in a string can be found in the file.
 	styles map[string]yaml.Style
@@ -49,13 +49,13 @@ type Document struct {
 
 // Position returns where the value at a JSON Pointer (RFC 6901) starts, or
 // the zero Position if the document has no value there.
-func (d *Document) Position(pointer string) Position {
+func (d *Document) Position(pointer string) problems.Position {
 	return d.positions[pointer]
 }
 
 // KeyPosition returns where the key of the value at a JSON Pointer is, or
 // where the value starts if it has no key, as an item of a list has none.
-func (d *Document) KeyPosition(pointer string) Position {
+func (d *Document) KeyPosition(pointer string) problems.Position {
 	if p, ok := d.keys[pointer]; ok {
 		return p
 	}
@@ -65,10 +65,10 @@ func (d *Document) KeyPosition(pointer string) Position {
 // ReportPosition returns where a diagnostic about the value at a JSON
 // Pointer points: at a mapping's key, which names it, and at where anything
 // else starts.
-func (d *Document) ReportPosition(pointer string) Position {
+func (d *Document) ReportPosition(pointer string) problems.Position {
 	tokens, err := jsonptr.Split(pointer)
 	if err != nil {
-		return Position{}
+		return problems.Position{}
 	}
 	if v, _ := jsonptr.Lookup(d.Value, tokens); isMapping(v) {
 		return d.KeyPosition(pointer)
@@ -82,7 +82,7 @@ func isMapping(v any) bool {
 }
 
 // Load loads a workflow file with the zero Loader.
-func Load(name string, data []byte) (*Document, Diagnostics) {
+func Load(name string, data []byte) (*Document, problems.Diagnostics) {
 	var l Loader
 	return l.Load(name, data)
 }
@@ -90,11 +90,11 @@ func Load(name string, data []byte) (*Document, Diagnostics) {
 // Load parses a workflow file and validates it against the schema of its
 // format. name is the file's name in diagnostics. Load returns every problem
 // it finds, warnings included, and a nil Document if any of them is an error.
-func (l *Loader) Load(name string, data []byte) (*Document, Diagnostics) {
+func (l *Loader) Load(name string, data []byte) (*Document, problems.Diagnostics) {
 	p := &parser{
 		file:   name,
-		keys:   make(map[string]Position),
-		values: make(map[string]Position),
+		keys:   make(map[string]problems.Position),
+		values: make(map[string]problems.Position),
 		styles: make(map[string]yaml.Style),
 	}
 	value := p.parse(data, cmp.Or(l.MaxSize, DefaultMaxSize))
@@ -124,21 +124,15 @@ func (l *Loader) Load(name string, data []byte) (*Document, Diagnostics) {
 // Pointer, so that diagnostics found later can point into the file.
 type parser struct {
 	file   string
-	keys   map[string]Position
-	values map[string]Position
+	keys   map[string]problems.Position
+	values map[string]problems.Position
 	styles map[string]yaml.Style
-	diags  Diagnostics
+	diags  problems.Diagnostics
 }
 
-func (p *parser) report(severity Severity, pos Position, code Code, path, format string, args ...any) {
-	p.diags = append(p.diags, Diagnostic{
-		File:     p.file,
-		Position: pos,
-		Severity: severity,
-		Code:     code,
-		Path:     path,
-		Message:  fmt.Sprintf(format, args...),
-	})
+// report reports a problem of kind k at pos, about the value at path.
+func (p *parser) report(k *problems.Kind, pos problems.Position, path string, params problems.Params) {
+	p.diags = append(p.diags, k.At(p.file, pos, path, params))
 }
 
 // parse turns YAML into JSON values. ACTIVATE reads workflows the same way,
@@ -146,14 +140,14 @@ func (p *parser) report(severity Severity, pos Position, code Code, path, format
 // key keeps its last value, and only the first document is read.
 func (p *parser) parse(data []byte, maxSize int) any {
 	if len(data) > maxSize {
-		p.report(Error, Position{}, CodeTooLarge, "", "the file is %d bytes, more than the limit of %d", len(data), maxSize)
+		p.report(problems.FileTooLarge, problems.Position{}, "", problems.Params{"size": len(data), "limit": maxSize})
 		return nil
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
 	if err := dec.Decode(&doc); err != nil {
 		if !errors.Is(err, io.EOF) {
-			p.syntaxError(Error, err)
+			p.syntaxError(problems.YAMLSyntax, err)
 		}
 		return nil
 	}
@@ -161,29 +155,25 @@ func (p *parser) parse(data []byte, maxSize int) any {
 	switch err := dec.Decode(&next); {
 	case errors.Is(err, io.EOF):
 	case err != nil:
-		p.syntaxError(Warning, err)
+		p.syntaxError(problems.ExtraDocumentInvalid, err)
 	case !emptyDocument(&next):
-		p.report(Warning, Position{next.Line, next.Column}, CodeExtraDocument, "",
-			"the file has more than one YAML document; only the first is read")
+		p.report(problems.ExtraDocument, position(&next), "", nil)
 	}
 	return p.value(doc.Content[0], "")
 }
 
 var syntaxErrorRE = regexp.MustCompile(`^yaml: line (\d+): (.*)$`)
 
-func (p *parser) syntaxError(severity Severity, err error) {
+// syntaxError reports err, the YAML library's error, as a problem of kind
+// k, whose reason is the library's message.
+func (p *parser) syntaxError(k *problems.Kind, err error) {
 	msg := strings.TrimPrefix(err.Error(), "yaml: ")
-	var pos Position
+	var pos problems.Position
 	if m := syntaxErrorRE.FindStringSubmatch(err.Error()); m != nil {
 		pos.Line, _ = strconv.Atoi(m[1])
 		msg = m[2]
 	}
-	if severity == Warning {
-		p.report(Warning, pos, CodeExtraDocument, "",
-			"the file has more than one YAML document, and only the first is read; the rest isn't valid YAML: %s", msg)
-		return
-	}
-	p.report(Error, pos, CodeSyntax, "", "invalid YAML: %s", msg)
+	p.report(k, pos, "", problems.Params{"reason": msg})
 }
 
 // emptyDocument reports whether a YAML document has no content, as after a
@@ -196,8 +186,8 @@ func emptyDocument(doc *yaml.Node) bool {
 	return n.Kind == yaml.ScalarNode && n.ShortTag() == "!!null" && n.Value == ""
 }
 
-func position(n *yaml.Node) Position {
-	return Position{n.Line, n.Column}
+func position(n *yaml.Node) problems.Position {
+	return problems.Position{Line: n.Line, Column: n.Column}
 }
 
 // value converts a YAML node to a JSON value, recording its position and its
@@ -216,7 +206,7 @@ func (p *parser) value(n *yaml.Node, path string) any {
 	case yaml.ScalarNode:
 		return p.scalar(n, path)
 	case yaml.AliasNode:
-		p.report(Error, position(n), CodeUnsupported, path, "YAML aliases aren't allowed")
+		p.report(problems.YAMLAlias, position(n), path, nil)
 		return nil
 	default:
 		return nil
@@ -230,15 +220,15 @@ func (p *parser) mapping(n *yaml.Node, path string) map[string]any {
 		k := n.Content[i]
 		switch {
 		case k.Kind != yaml.ScalarNode:
-			p.report(Error, position(k), CodeUnsupported, path, "a key must be a string, not a YAML collection")
+			p.report(problems.YAMLCollectionKey, position(k), path, nil)
 			continue
 		case k.ShortTag() == "!!merge":
-			p.report(Error, position(k), CodeUnsupported, path, "YAML merge keys (<<) aren't allowed")
+			p.report(problems.YAMLMergeKey, position(k), path, nil)
 			continue
 		}
 		if j, ok := last[k.Value]; ok {
-			p.report(Warning, position(k), CodeDuplicateKey, jsonptr.Append(path, k.Value),
-				"%q appears again, so its value on line %d is ignored", k.Value, n.Content[j].Line)
+			p.report(problems.DuplicateKey, position(k), jsonptr.Append(path, k.Value),
+				problems.Params{"key": k.Value, "first_line": strconv.Itoa(n.Content[j].Line)})
 		}
 		last[k.Value] = i
 	}
@@ -263,7 +253,7 @@ func (p *parser) scalar(n *yaml.Node, path string) any {
 	case "!!null":
 		return nil
 	case "!!merge":
-		p.report(Error, position(n), CodeUnsupported, path, "YAML merge keys (<<) aren't allowed")
+		p.report(problems.YAMLMergeKey, position(n), path, nil)
 		return nil
 	}
 	var v any
@@ -281,7 +271,7 @@ func (p *parser) scalar(n *yaml.Node, path string) any {
 		return float64(v)
 	case float64:
 		if math.IsInf(v, 0) || math.IsNaN(v) {
-			p.report(Error, position(n), CodeUnsupported, path, "%s isn't a number JSON can hold", n.Value)
+			p.report(problems.NumberNotJSON, position(n), path, problems.Params{"value": n.Value})
 			return nil
 		}
 		return v
@@ -309,7 +299,7 @@ func (p *parser) format(value any) int {
 	case n <= latestFormat:
 		return int(n)
 	}
-	p.report(Error, p.values["/format"], CodeFormat, "/format",
-		"format %d is newer than this version of Meridian, which runs format %d and earlier", n, latestFormat)
+	p.report(problems.FormatTooNew, p.values["/format"], "/format",
+		problems.Params{"format": strconv.FormatInt(n, 10), "latest": strconv.Itoa(latestFormat)})
 	return 0
 }

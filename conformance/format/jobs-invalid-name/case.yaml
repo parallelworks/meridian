@@ -5,7 +5,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: invalid_name
       path: /jobs/Build
       line: 2
       column: 3

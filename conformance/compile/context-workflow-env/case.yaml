@@ -3,8 +3,8 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: context
+      code: context_not_known
       path: /env/A
     - severity: error
-      code: context
+      code: status_not_known
       path: /env/B

@@ -10,6 +10,7 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/problems"
 )
 
 func load(t *testing.T, src string) *format.Document {
@@ -56,13 +57,13 @@ func TestPlatformInputs(t *testing.T) {
 	}
 
 	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "missing"}, compile.Options{Inputs: platform{}})
-	if len(diags) != 1 || diags[0].Code != compile.CodeInputValue || !strings.Contains(diags[0].Message, "no cluster named missing") {
+	if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || !strings.Contains(diags[0].Message(), "no cluster named missing") {
 		t.Errorf("a cluster the platform rejects: %v", diags)
 	}
 
 	doc = load(t, strings.Replace(clusterWorkflow, "compute-clusters", "slurm-partitions\n        resource: ${{ inputs.other }}", 1))
 	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
-	if len(diags) != 1 || diags[0].Code != compile.CodePlatform {
+	if len(diags) != 1 || diags[0].Code != problems.PlatformInput.Code() {
 		t.Errorf("a type the platform doesn't provide: %v", diags)
 	}
 }
@@ -141,7 +142,7 @@ jobs:
       - run: echo ok
 `)
 	inputs, diags := compile.ResolveInputs(doc, map[string]any{"g": "mine", "s": map[string]any{"g": "notamap"}}, compile.Options{})
-	if len(diags) != 1 || diags[0].Code != compile.CodeInputValue || diags[0].Path != "/on/execute/inputs/s/items/g" {
+	if len(diags) != 1 || diags[0].Code != problems.InputGroupNotMapping.Code() || diags[0].Path() != "/on/execute/inputs/s/items/g" {
 		t.Fatalf("diagnostics = %v", diags)
 	}
 	if inputs.Values["g"] != "mine" {
@@ -176,7 +177,7 @@ jobs:
 	} {
 		for _, key := range []string{"s", "unknown"} {
 			inputs, diags := compile.ResolveInputs(doc, map[string]any{key: v}, compile.Options{})
-			if !diags.HasErrors() || diags[0].Code != compile.CodeInputValue {
+			if !diags.HasErrors() || diags[0].Code != problems.InputNotJSON.Code() {
 				t.Errorf("%s in %s: %v", name, key, diags)
 			}
 			if _, ok := inputs.Values[key]; ok {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // maxBuilt bounds the bytes of strings and lists that one evaluation can
@@ -83,12 +84,20 @@ type Unknown struct {
 // An EvalError is an expression that can't be evaluated with the values it
 // was given, such as fromJSON of text that isn't JSON.
 type EvalError struct {
-	// Offset is the byte offset in the expression of the problem.
+	// Offset is the byte offset of the problem: in the expression, in the
+	// template evaluated, or in the string at Location.
 	Offset int
-	Msg    string
+	// Location is the JSON Pointer of the string in a workflow the problem
+	// is in, when it is in another expression than the one evaluated: one
+	// that it reads, as a relative reference or an input's definition
+	// does. It is "" for the expression itself.
+	Location string
+	// Kind is the kind of problem, and Params the values its message shows.
+	Kind   *problems.Kind
+	Params problems.Params
 }
 
-func (e *EvalError) Error() string { return e.Msg }
+func (e *EvalError) Error() string { return e.Kind.Message(e.Params) }
 
 // An UnknownError means an expression reads something its scope doesn't
 // have yet, such as needs before the jobs it needs have finished. It is
@@ -115,8 +124,8 @@ func newEvaluator(scope Scope) *evaluator {
 	return &evaluator{scope: scope.Budgeted()}
 }
 
-func (e *evaluator) errorAt(at int, format string, args ...any) error {
-	return &EvalError{Offset: at, Msg: fmt.Sprintf(format, args...)}
+func (e *evaluator) errorAt(at int, k *problems.Kind, params problems.Params) error {
+	return &EvalError{Offset: at, Kind: k, Params: params}
 }
 
 // spend counts n bytes built, and fails if the evaluation has built too
@@ -124,7 +133,7 @@ func (e *evaluator) errorAt(at int, format string, args ...any) error {
 func (e *evaluator) spend(at, n int) error {
 	*e.scope.spent += n
 	if *e.scope.spent > maxBuilt {
-		return e.errorAt(at, "the expression builds more than %d MiB", maxBuilt>>20)
+		return e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
 	}
 	return nil
 }
@@ -311,7 +320,7 @@ func (e *evaluator) binary(n *binary) (any, error) {
 	case "**", "^", "exp":
 		return math.Pow(x, y), nil
 	}
-	return nil, e.errorAt(n.at, "unknown operator %s", n.op)
+	return nil, e.errorAt(n.at, problems.UnknownOperator, problems.Params{"op": n.op})
 }
 
 func (e *evaluator) call(n *call) (any, error) {
@@ -443,7 +452,13 @@ func (e *evaluator) resolverError(at int, err error) error {
 	if u, ok := errors.AsType[*UnknownError](err); ok {
 		return &UnknownError{Offset: at, Name: u.Name}
 	}
-	return &EvalError{Offset: at, Msg: err.Error()}
+	if ee, ok := errors.AsType[*EvalError](err); ok && ee.Location != "" {
+		return ee
+	}
+	if se, ok := errors.AsType[*SyntaxError](err); ok && se.Location != "" {
+		return se
+	}
+	return &EvalError{Offset: at, Kind: problems.ExpressionFailed, Params: problems.Params{"reason": err.Error()}}
 }
 
 // names returns a path's names, with each [index] replaced by its index.
