@@ -146,6 +146,11 @@ func (t *Template) IsText() bool {
 // nothing else has the expression's value, of whatever type. Otherwise its
 // value is a string, with each expression replaced by its value's text: a
 // string as it is, null as nothing, and anything else as JSON.
+//
+// The template's expressions share the language's limit on what a template
+// builds, which counts each value's text here but not the text around it.
+// The limit is the template's own: a template it reads, such as an input's
+// default, has its own.
 func (t *Template) Eval(scope Scope) (any, error) {
 	if len(t.parts) == 1 && t.parts[0].expr != nil {
 		v, err := t.parts[0].expr.Eval(scope)

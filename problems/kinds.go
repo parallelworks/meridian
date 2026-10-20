@@ -163,3 +163,10 @@ var (
 	ExpressionTooLarge       = define(Error, "expression_too_large", "Expression builds too much", "limit")
 	ExpressionsReadEachOther = define(Error, "expressions_read_each_other", "Expressions read each other")
 )
+
+// Meridian's own limits on evaluating expressions, which aren't part of the
+// format: expressions that are each within the language's limits can still
+// pass them together.
+var (
+	ExpressionsBuildTooMuch = define(Error, "expressions_build_too_much", "Expressions build too much together", "limit")
+)

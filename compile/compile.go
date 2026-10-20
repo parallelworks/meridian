@@ -98,7 +98,9 @@ func (r *reporter) reportAt(k *problems.Kind, loc []string, params problems.Para
 
 // reportError reports err, an error parsing or evaluating the expressions in
 // the string at loc, at shift bytes after where the error puts it. An error
-// in another string, which the expression read, is reported where it is.
+// in another string, which the expression read, is reported where it is. A
+// group's budget running out is reported at the string whose evaluation ran
+// it out, since no one expression is wrong.
 func (r *reporter) reportError(loc []string, shift int, err error) {
 	pointer, offset := jsonptr.Format(loc), shift
 	report := func(k *problems.Kind, params problems.Params, at int, location string) {
@@ -113,6 +115,10 @@ func (r *reporter) reportError(loc []string, shift int, err error) {
 	}
 	if ee, ok := errors.AsType[*expr.EvalError](err); ok {
 		report(ee.Kind, ee.Params, ee.Offset, ee.Location)
+		return
+	}
+	if be, ok := errors.AsType[*expr.BudgetError](err); ok {
+		report(problems.ExpressionsBuildTooMuch, problems.Params{"limit": be.Limit}, 0, "")
 		return
 	}
 	report(problems.ExpressionFailed, problems.Params{"reason": err.Error()}, 0, "")

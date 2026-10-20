@@ -106,5 +106,6 @@
   "from_json_invalid": "fromJSON が読み取るテキスト {text} は有効な JSON ではありません。",
   "unknown_operator": "演算子 {op} はありません。",
   "expression_too_large": "式が作成するデータが {limit} MiB を超えています。",
-  "expressions_read_each_other": "ここにある式が互いを参照しているため、どの式にも値がありません。"
+  "expressions_read_each_other": "ここにある式が互いを参照しているため、どの式にも値がありません。",
+  "expressions_build_too_much": "ここでまとめて評価される式が作成するデータが、合計で {limit} MiB を超えています。"
 }

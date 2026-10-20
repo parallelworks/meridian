@@ -107,8 +107,10 @@ func hasTemplate(v any) bool {
 }
 
 // Eval evaluates the Value's templates in scope and returns its JSON value.
-// Its templates share one budget for what they build, as one expression's
-// evaluation does. It returns an *expr.UnknownError if a template reads
+// Its templates are one group: each has the language's limit on what it
+// builds, and together they share Meridian's wider budget for a group, which
+// isn't part of the format. It returns an *expr.BudgetError if they build
+// more than that together, and an *expr.UnknownError if a template reads
 // something scope doesn't have yet.
 func (v Value) Eval(scope expr.Scope) (any, error) {
 	return evalValue(v.v, scope.Budgeted())

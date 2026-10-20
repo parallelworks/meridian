@@ -745,7 +745,7 @@
   },
   "expression_too_large": {
     "title": "La expresión construye demasiado",
-    "why": "Una expresión construye más texto y listas de lo que permite el límite, que mantiene acotada su evaluación.",
+    "why": "Las expresiones de una cadena construyen más texto y listas de lo que el lenguaje permite a una cadena, 8 MiB, un límite que mantiene acotada su evaluación.",
     "fix": [
       "Construye menos, por ejemplo leyendo una parte de un valor en lugar de todo."
     ]
@@ -755,6 +755,13 @@
     "why": "Las expresiones del flujo de trabajo leen los valores de las otras, así que no se puede evaluar ninguna primero.",
     "fix": [
       "Cambia una de ellas para que no lea las demás."
+    ]
+  },
+  "expressions_build_too_much": {
+    "title": "Las expresiones construyen demasiado en conjunto",
+    "why": "Meridian evalúa algunas expresiones juntas y limita lo que construyen entre todas, además de lo que construye cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas construyen más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+    "fix": [
+      "Construye menos en estas expresiones, por ejemplo leyendo una parte de un valor en lugar de todo."
     ]
   }
 }
