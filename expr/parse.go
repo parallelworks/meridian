@@ -3,6 +3,7 @@ package expr
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -477,8 +478,8 @@ func (p *parser) not() (node, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i := len(bangs) - 1; i >= 0; i-- {
-		x = &unary{at: bangs[i], op: "!", x: x}
+	for _, at := range slices.Backward(bangs) {
+		x = &unary{at: at, op: "!", x: x}
 	}
 	return x, nil
 }

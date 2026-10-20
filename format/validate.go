@@ -39,20 +39,28 @@ type formatSchema struct {
 // compileSchema compiles an embedded schema, whose URI is id. A schema that
 // doesn't compile is a bug in this package, which its tests catch.
 func compileSchema(id string, data []byte) *formatSchema {
+	s, err := parseSchema(id, data)
+	if err != nil {
+		panic(fmt.Sprintf("format: schema %s: %v", id, err)) //nolint:forbidigo // the schema is embedded, so this is a bug in the build, not an error a caller can handle
+	}
+	return s
+}
+
+func parseSchema(id string, data []byte) (*formatSchema, error) {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 	if err != nil {
-		panic(fmt.Sprintf("format: schema %s: %v", id, err))
+		return nil, err
 	}
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
 	if err := c.AddResource(id, doc); err != nil {
-		panic(fmt.Sprintf("format: schema %s: %v", id, err))
+		return nil, err
 	}
 	s, err := c.Compile(id)
 	if err != nil {
-		panic(fmt.Sprintf("format: schema %s: %v", id, err))
+		return nil, err
 	}
-	return &formatSchema{s, doc}
+	return &formatSchema{s, doc}, nil
 }
 
 // maxPasses bounds how many times validate drops unknown keys and validates

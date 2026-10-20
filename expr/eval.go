@@ -203,7 +203,7 @@ func (e *evaluator) eval(n node) (any, error) {
 		}
 		return e.built(n.at, n.prefix+stringOf(v))
 	}
-	panic(fmt.Sprintf("expr: unknown node %T", n))
+	return nil, fmt.Errorf("expr: unknown node %T", n)
 }
 
 func (e *evaluator) binary(n *binary) (any, error) {
