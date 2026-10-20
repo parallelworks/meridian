@@ -93,9 +93,13 @@ cases:
     error: syntax
   - expr: "case(true, 'a')"
     error: syntax
-  # ACTIVATE reports this when the expression is evaluated; Meridian, when it
-  # is parsed.
+  # case() ends with a default.
   - expr: "case(true, 'a', false, 'b')"
+    error: syntax
+  # A branch that isn't taken is still parsed, so it is an error there too.
+  - expr: "false && case(true, 'a', false, 'b')"
+    error: syntax
+  - expr: "true ? 1 : case(true, 'a', false, 'b')"
     error: syntax
   - expr: join()
     error: syntax

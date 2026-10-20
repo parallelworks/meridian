@@ -101,13 +101,23 @@ cases:
     value: {prop: 1}
   - expr: '{"exp1": {"exp1": 1, "exp2": 2}, "exp2": {"exp1": 1, "exp2": 2}}'
     value: {exp1: {exp1: 1, exp2: 2}, exp2: {exp1: 1, exp2: 2}}
-  # A list or mapping that isn't JSON is an error. ACTIVATE reports it when
-  # the expression is evaluated; Meridian, when it is parsed.
+  # A list or mapping that isn't JSON is a syntax error.
   - expr: "['a', 'b']"
     error: syntax
   - expr: "{a: 1}"
     error: syntax
   - expr: "[1, 2"
+    error: syntax
+  # A branch that isn't taken is still parsed, so it is an error there too.
+  - expr: "true || ['a', 'b']"
+    error: syntax
+  - expr: "false && ['a', 'b']"
+    error: syntax
+  - expr: "true ? 1 : {a: 1}"
+    error: syntax
+  - expr: "inputs.type ?? {a: 1}"
+    error: syntax
+  - expr: "case(true, 1, ['a'])"
     error: syntax
 
   # Words are strings.
