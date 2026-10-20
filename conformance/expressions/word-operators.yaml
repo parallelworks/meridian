@@ -84,6 +84,12 @@ cases:
     value: true
   - expr: "inputs.name startsWith 'A' == startsWith(inputs.name, 'A')"
     value: true
+  # The word operators read null as "null", and the functions, like GitHub
+  # Actions', read it as "".
+  - expr: inputs.missing startsWith 'nu'
+    value: true
+  - expr: "startsWith(inputs.missing, 'nu')"
+    value: false
 
   - expr: inputs.hosts get inputs.idx
     value: h2

@@ -88,12 +88,22 @@ cases:
     value: 20
   - expr: 2 + 3 * 4
     value: 14
+  # Unlike JavaScript, where ** is right-associative, format 1's power
+  # operators are left-associative, like its others.
+  - expr: 2 ** 3 ** 2
+    value: 64
+  - expr: 2 ^ 3 ^ 2
+    value: 64
+  - expr: 2 exp 3 exp 2
+    value: 64
 
   # and and or are && and ||, in any case.
   - expr: false or inputs.name
     value: Alice
   - expr: true AND inputs.num
     value: 5
+  - expr: false OR inputs.name
+    value: Alice
 
   # Comparisons convert, except === and !==.
   - expr: "'5' == 5"
@@ -174,6 +184,18 @@ cases:
     value: 1e19
   - expr: inputs.missing - 1
     value: -1
+  # Unlike JavaScript, where [1] + [2] is "12", + adds lists as numbers.
+  - expr: "[1] + [2]"
+    value: .nan
+  # A string is read as Go reads a number, unlike JavaScript's Number(): _
+  # between digits and hexadecimal floats count, and 0x without a p exponent
+  # doesn't.
+  - expr: "'1_000' - 0"
+    value: 1000
+  - expr: "'0x1p4' - 0"
+    value: 16
+  - expr: "'0xff' - 0"
+    value: .nan
 
   # ! negates truthiness; any number of them.
   - expr: "!!inputs.name"
@@ -199,6 +221,10 @@ cases:
     value: ""
   - expr: 5 ?? default
     value: 5
+  # Unlike JavaScript, where ?? binds looser than ==, ?? is a comparison:
+  # this is (0 ?? 1) == 0, where JavaScript gives 0 ?? (1 == 0), 0.
+  - expr: 0 ?? 1 == 0
+    value: true
 
   # The ternary.
   - expr: "true ? a : b"

@@ -125,6 +125,10 @@ cases:
     value: 5
   - expr: round inputs.negF
     value: -3
+  # Unlike JavaScript's Math.round, which rounds halves up, round rounds
+  # them away from zero.
+  - expr: round -2.5
+    value: -3
   - expr: abs (floor inputs.negF)
     value: 4
   - expr: (abs "not-a-number") + 1
