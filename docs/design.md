@@ -192,8 +192,10 @@ the problem details that Parallel Works' services share
   run, such as a key or a value, is shown as data (a quoted name, compact
   JSON), so that only the words around it are translated.
 - **Its message in every language** the catalog has, written in ICU
-  MessageFormat. A diagnostic's detail is its message in English; a platform
-  writes it in the reader's language from the code and params.
+  MessageFormat: English, Spanish, Japanese, Korean and Chinese, the
+  languages of foundation's own catalogs. A diagnostic's detail is its
+  message in English; a platform writes it in the reader's language from the
+  code and params.
 - **Where it is**: a JSON Pointer into the workflow, and the file, line and
   column among its params. The kind decides whether it is an error or a
   warning.

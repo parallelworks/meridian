@@ -1,0 +1,760 @@
+{
+  "file_too_large": {
+    "title": "Archivo demasiado grande",
+    "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite.",
+    "fix": [
+      "Saca los scripts largos del flujo de trabajo y ponlos en archivos que ejecuten los pasos.",
+      "Divide el flujo de trabajo en otros más pequeños que se llamen entre sí con uses:."
+    ]
+  },
+  "extra_document": {
+    "title": "Más de un documento YAML",
+    "why": "Un archivo YAML puede contener varios documentos, separados por ---. El flujo de trabajo es el primero; el resto se ignora.",
+    "fix": [
+      "Elimina el --- y lo que le sigue, o muévelo a un flujo de trabajo propio."
+    ]
+  },
+  "extra_document_invalid": {
+    "title": "Más de un documento YAML, y el resto no es válido",
+    "why": "El archivo tiene un segundo documento YAML después de ---, que se ignora, y además ese documento no es YAML válido.",
+    "fix": [
+      "Elimina el --- y lo que le sigue."
+    ]
+  },
+  "yaml_syntax": {
+    "title": "YAML no válido",
+    "why": "El archivo no es YAML válido, así que no se puede leer como flujo de trabajo.",
+    "fix": [
+      "Revisa la línea que indica el error y la sangría de las líneas anteriores.",
+      "Pon entre comillas un valor que contenga dos puntos seguidos de un espacio, o que empiece por un carácter como {, [, * o &."
+    ]
+  },
+  "yaml_alias": {
+    "title": "Alias de YAML",
+    "why": "Los alias de YAML (*nombre) repiten un valor marcado con un ancla (&nombre). Los flujos de trabajo no los permiten, porque unos pocos alias pueden hacer que un archivo pequeño se convierta en uno enorme.",
+    "fix": [
+      "Escribe el valor completo donde está el alias."
+    ]
+  },
+  "yaml_collection_key": {
+    "title": "Clave que no es una cadena",
+    "why": "Un flujo de trabajo está formado por valores JSON, cuyas claves son cadenas. YAML permite una lista o un mapa como clave, algo que JSON no puede contener.",
+    "fix": [
+      "Haz que la clave sea una cadena."
+    ]
+  },
+  "yaml_merge_key": {
+    "title": "Clave de fusión de YAML",
+    "why": "Las claves de fusión de YAML (<<) copian un mapa dentro de otro. Los flujos de trabajo no las permiten, porque no forman parte de YAML 1.2 y los lectores no coinciden en lo que significan.",
+    "fix": [
+      "Escribe las claves que copiaría la fusión."
+    ]
+  },
+  "duplicate_key": {
+    "title": "Clave repetida",
+    "why": "Una clave aparece dos veces en el mismo mapa. Solo se usa su último valor.",
+    "fix": [
+      "Elimina una de las dos, o cámbiale el nombre si querías ambas."
+    ]
+  },
+  "number_not_json": {
+    "title": "Número que JSON no puede contener",
+    "why": "El valor es un número que YAML permite pero JSON no, como .inf o .nan.",
+    "fix": [
+      "Ponlo entre comillas si es texto, o escribe un número finito."
+    ]
+  },
+  "format_too_new": {
+    "title": "Formato demasiado reciente",
+    "why": "El format: del flujo de trabajo indica un formato más reciente que el que ejecuta esta versión de Meridian.",
+    "fix": [
+      "Ejecuta el flujo de trabajo con una versión más reciente, o escríbelo en un formato anterior."
+    ]
+  },
+  "schema_failed": {
+    "title": "Falló la comprobación del esquema",
+    "why": "No se pudo comprobar el flujo de trabajo con el esquema de su formato. Es un problema de Meridian, no del flujo de trabajo.",
+    "fix": [
+      "Infórmalo, junto con el flujo de trabajo que lo provoca."
+    ]
+  },
+  "unknown_key": {
+    "title": "Clave desconocida",
+    "why": "El flujo de trabajo tiene una clave que su formato no define aquí, así que se ignora. A menudo es una errata.",
+    "fix": [
+      "Corrige la ortografía de la clave o elimínala."
+    ]
+  },
+  "unknown_key_unresolved": {
+    "title": "Clave desconocida",
+    "why": "El flujo de trabajo tiene una clave que su formato no define aquí, junto con otros errores que hacen que no quede claro qué se quería decir.",
+    "fix": [
+      "Corrige primero los otros errores y después corrige o elimina la clave."
+    ]
+  },
+  "invalid_name": {
+    "title": "Nombre no válido",
+    "why": "Aquí los nombres, como el de un trabajo o el de una entrada, deben coincidir con un patrón para que las expresiones puedan leerlos.",
+    "fix": [
+      "Cámbiale el nombre para usar solo los caracteres que permite el patrón."
+    ]
+  },
+  "input_type_unknown": {
+    "title": "Tipo de entrada desconocido",
+    "why": "El type: de una entrada no es uno de los tipos que define el formato.",
+    "fix": [
+      "Usa uno de los tipos que indica el mensaje."
+    ]
+  },
+  "workflow_empty": {
+    "title": "Flujo de trabajo vacío",
+    "why": "El archivo no contiene ningún flujo de trabajo.",
+    "fix": [
+      "Añade los trabajos del flujo de trabajo."
+    ]
+  },
+  "wrong_type": {
+    "title": "Tipo incorrecto",
+    "why": "El valor tiene un tipo distinto del que espera el formato aquí, como una lista donde va una cadena.",
+    "fix": [
+      "Escribe el valor con el tipo que indica el mensaje."
+    ]
+  },
+  "missing_keys": {
+    "title": "Faltan claves",
+    "why": "A un mapa le faltan claves que debe tener.",
+    "fix": [
+      "Añade las claves que indica el mensaje."
+    ]
+  },
+  "missing_any_key": {
+    "title": "Falta una de varias claves",
+    "why": "Un mapa debe tener una de varias claves, y no tiene ninguna.",
+    "fix": [
+      "Añade una de las claves que indica el mensaje."
+    ]
+  },
+  "not_expression": {
+    "title": "No es una expresión",
+    "why": "Este valor debe ser una expresión ${{ }}, para que se evalúe en lugar de leerse como texto.",
+    "fix": [
+      "Escríbelo como ${{ ... }}."
+    ]
+  },
+  "pattern_mismatch": {
+    "title": "No coincide con su patrón",
+    "why": "El valor no tiene la forma que espera el formato aquí.",
+    "fix": [
+      "Escríbelo con la forma que describe el patrón del mensaje."
+    ]
+  },
+  "must_equal": {
+    "title": "No es el valor permitido",
+    "why": "Aquí solo se permite un valor.",
+    "fix": [
+      "Usa el valor que indica el mensaje."
+    ]
+  },
+  "value_must_equal": {
+    "title": "No es el valor permitido",
+    "why": "Aquí solo se permite un valor.",
+    "fix": [
+      "Usa el valor que indica el mensaje."
+    ]
+  },
+  "value_must_be_one_of": {
+    "title": "No es uno de los valores permitidos",
+    "why": "Aquí solo se permiten algunos valores.",
+    "fix": [
+      "Usa uno de los valores que indica el mensaje."
+    ]
+  },
+  "value_must_equal_or_expression": {
+    "title": "No es el valor permitido ni una expresión",
+    "why": "Aquí solo se permite un valor, o una expresión ${{ }} que lo dé.",
+    "fix": [
+      "Usa el valor que indica el mensaje, o una expresión."
+    ]
+  },
+  "value_must_be_one_of_or_expression": {
+    "title": "No es uno de los valores permitidos ni una expresión",
+    "why": "Aquí solo se permiten algunos valores, o una expresión ${{ }} que dé uno de ellos.",
+    "fix": [
+      "Usa uno de los valores que indica el mensaje, o una expresión."
+    ]
+  },
+  "value_must_match": {
+    "title": "No coincide con los patrones permitidos",
+    "why": "El valor no tiene ninguna de las formas que permite el formato aquí.",
+    "fix": [
+      "Escríbelo con una de las formas que describen los patrones del mensaje."
+    ]
+  },
+  "too_few_keys": {
+    "title": "Demasiado pocas claves",
+    "why": "El mapa tiene menos claves de las que exige el formato aquí.",
+    "fix": [
+      "Añade claves hasta llegar al mínimo."
+    ]
+  },
+  "too_many_keys": {
+    "title": "Demasiadas claves",
+    "why": "El mapa tiene más claves de las que permite el formato aquí.",
+    "fix": [
+      "Elimina claves hasta quedar dentro del límite."
+    ]
+  },
+  "key_not_allowed": {
+    "title": "Clave no permitida aquí",
+    "why": "Esta clave no se permite en este mapa, dadas las demás claves que tiene.",
+    "fix": [
+      "Elimina la clave, o la clave con la que entra en conflicto."
+    ]
+  },
+  "keys_not_allowed_together": {
+    "title": "Claves no permitidas juntas",
+    "why": "Cada una de estas claves elige una forma distinta para el mapa, así que no puede tenerlas juntas.",
+    "fix": [
+      "Conserva las claves de la forma que quieres y elimina las demás."
+    ]
+  },
+  "form_not_allowed": {
+    "title": "Forma no permitida aquí",
+    "why": "El valor tiene una forma que el formato no permite aquí.",
+    "fix": [
+      "Consulta en la documentación del formato qué se permite aquí."
+    ]
+  },
+  "several_forms": {
+    "title": "Coincide con varias formas",
+    "why": "El valor coincide con más de una de las formas permitidas aquí, así que no está claro qué significa.",
+    "fix": [
+      "Elimina las claves de las formas que no quieres."
+    ]
+  },
+  "no_form": {
+    "title": "No coincide con ninguna forma",
+    "why": "El valor no coincide con ninguna de las formas permitidas aquí, y no está claro cuál se quería.",
+    "fix": [
+      "Consulta en la documentación del formato las formas permitidas aquí."
+    ]
+  },
+  "schema_rule": {
+    "title": "Incumple una regla del esquema",
+    "why": "El valor incumple una de las reglas del esquema del flujo de trabajo.",
+    "fix": [
+      "Cambia el valor como indica el mensaje."
+    ]
+  },
+  "input_not_json": {
+    "title": "Valor de entrada que no es JSON",
+    "why": "Los valores de entrada de una ejecución son JSON, y este contiene algo que JSON no puede contener, como NaN o texto que no es UTF-8.",
+    "fix": [
+      "Envía el valor como JSON."
+    ]
+  },
+  "unknown_input": {
+    "title": "Valor para una entrada desconocida",
+    "why": "Se envió un valor para una entrada que el flujo de trabajo no define. Se conserva, porque un flujo de trabajo al que llama otro puede leer entradas que no define, pero a menudo es una errata.",
+    "fix": [
+      "Corrige el nombre de la entrada o elimina el valor."
+    ]
+  },
+  "input_group_not_mapping": {
+    "title": "El valor del grupo no es un mapa",
+    "why": "Un grupo de entradas recibe un mapa con los valores de sus entradas.",
+    "fix": [
+      "Envía el valor del grupo como un mapa, con los nombres de sus entradas como claves."
+    ]
+  },
+  "defaults_read_each_other": {
+    "title": "Valores predeterminados que se leen entre sí",
+    "why": "Los valores predeterminados de estas entradas leen los valores de las otras, así que no se puede calcular ninguno primero.",
+    "fix": [
+      "Cambia uno de los valores predeterminados para que no lea los demás."
+    ]
+  },
+  "input_required": {
+    "title": "La entrada necesita un valor",
+    "why": "La entrada no tiene valor ni valor predeterminado, y no es opcional.",
+    "fix": [
+      "Dale un valor a la entrada, dale un valor predeterminado o hazla optional: true."
+    ]
+  },
+  "input_condition_not_known": {
+    "title": "No se conoce la condición de la entrada",
+    "why": "El hidden:, ignore: u optional: de una entrada se decide cuando se crea la ejecución, pero lee algo que entonces no se conoce, como un secreto.",
+    "fix": [
+      "Haz que la condición lea solo entradas y lo que se conoce cuando se crea la ejecución."
+    ]
+  },
+  "platform_input": {
+    "title": "La entrada necesita una plataforma",
+    "why": "Este tipo de entrada nombra recursos de una plataforma, como sus clústeres, y aquí no hay nada que los proporcione.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en una plataforma que proporcione el tipo de la entrada."
+    ]
+  },
+  "platform_value_not_json": {
+    "title": "El valor de la plataforma no es JSON",
+    "why": "La plataforma dio para la entrada un valor que una ejecución no puede contener, porque no es JSON. Es un problema de la plataforma.",
+    "fix": [
+      "Infórmalo a los operadores de la plataforma."
+    ]
+  },
+  "input_rejected": {
+    "title": "La plataforma rechazó el valor de una entrada",
+    "why": "La plataforma que proporciona el tipo de esta entrada rechazó su valor, por el motivo indicado.",
+    "fix": [
+      "Elige un valor que tenga la plataforma, como uno de sus clústeres."
+    ]
+  },
+  "input_not_number": {
+    "title": "La entrada recibe un número",
+    "why": "Una entrada numérica recibe un número, o un texto que lo sea.",
+    "fix": [
+      "Envía un número."
+    ]
+  },
+  "input_below_min": {
+    "title": "Valor de la entrada por debajo de su mínimo",
+    "why": "El valor de la entrada es menor que el min: que da su definición.",
+    "fix": [
+      "Envía un valor al menos tan grande como el mínimo."
+    ]
+  },
+  "input_above_max": {
+    "title": "Valor de la entrada por encima de su máximo",
+    "why": "El valor de la entrada es mayor que el max: que da su definición.",
+    "fix": [
+      "Envía un valor que no supere el máximo."
+    ]
+  },
+  "input_not_boolean": {
+    "title": "La entrada recibe true o false",
+    "why": "Una entrada booleana recibe true o false, o el texto \"true\" o \"false\".",
+    "fix": [
+      "Envía true o false."
+    ]
+  },
+  "input_not_list": {
+    "title": "La entrada recibe una lista",
+    "why": "Una entrada de lista recibe una lista.",
+    "fix": [
+      "Envía una lista."
+    ]
+  },
+  "input_not_option_list": {
+    "title": "La entrada recibe una lista de sus opciones",
+    "why": "Un desplegable de selección múltiple recibe una lista de sus opciones.",
+    "fix": [
+      "Envía una lista de las opciones de la entrada."
+    ]
+  },
+  "input_not_option": {
+    "title": "No es una de las opciones de la entrada",
+    "why": "El valor de un desplegable debe ser una de sus opciones.",
+    "fix": [
+      "Envía una de las opciones que indica el mensaje."
+    ]
+  },
+  "input_not_text": {
+    "title": "La entrada recibe texto",
+    "why": "Una entrada de texto recibe texto, un número o true o false, pero no una lista ni un mapa.",
+    "fix": [
+      "Envía el valor como texto."
+    ]
+  },
+  "duplicate_step_id": {
+    "title": "Dos pasos con el mismo id",
+    "why": "El id de un paso lo nombra para los pasos que vienen después, así que dos pasos de un trabajo no pueden compartirlo.",
+    "fix": [
+      "Dale un id distinto a uno de los pasos."
+    ]
+  },
+  "needs_not_known": {
+    "title": "needs no se conoce cuando se crea la ejecución",
+    "why": "El needs: de un trabajo decide el orden en que se ejecutan los trabajos, así que debe conocerse cuando se crea la ejecución. Este needs: lee algo que solo se conoce más tarde.",
+    "fix": [
+      "Haz que needs: lea solo entradas, variables y lo demás que se conoce cuando se crea la ejecución."
+    ]
+  },
+  "needs_item_not_name": {
+    "title": "needs incluye algo que no es un nombre",
+    "why": "El needs: de un trabajo enumera los nombres de los trabajos a los que espera.",
+    "fix": [
+      "Enumera nombres de trabajos."
+    ]
+  },
+  "needs_not_name": {
+    "title": "needs no es un nombre ni una lista",
+    "why": "El needs: de un trabajo es el nombre del trabajo al que espera, o una lista de ellos.",
+    "fix": [
+      "Escribe el nombre de un trabajo, o una lista de nombres de trabajos."
+    ]
+  },
+  "needs_itself": {
+    "title": "El trabajo se necesita a sí mismo",
+    "why": "Un trabajo no puede esperarse a sí mismo.",
+    "fix": [
+      "Elimina el nombre del propio trabajo de su needs:."
+    ]
+  },
+  "needs_unknown_job": {
+    "title": "El trabajo necesita un trabajo que no existe",
+    "why": "El needs: de un trabajo nombra un trabajo que el flujo de trabajo no tiene.",
+    "fix": [
+      "Corrige el nombre del trabajo o añade el trabajo."
+    ]
+  },
+  "needs_cycle": {
+    "title": "Trabajos que se necesitan entre sí",
+    "why": "Estos trabajos se esperan entre sí, así que ninguno puede empezar.",
+    "fix": [
+      "Elimina uno de los needs: que cierran el ciclo."
+    ]
+  },
+  "context_not_known": {
+    "title": "Contexto no conocido aquí",
+    "why": "Una expresión lee un contexto que aún no se conoce donde se evalúa, como steps en el if: de un trabajo, que se decide antes de que se ejecuten sus pasos.",
+    "fix": [
+      "Lee el valor en un lugar donde se conozca, o pásalo mediante una salida o env."
+    ]
+  },
+  "status_not_known": {
+    "title": "Estado no conocido aquí",
+    "why": "Las funciones de estado como failure() indican cómo llegó hasta aquí el trabajo o el paso, algo que no se conoce donde se evalúa esta expresión.",
+    "fix": [
+      "Usa las funciones de estado solo en el if: de un trabajo o de un paso."
+    ]
+  },
+  "relative_outside_definitions": {
+    "title": "Referencia relativa fuera de las definiciones de entradas",
+    "why": "Una referencia relativa, como .name, lee una clave que está al lado en la definición de una entrada. Fuera de las definiciones de entradas no hay nada que pueda leer.",
+    "fix": [
+      "Lee el valor mediante su contexto, como inputs.name."
+    ]
+  },
+  "undefined_input": {
+    "title": "No existe esa entrada",
+    "why": "Una expresión lee una entrada que el flujo de trabajo no define, y que vale null.",
+    "fix": [
+      "Corrige el nombre de la entrada o define la entrada."
+    ]
+  },
+  "undefined_nested_input": {
+    "title": "No existe esa entrada en un grupo",
+    "why": "Una expresión lee una entrada que un grupo no tiene, y que vale null.",
+    "fix": [
+      "Corrige el nombre de la entrada o añádela al grupo."
+    ]
+  },
+  "needs_outside_job": {
+    "title": "needs fuera de un trabajo",
+    "why": "El contexto needs lee los trabajos a los que espera un trabajo, así que solo se conoce dentro de un trabajo.",
+    "fix": [
+      "Lee needs solo en las claves y los pasos de un trabajo."
+    ]
+  },
+  "undefined_job": {
+    "title": "No existe ese trabajo",
+    "why": "Una expresión lee needs de un trabajo que el flujo de trabajo no tiene.",
+    "fix": [
+      "Corrige el nombre del trabajo."
+    ]
+  },
+  "job_not_needed": {
+    "title": "Trabajo que no está en needs",
+    "why": "Un trabajo puede leer las salidas de los trabajos a los que espera, y este trabajo no espera al que lee.",
+    "fix": [
+      "Añade a su needs: el trabajo que lee."
+    ]
+  },
+  "needed_job_no_step": {
+    "title": "No existe ese paso en un trabajo de needs",
+    "why": "Una expresión lee un paso de otro trabajo con un id que no tiene ninguno de los pasos de ese trabajo.",
+    "fix": [
+      "Corrige el id del paso o dale ese id al paso."
+    ]
+  },
+  "needs_unknown_key": {
+    "title": "Clave desconocida de needs",
+    "why": "Cada trabajo de needs tiene outputs, result y steps, y nada más.",
+    "fix": [
+      "Lee outputs, result o steps."
+    ]
+  },
+  "step_not_earlier": {
+    "title": "El paso no se ejecuta antes que este",
+    "why": "Un paso puede leer las salidas de los pasos anteriores, y este viene después.",
+    "fix": [
+      "Mueve el paso que lee antes de este, o lee sus salidas más adelante."
+    ]
+  },
+  "undefined_step": {
+    "title": "No existe ese paso anterior",
+    "why": "Una expresión lee un paso con un id que no tiene ningún paso anterior del trabajo.",
+    "fix": [
+      "Corrige el id del paso o dale ese id al paso."
+    ]
+  },
+  "output_undefined_step": {
+    "title": "La salida lee un paso que no existe",
+    "why": "Una salida de un trabajo lee un paso con un id que no tiene ninguno de sus pasos, así que la salida está vacía.",
+    "fix": [
+      "Corrige el id del paso o dale ese id al paso."
+    ]
+  },
+  "steps_unknown_key": {
+    "title": "Clave desconocida de un paso",
+    "why": "Cada paso de steps tiene outputs, y nada más.",
+    "fix": [
+      "Lee steps.<id>.outputs."
+    ]
+  },
+  "output_steps_unknown_key": {
+    "title": "La salida lee una clave desconocida de un paso",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que esta salida del trabajo está vacía.",
+    "fix": [
+      "Lee steps.<id>.outputs."
+    ]
+  },
+  "no_matrix": {
+    "title": "El trabajo no tiene matriz",
+    "why": "El trabajo no tiene matriz, así que una palabra que empieza por matrix. es texto.",
+    "fix": [
+      "Dale al trabajo un strategy: con un matrix:, o elimina la referencia."
+    ]
+  },
+  "undefined_matrix_key": {
+    "title": "No existe esa clave de la matriz",
+    "why": "Una expresión lee una clave que la matriz del trabajo no tiene, y que vale null.",
+    "fix": [
+      "Corrige la clave o añádela a la matriz."
+    ]
+  },
+  "undefined_session": {
+    "title": "No existe esa sesión",
+    "why": "Una expresión lee una sesión que el flujo de trabajo no define.",
+    "fix": [
+      "Corrige el nombre de la sesión o añádela a sessions:."
+    ]
+  },
+  "expression_failed": {
+    "title": "La expresión falló",
+    "why": "Una expresión falló de una forma que Meridian no describe. Es un problema de Meridian.",
+    "fix": [
+      "Infórmalo, junto con el flujo de trabajo que lo provoca."
+    ]
+  },
+  "word_not_reference": {
+    "title": "Palabra que parece una referencia",
+    "why": "Una palabra de una expresión que parece una referencia es texto, porque no empieza por un contexto, como input.name, a la que le falta la s de inputs.",
+    "fix": [
+      "Corrige el nombre del contexto, o pon la palabra entre comillas si lo que quieres es texto."
+    ]
+  },
+  "hyphenated_name": {
+    "title": "Nombre con guion sin corchetes",
+    "why": "Un guion en una expresión resta, como en JavaScript, así que una referencia a un nombre con un guion resta su segunda mitad, lo que da NaN.",
+    "fix": [
+      "Lee un nombre con guion entre corchetes, como en inputs['pw-user']."
+    ]
+  },
+  "condition_word": {
+    "title": "Palabra que decide una condición",
+    "why": "Una palabra en una condición es texto, que siempre es verdadero, así que no decide nada.",
+    "fix": [
+      "Compara el valor con lo que debería ser, o usa una función de estado como failure()."
+    ]
+  },
+  "older_always": {
+    "title": "Forma antigua de always()",
+    "why": "La palabra always es la forma antigua de escribir always(), que ejecuta el trabajo o el paso pase lo que pase antes.",
+    "fix": [
+      "Escribe always()."
+    ]
+  },
+  "replaced_keyword": {
+    "title": "Palabra clave de if: sustituida",
+    "why": "La palabra fue una palabra clave de if:. Ahora es texto, que siempre es verdadero.",
+    "fix": [
+      "Usa la función de estado que indica el mensaje."
+    ]
+  },
+  "expression_empty": {
+    "title": "Expresión vacía",
+    "why": "No hay nada entre ${{ y }}.",
+    "fix": [
+      "Escribe una expresión o elimina el ${{ }}."
+    ]
+  },
+  "expression_too_deep": {
+    "title": "La expresión se anida demasiado",
+    "why": "La expresión se anida más de lo que permite el límite, que mantiene acotada su evaluación.",
+    "fix": [
+      "Divídela en expresiones más sencillas."
+    ]
+  },
+  "expression_ends_early": {
+    "title": "La expresión termina demasiado pronto",
+    "why": "La expresión se detiene antes de estar completa, por ejemplo después de un operador.",
+    "fix": [
+      "Termina la expresión."
+    ]
+  },
+  "unexpected_text": {
+    "title": "Texto inesperado",
+    "why": "La expresión tiene texto donde no se puede leer, como dos valores sin un operador entre ellos.",
+    "fix": [
+      "Revisa la expresión cerca del texto que indica el mensaje."
+    ]
+  },
+  "ternary_missing_colon": {
+    "title": "? sin su :",
+    "why": "Una condición ? a : b necesita su :.",
+    "fix": [
+      "Añade el : y el valor para cuando la condición es falsa."
+    ]
+  },
+  "coalesce_mixed": {
+    "title": "?? mezclado con || o &&",
+    "why": "Como en JavaScript, ?? no se puede mezclar con || ni && sin paréntesis, porque no está claro cuál se evalúa primero.",
+    "fix": [
+      "Añade paréntesis, como muestra el mensaje."
+    ]
+  },
+  "invalid_json_literal": {
+    "title": "JSON no válido en una expresión",
+    "why": "Las listas y los mapas de una expresión se escriben en JSON, que usa comillas dobles y no admite comas finales.",
+    "fix": [
+      "Escribe la lista o el mapa en JSON."
+    ]
+  },
+  "not_a_function": {
+    "title": "No es una función",
+    "why": "La expresión llama a un nombre que no es ninguna de las funciones de las expresiones. Los nombres de las funciones distinguen entre mayúsculas y minúsculas.",
+    "fix": [
+      "Corrige el nombre de la función."
+    ]
+  },
+  "call_missing_comma": {
+    "title": "Falta , o ) en una llamada",
+    "why": "Los argumentos de una llamada se separan con comas y terminan con ).",
+    "fix": [
+      "Añade la , o el ) que falta."
+    ]
+  },
+  "wrong_argument_count": {
+    "title": "Número incorrecto de argumentos",
+    "why": "La función se llama con un número de argumentos distinto del que recibe.",
+    "fix": [
+      "Llámala con el número de argumentos que indica el mensaje."
+    ]
+  },
+  "case_arguments": {
+    "title": "Argumentos de case()",
+    "why": "La función case() recibe pares de condición y valor, y después el valor para cuando no se cumple ninguna condición.",
+    "fix": [
+      "Dale a case() un número impar de argumentos, terminando con el valor predeterminado."
+    ]
+  },
+  "expected_close_paren": {
+    "title": "Falta )",
+    "why": "Se abre un paréntesis que nunca se cierra.",
+    "fix": [
+      "Añade el ) que falta."
+    ]
+  },
+  "unclosed_string": {
+    "title": "Cadena sin cerrar",
+    "why": "Una cadena entre comillas no termina antes de que termine la expresión.",
+    "fix": [
+      "Añade la comilla de cierre."
+    ]
+  },
+  "unclosed_bracket": {
+    "title": "Corchete sin cerrar",
+    "why": "Se abre un corchete que nunca se cierra.",
+    "fix": [
+      "Añade el corchete de cierre."
+    ]
+  },
+  "unclosed_template": {
+    "title": "${{ sin }}",
+    "why": "Un ${{ empieza una expresión, que necesita un }} para terminar.",
+    "fix": [
+      "Añade el }}, o escribe ${{ '${{' }} donde quieras el texto ${{."
+    ]
+  },
+  "format_unclosed_brace": {
+    "title": "Plantilla de format() con una { sin cerrar",
+    "why": "La plantilla de format() tiene una { que no se cierra. Escribe {{ para una { literal.",
+    "fix": [
+      "Cierra el marcador de posición, o escribe {{ para una { literal."
+    ]
+  },
+  "format_missing_argument": {
+    "title": "Plantilla de format() sin un argumento",
+    "why": "La plantilla de format() tiene un marcador de posición, como {1}, sin un argumento para él.",
+    "fix": [
+      "Añade el argumento o elimina el marcador de posición."
+    ]
+  },
+  "format_unopened_brace": {
+    "title": "Plantilla de format() con una } sin abrir",
+    "why": "La plantilla de format() tiene una } que ninguna { abre. Escribe }} para una } literal.",
+    "fix": [
+      "Elimina la } o escribe }} para una } literal."
+    ]
+  },
+  "range_not_whole": {
+    "title": "range de números que no son enteros",
+    "why": "El operador range crea una lista de números enteros, así que recibe números enteros.",
+    "fix": [
+      "Redondea los números, por ejemplo con round o floor."
+    ]
+  },
+  "range_out_of_bounds": {
+    "title": "range de números demasiado grandes",
+    "why": "El operador range recibe números que un número de JavaScript representa con exactitud, de -2^53 a 2^53.",
+    "fix": [
+      "Usa números más pequeños."
+    ]
+  },
+  "range_too_long": {
+    "title": "range demasiado largo",
+    "why": "El operador range crea una lista de 10.000 números como máximo.",
+    "fix": [
+      "Acorta el rango."
+    ]
+  },
+  "from_json_invalid": {
+    "title": "fromJSON de JSON no válido",
+    "why": "La función fromJSON lee JSON, y el texto que recibió no lo es.",
+    "fix": [
+      "Revisa el texto que lee, como la salida de un paso."
+    ]
+  },
+  "unknown_operator": {
+    "title": "Operador desconocido",
+    "why": "Una expresión guardada usa un operador que esta versión de Meridian no tiene.",
+    "fix": [
+      "Vuelve a compilar el flujo de trabajo con esta versión."
+    ]
+  },
+  "expression_too_large": {
+    "title": "La expresión construye demasiado",
+    "why": "Una expresión construye más texto y listas de lo que permite el límite, que mantiene acotada su evaluación.",
+    "fix": [
+      "Construye menos, por ejemplo leyendo una parte de un valor en lugar de todo."
+    ]
+  },
+  "expressions_read_each_other": {
+    "title": "Expresiones que se leen entre sí",
+    "why": "Las expresiones del flujo de trabajo leen los valores de las otras, así que no se puede evaluar ninguna primero.",
+    "fix": [
+      "Cambia una de ellas para que no lea las demás."
+    ]
+  }
+}
