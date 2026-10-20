@@ -2,8 +2,7 @@ package compile_test
 
 import (
 	"encoding/json"
-	"fmt"
-	"slices"
+	"maps"
 	"strings"
 	"testing"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -40,14 +40,14 @@ func TestInputsConformance(t *testing.T) {
 				opts.Inputs = passThrough{}
 			}
 			inputs, diags := compile.ResolveInputs(doc, c.Inputs, opts)
-			checkDiagnostics(t, c.Expect.Diagnostics, diags)
+			conformancetest.CheckDiagnostics(t, c.Expect.Diagnostics, diags)
 			if diags.HasErrors() {
 				return
 			}
-			if g, w := canonical(t, withTemplates(t, inputs)), canonical(t, orEmpty(c.Expect.Inputs)); g != w {
+			if g, w := conformancetest.Canonical(t, withTemplates(t, inputs)), conformancetest.Canonical(t, orEmpty(c.Expect.Inputs)); g != w {
 				t.Errorf("inputs = %s, want %s", g, w)
 			}
-			if g, w := canonical(t, inputs.Secrets), canonical(t, orEmpty(c.Expect.Secrets)); g != w {
+			if g, w := conformancetest.Canonical(t, inputs.Secrets), conformancetest.Canonical(t, orEmpty(c.Expect.Secrets)); g != w {
 				t.Errorf("secrets = %s, want %s", g, w)
 			}
 		})
@@ -56,20 +56,20 @@ func TestInputsConformance(t *testing.T) {
 
 // contexts gives the case's contexts, with its secret variables unknown.
 func contexts(c conformance.Case) map[string]any {
-	out := map[string]any{}
-	for k, v := range c.Contexts {
-		out[k] = v
+	out := maps.Clone(c.Contexts)
+	if out == nil {
+		out = map[string]any{}
 	}
-	vars, _ := out["vars"].(map[string]any)
 	if len(c.SecretVariables) > 0 {
-		copied := map[string]any{}
-		for k, v := range vars {
-			copied[k] = v
+		vars, _ := out["vars"].(map[string]any)
+		vars = maps.Clone(vars)
+		if vars == nil {
+			vars = map[string]any{}
 		}
 		for _, name := range c.SecretVariables {
-			copied[name] = expr.Unknown{Name: "vars"}
+			vars[name] = expr.Unknown{Name: "vars"}
 		}
-		out["vars"] = copied
+		out["vars"] = vars
 	}
 	return out
 }
@@ -136,34 +136,6 @@ func orEmpty(m map[string]any) map[string]any {
 	return m
 }
 
-func checkDiagnostics(t *testing.T, want []conformance.Diagnostic, got format.Diagnostics) {
-	t.Helper()
-	unmatched := slices.Clone(got)
-	for _, w := range want {
-		i := slices.IndexFunc(unmatched, func(d format.Diagnostic) bool {
-			return d.Severity.String() == w.Severity && string(d.Code) == w.Code && d.Path == w.Path &&
-				(w.Line == 0 || d.Position == format.Position{Line: w.Line, Column: w.Column})
-		})
-		if i < 0 {
-			t.Errorf("missing %s %s at %q, line %d, column %d; got %v", w.Severity, w.Code, w.Path, w.Line, w.Column, got)
-			continue
-		}
-		unmatched = slices.Delete(unmatched, i, i+1)
-	}
-	for _, d := range unmatched {
-		t.Errorf("unexpected %s (path %q)", d, d.Path)
-	}
-}
-
-func canonical(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(fmt.Errorf("%#v: %w", v, err))
-	}
-	return string(b)
-}
-
 func TestCompileConformance(t *testing.T) {
 	cases, err := conformance.Cases("compile")
 	if err != nil {
@@ -181,7 +153,7 @@ func TestCompileConformance(t *testing.T) {
 				opts.Inputs = passThrough{}
 			}
 			p, diags := compile.Compile("workflow.yaml", data, c.Inputs, opts)
-			checkDiagnostics(t, c.Expect.Diagnostics, diags)
+			conformancetest.CheckDiagnostics(t, c.Expect.Diagnostics, diags)
 			if (p == nil) != diags.HasErrors() {
 				t.Fatalf("plan is %v with errors %v", p != nil, diags.HasErrors())
 			}
@@ -200,38 +172,15 @@ func TestCompileConformance(t *testing.T) {
 				t.Fatal(err)
 			}
 			for ptr, want := range c.Expect.Plan {
-				got, ok := lookupPointer(doc, ptr)
+				got, ok := conformancetest.Lookup(t, doc, ptr)
 				if !ok {
 					t.Errorf("%s: the plan has nothing there: %s", ptr, encoded)
 					continue
 				}
-				if g, w := canonical(t, got), canonical(t, want); g != w {
+				if g, w := conformancetest.Canonical(t, got), conformancetest.Canonical(t, want); g != w {
 					t.Errorf("%s = %s, want %s", ptr, g, w)
 				}
 			}
 		})
 	}
-}
-
-func lookupPointer(v any, ptr string) (any, bool) {
-	unescape := strings.NewReplacer("~1", "/", "~0", "~")
-	for tok := range strings.SplitSeq(strings.TrimPrefix(ptr, "/"), "/") {
-		tok = unescape.Replace(tok)
-		switch c := v.(type) {
-		case map[string]any:
-			var ok bool
-			if v, ok = c[tok]; !ok {
-				return nil, false
-			}
-		case []any:
-			var i int
-			if _, err := fmt.Sscan(tok, &i); err != nil || i < 0 || i >= len(c) {
-				return nil, false
-			}
-			v = c[i]
-		default:
-			return nil, false
-		}
-	}
-	return v, true
 }

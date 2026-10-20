@@ -8,12 +8,14 @@ import (
 	"maps"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
+
+	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 )
 
 //go:embed schema/1.schema.json
@@ -34,21 +36,21 @@ type formatSchema struct {
 	doc any
 }
 
-// compileSchema compiles an embedded schema. A schema that doesn't compile is
-// a bug in this package, which its tests catch.
-func compileSchema(url string, data []byte) *formatSchema {
+// compileSchema compiles an embedded schema, whose URI is id. A schema that
+// doesn't compile is a bug in this package, which its tests catch.
+func compileSchema(id string, data []byte) *formatSchema {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 	if err != nil {
-		panic(fmt.Sprintf("format: schema %s: %v", url, err))
+		panic(fmt.Sprintf("format: schema %s: %v", id, err))
 	}
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
-	if err := c.AddResource(url, doc); err != nil {
-		panic(fmt.Sprintf("format: schema %s: %v", url, err))
+	if err := c.AddResource(id, doc); err != nil {
+		panic(fmt.Sprintf("format: schema %s: %v", id, err))
 	}
-	s, err := c.Compile(url)
+	s, err := c.Compile(id)
 	if err != nil {
-		panic(fmt.Sprintf("format: schema %s: %v", url, err))
+		panic(fmt.Sprintf("format: schema %s: %v", id, err))
 	}
 	return &formatSchema{s, doc}
 }
@@ -67,8 +69,8 @@ func (p *parser) validate(s *formatSchema, value any) any {
 		if err == nil {
 			return value
 		}
-		var verr *jsonschema.ValidationError
-		if !errors.As(err, &verr) {
+		verr, ok := errors.AsType[*jsonschema.ValidationError](err)
+		if !ok {
 			p.report(Error, Position{}, CodeSchema, "", "%v", err)
 			return value
 		}
@@ -85,7 +87,8 @@ func (p *parser) validate(s *formatSchema, value any) any {
 		}
 		for _, u := range x.unknown {
 			p.unknownKey(Warning, u)
-			if obj, ok := valueAt(value, u.object).(map[string]any); ok {
+			obj, _ := jsonptr.Lookup(value, u.object)
+			if obj, ok := obj.(map[string]any); ok {
 				delete(obj, u.key)
 			}
 		}
@@ -252,64 +255,29 @@ func namesEntries(loc []string, schema map[string]any) bool {
 	return ok
 }
 
-// lookup returns the schema JSON at an error's schema location.
+// lookup returns the schema JSON at an error's schema location, a URI whose
+// fragment is a JSON Pointer.
 func (s *formatSchema) lookup(location string) any {
 	_, frag, _ := strings.Cut(location, "#")
-	v := s.doc
-	if frag == "" {
-		return v
-	}
-	for tok := range strings.SplitSeq(strings.TrimPrefix(frag, "/"), "/") {
-		tok, err := url.PathUnescape(tok)
-		if err != nil {
-			return nil
-		}
-		v = child(v, pointerUnescaper.Replace(tok))
-	}
-	return v
-}
-
-var pointerUnescaper = strings.NewReplacer("~1", "/", "~0", "~")
-
-// valueAt returns the value at a location in a workflow, or nil.
-func valueAt(v any, loc []string) any {
-	for _, tok := range loc {
-		v = child(v, tok)
-	}
-	return v
-}
-
-func child(v any, tok string) any {
-	switch v := v.(type) {
-	case map[string]any:
-		return v[tok]
-	case []any:
-		i, err := strconv.Atoi(tok)
-		if err != nil || i < 0 || i >= len(v) {
-			return nil
-		}
-		return v[i]
-	default:
+	frag, err := url.PathUnescape(frag)
+	if err != nil {
 		return nil
 	}
-}
-
-func jsonPointer(loc []string) string {
-	var b strings.Builder
-	for _, tok := range loc {
-		b.WriteString("/")
-		b.WriteString(pointerEscaper.Replace(tok))
+	tokens, err := jsonptr.Split(frag)
+	if err != nil {
+		return nil
 	}
-	return b.String()
+	v, _ := jsonptr.Lookup(s.doc, tokens)
+	return v
 }
 
 func (p *parser) unknownKey(severity Severity, u unknownKey) {
-	path := pointer(jsonPointer(u.object), u.key)
+	path := jsonptr.Append(jsonptr.Format(u.object), u.key)
 	msg := fmt.Sprintf("unknown key %q", u.key)
 	if severity == Warning {
 		msg += " is ignored"
 	}
-	if s, ok := suggest(u.key, u.defined); ok {
+	if s, ok := hint.Suggest(u.key, u.defined); ok {
 		msg += fmt.Sprintf("; did you mean %q?", s)
 	}
 	p.report(severity, p.keys[path], CodeUnknownKey, path, "%s", msg)
@@ -317,20 +285,20 @@ func (p *parser) unknownKey(severity Severity, u unknownKey) {
 
 // schemaError reports an error that is left once unknown keys are set aside.
 func (p *parser) schemaError(s *formatSchema, e *jsonschema.ValidationError) {
-	path := jsonPointer(e.InstanceLocation)
+	path := jsonptr.Format(e.InstanceLocation)
 	switch k := e.ErrorKind.(type) {
 	case *kind.AdditionalProperties:
 		obj, _ := s.lookup(e.SchemaURL).(map[string]any)
 		patterns, _ := obj["patternProperties"].(map[string]any)
 		for _, key := range slices.Sorted(slices.Values(k.Properties)) {
-			kp := pointer(path, key)
+			kp := jsonptr.Append(path, key)
 			p.report(Error, p.keys[kp], CodeSchema, kp, "%q isn't a valid name here; a name must match %s",
 				key, strings.Join(slices.Sorted(maps.Keys(patterns)), " or "))
 		}
 		return
 	case *kind.AnyOf, *kind.OneOf:
 		if got, types, ok := wantedTypeKeys(e); ok {
-			kp := pointer(path, "type")
+			kp := jsonptr.Append(path, "type")
 			if t, ok := suggestType(got, types); ok {
 				p.report(Error, p.values[kp], CodeSchema, kp, "type %s isn't one allowed here; did you mean %q?", show(got), t)
 			} else {

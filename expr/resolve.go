@@ -2,16 +2,18 @@ package expr
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
-// A Document is a workflow that the expressions in it read: through
+// A Workflow is a workflow that the expressions in it read: through
 // relative references, which read keys near the expression, and through
 // inputs, whose definitions they can read as well as their values.
-type Document struct {
+type Workflow struct {
 	// Root is the workflow, as JSON values.
 	Root map[string]any
 	// Definitions is the path in Root of the input definitions.
@@ -19,20 +21,20 @@ type Document struct {
 }
 
 // Scope returns scope with a Resolver for expressions at location in the
-// document: the path of keys and list indexes that leads to them.
-func (d *Document) Scope(location []string, scope Scope) Scope {
+// workflow: the path of keys and list indexes that leads to them.
+func (w *Workflow) Scope(location []string, scope Scope) Scope {
 	scope = scope.Budgeted()
-	ev := &documentEval{doc: d, scope: scope, active: map[string]bool{}, done: map[string]any{}}
-	scope.Resolver = &documentResolver{eval: ev, location: location}
+	ev := &workflowEval{workflow: w, scope: scope, active: map[string]bool{}, done: map[string]any{}}
+	scope.Resolver = &workflowResolver{eval: ev, location: location}
 	return scope
 }
 
-// Eval evaluates what the document holds at location, in scope, as an
+// Eval evaluates what the workflow holds at location, in scope, as an
 // expression there that read it would: the expressions in a string, and in
 // each string of a list or mapping. It returns nil if there is nothing at
 // location.
-func (d *Document) Eval(location []string, scope Scope) (any, error) {
-	r := d.Scope(location, scope).Resolver.(*documentResolver)
+func (w *Workflow) Eval(location []string, scope Scope) (any, error) {
+	r := w.Scope(location, scope).Resolver.(*workflowResolver)
 	v, ok := r.raw(location)
 	if !ok {
 		return nil, nil
@@ -40,55 +42,55 @@ func (d *Document) Eval(location []string, scope Scope) (any, error) {
 	return r.resolve(v, location)
 }
 
-// A documentEval evaluates the expressions in a document that one
+// A workflowEval evaluates the expressions in a workflow that one
 // evaluation reaches, each at its own location and once. active holds the
 // locations being evaluated, so that expressions that read each other fail
 // instead of recursing forever, and done the values of those evaluated.
-type documentEval struct {
-	doc    *Document
-	scope  Scope
-	active map[string]bool
-	done   map[string]any
+type workflowEval struct {
+	workflow *Workflow
+	scope    Scope
+	active   map[string]bool
+	done     map[string]any
 }
 
-// A documentResolver resolves for an expression at location.
-type documentResolver struct {
-	eval     *documentEval
+// A workflowResolver resolves for an expression at location.
+type workflowResolver struct {
+	eval     *workflowEval
 	location []string
 }
 
-func (r *documentResolver) evalAt(t *Template, location []string) (any, error) {
+func (r *workflowResolver) evalAt(t *Template, location []string) (any, error) {
 	ev := r.eval
 	k := strings.Join(location, "\x00")
 	if v, ok := ev.done[k]; ok {
 		return v, nil
 	}
 	if ev.active[k] {
-		return nil, fmt.Errorf("the expressions at %s read each other", pointer(location))
+		return nil, fmt.Errorf("the expressions at %s read each other", jsonptr.Format(location))
 	}
 	ev.active[k] = true
 	defer delete(ev.active, k)
 	scope := ev.scope
-	scope.Resolver = &documentResolver{eval: ev, location: location}
+	scope.Resolver = &workflowResolver{eval: ev, location: location}
 	v, err := t.Eval(scope)
 	if err != nil {
 		if IsUnknown(err) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("in %s: %w", pointer(location), err)
+		return nil, fmt.Errorf("in %s: %w", jsonptr.Format(location), err)
 	}
 	ev.done[k] = v
 	return v, nil
 }
 
-// resolve evaluates what the document holds at location: a string's
+// resolve evaluates what the workflow holds at location: a string's
 // expressions, and those in each string of a list or mapping.
-func (r *documentResolver) resolve(v any, location []string) (any, error) {
+func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 	switch v := v.(type) {
 	case string:
 		t, err := ParseTemplate(v)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", pointer(location), err)
+			return nil, fmt.Errorf("%s: %w", jsonptr.Format(location), err)
 		}
 		if t.IsText() {
 			return v, nil
@@ -105,9 +107,9 @@ func (r *documentResolver) resolve(v any, location []string) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
-		for _, k := range slices.Sorted(maps.Keys(v)) {
+		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = r.resolve(v[k], appendPath(location, k)); err != nil {
+			if out[k], err = r.resolve(item, appendPath(location, k)); err != nil {
 				return nil, err
 			}
 		}
@@ -116,15 +118,15 @@ func (r *documentResolver) resolve(v any, location []string) (any, error) {
 	return v, nil
 }
 
-// raw returns what the document holds at location, unevaluated.
-func (r *documentResolver) raw(location []string) (any, bool) {
-	return walk(r.eval.doc.Root, location)
+// raw returns what the workflow holds at location, unevaluated.
+func (r *workflowResolver) raw(location []string) (any, bool) {
+	return walk(r.eval.workflow.Root, location)
 }
 
-// follow walks path from location in the document and returns the value it
+// follow walks path from location in the workflow and returns the value it
 // reaches, evaluated. A string on the way is evaluated, and the rest of the
 // path read from its value.
-func (r *documentResolver) follow(location, path []string) (any, bool, error) {
+func (r *workflowResolver) follow(location, path []string) (any, bool, error) {
 	v, ok := r.raw(location)
 	if !ok {
 		return nil, false, nil
@@ -149,7 +151,7 @@ func (r *documentResolver) follow(location, path []string) (any, bool, error) {
 
 // Relative resolves a relative reference: .x is a key beside the one the
 // expression is in, and each further level goes up one more.
-func (r *documentResolver) Relative(up int, path []string) (any, bool, error) {
+func (r *workflowResolver) Relative(up int, path []string) (any, bool, error) {
 	if up > len(r.location) {
 		return nil, false, nil
 	}
@@ -158,11 +160,11 @@ func (r *documentResolver) Relative(up int, path []string) (any, bool, error) {
 
 // Definition reads the input definitions at path, or else the default of
 // the input at path. An input in a group is in the group's items.
-func (r *documentResolver) Definition(path []string) (any, bool, error) {
-	if v, ok, err := r.follow(r.eval.doc.Definitions, path); err != nil || ok {
+func (r *workflowResolver) Definition(path []string) (any, bool, error) {
+	if v, ok, err := r.follow(r.eval.workflow.Definitions, path); err != nil || ok {
 		return v, ok, err
 	}
-	location := r.eval.doc.Definitions
+	location := r.eval.workflow.Definitions
 	definitions, _ := r.raw(location)
 	for i, k := range path {
 		field, ok := property(definitions, k)
@@ -191,18 +193,7 @@ func (r *documentResolver) Definition(path []string) (any, bool, error) {
 	return nil, false, nil
 }
 
+// appendPath returns a new path: path followed by keys.
 func appendPath(path []string, keys ...string) []string {
-	out := make([]string, 0, len(path)+len(keys))
-	return append(append(out, path...), keys...)
-}
-
-// pointer formats a location as a JSON Pointer.
-func pointer(location []string) string {
-	var b strings.Builder
-	escape := strings.NewReplacer("~", "~0", "/", "~1")
-	for _, k := range location {
-		b.WriteString("/")
-		b.WriteString(escape.Replace(k))
-	}
-	return b.String()
+	return slices.Concat(path, keys)
 }

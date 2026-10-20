@@ -9,6 +9,8 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -129,13 +131,13 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 					info.matrixKeys[k] = true
 				}
 			}
-			include, isList := m["include"].([]any)
-			if _, isExpr := m["include"].(string); isExpr {
+			switch include := m["include"].(type) {
+			case string:
+				// An expression, whose keys aren't known.
 				info.matrixKeys = nil
-			}
-			for _, entry := range include {
-				for k := range mapping(entry) {
-					if info.matrixKeys != nil && isList {
+			case []any:
+				for _, entry := range include {
+					for k := range mapping(entry) {
 						info.matrixKeys[k] = true
 					}
 				}
@@ -150,20 +152,23 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 // name followed by :any waits for any one instance of a matrix job.
 func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 	loc := appendPath(info.loc, "needs")
-	raw, ok := lookupOK(c.doc.Value, loc)
+	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
 		return
 	}
-	if s, isString := raw.(string); isString && strings.Contains(s, "${{") {
-		if !c.checkString(loc, s, 0, runCreated, info, false) {
+	if s, isString := raw.(string); isString {
+		parsed, checked := c.checkString(loc, s, runCreated, info)
+		if !checked {
 			return
 		}
-		v, err := c.evalCompileTime(loc, s)
-		if err != nil {
-			c.reportAt(format.Error, CodeNeeds, loc, "needs must be known when the run is created: %v", err)
-			return
+		if t, isTemplate := parsed.(*expr.Template); isTemplate {
+			v, err := t.Eval(expr.Scope{Contexts: compileTimeContexts(c.opts, c.inputs.evalValues())})
+			if err != nil {
+				c.reportAt(format.Error, CodeNeeds, loc, "needs must be known when the run is created: %v", err)
+				return
+			}
+			raw = v
 		}
-		raw = v
 	}
 	var list []string
 	switch v := raw.(type) {
@@ -188,26 +193,13 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 		case job == info.name:
 			c.reportAt(format.Error, CodeNeeds, loc, "job %s needs itself", info.name)
 		case !slices.Contains(names, job):
-			msg := fmt.Sprintf("job %s needs %s, which isn't a job of this workflow", info.name, job)
-			if s, ok := suggest(job, names); ok {
-				msg += fmt.Sprintf("; did you mean %s?", s)
-			}
-			c.reportAt(format.Error, CodeNeeds, loc, "%s", msg)
+			c.reportAt(format.Error, CodeNeeds, loc, "%s",
+				withSuggestion(fmt.Sprintf("job %s needs %s, which isn't a job of this workflow", info.name, job), job, names))
 		case !info.needed[job]:
 			info.needed[job] = true
 			info.needs = append(info.needs, plan.Need{Job: job, Any: anyInstance})
 		}
 	}
-}
-
-// evalCompileTime evaluates the string at loc with what is known when the
-// run is created.
-func (c *compiler) evalCompileTime(loc []string, s string) (any, error) {
-	t, err := expr.ParseTemplate(s)
-	if err != nil {
-		return nil, err
-	}
-	return t.Eval(expr.Scope{Contexts: compileTimeContexts(c.opts, c.inputs.evalValues())})
 }
 
 // checkCycles reports jobs that need each other, once for each cycle.
@@ -235,7 +227,7 @@ func (c *compiler) checkCycles(infos map[string]*jobInfo, names []string) {
 					reported[key] = true
 					first := slices.Min(cycle)
 					c.reportAt(format.Error, CodeNeeds, appendPath(infos[first].loc, "needs"),
-						"jobs %s need each other", joinList(slices.Sorted(slices.Values(cycle))))
+						"jobs %s need each other", hint.JoinList(slices.Sorted(slices.Values(cycle)), "and"))
 				}
 			}
 		}
@@ -249,17 +241,10 @@ func (c *compiler) checkCycles(infos map[string]*jobInfo, names []string) {
 	}
 }
 
-func joinList(items []string) string {
-	if len(items) < 2 {
-		return strings.Join(items, "")
-	}
-	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
-}
-
 func (c *compiler) job(info *jobInfo) plan.Job {
 	at := func(keys ...string) []string { return appendPath(info.loc, keys...) }
 	def := mapping(lookup(c.doc.Value, info.loc))
-	j := plan.Job{Key: info.name, Name: info.name, Needs: info.needs, Path: pointer(info.loc)}
+	j := plan.Job{Key: info.name, Name: info.name, Needs: info.needs, Path: jsonptr.Format(info.loc)}
 	info.step = -1
 	if _, ok := def["strategy"]; ok {
 		j.Strategy = &plan.Strategy{
@@ -300,7 +285,7 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 	def := mapping(lookup(c.doc.Value, loc))
 	s := plan.Step{
 		ID: str(def["id"]), Uses: str(def["uses"]), Shell: str(def["shell"]),
-		EarlyCancel: str(def["early-cancel"]), Path: pointer(loc),
+		EarlyCancel: str(def["early-cancel"]), Path: jsonptr.Format(loc),
 	}
 	s.Name = c.value(at("name"), stepRuns, info)
 	s.If = c.condition(at("if"), stepRuns, info)

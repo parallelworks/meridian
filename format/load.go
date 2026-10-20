@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/parallelworks/meridian/internal/jsonptr"
 )
 
 // DefaultMaxSize is the largest workflow file a Loader accepts unless it sets
@@ -58,6 +60,25 @@ func (d *Document) KeyPosition(pointer string) Position {
 		return p
 	}
 	return d.positions[pointer]
+}
+
+// ReportPosition returns where a diagnostic about the value at a JSON
+// Pointer points: at a mapping's key, which names it, and at where anything
+// else starts.
+func (d *Document) ReportPosition(pointer string) Position {
+	tokens, err := jsonptr.Split(pointer)
+	if err != nil {
+		return Position{}
+	}
+	if v, _ := jsonptr.Lookup(d.Value, tokens); isMapping(v) {
+		return d.KeyPosition(pointer)
+	}
+	return d.Position(pointer)
+}
+
+func isMapping(v any) bool {
+	_, ok := v.(map[string]any)
+	return ok
 }
 
 // Load loads a workflow file with the zero Loader.
@@ -179,13 +200,6 @@ func position(n *yaml.Node) Position {
 	return Position{n.Line, n.Column}
 }
 
-var pointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
-
-// pointer returns the JSON Pointer of a key in the object at path.
-func pointer(path, key string) string {
-	return path + "/" + pointerEscaper.Replace(key)
-}
-
 // value converts a YAML node to a JSON value, recording its position and its
 // descendants' under path.
 func (p *parser) value(n *yaml.Node, path string) any {
@@ -196,7 +210,7 @@ func (p *parser) value(n *yaml.Node, path string) any {
 	case yaml.SequenceNode:
 		s := make([]any, len(n.Content))
 		for i, item := range n.Content {
-			s[i] = p.value(item, path+"/"+strconv.Itoa(i))
+			s[i] = p.value(item, jsonptr.Append(path, strconv.Itoa(i)))
 		}
 		return s
 	case yaml.ScalarNode:
@@ -223,7 +237,7 @@ func (p *parser) mapping(n *yaml.Node, path string) map[string]any {
 			continue
 		}
 		if j, ok := last[k.Value]; ok {
-			p.report(Warning, position(k), CodeDuplicateKey, pointer(path, k.Value),
+			p.report(Warning, position(k), CodeDuplicateKey, jsonptr.Append(path, k.Value),
 				"%q appears again, so its value on line %d is ignored", k.Value, n.Content[j].Line)
 		}
 		last[k.Value] = i
@@ -234,7 +248,7 @@ func (p *parser) mapping(n *yaml.Node, path string) map[string]any {
 		if j, ok := last[k.Value]; !ok || j != i {
 			continue
 		}
-		path := pointer(path, k.Value)
+		path := jsonptr.Append(path, k.Value)
 		p.keys[path] = position(k)
 		m[k.Value] = p.value(n.Content[i+1], path)
 	}

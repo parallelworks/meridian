@@ -2,62 +2,28 @@ package compile
 
 import (
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // Helpers for the JSON values a workflow and its inputs are made of.
 
+// appendPath returns a new path: path followed by keys.
 func appendPath(path []string, keys ...string) []string {
-	out := make([]string, 0, len(path)+len(keys))
-	return append(append(out, path...), keys...)
-}
-
-// pointer formats a path as a JSON Pointer.
-func pointer(path []string) string {
-	escape := strings.NewReplacer("~", "~0", "/", "~1")
-	var b strings.Builder
-	for _, k := range path {
-		b.WriteString("/")
-		b.WriteString(escape.Replace(k))
-	}
-	return b.String()
+	return slices.Concat(path, keys)
 }
 
 // lookup returns the value at path in v, or nil.
 func lookup(v any, path []string) any {
-	v, _ = lookupOK(v, path)
+	v, _ = jsonptr.Lookup(v, path)
 	return v
-}
-
-func lookupOK(v any, path []string) (any, bool) {
-	for _, k := range path {
-		switch c := v.(type) {
-		case map[string]any:
-			var ok bool
-			if v, ok = c[k]; !ok {
-				return nil, false
-			}
-		case []any:
-			i, err := strconv.Atoi(k)
-			if err != nil || i < 0 || i >= len(c) {
-				return nil, false
-			}
-			v = c[i]
-		default:
-			return nil, false
-		}
-	}
-	return v, true
-}
-
-// lookupPath returns the value at path in a mapping of values.
-func lookupPath(values map[string]any, path []string) (any, bool) {
-	return lookupOK(values, path)
 }
 
 // setPath sets the value at path, making mappings on the way.
@@ -87,29 +53,6 @@ func deletePath(values map[string]any, path []string) {
 	delete(m, path[len(path)-1])
 }
 
-// copyMap copies a mapping of JSON values deeply.
-func copyMap(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = copyValue(v)
-	}
-	return out
-}
-
-func copyValue(v any) any {
-	switch v := v.(type) {
-	case map[string]any:
-		return copyMap(v)
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = copyValue(item)
-		}
-		return out
-	}
-	return v
-}
-
 // notJSON describes the first part of v that isn't a JSON value of the
 // kinds the compiler takes, or returns "". They are nil, booleans, finite
 // float64, int and int64 numbers, UTF-8 text, and lists and mappings of them.
@@ -135,11 +78,11 @@ func notJSON(v any) string {
 		}
 		return ""
 	case map[string]any:
-		for _, k := range slices.Sorted(maps.Keys(v)) {
+		for k, item := range jsonvalue.Sorted(v) {
 			if !utf8.ValidString(k) {
 				return "a key that isn't UTF-8"
 			}
-			if bad := notJSON(v[k]); bad != "" {
+			if bad := notJSON(item); bad != "" {
 				return bad
 			}
 		}
@@ -206,41 +149,11 @@ func describe(v any) string {
 	return describeRaw(v)
 }
 
-// suggest returns the name a misspelled name most likely meant: one that
-// differs only in case, hyphens and underscores, or else in a letter or so.
-func suggest(name string, names []string) (string, bool) {
-	norm := func(s string) string {
-		return strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(s))
+// withSuggestion adds to msg, about name, which of names it most likely
+// meant, if any.
+func withSuggestion(msg, name string, names []string) string {
+	if s, ok := hint.Suggest(name, names); ok {
+		msg += fmt.Sprintf("; did you mean %q?", s)
 	}
-	best, bestDist := "", max(1, len(name)/4)+1
-	for _, n := range names {
-		if norm(n) == norm(name) {
-			return n, true
-		}
-		if d := levenshtein(name, n); d < bestDist && len(name) > 3 {
-			best, bestDist = n, d
-		}
-	}
-	return best, best != ""
-}
-
-func levenshtein(a, b string) int {
-	ra, rb := []rune(a), []rune(b)
-	prev := make([]int, len(rb)+1)
-	cur := make([]int, len(rb)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(ra); i++ {
-		cur[0] = i
-		for j := 1; j <= len(rb); j++ {
-			cost := 1
-			if ra[i-1] == rb[j-1] {
-				cost = 0
-			}
-			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
-		}
-		prev, cur = cur, prev
-	}
-	return prev[len(rb)]
+	return msg
 }

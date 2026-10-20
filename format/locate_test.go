@@ -44,3 +44,33 @@ func TestLocate(t *testing.T) {
 		}
 	}
 }
+
+func TestReportPosition(t *testing.T) {
+	doc, diags := format.Load("workflow.yaml", []byte(`jobs:
+  main:
+    steps:
+      - run: echo
+`))
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	for _, tc := range []struct {
+		pointer string
+		want    format.Position
+	}{
+		// A mapping is named by its key, and anything else is where it
+		// starts.
+		{"/jobs/main", format.Position{Line: 2, Column: 3}},
+		{"/jobs/main/steps", format.Position{Line: 4, Column: 7}},
+		{"/jobs/main/steps/0/run", format.Position{Line: 4, Column: 14}},
+		// An item of a list has no key.
+		{"/jobs/main/steps/0", format.Position{Line: 4, Column: 9}},
+		// Nothing is there.
+		{"/jobs/main/steps/00", format.Position{}},
+		{"jobs", format.Position{}},
+	} {
+		if got := doc.ReportPosition(tc.pointer); got != tc.want {
+			t.Errorf("ReportPosition(%s) = %v, want %v", tc.pointer, got, tc.want)
+		}
+	}
+}

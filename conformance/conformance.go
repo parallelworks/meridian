@@ -13,6 +13,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
 	"strings"
 
@@ -178,15 +179,11 @@ type ExpressionCase struct {
 // case replaces.
 func (f *ExpressionFile) ScopeFor(c *ExpressionCase) Scope {
 	s := Scope{Contexts: map[string]any{}, Status: f.Scope.Status, Index: f.Scope.Index}
-	for k, v := range f.Scope.Contexts {
-		s.Contexts[k] = v
-	}
+	maps.Copy(s.Contexts, f.Scope.Contexts)
 	if c.Scope == nil {
 		return s
 	}
-	for k, v := range c.Scope.Contexts {
-		s.Contexts[k] = v
-	}
+	maps.Copy(s.Contexts, c.Scope.Contexts)
 	if c.Scope.Status != nil {
 		s.Status = c.Scope.Status
 	}

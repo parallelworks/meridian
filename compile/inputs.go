@@ -10,6 +10,9 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -101,12 +104,12 @@ func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 // compiler's checks of what reads them.
 func resolveInputs(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
 	r := &inputResolver{
-		doc:     doc,
-		opts:    opts,
-		eval:    &expr.Document{Root: doc.Value, Definitions: definitionsPath},
-		budget:  expr.Scope{}.Budgeted(),
-		values:  copyMap(submitted),
-		secrets: map[string]any{},
+		reporter: reporter{doc: doc},
+		opts:     opts,
+		workflow: &expr.Workflow{Root: doc.Value, Definitions: definitionsPath},
+		budget:   expr.Scope{}.Budgeted(),
+		values:   jsonvalue.CloneMap(submitted),
+		secrets:  map[string]any{},
 	}
 	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
 	r.collect(defs, definitionsPath, nil, nil)
@@ -153,31 +156,15 @@ type field struct {
 }
 
 type inputResolver struct {
-	doc  *format.Document
-	opts Options
-	eval *expr.Document
+	reporter
+	opts     Options
+	workflow *expr.Workflow
 	// budget holds the one budget that every evaluation of the inputs'
 	// expressions shares.
 	budget  expr.Scope
 	values  map[string]any
 	secrets map[string]any
 	fields  []*field
-	diags   format.Diagnostics
-}
-
-// report reports a problem with what is at loc in the workflow: a mapping,
-// such as an input's definition, at its key, and anything else where it
-// starts.
-func (r *inputResolver) report(severity format.Severity, code format.Code, loc []string, msg string, args ...any) {
-	ptr := pointer(loc)
-	pos := r.doc.Position(ptr)
-	if _, isMapping := lookup(r.doc.Value, loc).(map[string]any); isMapping {
-		pos = r.doc.KeyPosition(ptr)
-	}
-	r.diags = append(r.diags, format.Diagnostic{
-		File: r.doc.File, Position: pos, Severity: severity, Code: code, Path: ptr,
-		Message: fmt.Sprintf(msg, args...),
-	})
 }
 
 // collect records the definitions in defs, at loc in the workflow, whose
@@ -189,8 +176,8 @@ func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *
 			flattenSteps = false
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(defs)) {
-		def, ok := defs[key].(map[string]any)
+	for key, v := range jsonvalue.Sorted(defs) {
+		def, ok := v.(map[string]any)
 		if !ok || strings.HasPrefix(key, "$") {
 			continue
 		}
@@ -238,9 +225,9 @@ func (f *field) label() string {
 // checkJSON reports, and drops, submitted values that aren't JSON values,
 // which a plan can't hold.
 func (r *inputResolver) checkJSON(values map[string]any) {
-	for _, key := range slices.Sorted(maps.Keys(values)) {
-		if bad := notJSON(values[key]); bad != "" {
-			r.report(format.Error, CodeInputValue, definitionsPath, "the value of %s isn't JSON: it holds %s", key, bad)
+	for key, v := range jsonvalue.Sorted(values) {
+		if bad := notJSON(v); bad != "" {
+			r.reportAt(format.Error, CodeInputValue, definitionsPath, "the value of %s isn't JSON: it holds %s", key, bad)
 			delete(values, key)
 		}
 	}
@@ -257,23 +244,22 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 			}
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(values)) {
+	for key, v := range jsonvalue.Sorted(values) {
 		f, ok := known[key]
 		if !ok {
-			names := slices.Sorted(maps.Keys(known))
 			msg := fmt.Sprintf("%s isn't an input of this workflow", strings.Join(appendPath(path, key), "."))
-			if s, ok := suggest(key, names); ok {
-				msg += fmt.Sprintf("; did you mean %s?", strings.Join(appendPath(path, s), "."))
+			if s, ok := hint.Suggest(key, slices.Sorted(maps.Keys(known))); ok {
+				msg += fmt.Sprintf("; did you mean %q?", strings.Join(appendPath(path, s), "."))
 			}
-			r.report(format.Warning, CodeUnknownInput, definitionsPath, "%s", msg)
+			r.reportAt(format.Warning, CodeUnknownInput, definitionsPath, "%s", msg)
 			continue
 		}
-		if !f.container || f.flatten || values[key] == nil {
+		if !f.container || f.flatten || v == nil {
 			continue
 		}
-		child, ok := values[key].(map[string]any)
+		child, ok := v.(map[string]any)
 		if !ok {
-			r.report(format.Error, CodeInputValue, f.loc, "%s takes a mapping of its inputs' values, not %s", f.label(), describe(values[key]))
+			r.reportAt(format.Error, CodeInputValue, f.loc, "%s takes a mapping of its inputs' values, not %s", f.label(), describe(v))
 			delete(values, key)
 			continue
 		}
@@ -317,7 +303,7 @@ func (r *inputResolver) fillDefaults() {
 				// Known once the run is underway.
 				f.deferred = true
 			case err != nil:
-				r.report(format.Error, CodeExpression, appendPath(f.loc, "default"), "the default of %s: %v", f.label(), err)
+				r.reportAt(format.Error, CodeExpression, appendPath(f.loc, "default"), "the default of %s: %v", f.label(), err)
 			default:
 				r.setDefault(f, v)
 			}
@@ -327,7 +313,7 @@ func (r *inputResolver) fillDefaults() {
 			for i, f := range pending {
 				names[i] = strings.Join(f.path, ".")
 			}
-			r.report(format.Error, CodeExpression, pending[0].loc, "the defaults of %s read each other", strings.Join(names, " and "))
+			r.reportAt(format.Error, CodeExpression, pending[0].loc, "the defaults of %s read each other", strings.Join(names, " and "))
 			return
 		}
 	}
@@ -369,7 +355,7 @@ func overlaps(a, b []string) bool {
 // of its options, or the text of its default when that is an expression,
 // which a form sends when it can't evaluate the default itself.
 func (r *inputResolver) missing(f *field) bool {
-	v, ok := lookupPath(r.values, f.path)
+	v, ok := jsonptr.Lookup(r.values, f.path)
 	if !ok || v == nil {
 		return true
 	}
@@ -412,7 +398,7 @@ func (r *inputResolver) applyConditions() {
 		case f.typ == "boolean":
 			setPath(r.values, f.path, false)
 		default:
-			r.report(format.Error, CodeRequired, f.loc, "%s needs a value", f.label())
+			r.reportAt(format.Error, CodeRequired, f.loc, "%s needs a value", f.label())
 		}
 	}
 }
@@ -428,7 +414,7 @@ func (r *inputResolver) condition(f *field, key string) bool {
 	if _, isString := raw.(string); isString {
 		var err error
 		if v, err = r.evalAt(appendPath(f.loc, key)); err != nil {
-			r.report(format.Error, CodeExpression, appendPath(f.loc, key), "the %s of %s: %v", key, f.label(), err)
+			r.reportAt(format.Error, CodeExpression, appendPath(f.loc, key), "the %s of %s: %v", key, f.label(), err)
 			return false
 		}
 	}
@@ -458,7 +444,7 @@ func (r *inputResolver) drop(f *field) {
 func (r *inputResolver) evalAt(loc []string) (any, error) {
 	scope := r.budget
 	scope.Contexts = compileTimeContexts(r.opts, r.evalValues())
-	return r.eval.Eval(loc, scope)
+	return r.workflow.Eval(loc, scope)
 }
 
 // deferred returns the defaults that are evaluated once the run is
@@ -480,7 +466,7 @@ func (r *inputResolver) deferred() map[string]plan.Value {
 // default unknown, and each input with no value null, or false for a
 // boolean, which is the value it gets, rather than its definition.
 func (r *inputResolver) evalValues() any {
-	values := copyMap(r.values)
+	values := jsonvalue.CloneMap(r.values)
 	for _, f := range r.fields {
 		if f.container || f.header {
 			continue
@@ -489,7 +475,7 @@ func (r *inputResolver) evalValues() any {
 			setPath(values, f.path, expr.Unknown{Name: "inputs"})
 			continue
 		}
-		if _, ok := lookupPath(values, f.path); ok {
+		if _, ok := jsonptr.Lookup(values, f.path); ok {
 			continue
 		}
 		var v any
@@ -505,12 +491,9 @@ func (r *inputResolver) evalValues() any {
 // inputs, and the caller's org, vars, remote and sessions. org, vars and
 // remote default to empty, which reads every name as "".
 func compileTimeContexts(opts Options, inputs any) map[string]any {
-	contexts := map[string]any{"inputs": inputs, "org": map[string]any{}, "vars": map[string]any{}, "remote": map[string]any{}}
-	for k, v := range opts.Contexts {
-		if k != "inputs" {
-			contexts[k] = v
-		}
-	}
+	contexts := map[string]any{"org": map[string]any{}, "vars": map[string]any{}, "remote": map[string]any{}}
+	maps.Copy(contexts, opts.Contexts)
+	contexts["inputs"] = inputs
 	return contexts
 }
 
@@ -522,7 +505,7 @@ func (r *inputResolver) checkValues() {
 		if f.header || f.ignored || f.deferred {
 			continue
 		}
-		v, ok := lookupPath(r.values, f.path)
+		v, ok := jsonptr.Lookup(r.values, f.path)
 		if !ok || v == nil {
 			continue
 		}
@@ -535,7 +518,7 @@ func (r *inputResolver) checkValues() {
 			if errors.Is(err, errNoPlatform) {
 				code = CodePlatform
 			}
-			r.report(format.Error, code, f.loc, "%s: %v", f.label(), err)
+			r.reportAt(format.Error, code, f.loc, "%s: %v", f.label(), err)
 			continue
 		}
 		if f.typ == "password" {
@@ -660,8 +643,8 @@ func optionValues(options any) []any {
 			}
 		}
 	case map[string]any:
-		for _, k := range slices.Sorted(maps.Keys(o)) {
-			out = append(out, optionValues(o[k])...)
+		for _, group := range jsonvalue.Sorted(o) {
+			out = append(out, optionValues(group)...)
 		}
 	}
 	return out

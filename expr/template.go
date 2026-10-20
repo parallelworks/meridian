@@ -2,6 +2,7 @@ package expr
 
 import (
 	"errors"
+	"iter"
 	"strings"
 )
 
@@ -42,8 +43,7 @@ func ParseTemplate(s string) (*Template, error) {
 		at := offset + start + 3
 		e, err := Parse(src)
 		if err != nil {
-			var se *SyntaxError
-			if errors.As(err, &se) {
+			if se, ok := errors.AsType[*SyntaxError](err); ok {
 				se.Offset += at
 			}
 			return nil, err
@@ -109,16 +109,26 @@ func closer(open byte) byte {
 // String returns the template's source.
 func (t *Template) String() string { return t.src }
 
-// Exprs returns the template's expressions, and the byte offset in the
-// template of each one's source.
-func (t *Template) Exprs() (exprs []*Expr, offsets []int) {
-	for _, p := range t.parts {
-		if p.expr != nil {
-			exprs = append(exprs, p.expr)
-			offsets = append(offsets, p.at)
+// Exprs returns an iterator over the template's expressions, each with the
+// byte offset in the template of its source.
+func (t *Template) Exprs() iter.Seq2[int, *Expr] {
+	return func(yield func(int, *Expr) bool) {
+		for _, p := range t.parts {
+			if p.expr != nil && !yield(p.at, p.expr) {
+				return
+			}
 		}
 	}
-	return exprs, offsets
+}
+
+// Expr returns the template's expression if the template is one expression
+// and nothing else, such as ${{ inputs.x }}, whose value is the
+// expression's, of whatever type.
+func (t *Template) Expr() (*Expr, bool) {
+	if len(t.parts) == 1 && t.parts[0].expr != nil {
+		return t.parts[0].expr, true
+	}
+	return nil, false
 }
 
 // IsText reports whether the template has no expressions.
@@ -162,12 +172,10 @@ func (t *Template) Eval(scope Scope) (any, error) {
 
 // offsetError moves an error's offset from its expression to the template.
 func offsetError(err error, at int) error {
-	var ee *EvalError
-	var ue *UnknownError
-	switch {
-	case errors.As(err, &ee):
+	if ee, ok := errors.AsType[*EvalError](err); ok {
 		return &EvalError{Offset: ee.Offset + at, Msg: ee.Msg}
-	case errors.As(err, &ue):
+	}
+	if ue, ok := errors.AsType[*UnknownError](err); ok {
 		return &UnknownError{Offset: ue.Offset + at, Name: ue.Name}
 	}
 	return err

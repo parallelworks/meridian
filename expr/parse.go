@@ -125,13 +125,24 @@ var prefixOperators = map[string]bool{
 	"round": true, "fromJSON": true, "range": true,
 }
 
-// contexts are the names an operand can start with to read a context, and
-// the context each reads: var is another name for vars. A word that starts
-// with any other name is a string. job is one of Meridian's additions to
-// format 1.
-var contexts = map[string]string{
-	"inputs": "inputs", "needs": "needs", "steps": "steps", "matrix": "matrix", "env": "env", "job": "job",
-	"org": "org", "vars": "vars", "var": "vars", "remote": "remote", "sessions": "sessions",
+// A contextInfo is what the language says about a context.
+type contextInfo struct {
+	// name is the context's name.
+	name string
+	// strings is set for a context whose values are strings, where a name
+	// that isn't there reads as "".
+	strings bool
+}
+
+// contexts are the contexts an expression can read, by the names an operand
+// can start with to read each: var is another name for vars. A word that
+// starts with any other name is a string. job is one of Meridian's additions
+// to format 1.
+var contexts = map[string]contextInfo{
+	"inputs": {name: "inputs"}, "matrix": {name: "matrix"}, "job": {name: "job"},
+	"needs": {"needs", true}, "steps": {"steps", true}, "env": {"env", true},
+	"org": {"org", true}, "vars": {"vars", true}, "var": {"vars", true},
+	"remote": {"remote", true}, "sessions": {"sessions", true},
 }
 
 type parser struct {
@@ -667,7 +678,7 @@ func operand(w string, at int) node {
 		return relativeRef(w, at)
 	}
 	if name, rest, ok := contextPrefix(w); ok {
-		return &ref{at: at, context: contexts[name], path: splitPath(rest)}
+		return &ref{at: at, context: contexts[name].name, path: splitPath(rest)}
 	}
 	if n, err := strconv.ParseFloat(w, 64); err == nil {
 		return &literal{at: at, value: n}

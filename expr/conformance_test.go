@@ -1,8 +1,10 @@
 package expr_test
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 )
 
 func TestConformance(t *testing.T) {
@@ -22,7 +25,7 @@ func TestConformance(t *testing.T) {
 		t.Run(strings.TrimSuffix(strings.TrimPrefix(f.Name, "expressions/"), ".yaml"), func(t *testing.T) {
 			t.Parallel()
 			for i, c := range f.Cases {
-				name := cmpOr(c.Expr, c.Template, c.At)
+				name := cmp.Or(c.Expr, c.Template, c.At)
 				t.Run(fmt.Sprintf("%d %s", i+1, name), func(t *testing.T) {
 					runCase(t, &f, &c)
 				})
@@ -40,17 +43,20 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 
 	src, location := c.Template, []string(nil)
 	if c.At != "" {
-		location = pointerPath(c.At)
-		v, ok := lookup(f.Workflow, location)
+		var err error
+		if location, err = jsonptr.Split(c.At); err != nil {
+			t.Fatal(err)
+		}
+		v, _ := jsonptr.Lookup(f.Workflow, location)
 		s, isString := v.(string)
-		if !ok || !isString {
+		if !isString {
 			t.Fatalf("%s isn't a string in the workflow", c.At)
 		}
 		src = s
 	}
 	if f.Workflow != nil {
-		doc := &expr.Document{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
-		scope = doc.Scope(location, scope)
+		w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
+		scope = w.Scope(location, scope)
 	}
 
 	var got any
@@ -68,22 +74,19 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		}
 	}
 
-	var syntaxErr *expr.SyntaxError
-	var evalErr *expr.EvalError
-	var unknownErr *expr.UnknownError
 	switch {
 	case c.Error == "syntax":
-		if !errors.As(err, &syntaxErr) {
+		if _, ok := errors.AsType[*expr.SyntaxError](err); !ok {
 			t.Fatalf("got %v, %v; want a syntax error", show(got), err)
 		}
 	case c.Error == "eval":
-		if !errors.As(err, &evalErr) {
+		if _, ok := errors.AsType[*expr.EvalError](err); !ok {
 			t.Fatalf("got %v, %v; want an evaluation error", show(got), err)
 		}
 	case c.Error != "":
 		t.Fatalf("unknown error kind %q", c.Error)
 	case c.Unknown != "":
-		if !errors.As(err, &unknownErr) || unknownErr.Name != c.Unknown {
+		if u, ok := errors.AsType[*expr.UnknownError](err); !ok || u.Name != c.Unknown {
 			t.Fatalf("got %v, %v; want %s to be unknown", show(got), err, c.Unknown)
 		}
 	case err != nil:
@@ -114,15 +117,6 @@ func checkWarnings(t *testing.T, c *conformance.ExpressionCase, e *expr.Expr) {
 	}
 }
 
-func cmpOr(ss ...string) string {
-	for _, s := range ss {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
 // equal compares values as JSON does, with numbers compared by value, and
 // NaN equal to NaN.
 func equal(a, b any) bool {
@@ -137,16 +131,7 @@ func equal(a, b any) bool {
 		return ok && slices.EqualFunc(a, b, equal)
 	case map[string]any:
 		b, ok := b.(map[string]any)
-		if !ok || len(a) != len(b) {
-			return false
-		}
-		for k, v := range a {
-			w, ok := b[k]
-			if !ok || !equal(v, w) {
-				return false
-			}
-		}
-		return true
+		return ok && maps.EqualFunc(a, b, equal)
 	}
 	return a == b
 }
@@ -168,37 +153,4 @@ func show(v any) string {
 		return strconv.Quote(s)
 	}
 	return fmt.Sprintf("%#v", v)
-}
-
-func pointerPath(p string) []string {
-	if p == "" {
-		return nil
-	}
-	unescape := strings.NewReplacer("~1", "/", "~0", "~")
-	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
-	for i, part := range parts {
-		parts[i] = unescape.Replace(part)
-	}
-	return parts
-}
-
-func lookup(v any, path []string) (any, bool) {
-	for _, k := range path {
-		switch c := v.(type) {
-		case map[string]any:
-			var ok bool
-			if v, ok = c[k]; !ok {
-				return nil, false
-			}
-		case []any:
-			i, err := strconv.Atoi(k)
-			if err != nil || i < 0 || i >= len(c) {
-				return nil, false
-			}
-			v = c[i]
-		default:
-			return nil, false
-		}
-	}
-	return v, true
 }

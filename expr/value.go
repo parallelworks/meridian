@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // Values are JSON's: nil, bool, numbers, string, []any and map[string]any.
@@ -466,8 +468,8 @@ func keys(v any) []any {
 func values(v any) []any {
 	m, _ := collection(v).(map[string]any)
 	out := make([]any, 0, len(m))
-	for _, k := range slices.Sorted(maps.Keys(m)) {
-		out = append(out, m[k])
+	for _, item := range jsonvalue.Sorted(m) {
+		out = append(out, item)
 	}
 	return out
 }

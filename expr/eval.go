@@ -3,11 +3,12 @@ package expr
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // maxBuilt bounds the bytes of strings and lists that one evaluation can
@@ -139,7 +140,9 @@ func (e *evaluator) built(at int, v any) (any, error) {
 func (e *evaluator) eval(n node) (any, error) {
 	switch n := n.(type) {
 	case *literal:
-		return copyValue(n.value), nil
+		// A copy, so that a caller that changes the result doesn't change
+		// the expression.
+		return jsonvalue.Clone(n.value), nil
 	case *word:
 		return n.text, nil
 	case *ref:
@@ -343,12 +346,6 @@ func (e *evaluator) call(n *call) (any, error) {
 	return functions[n.name].eval(e, n.at, args)
 }
 
-// emptyByDefault are the contexts whose values are strings, where a name
-// that isn't there reads as "".
-var emptyByDefault = map[string]bool{
-	"env": true, "org": true, "vars": true, "remote": true, "sessions": true, "needs": true, "steps": true,
-}
-
 func (e *evaluator) ref(r *ref) (any, error) {
 	root, ok := e.scope.Contexts[r.context]
 	if !ok {
@@ -366,7 +363,7 @@ func (e *evaluator) ref(r *ref) (any, error) {
 		return known(r.at, v)
 	}
 	v, ok := walk(root, path)
-	if !ok && emptyByDefault[r.context] {
+	if !ok && contexts[r.context].strings {
 		return "", nil
 	}
 	return known(r.at, v)
@@ -440,11 +437,10 @@ func (e *evaluator) relative(r *relative) (any, error) {
 // led to it: a problem in another expression of the workflow is a problem
 // evaluating this one.
 func (e *evaluator) resolverError(at int, err error) error {
-	var u *UnknownError
-	switch {
-	case err == nil:
+	if err == nil {
 		return nil
-	case errors.As(err, &u):
+	}
+	if u, ok := errors.AsType[*UnknownError](err); ok {
 		return &UnknownError{Offset: at, Name: u.Name}
 	}
 	return &EvalError{Offset: at, Msg: err.Error()}
@@ -502,29 +498,9 @@ func walk(v any, path []string) (any, bool) {
 	return v, true
 }
 
-// copyValue copies lists and mappings, so that a caller that changes a
-// result doesn't change the expression's literals.
-func copyValue(v any) any {
-	switch v := v.(type) {
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = copyValue(item)
-		}
-		return out
-	case map[string]any:
-		out := maps.Clone(v)
-		for k, item := range out {
-			out[k] = copyValue(item)
-		}
-		return out
-	}
-	return v
-}
-
 // IsUnknown reports whether err means an expression reads something that
 // isn't known yet.
 func IsUnknown(err error) bool {
-	var u *UnknownError
-	return errors.As(err, &u)
+	_, ok := errors.AsType[*UnknownError](err)
+	return ok
 }

@@ -1,0 +1,17 @@
+description: >-
+  An if written without ${{ }} can start with space other than spaces and
+  tabs, such as a literal block's blank first line. Its problems are found
+  where they are in the file, after that space.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: word
+      path: /jobs/build/steps/0/if
+      line: 7
+      column: 11
+    - severity: warning
+      code: word
+      path: /jobs/build/steps/1/if
+      line: 11
+      column: 24

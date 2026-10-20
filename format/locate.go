@@ -5,6 +5,8 @@ import (
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/parallelworks/meridian/internal/jsonptr"
 )
 
 // Locate returns where in the file a place in a string value is: offset is
@@ -18,7 +20,12 @@ func (d *Document) Locate(pointer string, offset int) Position {
 	if !ok || start.Line == 0 || start.Line > len(d.lines) {
 		return start
 	}
-	value, _ := lookupPointer(d.Value, pointer).(string)
+	tokens, err := jsonptr.Split(pointer)
+	if err != nil {
+		return start
+	}
+	v, _ := jsonptr.Lookup(d.Value, tokens)
+	value, _ := v.(string)
 	if offset < 0 || offset > len(value) {
 		return start
 	}
@@ -68,34 +75,4 @@ func byteOffset(s string, i int) int {
 		i--
 	}
 	return len(s)
-}
-
-// lookupPointer returns the value at a JSON Pointer in v, or nil.
-func lookupPointer(v any, pointer string) any {
-	if pointer == "" {
-		return v
-	}
-	unescape := strings.NewReplacer("~1", "/", "~0", "~")
-	for tok := range strings.SplitSeq(strings.TrimPrefix(pointer, "/"), "/") {
-		tok = unescape.Replace(tok)
-		switch c := v.(type) {
-		case map[string]any:
-			v = c[tok]
-		case []any:
-			i := 0
-			for _, r := range tok {
-				if r < '0' || r > '9' {
-					return nil
-				}
-				i = i*10 + int(r-'0')
-			}
-			if i >= len(c) {
-				return nil
-			}
-			v = c[i]
-		default:
-			return nil
-		}
-	}
-	return v
 }
