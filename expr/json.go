@@ -275,7 +275,7 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 	case "up":
 		var up int
 		if err := json.Unmarshal(m["up"], &up); err != nil || up < 1 {
-			return nil, fmt.Errorf("expr: a relative reference goes up at least one level")
+			return nil, errors.New("expr: a relative reference goes up at least one level")
 		}
 		path, err := decodePath(m["path"])
 		return &relative{up: up, path: path}, err

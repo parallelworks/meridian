@@ -3,30 +3,80 @@ version: "2"
 linters:
   default: standard
   enable:
+    - bodyclose
     - errorlint
+    - forbidigo
     - gocritic
     - gosec
     - misspell
+    - modernize
     - nilerr
     - noctx
+    - perfsprint
     - revive
     - sloglint
     - unconvert
     - usestdlibvars
   settings:
+    forbidigo:
+      forbid:
+        - pattern: '^panic$'
+          msg: "Don't panic; return an error. Mark a panic for a broken invariant, such as an embedded file that doesn't parse, with //nolint:forbidigo and say why."
+        - pattern: '^context\.(Background|TODO)$'
+          msg: "Take a ctx from the caller instead of a placeholder; context.Background belongs only in main.go."
+        - pattern: '^os\.Setenv$'
+          msg: "Use t.Setenv, which restores the previous value when the test ends."
+        - pattern: '^time\.Sleep$'
+          msg: "Wait for the thing itself, not for a delay that is long enough on a laptop and too short on a loaded runner. If the delay is the test, keep it with //nolint:forbidigo and say why."
     gosec:
       excludes:
         - G104 # covered by errcheck
+    perfsprint:
+      # Every conversion except strconcat, which turns fmt.Sprintf into
+      # concatenation and reads worse, and err-error, which is only
+      # equivalent for a non-nil error.
+      integer-format: true
+      int-conversion: true
+      error-format: true
+      err-error: false
+      errorf: true
+      string-format: true
+      sprintf1: true
+      strconcat: false
+      concat-loop: true
+      bool-format: true
+      hex-format: true
     revive:
       rules:
         - name: exported
         - name: package-comments
+        - name: filename-format
+          arguments:
+            - '^[a-z][a-z0-9_]*\.go$'
+    staticcheck:
+      checks:
+        - all
   exclusions:
     presets:
       - std-error-handling
     rules:
       - path: _test\.go
         linters: [gosec, noctx]
+      # A program's main.go makes its root context; everything else, tests
+      # included (t.Context), takes one.
+      - path: '(^|/)main\.go$'
+        text: 'context\.(Background|TODO)'
+        linters: [forbidigo]
+      # os.Setenv and time.Sleep are banned in tests, where t.Setenv and
+      # waiting for the condition are the better tools.
+      - path-except: _test\.go
+        text: 'os\.Setenv|time\.Sleep'
+        linters: [forbidigo]
+
+issues:
+  # Report every finding, not the first few of each kind.
+  max-issues-per-linter: 0
+  max-same-issues: 0
 
 formatters:
   enable:

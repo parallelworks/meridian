@@ -104,7 +104,7 @@ func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 // compiler's checks of what reads them.
 func resolveInputs(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
 	r := &inputResolver{
-		reporter: reporter{doc: doc},
+		doc:      doc,
 		opts:     opts,
 		workflow: &expr.Workflow{Root: doc.Value, Definitions: definitionsPath},
 		budget:   expr.Scope{}.Budgeted(),

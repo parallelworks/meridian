@@ -46,7 +46,7 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		return nil, diags
 	}
 	inputs := resolveInputs(doc, submitted, opts)
-	c := &compiler{reporter: reporter{doc: doc}, opts: opts, inputs: inputs, secrets: map[string]bool{}}
+	c := &compiler{doc: doc, opts: opts, inputs: inputs, secrets: map[string]bool{}}
 	c.diags = append(c.diags, diags...)
 	c.diags = append(c.diags, inputs.diags...)
 
