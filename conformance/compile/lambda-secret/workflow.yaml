@@ -1,0 +1,4 @@
+jobs:
+  build:
+    steps:
+      - run: echo ${{ join(map(["a", "b"], h => h + '=' + vars.API_KEY), ' ') }}

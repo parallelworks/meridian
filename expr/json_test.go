@@ -78,6 +78,34 @@ func TestJSONEncoding(t *testing.T) {
 	if err := json.Unmarshal(data, &back); err != nil || back.String() != tmpl.String() {
 		t.Errorf("decoded %q, %v; want %q", back.String(), err, tmpl.String())
 	}
+
+	data, err = json.Marshal(mustParse(t, "map(inputs.l, (h, i) => h.name + i)"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"src":"map(inputs.l, (h, i) =\u003e h.name + i)","tree":{"args":[{"path":["l"],"ref":"inputs"},` +
+		`{"body":{"op":"+","x":{"param":"h","path":["name"]},"y":{"param":"i","path":[]}},"lambda":["h","i"]}],"call":"map"}}`
+	if string(data) != want {
+		t.Errorf("got  %s\nwant %s", data, want)
+	}
+}
+
+// A lambda's body counts toward a decoded tree's depth as it does a parsed
+// one's: the call and the lambda are two levels.
+func TestJSONLambdaDepth(t *testing.T) {
+	data, err := json.Marshal(mustParse(t, "map(l, x => "+strings.Repeat("!", 198)+"x)"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e expr.Expr
+	if err := json.Unmarshal(data, &e); err != nil {
+		t.Errorf("198 ! in a lambda: %v", err)
+	}
+	deeper := strings.Replace(string(data), `"body":`, `"body":{"op":"!","x":`, 1)
+	deeper = strings.Replace(deeper, `,"lambda"`, `},"lambda"`, 1)
+	if err := json.Unmarshal([]byte(deeper), &e); err == nil || !strings.Contains(err.Error(), "nests more than 200 levels deep") {
+		t.Errorf("199: %v, want the depth limit", err)
+	}
 }
 
 func TestJSONDecodeErrors(t *testing.T) {
@@ -102,6 +130,21 @@ func TestJSONDecodeErrors(t *testing.T) {
 		{"a node's unknown key", `{"src":"x","tree":{"ref":"inputs","path":[],"later":1}}`, `a ref node has no "later"`},
 		{"a node's key twice", `{"src":"x","tree":{"lit":1,"lit":2}}`, "duplicate object member name"},
 		{"too deep", `{"src":"x","tree":` + strings.Repeat(`{"op":"!","x":`, 300) + `{"lit":1}` + strings.Repeat(`}`, 300) + `}`, "nests more than 200 levels deep"},
+		{"a lambda alone", `{"src":"x","tree":{"lambda":["x"],"body":{"lit":1}}}`, "a lambda is the last argument of map() and filter(), and nothing else"},
+		{"a lambda first", `{"src":"x","tree":{"call":"map","args":[{"lambda":["x"],"body":{"lit":1}},{"lambda":["x"],"body":{"lit":1}}]}}`, "and nothing else"},
+		{"a lambda in contains", `{"src":"x","tree":{"call":"contains","args":[{"lit":[]},{"lambda":["x"],"body":{"lit":1}}]}}`, "and nothing else"},
+		{"map without a lambda", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lit":1}]}}`, "and nothing else"},
+		{"a lambda in an operator", `{"src":"x","tree":{"op":"!","x":{"lambda":["x"],"body":{"lit":1}}}}`, "and nothing else"},
+		{"no parameters", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":[],"body":{"lit":1}}]}}`, "a lambda has one or two parameters"},
+		{"three parameters", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["a","b","c"],"body":{"lit":1}}]}}`, "a lambda has one or two parameters"},
+		{"parameters that aren't a list", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":"x","body":{"lit":1}}]}}`, "a lambda has one or two parameters"},
+		{"a parameter that isn't a name", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["1x"],"body":{"lit":1}}]}}`, `"1x" isn't a parameter's name`},
+		{"a reserved parameter", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["Index","NAN"],"body":{"lit":1}}]}}`, `can't be named "NAN"`},
+		{"a parameter twice", `{"src":"x","tree":{"call":"filter","args":[{"lit":[]},{"lambda":["x","x"],"body":{"lit":1}}]}}`, `both named "x"`},
+		{"a lambda without a body", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["x"]}]}}`, `a node is missing "body"`},
+		{"a lambda's unknown key", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["x"],"body":{"lit":1},"x":{"lit":1}}]}}`, `a lambda node has no "x"`},
+		{"a parameter outside a lambda", `{"src":"x","tree":{"param":"x","path":[]}}`, `"x" isn't a parameter of a lambda around it`},
+		{"another lambda's parameter", `{"src":"x","tree":{"call":"map","args":[{"call":"map","args":[{"lit":[]},{"lambda":["y"],"body":{"param":"y"}}]},{"lambda":["x"],"body":{"param":"y"}}]}}`, `"y" isn't a parameter of a lambda around it`},
 	} {
 		var e expr.Expr
 		if err := json.Unmarshal([]byte(tc.data), &e); err == nil || !strings.Contains(err.Error(), tc.want) {

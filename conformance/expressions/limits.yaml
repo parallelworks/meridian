@@ -4,10 +4,13 @@ description: >-
   its bytes, and a list 8 for each item and each item's size. range counts 16
   for each number; join, +, upper, lower and toJSON the string they make;
   format its string, once; split the string's bytes and 8 for each part;
-  fromJSON the value it reads; and a template's text each value's text, but
-  not the text around them. keys, values and trim count nothing, and neither
-  does reading a template, which has its own count. Each case's template
-  builds exactly 8 MiB, or a byte more, which is an error.
+  fromJSON the value it reads; map 8 for each item it makes and the item's
+  size, and filter the same for each item it keeps; and a template's text
+  each value's text, but not the text around them. keys, values and trim
+  count nothing, and neither does reading a template, which has its own
+  count. A template also runs the lambdas of map and filter at most 100,000
+  times. Each case's template builds exactly 8 MiB or runs exactly 100,000
+  lambdas, or a byte or a run more, which is an error.
 source: Meridian
 workflow:
   # B, as in the cases of + below, counts 4,222,760, its text 4,165,844 and
@@ -18,6 +21,10 @@ workflow:
   # 4,165,852 bytes.
   read: ${{ length(.text + '') }}
   read-over: ${{ length(.over) }}
+  # Each of these runs 100,000 lambdas, as the cases below do: .runs counts
+  # its own.
+  runs: ${{ length(filter(range 10, i => length(filter(range 9999, j => false)))) }}
+  read-runs: ${{ .runs + length(filter(range 10, i => length(filter(range 9999, j => false)))) }}
 cases:
   # 100 range 575 makes 475 numbers, 7,600 bytes, and joining them with ''
   # makes their 3 digits each, 1,425. 1000 range 6800 makes 5,800 numbers,
@@ -93,3 +100,38 @@ cases:
     value: 835991
   - expr: "length(((1000 range 2663) join ((1000 range 1100) join '-')) split '') + length('' split '') + length(upper 'ab')"
     error: eval
+
+  # map counts 8 for each item it makes and the item's size. B,
+  # (1000 range 1238) join '', counts 3,808 + 952, and split ',' makes [B],
+  # 960. range 8589 counts 137,424, and the inner map makes 8,589 items of
+  # B's 952 bytes, 8,245,440. The outer map makes a list of one number, 16,
+  # and upper 'abcdefgh' 8. Together, 8,388,608.
+  - expr: "map(((1000 range 1238) join '') split ',', b => length(map(range 8589, i => b)))[0] + length(upper 'abcdefgh')"
+    value: 8597
+  - expr: "map(((1000 range 1238) join '') split ',', b => length(map(range 8589, i => b)))[0] + length(upper 'abcdefghi')"
+    error: eval
+  # filter counts 8 for each item it keeps and the item's size, and nothing
+  # for an item it doesn't keep. B, (1000 range 1131) join '', counts 2,096 +
+  # 524, and split ',' makes [B], 532. range 9413 counts 150,608, map makes
+  # 9,413 items of B's 524 bytes, 5,007,716, and filter keeps 6,066 of them,
+  # 3,227,112. The outer map makes 16, and upper 'abcd' 4. Together,
+  # 8,388,608.
+  - expr: "map(((1000 range 1131) join '') split ',', b => length(filter(map(range 9413, i => b), (x, j) => j < 6066)))[0] + length(upper 'abcd')"
+    value: 6070
+  - expr: "map(((1000 range 1131) join '') split ',', b => length(filter(map(range 9413, i => b), (x, j) => j < 6066)))[0] + length(upper 'abcde')"
+    error: eval
+
+  # The outer filter runs its lambda 10 times, and each run runs the inner
+  # one's 9,999 times: 100,000 runs. Neither keeps anything, and the ranges
+  # count 1,600,000 bytes.
+  - expr: "length(filter(range 10, i => length(filter(range 9999, j => false))))"
+    value: 0
+  - expr: "length(filter(range 10, i => length(filter(range 9999, j => false)))) + length(filter([1], k => false))"
+    error: eval
+  # The expressions in a template share its count, 50,000 runs each here.
+  - template: "${{ length(filter(range 5, i => length(filter(range 9999, j => false)))) }} ${{ length(filter(range 5, i => length(filter(range 9999, j => false)))) }}"
+    value: "0 0"
+  - template: "${{ length(filter(range 5, i => length(filter(range 9999, j => false)))) }} ${{ length(filter(range 5, i => length(filter(range 9999, j => false)))) + length(filter([1], k => false)) }}"
+    error: eval
+  - at: /read-runs
+    value: 0

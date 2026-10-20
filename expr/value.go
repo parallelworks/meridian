@@ -569,6 +569,29 @@ func values(v any) []any {
 	return out
 }
 
+// entries returns what map() and filter() go through: a list's items, with
+// their indexes, or a mapping's values in the order of their keys, with the
+// keys. A string that holds a JSON list or mapping is read as its value, and
+// null has no items. ok is false for anything else.
+func entries(v any) (keys, items []any, ok bool) {
+	switch c := collection(v).(type) {
+	case nil:
+		return nil, nil, true
+	case []any:
+		keys = make([]any, len(c))
+		for i := range c {
+			keys[i] = float64(i)
+		}
+		return keys, c, true
+	case map[string]any:
+		for k, item := range jsonvalue.Sorted(c) {
+			keys, items = append(keys, k), append(items, item)
+		}
+		return keys, items, true
+	}
+	return nil, nil, false
+}
+
 // elements returns a list's items, or a mapping's values in the order of
 // their keys.
 func elements(v any) []any {

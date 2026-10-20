@@ -2,9 +2,10 @@
 //
 // The language is format 1's, the one ACTIVATE evaluates: JavaScript's
 // operators, with its rules for comparing and converting values, plus word
-// operators such as in and get, GitHub Actions' functions, and the status
-// functions. docs/design.md describes it, and the conformance suite's
-// expressions area pins what each expression means.
+// operators such as in and get, GitHub Actions' functions, the status
+// functions, and map() and filter(), which run a lambda such as
+// h => h.name for each item of a list. docs/design.md describes it, and the
+// conformance suite's expressions area pins what each expression means.
 //
 // Parse parses one expression and ParseTemplate a string that has
 // expressions in it. Both are evaluated in a Scope, which holds the

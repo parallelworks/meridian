@@ -687,6 +687,41 @@
       "添加 }}，或在需要文本 ${{ 的地方写成 ${{ '${{' }}。"
     ]
   },
+  "lambda_expected": {
+    "title": "需要 lambda",
+    "why": "函数 map() 和 filter() 接受一个列表，以及对每一项运行的 lambda，例如 x => x + 1。lambda 由一个参数或括号中的一到两个参数、=> 和函数体组成。",
+    "fix": [
+      "将最后一个参数写成 lambda，例如 h => h.name。"
+    ]
+  },
+  "lambda_too_many_parameters": {
+    "title": "lambda 的参数过多",
+    "why": "map() 或 filter() 的 lambda 接受项，以及可选的该项在列表中的索引或在映射中的键，例如 (h, i) => i。",
+    "fix": [
+      "删除第二个之后的参数。"
+    ]
+  },
+  "lambda_parameter_reserved": {
+    "title": "lambda 参数使用了保留名称",
+    "why": "lambda 的参数不能使用在表达式中已有含义的名称：inputs 等上下文；不区分大小写的关键字 true、false、null 和 undefined，以及运算符 and 和 or；in 或 length 等单词运算符；不区分大小写的 NaN 和 Infinity；以及 [index] 读取的 index。",
+    "fix": [
+      "为参数换一个名称，例如 item。"
+    ]
+  },
+  "lambda_parameter_twice": {
+    "title": "lambda 参数重名",
+    "why": "lambda 的参数是项及其索引或键，因此每个参数都需要自己的名称。与 JavaScript 一样，lambda 的两个参数不能同名。",
+    "fix": [
+      "重命名其中一个参数，例如 (h, i) => i。"
+    ]
+  },
+  "lambda_misplaced": {
+    "title": "lambda 不在 map() 或 filter() 中",
+    "why": "用 => 编写的 lambda 只能作为 map() 或 filter() 的最后一个参数，这两个函数会对每一项运行它。在其他位置，=> 不是表达式的一部分。",
+    "fix": [
+      "将 lambda 移到 map() 或 filter() 中，放在它遍历的列表之后。"
+    ]
+  },
   "format_unclosed_brace": {
     "title": "format() 模板中有未闭合的 {",
     "why": "format() 的模板中有一个没有闭合的 {。要表示字面量 {，请写成 {{。",
@@ -757,11 +792,39 @@
       "修改其中一个表达式，使其不引用其他表达式。"
     ]
   },
+  "not_list_or_mapping": {
+    "title": "对非列表或映射的值使用 map() 或 filter()",
+    "why": "函数 map() 和 filter() 遍历列表的各项，或按键的顺序遍历映射的值。包含 JSON 列表或映射的字符串按其值读取，null 没有任何项。其他任何值，例如数字或其他文本，都会出错。",
+    "fix": [
+      "检查第一个参数的值，例如输入或步骤的输出。"
+    ]
+  },
+  "expression_runs_too_many_lambdas": {
+    "title": "表达式运行的 lambda 过多",
+    "why": "一个字符串中的表达式运行 map() 和 filter() 的 lambda 的次数超过了语言允许一个字符串运行的 100,000 次。该上限用于确保表达式的求值是有限的。嵌套在另一个 lambda 中的 lambda，会在外层 lambda 每次运行时对其每一项运行一次。",
+    "fix": [
+      "减少运行的 lambda，例如只遍历列表的一部分，而不是整个列表。"
+    ]
+  },
   "expressions_build_too_much": {
     "title": "表达式合计生成的数据过多",
     "why": "Meridian 会将某些表达式放在一起求值，除了限制每个表达式生成的数据外，还限制它们合计生成的数据。这些表达式各自都在语言的上限之内，但合计生成的数据超过了 Meridian 允许的量。该上限是 Meridian 自己的限制，不属于工作流格式。",
     "fix": [
       "减少这些表达式生成的数据，例如只读取值的一部分，而不是整个值。"
+    ]
+  },
+  "expressions_run_too_many_lambdas": {
+    "title": "表达式合计运行的 lambda 过多",
+    "why": "Meridian 会将某些表达式放在一起求值，除了限制每个表达式运行 map() 和 filter() 的 lambda 的次数外，还限制它们合计运行的次数。这些表达式各自都在语言的上限之内，但合计运行的次数超过了 Meridian 允许的次数。该上限是 Meridian 自己的限制，不属于工作流格式。",
+    "fix": [
+      "减少这些表达式运行的 lambda，例如只遍历列表的一部分，而不是整个列表。"
+    ]
+  },
+  "expressions_too_slow": {
+    "title": "表达式合计求值耗时过长",
+    "why": "Meridian 会将某些表达式放在一起求值，当它们的求值合计耗时达到 10 秒时停止求值。这是针对工作量远超任何实际工作流的工作流的安全措施，例如每个都遍历一个大值的 lambda。求值所需的时间取决于机器，因此这不是工作流格式的限制。",
+    "fix": [
+      "减少这些表达式的工作量，例如只遍历列表的一部分，而不是整个列表，或在每个 lambda 中少读取大值的内容。"
     ]
   }
 }

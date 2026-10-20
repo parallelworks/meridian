@@ -203,6 +203,30 @@ func TestDefaultsShareABudget(t *testing.T) {
 	}
 }
 
+// The group of all the inputs' defaults runs lambdas at most 1,000,000
+// times, though each default can run them 100,000 times: ten can, and
+// eleven can't.
+func TestDefaultsShareALambdaBudget(t *testing.T) {
+	for _, tc := range []struct {
+		defaults int
+		want     problems.Diagnostics
+	}{
+		{10, nil},
+		{11, problems.Diagnostics{problems.ExpressionsRunTooManyLambdas.At("", problems.Position{}, "", problems.Params{"limit": 1000000})}},
+	} {
+		var b strings.Builder
+		b.WriteString("on:\n  execute:\n    inputs:\n")
+		for i := range tc.defaults {
+			fmt.Fprintf(&b, "      d%d:\n        type: number\n        default: ${{ length(filter(range 10, i => length(filter(range 9999, j => false)))) }}\n", i)
+		}
+		b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
+		_, diags := compile.ResolveInputs(load(t, b.String()), nil, compile.Options{})
+		if len(diags) != len(tc.want) || len(diags) > 0 && (diags[0].Code != tc.want[0].Code || diags[0].Message() != tc.want[0].Message()) {
+			t.Errorf("%d defaults that each run 100,000 lambdas: %v, want %v", tc.defaults, diags, tc.want)
+		}
+	}
+}
+
 // A default doesn't count what the default of an input it reads built.
 func TestDefaultsCountOnTheirOwn(t *testing.T) {
 	doc := load(t, `on:

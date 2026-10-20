@@ -103,6 +103,13 @@ var wordOperators = map[string]int{
 	"split": precSplit, "join": precSplit,
 }
 
+// anyCaseOperators are the binary operators written as words in any case:
+// OR is ||, and And is &&.
+var anyCaseOperators = map[string]infix{
+	"or":  {op: "||", prec: precOr},
+	"and": {op: "&&", prec: precAnd},
+}
+
 // negatable are the word operators that ! negates: !in, !includes.
 var negatable = map[string]bool{"in": true, "includes": true, "startsWith": true, "endsWith": true}
 
@@ -173,6 +180,9 @@ type parser struct {
 	// grouped holds the nodes written in parentheses, which ?? can be mixed
 	// with.
 	grouped map[node]bool
+	// params are the parameters of the lambdas whose bodies are being
+	// parsed, innermost last.
+	params []string
 }
 
 func (p *parser) errorAt(at int, k *problems.Kind, params problems.Params) error {
@@ -186,6 +196,11 @@ func (p *parser) errorf(k *problems.Kind, params problems.Params) error {
 func (p *parser) unexpected() error {
 	if p.pos >= len(p.src) {
 		return p.errorf(problems.ExpressionEndsEarly, nil)
+	}
+	if strings.HasPrefix(p.src[p.pos:], "=>") {
+		// A lambda is parsed only as the last argument of map() or
+		// filter().
+		return p.errorf(problems.LambdaMisplaced, nil)
 	}
 	end := min(p.pos+8, len(p.src))
 	if i := strings.IndexAny(p.src[p.pos:end], " \t\r\n"); i > 0 {
@@ -203,6 +218,10 @@ func (p *parser) skipSpace() {
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 func isLetter(c byte) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }
+
+// isNameByte reports whether c can be part of a name such as my_var2: a
+// letter, a digit or an underscore. A name doesn't start with a digit.
+func isNameByte(c byte) bool { return isLetter(c) || isDigit(c) || c == '_' }
 
 // isWordByte reports whether c can be part of a word.
 func isWordByte(c byte) bool {
@@ -262,11 +281,9 @@ func (p *parser) peekInfix() (infix, bool) {
 		}
 	}
 	w := p.letters(p.pos)
-	switch strings.ToLower(w) {
-	case "or":
-		return infix{op: "||", prec: precOr, width: len(w)}, true
-	case "and":
-		return infix{op: "&&", prec: precAnd, width: len(w)}, true
+	if op, ok := anyCaseOperators[strings.ToLower(w)]; ok {
+		op.width = len(w)
+		return op, true
 	}
 	if prec, ok := wordOperators[w]; ok {
 		return infix{op: w, prec: prec, width: len(w)}, true
@@ -435,7 +452,24 @@ func (p *parser) unary() (node, error) {
 		}
 		return p.call(w, at)
 	}
+	if n, ok := p.param(w, at); ok {
+		return n, nil
+	}
 	return operand(w, at), nil
+}
+
+// param returns the reference to a lambda's parameter that w is, if it is
+// in the body of a lambda that has the parameter: its name alone, or
+// followed by a path, as in x, x.name or x[0].
+func (p *parser) param(w string, at int) (*param, bool) {
+	end := 0
+	for end < len(w) && isNameByte(w[end]) {
+		end++
+	}
+	if end == 0 || end < len(w) && w[end] != '.' && w[end] != '[' || !slices.Contains(p.params, w[:end]) {
+		return nil, false
+	}
+	return &param{at: at, name: w[:end], path: splitPath(w[end:])}, true
 }
 
 func (p *parser) call(name string, at int) (node, error) {
@@ -450,7 +484,13 @@ func (p *parser) call(name string, at int) (node, error) {
 		p.pos++
 	} else {
 		for {
-			arg, err := p.expression(0)
+			var arg node
+			var err error
+			if fn.each != nil && len(args) == fn.maxArgs-1 {
+				arg, err = p.lambda(name)
+			} else {
+				arg, err = p.expression(0)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -476,6 +516,87 @@ func (p *parser) call(name string, at int) (node, error) {
 		return nil, p.errorAt(at, problems.CaseArguments, nil)
 	}
 	return p.postfix(&call{at: at, name: name, args: args}, at)
+}
+
+// lambda parses the lambda that is the last argument of fn, map() or
+// filter(): x => body, (x) => body or (x, i) => body. As in JavaScript, a
+// comma can end the parameters in parentheses. The lambda isn't a level of
+// nesting for the parser, as the call is, but it is one of the tree's.
+func (p *parser) lambda(fn string) (node, error) {
+	p.skipSpace()
+	at := p.pos
+	open := p.peek(0) == '('
+	if open {
+		p.pos++
+	}
+	var params []string
+	var offsets []int
+	for {
+		p.skipSpace()
+		start := p.pos
+		for p.pos < len(p.src) && isNameByte(p.src[p.pos]) && (p.pos > start || !isDigit(p.src[p.pos])) {
+			p.pos++
+		}
+		if p.pos == start {
+			break
+		}
+		params, offsets = append(params, p.src[start:p.pos]), append(offsets, start)
+		p.skipSpace()
+		if !open || p.peek(0) != ',' {
+			break
+		}
+		p.pos++
+	}
+	if open && p.peek(0) == ')' {
+		p.pos++
+		open = false
+	}
+	p.skipSpace()
+	if open || len(params) == 0 || !strings.HasPrefix(p.src[p.pos:], "=>") {
+		return nil, p.errorAt(at, problems.LambdaExpected, problems.Params{"name": fn})
+	}
+	if len(params) > 2 {
+		return nil, p.errorAt(at, problems.LambdaTooManyParameters, problems.Params{"name": fn, "count": len(params)})
+	}
+	if i, k := paramProblem(params); k != nil {
+		return nil, p.errorAt(offsets[i], k, problems.Params{"name": params[i]})
+	}
+	p.pos += len("=>")
+	p.params = append(p.params, params...)
+	body, err := p.expression(0)
+	p.params = p.params[:len(p.params)-len(params)]
+	if err != nil {
+		return nil, err
+	}
+	return &lambda{at: at, params: params, body: body}, nil
+}
+
+// paramProblem returns the kind of problem with a lambda's parameters, if
+// any, and the parameter that has it: a name that a word already means
+// something by, or the same name as the parameter before it.
+func paramProblem(params []string) (i int, k *problems.Kind) {
+	for i, name := range params {
+		switch {
+		case reserved(name):
+			return i, problems.LambdaParameterReserved
+		case slices.Contains(params[:i], name):
+			return i, problems.LambdaParameterTwice
+		}
+	}
+	return 0, nil
+}
+
+// reserved reports whether name can't name a lambda's parameter, because a
+// word of that name already means something: a context, a keyword or a word
+// operator, NaN or Infinity, or index, which [index] reads. The keywords,
+// the operators and and or, NaN and Infinity are reserved in any case.
+func reserved(name string) bool {
+	_, context := contexts[name]
+	_, keyword := keywords[strings.ToLower(name)]
+	_, anyCase := anyCaseOperators[strings.ToLower(name)]
+	_, operator := wordOperators[name]
+	return context || keyword || anyCase || operator || prefixOperators[name] || name == "index" ||
+		strings.EqualFold(name, "NaN") || strings.EqualFold(name, "Infinity")
 }
 
 // not parses one or more ! and the operand they negate.
@@ -742,16 +863,15 @@ func operand(w string, at int) node {
 	if n, ok := wordNumber(w); ok {
 		return &literal{at: at, value: n}
 	}
-	switch strings.ToLower(w) {
-	case "true":
-		return &literal{at: at, value: true}
-	case "false":
-		return &literal{at: at, value: false}
-	case "null", "undefined":
-		return &literal{at: at, value: nil}
+	if v, ok := keywords[strings.ToLower(w)]; ok {
+		return &literal{at: at, value: v}
 	}
 	return &word{at: at, text: w}
 }
+
+// keywords are the words that are values, in any case: true, false, and
+// null, which undefined is too.
+var keywords = map[string]any{"true": true, "false": false, "null": nil, "undefined": nil}
 
 // wordNumber reads a word as a number, as a string is read (stringToNumber),
 // except that a word of nothing but space isn't one, and a - before a

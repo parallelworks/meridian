@@ -72,6 +72,24 @@ type call struct {
 	args []node
 }
 
+// A lambda is the x => body, (x) => body or (x, i) => body that is the last
+// argument of map() and filter(), which evaluate body for each item: x is
+// the item, and i its index in a list or its key in a mapping.
+type lambda struct {
+	at     int
+	params []string
+	body   node
+}
+
+// A param reads a parameter of a lambda around it, and the path in its
+// value: x, x.name, x[0]. A word whose name is a parameter's reads it only in
+// the lambda's body.
+type param struct {
+	at   int
+	name string
+	path []segment
+}
+
 // A slice is the slice operand (start):(end), (start):5 or (start):, whose
 // value is the string "start:end". end is nil when it is left open.
 type slice struct {
@@ -96,6 +114,8 @@ func (n *binary) offset() int   { return n.at }
 func (n *ternary) offset() int  { return n.at }
 func (n *member) offset() int   { return n.at }
 func (n *call) offset() int     { return n.at }
+func (n *lambda) offset() int   { return n.at }
+func (n *param) offset() int    { return n.at }
 func (n *slice) offset() int    { return n.at }
 func (n *concat) offset() int   { return n.at }
 

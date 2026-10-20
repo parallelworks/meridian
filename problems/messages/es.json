@@ -97,6 +97,11 @@
   "unclosed_string": "Una cadena que empieza con {quote} no tiene un {quote} que la termine.",
   "unclosed_bracket": "Un “{bracket}” no tiene un corchete que lo cierre.",
   "unclosed_template": "El $'{{' no tiene un '}}' que lo cierre. Escribe $'{{' ''$'{{''' '}}' para el texto $'{{'.",
+  "lambda_expected": "La función {name}() recibe como último argumento una lambda, como x => x + 1.",
+  "lambda_too_many_parameters": "Una lambda de {name}() recibe un elemento y, si quieres, su índice, no {count} parámetros.",
+  "lambda_parameter_reserved": "Un parámetro de una lambda no puede llamarse “{name}”, un nombre reservado para un contexto, una palabra clave, un operador o un número, o para [index].",
+  "lambda_parameter_twice": "Los dos parámetros de una lambda se llaman “{name}”.",
+  "lambda_misplaced": "Una lambda, como x => x + 1, solo puede ser el último argumento de map() o filter().",
   "format_unclosed_brace": "La plantilla de format() {template} tiene una “'{'” sin “'}'”.",
   "format_missing_argument": "La plantilla de format() {template} no tiene ningún argumento para {placeholder}.",
   "format_unopened_brace": "La plantilla de format() {template} tiene una “'}'” sin “'{'”.",
@@ -107,5 +112,9 @@
   "unknown_operator": "No existe el operador {op}.",
   "expression_too_large": "La expresión construye más de {limit} MiB.",
   "expressions_read_each_other": "Las expresiones de aquí se leen entre sí, así que ninguna tiene valor.",
-  "expressions_build_too_much": "Las expresiones que se evalúan juntas aquí construyen más de {limit} MiB entre todas."
+  "not_list_or_mapping": "La función {name}() recibe una lista o un mapa, no {value}.",
+  "expression_runs_too_many_lambdas": "La expresión ejecuta las lambdas de map() y filter() más de {limit} veces.",
+  "expressions_build_too_much": "Las expresiones que se evalúan juntas aquí construyen más de {limit} MiB entre todas.",
+  "expressions_run_too_many_lambdas": "Las expresiones que se evalúan juntas aquí ejecutan las lambdas de map() y filter() más de {limit} veces entre todas.",
+  "expressions_too_slow": "Las expresiones que se evalúan juntas aquí tardaron más de {limit, plural, one {# segundo} other {# segundos}} entre todas."
 }

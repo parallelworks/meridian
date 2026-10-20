@@ -14,8 +14,14 @@ type function struct {
 	// maxArgs is -1 for a function that takes any number of arguments.
 	maxArgs int
 	// eval computes the function from its arguments. It is nil for the
-	// status functions and case(), which the evaluator handles itself.
+	// status functions, case(), map() and filter(), which the evaluator
+	// handles itself.
 	eval func(e *evaluator, at int, args []any) (any, error)
+	// each is set for a function whose last argument is a lambda, which
+	// it runs for each item of its first: map() and filter(). It returns
+	// what the function's list gets for an item, given what the lambda
+	// gave for it, and keep false if it gets nothing.
+	each func(item, result any) (v any, keep bool)
 }
 
 // arity returns the params that say how many arguments f takes: arity is
@@ -44,7 +50,8 @@ var statusFunctions = map[string]func(*Status) bool{
 }
 
 // functions are GitHub Actions' expression functions, with its names and
-// meanings, and case(). String matching is case-sensitive, like ==.
+// meanings, case(), and map() and filter(), which take a lambda. String
+// matching is case-sensitive, like ==.
 var functions = map[string]function{
 	"success":   {},
 	"failure":   {},
@@ -73,6 +80,15 @@ var functions = map[string]function{
 	}},
 	"toJSON": {minArgs: 1, maxArgs: 1, eval: func(e *evaluator, at int, a []any) (any, error) {
 		return e.built(at, toJSON(a[0], "  "))
+	}},
+	"map": {minArgs: 2, maxArgs: 2, each: func(_, result any) (any, bool) {
+		return result, true
+	}},
+	// filter keeps an item its lambda gives a true value for, by the
+	// language's truthiness, so the text "false" is true:
+	// filter(hosts, h => h.enabled) keeps a host whose enabled is "false".
+	"filter": {minArgs: 2, maxArgs: 2, each: func(item, result any) (any, bool) {
+		return item, truthy(result)
 	}},
 }
 

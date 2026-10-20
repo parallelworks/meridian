@@ -274,6 +274,8 @@ func FuzzExpression(f *testing.F) {
 		"needs['j-1'].outputs.o", "env['A-B']", "sessions['s']", "format('{0}{{}}', contains(inputs.x, 1))",
 		"case(inputs.b, 1, 2)", "inputs.x.*.a['b']", "failure() && !cancelled()", "../../.x.[index]", "2:(len inputs.x)",
 		"${{ inputs.a }} and ${{ 'b' }}", "${{ ['}}'] }}}}",
+		"map(inputs.x, (v, i) => v + i)", "filter(inputs.j, (v, k) => k != 'a').*", "map(inputs.l, x => map(x, x => x[index]))",
+		"join(map(filter(inputs.x, v => v > 1), v => '-' + v), ' ')", "map(inputs.x, (v,) => v.a-b)",
 	} {
 		f.Add(seed)
 	}

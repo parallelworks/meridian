@@ -687,6 +687,41 @@
       "Añade el }}, o escribe ${{ '${{' }} donde quieras el texto ${{."
     ]
   },
+  "lambda_expected": {
+    "title": "Se esperaba una lambda",
+    "why": "Las funciones map() y filter() reciben una lista y después una lambda que ejecutan para cada elemento, como x => x + 1. Una lambda es un parámetro, o uno o dos entre paréntesis, seguido de => y su cuerpo.",
+    "fix": [
+      "Escribe el último argumento como una lambda, como h => h.name."
+    ]
+  },
+  "lambda_too_many_parameters": {
+    "title": "Lambda con demasiados parámetros",
+    "why": "Una lambda de map() o filter() recibe el elemento y, si quieres, su índice en una lista o su clave en un mapa, como en (h, i) => i.",
+    "fix": [
+      "Quita los parámetros que siguen al segundo."
+    ]
+  },
+  "lambda_parameter_reserved": {
+    "title": "Parámetro de lambda con un nombre reservado",
+    "why": "Un parámetro de una lambda no puede llevar un nombre que ya significa algo en una expresión: un contexto, como inputs; las palabras clave true, false, null y undefined, y los operadores and y or, en mayúsculas o minúsculas; un operador de palabra, como in o length; NaN e Infinity, en mayúsculas o minúsculas; o index, que lee [index].",
+    "fix": [
+      "Ponle otro nombre al parámetro, como item."
+    ]
+  },
+  "lambda_parameter_twice": {
+    "title": "Parámetros de lambda con el mismo nombre",
+    "why": "Los parámetros de una lambda son el elemento y su índice o clave, así que cada uno necesita su propio nombre. Como en JavaScript, una lambda no puede dar el mismo nombre a dos parámetros.",
+    "fix": [
+      "Cambia el nombre de uno de ellos, como en (h, i) => i."
+    ]
+  },
+  "lambda_misplaced": {
+    "title": "Lambda fuera de map() o filter()",
+    "why": "Una lambda, escrita con =>, solo puede ser el último argumento de map() o filter(), que la ejecutan para cada elemento. En cualquier otro lugar, => no forma parte de una expresión.",
+    "fix": [
+      "Mueve la lambda a map() o filter(), después de la lista que recorre."
+    ]
+  },
   "format_unclosed_brace": {
     "title": "Plantilla de format() con una { sin cerrar",
     "why": "La plantilla de format() tiene una { que no se cierra. Escribe {{ para una { literal.",
@@ -757,11 +792,39 @@
       "Cambia una de ellas para que no lea las demás."
     ]
   },
+  "not_list_or_mapping": {
+    "title": "map() o filter() de algo que no es una lista ni un mapa",
+    "why": "Las funciones map() y filter() recorren los elementos de una lista, o los valores de un mapa en el orden de sus claves. Una cadena que contiene una lista o un mapa en JSON se lee como su valor, y null no tiene elementos. Cualquier otra cosa, como un número u otro texto, es un error.",
+    "fix": [
+      "Revisa el valor del primer argumento, como una entrada o la salida de un paso."
+    ]
+  },
+  "expression_runs_too_many_lambdas": {
+    "title": "La expresión ejecuta demasiadas lambdas",
+    "why": "Las expresiones de una cadena ejecutan las lambdas de map() y filter() más veces de las que el lenguaje permite a una cadena, 100.000, un límite que mantiene acotada su evaluación. Una lambda dentro de otra se ejecuta para cada uno de sus elementos cada vez que se ejecuta la otra.",
+    "fix": [
+      "Ejecuta menos lambdas, por ejemplo recorriendo una parte de una lista en lugar de toda."
+    ]
+  },
   "expressions_build_too_much": {
     "title": "Las expresiones construyen demasiado en conjunto",
     "why": "Meridian evalúa algunas expresiones juntas y limita lo que construyen entre todas, además de lo que construye cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas construyen más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
     "fix": [
       "Construye menos en estas expresiones, por ejemplo leyendo una parte de un valor en lugar de todo."
+    ]
+  },
+  "expressions_run_too_many_lambdas": {
+    "title": "Las expresiones ejecutan demasiadas lambdas en conjunto",
+    "why": "Meridian evalúa algunas expresiones juntas y limita cuántas veces ejecutan las lambdas de map() y filter() entre todas, además de cuántas veces lo hace cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas ejecutan más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+    "fix": [
+      "Ejecuta menos lambdas en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda."
+    ]
+  },
+  "expressions_too_slow": {
+    "title": "Las expresiones tardan demasiado en conjunto",
+    "why": "Meridian evalúa algunas expresiones juntas y las detiene cuando su evaluación ha tardado 10 segundos entre todas. Es una protección contra flujos de trabajo que hacen mucho más trabajo que cualquier flujo real, como lambdas que recorren cada una un valor grande. No es un límite del formato del flujo de trabajo, porque lo que tarda la evaluación depende de la máquina.",
+    "fix": [
+      "Haz menos trabajo en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda, o leyendo menos de un valor grande en cada lambda."
     ]
   }
 }

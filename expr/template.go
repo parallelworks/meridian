@@ -157,6 +157,7 @@ func (t *Template) Eval(scope Scope) (any, error) {
 		return v, offsetError(err, t.parts[0].at)
 	}
 	ev := newEvaluator(scope)
+	defer ev.stop()
 	var b strings.Builder
 	for _, p := range t.parts {
 		if p.expr == nil {
