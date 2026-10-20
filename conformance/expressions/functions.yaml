@@ -1,7 +1,8 @@
 description: >-
   GitHub Actions' functions, with its meanings: contains, startsWith,
   endsWith, format, join, toJSON and fromJSON, and case, which picks the
-  value of its first true condition. String matching is case-sensitive.
+  value of its first true condition. contains also finds a key in a mapping,
+  as in and includes do. String matching is case-sensitive.
 source: ACTIVATE's tests
 scope:
   contexts:
@@ -28,7 +29,11 @@ cases:
     value: false
   - expr: "contains('abc123', 123)"
     value: true
+  # contains looks in a mapping's keys, as 'a' in inputs.obj does. Format 1
+  # gave false before, as GitHub Actions does.
   - expr: "contains(inputs.obj, 'a')"
+    value: true
+  - expr: "contains(inputs.obj, 1)"
     value: false
   - expr: "startsWith(inputs.name, 'Al')"
     value: true

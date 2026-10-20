@@ -57,8 +57,10 @@ cases:
     value: false
   - expr: "'bt' in inputs.string"
     value: true
+  # In a string, a number is found as its digits, as contains('123', 1)
+  # finds it. Format 1 gave false before.
   - expr: "1 in '123'"
-    value: false
+    value: true
   - expr: "inputs.arrayhere includes 'three'"
     value: true
   - expr: "inputs.arrayhere !includes 'three'"
@@ -194,5 +196,111 @@ cases:
     value: x,y,z!
   - expr: (1 range 3) join ","
     value: "1,2"
+  # A string joins to itself, as join('abc', ',') does. Format 1 gave ""
+  # before.
   - expr: "'abc' join ','"
+    value: abc
+
+  # Each word operator gives what its function gives for the same arguments:
+  # includes and in are contains, the one reversed, and startsWith, endsWith
+  # and join are the functions of those names.
+  # A number or a boolean is found in a string as its text, which for a
+  # number is what JavaScript's String() writes. Format 1 gave false for the
+  # word operators before.
+  - expr: "'a1' includes 1"
+    value: true
+  - expr: "contains('a1', 1)"
+    value: true
+  - expr: "'x1e+21' includes 1e21"
+    value: true
+  - expr: "contains('x1e+21', 1e21)"
+    value: true
+  - expr: "1e21 in 'x1e+21'"
+    value: true
+  - expr: "'abc123' includes 123"
+    value: true
+  - expr: "contains('abc123', 123)"
+    value: true
+  - expr: "123 in 'abc123'"
+    value: true
+  - expr: "'abc' includes true"
+    value: false
+  - expr: "contains('abc', true)"
+    value: false
+  - expr: "'a true b' includes true"
+    value: true
+  - expr: "contains('a true b', true)"
+    value: true
+  - expr: "inputs.list includes 'y'"
+    value: true
+  - expr: "contains(inputs.list, 'y')"
+    value: true
+  - expr: "[1, 2] includes '1'"
+    value: true
+  - expr: "contains([1, 2], '1')"
+    value: true
+  - expr: "inputs.missing includes 'a'"
+    value: false
+  - expr: "contains(inputs.missing, 'a')"
+    value: false
+  - expr: "inputs.count includes 4"
+    value: false
+  - expr: "contains(inputs.count, 4)"
+    value: false
+  - expr: "inputs.jsonArr includes '2'"
+    value: true
+  - expr: "contains(inputs.jsonArr, '2')"
+    value: true
+  # All three look in a mapping's keys, as JavaScript's in does.
+  - expr: "inputs.resource includes 'provider'"
+    value: true
+  - expr: "contains(inputs.resource, 'provider')"
+    value: true
+  - expr: "contains(inputs.resource, 'aws')"
+    value: false
+
+  - expr: "12345 startsWith 12"
+    value: true
+  - expr: "startsWith(12345, 12)"
+    value: true
+  - expr: "inputs.list startsWith '['"
+    value: true
+  - expr: "startsWith(inputs.list, '[')"
+    value: true
+  - expr: "inputs.missing startsWith ''"
+    value: true
+  - expr: "startsWith(inputs.missing, '')"
+    value: true
+  - expr: "true endsWith 'ue'"
+    value: true
+  - expr: "endsWith(true, 'ue')"
+    value: true
+  - expr: "inputs.name endsWith inputs.missing"
+    value: true
+  - expr: "endsWith(inputs.name, inputs.missing)"
+    value: true
+
+  - expr: inputs.list join "-"
+    value: x-y-z
+  - expr: join(inputs.list, "-")
+    value: x-y-z
+  - expr: inputs.jsonArr join "-"
+    value: 1-2-3
+  - expr: join(inputs.jsonArr, "-")
+    value: 1-2-3
+  - expr: inputs.name join "-"
+    value: Alice
+  - expr: join(inputs.name, "-")
+    value: Alice
+  - expr: inputs.missing join "-"
+    value: ""
+  - expr: join(inputs.missing, "-")
+    value: ""
+  - expr: inputs.count join "-"
+    value: ""
+  - expr: join(inputs.count, "-")
+    value: ""
+  - expr: inputs.resource join "-"
+    value: ""
+  - expr: join(inputs.resource, "-")
     value: ""

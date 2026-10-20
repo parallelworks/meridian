@@ -73,9 +73,10 @@ A `-` starts a word only as a number's sign: elsewhere it is an operator.
 A word is scanned whole, then read as the first of these that fits:
 
 1. **A relative reference**: a word that starts with `.` and has more after
-   it ([Relative references](#relative-references)). So `.5` reads the key
-   `5`, not a number, and the compiler warns about a relative reference that
-   starts with a digit: `0.5` is the number.
+   it, unless it is a number ([Relative references](#relative-references)).
+   `.5` and `.5e1` are numbers, as in JavaScript, while `.name`, `..5` and
+   `.5.x` are relative references. A key named with digits is read in
+   brackets: `.[5]`.
 2. **A reference**: a context's name, then a `.` or `[` and more
    ([References](#references)).
 3. **A number**: a word that is a number as a string is one
@@ -112,32 +113,36 @@ bare_key  = /* any other text */ .
 - `inputs.hosts[0]`, `inputs.hosts.[0]`, `inputs.hosts.0` and
   `inputs[hosts]0` read the same thing.
 - A bracket holds a key, never an expression: its text up to the first `]`
-  outside single or double quotes, without the whitespace around it. So
+  outside quotes, without the whitespace around it. So
   `inputs.list[inputs.i]` reads the key `inputs.i`. To read a key that an
   expression computes, use `get`: `inputs.list get inputs.i`.
-- A key in single or double quotes is the text between them, as it is.
-  Backticks aren't quotes here. `[index]` is the index of the list item that
-  an input's template is for. A whole number is a key or a list index. Any
+- A key in quotes, single, double or back, is the text between them, as it
+  is: ``inputs[`my-key`]`` reads the key `my-key`, as `inputs['my-key']`
+  does. `[index]` is the index of the list item that an input's template is
+  for. A whole number is a key or a list index. Any
   other key is a bare key, which reads like a name, except at the end of an
   `inputs` reference, where it reads the input's definition before its value:
   `inputs.x[hidden]`.
 - `*` reads the rest of the path from each item of a list, or each value of a
   mapping in the order of its keys, and makes a list of what it reads. A
-  further `*` flattens the lists: `inputs.people.*.tags.*`.
+  further `*` flattens the lists: `inputs.people.*.tags.*`. It reads the
+  same way after a group or a call: `fromJSON(inputs.json).*.name`.
 - A name or key with a `:` in it, such as `1:3`, `-2:` or `:2`, is a slice of
   a list or a string ([Values](#values)).
 
 ### Relative references
 
 ```
-Relative = { "../" } { "." } path .   /* starts with "."; scanned as one word */
+Relative = { "../" } { "." } path .   /* starts with "."; scanned as one word that isn't a number */
 ```
 
 A relative reference reads the workflow around the expression. Each `.`
 before the path goes up one level from the key the expression is in, so `.x`
 is a key beside it and `..x` is a key beside its parent. Each `../` goes up a
 level too, and `../x` is `..x`: `../../x` and `../../.x` both go up three
-levels.
+levels. A word that would read as a number, such as `.5` or `.0`, is the
+number, so a key or an index named with digits beside the expression is
+written in brackets: `.[5]`, `.['5']` or `.[0]`.
 
 ### Strings
 
@@ -179,7 +184,7 @@ Operand    = Group [ Slice | Postfix ]
            | Reference | Relative | string | JSON | word .
 Group      = "(" Expression ")" .
 Slice      = ":" [ Group | word ] .         /* the word is a number: (start):5 */
-Postfix    = { "." name | "[" key "]" } .
+Postfix    = { "." name | ".*" | "[" key "]" } .
 Call       = function "(" [ Expression { "," Expression } ] ")" Postfix .
 
 prefix_op  = "length" | "len" | "upper" | "lower" | "trim" | "keys" | "values"
@@ -289,7 +294,11 @@ What some bytes mean depends on what is around them:
 - **`-`** is subtraction between words: `inputs.num-1` subtracts 1, and
   `my-word` is `my` minus `word`, which is NaN. Brackets read a key with a
   `-` in it: `inputs['num-1']`. A `-` at the start of an operand before a
-  digit, or inside a number before its exponent's digits, is a sign.
+  digit, or inside a number before its exponent's digits, is a sign. The
+  compiler warns about a reference that subtracts a word with nothing
+  between them, such as `inputs.pw-user`: it is NaN, and probably meant the
+  name with the hyphen, `inputs['pw-user']`. The warning says so when the
+  workflow has that name.
 - **`/` and `*`** are division and multiplication, except right after a `.`
   in a word: `../x` and `.*`. So `~/dir` is `~` divided by `dir`.
 - **Prefix operators' names** are operators only before an operand.
@@ -357,9 +366,14 @@ in short:
   `'a' + null` is `"a"`, `upper null` is `""`, and `["a", null] join "-"`
   is `"a-"`. In JSON, such as `toJSON(x)`, `null` stays `null`.
 - **`in`, `includes` and `contains`** look for a substring in a string, an
-  item in a list and a key in a mapping. In a string, `null` is `""`, which
-  every string has, so `'abc' includes null` is true. In a list, an item
-  matches as `==` does, so `null` matches only `null`.
+  item in a list and a key in a mapping. In a string, what they look for is
+  its text: `'a1' includes 1` is true, and `null` is `""`, which every string
+  has, so `'abc' includes null` is true. In a list, an item matches as `==`
+  does, so `null` matches only `null`.
+- **Each word operator gives what its function gives** for the same
+  arguments: `in` and `includes` are `contains`, the one with its arguments
+  reversed, and `startsWith`, `endsWith` and `join` are the functions of
+  those names. So `'ab' join ','` is `"ab"`, as `join('ab', ',')` is.
 - **`+`** joins strings if either side is a string, and otherwise adds
   numbers. `-`, `*`, `/`, `//` (division rounded down), `%` and `mod` (the
   remainder, with the sign of the left side) and `**`, `^` and `exp` convert
@@ -375,7 +389,8 @@ in short:
   Infinity: `round 2.5` is 3, and `round -2.5` is -2.
 - **Strings that hold JSON.** Outputs and environment variables are strings,
   so a path, `get`, `length`, `keys`, `values` and `join` read a string that
-  holds a JSON list or mapping as its value.
+  holds a JSON list or mapping as its value. `join` gives any other string
+  as it is.
 - **Slices** count from the start, or from the end when negative, and are
   clamped to the list or string: `"hello" get 1:4` is `ell`. A string's
   characters are Unicode code points.

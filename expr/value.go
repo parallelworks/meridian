@@ -516,8 +516,8 @@ func key(v any) (string, bool) {
 }
 
 // contains reports whether a list has an element equal to x, a mapping has
-// the key x, or a string has the substring x. In a string, a null x is "",
-// which every string has; in a list, it matches only null.
+// the key x, or a string has x as text: a null x is "", which every string
+// has, and a number is its digits. In a list, null matches only null.
 func contains(collection, x any) bool {
 	switch c := collection.(type) {
 	case []any:
@@ -530,11 +530,7 @@ func contains(collection, x any) bool {
 		_, ok = c[k]
 		return ok
 	case string:
-		if x == nil {
-			return true
-		}
-		s, ok := x.(string)
-		return ok && strings.Contains(c, s)
+		return strings.Contains(c, stringOf(x))
 	}
 	return false
 }

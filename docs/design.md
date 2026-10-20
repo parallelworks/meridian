@@ -336,7 +336,8 @@ conversions in full.
   `false`, `null`, and lists and mappings written as JSON.
 - **References** read a context by path: `inputs.cluster.ip`,
   `inputs['my-key']`, `inputs.hosts[0]`, the slice `inputs.hosts[1:3]`, and
-  `inputs.groups.*.name` for each group's name. A path that leads nowhere is
+  `inputs.groups.*.name` for each group's name. A path can follow a group or
+  a call too: `fromJSON(x).*.name`. A path that leads nowhere is
   null, except in `env`, `org`, `vars`, `remote`, `sessions` and outputs,
   which hold strings, where a missing name is `""`. A string that holds JSON
   is read as its value, since outputs are strings.
@@ -345,7 +346,10 @@ conversions in full.
   reference, such as `input.mode`, and about a word that decides a
   condition, since a word is never false: `if: ${{ !completed }}` never runs.
   For a word that was once one of ACTIVATE's `if:` keywords, the warning
-  names the function that replaced it.
+  names the function that replaced it. A hyphen is a minus sign, so the
+  compiler also warns about a reference that subtracts a word with nothing
+  between them, such as `inputs.pw-user`, which is NaN; a name with a hyphen
+  in it is read in brackets, `inputs['pw-user']`.
 - **Operators**, from loosest to tightest: `? :`; `??`; `||` and `or`; `&&`
   and `and`; the comparisons `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and
   `>=`, with the word operators `in`, `includes`, `startsWith`, `endsWith`
@@ -356,8 +360,11 @@ conversions in full.
   `trim`, `keys`, `values`, `abs`, `floor`, `ceil`, `round`, `fromJSON` and
   `range`, bind tightest.
 - **Functions** are GitHub Actions' `contains`, `startsWith`, `endsWith`,
-  `format`, `join`, `toJSON` and `fromJSON`, with its meanings, plus the
-  status functions and `case(condition, value, ..., default)`.
+  `format`, `join`, `toJSON` and `fromJSON`, with its meanings, except that
+  `contains` also finds a key in a mapping, plus the status functions and
+  `case(condition, value, ..., default)`. A word operator gives what its
+  function gives for the same arguments: `in` and `includes` are `contains`,
+  and `startsWith`, `endsWith` and `join` are the functions of those names.
 - **Strings with expressions in them.** A string that is one expression and
   nothing else has the expression's value, of any type. Otherwise each
   expression is replaced by its value's text: a string as it is, null as
@@ -367,10 +374,11 @@ conversions in full.
   error.
 - **The workflow around an expression.** A relative reference reads the
   workflow near the expression: `.hidden` is the key `hidden` beside it, and
-  each further dot, or `../`, goes up a level. The compiler warns about one
-  that starts with a digit, such as `.5`, which reads the key `5`, not a
-  number. `inputs.x.type` reads input `x`'s definition, as its value has no
-  type, and in a list input's template, `[index]` is the index of the item.
+  each further dot, or `../`, goes up a level. A word that reads as a number,
+  such as `.5`, is the number, as in JavaScript, so a key named with digits
+  is read in brackets: `.[5]`. `inputs.x.type` reads input `x`'s definition,
+  as its value has no type, and in a list input's template, `[index]` is the
+  index of the item.
 
 Only expressions written in the workflow are evaluated. A value an
 expression reads, such as an input's value, a variable or an output, is data

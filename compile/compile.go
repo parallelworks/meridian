@@ -141,8 +141,9 @@ func (c *compiler) run(source plan.Source) plan.Run {
 }
 
 // checkDefinitions reports the probable mistakes in the expressions in v, at
-// loc in the input definitions, such as .5 written for a number. Resolving
-// the inputs reports the errors of the expressions it evaluates.
+// loc in the input definitions, such as inputs.pw-user written for
+// inputs['pw-user']. Resolving the inputs reports the errors of the
+// expressions it evaluates.
 func (c *compiler) checkDefinitions(loc []string, v any) {
 	switch v := v.(type) {
 	case string:
@@ -153,7 +154,7 @@ func (c *compiler) checkDefinitions(loc []string, v any) {
 		ptr := jsonptr.Format(loc)
 		for at, e := range t.Exprs() {
 			for _, p := range e.Check() {
-				c.report(format.Warning, c.doc.Locate(ptr, at+p.Offset), CodeWord, loc, "%s", p.Msg)
+				c.reportProblem(c.doc.Locate(ptr, at+p.Offset), loc, p, nil)
 			}
 		}
 	case []any:
@@ -230,7 +231,7 @@ func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 			// is text, which is true.
 			if e, err := expr.Parse(cond); err == nil {
 				for _, p := range e.CheckCondition() {
-					c.report(format.Warning, c.doc.Locate(jsonptr.Format(loc), start+p.Offset), CodeWord, loc, "%s", p.Msg)
+					c.reportProblem(c.doc.Locate(jsonptr.Format(loc), start+p.Offset), loc, p, job)
 				}
 			}
 			return plan.Literal(s)
@@ -345,7 +346,7 @@ func (c *compiler) checkExpr(loc []string, at int, e *expr.Expr, problems []expr
 	ptr := jsonptr.Format(loc)
 	pos := func(offset int) format.Position { return c.doc.Locate(ptr, at+offset) }
 	for _, p := range problems {
-		c.report(format.Warning, pos(p.Offset), CodeWord, loc, "%s", p.Msg)
+		c.reportProblem(pos(p.Offset), loc, p, job)
 	}
 	ok := true
 	if e.Relative() {

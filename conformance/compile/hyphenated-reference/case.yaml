@@ -1,0 +1,21 @@
+description: >-
+  A hyphen is a minus sign, so inputs.pw-user subtracts the text "user" from
+  inputs.pw, which is NaN. That probably meant the input pw-user, which is
+  read as inputs['pw-user'], so it is a warning at the reference, as well as
+  the warning that there is no input pw.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: reference
+      path: /jobs/build/steps/0/run
+      line: 10
+      column: 23
+    - severity: warning
+      code: word
+      path: /jobs/build/steps/0/run
+      line: 10
+      column: 23
+  plan:
+    /warnings/0/code: word
+    /warnings/1/code: reference
