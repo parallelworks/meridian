@@ -1,0 +1,22 @@
+description: >-
+  A choice that is the text of one of an input's options' values, when that
+  value is an expression, means that option, whose value is the
+  expression's: a form sends that text for an option it can't evaluate
+  itself. So does each choice of a multi-dropdown, and a choice from options
+  in groups. Any other value holding ${{ }} is data.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+inputs:
+  region: ${{ vars.REGION }}
+  regions: ["${{ vars.REGION }}", us-west]
+  grouped: ${{ vars.REGION }}
+  note: ${{ vars.REGION }}
+expect:
+  inputs:
+    region: us-east
+    regions: [us-east, us-west]
+    grouped: us-east
+    site: east
+    note: ${{ vars.REGION }}

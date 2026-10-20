@@ -94,7 +94,7 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 		secrets:  map[string]any{},
 	}
 	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
-	r.collect(defs, definitionsPath, nil, nil)
+	r.fields = r.collect(defs, definitionsPath, nil, nil)
 	r.checkJSON(r.values)
 	r.checkUnknown(r.values, nil)
 	for _, f := range r.fields {
@@ -131,14 +131,39 @@ type field struct {
 	hidden     bool
 	ignored    bool
 	optional   bool
-	// deferred is set for an input whose default reads something the
-	// compiler doesn't know, and dflt holds the default.
+	// deferred is set for an input whose value is evaluated once the run is
+	// underway, because its default, or a part of its value, reads something
+	// the compiler doesn't know. dflt holds what is evaluated then.
 	deferred bool
 	dflt     plan.Value
-	// texts are the paths in a submitted mapping or list of the strings
-	// that are the text of an expression in the same place in its default,
-	// and dflt then holds the value with those expressions in it.
-	texts [][]string
+
+	// index holds the indexes of the list rows that a field of a list's
+	// template is for, outermost first, and in is the input whose value
+	// holds the rows. Both are nil for an input.
+	index []int
+	in    *field
+	// texts are the strings in the value that are a form's text for an
+	// expression, and reads the expressions that filling in the value
+	// reads: its default's, or its texts'.
+	texts []text
+	reads []*expr.Expr
+	// later holds the parts of an input's value that are evaluated once the
+	// run is underway, until they are in dflt.
+	later []laterPart
+}
+
+// A text is a string in a value, at path in it, that is the text of the
+// expression at loc in the workflow: the one in the same place in the
+// input's default, or one of its options' values. A form sends that text
+// for an expression it can't evaluate itself.
+type text struct{ path, loc []string }
+
+// A laterPart is a part of an input's value, at path in it, that is
+// evaluated once the run is underway: v, a workflow's JSON values with its
+// templates parsed.
+type laterPart struct {
+	path []string
+	v    any
 }
 
 type inputResolver struct {
@@ -152,11 +177,15 @@ type inputResolver struct {
 	values  map[string]any
 	secrets map[string]any
 	fields  []*field
+	// rows are the fields of lists' rows: each field of a list's template,
+	// once for each row.
+	rows []*field
 }
 
-// collect records the definitions in defs, at loc in the workflow, whose
-// values are at path.
-func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *field) {
+// collect returns the fields that the definitions in defs, at loc in the
+// workflow, define, and those in them, whose values are at path.
+func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *field) []*field {
+	var out []*field
 	flattenSteps := true
 	if meta, ok := defs["$meta"].(map[string]any); ok {
 		if wizard, ok := meta["wizard"].(map[string]any); ok && wizard["flatten"] == false {
@@ -171,7 +200,7 @@ func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *
 		typ, _ := def["type"].(string)
 		f := &field{key: key, def: def, loc: appendPath(loc, key), path: appendPath(path, key), typ: typ, group: group}
 		_, f.hasDefault = def["default"]
-		r.fields = append(r.fields, f)
+		out = append(out, f)
 		if group != nil {
 			group.children = append(group.children, f)
 		}
@@ -184,12 +213,22 @@ func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *
 				continue
 			}
 			f.container, f.flatten = true, flattenSteps
-			r.collect(options, appendPath(f.loc, "options"), f.childPath(), f)
+			out = append(out, r.collect(options, appendPath(f.loc, "options"), f.childPath(), f)...)
 		case hasItems && typ != "list":
 			f.container = true
-			r.collect(items, appendPath(f.loc, "items"), f.childPath(), f)
+			out = append(out, r.collect(items, appendPath(f.loc, "items"), f.childPath(), f)...)
 		}
 	}
+	return out
+}
+
+// holder returns the input whose value holds f's: f, or the input whose
+// rows f is in.
+func (f *field) holder() *field {
+	if f.in != nil {
+		return f.in
+	}
+	return f
 }
 
 // childPath is where a container's inputs' values are.
@@ -252,33 +291,25 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 	}
 }
 
-// fillDefaults gives each input without a value its default. A default that
-// is an expression is evaluated with the other inputs' values, defaults
-// included, in the order they need, as are the parts of a default a form
-// sent as their text.
+// fillDefaults fills in the values. Each input without a value gets its
+// default, and so does each field of a list's rows, from the list's
+// template, once the list's rows are known. A string a form sent as the
+// text of an expression gets the expression's value. Expressions are
+// evaluated with the other inputs' values, defaults included, in the order
+// they need.
 func (r *inputResolver) fillDefaults() {
 	var pending []*field
-	for _, f := range r.fields {
-		if f.container || f.header || !f.hasDefault {
-			continue
-		}
-		def, err := plan.ValueOf(f.def["default"])
-		if err != nil {
-			continue // The schema checks reported it.
-		}
-		if !r.missing(f) {
-			if r.findDefaultTexts(f) {
+	var start func(fields []*field)
+	start = func(fields []*field) {
+		for _, f := range fields {
+			if r.prepare(f) {
 				pending = append(pending, f)
+			} else {
+				start(r.collectRows(f))
 			}
-			continue
 		}
-		if v, ok := def.Literal(); ok {
-			r.setDefault(f, v)
-			continue
-		}
-		f.dflt = def
-		pending = append(pending, f)
 	}
+	start(r.fields)
 	for len(pending) > 0 {
 		progress := false
 		for i := 0; i < len(pending); i++ {
@@ -289,20 +320,8 @@ func (r *inputResolver) fillDefaults() {
 			pending = slices.Delete(pending, i, i+1)
 			i--
 			progress = true
-			if f.texts != nil {
-				r.fillDefaultTexts(f)
-				continue
-			}
-			v, err := r.evalAt(appendPath(f.loc, "default"))
-			switch {
-			case expr.IsUnknown(err):
-				// Known once the run is underway.
-				f.deferred = true
-			case err != nil:
-				r.reportError(appendPath(f.loc, "default"), 0, err)
-			default:
-				r.setDefault(f, v)
-			}
+			r.evalPending(f)
+			start(r.collectRows(f))
 		}
 		if !progress {
 			names := make([]string, len(pending))
@@ -310,42 +329,140 @@ func (r *inputResolver) fillDefaults() {
 				names[i] = strings.Join(f.path, ".")
 			}
 			r.reportAt(problems.DefaultsReadEachOther, pending[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
-			return
+			break
+		}
+	}
+	r.holdLater()
+}
+
+// prepare fills in what it can of f's value without evaluating anything: a
+// default that has no expressions. It reports whether f waits for its
+// default's expressions, or its texts', to be evaluated.
+func (r *inputResolver) prepare(f *field) bool {
+	if f.container || f.header {
+		return false
+	}
+	if !r.missing(f) {
+		f.texts, f.reads = r.findTexts(f)
+		return f.texts != nil
+	}
+	if !f.hasDefault {
+		return false
+	}
+	def, err := plan.ValueOf(f.def["default"])
+	if err != nil {
+		return false // The schema checks reported it.
+	}
+	if v, ok := def.Literal(); ok {
+		r.setDefault(f, v)
+		return false
+	}
+	if rows, ok := f.def["default"].([]any); ok && f.typ == "list" {
+		// The rows are filled in as a form's starting rows are, each
+		// expression where it is, so that what is known of them is, and
+		// their fields' defaults can be filled in too.
+		setIn(r.values, f.path, jsonvalue.Clone(rows))
+		f.texts, f.reads = r.findTexts(f)
+		return true
+	}
+	f.reads = def.Exprs()
+	return true
+}
+
+// evalPending evaluates f's texts, or else its default, and fills in its
+// value with them. What reads something the compiler doesn't know is
+// evaluated once the run is underway.
+func (r *inputResolver) evalPending(f *field) {
+	if f.texts == nil {
+		loc := appendPath(f.loc, "default")
+		switch v, err := r.evalAt(loc, f.index); {
+		case expr.IsUnknown(err):
+			r.deferPart(f, nil, f.def["default"])
+		case err != nil:
+			r.reportError(loc, 0, err)
+		default:
+			r.setDefault(f, v)
+		}
+		return
+	}
+	value := lookup(r.values, f.path)
+	for _, t := range f.texts {
+		switch v, err := r.evalAt(t.loc, f.index); {
+		case expr.IsUnknown(err):
+			r.deferPart(f, t.path, lookup(value, t.path))
+		case err != nil:
+			r.reportError(t.loc, 0, err)
+		default:
+			setIn(r.values, slices.Concat(f.path, t.path), v)
 		}
 	}
 }
 
 // setDefault sets f's value to its default, unless the default is "", which
-// gives no value.
+// gives no value. The value is a copy, so that filling in a list's rows
+// doesn't change the workflow.
 func (r *inputResolver) setDefault(f *field, v any) {
 	if v != "" && v != nil {
-		setPath(r.values, f.path, v)
+		setIn(r.values, f.path, jsonvalue.Clone(v))
 	}
 }
 
-// findDefaultTexts finds the strings in f's submitted mapping or list that
-// are the text of an expression in the same place in its default, such as a
-// list's rows: a form sends that text for a part of a default it can't
-// evaluate itself. It reports whether there are any, and sets f.dflt to the
-// value with those expressions in it. Every other string is data.
-func (r *inputResolver) findDefaultTexts(f *field) bool {
-	v := lookup(r.values, f.path)
-	f.texts = defaultTexts(f.def["default"], v, nil)
-	if f.texts == nil {
-		return false
+// collectRows returns the fields of f's rows, if f is a list whose value is
+// known: each field of its template, for each row that is a mapping.
+func (r *inputResolver) collectRows(f *field) []*field {
+	template, ok := f.def["template"].(map[string]any)
+	if f.typ != "list" || !ok {
+		return nil
 	}
-	withExprs := jsonvalue.Clone(v)
-	for _, p := range f.texts {
-		t, err := expr.ParseTemplate(lookup(withExprs, p).(string))
-		if err != nil {
-			// It can't fail: it is the text of the default, which parsed.
-			f.texts = nil
-			return false
+	rows, _ := lookup(r.values, f.path).([]any)
+	var out []*field
+	for i, row := range rows {
+		if _, ok := row.(map[string]any); !ok {
+			continue
 		}
-		replaceAt(withExprs, p, t)
+		index := append(slices.Clip(f.index), i)
+		for _, c := range r.collect(template, appendPath(f.loc, "template"), appendPath(f.path, strconv.Itoa(i)), nil) {
+			c.index, c.in = index, f.holder()
+			out = append(out, c)
+		}
 	}
-	f.dflt = plan.Literal(withExprs)
-	return true
+	r.rows = append(r.rows, out...)
+	return out
+}
+
+// findTexts finds the strings in f's value that are a form's text for an
+// expression: the one in the same place in its default, or one of its
+// options' values. It returns them, and the expressions they hold. Every
+// other string is data.
+func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
+	value := lookup(r.values, f.path)
+	var texts []text
+	for _, p := range defaultTexts(f.def["default"], value, nil) {
+		texts = append(texts, text{p, slices.Concat(f.loc, []string{"default"}, p)})
+	}
+	for _, o := range expressionOptions(f.def["options"], appendPath(f.loc, "options")) {
+		if value == o.value {
+			texts = append(texts, text{nil, o.loc})
+		}
+		list, _ := value.([]any)
+		for i, item := range list {
+			p := []string{strconv.Itoa(i)}
+			if item == o.value && !slices.ContainsFunc(texts, func(t text) bool { return slices.Equal(t.path, p) }) {
+				texts = append(texts, text{p, o.loc})
+			}
+		}
+	}
+	var reads []*expr.Expr
+	for _, t := range texts {
+		tmpl, err := expr.ParseTemplate(lookup(value, t.path).(string))
+		if err != nil {
+			continue // The workflow's own text, which parsed when it was loaded.
+		}
+		for _, e := range tmpl.Exprs() {
+			reads = append(reads, e)
+		}
+	}
+	return texts, reads
 }
 
 // defaultTexts returns the paths, from path, of the strings in v that are
@@ -373,44 +490,103 @@ func defaultTexts(def, v any, path []string) [][]string {
 	return out
 }
 
-// fillDefaultTexts gives each of f's default texts the value of the
-// expression it is the text of, where it is in the default. If one reads
-// something the compiler doesn't know, the input's value is evaluated once
-// the run is underway, all of it.
-func (r *inputResolver) fillDefaultTexts(f *field) {
-	v := lookup(r.values, f.path)
-	for _, p := range f.texts {
-		loc := slices.Concat(f.loc, []string{"default"}, p)
-		out, err := r.evalAt(loc)
-		switch {
-		case expr.IsUnknown(err):
-			f.deferred = true
-			deletePath(r.values, f.path)
-			return
-		case err != nil:
-			r.reportError(loc, 0, err)
-		default:
-			replaceAt(v, p, out)
+// An exprOption is one of an input's options whose value holds an
+// expression, and where the value is in the workflow.
+type exprOption struct {
+	value string
+	loc   []string
+}
+
+// expressionOptions returns the options, at loc in the workflow, whose
+// values hold expressions: options as a list, or a list in each of their
+// groups.
+func expressionOptions(options any, loc []string) []exprOption {
+	var out []exprOption
+	switch o := options.(type) {
+	case []any:
+		for i, item := range o {
+			at := appendPath(loc, strconv.Itoa(i))
+			if m, ok := item.(map[string]any); ok {
+				item, at = m["value"], appendPath(at, "value")
+			}
+			if s, ok := item.(string); ok && strings.Contains(s, "${{") {
+				out = append(out, exprOption{s, at})
+			}
 		}
+	case map[string]any:
+		for k, group := range jsonvalue.Sorted(o) {
+			if _, ok := group.([]any); ok {
+				out = append(out, expressionOptions(group, appendPath(loc, k))...)
+			}
+		}
+	}
+	return out
+}
+
+// deferPart records that the part of f's value at path, raw in the
+// workflow, is evaluated once the run is underway. The value of f's input
+// is then evaluated as the run starts, all of it, with raw's expressions
+// in that part, parsed for f's rows.
+func (r *inputResolver) deferPart(f *field, path []string, raw any) {
+	v, err := parseFor(raw, f.index)
+	if err != nil {
+		return // The workflow's own text, which parsed when it was loaded.
+	}
+	in := f.holder()
+	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v})
+}
+
+// holdLater takes each input with parts evaluated once the run is underway
+// out of the values: its value is evaluated as the run starts, with those
+// parts' expressions where they are.
+func (r *inputResolver) holdLater() {
+	for _, f := range r.fields {
+		if f.later == nil {
+			continue
+		}
+		held := jsonvalue.Clone(lookup(r.values, f.path))
+		for _, p := range f.later {
+			if len(p.path) == 0 {
+				held = p.v
+			} else {
+				setIn(held, p.path, p.v)
+			}
+		}
+		f.deferred, f.dflt = true, plan.Literal(held)
+		deletePath(r.values, f.path)
 	}
 }
 
-// readsPending reports whether f's default reads another input whose default
+// readsPending reports whether what f waits for reads another value that
 // isn't known yet.
 func (r *inputResolver) readsPending(f *field, pending []*field) bool {
-	for _, e := range f.dflt.Exprs() {
+	for _, e := range f.reads {
 		for _, ref := range e.Refs() {
 			if ref.Context != "inputs" {
 				continue
 			}
+			path := indexPath(ref.Path, f.index)
 			for _, p := range pending {
-				if p != f && overlaps(ref.Path, p.path) {
+				if p != f && overlaps(path, p.path) {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+// indexPath returns path with each [index] in it the index it reads.
+func indexPath(path []string, index []int) []string {
+	out := slices.Clone(path)
+	k := 0
+	for i, name := range out {
+		if name == "[index]" && k < len(index) {
+			out[i] = strconv.Itoa(index[k])
+			k++
+		}
+	}
+	return out
 }
 
 // overlaps reports whether one path leads to the other.
@@ -458,13 +634,13 @@ func (r *inputResolver) applyConditions() {
 		}
 	}
 	for _, f := range r.fields {
-		if f.container || f.header || f.ignored || f.hasDefault || !r.missing(f) {
+		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || !r.missing(f) {
 			continue
 		}
 		switch {
 		case f.optional || f.hidden:
 		case f.typ == "boolean":
-			setPath(r.values, f.path, false)
+			setIn(r.values, f.path, false)
 		default:
 			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
 		}
@@ -481,7 +657,7 @@ func (r *inputResolver) condition(f *field, key string) bool {
 	v := raw
 	if _, isString := raw.(string); isString {
 		var err error
-		if v, err = r.evalAt(appendPath(f.loc, key)); err != nil {
+		if v, err = r.evalAt(appendPath(f.loc, key), f.index); err != nil {
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				r.reportAt(problems.InputConditionNotKnown, appendPath(f.loc, key),
 					problems.Params{"key": key, "input": f.label(), "name": u.Name})
@@ -511,12 +687,13 @@ func (r *inputResolver) drop(f *field) {
 	}
 }
 
-// evalAt evaluates what is at loc in the workflow, where it is, with the
-// values so far: the expressions in a string, and in each string of a list or
-// mapping.
-func (r *inputResolver) evalAt(loc []string) (any, error) {
+// evalAt evaluates what is at loc in the workflow, where it is, for the list
+// rows at index, with the values so far: the expressions in a string, and in
+// each string of a list or mapping.
+func (r *inputResolver) evalAt(loc []string, index []int) (any, error) {
 	scope := r.budget
 	scope.Contexts = compileTimeContexts(r.opts, r.evalValues())
+	scope.Index = index
 	return r.workflow.Eval(loc, scope)
 }
 
@@ -535,27 +712,37 @@ func (r *inputResolver) deferred() map[string]plan.Value {
 	return out
 }
 
-// evalValues returns the values for expressions to read: each deferred
-// default unknown, and each input with no value null, or false for a
-// boolean, which is the value it gets, rather than its definition.
+// evalValues returns the values for expressions to read: each input with no
+// value null, or false for a boolean, which is the value it gets, rather than
+// its definition, and so is each field of a row; and what is evaluated once
+// the run is underway unknown.
 func (r *inputResolver) evalValues() any {
 	values := jsonvalue.CloneMap(r.values)
+	for _, fields := range [][]*field{r.fields, r.rows} {
+		for _, f := range fields {
+			if f.container || f.header || f.deferred && !f.ignored || f.in != nil && f.in.deferred {
+				continue
+			}
+			if _, ok := jsonptr.Lookup(values, f.path); ok {
+				continue
+			}
+			var v any
+			if f.typ == "boolean" && !f.hasDefault {
+				v = false
+			}
+			setIn(values, f.path, v)
+		}
+	}
 	for _, f := range r.fields {
-		if f.container || f.header {
-			continue
+		switch {
+		case f.ignored:
+		case f.deferred:
+			setIn(values, f.path, expr.Unknown{Name: "inputs"})
+		default:
+			for _, p := range f.later {
+				setIn(values, slices.Concat(f.path, p.path), expr.Unknown{Name: "inputs"})
+			}
 		}
-		if f.deferred && !f.ignored {
-			setPath(values, f.path, expr.Unknown{Name: "inputs"})
-			continue
-		}
-		if _, ok := jsonptr.Lookup(values, f.path); ok {
-			continue
-		}
-		var v any
-		if f.typ == "boolean" && !f.hasDefault {
-			v = false
-		}
-		setPath(values, f.path, v)
 	}
 	return values
 }
@@ -596,7 +783,7 @@ func (r *inputResolver) checkValues() {
 			deletePath(r.values, f.path)
 			continue
 		}
-		setPath(r.values, f.path, out)
+		setIn(r.values, f.path, out)
 	}
 }
 

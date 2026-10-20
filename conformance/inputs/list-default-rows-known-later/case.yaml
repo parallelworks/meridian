@@ -1,0 +1,18 @@
+description: >-
+  A list's default rows are filled in expression by expression, as a form
+  fills in its starting rows. If one reads something the compiler doesn't
+  have, the list stays an expression until the run is underway, all of it,
+  but what is known of its rows is evaluated, and their fields take their
+  defaults.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+    TOKEN: unused
+secret-variables: [TOKEN]
+expect:
+  inputs:
+    hosts:
+      - name: us-east-1
+        token: ${{ vars.TOKEN }}
+        gpus: 1

@@ -1,0 +1,43 @@
+description: >-
+  Each row of a list is a group of its template's fields, which take their
+  defaults as inputs do: a field with no value, or "", takes its default, and
+  so does one whose value is the text of its default when that is an
+  expression. In a field's default, [index] is its row's index, and a
+  default that reads another field of the row waits for it. A list in a
+  row has rows of its own, for which the first [index] is the outer row's
+  and the second the inner row's.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+inputs:
+  workers:
+    - name: a
+      scheduler: slurm
+    - name: b
+      scheduler: pbs
+      partition: ""
+      region: ${{ vars.REGION }}
+      disks:
+        - size: 20
+        - {}
+expect:
+  inputs:
+    workers:
+      - name: a
+        scheduler: slurm
+        partition: default
+        region: us-east
+        is_slurm: true
+        cores: 4
+      - name: b
+        scheduler: pbs
+        partition: default
+        region: us-east
+        is_slurm: false
+        cores: 1
+        disks:
+          - size: 20
+            label: b-20
+          - size: 10
+            label: b-10

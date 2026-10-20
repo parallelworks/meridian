@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -131,6 +134,94 @@ jobs:
 	}
 	if row["token"] != "${{ vars.TOKEN }}" {
 		t.Errorf("submitted values changed to %v", submitted)
+	}
+}
+
+// A row's default that reads a secret is evaluated once the run is
+// underway, with the row's index in it, since no scope gives it then; and
+// the list's value with it, all of it.
+func TestRowDefaultKnownLater(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      names:
+        type: list
+        template:
+          name:
+            type: string
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          token:
+            type: string
+            default: ${{ vars.TOKEN }}-${{ inputs.names.[index].name }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	submitted := map[string]any{
+		"names": []any{map[string]any{"name": "a"}, map[string]any{"name": "b"}},
+		"hosts": []any{map[string]any{"name": "x"}, map[string]any{"name": "y", "token": "given"}},
+	}
+	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"TOKEN": expr.Unknown{Name: "vars"}}}}
+	inputs, diags := compile.ResolveInputs(doc, submitted, opts)
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if _, ok := inputs.Values["hosts"]; ok {
+		t.Error("a value deferred until the run is underway has a value now")
+	}
+	data, err := json.Marshal(inputs.Deferred["hosts"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored plan.Value
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	got, err := stored.Eval(expr.Scope{Contexts: map[string]any{
+		"inputs": map[string]any{"names": submitted["names"]},
+		"vars":   map[string]any{"TOKEN": "s"},
+	}})
+	want := []any{map[string]any{"name": "x", "token": "s-a"}, map[string]any{"name": "y", "token": "given"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("the deferred value is %v, %v; want %v", got, err, want)
+	}
+}
+
+// Filling in a list's default rows doesn't change the workflow's default.
+func TestDefaultRowsAreCopied(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          gpus:
+            type: number
+            default: 1
+        default:
+          - {}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	for range 2 {
+		inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+		if len(diags) != 0 {
+			t.Fatal(diags)
+		}
+		if got := fmt.Sprint(inputs.Values["hosts"]); got != "[map[gpus:1]]" {
+			t.Errorf("hosts = %s", got)
+		}
+	}
+	dflt, _ := jsonptr.Lookup(doc.Value, []string{"on", "execute", "inputs", "hosts", "default"})
+	if got := fmt.Sprint(dflt); got != "[map[]]" {
+		t.Errorf("the workflow's default changed to %s", got)
 	}
 }
 
