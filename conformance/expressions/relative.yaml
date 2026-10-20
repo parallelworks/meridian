@@ -84,6 +84,19 @@ cases:
   - at: /self
     error: eval
   # Unlike JavaScript, .5 isn't a number: a word that starts with . is a
-  # relative reference.
+  # relative reference. A relative reference that starts with a digit is
+  # probably a mistake, so it has a warning.
   - at: /numbered/half
     value: five
+  - expr: .5
+    value: null
+    warnings: [0]
+  - expr: 1 + .5x
+    value: 1
+    warnings: [4]
+  - expr: ..5
+    value: null
+    warnings: []
+  - expr: -.5
+    value: -0.5
+    warnings: []

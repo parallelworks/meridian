@@ -91,6 +91,14 @@ cases:
     value: true
   - expr: lower (trim inputs.padded)
     value: hello
+  # null is empty. Format 1 made it "null" before, so these were NULL, null
+  # and null.
+  - expr: upper inputs.missing
+    value: ""
+  - expr: lower inputs.missing
+    value: ""
+  - expr: trim inputs.missing
+    value: ""
 
   - expr: length keys inputs.obj
     value: 3
@@ -125,10 +133,22 @@ cases:
     value: 5
   - expr: round inputs.negF
     value: -3
-  # Unlike JavaScript's Math.round, which rounds halves up, round rounds
-  # them away from zero.
+  # round rounds halves up, toward +Infinity, as JavaScript's Math.round
+  # does. Format 1 rounded them away from zero before, so -2.5 was -3.
   - expr: round -2.5
+    value: -2
+  - expr: round 2.5
+    value: 3
+  - expr: round -0.5
+    value: 0
+  - expr: round 0.49999999999999994
+    value: 0
+  - expr: round -2.6
     value: -3
+  - expr: round (0 / 0)
+    value: .nan
+  - expr: round (1 / 0)
+    value: .inf
   - expr: abs (floor inputs.negF)
     value: 4
   - expr: (abs "not-a-number") + 1

@@ -8,6 +8,7 @@ scope:
     inputs:
       num: 5
       flag: true
+      off: false
       name: Alice
       empty: ""
 cases:
@@ -88,14 +89,23 @@ cases:
     value: 20
   - expr: 2 + 3 * 4
     value: 14
-  # Unlike JavaScript, where ** is right-associative, format 1's power
-  # operators are left-associative, like its others.
+  # The power operators group from the right, as JavaScript's ** does: this
+  # is 2 ** (3 ** 2). Format 1 grouped them from the left before, giving 64.
   - expr: 2 ** 3 ** 2
-    value: 64
+    value: 512
   - expr: 2 ^ 3 ^ 2
-    value: 64
+    value: 512
   - expr: 2 exp 3 exp 2
-    value: 64
+    value: 512
+  - expr: 2 ** 3 ^ 2 exp 1
+    value: 512
+  # - before a number, and a prefix operator, still bind tighter.
+  - expr: -2 ** 2
+    value: 4
+  - expr: 2 ** -1
+    value: 0.5
+  - expr: 4 ** 0.5 * 3
+    value: 6
 
   # and and or are && and ||, in any case.
   - expr: false or inputs.name
@@ -146,8 +156,17 @@ cases:
     value: "44.124"
   - expr: 1 + true
     value: 2
+  # null is empty wherever a string is made of it, as in a template's text.
+  # Format 1 gave "anull" before.
   - expr: "'a' + null"
-    value: anull
+    value: a
+  - expr: "null + 'b'"
+    value: b
+  - expr: "'a' + inputs.missing"
+    value: a
+  # Two nulls are numbers.
+  - expr: null + null
+    value: 0
   - expr: "'n=' + 1.0"
     value: n=1
   - expr: inputs.num*2+1
@@ -187,14 +206,60 @@ cases:
   # Unlike JavaScript, where [1] + [2] is "12", + adds lists as numbers.
   - expr: "[1] + [2]"
     value: .nan
-  # A string is read as Go reads a number, unlike JavaScript's Number(): _
-  # between digits and hexadecimal floats count, and 0x without a p exponent
-  # doesn't.
+
+  # A string is read as a number as JavaScript's Number() reads it. Format 1
+  # read it as Go does before, where 1_000 and 0x1p4 were numbers and 0xff
+  # wasn't.
   - expr: "'1_000' - 0"
-    value: 1000
+    value: .nan
   - expr: "'0x1p4' - 0"
-    value: 16
+    value: .nan
   - expr: "'0xff' - 0"
+    value: 255
+  - expr: "'0o17' - 0"
+    value: 15
+  - expr: "'0b101' - 0"
+    value: 5
+  # A sign before 0x, 0o or 0b makes a string not a number.
+  - expr: "'-0x10' - 0"
+    value: .nan
+  - expr: "'0x' - 0"
+    value: .nan
+  - expr: "'017' - 0"
+    value: 17
+  - expr: "'.5' - 0"
+    value: 0.5
+  - expr: "'5.' - 0"
+    value: 5
+  - expr: "'-2.5E-3' - 0"
+    value: -0.0025
+  - expr: "'+1e3' - 0"
+    value: 1000
+  - expr: "'1e400' - 0"
+    value: .inf
+  - expr: "'-1e400' - 0"
+    value: -.inf
+  - expr: "'Infinity' - 0"
+    value: .inf
+  - expr: "'-Infinity' - 0"
+    value: -.inf
+  - expr: "'infinity' - 0"
+    value: .nan
+  - expr: "'inf' - 0"
+    value: .nan
+  - expr: "'NaN' - 0"
+    value: .nan
+  - expr: "'' - 0"
+    value: 0
+  # JavaScript's space around a number, such as tabs, line breaks and no-break
+  # spaces, is ignored, and a string of nothing else is 0.
+  - expr: "' \t12\n ' - 0"
+    value: 12
+  - expr: "' 5 ' - 0"
+    value: 5
+  - expr: "'　' - 0"
+    value: 0
+  - expr: "'1 2' - 0"
     value: .nan
 
   # ! negates truthiness; any number of them.
@@ -221,10 +286,33 @@ cases:
     value: ""
   - expr: 5 ?? default
     value: 5
-  # Unlike JavaScript, where ?? binds looser than ==, ?? is a comparison:
-  # this is (0 ?? 1) == 0, where JavaScript gives 0 ?? (1 == 0), 0.
+  # ?? binds looser than comparisons, as in JavaScript: this is
+  # 0 ?? (1 == 0). Format 1 made ?? a comparison before, so this was
+  # (0 ?? 1) == 0, true.
   - expr: 0 ?? 1 == 0
-    value: true
+    value: 0
+  - expr: inputs.missing ?? 1 + 1
+    value: 2
+  - expr: inputs.missing ?? inputs.missing ?? 'last'
+    value: last
+  - expr: "inputs.missing ?? false ? 'a' : 'b'"
+    value: b
+  # As in JavaScript, ?? can't be mixed with || or && without parentheses.
+  # Format 1 allowed it before, with ?? binding tighter than both.
+  - expr: inputs.missing || false ?? true
+    error: syntax
+  - expr: inputs.missing ?? false || true
+    error: syntax
+  - expr: true && inputs.missing ?? 'x'
+    error: syntax
+  - expr: inputs.missing ?? true and false
+    error: syntax
+  - expr: inputs.missing or null ?? 'x'
+    error: syntax
+  - expr: (inputs.missing || null) ?? 'x'
+    value: x
+  - expr: inputs.missing ?? (false && true)
+    value: false
 
   # The ternary.
   - expr: "true ? a : b"
@@ -237,6 +325,33 @@ cases:
     value: d
   - expr: "inputs.num > 10 ? 'big' : inputs.num > 3 ? 'mid' : 'small'"
     value: mid
+  # A ternary written without spaces, followed by one with them: a spaced :
+  # closes the latest later ? with a space before it, so here the first
+  # ternary has no spaced : of its own and is glued. The ternary groups from
+  # the right, as in JavaScript. Format 1 refused this before.
+  - expr: "true?1:x ? 2 : 3"
+    value: 1
+  - expr: "false?1:true ? 2 : 3"
+    value: 2
+  - expr: "inputs.off?1:x ? 2 : 3"
+    value: 2
+  # A spaced ternary in the first branch of a spaced one: its : closes it
+  # first, and 12:30 stays a word.
+  - expr: "a ? b ? 12:30 : d : e"
+    value: "12:30"
+  - expr: "inputs.flag ? inputs.flag ? 12:30 : 'd' : 'e'"
+    value: "12:30"
+  - expr: "inputs.flag ? inputs.off ? 12:30 : 13:00 : 'e'"
+    value: "13:00"
+  # The look-ahead skips ??, which isn't a ternary.
+  - expr: "inputs.flag?inputs.missing ?? 4:5"
+    value: 4
+  # A glued ? doesn't count, so the outer ternary is spaced and false?1:2's
+  # 1:2 is a word; parentheses make this work.
+  - expr: "true ? false?1:2 : 3"
+    error: syntax
+  - expr: "true ? (false?1:2) : 3"
+    value: 2
 
   # || and && don't evaluate the side they don't need.
   - expr: inputs.flag || inputs.missing.deeper

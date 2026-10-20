@@ -90,23 +90,35 @@ type Problem struct {
 }
 
 // Check returns the expression's probable mistakes: words that look like
-// references but are text, because they don't start with a context.
+// references but are text, because they don't start with a context, and
+// relative references that look like numbers, such as .5.
 func (e *Expr) Check() []Problem {
 	var problems []Problem
 	visit(e.root, func(n node) {
-		w, ok := n.(*word)
-		if !ok {
-			return
+		switch n := n.(type) {
+		case *word:
+			i := strings.IndexAny(n.text, ".[")
+			if i <= 0 || !identifier(n.text[:i]) {
+				return
+			}
+			problems = append(problems, Problem{
+				Offset: n.at,
+				Msg: fmt.Sprintf("%s is the text %q, because %s isn't a context; quote it if text is what you mean",
+					n.text, n.text, n.text[:i]),
+			})
+		case *relative:
+			// A dot and a digit: the source is there, as a decoded tree has it
+			// too.
+			if n.at+1 >= len(e.src) || e.src[n.at] != '.' || !isDigit(e.src[n.at+1]) {
+				return
+			}
+			key := n.path[0].name
+			msg := fmt.Sprintf(".%s reads the key %s beside this one, because a word that starts with a dot is a relative reference", key, key)
+			if _, ok := numeral("0." + key); ok {
+				msg += fmt.Sprintf("; write 0.%s for the number", key)
+			}
+			problems = append(problems, Problem{Offset: n.at, Msg: msg})
 		}
-		i := strings.IndexAny(w.text, ".[")
-		if i <= 0 || !identifier(w.text[:i]) {
-			return
-		}
-		problems = append(problems, Problem{
-			Offset: w.at,
-			Msg: fmt.Sprintf("%s is the text %q, because %s isn't a context; quote it if text is what you mean",
-				w.text, w.text, w.text[:i]),
-		})
 	})
 	return problems
 }

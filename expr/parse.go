@@ -2,6 +2,7 @@ package expr
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -66,9 +67,13 @@ func tooDeep(n node, depth int) node {
 }
 
 // Operator precedence, from loosest to tightest. Binary operators of the
-// same precedence are left-associative.
+// same precedence are left-associative, except the power operators, which
+// are right-associative as JavaScript's ** is.
 const (
 	precTernary = iota + 1
+	// ?? binds looser than || and &&, but can't be mixed with them without
+	// parentheses, as in JavaScript.
+	precCoalesce
 	precOr
 	precAnd
 	precCompare
@@ -103,7 +108,7 @@ var symbolOperators = []struct {
 	{"!=", precCompare},
 	{"<=", precCompare},
 	{">=", precCompare},
-	{"??", precCompare},
+	{"??", precCoalesce},
 	{"&&", precAnd},
 	{"||", precOr},
 	{"**", precPow},
@@ -146,13 +151,18 @@ var contexts = map[string]contextInfo{
 }
 
 type parser struct {
-	src   string
-	pos   int
+	src string
+	pos int
+	// depth is how many levels the operand being parsed is nested in:
+	// groups, calls, operators' operands and ternaries' branches.
 	depth int
 	// colonEndsWord is non-zero inside a ? branch written without a ':'
 	// that has a space before it, where a ':' ends a word: a?1:2. Elsewhere
 	// a ':' is part of a word, as in 12:30 or 1:3.
 	colonEndsWord int
+	// grouped holds the nodes written in parentheses, which ?? can be mixed
+	// with.
+	grouped map[node]bool
 }
 
 func (p *parser) errorAt(at int, format string, args ...any) error {
@@ -196,12 +206,13 @@ func (p *parser) peek(off int) byte {
 	return 0
 }
 
-// enter counts a level of nesting and fails past maxDepth.
+// enter fails if the operand about to be parsed is nested more than
+// maxDepth levels deep, and otherwise counts a level for what it holds.
 func (p *parser) enter() error {
-	p.depth++
 	if p.depth > maxDepth {
 		return p.errorf("the expression nests more than %d levels deep", maxDepth)
 	}
+	p.depth++
 	return nil
 }
 
@@ -253,12 +264,9 @@ func (p *parser) peekInfix() (infix, bool) {
 	return infix{}, false
 }
 
-// expression parses operators of at least minPrec.
+// expression parses operators of at least minPrec. Every operand is parsed
+// by unary, which counts how deeply it is nested.
 func (p *parser) expression(minPrec int) (node, error) {
-	if err := p.enter(); err != nil {
-		return nil, err
-	}
-	defer func() { p.depth-- }()
 	left, err := p.unary()
 	if err != nil {
 		return nil, err
@@ -309,12 +317,26 @@ func (p *parser) expression(minPrec int) (node, error) {
 		}
 		at := p.pos
 		p.pos += op.width
-		right, err := p.expression(op.prec + 1)
+		rightPrec := op.prec + 1
+		if op.prec == precPow {
+			rightPrec = op.prec
+		}
+		right, err := p.expression(rightPrec)
 		if err != nil {
 			return nil, err
 		}
+		if op.op == "??" && (p.logical(left) || p.logical(right)) {
+			return nil, p.errorAt(at, "?? can't be mixed with || or && without parentheses; write (a || b) ?? c or a || (b ?? c)")
+		}
 		left = &binary{at: at, op: op.op, negated: op.negated, x: left, y: right}
 	}
+}
+
+// logical reports whether n is an || or && written without parentheses.
+// With ?? looser than both, an || or && beside a ?? is always its operand.
+func (p *parser) logical(n node) bool {
+	b, ok := n.(*binary)
+	return ok && (b.op == "||" || b.op == "&&") && !p.grouped[n]
 }
 
 // unary parses an operand with any prefix operators.
@@ -475,6 +497,10 @@ func (p *parser) group() (node, error) {
 		return nil, p.errorf("expected ')'")
 	}
 	p.pos++
+	if p.grouped == nil {
+		p.grouped = map[node]bool{}
+	}
+	p.grouped[x] = true
 	return x, nil
 }
 
@@ -496,11 +522,14 @@ func (p *parser) sliceEnd(start node, at int) (node, error) {
 	return &slice{at: at, start: start}, nil
 }
 
-// spacedColonAhead reports whether the rest of the current group has a ':'
-// with a space before it. Without one, a ? branch is written glued, as in
-// a?1:2, and its ':' ends a word instead of joining 12:30.
+// spacedColonAhead reports whether the ternary whose ? was just read is
+// closed by a ':' with a space before it, later in the current group.
+// Without one, its first branch is written glued, as in a?1:2, and a ':' in
+// it ends a word instead of joining 12:30. A later ? with a space before it
+// starts a spaced ternary, which a spaced ':' closes first, so in
+// true?1:x ? 2 : 3 the first ? has none.
 func (p *parser) spacedColonAhead() bool {
-	depth := 0
+	depth, later := 0, 0
 	var quote byte
 	for i := p.pos; i < len(p.src); i++ {
 		c := p.src[i]
@@ -518,10 +547,19 @@ func (p *parser) spacedColonAhead() bool {
 				return false
 			}
 			depth--
-		case c == ',' && depth == 0:
+		case depth > 0:
+		case c == ',':
 			return false
-		case c == ':' && depth == 0 && i > 0 && isSpace(p.src[i-1]):
-			return true
+		case c == '?' && i+1 < len(p.src) && p.src[i+1] == '?':
+			// ?? isn't a ternary.
+			i++
+		case c == '?' && isSpace(p.src[i-1]):
+			later++
+		case c == ':' && isSpace(p.src[i-1]):
+			if later == 0 {
+				return true
+			}
+			later--
 		}
 	}
 	return false
@@ -612,11 +650,10 @@ func exponentSign(w string, next byte) bool {
 	if !ok {
 		mantissa, ok = strings.CutSuffix(strings.TrimPrefix(w, "-"), "E")
 	}
-	if !ok || mantissa == "" || !isDigit(next) {
+	if !ok || !isDigit(next) {
 		return false
 	}
-	_, err := strconv.ParseFloat(mantissa, 64)
-	return err == nil
+	return decimal(mantissa)
 }
 
 // quoted scans a string in quotes. Inside single quotes, ” is a quote.
@@ -680,16 +717,10 @@ func operand(w string, at int) node {
 	if name, rest, ok := contextPrefix(w); ok {
 		return &ref{at: at, context: contexts[name].name, path: splitPath(rest)}
 	}
-	if n, err := strconv.ParseFloat(w, 64); err == nil {
+	if n, ok := wordNumber(w); ok {
 		return &literal{at: at, value: n}
 	}
-	lower := strings.ToLower(w)
-	if hex, ok := strings.CutPrefix(lower, "0x"); ok {
-		if n, err := strconv.ParseInt(hex, 16, 64); err == nil {
-			return &literal{at: at, value: float64(n)}
-		}
-	}
-	switch lower {
+	switch strings.ToLower(w) {
 	case "true":
 		return &literal{at: at, value: true}
 	case "false":
@@ -698,6 +729,26 @@ func operand(w string, at int) node {
 		return &literal{at: at, value: nil}
 	}
 	return &word{at: at, text: w}
+}
+
+// wordNumber reads a word as a number, as a string is read (stringToNumber),
+// except that a word of nothing but space isn't one, and a - before a
+// hexadecimal, octal or binary number negates it: -0x10 is -16, where the
+// string "-0x10" is NaN. NaN and Infinity are numbers, as JavaScript's
+// globals are.
+func wordNumber(w string) (float64, bool) {
+	if w == "NaN" {
+		return math.NaN(), true
+	}
+	w = strings.TrimFunc(w, isJSSpace)
+	if digits, ok := strings.CutPrefix(w, "-"); ok && len(digits) > 2 && digits[0] == '0' && radix(digits[1]) != 0 {
+		n, ok := numeral(digits)
+		return -n, ok
+	}
+	if w == "" {
+		return 0, false
+	}
+	return numeral(w)
 }
 
 // contextPrefix splits a word that reads a context into the context's name

@@ -52,7 +52,7 @@ var functions = map[string]function{
 	"case":      {minArgs: 3, maxArgs: -1},
 	"contains": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		if s, ok := a[0].(string); ok {
-			return strings.Contains(s, text(a[1])), nil
+			return strings.Contains(s, stringOf(a[1])), nil
 		}
 		list, ok := a[0].([]any)
 		if !ok {
@@ -66,18 +66,18 @@ var functions = map[string]function{
 		return false, nil
 	}},
 	"startsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
-		return strings.HasPrefix(text(a[0]), text(a[1])), nil
+		return strings.HasPrefix(stringOf(a[0]), stringOf(a[1])), nil
 	}},
 	"endsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
-		return strings.HasSuffix(text(a[0]), text(a[1])), nil
+		return strings.HasSuffix(stringOf(a[0]), stringOf(a[1])), nil
 	}},
 	"format": {minArgs: 1, maxArgs: -1, eval: func(e *evaluator, at int, a []any) (any, error) {
-		return format(e, at, text(a[0]), a[1:])
+		return format(e, at, stringOf(a[0]), a[1:])
 	}},
 	"join": {minArgs: 1, maxArgs: 2, eval: func(e *evaluator, at int, a []any) (any, error) {
 		sep := ","
 		if len(a) == 2 {
-			sep = text(a[1])
+			sep = stringOf(a[1])
 		}
 		if s, ok := collection(a[0]).(string); ok {
 			return s, nil
@@ -110,7 +110,7 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 			if err != nil || n < 0 || n >= len(args) {
 				return nil, e.errorAt(at, "format: %q has no argument for %s", tmpl, tmpl[i:i+end+1])
 			}
-			b.WriteString(text(args[n]))
+			b.WriteString(stringOf(args[n]))
 			if err := e.spend(at, b.Len()); err != nil {
 				return nil, err
 			}
@@ -173,6 +173,17 @@ func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	return e.built(at, out)
 }
 
+// roundHalfUp rounds n to a whole number as JavaScript's Math.round does: a
+// half rounds up, toward +Infinity, so -2.5 is -2. n+0.5 rounded down would
+// round 0.49999999999999994 to 1, because the sum rounds to 1.
+func roundHalfUp(n float64) float64 {
+	r := math.Floor(n)
+	if n-r >= 0.5 {
+		r++
+	}
+	return r
+}
+
 // prefix applies a unary operator.
 func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 	switch op {
@@ -199,7 +210,7 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 	case "ceil":
 		return math.Ceil(toNumber(v)), nil
 	case "round":
-		return math.Round(toNumber(v)), nil
+		return roundHalfUp(toNumber(v)), nil
 	case "fromJSON":
 		s, ok := v.(string)
 		if !ok {

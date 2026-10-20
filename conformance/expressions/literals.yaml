@@ -22,12 +22,54 @@ cases:
     value: 255
   - expr: 0XFF
     value: 255
-  - expr: 1_000
-    value: 1000
+  # A word is a number as JavaScript's Number() reads a string: hexadecimal,
+  # octal and binary whole numbers, and decimals beyond a float64's range as
+  # infinities. A - before a hexadecimal, octal or binary number negates it.
+  - expr: 0o17
+    value: 15
+  - expr: 0b101
+    value: 5
+  - expr: -0x10
+    value: -16
+  - expr: 017
+    value: 17
+  - expr: "5."
+    value: 5
+  - expr: 1e400
+    value: .inf
+  - expr: 0x10000000000000000
+    value: 18446744073709551616
   - expr: NaN
     value: .nan
   - expr: Infinity
     value: .inf
+  # Format 1 read these as Go reads numbers before: 1_000 was 1000, 0x1p4 was
+  # 16, and inf, nan and infinity were numbers in any case. As JavaScript
+  # reads them, they aren't numbers, so they are words.
+  - expr: 1_000
+    value: "1_000"
+  - expr: inf
+    value: inf
+  - expr: nan
+    value: nan
+  - expr: infinity
+    value: infinity
+  - expr: 0x1p4
+    value: "0x1p4"
+  # As words, nan and inf decide a condition, since a word is never false;
+  # NaN is a number, which is false.
+  - expr: nan
+    condition: true
+    value: nan
+    warnings: [0]
+  - expr: inf
+    condition: true
+    value: inf
+    warnings: [0]
+  - expr: NaN
+    condition: true
+    value: .nan
+    warnings: []
 
   - expr: "'it''s'"
     value: it's

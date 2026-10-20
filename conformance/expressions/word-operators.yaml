@@ -84,12 +84,35 @@ cases:
     value: true
   - expr: "inputs.name startsWith 'A' == startsWith(inputs.name, 'A')"
     value: true
-  # The word operators read null as "null", and the functions, like GitHub
-  # Actions', read it as "".
+  # The word operators read null as "", as the functions do. Format 1's word
+  # operators read it as "null" before, so the first was true.
   - expr: inputs.missing startsWith 'nu'
-    value: true
+    value: false
   - expr: "startsWith(inputs.missing, 'nu')"
     value: false
+  - expr: inputs.missing endsWith 'll'
+    value: false
+  - expr: "'abc' startsWith inputs.missing"
+    value: true
+  # In a string, null is "", which every string includes, as with
+  # contains(). Format 1 gave false before. In a list, null matches only a
+  # null item.
+  - expr: "'abc' includes inputs.missing"
+    value: true
+  - expr: "inputs.missing in 'abc'"
+    value: true
+  - expr: "contains('abc', inputs.missing)"
+    value: true
+  - expr: '["a", null] includes inputs.missing'
+    value: true
+  - expr: '["a", ""] includes inputs.missing'
+    value: false
+  - expr: inputs.missing split ','
+    value: [""]
+  - expr: '["a", null] join "-"'
+    value: a-
+  - expr: "join([\"a\", null])"
+    value: a,
 
   - expr: inputs.hosts get inputs.idx
     value: h2

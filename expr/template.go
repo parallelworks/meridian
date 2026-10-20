@@ -21,10 +21,10 @@ type part struct {
 	at int
 }
 
-// ParseTemplate parses the expressions in a string: each ${{ }} that is
-// closed. A }} in quotes or brackets doesn't close an expression, so
-// ${{ ['}}'] }} is one expression. Text after a ${{ that isn't closed is
-// text.
+// ParseTemplate parses the expressions in a string: each ${{ }}. A }} in
+// quotes or brackets doesn't close an expression, so ${{ ['}}'] }} is one
+// expression. A ${{ that isn't closed is a syntax error; a template writes
+// ${{ as text with ${{ '${{' }}.
 func ParseTemplate(s string) (*Template, error) {
 	t := &Template{src: s}
 	for rest, offset := s, 0; ; {
@@ -35,8 +35,7 @@ func ParseTemplate(s string) (*Template, error) {
 		}
 		end := closing(rest[start+3:])
 		if end < 0 {
-			t.addText(rest)
-			return t, nil
+			return nil, &SyntaxError{Offset: offset + start, Msg: "the ${{ has no }} to close it; write ${{ '${{' }} for the text ${{"}
 		}
 		t.addText(rest[:start])
 		src := rest[start+3 : start+3+end]
@@ -161,7 +160,7 @@ func (t *Template) Eval(scope Scope) (any, error) {
 		if err != nil {
 			return nil, offsetError(err, p.at)
 		}
-		s := text(v)
+		s := stringOf(v)
 		if err := ev.spend(p.at, len(s)); err != nil {
 			return nil, offsetError(err, p.at)
 		}

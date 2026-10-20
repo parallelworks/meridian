@@ -136,7 +136,35 @@ func (c *compiler) run(source plan.Source) plan.Run {
 	for _, key := range []string{"sessions", "links"} {
 		c.check([]string{key}, w[key], runCreated, nil)
 	}
+	c.checkDefinitions(definitionsPath, lookup(w, definitionsPath))
 	return r
+}
+
+// checkDefinitions reports the probable mistakes in the expressions in v, at
+// loc in the input definitions, such as .5 written for a number. Resolving
+// the inputs reports the errors of the expressions it evaluates.
+func (c *compiler) checkDefinitions(loc []string, v any) {
+	switch v := v.(type) {
+	case string:
+		t, err := expr.ParseTemplate(v)
+		if err != nil {
+			return
+		}
+		ptr := jsonptr.Format(loc)
+		for at, e := range t.Exprs() {
+			for _, p := range e.Check() {
+				c.report(format.Warning, c.doc.Locate(ptr, at+p.Offset), CodeWord, loc, "%s", p.Msg)
+			}
+		}
+	case []any:
+		for i, item := range v {
+			c.checkDefinitions(appendPath(loc, strconv.Itoa(i)), item)
+		}
+	case map[string]any:
+		for k, item := range jsonvalue.Sorted(v) {
+			c.checkDefinitions(appendPath(loc, k), item)
+		}
+	}
 }
 
 func str(v any) string {
