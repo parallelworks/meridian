@@ -1,0 +1,4 @@
+description: >-
+  A list's default can be the rows it starts with, each a mapping of the
+  template's fields.
+source: ACTIVATE's workflow schema

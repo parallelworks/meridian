@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -90,6 +91,46 @@ jobs:
 	data, err := json.Marshal(inputs.Deferred["dir"])
 	if err != nil || !strings.HasPrefix(string(data), `{"${{":[{"src":" env.HOME "`) {
 		t.Errorf("the deferred default encodes as %s, %v", data, err)
+	}
+}
+
+// A submitted row with the text of part of its default that reads a secret
+// is deferred whole, with only that part an expression: the same text
+// elsewhere in the row is data.
+func TestDefaultTextKnownLater(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          token:
+            type: string
+          note:
+            type: string
+        default:
+          - token: ${{ vars.TOKEN }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	row := map[string]any{"token": "${{ vars.TOKEN }}", "note": "${{ vars.TOKEN }}"}
+	submitted := map[string]any{"hosts": []any{row}}
+	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"TOKEN": expr.Unknown{Name: "vars"}}}}
+	inputs, diags := compile.ResolveInputs(doc, submitted, opts)
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if _, ok := inputs.Values["hosts"]; ok {
+		t.Error("a value deferred until the run is underway has a value now")
+	}
+	data, err := json.Marshal(inputs.Deferred["hosts"])
+	if err != nil || !strings.HasPrefix(string(data), `[{"note":"${{ vars.TOKEN }}","token":{"${{":[{"src":" vars.TOKEN "`) {
+		t.Errorf("the deferred value encodes as %s, %v", data, err)
+	}
+	if row["token"] != "${{ vars.TOKEN }}" {
+		t.Errorf("submitted values changed to %v", submitted)
 	}
 }
 

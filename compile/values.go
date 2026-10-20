@@ -135,3 +135,16 @@ func describeRaw(v any) string {
 	}
 	return fmt.Sprint(v)
 }
+
+// replaceAt replaces the value at path in v, a mapping or list that has one
+// there.
+func replaceAt(v any, path []string, x any) {
+	last := path[len(path)-1]
+	switch parent := lookup(v, path[:len(path)-1]).(type) {
+	case map[string]any:
+		parent[last] = x
+	case []any:
+		i, _ := strconv.Atoi(last)
+		parent[i] = x
+	}
+}

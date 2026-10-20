@@ -40,8 +40,10 @@ type Run struct {
 	Inputs Data `json:"inputs,omitzero"`
 	// DeferredInputs are the defaults of inputs that read what is known
 	// only once the run is underway, such as a secret variable, by their
-	// input's path, as in group.name. They are evaluated as the run starts,
-	// with the other inputs' values, and give the inputs' values.
+	// input's path, as in group.name. A submitted value with the text of an
+	// expression from its default is one too, with that expression in it.
+	// They are evaluated as the run starts, with the other inputs' values,
+	// and give the inputs' values.
 	DeferredInputs map[string]Value `json:"deferredInputs,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`

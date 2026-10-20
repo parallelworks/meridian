@@ -1,0 +1,27 @@
+description: >-
+  A string in a submitted list or mapping that is the text of an expression
+  in the same place in the input's default means that expression, as a whole
+  value that is the text of its default does: a form sends a list's default
+  rows, or a mapping default, with the text of what it can't evaluate. Any
+  other string holding ${{ }} is data, even the same text in another place.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+inputs:
+  hosts:
+    - name: ${{ vars.REGION }}-1
+      zone: ${{ vars.REGION }}-1
+    - name: ${{ vars.REGION }}-1
+  cluster:
+    name: ${{ vars.REGION }}
+    note: ${{ vars.REGION }}
+expect:
+  inputs:
+    hosts:
+      - name: us-east-1
+        zone: ${{ vars.REGION }}-1
+      - name: ${{ vars.REGION }}-1
+    cluster:
+      name: us-east
+      note: ${{ vars.REGION }}

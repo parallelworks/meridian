@@ -1,0 +1,20 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          zone:
+            type: string
+        default:
+          - name: ${{ vars.REGION }}-1
+      cluster:
+        type: compute-clusters
+        default:
+          name: ${{ vars.REGION }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

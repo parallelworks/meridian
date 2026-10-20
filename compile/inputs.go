@@ -135,6 +135,10 @@ type field struct {
 	// compiler doesn't know, and dflt holds the default.
 	deferred bool
 	dflt     plan.Value
+	// texts are the paths in a submitted mapping or list of the strings
+	// that are the text of an expression in the same place in its default,
+	// and dflt then holds the value with those expressions in it.
+	texts [][]string
 }
 
 type inputResolver struct {
@@ -250,16 +254,23 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 
 // fillDefaults gives each input without a value its default. A default that
 // is an expression is evaluated with the other inputs' values, defaults
-// included, in the order they need.
+// included, in the order they need, as are the parts of a default a form
+// sent as their text.
 func (r *inputResolver) fillDefaults() {
 	var pending []*field
 	for _, f := range r.fields {
-		if f.container || f.header || !r.missing(f) || !f.hasDefault {
+		if f.container || f.header || !f.hasDefault {
 			continue
 		}
 		def, err := plan.ValueOf(f.def["default"])
 		if err != nil {
 			continue // The schema checks reported it.
+		}
+		if !r.missing(f) {
+			if r.findDefaultTexts(f) {
+				pending = append(pending, f)
+			}
+			continue
 		}
 		if v, ok := def.Literal(); ok {
 			r.setDefault(f, v)
@@ -278,6 +289,10 @@ func (r *inputResolver) fillDefaults() {
 			pending = slices.Delete(pending, i, i+1)
 			i--
 			progress = true
+			if f.texts != nil {
+				r.fillDefaultTexts(f)
+				continue
+			}
 			v, err := r.evalAt(appendPath(f.loc, "default"))
 			switch {
 			case expr.IsUnknown(err):
@@ -305,6 +320,78 @@ func (r *inputResolver) fillDefaults() {
 func (r *inputResolver) setDefault(f *field, v any) {
 	if v != "" && v != nil {
 		setPath(r.values, f.path, v)
+	}
+}
+
+// findDefaultTexts finds the strings in f's submitted mapping or list that
+// are the text of an expression in the same place in its default, such as a
+// list's rows: a form sends that text for a part of a default it can't
+// evaluate itself. It reports whether there are any, and sets f.dflt to the
+// value with those expressions in it. Every other string is data.
+func (r *inputResolver) findDefaultTexts(f *field) bool {
+	v := lookup(r.values, f.path)
+	f.texts = defaultTexts(f.def["default"], v, nil)
+	if f.texts == nil {
+		return false
+	}
+	withExprs := jsonvalue.Clone(v)
+	for _, p := range f.texts {
+		t, err := expr.ParseTemplate(lookup(withExprs, p).(string))
+		if err != nil {
+			// It can't fail: it is the text of the default, which parsed.
+			f.texts = nil
+			return false
+		}
+		replaceAt(withExprs, p, t)
+	}
+	f.dflt = plan.Literal(withExprs)
+	return true
+}
+
+// defaultTexts returns the paths, from path, of the strings in v that are
+// the text of an expression in the same place in def.
+func defaultTexts(def, v any, path []string) [][]string {
+	var out [][]string
+	switch def := def.(type) {
+	case string:
+		if s, ok := v.(string); ok && s == def && strings.Contains(s, "${{") {
+			out = append(out, path)
+		}
+	case []any:
+		list, _ := v.([]any)
+		for i := range min(len(def), len(list)) {
+			out = append(out, defaultTexts(def[i], list[i], appendPath(path, strconv.Itoa(i)))...)
+		}
+	case map[string]any:
+		m, _ := v.(map[string]any)
+		for k, d := range jsonvalue.Sorted(def) {
+			if item, ok := m[k]; ok {
+				out = append(out, defaultTexts(d, item, appendPath(path, k))...)
+			}
+		}
+	}
+	return out
+}
+
+// fillDefaultTexts gives each of f's default texts the value of the
+// expression it is the text of, where it is in the default. If one reads
+// something the compiler doesn't know, the input's value is evaluated once
+// the run is underway, all of it.
+func (r *inputResolver) fillDefaultTexts(f *field) {
+	v := lookup(r.values, f.path)
+	for _, p := range f.texts {
+		loc := slices.Concat(f.loc, []string{"default"}, p)
+		out, err := r.evalAt(loc)
+		switch {
+		case expr.IsUnknown(err):
+			f.deferred = true
+			deletePath(r.values, f.path)
+			return
+		case err != nil:
+			r.reportError(loc, 0, err)
+		default:
+			replaceAt(v, p, out)
+		}
 	}
 }
 
