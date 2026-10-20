@@ -53,6 +53,9 @@ cases:
     value: true
   - expr: "'x' in ['xy', 'z']"
     error: syntax
+  # A branch that isn't taken is still parsed, so it is an error there too.
+  - expr: "false && 'x' in ['xy', 'z']"
+    error: syntax
   - expr: '''x'' in ["xy", "z"]'
     value: false
   - expr: "'bt' in inputs.string"

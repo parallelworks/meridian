@@ -32,6 +32,10 @@ workflow:
     - ["${{ ../../arrayhere.1 }}", "${{ ../../.arrayhere.2 }}"]
     - ${{ .[0] get 0 }}
     - ${{ .0 get 0 }}
+  field24:
+    group: {list: "${{ inputs.arrayhere }}", text: plain}
+    item: ${{ .group.list.2 }}
+    char: ${{ .group.text.0 }}
   computeOn: true
   options:
     field1:
@@ -56,7 +60,8 @@ scope:
 cases:
   - at: /field20
     value: [one, two, three]
-  # ACTIVATE reads the 0th character of field17's text, "$", instead.
+  # The path past .field17 reads the template's value, so this is the list's
+  # first item, not the template's first character. ACTIVATE agrees.
   - at: /field21/prop
     value: one
   - at: /field21b/prop
@@ -86,6 +91,12 @@ cases:
     value: two
   - at: /field23d/2
     value: null
+  # Through a mapping to a template, the path past it reads its value too.
+  - at: /field24/item
+    value: three
+  # Past plain text, the path reads a character of it.
+  - at: /field24/char
+    value: p
   - at: /options/field1/inner
     value: false
   - at: /options/field1/far

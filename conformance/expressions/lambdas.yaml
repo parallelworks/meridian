@@ -184,6 +184,9 @@ cases:
     unknown: needs
   - expr: "map([], w => needs.build.outputs.path)"
     value: []
+  # A body that never runs is still parsed, so a mistake in it is an error.
+  - expr: "map([], x => ['a'])"
+    error: syntax
   - at: /joined
     value: a-b-
   - at: /own
