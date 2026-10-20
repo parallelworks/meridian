@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: invalid_choice
       path: /on/execute/inputs/$meta/layout/gap
       line: 9
       column: 36

@@ -3,5 +3,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: reference
+      code: relative_outside_definitions
       path: /jobs/build/env/B

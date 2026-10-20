@@ -7,5 +7,5 @@ inputs:
 expect:
   diagnostics:
     - severity: error
-      code: input-value
+      code: input_not_boolean
       path: /on/execute/inputs/c

@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: too_long
       path: /on/execute/inputs/$meta/layout/label
       line: 9
       column: 40

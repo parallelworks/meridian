@@ -6,7 +6,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: reference
+      code: undefined_input
       path: /jobs/build/steps/0/run
       line: 10
       column: 23

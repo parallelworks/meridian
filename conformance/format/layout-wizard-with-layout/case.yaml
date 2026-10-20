@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: keys_not_allowed_together
       path: /on/execute/inputs/$meta
       line: 6
       column: 9

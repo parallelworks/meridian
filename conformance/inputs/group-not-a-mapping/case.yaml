@@ -5,5 +5,5 @@ inputs:
 expect:
   diagnostics:
     - severity: error
-      code: input-value
+      code: input_group_not_mapping
       path: /on/execute/inputs/k8s

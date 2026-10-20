@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // Version is the version of the plan encoding this package reads and
@@ -23,7 +23,7 @@ type Plan struct {
 	Jobs []Job `json:"jobs"`
 	// Warnings are the compiler's warnings, which are kept with the run so
 	// that they reach whoever runs the workflow.
-	Warnings []format.Diagnostic `json:"warnings,omitempty"`
+	Warnings []problems.Diagnostic `json:"warnings,omitempty"`
 }
 
 // Run is what the plan holds about the run as a whole.

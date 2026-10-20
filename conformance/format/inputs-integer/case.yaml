@@ -6,7 +6,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: input_type_unknown
       path: /on/execute/inputs/ask_timeout/type
       line: 6
       column: 15

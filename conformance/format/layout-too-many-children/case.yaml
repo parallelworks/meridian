@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: too_many
       path: /on/execute/inputs/$meta/layout/children
       line: 9
       column: 41

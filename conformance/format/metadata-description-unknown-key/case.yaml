@@ -4,7 +4,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: unknown-key
+      code: unknown_key
       path: /description/format
       line: 3
       column: 3

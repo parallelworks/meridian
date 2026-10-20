@@ -9,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 const sample = `on:
@@ -161,16 +162,16 @@ jobs:
 	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
 	var words []string
 	for _, d := range diags {
-		if d.Code == compile.CodeWord && strings.Contains(d.Message, "which is NaN") {
-			words = append(words, d.Message)
+		if d.Code == problems.HyphenatedName.Code() {
+			words = append(words, d.Message())
 		}
 	}
 	want := []string{
-		"; the workflow has an input pw-user",
-		"; the workflow has a job prep-model",
-		"; job build has a step with the id setup-go",
-		"; job build's matrix has python-version",
-		"to read no-such, write inputs['no-such']",
+		`. The workflow has an input "pw-user".`,
+		`. The workflow has a job "prep-model".`,
+		`. The job "build" has a step with the id "setup-go".`,
+		`. The matrix of the job "build" has a key "python-version".`,
+		"To read no-such, write inputs['no-such'].",
 	}
 	if len(words) != len(want) {
 		t.Fatalf("warnings %q, want %d", words, len(want))

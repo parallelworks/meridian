@@ -6,12 +6,12 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: word
+      code: replaced_keyword
       path: /jobs/build/steps/0/if
       line: 7
       column: 11
     - severity: warning
-      code: word
+      code: replaced_keyword
       path: /jobs/build/steps/1/if
       line: 11
       column: 24

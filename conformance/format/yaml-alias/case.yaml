@@ -5,7 +5,7 @@ source: ACTIVATE's YAML loader tests
 expect:
   diagnostics:
     - severity: error
-      code: unsupported
+      code: yaml_alias
       path: /jobs/main/env/GREETING
       line: 6
       column: 17

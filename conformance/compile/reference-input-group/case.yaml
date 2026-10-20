@@ -5,5 +5,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: warning
-      code: reference
+      code: undefined_nested_input
       path: /jobs/build/steps/1/run

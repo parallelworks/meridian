@@ -8,7 +8,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
@@ -53,42 +52,45 @@ func deletePath(values map[string]any, path []string) {
 	delete(m, path[len(path)-1])
 }
 
-// notJSON describes the first part of v that isn't a JSON value of the
-// kinds the compiler takes, or returns "". They are nil, booleans, finite
-// float64, int and int64 numbers, UTF-8 text, and lists and mappings of them.
-func notJSON(v any) string {
+// notJSON finds the first part of v that isn't a JSON value of the kinds the
+// compiler takes, and says what it is, as the param what of a message that
+// says so: a number that isn't finite, text or a key that isn't UTF-8, or a
+// Go type, with the number or the type's name. It returns "" if v is JSON.
+// JSON values are nil, booleans, finite float64, int and int64 numbers,
+// UTF-8 text, and lists and mappings of them.
+func notJSON(v any) (what, value string) {
 	switch v := v.(type) {
 	case nil, bool, int, int64:
-		return ""
+		return "", ""
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return formatNumber(v)
+			return "number", formatNumber(v)
 		}
-		return ""
+		return "", ""
 	case string:
 		if !utf8.ValidString(v) {
-			return "text that isn't UTF-8"
+			return "text", ""
 		}
-		return ""
+		return "", ""
 	case []any:
 		for _, item := range v {
-			if bad := notJSON(item); bad != "" {
-				return bad
+			if what, value := notJSON(item); what != "" {
+				return what, value
 			}
 		}
-		return ""
+		return "", ""
 	case map[string]any:
 		for k, item := range jsonvalue.Sorted(v) {
 			if !utf8.ValidString(k) {
-				return "a key that isn't UTF-8"
+				return "key", ""
 			}
-			if bad := notJSON(item); bad != "" {
-				return bad
+			if what, value := notJSON(item); what != "" {
+				return what, value
 			}
 		}
-		return ""
+		return "", ""
 	}
-	return fmt.Sprintf("a Go %T", v)
+	return "go_type", fmt.Sprintf("%T", v)
 }
 
 // toNumber returns v as a number: a number, or text that is one.
@@ -132,28 +134,4 @@ func describeRaw(v any) string {
 		}
 	}
 	return fmt.Sprint(v)
-}
-
-// describe shows a value in a message.
-func describe(v any) string {
-	switch v := v.(type) {
-	case nil:
-		return "null"
-	case string:
-		return strconv.Quote(v)
-	case map[string]any:
-		return "a mapping"
-	case []any:
-		return "a list"
-	}
-	return describeRaw(v)
-}
-
-// withSuggestion adds to msg, about name, which of names it most likely
-// meant, if any.
-func withSuggestion(msg, name string, names []string) string {
-	if s, ok := hint.Suggest(name, names); ok {
-		msg += fmt.Sprintf("; did you mean %q?", s)
-	}
-	return msg
 }

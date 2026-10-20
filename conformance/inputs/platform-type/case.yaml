@@ -6,5 +6,5 @@ inputs:
 expect:
   diagnostics:
     - severity: error
-      code: platform
+      code: platform_input
       path: /on/execute/inputs/cluster

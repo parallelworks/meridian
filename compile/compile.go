@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -16,31 +15,13 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
-)
-
-// Codes of the problems the compiler reports about jobs and expressions.
-const (
-	// CodeReference means an expression reads something the workflow
-	// doesn't define: an input, a job's output, a step or a matrix value.
-	CodeReference format.Code = "reference"
-	// CodeContext means an expression reads a context that isn't known
-	// where it is evaluated, such as steps in a job's if:.
-	CodeContext format.Code = "context"
-	// CodeNeeds means needs: names a job that isn't there, or jobs need
-	// each other.
-	CodeNeeds format.Code = "needs"
-	// CodeDuplicateID means two steps of a job have the same id.
-	CodeDuplicateID format.Code = "duplicate-id"
-	// CodeWord means a word in an expression that is probably a mistake: it
-	// looks like a reference, it decides a condition, or it is the older
-	// spelling always.
-	CodeWord format.Code = "word"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // Compile loads a workflow file and compiles it, with the input values
 // submitted for a run, into a plan. It reports every problem it finds, and
 // returns no plan if any is an error.
-func Compile(name string, data []byte, submitted map[string]any, opts Options) (*plan.Plan, format.Diagnostics) {
+func Compile(name string, data []byte, submitted map[string]any, opts Options) (*plan.Plan, problems.Diagnostics) {
 	doc, diags := format.Load(name, data)
 	if diags.HasErrors() {
 		return nil, diags
@@ -75,10 +56,11 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	if c.diags.HasErrors() {
 		return nil, c.diags
 	}
-	for _, d := range c.diags {
-		if d.Severity == format.Warning {
-			p.Warnings = append(p.Warnings, d)
-		}
+	for _, d := range c.diags.Warnings() {
+		// A plan keeps each warning's code and params, so that each reader
+		// sees it in their own language.
+		d.Detail = ""
+		p.Warnings = append(p.Warnings, d)
 	}
 	return p, c.diags
 }
@@ -95,21 +77,45 @@ type compiler struct {
 // A reporter collects the problems found in a workflow.
 type reporter struct {
 	doc   *format.Document
-	diags format.Diagnostics
+	diags problems.Diagnostics
 }
 
-// report reports a problem at pos with what is at loc in the workflow.
-func (r *reporter) report(severity format.Severity, pos format.Position, code format.Code, loc []string, msg string, args ...any) {
-	r.diags = append(r.diags, format.Diagnostic{
-		File: r.doc.File, Position: pos, Severity: severity, Code: code, Path: jsonptr.Format(loc),
-		Message: fmt.Sprintf(msg, args...),
-	})
+// report reports a problem of kind k at pos, with what is at loc in the
+// workflow.
+func (r *reporter) report(k *problems.Kind, pos problems.Position, loc []string, params problems.Params) {
+	r.reportPointer(k, pos, jsonptr.Format(loc), params)
 }
 
-// reportAt reports a problem with what is at loc: a mapping, such as an
-// input's definition, at its key, and anything else where it starts.
-func (r *reporter) reportAt(severity format.Severity, code format.Code, loc []string, msg string, args ...any) {
-	r.report(severity, r.doc.ReportPosition(jsonptr.Format(loc)), code, loc, msg, args...)
+func (r *reporter) reportPointer(k *problems.Kind, pos problems.Position, pointer string, params problems.Params) {
+	r.diags = append(r.diags, k.At(r.doc.File, pos, pointer, params))
+}
+
+// reportAt reports a problem of kind k with what is at loc: a mapping, such
+// as an input's definition, at its key, and anything else where it starts.
+func (r *reporter) reportAt(k *problems.Kind, loc []string, params problems.Params) {
+	r.report(k, r.doc.ReportPosition(jsonptr.Format(loc)), loc, params)
+}
+
+// reportError reports err, an error parsing or evaluating the expressions in
+// the string at loc, at shift bytes after where the error puts it. An error
+// in another string, which the expression read, is reported where it is.
+func (r *reporter) reportError(loc []string, shift int, err error) {
+	pointer, offset := jsonptr.Format(loc), shift
+	report := func(k *problems.Kind, params problems.Params, at int, location string) {
+		if location != "" {
+			pointer, offset = location, 0
+		}
+		r.reportPointer(k, r.doc.Locate(pointer, offset+at), pointer, params)
+	}
+	if se, ok := errors.AsType[*expr.SyntaxError](err); ok {
+		report(se.Kind, se.Params, se.Offset, se.Location)
+		return
+	}
+	if ee, ok := errors.AsType[*expr.EvalError](err); ok {
+		report(ee.Kind, ee.Params, ee.Offset, ee.Location)
+		return
+	}
+	report(problems.ExpressionFailed, problems.Params{"reason": err.Error()}, 0, "")
 }
 
 // run compiles what the plan holds about the run as a whole.
@@ -308,11 +314,11 @@ func (c *compiler) checkCondition(loc []string, s string, shift int, ph phase, j
 	}
 	_, whole := t.Expr()
 	for at, e := range t.Exprs() {
-		problems := e.Check()
+		found := e.Check()
 		if whole {
-			problems = e.CheckCondition()
+			found = e.CheckCondition()
 		}
-		ok = c.checkExpr(loc, at+shift, e, problems, ph, job) && ok
+		ok = c.checkExpr(loc, at+shift, e, found, ph, job) && ok
 	}
 	return t, ok
 }
@@ -326,11 +332,7 @@ func (c *compiler) parse(loc []string, s string, shift int) (*expr.Template, boo
 	}
 	t, err := expr.ParseTemplate(s)
 	if err != nil {
-		offset := 0
-		if se, ok := errors.AsType[*expr.SyntaxError](err); ok {
-			offset = se.Offset
-		}
-		c.report(format.Error, c.doc.Locate(jsonptr.Format(loc), offset+shift), CodeExpression, loc, "%v", err)
+		c.reportError(loc, shift, err)
 		return nil, false
 	}
 	if t.IsText() {
@@ -342,20 +344,19 @@ func (c *compiler) parse(loc []string, s string, shift int) (*expr.Template, boo
 // checkExpr checks e, an expression whose source is at byte offset at in the
 // string at loc, and reports problems, its probable mistakes. It returns
 // false if e has an error.
-func (c *compiler) checkExpr(loc []string, at int, e *expr.Expr, problems []expr.Problem, ph phase, job *jobInfo) bool {
+func (c *compiler) checkExpr(loc []string, at int, e *expr.Expr, found []expr.Problem, ph phase, job *jobInfo) bool {
 	ptr := jsonptr.Format(loc)
-	pos := func(offset int) format.Position { return c.doc.Locate(ptr, at+offset) }
-	for _, p := range problems {
+	pos := func(offset int) problems.Position { return c.doc.Locate(ptr, at+offset) }
+	for _, p := range found {
 		c.reportProblem(pos(p.Offset), loc, p, job)
 	}
 	ok := true
 	if e.Relative() {
-		c.report(format.Error, pos(0), CodeReference, loc,
-			"a relative reference such as .name can only be used in input definitions")
+		c.report(problems.RelativeOutsideDefinitions, pos(0), loc, nil)
 		ok = false
 	}
 	if used, _ := e.StatusChecks(); used && !ph.has("status") {
-		c.report(format.Error, pos(0), CodeContext, loc, "status functions such as failure() aren't known %s", ph.when())
+		c.report(problems.StatusNotKnown, pos(0), loc, problems.Params{"phase": ph.name()})
 		ok = false
 	}
 	for _, r := range e.Refs() {

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"iter"
 	"strings"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A Template is a string in a workflow, with the expressions in it parsed.
@@ -35,7 +37,7 @@ func ParseTemplate(s string) (*Template, error) {
 		}
 		end := closing(rest[start+3:])
 		if end < 0 {
-			return nil, &SyntaxError{Offset: offset + start, Msg: "the ${{ has no }} to close it; write ${{ '${{' }} for the text ${{"}
+			return nil, &SyntaxError{Offset: offset + start, Kind: problems.UnclosedTemplate}
 		}
 		t.addText(rest[:start])
 		src := rest[start+3 : start+3+end]
@@ -172,7 +174,12 @@ func (t *Template) Eval(scope Scope) (any, error) {
 // offsetError moves an error's offset from its expression to the template.
 func offsetError(err error, at int) error {
 	if ee, ok := errors.AsType[*EvalError](err); ok {
-		return &EvalError{Offset: ee.Offset + at, Msg: ee.Msg}
+		if ee.Location != "" {
+			return ee // in another string
+		}
+		c := *ee
+		c.Offset += at
+		return &c
 	}
 	if ue, ok := errors.AsType[*UnknownError](err); ok {
 		return &UnknownError{Offset: ue.Offset + at, Name: ue.Name}

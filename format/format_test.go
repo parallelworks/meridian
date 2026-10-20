@@ -1,12 +1,12 @@
 package format_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/problems"
 )
 
 const hello = `jobs:
@@ -33,8 +33,8 @@ func TestLoadSizeLimit(t *testing.T) {
 			if (doc != nil) != tc.ok {
 				t.Fatalf("loaded %v, want %v: %v", doc != nil, tc.ok, diags)
 			}
-			if !tc.ok && (len(diags) != 1 || diags[0].Code != format.CodeTooLarge) {
-				t.Errorf("diagnostics = %v, want one %s", diags, format.CodeTooLarge)
+			if !tc.ok && (len(diags) != 1 || diags[0].Code != problems.FileTooLarge.Code()) {
+				t.Errorf("diagnostics = %v, want one %s", diags, problems.FileTooLarge.Code())
 			}
 		})
 	}
@@ -64,7 +64,7 @@ func TestDocumentPosition(t *testing.T) {
 	if got, want := doc.Format, 1; got != want {
 		t.Errorf("Format = %d, want %d", got, want)
 	}
-	for pointer, want := range map[string]format.Position{
+	for pointer, want := range map[string]problems.Position{
 		"":                       {Line: 1, Column: 1},
 		"/jobs/main":             {Line: 3, Column: 5},
 		"/jobs/main/steps/0/run": {Line: 4, Column: 14},
@@ -77,32 +77,13 @@ func TestDocumentPosition(t *testing.T) {
 }
 
 func TestDiagnostics(t *testing.T) {
-	warning := format.Diagnostic{
-		File: "workflow.yaml", Position: format.Position{Line: 3, Column: 5},
-		Severity: format.Warning, Code: format.CodeUnknownKey, Message: `unknown key "x" is ignored`,
+	_, diags := format.Load("workflow.yaml", []byte("jobs:\n  main:\n    x: 1\n    steps: [}\n"))
+	if len(diags) != 1 {
+		t.Fatalf("diagnostics = %v, want one", diags)
 	}
-	syntax := format.Diagnostic{
-		File: "workflow.yaml", Position: format.Position{Line: 7},
-		Severity: format.Error, Code: format.CodeSyntax, Message: "invalid YAML: mapping values are not allowed here",
-	}
-	tooLarge := format.Diagnostic{Severity: format.Error, Code: format.CodeTooLarge, Message: "the file is too large"}
-
-	for d, want := range map[*format.Diagnostic]string{
-		&warning:  `workflow.yaml:3:5: warning: unknown key "x" is ignored (unknown-key)`,
-		&syntax:   "workflow.yaml:7: error: invalid YAML: mapping values are not allowed here (syntax)",
-		&tooLarge: "error: the file is too large (too-large)",
-	} {
-		if got := d.String(); got != want {
-			t.Errorf("String() = %q, want %q", got, want)
-		}
-	}
-
-	if err := (format.Diagnostics{warning}).Err(); err != nil {
-		t.Errorf("Err() with only a warning = %v, want nil", err)
-	}
-	err := (format.Diagnostics{warning, syntax}).Err()
-	if errs, ok := errors.AsType[format.Diagnostics](err); !ok || len(errs) != 1 || errs[0] != syntax {
-		t.Errorf("Err() = %v, want the syntax error alone", err)
+	want := "workflow.yaml:3: error: The file isn't valid YAML: did not find expected node content. (yaml_syntax)"
+	if got := diags[0].String(); got != want {
+		t.Errorf("String() = %q, want %q", got, want)
 	}
 }
 

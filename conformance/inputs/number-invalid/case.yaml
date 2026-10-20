@@ -6,8 +6,8 @@ inputs:
 expect:
   diagnostics:
     - severity: error
-      code: input-value
+      code: input_above_max
       path: /on/execute/inputs/count
     - severity: error
-      code: input-value
+      code: input_not_number
       path: /on/execute/inputs/other

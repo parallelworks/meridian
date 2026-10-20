@@ -4,7 +4,7 @@ source: ACTIVATE's YAML loader tests
 expect:
   diagnostics:
     - severity: error
-      code: unsupported
+      code: yaml_merge_key
       path: /jobs/main
       line: 3
       column: 5

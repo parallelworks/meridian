@@ -6,5 +6,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: reference
+      code: job_not_needed
       path: /jobs/test/steps/1/run

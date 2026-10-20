@@ -4,5 +4,5 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: workflow_empty
       path: ""

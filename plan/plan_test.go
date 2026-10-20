@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/expr"
-	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 func mustValue(t *testing.T, v any) plan.Value {
@@ -49,11 +49,18 @@ func samplePlan(t *testing.T) *plan.Plan {
 			Outputs: map[string]plan.Value{"out": mustValue(t, "${{ steps.greet.outputs.x }}")},
 			Path:    "/jobs/build",
 		}},
-		Warnings: []format.Diagnostic{{
-			File: "workflow.yaml", Position: format.Position{Line: 3, Column: 9}, Severity: format.Warning,
-			Code: format.CodeUnknownKey, Path: "/jobs/build/x", Message: "x is ignored",
-		}},
+		Warnings: []problems.Diagnostic{withoutDetail(problems.UnknownKey.At(
+			"workflow.yaml", problems.Position{Line: 3, Column: 9}, "/jobs/build/x",
+			problems.Params{"key": "x", "suggested": false, "suggestion": ""},
+		))},
 	}
+}
+
+// withoutDetail returns d as a plan holds it: without its text, which each
+// reader renders in their own language.
+func withoutDetail(d problems.Diagnostic) problems.Diagnostic {
+	d.Detail = ""
+	return d
 }
 
 func TestEncodeDecode(t *testing.T) {
@@ -100,8 +107,12 @@ func TestEncodeDecode(t *testing.T) {
 	if wd := back.Jobs[0].Steps[0].WorkingDirectory; wd.IsZero() {
 		t.Error("working-directory: null was lost")
 	}
-	if back.Warnings[0].Severity != format.Warning || !strings.Contains(string(data), `"severity":"warning"`) {
-		t.Errorf("the warning's severity didn't survive: %s", data)
+	w := back.Warnings[0]
+	if w.Severity() != problems.Warning || w.Message() != `The key "x" isn't known here, so it's ignored.` || w.Position() != (problems.Position{Line: 3, Column: 9}) {
+		t.Errorf("the warning didn't survive: %s", data)
+	}
+	if strings.Contains(string(data), `"detail"`) {
+		t.Errorf("the plan holds the warning's text: %s", data)
 	}
 }
 

@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: above_maximum
       path: /on/execute/inputs/$meta/layout/span
       line: 9
       column: 50

@@ -3,10 +3,10 @@ source: ACTIVATE's tests
 expect:
   diagnostics:
     - severity: error
-      code: required
+      code: input_required
       path: /on/execute/inputs/required_field
       line: 4
       column: 7
     - severity: error
-      code: required
+      code: input_required
       path: /on/execute/inputs/other

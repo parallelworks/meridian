@@ -4,7 +4,7 @@ source: Meridian
 expect:
   diagnostics:
     - severity: error
-      code: unsupported
+      code: yaml_collection_key
       path: /configurations/keys/inputs
       line: 4
       column: 9

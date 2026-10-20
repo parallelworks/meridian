@@ -1,13 +1,14 @@
 package expr
 
 import (
-	"fmt"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A Workflow is a workflow that the expressions in it read: through
@@ -66,7 +67,7 @@ func (r *workflowResolver) evalAt(t *Template, location []string) (any, error) {
 		return v, nil
 	}
 	if ev.active[k] {
-		return nil, fmt.Errorf("the expressions at %s read each other", jsonptr.Format(location))
+		return nil, &EvalError{Location: jsonptr.Format(location), Kind: problems.ExpressionsReadEachOther}
 	}
 	ev.active[k] = true
 	defer delete(ev.active, k)
@@ -77,7 +78,7 @@ func (r *workflowResolver) evalAt(t *Template, location []string) (any, error) {
 		if IsUnknown(err) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("in %s: %w", jsonptr.Format(location), err)
+		return nil, located(err, location)
 	}
 	ev.done[k] = v
 	return v, nil
@@ -90,7 +91,7 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 	case string:
 		t, err := ParseTemplate(v)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", jsonptr.Format(location), err)
+			return nil, located(err, location)
 		}
 		if t.IsText() {
 			return v, nil
@@ -191,6 +192,23 @@ func (r *workflowResolver) Definition(path []string) (any, bool, error) {
 		}
 	}
 	return nil, false, nil
+}
+
+// located returns err, a problem in the string at location, with that
+// location, unless it has one already: a problem in another string that
+// string reads.
+func located(err error, location []string) error {
+	if ee, ok := errors.AsType[*EvalError](err); ok && ee.Location == "" {
+		c := *ee
+		c.Location = jsonptr.Format(location)
+		return &c
+	}
+	if se, ok := errors.AsType[*SyntaxError](err); ok && se.Location == "" {
+		c := *se
+		c.Location = jsonptr.Format(location)
+		return &c
+	}
+	return err
 }
 
 // appendPath returns a new path: path followed by keys.

@@ -4,7 +4,7 @@ source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:
     - severity: error
-      code: schema
+      code: missing_any_key
       path: /links/ollama
       line: 3
       column: 5

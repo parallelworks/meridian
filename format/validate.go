@@ -16,6 +16,7 @@ import (
 
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 //go:embed schema/1.schema.json
@@ -79,7 +80,7 @@ func (p *parser) validate(s *formatSchema, value any) any {
 		}
 		verr, ok := errors.AsType[*jsonschema.ValidationError](err)
 		if !ok {
-			p.report(Error, Position{}, CodeSchema, "", "%v", err)
+			p.report(problems.SchemaFailed, problems.Position{}, "", problems.Params{"reason": err.Error()})
 			return value
 		}
 		var x explanation
@@ -89,12 +90,12 @@ func (p *parser) validate(s *formatSchema, value any) any {
 				p.schemaError(s, e)
 			}
 			for _, u := range x.unknown {
-				p.unknownKey(Error, u)
+				p.unknownKey(problems.UnknownKeyUnresolved, u)
 			}
 			return value
 		}
 		for _, u := range x.unknown {
-			p.unknownKey(Warning, u)
+			p.unknownKey(problems.UnknownKey, u)
 			obj, _ := jsonptr.Lookup(value, u.object)
 			if obj, ok := obj.(map[string]any); ok {
 				delete(obj, u.key)
@@ -279,16 +280,12 @@ func (s *formatSchema) lookup(location string) any {
 	return v
 }
 
-func (p *parser) unknownKey(severity Severity, u unknownKey) {
+// unknownKey reports a key the schema doesn't define, as a problem of kind
+// k.
+func (p *parser) unknownKey(k *problems.Kind, u unknownKey) {
 	path := jsonptr.Append(jsonptr.Format(u.object), u.key)
-	msg := fmt.Sprintf("unknown key %q", u.key)
-	if severity == Warning {
-		msg += " is ignored"
-	}
-	if s, ok := hint.Suggest(u.key, u.defined); ok {
-		msg += fmt.Sprintf("; did you mean %q?", s)
-	}
-	p.report(severity, p.keys[path], CodeUnknownKey, path, "%s", msg)
+	s, ok := hint.Suggest(u.key, u.defined)
+	p.report(k, p.keys[path], path, problems.WithSuggestion(problems.Params{"key": u.key}, s, ok))
 }
 
 // schemaError reports an error that is left once unknown keys are set aside.
@@ -300,23 +297,21 @@ func (p *parser) schemaError(s *formatSchema, e *jsonschema.ValidationError) {
 		patterns, _ := obj["patternProperties"].(map[string]any)
 		for _, key := range slices.Sorted(slices.Values(k.Properties)) {
 			kp := jsonptr.Append(path, key)
-			p.report(Error, p.keys[kp], CodeSchema, kp, "%q isn't a valid name here; a name must match %s",
-				key, strings.Join(slices.Sorted(maps.Keys(patterns)), " or "))
+			p.report(problems.InvalidName, p.keys[kp], kp,
+				problems.Params{"key": key, "patterns": problems.List(slices.Sorted(maps.Keys(patterns)))})
 		}
 		return
 	case *kind.AnyOf, *kind.OneOf:
 		if got, types, ok := wantedTypeKeys(e); ok {
 			kp := jsonptr.Append(path, "type")
-			if t, ok := suggestType(got, types); ok {
-				p.report(Error, p.values[kp], CodeSchema, kp, "type %s isn't one allowed here; did you mean %q?", show(got), t)
-			} else {
-				p.report(Error, p.values[kp], CodeSchema, kp, "type %s isn't one allowed here, which are %s",
-					show(got), quoteList(types, "and"))
-			}
+			t, ok := suggestType(got, types)
+			params := problems.Params{"type": problems.Show(got), "types": problems.QuoteAll(types)}
+			p.report(problems.InputTypeUnknown, p.values[kp], kp, problems.WithSuggestion(params, t, ok))
 			return
 		}
 	}
-	p.report(Error, p.values[path], CodeSchema, path, "%s", s.describe(e))
+	f := s.describe(e)
+	p.report(f.kind, p.values[path], path, f.params)
 }
 
 // wantedTypeKeys returns the value's type key and the values the forms of
