@@ -98,3 +98,6 @@ cases:
     error: syntax
   - expr: "hashFiles('**/go.sum')"
     error: syntax
+  # Unlike GitHub Actions, function names are case-sensitive.
+  - expr: "Contains('a', 'a')"
+    error: syntax

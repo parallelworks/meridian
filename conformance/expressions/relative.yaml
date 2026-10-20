@@ -40,6 +40,9 @@ workflow:
     a: ${{ .b }}
     b: ${{ .a }}
   self: ${{ .self }}
+  numbered:
+    "5": five
+    half: ${{ .5 }}
 scope:
   contexts:
     inputs:
@@ -80,3 +83,7 @@ cases:
     error: eval
   - at: /self
     error: eval
+  # Unlike JavaScript, .5 isn't a number: a word that starts with . is a
+  # relative reference.
+  - at: /numbered/half
+    value: five

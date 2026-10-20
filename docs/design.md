@@ -323,7 +323,8 @@ Format 1's expressions are the ones ACTIVATE evaluates, as its documentation
 describes them: JavaScript's operators, with its rules for comparing and
 converting values. The `expr` package parses them into a tree, which is what
 the plan stores, and the conformance suite's `expressions` area pins what
-each one means.
+each one means. [Expressions](expressions.md) gives their grammar, limits and
+conversions in full.
 
 - **Values** are JSON's: null, booleans, numbers, strings, lists and
   mappings. Numbers are 64-bit floats, as in JavaScript.
