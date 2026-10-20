@@ -1,0 +1,36 @@
+on:
+  execute:
+    inputs:
+      workers:
+        type: list
+        template:
+          name:
+            type: string
+          scheduler:
+            type: dropdown
+            options: [slurm, pbs]
+          partition:
+            type: string
+            default: default
+          region:
+            type: string
+            default: ${{ vars.REGION }}
+          cores:
+            type: number
+            default: "${{ inputs.workers.[index].is_slurm ? 4 : 1 }}"
+          is_slurm:
+            type: boolean
+            default: ${{ inputs.workers.[index].scheduler == 'slurm' }}
+          disks:
+            type: list
+            template:
+              size:
+                type: number
+                default: 10
+              label:
+                type: string
+                default: ${{ inputs.workers.[index].name }}-${{ inputs.workers.[index].disks.[index].size }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

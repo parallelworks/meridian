@@ -1,0 +1,20 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          token:
+            type: string
+          gpus:
+            type: number
+            default: 1
+        default:
+          - name: ${{ vars.REGION }}-1
+            token: ${{ vars.TOKEN }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

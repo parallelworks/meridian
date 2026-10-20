@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
@@ -25,18 +26,38 @@ func lookup(v any, path []string) any {
 	return v
 }
 
-// setPath sets the value at path, making mappings on the way.
-func setPath(values map[string]any, path []string, v any) {
-	m := values
-	for _, k := range path[:len(path)-1] {
-		next, ok := m[k].(map[string]any)
-		if !ok {
-			next = map[string]any{}
-			m[k] = next
+// setIn sets the value at path in v, a mapping or list: it follows the
+// lists on the way to the item a number names, and makes the mappings on the
+// way that aren't there. It sets nothing if a list doesn't have the item.
+func setIn(v any, path []string, x any) {
+	for i, k := range path {
+		last := i == len(path)-1
+		switch c := v.(type) {
+		case []any:
+			n, err := strconv.Atoi(k)
+			if err != nil || n < 0 || n >= len(c) {
+				return
+			}
+			if last {
+				c[n] = x
+				return
+			}
+			v = c[n]
+		case map[string]any:
+			if last {
+				c[k] = x
+				return
+			}
+			switch c[k].(type) {
+			case map[string]any, []any:
+			default:
+				c[k] = map[string]any{}
+			}
+			v = c[k]
+		default:
+			return
 		}
-		m = next
 	}
-	m[path[len(path)-1]] = v
 }
 
 // deletePath removes the value at path, if there is one.
@@ -136,15 +157,34 @@ func describeRaw(v any) string {
 	return fmt.Sprint(v)
 }
 
-// replaceAt replaces the value at path in v, a mapping or list that has one
-// there.
-func replaceAt(v any, path []string, x any) {
-	last := path[len(path)-1]
-	switch parent := lookup(v, path[:len(path)-1]).(type) {
-	case map[string]any:
-		parent[last] = x
+// parseFor returns v, a workflow's JSON values, with each string that holds
+// an expression parsed as a template for the list rows at index.
+func parseFor(v any, index []int) (any, error) {
+	switch v := v.(type) {
+	case string:
+		t, err := expr.ParseTemplateFor(v, index)
+		if err != nil || t.IsText() {
+			return v, err
+		}
+		return t, nil
 	case []any:
-		i, _ := strconv.Atoi(last)
-		parent[i] = x
+		out := make([]any, len(v))
+		for i, item := range v {
+			var err error
+			if out[i], err = parseFor(item, index); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			var err error
+			if out[k], err = parseFor(item, index); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
 	}
+	return v, nil
 }

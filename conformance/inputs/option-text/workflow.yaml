@@ -1,0 +1,36 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: dropdown
+        options:
+          - label: My region
+            value: ${{ vars.REGION }}
+          - label: us-west
+            value: us-west
+      regions:
+        type: multi-dropdown
+        options:
+          - label: My region
+            value: ${{ vars.REGION }}
+          - label: us-west
+            value: us-west
+      site:
+        type: string
+        default: east
+      grouped:
+        type: dropdown
+        option-key: ${{ inputs.site }}
+        options:
+          east:
+            - label: My region
+              value: ${{ vars.REGION }}
+          west:
+            - label: us-west
+              value: us-west
+      note:
+        type: string
+jobs:
+  main:
+    steps:
+      - run: echo ok

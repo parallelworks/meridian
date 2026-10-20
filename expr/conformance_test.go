@@ -2,6 +2,7 @@ package expr_test
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -93,6 +94,35 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		t.Fatalf("got error %v; want %s", err, show(c.Value))
 	case !equal(got, c.Value):
 		t.Fatalf("got %s, want %s", show(got), show(c.Value))
+	case len(scope.Index) > 0:
+		if c.Expr != "" {
+			src = "${{" + c.Expr + "}}"
+		}
+		checkParsedFor(t, src, scope, c.Value)
+	}
+}
+
+// checkParsedFor checks that src, parsed for its scope's list items, has
+// the value it has with them as the scope's Index, after a trip through
+// JSON, with no Index in the scope.
+func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
+	t.Helper()
+	tmpl, err := expr.ParseTemplateFor(src, scope.Index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored expr.Template
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	index := scope.Index
+	scope.Index = nil
+	if got, err := stored.Eval(scope); err != nil || !equal(got, want) {
+		t.Errorf("parsed for %v: got %s, %v; want %s", index, show(got), err, show(want))
 	}
 }
 
