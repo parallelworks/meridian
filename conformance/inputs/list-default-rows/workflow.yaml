@@ -1,0 +1,29 @@
+on:
+  execute:
+    inputs:
+      prefix:
+        type: string
+        default: web
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          gpus:
+            type: number
+            default: 1
+        default:
+          - name: ${{ inputs.prefix }}-1
+            gpus: 0
+          - name: gpu-1
+      given:
+        type: list
+        template:
+          name:
+            type: string
+        default:
+          - name: unused
+jobs:
+  main:
+    steps:
+      - run: echo ok

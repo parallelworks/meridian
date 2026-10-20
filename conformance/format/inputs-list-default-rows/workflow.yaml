@@ -1,0 +1,15 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+        default:
+          - name: cpu-1
+          - name: gpu-1
+jobs:
+  main:
+    steps:
+      - run: echo ok

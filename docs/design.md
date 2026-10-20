@@ -217,12 +217,15 @@ definitions, under `on.execute.inputs`, and fills in what is missing, as
 ACTIVATE's launch form and its backend do together:
 
 - **Defaults.** An input with no value, or with `""` when `""` isn't one of
-  its options, takes its default. A default of `""` gives no value. A
-  default that is an expression is evaluated with the other inputs' values,
-  defaults included, in whatever order they need; defaults that read each
-  other are an error. A submitted value that is exactly the text of such a
-  default means the default, since a form sends that text for a default it
-  can't evaluate itself; any other value holding `${{ }}` is data.
+  its options, takes its default. A default of `""` gives no value. A list's
+  default is the rows it starts with, as they are written. A default that is
+  an expression is evaluated with the other inputs' values, defaults
+  included, in whatever order they need; defaults that read each other are
+  an error. A submitted value that is exactly the text of such a default
+  means the default, since a form sends that text for a default it can't
+  evaluate itself. So does a string in a submitted mapping or list that is
+  the text of an expression in the same place in its default, such as in one
+  of a list's default rows. Any other value holding `${{ }}` is data.
 - **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
   values are complete, and are true when they are true or the text `true`.
   An ignored input has no value, even one that was submitted. An input with
@@ -248,9 +251,10 @@ ACTIVATE's launch form and its backend do together:
   known when the run is created, such as `env` or a secret variable, stays an
   expression in the plan, beside the inputs' values, and is evaluated as the
   run starts. A mapping or list default stays whole, even if only part of it
-  reads such a thing. The secret variables it reads are among the run's
-  secrets. A `password` input's value isn't in the plan: it is one of the
-  run's secrets.
+  reads such a thing, and so does a submitted value with the text of such a
+  part. The secret variables it reads are among the run's secrets. A
+  `password` input's value isn't in the plan: it is one of the run's
+  secrets.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
 API: it evaluates conditions and defaults against the submitted values

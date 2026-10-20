@@ -2235,7 +2235,8 @@
                   "const": "list"
                 },
                 "default": {
-                  "type": ["string", "object"]
+                  "description": "Rows the list starts with, each an object of the template's fields (a plain value in a list of strings)",
+                  "type": ["array", "string", "object"]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
