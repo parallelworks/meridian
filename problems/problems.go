@@ -16,7 +16,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io/fs"
-	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -93,10 +92,11 @@ func QuoteAll(names []string) string {
 	return List(q)
 }
 
-// WithSuggestion sets params' suggested and suggestion: whether ok, that
-// name was probably meant, and the name. It returns params.
+// WithSuggestion sets params' suggested and suggestion: whether ok, as
+// "true" or "false", that name was probably meant, and the name. It returns
+// params.
 func WithSuggestion(params Params, name string, ok bool) Params {
-	params["suggested"] = ok
+	params["suggested"] = strconv.FormatBool(ok)
 	params["suggestion"] = ""
 	if ok {
 		params["suggestion"] = name
@@ -218,7 +218,14 @@ func (k *Kind) Message(params Params) string {
 func (k *Kind) At(file string, pos Position, pointer string, params Params) Diagnostic {
 	fe := k.typ.At(fragment(pointer), "")
 	fe.Params = make(Params, len(params)+3)
-	maps.Copy(fe.Params, params)
+	for name, v := range params {
+		// foundation's clients keep only string and number params, so a
+		// boolean that switches a select travels as "true" or "false".
+		if b, ok := v.(bool); ok {
+			v = strconv.FormatBool(b)
+		}
+		fe.Params[name] = v
+	}
 	fe.Detail = k.Message(fe.Params)
 	if file != "" {
 		fe.Params[ParamFile] = file
