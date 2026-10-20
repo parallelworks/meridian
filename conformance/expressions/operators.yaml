@@ -275,7 +275,6 @@ cases:
     value: true
   - expr: "!(inputs.num > 3)"
     value: false
-  # ACTIVATE gives null when the input isn't there, as if there were no !.
   - expr: "!inputs.missing.flag"
     value: true
 

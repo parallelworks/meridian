@@ -147,8 +147,6 @@ cases:
     value: 0.096
   - expr: inputs.jsonArr[1:3]
     value: [20, 30]
-  # ACTIVATE ignores the rest of the path after an output's name, and gives
-  # the whole output.
   - expr: needs.build.outputs.json.k
     value: v
 
