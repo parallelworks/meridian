@@ -28,10 +28,10 @@ text     = /* bytes that aren't an expression */ .
   ends at the next one of its kind. A `(`, `[` or `{` starts a bracket that
   ends when brackets of that kind balance, and brackets of other kinds don't
   count inside it. So `${{ {"a": "}}"} }}` is one expression.
-- A `${{` without such a `}}` is text, and so is the rest of the string:
-  `${{ 'a }} ${{ 1 }}` has no expressions, because its quote never closes.
+- A `${{` without such a `}}` is a syntax error. So is `${{ 'a }} ${{ 1 }}`,
+  whose quote never closes.
 - Text has no escapes. A `}}` in text is text, so `${{ 1 }}}` is `1}`. A
-  template can write `${{` as text by building it: `${{ '${{' }}`.
+  template writes `${{` as text by building it: `${{ '${{' }}`.
 
 A template that is one expression and nothing else has the expression's
 value, of any type. Otherwise each expression is replaced by its value's text
@@ -74,15 +74,17 @@ A word is scanned whole, then read as the first of these that fits:
 
 1. **A relative reference**: a word that starts with `.` and has more after
    it ([Relative references](#relative-references)). So `.5` reads the key
-   `5`, not a number.
+   `5`, not a number, and the compiler warns about a relative reference that
+   starts with a digit: `0.5` is the number.
 2. **A reference**: a context's name, then a `.` or `[` and more
    ([References](#references)).
-3. **A number**: whatever Go's `strconv.ParseFloat` reads, or `0x` and
-   hexadecimal digits. That is decimal digits with an optional fraction and
-   exponent (`42`, `2.5e-3`, and `017`, which is 17), `_` between digits
-   (`1_000`), hexadecimal floats with a `p` exponent (`0x1p4`), `Inf`,
-   `Infinity` and `NaN` in any case, and whole numbers such as `0xff`. A
-   number beyond a 64-bit float's range, such as `1e400`, isn't read as one.
+3. **A number**: a word that is a number as a string is one
+   ([Values](#values)), such as `42`, `2.5e-3`, `017` (17), `0xff`, `0o17` or
+   `0b101`, and `1e400`, which is beyond a 64-bit float's range and so is
+   Infinity. A `-` before a hexadecimal, octal or binary number negates it:
+   `-0x10` is -16. `NaN` and `Infinity`, in that case, are numbers too, as
+   JavaScript's globals are. `1_000`, `0x1p4`, `inf` and `nan` aren't
+   numbers, so they are bare words.
 4. **`true`, `false`, `null`**, and `undefined`, which is `null`, in any
    case.
 5. **A bare word**, whose value is its text: `debug`, `ubuntu:22.04`, `12:30`,
@@ -234,23 +236,28 @@ From loosest to tightest:
 | Precedence | Operators |
 | --- | --- |
 | 1 | `? :` |
-| 2 | `\|\|`, `or` |
-| 3 | `&&`, `and` |
-| 4 | `==`, `!=`, `===`, `!==`, `<`, `<=`, `>`, `>=`, `??`, `in`, `includes`, `startsWith`, `endsWith`, `get`, and the negated `!in`, `!includes`, `!startsWith`, `!endsWith` |
-| 5 | `range` |
-| 6 | `+`, `-` |
-| 7 | `*`, `/`, `//`, `%`, `mod` |
-| 8 | `**`, `^`, `exp` |
-| 9 | `split`, `join` |
+| 2 | `??` |
+| 3 | `\|\|`, `or` |
+| 4 | `&&`, `and` |
+| 5 | `==`, `!=`, `===`, `!==`, `<`, `<=`, `>`, `>=`, `in`, `includes`, `startsWith`, `endsWith`, `get`, and the negated `!in`, `!includes`, `!startsWith`, `!endsWith` |
+| 6 | `range` |
+| 7 | `+`, `-` |
+| 8 | `*`, `/`, `//`, `%`, `mod` |
+| 9 | `**`, `^`, `exp` |
+| 10 | `split`, `join` |
 
 The unary `!` and `-` and the prefix operators bind tighter than all of them,
 except that `range` before an operand takes arithmetic: `!inputs.count - 1` is
-`(!inputs.count) - 1`.
+`(!inputs.count) - 1`, and `-2 ** 2` is `(-2) ** 2`, 4.
 
-- Binary operators of the same precedence are left-associative, `**`
-  included: `2 ** 3 ** 2` is `(2 ** 3) ** 2`, 64, and `1 < 2 < 3` compares
-  `true` with 3.
-- `??` is a comparison: `a ?? b == c` is `(a ?? b) == c`.
+- Binary operators of the same precedence are left-associative, so
+  `1 < 2 < 3` compares `true` with 3. The power operators are the exception:
+  they are right-associative, as JavaScript's `**` is, so `2 ** 3 ** 2` is
+  `2 ** (3 ** 2)`, 512.
+- `??` binds looser than comparisons, `||` and `&&`, as in JavaScript:
+  `a ?? b == c` is `a ?? (b == c)`. As in JavaScript, `??` can't be mixed
+  with `||`, `or`, `&&` or `and` without parentheses: `a || b ?? c` and
+  `a ?? b && c` are syntax errors, and `(a || b) ?? c` is fine.
 - The ternary is right-associative: `a ? b : c ? d : e` is
   `a ? b : (c ? d : e)`, and its condition is everything before the `?`
   that binds tighter, so `a || b ? c : d` is `(a || b) ? c : d`.
@@ -266,13 +273,19 @@ What some bytes mean depends on what is around them:
 
 - **`:`** is part of a word, as in `12:30`, `ubuntu:22.04` or the slice
   `1:3`, and it also separates a ternary's branches. At each `?`, the parser
-  looks ahead to the end of the enclosing group, or a `,` at the same level,
-  for a `:` with whitespace before it. If there is one, a `:` in the first
-  branch stays part of a word: `true ? 12:30 : 13:00`. If there isn't, the
-  ternary is written without spaces, and a `:` ends a word in its first
-  branch: `inputs.flag?1:2`. Because the look-ahead goes past the first
-  branch, `true?1:x ? 2 : 3` is a syntax error: the later ` :` makes `1:x` a
-  word. Spaces or parentheses fix it.
+  looks ahead, to the end of the enclosing group or a `,` at the same level,
+  for the `:` with whitespace before it that closes this ternary. A later
+  `?` with whitespace before it, at the same level, starts a spaced
+  ternary, and a spaced `:` closes the latest of those still open before it
+  can close this one. A `??` isn't a ternary's `?`. If this ternary has a spaced `:`, a `:` in its first
+  branch stays part of a word: `true ? 12:30 : 13:00`, and
+  `a ? b ? 12:30 : d : e`. If it hasn't, the ternary is written without
+  spaces, and a `:` ends a word in its first branch: `inputs.flag?1:2`. So
+  in `true?1:x ? 2 : 3`, the spaced `:` is the second ternary's, the first
+  is written without spaces, and the whole is `true ? 1 : (x ? 2 : 3)`. A
+  `?` written without a space before it doesn't count, so
+  `true ? false?1:2 : 3` reads `1:2` as a word, and is a syntax error;
+  `true ? (false?1:2) : 3` isn't.
 - **`-`** is subtraction between words: `inputs.num-1` subtracts 1, and
   `my-word` is `my` minus `word`, which is NaN. Brackets read a key with a
   `-` in it: `inputs['num-1']`. A `-` at the start of an operand before a
@@ -297,10 +310,10 @@ The limits are part of the language, so that a workflow can't make the
 compiler or coordinator do unbounded work:
 
 - **Nesting.** An expression nests at most 200 levels. The parser counts a
-  level for each operand and each expression it is inside, so each group
-  counts two and at most 99 groups nest. The tree it builds is at most 200
-  levels deep too, which bounds chains such as `a + b + …` and `!!…x`. A
-  stored tree is decoded by the same rule.
+  level for each group, call, operator's operand and ternary branch that an
+  operand is inside, so 200 groups nest and 201 don't. The tree it builds is
+  at most 200 levels deep too, which bounds chains such as `a + b + …` and
+  `!!…x`. A stored tree is decoded by the same rule.
 - **`range`** takes whole numbers from -2^53 to 2^53, and makes at most
   10,000 of them.
 - **What an evaluation builds.** An evaluation builds at most 8 MiB of strings
@@ -319,16 +332,34 @@ in short:
 - **Truthiness.** `false`, `0`, NaN, `""` and `null` are false. Everything
   else is true, including `"false"`, `"0"`, `[]` and `{}`.
 - **To a number**, for arithmetic, for ordering, and for some of `==`'s
-  comparisons: `null` is 0, `true` 1 and `false` 0. A string has the
-  whitespace around it removed: an empty string is 0, and otherwise it is
-  read by Go's `strconv.ParseFloat`, as ACTIVATE reads it. So `"1_000"` is
-  1000 and `"0x1p4"` is 16, but `"0xff"` and `"1e400"` are NaN. A list or a
-  mapping is NaN.
-- **To a string**, for `+` with a string and for the string operators: `null`
-  is `"null"`, a number is written as JavaScript's `String(n)` writes it, and a
-  list or mapping is its JSON on one line, with keys in sorted order. In a
-  template's text, and in the arguments of `contains`, `startsWith`,
-  `endsWith` and `format`, `null` is `""`.
+  comparisons: `null` is 0, `true` 1 and `false` 0. A string is read as
+  JavaScript's `Number()` reads it:
+  - The space JavaScript ignores around it is removed: spaces, tabs, line
+    breaks, no-break spaces and the other Unicode spaces. A string that is
+    then empty is 0.
+  - A decimal has an optional sign, digits with an optional fraction, or a
+    fraction alone, and an optional exponent: `"017"` is 17, `".5"` 0.5,
+    `"5."` 5 and `"-2.5E-3"` -0.0025. One beyond a 64-bit float's range is
+    an infinity: `"1e400"` is Infinity.
+  - `"0x"`, `"0o"` and `"0b"`, in either case, then hexadecimal, octal or
+    binary digits, are whole numbers, without a sign: `"0xff"` is 255, and
+    `"-0x10"` is NaN.
+  - `"Infinity"`, `"+Infinity"` and `"-Infinity"`, in that case, are
+    infinities.
+  - Anything else is NaN, including `"1_000"`, `"0x1p4"`, `"inf"` and
+    `"NaN"`.
+
+  A list or a mapping is NaN.
+- **To a string**, for template text, for `+` with a string, and for the
+  string operators and functions: `null` is `""`, as GitHub Actions makes
+  it, a number is written as JavaScript's `String(n)` writes it, and a list
+  or mapping is its JSON on one line, with keys in sorted order. So
+  `'a' + null` is `"a"`, `upper null` is `""`, and `["a", null] join "-"`
+  is `"a-"`. In JSON, such as `toJSON(x)`, `null` stays `null`.
+- **`in`, `includes` and `contains`** look for a substring in a string, an
+  item in a list and a key in a mapping. In a string, `null` is `""`, which
+  every string has, so `'abc' includes null` is true. In a list, an item
+  matches as `==` does, so `null` matches only `null`.
 - **`+`** joins strings if either side is a string, and otherwise adds
   numbers. `-`, `*`, `/`, `//` (division rounded down), `%` and `mod` (the
   remainder, with the sign of the left side) and `**`, `^` and `exp` convert
@@ -340,8 +371,8 @@ in short:
   types are never equal.
 - **`<`, `<=`, `>` and `>=`** compare two strings byte for byte, and anything
   else as numbers. NaN makes each of them false.
-- **`round`** rounds halves away from zero, as Go's `math.Round` does:
-  `round -2.5` is -3.
+- **`round`** rounds as JavaScript's `Math.round` does, halves up toward
+  Infinity: `round 2.5` is 3, and `round -2.5` is -2.
 - **Strings that hold JSON.** Outputs and environment variables are strings,
   so a path, `get`, `length`, `keys`, `values` and `join` read a string that
   holds a JSON list or mapping as its value.

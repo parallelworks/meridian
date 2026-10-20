@@ -193,15 +193,15 @@ func (e *evaluator) eval(n node) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			end = text(v)
+			end = stringOf(v)
 		}
-		return text(start) + ":" + end, nil
+		return stringOf(start) + ":" + end, nil
 	case *concat:
 		v, err := e.eval(n.x)
 		if err != nil {
 			return nil, err
 		}
-		return e.built(n.at, n.prefix+text(v))
+		return e.built(n.at, n.prefix+stringOf(v))
 	}
 	panic(fmt.Sprintf("expr: unknown node %T", n))
 }

@@ -3,7 +3,7 @@ description: >-
   else has the expression's value, of any type. Otherwise each expression is
   replaced by its value's text: a string as it is, null as nothing, and
   anything else as JSON. A }} in quotes or brackets doesn't end an expression,
-  and a ${{ that isn't closed is text.
+  and a ${{ that isn't closed is a syntax error.
 source: ACTIVATE's tests
 scope:
   contexts:
@@ -63,8 +63,19 @@ cases:
     value: ["}}"]
   - template: '${{ {"hello": "}}"} }}'
     value: {hello: "}}"}
+  # A ${{ that isn't closed is a syntax error. Format 1 made it and the rest
+  # of the string text before, even expressions after it that are closed.
   - template: "${{ something "
-    value: "${{ something "
+    error: syntax
+  - template: "${{ 'a }} ${{ 1 }}"
+    error: syntax
+  - template: "${{ 1 }} and ${{ 2"
+    error: syntax
+  # A template writes ${{ as text with an expression.
+  - template: "${{ '${{' }} is text"
+    value: "${{ is text"
+  - template: "a }} alone is text"
+    value: "a }} alone is text"
   - template: "no expressions"
     value: no expressions
   - template: "${{ }}"

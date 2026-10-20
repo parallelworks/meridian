@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
@@ -67,19 +69,120 @@ func toNumber(v any) float64 {
 	return math.NaN()
 }
 
-// stringToNumber reads a string as a number: surrounding space is ignored,
-// an empty string is 0, and a string that isn't a number is NaN. Numbers
-// are read as Go's strconv.ParseFloat reads them, as ACTIVATE does.
+// stringToNumber reads a string as a number, as JavaScript's Number() does:
+// the space around it is ignored, an empty string is 0, and a string that
+// isn't a number is NaN.
 func stringToNumber(s string) float64 {
-	s = strings.TrimSpace(s)
+	s = strings.TrimFunc(s, isJSSpace)
 	if s == "" {
 		return 0
 	}
-	n, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return math.NaN()
+	if n, ok := numeral(s); ok {
+		return n
 	}
-	return n
+	return math.NaN()
+}
+
+// numeral reads s as a number written as JavaScript reads one from a string:
+// Infinity with an optional sign; a decimal with an optional sign, fraction
+// and exponent, such as 017, .5 or -2.5e-3; or, without a sign, a
+// hexadecimal, octal or binary whole number, such as 0xff, 0o17 or 0b101. A
+// decimal beyond a float64's range is an infinity. ok is false if s is none
+// of these: inf, NaN and 1_000 aren't numbers.
+func numeral(s string) (n float64, ok bool) {
+	switch s {
+	case "Infinity", "+Infinity":
+		return math.Inf(1), true
+	case "-Infinity":
+		return math.Inf(-1), true
+	}
+	if len(s) > 2 && s[0] == '0' {
+		if base := radix(s[1]); base != 0 {
+			return wholeNumber(s[2:], base)
+		}
+	}
+	if !decimal(s) {
+		return 0, false
+	}
+	// Beyond a float64's range, ParseFloat returns an infinity and an error.
+	n, _ = strconv.ParseFloat(s, 64)
+	return n, true
+}
+
+// radix returns the base that the letter after a 0 gives a number, as in
+// 0x, 0o and 0b, or 0.
+func radix(c byte) int {
+	switch c {
+	case 'x', 'X':
+		return 16
+	case 'o', 'O':
+		return 8
+	case 'b', 'B':
+		return 2
+	}
+	return 0
+}
+
+// wholeNumber reads digits in base as a number, rounded to the nearest
+// float64 as JavaScript rounds it. ok is false unless digits are one or more
+// of base's digits.
+func wholeNumber(digits string, base int) (float64, bool) {
+	for i := range len(digits) {
+		d := strings.IndexByte("0123456789abcdef", digits[i]|0x20)
+		if d < 0 || d >= base {
+			return 0, false
+		}
+	}
+	i, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return 0, false
+	}
+	n, _ := new(big.Float).SetInt(i).Float64()
+	return n, true
+}
+
+// decimal reports whether s is a decimal number: an optional sign, digits
+// with an optional fraction or a fraction alone, and an optional exponent.
+func decimal(s string) bool {
+	i := 0
+	digits := func() int {
+		start := i
+		for i < len(s) && isDigit(s[i]) {
+			i++
+		}
+		return i - start
+	}
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	n := digits()
+	if i < len(s) && s[i] == '.' {
+		i++
+		n += digits()
+	}
+	if n == 0 {
+		return false
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		if digits() == 0 {
+			return false
+		}
+	}
+	return i == len(s)
+}
+
+// isJSSpace reports whether r is space that JavaScript ignores around a
+// number in a string: its white space and line terminators.
+func isJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', '\uFEFF', '\u2028', '\u2029':
+		return true
+	}
+	return unicode.Is(unicode.Zs, r)
 }
 
 // formatNumber formats n as JavaScript's String(n) does: whole numbers
@@ -108,12 +211,13 @@ func formatNumber(n float64) string {
 }
 
 // stringOf converts v to a string as JavaScript's String() does, except
-// that a list or a mapping is its JSON. The + operator and the string
-// operators use it.
+// that null is empty, as GitHub Actions makes it, and a list or a mapping is
+// its JSON. Template text, the + operator and the string operators and
+// functions use it.
 func stringOf(v any) string {
 	switch v := v.(type) {
 	case nil:
-		return "null"
+		return ""
 	case string:
 		return v
 	case bool:
@@ -126,15 +230,6 @@ func stringOf(v any) string {
 		return formatNumber(n)
 	}
 	return toJSON(v, "")
-}
-
-// text converts v to the text that replaces an expression inside a longer
-// string: like stringOf, but null is empty.
-func text(v any) string {
-	if v == nil {
-		return ""
-	}
-	return stringOf(v)
 }
 
 // toJSON encodes v as JSON, with mapping keys in sorted order and indent as
@@ -421,7 +516,8 @@ func key(v any) (string, bool) {
 }
 
 // contains reports whether a list has an element equal to x, a mapping has
-// the key x, or a string has the substring x.
+// the key x, or a string has the substring x. In a string, a null x is "",
+// which every string has; in a list, it matches only null.
 func contains(collection, x any) bool {
 	switch c := collection.(type) {
 	case []any:
@@ -434,6 +530,9 @@ func contains(collection, x any) bool {
 		_, ok = c[k]
 		return ok
 	case string:
+		if x == nil {
+			return true
+		}
 		s, ok := x.(string)
 		return ok && strings.Contains(c, s)
 	}

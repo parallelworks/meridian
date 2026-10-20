@@ -250,11 +250,15 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		if err != nil {
 			return nil, err
 		}
-		n := stringToNumber(s)
-		if !math.IsNaN(n) && !math.IsInf(n, 0) && s != "NaN" {
-			return nil, fmt.Errorf("expr: %q isn't NaN or an infinity", s)
+		switch s {
+		case "NaN":
+			return &literal{value: math.NaN()}, nil
+		case "Infinity":
+			return &literal{value: math.Inf(1)}, nil
+		case "-Infinity":
+			return &literal{value: math.Inf(-1)}, nil
 		}
-		return &literal{value: n}, nil
+		return nil, fmt.Errorf("expr: %q isn't NaN, Infinity or -Infinity", s)
 	case "word":
 		s, err := str("word")
 		return &word{text: s}, err

@@ -75,6 +75,10 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   rare new numbers rather than given one each. Tools that create a workflow,
   such as `meridian init` and editor templates, write the latest number into
   it.
+- **Bug fixes.** A fix for behaviour that is plainly a bug can change what a
+  format means without a new number, when a scan of the workflows we know of
+  shows that none rely on it. ACTIVATE takes the same fix at the same time,
+  so that a format means one thing wherever it runs.
 - **Translation.** Each format after the first is defined by how it differs
   from the one before, and comes with a translation from it. The compiler
   translates an older workflow into the current format right after
@@ -342,26 +346,31 @@ conversions in full.
   condition, since a word is never false: `if: ${{ !completed }}` never runs.
   For a word that was once one of ACTIVATE's `if:` keywords, the warning
   names the function that replaced it.
-- **Operators**, from loosest to tightest: `? :`; `||` and `or`; `&&` and
-  `and`; the comparisons `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and `>=`,
-  with `??` and the word operators `in`, `includes`, `startsWith`, `endsWith`
+- **Operators**, from loosest to tightest: `? :`; `??`; `||` and `or`; `&&`
+  and `and`; the comparisons `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and
+  `>=`, with the word operators `in`, `includes`, `startsWith`, `endsWith`
   and `get`; `range`; `+` and `-`; `*`, `/`, `//`, `%` and `mod`; `**`, `^`
-  and `exp`; and `split` and `join`. The unary `!` and `-`, and the word
-  operators `length`, `upper`, `lower`, `trim`, `keys`, `values`, `abs`,
-  `floor`, `ceil`, `round`, `fromJSON` and `range`, bind tightest.
+  and `exp`, which group from the right; and `split` and `join`. As in
+  JavaScript, `??` can't be mixed with `||` or `&&` without parentheses. The
+  unary `!` and `-`, and the word operators `length`, `upper`, `lower`,
+  `trim`, `keys`, `values`, `abs`, `floor`, `ceil`, `round`, `fromJSON` and
+  `range`, bind tightest.
 - **Functions** are GitHub Actions' `contains`, `startsWith`, `endsWith`,
   `format`, `join`, `toJSON` and `fromJSON`, with its meanings, plus the
   status functions and `case(condition, value, ..., default)`.
 - **Strings with expressions in them.** A string that is one expression and
   nothing else has the expression's value, of any type. Otherwise each
   expression is replaced by its value's text: a string as it is, null as
-  nothing, and anything else as JSON. A mapping's keys are in sorted order
-  here, and wherever else their order shows.
+  nothing, and anything else as JSON. Null is nothing wherever a string is
+  made of it, as in `'a' + null`. A mapping's keys are in sorted order here,
+  and wherever else their order shows. A `${{` without its `}}` is a syntax
+  error.
 - **The workflow around an expression.** A relative reference reads the
   workflow near the expression: `.hidden` is the key `hidden` beside it, and
-  each further dot, or `../`, goes up a level. `inputs.x.type` reads input
-  `x`'s definition, as its value has no type, and in a list input's
-  template, `[index]` is the index of the item.
+  each further dot, or `../`, goes up a level. The compiler warns about one
+  that starts with a digit, such as `.5`, which reads the key `5`, not a
+  number. `inputs.x.type` reads input `x`'s definition, as its value has no
+  type, and in a list input's template, `[index]` is the index of the item.
 
 Only expressions written in the workflow are evaluated. A value an
 expression reads, such as an input's value, a variable or an output, is data
