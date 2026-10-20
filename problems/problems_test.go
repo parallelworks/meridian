@@ -18,12 +18,33 @@ import (
 	"github.com/parallelworks/foundation/problem/problemtest"
 )
 
+// languages are the languages Meridian's messages and pages are in: those
+// foundation's own catalogs have.
+var languages = []string{"en", "es", "ja", "ko", "zh"}
+
 func TestCatalog(t *testing.T) {
 	problemtest.CheckGoCatalog(t, Catalog, Registry)
+	if got := Catalog.Languages(); !slices.Equal(got, languages) {
+		t.Errorf("the catalog is in %v, want %v", got, languages)
+	}
 	for _, lang := range Catalog.Languages() {
-		for code := range Catalog.Messages(lang) {
+		msgs := Catalog.Messages(lang)
+		for code, msg := range msgs {
 			if _, ok := Lookup(code); !ok {
 				t.Errorf("%s catalog has a message for %s, which isn't a kind", lang, code)
+			}
+			// Each language quotes a name with its own quotation marks,
+			// so English's straight quotes around a param mean a
+			// translation was missed.
+			if lang != "en" && (strings.Contains(msg, `"{`) || strings.Contains(msg, `}"`)) {
+				t.Errorf("%s catalog's %s quotes a param in English quotation marks: %q", lang, code, msg)
+			}
+		}
+		// The localizer falls back to English for a code a language
+		// lacks, so a missing translation renders without an error.
+		for _, typ := range Registry.Types() {
+			if _, ok := msgs[typ.Code]; !ok {
+				t.Errorf("%s catalog has no message for %s", lang, typ.Code)
 			}
 		}
 	}
@@ -82,27 +103,42 @@ func TestEveryKindIsReported(t *testing.T) {
 	}
 }
 
+// TestDocs checks that every kind's page has its text in every language.
+// English takes its title from the kind; a translation has its own, and as
+// many steps to fix the problem as the English page.
 func TestDocs(t *testing.T) {
-	data, err := files.ReadFile("docs/en.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var docs map[problem.Code]problem.Doc
-	if err := json.Unmarshal(data, &docs); err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range Kinds() {
-		if _, ours := Registry.Lookup(k.Code()); !ours {
-			continue // foundation documents its rules
+	read := func(lang string) map[problem.Code]problem.Doc {
+		data, err := files.ReadFile("docs/" + lang + ".json")
+		if err != nil {
+			t.Fatal(err)
 		}
-		d, ok := docs[k.Code()]
-		if !ok || d.Why == "" || len(d.Fix) == 0 {
-			t.Errorf("docs/en.json has no why and fix for %s", k.Code())
+		var docs map[problem.Code]problem.Doc
+		if err := json.Unmarshal(data, &docs); err != nil {
+			t.Fatal(err)
 		}
-		delete(docs, k.Code())
+		return docs
 	}
-	for code := range docs {
-		t.Errorf("docs/en.json has %s, which isn't a kind", code)
+	english := read("en")
+	for _, lang := range languages {
+		docs := read(lang)
+		for _, k := range Kinds() {
+			if _, ours := Registry.Lookup(k.Code()); !ours {
+				continue // foundation documents its rules
+			}
+			d, ok := docs[k.Code()]
+			switch {
+			case !ok || d.Why == "" || len(d.Fix) == 0:
+				t.Errorf("docs/%s.json has no why and fix for %s", lang, k.Code())
+			case lang != "en" && d.Title == "":
+				t.Errorf("docs/%s.json has no title for %s", lang, k.Code())
+			case len(d.Fix) != len(english[k.Code()].Fix):
+				t.Errorf("docs/%s.json has %d steps to fix %s, and docs/en.json has %d", lang, len(d.Fix), k.Code(), len(english[k.Code()].Fix))
+			}
+			delete(docs, k.Code())
+		}
+		for code := range docs {
+			t.Errorf("docs/%s.json has %s, which isn't a kind", lang, code)
+		}
 	}
 }
 
@@ -250,6 +286,76 @@ func TestMessages(t *testing.T) {
 	} {
 		if got := tc.kind.Message(tc.params); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.kind.Code(), got, tc.want)
+		}
+	}
+}
+
+// TestLocalize pins a few messages in each language word for word: the
+// quotation marks each puts around a name, a suggestion, a plural, the type
+// names wrong_type selects, and English for a language the catalog lacks.
+func TestLocalize(t *testing.T) {
+	for _, tc := range []struct {
+		kind   *Kind
+		params Params
+		want   map[string]string
+	}{
+		{
+			UndefinedInput,
+			Params{"name": "rundir", "suggested": "true", "suggestion": "run_dir"},
+			map[string]string{
+				"es": "No hay ninguna entrada “rundir”. ¿Quisiste decir “run_dir”?",
+				"ja": "入力「rundir」はありません。「run_dir」の間違いではありませんか？",
+				"ko": "‘rundir’ 입력이 없습니다. ‘run_dir’을(를) 의도하셨나요?",
+				"zh": "没有输入“rundir”。您是不是想用“run_dir”？",
+				"fr": `There's no input "rundir". Did you mean "run_dir"?`,
+			},
+		},
+		{
+			WrongType,
+			Params{"count": 2, "type1": "object", "type2": "array", "type3": "", "has_got": "true", "got": "string"},
+			map[string]string{
+				"es": "Debe ser un mapa o una lista, no una cadena.",
+				"ja": "文字列ではなく、マッピングかリストにしてください。",
+				"ko": "문자열이 아니라 매핑 또는 목록이어야 합니다.",
+				"zh": "必须是映射或列表，而不是字符串。",
+			},
+		},
+		{
+			TooFewKeys,
+			Params{"min": 1, "count": 0},
+			map[string]string{
+				"es": "Necesita al menos 1 clave. Tiene 0.",
+				"ja": "キーが 1 個以上必要ですが、0 個しかありません。",
+				"ko": "키가 1개 이상 필요하지만 0개만 있습니다.",
+				"zh": "至少需要 1 个键，但只有 0 个。",
+			},
+		},
+		{
+			WrongArgumentCount,
+			Params{"name": "contains", "arity": "exact", "min": 2, "max": 2, "count": 1},
+			map[string]string{
+				"es": "La función contains() recibe 2 argumentos, pero se le pasó 1.", //nolint:misspell // Spanish, not a misspelling of arguments
+				"ja": "関数 contains() の引数は 2 個ですが、1 個指定されています。",
+				"ko": "contains() 함수는 인수를 2개 받지만 1개가 지정되었습니다.",
+				"zh": "函数 contains() 接受 2 个参数，但传入了 1 个。",
+			},
+		},
+		{
+			UnclosedTemplate,
+			nil,
+			map[string]string{
+				"es": "El ${{ no tiene un }} que lo cierre. Escribe ${{ '${{' }} para el texto ${{.",
+				"ja": "${{ を閉じる }} がありません。テキストとしての ${{ は ${{ '${{' }} と書いてください。",
+				"ko": "${{ 기호를 닫는 }} 기호가 없습니다. 텍스트로 ${{ 기호를 쓰려면 ${{ '${{' }} 형태로 쓰세요.",
+				"zh": "${{ 没有以 }} 结束。要表示文本 ${{，请写成 ${{ '${{' }}。",
+			},
+		},
+	} {
+		d := tc.kind.At("w.yaml", Position{1, 1}, "/a", tc.params)
+		for lang, want := range tc.want {
+			if got := d.Localize(lang); got != want {
+				t.Errorf("%s in %s: got %q, want %q", tc.kind.Code(), lang, got, want)
+			}
 		}
 	}
 }

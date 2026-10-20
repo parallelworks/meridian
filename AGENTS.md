@@ -23,10 +23,11 @@
   (`GOFIPS140=certified`). If a test fails with a FIPS error, change the algorithm, not
   the flag.
 - Every problem Meridian reports is a kind in `problems/kinds.go`, with a stable code, its
-  English message in `problems/messages/en.json` and its page's text in
-  `problems/docs/en.json`. A new message is a new kind, never text built in Go, and a
-  value from a workflow goes in a param. Codes and params are never renamed. Tests fail
-  for a kind that has no message or page, or that nothing reports.
+  message in `problems/messages/<lang>.json` and its page's text in
+  `problems/docs/<lang>.json`, in each of the languages foundation's catalogs have: en,
+  es, ja, ko and zh. A new message is a new kind, never text built in Go, and a value
+  from a workflow goes in a param. Codes and params are never renamed. Tests fail for a
+  kind that has no message or page in a language, or that nothing reports.
 - Never fall back to weaker isolation or security. When a requirement can't be met, such
   as a missing container runtime or a key the environment can't provide, fail with an
   error that says why.
