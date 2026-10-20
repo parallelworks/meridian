@@ -147,11 +147,18 @@ func (e *evaluator) join(at int, v any, sep string) (any, error) {
 // maxRange is the most numbers range produces.
 const maxRange = 10000
 
+// maxExact is the largest whole number that float64 holds along with every
+// whole number below it.
+const maxExact = 1 << 53
+
 // rangeOf returns the whole numbers from start up to but not including end.
 func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	s, t := toNumber(start), toNumber(end)
 	if s != math.Trunc(s) || t != math.Trunc(t) {
 		return nil, e.errorAt(at, "range takes whole numbers, not %s and %s", stringOf(start), stringOf(end))
+	}
+	if math.Abs(s) > maxExact || math.Abs(t) > maxExact {
+		return nil, e.errorAt(at, "range takes numbers from -2^53 to 2^53, not %s and %s", formatNumber(s), formatNumber(t))
 	}
 	if t <= s {
 		return []any{}, nil
@@ -159,9 +166,9 @@ func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	if t-s > maxRange {
 		return nil, e.errorAt(at, "the range from %s to %s has more than %d numbers", formatNumber(s), formatNumber(t), maxRange)
 	}
-	out := make([]any, 0, int(t-s))
-	for i := s; i < t; i++ {
-		out = append(out, i)
+	out := make([]any, int(t-s))
+	for i := range out {
+		out[i] = s + float64(i)
 	}
 	return e.built(at, out)
 }

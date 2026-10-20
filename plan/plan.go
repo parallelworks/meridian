@@ -1,8 +1,9 @@
 package plan
 
 import (
-	"bytes"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 
 	"github.com/parallelworks/meridian/format"
@@ -35,8 +36,13 @@ type Run struct {
 	Icon        string `json:"icon,omitempty"`
 	Thumbnail   string `json:"thumbnail,omitempty"`
 	// Inputs are the run's input values, with defaults applied and ignored
-	// inputs left out: a mapping, which holds no templates.
-	Inputs Value `json:"inputs,omitzero"`
+	// inputs left out: a mapping.
+	Inputs Data `json:"inputs,omitzero"`
+	// DeferredInputs are the defaults of inputs that read what is known
+	// only once the run is underway, such as a secret variable, by their
+	// input's path, as in group.name. They are evaluated as the run starts,
+	// with the other inputs' values, and give the inputs' values.
+	DeferredInputs map[string]Value `json:"deferredInputs,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`
 	// Timeout is the run's timeout:.
@@ -66,9 +72,8 @@ type Job struct {
 	Key string `json:"key"`
 	// Name is the job's name in the workflow.
 	Name string `json:"name"`
-	// Matrix holds a matrix instance's values: a mapping, which holds no
-	// templates.
-	Matrix Value `json:"matrix,omitzero"`
+	// Matrix holds a matrix instance's values: a mapping.
+	Matrix Data `json:"matrix,omitzero"`
 	// Strategy is the matrix of a job whose values aren't known until its
 	// dependencies have finished, which the coordinator expands then. A job
 	// with a Strategy has no instances yet.
@@ -118,7 +123,7 @@ type JobRetry struct {
 // A Step is one step of a job.
 type Step struct {
 	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Name Value  `json:"name,omitzero"`
 	// If is the step's if:. Unset means success().
 	If Value `json:"if,omitzero"`
 	// Run is the command the step runs.
@@ -156,22 +161,25 @@ func Encode(p *Plan) ([]byte, error) {
 	return json.Marshal(p)
 }
 
+// ErrVersion is what Decode returns for a plan of a version this release
+// doesn't read, such as one a newer release wrote.
+var ErrVersion = errors.New("plan: unsupported version")
+
 // Decode decodes a plan that Encode encoded. It fails on a plan of another
-// version, and on keys it doesn't know, which a newer release wrote.
+// version, with ErrVersion, and on keys it doesn't know, which a newer
+// release wrote. Keys match exactly, and no key can be given twice.
 func Decode(data []byte) (*Plan, error) {
 	var head struct {
 		Version int `json:"version"`
 	}
-	if err := json.Unmarshal(data, &head); err != nil {
-		return nil, err
+	if err := jsonv2.Unmarshal(data, &head); err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
 	}
 	if head.Version != Version {
-		return nil, fmt.Errorf("plan: version %d isn't one this release reads, which is %d", head.Version, Version)
+		return nil, fmt.Errorf("%w %d; this release reads version %d", ErrVersion, head.Version, Version)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	p := new(Plan)
-	if err := dec.Decode(p); err != nil {
+	if err := jsonv2.Unmarshal(data, p, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 	return p, nil

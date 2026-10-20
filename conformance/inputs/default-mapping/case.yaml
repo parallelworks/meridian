@@ -1,0 +1,19 @@
+description: >-
+  A default can be a mapping or a list, whose strings' expressions are
+  evaluated where they are. A default with an expression that reads something
+  the compiler doesn't have stays an expression, all of it, until the run is
+  underway.
+source: Meridian
+contexts:
+  vars:
+    TOKEN: unused
+secret-variables: [TOKEN]
+expect:
+  inputs:
+    name: web
+    cluster:
+      name: web
+      labels: [web, fixed]
+    auth:
+      token: ${{ vars.TOKEN }}
+      user: ${{ inputs.name }}

@@ -1,12 +1,12 @@
 package plan
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 )
@@ -18,25 +18,36 @@ import (
 //
 // A Value encodes as JSON. A template encodes as an object whose one key is
 // ${{, holding the template's parts, so a value without expressions encodes
-// as itself.
+// as itself. A mapping whose only key starts with $, as ${{ does, encodes
+// inside an object whose one key is $, so that it is never taken for a
+// template, whatever the workflow or a run's data put in it.
 type Value struct {
 	v any
+	// set is false only for the zero Value, which is unset. A Value of null
+	// is set: a step's working-directory: null opts out of its job's.
+	set bool
 }
 
-// templateKey is the key that marks a template in a Value's JSON.
-const templateKey = "${{"
+const (
+	// templateKey is the key that marks a template in a Value's JSON.
+	templateKey = "${{"
+	// dataKey is the key that marks a mapping whose only key starts with $.
+	dataKey = "$"
+)
 
 // ValueOf makes a Value of v, a workflow's JSON values, parsing the
-// expressions in each string. It fails if an expression doesn't parse, or if
-// a mapping's only key is ${{, which its JSON couldn't tell from a template.
+// expressions in each string. It fails if an expression doesn't parse.
 func ValueOf(v any) (Value, error) {
 	out, err := parseValue(v)
-	return Value{out}, err
+	if err != nil {
+		return Value{}, err
+	}
+	return Value{out, true}, nil
 }
 
 // Literal returns a Value that holds v as it is: no string in it is parsed,
 // and an *expr.Template in it stays a template.
-func Literal(v any) Value { return Value{v} }
+func Literal(v any) Value { return Value{v, true} }
 
 func parseValue(v any) (any, error) {
 	switch v := v.(type) {
@@ -56,11 +67,8 @@ func parseValue(v any) (any, error) {
 		}
 		return out, nil
 	case map[string]any:
-		if _, ok := v[templateKey]; ok && len(v) == 1 {
-			return nil, fmt.Errorf("a mapping can't have %s as its only key", templateKey)
-		}
 		out := make(map[string]any, len(v))
-		for _, k := range slices.Sorted(maps.Keys(v)) {
+		for _, k := range sortedKeys(v) {
 			var err error
 			if out[k], err = parseValue(v[k]); err != nil {
 				return nil, fmt.Errorf("%s: %w", k, err)
@@ -72,7 +80,7 @@ func parseValue(v any) (any, error) {
 }
 
 // IsZero reports whether the Value is unset.
-func (v Value) IsZero() bool { return v.v == nil }
+func (v Value) IsZero() bool { return !v.set }
 
 // Literal returns the Value's JSON value if it holds no expressions.
 func (v Value) Literal() (any, bool) {
@@ -99,10 +107,11 @@ func hasTemplate(v any) bool {
 }
 
 // Eval evaluates the Value's templates in scope and returns its JSON value.
-// It returns an *expr.UnknownError if a template reads something scope
-// doesn't have yet.
+// Its templates share one budget for what they build, as one expression's
+// evaluation does. It returns an *expr.UnknownError if a template reads
+// something scope doesn't have yet.
 func (v Value) Eval(scope expr.Scope) (any, error) {
-	return evalValue(v.v, scope)
+	return evalValue(v.v, scope.Budgeted())
 }
 
 func evalValue(v any, scope expr.Scope) (any, error) {
@@ -120,9 +129,9 @@ func evalValue(v any, scope expr.Scope) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
-		for k, item := range v {
+		for _, k := range sortedKeys(v) {
 			var err error
-			if out[k], err = evalValue(item, scope); err != nil {
+			if out[k], err = evalValue(v[k], scope); err != nil {
 				return nil, err
 			}
 		}
@@ -145,7 +154,7 @@ func (v Value) Exprs() []*expr.Expr {
 				walk(item)
 			}
 		case map[string]any:
-			for _, k := range slices.Sorted(maps.Keys(v)) {
+			for _, k := range sortedKeys(v) {
 				walk(v[k])
 			}
 		}
@@ -174,67 +183,95 @@ func encodeValue(v any) any {
 		for k, item := range v {
 			out[k] = encodeValue(item)
 		}
+		if marked(v) {
+			return map[string]any{dataKey: out}
+		}
 		return out
 	}
 	return v
 }
 
+// marked reports whether a mapping's only key starts with $, which in a
+// Value's JSON would mark it as something other than a mapping.
+func marked(m map[string]any) bool {
+	if len(m) != 1 {
+		return false
+	}
+	for k := range m {
+		return strings.HasPrefix(k, "$")
+	}
+	return false
+}
+
 // UnmarshalJSON decodes a Value that MarshalJSON encoded. Numbers decode as
 // json.Number's value: int64 when whole and in range, float64 otherwise.
 func (v *Value) UnmarshalJSON(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var raw any
-	if err := dec.Decode(&raw); err != nil {
+	raw, err := decodeJSON(data)
+	if err != nil {
 		return err
 	}
 	out, err := decodeValue(raw)
 	if err != nil {
 		return err
 	}
-	v.v = out
+	*v = Value{out, true}
 	return nil
 }
 
 func decodeValue(v any) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
-		if n, err := v.Int64(); err == nil {
-			return n, nil
-		}
-		return v.Float64()
+		return number(v)
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
 			if out[i], err = decodeValue(item); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%d: %w", i, err)
 			}
 		}
 		return out, nil
 	case map[string]any:
-		if parts, ok := v[templateKey]; ok && len(v) == 1 {
-			data, err := json.Marshal(parts)
-			if err != nil {
-				return nil, err
-			}
-			t := new(expr.Template)
-			if err := t.UnmarshalJSON(data); err != nil {
-				return nil, err
-			}
-			if t.IsText() {
-				return nil, errors.New("plan: a template has no expressions")
-			}
-			return t, nil
+		if !marked(v) {
+			return decodeMapping(v)
 		}
-		out := make(map[string]any, len(v))
-		for k, item := range v {
-			var err error
-			if out[k], err = decodeValue(item); err != nil {
-				return nil, fmt.Errorf("%s: %w", k, err)
-			}
+		if parts, ok := v[templateKey]; ok {
+			return decodeTemplate(parts)
 		}
-		return out, nil
+		if m, ok := v[dataKey].(map[string]any); ok && marked(m) {
+			return decodeMapping(m)
+		}
+		return nil, errors.New("plan: a mapping whose only key starts with $ must be a template or be inside {\"$\": ...}")
 	}
 	return v, nil
+}
+
+func decodeMapping(m map[string]any) (any, error) {
+	out := make(map[string]any, len(m))
+	for _, k := range sortedKeys(m) {
+		var err error
+		if out[k], err = decodeValue(m[k]); err != nil {
+			return nil, fmt.Errorf("%s: %w", k, err)
+		}
+	}
+	return out, nil
+}
+
+func decodeTemplate(parts any) (any, error) {
+	data, err := json.Marshal(parts)
+	if err != nil {
+		return nil, err
+	}
+	t := new(expr.Template)
+	if err := t.UnmarshalJSON(data); err != nil {
+		return nil, err
+	}
+	if t.IsText() {
+		return nil, errors.New("plan: a template has no expressions")
+	}
+	return t, nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
 }

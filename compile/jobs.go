@@ -1,7 +1,6 @@
 package compile
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -13,12 +12,6 @@ import (
 	"github.com/parallelworks/meridian/plan"
 )
 
-var (
-	sprintf  = fmt.Sprintf
-	itoa     = strconv.Itoa
-	errorsAs = errors.As
-)
-
 // A phase is when a value is evaluated, which decides what it can read.
 type phase int
 
@@ -26,8 +19,11 @@ const (
 	// runCreated is when the run is created: the workflow's env, timeout,
 	// sessions and links, and a job's needs.
 	runCreated phase = iota
-	// jobReady is when a job's dependencies have finished: its if:,
-	// runs-on:, strategy:, resources:, retry:, timeout:, ssh: and
+	// needsDone is when a job's dependencies have finished, before its
+	// matrix is expanded: its strategy:.
+	needsDone
+	// jobReady is when a job, or a matrix instance of it, is ready to run:
+	// its if:, runs-on:, resources:, retry:, timeout:, ssh: and
 	// working-directory:.
 	jobReady
 	// jobEnv is when a job's env: is set, before its steps run.
@@ -44,7 +40,9 @@ func (p phase) has(context string) bool {
 	switch context {
 	case "inputs", "org", "vars", "remote", "sessions":
 		return true
-	case "needs", "matrix", "status", "env":
+	case "needs", "status", "env":
+		return p >= needsDone
+	case "matrix":
 		return p >= jobReady
 	case "job":
 		return p >= jobEnv
@@ -58,6 +56,8 @@ func (p phase) when() string {
 	switch p {
 	case runCreated:
 		return "when the run is created, which is when this is evaluated"
+	case needsDone:
+		return "in a job's strategy:, which is evaluated before its matrix is expanded"
 	case jobReady:
 		return "here, which is evaluated before the job's steps run"
 	case jobEnv:
@@ -114,7 +114,7 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 			continue
 		}
 		if first, dup := info.stepIDs[id]; dup {
-			c.reportAt(format.Error, CodeDuplicateID, appendPath(info.loc, "steps", itoa(i), "id"),
+			c.reportAt(format.Error, CodeDuplicateID, appendPath(info.loc, "steps", strconv.Itoa(i), "id"),
 				"steps %d and %d of job %s both have the id %s", first, i, name, id)
 			continue
 		}
@@ -188,9 +188,9 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 		case job == info.name:
 			c.reportAt(format.Error, CodeNeeds, loc, "job %s needs itself", info.name)
 		case !slices.Contains(names, job):
-			msg := sprintf("job %s needs %s, which isn't a job of this workflow", info.name, job)
+			msg := fmt.Sprintf("job %s needs %s, which isn't a job of this workflow", info.name, job)
 			if s, ok := suggest(job, names); ok {
-				msg += sprintf("; did you mean %s?", s)
+				msg += fmt.Sprintf("; did you mean %s?", s)
 			}
 			c.reportAt(format.Error, CodeNeeds, loc, "%s", msg)
 		case !info.needed[job]:
@@ -263,9 +263,9 @@ func (c *compiler) job(info *jobInfo) plan.Job {
 	info.step = -1
 	if _, ok := def["strategy"]; ok {
 		j.Strategy = &plan.Strategy{
-			Matrix:      c.value(at("strategy", "matrix"), jobReady, info),
-			FailFast:    c.value(at("strategy", "fail-fast"), jobReady, info),
-			MaxParallel: c.value(at("strategy", "max-parallel"), jobReady, info),
+			Matrix:      c.value(at("strategy", "matrix"), needsDone, info),
+			FailFast:    c.value(at("strategy", "fail-fast"), needsDone, info),
+			MaxParallel: c.value(at("strategy", "max-parallel"), needsDone, info),
 		}
 	}
 	j.If = c.condition(at("if"), jobReady, info)
@@ -288,7 +288,7 @@ func (c *compiler) job(info *jobInfo) plan.Job {
 	j.Steps = make([]plan.Step, len(steps))
 	for i := range steps {
 		info.step = i
-		j.Steps[i] = c.step(info, at("steps", itoa(i)))
+		j.Steps[i] = c.step(info, at("steps", strconv.Itoa(i)))
 	}
 	info.step = len(steps)
 	j.Outputs = c.values(at("outputs"), jobEnds, info)
@@ -299,10 +299,10 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 	at := func(keys ...string) []string { return appendPath(loc, keys...) }
 	def := mapping(lookup(c.doc.Value, loc))
 	s := plan.Step{
-		ID: str(def["id"]), Name: str(def["name"]), Uses: str(def["uses"]), Shell: str(def["shell"]),
+		ID: str(def["id"]), Uses: str(def["uses"]), Shell: str(def["shell"]),
 		EarlyCancel: str(def["early-cancel"]), Path: pointer(loc),
 	}
-	c.check(at("name"), def["name"], stepRuns, info)
+	s.Name = c.value(at("name"), stepRuns, info)
 	s.If = c.condition(at("if"), stepRuns, info)
 	s.Run = c.value(at("run"), stepRuns, info)
 	s.With = c.value(at("with"), stepRuns, info)

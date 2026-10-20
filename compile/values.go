@@ -2,9 +2,12 @@ package compile
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Helpers for the JSON values a workflow and its inputs are made of.
@@ -105,6 +108,44 @@ func copyValue(v any) any {
 		return out
 	}
 	return v
+}
+
+// notJSON describes the first part of v that isn't a JSON value of the
+// kinds the compiler takes, or returns "". They are nil, booleans, finite
+// float64, int and int64 numbers, UTF-8 text, and lists and mappings of them.
+func notJSON(v any) string {
+	switch v := v.(type) {
+	case nil, bool, int, int64:
+		return ""
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return formatNumber(v)
+		}
+		return ""
+	case string:
+		if !utf8.ValidString(v) {
+			return "text that isn't UTF-8"
+		}
+		return ""
+	case []any:
+		for _, item := range v {
+			if bad := notJSON(item); bad != "" {
+				return bad
+			}
+		}
+		return ""
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if !utf8.ValidString(k) {
+				return "a key that isn't UTF-8"
+			}
+			if bad := notJSON(v[k]); bad != "" {
+				return bad
+			}
+		}
+		return ""
+	}
+	return fmt.Sprintf("a Go %T", v)
 }
 
 // toNumber returns v as a number: a number, or text that is one.

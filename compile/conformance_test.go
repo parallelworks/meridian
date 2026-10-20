@@ -44,11 +44,7 @@ func TestInputsConformance(t *testing.T) {
 			if diags.HasErrors() {
 				return
 			}
-			values, _ := inputs.Values.Literal()
-			if values == nil {
-				values = withTemplates(t, inputs)
-			}
-			if g, w := canonical(t, values), canonical(t, orEmpty(c.Expect.Inputs)); g != w {
+			if g, w := canonical(t, withTemplates(t, inputs)), canonical(t, orEmpty(c.Expect.Inputs)); g != w {
 				t.Errorf("inputs = %s, want %s", g, w)
 			}
 			if g, w := canonical(t, inputs.Secrets), canonical(t, orEmpty(c.Expect.Secrets)); g != w {
@@ -78,24 +74,44 @@ func contexts(c conformance.Case) map[string]any {
 	return out
 }
 
-// withTemplates returns the values with each template as its text.
-func withTemplates(t *testing.T, inputs *compile.Inputs) any {
+// withTemplates returns the values with each deferred default as its
+// text.
+func withTemplates(t *testing.T, inputs *compile.Inputs) map[string]any {
 	t.Helper()
-	data, err := json.Marshal(inputs.Values)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		t.Fatal(err)
-	}
-	var text func(v any) any
-	text = func(v any) any {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return v
+	values := inputs.Values
+	for path, v := range inputs.Deferred {
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if parts, ok := m["${{"].([]any); ok && len(m) == 1 {
+		var raw any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatal(err)
+		}
+		keys := strings.Split(path, ".")
+		m := values
+		for _, k := range keys[:len(keys)-1] {
+			next, ok := m[k].(map[string]any)
+			if !ok {
+				next = map[string]any{}
+				m[k] = next
+			}
+			m = next
+		}
+		m[keys[len(keys)-1]] = templateText(raw)
+	}
+	return values
+}
+
+// templateText returns v, a Value's JSON, with each template as its text.
+func templateText(v any) any {
+	switch v := v.(type) {
+	case []any:
+		for i, item := range v {
+			v[i] = templateText(item)
+		}
+	case map[string]any:
+		if parts, ok := v["${{"].([]any); ok && len(v) == 1 {
 			var b strings.Builder
 			for _, p := range parts {
 				if s, ok := p.(string); ok {
@@ -106,12 +122,11 @@ func withTemplates(t *testing.T, inputs *compile.Inputs) any {
 			}
 			return b.String()
 		}
-		for k, item := range m {
-			m[k] = text(item)
+		for k, item := range v {
+			v[k] = templateText(item)
 		}
-		return m
 	}
-	return text(v)
+	return v
 }
 
 func orEmpty(m map[string]any) map[string]any {

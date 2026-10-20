@@ -2,6 +2,8 @@ package expr
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -19,12 +21,23 @@ type Document struct {
 // Scope returns scope with a Resolver for expressions at location in the
 // document: the path of keys and list indexes that leads to them.
 func (d *Document) Scope(location []string, scope Scope) Scope {
-	if scope.spent == nil {
-		scope.spent = new(int)
-	}
+	scope = scope.Budgeted()
 	ev := &documentEval{doc: d, scope: scope, active: map[string]bool{}, done: map[string]any{}}
 	scope.Resolver = &documentResolver{eval: ev, location: location}
 	return scope
+}
+
+// Eval evaluates what the document holds at location, in scope, as an
+// expression there that read it would: the expressions in a string, and in
+// each string of a list or mapping. It returns nil if there is nothing at
+// location.
+func (d *Document) Eval(location []string, scope Scope) (any, error) {
+	r := d.Scope(location, scope).Resolver.(*documentResolver)
+	v, ok := r.raw(location)
+	if !ok {
+		return nil, nil
+	}
+	return r.resolve(v, location)
 }
 
 // A documentEval evaluates the expressions in a document that one
@@ -92,9 +105,9 @@ func (r *documentResolver) resolve(v any, location []string) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
-		for k, item := range v {
+		for _, k := range slices.Sorted(maps.Keys(v)) {
 			var err error
-			if out[k], err = r.resolve(item, appendPath(location, k)); err != nil {
+			if out[k], err = r.resolve(v[k], appendPath(location, k)); err != nil {
 				return nil, err
 			}
 		}

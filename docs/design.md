@@ -209,16 +209,19 @@ ACTIVATE's launch form and its backend do together:
   number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
-  name, and is kept, as ACTIVATE keeps it.
+  name, and is kept, as ACTIVATE keeps it. A submitted value that isn't
+  JSON, such as NaN or text that isn't UTF-8, is an error.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
   input of such a type that has a value is an error.
 - **What the compiler doesn't have.** A default that reads something not
   known when the run is created, such as `env` or a secret variable, stays an
-  expression in the plan and is evaluated once the run is underway. A
-  `password` input's value isn't in the plan: it is one of the run's
-  secrets.
+  expression in the plan, beside the inputs' values, and is evaluated as the
+  run starts. A mapping or list default stays whole, even if only part of it
+  reads such a thing. The secret variables it reads are among the run's
+  secrets. A `password` input's value isn't in the plan: it is one of the
+  run's secrets.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
 API: it evaluates conditions and defaults against the submitted values
@@ -251,6 +254,14 @@ text and the trees of its expressions. Anything that can't be known until
 the run is underway, such as a job's `needs`, stays an expression to
 evaluate later.
 
+Everything else is data, and stays data. What a run was given, such as its
+inputs' values and a matrix instance's, is stored as JSON that is never
+evaluated. In the workflow's own values, a mapping whose only key starts
+with `$`, as a stored expression's does, is stored marked as data. So nothing
+a workflow or a run's data holds can become an expression when a plan is
+read back, and an explicit `null`, such as a step's `working-directory:
+null`, stays distinct from a value that isn't there.
+
 Each job instance has a key: the job's name, or for a matrix instance its
 name, `#` and its index, as in `build#2`. A matrix whose values come from
 `needs` can't be expanded when the run is created, so the plan holds the
@@ -264,7 +275,7 @@ Plan encodings change the way the format does: by addition. A change that
 can't be an addition gets a new plan version, and releases keep reading the
 old one until no stored run can still use it. A release refuses a plan with
 a key it doesn't know, which a newer release wrote, rather than run it
-without that part.
+without that part. Keys match exactly, and a key given twice is refused.
 
 ## Expressions
 
@@ -279,7 +290,8 @@ to depends on where it is evaluated:
 | A job ends | Worker | | Job `outputs:` |
 
 `matrix` is known once a job's matrix is expanded: when the run is created,
-or, for a matrix that uses `needs`, when its dependencies have finished.
+or, for a matrix that uses `needs`, when its dependencies have finished. A
+job's `strategy:` is what is expanded, so it can't read `matrix`.
 
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`). A job's default `if:` is
@@ -358,9 +370,11 @@ is evaluated.
 
 Evaluation is pure: an expression can't read files, start processes or reach
 a network. Depth, time and the size of a result are bounded, so a workflow
-can't make the compiler or coordinator do unbounded work: an expression
-nests at most 200 levels, `range` makes at most 10,000 numbers, and an
-evaluation builds at most 8 MiB of strings and lists.
+can't make the compiler or coordinator do unbounded work: an expression's
+tree nests at most 200 levels, `range` makes at most 10,000 numbers, none
+beyond ±2^53, and an evaluation builds at most 8 MiB of strings and lists.
+Evaluating a run's input defaults and conditions is one evaluation, as is
+evaluating every expression in one value, such as a step's `with:`.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.

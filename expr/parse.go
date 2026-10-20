@@ -43,7 +43,26 @@ func Parse(src string) (*Expr, error) {
 	if p.pos < len(src) {
 		return nil, p.unexpected()
 	}
+	if n := tooDeep(root, 0); n != nil {
+		return nil, p.errorAt(n.offset(), "the expression nests more than %d levels deep", maxDepth)
+	}
 	return &Expr{src: src, root: root}, nil
+}
+
+// tooDeep returns a node of the tree under n, which is depth levels deep,
+// that is more than maxDepth levels deep, or nil. The parser counts the
+// levels it recurses through, but a chain such as a + b + c or !!x nests
+// without recursing, and a decoded tree must not be deeper than a parsed one.
+func tooDeep(n node, depth int) node {
+	if depth > maxDepth {
+		return n
+	}
+	for _, c := range children(n) {
+		if deep := tooDeep(c, depth+1); deep != nil {
+			return deep
+		}
+	}
+	return nil
 }
 
 // Operator precedence, from loosest to tightest. Binary operators of the

@@ -1,0 +1,8 @@
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux, mac]
+      max-parallel: ${{ matrix.os == 'linux' && 1 || 2 }}
+    steps:
+      - run: echo ${{ matrix.os }}

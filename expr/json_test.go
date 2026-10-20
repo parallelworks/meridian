@@ -95,6 +95,11 @@ func TestJSONDecodeErrors(t *testing.T) {
 		{"zero up", `{"src":"x","tree":{"up":0,"path":["x"]}}`},
 		{"bad segment", `{"src":"x","tree":{"ref":"inputs","path":[{"what":1}]}}`},
 		{"unknown key", `{"src":"x","tree":{"lit":1},"extra":1}`},
+		{"a key in another case", `{"SRC":"x","tree":{"lit":1}}`},
+		{"a key twice", `{"src":"x","src":"y","tree":{"lit":1}}`},
+		{"a node of two kinds", `{"src":"x","tree":{"lit":1,"word":"x"}}`},
+		{"a node's unknown key", `{"src":"x","tree":{"ref":"inputs","path":[],"later":1}}`},
+		{"a node's key twice", `{"src":"x","tree":{"lit":1,"lit":2}}`},
 		{"too deep", `{"src":"x","tree":` + strings.Repeat(`{"op":"!","x":`, 300) + `{"lit":1}` + strings.Repeat(`}`, 300) + `}`},
 	} {
 		var e expr.Expr
