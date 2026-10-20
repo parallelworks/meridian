@@ -201,8 +201,8 @@ func TestValue(t *testing.T) {
 		t.Errorf("Literal encodes as %s, %v", data, err)
 	}
 
-	var se *expr.SyntaxError
-	if _, err := plan.ValueOf([]any{"ok", "${{ 1 + }}"}); !errors.As(err, &se) || !strings.HasPrefix(err.Error(), "1: ") {
+	_, err = plan.ValueOf([]any{"ok", "${{ 1 + }}"})
+	if _, ok := errors.AsType[*expr.SyntaxError](err); !ok || !strings.HasPrefix(err.Error(), "1: ") {
 		t.Errorf("a bad expression = %v", err)
 	}
 	if v, err := plan.ValueOf(nil); err != nil || v.IsZero() {

@@ -45,8 +45,8 @@ func TestJSONRoundTrip(t *testing.T) {
 				scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
 			}
 			if f.Workflow != nil {
-				doc := &expr.Document{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
-				scope = doc.Scope(nil, scope)
+				w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
+				scope = w.Scope(nil, scope)
 			}
 			want, wantErr := tmpl.Eval(scope)
 			got, gotErr := back.Eval(scope)
@@ -81,35 +81,30 @@ func TestJSONEncoding(t *testing.T) {
 }
 
 func TestJSONDecodeErrors(t *testing.T) {
-	for _, tc := range []struct{ name, data string }{
-		{"not an object", `{"src":"x","tree":1}`},
-		{"no kind", `{"src":"x","tree":{}}`},
-		{"unknown context", `{"src":"x","tree":{"ref":"secrets","path":[]}}`},
-		{"var spelled var", `{"src":"x","tree":{"ref":"var","path":[]}}`},
-		{"unknown function", `{"src":"x","tree":{"call":"hashFiles","args":[]}}`},
-		{"wrong arity", `{"src":"x","tree":{"call":"contains","args":[{"lit":1}]}}`},
-		{"unknown binary operator", `{"src":"x","tree":{"op":"=","x":{"lit":1},"y":{"lit":2}}}`},
-		{"unknown unary operator", `{"src":"x","tree":{"op":"+","x":{"lit":1}}}`},
-		{"negated ==", `{"src":"x","tree":{"op":"==","not":true,"x":{"lit":1},"y":{"lit":2}}}`},
-		{"finite num", `{"src":"x","tree":{"num":"1"}}`},
-		{"zero up", `{"src":"x","tree":{"up":0,"path":["x"]}}`},
-		{"bad segment", `{"src":"x","tree":{"ref":"inputs","path":[{"what":1}]}}`},
-		{"unknown key", `{"src":"x","tree":{"lit":1},"extra":1}`},
-		{"a key in another case", `{"SRC":"x","tree":{"lit":1}}`},
-		{"a key twice", `{"src":"x","src":"y","tree":{"lit":1}}`},
-		{"a node of two kinds", `{"src":"x","tree":{"lit":1,"word":"x"}}`},
-		{"a node's unknown key", `{"src":"x","tree":{"ref":"inputs","path":[],"later":1}}`},
-		{"a node's key twice", `{"src":"x","tree":{"lit":1,"lit":2}}`},
-		{"too deep", `{"src":"x","tree":` + strings.Repeat(`{"op":"!","x":`, 300) + `{"lit":1}` + strings.Repeat(`}`, 300) + `}`},
+	for _, tc := range []struct{ name, data, want string }{
+		{"not an object", `{"src":"x","tree":1}`, "a node must be an object"},
+		{"no kind", `{"src":"x","tree":{}}`, "a node has no kind"},
+		{"unknown context", `{"src":"x","tree":{"ref":"secrets","path":[]}}`, `"secrets" isn't a context`},
+		{"var spelled var", `{"src":"x","tree":{"ref":"var","path":[]}}`, `"var" isn't a context`},
+		{"unknown function", `{"src":"x","tree":{"call":"hashFiles","args":[]}}`, "hashFiles isn't a function"},
+		{"wrong arity", `{"src":"x","tree":{"call":"contains","args":[{"lit":1}]}}`, "contains() can't take 1 arguments"},
+		{"unknown binary operator", `{"src":"x","tree":{"op":"=","x":{"lit":1},"y":{"lit":2}}}`, `"=" isn't a binary operator`},
+		{"unknown unary operator", `{"src":"x","tree":{"op":"+","x":{"lit":1}}}`, `"+" isn't a unary operator`},
+		{"negated ==", `{"src":"x","tree":{"op":"==","not":true,"x":{"lit":1},"y":{"lit":2}}}`, `"==" can't be negated`},
+		{"finite num", `{"src":"x","tree":{"num":"1"}}`, `"1" isn't NaN or an infinity`},
+		{"zero up", `{"src":"x","tree":{"up":0,"path":["x"]}}`, "goes up at least one level"},
+		{"bad segment", `{"src":"x","tree":{"ref":"inputs","path":[{"what":1}]}}`, "unknown path segment"},
+		{"unknown key", `{"src":"x","tree":{"lit":1},"extra":1}`, `unknown field "extra"`},
+		{"a key in another case", `{"SRC":"x","tree":{"lit":1}}`, `unknown field "SRC"`},
+		{"a key twice", `{"src":"x","src":"y","tree":{"lit":1}}`, "duplicate object member name"},
+		{"a node of two kinds", `{"src":"x","tree":{"lit":1,"word":"x"}}`, "a node is both lit and word"},
+		{"a node's unknown key", `{"src":"x","tree":{"ref":"inputs","path":[],"later":1}}`, `a ref node has no "later"`},
+		{"a node's key twice", `{"src":"x","tree":{"lit":1,"lit":2}}`, "duplicate object member name"},
+		{"too deep", `{"src":"x","tree":` + strings.Repeat(`{"op":"!","x":`, 300) + `{"lit":1}` + strings.Repeat(`}`, 300) + `}`, "nests more than 200 levels deep"},
 	} {
 		var e expr.Expr
-		if err := json.Unmarshal([]byte(tc.data), &e); err == nil {
-			t.Errorf("%s: decoded", tc.name)
+		if err := json.Unmarshal([]byte(tc.data), &e); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want an error with %q", tc.name, err, tc.want)
 		}
-	}
-	var e expr.Expr
-	err := json.Unmarshal([]byte(`{"src":"x","tree":`+strings.Repeat(`{"op":"!","x":`, 300)+`{"lit":1}`+strings.Repeat(`}`, 300)+`}`), &e)
-	if err == nil || !strings.Contains(err.Error(), "nests more than") {
-		t.Errorf("too deep: %v", err)
 	}
 }

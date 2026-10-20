@@ -9,9 +9,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -43,7 +46,7 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		return nil, diags
 	}
 	inputs := resolveInputs(doc, submitted, opts)
-	c := &compiler{doc: doc, opts: opts, inputs: inputs, secrets: map[string]bool{}}
+	c := &compiler{reporter: reporter{doc: doc}, opts: opts, inputs: inputs, secrets: map[string]bool{}}
 	c.diags = append(c.diags, diags...)
 	c.diags = append(c.diags, inputs.diags...)
 
@@ -81,31 +84,32 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 }
 
 type compiler struct {
-	doc    *format.Document
+	reporter
 	opts   Options
 	inputs *inputResolver
 	// secrets are the secret variables and inputs the run reads.
 	secrets  map[string]bool
 	jobInfos map[string]*jobInfo
-	diags    format.Diagnostics
 }
 
-func (c *compiler) report(severity format.Severity, code format.Code, pos format.Position, loc []string, msg string, args ...any) {
-	c.diags = append(c.diags, format.Diagnostic{
-		File: c.doc.File, Position: pos, Severity: severity, Code: code, Path: pointer(loc),
+// A reporter collects the problems found in a workflow.
+type reporter struct {
+	doc   *format.Document
+	diags format.Diagnostics
+}
+
+// report reports a problem at pos with what is at loc in the workflow.
+func (r *reporter) report(severity format.Severity, pos format.Position, code format.Code, loc []string, msg string, args ...any) {
+	r.diags = append(r.diags, format.Diagnostic{
+		File: r.doc.File, Position: pos, Severity: severity, Code: code, Path: jsonptr.Format(loc),
 		Message: fmt.Sprintf(msg, args...),
 	})
 }
 
-// reportAt reports a problem with what is at loc: a mapping at its key, and
-// anything else where it starts.
-func (c *compiler) reportAt(severity format.Severity, code format.Code, loc []string, msg string, args ...any) {
-	ptr := pointer(loc)
-	pos := c.doc.Position(ptr)
-	if _, isMapping := lookup(c.doc.Value, loc).(map[string]any); isMapping {
-		pos = c.doc.KeyPosition(ptr)
-	}
-	c.report(severity, code, pos, loc, msg, args...)
+// reportAt reports a problem with what is at loc: a mapping, such as an
+// input's definition, at its key, and anything else where it starts.
+func (r *reporter) reportAt(severity format.Severity, code format.Code, loc []string, msg string, args ...any) {
+	r.report(severity, r.doc.ReportPosition(jsonptr.Format(loc)), code, loc, msg, args...)
 }
 
 // run compiles what the plan holds about the run as a whole.
@@ -130,7 +134,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		}
 	}
 	for _, key := range []string{"sessions", "links"} {
-		c.check([]string{key}, lookup(w, []string{key}), runCreated, nil)
+		c.check([]string{key}, w[key], runCreated, nil)
 	}
 	return r
 }
@@ -153,25 +157,15 @@ func mapping(v any) map[string]any {
 // value checks the value at loc in the workflow and returns it as a plan
 // Value, or the zero Value if it isn't there or has errors.
 func (c *compiler) value(loc []string, ph phase, job *jobInfo) plan.Value {
-	raw, ok := lookupOK(c.doc.Value, loc)
+	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
 		return plan.Value{}
 	}
-	if !c.check(loc, raw, ph, job) {
+	v, ok := c.check(loc, raw, ph, job)
+	if !ok {
 		return plan.Value{}
 	}
-	return c.parsed(loc, raw)
-}
-
-// parsed returns raw, the value at loc in the workflow, as a Value, and
-// reports why if it can't be one.
-func (c *compiler) parsed(loc []string, raw any) plan.Value {
-	v, err := plan.ValueOf(raw)
-	if err != nil {
-		c.reportAt(format.Error, CodeExpression, loc, "%v", err)
-		return plan.Value{}
-	}
-	return v
+	return plan.Literal(v)
 }
 
 // values compiles a mapping of values, such as an env:.
@@ -181,7 +175,7 @@ func (c *compiler) values(loc []string, ph phase, job *jobInfo) map[string]plan.
 		return nil
 	}
 	out := make(map[string]plan.Value, len(m))
-	for _, k := range slices.Sorted(maps.Keys(m)) {
+	for k := range jsonvalue.Sorted(m) {
 		if v := c.value(appendPath(loc, k), ph, job); !v.IsZero() {
 			out[k] = v
 		}
@@ -193,7 +187,7 @@ func (c *compiler) values(loc []string, ph phase, job *jobInfo) map[string]plan.
 // when it has an operator, a dot, parentheses or brackets; a lone word,
 // such as always or true, stays a word.
 func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
-	raw, ok := lookupOK(c.doc.Value, loc)
+	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
 		return plan.Value{}
 	}
@@ -201,104 +195,142 @@ func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 	if !isString {
 		return plan.Literal(raw)
 	}
-	if word := strings.TrimSpace(s); word != "" && !strings.Contains(s, "${{") && !strings.ContainsAny(word, " \t.()!=<>&|?[") {
-		// A lone word stays a word: always means always(), and any other is
-		// text, which is true.
-		if e, err := expr.Parse(word); err == nil {
-			for _, p := range e.CheckCondition() {
-				c.report(format.Warning, CodeWord, c.doc.Locate(pointer(loc), p.Offset+len(s)-len(strings.TrimLeft(s, " \t"))), loc, "%s", p.Msg)
+	shift := 0
+	if cond, start, bare := bareCondition(s); bare {
+		if !strings.ContainsAny(cond, " \t.()!=<>&|?[") {
+			// A lone word stays a word: always means always(), and any other
+			// is text, which is true.
+			if e, err := expr.Parse(cond); err == nil {
+				for _, p := range e.CheckCondition() {
+					c.report(format.Warning, c.doc.Locate(jsonptr.Format(loc), start+p.Offset), CodeWord, loc, "%s", p.Msg)
+				}
 			}
+			return plan.Literal(s)
 		}
-		return plan.Literal(s)
+		const open = "${{ "
+		s, shift = open+cond+" }}", start-len(open)
 	}
-	wrapped, shift := wrapBareCondition(s)
-	if !c.checkString(loc, wrapped, shift, ph, job, true) {
+	v, ok := c.checkCondition(loc, s, shift, ph, job)
+	if !ok {
 		return plan.Value{}
 	}
-	return c.parsed(loc, wrapped)
+	return plan.Literal(v)
 }
 
-// wrapBareCondition wraps an if: written without ${{ }} as an expression,
-// and returns how far the wrapping moves a place in it.
-func wrapBareCondition(s string) (string, int) {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" || strings.Contains(trimmed, "${{") || !strings.ContainsAny(trimmed, " \t.()!=<>&|?[") {
-		return s, 0
+// bareCondition returns s, an if: written without ${{ }}, without the space
+// around it, and the byte offset in s where it starts. ok is false if s has
+// ${{ }}, or nothing but space.
+func bareCondition(s string) (cond string, start int, ok bool) {
+	cond = strings.TrimSpace(s)
+	if cond == "" || strings.Contains(cond, "${{") {
+		return "", 0, false
 	}
-	const open = "${{ "
-	return open + trimmed + " }}", len(s) - len(strings.TrimLeft(s, " \t")) - len(open)
+	return cond, len(s) - len(strings.TrimLeftFunc(s, unicode.IsSpace)), true
 }
 
 // check checks every string in raw, the value at loc in the workflow, and
-// reports false if one has an error.
-func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) bool {
-	ok := true
+// returns raw with the expressions in each string parsed, as a plan Value
+// holds them. ok is false if a string has an error.
+func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) (any, bool) {
 	switch v := raw.(type) {
 	case string:
-		ok = c.checkString(loc, v, 0, ph, job, false)
+		return c.checkString(loc, v, ph, job)
 	case []any:
+		out, ok := make([]any, len(v)), true
 		for i, item := range v {
-			ok = c.check(appendPath(loc, strconv.Itoa(i)), item, ph, job) && ok
+			var itemOK bool
+			out[i], itemOK = c.check(appendPath(loc, strconv.Itoa(i)), item, ph, job)
+			ok = ok && itemOK
 		}
+		return out, ok
 	case map[string]any:
-		for _, k := range slices.Sorted(maps.Keys(v)) {
-			ok = c.check(appendPath(loc, k), v[k], ph, job) && ok
+		out, ok := make(map[string]any, len(v)), true
+		for k, item := range jsonvalue.Sorted(v) {
+			var itemOK bool
+			out[k], itemOK = c.check(appendPath(loc, k), item, ph, job)
+			ok = ok && itemOK
 		}
+		return out, ok
 	}
-	return ok
+	return raw, true
 }
 
-// checkString checks the expressions in s, the string at loc, which is
-// shift bytes after where s puts them, as a wrapped if: is. A condition also
+// checkString checks the expressions in s, the string at loc, and returns s
+// parsed: a template, or s itself if it has no expressions.
+func (c *compiler) checkString(loc []string, s string, ph phase, job *jobInfo) (any, bool) {
+	t, ok := c.parse(loc, s, 0)
+	if t == nil {
+		return s, ok
+	}
+	for at, e := range t.Exprs() {
+		ok = c.checkExpr(loc, at, e, e.Check(), ph, job) && ok
+	}
+	return t, ok
+}
+
+// checkCondition checks the expressions in s, the if: at loc, which are
+// shift bytes after where s puts them, as a wrapped if:'s are, and returns s
+// parsed as checkString does. An if: that is one expression and nothing else
 // gets the checks of a condition.
-func (c *compiler) checkString(loc []string, s string, shift int, ph phase, job *jobInfo, condition bool) bool {
-	if !strings.Contains(s, "${{") {
-		return true
+func (c *compiler) checkCondition(loc []string, s string, shift int, ph phase, job *jobInfo) (any, bool) {
+	t, ok := c.parse(loc, s, shift)
+	if t == nil {
+		return s, ok
 	}
-	ptr := pointer(loc)
-	at := func(offset int) format.Position { return c.doc.Locate(ptr, offset+shift) }
-	t, err := expr.ParseTemplate(s)
-	if err != nil {
-		var se *expr.SyntaxError
-		offset := 0
-		if errors.As(err, &se) {
-			offset = se.Offset
-		}
-		c.report(format.Error, CodeExpression, at(offset), loc, "%v", err)
-		return false
-	}
-	ok := true
-	exprs, offsets := t.Exprs()
-	for i, e := range exprs {
-		base := offsets[i]
+	_, whole := t.Expr()
+	for at, e := range t.Exprs() {
 		problems := e.Check()
-		if condition && len(exprs) == 1 && t.String() == "${{"+e.String()+"}}" {
+		if whole {
 			problems = e.CheckCondition()
 		}
-		for _, p := range problems {
-			c.report(format.Warning, CodeWord, at(base+p.Offset), loc, "%s", p.Msg)
+		ok = c.checkExpr(loc, at+shift, e, problems, ph, job) && ok
+	}
+	return t, ok
+}
+
+// parse parses the expressions in s, the string at loc, which are shift
+// bytes after where s puts them, and reports a syntax error. It returns nil
+// if s has no expressions or doesn't parse.
+func (c *compiler) parse(loc []string, s string, shift int) (*expr.Template, bool) {
+	if !strings.Contains(s, "${{") {
+		return nil, true
+	}
+	t, err := expr.ParseTemplate(s)
+	if err != nil {
+		offset := 0
+		if se, ok := errors.AsType[*expr.SyntaxError](err); ok {
+			offset = se.Offset
 		}
-		if e.Relative() {
-			c.report(format.Error, CodeReference, at(base), loc,
-				"a relative reference such as .name can only be used in input definitions")
-			ok = false
-		}
-		if used, _ := e.StatusChecks(); used && !ph.has("status") {
-			c.report(format.Error, CodeContext, at(base), loc, "status functions such as failure() aren't known %s", ph.when())
-			ok = false
-		}
-		for _, r := range e.Refs() {
-			msg, severity := c.checkRef(r, ph, job)
-			if msg == "" {
-				continue
-			}
-			code := CodeReference
-			if !ph.has(r.Context) {
-				code = CodeContext
-			}
-			c.report(severity, code, at(base+r.Offset), loc, "%s", msg)
-			ok = ok && severity != format.Error
-		}
+		c.report(format.Error, c.doc.Locate(jsonptr.Format(loc), offset+shift), CodeExpression, loc, "%v", err)
+		return nil, false
+	}
+	if t.IsText() {
+		return nil, true
+	}
+	return t, true
+}
+
+// checkExpr checks e, an expression whose source is at byte offset at in the
+// string at loc, and reports problems, its probable mistakes. It returns
+// false if e has an error.
+func (c *compiler) checkExpr(loc []string, at int, e *expr.Expr, problems []expr.Problem, ph phase, job *jobInfo) bool {
+	ptr := jsonptr.Format(loc)
+	pos := func(offset int) format.Position { return c.doc.Locate(ptr, at+offset) }
+	for _, p := range problems {
+		c.report(format.Warning, pos(p.Offset), CodeWord, loc, "%s", p.Msg)
+	}
+	ok := true
+	if e.Relative() {
+		c.report(format.Error, pos(0), CodeReference, loc,
+			"a relative reference such as .name can only be used in input definitions")
+		ok = false
+	}
+	if used, _ := e.StatusChecks(); used && !ph.has("status") {
+		c.report(format.Error, pos(0), CodeContext, loc, "status functions such as failure() aren't known %s", ph.when())
+		ok = false
+	}
+	for _, r := range e.Refs() {
+		ok = c.checkRef(r, ph, job, pos(r.Offset), loc) && ok
 	}
 	return ok
 }

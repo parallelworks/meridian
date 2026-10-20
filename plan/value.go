@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // A Value is part of a workflow that may hold expressions: JSON values, in
@@ -68,9 +68,9 @@ func parseValue(v any) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
-		for _, k := range sortedKeys(v) {
+		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = parseValue(v[k]); err != nil {
+			if out[k], err = parseValue(item); err != nil {
 				return nil, fmt.Errorf("%s: %w", k, err)
 			}
 		}
@@ -129,9 +129,9 @@ func evalValue(v any, scope expr.Scope) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
-		for _, k := range sortedKeys(v) {
+		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = evalValue(v[k], scope); err != nil {
+			if out[k], err = evalValue(item, scope); err != nil {
 				return nil, err
 			}
 		}
@@ -147,15 +147,16 @@ func (v Value) Exprs() []*expr.Expr {
 	walk = func(v any) {
 		switch v := v.(type) {
 		case *expr.Template:
-			exprs, _ := v.Exprs()
-			out = append(out, exprs...)
+			for _, e := range v.Exprs() {
+				out = append(out, e)
+			}
 		case []any:
 			for _, item := range v {
 				walk(item)
 			}
 		case map[string]any:
-			for _, k := range sortedKeys(v) {
-				walk(v[k])
+			for _, item := range jsonvalue.Sorted(v) {
+				walk(item)
 			}
 		}
 	}
@@ -248,9 +249,9 @@ func decodeValue(v any) (any, error) {
 
 func decodeMapping(m map[string]any) (any, error) {
 	out := make(map[string]any, len(m))
-	for _, k := range sortedKeys(m) {
+	for k, item := range jsonvalue.Sorted(m) {
 		var err error
-		if out[k], err = decodeValue(m[k]); err != nil {
+		if out[k], err = decodeValue(item); err != nil {
 			return nil, fmt.Errorf("%s: %w", k, err)
 		}
 	}
@@ -270,8 +271,4 @@ func decodeTemplate(parts any) (any, error) {
 		return nil, errors.New("plan: a template has no expressions")
 	}
 	return t, nil
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	return slices.Sorted(maps.Keys(m))
 }

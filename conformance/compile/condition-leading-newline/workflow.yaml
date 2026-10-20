@@ -1,0 +1,11 @@
+jobs:
+  build:
+    steps:
+      - run: echo a
+        if: |
+
+          completed
+      - run: echo b
+        if: |
+
+          success() && cancelled

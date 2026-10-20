@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // Data is JSON that a run was given rather than what its workflow says, such
@@ -63,9 +65,9 @@ func numbers(v any) (any, error) {
 			}
 		}
 	case map[string]any:
-		for _, k := range sortedKeys(v) {
+		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if v[k], err = numbers(v[k]); err != nil {
+			if v[k], err = numbers(item); err != nil {
 				return nil, fmt.Errorf("%s: %w", k, err)
 			}
 		}

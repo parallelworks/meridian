@@ -11,6 +11,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
+
+	"github.com/parallelworks/meridian/internal/hint"
 )
 
 // expression is the pattern the schema gives a value that must be a ${{ }}
@@ -156,13 +158,13 @@ func mustBeValue(values []string) string {
 	case 1:
 		parts = append(parts, "be "+consts[0])
 	default:
-		parts = append(parts, "be one of "+joinList(consts, "or"))
+		parts = append(parts, "be one of "+hint.JoinList(consts, "or"))
 	}
 	if expr {
 		parts = append(parts, "be a ${{ }} expression")
 	}
 	if len(patterns) > 0 {
-		parts = append(parts, "match "+joinList(patterns, "or"))
+		parts = append(parts, "match "+hint.JoinList(patterns, "or"))
 	}
 	return strings.Join(parts, ", or ")
 }
@@ -188,7 +190,7 @@ func mustBeType(want []string, got string) string {
 	for i, t := range want {
 		names[i] = typeName(t)
 	}
-	msg := "must be " + joinList(names, "or")
+	msg := "must be " + hint.JoinList(names, "or")
 	if got != "" {
 		msg += ", not " + typeName(got)
 	}
@@ -212,20 +214,12 @@ func typeName(t string) string {
 	}
 }
 
-// joinList joins items as a sentence does: "a", "a or b", "a, b or c".
-func joinList(items []string, conj string) string {
-	if len(items) < 2 {
-		return strings.Join(items, "")
-	}
-	return strings.Join(items[:len(items)-1], ", ") + " " + conj + " " + items[len(items)-1]
-}
-
 func quoteList(items []string, conj string) string {
 	q := make([]string, len(items))
 	for i, item := range items {
 		q[i] = strconv.Quote(item)
 	}
-	return joinList(q, conj)
+	return hint.JoinList(q, conj)
 }
 
 func showList(items []any, conj string) string {
@@ -233,7 +227,7 @@ func showList(items []any, conj string) string {
 	for i, item := range items {
 		s[i] = show(item)
 	}
-	return joinList(s, conj)
+	return hint.JoinList(s, conj)
 }
 
 func show(v any) string {
@@ -249,25 +243,6 @@ func number(r *big.Rat) string {
 	}
 	f, _ := r.Float64()
 	return strconv.FormatFloat(f, 'g', -1, 64)
-}
-
-// suggest returns the defined key that a misspelled key most likely meant:
-// one that differs only in case, hyphens and underscores, or else in a
-// letter or so.
-func suggest(key string, defined []string) (string, bool) {
-	norm := func(s string) string {
-		return strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(s))
-	}
-	best, bestDist := "", max(1, len(key)/4)+1
-	for _, d := range defined {
-		if norm(d) == norm(key) {
-			return d, true
-		}
-		if dist := levenshtein(key, d); dist < bestDist && len(key) > 3 {
-			best, bestDist = d, dist
-		}
-	}
-	return best, best != ""
 }
 
 // typeNames maps type names from other languages to the input types that
@@ -288,26 +263,5 @@ func suggestType(got any, types []string) (string, bool) {
 	if t, ok := typeNames[strings.ToLower(name)]; ok && slices.Contains(types, t) {
 		return t, true
 	}
-	return suggest(name, types)
-}
-
-func levenshtein(a, b string) int {
-	ra, rb := []rune(a), []rune(b)
-	prev := make([]int, len(rb)+1)
-	cur := make([]int, len(rb)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(ra); i++ {
-		cur[0] = i
-		for j := 1; j <= len(rb); j++ {
-			cost := 1
-			if ra[i-1] == rb[j-1] {
-				cost = 0
-			}
-			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
-		}
-		prev, cur = cur, prev
-	}
-	return prev[len(rb)]
+	return hint.Suggest(name, types)
 }

@@ -263,7 +263,7 @@ func decodeNode(data json.RawMessage, depth int) (node, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := contexts[name]; !ok || contexts[name] != name {
+		if c, ok := contexts[name]; !ok || c.name != name {
 			return nil, fmt.Errorf("expr: %q isn't a context", name)
 		}
 		path, err := decodePath(m["path"])

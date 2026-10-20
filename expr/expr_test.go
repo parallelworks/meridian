@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/parallelworks/meridian/expr"
 )
@@ -89,8 +88,7 @@ func TestCheckMessages(t *testing.T) {
 
 func TestTemplateOffsets(t *testing.T) {
 	_, err := expr.ParseTemplate("echo ${{ inputs.a = 1 }}")
-	var se *expr.SyntaxError
-	if !errors.As(err, &se) || se.Offset != 18 {
+	if se, ok := errors.AsType[*expr.SyntaxError](err); !ok || se.Offset != 18 {
 		t.Errorf("syntax error = %#v, want offset 18", err)
 	}
 	tmpl, err := expr.ParseTemplate("a ${{ 1 }} b ${{ fromJSON 'x' }}")
@@ -98,22 +96,34 @@ func TestTemplateOffsets(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = tmpl.Eval(expr.Scope{})
-	var ee *expr.EvalError
-	if !errors.As(err, &ee) || ee.Offset != 17 {
+	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Offset != 17 {
 		t.Errorf("evaluation error = %#v, want offset 17", err)
+	}
+	var srcs []string
+	var offsets []int
+	for at, e := range tmpl.Exprs() {
+		srcs, offsets = append(srcs, e.String()), append(offsets, at)
+	}
+	if !slices.Equal(srcs, []string{" 1 ", " fromJSON 'x' "}) || !slices.Equal(offsets, []int{5, 16}) {
+		t.Errorf("Exprs = %q, %v", srcs, offsets)
+	}
+	if _, ok := tmpl.Expr(); ok {
+		t.Error("Expr: a template with text isn't one expression")
 	}
 	tmpl, err = expr.ParseTemplate("x ${{ needs.a.outputs.b }}")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = tmpl.Eval(expr.Scope{})
-	var ue *expr.UnknownError
-	if !errors.As(err, &ue) || ue.Offset != 6 || ue.Name != "needs" || !expr.IsUnknown(err) {
+	if ue, ok := errors.AsType[*expr.UnknownError](err); !ok || ue.Offset != 6 || ue.Name != "needs" || !expr.IsUnknown(err) {
 		t.Errorf("unknown error = %#v, want needs at offset 6", err)
 	}
-	exprs, offsets := tmpl.Exprs()
-	if len(exprs) != 1 || exprs[0].String() != " needs.a.outputs.b " || !slices.Equal(offsets, []int{5}) {
-		t.Errorf("Exprs = %v, %v", exprs, offsets)
+	tmpl, err = expr.ParseTemplate("${{ inputs.x }}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := tmpl.Expr(); !ok || e.String() != " inputs.x " {
+		t.Errorf("Expr = %v, %v; want inputs.x", e, ok)
 	}
 }
 
@@ -138,44 +148,39 @@ func TestBuildLimit(t *testing.T) {
 	big := strings.Repeat("x", 1<<20)
 	src := "inputs.s" + strings.Repeat(" + inputs.s", 20)
 	_, err := mustParse(t, src).Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	var ee *expr.EvalError
-	if !errors.As(err, &ee) || !strings.Contains(ee.Msg, "builds more than") {
+	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || !strings.Contains(ee.Msg, "builds more than") {
 		t.Errorf("got %v, want the build limit", err)
 	}
 	_, err = mustParse(t, "(range 10000) join inputs.s").Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	if !errors.As(err, &ee) {
+	if _, ok := errors.AsType[*expr.EvalError](err); !ok {
 		t.Errorf("join: got %v, want the build limit", err)
 	}
 }
 
-// Expressions that read each other many times are each evaluated once.
-func TestDocumentEvaluatesEachExpressionOnce(t *testing.T) {
+// Expressions that read each other many times are each evaluated once. Each
+// one builds a KiB of text, so that evaluating them more than once runs into
+// the budget, which they share, rather than taking 2^60 evaluations.
+func TestWorkflowEvaluatesEachExpressionOnce(t *testing.T) {
+	kib := strings.Repeat("x", 1<<10)
 	root := map[string]any{"v0": "${{ 1 }}"}
 	for i := 1; i <= 60; i++ {
-		root[fmt.Sprintf("v%d", i)] = fmt.Sprintf("${{ .v%d + .v%d }}", i-1, i-1)
+		root[fmt.Sprintf("v%d", i)] = fmt.Sprintf("${{ .v%d + .v%d + ('%s' + 'x' == '' ? 1 : 0) }}", i-1, i-1, kib)
 	}
-	doc := &expr.Document{Root: root}
-	e := mustParse(t, ".v60")
-	start := time.Now()
-	got, err := e.Eval(doc.Scope([]string{"x"}, expr.Scope{}))
+	w := &expr.Workflow{Root: root}
+	got, err := mustParse(t, ".v60").Eval(w.Scope([]string{"x"}, expr.Scope{}))
 	if err != nil || got != math.Pow(2, 60) {
 		t.Errorf("got %v, %v; want 2**60", got, err)
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("took %v", d)
-	}
 }
 
-func TestDocumentErrors(t *testing.T) {
-	doc := &expr.Document{Root: map[string]any{"a": "${{ .b }}", "b": "${{ fromJSON 'x' }}", "c": "${{ needs.x.outputs.y }}"}}
-	_, err := mustParse(t, "1 + .a").Eval(doc.Scope([]string{"x"}, expr.Scope{}))
-	var ee *expr.EvalError
-	if !errors.As(err, &ee) || ee.Offset != 4 || !strings.Contains(ee.Msg, "in /b") {
+func TestWorkflowErrors(t *testing.T) {
+	w := &expr.Workflow{Root: map[string]any{"a": "${{ .b }}", "b": "${{ fromJSON 'x' }}", "c": "${{ needs.x.outputs.y }}"}}
+	_, err := mustParse(t, "1 + .a").Eval(w.Scope([]string{"x"}, expr.Scope{}))
+	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Offset != 4 || !strings.Contains(ee.Msg, "in /b") {
 		t.Errorf("got %#v, want an error at the reference that mentions /b", err)
 	}
-	_, err = mustParse(t, "1 + .c").Eval(doc.Scope([]string{"x"}, expr.Scope{}))
-	var ue *expr.UnknownError
-	if !errors.As(err, &ue) || ue.Offset != 4 || ue.Name != "needs" {
+	_, err = mustParse(t, "1 + .c").Eval(w.Scope([]string{"x"}, expr.Scope{}))
+	if ue, ok := errors.AsType[*expr.UnknownError](err); !ok || ue.Offset != 4 || ue.Name != "needs" {
 		t.Errorf("got %#v, want needs unknown at the reference", err)
 	}
 }
@@ -211,11 +216,11 @@ func FuzzExpression(f *testing.F) {
 		Status: &expr.Status{Failed: true},
 		Index:  []int{0},
 	}
-	doc := &expr.Document{Root: map[string]any{"x": "${{ .y }}", "y": []any{"${{ ..x }}"}}}
+	w := &expr.Workflow{Root: map[string]any{"x": "${{ .y }}", "y": []any{"${{ ..x }}"}}}
 	f.Fuzz(func(t *testing.T, src string) {
 		if e, err := expr.Parse(src); err == nil {
 			_, _ = e.Eval(scope)
-			_, _ = e.Eval(doc.Scope([]string{"z", "w"}, scope))
+			_, _ = e.Eval(w.Scope([]string{"z", "w"}, scope))
 			e.Refs()
 			e.StatusChecks()
 			e.CheckCondition()
@@ -254,8 +259,7 @@ func BenchmarkEval(b *testing.B) {
 func TestSplitLimit(t *testing.T) {
 	big := strings.Repeat("x", 2<<20)
 	_, err := mustParse(t, `inputs.s split ""`).Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"s": big}}})
-	var ee *expr.EvalError
-	if !errors.As(err, &ee) {
+	if _, ok := errors.AsType[*expr.EvalError](err); !ok {
 		t.Errorf("got %v, want the build limit", err)
 	}
 }
@@ -280,9 +284,9 @@ func TestUnknownValues(t *testing.T) {
 		"inputs.list[1] ?? 'default'": nil,
 	} {
 		got, err := mustParse(t, src).Eval(scope)
-		var ue *expr.UnknownError
+		ue, unknown := errors.AsType[*expr.UnknownError](err)
 		switch {
-		case want == nil && (!errors.As(err, &ue) || ue.Name != "secret"):
+		case want == nil && (!unknown || ue.Name != "secret"):
 			t.Errorf("%s = %v, %v; want the secret unknown", src, got, err)
 		case want != nil && (err != nil || got != want):
 			t.Errorf("%s = %v, %v; want %v", src, got, err, want)

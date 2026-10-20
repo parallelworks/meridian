@@ -17,47 +17,57 @@ var definitionKeys = map[string]bool{
 	"description": true, "tooltip": true, "options": true, "items": true, "min": true, "max": true,
 }
 
-// checkRef checks a reference an expression evaluated in phase ph makes,
-// in job (nil outside jobs), and returns what is wrong with it, or "". A
-// reference to something the workflow doesn't define is a warning, as
-// ACTIVATE reads it as null or "" and runs the workflow, unless ACTIVATE fails
-// the step or job that reads it.
-func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo) (string, format.Severity) {
+// checkRef checks a reference that an expression evaluated in phase ph
+// makes, in job (nil outside jobs), and reports at pos, in the string at loc,
+// what is wrong with it. A reference to something the workflow doesn't
+// define is a warning, as ACTIVATE reads it as null or "" and runs the
+// workflow, unless ACTIVATE fails the step or job that reads it. checkRef
+// returns false if the reference is an error.
+func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, pos format.Position, loc []string) bool {
 	if !ph.has(r.Context) {
-		return fmt.Sprintf("%s isn't known %s", r.Context, ph.when()), format.Error
+		c.report(format.Error, pos, CodeContext, loc, "%s isn't known %s", r.Context, ph.when())
+		return false
 	}
 	path := r.Path
 	if len(path) == 0 || path[0] == "*" || path[0] == "[index]" {
-		return "", 0
+		return true
+	}
+	// problem reports msg, if there is one.
+	problem := func(severity format.Severity, msg string) bool {
+		if msg == "" {
+			return true
+		}
+		c.report(severity, pos, CodeReference, loc, "%s", msg)
+		return severity != format.Error
 	}
 	switch r.Context {
 	case "inputs":
-		return c.checkInputRef(path), format.Warning
+		return problem(format.Warning, c.checkInputRef(path))
 	case "needs":
-		return c.checkNeedsRef(path, ph, job), format.Error
+		return problem(format.Error, c.checkNeedsRef(path, ph, job))
 	case "steps":
-		msg := c.checkStepRef(path, job)
+		severity := format.Error
 		if ph == jobEnds {
 			// A job's outputs read a step's missing output as "".
-			return msg, format.Warning
+			severity = format.Warning
 		}
-		return msg, format.Error
+		return problem(severity, c.checkStepRef(path, job))
 	case "matrix":
 		switch {
 		case job == nil || !job.matrix:
-			return fmt.Sprintf("job %s has no matrix, so matrix.%s is the text %q", jobName(job), path[0], "matrix."+path[0]), format.Warning
+			return problem(format.Warning, fmt.Sprintf("job %s has no matrix, so matrix.%s is the text %q", jobName(job), path[0], "matrix."+path[0]))
 		case job.matrixKeys != nil && !job.matrixKeys[path[0]]:
-			return withSuggestion(fmt.Sprintf("job %s's matrix has no %s", job.name, path[0]), path[0], slices.Sorted(maps.Keys(job.matrixKeys))), format.Warning
+			return problem(format.Warning, withSuggestion(fmt.Sprintf("job %s's matrix has no %s", job.name, path[0]), path[0], slices.Sorted(maps.Keys(job.matrixKeys))))
 		}
 	case "sessions":
 		sessions := mapping(c.doc.Value["sessions"])
 		if _, ok := sessions[path[0]]; !ok {
-			return withSuggestion(fmt.Sprintf("the workflow has no session %s", path[0]), path[0], slices.Sorted(maps.Keys(sessions))), format.Warning
+			return problem(format.Warning, withSuggestion(fmt.Sprintf("the workflow has no session %s", path[0]), path[0], slices.Sorted(maps.Keys(sessions))))
 		}
 	case "vars":
 		c.recordSecret(r)
 	}
-	return "", 0
+	return true
 }
 
 // recordSecret records the secret variable r reads, if it reads one.
@@ -75,13 +85,6 @@ func jobName(job *jobInfo) string {
 		return "(none)"
 	}
 	return job.name
-}
-
-func withSuggestion(msg, name string, names []string) string {
-	if s, ok := suggest(name, names); ok {
-		msg += fmt.Sprintf("; did you mean %s?", s)
-	}
-	return msg
 }
 
 // checkInputRef checks that inputs.<path> names an input, and an input in

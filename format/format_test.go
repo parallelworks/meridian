@@ -101,8 +101,7 @@ func TestDiagnostics(t *testing.T) {
 		t.Errorf("Err() with only a warning = %v, want nil", err)
 	}
 	err := (format.Diagnostics{warning, syntax}).Err()
-	var errs format.Diagnostics
-	if !errors.As(err, &errs) || len(errs) != 1 || errs[0] != syntax {
+	if errs, ok := errors.AsType[format.Diagnostics](err); !ok || len(errs) != 1 || errs[0] != syntax {
 		t.Errorf("Err() = %v, want the syntax error alone", err)
 	}
 }
