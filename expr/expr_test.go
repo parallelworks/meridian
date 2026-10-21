@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -361,6 +362,31 @@ func BenchmarkEval(b *testing.B) {
 	}
 }
 
+// A group of templates reads a list's rows, each of which has a marked
+// field, as a run's input defaults read rows whose fields read variables.
+func BenchmarkMarked(b *testing.B) {
+	for _, n := range []int{10, 1000, 10000} {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			rows := make([]any, n)
+			marked := [][]string{{"org"}, {"vars"}}
+			for i := range n {
+				rows[i] = map[string]any{"x": "v", "y": "w"}
+				marked = append(marked, []string{"inputs", "rows", strconv.Itoa(i), "x"})
+			}
+			scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"rows": rows}}, Marked: marked}
+			e := mustParse(b, "inputs.rows[5].y")
+			for b.Loop() {
+				group := scope.Budgeted()
+				for range 1000 {
+					if _, err := e.Eval(group); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
 // A value that isn't known yet, such as a secret's, makes what reads it
 // unknown, and leaves the rest of the context readable. A slice or a .*
 // holds it only if it reads it, and reading the same parts again in a
@@ -427,6 +453,8 @@ func TestUnknownValues(t *testing.T) {
 // evaluate the reference, nor vars alone, which is a word. A failed
 // evaluation is marked too. A reference reads a marked value however it
 // writes the keys that lead to it, as a slice or an index written 00 does.
+// A group that evaluates many templates, which indexes the marked paths,
+// finds the same.
 func TestMarked(t *testing.T) {
 	scope := expr.Scope{
 		Contexts: map[string]any{
@@ -434,6 +462,12 @@ func TestMarked(t *testing.T) {
 			"inputs": map[string]any{"hosts": []any{map[string]any{"name": "a", "key": "k"}}},
 		},
 		Marked: [][]string{{"vars", "token"}, {"inputs", "hosts", "0", "key"}},
+	}
+	many := scope.Budgeted()
+	for range 100 {
+		if _, err := mustParse(t, "vars.region").Eval(many); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for src, want := range map[string]bool{
 		"${{ vars.token }}":                          true,
@@ -478,6 +512,43 @@ func TestMarked(t *testing.T) {
 		got, marked, err := tmpl.EvalMarked(scope)
 		if marked != want || fmt.Sprint(got, err) != fmt.Sprint(v, vErr) {
 			t.Errorf("%s: marked %v, %v, %v; want marked %v, and %v, %v as Eval gives", src, marked, got, err, want, v, vErr)
+		}
+		if _, marked, _ := tmpl.EvalMarked(many); marked != want {
+			t.Errorf("%s in a group that evaluates many: marked %v, want %v", src, marked, want)
+		}
+	}
+}
+
+// The evaluations that share a budget find the paths appended to Marked
+// since they began, and another Marked's paths in its place, before and
+// after they have evaluated enough to index the paths.
+func TestMarkedAppended(t *testing.T) {
+	scope := expr.Scope{Contexts: map[string]any{"vars": map[string]any{"a": "1", "b": "2"}}}.Budgeted()
+	marked := make([][]string, 0, 4)
+	marked = append(marked, []string{"vars", "a"})
+	for _, tc := range []struct {
+		marked [][]string
+		src    string
+		want   bool
+	}{
+		{marked, "${{ vars.a }}", true},
+		{marked, "${{ vars.b }}", false},
+		{append(marked, []string{"vars", "b"}), "${{ vars.b }}", true},
+		{marked, "${{ vars.b }}", false},
+		{[][]string{{"vars", "b"}}, "${{ vars.a }}", false},
+		{[][]string{{"vars", "b"}}, "${{ vars.b }}", true},
+		{[][]string{}, "${{ vars.a }}", false},
+	} {
+		tmpl, err := expr.ParseTemplate(tc.src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scope.Marked = tc.marked
+		for i := range 100 {
+			if _, marked, err := tmpl.EvalMarked(scope); err != nil || marked != tc.want {
+				t.Errorf("%s with %q marked, evaluation %d: marked %v, %v; want %v", tc.src, tc.marked, i, marked, err, tc.want)
+				break
+			}
 		}
 	}
 }
