@@ -12,7 +12,7 @@ package problems
 import (
 	"cmp"
 	"embed"
-	"encoding/json"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io/fs"
@@ -111,12 +111,9 @@ func List(items []string) string { return strings.Join(items, ", ") }
 // Show shows a value from a workflow or a run in a message: as compact JSON,
 // cut to 40 characters.
 func Show(v any) string {
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
 	s := fmt.Sprint(v)
-	if err := enc.Encode(v); err == nil {
-		s = strings.TrimSuffix(b.String(), "\n")
+	if b, err := jsonv2.Marshal(v, shown); err == nil {
+		s = string(b)
 	}
 	if utf8.RuneCountInString(s) > maxShown {
 		r := []rune(s)
@@ -124,6 +121,20 @@ func Show(v any) string {
 	}
 	return s
 }
+
+// shown is how Show encodes a value: as encoding/json always has, with
+// mappings in the order of their keys, a nil list or mapping as null, U+2028
+// and U+2029 escaped and invalid UTF-8 replaced, but without escaping <, >
+// and &, which mean nothing special in a message.
+var shown = jsonv2.JoinOptions(
+	jsonv2.Deterministic(true),
+	jsonv2.FormatNilMapAsNull(true),
+	jsonv2.FormatNilSliceAsNull(true),
+	jsontext.EscapeForJS(true),
+	jsontext.AllowInvalidUTF8(true),
+	jsontext.AllowDuplicateNames(true),
+	jsontext.PreserveRawStrings(true),
+)
 
 // The params every diagnostic may have besides its kind's: where it is. No
 // kind lists them, and no message shows them.

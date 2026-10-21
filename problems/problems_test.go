@@ -1,12 +1,12 @@
 package problems
 
 import (
-	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"maps"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -113,7 +113,7 @@ func TestDocs(t *testing.T) {
 			t.Fatal(err)
 		}
 		var docs map[problem.Code]problem.Doc
-		if err := json.Unmarshal(data, &docs); err != nil {
+		if err := jsonv2.Unmarshal(data, &docs); err != nil {
 			t.Fatal(err)
 		}
 		return docs
@@ -378,7 +378,7 @@ func TestDiagnostic(t *testing.T) {
 	// A plan keeps the code and params, without the detail, and decodes
 	// with encoding/json/v2.
 	d.Detail = ""
-	data, err := json.Marshal(d)
+	data, err := jsonv2.Marshal(d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,6 +410,10 @@ func TestShow(t *testing.T) {
 		{"a<b", `"a<b"`},
 		{map[string]any{"a": 1}, `{"a":1}`},
 		{[]any{1, "x"}, `[1,"x"]`},
+		{map[string]any{"b": []any(nil), "a": 1e21}, `{"a":1e+21,"b":null}`},
+		{"line\u2028end", `"line\u2028end"`},
+		{"bad \xff byte", "\"bad \ufffd byte\""},
+		{math.NaN(), "NaN"},
 		{strings.Repeat("x", 50), `"` + strings.Repeat("x", 38) + "…"},
 	} {
 		if got := Show(tc.v); got != tc.want {

@@ -1,11 +1,12 @@
 package plan
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -79,7 +80,7 @@ type Job struct {
 	// Strategy is the matrix of a job whose values aren't known until its
 	// dependencies have finished, which the coordinator expands then. A job
 	// with a Strategy has no instances yet.
-	Strategy *Strategy `json:"strategy,omitempty"`
+	Strategy *Strategy `json:"strategy,omitzero"`
 	// Needs are the jobs this one waits for.
 	Needs []Need `json:"needs,omitempty"`
 	// If is the job's if:. Unset means success().
@@ -90,7 +91,7 @@ type Job struct {
 	Resources Value `json:"resources,omitzero"`
 	// SSH is the job's format 1 ssh:.
 	SSH              Value            `json:"ssh,omitzero"`
-	Retry            *JobRetry        `json:"retry,omitempty"`
+	Retry            *JobRetry        `json:"retry,omitzero"`
 	Timeout          Value            `json:"timeout,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`
 	WorkingDirectory Value            `json:"workingDirectory,omitzero"`
@@ -104,7 +105,7 @@ type Job struct {
 // Any, on whichever finishes first.
 type Need struct {
 	Job string `json:"job"`
-	Any bool   `json:"any,omitempty"`
+	Any bool   `json:"any,omitzero"`
 }
 
 // A Strategy is a matrix to expand once its values are known.
@@ -133,13 +134,13 @@ type Step struct {
 	// Uses names a built-in action, or the workflow the step runs.
 	Uses string `json:"uses,omitempty"`
 	// Workflow is the compiled workflow a step's uses: runs.
-	Workflow         *Plan            `json:"workflow,omitempty"`
+	Workflow         *Plan            `json:"workflow,omitzero"`
 	With             Value            `json:"with,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`
 	Shell            string           `json:"shell,omitempty"`
 	WorkingDirectory Value            `json:"workingDirectory,omitzero"`
 	SSH              Value            `json:"ssh,omitzero"`
-	Retry            *StepRetry       `json:"retry,omitempty"`
+	Retry            *StepRetry       `json:"retry,omitzero"`
 	Timeout          Value            `json:"timeout,omitzero"`
 	IgnoreErrors     Value            `json:"ignoreErrors,omitzero"`
 	EarlyCancel      string           `json:"earlyCancel,omitempty"`
@@ -154,14 +155,53 @@ type StepRetry struct {
 	MaxRetries   Value `json:"maxRetries,omitzero"`
 	Interval     Value `json:"interval,omitzero"`
 	Timeout      Value `json:"timeout,omitzero"`
-	CleanOnRetry bool  `json:"cleanOnRetry,omitempty"`
+	CleanOnRetry bool  `json:"cleanOnRetry,omitzero"`
 }
 
 // Encode encodes a plan as JSON. The same plan always encodes to the same
 // bytes.
 func Encode(p *Plan) ([]byte, error) {
-	return json.Marshal(p)
+	return jsonv2.Marshal(p, encoding)
 }
+
+var (
+	// encoding writes a plan as encoding/json always has, so that its bytes
+	// don't change: mappings in the order of their keys, a nil list or
+	// mapping as null, <, >, &, U+2028 and U+2029 escaped, and invalid UTF-8
+	// replaced. Values and data are written as they are walked.
+	encoding = jsonv2.JoinOptions(
+		jsonv2.Deterministic(true),
+		jsonv2.FormatNilMapAsNull(true),
+		jsonv2.FormatNilSliceAsNull(true),
+		jsontext.EscapeForHTML(true),
+		jsontext.EscapeForJS(true),
+		jsontext.AllowInvalidUTF8(true),
+		jsontext.AllowDuplicateNames(true),
+		jsontext.PreserveRawStrings(true),
+		jsonv2.WithMarshalers(jsonv2.JoinMarshalers(
+			jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, v Value) error { return encodeValue(enc, v.v) }),
+			jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, d Data) error { return jsonv2.MarshalEncode(enc, d.v) }),
+		)),
+	)
+	// decoding reads values and data as they are walked, from JSON that is
+	// read once. A key given twice and invalid UTF-8 are errors.
+	decoding = jsonv2.WithUnmarshalers(jsonv2.JoinUnmarshalers(
+		jsonv2.UnmarshalFromFunc(func(dec *jsontext.Decoder, v *Value) error {
+			out, err := decodeValue(dec)
+			if err == nil {
+				*v = Value{out, true}
+			}
+			return err
+		}),
+		jsonv2.UnmarshalFromFunc(func(dec *jsontext.Decoder, d *Data) error {
+			out, err := jsonvalue.Decode(dec, number)
+			if err == nil {
+				d.v = out
+			}
+			return err
+		}),
+	))
+)
 
 // ErrVersion is what Decode returns for a plan of a version this release
 // doesn't read, such as one a newer release wrote.
@@ -171,6 +211,14 @@ var ErrVersion = errors.New("plan: unsupported version")
 // version, with ErrVersion, and on keys it doesn't know, which a newer
 // release wrote. Keys match exactly, and no key can be given twice.
 func Decode(data []byte) (*Plan, error) {
+	p := new(Plan)
+	err := jsonv2.Unmarshal(data, p, decoding, jsonv2.RejectUnknownMembers(true))
+	if err == nil && p.Version == Version {
+		return p, nil
+	}
+	// A plan of another version need not decode as this one, so its version
+	// is read on its own, and only when the plan doesn't decode as this
+	// version's.
 	var head struct {
 		Version int `json:"version"`
 	}
@@ -180,9 +228,5 @@ func Decode(data []byte) (*Plan, error) {
 	if head.Version != Version {
 		return nil, fmt.Errorf("%w %d; this release reads version %d", ErrVersion, head.Version, Version)
 	}
-	p := new(Plan)
-	if err := jsonv2.Unmarshal(data, p, jsonv2.RejectUnknownMembers(true)); err != nil {
-		return nil, fmt.Errorf("plan: %w", err)
-	}
-	return p, nil
+	return nil, fmt.Errorf("plan: %w", err)
 }

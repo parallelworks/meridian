@@ -3,7 +3,7 @@
 package conformancetest
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"slices"
 	"testing"
 
@@ -45,10 +45,11 @@ func Lookup(t testing.TB, v any, pointer string) (any, bool) {
 }
 
 // Canonical encodes v as JSON, so that values decoded by different means
-// compare equal.
+// compare equal. Mappings are in the order of their keys, and a nil list or
+// mapping is null.
 func Canonical(t testing.TB, v any) string {
 	t.Helper()
-	b, err := json.Marshal(v)
+	b, err := jsonv2.Marshal(v, jsonv2.Deterministic(true), jsonv2.FormatNilMapAsNull(true), jsonv2.FormatNilSliceAsNull(true))
 	if err != nil {
 		t.Fatalf("%#v: %v", v, err)
 	}

@@ -1,9 +1,13 @@
 package plan
 
 import (
-	"encoding/json"
+	"bytes"
+	"cmp"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -168,30 +172,79 @@ func (v Value) Exprs() []*expr.Expr {
 
 // MarshalJSON encodes the Value, with each template as {"${{": [parts]}.
 func (v Value) MarshalJSON() ([]byte, error) {
-	return json.Marshal(encodeValue(v.v))
+	return jsonv2.Marshal(v, encoding)
 }
 
-func encodeValue(v any) any {
+// encodeValue writes JSON values, with each template as {"${{": [parts]}
+// and each marked mapping inside {"$": ...}.
+func encodeValue(enc *jsontext.Encoder, v any) error {
 	switch v := v.(type) {
 	case *expr.Template:
-		return map[string]any{templateKey: v}
+		parts, err := v.MarshalJSON()
+		if err != nil {
+			return err
+		}
+		return writeObject(enc, templateKey, func() error { return enc.WriteValue(parts) })
 	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = encodeValue(item)
+		if err := enc.WriteToken(jsontext.BeginArray); err != nil {
+			return err
 		}
-		return out
+		for _, item := range v {
+			if err := encodeValue(enc, item); err != nil {
+				return err
+			}
+		}
+		return enc.WriteToken(jsontext.EndArray)
 	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, item := range v {
-			out[k] = encodeValue(item)
-		}
 		if marked(v) {
-			return map[string]any{dataKey: out}
+			return writeObject(enc, dataKey, func() error { return encodeMapping(enc, v) })
 		}
-		return out
+		return encodeMapping(enc, v)
+	case string:
+		return enc.WriteToken(jsontext.String(v))
+	case bool:
+		return enc.WriteToken(jsontext.Bool(v))
+	case nil:
+		return enc.WriteToken(jsontext.Null)
+	case int64:
+		return enc.WriteToken(jsontext.Int(v))
+	case float64:
+		// NaN and the infinities aren't JSON: MarshalEncode fails on them.
+		if !math.IsNaN(v) && !math.IsInf(v, 0) {
+			return enc.WriteToken(jsontext.Float(v))
+		}
 	}
-	return v
+	return jsonv2.MarshalEncode(enc, v)
+}
+
+func encodeMapping(enc *jsontext.Encoder, m map[string]any) error {
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+	for k, item := range jsonvalue.Sorted(m) {
+		if err := enc.WriteToken(jsontext.String(k)); err != nil {
+			return err
+		}
+		if err := encodeValue(enc, item); err != nil {
+			return err
+		}
+	}
+	return enc.WriteToken(jsontext.EndObject)
+}
+
+// writeObject writes an object whose one key is key, with value writing its
+// value.
+func writeObject(enc *jsontext.Encoder, key string, value func() error) error {
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+	if err := enc.WriteToken(jsontext.String(key)); err != nil {
+		return err
+	}
+	if err := value(); err != nil {
+		return err
+	}
+	return enc.WriteToken(jsontext.EndObject)
 }
 
 // marked reports whether a mapping's only key starts with $, which in a
@@ -207,70 +260,119 @@ func marked(m map[string]any) bool {
 }
 
 // UnmarshalJSON decodes a Value that MarshalJSON encoded. Numbers decode as
-// json.Number's value: int64 when whole and in range, float64 otherwise.
+// int64 when whole and in range, and float64 otherwise.
 func (v *Value) UnmarshalJSON(data []byte) error {
-	raw, err := decodeJSON(data)
-	if err != nil {
-		return err
-	}
-	out, err := decodeValue(raw)
-	if err != nil {
-		return err
-	}
-	*v = Value{out, true}
-	return nil
+	return jsonv2.Unmarshal(data, v, decoding)
 }
 
-func decodeValue(v any) (any, error) {
-	switch v := v.(type) {
-	case json.Number:
-		return number(v)
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			var err error
-			if out[i], err = decodeValue(item); err != nil {
+// errUnmarked reports a mapping that is marked, but as nothing a Value's
+// JSON has.
+var errUnmarked = errors.New("plan: a mapping whose only key starts with $ must be a template or be inside {\"$\": ...}")
+
+// decodeValue reads JSON values, with a template from each {"${{": [parts]}
+// and a mapping from each {"$": ...}.
+func decodeValue(dec *jsontext.Decoder) (any, error) {
+	switch dec.PeekKind() {
+	case '[':
+		if _, err := dec.ReadToken(); err != nil {
+			return nil, err
+		}
+		list := []any{}
+		for i := 0; dec.PeekKind() != ']'; i++ {
+			item, err := decodeValue(dec)
+			if err != nil {
 				return nil, fmt.Errorf("%d: %w", i, err)
 			}
+			list = append(list, item)
 		}
-		return out, nil
-	case map[string]any:
-		if !marked(v) {
-			return decodeMapping(v)
-		}
-		if parts, ok := v[templateKey]; ok {
-			return decodeTemplate(parts)
-		}
-		if m, ok := v[dataKey].(map[string]any); ok && marked(m) {
-			return decodeMapping(m)
-		}
-		return nil, errors.New("plan: a mapping whose only key starts with $ must be a template or be inside {\"$\": ...}")
+		_, err := dec.ReadToken()
+		return list, err
+	case '{':
+		return decodeMapping(dec)
 	}
-	return v, nil
+	return jsonvalue.Decode(dec, number)
 }
 
-func decodeMapping(m map[string]any) (any, error) {
-	out := make(map[string]any, len(m))
-	for k, item := range jsonvalue.Sorted(m) {
-		var err error
-		if out[k], err = decodeValue(item); err != nil {
+// decodeMapping reads a mapping, or what a mapping whose only key starts
+// with $ marks.
+func decodeMapping(dec *jsontext.Decoder) (any, error) {
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, err
+	}
+	m := map[string]any{}
+	for first := true; dec.PeekKind() != '}'; first = false {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return nil, err
+		}
+		k := tok.String()
+		var item any
+		if first && strings.HasPrefix(k, "$") {
+			// Whether k is the only key is known only after its value.
+			var raw jsontext.Value
+			if raw, err = dec.ReadValue(); err != nil {
+				return nil, err
+			}
+			raw = raw.Clone()
+			if dec.PeekKind() == '}' {
+				if _, err := dec.ReadToken(); err != nil {
+					return nil, err
+				}
+				return decodeMarked(k, raw)
+			}
+			item, err = decodeFrom(raw, decodeValue)
+		} else {
+			item, err = decodeValue(dec)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", k, err)
 		}
+		m[k] = item
 	}
-	return out, nil
+	_, err := dec.ReadToken()
+	return m, err
 }
 
-func decodeTemplate(parts any) (any, error) {
-	data, err := json.Marshal(parts)
-	if err != nil {
-		return nil, err
+// decodeMarked decodes the value of a mapping whose only key, k, starts
+// with $: a template's parts, or a mapping whose only key starts with $.
+func decodeMarked(k string, raw jsontext.Value) (any, error) {
+	switch k {
+	case templateKey:
+		t := new(expr.Template)
+		if err := t.UnmarshalJSON(raw); err != nil {
+			return nil, err
+		}
+		if t.IsText() {
+			return nil, errors.New("plan: a template has no expressions")
+		}
+		return t, nil
+	case dataKey:
+		return decodeFrom(raw, func(dec *jsontext.Decoder) (any, error) {
+			if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '{' || dec.PeekKind() == '}' {
+				return nil, cmp.Or(err, errUnmarked)
+			}
+			tok, err := dec.ReadToken()
+			if err != nil {
+				return nil, err
+			}
+			k := tok.String()
+			if !strings.HasPrefix(k, "$") {
+				return nil, errUnmarked
+			}
+			item, err := decodeValue(dec)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", k, err)
+			}
+			if dec.PeekKind() != '}' {
+				return nil, errUnmarked
+			}
+			return map[string]any{k: item}, nil
+		})
 	}
-	t := new(expr.Template)
-	if err := t.UnmarshalJSON(data); err != nil {
-		return nil, err
-	}
-	if t.IsText() {
-		return nil, errors.New("plan: a template has no expressions")
-	}
-	return t, nil
+	return nil, errUnmarked
+}
+
+// decodeFrom decodes raw, one JSON value, with decode.
+func decodeFrom(raw jsontext.Value, decode func(*jsontext.Decoder) (any, error)) (any, error) {
+	return decode(jsontext.NewDecoder(bytes.NewBuffer(raw)))
 }

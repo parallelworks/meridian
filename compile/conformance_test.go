@@ -1,7 +1,7 @@
 package compile_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"maps"
 	"strings"
 	"testing"

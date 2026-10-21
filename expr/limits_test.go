@@ -3,6 +3,7 @@ package expr_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -639,6 +640,44 @@ func TestGroupTimeBudget(t *testing.T) {
 		c := &clock{steps: []time.Duration{time.Second, tc.after}}
 		if err := eval("length(.a) + 1", w.Scope([]string{"x"}, expr.WithClock(lists, c.read))); tc.ok && err != nil || !tc.ok && !tooSlow(err) {
 			t.Errorf("the 256th step %v after the reader started: %v", tc.after, err)
+		}
+	}
+}
+
+// toJSON counts what it builds before building it: as many bytes as it then
+// writes.
+func TestToJSONCountsFirst(t *testing.T) {
+	values := []any{
+		nil, true, false, "", "plain", "\"\\\b\f\n\r\t\x00\x1f\x7f<>&\u2028\u2029é😀\xff\xc3(",
+		0.0, math.Copysign(0, -1), 1.5, -2.25e-7, 1e21, 123456789.0, math.NaN(), math.Inf(-1), int64(-1) << 63, 7,
+		[]any{},
+		map[string]any{},
+		[]any(nil), map[string]any(nil),
+		struct{}{},
+		[]any{1.0, []any{"a", map[string]any{}}, nil},
+		map[string]any{"b": []any{nil, []any{}}, "a\u2028<": map[string]any{"c": "d", "e": map[string]any{"f": 1}}},
+	}
+	for c := range 256 {
+		values = append(values, string(rune(c)), string([]byte{byte(c)}), string([]byte{0xe2, 0x80, byte(c)}))
+	}
+	for _, v := range values {
+		for _, indent := range []string{"", "  ", "\t\t"} {
+			if s, n := expr.ToJSON(v, indent); n != len(s) {
+				t.Errorf("%#v with indent %q: counted %d, wrote %d: %s", v, indent, n, len(s), s)
+			}
+		}
+	}
+}
+
+// Each of thirty nested toJSON calls about doubles its text, which passes
+// what a template can build at the 23rd.
+func BenchmarkToJSONLimit(b *testing.B) {
+	e := mustParse(b, strings.Repeat("toJSON(", 30)+`'"'`+strings.Repeat(")", 30))
+	b.ReportAllocs()
+	for b.Loop() {
+		_, err := e.Eval(expr.Scope{})
+		if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Kind != problems.ExpressionTooLarge {
+			b.Fatalf("got %v, want %s", err, problems.ExpressionTooLarge.Code())
 		}
 	}
 }
