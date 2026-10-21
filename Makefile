@@ -20,7 +20,7 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: check
-check: tidy-check lint vulncheck cgo-check test test-race build ## Run all checks, tests and builds
+check: tidy-check lint vulncheck cgo-check test test-race bench build ## Run all checks, tests and builds
 
 .PHONY: tidy-check
 tidy-check: ## Verify both Go modules are tidy
@@ -49,6 +49,10 @@ cgo-check: ## Verify that no package or dependency uses cgo
 .PHONY: test
 test: ## Run tests
 	$(FIPS) go test -shuffle=on -cover ./...
+
+.PHONY: bench
+bench: ## Run each benchmark once, to check that it still runs
+	$(FIPS) go test -run='^$$' -bench=. -benchtime=1x ./...
 
 .PHONY: test-race
 test-race: ## Run tests with the race detector (needs cgo and a C compiler on Linux)
