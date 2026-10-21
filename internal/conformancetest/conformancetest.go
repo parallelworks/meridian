@@ -17,10 +17,13 @@ import (
 // CheckDiagnostics checks that got has each diagnostic a case expects, and
 // no others. One expected without a line matches on any line, one without a
 // column in any column, and one matches whatever values the params it
-// doesn't list have.
+// doesn't list have. Those that say more are matched first, so that one
+// that says less doesn't take the diagnostic another needs.
 func CheckDiagnostics(t testing.TB, want []conformance.Diagnostic, got problems.Diagnostics) {
 	t.Helper()
 	unmatched := slices.Clone(got)
+	want = slices.Clone(want)
+	slices.SortStableFunc(want, func(a, b conformance.Diagnostic) int { return specificity(b) - specificity(a) })
 	for _, w := range want {
 		i := slices.IndexFunc(unmatched, func(d problems.Diagnostic) bool {
 			pos := d.Position()
@@ -38,6 +41,19 @@ func CheckDiagnostics(t testing.TB, want []conformance.Diagnostic, got problems.
 	for _, d := range unmatched {
 		t.Errorf("unexpected %s (path %q, params %s)", d, d.Path(), Canonical(t, d.Params))
 	}
+}
+
+// specificity counts what an expected diagnostic says beyond its severity,
+// code and path.
+func specificity(w conformance.Diagnostic) int {
+	n := len(w.Params)
+	if w.Line != 0 {
+		n++
+	}
+	if w.Column != 0 {
+		n++
+	}
+	return n
 }
 
 // hasParams reports whether d's params have the values want gives them.
