@@ -1,17 +1,22 @@
 package plan_test
 
 import (
-	"encoding/json"
+	"bytes"
 	"errors"
+	"math"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
-func mustValue(t *testing.T, v any) plan.Value {
+func mustValue(t testing.TB, v any) plan.Value {
 	t.Helper()
 	pv, err := plan.ValueOf(v)
 	if err != nil {
@@ -52,6 +57,65 @@ func samplePlan(t *testing.T) *plan.Plan {
 		Warnings: []problems.Diagnostic{withoutDetail(problems.UnknownKey.At(
 			"workflow.yaml", problems.Position{Line: 3, Column: 9}, "/jobs/build/x",
 			problems.Params{"key": "x", "suggested": "false", "suggestion": ""},
+		))},
+	}
+}
+
+// edgePlan is a plan with what its encoding keeps as encoding/json always
+// wrote it: <, >, &, U+2028 and U+2029 escaped, invalid UTF-8 replaced,
+// numbers of each kind, nil lists and mappings, which data writes as null and
+// a value as empty, marked mappings, and fields at their zero values.
+func edgePlan(t testing.TB) *plan.Plan {
+	text := "<a href=\"x\">Tom & Jerry</a>\u2028\u2029 \x00\x1f\t\b\f\\ é😀 bad \xff byte"
+	nested := &plan.Plan{
+		Version: plan.Version,
+		Run:     plan.Run{Source: plan.Source{Location: "sub.yaml", Revision: "sha256:01"}, Format: 1},
+		Jobs: []plan.Job{{
+			Key: "s", Name: "s", Path: "/jobs/s",
+			Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/s/steps/0"}},
+		}},
+	}
+	return &plan.Plan{
+		Version: plan.Version,
+		Run: plan.Run{
+			Source: plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
+			Format: 1,
+			Name:   text,
+			Inputs: plan.DataOf(map[string]any{
+				"text":    text,
+				"numbers": []any{int64(1) << 60, 3, 1e21, 1e-7, 0.1, math.Copysign(0, -1), 123456789.0},
+				"empty":   []any{[]any(nil), map[string]any(nil), []any{}, map[string]any{}},
+				"${{":     []any{"stays data"},
+				"$":       map[string]any{"$x": "also data"},
+			}),
+			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
+			Env:            map[string]plan.Value{"TEXT": mustValue(t, text+" ${{ inputs.text < 'b' && !contains(inputs.text, '&') }}")},
+			Timeout:        plan.Literal(map[string]any{"$only": "marked"}),
+			Secrets:        []string{"inputs.token"},
+			Permissions:    []string{},
+		},
+		Jobs: []plan.Job{{
+			Key: "a#0", Name: "a", Path: "/jobs/a",
+			Matrix:           plan.DataOf(map[string]any{"os": text}),
+			Needs:            []plan.Need{{Job: "b"}, {Job: "c", Any: true}},
+			Retry:            &plan.JobRetry{},
+			WorkingDirectory: plan.Literal([]any{[]any(nil), map[string]any(nil), 3, int64(4), 0.5}),
+		}, {
+			Key: "b", Name: "b", Path: "/jobs/b",
+			Strategy: &plan.Strategy{Matrix: mustValue(t, map[string]any{"x": "${{ fromJSON(inputs.text) }}", "$y": "${{ 1 }}"})},
+			Steps: []plan.Step{
+				{Retry: &plan.StepRetry{}, Path: "/jobs/b/steps/0"},
+				{
+					ID: "w", Uses: "sub.yaml", Workflow: nested, Path: "/jobs/b/steps/1",
+					With:  mustValue(t, map[string]any{"$out": "${{ inputs.x }}", "list": []any{nil, true, 1.5, int64(2)}}),
+					Retry: &plan.StepRetry{CleanOnRetry: true, MaxRetries: plan.Literal(int64(2))},
+				},
+			},
+			Outputs: map[string]plan.Value{},
+		}},
+		Warnings: []problems.Diagnostic{withoutDetail(problems.UnknownKey.At(
+			"workflow.yaml", problems.Position{Line: 3, Column: 9}, "/jobs/b/<x>",
+			problems.Params{"key": "<x>", "suggested": "false", "suggestion": ""},
 		))},
 	}
 }
@@ -116,21 +180,69 @@ func TestEncodeDecode(t *testing.T) {
 	}
 }
 
+// Plans encode to the bytes they always have: testdata holds what Meridian
+// wrote before it moved to encoding/json/v2, for the edge plan and for a
+// public workflow's plan. Each decodes, and encodes the same.
+func TestEncodingIsStable(t *testing.T) {
+	want, err := os.ReadFile("testdata/edges.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := plan.Encode(edgePlan(t))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Errorf("the edge plan encodes as\n%s, %v; want\n%s", got, err, want)
+	}
+	for _, name := range []string{"edges", "spack-builder"} {
+		data, err := os.ReadFile("testdata/" + name + ".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := plan.Decode(data)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		// -0 is whole, so it decodes as the int64 0, as it always has.
+		want := bytes.Replace(data, []byte(",-0,"), []byte(",0,"), 1)
+		if again, err := plan.Encode(p); err != nil || !bytes.Equal(again, want) {
+			t.Errorf("%s: decoding and encoding changed it:\n%s\n%s", name, want, again)
+		}
+	}
+	for name, p := range map[string]*plan.Plan{
+		"NaN in a value": {Version: plan.Version, Run: plan.Run{Timeout: plan.Literal(math.NaN())}},
+		"NaN in data":    {Version: plan.Version, Run: plan.Run{Inputs: plan.DataOf([]any{math.Inf(1)})}},
+	} {
+		if _, err := plan.Encode(p); err == nil {
+			t.Errorf("%s: encoded", name)
+		}
+	}
+}
+
 func TestDecodeRefuses(t *testing.T) {
 	good, err := plan.Encode(samplePlan(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, data := range map[string]string{
-		"another version":       strings.Replace(string(good), `"version":1`, `"version":2`, 1),
-		"an unknown key":        strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
-		"a bad tree":            strings.Replace(string(good), `"ref":"inputs"`, `"ref":"secrets"`, 1),
-		"a node of two kinds":   strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","word":"x"`, 1),
-		"a node's unknown key":  strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","later":1`, 1),
-		"a key in another case": strings.Replace(string(good), `"jobs":`, `"JOBS":`, 1),
-		"a key twice":           strings.Replace(string(good), `"version":1`, `"version":1,"version":1`, 1),
-		"an unmarked $ key":     strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$yaml":"x"}`, 1),
-		"not JSON":              "{",
+		"another version":                  strings.Replace(string(good), `"version":1`, `"version":2`, 1),
+		"an unknown key":                   strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
+		"a bad tree":                       strings.Replace(string(good), `"ref":"inputs"`, `"ref":"secrets"`, 1),
+		"a node of two kinds":              strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","word":"x"`, 1),
+		"a node's unknown key":             strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","later":1`, 1),
+		"a key in another case":            strings.Replace(string(good), `"jobs":`, `"JOBS":`, 1),
+		"a key twice":                      strings.Replace(string(good), `"version":1`, `"version":1,"version":1`, 1),
+		"an unmarked $ key":                strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$yaml":"x"}`, 1),
+		"not JSON":                         "{",
+		"a key twice in a value":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"a":1,"a":2}`, 1),
+		"a key twice in data":              strings.Replace(string(good), `"os":"linux"`, `"os":"linux","os":"linux"`, 1),
+		"a key twice in a tree":            strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","ref":"inputs"`, 1),
+		"invalid UTF-8":                    strings.Replace(string(good), `"timeout":"1h"`, "\"timeout\":\"\xff\"", 1),
+		"a lone surrogate":                 strings.Replace(string(good), `"timeout":"1h"`, `"timeout":"\ud800"`, 1),
+		"a number out of range":            strings.Replace(string(good), `"timeout":"1h"`, `"timeout":1e400`, 1),
+		"parts that aren't a list":         strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":"x"}`, 1),
+		"a template without an expression": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":["x"]}`, 1),
+		"a bad template beside a key":      strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"${{":"x"},"y":1}`, 1),
+		"a $ that marks nothing":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"yaml":"x"}}`, 1),
+		"a version that isn't a number":    strings.Replace(string(good), `"version":1`, `"version":"1"`, 1),
 	} {
 		if !strings.Contains(string(good), `"timeout":"1h"`) {
 			t.Fatalf("the sample plan changed: %s", good)
@@ -139,9 +251,46 @@ func TestDecodeRefuses(t *testing.T) {
 			t.Errorf("%s: decoded", name)
 		}
 	}
-	_, err = plan.Decode([]byte(strings.Replace(string(good), `"version":1`, `"version":2`, 1)))
-	if !errors.Is(err, plan.ErrVersion) {
-		t.Errorf("another version: %v, want ErrVersion", err)
+	for name, data := range map[string]string{
+		"another version":             strings.Replace(string(good), `"version":1`, `"version":2`, 1),
+		"another version's keys":      strings.Replace(string(good), `"version":1`, `"version":2,"later":true`, 1),
+		"another version, last":       strings.Replace(string(good), `"version":1,`, ``, 1)[:len(good)-len(`"version":1,`)-1] + `,"later":{},"version":2}`,
+		"no version":                  strings.Replace(string(good), `"version":1,`, ``, 1),
+		"another version's templates": strings.Replace(strings.Replace(string(good), `"version":1`, `"version":2`, 1), `"ref":"inputs"`, `"ref":"later"`, 1),
+	} {
+		if _, err := plan.Decode([]byte(data)); !errors.Is(err, plan.ErrVersion) {
+			t.Errorf("%s: %v, want ErrVersion", name, err)
+		}
+	}
+	if _, err := plan.Decode([]byte(strings.Replace(string(good), `"version":1`, `"version":"1"`, 1))); err == nil || errors.Is(err, plan.ErrVersion) {
+		t.Errorf("a version that isn't a number: %v, want an error other than ErrVersion", err)
+	}
+}
+
+// A plan's keys can come in any order.
+func TestDecodeKeyOrder(t *testing.T) {
+	data := `{"jobs":[{"steps":[{"path":"/jobs/a/steps/0","run":{"${{":[{"tree":{"ref":"inputs","path":["x"]},"src":" inputs.x "}]}}],` +
+		`"path":"/jobs/a","name":"a","key":"a"}],"run":{"format":1,"source":{"revision":"r","location":"w"}},"version":1}`
+	p, err := plan.Decode([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.Jobs[0].Steps[0].Run.Eval(expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"x": "y"}}}); err != nil || got != "y" {
+		t.Errorf("run = %v, %v", got, err)
+	}
+}
+
+// A Value or Data decoded on its own is as strict as in a plan.
+func TestValueDecodingIsStrict(t *testing.T) {
+	for _, data := range []string{`{"a":1,"a":2}`, "\"\xff\"", `"\ud800"`, `[{"${{":[{"src":"","tree":{"lit":1,"lit":2}}]}]`, `1 2`} {
+		var v plan.Value
+		if err := v.UnmarshalJSON([]byte(data)); err == nil {
+			t.Errorf("Value %s: decoded", data)
+		}
+		var d plan.Data
+		if err := d.UnmarshalJSON([]byte(data)); err == nil {
+			t.Errorf("Data %s: decoded", data)
+		}
 	}
 }
 
@@ -156,29 +305,29 @@ func TestDataStaysData(t *testing.T) {
 		"top level":  plan.Literal(map[string]any{"${{": stored}),
 		"a template": mustValue(t, map[string]any{"$out": "${{ inputs.x }}"}),
 	} {
-		data, err := json.Marshal(v)
+		data, err := v.MarshalJSON()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		var back plan.Value
-		if err := json.Unmarshal(data, &back); err != nil {
+		if err := back.UnmarshalJSON(data); err != nil {
 			t.Fatalf("%s: %v\n%s", name, err, data)
 		}
 		if g, w := len(back.Exprs()), len(v.Exprs()); g != w {
 			t.Errorf("%s: %d expressions after a round trip, not %d: %s", name, g, w, data)
 		}
-		again, err := json.Marshal(back)
+		again, err := back.MarshalJSON()
 		if err != nil || string(again) != string(data) {
 			t.Errorf("%s: a round trip changed it:\n%s\n%s", name, data, again)
 		}
 	}
 
-	data, err := json.Marshal(plan.DataOf(map[string]any{"${{": stored, "n": int64(1) << 60}))
+	data, err := plan.DataOf(map[string]any{"${{": stored, "n": int64(1) << 60}).MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var d plan.Data
-	if err := json.Unmarshal(data, &d); err != nil {
+	if err := d.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)
 	}
 	m := d.Get().(map[string]any)
@@ -207,7 +356,7 @@ func TestValue(t *testing.T) {
 	}
 
 	// A literal value keeps ${{ }} as text.
-	data, err := json.Marshal(plan.Literal("${{ x }}"))
+	data, err := plan.Literal("${{ x }}").MarshalJSON()
 	if err != nil || string(data) != `"${{ x }}"` {
 		t.Errorf("Literal encodes as %s, %v", data, err)
 	}
@@ -271,4 +420,111 @@ func TestEvalGroupsTemplates(t *testing.T) {
 func hasKind(err error, k *problems.Kind) bool {
 	ee, ok := errors.AsType[*expr.EvalError](err)
 	return ok && ee.Kind == k
+}
+
+// passThrough is a platform that takes every value it's given as it is.
+type passThrough struct{}
+
+func (passThrough) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
+
+// benchmarkPlans returns plans to encode and decode: a public workflow's,
+// and one from a workflow as large as a file can be whose expressions each
+// nest as deeply as they can, 200 levels.
+func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
+	b.Helper()
+	spack, err := (&conformance.Case{Name: "format/public-spack-builder"}).Workflow()
+	if err != nil {
+		b.Fatal(err)
+	}
+	var deep strings.Builder
+	deep.WriteString("jobs:\n  deep:\n    steps:\n")
+	step := "      - run: ${{ " + strings.Repeat("1+", 200) + "1 }}\n"
+	for deep.Len()+len(step) <= format.DefaultMaxSize {
+		deep.WriteString(step)
+	}
+	plans := map[string]*plan.Plan{}
+	for name, w := range map[string]struct {
+		data   []byte
+		inputs map[string]any
+	}{
+		"spack-builder": {spack, map[string]any{"cluster": map[string]any{"resource": "x"}}},
+		"deep":          {[]byte(deep.String()), nil},
+	} {
+		p, diags := compile.Compile("workflow.yaml", w.data, w.inputs, compile.Options{Inputs: passThrough{}})
+		if p == nil {
+			b.Fatalf("%s: %v", name, diags)
+		}
+		plans[name] = p
+	}
+	return plans
+}
+
+func BenchmarkEncode(b *testing.B) {
+	for name, p := range benchmarkPlans(b) {
+		b.Run(name, func(b *testing.B) {
+			data, err := plan.Encode(p)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := plan.Encode(p); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkDecode(b *testing.B) {
+	for name, p := range benchmarkPlans(b) {
+		b.Run(name, func(b *testing.B) {
+			data, err := plan.Encode(p)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := plan.Decode(data); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// Every plan the compiler makes decodes, and encodes as it did.
+func FuzzPlanRoundTrip(f *testing.F) {
+	for _, area := range []string{"compile", "format", "inputs"} {
+		cases, err := conformance.Cases(area)
+		if err != nil {
+			f.Fatal(err)
+		}
+		for _, c := range cases {
+			data, err := c.Workflow()
+			if err != nil {
+				f.Fatal(err)
+			}
+			f.Add(data)
+		}
+	}
+	f.Fuzz(func(t *testing.T, workflow []byte) {
+		p, _ := compile.Compile("workflow.yaml", workflow, nil, compile.Options{Inputs: passThrough{}})
+		if p == nil {
+			return
+		}
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := plan.Decode(data)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, data)
+		}
+		if again, err := plan.Encode(back); err != nil || !bytes.Equal(again, data) {
+			t.Fatalf("decoding and encoding changed the plan:\n%s\n%s (%v)", data, again, err)
+		}
+	})
 }
