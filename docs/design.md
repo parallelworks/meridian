@@ -545,7 +545,13 @@ however many templates it has, and each of these caps, for every group, is
 at least one template's limit, so a template on its own that keeps to the
 language's limits never reaches it. A group that passes one fails with
 `expressions_build_too_much` or `expressions_too_much_work`, which say the
-group did too much together, rather than with an expression's error.
+group did too much together, rather than with an expression's error. What a
+template has read or built counts toward its group even when the template
+then fails its own limits, so that templates that each fail after reading a
+large value can't together do more than the group may, and a template that
+starts once its group has passed a cap fails before it does anything. A
+string that a template reads as the JSON it holds is counted before it is
+parsed, so one the template can't afford to read isn't.
 
 The net bounds time too, as a backstop that work within the limits never
 reaches: a group's templates spend at most 10 seconds of wall-clock time
@@ -553,8 +559,9 @@ evaluating, together. The work count prices each step and each read by
 what it costs, so a template at its limit takes well under a second, and a
 group at its own a few seconds. The cap isn't a limit a workflow is written
 to, since how long evaluating takes depends on the machine. The evaluator
-reads the clock every 256 steps its group takes, each node it evaluates and
-each run of a lambda, and a group that passes the cap fails with
+reads the clock as each template starts, one that another reads among
+them, and every 256 steps its group takes, each node it evaluates and each
+run of a lambda, and a group that passes the cap fails with
 `expressions_too_slow`.
 
 Values that come from secrets are masked wherever they appear in logs,
