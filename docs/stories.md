@@ -450,13 +450,11 @@ such as `@main`, so two runs of a workflow can run different code.
 
 - **Outputs.** A workflow can declare top-level `outputs:`, mapped from its
   jobs' outputs, and a step that calls it reads them as `steps.<id>.outputs`.
-- **Checked `with:`.** The compiler already fetches and compiles a workflow
-  that a step calls ([Compiling](design.md#compiling)), so it checks `with:`
-  against that workflow's inputs. An unknown key or a wrong type is an error
-  at its line.
-- **Pinned versions.** A branch is resolved to a commit when the run is
-  compiled, and the commit is stored in the plan, so a rerun runs the same
-  code.
+- **Checked `with:`.** The compiler loads a workflow that a step calls when
+  the run is created
+  ([Workflows a step calls](design.md#workflows-a-step-calls)), so it can
+  check `with:` against that workflow's inputs. An unknown key or a wrong
+  type is an error at its line.
 - **Jobs that call workflows.** A job can have a `uses:` of its own. The
   called workflow's jobs join the run's graph and are placed like the
   caller's, and no worker waits for them. This answers steps that run a

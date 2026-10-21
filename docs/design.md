@@ -14,10 +14,12 @@ pull request that makes any part of it wrong updates it.
 | Job | Steps that run in order, in one place. A matrix job has one instance per combination of its matrix values. |
 | Step | A command (`run:`), or another workflow or a built-in action (`uses:`). |
 | Attempt | One try at running a job instance. Most job instances have one. |
+| Phase | One of the five points in a run at which Meridian evaluates what the workflow leaves to it: Create, Start, Ready, Step and End. |
 | Execution group | A named source of capacity: an ordered list of members. |
 | Member | One place a group can run jobs: a backend, its settings and the resources it offers. |
 | Backend | How a member starts work: `local`, `ssh`, `kubernetes`, `slurm` or `pbs`. |
-| Plan | The compiled form of a run: typed, checked and stored with the run. |
+| Plan | The compiled form of a run: typed, checked, holding no secret, and stored with the run. |
+| Secret record | A run's passwords and the variables it read, encrypted and kept only until the run ends. |
 | Coordinator | The part of Meridian that schedules jobs, places them on groups and hears from workers. |
 | Worker | The process that runs one attempt's steps and reports on them: the `meridian` binary itself. |
 
@@ -32,10 +34,10 @@ its own.
  workflow.yaml + inputs
           │
           ▼
-       compile ◀──── resolvers: inputs, secrets, groups, sources, …
+   compile: Create ◀──── resolvers: inputs, variables, groups, sources, …
           │
           ▼
-        plan ───────▶ store (hopper, on SQLite or Postgres)
+  plan + passwords ───▶ store (hopper, on SQLite or Postgres)
                             ▲
                             │
                        coordinator ──── backend ────▶ starts a worker
@@ -44,14 +46,18 @@ its own.
                                                     runs the steps
 ```
 
+The compiler creates a run's plan, the coordinator starts the run and
+readies each job, and a worker runs a job's steps and gives its outputs:
+the five [phases](#phases).
+
 Meridian is a set of Go packages:
 
 | Package | Does |
 | --- | --- |
 | `format` | Loads workflow files and validates them against the schema of their format. |
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
-| `compile` | Turns a workflow and its inputs into a plan, through resolver interfaces. |
-| `plan` | The plan's types and encoding. |
+| `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
+| `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
 | `coordinator` | Stores runs, schedules and places jobs, and serves the worker API. |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `backend/…` | Start workers: `local`, `ssh`, `kubernetes`, `slurm`, `pbs`. |
@@ -83,19 +89,29 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   from the one before, and comes with a translation from it. The compiler
   translates an older workflow into the current format right after
   validating it, so everything after that, from the rest of the compiler to
-  the plan, coordinator and worker, sees one format. A feature a newer
+  the plan, coordinator and worker, sees one format's keys. A feature a newer
   format removes survives in older workflows as its translation: if a later
   format drops `ssh:`, a format 1 job's `ssh:` becomes an inline execution
   group. Translations chain, so a new format adds one, from the format
-  before it.
+  before it. Expressions keep their own format's language: the parser reads
+  each in its workflow's format, and evaluation follows the format the plan
+  records.
 - **Migration.** `meridian migrate` applies the same translations to a
   workflow file, keeping its comments, and says what it can't change in the
   file, such as an execution group to configure.
 - **Deprecations.** A key can be deprecated within a format. It keeps its
   meaning, the schema marks it `deprecated`, so editors flag it, and the
-  compiler warns. Only a new format number removes it.
-- **Additions.** Format 1 gains keys without a new number, because adding a
-  key changes no workflow that was valid before:
+  compiler warns. Only a new format number removes it. The schema marks no
+  key yet, and the compiler doesn't yet warn about the first,
+  [`ssh:`](#ssh-is-deprecated).
+- **Additions.** Format 1 gains keys and functions without a new number when
+  they change no workflow that was valid before: a key the schema didn't
+  allow, or a call that was a syntax error. A word that is text today is
+  different. Giving it a meaning, as a new context such as `job`, a new
+  property such as `needs.<job>.result` or a new word operator does, changes
+  what a workflow that has the word means. So it is made as a bug fix is,
+  with a scan of the known workflows and a conformance case, and ACTIVATE
+  takes it too, or it waits for a new format. Format 1's additions are:
   - `format:` itself;
   - workflow metadata (below);
   - `execution-group:` in `runs-on:`, beside format 1's `environment:`, the
@@ -103,18 +119,22 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
     says what a job needs from it;
   - `needs.*` in `strategy:` and `runs-on:`, for jobs sized from what earlier
     jobs found;
-  - `needs.<job>.result`, a dependency's outcome;
+  - `needs.<job>.result`, a dependency's outcome, and the `job` context
+    ([Contexts](#contexts));
+  - `map()` and `filter()`, with their lambdas
+    ([The language](#the-language));
   - a job's `retry:`, which can rerun a job whose worker was lost.
 - **Metadata.** A workflow can carry `name`, `description`, `icon` and
   `thumbnail`. `description` is a string or `{file: <path>}`; `icon` and
   `thumbnail` are paths. Paths are relative to the workflow file and may not
   leave its directory tree, so a workflow in a Git repository is complete and
-  can't read files outside it.
+  can't read files outside it. The compiler doesn't check that yet.
 - **Strictness.** A workflow that needs something the environment can't
   provide fails to compile: an input type that names platform resources, a
-  `uses:` source with no resolver, sessions without a session provider. The
-  error names the key and what would provide it. There is no flag to run the
-  workflow anyway.
+  `uses:` that names a workflow with no Sources resolver, sessions without a
+  session provider. The error names the key and what would provide it.
+  There is no flag to run the workflow anyway. The compiler doesn't yet
+  refuse the last two.
 - **What ACTIVATE ignores.** ACTIVATE has never checked workflows against
   the schema, so workflows that run there can have keys the schema doesn't
   define, which ACTIVATE ignores. In format 1, such a key is a warning, and
@@ -124,23 +144,122 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
 
 ### Conformance
 
-The conformance suite pins the format's meaning. Each case is a workflow and
-its inputs with either the plan it compiles to or the errors it produces, and
-some cases also run, with the outputs and outcomes they must end with. Cases
-come from ACTIVATE's own tests, from public workflows and from Meridian, and
-cover loading and validation, expressions, matrix expansion, `needs`,
-defaults, inputs, status functions and step retries, including retries that
-pick another host each time. They live in `conformance/`, and each package
-runs the cases of its area.
+The conformance suite pins the format's meaning. Each case is a workflow,
+with the inputs and contexts it is given, and either what it compiles to or
+the problems it has. Cases come from ACTIVATE's own tests, from public
+workflows and from Meridian. They live in `conformance/`, in areas, and each
+package runs the cases of its own: `format` for loading and validation,
+`expressions` for what expressions evaluate to, `inputs` for a run's input
+values, and `compile` for plans and the problems with jobs and expressions.
+Cases for the later phases come with them: Start's values and its check of
+the run's shape, matrix expansion, the shape of each context in each phase,
+and runs, with the outcomes and outputs they must end with, status
+functions and step retries among them.
 
 Behavior that workflows rely on is kept, even where it is surprising. Behavior
 no workflow could rely on, such as a crash or a silently wrong result, is
 fixed, and its case records the fix.
 
+## Phases
+
+A run is evaluated at five points, its phases. Each phase is one function of
+Meridian's packages, which computes what the workflow leaves to that point
+from what is known by then. The coordinator and the worker only gather a
+phase's inputs and keep what it gives, so every implementation, whether
+`meridian`, a platform or an editor's WebAssembly, computes the same thing.
+
+| Phase | When | Function | Contexts it adds | Evaluates |
+| --- | --- | --- | --- | --- |
+| Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
+| Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
+| Ready | A job's dependencies have finished | `plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
+| Step | A job starts on its worker, and each of its steps is about to run | `plan.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
+| End | A job's steps have run | `plan.End`, in the worker | | The job's `outputs:` |
+
+Each phase reads the contexts of the phases before it too.
+
+- **Pure.** Create and Start reach files, networks and platforms only
+  through resolvers ([Interfaces](#interfaces)), and Ready, Step and End
+  reach nothing. Given the same inputs and resolver answers, a phase gives
+  the same result, byte for byte.
+- **One scope.** One function builds the contexts an expression reads in
+  each phase, and the compiler, coordinator, worker and WebAssembly package
+  all use it, so a context has one shape everywhere ([Contexts](#contexts)).
+- **What each gives.** Create gives the plan, the run's passwords and its
+  diagnostics ([Compiling](#compiling)). Start gives the run's completed
+  values, or fails the run ([Starting a run](#starting-a-run)). Ready gives
+  a job's evaluated values, or skips it, and a matrix's instances. Step
+  gives a step's evaluated values, and End the job's outputs.
+- **What is kept.** Start's results depend on what the run read as it
+  started, so the coordinator keeps them: in the run's secret record when
+  evaluating them read a variable or a password, and as run state otherwise
+  ([Run data](#run-data)). Ready, Step and End depend only on what is kept
+  already, so what they evaluate is given to whoever needs it, and only what
+  they decide is kept: that a job is skipped, a matrix's instances, a job's
+  outcome and outputs.
+
+Only Create is built. Start, matrix expansion, Ready, Step and End are
+designed here, and not built yet.
+
+### Contexts
+
+What an expression can read is its contexts, each a mapping:
+
+| Context | Holds | Known from |
+| --- | --- | --- |
+| `inputs` | The run's input values ([Inputs](#inputs)): a group's under its name, a list's as rows. In input definitions, `inputs.x.type` and the like read `x`'s definition, and `[index]` is the index of a list's row. | Create; Start completes it |
+| `org`, `vars` | Organization and user variables, by name, as strings. `var` is another name for `vars`. | Create, for the run's shape; Start, for everything else |
+| `remote` | Where a fetched workflow came from, as strings, such as `remote.repo` and `remote.branch`. | Create |
+| `sessions` | The workflow's `sessions:`, by name, as strings, as the session provider gives them. | Create |
+| `env` | The workflow's `env:`, then the job's over it, then the step's over that, as strings. Each reads the ones under it, and the workflow's reads none. | Start, the workflow's; Step, the job's and the step's |
+| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are its steps' so far. | Ready |
+| `matrix` | The job instance's matrix values. | Ready, once the matrix is expanded |
+| `job` | The job instance: `job.name`, the job's name; `job.key`, the instance's, as in `build#2`; `job.attempt`, from 1; and `job.group` and `job.member`, where it was placed. | Step |
+| `steps` | `steps.<id>.outputs.<name>`, for each step that ran before this one, as strings. | Step |
+
+A name that a context doesn't have reads as `""` in `needs`, `steps`, `env`,
+`org`, `vars`, `remote` and `sessions`, whose values are strings, and as null
+in `inputs`, `matrix` and `job`.
+
+Reading a context in a phase before it is known is an error when the run is
+created, such as `steps` in a job's `if:`, or `needs` in the workflow's
+`env:`. A job's `strategy:` is what is expanded, so it can't read `matrix`.
+Input definitions are evaluated at Create and Start, so they read only the
+contexts those phases know ([Inputs](#inputs)).
+
+The status functions are `success()`, `failure()`, `always()` and
+`cancelled()` (also spelled `canceled()`), known from Ready on. A job's
+default `if:` is `success()`, and an `if:` that calls a status function
+replaces it. An `if:` whose value is the word `always` means `always()`: it
+is the older spelling, which the compiler warns about, and a later format
+can drop it.
+
+`needs.<job>.result` is a dependency's outcome: `success`, `failure`,
+`cancelled` or `skipped`. For a matrix job it is `failure` if any instance
+failed, otherwise `cancelled` if any was cancelled, `skipped` if all were
+skipped, and `success` otherwise. With it, a job can run only when another
+failed, as a fallback the workflow controls:
+
+```yaml
+jobs:
+  primary:
+    steps:
+      - run: ./deploy.sh primary
+  secondary:
+    needs: [primary]
+    if: ${{ always() && needs.primary.result == 'failure' }}
+    steps:
+      - run: ./deploy.sh secondary
+```
+
+`job` and `needs.<job>.result` change what an expression that reads them
+means in format 1, so they follow the rule for such additions
+([The workflow format](#the-workflow-format)).
+
 ## Compiling
 
-The compiler turns a workflow, its inputs and its resolvers into a plan, in
-order:
+Compiling is the Create phase. The compiler turns a workflow, its inputs and
+its resolvers into a plan, in order:
 
 1. **Load.** Parse the YAML, keeping the source position of every node.
    YAML aliases and merge keys are refused, as ACTIVATE refuses them, and
@@ -148,26 +267,31 @@ order:
 2. **Validate** against the schema of the workflow's format.
 3. **Translate** a workflow in an older format into the current one.
 4. **Resolve** through the resolver interfaces: check input values against
-   their declarations and apply defaults, look up execution groups, and fetch
-   and compile the workflows that `uses:` names, with cycle detection and a
-   depth limit.
-5. **Expand** matrices whose values are known and read no organization or
-   user variable, and link each step's `cleanup:` command to the end of
-   its job.
+   their declarations and apply defaults, look up execution groups, check
+   the workflow's sessions, and resolve, pin and load the workflows that
+   `uses:` names, with cycle detection and a depth limit
+   ([Workflows a step calls](#workflows-a-step-calls)).
+5. **Check matrices** with the function that expands them, without
+   expanding them: their keys, the shape of `include` and `exclude`, and
+   their size where their values are known ([Matrices](#matrices)). Link
+   each step's `cleanup:` command to the end of its job.
 6. **Check expressions.** Parse every `${{ }}`, evaluate what is already
    known, and check every reference that is left, with its position:
    - Reading a context where it isn't known yet is an error, such as `steps`
-     in a job's `if:`, or `needs` in the workflow's `env:`. So is a relative
-     reference outside input definitions, since the plan doesn't hold the
-     workflow it would read.
+     in a job's `if:`, or `needs` in the workflow's `env:`
+     ([Contexts](#contexts)). So is a relative reference outside input
+     definitions, since the plan holds no other part of the workflow for it
+     to read.
    - Reading a job's outputs is an error unless the job needs it, or is the
      job itself. A job's outputs are whatever its steps write, so their names
      aren't checked.
-   - In format 1, reading an input, step, matrix key or session that doesn't
+   - In format 1, reading an input, matrix key or session that doesn't
      exist is a warning: ACTIVATE reads it as null or `""` and runs, and a
      workflow a step calls can read inputs its caller passes without
-     defining them. A step reading a step that doesn't run before it is an
-     error, since ACTIVATE fails the step.
+     defining them. A step reading a step that doesn't exist or doesn't run
+     before it, or a step's key other than `outputs`, is an error, since
+     ACTIVATE fails the step; in a job's outputs, which read it as `""`, it
+     is a warning.
    - Reading a variable that isn't a secret, or defining an input that takes
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is
@@ -178,13 +302,17 @@ order:
      row are `api key`, `private key` or `access key`, so `HF_TOKEN` and
      `apiKey` do and `tokenizer` doesn't. A variable is warned about once,
      where it is first read.
-7. **Emit** the plan.
+7. **Emit** the plan, and beside it the run's passwords, which the plan
+   doesn't hold.
 
 The compiler does no I/O of its own: files, networks and platforms are
-reached only through resolvers. It is deterministic, so the same workflow,
-inputs and resolver answers give a byte-identical plan. That is also what
-lets it build to WebAssembly unchanged (see
-[Editors and web UIs](#editors-and-web-uis)).
+reached only through resolvers, which get the context the compiler is
+given, so cancellation, deadlines and traces reach them. It is
+deterministic, so the same workflow, inputs and resolver answers give a
+byte-identical plan. That is also what lets it build to WebAssembly
+unchanged (see [Editors and web UIs](#editors-and-web-uis)). Today
+`Compile` takes no context, and doesn't return the run's passwords, which
+only `ResolveInputs` gives.
 
 Errors and warnings are reported together rather than one at a time.
 Warnings, such as a deprecated key, don't stop a run, and are kept with it,
@@ -222,9 +350,17 @@ the same way beside a successful result. A plan keeps its warnings' codes
 and params but not their text, so each reader sees them in their own
 language.
 
-Limits on a run's size (jobs, matrix instances, expression depth, `uses:`
-depth) are set by whoever runs Meridian. The defaults are high enough for
-every workflow in the conformance suite.
+Limits on a run's size are Meridian's own, which whoever runs it sets in
+the compiler's options (`Options.Limits`): the workflow file's size, 100 KiB
+by default, as in ACTIVATE; the number of jobs; a matrix's instances, 256 by
+default; how deep workflows that `uses:` calls nest; and the nets on what a
+group of templates builds and does ([The language](#the-language)). The
+defaults are high enough for every workflow in the conformance suite. An
+expression's depth, `range`, and what one template builds and does are the
+language's limits, the same wherever a workflow runs. A plan's JSON nests at
+most 10,000 levels, as deep as its encoding reads, so a value nested deeper
+is an error. Today the file's size and the nets are fixed, and there are no
+others.
 
 ### Inputs
 
@@ -284,23 +420,32 @@ ACTIVATE's launch form and its backend do together:
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
   input of such a type that has a value is an error.
-- **What the compiler doesn't have.** A default that reads something not
-  known when the run is created, such as `env` or a secret variable, stays an
-  expression in the plan, beside the inputs' values, and is evaluated as the
-  run starts, then checked against its input's type as the others' values
-  are. An input's value stays whole, even if only part of it reads such a
-  thing: a part of a mapping or list default, a form's text, or a row's
-  default, whose `[index]` is kept in the plan. The secret variables it
-  reads are among the run's secrets.
+- **What waits for Start.** A default that reads something not known when
+  the run is created, such as `env` or a secret variable, stays an
+  expression in the plan, beside the input definitions. Start evaluates it,
+  then checks it as Create checks the others: against its input's type,
+  whether it is required, and with the Inputs resolver for a platform type
+  ([Starting a run](#starting-a-run)). An input's value stays whole, even if
+  only part of it reads such a thing: a part of a mapping or list default, a
+  form's text, or a row's default, whose `[index]` is kept in the plan. The
+  secret variables it reads are among the run's secrets.
+- **What definitions read.** Input definitions are evaluated at Create and
+  Start, so they read `inputs`, `org`, `vars`, `remote`, `sessions` and the
+  workflow's `env`, and nothing later: reading `needs`, `steps`, `matrix`,
+  `job` or a status function in one is an error. Start evaluates the
+  workflow's `env:` with the inputs, in the order they need, so a default
+  can read `env` and an `env:` value an input; a default and an `env:` value
+  that read each other are an error, as two defaults that do are. Today the
+  compiler accepts a later context in a definition, and holds its input for
+  a start that can't evaluate it.
 - **Variables.** A plan never holds an organization or user variable's
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
   or `vars`, or a part of an input's value that reads one, stays an
   expression in the plan in the same way, its input's whole value, and is
-  evaluated as the run starts. The compiler evaluates it all the same,
-  since what decides the run's shape reads its value: the inputs'
-  `hidden`, `ignore` and `optional`, and the jobs' `needs`. It checks it
-  against its input's type too, but a problem with it doesn't show the
-  value.
+  evaluated at Start. The compiler evaluates it all the same, since what
+  decides the run's shape reads its value: the inputs' `hidden`, `ignore`
+  and `optional`, and the jobs' `needs`. It checks it against its input's
+  type too, but a problem with it doesn't show the value.
 - **Passwords.** A plan never holds a `password` input's value, wherever
   the input is: on its own, in a group or a wizard step, or a field of a
   list's or a repeated step's rows. The value is one of the run's secrets,
@@ -309,12 +454,11 @@ ACTIVATE's launch form and its backend do together:
   row, and it is checked against its type, but a problem with it doesn't
   show it. A value made from a password counts as the password, as one made
   from a variable counts as the variable: a default that reads one stays an
-  expression in the plan, and is evaluated as the run starts. A list held
-  for the run's start holds its rows without their passwords' values,
-  which the run's start puts in their places. A list whose rows are
-  evaluated as the run starts, with a password field in them, is one of the
-  run's secrets as a whole, since the plan can't say which of its values
-  are passwords.
+  expression in the plan, and is evaluated at Start. A list held for Start
+  holds its rows without their passwords' values, which Start puts in their
+  places. A list whose rows are evaluated at Start, with a password field in
+  them, is one of the run's secrets as a whole, since the plan can't say
+  which of its values are passwords.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
 API: it evaluates conditions and defaults against the submitted values
@@ -324,32 +468,87 @@ form keeps a repeated step's value as rows, as Meridian does, but its
 backend fills in the step's inputs as an ordinary step's, and drops the
 rows.
 
-## The plan
+## Starting a run
 
-The plan is typed Go, encoded as JSON and stored with the run. A coordinator
-schedules from the plan alone, and a run resumed by another process or
-release continues from the same plan.
+Start completes what the plan leaves to the run's start, with what only the
+start has: the variables, read once for the run, and the run's passwords.
+It is `compile.Start`, which reuses the compiler's input resolver, and the
+coordinator runs it as the run's first hopper job, which every other job of
+the run waits for ([On hopper](#on-hopper)).
+
+1. **Read.** Read the variables the plan lists through the Variables
+   interface, by name, or a context's whole when the plan names it alone,
+   and take the run's passwords from its secret record.
+2. **Check the shape.** Evaluate again each decision of the run's shape
+   that read a variable: an input's `hidden`, `ignore` and `optional`, and a
+   job's `needs`. If one differs from what the plan records, the run fails
+   with `run_shape_changed`, rather than run with values from two readings.
+3. **Complete the inputs.** Evaluate the inputs the plan holds for Start,
+   and the workflow's `env:` and `timeout:`, against the plan's input
+   definitions, so relative references, reads of a definition and lists'
+   templates work as they do at Create. Each input's value is checked as
+   Create checks one: its type, whether it is required, and a platform
+   type with the Inputs resolver.
+4. **Expand** each matrix whose values are known by now, written out or
+   read from inputs or variables ([Matrices](#matrices)), so a matrix that
+   can't be expanded fails the run before any job runs.
+5. **Keep** the variables it read in the secret record, and what it
+   evaluated there or as run state, by whether evaluating it read a
+   variable or a password ([Phases](#phases)), and its diagnostics with the
+   run, all in the transaction that ends its hopper job.
+
+A coordinator that dies during Start leaves its job to another replica,
+which starts it again from the beginning: nothing reads Start's results
+until they are stored. A rerun runs Start again ([Reruns](#reruns)).
+
+## Run data
+
+A run's data is of three kinds, kept apart by who may read them:
+
+| Kind | Holds | Read by | Kept |
+| --- | --- | --- | --- |
+| [The plan](#the-plan) | What the run does, as the workflow says it, with no secret and no variable's value | Whoever can see the run | With the run |
+| [The secret record](#the-secret-record) | The run's passwords, the variables it read as it started, and what Start made from them | The coordinator, and each attempt the part its job reads | Until the run ends |
+| [Run state](#run-state) | Jobs, attempts, outcomes, outputs and diagnostics | Whoever can see the run | With the run |
+
+What Meridian makes from a variable or a password is kept only in the
+secret record, so the plan and run state can be shown to whoever can see the
+run. A job's outputs and logs hold what its steps write, and Meridian masks
+only secrets in them ([Outputs](#outputs)), so a plain variable's value
+that a step writes stays as it is
+([Variables and secrets](#variables-and-secrets)).
+
+### The plan
+
+The plan is typed Go, encoded as JSON and stored with the run, and doesn't
+change once the run is created. A coordinator schedules from the plan and
+the secret record alone, and a run resumed by another process or release
+continues from the same plan.
 
 It holds:
 
 - **The run:** the workflow's source and revision, its format and metadata,
-  the resolved inputs and the defaults evaluated as it starts, workflow
-  `env`, the run's timeout, and the secrets and variables it reads. A
-  revision names the exact text that ran: a Git commit, or the SHA-256
-  digest of the text when no commit has it, as for a file with uncommitted
-  changes or a workflow a platform stores.
-- **Jobs**, one per job instance: dependencies (on all instances of a job,
-  or `:any` of them), matrix values, the job's `if:`, its group, resources
-  and `retry:`, steps, outputs, timeout and `env`.
-- **Steps:** what they run (a command, a workflow, or a built-in action), and
-  their `if:`, `env`, `with:`, shell, working directory, `retry:`, timeout,
-  `ignore-errors`, `early-cancel` and cleanup.
+  the Meridian release that compiled it, the input values known when the
+  run was created, the inputs left to Start, the workflow's `env`, the run's
+  timeout, `remote` and `sessions`, the decisions of its shape that read a
+  variable, and the secrets and variables Start reads. A revision names the
+  exact text that ran: a Git commit, or the SHA-256 digest of the text when
+  no commit has it, as for a file with uncommitted changes or a workflow a
+  platform stores.
+- **The input definitions**, `on.execute.inputs` as the workflow writes
+  them, with their expressions parsed and no values, so that Start
+  evaluates what was left to it as Create would have.
+- **Jobs**, one per job: dependencies (on all instances of a job, or `:any`
+  of them), its `strategy:`, its `if:`, group, resources and `retry:`,
+  steps, outputs, timeout and `env`, and the secrets and variables it reads.
+- **Steps:** what they run (a command, a workflow by its pinned reference,
+  or a built-in action), and their `if:`, `env`, `with:`, shell, working
+  directory, `retry:`, timeout, `ignore-errors`, `early-cancel` and cleanup.
 
 Expressions are stored parsed, not as strings, with their source kept for
 messages: each string in the workflow that holds a `${{ }}` is stored as its
-text and the trees of its expressions. Anything that can't be known until
-the run is underway, such as a job's `needs`, stays an expression to
-evaluate later.
+text and the trees of its expressions. What reads a context known only
+later, such as `needs`, stays an expression for its phase to evaluate.
 
 Everything else is data, and stays data. What a run was given, such as its
 inputs' values and a matrix instance's, is stored as JSON that is never
@@ -359,92 +558,102 @@ a workflow or a run's data holds can become an expression when a plan is
 read back, and an explicit `null`, such as a step's `working-directory:
 null`, stays distinct from a value that isn't there.
 
-Each job instance has a key: the job's name, or for a matrix instance its
-name, `#` and its index, as in `build#2`. A matrix whose values come from
-`needs` can't be expanded when the run is created, so the plan holds the
-job once, with its strategy, and the coordinator expands it when the jobs it
-needs have finished. A matrix that reads a variable, or an input whose
-value reads one, is held the same way, and expanded as the run starts.
-
 The plan holds no secret values, nor any value made from one. It names the
-secrets a run needs, and each attempt receives them when it is claimed:
-the secret variables it reads, each of a context's when it reads every
-variable of the context, as `vars.*` does; and its passwords, by their
+secrets the run reads, the run's for Start and each job's for its attempts:
+the secret variables an expression reads, each of a context's when it reads
+every variable of the context, as `vars.*` does; and passwords, by their
 paths in the inputs' values, `password` inputs and the password fields of
-lists' rows, and lists whose rows hold one and are evaluated as the run
-starts ([Inputs](#inputs)). As the run starts, each password's value is
-put in the inputs' values at its path, in those of the inputs evaluated
-then too.
+lists' rows, and lists whose rows hold one and are evaluated at Start
+([Inputs](#inputs)). Their values are in the secret record.
 
 Nor does the plan hold the value of an organization or user variable, secret
 or not, or a value made from one. People keep secrets in plain variables
 too, and a plan is kept with every run's record, where whoever can see the
 run can read it. So what reads a variable stays an expression: an input's
 default, as the run's deferred inputs, and a matrix, as its job's strategy.
-The plan names the variables a run reads that aren't secrets, as
-`org.<name>` and `vars.<name>`, found in every expression it holds; a read
-of each variable of a context, as `vars.*` is, names the context, `org` or
-`vars`. (In format 1, `vars` alone is a word, not a read of the context.)
+The plan names the variables the run reads that aren't secrets, for Start
+and for each job, as `org.<name>` and `vars.<name>`, found in every
+expression it holds; a read of each variable of a context, as `vars.*` is,
+names the context, `org` or `vars`. (In format 1, `vars` alone is a word,
+not a read of the context.)
 
 What decides the run's shape still reads variables when the run is created:
 an input's `hidden`, `ignore` and `optional`, and a job's `needs`. The plan
 holds only what they decided, which inputs the run has and which jobs each
-job waits for. That can say something of a variable's value, such as that
-it names a job, which is accepted: the plan has to hold the run's shape.
+job waits for, and Start decides them again to check that nothing changed
+([Starting a run](#starting-a-run)). That can say something of a variable's
+value, such as that it names a job, which is accepted: the plan has to hold
+the run's shape.
 
-Plan encodings change the way the format does: by addition. A change that
-can't be an addition gets a new plan version, and releases keep reading the
-old one until no stored run can still use it. A release refuses a plan with
-a key it doesn't know, which a newer release wrote, rather than run it
-without that part. Keys match exactly, and a key given twice is refused.
+A source's location names the workflow to whoever can see the run, so it
+says nothing of the machine the run was created on: a platform gives its
+own name for the workflow, and `meridian` gives the workflow's path in its
+Git repository, or its file's name outside one.
+
+Today the plan doesn't hold the input definitions, `remote`, `sessions`, the
+release, the shape's decisions, or each job's secrets and variables.
+
+### The secret record
+
+The secret record holds what a run needs that the plan can't: its
+passwords, from Create; the variables it read at Start, plain and secret;
+and what Start made from them.
+
+- **Encrypted.** The coordinator stores it beside the run, in the same
+  database, encrypted with AES-256-GCM under a data key of its own, which
+  the Keys interface wraps: a platform's key management service, or locally
+  a key file only the user can read. The run's ID is its associated data,
+  so a record can't be moved to another run.
+- **Read in parts.** The coordinator reads it for Start and Ready, and gives
+  each attempt, when it is claimed, the values its own job reads
+  ([Variables and secrets](#variables-and-secrets)).
+- **Deleted when the run ends.** A rerun starts again: it reads the
+  variables again, and needs the passwords again, given again by the person
+  running it or kept by a platform that chooses to.
+- **Stored, not held in memory.** Coordinator replicas keep no state between
+  calls, and `meridian resume` picks a run up in another process, so a run's
+  secrets live where its state does, and the store holds them only
+  encrypted.
+
+### Run state
+
+Run state is hopper's: the run's jobs, their attempts, outcomes and outputs,
+beside Meridian's run record, which holds the plan and the run's
+diagnostics. It holds no secret that Meridian can recognize: a job's
+outputs are checked against the secrets its attempt received before they
+leave the worker ([Outputs](#outputs)), and diagnostics never show a value
+made from a variable or a password.
+
+### Plans across versions
+
+A plan has one reader, as a workflow does. A release reads every plan
+version up to its own, and upgrades an older plan in memory as it decodes
+it, as the compiler translates an older format, so everything past decoding
+sees one version.
+
+- **Every change gets a version.** A plan's version rises with each change
+  to its encoding, an addition among them; an addition's upgrade changes
+  nothing. Each version's encoding is described by a JSON Schema, kept in
+  this repository, so the plan is a contract a platform can read too. The
+  trees of stored expressions are part of it.
+- **The version says who can read it.** The run record keeps its plan's
+  version, so a replica tells whether it reads a run without decoding its
+  plan. A replica claims only runs whose version it reads, so during a
+  rolling upgrade old replicas leave newer runs alone. A release still
+  refuses a plan with a key it doesn't know, rather than run it without
+  that part. Keys match exactly, and a key given twice is refused.
+- **What an expression means is its format's.** A stored tree is read the
+  same in every version, and evaluated by the rules of the format the plan
+  records.
+- **The release.** The plan records the Meridian release that compiled it.
+
+Today a plan is version 1, and has no schema.
 
 ## Expressions
 
-Expressions are evaluated in five places, and what an expression can refer
-to depends on where it is evaluated:
-
-| When | Evaluated by | Adds these contexts | Used by |
-| --- | --- | --- | --- |
-| The run is created | Compiler | `inputs`, `org` and `vars` (organization and user variables), `remote` (the repository the workflow came from), workflow `env`, `sessions` from a session provider | Everything that is known by then and reads no variable, and what decides the run's shape, which can: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
-| The run starts | Coordinator | `org` and `vars`, read once for the run, and the secrets the run needs | Input defaults the compiler leaves to it, such as those that read a variable, a secret or a password, and matrices that read a variable |
-| A job's dependencies have finished | Coordinator | `needs`, status functions, `env` | Job `if:`, and `strategy:`, `runs-on:`, `resources:`, `retry:`, `timeout:` and `working-directory:` that use them |
-| A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
-| A job ends | Worker | | Job `outputs:` |
-
-The compiler reads `org` and `vars` for what decides the run's shape, and
-to check the values of inputs whose defaults read them, but a plan holds
-none of their values ([The plan](#the-plan)): everything else that reads one
-is evaluated once the run is underway, with the values the run read as it
-started ([Variables](#variables)).
-
-`matrix` is known once a job's matrix is expanded: when the run is created,
-or, for a matrix that reads a variable, when the run starts, or, for a
-matrix that uses `needs`, when its dependencies have finished. A job's
-`strategy:` is what is expanded, so it can't read `matrix`.
-
-The status functions are `success()`, `failure()`, `always()` and
-`cancelled()` (also spelled `canceled()`). A job's default `if:` is
-`success()`, and an `if:` that calls a status function replaces it. An
-`if:` whose value is the word `always` means `always()`: it is the older
-spelling, which the compiler warns about, and a later format can drop it.
-
-`needs.<job>.result` is a dependency's outcome: `success`, `failure`,
-`cancelled` or `skipped`. For a matrix job it is `failure` if any instance
-failed, otherwise `cancelled` if any was cancelled, `skipped` if all were
-skipped, and `success` otherwise. With it, a job can run only when another
-failed, as a fallback the workflow controls:
-
-```yaml
-jobs:
-  primary:
-    steps:
-      - run: ./deploy.sh primary
-  secondary:
-    needs: [primary]
-    if: ${{ always() && needs.primary.result == 'failure' }}
-    steps:
-      - run: ./deploy.sh secondary
-```
+An expression is evaluated in a phase, which decides what it can read
+([Phases](#phases), [Contexts](#contexts)). This section says what an
+expression means.
 
 ### The language
 
@@ -453,7 +662,8 @@ describes them: JavaScript's operators, with its rules for comparing and
 converting values. The `expr` package parses them into a tree, which is what
 the plan stores, and the conformance suite's `expressions` area pins what
 each one means. [Expressions](expressions.md) gives their grammar, limits and
-conversions in full.
+conversions in full. A later format can change the language: the parser
+reads each expression in its workflow's format.
 
 - **Values** are JSON's: null, booleans, numbers, strings, lists and
   mappings. Numbers are 64-bit floats, as in JavaScript.
@@ -463,9 +673,9 @@ conversions in full.
   `inputs['my-key']`, `inputs.hosts[0]`, the slice `inputs.hosts[1:3]`, and
   `inputs.groups.*.name` for each group's name. A path can follow a group or
   a call too: `fromJSON(x).*.name`. A path that leads nowhere is
-  null, except in `env`, `org`, `vars`, `remote`, `sessions` and outputs,
-  which hold strings, where a missing name is `""`. A string that holds JSON
-  is read as its value, since outputs are strings.
+  null, except in the contexts that hold strings, where a missing name is
+  `""` ([Contexts](#contexts)). A string that holds JSON is read as its
+  value, since outputs are strings.
 - **Words.** A word that is none of these is a string: `inputs.mode == debug`
   compares with `"debug"`. The compiler warns about a word that looks like a
   reference, such as `input.mode`, and about a word that decides a
@@ -554,15 +764,17 @@ string that a template reads as the JSON it holds is counted before it is
 parsed, so one the template can't afford to read isn't.
 
 The net bounds time too, as a backstop that work within the limits never
-reaches: a group's templates spend at most 10 seconds of wall-clock time
-evaluating, together. The work count prices each step and each read by
-what it costs, so a template at its limit takes well under a second, and a
-group at its own a few seconds. The cap isn't a limit a workflow is written
-to, since how long evaluating takes depends on the machine. The evaluator
-reads the clock as each template starts, one that another reads among
-them, and every 256 steps its group takes, each node it evaluates and each
-run of a lambda, and a group that passes the cap fails with
-`expressions_too_slow`.
+reaches. The time is the caller's: a group's templates stop evaluating when
+the context of the phase that evaluates them is done, and a group evaluated
+without a deadline spends at most 10 seconds of wall-clock time, together.
+The work count prices each step and each read by what it costs, so a
+template at its limit takes well under a second, and a group at its own a
+few seconds. The cap isn't a limit a workflow is written to, since how long
+evaluating takes depends on the machine. The evaluator reads the clock as
+each template starts, one that another reads among them, and every 256
+steps its group takes, each node it evaluates and each run of a lambda, and
+a group that passes the cap fails with `expressions_too_slow`. Today the cap
+is 10 seconds, whatever the caller's deadline.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them. So are values made from them: an
@@ -580,10 +792,10 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
 | Inputs | Input types beyond the built-in ones, and their choices | Built-in types, plus Slurm partitions, accounts and QOS, and PBS queues, read from a member's scheduler |
-| Secrets | Secret values, by name | Environment variables and files the user names |
-| Variables | Organization and user variables | A variables file in Meridian's config directory |
+| Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
+| Keys | The key that wraps each run's secret record's data key | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names | Git, through the `git` command |
+| Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command |
 | Actions | Built-in actions | `parallelworks/checkout`, and those that need no platform |
 | Sessions | Interactive sessions a workflow serves | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
@@ -592,19 +804,30 @@ interface, and the compiler, coordinator and worker see only the interface:
 A resolver may be missing. Then the workflow features that need it fail to
 compile, with an error saying which interface was missing.
 
+Resolvers get the caller's context, so cancellation, deadlines and traces
+reach them. They report what is wrong as a problem, a kind and its params
+([Compiling](#compiling)), rather than as text, so that a platform's reason
+reaches each reader in their own language. Today the Inputs resolver
+returns a Go error, and the compiler is given variables as mappings, not
+through an interface.
+
 ## Durable execution
 
 ### On hopper
 
 Durable state is [hopper](https://github.com/parallelworks/hopper)'s.
 Meridian keeps no scheduling state of its own, and only adds run records
-that hopper doesn't model, such as the plan, in the same database.
+that hopper doesn't model, such as the plan and the secret record, in the
+same database.
 
 - **A run is a hopper workflow.** One transaction stores the run record and
-  inserts the workflow, its jobs and their edges, so a run is stored before
-  anything executes, and either all of it is stored or none of it is.
-- **Each job instance is a hopper job**, and `needs:` becomes hopper's
-  dependency edges.
+  the secret record, with the run's passwords, and inserts the workflow, its
+  jobs and their edges, so a run is stored before anything executes, and
+  either all of it is stored or none of it is. Its first job is Start
+  ([Starting a run](#starting-a-run)), which every other job waits for.
+- **Each job is a hopper job**, and `needs:` becomes hopper's dependency
+  edges. A matrix job's instances are a hopper workflow of their own
+  ([Matrices](#matrices)).
 - **Meridian decides what a dependency's outcome means.** Its edges let a
   dependent run whatever its dependencies' outcomes were. A job ends with
   Meridian's outcome (success, failure, cancelled or skipped) stored with its
@@ -622,10 +845,11 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
 ```
 
 - **pending:** waiting for its dependencies.
-- **ready:** its dependencies have finished. The coordinator evaluates its
-  `if:`, and a false `if:` skips it here. Otherwise the coordinator evaluates
-  whatever was left for this point, such as a `runs-on:` that uses `needs`,
-  and picks a member of the job's group ([Placement](#placement)).
+- **ready:** its dependencies have finished. The coordinator runs Ready: it
+  expands a matrix that reads `needs`, and evaluates the job's `if:`, so a
+  false `if:` skips it here. Otherwise it evaluates the rest of what was left
+  for this point, such as a `runs-on:` that uses `needs`, and picks a member
+  of the job's group ([Placement](#placement)).
 - **placing:** the member's backend is starting a worker: a scheduler job
   waiting in a queue, a pod being scheduled, a process starting over SSH. No
   user code runs yet, and the time this takes doesn't count against any
@@ -633,6 +857,74 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
 - **running:** a worker has claimed the attempt and holds its lease.
 - **The end:** the worker reports the outcome, or the coordinator records
   one when the worker is lost or the job is cancelled.
+
+### Matrices
+
+One function expands a matrix, `plan.Expand`, which takes a job's
+`strategy:` and the contexts it reads, and gives the job's instances. The
+matrix's keys other than `include` and `exclude`, in the order of their
+names, as ACTIVATE orders them, give every combination of their values, the
+first key changing slowest. Each `exclude` entry removes the combinations
+that have all its values. Each `include` entry then adds its values to every
+combination whose matrix values it matches without changing one, or, when
+it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
+differs for an `include` entry that names no matrix key: it makes it a
+combination of its own, where GitHub Actions adds it to every combination.
+Which one format 1 keeps is decided by a scan of the known workflows, as a
+bug fix is ([The workflow format](#the-workflow-format)). Each instance's
+key is the job's name, `#` and its index from 0, as in `build#2`.
+
+- **Where.** The coordinator expands every matrix: at Start, one whose
+  values are known by then, written out or read from inputs or variables,
+  and at Ready, one that reads `needs`. The compiler expands none. It checks
+  each with the same function where its values are known, and checks that
+  the jobs and outputs a matrix reads exist; only the values wait. Today the
+  compiler keeps every `strategy:` in the plan, and nothing expands one.
+- **One hopper job.** A matrix job is one hopper job, whichever phase
+  expanded it. When it is ready, the coordinator inserts its instances as a
+  hopper workflow of their own, and finishes the job once they have all
+  finished, with their combined outcome and outputs. Jobs that need it wait
+  for all its instances. So a matrix written out and one sized from earlier
+  results run the same way.
+- **`fail-fast` and `max-parallel`** belong to the strategy: the coordinator
+  cancels the remaining instances when one fails, and places no more than
+  `max-parallel` at a time.
+- **Outcome and outputs.** The job's outcome is its instances' combined, as
+  `needs.<job>.result` gives it ([Contexts](#contexts)). Its outputs are
+  its instances', by name, and an output that more than one instance sets
+  has the value of the one with the highest index, so it doesn't depend on
+  which finished last, as it does in ACTIVATE and GitHub Actions. No
+  workflow can rely on which instance finishes last, so this is made as a
+  bug fix ([The workflow format](#the-workflow-format)).
+- **`needs: <job>:any`** waits for any one instance, and `needs.<job>` is
+  then that instance's outcome and outputs ([On hopper](#on-hopper)).
+- **Size.** A matrix has at least one instance and at most 256 by default,
+  a limit of Meridian's ([Compiling](#compiling)), not the format's. A
+  matrix with no instance, or more than the limit, fails where it is
+  expanded, or when the run is created if its values are known then.
+
+### Workflows a step calls
+
+A step whose `uses:` names a workflow runs it as a run of its own, a child
+of the step's run, with its own plan, secret record and jobs.
+
+- **Pinned when the run is created.** The compiler resolves the workflow
+  through the Sources interface, pins it to a commit and the SHA-256 digest
+  of its text, and loads and validates it, and the workflows it calls in
+  turn, with cycle detection and a depth limit. The plan holds every pinned
+  reference, not a compiled workflow, so the run and its reruns run the same
+  code throughout, even where a reference names a branch.
+- **Compiled when the step runs.** The worker evaluates the step's `with:`,
+  and the coordinator creates the child run from the pinned workflow with
+  those values, through Create and Start, linked to the step. The step ends
+  with the child run's outcome.
+- **Its own scope.** A child run reads its own inputs, and the variables its
+  own Start reads. A value the step passes that was made from a variable or
+  a password is kept out of the child's plan, in its secret record, as a
+  password is.
+- **Without a Sources resolver**, a `uses:` that names a workflow fails to
+  compile ([The workflow format](#the-workflow-format)). Today the compiler
+  keeps it in the plan as it is written, without resolving it.
 
 ### Failures and retries
 
@@ -660,7 +952,7 @@ not assumed idempotent.
 - **A worker that stops heartbeating is checked with its backend** before it
   is declared lost: `squeue` or `qstat`, the pod's status, the process on the
   SSH host. So a worker that is only cut off from the coordinator isn't
-  mistaken for one that is dead.
+  mistaken for one that is dead ([Leases and fencing](#leases-and-fencing)).
 
 ### Job retries
 
@@ -686,8 +978,12 @@ jobs:
   for now is
   `worker-lost`: the worker was lost after a step started, for example
   because its node failed or the job was preempted.
-- **`max-retries` and `interval`** work as in a step's `retry:`, defaults
-  included. There is no per-attempt `timeout`, since a job has its own.
+- **`max-retries` and `interval`.** A job runs again at most `max-retries`
+  times, 3 by default. The first new attempt waits `interval`, 1 minute by
+  default, and each one after it twice as long as the one before, up to an
+  hour. A job's `retry:` is Meridian's addition, so these defaults are its
+  own, and can still change. There is no per-attempt `timeout`, since a job
+  has its own.
 - **The new attempt is placed again**, so it can go to another member of
   the job's group.
 - **What the lost attempt wrote stays** in the run directory, so a job that
@@ -707,24 +1003,40 @@ and a failure that ends a run would usually happen again.
 
 A person reruns a run with `meridian rerun`, either all of it or only its
 failed jobs and the jobs that depend on them. A rerun uses the run's stored
-plan, so it runs the same revision with the same inputs, and the jobs it
-doesn't rerun keep their outcomes and outputs; only what reads a variable
-reads its value as it is then ([Variables](#variables)). Each attempt of a
-job, and each retry of a step, keeps its own logs, so earlier attempts can
-still be read.
+plan, so it runs the same revision, with the same workflows pinned and the
+same inputs, and the jobs it doesn't rerun keep their outcomes and outputs.
+It starts again: Start reads each variable's value as it is then
+([Variables and secrets](#variables-and-secrets)), and needs the run's
+passwords again, given again by the person rerunning it or kept by a
+platform that chooses to. A rerun whose shape would now differ fails with
+`run_shape_changed`. Each attempt of a job, and each retry of a step, keeps
+its own logs, so earlier attempts can still be read.
 
-### Variables
+### Variables and secrets
 
 A run reads organization and user variables through the Variables
-interface, and keeps none of their values in its records
-([The plan](#the-plan)).
+interface, by name, plain or secret, and keeps their values only in its
+secret record ([Run data](#run-data)).
 
-- **Once for each run.** As a run starts, the coordinator reads the
-  variables its plan lists, a context's whole when the plan names it alone,
-  and holds them in memory for that run. It evaluates the defaults and
-  matrices the compiler left to it with them, and each attempt receives
-  them when it is claimed, so every expression of the run reads the same
-  values.
+- **At Create**, the compiler reads only the plain variables read by what
+  it evaluates: what decides the run's shape, and the values of inputs that
+  read one, which it checks against their types. It reads no secret
+  variable's value; what reads one waits for Start.
+- **Once at Start**, the coordinator reads every variable the plan lists, a
+  context's whole when the plan names it alone, and keeps them in the
+  secret record, so every expression of the run reads the same values.
+- **Each job gets its own.** The plan lists, for each job, the secrets and
+  variables its expressions read, directly or through an input made from
+  one, and an attempt receives only its own job's when it is claimed. A
+  read of each variable of a context, as `vars.*` is, lists all of them.
+- **Declared variables.** Format 1's `needs.organizationVariables` lists
+  the organization variables a workflow requires: as in ACTIVATE, a run
+  fails when it is created if the Variables interface doesn't have one,
+  naming each one missing. Its `needs.userVariables` lists the user
+  variables a workflow asks to read: as in ACTIVATE, a secret user variable
+  a workflow doesn't list isn't given to it, and reads as `""`, and the
+  compiler warns where it is read. A platform can ask the person running a
+  workflow to approve the variables it lists.
 - **A rerun reads them again.** It sees each variable's value as it is
   then, not as it was when the run first started. If the Variables
   interface keeps versions of a variable, a run could record the versions
@@ -740,6 +1052,14 @@ interface, and keeps none of their values in its records
   to come from the secret, and isn't masked.
 - **Diagnostics never quote a variable's value.** Warnings and errors kept
   with a run show `***` in place of a value that came from a variable.
+- **Permissions.** Format 1's `permissions:` lists what the run's token for
+  a platform's API may do, `'*'` for all that the person running it may.
+  Meridian keeps it in the plan and gives it to the platform, which issues
+  the token and can ask the person to approve it. Meridian has no API of
+  its own for such a token to reach, so locally it has no effect.
+
+Today the compiler lists the secrets and variables of the run as a whole,
+and checks neither declared list.
 
 ### Leases and fencing
 
@@ -751,10 +1071,36 @@ write from a superseded attempt fails, and the worker that made it stops its
 job. hopper's leases today belong to the client that claimed a job; per-job
 leases are something it doesn't have yet.
 
+Fencing numbers keep a superseded attempt's reports out of the store, but
+not what it writes elsewhere, such as checkpoints in the run directory.
+Only a job whose `retry:` lists `worker-lost` can have a second attempt
+while the first may still be running, cut off. So its workers fence
+themselves too, as a Kubernetes controller that can't renew its leader
+lease stops leading:
+
+- **The worker stops the job** when it hasn't renewed its lease for a lease
+  period, counted on its monotonic clock from when it sent the last
+  heartbeat that succeeded. It stops the job's steps as a cancellation does.
+- **The coordinator waits** until the lease has lapsed for that period and a
+  margin, by the store's clock, before it starts a new attempt. Neither
+  side reads the other's clock; each only measures the period.
+- **The cost** is that such a job stops when it is cut off from every
+  coordinator replica for longer than a lease period, even when its host is
+  fine. Its new attempt resumes it, as its `retry:` asks.
+
+Other jobs keep running while they are cut off, since nothing runs them
+again: their workers spool reports and deliver them when they reconnect
+([Running steps](#running-steps)).
+
+A worker is lost only when its backend says it is, or, for a job that
+fences itself, once its lease has lapsed for the period and the margin. A
+backend check that can't decide, such as one over an SSH connection that is
+down, counts as not lost.
+
 When the coordinator comes back after being down, its workers get a grace
 period to reconnect before their attempts count as lost. Jobs keep running
-while Meridian is down, and a laptop waking up or `meridian run` restarting
-must not make them all look lost.
+while Meridian is down, but for those that fence themselves, and a laptop
+waking up or `meridian run` restarting must not make them all look lost.
 
 ### Cancellation, timeouts and cleanup
 
@@ -772,28 +1118,14 @@ must not make them all look lost.
 ### Outputs
 
 A step writes outputs to the file named by `$OUTPUTS`. A job's outputs are
-capped at 1 MB and a run's at 50 MB. When a job is claimed, it receives its
-dependencies' outcomes and outputs with it, rather than reading each one
-back. hopper keeps finalized jobs' outputs only in its history, so this,
-too, needs something hopper doesn't have yet.
-
-### Matrices from earlier results
-
-A matrix whose values come from `needs` can't be expanded until its
-dependencies have finished. It is stored as one hopper job. When that job is
-ready, the coordinator expands the matrix, inserts the instances as a hopper
-workflow of their own, and finishes the job once they have all finished,
-with their combined outcome and outputs. Jobs that need it wait for all its
-instances, as they do for any matrix. The compiler still checks that the
-jobs and outputs the matrix refers to exist; only the values wait.
-
-A matrix that reads a variable, whose values a plan doesn't hold, is stored
-the same way, and the coordinator expands it as the run starts, with the
-variables the run read then.
-
-`fail-fast` and `max-parallel` apply to these matrices as to any other: the
-coordinator cancels the remaining instances when one fails, and places no
-more than `max-parallel` at a time.
+capped at 1 MB and a run's at 50 MB. Before the worker reports a job's
+outputs, it checks them against the values of the secrets its attempt
+received, and an output that holds one is reported with it masked, `***`,
+as logs are, and a warning that names the output; GitHub Actions leaves
+such an output out. When a job is claimed, it receives its dependencies'
+outcomes and outputs with it, rather than reading each one back. hopper
+keeps finalized jobs' outputs only in its history, so this, too, needs
+something hopper doesn't have yet.
 
 ## The coordinator
 
@@ -900,13 +1232,17 @@ errors as RFC 9457 problem details. Meridian's coordinator and a platform
 that embeds Meridian serve the same API.
 
 - **Claim:** exchange the bootstrap token for the attempt's credential, and
-  receive the job from the plan, its secrets, the variables the run read as
-  it started, and its dependencies' outcomes and outputs.
+  receive the job as Ready evaluated it; the values of its own job's
+  secrets and variables, and of the inputs Start completed that it reads;
+  and its dependencies' outcomes and outputs.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
 - **Step events:** a step started, or finished with its exit code.
 - **Logs:** each step's output, uploaded as a stream with byte offsets, so
   an interrupted upload resumes without duplicating or losing lines.
+- **Child runs:** start the run of a workflow a step calls, with its
+  step's `with:`, and wait for its outcome
+  ([Workflows a step calls](#workflows-a-step-calls)).
 - **Complete:** the outcome and the job's outputs.
 
 Every write is idempotent and carries a sequence number, so a worker
@@ -951,10 +1287,12 @@ the coordinator's machine opens no port.
   host, outside the container. It creates the job's container, runs each
   step in it with the runtime's `exec`, and removes the container when the
   job ends.
-- **Logs** are masked on the worker, before they leave the host.
+- **Logs** are masked on the worker, before they leave the host, and so are
+  outputs ([Outputs](#outputs)).
 - **While the coordinator is unreachable**, a worker keeps running its steps,
   spools logs and events to disk up to a limit, and delivers them in order
-  when it reconnects.
+  when it reconnects, unless its job fences itself
+  ([Leases and fencing](#leases-and-fencing)).
 
 ## Backends and isolation
 
@@ -998,7 +1336,7 @@ each user or platform defines for itself, with as many members as it has to
 fall back between. So `ssh:` is deprecated in favor of execution groups:
 
 - The schema marks it `deprecated`, and the compiler warns, naming the
-  execution group that would replace it.
+  execution group that would replace it. Neither does yet.
 - It keeps working in format 1 as it always has: its commands run on that
   host, outside any container, because existing workflows rely on the
   host's files and tools. To Meridian it is an inline execution group with
@@ -1042,8 +1380,9 @@ A job's time limit is its `timeout:`. There is no separate walltime:
 
 - **Who is trusted.** A workflow runs with the privileges of the user who
   started it. Code that `uses:` brings in is as trusted as where it comes
-  from, so references to it should pin a commit. Untrusted code belongs in a
-  group whose members use microVMs.
+  from, so references to it should pin a commit. One that names a branch is
+  pinned when the run is created, so the run and its reruns run the same
+  code. Untrusted code belongs in a group whose members use microVMs.
 - **Workers are trusted with one attempt.** A worker's credential covers
   one attempt and expires, and the coordinator checks every write against
   the attempt's lease.
@@ -1054,15 +1393,14 @@ A job's time limit is its `timeout:`. There is no separate walltime:
 - **SSH host keys are checked** against the user's `known_hosts`. An unknown
   key is an error until the user accepts it explicitly; Meridian never
   accepts a key on first use by itself.
-- **Secrets** stay out of the plan and out of the run's records. Each
-  attempt receives the secrets it needs when it claims, and they are masked
-  in its logs. Locally, a secret a run will need later, such as the value of
-  a `password` input, is kept in a file only the user can read and deleted
-  when the run ends.
-- **Variables** stay out of the plan and the run's records too, secret or
-  not, since people keep secrets in plain variables. A run reads them as it
-  starts and holds them in memory while it runs, and its diagnostics never
-  quote one ([Variables](#variables)).
+- **Secrets** stay out of the plan and run state. A run's passwords and
+  secret variables are in its secret record, encrypted, until the run ends.
+  Each attempt receives only those its own job reads, when it claims, and
+  they are masked in its logs and outputs.
+- **Variables** stay out of the plan and run state too, secret or not, since
+  people keep secrets in plain variables. A run reads them as it starts and
+  keeps them in its secret record while it runs, and its diagnostics never
+  quote one ([Variables and secrets](#variables-and-secrets)).
 - **Untrusted input is bounded:** workflow size, YAML aliases, expressions,
   outputs and log volume.
 
@@ -1076,6 +1414,10 @@ the use of a non-approved algorithm into an error.
   The coordinator's certificate uses an ECDSA P-256 key.
 - **SSH**, through `golang.org/x/crypto/ssh`, which negotiates only approved
   algorithms in FIPS mode. A server that offers none of them can't be used.
+- **Secret records** are encrypted with AES-256-GCM, through `crypto/cipher`
+  with random nonces (`cipher.NewGCMWithRandomNonce`), the way the module
+  approves, under data keys from `crypto/rand`. A platform's Keys interface
+  wraps them with its own key management.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
   digests are SHA-256.
 - **External tools** that Meridian runs (`git`, container runtimes,
@@ -1099,7 +1441,7 @@ binaries still link `libSystem`, as Apple requires.
   reason.
 - **Retention:** runs, logs and hopper's history are kept for a configured
   time. A job's outputs are kept until every job that depends on it has
-  finished.
+  finished. A run's secret record is deleted when the run ends.
 - **Benchmarks:** compile time for large workflows, the time Meridian adds
   between a job becoming ready and its placement, and job throughput on
   SQLite and Postgres. Their thresholds live in the repository and gate
@@ -1126,17 +1468,18 @@ Execution groups and variables live in Meridian's config directory, and
 are never read from the repository a workflow comes from, so cloning a
 workflow can't send its jobs to your SSH hosts.
 
-The database and logs live in Meridian's state directory. SQLite can't lock
-reliably on a network filesystem, which is where home directories on
-clusters often are, so Meridian refuses to open a database there and says
-how to choose a local path.
+The database, the key that wraps secret records, and logs live in
+Meridian's state directory. SQLite can't lock reliably on a network
+filesystem, which is where home directories on clusters often are, so
+Meridian refuses to open a database there and says how to choose a local
+path.
 
 ## Editors and web UIs
 
 Editors and web UIs validate workflows, expand matrices and evaluate
 expressions with a TypeScript package built from the same Go code, as
-WebAssembly, so what they accept is what runs. The package exports typed
-functions rather than setting globals.
+WebAssembly: the phases' own functions, so what they accept is what runs.
+The package exports typed functions rather than setting globals.
 
 The package also edits workflows. An edit sets, adds or removes the value at
 a JSON Pointer and leaves every other byte of the file as it was, so comments
@@ -1159,7 +1502,9 @@ Larger features that aren't designed yet are proposed in
   works.
 - **Steps that run a workflow.** A job made only of `uses:` steps could run
   on the coordinator, with no worker. In a job that mixes them with `run:`
-  steps, the worker waits for the child run, holding capacity while it does.
+  steps, the worker waits for the child run
+  ([Workflows a step calls](#workflows-a-step-calls)), holding capacity
+  while it does.
 - **The Kubernetes client.** `client-go` is a large dependency for a few API
   calls; plain HTTP against the API may be enough.
 - **Git.** Running the `git` command uses the host's credentials and
