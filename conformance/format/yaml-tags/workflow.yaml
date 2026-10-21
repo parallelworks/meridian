@@ -1,0 +1,16 @@
+configurations:
+  tags:
+    inputs:
+      null-tilde: !!null ~
+      null-empty: !!null
+      null-text: !!null text
+      null-zero: !!null 0
+      local: !foo 123
+      local-mapping: !foo {a: 1}
+      str: !!str 1
+      int: !!int '12'
+      binary: !!binary aGk=
+jobs:
+  main:
+    steps:
+      - run: echo hello

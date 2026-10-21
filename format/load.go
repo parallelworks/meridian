@@ -250,8 +250,6 @@ func (p *parser) scalar(n *yaml.Node, path string) any {
 	case "!!str":
 		p.styles[path] = n.Style
 		return n.Value
-	case "!!null":
-		return nil
 	case "!!merge":
 		p.report(problems.YAMLMergeKey, position(n), path, nil)
 		return nil
