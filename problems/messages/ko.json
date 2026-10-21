@@ -111,10 +111,10 @@
   "from_json_invalid": "fromJSON이 읽는 텍스트 {text} 값이 올바른 JSON이 아닙니다.",
   "unknown_operator": "{op} 연산자가 없습니다.",
   "expression_too_large": "표현식이 {limit}MiB를 넘는 데이터를 만듭니다.",
+  "expression_too_much_work": "표현식의 작업량이 {limit}MiB를 넘습니다.",
   "expressions_read_each_other": "이곳의 표현식들이 서로를 참조하므로 어느 표현식도 값을 가질 수 없습니다.",
   "not_list_or_mapping": "{name}() 함수에는 {value} 값이 아니라 목록 또는 매핑을 지정해야 합니다.",
-  "expression_runs_too_many_lambdas": "표현식이 map() 및 filter() 함수의 람다를 {limit}번보다 많이 실행합니다.",
   "expressions_build_too_much": "이곳에서 함께 평가되는 표현식들이 합쳐서 {limit}MiB를 넘는 데이터를 만듭니다.",
-  "expressions_run_too_many_lambdas": "이곳에서 함께 평가되는 표현식들이 합쳐서 map() 및 filter() 함수의 람다를 {limit}번보다 많이 실행합니다.",
+  "expressions_too_much_work": "이곳에서 함께 평가되는 표현식들의 작업량이 합쳐서 {limit}MiB를 넘습니다.",
   "expressions_too_slow": "이곳에서 함께 평가되는 표현식들의 평가에 합쳐서 {limit}초보다 오래 걸렸습니다."
 }

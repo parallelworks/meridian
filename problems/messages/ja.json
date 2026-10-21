@@ -111,10 +111,10 @@
   "from_json_invalid": "fromJSON が読み取るテキスト {text} は有効な JSON ではありません。",
   "unknown_operator": "演算子 {op} はありません。",
   "expression_too_large": "式が作成するデータが {limit} MiB を超えています。",
+  "expression_too_much_work": "式の処理量が {limit} MiB を超えています。",
   "expressions_read_each_other": "ここにある式が互いを参照しているため、どの式にも値がありません。",
   "not_list_or_mapping": "関数 {name}() には、{value} ではなくリストまたはマッピングを指定してください。",
-  "expression_runs_too_many_lambdas": "式が map() と filter() のラムダを実行する回数が {limit} 回を超えています。",
   "expressions_build_too_much": "ここでまとめて評価される式が作成するデータが、合計で {limit} MiB を超えています。",
-  "expressions_run_too_many_lambdas": "ここでまとめて評価される式が map() と filter() のラムダを実行する回数が、合計で {limit} 回を超えています。",
+  "expressions_too_much_work": "ここでまとめて評価される式の処理量が、合計で {limit} MiB を超えています。",
   "expressions_too_slow": "ここでまとめて評価される式の評価に、合計で {limit} 秒を超える時間がかかりました。"
 }

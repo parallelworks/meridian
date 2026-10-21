@@ -11,8 +11,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // Values are JSON's: nil, bool, numbers, string, []any and map[string]any.
@@ -322,6 +320,12 @@ func parseJSON(s string) (any, error) {
 	return v, nil
 }
 
+// jsonValue returns the value that s holds as JSON, if it holds any.
+func jsonValue(s string) (any, bool) {
+	v, err := parseJSON(s)
+	return v, err == nil
+}
+
 // collection returns the list or mapping that a string holds as JSON, or v
 // itself. Outputs are always strings, so operators that work on lists and
 // mappings accept them in JSON.
@@ -464,13 +468,20 @@ func property(v any, key string) (any, bool) {
 		if parsed, err := parseJSON(v); err == nil {
 			return property(parsed, key)
 		}
-		runes := []rune(v)
-		if start, end, ok := sliceBounds(key, len(runes)); ok {
-			return string(runes[start:end]), true
-		}
-		if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < len(runes) {
-			return string(runes[i]), true
-		}
+		return character(v, key)
+	}
+	return nil, false
+}
+
+// character returns the character of a string that doesn't hold JSON at an
+// index, or its slice, such as 1:3.
+func character(s, key string) (any, bool) {
+	runes := []rune(s)
+	if start, end, ok := sliceBounds(key, len(runes)); ok {
+		return string(runes[start:end]), true
+	}
+	if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < len(runes) {
+		return string(runes[i]), true
 	}
 	return nil, false
 }
@@ -547,58 +558,6 @@ func length(v any) float64 {
 		return float64(len(v))
 	}
 	return 0
-}
-
-// keys returns a mapping's keys in sorted order.
-func keys(v any) []any {
-	m, _ := collection(v).(map[string]any)
-	out := make([]any, 0, len(m))
-	for _, k := range slices.Sorted(maps.Keys(m)) {
-		out = append(out, k)
-	}
-	return out
-}
-
-// values returns a mapping's values in the order of their keys.
-func values(v any) []any {
-	m, _ := collection(v).(map[string]any)
-	out := make([]any, 0, len(m))
-	for _, item := range jsonvalue.Sorted(m) {
-		out = append(out, item)
-	}
-	return out
-}
-
-// entries returns what map() and filter() go through: a list's items, with
-// their indexes, or a mapping's values in the order of their keys, with the
-// keys. A string that holds a JSON list or mapping is read as its value, and
-// null has no items. ok is false for anything else.
-func entries(v any) (keys, items []any, ok bool) {
-	switch c := collection(v).(type) {
-	case nil:
-		return nil, nil, true
-	case []any:
-		keys = make([]any, len(c))
-		for i := range c {
-			keys[i] = float64(i)
-		}
-		return keys, c, true
-	case map[string]any:
-		for k, item := range jsonvalue.Sorted(c) {
-			keys, items = append(keys, k), append(items, item)
-		}
-		return keys, items, true
-	}
-	return nil, nil, false
-}
-
-// elements returns a list's items, or a mapping's values in the order of
-// their keys.
-func elements(v any) []any {
-	if list, ok := collection(v).([]any); ok {
-		return list
-	}
-	return values(v)
 }
 
 // size estimates the bytes a value takes, to bound what an evaluation can

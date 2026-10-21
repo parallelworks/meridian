@@ -22,6 +22,9 @@ type function struct {
 	// what the function's list gets for an item, given what the lambda
 	// gave for it, and keep false if it gets nothing.
 	each func(item, result any) (v any, keep bool)
+	// reads is set for a function that reads its arguments, each of which
+	// costs its size toward the work of the template that calls it.
+	reads bool
 }
 
 // arity returns the params that say how many arguments f takes: arity is
@@ -59,26 +62,30 @@ var functions = map[string]function{
 	"canceled":  {},
 	"always":    {},
 	"case":      {minArgs: 3, maxArgs: -1},
-	"contains": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
+	"contains": {minArgs: 2, maxArgs: 2, reads: true, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return contains(a[0], a[1]), nil
 	}},
-	"startsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
+	"startsWith": {minArgs: 2, maxArgs: 2, reads: true, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return strings.HasPrefix(stringOf(a[0]), stringOf(a[1])), nil
 	}},
-	"endsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
+	"endsWith": {minArgs: 2, maxArgs: 2, reads: true, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return strings.HasSuffix(stringOf(a[0]), stringOf(a[1])), nil
 	}},
-	"format": {minArgs: 1, maxArgs: -1, eval: func(e *evaluator, at int, a []any) (any, error) {
+	"format": {minArgs: 1, maxArgs: -1, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
 		return format(e, at, stringOf(a[0]), a[1:])
 	}},
-	"join": {minArgs: 1, maxArgs: 2, eval: func(e *evaluator, at int, a []any) (any, error) {
-		sep := ","
+	"join": {minArgs: 1, maxArgs: 2, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
 		if len(a) == 2 {
-			sep = stringOf(a[1])
+			return e.join(at, a[0], stringOf(a[1]))
+		}
+		// The separator it reads when it isn't given is ",".
+		const sep = ","
+		if _, err := e.read(at, nil, sep); err != nil {
+			return nil, err
 		}
 		return e.join(at, a[0], sep)
 	}},
-	"toJSON": {minArgs: 1, maxArgs: 1, eval: func(e *evaluator, at int, a []any) (any, error) {
+	"toJSON": {minArgs: 1, maxArgs: 1, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
 		return e.built(at, toJSON(a[0], "  "))
 	}},
 	"map": {minArgs: 2, maxArgs: 2, each: func(_, result any) (any, bool) {
@@ -142,8 +149,12 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 // counts what it builds before building it, because a long separator is
 // repeated for every item.
 func (e *evaluator) join(at int, v any, sep string) (any, error) {
+	c := collection(v)
+	if err := e.work(at, heldWork(v, c)); err != nil {
+		return nil, err
+	}
 	var list []any
-	switch c := collection(v).(type) {
+	switch c := c.(type) {
 	case string:
 		return c, nil
 	case []any:
@@ -204,34 +215,83 @@ func roundHalfUp(n float64) float64 {
 	return r
 }
 
-// prefix applies a unary operator.
+// prefix applies a unary operator. upper, lower, trim, keys, values and
+// fromJSON read their operand, which costs its size. length reads a string,
+// whose characters it counts or which it reads as JSON, and -, abs, floor,
+// ceil, round and range a string they convert to a number, but not a list's
+// or a mapping's length or any other number, which they know.
 func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 	switch op {
 	case "!":
 		return !truthy(v), nil
 	case "-":
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
 		return -toNumber(v), nil
 	case "length", "len":
-		return length(v), nil
+		// A string that holds a JSON list or mapping is read as its value,
+		// which counts too.
+		c := collection(v)
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
+		if err := e.work(at, heldWork(v, c)); err != nil {
+			return nil, err
+		}
+		return length(c), nil
 	case "upper":
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
 		return e.built(at, strings.ToUpper(stringOf(v)))
 	case "lower":
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
 		return e.built(at, strings.ToLower(stringOf(v)))
 	case "trim":
-		return strings.TrimSpace(stringOf(v)), nil
-	case "keys":
-		return keys(v), nil
-	case "values":
-		return values(v), nil
-	case "abs":
-		return math.Abs(toNumber(v)), nil
-	case "floor":
-		return math.Floor(toNumber(v)), nil
-	case "ceil":
-		return math.Ceil(toNumber(v)), nil
-	case "round":
-		return roundHalfUp(toNumber(v)), nil
+		return e.read(at, strings.TrimSpace(stringOf(v)), v)
+	case "keys", "values":
+		// A mapping's keys or values, in the order of its keys, and none
+		// of anything else. A string that holds a JSON mapping is read as
+		// its value, which counts too.
+		c := collection(v)
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
+		if err := e.work(at, heldWork(v, c)); err != nil {
+			return nil, err
+		}
+		m, _ := c.(map[string]any)
+		keys := e.sortedKeys(m)
+		out := make([]any, len(keys))
+		for i, k := range keys {
+			if op == "keys" {
+				out[i] = k
+			} else {
+				out[i] = m[k]
+			}
+		}
+		return out, nil
+	case "abs", "floor", "ceil", "round":
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
+		n := toNumber(v)
+		switch op {
+		case "abs":
+			return math.Abs(n), nil
+		case "floor":
+			return math.Floor(n), nil
+		case "ceil":
+			return math.Ceil(n), nil
+		}
+		return roundHalfUp(n), nil
 	case "fromJSON":
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
 		s, ok := v.(string)
 		if !ok {
 			return v, nil
@@ -242,6 +302,9 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 		}
 		return e.built(at, parsed)
 	case "range":
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
 		return e.rangeOf(at, 0.0, v)
 	}
 	return nil, e.errorAt(at, problems.UnknownOperator, problems.Params{"op": op})

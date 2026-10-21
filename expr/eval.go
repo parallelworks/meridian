@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,34 +31,42 @@ const maxBuilt = 8 << 20
 // that keeps to the language's limits never reaches it.
 const maxGroupBuilt = 64 << 20
 
-// maxLambdaRuns is the language's limit on how many times one template runs
-// the lambdas of map() and filter(), so that lambdas in lambdas can't make
-// evaluating it take unbounded time.
-const maxLambdaRuns = 100000
+// maxWork is the language's limit on the work one template does, so that
+// evaluating it takes bounded time. Work is counted in bytes, as builds are:
+// 8 for each step, such as an operand, an operator, a call, a segment of a
+// path or a run of a lambda; the size of each value that an operation reads,
+// such as both sides of ==; and what the template builds. docs/expressions.md
+// says how each operation counts, under Limits. A template doesn't count the
+// work of a template it reads: that one has its own count.
+const maxWork = 32 << 20
 
-// maxGroupLambdaRuns is Meridian's own limit on how many times the
-// templates of a group run lambdas together: ten templates at the
-// language's limit. Like maxGroupBuilt, it isn't part of the format.
-const maxGroupLambdaRuns = 10 * maxLambdaRuns
+// step is what each step of an evaluation counts toward its work: the size
+// of a scalar.
+const step = 8
 
-// A group's limits are at least one template's: this doesn't compile if
-// they aren't.
+// maxGroupWork is Meridian's own limit on the work that the templates of a
+// group do together: eight templates at the language's limit. Like
+// maxGroupBuilt, it isn't part of the format.
+const maxGroupWork = 8 * maxWork
+
+// A group's limits are at least one template's, and a template can build
+// all that it may within its work: this doesn't compile if they aren't.
 const (
 	_ uint = maxGroupBuilt - maxBuilt
-	_ uint = maxGroupLambdaRuns - maxLambdaRuns
+	_ uint = maxGroupWork - maxWork
+	_ uint = maxWork - maxBuilt
 )
 
 // maxGroupTime is Meridian's own limit on how long the templates of a group
-// spend evaluating, together. Counting what expressions build and run can't
-// bound the cost of a step that counts nothing, such as contains on a large
-// value, which a lambda can repeat 100,000 times, so this is a last resort
-// for workflows that do far more work than any real one. It isn't part of
+// spend evaluating, together. It is a backstop that work within the limits
+// never reaches: the work a template does is counted by what its steps and
+// reads cost, so a group at its limit takes a few seconds. It isn't part of
 // the format, since how long evaluating takes depends on the machine.
 const maxGroupTime = 10 * time.Second
 
-// clockEvery is how many nodes a group's templates evaluate between reads
-// of the clock, besides the read at each run of a lambda's body, so that
-// most nodes don't read it.
+// clockEvery is how many steps a group's templates take between reads of
+// the clock, so that most steps don't read it: each node they evaluate, and
+// each run of a lambda's body.
 const clockEvery = 256
 
 // A Scope is what an expression can read.
@@ -85,15 +94,15 @@ type Scope struct {
 	budget *budget
 }
 
-// A budget counts what the templates of a group have built, how many times
-// they have run lambdas, and how long they have spent evaluating. The
-// group's evaluations happen one at a time, though one can be nested in
-// another, as a template that reads another is.
+// A budget counts what the templates of a group have built, the work they
+// have done, and how long they have spent evaluating. The group's
+// evaluations happen one at a time, though one can be nested in another, as
+// a template that reads another is.
 type budget struct {
-	built, runs int
-	// nodes counts the nodes the group's templates have evaluated, so that
+	built, work int
+	// steps counts the steps the group's templates have taken, so that
 	// the clock is read every clockEvery of them.
-	nodes int
+	steps int
 	// elapsed is how long the group's templates have spent evaluating, up
 	// to last, when the clock was last read.
 	elapsed time.Duration
@@ -101,7 +110,7 @@ type budget struct {
 	// active counts the evaluations under way, so that the time between
 	// two of the group's evaluations doesn't count.
 	active int
-	// clock reads the time: time.Now, or a test's clock.
+	// clock reads the time: now, or a test's clock.
 	clock func() time.Time
 }
 
@@ -110,12 +119,12 @@ type budget struct {
 // templates are a group, such as all of a run's input defaults and
 // conditions, or every template in one value. Each template still has the
 // language's limits, and the group has Meridian's wider ones, which aren't
-// part of the format: its templates build at most 64 MiB together, run
-// lambdas at most 1,000,000 times, and spend at most 10 seconds evaluating.
+// part of the format: its templates build at most 64 MiB together, do at
+// most 256 MiB of work, and spend at most 10 seconds evaluating.
 // A scope that has a budget keeps it.
 func (s Scope) Budgeted() Scope {
 	if s.budget == nil {
-		s.budget = &budget{clock: time.Now}
+		s.budget = &budget{clock: now}
 	}
 	return s
 }
@@ -146,6 +155,14 @@ func (b *budget) tick() bool {
 	return b.elapsed > maxGroupTime
 }
 
+// epoch is when the process started, which now reads the time from.
+var epoch = time.Now()
+
+// now reads the time from the monotonic clock alone, which is cheaper to read
+// than time.Now, which reads the wall clock too. A budget only measures how
+// long evaluations take.
+func now() time.Time { return epoch.Add(time.Since(epoch)) }
+
 // Status is how a job or step got to where an expression is evaluated: for
 // a step, how the earlier steps of its job ended, and for a job, how the
 // jobs it needs ended.
@@ -154,17 +171,20 @@ type Status struct {
 	Cancelled bool
 }
 
-// A Resolver reads the workflow around an expression.
+// A Resolver reads the workflow around an expression. Each method follows
+// a path through the values of the workflow's expressions as walk does,
+// with charge, which counts the work of what it reads; an error from
+// charge stops it and is returned.
 type Resolver interface {
 	// Relative returns the value of the relative reference that goes up
 	// levels from the key the expression is in and then follows path, with
 	// any expressions in it evaluated. ok is false if there is nothing
 	// there.
-	Relative(up int, path []string) (v any, ok bool, err error)
+	Relative(up int, path []string, charge func(n int) error) (v any, ok bool, err error)
 	// Definition returns what the input definitions hold at path, with any
 	// expressions in it evaluated, or else the default of the input at
 	// path. ok is false if there is neither.
-	Definition(path []string) (v any, ok bool, err error)
+	Definition(path []string, charge func(n int) error) (v any, ok bool, err error)
 }
 
 // Unknown is a value in a context that exists but isn't known yet, such as a
@@ -206,16 +226,16 @@ type UnknownError struct {
 func (e *UnknownError) Error() string { return fmt.Sprintf("%s isn't known yet", e.Name) }
 
 // A BudgetError means the templates of a group, which share a budget
-// (Scope.Budgeted), built more together, ran lambdas more often, or spent
-// longer evaluating than Meridian allows a group. It isn't a problem with
-// any one expression, which can each be within the language's limits: the
-// budget is Meridian's own, not part of the format.
+// (Scope.Budgeted), built more together, did more work, or spent longer
+// evaluating than Meridian allows a group. It isn't a problem with any one
+// expression, which can each be within the language's limits: the budget is
+// Meridian's own, not part of the format.
 type BudgetError struct {
 	// Kind is the limit the group passed: problems.ExpressionsBuildTooMuch,
-	// problems.ExpressionsRunTooManyLambdas or problems.ExpressionsTooSlow.
+	// problems.ExpressionsTooMuchWork or problems.ExpressionsTooSlow.
 	Kind *problems.Kind
-	// Limit is the group's limit: in MiB for what it builds, in runs for
-	// its lambdas, and in seconds for its time.
+	// Limit is the group's limit: in MiB for what it builds and the work it
+	// does, and in seconds for its time.
 	Limit int
 }
 
@@ -234,12 +254,15 @@ func (e *Expr) Eval(scope Scope) (any, error) {
 // in text.
 type evaluator struct {
 	scope Scope
-	// spent counts what the template has built, and runs how many times it
-	// has run lambdas, for the language's limits.
-	spent, runs int
+	// spent counts what the template has built, and worked the work it has
+	// done, for the language's limits.
+	spent, worked int
 	// frame holds the parameters of the lambda whose body is being
 	// evaluated, if any, and those of the lambdas around it.
 	frame *frame
+	// facts holds what the evaluation has found out about the lists and
+	// mappings in its scope that references read.
+	facts map[identity]*facts
 }
 
 // A frame holds the values of a lambda's parameters while its body is
@@ -274,6 +297,15 @@ func newEvaluator(scope Scope) *evaluator {
 // stop ends the evaluation, and counts its time.
 func (e *evaluator) stop() { e.scope.budget.stop() }
 
+// stepped counts a step toward the group's reads of the clock, and reads it
+// every clockEvery steps.
+func (e *evaluator) stepped() error {
+	if e.scope.budget.steps++; e.scope.budget.steps%clockEvery == 0 {
+		return e.timed()
+	}
+	return nil
+}
+
 // timed reads the clock, and fails if the group has spent longer evaluating
 // than Meridian allows.
 func (e *evaluator) timed() error {
@@ -287,9 +319,10 @@ func (e *evaluator) errorAt(at int, k *problems.Kind, params problems.Params) er
 	return &EvalError{Offset: at, Kind: k, Params: params}
 }
 
-// spend counts n bytes built, and fails if they take the template past the
-// language's limit, or its group past Meridian's. A count that fails isn't
-// kept, since what it counts isn't built.
+// spend counts n bytes built, which count as work too, and fails if they
+// take the template past the language's limits, or its group past
+// Meridian's. A count that fails isn't kept, since what it counts isn't
+// built.
 func (e *evaluator) spend(at, n int) error {
 	if e.spent+n > maxBuilt {
 		return e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
@@ -297,24 +330,78 @@ func (e *evaluator) spend(at, n int) error {
 	if e.scope.budget.built+n > maxGroupBuilt {
 		return &BudgetError{Kind: problems.ExpressionsBuildTooMuch, Limit: maxGroupBuilt >> 20}
 	}
+	if err := e.work(at, n); err != nil {
+		return err
+	}
 	e.spent += n
 	e.scope.budget.built += n
 	return nil
 }
 
-// run counts a run of a lambda's body, and fails if it takes the template
-// past the language's limit, or its group past Meridian's. It reads the
-// clock too, since a body can do work that counts nothing.
+// work counts n bytes of work, and fails if they take the template past the
+// language's limit, or its group past Meridian's. A count that fails isn't
+// kept, since the work it counts isn't done.
+func (e *evaluator) work(at, n int) error {
+	if e.worked+n > maxWork || e.scope.budget.work+n > maxGroupWork {
+		return e.tooMuchWork(at, n)
+	}
+	e.worked += n
+	e.scope.budget.work += n
+	return nil
+}
+
+// tooMuchWork returns the error for n bytes of work that take the template
+// past the language's limit, or its group past Meridian's.
+func (e *evaluator) tooMuchWork(at, n int) error {
+	if e.worked+n > maxWork {
+		return e.errorAt(at, problems.ExpressionTooMuchWork, problems.Params{"limit": maxWork >> 20})
+	}
+	return &BudgetError{Kind: problems.ExpressionsTooMuchWork, Limit: maxGroupWork >> 20}
+}
+
+// read counts the work of an operation that read vs, their sizes, and
+// returns result, what it made of them. A read is counted after it, since
+// it holds nothing: an operation that reads too much fails all the same.
+func (e *evaluator) read(at int, result any, vs ...any) (any, error) {
+	n := 0
+	for _, v := range vs {
+		n += e.sizeOf(v)
+	}
+	if err := e.work(at, n); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// readBoth is read for an operation that read a and b.
+func (e *evaluator) readBoth(at int, result, a, b any) (any, error) {
+	if err := e.work(at, e.sizeOf(a)+e.sizeOf(b)); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// readText counts the work of an operation that reads those of vs that are
+// strings, such as to convert them to numbers: their sizes.
+func (e *evaluator) readText(at int, vs ...any) error {
+	n := 0
+	for _, v := range vs {
+		if s, ok := v.(string); ok {
+			n += len(s)
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return e.work(at, n)
+}
+
+// run counts a run of a lambda's body: a step.
 func (e *evaluator) run(at int) error {
-	if e.runs >= maxLambdaRuns {
-		return e.errorAt(at, problems.ExpressionRunsTooManyLambdas, problems.Params{"limit": maxLambdaRuns})
+	if err := e.work(at, step); err != nil {
+		return err
 	}
-	if e.scope.budget.runs >= maxGroupLambdaRuns {
-		return &BudgetError{Kind: problems.ExpressionsRunTooManyLambdas, Limit: maxGroupLambdaRuns}
-	}
-	e.runs++
-	e.scope.budget.runs++
-	return e.timed()
+	return e.stepped()
 }
 
 // built counts v as built and returns it.
@@ -326,13 +413,30 @@ func (e *evaluator) built(at int, v any) (any, error) {
 }
 
 func (e *evaluator) eval(n node) (any, error) {
-	if e.scope.budget.nodes++; e.scope.budget.nodes%clockEvery == 0 {
+	b := e.scope.budget
+	if b.steps++; b.steps%clockEvery == 0 {
 		if err := e.timed(); err != nil {
 			return nil, err
 		}
 	}
+	// Each node is a step: an operand, an operator or a call. A group
+	// isn't a node, and a lambda isn't evaluated as one: each of its runs
+	// is a step (each). Its offset is read only for an error.
+	if e.worked+step > maxWork || b.work+step > maxGroupWork {
+		return nil, e.tooMuchWork(n.offset(), step)
+	}
+	e.worked += step
+	b.work += step
 	switch n := n.(type) {
 	case *literal:
+		// A list or mapping written as JSON is read each time it is
+		// evaluated.
+		switch n.value.(type) {
+		case []any, map[string]any:
+			if _, err := e.read(n.at, nil, n.value); err != nil {
+				return nil, err
+			}
+		}
 		// A copy, so that a caller that changes the result doesn't change
 		// the expression.
 		return jsonvalue.Clone(n.value), nil
@@ -345,9 +449,17 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		v, ok := walk(e.frame.lookup(n.name), path)
-		if !ok {
-			return nil, nil
+		// The parameter's name counts its bytes, beyond the step.
+		if err := e.work(n.at, nameWork(n.name)-step); err != nil {
+			return nil, err
+		}
+		if err := e.pathWork(n.at, path); err != nil {
+			return nil, err
+		}
+		f := follower{e: e, at: n.at}
+		v, ok, err := f.walk(e.frame.lookup(n.name), path)
+		if err != nil || !ok {
+			return nil, err
 		}
 		return v, nil
 	case *relative:
@@ -378,11 +490,17 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		v, ok := walk(v, path)
-		if !ok {
-			return nil, nil
+		if err := e.pathWork(n.at, path); err != nil {
+			return nil, err
 		}
-		return known(n.at, v)
+		// A computed value holds nothing unknown, since a reference that
+		// reads something unknown fails.
+		f := follower{e: e, at: n.at}
+		v, ok, err := f.walk(v, path)
+		if err != nil || !ok {
+			return nil, err
+		}
+		return v, nil
 	case *call:
 		return e.call(n)
 	case *slice:
@@ -398,7 +516,7 @@ func (e *evaluator) eval(n node) (any, error) {
 			}
 			end = stringOf(v)
 		}
-		return stringOf(start) + ":" + end, nil
+		return e.built(n.at, stringOf(start)+":"+end)
 	case *concat:
 		v, err := e.eval(n.x)
 		if err != nil {
@@ -435,47 +553,53 @@ func (e *evaluator) binary(n *binary) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The operators that compare and search read both operands, which cost
+	// their sizes whether or not they are read to the end: they count them
+	// after reading them (read).
 	switch n.op {
 	case "==":
-		return looseEqual(a, b), nil
+		return e.readBoth(n.at, looseEqual(a, b), a, b)
 	case "!=":
-		return !looseEqual(a, b), nil
+		return e.readBoth(n.at, !looseEqual(a, b), a, b)
 	case "===":
-		return strictEqual(a, b), nil
+		return e.readBoth(n.at, strictEqual(a, b), a, b)
 	case "!==":
-		return !strictEqual(a, b), nil
+		return e.readBoth(n.at, !strictEqual(a, b), a, b)
 	case "<", ">", "<=", ">=":
 		c, ok := compare(a, b)
-		if !ok {
-			return false, nil
-		}
-		switch n.op {
-		case "<":
-			return c < 0, nil
-		case ">":
-			return c > 0, nil
-		case "<=":
-			return c <= 0, nil
-		}
-		return c >= 0, nil
+		holds := ok && (n.op == "<" && c < 0 || n.op == ">" && c > 0 || n.op == "<=" && c <= 0 || n.op == ">=" && c >= 0)
+		return e.readBoth(n.at, holds, a, b)
 	case "in":
-		return contains(b, a) != n.negated, nil
+		return e.readBoth(n.at, contains(b, a) != n.negated, a, b)
 	case "includes":
-		return contains(a, b) != n.negated, nil
+		return e.readBoth(n.at, contains(a, b) != n.negated, a, b)
 	case "startsWith":
-		return strings.HasPrefix(stringOf(a), stringOf(b)) != n.negated, nil
+		return e.readBoth(n.at, strings.HasPrefix(stringOf(a), stringOf(b)) != n.negated, a, b)
 	case "endsWith":
-		return strings.HasSuffix(stringOf(a), stringOf(b)) != n.negated, nil
+		return e.readBoth(n.at, strings.HasSuffix(stringOf(a), stringOf(b)) != n.negated, a, b)
 	case "get":
 		k, ok := key(b)
 		if !ok {
 			return nil, nil
 		}
-		v, _ := property(a, k)
-		return v, nil
+		// get reads a key that is text, which it looks up or reads as an
+		// index, and a string it reads into, as a path's name does.
+		if err := e.readText(n.at, b); err != nil {
+			return nil, err
+		}
+		f := follower{e: e, at: n.at}
+		v, _, err := f.lookup(a, k)
+		return v, err
 	case "range":
+		// range reads text it converts to a number.
+		if err := e.readText(n.at, a, b); err != nil {
+			return nil, err
+		}
 		return e.rangeOf(n.at, a, b)
 	case "split":
+		if _, err := e.readBoth(n.at, nil, a, b); err != nil {
+			return nil, err
+		}
 		s, sep := stringOf(a), stringOf(b)
 		// Count the list before making it, as the string's bytes and 8 for
 		// each part that strings.Split makes: an empty separator makes a
@@ -494,6 +618,9 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		}
 		return out, nil
 	case "join":
+		if _, err := e.readBoth(n.at, nil, a, b); err != nil {
+			return nil, err
+		}
 		return e.join(n.at, a, stringOf(b))
 	case "+":
 		_, aStr := a.(string)
@@ -501,6 +628,10 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		if aStr || bStr {
 			return e.built(n.at, stringOf(a)+stringOf(b))
 		}
+	}
+	// Arithmetic reads text it converts to a number.
+	if err := e.readText(n.at, a, b); err != nil {
+		return nil, err
 	}
 	x, y := toNumber(a), toNumber(b)
 	switch n.op {
@@ -543,7 +674,8 @@ func (e *evaluator) call(n *call) (any, error) {
 		}
 		return e.eval(n.args[len(n.args)-1])
 	}
-	if fn := functions[n.name]; fn.each != nil {
+	fn := functions[n.name]
+	if fn.each != nil {
 		return e.each(n, fn)
 	}
 	args := make([]any, len(n.args))
@@ -554,21 +686,56 @@ func (e *evaluator) call(n *call) (any, error) {
 		}
 		args[i] = v
 	}
-	return functions[n.name].eval(e, n.at, args)
+	if fn.reads {
+		var err error
+		if len(args) == 2 {
+			_, err = e.readBoth(n.at, nil, args[0], args[1])
+		} else {
+			_, err = e.read(n.at, nil, args...)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return fn.eval(e, n.at, args)
 }
 
 // each evaluates n, a call to map() or filter(): it runs the lambda that is
 // the last argument for each item of the first, and makes a list of what
-// fn.each gives for each. It counts each run, and 8 for each item of the
-// list and the item's size.
+// fn.each gives for each. Each run is a step, and it counts 8 for each item
+// of the list it makes and the item's size.
 func (e *evaluator) each(n *call, fn function) (any, error) {
 	v, err := e.eval(n.args[0])
 	if err != nil {
 		return nil, err
 	}
-	keys, items, ok := entries(v)
-	if !ok {
-		return nil, e.errorAt(n.at, problems.NotListOrMapping, problems.Params{"name": n.name, "value": problems.Show(v)})
+	var keys, items []any
+	c := collection(v)
+	switch c := c.(type) {
+	case []any:
+		keys, items = make([]any, len(c)), c
+		for i := range c {
+			keys[i] = float64(i)
+		}
+		if err := e.work(n.at, traversal(v, c, nil)); err != nil {
+			return nil, err
+		}
+	case map[string]any:
+		sorted := e.sortedKeys(c)
+		if err := e.work(n.at, traversal(v, c, sorted)); err != nil {
+			return nil, err
+		}
+		keys, items = make([]any, len(sorted)), make([]any, len(sorted))
+		for i, k := range sorted {
+			keys[i], items[i] = k, c[k]
+		}
+	default:
+		if err := e.work(n.at, traversal(v, c, nil)); err != nil {
+			return nil, err
+		}
+		if c != nil {
+			return nil, e.errorAt(n.at, problems.NotListOrMapping, problems.Params{"name": n.name, "value": problems.Show(v)})
+		}
 	}
 	f := &frame{lambda: n.args[len(n.args)-1].(*lambda), outer: e.frame}
 	e.frame = f
@@ -602,54 +769,272 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := e.pathWork(r.at, path); err != nil {
+		return nil, err
+	}
+	f := follower{e: e, at: r.at}
+	var v any
 	if r.context == "inputs" {
-		v, err := e.inputs(r, root, path)
-		if err != nil {
+		if v, err = e.inputs(r, &f, root, path); err != nil {
 			return nil, err
 		}
-		return known(r.at, v)
+	} else {
+		if v, ok, err = f.walk(root, path); err != nil {
+			return nil, err
+		}
+		if !ok && contexts[r.context].strings {
+			return "", nil
+		}
 	}
-	v, ok := walk(root, path)
-	if !ok && contexts[r.context].strings {
-		return "", nil
+	if f.throughText {
+		// What a path reads from text is new, and holds nothing unknown.
+		return v, nil
 	}
-	return known(r.at, v)
+	return e.known(r.at, root, path, v)
 }
 
-// known returns v, or an *UnknownError if v is or holds an Unknown.
-func known(at int, v any) (any, error) {
-	switch v := v.(type) {
+// known returns v, which the reference at offset at read by following path
+// from root, in the scope, or an *UnknownError if v is or holds an Unknown.
+// It goes through a list or a mapping once in an evaluation (examine). A
+// list that a * makes is new each time, so it looks through its items,
+// unless the list or mapping it is made from was read before: then it goes
+// through that once instead.
+func (e *evaluator) known(at int, root any, path []string, v any) (any, error) {
+	switch u := v.(type) {
 	case Unknown:
-		return nil, &UnknownError{Offset: at, Name: v.Name}
-	case []any:
-		for _, item := range v {
-			if _, err := known(at, item); err != nil {
-				return nil, err
+		return nil, &UnknownError{Offset: at, Name: u.Name}
+	case []any, map[string]any:
+	default:
+		return v, nil
+	}
+	if i := slices.Index(path, "*"); i >= 0 {
+		if from, ok := source(root, path[:i]); ok && e.seen(from) {
+			if f := e.examine(from); !f.holds {
+				return v, nil
 			}
 		}
-	case map[string]any:
-		for _, item := range v {
-			if _, err := known(at, item); err != nil {
-				return nil, err
+		items, _ := v.([]any)
+		for _, item := range items {
+			if _, isString := item.(string); isString {
+				continue
+			}
+			if _, u, holds := examine(item); holds {
+				return nil, &UnknownError{Offset: at, Name: u.Name}
 			}
 		}
+		return v, nil
+	}
+	if f := e.examine(v); f != nil && f.holds {
+		return nil, &UnknownError{Offset: at, Name: f.unknown.Name}
 	}
 	return v, nil
+}
+
+// source returns what path leads to from root through lists and mappings
+// alone, which a list a reference makes with a * is made from. ok is false
+// if it leads through anything else, such as text, where nothing unknown
+// is, or nowhere.
+func source(root any, path []string) (any, bool) {
+	v := root
+	for _, name := range path {
+		switch v.(type) {
+		case []any, map[string]any:
+		default:
+			return nil, false
+		}
+		next, ok := property(v, name)
+		if !ok {
+			return nil, false
+		}
+		v = next
+	}
+	return v, true
+}
+
+// An identity tells a list or a mapping from any other while it is alive:
+// where its items are, and how many a list has.
+type identity struct {
+	at  uintptr
+	len int
+}
+
+// identityOf returns the identity of v, if it is a list or a mapping.
+func identityOf(v any) (identity, bool) {
+	switch c := v.(type) {
+	case []any:
+		return identity{reflect.ValueOf(v).Pointer(), len(c)}, true
+	case map[string]any:
+		return identity{reflect.ValueOf(v).Pointer(), -1}, true
+	}
+	return identity{}, false
+}
+
+// facts are what an evaluation has found out about a list or a mapping in
+// its scope: its size, the Unknown it is or holds, if any, and, once asked
+// for, a mapping's keys in order. examined is false while all that is known
+// is that a reference read it with a *. held keeps it alive, so that no
+// other takes its place, and its identity, while the facts are remembered.
+type facts struct {
+	examined bool
+	size     int
+	unknown  Unknown
+	holds    bool
+	keys     []string
+	held     any
+}
+
+// factsOf returns what the evaluation has found out about v, or nil.
+func (e *evaluator) factsOf(v any) *facts {
+	if len(e.facts) == 0 {
+		return nil
+	}
+	id, ok := identityOf(v)
+	if !ok {
+		return nil
+	}
+	return e.facts[id]
+}
+
+// seen reports whether the evaluation has met v, a list or mapping in its
+// scope, before, and remembers it if not.
+func (e *evaluator) seen(v any) bool {
+	id, ok := identityOf(v)
+	if !ok {
+		return false
+	}
+	if _, ok := e.facts[id]; ok {
+		return true
+	}
+	if e.facts == nil {
+		e.facts = map[identity]*facts{}
+	}
+	e.facts[id] = &facts{held: v}
+	return false
+}
+
+// examine returns what v, a list or mapping in the evaluation's scope, is
+// and holds: it goes through it the first time, and remembers that. It
+// returns nil for anything else.
+func (e *evaluator) examine(v any) *facts {
+	id, ok := identityOf(v)
+	if !ok {
+		return nil
+	}
+	f := e.facts[id]
+	if f == nil {
+		f = &facts{held: v}
+		if e.facts == nil {
+			e.facts = map[identity]*facts{}
+		}
+		e.facts[id] = f
+	}
+	if !f.examined {
+		f.size, f.unknown, f.holds = examine(v)
+		f.examined = true
+	}
+	return f
+}
+
+// examine returns v's size, and the Unknown that v is or holds, if any,
+// going through it once. It stops at an Unknown, without the size.
+func examine(v any) (n int, u Unknown, holds bool) {
+	switch v := v.(type) {
+	case string:
+		return len(v), Unknown{}, false
+	case Unknown:
+		return 0, v, true
+	case []any:
+		n = step * len(v)
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				n += len(s)
+				continue
+			}
+			m, u, holds := examine(item)
+			if holds {
+				return 0, u, true
+			}
+			n += m
+		}
+		return n, Unknown{}, false
+	case map[string]any:
+		n = step * len(v)
+		for k, item := range v {
+			n += len(k)
+			if s, ok := item.(string); ok {
+				n += len(s)
+				continue
+			}
+			m, u, holds := examine(item)
+			if holds {
+				return 0, u, true
+			}
+			n += m
+		}
+		return n, Unknown{}, false
+	}
+	return step, Unknown{}, false
+}
+
+// sizeOf returns v's size: as examine found it, if v is a list or mapping
+// in the scope that a reference read.
+func (e *evaluator) sizeOf(v any) int {
+	if s, ok := v.(string); ok {
+		return len(s)
+	}
+	return e.sizeOfValue(v)
+}
+
+// sizeOfValue is sizeOf for what isn't a string.
+func (e *evaluator) sizeOfValue(v any) int {
+	switch v.(type) {
+	case []any, map[string]any:
+		if f := e.factsOf(v); f != nil && f.examined && !f.holds {
+			return f.size
+		}
+		return size(v)
+	}
+	return step
+}
+
+// sortedKeys returns a mapping's keys in order. It remembers them for a
+// mapping in the scope that a reference read, so that going through it again
+// doesn't sort them again.
+func (e *evaluator) sortedKeys(m map[string]any) []string {
+	f := e.factsOf(m)
+	if f != nil && f.keys != nil {
+		return f.keys
+	}
+	keys := sortedKeys(m)
+	if f != nil {
+		f.keys = keys
+	}
+	return keys
+}
+
+// sortedKeys returns a mapping's keys in order.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // inputs reads an input's value, or what its definition holds: inputs.x.type
 // is the type of input x, as its value has no type. A last segment in
 // brackets without quotes, as in inputs.x[hidden], reads the definition
-// first.
-func (e *evaluator) inputs(r *ref, values any, path []string) (any, error) {
+// first. f follows the path through the values.
+func (e *evaluator) inputs(r *ref, f *follower, values any, path []string) (any, error) {
 	definitionFirst := len(r.path) > 0 && r.path[len(r.path)-1].kind == bareKey
 	if !definitionFirst {
-		if v, ok := walk(values, path); ok {
-			return v, nil
+		if v, ok, err := f.walk(values, path); err != nil || ok {
+			return v, err
 		}
 	}
 	if e.scope.Resolver != nil && len(path) > 0 {
-		v, ok, err := e.scope.Resolver.Definition(path)
+		v, ok, err := e.scope.Resolver.Definition(path, func(w int) error { return e.work(r.at, w) })
 		if err != nil {
 			return nil, e.resolverError(r.at, err)
 		}
@@ -658,8 +1043,8 @@ func (e *evaluator) inputs(r *ref, values any, path []string) (any, error) {
 		}
 	}
 	if definitionFirst {
-		if v, ok := walk(values, path); ok {
-			return v, nil
+		if v, ok, err := f.walk(values, path); err != nil || ok {
+			return v, err
 		}
 	}
 	return nil, nil
@@ -673,7 +1058,10 @@ func (e *evaluator) relative(r *relative) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, ok, err := e.scope.Resolver.Relative(r.up, path)
+	if err := e.pathWork(r.at, path); err != nil {
+		return nil, err
+	}
+	v, ok, err := e.scope.Resolver.Relative(r.up, path, func(w int) error { return e.work(r.at, w) })
 	if err != nil || !ok {
 		return nil, e.resolverError(r.at, err)
 	}
@@ -684,6 +1072,9 @@ func (e *evaluator) relative(r *relative) (any, error) {
 // led to it: a problem in another expression of the workflow is a problem
 // evaluating this one. The group's budget running out, which the two
 // expressions share, isn't a problem at either, and is returned as it is.
+// A problem in another expression has its Location; one without is this
+// evaluation's own, from counting the work of what the reference's path
+// reads, and is returned as it is too.
 func (e *evaluator) resolverError(at int, err error) error {
 	if err == nil {
 		return nil
@@ -694,7 +1085,7 @@ func (e *evaluator) resolverError(at int, err error) error {
 	if be, ok := errors.AsType[*BudgetError](err); ok {
 		return be
 	}
-	if ee, ok := errors.AsType[*EvalError](err); ok && ee.Location != "" {
+	if ee, ok := errors.AsType[*EvalError](err); ok {
 		return ee
 	}
 	if se, ok := errors.AsType[*SyntaxError](err); ok && se.Location != "" {
@@ -721,38 +1112,208 @@ func (e *evaluator) names(at int, path []segment) ([]string, error) {
 	return names, nil
 }
 
+// pathWork counts the steps of following path, which the node at offset at
+// reads, from where it starts: the segments up to its first *, and that *.
+// walk counts the rest as it follows the path.
+func (e *evaluator) pathWork(at int, path []string) error {
+	return e.work(at, namesWork(path))
+}
+
+// nameWork returns what reading a segment of a path counts: a name or an
+// index, which it looks up, the bytes written, or 8 if that is more, and a *
+// a step.
+func nameWork(name string) int {
+	if name == "*" {
+		return step
+	}
+	return max(step, len(name))
+}
+
+// namesWork returns what the segments of path that are followed from where
+// it starts count: those up to its first *, and that *.
+func namesWork(path []string) int {
+	n := 0
+	for _, name := range path {
+		n += nameWork(name)
+		if name == "*" {
+			break
+		}
+	}
+	return n
+}
+
+// heldWork returns what reading v as c, the list or mapping it holds as
+// JSON (collection), reads besides v itself: the value, if v is a string
+// that holds one.
+func heldWork(v, c any) int {
+	if _, isString := v.(string); !isString {
+		return 0
+	}
+	if _, isString := c.(string); isString {
+		return 0
+	}
+	return size(c)
+}
+
+// A follower follows paths, as walk does, and counts the work of what they
+// read beyond their segments (pathWork): the evaluator's, for the node at
+// offset at, or else charge's, if it isn't nil.
+type follower struct {
+	e      *evaluator
+	at     int
+	charge func(n int) error
+	// throughText is set once a path reads into a string: what it reads
+	// from there is new.
+	throughText bool
+}
+
+// count counts n bytes of the follower's work.
+func (f *follower) count(n int) error {
+	switch {
+	case f.e != nil:
+		return f.e.work(f.at, n)
+	case f.charge != nil:
+		return f.charge(n)
+	}
+	return nil
+}
+
+// sortedKeys returns a mapping's keys in order, as the evaluator remembers
+// them, if there is one.
+func (f *follower) sortedKeys(m map[string]any) []string {
+	if f.e != nil {
+		return f.e.sortedKeys(m)
+	}
+	return sortedKeys(m)
+}
+
+// lookup returns the property name of v, as property does, and counts what
+// it reads of a string: the string, and the value it holds as JSON, if it
+// holds any, which the name is read from in turn. A string that doesn't
+// hold JSON is read for a character of it.
+func (f *follower) lookup(v any, name string) (any, bool, error) {
+	for {
+		s, isString := v.(string)
+		if !isString {
+			next, ok := property(v, name)
+			return next, ok, nil
+		}
+		f.throughText = true
+		if err := f.count(len(s)); err != nil {
+			return nil, false, err
+		}
+		parsed, ok := jsonValue(s)
+		if !ok {
+			next, ok := character(s, name)
+			return next, ok, nil
+		}
+		if err := f.count(size(parsed)); err != nil {
+			return nil, false, err
+		}
+		v = parsed
+	}
+}
+
+// traversal returns what going through v's items reads besides them, given
+// c, what v holds (collection), and keys, a mapping's keys in order: a
+// string, and the list or mapping it holds as JSON, if it holds one, and a
+// mapping's keys, 8 for each and its bytes. A list's items are gone through
+// as they are.
+func traversal(v, c any, keys []string) int {
+	switch v := v.(type) {
+	case string:
+		return len(v) + heldWork(v, c)
+	case map[string]any:
+		n := step * len(keys)
+		for _, k := range keys {
+			n += len(k)
+		}
+		return n
+	}
+	return 0
+}
+
 // walk follows a path from v. A * reads the rest of the path from each item
 // of a list or mapping, and returns the results that have it as a list. ok is
-// false if the path leads nowhere.
-func walk(v any, path []string) (any, bool) {
+// false if the path leads nowhere. charge, if it isn't nil, counts the work
+// of what the path reads beyond its segments, as a follower does.
+func walk(v any, path []string, charge func(n int) error) (any, bool, error) {
+	f := follower{charge: charge}
+	return f.walk(v, path)
+}
+
+// walk follows a path from v, as walk does, and counts the work of what it
+// reads beyond the segments (pathWork): a string that a name reads into
+// (lookup), and for each *, its traversal, and for each item a step and the
+// segments of the rest of the path followed from it, up to its next *.
+func (f *follower) walk(v any, path []string) (any, bool, error) {
 	for i, name := range path {
 		if _, ok := v.(Unknown); ok {
-			return v, true
+			return v, true, nil
 		}
 		if name != "*" {
-			next, ok := property(v, name)
+			var next any
+			ok := false
+			if _, isString := v.(string); isString {
+				var err error
+				if next, ok, err = f.lookup(v, name); err != nil {
+					return nil, false, err
+				}
+			} else {
+				next, ok = property(v, name)
+			}
 			if !ok {
-				return nil, false
+				return nil, false, nil
 			}
 			v = next
 			continue
 		}
-		rest := path[i+1:]
-		out := []any{}
-		for _, item := range elements(v) {
-			w, ok := walk(item, rest)
+		rest, c := path[i+1:], collection(v)
+		if _, isString := v.(string); isString {
+			f.throughText = true
+		}
+		var items []any
+		switch c := c.(type) {
+		case []any:
+			items = c
+			if err := f.count(traversal(v, c, nil)); err != nil {
+				return nil, false, err
+			}
+		case map[string]any:
+			keys := f.sortedKeys(c)
+			if err := f.count(traversal(v, c, keys)); err != nil {
+				return nil, false, err
+			}
+			items = make([]any, len(keys))
+			for i, k := range keys {
+				items[i] = c[k]
+			}
+		default:
+			if err := f.count(traversal(v, c, nil)); err != nil {
+				return nil, false, err
+			}
+		}
+		if err := f.count(len(items) * (step + namesWork(rest))); err != nil {
+			return nil, false, err
+		}
+		out, flatten := make([]any, 0, len(items)), slices.Contains(rest, "*")
+		for _, item := range items {
+			w, ok, err := f.walk(item, rest)
+			if err != nil {
+				return nil, false, err
+			}
 			if !ok {
 				continue
 			}
-			if list, isList := w.([]any); isList && slices.Contains(rest, "*") {
+			if list, isList := w.([]any); isList && flatten {
 				out = append(out, list...)
 			} else {
 				out = append(out, w)
 			}
 		}
-		return out, true
+		return out, true, nil
 	}
-	return v, true
+	return v, true, nil
 }
 
 // IsUnknown reports whether err means an expression reads something that

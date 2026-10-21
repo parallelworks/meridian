@@ -116,11 +116,11 @@
   "from_json_invalid": "The text {text} that fromJSON reads isn't valid JSON.",
   "unknown_operator": "There's no operator {op}.",
   "expression_too_large": "The expression builds more than {limit} MiB.",
+  "expression_too_much_work": "The expression does more than {limit} MiB of work.",
   "expressions_read_each_other": "The expressions here read each other, so none of them has a value.",
   "not_list_or_mapping": "The function {name}() takes a list or a mapping, not {value}.",
-  "expression_runs_too_many_lambdas": "The expression runs the lambdas of map() and filter() more than {limit} times.",
 
   "expressions_build_too_much": "The expressions evaluated together here build more than {limit} MiB between them.",
-  "expressions_run_too_many_lambdas": "The expressions evaluated together here run the lambdas of map() and filter() more than {limit} times between them.",
+  "expressions_too_much_work": "The expressions evaluated together here do more than {limit} MiB of work between them.",
   "expressions_too_slow": "The expressions evaluated together here took more than {limit, plural, one {# second} other {# seconds}} between them."
 }

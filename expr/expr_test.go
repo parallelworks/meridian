@@ -329,11 +329,17 @@ func BenchmarkEval(b *testing.B) {
 }
 
 // A value that isn't known yet, such as a secret's, makes what reads it
-// unknown, and leaves the rest of the context readable.
+// unknown, and leaves the rest of the context readable. A slice or a .*
+// holds it only if it reads it, and reading the same parts again in a
+// template finds the same.
 func TestUnknownValues(t *testing.T) {
 	scope := expr.Scope{Contexts: map[string]any{
-		"vars":   map[string]any{"PUBLIC": "p", "TOKEN": expr.Unknown{Name: "secret"}},
-		"inputs": map[string]any{"list": []any{"a", expr.Unknown{Name: "secret"}}},
+		"vars": map[string]any{"PUBLIC": "p", "TOKEN": expr.Unknown{Name: "secret"}},
+		"inputs": map[string]any{
+			"list":  []any{"a", expr.Unknown{Name: "secret"}},
+			"rows":  []any{map[string]any{"n": "x"}, map[string]any{"n": expr.Unknown{Name: "secret"}}},
+			"known": []any{map[string]any{"n": "y"}},
+		},
 	}}
 	for src, want := range map[string]any{
 		"vars.PUBLIC":                 "p",
@@ -346,6 +352,22 @@ func TestUnknownValues(t *testing.T) {
 		"(fromJSON '[1]')[0] + 1":     2.0,
 		"format('{0}', vars.TOKEN)":   nil,
 		"inputs.list[1] ?? 'default'": nil,
+
+		"length(inputs.list[0:1])":                                     1.0,
+		"inputs.list[0:2]":                                             nil,
+		"inputs.rows[0].n":                                             "x",
+		"inputs.rows[1]":                                               nil,
+		"length(inputs.rows[0:1].*.n)":                                 1.0,
+		"inputs.rows.*.n":                                              nil,
+		"length(inputs.known.*.n)":                                     1.0,
+		"length(inputs.list[0:1]) + length(inputs.list[0:1])":          2.0,
+		"length(inputs.list[0:1]) + length(inputs.list)":               nil,
+		"length(map(inputs.known, r => length(inputs.list[0:1])))":     1.0,
+		"length(inputs.known.*.n) + length(inputs.known.*.n)":          2.0,
+		"length(inputs.known.*.n) + length(inputs.rows.*.n)":           nil,
+		"length(inputs.rows[0:1].*.n) + length(inputs.rows.*.n)":       nil,
+		"length(inputs.rows.*.missing) + length(inputs.rows.*.n)":      nil,
+		"length(inputs.rows.*.missing) + length(inputs.rows[0:1].*.n)": 1.0,
 	} {
 		got, err := mustParse(t, src).Eval(scope)
 		ue, unknown := errors.AsType[*expr.UnknownError](err)

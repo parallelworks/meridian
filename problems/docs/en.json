@@ -673,6 +673,12 @@
       "Build less, such as by reading part of a value rather than all of it."
     ]
   },
+  "expression_too_much_work": {
+    "why": "The expressions in one string do more work than the language allows a string, 32 MiB, a limit that keeps evaluating them bounded. Work is counted in bytes: 8 for each step, such as an operand, an operator, a call or a run of a lambda, plus the size of each value that an operation such as == or keys reads, plus what the expressions build.",
+    "fix": [
+      "Do less work, such as by going through part of a list rather than all of it, or by reading less of a large value in each lambda."
+    ]
+  },
   "expressions_read_each_other": {
     "why": "Expressions in the workflow read each other's values, so none of them can be evaluated first.",
     "fix": [
@@ -685,26 +691,20 @@
       "Check the value of the first argument, such as an input or a step's output."
     ]
   },
-  "expression_runs_too_many_lambdas": {
-    "why": "The expressions in one string run the lambdas of map() and filter() more often than the language allows a string, 100,000 times, a limit that keeps evaluating them bounded. A lambda in another runs for each of its items every time the other runs.",
-    "fix": [
-      "Run fewer lambdas, such as by going through part of a list rather than all of it."
-    ]
-  },
   "expressions_build_too_much": {
     "why": "Meridian evaluates some expressions together, and bounds what they build between them as well as what each one builds. Each of these is within the language's limit, but together they build more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
     "fix": [
       "Build less in these expressions, such as by reading part of a value rather than all of it."
     ]
   },
-  "expressions_run_too_many_lambdas": {
-    "why": "Meridian evaluates some expressions together, and bounds how often they run the lambdas of map() and filter() between them as well as how often each one does. Each of these is within the language's limit, but together they run more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
+  "expressions_too_much_work": {
+    "why": "Meridian evaluates some expressions together, and bounds the work they do between them as well as the work each one does. Each of these is within the language's limit, but together they do more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
     "fix": [
-      "Run fewer lambdas in these expressions, such as by going through part of a list rather than all of it."
+      "Do less work in these expressions, such as by going through part of a list rather than all of it."
     ]
   },
   "expressions_too_slow": {
-    "why": "Meridian evaluates some expressions together, and stops them once evaluating them has taken 10 seconds between them. This is a safeguard against workflows that do far more work than any real one, such as lambdas that each go through a large value. It isn't a limit of the workflow format, since how long evaluating takes depends on the machine.",
+    "why": "Meridian evaluates some expressions together, and stops them once evaluating them has taken 10 seconds between them. This is a safeguard behind the language's limit on the work each expression does, and Meridian's on the work they do together, against workflows that do far more than any real one. It isn't a limit of the workflow format, since how long evaluating takes depends on the machine.",
     "fix": [
       "Do less work in these expressions, such as by going through part of a list rather than all of it, or by reading less of a large value in each lambda."
     ]

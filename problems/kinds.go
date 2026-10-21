@@ -168,18 +168,18 @@ var (
 	FromJSONInvalid          = define(Error, "from_json_invalid", "fromJSON of invalid JSON", "text")
 	UnknownOperator          = define(Error, "unknown_operator", "Unknown operator", "op")
 	ExpressionTooLarge       = define(Error, "expression_too_large", "Expression builds too much", "limit")
+	ExpressionTooMuchWork    = define(Error, "expression_too_much_work", "Expression does too much work", "limit")
 	ExpressionsReadEachOther = define(Error, "expressions_read_each_other", "Expressions read each other")
 
 	// map() and filter().
-	NotListOrMapping             = define(Error, "not_list_or_mapping", "map() or filter() of what isn't a list or mapping", "name", "value")
-	ExpressionRunsTooManyLambdas = define(Error, "expression_runs_too_many_lambdas", "Expression runs too many lambdas", "limit")
+	NotListOrMapping = define(Error, "not_list_or_mapping", "map() or filter() of what isn't a list or mapping", "name", "value")
 )
 
 // Meridian's own limits on evaluating expressions, which aren't part of the
 // format: expressions that are each within the language's limits can still
 // pass them together.
 var (
-	ExpressionsBuildTooMuch      = define(Error, "expressions_build_too_much", "Expressions build too much together", "limit")
-	ExpressionsRunTooManyLambdas = define(Error, "expressions_run_too_many_lambdas", "Expressions run too many lambdas together", "limit")
-	ExpressionsTooSlow           = define(Error, "expressions_too_slow", "Expressions take too long together", "limit")
+	ExpressionsBuildTooMuch = define(Error, "expressions_build_too_much", "Expressions build too much together", "limit")
+	ExpressionsTooMuchWork  = define(Error, "expressions_too_much_work", "Expressions do too much work together", "limit")
+	ExpressionsTooSlow      = define(Error, "expressions_too_slow", "Expressions take too long together", "limit")
 )
