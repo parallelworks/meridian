@@ -40,8 +40,6 @@ workflow:
   # heavy does 32 MiB of work, as the cases below do with no T, and reading
   # it counts nothing toward a reader's work: reads-heavy reads it, and does
   # 32 MiB of its own. reads-rows reads rows, and .* visits its 3 items.
-  # reads-default reads the default of input heavy, another template that
-  # does 32 MiB.
   heavy: "${{ map(((1000 range 10000) join '') split ',', b => length(filter(range 460, i => b < b)) + !(range 1009) + ('abcdefghijklmno' < '')) }}"
   heavy-over: "${{ map(((1000 range 10000) join '') split ',', b => length(filter(range 460, i => b < b)) + !(range 1009) + ('abcdefghijklmnop' < '')) }}"
   rows: "${{ fromJSON('[{\"a\": 1}, {\"a\": 2}, {}]') }}"
@@ -49,14 +47,20 @@ workflow:
   reads-heavy-over: "${{ map(((1000 range 10000) join '') split ',', b => length(.heavy) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefghijklmnop' < '')) }}"
   reads-rows: "${{ map(((1000 range 10000) join '') split ',', b => length(.rows.*.a) + length(filter(range 460, i => b < b)) + !(range 1004) + ('abcdefg' < '')) }}"
   reads-rows-over: "${{ map(((1000 range 10000) join '') split ',', b => length(.rows.*.a) + length(filter(range 460, i => b < b)) + !(range 1004) + ('abcdefgh' < '')) }}"
-  reads-default: "${{ map(((1000 range 10000) join '') split ',', b => length(inputs.heavy.default) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefg' < '')) }}"
-  reads-default-over: "${{ map(((1000 range 10000) join '') split ',', b => length(inputs.heavy.default) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefgh' < '')) }}"
   on:
     execute:
       inputs:
         heavy:
           type: string
           default: "${{ map(((1000 range 10000) join '') split ',', b => length(filter(range 460, i => b < b)) + !(range 1009) + ('abcdefghijklmno' < '')) }}"
+        # reads-default's default reads the default of input heavy, another
+        # template that does 32 MiB.
+        reads-default:
+          type: string
+          default: "${{ map(((1000 range 10000) join '') split ',', b => length(inputs.heavy.default) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefg' < '')) }}"
+        reads-default-over:
+          type: string
+          default: "${{ map(((1000 range 10000) join '') split ',', b => length(inputs.heavy.default) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefgh' < '')) }}"
 scope:
   contexts:
     inputs:
@@ -557,7 +561,7 @@ cases:
   - at: /reads-rows-over
     error: eval
   # T is length(inputs.heavy.default), 32. K is 460, M 1,007, with 7 letters.
-  - at: /reads-default
+  - at: /on/execute/inputs/reads-default/default
     value: [1]
-  - at: /reads-default-over
+  - at: /on/execute/inputs/reads-default-over/default
     error: eval
