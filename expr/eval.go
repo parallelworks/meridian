@@ -801,17 +801,19 @@ type identity struct {
 	len int
 }
 
-// found is what unknown found in a list or a mapping.
+// found is what unknown found in a list or a mapping. held is the list or
+// mapping, which it keeps alive, so that no other takes its place, and its
+// identity, while it is remembered.
 type found struct {
 	unknown Unknown
 	ok      bool
+	held    any
 }
 
 // unknown returns the Unknown that v is or holds, if any. It remembers what
-// it finds in each list and mapping, which keeps its identity while the
-// evaluation holds it, so that a reference that reads one again doesn't go
-// through it again. A list that a * makes is new each time, and isn't
-// passed here.
+// it finds in each list and mapping, so that a reference that reads one
+// again doesn't go through it again. A list that a * makes is new each time,
+// and isn't passed here.
 func (e *evaluator) unknown(v any) (Unknown, bool) {
 	var id identity
 	switch c := v.(type) {
@@ -831,7 +833,7 @@ func (e *evaluator) unknown(v any) (Unknown, bool) {
 	if e.unknowns == nil {
 		e.unknowns = map[identity]found{}
 	}
-	e.unknowns[id] = found{u, ok}
+	e.unknowns[id] = found{u, ok, v}
 	return u, ok
 }
 

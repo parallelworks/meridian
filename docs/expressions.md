@@ -400,7 +400,10 @@ compiler or coordinator do unbounded work:
 - **The work a template does.** A template does at most 32 MiB of work,
   counted in bytes as what it builds is: 8 for each step it takes, the size
   of each value its operations read, and what it builds. A template it reads
-  has its own count, as for what it builds.
+  has its own count, as for what it builds. Work bounds how long a template
+  takes, not the memory it holds: reading the same value twice counts its
+  size twice without copying it. What a template holds is bounded by what it
+  builds.
 
 ### What a template builds
 
