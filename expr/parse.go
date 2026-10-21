@@ -41,7 +41,12 @@ func (e *SyntaxError) Error() string { return e.Kind.Message(e.Params) }
 
 // Parse parses an expression: the text between ${{ and }}.
 func Parse(src string) (*Expr, error) {
-	p := &parser{src: src}
+	return (&parser{src: src}).parse()
+}
+
+// parse parses the parser's source as an expression.
+func (p *parser) parse() (*Expr, error) {
+	src := p.src
 	p.skipSpace()
 	if p.pos == len(src) {
 		return nil, p.errorf(problems.ExpressionEmpty, nil)
@@ -177,6 +182,9 @@ type parser struct {
 	// that has a space before it, where a ':' ends a word: a?1:2. Elsewhere
 	// a ':' is part of a word, as in 12:30 or 1:3.
 	colonEndsWord int
+	// spaced holds what spacedColonAhead reports at each offset, worked out
+	// for the whole source at its first ternary (spacedColons).
+	spaced []bool
 	// grouped holds the nodes written in parentheses, which ?? can be mixed
 	// with.
 	grouped map[node]bool
@@ -662,10 +670,47 @@ func (p *parser) sliceEnd(start node, at int) (node, error) {
 // starts a spaced ternary, which a spaced ':' closes first, so in
 // true?1:x ? 2 : 3 the first ? has none.
 func (p *parser) spacedColonAhead() bool {
-	depth, later := 0, 0
+	if p.spaced == nil {
+		p.spaced = spacedColons(p.src)
+	}
+	return p.spaced[p.pos]
+}
+
+// spacedColons returns, for each offset in src just after a ?, whether a
+// ':' with a space before it closes the ternary whose ? ends there, as
+// spacedColonAhead says: in the group the ? is in, before a ',' at its
+// level, and after any later spaced ternary there is closed. It reads src
+// once, so that a chain of ternaries such as a?1:a?1:… isn't read to its
+// end at each ?.
+//
+// It keeps, for each level of brackets that src is in at the byte it
+// reads, the ternaries there still waiting for their ':', in order, with a
+// mark for each spaced ? after them. A spaced ':' closes those after the
+// latest mark, and takes the mark, which the spaced ternary there closes
+// first; a ',' or the bracket that closes the level leaves those still
+// waiting without one. A level's brackets, and its quotes, are counted as
+// a scan from each ? counts them: src is never in quotes where a ternary
+// is parsed, since the parser reads every quote that the scan does.
+func spacedColons(src string) []bool {
+	const (
+		mark  = -1 // a spaced ?, after the ternaries below it
+		level = -2 // the start of a level of brackets
+	)
+	spaced := make([]bool, len(src)+1)
+	// waiting holds the offsets just after the ternaries waiting for their
+	// ':', and the marks, innermost level last, each after its level.
+	var waiting []int
+	end := func() {
+		for len(waiting) > 0 && waiting[len(waiting)-1] != level {
+			waiting = waiting[:len(waiting)-1]
+		}
+	}
 	var quote byte
-	for i := p.pos; i < len(p.src); i++ {
-		c := p.src[i]
+	for i := 0; i < len(src); i++ {
+		if i > 0 && src[i-1] == '?' && quote == 0 {
+			waiting = append(waiting, i)
+		}
+		c := src[i]
 		switch {
 		case quote != 0:
 			if c == quote {
@@ -674,28 +719,30 @@ func (p *parser) spacedColonAhead() bool {
 		case c == '\'' || c == '"' || c == '`':
 			quote = c
 		case c == '(' || c == '[' || c == '{':
-			depth++
+			waiting = append(waiting, level)
 		case c == ')' || c == ']' || c == '}':
-			if depth == 0 {
-				return false
+			end()
+			if len(waiting) > 0 {
+				waiting = waiting[:len(waiting)-1]
 			}
-			depth--
-		case depth > 0:
 		case c == ',':
-			return false
-		case c == '?' && i+1 < len(p.src) && p.src[i+1] == '?':
+			end()
+		case c == '?' && i+1 < len(src) && src[i+1] == '?':
 			// ?? isn't a ternary.
 			i++
-		case c == '?' && isSpace(p.src[i-1]):
-			later++
-		case c == ':' && isSpace(p.src[i-1]):
-			if later == 0 {
-				return true
+		case c == '?' && i > 0 && isSpace(src[i-1]):
+			waiting = append(waiting, mark)
+		case c == ':' && i > 0 && isSpace(src[i-1]):
+			for len(waiting) > 0 && waiting[len(waiting)-1] >= 0 {
+				spaced[waiting[len(waiting)-1]] = true
+				waiting = waiting[:len(waiting)-1]
 			}
-			later--
+			if len(waiting) > 0 && waiting[len(waiting)-1] == mark {
+				waiting = waiting[:len(waiting)-1]
+			}
 		}
 	}
-	return false
+	return spaced
 }
 
 // postfix parses .name and [key] after a computed value.

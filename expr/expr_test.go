@@ -346,6 +346,29 @@ func BenchmarkParse(b *testing.B) {
 	}
 }
 
+// Each ? written without spaces looks ahead for a spaced ':' that closes
+// it, which takes time linear in the expression's length for all of them
+// together: 25,000 in a chain, which nests too deeply, and 150 before a
+// call with 25,000 arguments.
+func BenchmarkParseTernaries(b *testing.B) {
+	for _, tc := range []struct {
+		name, src string
+		deep      bool
+	}{
+		{"chain", strings.Repeat("a?1:", 25000) + "1", true},
+		{"before a call", strings.Repeat("a?1:", 150) + "format(''" + strings.Repeat(", x", 25000) + ")", false},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				_, err := expr.Parse(tc.src)
+				if se, ok := errors.AsType[*expr.SyntaxError](err); tc.deep != (ok && se.Kind == problems.ExpressionTooDeep) || !tc.deep && err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkEval(b *testing.B) {
 	e, err := expr.Parse("inputs.workers get env.RETRY get slurm get partition")
 	if err != nil {
