@@ -356,6 +356,45 @@ func nest(depth int, key string, leaf any, others ...any) any {
 	return v
 }
 
+// Mappings nested in the value of a mapping's first key that starts with $,
+// whose meaning is known only once the mapping ends, decode in one pass:
+// as deeply as a plan can nest them, as a mapping's only key, beside other
+// keys, and as a template's key.
+func TestDecodeNestedMarks(t *testing.T) {
+	// A list under each ${{ is read as a template's parts until the
+	// mapping goes on.
+	var templateKeys any = []any{"x"}
+	for range plan.MaxDepth/2 - 3 {
+		templateKeys = []any{map[string]any{"${{": templateKeys, "b": int64(1)}}
+	}
+	for name, v := range map[string]any{
+		"only keys":        nest(plan.MaxDepth/2-3, "$a", int64(1)),
+		"first keys":       nest(plan.MaxDepth-6, "$a", int64(1), "b", int64(1)),
+		"template keys":    templateKeys,
+		"templates within": nest(plan.MaxDepth/2-5, "$a", map[string]any{"$x": "${{ inputs.x }}"}, "b", int64(1)),
+	} {
+		value, err := plan.ValueOf(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: value}}}}}
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		back, err := plan.Decode(data)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if again, err := plan.Encode(back); err != nil || !bytes.Equal(again, data) {
+			t.Errorf("%s: decoding and encoding changed it (%v)", name, err)
+		}
+		if got, want := len(back.Exprs()), len(p.Exprs()); got != want || name == "templates within" && got == 0 {
+			t.Errorf("%s: %d expressions after a round trip, not %d", name, got, want)
+		}
+	}
+}
+
 // A Value's and Data's Depth is how many levels their JSON nests, and a
 // plan holds as many as MaxDepth.
 func TestDepth(t *testing.T) {
@@ -553,9 +592,11 @@ type passThrough struct{}
 
 func (passThrough) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
 
-// benchmarkPlans returns plans to encode and decode: a public workflow's,
-// and one from a workflow as large as a file can be whose expressions each
-// nest as deeply as they can, 200 levels.
+// benchmarkPlans returns plans to encode and decode: a public workflow's;
+// one from a workflow as large as a file can be whose expressions each nest
+// as deeply as they can, 200 levels; and one from a file as large whose
+// step's with: nests mappings in the value of a first key that starts with
+// $, each one in the next, 8,527 levels.
 func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
 	b.Helper()
 	spack, err := (&conformance.Case{Name: "format/public-spack-builder"}).Workflow()
@@ -568,6 +609,9 @@ func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
 	for deep.Len()+len(step) <= format.DefaultMaxSize {
 		deep.WriteString(step)
 	}
+	head := "jobs:\n  marked:\n    steps:\n      - uses: marketplace/x\n        with: {k: "
+	levels := (format.DefaultMaxSize - len(head) - len("1}\n")) / len("{$a: , b: 1}")
+	marked := head + strings.Repeat("{$a: ", levels) + "1" + strings.Repeat(", b: 1}", levels) + "}\n"
 	plans := map[string]*plan.Plan{}
 	for name, w := range map[string]struct {
 		data   []byte
@@ -575,6 +619,7 @@ func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
 	}{
 		"spack-builder": {spack, map[string]any{"cluster": map[string]any{"resource": "x"}}},
 		"deep":          {[]byte(deep.String()), nil},
+		"marked":        {[]byte(marked), nil},
 	} {
 		p, diags := compile.Compile("workflow.yaml", w.data, w.inputs, compile.Options{Inputs: passThrough{}})
 		if p == nil {
