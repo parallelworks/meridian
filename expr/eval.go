@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,9 +65,9 @@ const (
 // machine.
 const maxGroupTime = 10 * time.Second
 
-// clockEvery is how many nodes a group's templates evaluate between reads
-// of the clock, besides the read at each run of a lambda's body, so that
-// most nodes don't read it.
+// clockEvery is how many steps a group's templates take between reads of
+// the clock, so that most steps don't read it: each node they evaluate, and
+// each run of a lambda's body.
 const clockEvery = 256
 
 // A Scope is what an expression can read.
@@ -100,9 +101,9 @@ type Scope struct {
 // a template that reads another is.
 type budget struct {
 	built, work int
-	// nodes counts the nodes the group's templates have evaluated, so that
+	// steps counts the steps the group's templates have taken, so that
 	// the clock is read every clockEvery of them.
-	nodes int
+	steps int
 	// elapsed is how long the group's templates have spent evaluating, up
 	// to last, when the clock was last read.
 	elapsed time.Duration
@@ -164,19 +165,19 @@ type Status struct {
 }
 
 // A Resolver reads the workflow around an expression. Each method follows
-// a path, and calls visit at each * in it, as walk does, so that the
-// evaluator counts the work of the items it visits; an error from visit
-// stops it and is returned. visit is nil for a path with no *.
+// a path through the values of the workflow's expressions as walk does,
+// with charge, which counts the work of what it reads; an error from
+// charge stops it and is returned.
 type Resolver interface {
 	// Relative returns the value of the relative reference that goes up
 	// levels from the key the expression is in and then follows path, with
 	// any expressions in it evaluated. ok is false if there is nothing
 	// there.
-	Relative(up int, path []string, visit func(items int, rest []string) error) (v any, ok bool, err error)
+	Relative(up int, path []string, charge func(n int) error) (v any, ok bool, err error)
 	// Definition returns what the input definitions hold at path, with any
 	// expressions in it evaluated, or else the default of the input at
 	// path. ok is false if there is neither.
-	Definition(path []string, visit func(items int, rest []string) error) (v any, ok bool, err error)
+	Definition(path []string, charge func(n int) error) (v any, ok bool, err error)
 }
 
 // Unknown is a value in a context that exists but isn't known yet, such as a
@@ -252,6 +253,8 @@ type evaluator struct {
 	// frame holds the parameters of the lambda whose body is being
 	// evaluated, if any, and those of the lambdas around it.
 	frame *frame
+	// unknowns holds what unknown finds in each list and mapping.
+	unknowns map[identity]found
 }
 
 // A frame holds the values of a lambda's parameters while its body is
@@ -285,6 +288,15 @@ func newEvaluator(scope Scope) *evaluator {
 
 // stop ends the evaluation, and counts its time.
 func (e *evaluator) stop() { e.scope.budget.stop() }
+
+// stepped counts a step toward the group's reads of the clock, and reads it
+// every clockEvery steps.
+func (e *evaluator) stepped() error {
+	if e.scope.budget.steps++; e.scope.budget.steps%clockEvery == 0 {
+		return e.timed()
+	}
+	return nil
+}
 
 // timed reads the clock, and fails if the group has spent longer evaluating
 // than Meridian allows.
@@ -342,12 +354,24 @@ func (e *evaluator) read(at int, vs ...any) error {
 	return e.work(at, n)
 }
 
-// run counts a run of a lambda's body, a step, and reads the clock.
+// readText counts the work of an operation that reads those of vs that are
+// strings, such as to convert them to numbers: their sizes.
+func (e *evaluator) readText(at int, vs ...any) error {
+	n := 0
+	for _, v := range vs {
+		if s, ok := v.(string); ok {
+			n += len(s)
+		}
+	}
+	return e.work(at, n)
+}
+
+// run counts a run of a lambda's body: a step.
 func (e *evaluator) run(at int) error {
 	if err := e.work(at, step); err != nil {
 		return err
 	}
-	return e.timed()
+	return e.stepped()
 }
 
 // built counts v as built and returns it.
@@ -359,10 +383,8 @@ func (e *evaluator) built(at int, v any) (any, error) {
 }
 
 func (e *evaluator) eval(n node) (any, error) {
-	if e.scope.budget.nodes++; e.scope.budget.nodes%clockEvery == 0 {
-		if err := e.timed(); err != nil {
-			return nil, err
-		}
+	if err := e.stepped(); err != nil {
+		return nil, err
 	}
 	// Each node is a step: an operand, an operator or a call. A group
 	// isn't a node, and a lambda isn't evaluated as one: each of its runs
@@ -392,11 +414,10 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		visit, err := e.pathWork(n.at, path)
-		if err != nil {
+		if err := e.pathWork(n.at, path); err != nil {
 			return nil, err
 		}
-		v, ok, err := walk(e.frame.lookup(n.name), path, visit)
+		v, ok, err := walk(e.frame.lookup(n.name), path, func(w int) error { return e.work(n.at, w) })
 		if err != nil || !ok {
 			return nil, err
 		}
@@ -429,15 +450,16 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		visit, err := e.pathWork(n.at, path)
-		if err != nil {
+		if err := e.pathWork(n.at, path); err != nil {
 			return nil, err
 		}
-		v, ok, err := walk(v, path, visit)
+		// A computed value holds nothing unknown, since a reference that
+		// reads something unknown fails.
+		v, ok, err := walk(v, path, func(w int) error { return e.work(n.at, w) })
 		if err != nil || !ok {
 			return nil, err
 		}
-		return known(n.at, v)
+		return v, nil
 	case *call:
 		return e.call(n)
 	case *slice:
@@ -453,7 +475,7 @@ func (e *evaluator) eval(n node) (any, error) {
 			}
 			end = stringOf(v)
 		}
-		return stringOf(start) + ":" + end, nil
+		return e.built(n.at, stringOf(start)+":"+end)
 	case *concat:
 		v, err := e.eval(n.x)
 		if err != nil {
@@ -495,6 +517,13 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		// These read both operands, which cost their sizes whether or not
 		// they are read to the end.
 		if err := e.read(n.at, a, b); err != nil {
+			return nil, err
+		}
+	case "get", "range":
+		// get reads a string it reads into, as a path's name does, and a
+		// key that is text, which it looks up or reads as an index. range
+		// reads text it converts to a number.
+		if err := e.readText(n.at, a, b); err != nil {
 			return nil, err
 		}
 	}
@@ -564,6 +593,10 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		if aStr || bStr {
 			return e.built(n.at, stringOf(a)+stringOf(b))
 		}
+	}
+	// Arithmetic reads text it converts to a number.
+	if err := e.readText(n.at, a, b); err != nil {
+		return nil, err
 	}
 	x, y := toNumber(a), toNumber(b)
 	switch n.op {
@@ -635,6 +668,9 @@ func (e *evaluator) each(n *call, fn function) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := e.work(n.at, traversal(v)); err != nil {
+		return nil, err
+	}
 	keys, items, ok := entries(v)
 	if !ok {
 		return nil, e.errorAt(n.at, problems.NotListOrMapping, problems.Params{"name": n.name, "value": problems.Show(v)})
@@ -671,61 +707,138 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	visit, err := e.pathWork(r.at, path)
-	if err != nil {
+	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
 	if r.context == "inputs" {
-		v, err := e.inputs(r, root, path, visit)
+		v, err := e.inputs(r, root, path)
 		if err != nil {
 			return nil, err
 		}
-		return known(r.at, v)
+		return e.known(r.at, root, path, v)
 	}
-	v, ok, err := walk(root, path, visit)
+	v, ok, err := walk(root, path, func(w int) error { return e.work(r.at, w) })
 	if err != nil {
 		return nil, err
 	}
 	if !ok && contexts[r.context].strings {
 		return "", nil
 	}
-	return known(r.at, v)
+	return e.known(r.at, root, path, v)
 }
 
-// known returns v, or an *UnknownError if v is or holds an Unknown.
-func known(at int, v any) (any, error) {
+// known returns v, which a reference at offset at read by following path
+// from root, or an *UnknownError if v is or holds an Unknown. A list that a
+// * or a slice makes is new, and holds nothing unknown if what it is made
+// from doesn't, so that is what it looks for first: it found that before if
+// the reference read it already.
+func (e *evaluator) known(at int, root any, path []string, v any) (any, error) {
+	if u, ok := v.(Unknown); ok {
+		return nil, &UnknownError{Offset: at, Name: u.Name}
+	}
+	if i := slices.IndexFunc(path, makesList); i >= 0 {
+		from, _, _ := walk(root, path[:i], nil)
+		if _, ok := e.unknown(from); !ok {
+			return v, nil
+		}
+		if slices.Contains(path[i:], "*") {
+			// The list a * makes is new each time: look through its items,
+			// which aren't.
+			items, _ := v.([]any)
+			for _, item := range items {
+				if u, ok := e.unknown(item); ok {
+					return nil, &UnknownError{Offset: at, Name: u.Name}
+				}
+			}
+			return v, nil
+		}
+	}
+	if u, ok := e.unknown(v); ok {
+		return nil, &UnknownError{Offset: at, Name: u.Name}
+	}
+	return v, nil
+}
+
+// makesList reports whether a path's segment makes a new list when it reads
+// one: a *, or a slice such as 1:3.
+func makesList(name string) bool { return name == "*" || strings.Contains(name, ":") }
+
+// An identity tells a list or a mapping from any other while it is held:
+// where its items are, and how many a list has.
+type identity struct {
+	at  uintptr
+	len int
+}
+
+// found is what unknown found in a list or a mapping.
+type found struct {
+	unknown Unknown
+	ok      bool
+}
+
+// unknown returns the Unknown that v is or holds, if any. It remembers what
+// it finds in each list and mapping, which keeps its identity while the
+// evaluation holds it, so that a reference that reads one again doesn't go
+// through it again. A list that a * makes is new each time, and isn't
+// passed here.
+func (e *evaluator) unknown(v any) (Unknown, bool) {
+	var id identity
+	switch c := v.(type) {
+	case Unknown:
+		return c, true
+	case []any:
+		id = identity{reflect.ValueOf(c).Pointer(), len(c)}
+	case map[string]any:
+		id = identity{at: reflect.ValueOf(c).Pointer()}
+	default:
+		return Unknown{}, false
+	}
+	if f, ok := e.unknowns[id]; ok {
+		return f.unknown, f.ok
+	}
+	u, ok := holdsUnknown(v)
+	if e.unknowns == nil {
+		e.unknowns = map[identity]found{}
+	}
+	e.unknowns[id] = found{u, ok}
+	return u, ok
+}
+
+// holdsUnknown returns the Unknown that v is or holds, if any.
+func holdsUnknown(v any) (Unknown, bool) {
 	switch v := v.(type) {
 	case Unknown:
-		return nil, &UnknownError{Offset: at, Name: v.Name}
+		return v, true
 	case []any:
 		for _, item := range v {
-			if _, err := known(at, item); err != nil {
-				return nil, err
+			if u, ok := holdsUnknown(item); ok {
+				return u, true
 			}
 		}
 	case map[string]any:
 		for _, item := range v {
-			if _, err := known(at, item); err != nil {
-				return nil, err
+			if u, ok := holdsUnknown(item); ok {
+				return u, true
 			}
 		}
 	}
-	return v, nil
+	return Unknown{}, false
 }
 
 // inputs reads an input's value, or what its definition holds: inputs.x.type
 // is the type of input x, as its value has no type. A last segment in
 // brackets without quotes, as in inputs.x[hidden], reads the definition
-// first. visit counts the work of each * in path, as for walk.
-func (e *evaluator) inputs(r *ref, values any, path []string, visit func(items int, rest []string) error) (any, error) {
+// first.
+func (e *evaluator) inputs(r *ref, values any, path []string) (any, error) {
+	charge := func(w int) error { return e.work(r.at, w) }
 	definitionFirst := len(r.path) > 0 && r.path[len(r.path)-1].kind == bareKey
 	if !definitionFirst {
-		if v, ok, err := walk(values, path, visit); err != nil || ok {
+		if v, ok, err := walk(values, path, charge); err != nil || ok {
 			return v, err
 		}
 	}
 	if e.scope.Resolver != nil && len(path) > 0 {
-		v, ok, err := e.scope.Resolver.Definition(path, visit)
+		v, ok, err := e.scope.Resolver.Definition(path, func(w int) error { return e.work(r.at, w) })
 		if err != nil {
 			return nil, e.resolverError(r.at, err)
 		}
@@ -734,7 +847,7 @@ func (e *evaluator) inputs(r *ref, values any, path []string, visit func(items i
 		}
 	}
 	if definitionFirst {
-		if v, ok, err := walk(values, path, visit); err != nil || ok {
+		if v, ok, err := walk(values, path, charge); err != nil || ok {
 			return v, err
 		}
 	}
@@ -749,11 +862,10 @@ func (e *evaluator) relative(r *relative) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	visit, err := e.pathWork(r.at, path)
-	if err != nil {
+	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
-	v, ok, err := e.scope.Resolver.Relative(r.up, path, visit)
+	v, ok, err := e.scope.Resolver.Relative(r.up, path, func(w int) error { return e.work(r.at, w) })
 	if err != nil || !ok {
 		return nil, e.resolverError(r.at, err)
 	}
@@ -765,8 +877,8 @@ func (e *evaluator) relative(r *relative) (any, error) {
 // evaluating this one. The group's budget running out, which the two
 // expressions share, isn't a problem at either, and is returned as it is.
 // A problem in another expression has its Location; one without is this
-// evaluation's own, from counting the work of a * in the reference's path,
-// and is returned as it is too.
+// evaluation's own, from counting the work of what the reference's path
+// reads, and is returned as it is too.
 func (e *evaluator) resolverError(at int, err error) error {
 	if err == nil {
 		return nil
@@ -804,20 +916,11 @@ func (e *evaluator) names(at int, path []segment) ([]string, error) {
 	return names, nil
 }
 
-// pathWork counts the work of following path, which the node at offset at
-// reads, from where it starts: a step for each segment up to its first *,
-// and for that *. It returns what counts the rest as the path is followed,
-// for walk, or nil if the path has no *.
-func (e *evaluator) pathWork(at int, path []string) (visit func(items int, rest []string) error, err error) {
-	if !slices.Contains(path, "*") {
-		return nil, e.work(at, step*len(path))
-	}
-	visit = func(items int, rest []string) error {
-		// Each item is a step, and the rest of the path is followed from
-		// each, up to its next *, which counts its own items.
-		return e.work(at, items*step*(1+segments(rest)))
-	}
-	return visit, e.work(at, step*segments(path))
+// pathWork counts the steps of following path, which the node at offset at
+// reads, from where it starts: one for each segment up to its first *, and
+// for that *. walk counts the rest as it follows the path.
+func (e *evaluator) pathWork(at int, path []string) error {
+	return e.work(at, step*segments(path))
 }
 
 // segments returns how many segments of path are followed from where it
@@ -829,18 +932,42 @@ func segments(path []string) int {
 	return len(path)
 }
 
+// traversal returns what going through v's items reads besides them: a
+// string, which holds them as JSON, and a mapping's keys, which they are
+// gone through in the order of, 8 for each and its bytes. A list's items
+// are gone through as they are.
+func traversal(v any) int {
+	switch v := v.(type) {
+	case string:
+		return len(v)
+	case map[string]any:
+		n := 8 * len(v)
+		for k := range v {
+			n += len(k)
+		}
+		return n
+	}
+	return 0
+}
+
 // walk follows a path from v. A * reads the rest of the path from each item
 // of a list or mapping, and returns the results that have it as a list. ok is
-// false if the path leads nowhere. visit, if it isn't nil, is called at each
-// * with how many items it visits and the rest of the path, before it visits
-// them, so that the evaluator counts their work; an error from it stops the
-// walk.
-func walk(v any, path []string, visit func(items int, rest []string) error) (any, bool, error) {
+// false if the path leads nowhere. charge, if it isn't nil, counts the work
+// of what the path reads that its segments don't (pathWork), before it is
+// read: a string that a name reads into, and for each *, its traversal and a
+// step for each item and for each segment of the rest of the path followed
+// from the item, up to its next *. An error from charge stops the walk.
+func walk(v any, path []string, charge func(n int) error) (any, bool, error) {
 	for i, name := range path {
 		if _, ok := v.(Unknown); ok {
 			return v, true, nil
 		}
 		if name != "*" {
+			if s, isString := v.(string); isString && charge != nil {
+				if err := charge(len(s)); err != nil {
+					return nil, false, err
+				}
+			}
 			next, ok := property(v, name)
 			if !ok {
 				return nil, false, nil
@@ -848,15 +975,21 @@ func walk(v any, path []string, visit func(items int, rest []string) error) (any
 			v = next
 			continue
 		}
-		rest, items := path[i+1:], elements(v)
-		if visit != nil {
-			if err := visit(len(items), rest); err != nil {
+		rest := path[i+1:]
+		if charge != nil {
+			if err := charge(traversal(v)); err != nil {
+				return nil, false, err
+			}
+		}
+		items := elements(v)
+		if charge != nil {
+			if err := charge(len(items) * step * (1 + segments(rest))); err != nil {
 				return nil, false, err
 			}
 		}
 		out := []any{}
 		for _, item := range items {
-			w, ok, err := walk(item, rest, visit)
+			w, ok, err := walk(item, rest, charge)
 			if err != nil {
 				return nil, false, err
 			}

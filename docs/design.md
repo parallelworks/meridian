@@ -463,9 +463,9 @@ The net bounds time too, as a backstop: a group's templates spend at most
 each step and each read by what it costs, so the cap is for the costs it
 misses, and stops a workflow that does far more than any real one. It isn't
 a limit a workflow is written to, since how long evaluating takes depends
-on the machine. The evaluator reads the clock every 256 nodes its group
-evaluates and at each run of a lambda, and a group that passes the cap
-fails with `expressions_too_slow`.
+on the machine. The evaluator reads the clock every 256 steps its group
+takes, each node it evaluates and each run of a lambda, and a group that
+passes the cap fails with `expressions_too_slow`.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.

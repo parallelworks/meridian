@@ -261,6 +261,7 @@ func TestWork(t *testing.T) {
 			"inputs": map[string]any{
 				"a": map[string]any{"b": 1.0},
 				"s": "abc",
+				"t": "12",
 				"l": []any{map[string]any{"a": 1.0}, map[string]any{"a": 2.0}, map[string]any{}},
 				"w": []any{"ab", "c"},
 			},
@@ -303,13 +304,21 @@ func TestWork(t *testing.T) {
 		// A .* is a step, and so is each item it visits, from which the
 		// rest of the path is followed.
 		{"inputs.l.*.a", 72},
-		{"inputs.l.*.*", 88},
+		{"inputs.l.*", 48},
 		{"inputs.missing.*.a", 24},
 		{"(inputs.l).*.a", 80},
+		// Going through a mapping reads its keys, 8 for each and its
+		// bytes, and through a string the string, which holds the items as
+		// JSON.
+		{"inputs.a.*", 41},
+		{"inputs.l.*.*", 106},
+		{"(inputs.s).*", 35},
 		// Each run of a lambda is a step, and its body counts each time.
 		{"filter(inputs.l, x => false)", 72},
 		{"filter(inputs.l, x => length(filter(inputs.w, y => false)))", 240},
 		{"map(inputs.l, x => x.a)", 144},
+		{"map('[1]', x => x)", 51},
+		{"filter(inputs.a, x => false)", 49},
 		// An operation that reads values counts their sizes.
 		{"'abc' == 'de'", 29},
 		{"'abc' !== 'de'", 29},
@@ -336,16 +345,31 @@ func TestWork(t *testing.T) {
 		{"'a,b' split ','", 47},
 		{"[1, 2]", 40},
 		{`{"k": "v"}`, 18},
-		// A reference, a path, get, arithmetic, ! and abs read nothing.
+		// A name, an index or get that reads into a string reads it, and
+		// get reads a key that is text.
+		{"inputs.s[0]", 27},
+		{"inputs.s get 0", 35},
+		{"inputs.a get 'b'", 33},
+		// Converting text to a number reads it.
+		{"inputs.t * 1", 34},
+		{"'12' - 1", 26},
+		{"-inputs.s", 27},
+		{"abs inputs.s", 27},
+		{"range '3'", 65},
+		{"'1' range 3", 57},
+		// A path through lists and mappings, get of them, arithmetic on
+		// numbers and ! read nothing.
 		{"inputs.l", 16},
-		{"inputs.a get 'b'", 32},
-		{"-inputs.s", 24},
-		{"abs inputs.s", 24},
+		{"inputs.l get 1", 32},
+		{"inputs.a.b - 1", 40},
+		{"true + 1", 24},
 		{"!inputs.l", 24},
-		// What a template builds counts as work too.
+		// What a template builds counts as work too, the slice operands'
+		// text among it.
 		{"'a' + 'b'", 26},
 		{"range 3", 64},
 		{"0:('ab')", 20},
+		{"(1):(2)", 27},
 	} {
 		if _, got, err := expr.Work(mustParse(t, tc.src), scope); err != nil || got != tc.work {
 			t.Errorf("%s: %d, %v; want %d", tc.src, got, err, tc.work)
@@ -490,80 +514,67 @@ func tooSlow(err error) bool {
 }
 
 // The templates of a group spend at most 10 seconds evaluating, together.
-// The clock is read when an evaluation starts and when it stops, at each run
-// of a lambda's body, and every 256 nodes that the group evaluates. Each
-// read but a stop's checks the time.
+// The clock is read when an evaluation starts and when it stops, and every
+// 256 steps the group takes: each node it evaluates, and each run of a
+// lambda's body. Each read but a stop's checks the time.
 func TestGroupTimeBudget(t *testing.T) {
 	eval := func(src string, scope expr.Scope) error {
 		t.Helper()
 		_, err := mustParse(t, src).Eval(scope)
 		return err
 	}
-	lists := inputs(map[string]any{"ten": make([]any, 10), "eleven": make([]any, 11), "five": make([]any, 5)})
+	lists := inputs(map[string]any{"l126": make([]any, 126), "l127": make([]any, 127)})
+	// steps returns an expression of n steps: format, its template and n-2
+	// arguments.
+	steps := func(n int) string { return "format(''" + strings.Repeat(", 1", n-2) + ")" }
 
-	// A second a read: ten runs take ten seconds, and eleven pass them.
-	if err := eval("map(inputs.ten, x => x)", expr.WithClock(lists, every(time.Second).read)); err != nil {
-		t.Errorf("10 seconds: %v", err)
+	// 11 seconds a read: the 256th step reads the clock, and the 255th
+	// doesn't.
+	if err := eval(steps(255), expr.WithClock(lists, every(11*time.Second).read)); err != nil {
+		t.Errorf("255 steps: %v", err)
 	}
-	err := eval("map(inputs.eleven, x => x)", expr.WithClock(lists, every(time.Second).read))
+	err := eval(steps(256), expr.WithClock(lists, every(11*time.Second).read))
 	if want := "The expressions evaluated together here took more than 10 seconds between them."; !tooSlow(err) || err.Error() != want {
-		t.Errorf("11 seconds: %v, want %q", err, want)
+		t.Errorf("256 steps: %v, want %q", err, want)
+	}
+	// Each run of a lambda is a step: map, inputs.l, and a run and x for
+	// each of 126 or 127 items are 254 or 256 steps.
+	if err := eval("map(inputs.l126, x => x)", expr.WithClock(lists, every(11*time.Second).read)); err != nil {
+		t.Errorf("126 runs: %v", err)
+	}
+	if err := eval("map(inputs.l127, x => x)", expr.WithClock(lists, every(11*time.Second).read)); !tooSlow(err) {
+		t.Errorf("127 runs: %v, want %s", err, problems.ExpressionsTooSlow.Code())
 	}
 
-	// 11 seconds a read: the 256th node reads the clock, and the 255th
-	// doesn't. format, its template and 253 arguments are 255 nodes.
-	nodes := func(n int) string { return "format(''" + strings.Repeat(", 1", n-2) + ")" }
-	if err := eval(nodes(255), expr.WithClock(lists, every(11*time.Second).read)); err != nil {
-		t.Errorf("255 nodes: %v", err)
-	}
-	if err := eval(nodes(256), expr.WithClock(lists, every(11*time.Second).read)); !tooSlow(err) {
-		t.Errorf("256 nodes: %v, want %s", err, problems.ExpressionsTooSlow.Code())
-	}
-
-	// The group shares its time. A template that runs a lambda once takes 8
-	// seconds, 4 to its run and 4 to its stop, which passes on its own, and
-	// a second one in the group passes 10 seconds at its run. The time
+	// The group shares its time. A template of 256 steps takes 8 seconds,
+	// 4 to its 256th step and 4 to its stop, which passes on its own, and a
+	// second one in the group passes 10 seconds at its 256th step. The time
 	// between two of the group's evaluations, an hour here, doesn't count.
 	c := every(4 * time.Second)
 	group := expr.WithClock(lists, c.read)
-	if err := eval("map([1], x => x)", group); err != nil {
+	if err := eval(steps(256), group); err != nil {
 		t.Errorf("one template of 8 seconds: %v", err)
 	}
 	c.now = c.now.Add(time.Hour)
-	if err := eval("map([1], x => x)", group); !tooSlow(err) {
+	if err := eval(steps(256), group); !tooSlow(err) {
 		t.Errorf("two templates of 8 seconds: %v, want %s", err, problems.ExpressionsTooSlow.Code())
 	}
-	if err := eval("map([1], x => x)", expr.WithClock(lists, every(4*time.Second).read)); err != nil {
+	if err := eval(steps(256), expr.WithClock(lists, every(4*time.Second).read)); err != nil {
 		t.Errorf("a template of 8 seconds in a group of its own: %v", err)
 	}
 
-	// A template that another reads counts its time once: its 5 runs and
-	// its stop, and the reader's 4 runs, take 10 seconds together.
-	w := &expr.Workflow{Root: map[string]any{"a": "${{ map(inputs.five, x => x) }}", "b": "${{ 1 }}"}}
-	reader := func(runs int) string { return fmt.Sprintf("length(.a) + length(map(%s, x => x))", ones(runs)) }
-	if err := eval(reader(4), w.Scope([]string{"x"}, expr.WithClock(lists, every(time.Second).read))); err != nil {
-		t.Errorf("a template that reads another, 10 seconds: %v", err)
-	}
-	if err := eval(reader(5), w.Scope([]string{"x"}, expr.WithClock(lists, every(time.Second).read))); !tooSlow(err) {
-		t.Errorf("a template that reads another, 11 seconds: %v, want %s", err, problems.ExpressionsTooSlow.Code())
-	}
-	// The time the reader spends before it reads a template counts too.
-	// Here the reader starts, runs a lambda a second later, and reads .b,
-	// whose stop is 8 or 9 seconds later; the reader's next run is a
-	// second after that.
-	read := "length(map([1], x => x)) + .b + length(map([1], x => x))"
+	// A template that another reads takes its steps in the group's count,
+	// and its time counts from when the reader started: the reader's +,
+	// length and .a, and .a's 253 steps, are the group's 256th step, 10 or
+	// 11 seconds after the reader started.
+	w := &expr.Workflow{Root: map[string]any{"a": "${{ " + steps(253) + " }}"}}
 	for _, tc := range []struct {
-		before time.Duration
-		ok     bool
-	}{{8 * time.Second, true}, {9 * time.Second, false}} {
-		c := &clock{steps: []time.Duration{time.Second, time.Second, tc.before, time.Second}}
-		if err := eval(read, w.Scope([]string{"x"}, expr.WithClock(lists, c.read))); tc.ok && err != nil || !tc.ok && !tooSlow(err) {
-			t.Errorf("a template read %v after the reader's run: %v", tc.before, err)
+		after time.Duration
+		ok    bool
+	}{{10 * time.Second, true}, {11 * time.Second, false}} {
+		c := &clock{steps: []time.Duration{time.Second, tc.after}}
+		if err := eval("length(.a) + 1", w.Scope([]string{"x"}, expr.WithClock(lists, c.read))); tc.ok && err != nil || !tc.ok && !tooSlow(err) {
+			t.Errorf("the 256th step %v after the reader started: %v", tc.after, err)
 		}
 	}
-}
-
-// ones returns a JSON list of n ones.
-func ones(n int) string {
-	return "[" + strings.TrimSuffix(strings.Repeat("1,", n), ",") + "]"
 }

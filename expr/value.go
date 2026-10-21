@@ -593,12 +593,16 @@ func entries(v any) (keys, items []any, ok bool) {
 }
 
 // elements returns a list's items, or a mapping's values in the order of
-// their keys.
+// their keys. A string that holds a JSON list or mapping is read, once, as
+// its value.
 func elements(v any) []any {
-	if list, ok := collection(v).([]any); ok {
-		return list
+	switch c := collection(v).(type) {
+	case []any:
+		return c
+	case map[string]any:
+		return values(c)
 	}
-	return values(v)
+	return nil
 }
 
 // size estimates the bytes a value takes, to bound what an evaluation can

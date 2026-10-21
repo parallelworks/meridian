@@ -430,7 +430,7 @@ else counts toward what a template builds: reading a value, a path, `get`,
 | `range`, the prefix and the word operator | The list it makes: 16 for each number |
 | `map` | The list it makes: 8 for each item, plus the item's size |
 | `filter` | The list it makes: 8 for each item it keeps, plus the item's size |
-| The slice operand `2:(end)` | The string it makes |
+| The slice operands `(start):(end)` and `2:(end)` | The string they make |
 
 - An operation that gives back what it was given makes nothing, and counts
   nothing: `join` of a string, which is the string, and `fromJSON` of a value
@@ -500,10 +500,15 @@ early, as `==` could at the first byte two strings differ in.
 | `join`, the function and the word operator | The list or string, and the separator: `','` when it isn't given |
 | `split` | The string and the separator |
 | A list or mapping written as JSON | Itself, each time it is evaluated |
+| A name or index of a path, and `get`, that read into a string | The string, for a character of it or a key of the JSON it holds |
+| `get` | Its key, if it is text |
+| Arithmetic, `-`, `abs`, `floor`, `ceil`, `round` and `range` | A string they convert to a number |
+| `map`, `filter` and `.*` | A string they go through, which holds the items as JSON; a mapping's keys, which they go through in order: 8 for each and its bytes |
 
 Every other operation reads nothing, however large its operands: reading a
-reference or a path, `get`, arithmetic, `!`, `abs`, `floor`, `ceil`, `round`
-and `range` count their steps only.
+reference, a path through lists and mappings, `get` of them by a number,
+arithmetic on numbers, and `!` count their steps only, and so do `map`,
+`filter` and `.*` going through a list, besides each item.
 
 **What it builds,** as counted above, counts as work too.
 

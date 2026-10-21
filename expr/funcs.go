@@ -200,19 +200,22 @@ func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	return e.built(at, out)
 }
 
-// readsOperand reports whether the prefix operator op reads its operand v,
-// which costs v's size. length reads a string, whose characters it counts or
-// which it reads as JSON, but not a list or a mapping, whose length it
-// knows.
-func readsOperand(op string, v any) bool {
+// operandReads returns the work of what the prefix operator op reads of its
+// operand v. upper, lower, trim, keys, values and fromJSON read it, which
+// costs its size. length reads a string, whose characters it counts or which
+// it reads as JSON, and -, abs, floor, ceil, round and range a string they
+// convert to a number, but not a list's or a mapping's length or any other
+// number, which they know.
+func operandReads(op string, v any) int {
 	switch op {
 	case "upper", "lower", "trim", "keys", "values", "fromJSON":
-		return true
-	case "length", "len":
-		_, isString := v.(string)
-		return isString
+		return size(v)
+	case "length", "len", "-", "abs", "floor", "ceil", "round", "range":
+		if s, ok := v.(string); ok {
+			return len(s)
+		}
 	}
-	return false
+	return 0
 }
 
 // roundHalfUp rounds n to a whole number as JavaScript's Math.round does: a
@@ -228,10 +231,8 @@ func roundHalfUp(n float64) float64 {
 
 // prefix applies a unary operator.
 func (e *evaluator) prefix(at int, op string, v any) (any, error) {
-	if readsOperand(op, v) {
-		if err := e.read(at, v); err != nil {
-			return nil, err
-		}
+	if err := e.work(at, operandReads(op, v)); err != nil {
+		return nil, err
 	}
 	switch op {
 	case "!":

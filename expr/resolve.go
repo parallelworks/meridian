@@ -49,7 +49,9 @@ func (w *Workflow) Eval(location []string, scope Scope) (any, error) {
 // A workflowEval evaluates the expressions in a workflow that one
 // evaluation reaches, each at its own location and once. active holds the
 // locations being evaluated, so that expressions that read each other fail
-// instead of recursing forever, and done the values of those evaluated.
+// instead of recursing forever, and done the values of those evaluated, and
+// of the lists and mappings resolved, so that reading one again doesn't
+// make it again.
 type workflowEval struct {
 	workflow *Workflow
 	scope    Scope
@@ -90,6 +92,10 @@ func (r *workflowResolver) evalAt(t *Template, location []string) (any, error) {
 // resolve evaluates what the workflow holds at location: a string's
 // expressions, and those in each string of a list or mapping.
 func (r *workflowResolver) resolve(v any, location []string) (any, error) {
+	k := strings.Join(location, "\x00")
+	if v, ok := r.eval.done[k]; ok {
+		return v, nil
+	}
 	switch v := v.(type) {
 	case string:
 		t, err := ParseTemplate(v)
@@ -97,6 +103,7 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 			return nil, located(err, location)
 		}
 		if t.IsText() {
+			r.eval.done[k] = v
 			return v, nil
 		}
 		return r.evalAt(t, location)
@@ -108,15 +115,17 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 				return nil, err
 			}
 		}
+		r.eval.done[k] = out
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
-		for k, item := range jsonvalue.Sorted(v) {
+		for key, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = r.resolve(item, appendPath(location, k)); err != nil {
+			if out[key], err = r.resolve(item, appendPath(location, key)); err != nil {
 				return nil, err
 			}
 		}
+		r.eval.done[k] = out
 		return out, nil
 	}
 	return v, nil
@@ -130,8 +139,8 @@ func (r *workflowResolver) raw(location []string) (any, bool) {
 
 // follow walks path from location in the workflow and returns the value it
 // reaches, evaluated. A string on the way is evaluated, and the rest of the
-// path read from its value, with visit called at each * in it, as walk does.
-func (r *workflowResolver) follow(location, path []string, visit func(items int, rest []string) error) (any, bool, error) {
+// path read from its value, with charge, as walk does.
+func (r *workflowResolver) follow(location, path []string, charge func(n int) error) (any, bool, error) {
 	v, ok := r.raw(location)
 	if !ok {
 		return nil, false, nil
@@ -142,7 +151,7 @@ func (r *workflowResolver) follow(location, path []string, visit func(items int,
 			if err != nil {
 				return nil, false, err
 			}
-			return walk(resolved, path[i:], visit)
+			return walk(resolved, path[i:], charge)
 		}
 		if v, ok = property(v, k); !ok {
 			return nil, false, nil
@@ -155,17 +164,17 @@ func (r *workflowResolver) follow(location, path []string, visit func(items int,
 
 // Relative resolves a relative reference: .x is a key beside the one the
 // expression is in, and each further level goes up one more.
-func (r *workflowResolver) Relative(up int, path []string, visit func(items int, rest []string) error) (any, bool, error) {
+func (r *workflowResolver) Relative(up int, path []string, charge func(n int) error) (any, bool, error) {
 	if up > len(r.location) {
 		return nil, false, nil
 	}
-	return r.follow(r.location[:len(r.location)-up], path, visit)
+	return r.follow(r.location[:len(r.location)-up], path, charge)
 }
 
 // Definition reads the input definitions at path, or else the default of
 // the input at path. An input in a group is in the group's items.
-func (r *workflowResolver) Definition(path []string, visit func(items int, rest []string) error) (any, bool, error) {
-	if v, ok, err := r.follow(r.eval.workflow.Definitions, path, visit); err != nil || ok {
+func (r *workflowResolver) Definition(path []string, charge func(n int) error) (any, bool, error) {
+	if v, ok, err := r.follow(r.eval.workflow.Definitions, path, charge); err != nil || ok {
 		return v, ok, err
 	}
 	location := r.eval.workflow.Definitions
