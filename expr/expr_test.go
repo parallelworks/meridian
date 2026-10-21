@@ -418,7 +418,8 @@ func TestUnknownValues(t *testing.T) {
 // a list or mapping that holds it, read whole or with a *. One that reads
 // only the rest of the context isn't, and neither is one that doesn't
 // evaluate the reference, nor vars alone, which is a word. A failed
-// evaluation is marked too.
+// evaluation is marked too. A reference reads a marked value however it
+// writes the keys that lead to it, as a slice or an index written 00 does.
 func TestMarked(t *testing.T) {
 	scope := expr.Scope{
 		Contexts: map[string]any{
@@ -446,6 +447,19 @@ func TestMarked(t *testing.T) {
 		"${{ vars.region == 'x' ? vars.token : 1 }}": false,
 		"${{ inputs.hosts.*.name }}":                 false,
 		"${{ inputs.hosts[0].name }}":                false,
+		"${{ inputs.hosts[0:1] }}":                   true,
+		"${{ inputs.hosts[-1:] }}":                   true,
+		"${{ inputs.hosts[:] }}":                     true,
+		"${{ inputs.hosts[00].key }}":                true,
+		"${{ inputs.hosts.00.key }}":                 true,
+		"${{ inputs.hosts['+0'].key }}":              true,
+		"${{ inputs.hosts[-0].key }}":                true,
+		"${{ inputs.hosts[0:1][0].key }}":            true,
+		"${{ inputs.hosts[-1:].*.key }}":             true,
+		"${{ inputs.hosts[0:1].*.name }}":            false,
+		"${{ inputs.hosts[00].name }}":               false,
+		"${{ inputs.hosts[-1].key }}":                false,
+		"${{ inputs.hosts[0:1].key }}":               false,
 		"${{ toJSON(vars) }}":                        false,
 		"text":                                       false,
 	} {

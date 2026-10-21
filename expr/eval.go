@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -92,8 +93,9 @@ type Scope struct {
 	// rather than var, then the names that lead to the value from it, a
 	// list's items by their indexes, as in [vars token]. An evaluation that
 	// reads a marked value, a list or mapping that holds one, or a part of
-	// one, is marked, whatever it makes of it: see Template.EvalMarked. Nil
-	// marks nothing.
+	// one, is marked, whatever it makes of it: see Template.EvalMarked. A
+	// reference reads a marked value however it spells the keys that lead
+	// to it, as a slice or a * does a list's items. Nil marks nothing.
 	Marked [][]string
 
 	// budget counts what the templates that share it have done together,
@@ -851,21 +853,14 @@ func (e *evaluator) ref(r *ref) (any, error) {
 
 // marks reports whether what a reference reads by following path in
 // context is marked, or holds a marked value, or is part of one: whether
-// path leads to one of the paths in marked, or one of them leads to it. A *
-// in path reads each item.
+// path can reach one of the paths in marked, however its keys are written
+// (reach.Patterns).
 func marks(marked [][]string, context string, path []string) bool {
-	for _, m := range marked {
-		if len(m) == 0 || m[0] != context {
-			continue
-		}
-		m = m[1:]
-		n := min(len(m), len(path))
-		i := 0
-		for i < n && (path[i] == m[i] || path[i] == "*") {
-			i++
-		}
-		if i == n {
-			return true
+	for p := range reach.Patterns(path) {
+		for _, m := range marked {
+			if len(m) > 0 && m[0] == context && reach.Reaches(p, m[1:]) {
+				return true
+			}
 		}
 	}
 	return false

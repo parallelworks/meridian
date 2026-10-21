@@ -1,6 +1,7 @@
 package compile_test
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"slices"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -70,6 +72,20 @@ func TestDiagnosticsHideVariables(t *testing.T) {
 		},
 		{
 			"a default that reads a default that read a variable", inputs("a: {type: string, default: '${{ vars.X }}'}", "b: {type: string, default: '${{ fromJSON(inputs.a) }}'}"),
+			"s3cr3t{", problems.FromJSONInvalid,
+			[]string{"text"},
+		},
+		{
+			"a default that reads a row that read a variable through a slice",
+			inputs("rows: {type: list, template: {x: {type: string, default: '${{ vars.X }}'}}, default: [{}]}",
+				"z: {type: string, default: '${{ fromJSON(inputs.rows[0:1][0].x) }}'}"),
+			"s3cr3t{", problems.FromJSONInvalid,
+			[]string{"text"},
+		},
+		{
+			"a default that reads a row that read a variable by an index written 00",
+			inputs("rows: {type: list, template: {x: {type: string, default: '${{ vars.X }}'}}, default: [{}]}",
+				"z: {type: string, default: '${{ fromJSON(inputs.rows[00].x) }}'}"),
 			"s3cr3t{", problems.FromJSONInvalid,
 			[]string{"text"},
 		},
@@ -190,6 +206,35 @@ jobs:
 	got, err := p.Run.DeferredInputs["n"].Eval(expr.Scope{Contexts: map[string]any{"vars": map[string]any{"N": "6"}}})
 	if err != nil || got != "6" {
 		t.Errorf("n is %v, %v, as the run starts", got, err)
+	}
+}
+
+// A plan holds no variable's value that a default reads from a row whose
+// field read the variable, however its path reaches the field: the default
+// is evaluated as the run starts.
+func TestPlanHoldsNoVariableFromRows(t *testing.T) {
+	for _, read := range []string{
+		"toJSON(inputs.rows)", "toJSON(inputs.rows[0:1])", "toJSON(inputs.rows[-1:])", "toJSON(inputs.rows.*.x)",
+		"inputs.rows[00].x", "inputs.rows['+0'].x", "inputs.rows[-0].x", "inputs.rows[:][0].x",
+	} {
+		src := inputs("rows: {type: list, template: {x: {type: string, default: '${{ vars.REGION }}'}}, default: [{}]}",
+			`summary: {type: string, default: "${{ `+read+` }}"}`)
+		p, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{
+			Contexts: map[string]any{"vars": map[string]any{"REGION": "s3cr3t-region"}},
+		})
+		if diags.HasErrors() {
+			t.Fatalf("%s: %v", read, diags)
+		}
+		encoded, err := plan.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, []byte("s3cr3t-region")) {
+			t.Errorf("%s: the plan holds the variable's value: %s", read, encoded)
+		}
+		if _, ok := p.Run.DeferredInputs["summary"]; !ok {
+			t.Errorf("%s: summary isn't evaluated as the run starts", read)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 )
 
 // Values are JSON's: nil, bool, numbers, string, []any and map[string]any.
@@ -508,10 +509,10 @@ func property(v any, key string) (any, bool) {
 		p, ok := v[key]
 		return p, ok
 	case []any:
-		if start, end, ok := sliceBounds(key, len(v)); ok {
+		if start, end, ok := reach.Slice(key, len(v)); ok {
 			return v[start:end], true
 		}
-		if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < len(v) {
+		if i, ok := reach.Index(key); ok && i < len(v) {
 			return v[i], true
 		}
 	case string:
@@ -527,42 +528,13 @@ func property(v any, key string) (any, bool) {
 // index, or its slice, such as 1:3.
 func character(s, key string) (any, bool) {
 	runes := []rune(s)
-	if start, end, ok := sliceBounds(key, len(runes)); ok {
+	if start, end, ok := reach.Slice(key, len(runes)); ok {
 		return string(runes[start:end]), true
 	}
-	if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < len(runes) {
+	if i, ok := reach.Index(key); ok && i < len(runes) {
 		return string(runes[i]), true
 	}
 	return nil, false
-}
-
-// sliceBounds reads a slice such as 1:3, :2 or -2: of something n long. A
-// negative bound counts from the end, and bounds are clamped to [0, n].
-func sliceBounds(key string, n int) (start, end int, ok bool) {
-	from, to, found := strings.Cut(key, ":")
-	if !found {
-		return 0, 0, false
-	}
-	start, end = 0, n
-	var err error
-	if from != "" {
-		if start, err = strconv.Atoi(from); err != nil {
-			return 0, 0, false
-		}
-	}
-	if to != "" {
-		if end, err = strconv.Atoi(to); err != nil {
-			return 0, 0, false
-		}
-	}
-	clamp := func(i int) int {
-		if i < 0 {
-			i += n
-		}
-		return min(max(i, 0), n)
-	}
-	start, end = clamp(start), clamp(end)
-	return start, max(start, end), true
 }
 
 // key converts an operand of get to a property name: a number is an index.
