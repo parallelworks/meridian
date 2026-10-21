@@ -1,0 +1,18 @@
+description: >-
+  A tagged scalar is read as ACTIVATE's YAML library reads it, and keeps its
+  text when it doesn't decode as its tag says: !!null text and !!null 0 are
+  the strings text and 0, while !!null ~ and an empty !!null are null. A tag
+  the library doesn't know, such as !foo, leaves the scalar a string, and a
+  tagged mapping is a mapping. !!binary is the text its base64 decodes to.
+source: Meridian
+expect:
+  values:
+    /configurations/tags/inputs/null-tilde: null
+    /configurations/tags/inputs/null-empty: null
+    /configurations/tags/inputs/null-text: text
+    /configurations/tags/inputs/null-zero: "0"
+    /configurations/tags/inputs/local: "123"
+    /configurations/tags/inputs/local-mapping: {a: 1}
+    /configurations/tags/inputs/str: "1"
+    /configurations/tags/inputs/int: 12
+    /configurations/tags/inputs/binary: hi
