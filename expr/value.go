@@ -1,8 +1,6 @@
 package expr
 
 import (
-	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
 	"maps"
 	"math"
 	"math/big"
@@ -12,7 +10,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
 )
 
@@ -348,27 +345,6 @@ func jsonLen(v any, indent string, depth int) int {
 	}
 	var b [32]byte
 	return len(appendFloat(b[:0], n))
-}
-
-// lax reads JSON as encoding/json has always read it here: a key given twice
-// has its later value, and invalid UTF-8 is replaced.
-var lax = jsonv2.JoinOptions(
-	jsontext.AllowDuplicateNames(true),
-	jsontext.AllowInvalidUTF8(true),
-	jsonv2.WithUnmarshalers(jsonv2.UnmarshalFromFunc(func(dec *jsontext.Decoder, v *any) error {
-		out, err := jsonvalue.Decode(dec, parseFloat)
-		*v = out
-		return err
-	})),
-)
-
-// parseJSON decodes JSON text into values.
-func parseJSON(s string) (any, error) {
-	var v any
-	if err := jsonv2.Unmarshal([]byte(s), &v, lax); err != nil {
-		return nil, err
-	}
-	return v, nil
 }
 
 // jsonValue returns the value that s holds as JSON, if it holds any.
