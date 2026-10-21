@@ -86,10 +86,12 @@ cases:
     value: 8286783
   - expr: "length(join(1000 range 6800, join(100 range 575, ''))) + length(upper 'abcdefghi')"
     error: eval
+    code: expression_too_large
   - expr: "length((1000 range 6800) join ((100 range 575) join '')) + length(upper 'abcdefgh')"
     value: 8286783
   - expr: "length((1000 range 6800) join ((100 range 575) join '')) + length(upper 'abcdefghi')"
     error: eval
+    code: expression_too_large
   - expr: >-
       length(join(1000 range 6800, join(100 range 575, ''))) + length(upper 'abcdefgh')
       + length(keys({"a": 1})) + length(values({"a": 1})) + length(trim ' a ')
@@ -102,24 +104,29 @@ cases:
     value: 4165848
   - expr: "length((1000 range 4011) join ((100 range 560) join '') + 'abcde')"
     error: eval
+    code: expression_too_large
   # upper B and lower B make 4,165,844, and upper 'abcd' 4.
   - expr: "length(upper((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'abcd')"
     value: 4165848
   - expr: "length(upper((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'abcde')"
     error: eval
+    code: expression_too_large
   - expr: "length(lower((1000 range 4011) join ((100 range 560) join ''))) + length(lower 'abcd')"
     value: 4165848
   - expr: "length(lower((1000 range 4011) join ((100 range 560) join ''))) + length(lower 'abcde')"
     error: eval
+    code: expression_too_large
   # toJSON(B) makes B in quotes, 4,165,846, and upper 'ab' 2.
   - expr: "length(toJSON((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'ab')"
     value: 4165848
   - expr: "length(toJSON((1000 range 4011) join ((100 range 560) join ''))) + length(upper 'abc')"
     error: eval
+    code: expression_too_large
   - at: /read
     value: 4165852
   - at: /read-over
     error: eval
+    code: expression_too_large
 
   # B, (1000 range 4136) join ((100 range 394) join ''), counts 4,704 + 882 +
   # 50,176 + 2,777,614 = 2,833,376. format makes B twice and abcd, and counts
@@ -128,12 +135,14 @@ cases:
     value: 5555232
   - expr: "length(format('{0}{0}abcde', (1000 range 4136) join ((100 range 394) join '')))"
     error: eval
+    code: expression_too_large
   # toJSON(B) makes 2,777,616, fromJSON reads B, 2,777,614, and upper 'ab'
   # makes 2.
   - expr: "length(fromJSON(toJSON((1000 range 4136) join ((100 range 394) join '')))) + length(upper 'ab')"
     value: 2777616
   - expr: "length(fromJSON(toJSON((1000 range 4136) join ((100 range 394) join '')))) + length(upper 'abc')"
     error: eval
+    code: expression_too_large
 
   # B, (1000 range 3025) join ((100 range 358) join '-'), counts 4,128 + 1,031
   # + 32,400 + 2,094,844 = 2,132,403. B has 2,024 × 257 dashes, so split '-'
@@ -143,6 +152,7 @@ cases:
     value: 520178
   - expr: "length(((1000 range 3025) join ((100 range 358) join '-')) split '-') + length(upper 'abcdefghij')"
     error: eval
+    code: expression_too_large
   # B, (1000 range 2663) join ((1000 range 1100) join '-'), counts 1,600 + 499
   # + 26,608 + 835,990 = 864,697. split '' makes a part of each character, and
   # counts 9 for each: 7,523,910. An empty string has no characters, so
@@ -151,6 +161,7 @@ cases:
     value: 835991
   - expr: "length(((1000 range 2663) join ((1000 range 1100) join '-')) split '') + length('' split '') + length(upper 'ab')"
     error: eval
+    code: expression_too_large
 
   # map counts 8 for each item it makes and the item's size. B,
   # (1000 range 1238) join '', counts 3,808 + 952, and split ',' makes [B],
@@ -161,6 +172,7 @@ cases:
     value: 8597
   - expr: "map(((1000 range 1238) join '') split ',', b => length(map(range 8589, i => b)))[0] + length(upper 'abcdefghi')"
     error: eval
+    code: expression_too_large
   # filter counts 8 for each item it keeps and the item's size, and nothing
   # for an item it doesn't keep. B, (1000 range 1131) join '', counts 2,096 +
   # 524, and split ',' makes [B], 532. range 9413 counts 150,608, map makes
@@ -171,6 +183,7 @@ cases:
     value: 6070
   - expr: "map(((1000 range 1131) join '') split ',', b => length(filter(map(range 9413, i => b), (x, j) => j < 6066)))[0] + length(upper 'abcde')"
     error: eval
+    code: expression_too_large
 
   # The cases below do exactly 32 MiB of work, 33,554,432 bytes, and each
   # has a twin with a letter more, a byte over, which is an error. Each is
@@ -197,6 +210,7 @@ cases:
     value: [0]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(filter(range 460, i => b < b)) + !(range 1009) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # A template's expressions share its count, and what it builds counts as
   # work: the text of the first value, [0], 3, and 'abcd', 8 and its text, 4.
   # The text around them counts nothing. With no T: K is 460, M 1,009, with no
@@ -205,29 +219,34 @@ cases:
     value: "([0], abcd)"
   - template: "(${{ map(((1000 range 10000) join '') split ',', b => length(filter(range 460, i => b < b)) + !(range 1009) + ('' < '')) }}, ${{ 'abcde' }})"
     error: eval
+    code: expression_too_much_work
   # Parentheses that only group count nothing: T is one operand, 8. K is 460,
   # M 1,008, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => ((((1)))) + length(filter(range 460, i => b < b)) + !(range 1008) + ('abcdefghijklmno' < ''))"
     value: [1]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((((1)))) + length(filter(range 460, i => b < b)) + !(range 1008) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # Each operand counts 8, a number, a string, true and a bare word alike, and
   # each && 8: 72. K is 460, M 1,004, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => (1 && 'a' && true && word && 2) + length(filter(range 460, i => b < b)) + !(range 1004) + ('abcdefghijklmno' < ''))"
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => (1 && 'a' && true && word && 2) + length(filter(range 460, i => b < b)) + !(range 1004) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # -5 is a number, one operand, and - 5 is - applied to 5, two steps; with +,
   # 32. K is 460, M 1,007, with 7 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => (-5 + - 5) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefg' < ''))"
     value: [-10]
   - expr: "map(((1000 range 10000) join '') split ',', b => (-5 + - 5) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # null, ?? and 3, 24. K is 460, M 1,007, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => (null ?? 3) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefghijklmno' < ''))"
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (null ?? 3) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # A reference counts 8, and 8 for each name or index of its path: 24, 24 and
   # 32. vars.missing is "", 16, and length reads it, 0, 8 for itself. With
   # three +, 128. K is 460, M 1,001, with 7 letters.
@@ -235,6 +254,7 @@ cases:
     value: [4]
   - expr: "map(((1000 range 10000) join '') split ',', b => (inputs.a.b + inputs['a']['b'] + inputs.l[1].a + length(vars.missing)) + length(filter(range 460, i => b < b)) + !(range 1001) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # Each name of a path counts, whether or not the path leads anywhere:
   # inputs.missing.b.c is 32, and with ?? and 1, 48. inputs.missing.*.a is 8,
   # and 8 each for missing and *, which visits nothing; with length, 32. With
@@ -243,18 +263,21 @@ cases:
     value: [1]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((inputs.missing.b.c ?? 1) + length(inputs.missing.*.a)) + length(filter(range 460, i => b < b)) + !(range 1003) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # length 8, map 8 and inputs.l 16. Each of 3 runs counts 8, and x.a 16. map
   # makes 3 items, 16 each: 152. K is 460, M 999, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => length(map(inputs.l, (x, k) => x.a)) + length(filter(range 460, i => b < b)) + !(range 999) + ('abcdefghijklmno' < ''))"
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(map(inputs.l, (x, k) => x.a)) + length(filter(range 460, i => b < b)) + !(range 999) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # length 8, filter 8 and inputs.l 16. Each of 3 runs counts 8, and k > 5 24
   # and reads two numbers, 16: 176. K is 460, M 998, with 7 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => length(filter(inputs.l, (x, k) => k > 5)) + length(filter(range 460, i => b < b)) + !(range 998) + ('abcdefg' < ''))"
     value: [0]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(filter(inputs.l, (x, k) => k > 5)) + length(filter(range 460, i => b < b)) + !(range 998) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # A path after a computed value is an operand, 8, and 8 for each name:
   # (inputs.a).b is 8 + 16 + 8. fromJSON('{"c": 2}').c is 8, fromJSON 8 and
   # its text 8, reading the text, 8, building {"c": 2}, 17, and c 8: 57. With
@@ -263,6 +286,7 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((inputs.a).b + fromJSON('{\"c\": 2}').c) + length(filter(range 460, i => b < b)) + !(range 1003) + ('abcdefg' < ''))"
     error: eval
+    code: expression_too_much_work
   # The slice operands (0):(2) and (1): are an operand each, 8, besides 0, 2
   # and 1, and build their text, 0:2 and 1:, 3 and 2. get reads the string it
   # reads into, abc, 3, and its key, which is text, 3 and 2. With get 8,
@@ -272,6 +296,7 @@ cases:
     value: [4]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.s get (0):(2)) + length(inputs.s get (1):)) + length(filter(range 460, i => b < b)) + !(range 1001) + ('abcd' < ''))"
     error: eval
+    code: expression_too_much_work
   # The slice operand 1:(3) is an operand, 8, besides 3, 8, and builds 1:3, 3,
   # which get reads as its key, 3. length 8, get 8 and inputs.l 16: 54. K is
   # 460, M 1,006, with 1 letter.
@@ -279,6 +304,7 @@ cases:
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(inputs.l get 1:(3)) + length(filter(range 460, i => b < b)) + !(range 1006) + ('ab' < ''))"
     error: eval
+    code: expression_too_much_work
   # (inputs.w):(b) builds its text, ["ab","c"]:B, 36,011, which length reads:
   # the slice, inputs.w and b 32, length 8, and 72,022: 72,062. K is 459, M
   # 1,008, with 9 letters.
@@ -286,6 +312,7 @@ cases:
     value: [36011]
   - expr: "map(((1000 range 10000) join '') split ',', b => length((inputs.w):(b)) + length(filter(range 459, i => b < b)) + !(range 1008) + ('abcdefghij' < ''))"
     error: eval
+    code: expression_too_much_work
   # !, -, abs, floor, ceil and round count 8 each, and read nothing: 16 with
   # each operand. length(range 3) is 8 + 8 + 8, and 3 numbers built, 48. With
   # six +, 216. K is 460, M 995, with 15 letters.
@@ -293,12 +320,14 @@ cases:
     value: [10]
   - expr: "map(((1000 range 10000) join '') split ',', b => (!0 + -(1) + abs -2 + floor 1.5 + ceil 1.5 + round 1.5 + length(range 3)) + length(filter(range 460, i => b < b)) + !(range 995) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # 11 operands and 10 operators, which read nothing: 168. K is 460, M 998,
   # with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => (1 + 2 - 3 * 4 / 5 // 6 % 7 mod 8 ** 1 ^ 1 exp 1) + length(filter(range 460, i => b < b)) + !(range 998) + ('abcdefghijklmno' < ''))"
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (1 + 2 - 3 * 4 / 5 // 6 % 7 mod 8 ** 1 ^ 1 exp 1) + length(filter(range 460, i => b < b)) + !(range 998) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # get 8, inputs.a 16 and 'b' 8, and reading its key, which is text, 1, and
   # length 8 of a number: 41. range 8, 2 and 5 16, and 3 numbers built, 48,
   # and length 8: 80. With +, 129. K is 460, M 1,001, with 6 letters.
@@ -306,18 +335,21 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.a get 'b') + length(2 range 5)) + length(filter(range 460, i => b < b)) + !(range 1001) + ('abcdefg' < ''))"
     error: eval
+    code: expression_too_much_work
   # A ternary counts 8, its condition, and the branch it takes, and nothing
   # for the other: 24 each, and + 8. K is 460, M 1,005, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => ((true ? 1 : b < b) + (false ? b < b : 2)) + length(filter(range 460, i => b < b)) + !(range 1005) + ('abcdefghijklmno' < ''))"
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((true ? 1 : b < b) + (false ? b < b : 2)) + length(filter(range 460, i => b < b)) + !(range 1005) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # &&, || and ?? count 8, and nothing for an operand they don't need: 16
   # each, and two + 16. K is 460, M 1,005, with 7 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => ((0 && b < b) + (1 || b < b) + (1 ?? b < b)) + length(filter(range 460, i => b < b)) + !(range 1005) + ('abcdefg' < ''))"
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((0 && b < b) + (1 || b < b) + (1 ?? b < b)) + length(filter(range 460, i => b < b)) + !(range 1005) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # case counts 8, and the predicates up to the one that holds and its value,
   # and nothing for the rest: 32 and 24, and + 8. K is 460, M 1,005, with 7
   # letters.
@@ -325,6 +357,7 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (case(false, b < b, true, 2, b < b) + case(true, 1, b < b, b < b, b < b)) + length(filter(range 460, i => b < b)) + !(range 1005) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # Each call counts 8: with +, 24. K is 460, M 1,007, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => (success() + always()) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefghijklmno' < ''))"
     scope: {status: {}}
@@ -332,6 +365,7 @@ cases:
   - expr: "map(((1000 range 10000) join '') split ',', b => (success() + always()) + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefghijklmnop' < ''))"
     scope: {status: {}}
     error: eval
+    code: expression_too_much_work
   # filter 8 and inputs.l 16, and each of 3 runs 8 and false 8; length 8: 80.
   # map the same, and 3 items built, 48: 128. With +, 216. K is 460, M 995,
   # with 15 letters.
@@ -339,6 +373,7 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(filter(inputs.l, x => false)) + length(map(inputs.l, x => 0))) + length(filter(range 460, i => b < b)) + !(range 995) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # length, filter, range and 3, 32, and 3 numbers, 48. Each of 3 runs counts
   # 8, and the inner filter, range and 2 24, 2 numbers 32, and 2 runs of 16:
   # 96. The inner filter makes [], which is true, so the outer one keeps 3
@@ -347,6 +382,7 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(filter(range 3, i => filter(range 2, j => false))) + length(filter(range 460, i => b < b)) + !(range 983) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # .* counts 8, and 8 for each item it visits, and the rest of the path is
   # followed from each. Going through a mapping reads its keys, 8 for each and
   # its bytes. inputs.l.*.a: 8 + 8 + 8, and 16 for each of 3 items, and length
@@ -358,12 +394,14 @@ cases:
     value: [6]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.l.*.a) + length(inputs.m.*) + length(inputs.l.*.*)) + length(filter(range 460, i => b < b)) + !(range 992) + ('abcd' < ''))"
     error: eval
+    code: expression_too_much_work
   # A path after a computed value: 8, inputs.l 16, .* 8, 16 for each of 3
   # items, and length 8: 88. K is 460, M 1,003, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => length((inputs.l).*.a) + length(filter(range 460, i => b < b)) + !(range 1003) + ('abcdefghijklmno' < ''))"
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => length((inputs.l).*.a) + length(filter(range 460, i => b < b)) + !(range 1003) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # [index] is an index of the path, 8: 32. K is 460, M 1,007, with 7 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => inputs.l[index].a + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefg' < ''))"
     scope: {index: [1]}
@@ -371,12 +409,14 @@ cases:
   - expr: "map(((1000 range 10000) join '') split ',', b => inputs.l[index].a + length(filter(range 460, i => b < b)) + !(range 1007) + ('abcdefgh' < ''))"
     scope: {index: [1]}
     error: eval
+    code: expression_too_much_work
   # Each comparison counts 8, b and b 16, and reads both, 72,000: 72,024.
   # Seven, and six +: 504,216. K is 453, M 1,016, with 15 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => ((b == b) + (b != b) + (b === b) + (b !== b) + (b > b) + (b <= b) + (b >= b)) + length(filter(range 453, i => b < b)) + !(range 1016) + ('abcdefghijklmno' < ''))"
     value: [4]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((b == b) + (b != b) + (b === b) + (b !== b) + (b > b) + (b <= b) + (b >= b)) + length(filter(range 453, i => b < b)) + !(range 1016) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # contains, startsWith and endsWith, as functions and as word operators, and
   # in, includes and !in, read both operands: 72,024 each. Eight, and seven +:
   # 576,248. K is 452, M 1,017, with 15 letters.
@@ -384,6 +424,7 @@ cases:
     value: [7]
   - expr: "map(((1000 range 10000) join '') split ',', b => (contains(b, b) + startsWith(b, b) + endsWith(b, b) + (b in b) + (b includes b) + (b startsWith b) + (b endsWith b) + (b !in b)) + length(filter(range 452, i => b < b)) + !(range 1017) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # length reads a string, 36,000, but not a list. == reads two numbers, 16.
   # trim, upper and lower read b, and upper and lower build 36,000 each:
   # 36,048 + 56 + 36,024 + 72,024 + 72,024, and four +: 216,208. K is 457, M
@@ -392,6 +433,7 @@ cases:
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => ((length(b) == 36000) + (length(inputs.l) == 3) + !trim b + !upper b + !lower b) + length(filter(range 457, i => b < b)) + !(range 1005) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # keys and values read their operand: inputs.m, 2 entries of 8, their keys
   # 2, and {"a": 1} and {"a": 2}, 17 each: 52. With keys, inputs.m and length,
   # 84. keys b reads b, 36,000, and makes []: 36,024. With two +, 36,208. K is
@@ -400,6 +442,7 @@ cases:
     value: [4]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(keys inputs.m) + length(values inputs.m) + length(keys b)) + length(filter(range 459, i => b < b)) + !(range 3249) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # toJSON reads its value, {"b": 1}, 17, and builds 12, which length reads as
   # the mapping it holds, 12 and 17: 8 + 8 + 16 + 17 + 12 + 12 + 17 = 90.
   # fromJSON reads its text, 9, and builds [1, "ab"], 26: 67 with length.
@@ -409,6 +452,7 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(toJSON(inputs.a)) + length(fromJSON(inputs.j)) + !fromJSON(inputs.a)) + length(filter(range 460, i => b < b)) + !(range 995) + ('abcdefghij' < ''))"
     error: eval
+    code: expression_too_much_work
   # format reads its string, 7, and each argument, 3 and 8, and builds abc-5,
   # 5. format, its three arguments, length and reading abc-5: 76. K is 460, M
   # 1,004, with 11 letters.
@@ -416,6 +460,7 @@ cases:
     value: [5]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(format('{0}-{1}', inputs.s, 5)) + length(filter(range 460, i => b < b)) + !(range 1004) + ('abcdefghijkl' < ''))"
     error: eval
+    code: expression_too_much_work
   # join reads its list, ["ab", "c"], 19, and its separator: ',' when it has
   # none, 1, and '--' 2. It builds ab,c and ab--c. join of a string reads it
   # and the separator, 5, and gives back the string, which it doesn't build:
@@ -424,6 +469,7 @@ cases:
     value: [12]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(join(inputs.w)) + length(inputs.w join '--') + length(join(inputs.s, 5))) + length(filter(range 460, i => b < b)) + !(range 996) + ('abcdefghijklmno' < ''))"
     error: eval
+    code: expression_too_much_work
   # split reads its string and separator, 3 and 1, and builds the string's
   # bytes and 8 for each of 2 parts, 19: with split, inputs.s, 'b' and length,
   # 63. K is 460, M 1,005, with 8 letters.
@@ -431,6 +477,7 @@ cases:
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(inputs.s split 'b') + length(filter(range 460, i => b < b)) + !(range 1005) + ('abcdefghi' < ''))"
     error: eval
+    code: expression_too_much_work
   # A list or mapping written as JSON is read each time it is evaluated: [1,
   # "ab"] is 26, and == reads it and null. Each of 2 runs counts 8, == 8, the
   # list 8 + 26, null 8, and 34 read: 92. With length, filter, range and 2,
@@ -440,6 +487,7 @@ cases:
     value: [0]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(filter(range 2, i => [1, \"ab\"] == null)) + !{\"k\": \"v\"}) + length(filter(range 460, i => b < b)) + !(range 991) + ('abcdefghijklmn' < ''))"
     error: eval
+    code: expression_too_much_work
   # ! reads nothing, however large its operand: !b is 16. get reads the string
   # it reads into, 36,000, and length the 1 it gets: with get, b, 0 and
   # length, 36,033. Arithmetic and abs read a string they convert to a number:
@@ -449,6 +497,7 @@ cases:
     value: [2]
   - expr: "map(((1000 range 10000) join '') split ',', b => (!b + length(b get 0) + !(b - b) + !(abs b)) + length(filter(range 458, i => b < b)) + !(range 1007) + ('abcdefg' < ''))"
     error: eval
+    code: expression_too_much_work
   # A name or index that reads into a string reads the string, and the value
   # it holds as JSON, if it holds one, which the name reads, or else a
   # character of it, each time. inputs.s[0] reads abc, 3, and length the a, 1:
@@ -459,6 +508,7 @@ cases:
     value: [4]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.s[0]) + length(inputs.j[1]) + length(b[0])) + length(filter(range 459, i => b < b)) + !(range 3253) + ('abcdef' < ''))"
     error: eval
+    code: expression_too_much_work
   # A string read as the JSON it holds counts the value it holds too, by the
   # size rule, each time. inputs.j get 0 reads [1, "ab"], 9, and its value,
   # 26: with get, its operands and length, 75. inputs.t[0] reads 12 and the
@@ -470,6 +520,7 @@ cases:
     value: [8]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.j get 0) + (inputs.t[0] ?? 7) + length(inputs.s get 1)) + length(filter(range 460, i => b < b)) + !(range 997) + ('abcdefghijklmno' < ''))"
     error: eval
+    code: expression_too_much_work
   # length, keys, values, join and filter read a string that holds a JSON list
   # or mapping as its value, which counts too: inputs.j 9 and 26, inputs.o 8
   # and 17, and inputs.jw 11 and 19. length of inputs.j is 59, and of keys or
@@ -481,6 +532,7 @@ cases:
     value: [10]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.j) + length(keys inputs.o) + length(values inputs.o) + length(join(inputs.jw)) + length(inputs.t) + length(filter(inputs.o, x => false))) + length(filter(range 460, i => b < b)) + !(range 985) + ('abcdefghi' < ''))"
     error: eval
+    code: expression_too_much_work
   # get reads a string it reads into, abc, 3, and a key that is text, x and 1,
   # 1 each, but not a number. With get, its operands and length, which reads
   # the c it gets: 44, 41 and 41. With two +, 142. K is 460, M 1,000, with 9
@@ -489,6 +541,7 @@ cases:
     value: [3]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(inputs.s get 2) + length(inputs.m get 'x') + length(inputs.l get '1')) + length(filter(range 460, i => b < b)) + !(range 1000) + ('abcdefghij' < ''))"
     error: eval
+    code: expression_too_much_work
   # Arithmetic, -, abs, floor, ceil, round and range read a string they
   # convert to a number, 12, 2, but not a number or true: t - 1 and t * 2 are
   # 34 each, -t and the four others 26 each, range t 226 with the 12 numbers
@@ -498,6 +551,7 @@ cases:
     value: [87]
   - expr: "map(((1000 range 10000) join '') split ',', b => (inputs.t - 1 + inputs.t * 2 + -inputs.t + abs inputs.t + floor inputs.t + ceil inputs.t + round inputs.t + length(range inputs.t) + length(inputs.t range 14) + (true + 1)) + length(filter(range 460, i => b < b)) + !(range 972) + ('abcdef' < ''))"
     error: eval
+    code: expression_too_much_work
   # map, filter and .* read a string they go through, and the list or mapping
   # it holds as JSON, and a mapping's keys, 8 for each and its bytes, but
   # nothing more of a list. map: 8, inputs.j 16, its 9 bytes and its value,
@@ -510,6 +564,7 @@ cases:
     value: [4]
   - expr: "map(((1000 range 10000) join '') split ',', b => (length(map(inputs.j, x => 1)) + length(filter(inputs.m, x => false)) + length(inputs.j.*) + length(b.*)) + length(filter(range 459, i => b < b)) + !(range 3240) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # A name read to look something up counts its bytes, or 8 if that is more:
   # a_long_input_name and a long quoted key 17 each, and the parameter
   # an_element 10 each time it is read, while inputs, m, x and a are 8.
@@ -521,6 +576,7 @@ cases:
     value: [7]
   - expr: "map(((1000 range 10000) join '') split ',', b => (inputs.a_long_input_name + inputs['a long quoted key'] + inputs.m[x].a + length(map(inputs.l, an_element => an_element.a))) + length(filter(range 460, i => b < b)) + !(range 992) + ('abcdefghijklmnop' < ''))"
     error: eval
+    code: expression_too_much_work
   # After a .*, each name of the rest of the path counts its bytes for each
   # item: a_long_field is 12. length, inputs, l and *, 32, and 20 for each of
   # 3 items: 92. K is 460, M 1,003, with 11 letters.
@@ -528,6 +584,7 @@ cases:
     value: [0]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(inputs.l.*.a_long_field) + length(filter(range 460, i => b < b)) + !(range 1003) + ('abcdefghijkl' < ''))"
     error: eval
+    code: expression_too_much_work
   # trim and upper read their operand whatever it is, a number or true 8, and
   # upper builds TRUE, 4. length reads only a string. 32 + 36 + 16, and two +:
   # 100. K is 460, M 1,003, with 3 letters.
@@ -535,12 +592,14 @@ cases:
     value: [0]
   - expr: "map(((1000 range 10000) join '') split ',', b => (!trim 12345 + !upper true + length(5)) + length(filter(range 460, i => b < b)) + !(range 1003) + ('abcd' < ''))"
     error: eval
+    code: expression_too_much_work
   # What a template builds counts as work too: b + b builds 72,000, and length
   # reads it: 144,032. K is 458, M 1,013, with 7 letters.
   - expr: "map(((1000 range 10000) join '') split ',', b => length(b + b) + length(filter(range 458, i => b < b)) + !(range 1013) + ('abcdefg' < ''))"
     value: [72000]
   - expr: "map(((1000 range 10000) join '') split ',', b => length(b + b) + length(filter(range 458, i => b < b)) + !(range 1013) + ('abcdefgh' < ''))"
     error: eval
+    code: expression_too_much_work
   # Reading a template counts nothing toward the reader's work, as it has its
   # own count: heavy, with no T, does 32 MiB. K is 460, M 1,009, with 15
   # letters.
@@ -548,20 +607,24 @@ cases:
     value: [0]
   - at: /heavy-over
     error: eval
+    code: expression_too_much_work
   # T is length(.heavy), 24: .heavy, 8 and 8, and length of a list, 8. K is
   # 460, M 1,007, with 15 letters.
   - at: /reads-heavy
     value: [1]
   - at: /reads-heavy-over
     error: eval
+    code: expression_too_much_work
   # T is length(.rows.*.a), 80: .rows.*.a 8, 8 and 8, and 16 for each of 3
   # items, and length 8. K is 460, M 1,004, with 7 letters.
   - at: /reads-rows
     value: [2]
   - at: /reads-rows-over
     error: eval
+    code: expression_too_much_work
   # T is length(inputs.heavy.default), 32. K is 460, M 1,007, with 7 letters.
   - at: /on/execute/inputs/reads-default/default
     value: [1]
   - at: /on/execute/inputs/reads-default-over/default
     error: eval
+    code: expression_too_much_work

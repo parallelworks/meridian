@@ -15,7 +15,7 @@ inputs:
     - name: a
       key: HUNTER2SECRET
 expect:
-  inputs:
+  deferred:
     hosts:
       - name: a
         site: ${{ vars.SITE }}

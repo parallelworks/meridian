@@ -178,8 +178,10 @@ cases:
     value: [1, 2]
   - expr: fromJSON "[1, 2"
     error: eval
+    code: from_json_invalid
   - expr: fromJSON "01"
     error: eval
+    code: from_json_invalid
 
   - expr: range 3
     value: [0, 1, 2]
@@ -191,7 +193,10 @@ cases:
     value: 10
   - expr: range 10001
     error: eval
+    code: range_too_long
   - expr: range 1.5
     error: eval
+    code: range_not_whole
   - expr: range "x"
     error: eval
+    code: range_not_whole

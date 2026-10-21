@@ -10,6 +10,7 @@ expect:
     - severity: warning
       code: unknown_input
       path: /on/execute/inputs
+      params: {input: clustr_name, suggested: "true", suggestion: cluster_name}
   inputs:
     cluster_name: x
     clustr_name: "y"

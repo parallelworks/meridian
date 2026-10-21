@@ -11,11 +11,12 @@ contexts:
     REGION: us-east
 expect:
   inputs:
+    names: a
+  deferred:
     hosts:
       - name: a
         zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
     last: ${{ toJSON(inputs.hosts[-1:]) }}
-    names: a
     signed: ${{ inputs.hosts['+0'].zone }} ${{ inputs.hosts[-0].zone }}
     slice: ${{ toJSON(inputs.hosts[0:1]) }}
     zero: ${{ inputs.hosts[00].zone }}

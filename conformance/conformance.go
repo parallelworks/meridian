@@ -11,6 +11,7 @@ package conformance
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -59,9 +60,15 @@ type Expect struct {
 	Diagnostics []Diagnostic `yaml:"diagnostics,omitempty"`
 	// Values are values the loaded workflow must have, by JSON Pointer.
 	Values map[string]any `yaml:"values,omitempty"`
-	// Inputs are the run's input values, in the inputs area. A value that
-	// stays an expression until the run is underway is its text.
+	// Inputs are the run's input values, in the inputs area, without those
+	// in Deferred.
 	Inputs map[string]any `yaml:"inputs,omitempty"`
+	// Deferred are the values that stay expressions until the run is
+	// underway, such as a default that reads a secret variable, by their
+	// input's path, as in group.name. Each is its text: a template as the
+	// string it is written as, and a list or mapping with each template in
+	// it as its text.
+	Deferred map[string]any `yaml:"deferred,omitempty"`
 	// Secrets are the values of password inputs, by their path.
 	Secrets map[string]any `yaml:"secrets,omitempty"`
 	// Plan holds values the compiled plan must have, by JSON Pointer into
@@ -70,13 +77,19 @@ type Expect struct {
 }
 
 // A Diagnostic is an error or warning a case expects. Line and Column are
-// checked when they are set.
+// each checked when they are set.
 type Diagnostic struct {
 	Severity string `yaml:"severity"`
 	Code     string `yaml:"code"`
 	Path     string `yaml:"path"`
 	Line     int    `yaml:"line,omitempty"`
 	Column   int    `yaml:"column,omitempty"`
+	// Params are the values of some of the diagnostic's params, by name.
+	// A kind's params are part of its contract, as its code is. Those
+	// listed must have these values, and the others aren't checked. A
+	// param is text or a number, and a boolean is the text "true" or
+	// "false".
+	Params map[string]any `yaml:"params,omitempty"`
 }
 
 // Workflow returns the case's workflow file.
@@ -147,8 +160,9 @@ type Status struct {
 	Cancelled bool `yaml:"cancelled,omitempty"`
 }
 
-// An ExpressionCase is one expression and what it must produce: Value,
-// unless Error or Unknown is set.
+// An ExpressionCase is one expression and what it must produce: exactly one
+// of a value, an error and something unknown. A case that expects null has
+// value: null.
 type ExpressionCase struct {
 	// Expr is an expression: the text between ${{ and }}.
 	Expr string `yaml:"expr,omitempty"`
@@ -165,6 +179,9 @@ type ExpressionCase struct {
 	// Error is "syntax" for an expression that doesn't parse, or "eval" for
 	// one that can't be evaluated.
 	Error string `yaml:"error,omitempty"`
+	// Code, if set, is the code of the error's kind, such as
+	// unclosed_string. Meridian's problems package lists them.
+	Code string `yaml:"code,omitempty"`
 	// Unknown is what the expression reads that isn't known yet: a context,
 	// "status" or "index". It can't be evaluated until it is.
 	Unknown string `yaml:"unknown,omitempty"`
@@ -213,17 +230,63 @@ func ExpressionFiles() ([]ExpressionFile, error) {
 		if err := decode(data, &f); err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
+		expects, err := expectations(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
 		for i, c := range f.Cases {
 			if n := count(c.Expr != "", c.Template != "", c.At != ""); n != 1 {
 				return nil, fmt.Errorf("%s: case %d has %d of expr, template and at, not 1", name, i+1, n)
 			}
-			if c.Error != "" && c.Unknown != "" || (c.Error != "" || c.Unknown != "") && c.Value != nil {
-				return nil, fmt.Errorf("%s: case %d expects more than one of value, error and unknown", name, i+1)
+			if expects[i] != 1 {
+				return nil, fmt.Errorf("%s: case %d expects %d of value, error and unknown, not 1", name, i+1, expects[i])
+			}
+			if c.Code != "" && c.Error == "" {
+				return nil, fmt.Errorf("%s: case %d has a code but no error", name, i+1)
 			}
 		}
 		files = append(files, f)
 	}
 	return files, nil
+}
+
+// expectations returns how many of value, error and unknown each case in a
+// file of expression cases has. Decoding doesn't tell value: null from no
+// value, so they are counted in the file's YAML.
+func expectations(data []byte) ([]int, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	var cases *yaml.Node
+	if len(doc.Content) == 1 {
+		cases = member(doc.Content[0], "cases")
+	}
+	if cases == nil || cases.Kind != yaml.SequenceNode {
+		return nil, errors.New("no list of cases")
+	}
+	counts := make([]int, len(cases.Content))
+	for i, c := range cases.Content {
+		for _, key := range []string{"value", "error", "unknown"} {
+			if member(c, key) != nil {
+				counts[i]++
+			}
+		}
+	}
+	return counts, nil
+}
+
+// member returns the value of key in a mapping node, or nil if it has none.
+func member(n *yaml.Node, key string) *yaml.Node {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func count(bs ...bool) int {

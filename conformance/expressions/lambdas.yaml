@@ -98,20 +98,28 @@ cases:
     value: []
   - expr: "map(inputs.count, x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "map(3, x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "filter(inputs.flag, x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "filter(true, x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "map(inputs.text, x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "map('', x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "map('[1, 2', x => x)"
     error: eval
+    code: not_list_or_mapping
   - expr: "map('null', x => x)"
     error: eval
+    code: not_list_or_mapping
 
   # filter keeps what is true by an expression's truthiness, so it keeps the
   # strings "false" and "0", [] and {}, and it keeps the items, not what the
@@ -187,6 +195,7 @@ cases:
   # A body that never runs is still parsed, so a mistake in it is an error.
   - expr: "map([], x => ['a'])"
     error: syntax
+    code: invalid_json_literal
   - at: /joined
     value: a-b-
   - at: /own
@@ -277,165 +286,242 @@ cases:
   # operator, or NaN, Infinity or index, which it would hide.
   - expr: "map(inputs.list, inputs => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, needs => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, steps => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, matrix => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, env => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, org => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, vars => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, var => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, remote => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, sessions => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, true => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, False => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, null => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, Undefined => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, and => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, OR => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, in => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, includes => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, startsWith => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, get => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, range => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, mod => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, exp => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, split => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, join => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, len => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, length => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, upper => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, trim => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, keys => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, values => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, round => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, fromJSON => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, NaN => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, Infinity => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   # In any case, as and, or, true, false, null and undefined are.
   - expr: "map(inputs.list, nan => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, INFINITY => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, index => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, (x, index) => x)"
     error: syntax
+    code: lambda_parameter_reserved
   # job is the context of the job a step runs in, which can't be hidden
   # either.
   - expr: "map(inputs.list, job => 1)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "map(inputs.list, (job, i) => i)"
     error: syntax
+    code: lambda_parameter_reserved
   - expr: "filter(inputs.list, (x, job) => x)"
     error: syntax
+    code: lambda_parameter_reserved
   # As in JavaScript, two parameters can't have the same name.
   - expr: "map(inputs.list, (x, x) => x)"
     error: syntax
+    code: lambda_parameter_twice
   - expr: "filter(inputs.list, (x, x) => x)"
     error: syntax
+    code: lambda_parameter_twice
 
   # A lambda takes an item and an optional index, and is the last argument
   # of map or filter.
   - expr: "map(inputs.list, (a, b, c) => a)"
     error: syntax
+    code: lambda_too_many_parameters
   - expr: "map(inputs.list, () => 1)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, (a b) => a)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, (x, 1) => x)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, (x => x)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, 1x => 1)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, x.y => 1)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, $x => 1)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, x = > x)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, x => )"
     error: syntax
+    code: unexpected_text
   - expr: "map(inputs.list, x => y => 1)"
     error: syntax
+    code: lambda_misplaced
   - expr: "map(x => x, inputs.list)"
     error: syntax
+    code: lambda_misplaced
   - expr: "contains(inputs.list, x => x)"
     error: syntax
+    code: lambda_misplaced
   - expr: "format('{0}', x => x)"
     error: syntax
+    code: lambda_misplaced
   - expr: "join(map(inputs.list, x => x), y => y)"
     error: syntax
+    code: lambda_misplaced
   - expr: "map(inputs.list)"
     error: syntax
+    code: wrong_argument_count
   - expr: "filter(inputs.list)"
     error: syntax
+    code: wrong_argument_count
   - expr: "map()"
     error: syntax
+    code: wrong_argument_count
   - expr: "map(inputs.list, inputs.list)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, 1)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, x)"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, (x))"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, 'x => x')"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, )"
     error: syntax
+    code: lambda_expected
   - expr: "map(inputs.list, x => x, 1)"
     error: syntax
+    code: wrong_argument_count
   - expr: "map(inputs.list, x => x,)"
     error: syntax
+    code: unexpected_text
   - expr: "map (inputs.list, x => x)"
     error: syntax
+    code: unexpected_text
   - expr: "Map(inputs.list, x => x)"
     error: syntax
+    code: not_a_function
   - expr: "x => 1"
     error: syntax
+    code: lambda_misplaced
   - expr: "(x) => x"
     error: syntax
+    code: lambda_misplaced
   - expr: "inputs.list => 1"
     error: syntax
+    code: lambda_misplaced
   - expr: "1 + => 2"
     error: syntax
+    code: lambda_misplaced
   - expr: "=> 1"
     error: syntax
+    code: lambda_misplaced
 
   # A lambda's body counts toward the 200 levels an expression nests: the
   # call and the lambda are two levels of its tree, and the call one level of
@@ -446,15 +532,19 @@ cases:
     value: [true, true, true]
   - expr: "map(inputs.list, x => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!x)"
     error: syntax
+    code: expression_too_deep
   - expr: "map(inputs.nested, x => map(x, y => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!y))"
     value: [[true, true], [true]]
   - expr: "map(inputs.nested, x => map(x, y => !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!y))"
     error: syntax
+    code: expression_too_deep
   - expr: "map(inputs.list, x => x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x)"
     value: [199, 398, 597]
   - expr: "map(inputs.list, x => x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x)"
     error: syntax
+    code: expression_too_deep
   - expr: "map(inputs.list, x => (((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
     value: [1, 2, 3]
   - expr: "map(inputs.list, x => ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((x)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
     error: syntax
+    code: expression_too_deep

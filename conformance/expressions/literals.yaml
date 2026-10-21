@@ -104,21 +104,29 @@ cases:
   # A list or mapping that isn't JSON is a syntax error.
   - expr: "['a', 'b']"
     error: syntax
+    code: invalid_json_literal
   - expr: "{a: 1}"
     error: syntax
+    code: invalid_json_literal
   - expr: "[1, 2"
     error: syntax
+    code: unclosed_bracket
   # A branch that isn't taken is still parsed, so it is an error there too.
   - expr: "true || ['a', 'b']"
     error: syntax
+    code: invalid_json_literal
   - expr: "false && ['a', 'b']"
     error: syntax
+    code: invalid_json_literal
   - expr: "true ? 1 : {a: 1}"
     error: syntax
+    code: invalid_json_literal
   - expr: "inputs.type ?? {a: 1}"
     error: syntax
+    code: invalid_json_literal
   - expr: "case(true, 1, ['a'])"
     error: syntax
+    code: invalid_json_literal
 
   # Words are strings.
   - expr: inputs.pvc == New

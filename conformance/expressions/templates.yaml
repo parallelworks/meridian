@@ -67,10 +67,13 @@ cases:
   # of the string text before, even expressions after it that are closed.
   - template: "${{ something "
     error: syntax
+    code: unclosed_template
   - template: "${{ 'a }} ${{ 1 }}"
     error: syntax
+    code: unclosed_template
   - template: "${{ 1 }} and ${{ 2"
     error: syntax
+    code: unclosed_template
   # A template writes ${{ as text with an expression.
   - template: "${{ '${{' }} is text"
     value: "${{ is text"
@@ -80,5 +83,7 @@ cases:
     value: no expressions
   - template: "${{ }}"
     error: syntax
+    code: expression_empty
   - template: "a ${{ 1 + }} b"
     error: syntax
+    code: expression_ends_early

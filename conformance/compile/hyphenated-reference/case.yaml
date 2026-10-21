@@ -11,11 +11,19 @@ expect:
       path: /jobs/build/steps/0/run
       line: 10
       column: 23
+      params:
+        written: inputs.pw
+        word: user
+        name: pw-user
+        fix: inputs['pw-user']
+        defines: input
+        defined: pw-user
     - severity: warning
       code: undefined_input
       path: /jobs/build/steps/0/run
       line: 10
       column: 23
+      params: {name: pw}
   plan:
     /warnings/0/code: hyphenated_name
     /warnings/1/code: undefined_input

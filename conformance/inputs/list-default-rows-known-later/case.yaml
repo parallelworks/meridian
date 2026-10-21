@@ -12,6 +12,7 @@ secret-variables: [TOKEN]
 expect:
   inputs:
     region: us-east
+  deferred:
     hosts:
       - name: us-east-1
         token: ${{ vars.TOKEN }}

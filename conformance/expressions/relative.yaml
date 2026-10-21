@@ -103,8 +103,10 @@ cases:
     value: null
   - at: /loop/a
     error: eval
+    code: expressions_read_each_other
   - at: /self
     error: eval
+    code: expressions_read_each_other
   # A word that starts with a dot and reads as a number is one, as in
   # JavaScript and as -.5 already was. Any other is a relative reference, and
   # a key named with digits is read in brackets. Format 1 read .5 as the key 5

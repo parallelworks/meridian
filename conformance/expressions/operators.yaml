@@ -300,14 +300,19 @@ cases:
   # Format 1 allowed it before, with ?? binding tighter than both.
   - expr: inputs.missing || false ?? true
     error: syntax
+    code: coalesce_mixed
   - expr: inputs.missing ?? false || true
     error: syntax
+    code: coalesce_mixed
   - expr: true && inputs.missing ?? 'x'
     error: syntax
+    code: coalesce_mixed
   - expr: inputs.missing ?? true and false
     error: syntax
+    code: coalesce_mixed
   - expr: inputs.missing or null ?? 'x'
     error: syntax
+    code: coalesce_mixed
   - expr: (inputs.missing || null) ?? 'x'
     value: x
   - expr: inputs.missing ?? (false && true)
@@ -349,6 +354,7 @@ cases:
   # 1:2 is a word; parentheses make this work.
   - expr: "true ? false?1:2 : 3"
     error: syntax
+    code: ternary_missing_colon
   - expr: "true ? (false?1:2) : 3"
     value: 2
 

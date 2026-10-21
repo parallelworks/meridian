@@ -4,16 +4,19 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 func TestConformance(t *testing.T) {
@@ -34,9 +37,17 @@ func TestConformance(t *testing.T) {
 	}
 }
 
+// unhurried returns scope in a group of its own whose clock never moves, so
+// that a case's evaluation passes Meridian's limit on a group's time only
+// if it passes the others, however slow the machine running the tests is.
+// No case evaluates for anywhere near the 10 seconds a group may take.
+func unhurried(scope expr.Scope) expr.Scope {
+	return expr.WithClock(scope, func() time.Time { return time.Time{} })
+}
+
 func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.ExpressionCase) {
 	s := f.ScopeFor(c)
-	scope := expr.Scope{Contexts: s.Contexts, Index: s.Index}
+	scope := unhurried(expr.Scope{Contexts: s.Contexts, Index: s.Index})
 	if s.Status != nil {
 		scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
 	}
@@ -64,25 +75,30 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 	if c.Expr != "" {
 		var e *expr.Expr
 		if e, err = expr.Parse(c.Expr); err == nil {
-			checkWarnings(t, c, e)
+			checkWarnings(t, c, func(yield func(int, *expr.Expr) bool) { yield(0, e) })
 			got, err = e.Eval(scope)
 		}
 	} else {
 		var tmpl *expr.Template
 		if tmpl, err = expr.ParseTemplate(src); err == nil {
+			checkWarnings(t, c, tmpl.Exprs())
 			got, err = tmpl.Eval(scope)
 		}
 	}
 
 	switch {
 	case c.Error == "syntax":
-		if _, ok := errors.AsType[*expr.SyntaxError](err); !ok {
+		e, ok := errors.AsType[*expr.SyntaxError](err)
+		if !ok {
 			t.Fatalf("got %v, %v; want a syntax error", show(got), err)
 		}
+		checkCode(t, c, e.Kind)
 	case c.Error == "eval":
-		if _, ok := errors.AsType[*expr.EvalError](err); !ok {
+		e, ok := errors.AsType[*expr.EvalError](err)
+		if !ok {
 			t.Fatalf("got %v, %v; want an evaluation error", show(got), err)
 		}
+		checkCode(t, c, e.Kind)
 	case c.Error != "":
 		t.Fatalf("unknown error kind %q", c.Error)
 	case c.Unknown != "":
@@ -120,29 +136,42 @@ func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
 	}
 	index := scope.Index
 	scope.Index = nil
-	if got, err := stored.Eval(scope); err != nil || !equal(got, want) {
+	if got, err := stored.Eval(unhurried(scope)); err != nil || !equal(got, want) {
 		t.Errorf("parsed for %v: got %s, %v; want %s", index, show(got), err, show(want))
 	}
 }
 
-// checkWarnings checks the probable mistakes the case's expression has, if
-// the case lists them.
-func checkWarnings(t *testing.T, c *conformance.ExpressionCase, e *expr.Expr) {
+// checkWarnings checks the probable mistakes of the case's expressions, each
+// with its byte offset in the expression or template, if the case lists
+// them.
+func checkWarnings(t *testing.T, c *conformance.ExpressionCase, exprs iter.Seq2[int, *expr.Expr]) {
 	t.Helper()
 	if c.Warnings == nil {
 		return
 	}
-	problems := e.Check()
-	if c.Condition {
-		problems = e.CheckCondition()
-	}
+	var found []expr.Problem
 	var offsets []int
-	for _, p := range problems {
-		offsets = append(offsets, p.Offset)
+	for at, e := range exprs {
+		ps := e.Check()
+		if c.Condition {
+			ps = e.CheckCondition()
+		}
+		for _, p := range ps {
+			found = append(found, p)
+			offsets = append(offsets, at+p.Offset)
+		}
 	}
 	slices.Sort(offsets)
 	if !slices.Equal(offsets, c.Warnings) {
-		t.Errorf("warnings at %v (%v), want at %v", offsets, problems, c.Warnings)
+		t.Errorf("warnings at %v (%v), want at %v", offsets, found, c.Warnings)
+	}
+}
+
+// checkCode checks the code of an error's kind, if the case gives it.
+func checkCode(t *testing.T, c *conformance.ExpressionCase, k *problems.Kind) {
+	t.Helper()
+	if c.Code != "" && string(k.Code()) != c.Code {
+		t.Errorf("got %s, want %s", k.Code(), c.Code)
 	}
 }
 

@@ -13,12 +13,13 @@ inputs:
       pass: HUNTER2SECRET
 expect:
   inputs:
+    first: a
+  deferred:
     copy: ${{ inputs.pw }}
     size: ${{ length(inputs.pw) }}
     creds:
       - user: a
         hint: ${{ inputs.creds.[index].user }}:${{ inputs.creds.[index].pass }}
-    first: a
   secrets:
     pw: HUNTER2SECRET
     creds.0.pass: HUNTER2SECRET
