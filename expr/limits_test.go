@@ -500,6 +500,63 @@ func TestGroupWorkBudget(t *testing.T) {
 	}
 }
 
+// A template that fails the language's limits counts toward its group what
+// it read or built before it failed, and a template that starts once its
+// group has passed a limit, or can't take a step more, fails at once. So
+// templates that each read a string of 4 MiB as the JSON list it holds,
+// 32 MiB more, and fail, stop their group after a few, without parsing the
+// string again: seven pass 256 MiB of work, and two 64 MiB built.
+func TestGroupCountsFailedTemplates(t *testing.T) {
+	j := "[" + strings.Repeat("1,", 2<<20) + "1]"
+	read := len(j) + (2<<20+1)*16
+	for _, tc := range []struct {
+		src            string
+		failed         int
+		template, kind *problems.Kind
+		// work and built are what each template that fails its own limit
+		// counts toward the group: its steps, and what it read or built.
+		work, built int
+	}{
+		{"length inputs.j > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 32 + read, 0},
+		{"inputs.j[0] > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 32 + read, 0},
+		{"length(fromJSON(inputs.j))", 2, problems.ExpressionTooLarge, problems.ExpressionsBuildTooMuch, 32 + read, read - len(j)},
+	} {
+		group := inputs(map[string]any{"j": j}).Budgeted()
+		e := mustParse(t, tc.src)
+		for i := range 64 {
+			_, err := e.Eval(group)
+			ee, isTemplate := errors.AsType[*expr.EvalError](err)
+			be, isGroup := errors.AsType[*expr.BudgetError](err)
+			if i < tc.failed && (!isTemplate || ee.Kind != tc.template) || i >= tc.failed && (!isGroup || be.Kind != tc.kind) {
+				t.Fatalf("%s: template %d: %v", tc.src, i+1, err)
+			}
+			if built, work, _ := expr.Counted(group); i < tc.failed && (work != (i+1)*tc.work || built != (i+1)*tc.built) {
+				t.Fatalf("%s: after template %d the group counted %d built and %d work, want %d and %d",
+					tc.src, i+1, built, work, (i+1)*tc.built, (i+1)*tc.work)
+			}
+		}
+	}
+}
+
+// A string that an operation reads as the JSON it holds is counted before
+// it is parsed, so that a template that can't read it fails, as it would
+// once it had parsed it, without parsing it.
+func TestStringsCountBeforeParsing(t *testing.T) {
+	// Comparing h with itself leaves less than 1 MiB of work.
+	values := map[string]any{"h": xs(workLimit/2 - 64), "j": "[" + strings.Repeat("1,", 1<<19) + "1]"}
+	for _, src := range []string{
+		"length inputs.j", "keys inputs.j", "values inputs.j", "map(inputs.j, x => x)", "filter(inputs.j, x => x)",
+		"join(inputs.j)", "inputs.j join ','", "fromJSON(inputs.j)", "inputs.j[0]",
+	} {
+		e := mustParse(t, "inputs.h == inputs.h && "+src)
+		var err error
+		allocs := testing.AllocsPerRun(1, func() { _, err = e.Eval(inputs(values)) })
+		if !tooMuchWork(err) || allocs > 100 {
+			t.Errorf("%s: %v, %v allocations; want %s, and the string not parsed", src, err, allocs, problems.ExpressionTooMuchWork.Code())
+		}
+	}
+}
+
 // An Evaluator keeps the values it makes, and each evaluation counts toward
 // the group as one that makes everything anew does: what it returns, and
 // what the group has counted after it, are the same, until the group runs
@@ -586,9 +643,11 @@ func tooSlow(err error) bool {
 }
 
 // The templates of a group spend at most 10 seconds evaluating, together.
-// The clock is read when an evaluation starts and when it stops, and every
-// 256 steps the group takes: each node it evaluates, and each run of a
-// lambda's body. Each read but a stop's checks the time.
+// The clock is read when each evaluation starts, that of a template that
+// another reads among them, and when it stops, and every 256 steps the
+// group takes: each node it evaluates, and each run of a lambda's body.
+// Each read but a stop's checks the time, so a template that starts once
+// the group has spent its time fails before it takes a step.
 func TestGroupTimeBudget(t *testing.T) {
 	eval := func(src string, scope expr.Scope) error {
 		t.Helper()
@@ -634,19 +693,38 @@ func TestGroupTimeBudget(t *testing.T) {
 	if err := eval(steps(256), expr.WithClock(lists, every(4*time.Second).read)); err != nil {
 		t.Errorf("a template of 8 seconds in a group of its own: %v", err)
 	}
+	// A template of a step after one of 11 seconds, which passes as its
+	// time is counted when it stops, fails as it starts.
+	group = expr.WithClock(lists, every(11*time.Second).read)
+	if err := eval("1", group); err != nil {
+		t.Errorf("a template of 11 seconds: %v", err)
+	}
+	if err := eval("1", group); !tooSlow(err) {
+		t.Errorf("a template of a step after one of 11 seconds: %v, want %s", err, problems.ExpressionsTooSlow.Code())
+	}
 
 	// A template that another reads takes its steps in the group's count,
 	// and its time counts from when the reader started: the reader's +,
 	// length and .a, and .a's 253 steps, are the group's 256th step, 10 or
-	// 11 seconds after the reader started.
+	// 11 seconds after the reader started, and .a starts 10 or 11 seconds
+	// after the reader did.
 	w := &expr.Workflow{Root: map[string]any{"a": "${{ " + steps(253) + " }}"}}
 	for _, tc := range []struct {
+		what  string
 		after time.Duration
+		// clock is how far each read moves the clock on: the reader's
+		// start, then .a's, then the 256th step.
+		clock []time.Duration
 		ok    bool
-	}{{10 * time.Second, true}, {11 * time.Second, false}} {
-		c := &clock{steps: []time.Duration{time.Second, tc.after}}
+	}{
+		{"the 256th step", 10 * time.Second, []time.Duration{time.Second, 0, 10 * time.Second}, true},
+		{"the 256th step", 11 * time.Second, []time.Duration{time.Second, 0, 11 * time.Second}, false},
+		{".a's start", 10 * time.Second, []time.Duration{time.Second, 10 * time.Second, 0}, true},
+		{".a's start", 11 * time.Second, []time.Duration{time.Second, 11 * time.Second, 0}, false},
+	} {
+		c := &clock{steps: tc.clock}
 		if err := eval("length(.a) + 1", w.Scope([]string{"x"}, expr.WithClock(lists, c.read))); tc.ok && err != nil || !tc.ok && !tooSlow(err) {
-			t.Errorf("the 256th step %v after the reader started: %v", tc.after, err)
+			t.Errorf("%s %v after the reader started: %v", tc.what, tc.after, err)
 		}
 	}
 }

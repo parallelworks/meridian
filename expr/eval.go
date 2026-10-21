@@ -165,13 +165,27 @@ func (s Scope) Budgeted() Scope {
 	return s
 }
 
-// start notes that one of the group's evaluations starts, and the time
-// counts from then if no other is under way.
-func (b *budget) start() {
-	if b.active == 0 {
-		b.last = b.clock()
+// start notes that one of the group's evaluations starts, and reads the
+// clock: the time counts from then if no other is under way, and up to then
+// if one is, as a template that another reads starts while its reader is
+// under way. It fails, and the evaluation doesn't start, if the group has
+// no time left, can't take a step more, or has built more than it may.
+func (b *budget) start() error {
+	now := b.clock()
+	if b.active > 0 {
+		b.elapsed += now.Sub(b.last)
+	}
+	b.last = now
+	switch {
+	case b.elapsed > maxGroupTime:
+		return &BudgetError{Kind: problems.ExpressionsTooSlow, Limit: int(maxGroupTime / time.Second)}
+	case b.work+step > maxGroupWork:
+		return &BudgetError{Kind: problems.ExpressionsTooMuchWork, Limit: maxGroupWork >> 20}
+	case b.built > maxGroupBuilt:
+		return &BudgetError{Kind: problems.ExpressionsBuildTooMuch, Limit: maxGroupBuilt >> 20}
 	}
 	b.active++
+	return nil
 }
 
 // stop notes that an evaluation ends, and counts the time since the clock
@@ -305,7 +319,10 @@ func (e *BudgetError) Error() string {
 
 // Eval evaluates the expression in scope.
 func (e *Expr) Eval(scope Scope) (any, error) {
-	ev := newEvaluator(scope)
+	ev, err := newEvaluator(scope)
+	if err != nil {
+		return nil, err
+	}
 	defer ev.stop()
 	return ev.eval(e.root)
 }
@@ -347,11 +364,15 @@ func (f *frame) lookup(name string) any {
 }
 
 // newEvaluator returns an evaluator for a template in scope, whose time
-// counts toward its group's until stop.
-func newEvaluator(scope Scope) *evaluator {
+// counts toward its group's until stop. It fails if the group has spent
+// what it may (budget.start), so that a group's templates stop at its
+// limits however little each does before it fails.
+func newEvaluator(scope Scope) (*evaluator, error) {
 	e := &evaluator{scope: scope.Budgeted()}
-	e.scope.budget.start()
-	return e
+	if err := e.scope.budget.start(); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
 // stop ends the evaluation, and counts its time.
@@ -379,35 +400,46 @@ func (e *evaluator) errorAt(at int, k *problems.Kind, params problems.Params) er
 	return &EvalError{Offset: at, Kind: k, Params: params}
 }
 
-// spend counts n bytes built, which count as work too, and fails if they
-// take the template past the language's limits, or its group past
-// Meridian's. A count that fails isn't kept, since what it counts isn't
-// built.
-func (e *evaluator) spend(at, n int) error {
-	if e.spent+n > maxBuilt {
-		return e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
-	}
-	if e.scope.budget.built+n > maxGroupBuilt {
-		return &BudgetError{Kind: problems.ExpressionsBuildTooMuch, Limit: maxGroupBuilt >> 20}
-	}
-	if err := e.work(at, n); err != nil {
-		return err
-	}
-	e.spent += n
-	e.scope.budget.built += n
-	return nil
-}
+// spend counts n bytes that are about to be built, which count as work too,
+// and fails if they take the template past the language's limits, or its
+// group past Meridian's. A count that fails isn't kept, since what it
+// counts isn't built.
+func (e *evaluator) spend(at, n int) error { return e.count(at, n, n, false) }
 
-// work counts n bytes of work, and fails if they take the template past the
-// language's limit, or its group past Meridian's. A count that fails isn't
-// kept, since the work it counts isn't done.
-func (e *evaluator) work(at, n int) error {
-	if e.worked+n > maxWork || e.scope.budget.work+n > maxGroupWork {
-		return e.tooMuchWork(at, n)
+// work counts n bytes of work that is about to be done, and fails if they
+// take the template past the language's limit, or its group past
+// Meridian's. A count that fails isn't kept, since the work it counts isn't
+// done.
+func (e *evaluator) work(at, n int) error { return e.count(at, 0, n, false) }
+
+// did counts n bytes of work that is done already, such as a read, and
+// fails as work does. The group keeps a count that fails all the same.
+func (e *evaluator) did(at, n int) error { return e.count(at, 0, n, true) }
+
+// count counts built bytes built and w bytes of work, and fails if they
+// take the template past the language's limits, or its group past
+// Meridian's. A count that passes is kept. One that fails isn't kept by the
+// template, which fails, and its group keeps it if done is set: what it
+// counts is built or done already, and the group's limits bound what its
+// templates do, even those that fail their own. A group past its limits
+// fails the next count, and every template that starts after it.
+func (e *evaluator) count(at, built, w int, done bool) error {
+	b := e.scope.budget
+	var err error
+	switch {
+	case e.spent+built > maxBuilt:
+		err = e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
+	case b.built+built > maxGroupBuilt:
+		err = &BudgetError{Kind: problems.ExpressionsBuildTooMuch, Limit: maxGroupBuilt >> 20}
+	case e.worked+w > maxWork || b.work+w > maxGroupWork:
+		err = e.tooMuchWork(at, w)
+	default:
+		e.spent, e.worked = e.spent+built, e.worked+w
 	}
-	e.worked += n
-	e.scope.budget.work += n
-	return nil
+	if err == nil || done {
+		b.built, b.work = b.built+built, b.work+w
+	}
+	return err
 }
 
 // tooMuchWork returns the error for n bytes of work that take the template
@@ -421,13 +453,14 @@ func (e *evaluator) tooMuchWork(at, n int) error {
 
 // read counts the work of an operation that read vs, their sizes, and
 // returns result, what it made of them. A read is counted after it, since
-// it holds nothing: an operation that reads too much fails all the same.
+// it holds nothing: an operation that reads too much fails all the same,
+// and its group counts the read (did).
 func (e *evaluator) read(at int, result any, vs ...any) (any, error) {
 	n := 0
 	for _, v := range vs {
 		n += e.sizeOf(v)
 	}
-	if err := e.work(at, n); err != nil {
+	if err := e.did(at, n); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -435,7 +468,7 @@ func (e *evaluator) read(at int, result any, vs ...any) (any, error) {
 
 // readBoth is read for an operation that read a and b.
 func (e *evaluator) readBoth(at int, result, a, b any) (any, error) {
-	if err := e.work(at, e.sizeOf(a)+e.sizeOf(b)); err != nil {
+	if err := e.did(at, e.sizeOf(a)+e.sizeOf(b)); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -464,9 +497,11 @@ func (e *evaluator) run(at int) error {
 	return e.stepped()
 }
 
-// built counts v as built and returns it.
+// built counts v, which is built already, and returns it. If v takes the
+// template past its limits, its group counts it all the same.
 func (e *evaluator) built(at int, v any) (any, error) {
-	if err := e.spend(at, size(v)); err != nil {
+	n := size(v)
+	if err := e.count(at, n, n, true); err != nil {
 		return nil, err
 	}
 	return v, nil
@@ -770,29 +805,28 @@ func (e *evaluator) each(n *call, fn function) (any, error) {
 		return nil, err
 	}
 	var keys, items []any
-	c := collection(v)
+	c, err := e.collection(n.at, v)
+	if err != nil {
+		return nil, err
+	}
 	switch c := c.(type) {
 	case []any:
 		keys, items = make([]any, len(c)), c
 		for i := range c {
 			keys[i] = float64(i)
 		}
-		if err := e.work(n.at, traversal(v, c, nil)); err != nil {
-			return nil, err
-		}
 	case map[string]any:
 		sorted := e.sortedKeys(c)
-		if err := e.work(n.at, traversal(v, c, sorted)); err != nil {
-			return nil, err
+		if _, isString := v.(string); !isString {
+			if err := e.did(n.at, traversal(v, c, sorted)); err != nil {
+				return nil, err
+			}
 		}
 		keys, items = make([]any, len(sorted)), make([]any, len(sorted))
 		for i, k := range sorted {
 			keys[i], items[i] = k, c[k]
 		}
 	default:
-		if err := e.work(n.at, traversal(v, c, nil)); err != nil {
-			return nil, err
-		}
 		if c != nil {
 			return nil, e.errorAt(n.at, problems.NotListOrMapping, problems.Params{"name": n.name, "value": problems.Show(v)})
 		}
@@ -1205,6 +1239,26 @@ func namesWork(path []string) int {
 	return n
 }
 
+// collection returns the list or mapping that v holds as JSON, or v
+// itself, as collection does, and counts the work of reading a string as
+// one: its bytes, before it is parsed, so that a string too large to read
+// isn't, and the value it holds, if it holds one (heldWork). It counts
+// nothing for anything else, which isn't read as JSON.
+func (e *evaluator) collection(at int, v any) (any, error) {
+	s, isString := v.(string)
+	if !isString {
+		return v, nil
+	}
+	if err := e.work(at, len(s)); err != nil {
+		return nil, err
+	}
+	c := collection(s)
+	if err := e.did(at, heldWork(s, c)); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // heldWork returns what reading v as c, the list or mapping it holds as
 // JSON (collection), reads besides v itself: the value, if v is a string
 // that holds one.
@@ -1241,6 +1295,15 @@ func (f *follower) count(n int) error {
 	return nil
 }
 
+// did counts n bytes of the follower's work that is done already, as count
+// does, and the evaluator's group keeps them if they fail (evaluator.did).
+func (f *follower) did(n int) error {
+	if f.e != nil {
+		return f.e.did(f.at, n)
+	}
+	return f.count(n)
+}
+
 // sortedKeys returns a mapping's keys in order, as the evaluator remembers
 // them, if there is one.
 func (f *follower) sortedKeys(m map[string]any) []string {
@@ -1270,7 +1333,7 @@ func (f *follower) lookup(v any, name string) (any, bool, error) {
 			next, ok := character(s, name)
 			return next, ok, nil
 		}
-		if err := f.count(size(parsed)); err != nil {
+		if err := f.did(size(parsed)); err != nil {
 			return nil, false, err
 		}
 		v = parsed

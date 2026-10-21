@@ -77,6 +77,18 @@ func BenchmarkConditions(b *testing.B) {
 	}), nil)
 }
 
+// Each input's hidden reads the length of a text input given a JSON list of
+// 4 MiB, more than a template may read: a few fail on it, and the rest stop
+// at their group's limit without parsing it.
+func BenchmarkHiddenReadsLargeJSON(b *testing.B) {
+	benchmarkResolve(b, inputsWorkflow(64, func(i int) string {
+		if i == 0 {
+			return "      j: {type: string}\n"
+		}
+		return fmt.Sprintf("      a%04d: {type: string, optional: true, hidden: '${{ length inputs.j > 0 }}'}\n", i)
+	}), map[string]any{"j": "[" + strings.Repeat("1,", 2<<20) + "1]"})
+}
+
 // A run's submitted values name inputs the workflow doesn't have, each
 // close to one it has.
 func BenchmarkUnknownInputs(b *testing.B) {

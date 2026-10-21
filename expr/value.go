@@ -569,9 +569,11 @@ func contains(collection, x any) bool {
 }
 
 // length returns the number of characters in a string, or of items in a
-// list or mapping, and 0 for anything else.
+// list or mapping, and 0 for anything else. It counts a string's
+// characters: what reads a string as the JSON it holds reads it first
+// (collection).
 func length(v any) float64 {
-	switch v := collection(v).(type) {
+	switch v := v.(type) {
 	case string:
 		return float64(utf8.RuneCountInString(v))
 	case []any:
