@@ -2,6 +2,7 @@ package format
 
 import (
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
@@ -102,7 +103,7 @@ func (d *Document) Locator(pointer string) *Locator {
 			quote = 1
 		}
 		line := d.lines[l.start.Line-1]
-		at := byteOffset(line, l.start.Column-1+quote)
+		at := d.runes.byteOffset(line, l.start.Line, l.start.Column-1+quote)
 		l.ok = strings.HasPrefix(line[at:], l.value)
 		l.column = l.start.Column + quote
 	case yaml.LiteralStyle:
@@ -145,13 +146,56 @@ func (l *Locator) Locate(offset int) problems.Position {
 	return problems.Position{Line: lineNo, Column: 1 + l.line.indent + runes - l.read.lineRunes}
 }
 
-// byteOffset returns the byte offset of the rune at index i in s.
-func byteOffset(s string, i int) int {
-	for at := range s {
-		if i == 0 {
-			return at
+// lineRunes finds where the runes of a file's lines start. An ASCII line's
+// runes are its bytes. For another line, it keeps where each of its runes
+// starts once it is first asked, so that the strings on one long line are
+// found without reading the line again for each.
+type lineRunes struct {
+	mu sync.Mutex
+	// starts holds the byte offsets of each line's runes, by its number,
+	// and nil for an ASCII line.
+	starts map[int][]int
+}
+
+// byteOffset returns the byte offset of the rune at index i in line, the
+// file's line no, or the line's length if it has no such rune.
+func (r *lineRunes) byteOffset(line string, no, i int) int {
+	r.mu.Lock()
+	starts, ok := r.starts[no]
+	if !ok {
+		starts = runeStarts(line)
+		if r.starts == nil {
+			r.starts = map[int][]int{}
 		}
-		i--
+		r.starts[no] = starts
 	}
-	return len(s)
+	r.mu.Unlock()
+	switch {
+	case i < 0:
+	case starts == nil && i < len(line):
+		return i
+	case i < len(starts):
+		return starts[i]
+	}
+	return len(line)
+}
+
+// runeStarts returns the byte offset of each rune in s, with each byte that
+// isn't UTF-8 a rune of its own, or nil if s is ASCII.
+func runeStarts(s string) []int {
+	ascii := true
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return nil
+	}
+	starts := make([]int, 0, len(s))
+	for at := range s {
+		starts = append(starts, at)
+	}
+	return starts
 }
