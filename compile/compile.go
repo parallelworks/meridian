@@ -43,12 +43,11 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	for k := range inputs.secrets {
 		c.secrets["inputs."+k] = true
 	}
-	for _, f := range inputs.fields {
-		// A password whose default is evaluated as the run starts is one of
-		// its secrets then.
-		if f.typ == "password" && (f.deferred || f.variable) && !f.ignored {
-			c.secrets["inputs."+strings.Join(f.path, ".")] = true
-		}
+	// A password whose value is evaluated as the run starts is one of its
+	// secrets then, and so is a list whose rows are, with a password field
+	// in them.
+	for k := range inputs.secretsLater {
+		c.secrets["inputs."+k] = true
 	}
 	for _, v := range p.Run.DeferredInputs {
 		for _, e := range v.Exprs() {
@@ -159,11 +158,12 @@ var workflowParams = map[string]bool{
 	"options": true, "min": true, "max": true, "limit": true, "op": true,
 }
 
-// mask returns params, those of a problem with a value that read a variable,
-// with what they show of the value masked: each param but those that show
-// the workflow is problems.Masked, and there is no suggestion, which would
-// be near the value. A variable can hold a secret, so a diagnostic never
-// quotes one.
+// mask returns params, those of a problem with a value that read a variable
+// or a password, or that holds a password, with what they show of the
+// value masked: each param but those that show the workflow is
+// problems.Masked, and there is no suggestion, which would be near the
+// value. A variable can hold a secret, and a password is one, so a
+// diagnostic never quotes one.
 func mask(params problems.Params) problems.Params {
 	out := make(problems.Params, len(params))
 	for name, v := range params {
@@ -179,9 +179,9 @@ func mask(params problems.Params) problems.Params {
 }
 
 // maskedIf returns err, an error evaluating an expression, with its params
-// masked if the evaluation read a variable. Only an *expr.EvalError shows
-// the values an expression read: a syntax error shows the workflow's text,
-// and a budget error Meridian's limits.
+// masked if the evaluation read a variable or a password. Only an
+// *expr.EvalError shows the values an expression read: a syntax error
+// shows the workflow's text, and a budget error Meridian's limits.
 func maskedIf(marked bool, err error) error {
 	if ee, ok := errors.AsType[*expr.EvalError](err); ok && marked {
 		c := *ee

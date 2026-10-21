@@ -1,0 +1,38 @@
+on:
+  execute:
+    inputs:
+      $meta:
+        wizard:
+          mode: wizard
+      cluster:
+        type: step
+        title: Cluster
+        options:
+          name:
+            type: string
+      workers:
+        type: step
+        title: Worker
+        multi: true
+        options:
+          host:
+            type: string
+          port:
+            type: number
+            default: 22
+          label:
+            type: string
+            default: ${{ inputs.name }}-${{ inputs.workers.[index].host }}
+          login:
+            type: password
+      spares:
+        type: step
+        title: Spare
+        multi: true
+        options:
+          host:
+            type: string
+jobs:
+  main:
+    steps:
+      - run: echo ok

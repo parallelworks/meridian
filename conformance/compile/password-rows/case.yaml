@@ -1,0 +1,47 @@
+description: >-
+  The plan names the password fields of a list's rows, and of a repeated
+  wizard step's, among the run's secrets, by their paths, and holds none of
+  their values: not in the inputs' values, nor in a list that is evaluated
+  as the run starts. A list whose rows are evaluated as the run starts, with
+  a password field in them, is one of the run's secrets as a whole, since
+  the plan can't say which of its values are passwords. A repeated step
+  given no value runs without one.
+source: Meridian
+contexts:
+  vars:
+    SITE: unused
+    KEYS: unused
+secret-variables: [SITE, KEYS]
+inputs:
+  creds:
+    - user: a
+      pass: HUNTER2SECRET
+    - user: b
+  hosts:
+    - name: h
+      key: HUNTER2SECRET
+  workers:
+    - host: w1
+      login: HUNTER2SECRET
+    - host: w2
+      login: HUNTER2SECRET
+expect:
+  plan:
+    /run/inputs:
+      creds:
+        - user: a
+        - user: b
+      workers:
+        - host: w1
+        - host: w2
+    /run/deferredInputs/hosts/0/name: h
+    /run/deferredInputs/hosts/0/site/${{/0/src: " vars.SITE "
+    /run/deferredInputs/keys/${{/0/src: " fromJSON(vars.KEYS) "
+    /run/secrets:
+      - inputs.creds.0.pass
+      - inputs.hosts.0.key
+      - inputs.keys
+      - inputs.workers.0.login
+      - inputs.workers.1.login
+      - vars.KEYS
+      - vars.SITE

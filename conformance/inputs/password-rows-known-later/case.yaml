@@ -1,0 +1,24 @@
+description: >-
+  A list with a row whose field's default reads something the compiler
+  doesn't have stays an expression until the run is underway, all of it but
+  the values of the password fields in its rows: each is one of the run's
+  secrets, by its row's path. A list whose rows are evaluated once the run is
+  underway has no password value for the compiler to keep.
+source: Meridian
+contexts:
+  vars:
+    SITE: unused
+    KEYS: unused
+secret-variables: [SITE, KEYS]
+inputs:
+  hosts:
+    - name: a
+      key: HUNTER2SECRET
+expect:
+  inputs:
+    hosts:
+      - name: a
+        site: ${{ vars.SITE }}
+    keys: ${{ fromJSON(vars.KEYS) }}
+  secrets:
+    hosts.0.key: HUNTER2SECRET

@@ -1,0 +1,14 @@
+description: >-
+  A read of every variable of a context, as vars.* is, reads its secrets
+  too: the plan names each of them among the run's secrets, beside the
+  context among the variables it reads.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+    TOKEN: unused
+secret-variables: [TOKEN]
+expect:
+  plan:
+    /run/secrets: [vars.TOKEN]
+    /run/variables: [vars]

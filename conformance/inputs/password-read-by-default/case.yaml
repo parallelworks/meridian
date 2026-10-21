@@ -1,0 +1,24 @@
+description: >-
+  A value made from a password counts as the password, as one made from a
+  variable counts as the variable: a default that reads a password input, or
+  a password field of a list's row, stays an expression until the run is
+  underway, and so does a list with a row whose field's default reads one,
+  all of it but the password's value. A default that reads another field of
+  the row is evaluated.
+source: Meridian
+inputs:
+  pw: HUNTER2SECRET
+  creds:
+    - user: a
+      pass: HUNTER2SECRET
+expect:
+  inputs:
+    copy: ${{ inputs.pw }}
+    size: ${{ length(inputs.pw) }}
+    creds:
+      - user: a
+        hint: ${{ inputs.creds.[index].user }}:${{ inputs.creds.[index].pass }}
+    first: a
+  secrets:
+    pw: HUNTER2SECRET
+    creds.0.pass: HUNTER2SECRET

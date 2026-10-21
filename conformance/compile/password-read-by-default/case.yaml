@@ -1,0 +1,12 @@
+description: >-
+  The plan holds no value made from a password input: an input whose default
+  reads one is evaluated as the run starts, as one that reads a variable is,
+  and the password is among the run's secrets.
+source: Meridian
+inputs:
+  pw: HUNTER2SECRET
+expect:
+  plan:
+    /run/inputs: {user: admin}
+    /run/deferredInputs/copy/${{/0/src: " inputs.pw "
+    /run/secrets: [inputs.pw]

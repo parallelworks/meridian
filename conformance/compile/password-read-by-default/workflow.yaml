@@ -1,0 +1,16 @@
+on:
+  execute:
+    inputs:
+      pw:
+        type: password
+      copy:
+        type: string
+        hidden: true
+        default: ${{ inputs.pw }}
+      user:
+        type: string
+        default: admin
+jobs:
+  main:
+    steps:
+      - run: login ${{ inputs.user }} ${{ inputs.copy }}

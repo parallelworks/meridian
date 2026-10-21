@@ -42,19 +42,27 @@ type Run struct {
 	Inputs Data `json:"inputs,omitzero"`
 	// DeferredInputs are the defaults of inputs that read what is known
 	// only once the run is underway, such as a secret variable, or what the
-	// plan never holds, an organization or user variable, by their input's
-	// path, as in group.name. An input's value that reads such a thing in
-	// only a part of it, such as one of a list's rows, is one too, with that
-	// part's expressions in it. They are evaluated as the run starts, with
-	// the other inputs' values, and give the inputs' values.
+	// plan never holds, an organization or user variable or a password
+	// input, by their input's path, as in group.name. An input's value that
+	// reads such a thing in only a part of it, such as one of a list's rows,
+	// is one too, with that part's expressions in it, and without the
+	// values of the password fields in its rows, which are among the
+	// secrets. They are evaluated as the run starts, with the other inputs'
+	// values, and give the inputs' values.
 	DeferredInputs map[string]Value `json:"deferredInputs,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`
 	// Timeout is the run's timeout:.
 	Timeout Value `json:"timeout,omitzero"`
-	// Secrets names the secret variables the run reads, and its password
-	// inputs, as in vars.token and inputs.token. Their values are never in
-	// the plan; each attempt receives them when it is claimed.
+	// Secrets names the secret variables the run reads, as in vars.token,
+	// each of a context's for a read of every variable of the context, as
+	// vars.* is; and its passwords, by their paths in the inputs' values: a
+	// password input, as in inputs.token, a password field of a list's row,
+	// as in inputs.creds.0.pass, and a list whose rows have one and are
+	// evaluated as the run starts, all of it, as in inputs.creds. Their
+	// values are never in the plan; each attempt receives them when it is
+	// claimed. As the run starts, each password's value is put in the
+	// inputs' values at its path.
 	Secrets []string `json:"secrets,omitempty"`
 	// Variables names the organization and user variables the run reads
 	// that aren't secrets, as in org.region and vars.region, in order. A

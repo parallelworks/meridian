@@ -42,8 +42,9 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int
 		c.reportIn(in, at, problems.ContextNotKnown, problems.Params{"context": r.Context, "phase": ph.name()})
 		return false
 	}
+	c.recordSecret(r)
 	path := r.Path
-	if len(path) == 0 || path[0] == "*" || path[0] == "[index]" {
+	if unnamed(path) {
 		return true
 	}
 	var f finding
@@ -71,7 +72,6 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int
 			f = suggesting(problems.UndefinedSession, problems.Params{"name": path[0]}, path[0], slices.Sorted(maps.Keys(sessions)))
 		}
 	case "org", "vars":
-		c.recordSecret(r)
 		c.checkVariableName(r, in, at)
 	}
 	if f.kind == nil {
@@ -138,11 +138,31 @@ func (c *compiler) defines(r expr.Ref, job *jobInfo) (defines, defined, in strin
 	return "", "", ""
 }
 
-// recordSecret records the secret variable r reads, if it reads one.
+// recordSecret records the secret variables r reads, if it reads any: the
+// one it names, or each of its context's, for a read that names none, as
+// vars.* does.
 func (c *compiler) recordSecret(r expr.Ref) {
-	if (r.Context == "org" || r.Context == "vars") && len(r.Path) > 0 && c.isSecret(r.Context, r.Path[0]) {
-		c.secrets[r.Context+"."+r.Path[0]] = true
+	if r.Context != "org" && r.Context != "vars" {
+		return
 	}
+	if !unnamed(r.Path) {
+		if c.isSecret(r.Context, r.Path[0]) {
+			c.secrets[r.Context+"."+r.Path[0]] = true
+		}
+		return
+	}
+	for name := range mapping(c.opts.Contexts[r.Context]) {
+		if c.isSecret(r.Context, name) {
+			c.secrets[r.Context+"."+name] = true
+		}
+	}
+}
+
+// unnamed reports whether a reference whose path in its context is path
+// names nothing in it: it reads all of the context, each of its items as *
+// does, or the one an [index] chooses.
+func unnamed(path []string) bool {
+	return len(path) == 0 || path[0] == "*" || path[0] == "[index]"
 }
 
 // isSecret reports whether the variable name in context, org or vars, is a

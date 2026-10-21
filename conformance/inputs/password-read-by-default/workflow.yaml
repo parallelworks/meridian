@@ -1,0 +1,29 @@
+on:
+  execute:
+    inputs:
+      pw:
+        type: password
+      copy:
+        type: string
+        hidden: true
+        default: ${{ inputs.pw }}
+      size:
+        type: number
+        default: ${{ length(inputs.pw) }}
+      creds:
+        type: list
+        template:
+          user:
+            type: string
+          pass:
+            type: password
+          hint:
+            type: string
+            default: ${{ inputs.creds.[index].user }}:${{ inputs.creds.[index].pass }}
+      first:
+        type: string
+        default: ${{ inputs.creds[0].user }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

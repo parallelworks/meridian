@@ -16,8 +16,9 @@ import "github.com/parallelworks/foundation/problem"
 //     one's JSON, joined with ", ";
 //   - a pattern or a piece of an expression as it is.
 //
-// A value that came from an organization or user variable, or was made
-// from one, is never shown: a param that would show it is Masked.
+// A value that came from an organization or user variable or a password
+// input, or was made from one, is never shown: a param that would show it
+// is Masked.
 //
 // suggested is true when suggestion holds a name that was probably meant.
 

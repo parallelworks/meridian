@@ -1,0 +1,22 @@
+description: >-
+  A password field in a list's rows is one of the run's secrets, as a
+  password input is, by its path in the values: the list's name, the row's
+  index and the field's name. Its value isn't in its row, and it is checked
+  as a password input's is, so a number gives its text.
+source: Meridian
+inputs:
+  creds:
+    - user: a
+      pass: HUNTER2SECRET
+    - user: b
+      pass: 42
+    - user: c
+expect:
+  inputs:
+    creds:
+      - user: a
+      - user: b
+      - user: c
+  secrets:
+    creds.0.pass: HUNTER2SECRET
+    creds.1.pass: "42"

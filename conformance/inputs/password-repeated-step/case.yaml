@@ -1,0 +1,27 @@
+description: >-
+  A wizard step with multi true repeats, as many times as the person running
+  the workflow adds it: its value is a list under its name, one row for each
+  time, whatever $meta.wizard.flatten says, as a form keeps it. Each row is a
+  group of the step's inputs, which take their defaults as a list's rows do,
+  and a password among them is one of the run's secrets, by its row's path.
+  A repeated step given no value has none, and isn't required.
+source: Meridian
+inputs:
+  name: c1
+  workers:
+    - host: a
+      login: HUNTER2SECRET
+    - host: b
+      port: 2222
+expect:
+  inputs:
+    name: c1
+    workers:
+      - host: a
+        port: 22
+        label: c1-a
+      - host: b
+        port: 2222
+        label: c1-b
+  secrets:
+    workers.0.login: HUNTER2SECRET
