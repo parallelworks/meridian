@@ -785,6 +785,13 @@
       "Construye menos, por ejemplo leyendo una parte de un valor en lugar de todo."
     ]
   },
+  "expression_too_much_work": {
+    "title": "La expresión hace demasiado trabajo",
+    "why": "Las expresiones de una cadena hacen más trabajo del que el lenguaje permite a una cadena, 32 MiB, un límite que mantiene acotada su evaluación. El trabajo se cuenta en bytes: 8 por cada paso, como un operando, un operador, una llamada o una ejecución de una lambda, más el tamaño de cada valor que lee una operación como == o keys, más lo que construyen las expresiones.",
+    "fix": [
+      "Haz menos trabajo, por ejemplo recorriendo una parte de una lista en lugar de toda, o leyendo menos de un valor grande en cada lambda."
+    ]
+  },
   "expressions_read_each_other": {
     "title": "Expresiones que se leen entre sí",
     "why": "Las expresiones del flujo de trabajo leen los valores de las otras, así que no se puede evaluar ninguna primero.",
@@ -799,13 +806,6 @@
       "Revisa el valor del primer argumento, como una entrada o la salida de un paso."
     ]
   },
-  "expression_runs_too_many_lambdas": {
-    "title": "La expresión ejecuta demasiadas lambdas",
-    "why": "Las expresiones de una cadena ejecutan las lambdas de map() y filter() más veces de las que el lenguaje permite a una cadena, 100.000, un límite que mantiene acotada su evaluación. Una lambda dentro de otra se ejecuta para cada uno de sus elementos cada vez que se ejecuta la otra.",
-    "fix": [
-      "Ejecuta menos lambdas, por ejemplo recorriendo una parte de una lista en lugar de toda."
-    ]
-  },
   "expressions_build_too_much": {
     "title": "Las expresiones construyen demasiado en conjunto",
     "why": "Meridian evalúa algunas expresiones juntas y limita lo que construyen entre todas, además de lo que construye cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas construyen más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
@@ -813,16 +813,16 @@
       "Construye menos en estas expresiones, por ejemplo leyendo una parte de un valor en lugar de todo."
     ]
   },
-  "expressions_run_too_many_lambdas": {
-    "title": "Las expresiones ejecutan demasiadas lambdas en conjunto",
-    "why": "Meridian evalúa algunas expresiones juntas y limita cuántas veces ejecutan las lambdas de map() y filter() entre todas, además de cuántas veces lo hace cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas ejecutan más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+  "expressions_too_much_work": {
+    "title": "Las expresiones hacen demasiado trabajo en conjunto",
+    "why": "Meridian evalúa algunas expresiones juntas y limita el trabajo que hacen entre todas, además del que hace cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas hacen más trabajo del que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
     "fix": [
-      "Ejecuta menos lambdas en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda."
+      "Haz menos trabajo en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda."
     ]
   },
   "expressions_too_slow": {
     "title": "Las expresiones tardan demasiado en conjunto",
-    "why": "Meridian evalúa algunas expresiones juntas y las detiene cuando su evaluación ha tardado 10 segundos entre todas. Es una protección contra flujos de trabajo que hacen mucho más trabajo que cualquier flujo real, como lambdas que recorren cada una un valor grande. No es un límite del formato del flujo de trabajo, porque lo que tarda la evaluación depende de la máquina.",
+    "why": "Meridian evalúa algunas expresiones juntas y las detiene cuando su evaluación ha tardado 10 segundos entre todas. Es una protección, detrás del límite del lenguaje sobre el trabajo de cada expresión y el de Meridian sobre el trabajo que hacen juntas, contra flujos de trabajo que hacen mucho más que cualquier flujo real. No es un límite del formato del flujo de trabajo, porque lo que tarda la evaluación depende de la máquina.",
     "fix": [
       "Haz menos trabajo en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda, o leyendo menos de un valor grande en cada lambda."
     ]

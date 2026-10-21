@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,16 +15,28 @@ import (
 
 // templateLimit is the language's limit on what one template builds, and
 // groupLimit Meridian's on what the templates of a group build together.
+// workLimit and groupWork are the same limits on the work they do.
 const (
 	templateLimit = 8 << 20
 	groupLimit    = 64 << 20
+	workLimit     = 32 << 20
+	groupWork     = 256 << 20
 )
 
-func xs(n int) string { return strings.Repeat("x", n) }
+// longest holds the x's that xs returns, made once, since the tests of the
+// work limit read strings of up to 32 MiB.
+var longest = sync.OnceValue(func() string { return strings.Repeat("x", workLimit+1) })
+
+func xs(n int) string { return longest()[:n] }
 
 func tooLarge(err error) bool {
 	ee, ok := errors.AsType[*expr.EvalError](err)
 	return ok && ee.Kind == problems.ExpressionTooLarge
+}
+
+func tooMuchWork(err error) bool {
+	ee, ok := errors.AsType[*expr.EvalError](err)
+	return ok && ee.Kind == problems.ExpressionTooMuchWork
 }
 
 func overBudget(err error) bool {
@@ -214,7 +227,9 @@ func TestGroupBudget(t *testing.T) {
 	reads := make([]string, 8)
 	for i := range reads {
 		root[fmt.Sprintf("v%d", i)] = "${{ inputs.s + inputs.s }}"
-		reads[i] = fmt.Sprintf("length(.v%d)", i)
+		// ! reads nothing of what it negates, so the reader does little
+		// work.
+		reads[i] = fmt.Sprintf("!.v%d", i)
 	}
 	w := &expr.Workflow{Root: root}
 	scope := inputs(map[string]any{"s": xs(templateLimit / 2)})
@@ -222,10 +237,10 @@ func TestGroupBudget(t *testing.T) {
 	// group's 64 MiB.
 	all := strings.Join(reads, " + ")
 	got, err := mustParse(t, all).Eval(w.Scope([]string{"x"}, scope))
-	if err != nil || got != float64(groupLimit) {
-		t.Errorf("eight templates of 8 MiB: %v, %v; want %d", got, err, groupLimit)
+	if err != nil || got != 0.0 {
+		t.Errorf("eight templates of 8 MiB: %v, %v; want 0", got, err)
 	}
-	_, err = mustParse(t, all+" + length(.byte)").Eval(w.Scope([]string{"x"}, scope))
+	_, err = mustParse(t, all+" + !.byte").Eval(w.Scope([]string{"x"}, scope))
 	if !overBudget(err) || !strings.Contains(err.Error(), "64 MiB") {
 		t.Errorf("a byte more: %v, want %s", err, problems.ExpressionsBuildTooMuch.Code())
 	}
@@ -237,96 +252,214 @@ func TestGroupBudget(t *testing.T) {
 	}
 }
 
-// runLimit is the language's limit on how many times a template runs
-// lambdas, and groupRuns Meridian's on how many times a group's templates
-// do together.
-const (
-	runLimit  = 100000
-	groupRuns = 1000000
-)
-
-func tooManyRuns(err error) bool {
-	ee, ok := errors.AsType[*expr.EvalError](err)
-	return ok && ee.Kind == problems.ExpressionRunsTooManyLambdas
+// Each part of an expression counts toward its template's work, as
+// docs/expressions.md says under Limits: 8 for each step, the size of each
+// value an operation reads, and what the template builds.
+func TestWork(t *testing.T) {
+	scope := expr.Scope{
+		Contexts: map[string]any{
+			"inputs": map[string]any{
+				"a": map[string]any{"b": 1.0},
+				"s": "abc",
+				"l": []any{map[string]any{"a": 1.0}, map[string]any{"a": 2.0}, map[string]any{}},
+				"w": []any{"ab", "c"},
+			},
+			"vars": map[string]any{},
+		},
+		Status: &expr.Status{},
+		Index:  []int{1},
+	}
+	for _, tc := range []struct {
+		src  string
+		work int
+	}{
+		// Each operand, operator and call is a step, and parentheses that
+		// only group are none. A number with its sign is one operand, and
+		// a - with a space after it an operator.
+		{"1", 8},
+		{"((1))", 8},
+		{"'abc'", 8},
+		{"word", 8},
+		{"-5", 8},
+		{"- 5", 16},
+		{"1 + 2", 24},
+		{"!!true", 24},
+		{"success()", 8},
+		{"true ? 1 : 2", 24},
+		// What isn't evaluated counts nothing.
+		{"false ? 'abc' == 'abc' : 2", 24},
+		{"false && 'abc' == 'abc'", 16},
+		{"true || 'abc' == 'abc'", 16},
+		{"1 ?? 'abc' == 'abc'", 16},
+		{"case(false, 'abc' == 'abc', true, 2, 3)", 32},
+		// Each name or index of a path is a step, whether or not the path
+		// leads anywhere, and so is a path after a computed value.
+		{"inputs.a.b", 24},
+		{"inputs['a'].b", 24},
+		{"inputs.l[index].a", 32},
+		{"inputs.missing.b.c", 32},
+		{"vars.x", 16},
+		{"(inputs.a).b", 32},
+		// A .* is a step, and so is each item it visits, from which the
+		// rest of the path is followed.
+		{"inputs.l.*.a", 72},
+		{"inputs.l.*.*", 88},
+		{"inputs.missing.*.a", 24},
+		{"(inputs.l).*.a", 80},
+		// Each run of a lambda is a step, and its body counts each time.
+		{"filter(inputs.l, x => false)", 72},
+		{"filter(inputs.l, x => length(filter(inputs.w, y => false)))", 240},
+		{"map(inputs.l, x => x.a)", 144},
+		// An operation that reads values counts their sizes.
+		{"'abc' == 'de'", 29},
+		{"'abc' !== 'de'", 29},
+		{"'abc' < 'de'", 29},
+		{"1 == '1'", 33},
+		{"contains('abc', 'b')", 28},
+		{"'abc' !in 'b'", 28},
+		{"'abc' startsWith 'a'", 28},
+		{"endsWith('abc', 'c')", 28},
+		{"length('abc')", 19},
+		{"length(inputs.l)", 24},
+		{"trim ' a '", 19},
+		{"upper 'ab'", 20},
+		{"lower 5", 25},
+		{"keys inputs.a", 41},
+		{"values inputs.a", 41},
+		{"toJSON(1)", 25},
+		{"fromJSON('[1]')", 35},
+		{"fromJSON(1)", 24},
+		{"format('{0}', 'ab')", 31},
+		{"join(inputs.w)", 48},
+		{"inputs.w join '-'", 56},
+		{"join('ab', '-')", 27},
+		{"'a,b' split ','", 47},
+		{"[1, 2]", 40},
+		{`{"k": "v"}`, 18},
+		// A reference, a path, get, arithmetic, ! and abs read nothing.
+		{"inputs.l", 16},
+		{"inputs.a get 'b'", 32},
+		{"-inputs.s", 24},
+		{"abs inputs.s", 24},
+		{"!inputs.l", 24},
+		// What a template builds counts as work too.
+		{"'a' + 'b'", 26},
+		{"range 3", 64},
+		{"0:('ab')", 20},
+	} {
+		if _, got, err := expr.Work(mustParse(t, tc.src), scope); err != nil || got != tc.work {
+			t.Errorf("%s: %d, %v; want %d", tc.src, got, err, tc.work)
+		}
+	}
 }
 
-// A template runs lambdas at most 100,000 times: map's and filter's alike,
-// and a lambda in another's body each time the other runs. The expressions
-// of a template share its count, and a template it reads has its own.
-func TestLambdaRunLimit(t *testing.T) {
-	at, over := inputs(map[string]any{"l": make([]any, runLimit)}), inputs(map[string]any{"l": make([]any, runLimit+1)})
-	for _, src := range []string{"length(map(inputs.l, x => 1))", "length(filter(inputs.l, x => true))"} {
-		if got, err := mustParse(t, src).Eval(at); err != nil || got != float64(runLimit) {
-			t.Errorf("%s with %d items: %v, %v", src, runLimit, got, err)
-		}
-		_, err := mustParse(t, src).Eval(over)
-		if ee, _ := errors.AsType[*expr.EvalError](err); !tooManyRuns(err) || ee.Offset != 7 {
-			t.Errorf("%s with %d items: %#v, want %s at 7", src, runLimit+1, err, problems.ExpressionRunsTooManyLambdas.Code())
-		}
+// A template does at most 32 MiB of work. Each case's inputs make its
+// template do n bytes of work: it passes at the limit, and fails a byte
+// over.
+func TestWorkLimit(t *testing.T) {
+	both := func(n int) map[string]any { return map[string]any{"a": xs(n - 41), "b": "y"} }
+	// 1,000,000 items of 16 each, and the text of a value [], 2. The
+	// template's second expression reads the rest: ==, inputs.s, '' and
+	// the text false, 37, and the string's bytes.
+	steps := func(n int) map[string]any {
+		return map[string]any{"l": make([]any, 1000000), "s": xs(n - 63 - 16*1000000)}
 	}
-	_, err := mustParse(t, "map(inputs.l, x => 1)").Eval(over)
-	if want := "The expression runs the lambdas of map() and filter() more than 100,000 times."; err == nil || err.Error() != want {
-		t.Errorf("message %q, want %q", err, want)
+	for _, tc := range []struct {
+		name     string
+		template string
+		// inputs returns the inputs with which the template does n bytes
+		// of work.
+		inputs func(n int) map[string]any
+	}{
+		// 8, two references of 16, and the bytes of both.
+		{"==", "${{ inputs.a == inputs.b }}", both},
+		{"contains", "${{ contains(inputs.a, inputs.b) }}", both},
+		{"startsWith", "${{ inputs.a startsWith inputs.b }}", both},
+		{
+			// 8, a reference of 16, and the string's bytes.
+			"length", "${{ length(inputs.a) }}",
+			func(n int) map[string]any { return map[string]any{"a": xs(n - 24)} },
+		},
+		{
+			// 8, a reference of 16, and the mapping: 8 for its entry, its
+			// key and its value.
+			"keys", "${{ keys inputs.m }}",
+			func(n int) map[string]any { return map[string]any{"m": map[string]any{"k": xs(n - 33)}} },
+		},
+		{
+			// inputs.l.*.a is 24, and each item it visits 16.
+			".*", "${{ inputs.l.*.a }}${{ inputs.s == '' }}", steps,
+		},
+		{
+			// filter and inputs.l are 24, and each run 16.
+			"lambda runs", "${{ filter(inputs.l, x => false) }}${{ inputs.s == '' }}", steps,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl, err := expr.ParseTemplate(tc.template)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tmpl.Eval(inputs(tc.inputs(workLimit))); err != nil {
+				t.Errorf("at the limit: %v", err)
+			}
+			if _, err := tmpl.Eval(inputs(tc.inputs(workLimit + 1))); !tooMuchWork(err) {
+				t.Errorf("a byte over the limit: %v, want %s", err, problems.ExpressionTooMuchWork.Code())
+			}
+		})
 	}
 
-	// 10 runs of the outer lambda, and 9,999 of the inner one for each.
-	nested := "length(filter(range 10, i => length(filter(range 9999, j => false))))"
-	if _, err := mustParse(t, nested).Eval(expr.Scope{}); err != nil {
-		t.Errorf("nested lambdas that run 100,000 times: %v", err)
-	}
-	if _, err := mustParse(t, nested+" + length(map([1], k => k))").Eval(expr.Scope{}); !tooManyRuns(err) {
-		t.Errorf("and one more run: %v, want %s", err, problems.ExpressionRunsTooManyLambdas.Code())
-	}
-
-	half := inputs(map[string]any{"l": make([]any, runLimit/2)})
-	tmpl, err := expr.ParseTemplate("${{ length(map(inputs.l, x => 1)) }} ${{ length(map(inputs.l, x => 1)) }}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := tmpl.Eval(half); err != nil || got != "50000 50000" {
-		t.Errorf("a template's two expressions that run 50,000 times each: %v, %v", got, err)
-	}
-	tmpl, err = expr.ParseTemplate("${{ length(map(inputs.l, x => 1)) }} ${{ length(map(inputs.l, x => 1)) + length(map([1], x => 1)) }}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tmpl.Eval(half); !tooManyRuns(err) {
-		t.Errorf("and one more run: %v, want %s", err, problems.ExpressionRunsTooManyLambdas.Code())
-	}
-
-	w := &expr.Workflow{Root: map[string]any{"runs": "${{ length(map(inputs.l, x => 1)) }}"}}
-	got, err := mustParse(t, "length(map(inputs.l, x => 1)) + .runs").Eval(w.Scope([]string{"x"}, at))
-	if err != nil || got != float64(2*runLimit) {
-		t.Errorf("a template that reads one that runs 100,000 lambdas, and runs as many: %v, %v", got, err)
+	// The error is at the operation that passes the limit.
+	_, err := mustParse(t, "inputs.a == inputs.b").Eval(inputs(both(workLimit + 1)))
+	ee, _ := errors.AsType[*expr.EvalError](err)
+	if want := "The expression does more than 32 MiB of work."; !tooMuchWork(err) || ee.Offset != 9 || err.Error() != want {
+		t.Errorf("a byte over: %#v, want %q at 9", err, want)
 	}
 }
 
-// The templates of a group, which share a budget, run lambdas at most
-// 1,000,000 times together, even though each is within the language's
-// limit.
-func TestGroupLambdaBudget(t *testing.T) {
-	root := map[string]any{"one": "${{ length(map([1], x => 1)) }}"}
-	reads := make([]string, 10)
+// The templates of a group, which share a budget, do at most 256 MiB of
+// work together, even though each is within the language's limit.
+func TestGroupWorkBudget(t *testing.T) {
+	// 8, two references of 16, and 16 MiB less 20 read twice: 32 MiB.
+	values := map[string]any{"h": xs(workLimit/2 - 20)}
+	heavy := "inputs.h == inputs.h"
+	isOver := func(err error) bool {
+		be, ok := errors.AsType[*expr.BudgetError](err)
+		return ok && be.Kind == problems.ExpressionsTooMuchWork && be.Limit == groupWork>>20
+	}
+
+	// Eight templates that each do 32 MiB, the most one can, do the
+	// group's 256 MiB, and a step more is too much.
+	group := inputs(values).Budgeted()
+	for i := range 8 {
+		if _, err := mustParse(t, heavy).Eval(group); err != nil {
+			t.Fatalf("template %d of 32 MiB: %v", i+1, err)
+		}
+	}
+	_, err := mustParse(t, "1").Eval(group)
+	if want := "The expressions evaluated together here do more than 256 MiB of work between them."; !isOver(err) || err.Error() != want {
+		t.Errorf("a step more: %#v, want %q", err, want)
+	}
+
+	// A template that reads others shares their group: seven of 32 MiB
+	// and the reader's 160 pass, and an eighth doesn't.
+	root := map[string]any{}
+	reads := make([]string, 8)
 	for i := range reads {
-		root[fmt.Sprintf("v%d", i)] = "${{ length(map(inputs.l, x => 1)) }}"
+		root[fmt.Sprintf("v%d", i)] = "${{ " + heavy + " }}"
 		reads[i] = fmt.Sprintf(".v%d", i)
 	}
 	w := &expr.Workflow{Root: root}
-	scope := inputs(map[string]any{"l": make([]any, runLimit)})
-	all := strings.Join(reads, " + ")
-	got, err := mustParse(t, all).Eval(w.Scope([]string{"x"}, scope))
-	if err != nil || got != float64(groupRuns) {
-		t.Errorf("ten templates that run 100,000 lambdas each: %v, %v; want %d", got, err, groupRuns)
+	if _, err := mustParse(t, strings.Join(reads[:7], " + ")).Eval(w.Scope([]string{"x"}, inputs(values))); err != nil {
+		t.Errorf("a template that reads seven of 32 MiB: %v", err)
 	}
-	_, err = mustParse(t, all+" + .one").Eval(w.Scope([]string{"x"}, scope))
-	be, ok := errors.AsType[*expr.BudgetError](err)
-	if want := "The expressions evaluated together here run the lambdas of map() and filter() more than 1,000,000 times between them."; !ok ||
-		be.Kind != problems.ExpressionsRunTooManyLambdas || be.Limit != groupRuns || err.Error() != want {
-		t.Errorf("and one more run: %#v, want %q", err, want)
+	if _, err := mustParse(t, strings.Join(reads, " + ")).Eval(w.Scope([]string{"x"}, inputs(values))); !isOver(err) {
+		t.Errorf("a template that reads eight of 32 MiB: %v, want %s", err, problems.ExpressionsTooMuchWork.Code())
 	}
+
 	// A scope without a budget makes each evaluation a group of its own.
-	for range 11 {
-		if _, err := mustParse(t, "map(inputs.l, x => 1)").Eval(scope); err != nil {
+	for range 9 {
+		if _, err := mustParse(t, heavy).Eval(inputs(values)); err != nil {
 			t.Fatalf("a template on its own: %v", err)
 		}
 	}

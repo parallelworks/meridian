@@ -221,13 +221,14 @@ func TestValue(t *testing.T) {
 	}
 }
 
-// A Value's templates are one group. Each has the language's limit on what
-// it builds, 8 MiB, and together they share Meridian's budget for a group,
-// 64 MiB.
+// A Value's templates are one group. Each has the language's limits on
+// what it builds, 8 MiB, and the work it does, 32 MiB, and together they
+// share Meridian's budget for a group, 64 MiB and 256 MiB.
 func TestEvalGroupsTemplates(t *testing.T) {
 	scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{
 		"five": strings.Repeat("x", 5<<20),
 		"four": strings.Repeat("x", 4<<20),
+		"half": strings.Repeat("x", 16<<20-20),
 	}}}
 	two := mustValue(t, []any{"${{ inputs.five + '' }}", "${{ inputs.five + '' }}"})
 	if _, err := two.Eval(scope); err != nil {
@@ -248,8 +249,22 @@ func TestEvalGroupsTemplates(t *testing.T) {
 		t.Errorf("eight templates that each build 8 MiB: %v", err)
 	}
 	_, err := mustValue(t, append(eight, "${{ 'x' + '' }}")).Eval(scope)
-	if _, ok := errors.AsType[*expr.BudgetError](err); !ok {
+	if be, ok := errors.AsType[*expr.BudgetError](err); !ok || be.Kind != problems.ExpressionsBuildTooMuch {
 		t.Errorf("and a byte more: %v, want %s", err, problems.ExpressionsBuildTooMuch.Code())
+	}
+
+	// Eight templates that each do 32 MiB of work, the most one can, do the
+	// group's 256 MiB, and a step more is too much. Each is ==, two
+	// references and half read twice.
+	for i := range eight {
+		eight[i] = "${{ inputs.half == inputs.half }}"
+	}
+	if _, err := mustValue(t, eight).Eval(scope); err != nil {
+		t.Errorf("eight templates that each do 32 MiB of work: %v", err)
+	}
+	_, err = mustValue(t, append(eight, "${{ 1 }}")).Eval(scope)
+	if be, ok := errors.AsType[*expr.BudgetError](err); !ok || be.Kind != problems.ExpressionsTooMuchWork {
+		t.Errorf("and a step more: %v, want %s", err, problems.ExpressionsTooMuchWork.Code())
 	}
 }
 

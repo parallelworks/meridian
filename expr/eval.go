@@ -30,29 +30,38 @@ const maxBuilt = 8 << 20
 // that keeps to the language's limits never reaches it.
 const maxGroupBuilt = 64 << 20
 
-// maxLambdaRuns is the language's limit on how many times one template runs
-// the lambdas of map() and filter(), so that lambdas in lambdas can't make
-// evaluating it take unbounded time.
-const maxLambdaRuns = 100000
+// maxWork is the language's limit on the work one template does, so that
+// evaluating it takes bounded time. Work is counted in bytes, as builds are:
+// 8 for each step, such as an operand, an operator, a call, a segment of a
+// path or a run of a lambda; the size of each value that an operation reads,
+// such as both sides of ==; and what the template builds. docs/expressions.md
+// says how each operation counts, under Limits. A template doesn't count the
+// work of a template it reads: that one has its own count.
+const maxWork = 32 << 20
 
-// maxGroupLambdaRuns is Meridian's own limit on how many times the
-// templates of a group run lambdas together: ten templates at the
-// language's limit. Like maxGroupBuilt, it isn't part of the format.
-const maxGroupLambdaRuns = 10 * maxLambdaRuns
+// step is what each step of an evaluation counts toward its work: the size
+// of a scalar.
+const step = 8
 
-// A group's limits are at least one template's: this doesn't compile if
-// they aren't.
+// maxGroupWork is Meridian's own limit on the work that the templates of a
+// group do together: eight templates at the language's limit. Like
+// maxGroupBuilt, it isn't part of the format.
+const maxGroupWork = 8 * maxWork
+
+// A group's limits are at least one template's, and a template can build
+// all that it may within its work: this doesn't compile if they aren't.
 const (
 	_ uint = maxGroupBuilt - maxBuilt
-	_ uint = maxGroupLambdaRuns - maxLambdaRuns
+	_ uint = maxGroupWork - maxWork
+	_ uint = maxWork - maxBuilt
 )
 
 // maxGroupTime is Meridian's own limit on how long the templates of a group
-// spend evaluating, together. Counting what expressions build and run can't
-// bound the cost of a step that counts nothing, such as contains on a large
-// value, which a lambda can repeat 100,000 times, so this is a last resort
-// for workflows that do far more work than any real one. It isn't part of
-// the format, since how long evaluating takes depends on the machine.
+// spend evaluating, together. It is a backstop: the work a template does is
+// counted by what its steps and reads cost, and this bounds the costs that
+// the count misses, for workflows that do far more than any real one. It
+// isn't part of the format, since how long evaluating takes depends on the
+// machine.
 const maxGroupTime = 10 * time.Second
 
 // clockEvery is how many nodes a group's templates evaluate between reads
@@ -85,12 +94,12 @@ type Scope struct {
 	budget *budget
 }
 
-// A budget counts what the templates of a group have built, how many times
-// they have run lambdas, and how long they have spent evaluating. The
-// group's evaluations happen one at a time, though one can be nested in
-// another, as a template that reads another is.
+// A budget counts what the templates of a group have built, the work they
+// have done, and how long they have spent evaluating. The group's
+// evaluations happen one at a time, though one can be nested in another, as
+// a template that reads another is.
 type budget struct {
-	built, runs int
+	built, work int
 	// nodes counts the nodes the group's templates have evaluated, so that
 	// the clock is read every clockEvery of them.
 	nodes int
@@ -110,8 +119,8 @@ type budget struct {
 // templates are a group, such as all of a run's input defaults and
 // conditions, or every template in one value. Each template still has the
 // language's limits, and the group has Meridian's wider ones, which aren't
-// part of the format: its templates build at most 64 MiB together, run
-// lambdas at most 1,000,000 times, and spend at most 10 seconds evaluating.
+// part of the format: its templates build at most 64 MiB together, do at
+// most 256 MiB of work, and spend at most 10 seconds evaluating.
 // A scope that has a budget keeps it.
 func (s Scope) Budgeted() Scope {
 	if s.budget == nil {
@@ -154,17 +163,20 @@ type Status struct {
 	Cancelled bool
 }
 
-// A Resolver reads the workflow around an expression.
+// A Resolver reads the workflow around an expression. Each method follows
+// a path, and calls visit at each * in it, as walk does, so that the
+// evaluator counts the work of the items it visits; an error from visit
+// stops it and is returned. visit is nil for a path with no *.
 type Resolver interface {
 	// Relative returns the value of the relative reference that goes up
 	// levels from the key the expression is in and then follows path, with
 	// any expressions in it evaluated. ok is false if there is nothing
 	// there.
-	Relative(up int, path []string) (v any, ok bool, err error)
+	Relative(up int, path []string, visit func(items int, rest []string) error) (v any, ok bool, err error)
 	// Definition returns what the input definitions hold at path, with any
 	// expressions in it evaluated, or else the default of the input at
 	// path. ok is false if there is neither.
-	Definition(path []string) (v any, ok bool, err error)
+	Definition(path []string, visit func(items int, rest []string) error) (v any, ok bool, err error)
 }
 
 // Unknown is a value in a context that exists but isn't known yet, such as a
@@ -206,16 +218,16 @@ type UnknownError struct {
 func (e *UnknownError) Error() string { return fmt.Sprintf("%s isn't known yet", e.Name) }
 
 // A BudgetError means the templates of a group, which share a budget
-// (Scope.Budgeted), built more together, ran lambdas more often, or spent
-// longer evaluating than Meridian allows a group. It isn't a problem with
-// any one expression, which can each be within the language's limits: the
-// budget is Meridian's own, not part of the format.
+// (Scope.Budgeted), built more together, did more work, or spent longer
+// evaluating than Meridian allows a group. It isn't a problem with any one
+// expression, which can each be within the language's limits: the budget is
+// Meridian's own, not part of the format.
 type BudgetError struct {
 	// Kind is the limit the group passed: problems.ExpressionsBuildTooMuch,
-	// problems.ExpressionsRunTooManyLambdas or problems.ExpressionsTooSlow.
+	// problems.ExpressionsTooMuchWork or problems.ExpressionsTooSlow.
 	Kind *problems.Kind
-	// Limit is the group's limit: in MiB for what it builds, in runs for
-	// its lambdas, and in seconds for its time.
+	// Limit is the group's limit: in MiB for what it builds and the work it
+	// does, and in seconds for its time.
 	Limit int
 }
 
@@ -234,9 +246,9 @@ func (e *Expr) Eval(scope Scope) (any, error) {
 // in text.
 type evaluator struct {
 	scope Scope
-	// spent counts what the template has built, and runs how many times it
-	// has run lambdas, for the language's limits.
-	spent, runs int
+	// spent counts what the template has built, and worked the work it has
+	// done, for the language's limits.
+	spent, worked int
 	// frame holds the parameters of the lambda whose body is being
 	// evaluated, if any, and those of the lambdas around it.
 	frame *frame
@@ -287,9 +299,10 @@ func (e *evaluator) errorAt(at int, k *problems.Kind, params problems.Params) er
 	return &EvalError{Offset: at, Kind: k, Params: params}
 }
 
-// spend counts n bytes built, and fails if they take the template past the
-// language's limit, or its group past Meridian's. A count that fails isn't
-// kept, since what it counts isn't built.
+// spend counts n bytes built, which count as work too, and fails if they
+// take the template past the language's limits, or its group past
+// Meridian's. A count that fails isn't kept, since what it counts isn't
+// built.
 func (e *evaluator) spend(at, n int) error {
 	if e.spent+n > maxBuilt {
 		return e.errorAt(at, problems.ExpressionTooLarge, problems.Params{"limit": maxBuilt >> 20})
@@ -297,23 +310,43 @@ func (e *evaluator) spend(at, n int) error {
 	if e.scope.budget.built+n > maxGroupBuilt {
 		return &BudgetError{Kind: problems.ExpressionsBuildTooMuch, Limit: maxGroupBuilt >> 20}
 	}
+	if err := e.work(at, n); err != nil {
+		return err
+	}
 	e.spent += n
 	e.scope.budget.built += n
 	return nil
 }
 
-// run counts a run of a lambda's body, and fails if it takes the template
-// past the language's limit, or its group past Meridian's. It reads the
-// clock too, since a body can do work that counts nothing.
+// work counts n bytes of work, and fails if they take the template past the
+// language's limit, or its group past Meridian's. A count that fails isn't
+// kept, since the work it counts isn't done.
+func (e *evaluator) work(at, n int) error {
+	if e.worked+n > maxWork {
+		return e.errorAt(at, problems.ExpressionTooMuchWork, problems.Params{"limit": maxWork >> 20})
+	}
+	if e.scope.budget.work+n > maxGroupWork {
+		return &BudgetError{Kind: problems.ExpressionsTooMuchWork, Limit: maxGroupWork >> 20}
+	}
+	e.worked += n
+	e.scope.budget.work += n
+	return nil
+}
+
+// read counts the work of an operation that reads values: their sizes.
+func (e *evaluator) read(at int, vs ...any) error {
+	n := 0
+	for _, v := range vs {
+		n += size(v)
+	}
+	return e.work(at, n)
+}
+
+// run counts a run of a lambda's body, a step, and reads the clock.
 func (e *evaluator) run(at int) error {
-	if e.runs >= maxLambdaRuns {
-		return e.errorAt(at, problems.ExpressionRunsTooManyLambdas, problems.Params{"limit": maxLambdaRuns})
+	if err := e.work(at, step); err != nil {
+		return err
 	}
-	if e.scope.budget.runs >= maxGroupLambdaRuns {
-		return &BudgetError{Kind: problems.ExpressionsRunTooManyLambdas, Limit: maxGroupLambdaRuns}
-	}
-	e.runs++
-	e.scope.budget.runs++
 	return e.timed()
 }
 
@@ -331,8 +364,22 @@ func (e *evaluator) eval(n node) (any, error) {
 			return nil, err
 		}
 	}
+	// Each node is a step: an operand, an operator or a call. A group
+	// isn't a node, and a lambda isn't evaluated as one: each of its runs
+	// is a step (each).
+	if err := e.work(n.offset(), step); err != nil {
+		return nil, err
+	}
 	switch n := n.(type) {
 	case *literal:
+		// A list or mapping written as JSON is read each time it is
+		// evaluated.
+		switch n.value.(type) {
+		case []any, map[string]any:
+			if err := e.read(n.at, n.value); err != nil {
+				return nil, err
+			}
+		}
 		// A copy, so that a caller that changes the result doesn't change
 		// the expression.
 		return jsonvalue.Clone(n.value), nil
@@ -345,9 +392,13 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		v, ok := walk(e.frame.lookup(n.name), path)
-		if !ok {
-			return nil, nil
+		visit, err := e.pathWork(n.at, path)
+		if err != nil {
+			return nil, err
+		}
+		v, ok, err := walk(e.frame.lookup(n.name), path, visit)
+		if err != nil || !ok {
+			return nil, err
 		}
 		return v, nil
 	case *relative:
@@ -378,9 +429,13 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		v, ok := walk(v, path)
-		if !ok {
-			return nil, nil
+		visit, err := e.pathWork(n.at, path)
+		if err != nil {
+			return nil, err
+		}
+		v, ok, err := walk(v, path, visit)
+		if err != nil || !ok {
+			return nil, err
 		}
 		return known(n.at, v)
 	case *call:
@@ -434,6 +489,14 @@ func (e *evaluator) binary(n *binary) (any, error) {
 	b, err := e.eval(n.y)
 	if err != nil {
 		return nil, err
+	}
+	switch n.op {
+	case "==", "!=", "===", "!==", "<", ">", "<=", ">=", "in", "includes", "startsWith", "endsWith", "split", "join":
+		// These read both operands, which cost their sizes whether or not
+		// they are read to the end.
+		if err := e.read(n.at, a, b); err != nil {
+			return nil, err
+		}
 	}
 	switch n.op {
 	case "==":
@@ -543,7 +606,8 @@ func (e *evaluator) call(n *call) (any, error) {
 		}
 		return e.eval(n.args[len(n.args)-1])
 	}
-	if fn := functions[n.name]; fn.each != nil {
+	fn := functions[n.name]
+	if fn.each != nil {
 		return e.each(n, fn)
 	}
 	args := make([]any, len(n.args))
@@ -554,13 +618,18 @@ func (e *evaluator) call(n *call) (any, error) {
 		}
 		args[i] = v
 	}
-	return functions[n.name].eval(e, n.at, args)
+	if fn.reads {
+		if err := e.read(n.at, args...); err != nil {
+			return nil, err
+		}
+	}
+	return fn.eval(e, n.at, args)
 }
 
 // each evaluates n, a call to map() or filter(): it runs the lambda that is
 // the last argument for each item of the first, and makes a list of what
-// fn.each gives for each. It counts each run, and 8 for each item of the
-// list and the item's size.
+// fn.each gives for each. Each run is a step, and it counts 8 for each item
+// of the list it makes and the item's size.
 func (e *evaluator) each(n *call, fn function) (any, error) {
 	v, err := e.eval(n.args[0])
 	if err != nil {
@@ -602,14 +671,21 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	visit, err := e.pathWork(r.at, path)
+	if err != nil {
+		return nil, err
+	}
 	if r.context == "inputs" {
-		v, err := e.inputs(r, root, path)
+		v, err := e.inputs(r, root, path, visit)
 		if err != nil {
 			return nil, err
 		}
 		return known(r.at, v)
 	}
-	v, ok := walk(root, path)
+	v, ok, err := walk(root, path, visit)
+	if err != nil {
+		return nil, err
+	}
 	if !ok && contexts[r.context].strings {
 		return "", nil
 	}
@@ -640,16 +716,16 @@ func known(at int, v any) (any, error) {
 // inputs reads an input's value, or what its definition holds: inputs.x.type
 // is the type of input x, as its value has no type. A last segment in
 // brackets without quotes, as in inputs.x[hidden], reads the definition
-// first.
-func (e *evaluator) inputs(r *ref, values any, path []string) (any, error) {
+// first. visit counts the work of each * in path, as for walk.
+func (e *evaluator) inputs(r *ref, values any, path []string, visit func(items int, rest []string) error) (any, error) {
 	definitionFirst := len(r.path) > 0 && r.path[len(r.path)-1].kind == bareKey
 	if !definitionFirst {
-		if v, ok := walk(values, path); ok {
-			return v, nil
+		if v, ok, err := walk(values, path, visit); err != nil || ok {
+			return v, err
 		}
 	}
 	if e.scope.Resolver != nil && len(path) > 0 {
-		v, ok, err := e.scope.Resolver.Definition(path)
+		v, ok, err := e.scope.Resolver.Definition(path, visit)
 		if err != nil {
 			return nil, e.resolverError(r.at, err)
 		}
@@ -658,8 +734,8 @@ func (e *evaluator) inputs(r *ref, values any, path []string) (any, error) {
 		}
 	}
 	if definitionFirst {
-		if v, ok := walk(values, path); ok {
-			return v, nil
+		if v, ok, err := walk(values, path, visit); err != nil || ok {
+			return v, err
 		}
 	}
 	return nil, nil
@@ -673,7 +749,11 @@ func (e *evaluator) relative(r *relative) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, ok, err := e.scope.Resolver.Relative(r.up, path)
+	visit, err := e.pathWork(r.at, path)
+	if err != nil {
+		return nil, err
+	}
+	v, ok, err := e.scope.Resolver.Relative(r.up, path, visit)
 	if err != nil || !ok {
 		return nil, e.resolverError(r.at, err)
 	}
@@ -684,6 +764,9 @@ func (e *evaluator) relative(r *relative) (any, error) {
 // led to it: a problem in another expression of the workflow is a problem
 // evaluating this one. The group's budget running out, which the two
 // expressions share, isn't a problem at either, and is returned as it is.
+// A problem in another expression has its Location; one without is this
+// evaluation's own, from counting the work of a * in the reference's path,
+// and is returned as it is too.
 func (e *evaluator) resolverError(at int, err error) error {
 	if err == nil {
 		return nil
@@ -694,7 +777,7 @@ func (e *evaluator) resolverError(at int, err error) error {
 	if be, ok := errors.AsType[*BudgetError](err); ok {
 		return be
 	}
-	if ee, ok := errors.AsType[*EvalError](err); ok && ee.Location != "" {
+	if ee, ok := errors.AsType[*EvalError](err); ok {
 		return ee
 	}
 	if se, ok := errors.AsType[*SyntaxError](err); ok && se.Location != "" {
@@ -721,26 +804,62 @@ func (e *evaluator) names(at int, path []segment) ([]string, error) {
 	return names, nil
 }
 
+// pathWork counts the work of following path, which the node at offset at
+// reads, from where it starts: a step for each segment up to its first *,
+// and for that *. It returns what counts the rest as the path is followed,
+// for walk, or nil if the path has no *.
+func (e *evaluator) pathWork(at int, path []string) (visit func(items int, rest []string) error, err error) {
+	if !slices.Contains(path, "*") {
+		return nil, e.work(at, step*len(path))
+	}
+	visit = func(items int, rest []string) error {
+		// Each item is a step, and the rest of the path is followed from
+		// each, up to its next *, which counts its own items.
+		return e.work(at, items*step*(1+segments(rest)))
+	}
+	return visit, e.work(at, step*segments(path))
+}
+
+// segments returns how many segments of path are followed from where it
+// starts: those up to its first *, and the *.
+func segments(path []string) int {
+	if i := slices.Index(path, "*"); i >= 0 {
+		return i + 1
+	}
+	return len(path)
+}
+
 // walk follows a path from v. A * reads the rest of the path from each item
 // of a list or mapping, and returns the results that have it as a list. ok is
-// false if the path leads nowhere.
-func walk(v any, path []string) (any, bool) {
+// false if the path leads nowhere. visit, if it isn't nil, is called at each
+// * with how many items it visits and the rest of the path, before it visits
+// them, so that the evaluator counts their work; an error from it stops the
+// walk.
+func walk(v any, path []string, visit func(items int, rest []string) error) (any, bool, error) {
 	for i, name := range path {
 		if _, ok := v.(Unknown); ok {
-			return v, true
+			return v, true, nil
 		}
 		if name != "*" {
 			next, ok := property(v, name)
 			if !ok {
-				return nil, false
+				return nil, false, nil
 			}
 			v = next
 			continue
 		}
-		rest := path[i+1:]
+		rest, items := path[i+1:], elements(v)
+		if visit != nil {
+			if err := visit(len(items), rest); err != nil {
+				return nil, false, err
+			}
+		}
 		out := []any{}
-		for _, item := range elements(v) {
-			w, ok := walk(item, rest)
+		for _, item := range items {
+			w, ok, err := walk(item, rest, visit)
+			if err != nil {
+				return nil, false, err
+			}
 			if !ok {
 				continue
 			}
@@ -750,9 +869,9 @@ func walk(v any, path []string) (any, bool) {
 				out = append(out, w)
 			}
 		}
-		return out, true
+		return out, true, nil
 	}
-	return v, true
+	return v, true, nil
 }
 
 // IsUnknown reports whether err means an expression reads something that

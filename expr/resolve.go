@@ -124,13 +124,14 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 
 // raw returns what the workflow holds at location, unevaluated.
 func (r *workflowResolver) raw(location []string) (any, bool) {
-	return walk(r.eval.workflow.Root, location)
+	v, ok, _ := walk(r.eval.workflow.Root, location, nil)
+	return v, ok
 }
 
 // follow walks path from location in the workflow and returns the value it
 // reaches, evaluated. A string on the way is evaluated, and the rest of the
-// path read from its value.
-func (r *workflowResolver) follow(location, path []string) (any, bool, error) {
+// path read from its value, with visit called at each * in it, as walk does.
+func (r *workflowResolver) follow(location, path []string, visit func(items int, rest []string) error) (any, bool, error) {
 	v, ok := r.raw(location)
 	if !ok {
 		return nil, false, nil
@@ -141,8 +142,7 @@ func (r *workflowResolver) follow(location, path []string) (any, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
-			v, ok := walk(resolved, path[i:])
-			return v, ok, nil
+			return walk(resolved, path[i:], visit)
 		}
 		if v, ok = property(v, k); !ok {
 			return nil, false, nil
@@ -155,17 +155,17 @@ func (r *workflowResolver) follow(location, path []string) (any, bool, error) {
 
 // Relative resolves a relative reference: .x is a key beside the one the
 // expression is in, and each further level goes up one more.
-func (r *workflowResolver) Relative(up int, path []string) (any, bool, error) {
+func (r *workflowResolver) Relative(up int, path []string, visit func(items int, rest []string) error) (any, bool, error) {
 	if up > len(r.location) {
 		return nil, false, nil
 	}
-	return r.follow(r.location[:len(r.location)-up], path)
+	return r.follow(r.location[:len(r.location)-up], path, visit)
 }
 
 // Definition reads the input definitions at path, or else the default of
 // the input at path. An input in a group is in the group's items.
-func (r *workflowResolver) Definition(path []string) (any, bool, error) {
-	if v, ok, err := r.follow(r.eval.workflow.Definitions, path); err != nil || ok {
+func (r *workflowResolver) Definition(path []string, visit func(items int, rest []string) error) (any, bool, error) {
+	if v, ok, err := r.follow(r.eval.workflow.Definitions, path, visit); err != nil || ok {
 		return v, ok, err
 	}
 	location := r.eval.workflow.Definitions
@@ -187,7 +187,7 @@ func (r *workflowResolver) Definition(path []string) (any, bool, error) {
 			if _, ok := property(field, "default"); !ok {
 				return nil, false, nil
 			}
-			return r.follow(next, []string{"default"})
+			return r.follow(next, []string{"default"}, nil)
 		}
 		definitions, location = field, next
 		if items, ok := property(field, "items"); ok {

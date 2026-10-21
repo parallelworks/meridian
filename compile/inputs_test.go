@@ -335,26 +335,27 @@ func TestDefaultsShareABudget(t *testing.T) {
 	}
 }
 
-// The group of all the inputs' defaults runs lambdas at most 1,000,000
-// times, though each default can run them 100,000 times: ten can, and
-// eleven can't.
-func TestDefaultsShareALambdaBudget(t *testing.T) {
+// The group of all the inputs' defaults does at most 256 MiB of work,
+// though each default can do 32 MiB: eight can, and nine can't.
+func TestDefaultsShareAWorkBudget(t *testing.T) {
 	for _, tc := range []struct {
 		defaults int
 		want     problems.Diagnostics
 	}{
-		{10, nil},
-		{11, problems.Diagnostics{problems.ExpressionsRunTooManyLambdas.At("", problems.Position{}, "", problems.Params{"limit": 1000000})}},
+		{8, nil},
+		{9, problems.Diagnostics{problems.ExpressionsTooMuchWork.At("", problems.Position{}, "", problems.Params{"limit": 256})}},
 	} {
 		var b strings.Builder
-		b.WriteString("on:\n  execute:\n    inputs:\n")
+		b.WriteString("on:\n  execute:\n    inputs:\n      half:\n        type: string\n")
 		for i := range tc.defaults {
-			fmt.Fprintf(&b, "      d%d:\n        type: number\n        default: ${{ length(filter(range 10, i => length(filter(range 9999, j => false)))) }}\n", i)
+			// 8, two references of 16, and half read twice: 32 MiB.
+			fmt.Fprintf(&b, "      d%d:\n        type: boolean\n        default: ${{ inputs.half == inputs.half }}\n", i)
 		}
 		b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
-		_, diags := compile.ResolveInputs(load(t, b.String()), nil, compile.Options{})
+		submitted := map[string]any{"half": strings.Repeat("x", 16<<20-20)}
+		_, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{})
 		if len(diags) != len(tc.want) || len(diags) > 0 && (diags[0].Code != tc.want[0].Code || diags[0].Message() != tc.want[0].Message()) {
-			t.Errorf("%d defaults that each run 100,000 lambdas: %v, want %v", tc.defaults, diags, tc.want)
+			t.Errorf("%d defaults that each do 32 MiB of work: %v, want %v", tc.defaults, diags, tc.want)
 		}
 	}
 }

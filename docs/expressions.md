@@ -397,11 +397,12 @@ compiler or coordinator do unbounded work:
   or more `${{ }}` in it, builds at most 8 MiB. It doesn't count what another
   template that it reads builds, such as an input's default or a key that a
   relative reference reads: that template has its own count.
-- **Lambdas.** A template runs the lambdas of `map` and `filter` at most
-  100,000 times. A lambda in another runs for each of its items each time the
-  other runs, so `filter(range 10, i => length(filter(range 9999, j => false)))`
-  runs 100,000 times. A template it reads has its own count, as for what it
-  builds.
+- **The work a template does.** A template does at most 32 MiB of work,
+  counted in bytes as what it builds is: 8 for each step it takes, the size
+  of each value its operations read, and what it builds. A template it reads
+  has its own count, as for what it builds.
+
+### What a template builds
 
 What a template builds is the size of each value that its operations make. A
 value's size is:
@@ -413,8 +414,8 @@ value's size is:
 - for anything else, 8.
 
 Each operation in this table counts the size of what it makes, and nothing
-else counts: reading a value, a path, `get`, `keys`, `values` and `trim`
-count nothing.
+else counts toward what a template builds: reading a value, a path, `get`,
+`keys`, `values` and `trim` build nothing.
 
 | Operation | Counts |
 | --- | --- |
@@ -442,6 +443,76 @@ count nothing.
 - `map` and `filter` count each item of their list, even one that was there
   already, as in `map(l, x => x)`. What a lambda's body makes counts too,
   each time it runs, and an item that `filter` doesn't keep counts nothing.
+
+### The work a template does
+
+A template's work is the sum of three counts, in bytes.
+
+**Its steps, 8 each,** the size of a scalar. Each of these is a step, each
+time the template evaluates it:
+
+- an operand: a literal, such as `1`, `-5`, `'text'`, `true`, `null`, or a
+  list or mapping written as JSON; a bare word; a reference, such as
+  `inputs.a`; a relative reference, such as `.hidden`; a lambda's parameter;
+  a computed value that a path reads, as `(x).a` and `fromJSON(x).a` do; and
+  the slice operands `(start):(end)` and `2:(end)`;
+- an operator: a unary one, such as `!`, `-` or `length`; a binary one, such
+  as `+`, `==`, `&&`, `??`, `in`, `!in` or `get`; and the ternary `? :`;
+- a call of a function, `case` and the status functions among them;
+- each name, index, `[index]` or `*` of a path: `inputs.a[0].b` has three,
+  and counts 32 with its operand;
+- each item that a `.*` visits. The rest of the path is followed from each
+  item, and counts again for each: `inputs.l.*.a` over a list of three items
+  counts 8 for the operand, 8 each for `l` and `*`, and 16 for each item, 72;
+- each run of a lambda, besides what its body counts each time it runs. A
+  lambda in another runs for each of its items each time the other runs.
+
+A step is the same whatever the operands are, and whatever tree an
+implementation parses the expression into:
+
+- Parentheses that only group aren't a step: `((x))` counts what `x` does.
+- A number written with its sign, `-5`, is one operand. `- 5` and `-x` are
+  `-` and its operand, two steps.
+- `!in`, `!includes`, `!startsWith` and `!endsWith` are one operator each.
+- A path's names count whether or not the path leads anywhere:
+  `inputs.missing.a.b` counts 32.
+- What isn't evaluated counts nothing: the operand that `&&`, `||` and `??`
+  don't need, the branch of `? :` that isn't taken, and of `case`'s
+  arguments, the values it doesn't choose and the predicates after the one
+  that holds.
+- The text around `${{ }}` counts nothing.
+
+**What its operations read.** Each operation in this table counts the size
+of each value it reads, by the rule above, whatever the value's type. It
+counts the whole size, before it reads anything, even when it could stop
+early, as `==` could at the first byte two strings differ in.
+
+| Operation | Reads |
+| --- | --- |
+| `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and `>=` | Both operands |
+| `contains`, `in`, `includes`, `startsWith` and `endsWith`, the functions and the word operators | Both operands |
+| `length` | A string; a list's or mapping's length reads nothing |
+| `trim`, `upper` and `lower` | The operand |
+| `keys` and `values` | The operand |
+| `toJSON` | The value |
+| `fromJSON` | The text, or the value, which it gives back, if it isn't a string |
+| `format` | The format string and each argument |
+| `join`, the function and the word operator | The list or string, and the separator: `','` when it isn't given |
+| `split` | The string and the separator |
+| A list or mapping written as JSON | Itself, each time it is evaluated |
+
+Every other operation reads nothing, however large its operands: reading a
+reference or a path, `get`, arithmetic, `!`, `abs`, `floor`, `ceil`, `round`
+and `range` count their steps only.
+
+**What it builds,** as counted above, counts as work too.
+
+So `inputs.name == 'admin'` counts 8 for `==`, 16 for the reference, 8 for
+`'admin'`, and the bytes of both strings: 41 for a name of 4 bytes.
+`filter(range 10, i => i > 4)` counts 8 for `filter`; 16 for `range` and
+`10`, and 160 for the numbers it makes; 48 for each of the 10 runs, which is
+8, `i > 4` 24, and its two numbers 16; and 80 for the five numbers `filter`
+keeps: 744.
 
 Meridian bounds what it evaluates together as well, such as all of a run's
 input defaults, and how long that takes, but those bounds are its own and

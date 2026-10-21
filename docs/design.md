@@ -431,37 +431,41 @@ input's default is part of the workflow, so a default that is an expression
 is evaluated.
 
 Evaluation is pure: an expression can't read files, start processes or reach
-a network. Depth, time and the size of a result are bounded, so a workflow
+a network. Depth, work and the size of a result are bounded, so a workflow
 can't make the compiler or coordinator do unbounded work: an expression's
 tree nests at most 200 levels, `range` makes at most 10,000 numbers, none
 beyond ±2^53, and a template, a `${{ }}` alone or text with `${{ }}` in it,
-builds at most 8 MiB of strings and lists and runs the lambdas of `map` and
-`filter` at most 100,000 times. These limits are the language's, and
+builds at most 8 MiB of strings and lists and does at most 32 MiB of work.
+Work is counted in bytes, as what a template builds is: 8 for each step,
+such as an operand, an operator, a segment of a path or a run of a lambda,
+the size of each value an operation such as `==` or `keys` reads, and what
+the template builds. These limits are the language's, and
 [Expressions](expressions.md#limits) says how each operation counts toward
-them. A template doesn't count what a template it reads builds or runs,
-such as an input's default: that has its own count.
+them. They depend only on the expression and the sizes of the values it
+reads, so every implementation of the format counts the same, and a
+workflow passes or fails them wherever it runs. A template doesn't count
+what a template it reads builds or does, such as an input's default: that
+has its own count.
 
 Meridian adds a safety net of its own, which isn't part of the format: the
 templates it evaluates together as a group build at most 64 MiB between
-them, and run lambdas at most 1,000,000 times, ten templates at their
-limit. A group is all of a run's input defaults and conditions, or every
-template in one value, such as a step's `with:`. The net bounds what a
-group does however many templates it has, and each of these caps, for
-every group, is at least one template's limit, so a template on its own
-that keeps to the language's limits never reaches it. A group that passes
-one fails with `expressions_build_too_much` or
-`expressions_run_too_many_lambdas`, which say the group did too much
-together, rather than with an expression's error.
+them, and do at most 256 MiB of work, eight templates at their limit. A
+group is all of a run's input defaults and conditions, or every template in
+one value, such as a step's `with:`. The net bounds what a group does
+however many templates it has, and each of these caps, for every group, is
+at least one template's limit, so a template on its own that keeps to the
+language's limits never reaches it. A group that passes one fails with
+`expressions_build_too_much` or `expressions_too_much_work`, which say the
+group did too much together, rather than with an expression's error.
 
-The net bounds time too, as a last resort: a group's templates spend at
-most 10 seconds of wall-clock time evaluating, together. Counting what
-templates build and run can't bound a step that counts nothing, such as
-`contains` on a large value, and a lambda can repeat such a step 100,000
-times. The cap is a safeguard against workflows that do far more work than
-any real one, not a limit a workflow is written to: how long evaluating
-takes depends on the machine. The evaluator reads the clock every 256
-nodes its group evaluates and at each run of a lambda, and a group that
-passes the cap fails with `expressions_too_slow`.
+The net bounds time too, as a backstop: a group's templates spend at most
+10 seconds of wall-clock time evaluating, together. The work count prices
+each step and each read by what it costs, so the cap is for the costs it
+misses, and stops a workflow that does far more than any real one. It isn't
+a limit a workflow is written to, since how long evaluating takes depends
+on the machine. The evaluator reads the clock every 256 nodes its group
+evaluates and at each run of a lambda, and a group that passes the cap
+fails with `expressions_too_slow`.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.

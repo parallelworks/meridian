@@ -22,6 +22,9 @@ type function struct {
 	// what the function's list gets for an item, given what the lambda
 	// gave for it, and keep false if it gets nothing.
 	each func(item, result any) (v any, keep bool)
+	// reads is set for a function that reads its arguments, each of which
+	// costs its size toward the work of the template that calls it.
+	reads bool
 }
 
 // arity returns the params that say how many arguments f takes: arity is
@@ -59,26 +62,30 @@ var functions = map[string]function{
 	"canceled":  {},
 	"always":    {},
 	"case":      {minArgs: 3, maxArgs: -1},
-	"contains": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
+	"contains": {minArgs: 2, maxArgs: 2, reads: true, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return contains(a[0], a[1]), nil
 	}},
-	"startsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
+	"startsWith": {minArgs: 2, maxArgs: 2, reads: true, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return strings.HasPrefix(stringOf(a[0]), stringOf(a[1])), nil
 	}},
-	"endsWith": {minArgs: 2, maxArgs: 2, eval: func(_ *evaluator, _ int, a []any) (any, error) {
+	"endsWith": {minArgs: 2, maxArgs: 2, reads: true, eval: func(_ *evaluator, _ int, a []any) (any, error) {
 		return strings.HasSuffix(stringOf(a[0]), stringOf(a[1])), nil
 	}},
-	"format": {minArgs: 1, maxArgs: -1, eval: func(e *evaluator, at int, a []any) (any, error) {
+	"format": {minArgs: 1, maxArgs: -1, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
 		return format(e, at, stringOf(a[0]), a[1:])
 	}},
-	"join": {minArgs: 1, maxArgs: 2, eval: func(e *evaluator, at int, a []any) (any, error) {
-		sep := ","
+	"join": {minArgs: 1, maxArgs: 2, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
 		if len(a) == 2 {
-			sep = stringOf(a[1])
+			return e.join(at, a[0], stringOf(a[1]))
+		}
+		// The separator it reads when it isn't given is ",".
+		const sep = ","
+		if err := e.read(at, sep); err != nil {
+			return nil, err
 		}
 		return e.join(at, a[0], sep)
 	}},
-	"toJSON": {minArgs: 1, maxArgs: 1, eval: func(e *evaluator, at int, a []any) (any, error) {
+	"toJSON": {minArgs: 1, maxArgs: 1, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
 		return e.built(at, toJSON(a[0], "  "))
 	}},
 	"map": {minArgs: 2, maxArgs: 2, each: func(_, result any) (any, bool) {
@@ -193,6 +200,21 @@ func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	return e.built(at, out)
 }
 
+// readsOperand reports whether the prefix operator op reads its operand v,
+// which costs v's size. length reads a string, whose characters it counts or
+// which it reads as JSON, but not a list or a mapping, whose length it
+// knows.
+func readsOperand(op string, v any) bool {
+	switch op {
+	case "upper", "lower", "trim", "keys", "values", "fromJSON":
+		return true
+	case "length", "len":
+		_, isString := v.(string)
+		return isString
+	}
+	return false
+}
+
 // roundHalfUp rounds n to a whole number as JavaScript's Math.round does: a
 // half rounds up, toward +Infinity, so -2.5 is -2. n+0.5 rounded down would
 // round 0.49999999999999994 to 1, because the sum rounds to 1.
@@ -206,6 +228,11 @@ func roundHalfUp(n float64) float64 {
 
 // prefix applies a unary operator.
 func (e *evaluator) prefix(at int, op string, v any) (any, error) {
+	if readsOperand(op, v) {
+		if err := e.read(at, v); err != nil {
+			return nil, err
+		}
+	}
 	switch op {
 	case "!":
 		return !truthy(v), nil

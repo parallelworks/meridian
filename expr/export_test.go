@@ -10,3 +10,11 @@ func WithClock(scope Scope, now func() time.Time) Scope {
 	scope.budget.clock = now
 	return scope
 }
+
+// Work evaluates e in scope, as Eval does, and returns the work it counted.
+func Work(e *Expr, scope Scope) (any, int, error) {
+	ev := newEvaluator(scope)
+	defer ev.stop()
+	v, err := ev.eval(e.root)
+	return v, ev.worked, err
+}
