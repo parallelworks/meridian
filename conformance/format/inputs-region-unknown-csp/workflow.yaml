@@ -1,0 +1,10 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: region
+        csp: digitalocean
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.region }}

@@ -7,6 +7,12 @@ on:
         max: 8
       other:
         type: number
+      low:
+        type: number
+        min: 1
+      high:
+        type: number
+        max: 8
 jobs:
   main:
     steps:

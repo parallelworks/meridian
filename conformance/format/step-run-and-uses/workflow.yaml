@@ -1,0 +1,5 @@
+jobs:
+  main:
+    steps:
+      - run: echo hello
+        uses: marketplace/hello

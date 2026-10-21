@@ -1,0 +1,7 @@
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: make
+      - run: echo ${{ steps.compile.bogus }} ${{ steps.compile.outputs.bin }}
+      - run: echo ${{ steps.compil.outputs.bin }}

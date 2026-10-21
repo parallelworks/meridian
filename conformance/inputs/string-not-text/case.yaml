@@ -1,0 +1,21 @@
+description: >-
+  An input that takes text, such as a string or an editor, takes a list or
+  a mapping as an error. A number or a boolean is converted to its text.
+source: Meridian
+inputs:
+  name: [a, b]
+  script: {run: make}
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_text
+      path: /on/execute/inputs/name
+      line: 4
+      column: 7
+      params: {input: name, value: '["a","b"]'}
+    - severity: error
+      code: input_not_text
+      path: /on/execute/inputs/script
+      line: 6
+      column: 7
+      params: {input: script, value: '{"run":"make"}'}

@@ -1,0 +1,14 @@
+description: >-
+  A multi-dropdown input's value is a list of its options, even when only
+  one is chosen. Anything else is an error.
+source: Meridian
+inputs:
+  zones: a
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_option_list
+      path: /on/execute/inputs/zones
+      line: 4
+      column: 7
+      params: {input: zones, value: '"a"'}

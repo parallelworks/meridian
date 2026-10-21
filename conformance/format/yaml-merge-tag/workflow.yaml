@@ -1,0 +1,4 @@
+jobs:
+  main:
+    steps:
+      - run: !!merge echo hello

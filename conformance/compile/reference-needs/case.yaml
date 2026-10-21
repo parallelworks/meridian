@@ -1,10 +1,16 @@
 description: >-
   needs.<job> must name a job this one needs: ACTIVATE fails a step that reads
   another. A job's outputs are whatever its steps write, so their names
-  aren't checked, and a job's steps can read its own outputs so far.
+  aren't checked, and a job's steps can read its own outputs so far. Its
+  if: can't, as it is decided before any of them runs.
 source: Meridian
 expect:
   diagnostics:
     - severity: error
       code: job_not_needed
       path: /jobs/test/steps/1/run
+      params: {job: test, needed: deploy}
+    - severity: error
+      code: job_not_needed
+      path: /jobs/test/if
+      params: {job: test, needed: test}

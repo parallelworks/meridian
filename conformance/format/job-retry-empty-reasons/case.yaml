@@ -1,0 +1,11 @@
+description: >-
+  A job's retry lists at least one reason to run it again.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: too_few
+      path: /jobs/simulate/retry/reasons
+      line: 4
+      column: 16
+      params: {min: 1}

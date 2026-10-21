@@ -41,16 +41,24 @@ func TestInputsConformance(t *testing.T) {
 			}
 			inputs, diags := compile.ResolveInputs(doc, c.Inputs, opts)
 			conformancetest.CheckDiagnostics(t, c.Expect.Diagnostics, diags)
-			// A run with errors doesn't start, so a case with errors says
-			// what it expects of the values only where it means to: how
-			// the values that were good were read, say.
-			check := func(what string, got any, want map[string]any) {
+			check := func(what string, got, want map[string]any) {
 				t.Helper()
-				if want == nil && diags.HasErrors() {
+				if !diags.HasErrors() {
+					if g, w := conformancetest.Canonical(t, got), conformancetest.Canonical(t, orEmpty(want)); g != w {
+						t.Errorf("%s = %s, want %s", what, g, w)
+					}
 					return
 				}
-				if g, w := conformancetest.Canonical(t, got), conformancetest.Canonical(t, orEmpty(want)); g != w {
-					t.Errorf("%s = %s, want %s", what, g, w)
+				// A run with errors doesn't start, so a case with errors
+				// lists only the values it checks, such as those of the
+				// inputs that were given good ones.
+				for name, w := range want {
+					g, ok := got[name]
+					if !ok {
+						t.Errorf("%s has no %s, want %s", what, name, conformancetest.Canonical(t, w))
+					} else if g, w := conformancetest.Canonical(t, g), conformancetest.Canonical(t, w); g != w {
+						t.Errorf("%s.%s = %s, want %s", what, name, g, w)
+					}
 				}
 			}
 			check("inputs", inputs.Values, c.Expect.Inputs)

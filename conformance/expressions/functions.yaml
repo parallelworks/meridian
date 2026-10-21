@@ -1,9 +1,11 @@
 description: >-
-  GitHub Actions' functions, with its meanings: contains, startsWith,
-  endsWith, format, join, toJSON and fromJSON, and case, which picks the
-  value of its first true condition. contains also finds a key in a mapping,
-  as in and includes do. String matching is case-sensitive.
-source: ACTIVATE's tests
+  Functions named after GitHub Actions' and mostly meaning what they mean
+  there: contains, startsWith, endsWith, format, join, toJSON and fromJSON,
+  and case, which picks the value of its first true condition. Unlike
+  GitHub Actions, contains also finds a key in a mapping, as in and includes
+  do, string matching and function names are case-sensitive, and hashFiles
+  isn't a function.
+source: ACTIVATE's tests, and Meridian
 scope:
   contexts:
     inputs:
@@ -79,6 +81,10 @@ cases:
     value: '"a && b <c>"'
   - expr: toJSON(inputs.list)
     value: "[\n  \"x\",\n  \"y\"\n]"
+  # A key given twice in JSON text has its later value, as JSON.parse and
+  # Go's encoding/json give it.
+  - expr: "fromJSON('{\"a\": 1, \"b\": 2, \"a\": 3}')"
+    value: {a: 3, b: 2}
 
   - expr: "case(inputs.num > 3, 'big', inputs.num > 1, 'mid', 'small')"
     value: big

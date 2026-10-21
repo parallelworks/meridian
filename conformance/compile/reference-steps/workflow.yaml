@@ -5,5 +5,7 @@ jobs:
       - id: later
         run: echo x=1 >> $OUTPUTS
       - run: echo ${{ steps.later.outputs.x }}
+      - id: self
+        run: echo ${{ steps.self.outputs.x }}
     outputs:
       x: ${{ steps.later.outputs.x }}

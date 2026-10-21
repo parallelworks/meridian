@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      zones:
+        type: multi-dropdown
+        options:
+          - {label: Zone A, value: a}
+          - {label: Zone B, value: b}
+jobs:
+  main:
+    steps:
+      - run: echo ok

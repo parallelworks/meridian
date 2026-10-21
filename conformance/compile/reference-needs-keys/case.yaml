@@ -1,0 +1,25 @@
+description: >-
+  needs.<job> has a needed job's outputs, its result and its steps, and
+  needs.<job>.steps.<id> names one of that job's steps. Anything else is an
+  error, and so is needs.<job> for a job the workflow doesn't have.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: needed_job_no_step
+      path: /jobs/test/steps/1/run
+      line: 10
+      column: 23
+      params: {job: build, id: nope}
+    - severity: error
+      code: needs_unknown_key
+      path: /jobs/test/steps/2/run
+      line: 11
+      column: 23
+      params: {job: build, key: bogus}
+    - severity: error
+      code: undefined_job
+      path: /jobs/test/steps/3/run
+      line: 12
+      column: 23
+      params: {job: buld, suggested: "true", suggestion: build}

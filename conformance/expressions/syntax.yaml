@@ -76,6 +76,9 @@ cases:
   - expr: nope(1)
     error: syntax
     code: not_a_function
+  - expr: "contains(inputs.a : 'x')"
+    error: syntax
+    code: call_missing_comma
   - expr: success(1)
     error: syntax
     code: wrong_argument_count

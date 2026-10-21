@@ -1,0 +1,33 @@
+description: >-
+  hidden, ignore and optional decide which inputs the run has, when it is
+  created, so one that reads something the compiler doesn't have, such as a
+  secret variable, is an error.
+source: Meridian
+contexts:
+  vars:
+    TOKEN: unused
+secret-variables: [TOKEN]
+inputs:
+  shown: a
+  kept: b
+  given: c
+expect:
+  diagnostics:
+    - severity: error
+      code: input_condition_not_known
+      path: /on/execute/inputs/shown/hidden
+      line: 6
+      column: 17
+      params: {input: shown, key: hidden, name: vars}
+    - severity: error
+      code: input_condition_not_known
+      path: /on/execute/inputs/kept/ignore
+      line: 9
+      column: 17
+      params: {input: kept, key: ignore, name: vars}
+    - severity: error
+      code: input_condition_not_known
+      path: /on/execute/inputs/given/optional
+      line: 12
+      column: 19
+      params: {input: given, key: optional, name: vars}

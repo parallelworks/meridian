@@ -73,6 +73,38 @@ func TestPlatformInputs(t *testing.T) {
 	}
 }
 
+// returns is a platform whose value for every input is v.
+type returns struct{ v any }
+
+func (r returns) ResolveInput(string, map[string]any, any) (any, error) { return r.v, nil }
+
+// A platform's value for an input is checked as a submitted one is: a plan
+// holds only JSON, so a value that isn't is an error, which says what of it
+// isn't.
+func TestPlatformValueNotJSON(t *testing.T) {
+	doc := load(t, clusterWorkflow)
+	for _, tc := range []struct {
+		v           any
+		what, value string
+	}{
+		{map[string]any{"cores": math.Inf(1)}, "number", "+Inf"},
+		{[]any{"a", math.NaN()}, "number", "NaN"},
+		{map[string]any{"name": "\xff"}, "text", ""},
+		{map[string]any{"\xff": 1}, "key", ""},
+		{map[string]any{"since": struct{}{}}, "go_type", "struct {}"},
+	} {
+		_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "a"}, compile.Options{Inputs: returns{tc.v}})
+		if len(diags) != 1 || diags[0].Code != problems.PlatformValueNotJSON.Code() {
+			t.Errorf("%#v: %v, want %s", tc.v, diags, problems.PlatformValueNotJSON.Code())
+			continue
+		}
+		d := diags[0]
+		if d.Path() != "/on/execute/inputs/cluster" || d.Params["input"] != "cluster" || d.Params["what"] != tc.what || d.Params["value"] != tc.value {
+			t.Errorf("%#v: %s at %q with %v, want what %q and value %q", tc.v, d, d.Path(), d.Params, tc.what, tc.value)
+		}
+	}
+}
+
 func TestDeferredDefaultsEncode(t *testing.T) {
 	doc := load(t, `on:
   execute:

@@ -1,13 +1,22 @@
-description: A value that isn't a number, or is outside the input's min and max, is an error.
+description: >-
+  A value that isn't a number, or is outside the input's min and max, is an
+  error. One equal to its min or max is within them.
 source: Meridian
 inputs:
   count: 9
   other: many
+  low: 1
+  high: 8
 expect:
   diagnostics:
     - severity: error
       code: input_above_max
       path: /on/execute/inputs/count
+      params: {input: count, value: "9", max: "8"}
     - severity: error
       code: input_not_number
       path: /on/execute/inputs/other
+      params: {input: other, value: '"many"'}
+  inputs:
+    low: 1
+    high: 8

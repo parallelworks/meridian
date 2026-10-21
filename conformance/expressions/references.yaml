@@ -3,7 +3,7 @@ description: >-
   as [1:3], and .* for each item. A path that leads nowhere is null, except in
   the contexts that hold strings, where a missing name is "". A string that
   holds JSON is read as its value.
-source: ACTIVATE's documentation and tests
+source: ACTIVATE's documentation and tests, and Meridian
 scope:
   contexts:
     inputs:
@@ -25,6 +25,8 @@ scope:
       nested: '{"m5": {"large": 1}}'
       catalog: {m5.large: 0.096}
       s: hello
+      accented: héllo
+      emoji: a😀b
       arr: [a, b, c, d, e]
       jsonArr: "[10, 20, 30, 40]"
       remote: {repo: from-inputs}
@@ -175,6 +177,15 @@ cases:
     value: []
   - expr: inputs.s[abc:def]
     value: null
+  # A string's indexes count characters, not bytes.
+  - expr: inputs.accented[1]
+    value: é
+  - expr: inputs.accented[1:3]
+    value: él
+  - expr: inputs.emoji[1]
+    value: 😀
+  - expr: inputs.emoji[1:]
+    value: 😀b
 
   # Each context.
   - expr: org.orgKey

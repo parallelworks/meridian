@@ -248,6 +248,8 @@ func TestDecodeRefuses(t *testing.T) {
 		"a template without an expression": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":["x"]}`, 1),
 		"a bad template beside a key":      strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"${{":"x"},"y":1}`, 1),
 		"a $ that marks nothing":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"yaml":"x"}}`, 1),
+		"a $ that marks two keys":          strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"$a":1,"$b":2}}`, 1),
+		"a $ that marks an empty mapping":  strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{}}`, 1),
 		// The value of a first key that starts with $, beside another.
 		"a $ that marks nothing, nested":             strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":[{"$":{"yaml":"x"}}],"y":1}`, 1),
 		"an unmarked $ key, nested":                  strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"$yaml":"x"},"y":1}`, 1),

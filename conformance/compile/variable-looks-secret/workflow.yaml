@@ -23,4 +23,5 @@ jobs:
   main:
     steps:
       - run: echo ${{ org.HF_TOKEN }} ${{ vars.apiKey }} ${{ vars.tokenizer }} ${{ vars.DB_PASSWORD }}
+      - run: echo ${{ vars.APIKey }}
       - run: echo ${{ vars.apiKey }}

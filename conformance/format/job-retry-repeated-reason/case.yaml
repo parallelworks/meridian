@@ -1,0 +1,10 @@
+description: >-
+  A job's retry lists each reason once.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: duplicate_items
+      path: /jobs/simulate/retry/reasons
+      line: 4
+      column: 16

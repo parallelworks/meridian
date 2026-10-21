@@ -1,0 +1,6 @@
+jobs:
+  main:
+    steps:
+      - run: echo hello
+---
+null

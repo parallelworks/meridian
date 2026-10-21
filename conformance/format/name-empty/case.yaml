@@ -1,0 +1,11 @@
+description: >-
+  A workflow's name, if it has one, isn't empty.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: too_short
+      path: /name
+      line: 1
+      column: 7
+      params: {min: 1}

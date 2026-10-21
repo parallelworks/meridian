@@ -1,0 +1,12 @@
+description: >-
+  A second YAML document that is null, written as null or ~, is still a
+  second document, so it is a warning. Only a separator with nothing after
+  it isn't one.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: extra_document
+      path: ""
+      line: 5
+      column: 1

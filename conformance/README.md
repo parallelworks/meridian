@@ -74,8 +74,8 @@ expect:
   `expect.inputs`.
 - A case without errors has exactly the values its `expect` lists, and none
   where it lists none. A run with errors doesn't start, so a case with
-  errors checks only the values it lists: `expect.inputs: {}` says there are
-  none.
+  errors checks only the values it lists, such as those of the inputs that
+  were given good ones, and not the others.
 - `contexts` are what expressions read besides inputs, such as `org` and
   `vars`. `secret-variables` names variables in `vars` that are secrets:
   the compiler doesn't have their values, which are known only once the run

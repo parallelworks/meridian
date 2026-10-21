@@ -1,0 +1,6 @@
+description: >-
+  A job named twice in needs is needed once.
+source: Meridian
+expect:
+  plan:
+    /jobs/1/needs: [{job: build}]

@@ -3,6 +3,7 @@ package compile_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/v2"
 	"strings"
 	"testing"
 
@@ -78,6 +79,37 @@ func TestNoPlanWithErrors(t *testing.T) {
 	p, diags = compile.Compile("workflow.yaml", []byte("jobs: ["), nil, compile.Options{})
 	if p != nil || !diags.HasErrors() {
 		t.Errorf("a file that doesn't load: plan %v, %v", p, diags)
+	}
+}
+
+// A plan keeps each warning's code, params and place, but not its message
+// in English, so that each reader sees it in their own language: decoded,
+// it says what the compiler's warning says.
+func TestPlanWarningsKeepNoMessage(t *testing.T) {
+	src := strings.Replace(sample, "make test", "make test ${{ inputs.mode }}", 1)
+	p, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
+	if diags.HasErrors() || len(diags) != 1 || len(p.Warnings) != 1 {
+		t.Fatalf("diagnostics %v, plan warnings %v; want the one warning in both", diags, p.Warnings)
+	}
+	data, err := plan.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Warnings []map[string]any `json:"warnings"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Warnings) != 1 || raw.Warnings[0]["detail"] != nil || raw.Warnings[0]["code"] != string(problems.UndefinedInput.Code()) {
+		t.Errorf("the plan's warnings are %v, want the code and no detail", raw.Warnings)
+	}
+	back, err := plan.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := back.Warnings[0], diags[0]; got.String() != want.String() || got.Localize("ja") != want.Localize("ja") || got.Path() != want.Path() {
+		t.Errorf("the plan's warning is %s, at %q; want %s, at %q", got, got.Path(), want, want.Path())
 	}
 }
 

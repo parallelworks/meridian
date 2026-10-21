@@ -1,0 +1,13 @@
+description: >-
+  A cloud input's csp is one of the cloud providers, or an expression.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: value_must_be_one_of_or_expression
+      path: /on/execute/inputs/region/csp
+      line: 6
+      column: 14
+      params:
+        value: '"digitalocean"'
+        allowed: '"aws", "azure", "google", "openstack"'

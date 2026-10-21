@@ -1,0 +1,19 @@
+description: >-
+  The job context is what a job knows of itself once it is underway, so a
+  job's if: and runs-on:, which decide whether and where it runs, can't read
+  it. Its env: and steps can.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context_not_known
+      path: /jobs/build/if
+      line: 3
+      column: 13
+      params: {context: job, phase: job_ready}
+    - severity: error
+      code: context_not_known
+      path: /jobs/build/runs-on
+      line: 4
+      column: 18
+      params: {context: job, phase: job_ready}

@@ -1,0 +1,6 @@
+jobs:
+  simulate:
+    retry:
+      reasons: []
+    steps:
+      - run: ./simulate

@@ -1,0 +1,14 @@
+jobs:
+  plan:
+    steps:
+      - id: split
+        run: echo 'shards=[1, 2]' >> $OUTPUTS
+    outputs:
+      shards: ${{ steps.split.outputs.shards }}
+  test:
+    needs: [plan]
+    strategy:
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - run: echo ${{ matrix.shard }}

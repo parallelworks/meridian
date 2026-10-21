@@ -61,7 +61,9 @@ type Expect struct {
 	// Values are values the loaded workflow must have, by JSON Pointer.
 	Values map[string]any `yaml:"values,omitempty"`
 	// Inputs are the run's input values, in the inputs area, without those
-	// in Deferred.
+	// in Deferred. A run with errors doesn't start, so in a case with
+	// errors, Inputs, Deferred and Secrets hold only the values the case
+	// checks, and the run can have others.
 	Inputs map[string]any `yaml:"inputs,omitempty"`
 	// Deferred are the values that stay expressions until the run is
 	// underway, such as a default that reads a secret variable, by their
