@@ -2,6 +2,7 @@ package expr_test
 
 import (
 	"cmp"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"iter"
@@ -27,14 +28,30 @@ func TestConformance(t *testing.T) {
 	for _, f := range files {
 		t.Run(strings.TrimSuffix(strings.TrimPrefix(f.Name, "expressions/"), ".yaml"), func(t *testing.T) {
 			t.Parallel()
+			scope, workflow := canonical(t, f.Scope), canonical(t, f.Workflow)
 			for i, c := range f.Cases {
 				name := cmp.Or(c.Expr, c.Template, c.At)
 				t.Run(fmt.Sprintf("%d %s", i+1, name), func(t *testing.T) {
 					runCase(t, &f, &c)
 				})
 			}
+			// The cases share the file's scope and workflow, so a case that
+			// changed them would change what the cases after it see.
+			if canonical(t, f.Scope) != scope || canonical(t, f.Workflow) != workflow {
+				t.Error("evaluating the cases changed the file's scope or workflow")
+			}
 		})
 	}
+}
+
+// canonical encodes v as JSON, with mappings in the order of their keys.
+func canonical(t *testing.T, v any) string {
+	t.Helper()
+	data, err := jsonv2.Marshal(v, jsonv2.Deterministic(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // unhurried returns scope in a group of its own whose clock never moves, so
