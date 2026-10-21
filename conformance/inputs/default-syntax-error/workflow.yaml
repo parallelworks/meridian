@@ -1,0 +1,27 @@
+on:
+  execute:
+    inputs:
+      name:
+        type: string
+        default: ${{ inputs.user + }}
+      greeting:
+        type: string
+        default: Hello, ${{ ..name.default }}
+      settings:
+        type: group
+        items:
+          port:
+            type: number
+            default: ${{ 8080 8081 }}
+      hosts:
+        type: list
+        template:
+          host:
+            type: string
+            default: ${{ 'web-' + }}
+        default:
+          - host: ${{ inputs.name ?? }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

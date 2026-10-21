@@ -184,3 +184,38 @@ func TestCompileConformance(t *testing.T) {
 		})
 	}
 }
+
+// Every plan the compiler returns, which it does only without errors,
+// encodes: compiling each compile and inputs case, with its values, gives
+// a plan that can be stored with the run, or errors and none.
+func TestConformancePlansEncode(t *testing.T) {
+	for _, area := range []string{"compile", "inputs"} {
+		cases, err := conformance.Cases(area)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cases {
+			t.Run(c.Name, func(t *testing.T) {
+				t.Parallel()
+				data, err := c.Workflow()
+				if err != nil {
+					t.Fatal(err)
+				}
+				opts := compile.Options{Contexts: contexts(c)}
+				if !c.NoPlatform {
+					opts.Inputs = passThrough{}
+				}
+				p, diags := compile.Compile("workflow.yaml", data, c.Inputs, opts)
+				if (p == nil) != diags.HasErrors() {
+					t.Fatalf("plan is %v with errors %v", p != nil, diags.HasErrors())
+				}
+				if p == nil {
+					return
+				}
+				if _, err := plan.Encode(p); err != nil {
+					t.Errorf("the plan doesn't encode: %v", err)
+				}
+			})
+		}
+	}
+}

@@ -1,0 +1,21 @@
+on:
+  execute:
+    inputs:
+      name:
+        type: string
+        label: ${{ 'Name' + }}
+        description: The name ${{ inputs.site ?? }} uses
+        default: me
+      site:
+        type: string
+        default: east
+        tooltip: ${{ 'Where it runs' 'now' }}
+        placeholder: ${{ 'e.g. ' + inputs.name + }}
+      size:
+        type: number
+        default: 1
+        hidden: ${{ inputs.site == }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

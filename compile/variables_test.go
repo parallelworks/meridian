@@ -78,6 +78,11 @@ func TestDiagnosticsHideVariables(t *testing.T) {
 			"s3cr3t", problems.NotListOrMapping,
 			[]string{"value"},
 		},
+		{
+			"a default that isn't JSON", inputs("s: {type: string, default: '${{ vars.X / 0 }}'}"),
+			"31337", problems.InputNotJSON,
+			[]string{"value"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := compile.Options{Inputs: platform{}, Contexts: map[string]any{"vars": map[string]any{"X": tc.value}}}

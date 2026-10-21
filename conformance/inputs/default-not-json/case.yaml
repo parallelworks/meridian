@@ -1,0 +1,34 @@
+description: >-
+  A default that gives NaN or an infinity, as 0/0 and 1/0 do, gives a
+  value that isn't JSON, which a run's values can't hold, so it is an error
+  at the input, as a submitted value that isn't JSON is, for text inputs
+  too. One in a list's rows is reported at the row's field. Text that holds
+  the word NaN is fine.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/ratio
+      line: 4
+      column: 7
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/limit
+      line: 7
+      column: 7
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/floor
+      line: 10
+      column: 7
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/hosts/template/weight
+      line: 21
+      column: 11
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/disks/template/size
+      line: 29
+      column: 11

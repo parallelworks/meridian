@@ -235,6 +235,9 @@ ACTIVATE's launch form and its backend do together:
   default that is an expression is evaluated with the other inputs' values,
   defaults included, in whatever order they need; defaults that read each
   other are an error.
+- **Syntax.** Every expression in the input definitions must parse, in a
+  default, an option, a label or anywhere else, whether or not the run
+  evaluates it. A syntax error is reported once, where it is.
 - **A form's text.** A form sends the text of an expression it can't
   evaluate itself, such as a default that reads a secret. A submitted value
   that is exactly the text of an input's default means the default. So does
@@ -262,8 +265,11 @@ ACTIVATE's launch form and its backend do together:
   number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
-  name, and is kept, as ACTIVATE keeps it. A submitted value that isn't
-  JSON, such as NaN or text that isn't UTF-8, is an error.
+  name, and is kept, as ACTIVATE keeps it. A value that isn't JSON, such
+  as NaN or text that isn't UTF-8, is an error, whether it was submitted or
+  a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
+  can't encode such a run's values, and fails it as it starts. One in a
+  list's rows is reported at the row's field.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an

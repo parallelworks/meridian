@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      pw-user:
+        type: string
+        default: me
+      owner:
+        type: string
+        default: ${{ inputs.pw-user }}
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.owner }}

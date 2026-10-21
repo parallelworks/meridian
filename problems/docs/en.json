@@ -212,9 +212,10 @@
     ]
   },
   "input_not_json": {
-    "why": "A run's input values are JSON, and this one holds something JSON can't, such as NaN or text that isn't UTF-8.",
+    "why": "A run's input values are JSON, and this one holds something JSON can't, such as NaN or text that isn't UTF-8. It was submitted that way, or an expression in the input's default gave it: 0/0 gives NaN, and 1/0 an infinity.",
     "fix": [
-      "Submit the value as JSON."
+      "Submit the value as JSON.",
+      "If the input's default gave it, change the expression so that it gives a value JSON can hold. A hyphen subtracts, so inputs.pw-user gives NaN: read the input as inputs['pw-user']."
     ]
   },
   "unknown_input": {

@@ -101,6 +101,7 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 	}
 	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
 	r.fields = r.collect(defs, definitionsPath, nil, nil)
+	r.checkSyntax(append(make([]string, 0, 16), definitionsPath...), defs)
 	r.checkJSON(r.values)
 	r.checkUnknown(r.values, nil)
 	for _, f := range r.fields {
@@ -269,11 +270,38 @@ func (f *field) label() string {
 	return name
 }
 
+// checkSyntax reports the syntax errors in the expressions in v, at loc in
+// the input definitions: in a default, an option, a label or anywhere else,
+// whether or not resolving the inputs evaluates it. An evaluation that
+// reads one reports the same diagnostic, which sorting the diagnostics
+// drops, so each is reported once. It appends to loc in place, so that the
+// walk reuses one path: the caller's loc must own the room after it.
+func (r *inputResolver) checkSyntax(loc []string, v any) {
+	switch v := v.(type) {
+	case string:
+		if !strings.Contains(v, "${{") {
+			return
+		}
+		if _, err := r.workflow.Template(v); err != nil {
+			r.reportError(loc, 0, err)
+		}
+	case []any:
+		for i, item := range v {
+			r.checkSyntax(append(loc, strconv.Itoa(i)), item)
+		}
+	case map[string]any:
+		// The diagnostics are sorted, so the keys' order doesn't matter.
+		for k, item := range v {
+			r.checkSyntax(append(loc, k), item)
+		}
+	}
+}
+
 // checkJSON reports, and drops, submitted values that aren't JSON values,
 // which a plan can't hold.
 func (r *inputResolver) checkJSON(values map[string]any) {
 	for key, v := range jsonvalue.Sorted(values) {
-		if what, bad := notJSON(v); what != "" {
+		if what, bad, _ := notJSON(v); what != "" {
 			r.reportAt(problems.InputNotJSON, definitionsPath, problems.Params{"input": key, "what": what, "value": bad})
 			delete(values, key)
 		}
@@ -367,7 +395,7 @@ func (r *inputResolver) prepare(f *field) bool {
 	// The workflow keeps what it parses, for the evaluation.
 	reads, err := r.workflow.Exprs(appendPath(f.loc, "default"))
 	if err != nil {
-		return false // The schema checks reported it.
+		return false // checkSyntax reported it.
 	}
 	if reads == nil {
 		r.setDefault(f, f.def["default"])
@@ -483,7 +511,7 @@ func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
 	for _, t := range texts {
 		exprs, err := r.workflow.Exprs(t.loc)
 		if err != nil {
-			continue // The workflow's own text, which parsed when it was loaded.
+			continue // checkSyntax reported it.
 		}
 		reads = append(reads, exprs...)
 	}
@@ -556,7 +584,7 @@ func expressionOptions(options any, loc []string) []exprOption {
 func (r *inputResolver) deferPart(f *field, path []string, raw any, variable bool) {
 	v, err := parseFor(raw, f.index)
 	if err != nil {
-		return // The workflow's own text, which parsed when it was loaded.
+		return // checkSyntax reported it.
 	}
 	in := f.holder()
 	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})
@@ -826,10 +854,12 @@ func compileTimeContexts(opts Options, inputs any) map[string]any {
 
 // checkValues checks each value against its input's type, converts numbers
 // and booleans given as text, resolves platform types, and moves password
-// values to the secrets. The value of an input that reads a variable is
-// checked too, and kept for what the compiler evaluates, but what is wrong
-// with it is reported without it, and a password's isn't one of the
-// secrets: it is evaluated again as the run starts.
+// values to the secrets. A value that isn't JSON, which a plan can't hold,
+// such as a default that gives NaN, is reported and dropped, as a submitted
+// one is. The value of an input that reads a variable is checked too, and
+// kept for what the compiler evaluates, but what is wrong with it is
+// reported without it, and a password's isn't one of the secrets: it is
+// evaluated again as the run starts.
 func (r *inputResolver) checkValues() {
 	for _, f := range r.fields {
 		if f.header || f.ignored || f.deferred {
@@ -843,12 +873,19 @@ func (r *inputResolver) checkValues() {
 			continue
 		}
 		out, bad := r.checkValue(f, v)
+		at := f
+		if bad.kind == nil {
+			at, bad = r.checkJSONValue(f, out)
+		}
 		if bad.kind != nil {
-			bad.params["input"] = f.label()
+			bad.params["input"] = at.label()
 			if f.variable {
 				bad.params = mask(bad.params)
 			}
-			r.reportAt(bad.kind, f.loc, bad.params)
+			r.reportAt(bad.kind, at.loc, bad.params)
+			if bad.kind == problems.InputNotJSON {
+				r.remove(f.path)
+			}
 			continue
 		}
 		if f.typ == "password" {
@@ -884,7 +921,7 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		case err != nil:
 			return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
 		}
-		if what, bad := notJSON(out); what != "" {
+		if what, bad, _ := notJSON(out); what != "" {
 			return wrong(problems.PlatformValueNotJSON, problems.Params{"what": what, "value": bad})
 		}
 		return out, finding{}
@@ -948,6 +985,25 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		return formatNumber(n), finding{}
 	}
 	return v, finding{}
+}
+
+// checkJSONValue checks that v, the value of f as the run sees it, is JSON:
+// an expression can give NaN or an infinity, as 0/0 and 1/0 do, which a
+// run's values can't hold. It returns what is wrong, and the field it is
+// at: the innermost field of f's rows that holds the part that isn't JSON,
+// or else f.
+func (r *inputResolver) checkJSONValue(f *field, v any) (*field, finding) {
+	what, value, at := notJSON(v)
+	if what == "" {
+		return f, finding{}
+	}
+	in, path := f, slices.Concat(f.path, at)
+	for _, row := range r.rows {
+		if len(row.path) > len(in.path) && len(row.path) <= len(path) && slices.Equal(row.path, path[:len(row.path)]) {
+			in = row
+		}
+	}
+	return in, finding{problems.InputNotJSON, problems.Params{"what": what, "value": value}}
 }
 
 // checkOption checks that v is one of a dropdown's options, when they are

@@ -1,0 +1,30 @@
+description: >-
+  A syntax error in an input's default is an error, as it is wherever it is
+  in the input definitions, whether or not the run evaluates it: in a
+  group's input, in a list's starting rows, and in its template, though the
+  list has no rows for it, since its starting rows don't parse. It is
+  reported once, where it is, though another default reads it. An input
+  with a default isn't required, even when the default doesn't parse.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/name/default
+      line: 6
+      column: 36
+    - severity: error
+      code: unexpected_text
+      path: /on/execute/inputs/settings/items/port/default
+      line: 15
+      column: 31
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/hosts/template/host/default
+      line: 21
+      column: 35
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/hosts/default/0/host
+      line: 23
+      column: 38

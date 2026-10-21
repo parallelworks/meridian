@@ -1,0 +1,37 @@
+on:
+  execute:
+    inputs:
+      ratio:
+        type: string
+        default: ${{ 0/0 }}
+      limit:
+        type: editor
+        default: ${{ 1/0 }}
+      floor:
+        type: string
+        default: ${{ -1/0 }}
+      note:
+        type: string
+        default: The ratio is ${{ inputs.ratio }}
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          weight:
+            type: string
+            default: ${{ 0/0 }}
+        default:
+          - name: a
+      disks:
+        type: list
+        template:
+          size:
+            type: string
+            default: ${{ 1/0 }}
+        default:
+          - {}
+jobs:
+  main:
+    steps:
+      - run: echo ok
