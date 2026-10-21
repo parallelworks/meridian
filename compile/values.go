@@ -60,17 +60,27 @@ func setIn(v any, path []string, x any) {
 	}
 }
 
-// deletePath removes the value at path, if there is one.
-func deletePath(values map[string]any, path []string) {
-	m := values
-	for _, k := range path[:len(path)-1] {
-		next, ok := m[k].(map[string]any)
-		if !ok {
+// deletePath removes the value at path in v, a mapping or list, if a
+// mapping holds one there: it follows the lists on the way, as setIn does.
+func deletePath(v any, path []string) {
+	for i, k := range path {
+		switch c := v.(type) {
+		case map[string]any:
+			if i == len(path)-1 {
+				delete(c, k)
+				return
+			}
+			v = c[k]
+		case []any:
+			n, err := strconv.Atoi(k)
+			if err != nil || n < 0 || n >= len(c) {
+				return
+			}
+			v = c[n]
+		default:
 			return
 		}
-		m = next
 	}
-	delete(m, path[len(path)-1])
 }
 
 // notJSON finds the first part of v that isn't a JSON value of the kinds the

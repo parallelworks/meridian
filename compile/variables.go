@@ -23,7 +23,7 @@ func (c *compiler) variables(p *plan.Plan) []string {
 				continue
 			}
 			switch {
-			case len(r.Path) == 0 || r.Path[0] == "*" || r.Path[0] == "[index]":
+			case unnamed(r.Path):
 				read[r.Context] = true
 			case !c.isSecret(r.Context, r.Path[0]):
 				read[r.Context+"."+r.Path[0]] = true
@@ -69,16 +69,17 @@ func repeatedVariable() func(problems.Diagnostic) bool {
 // can be a secret.
 var textTypes = map[string]bool{"string": true, "editor": true}
 
-// checkInputNames warns about each of fields, and each field of a list's
-// rows, that takes text and whose name looks like a secret's. Unlike a
-// password input's, its value is kept with the run, and isn't masked.
+// checkInputNames warns about each of fields, and each field of a list's or
+// a repeated step's rows, that takes text and whose name looks like a
+// secret's. Unlike a password input's, its value is kept with the run, and
+// isn't masked.
 func (c *compiler) checkInputNames(fields []*field) {
 	for _, f := range fields {
 		if textTypes[f.typ] && looksSecret(f.key) {
 			c.reportAt(problems.InputLooksSecret, f.loc, problems.Params{"input": f.label()})
 		}
-		if template, ok := f.def["template"].(map[string]any); ok && f.typ == "list" {
-			c.checkInputNames(c.inputs.collect(template, appendPath(f.loc, "template"), appendPath(f.path, "[index]"), nil))
+		if defs, loc := f.rowInputs(); defs != nil {
+			c.checkInputNames(c.inputs.collect(defs, loc, appendPath(f.path, "[index]"), nil))
 		}
 	}
 }

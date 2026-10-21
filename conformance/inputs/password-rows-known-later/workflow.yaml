@@ -1,0 +1,23 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          key:
+            type: password
+          site:
+            type: string
+            default: ${{ vars.SITE }}
+      keys:
+        type: list
+        template:
+          key:
+            type: password
+        default: ${{ fromJSON(vars.KEYS) }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -202,9 +202,11 @@ the problem details that Parallel Works' services share
 - **Params**, the values its message shows. Data from the workflow or the
   run, such as a key or a value, is shown as data (a quoted name, compact
   JSON), so that only the words around it are translated. A value that an
-  organization or user variable gave, or that was made from one, is never
-  shown: a variable can hold a secret, so a param that would show it is
-  `***`, and a suggestion near it is left out.
+  organization or user variable or a `password` input gave, or that was
+  made from one, is never shown: a variable can hold a secret, and a
+  password is one, so a param that would show it is `***`, and a
+  suggestion near it is left out. Nor is a value given for a group, a list
+  or a wizard step with a password among its inputs.
 - **Its message in every language** the catalog has, written in ICU
   MessageFormat: English, Spanish, Japanese, Korean and Chinese, the
   languages of foundation's own catalogs. A diagnostic's detail is its
@@ -249,7 +251,8 @@ ACTIVATE's launch form and its backend do together:
   a default, is a group of the template's fields, which take their defaults
   as inputs do, in the same order as the rest; in a field's default,
   `[index]` is its row's index. A row's fields aren't checked against their
-  types, and their conditions aren't evaluated.
+  types, but for a password field, which is checked as a `password`
+  input is, and their conditions aren't evaluated.
 - **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
   values are complete, and are true when they are true or the text `true`.
   An ignored input has no value, even one that was submitted. An input with
@@ -258,7 +261,12 @@ ACTIVATE's launch form and its backend do together:
   reported, not only the first.
 - **Containers.** A group's values are under its name. A wizard step's
   inputs have their values beside the step's, unless `$meta.wizard.flatten`
-  is `false`. A header has no value.
+  is `false`. A wizard step with `multi: true` repeats, as many times as the
+  person running the workflow adds it: its value is a list under its name,
+  one row for each time, whatever `flatten` says, as a form keeps it, and
+  each row is a group of the step's inputs, as a list's row is of its
+  template's fields. A repeated step given no value has none. A header has
+  no value.
 - **Types.** A number or a boolean given as text, such as `"5"` or
   `"true"`, is converted, and a text input given a number gets its text.
   Anything else that doesn't fit the input's type is an error, as is a
@@ -281,8 +289,7 @@ ACTIVATE's launch form and its backend do together:
   are. An input's value stays whole, even if only part of it reads such a
   thing: a part of a mapping or list default, a form's text, or a row's
   default, whose `[index]` is kept in the plan. The secret variables it
-  reads are among the run's secrets. A `password` input's value isn't in the
-  plan: it is one of the run's secrets.
+  reads are among the run's secrets.
 - **Variables.** A plan never holds an organization or user variable's
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
   or `vars`, or an input whose value reads one, stays an expression in the
@@ -291,11 +298,28 @@ ACTIVATE's launch form and its backend do together:
   the run's shape reads its value: the inputs' `hidden`, `ignore` and
   `optional`, and the jobs' `needs`. It checks it against its input's type
   too, but a problem with it doesn't show the value.
+- **Passwords.** A plan never holds a `password` input's value, wherever
+  the input is: on its own, in a group or a wizard step, or a field of a
+  list's or a repeated step's rows. The value is one of the run's secrets,
+  which the plan names by its path in the values, such as
+  `inputs.creds.0.pass` for the field `pass` of the list `creds`'s first
+  row, and it is checked against its type, but a problem with it doesn't
+  show it. A value made from a password counts as the password, as one made
+  from a variable counts as the variable: a default that reads one stays an
+  expression in the plan, and is evaluated as the run starts. A list held
+  for the run's start holds its rows without their passwords' values,
+  which the run's start puts in their places. A list whose rows are
+  evaluated as the run starts, with a password field in them, is one of the
+  run's secrets as a whole, since the plan can't say which of its values
+  are passwords.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
 API: it evaluates conditions and defaults against the submitted values
 before it fills in defaults, so a condition can read an input's definition
-in place of its default. It doesn't check values against their types.
+in place of its default. It doesn't check values against their types. Its
+form keeps a repeated step's value as rows, as Meridian does, but its
+backend fills in the step's inputs as an ordinary step's, and drops the
+rows.
 
 ## The plan
 
@@ -339,9 +363,15 @@ job once, with its strategy, and the coordinator expands it when the jobs it
 needs have finished. A matrix that reads a variable, or an input whose
 value reads one, is held the same way, and expanded as the run starts.
 
-The plan holds no secret values. It names the secrets a run needs, secret
-variables and `password` inputs, and each attempt receives them when it is
-claimed.
+The plan holds no secret values, nor any value made from one. It names the
+secrets a run needs, and each attempt receives them when it is claimed:
+the secret variables it reads, each of a context's when it reads every
+variable of the context, as `vars.*` does; and its passwords, by their
+paths in the inputs' values, `password` inputs and the password fields of
+lists' rows, and lists whose rows hold one and are evaluated as the run
+starts ([Inputs](#inputs)). As the run starts, each password's value is
+put in the inputs' values at its path, in those of the inputs evaluated
+then too.
 
 Nor does the plan hold the value of an organization or user variable, secret
 or not, or a value made from one. People keep secrets in plain variables
@@ -373,7 +403,7 @@ to depends on where it is evaluated:
 | When | Evaluated by | Adds these contexts | Used by |
 | --- | --- | --- | --- |
 | The run is created | Compiler | `inputs`, `org` and `vars` (organization and user variables), `remote` (the repository the workflow came from), workflow `env`, `sessions` from a session provider | Everything that is known by then and reads no variable, and what decides the run's shape, which can: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
-| The run starts | Coordinator | `org` and `vars`, read once for the run, and the secrets the run needs | Input defaults the compiler leaves to it, such as those that read a variable or a secret, and matrices that read a variable |
+| The run starts | Coordinator | `org` and `vars`, read once for the run, and the secrets the run needs | Input defaults the compiler leaves to it, such as those that read a variable, a secret or a password, and matrices that read a variable |
 | A job's dependencies have finished | Coordinator | `needs`, status functions, `env` | Job `if:`, and `strategy:`, `runs-on:`, `resources:`, `retry:`, `timeout:` and `working-directory:` that use them |
 | A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
 | A job ends | Worker | | Job `outputs:` |

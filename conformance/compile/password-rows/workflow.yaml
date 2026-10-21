@@ -1,0 +1,53 @@
+on:
+  execute:
+    inputs:
+      $meta:
+        wizard:
+          mode: wizard
+      setup:
+        type: step
+        title: Setup
+        options:
+          creds:
+            type: list
+            template:
+              user:
+                type: string
+              pass:
+                type: password
+          hosts:
+            type: list
+            template:
+              name:
+                type: string
+              key:
+                type: password
+              site:
+                type: string
+                default: ${{ vars.SITE }}
+          keys:
+            type: list
+            template:
+              key:
+                type: password
+            default: ${{ fromJSON(vars.KEYS) }}
+      workers:
+        type: step
+        title: Worker
+        multi: true
+        options:
+          host:
+            type: string
+          login:
+            type: password
+      spares:
+        type: step
+        title: Spare
+        multi: true
+        options:
+          host:
+            type: string
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.creds[0].user }} ${{ inputs.workers[1].host }} ${{ inputs.hosts[0].name }}
