@@ -1,6 +1,8 @@
 package format_test
 
 import (
+	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"github.com/parallelworks/meridian/format"
@@ -43,6 +45,51 @@ func TestLocate(t *testing.T) {
 		if got := doc.Locate(tc.pointer, tc.offset); got != tc.want {
 			t.Errorf("Locate(%s, %d) = %v, want %v", tc.pointer, tc.offset, got, tc.want)
 		}
+	}
+}
+
+// A Locator finds each place in a string where Locate does, in whatever
+// order it is asked for them.
+func TestLocator(t *testing.T) {
+	doc, diags := format.Load("workflow.yaml", []byte(`jobs:
+  main:
+    steps:
+      - run: a ${{ x }} é ${{ y }} 日本 ${{ z }}
+      - run: 'é ${{ x }}'
+      - run: |
+          é ${{ x }}
+            日本 ${{ y }}
+
+          ${{ z }} done
+      - run: >
+          folded ${{ x }}
+`))
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	var inOrder []int
+	for offset := -1; offset < 50; offset++ {
+		inOrder = append(inOrder, offset)
+	}
+	shuffled := slices.Clone(inOrder)
+	rand.New(rand.NewPCG(1, 2)).Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+	for _, pointer := range []string{
+		"/jobs/main/steps/0/run", "/jobs/main/steps/1/run", "/jobs/main/steps/2/run",
+		"/jobs/main/steps/3/run", "/jobs/main/steps/9/run",
+	} {
+		for _, offsets := range [][]int{inOrder, shuffled} {
+			l := doc.Locator(pointer)
+			for _, offset := range offsets {
+				// Locate finds each place with a Locator of its own.
+				if got, want := l.Locate(offset), doc.Locate(pointer, offset); got != want {
+					t.Errorf("Locator(%s).Locate(%d) = %v, want %v", pointer, offset, got, want)
+				}
+			}
+		}
+	}
+	// The block's lines are where the file has them.
+	if got, want := doc.Locate("/jobs/main/steps/2/run", 21), (problems.Position{Line: 8, Column: 16}); got != want {
+		t.Errorf("Locate in a block = %v, want %v", got, want)
 	}
 }
 

@@ -155,6 +155,30 @@ func (b *budget) tick() bool {
 	return b.elapsed > maxGroupTime
 }
 
+// A cost is what evaluating counts toward a group's budget: what it built,
+// the work it did, and the steps it took.
+type cost struct{ built, work, steps int }
+
+func (c cost) plus(d cost) cost { return cost{c.built + d.built, c.work + d.work, c.steps + d.steps} }
+
+func (c cost) minus(d cost) cost { return cost{c.built - d.built, c.work - d.work, c.steps - d.steps} }
+
+// counted returns what the group's templates have counted so far.
+func (b *budget) counted() cost { return cost{b.built, b.work, b.steps} }
+
+// charge counts c, what evaluating something again would count, and
+// reports true, if the group stays within its limits. Otherwise it counts
+// nothing and reports false, so that evaluating it again fails where it
+// would: past what the group may build or do, or once it has spent its
+// time.
+func (b *budget) charge(c cost) bool {
+	if b.built+c.built > maxGroupBuilt || b.work+c.work > maxGroupWork || b.elapsed > maxGroupTime {
+		return false
+	}
+	b.built, b.work, b.steps = b.built+c.built, b.work+c.work, b.steps+c.steps
+	return true
+}
+
 // epoch is when the process started, which now reads the time from.
 var epoch = time.Now()
 

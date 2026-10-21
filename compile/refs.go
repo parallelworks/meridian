@@ -32,14 +32,14 @@ func suggesting(k *problems.Kind, params problems.Params, name string, names []s
 }
 
 // checkRef checks a reference that an expression evaluated in phase ph
-// makes, in job (nil outside jobs), and reports at pos, in the string at loc,
-// what is wrong with it. A reference to something the workflow doesn't
+// makes, in job (nil outside jobs), and reports at byte offset at in the
+// string in what is wrong with it. A reference to something the workflow doesn't
 // define is a warning, as ACTIVATE reads it as null or "" and runs the
 // workflow, unless ACTIVATE fails the step or job that reads it. checkRef
 // returns false if the reference is an error.
-func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, pos problems.Position, loc []string) bool {
+func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int) bool {
 	if !ph.has(r.Context) {
-		c.report(problems.ContextNotKnown, pos, loc, problems.Params{"context": r.Context, "phase": ph.name()})
+		c.reportIn(in, at, problems.ContextNotKnown, problems.Params{"context": r.Context, "phase": ph.name()})
 		return false
 	}
 	path := r.Path
@@ -76,22 +76,22 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, pos problems.Pos
 	if f.kind == nil {
 		return true
 	}
-	c.report(f.kind, pos, loc, f.params)
+	c.reportIn(in, at, f.kind, f.params)
 	return f.kind.Severity() != problems.Error
 }
 
-// reportProblem reports p, a probable mistake in an expression, at pos. If
-// the mistake split a name the workflow has, such as an input pw-user in
-// inputs.pw-user, it says so.
-func (c *compiler) reportProblem(pos problems.Position, loc []string, p expr.Problem, job *jobInfo) {
+// reportProblem reports p, a probable mistake in an expression, at byte
+// offset at in the string in. If the mistake split a name the workflow has,
+// such as an input pw-user in inputs.pw-user, it says so.
+func (c *compiler) reportProblem(in *spot, at int, p expr.Problem, job *jobInfo) {
 	params := p.Params
 	if p.Meant != nil {
-		if defines, defined, in := c.defines(*p.Meant, job); defines != "" {
+		if defines, defined, inJob := c.defines(*p.Meant, job); defines != "" {
 			params = maps.Clone(params)
-			params["defines"], params["defined"], params["job"] = defines, defined, in
+			params["defines"], params["defined"], params["job"] = defines, defined, inJob
 		}
 	}
-	c.report(p.Kind, pos, loc, params)
+	c.reportIn(in, at, p.Kind, params)
 }
 
 // defines says what in the workflow r names: an input, a job, a step, a

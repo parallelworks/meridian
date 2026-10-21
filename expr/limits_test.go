@@ -499,6 +499,60 @@ func TestGroupWorkBudget(t *testing.T) {
 	}
 }
 
+// An Evaluator keeps the values it makes, and each evaluation counts toward
+// the group as one that makes everything anew does: what it returns, and
+// what the group has counted after it, are the same, until the group runs
+// out of work and after.
+func TestEvaluatorCountsAsAnew(t *testing.T) {
+	root := map[string]any{"w": map[string]any{
+		"a":    "${{ .b + .c }}",
+		"b":    "${{ .c + (inputs.h == inputs.h ? 1 : 0) }}",
+		"c":    "${{ 1 }}",
+		"text": "no expressions",
+		"l":    []any{"${{ .c }}", "${{ length(inputs.h) > 1 }}", "text"},
+		"m":    map[string]any{"x": "${{ ..a }}", "y": "${{ length(..l) + ..b }}", "z": "${{ ..m.x }}"},
+		"d":    "${{ .m.y + .a + length(.l) }}",
+		"e":    "${{ .e }}",
+		"f":    "${{ .missing.x + inputs.nope }}",
+	}}
+	locations := [][]string{
+		{"w", "c"},
+		{"w", "a"},
+		{"w", "a"},
+		{"w", "m"},
+		{"w", "b"},
+		{"w", "l"},
+		{"w", "d"},
+		{"w", "e"},
+		{"w", "text"},
+		{"w", "m", "z"},
+		{"w", "f"},
+		{"w", "m", "y"},
+		{"w"},
+		{"w", "l", "1"},
+	}
+	for _, size := range []int{10, 3 << 20, 9 << 20} {
+		values := map[string]any{"h": xs(size)}
+		w := &expr.Workflow{Root: root}
+		anew, kept := inputs(values).Budgeted(), inputs(values).Budgeted()
+		ev := w.Evaluator(kept)
+		for i := range 6 * len(locations) {
+			loc := locations[(i*5)%len(locations)]
+			want, wantErr := w.Eval(loc, anew)
+			got, gotErr := ev.Eval(loc)
+			if fmt.Sprint(got) != fmt.Sprint(want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
+				t.Fatalf("%d MiB, evaluation %d of %q = %v, %v; want %v, %v", size>>20, i, loc, got, gotErr, want, wantErr)
+			}
+			b1, w1, s1 := expr.Counted(anew)
+			b2, w2, s2 := expr.Counted(kept)
+			if b1 != b2 || w1 != w2 || s1 != s2 {
+				t.Fatalf("%d MiB, evaluation %d of %q counted %d built, %d work, %d steps; want %d, %d, %d",
+					size>>20, i, loc, b2, w2, s2, b1, w1, s1)
+			}
+		}
+	}
+}
+
 // A clock is a test's clock. Each read moves it on by the next of steps,
 // or by the last once there is one left, and the test can move it on
 // between reads too.

@@ -383,3 +383,89 @@ jobs:
 		t.Errorf("b, 7.5 MiB, reads a, 5 MiB: %d bytes, %v", len(b), diags)
 	}
 }
+
+// Defaults are filled in the order they need, whichever way they read each
+// other, through a list's rows too. Those that read each other, and those
+// that read them, are an error, which names them in order.
+func TestDefaultsFillInOrder(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      a: {type: string, default: '${{ inputs.b }}-a'}
+      b: {type: string, default: '${{ inputs.hosts[1].name }}-b'}
+      c: {type: string, default: '${{ inputs.z }}-c'}
+      hosts:
+        type: list
+        template:
+          name: {type: string, default: '${{ inputs.base }}-row'}
+        default: [{}, {}]
+      base: {type: string, default: '${{ inputs.c }}-base'}
+      x: {type: string, default: '${{ inputs.y }}'}
+      y: {type: string, default: '${{ inputs.w }}'}
+      w: {type: string, default: '${{ inputs.x }}'}
+      reader: {type: string, default: '${{ inputs.y }}', optional: true}
+      z: {type: string, default: z}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	if len(diags) != 1 || diags[0].Code != problems.DefaultsReadEachOther.Code() ||
+		diags[0].Params["inputs"] != `"reader", "w", "x", "y"` {
+		t.Fatalf("diagnostics %v, want %s naming reader, w, x and y", diags, problems.DefaultsReadEachOther.Code())
+	}
+	if got, want := inputs.Values["a"], "z-c-base-row-b-a"; got != want {
+		t.Errorf("a = %v, want %v", got, want)
+	}
+}
+
+// An input's ignore that is true changes what its optional reads of it: an
+// ignored input that is evaluated once the run is underway has no value,
+// rather than one that isn't known yet.
+func TestConditionsReadIgnored(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      token:
+        type: string
+        default: ${{ vars.TOKEN }}
+        hidden: ${{ false }}
+        ignore: true
+        optional: ${{ inputs.token == null }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"TOKEN": expr.Unknown{Name: "vars"}}}}
+	inputs, diags := compile.ResolveInputs(doc, nil, opts)
+	if len(diags) != 0 || len(inputs.Deferred) != 0 {
+		t.Errorf("diagnostics %v and deferred %v, want none", diags, inputs.Deferred)
+	}
+}
+
+// Defaults are filled in passes over those that wait, in order: each pass
+// fills in each one that reads none that still waits. A relative reference
+// to another input's default reads the values as they are then, so e,
+// filled in the first pass after c, reads c's value.
+func TestDefaultsFillInPasses(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      a: {type: string, default: '${{ inputs.b }}'}
+      b: {type: string, default: "${{ 'x' }}"}
+      c: {type: string, default: '${{ inputs.b }}-c'}
+      e: {type: string, default: '${{ ..f.default }}'}
+      f: {type: string, default: '${{ inputs.c }}'}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	want := map[string]any{"a": "x", "b": "x", "c": "x-c", "e": "x-c", "f": "x-c"}
+	if len(diags) != 0 || !reflect.DeepEqual(inputs.Values, want) {
+		t.Errorf("values %v, %v; want %v", inputs.Values, diags, want)
+	}
+}

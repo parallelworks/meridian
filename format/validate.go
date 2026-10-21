@@ -35,6 +35,12 @@ var schemas = map[int]func() *formatSchema{
 type formatSchema struct {
 	*jsonschema.Schema
 	doc any
+	// probe is the schema as the if of another, {"if": schema, "else":
+	// false}, which values match as they match the schema. The library
+	// evaluates an if without the details of why a value doesn't match,
+	// which take the most time: for a value that matches one form of many,
+	// an error for each form before it.
+	probe *jsonschema.Schema
 }
 
 // compileSchema compiles an embedded schema, whose URI is id. A schema that
@@ -54,14 +60,22 @@ func parseSchema(id string, data []byte) (*formatSchema, error) {
 	}
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
+	probeID := id + ":probe"
 	if err := c.AddResource(id, doc); err != nil {
+		return nil, err
+	}
+	if err := c.AddResource(probeID, map[string]any{"if": map[string]any{"$ref": id}, "else": false}); err != nil {
 		return nil, err
 	}
 	s, err := c.Compile(id)
 	if err != nil {
 		return nil, err
 	}
-	return &formatSchema{s, doc}, nil
+	probe, err := c.Compile(probeID)
+	if err != nil {
+		return nil, err
+	}
+	return &formatSchema{s, doc, probe}, nil
 }
 
 // maxPasses bounds how many times validate drops unknown keys and validates
@@ -74,6 +88,10 @@ const maxPasses = 4
 // returns, so that later stages ignore it as ACTIVATE does.
 func (p *parser) validate(s *formatSchema, value any) any {
 	for pass := 1; ; pass++ {
+		// Most values match, which the probe tells quickest.
+		if s.probe.Validate(value) == nil {
+			return value
+		}
 		err := s.Validate(value)
 		if err == nil {
 			return value

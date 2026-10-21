@@ -99,7 +99,7 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 	r.checkUnknown(r.values, nil)
 	for _, f := range r.fields {
 		if f.header {
-			deletePath(r.values, f.path)
+			r.remove(f.path)
 		}
 	}
 	r.fillDefaults()
@@ -180,6 +180,11 @@ type inputResolver struct {
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
 	rows []*field
+	// evaluators evaluate expressions with the values as they are, one for
+	// the rows at each index, and contexts are what they read. Both are
+	// made again once the values change.
+	evaluators map[string]*expr.Evaluator
+	contexts   map[string]any
 }
 
 // collect returns the fields that the definitions in defs, at loc in the
@@ -270,10 +275,14 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 			}
 		}
 	}
+	var names []string
 	for key, v := range jsonvalue.Sorted(values) {
 		f, ok := known[key]
 		if !ok {
-			s, ok := hint.Suggest(key, slices.Sorted(maps.Keys(known)))
+			if names == nil {
+				names = slices.Sorted(maps.Keys(known))
+			}
+			s, ok := hint.Suggest(key, names)
 			params := problems.Params{"input": strings.Join(appendPath(path, key), ".")}
 			r.reportAt(problems.UnknownInput, definitionsPath, problems.WithSuggestion(params, strings.Join(appendPath(path, s), "."), ok))
 			continue
@@ -298,39 +307,29 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 // evaluated with the other inputs' values, defaults included, in the order
 // they need.
 func (r *inputResolver) fillDefaults() {
-	var pending []*field
+	var pending pendingFields
 	var start func(fields []*field)
 	start = func(fields []*field) {
 		for _, f := range fields {
 			if r.prepare(f) {
-				pending = append(pending, f)
+				pending.add(f)
 			} else {
 				start(r.collectRows(f))
 			}
 		}
 	}
 	start(r.fields)
-	for len(pending) > 0 {
-		progress := false
-		for i := 0; i < len(pending); i++ {
-			f := pending[i]
-			if r.readsPending(f, pending) {
-				continue
-			}
-			pending = slices.Delete(pending, i, i+1)
-			i--
-			progress = true
-			r.evalPending(f)
-			start(r.collectRows(f))
+	for p := pending.next(); p != nil; p = pending.next() {
+		r.evalPending(p.f)
+		start(r.collectRows(p.f))
+		pending.filled(p)
+	}
+	if left := pending.waiting(); len(left) > 0 {
+		names := make([]string, len(left))
+		for i, f := range left {
+			names[i] = strings.Join(f.path, ".")
 		}
-		if !progress {
-			names := make([]string, len(pending))
-			for i, f := range pending {
-				names[i] = strings.Join(f.path, ".")
-			}
-			r.reportAt(problems.DefaultsReadEachOther, pending[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
-			break
-		}
+		r.reportAt(problems.DefaultsReadEachOther, left[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
 	}
 	r.holdLater()
 }
@@ -349,23 +348,24 @@ func (r *inputResolver) prepare(f *field) bool {
 	if !f.hasDefault {
 		return false
 	}
-	def, err := plan.ValueOf(f.def["default"])
+	// The workflow keeps what it parses, for the evaluation.
+	reads, err := r.workflow.Exprs(appendPath(f.loc, "default"))
 	if err != nil {
 		return false // The schema checks reported it.
 	}
-	if v, ok := def.Literal(); ok {
-		r.setDefault(f, v)
+	if reads == nil {
+		r.setDefault(f, f.def["default"])
 		return false
 	}
 	if rows, ok := f.def["default"].([]any); ok && f.typ == "list" {
 		// The rows are filled in as a form's starting rows are, each
 		// expression where it is, so that what is known of them is, and
 		// their fields' defaults can be filled in too.
-		setIn(r.values, f.path, jsonvalue.Clone(rows))
+		r.set(f.path, jsonvalue.Clone(rows))
 		f.texts, f.reads = r.findTexts(f)
 		return true
 	}
-	f.reads = def.Exprs()
+	f.reads = reads
 	return true
 }
 
@@ -393,7 +393,7 @@ func (r *inputResolver) evalPending(f *field) {
 		case err != nil:
 			r.reportError(t.loc, 0, err)
 		default:
-			setIn(r.values, slices.Concat(f.path, t.path), v)
+			r.set(slices.Concat(f.path, t.path), v)
 		}
 	}
 }
@@ -403,7 +403,7 @@ func (r *inputResolver) evalPending(f *field) {
 // doesn't change the workflow.
 func (r *inputResolver) setDefault(f *field, v any) {
 	if v != "" && v != nil {
-		setIn(r.values, f.path, jsonvalue.Clone(v))
+		r.set(f.path, jsonvalue.Clone(v))
 	}
 }
 
@@ -426,7 +426,10 @@ func (r *inputResolver) collectRows(f *field) []*field {
 			out = append(out, c)
 		}
 	}
-	r.rows = append(r.rows, out...)
+	if len(out) > 0 {
+		r.rows = append(r.rows, out...)
+		r.changed()
+	}
 	return out
 }
 
@@ -454,13 +457,11 @@ func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
 	}
 	var reads []*expr.Expr
 	for _, t := range texts {
-		tmpl, err := expr.ParseTemplate(lookup(value, t.path).(string))
+		exprs, err := r.workflow.Exprs(t.loc)
 		if err != nil {
 			continue // The workflow's own text, which parsed when it was loaded.
 		}
-		for _, e := range tmpl.Exprs() {
-			reads = append(reads, e)
-		}
+		reads = append(reads, exprs...)
 	}
 	return texts, reads
 }
@@ -534,6 +535,7 @@ func (r *inputResolver) deferPart(f *field, path []string, raw any) {
 	}
 	in := f.holder()
 	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v})
+	r.changed()
 }
 
 // holdLater takes each input with parts evaluated once the run is underway
@@ -553,27 +555,8 @@ func (r *inputResolver) holdLater() {
 			}
 		}
 		f.deferred, f.dflt = true, plan.Literal(held)
-		deletePath(r.values, f.path)
+		r.remove(f.path)
 	}
-}
-
-// readsPending reports whether what f waits for reads another value that
-// isn't known yet.
-func (r *inputResolver) readsPending(f *field, pending []*field) bool {
-	for _, e := range f.reads {
-		for _, ref := range e.Refs() {
-			if ref.Context != "inputs" {
-				continue
-			}
-			path := indexPath(ref.Path, f.index)
-			for _, p := range pending {
-				if p != f && overlaps(path, p.path) {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // indexPath returns path with each [index] in it the index it reads.
@@ -587,12 +570,6 @@ func indexPath(path []string, index []int) []string {
 		}
 	}
 	return out
-}
-
-// overlaps reports whether one path leads to the other.
-func overlaps(a, b []string) bool {
-	n := min(len(a), len(b))
-	return slices.Equal(a[:n], b[:n])
 }
 
 // missing reports whether f has no value: none at all, "" when "" isn't one
@@ -624,10 +601,15 @@ func (r *inputResolver) applyConditions() {
 	for _, f := range r.fields {
 		if f.group != nil && f.group.ignored {
 			f.ignored = true
+			r.changed()
 			continue
 		}
 		f.hidden = r.condition(f, "hidden") || f.group != nil && f.group.hidden
-		f.ignored = r.condition(f, "ignore")
+		if f.ignored = r.condition(f, "ignore"); f.ignored {
+			// What expressions read of f changes, before its value is
+			// dropped.
+			r.changed()
+		}
 		f.optional = r.condition(f, "optional")
 		if f.ignored {
 			r.drop(f)
@@ -640,7 +622,7 @@ func (r *inputResolver) applyConditions() {
 		switch {
 		case f.optional || f.hidden:
 		case f.typ == "boolean":
-			setIn(r.values, f.path, false)
+			r.set(f.path, false)
 		default:
 			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
 		}
@@ -679,7 +661,7 @@ func (r *inputResolver) condition(f *field, key string) bool {
 // drop removes the values of an ignored input, and of the inputs it holds.
 func (r *inputResolver) drop(f *field) {
 	if !f.container || !f.flatten {
-		deletePath(r.values, f.path)
+		r.remove(f.path)
 		return
 	}
 	for _, c := range f.children {
@@ -691,10 +673,40 @@ func (r *inputResolver) drop(f *field) {
 // rows at index, with the values so far: the expressions in a string, and in
 // each string of a list or mapping.
 func (r *inputResolver) evalAt(loc []string, index []int) (any, error) {
-	scope := r.budget
-	scope.Contexts = compileTimeContexts(r.opts, r.evalValues())
-	scope.Index = index
-	return r.workflow.Eval(loc, scope)
+	key := fmt.Sprint(index)
+	ev, ok := r.evaluators[key]
+	if !ok {
+		if r.contexts == nil {
+			r.contexts = compileTimeContexts(r.opts, r.evalValues())
+		}
+		scope := r.budget
+		scope.Contexts = r.contexts
+		scope.Index = index
+		ev = r.workflow.Evaluator(scope)
+		if r.evaluators == nil {
+			r.evaluators = map[string]*expr.Evaluator{}
+		}
+		r.evaluators[key] = ev
+	}
+	return ev.Eval(loc)
+}
+
+// set sets the value at path, and remove removes it.
+func (r *inputResolver) set(path []string, v any) {
+	setIn(r.values, path, v)
+	r.changed()
+}
+
+func (r *inputResolver) remove(path []string) {
+	deletePath(r.values, path)
+	r.changed()
+}
+
+// changed notes that what expressions read of the values changed: the
+// values, or what is known of them. The evaluations that follow read them
+// anew.
+func (r *inputResolver) changed() {
+	r.evaluators, r.contexts = nil, nil
 }
 
 // deferred returns the defaults that are evaluated once the run is
@@ -780,10 +792,10 @@ func (r *inputResolver) checkValues() {
 		}
 		if f.typ == "password" {
 			r.secrets[strings.Join(f.path, ".")] = out
-			deletePath(r.values, f.path)
+			r.remove(f.path)
 			continue
 		}
-		setIn(r.values, f.path, out)
+		r.set(f.path, out)
 	}
 }
 
