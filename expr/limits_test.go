@@ -503,9 +503,11 @@ func TestGroupWorkBudget(t *testing.T) {
 // A template that fails the language's limits counts toward its group what
 // it read or built before it failed, and a template that starts once its
 // group has passed a limit, or can't take a step more, fails at once. So
-// templates that each read a string of 4 MiB as the JSON list it holds,
-// 32 MiB more, and fail, stop their group after a few, without parsing the
-// string again: seven pass 256 MiB of work, and two 64 MiB built.
+// 400 templates that each read a string of 4 MiB as the JSON list it
+// holds, 32 MiB more, and fail, stop their group after a few, without
+// parsing the string again: seven pass 256 MiB of work, and two 64 MiB
+// built. The rest fail on the group's work or build, well before its
+// clock.
 func TestGroupCountsFailedTemplates(t *testing.T) {
 	j := "[" + strings.Repeat("1,", 2<<20) + "1]"
 	read := len(j) + (2<<20+1)*16
@@ -519,11 +521,13 @@ func TestGroupCountsFailedTemplates(t *testing.T) {
 	}{
 		{"length inputs.j > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 32 + read, 0},
 		{"inputs.j[0] > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 32 + read, 0},
+		{"length(inputs.j.*) > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 40 + read, 0},
+		{"map(inputs.j, x => x)", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 24 + read, 0},
 		{"length(fromJSON(inputs.j))", 2, problems.ExpressionTooLarge, problems.ExpressionsBuildTooMuch, 32 + read, read - len(j)},
 	} {
 		group := inputs(map[string]any{"j": j}).Budgeted()
 		e := mustParse(t, tc.src)
-		for i := range 64 {
+		for i := range 400 {
 			_, err := e.Eval(group)
 			ee, isTemplate := errors.AsType[*expr.EvalError](err)
 			be, isGroup := errors.AsType[*expr.BudgetError](err)
@@ -542,11 +546,12 @@ func TestGroupCountsFailedTemplates(t *testing.T) {
 // it is parsed, so that a template that can't read it fails, as it would
 // once it had parsed it, without parsing it.
 func TestStringsCountBeforeParsing(t *testing.T) {
-	// Comparing h with itself leaves less than 1 MiB of work.
-	values := map[string]any{"h": xs(workLimit/2 - 64), "j": "[" + strings.Repeat("1,", 1<<19) + "1]"}
+	// Comparing h with itself leaves less than 128 bytes of work, too
+	// little to read j, whose numbers would each be made if it were parsed.
+	values := map[string]any{"h": xs(workLimit/2 - 64), "j": "[" + strings.Repeat("999,", 1<<18) + "999]"}
 	for _, src := range []string{
 		"length inputs.j", "keys inputs.j", "values inputs.j", "map(inputs.j, x => x)", "filter(inputs.j, x => x)",
-		"join(inputs.j)", "inputs.j join ','", "fromJSON(inputs.j)", "inputs.j[0]",
+		"join(inputs.j)", "inputs.j join ','", "fromJSON(inputs.j)", "inputs.j[0]", "inputs.j.*", "(inputs.j).*.a",
 	} {
 		e := mustParse(t, "inputs.h == inputs.h && "+src)
 		var err error

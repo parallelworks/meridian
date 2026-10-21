@@ -818,7 +818,7 @@ func (e *evaluator) each(n *call, fn function) (any, error) {
 	case map[string]any:
 		sorted := e.sortedKeys(c)
 		if _, isString := v.(string); !isString {
-			if err := e.did(n.at, traversal(v, c, sorted)); err != nil {
+			if err := e.did(n.at, keysWork(sorted)); err != nil {
 				return nil, err
 			}
 		}
@@ -1241,22 +1241,10 @@ func namesWork(path []string) int {
 
 // collection returns the list or mapping that v holds as JSON, or v
 // itself, as collection does, and counts the work of reading a string as
-// one: its bytes, before it is parsed, so that a string too large to read
-// isn't, and the value it holds, if it holds one (heldWork). It counts
-// nothing for anything else, which isn't read as JSON.
+// one, for the node at offset at (follower.collection).
 func (e *evaluator) collection(at int, v any) (any, error) {
-	s, isString := v.(string)
-	if !isString {
-		return v, nil
-	}
-	if err := e.work(at, len(s)); err != nil {
-		return nil, err
-	}
-	c := collection(s)
-	if err := e.did(at, heldWork(s, c)); err != nil {
-		return nil, err
-	}
-	return c, nil
+	f := follower{e: e, at: at}
+	return f.collection(v)
 }
 
 // heldWork returns what reading v as c, the list or mapping it holds as
@@ -1340,23 +1328,36 @@ func (f *follower) lookup(v any, name string) (any, bool, error) {
 	}
 }
 
-// traversal returns what going through v's items reads besides them, given
-// c, what v holds (collection), and keys, a mapping's keys in order: a
-// string, and the list or mapping it holds as JSON, if it holds one, and a
-// mapping's keys, 8 for each and its bytes. A list's items are gone through
-// as they are.
-func traversal(v, c any, keys []string) int {
-	switch v := v.(type) {
-	case string:
-		return len(v) + heldWork(v, c)
-	case map[string]any:
-		n := step * len(keys)
-		for _, k := range keys {
-			n += len(k)
-		}
-		return n
+// collection returns the list or mapping that v holds as JSON, or v
+// itself, as collection does, and counts the work of reading a string as
+// one: its bytes, before it is parsed, so that a string too large to read
+// isn't, and the value it holds, if it holds one (heldWork). It counts
+// nothing for anything else, which isn't read as JSON.
+func (f *follower) collection(v any) (any, error) {
+	s, isString := v.(string)
+	if !isString {
+		return v, nil
 	}
-	return 0
+	if err := f.count(len(s)); err != nil {
+		return nil, err
+	}
+	c := collection(s)
+	if err := f.did(heldWork(s, c)); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// keysWork returns what going through a mapping's keys, in order, reads
+// besides its values: 8 for each key and its bytes. Going through a list
+// reads nothing besides its items, and through a string, what reading it as
+// JSON does (follower.collection).
+func keysWork(keys []string) int {
+	n := step * len(keys)
+	for _, k := range keys {
+		n += len(k)
+	}
+	return n
 }
 
 // walk follows a path from v. A * reads the rest of the path from each item
@@ -1370,8 +1371,10 @@ func walk(v any, path []string, charge func(n int) error) (any, bool, error) {
 
 // walk follows a path from v, as walk does, and counts the work of what it
 // reads beyond the segments (pathWork): a string that a name reads into
-// (lookup), and for each *, its traversal, and for each item a step and the
-// segments of the rest of the path followed from it, up to its next *.
+// (lookup), and for each *, what it goes through: a string and the JSON it
+// holds (collection), or a mapping's keys (keysWork), and for each item a
+// step and the segments of the rest of the path followed from it, up to its
+// next *.
 func (f *follower) walk(v any, path []string) (any, bool, error) {
 	for i, name := range path {
 		if _, ok := v.(Unknown); ok {
@@ -1394,29 +1397,29 @@ func (f *follower) walk(v any, path []string) (any, bool, error) {
 			v = next
 			continue
 		}
-		rest, c := path[i+1:], collection(v)
-		if _, isString := v.(string); isString {
+		rest := path[i+1:]
+		_, isString := v.(string)
+		if isString {
 			f.throughText = true
+		}
+		c, err := f.collection(v)
+		if err != nil {
+			return nil, false, err
 		}
 		var items []any
 		switch c := c.(type) {
 		case []any:
 			items = c
-			if err := f.count(traversal(v, c, nil)); err != nil {
-				return nil, false, err
-			}
 		case map[string]any:
 			keys := f.sortedKeys(c)
-			if err := f.count(traversal(v, c, keys)); err != nil {
-				return nil, false, err
+			if !isString {
+				if err := f.did(keysWork(keys)); err != nil {
+					return nil, false, err
+				}
 			}
 			items = make([]any, len(keys))
 			for i, k := range keys {
 				items[i] = c[k]
-			}
-		default:
-			if err := f.count(traversal(v, c, nil)); err != nil {
-				return nil, false, err
 			}
 		}
 		if err := f.count(len(items) * (step + namesWork(rest))); err != nil {
