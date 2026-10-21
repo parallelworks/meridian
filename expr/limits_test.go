@@ -503,7 +503,9 @@ func TestGroupWorkBudget(t *testing.T) {
 // An Evaluator keeps the values it makes, and each evaluation counts toward
 // the group as one that makes everything anew does: what it returns, and
 // what the group has counted after it, are the same, until the group runs
-// out of work and after.
+// out of work and after. Marking what reads inputs.h counts nothing, and an
+// evaluation that reads a value kept from an earlier one is marked as one
+// that makes it anew is.
 func TestEvaluatorCountsAsAnew(t *testing.T) {
 	root := map[string]any{"w": map[string]any{
 		"a":    "${{ .b + .c }}",
@@ -535,14 +537,19 @@ func TestEvaluatorCountsAsAnew(t *testing.T) {
 	for _, size := range []int{10, 3 << 20, 9 << 20} {
 		values := map[string]any{"h": xs(size)}
 		w := &expr.Workflow{Root: root}
-		anew, kept := inputs(values).Budgeted(), inputs(values).Budgeted()
+		marked := inputs(values)
+		marked.Marked = [][]string{{"inputs", "h"}}
+		anew, kept := inputs(values).Budgeted(), marked.Budgeted()
 		ev := w.Evaluator(kept)
 		for i := range 6 * len(locations) {
 			loc := locations[(i*5)%len(locations)]
 			want, wantErr := w.Eval(loc, anew)
-			got, gotErr := ev.Eval(loc)
+			got, gotMarked, gotErr := ev.EvalMarked(loc)
 			if fmt.Sprint(got) != fmt.Sprint(want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
 				t.Fatalf("%d MiB, evaluation %d of %q = %v, %v; want %v, %v", size>>20, i, loc, got, gotErr, want, wantErr)
+			}
+			if _, wantMarked, err := w.Evaluator(marked).EvalMarked(loc); err == nil && gotErr == nil && gotMarked != wantMarked {
+				t.Fatalf("%d MiB, evaluation %d of %q is marked %v; want %v", size>>20, i, loc, gotMarked, wantMarked)
 			}
 			b1, w1, s1 := expr.Counted(anew)
 			b2, w2, s2 := expr.Counted(kept)

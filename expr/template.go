@@ -219,6 +219,20 @@ func (t *Template) Eval(scope Scope) (any, error) {
 	return b.String(), nil
 }
 
+// EvalMarked evaluates the template as Eval does, and reports whether the
+// evaluation read a value that scope marks (Scope.Marked), or that a
+// template it read, such as an input's default, read. Whatever it gives is
+// then made from the marked value, as ${{ vars.token * 2 }} is, or decided
+// by it, as a condition is, so a runner that masks the marked value masks
+// what it gives too. A failed evaluation is marked as well, so that what
+// reports the error can leave out the values it shows.
+func (t *Template) EvalMarked(scope Scope) (v any, marked bool, err error) {
+	scope = scope.Budgeted()
+	outer := scope.budget.noting()
+	v, err = t.Eval(scope)
+	return v, scope.budget.done(outer), err
+}
+
 // offsetError moves an error's offset from its expression to the template.
 func offsetError(err error, at int) error {
 	if ee, ok := errors.AsType[*EvalError](err); ok {

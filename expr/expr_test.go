@@ -412,3 +412,82 @@ func TestUnknownValues(t *testing.T) {
 		}
 	}
 }
+
+// An evaluation that reads a marked value is marked, whatever it makes of
+// it: the value, text or a number made from it, a condition it decides, or
+// a list or mapping that holds it, read whole or with a *. One that reads
+// only the rest of the context isn't, and neither is one that doesn't
+// evaluate the reference, nor vars alone, which is a word. A failed
+// evaluation is marked too.
+func TestMarked(t *testing.T) {
+	scope := expr.Scope{
+		Contexts: map[string]any{
+			"vars":   map[string]any{"token": "s3cret", "region": "us-east"},
+			"inputs": map[string]any{"hosts": []any{map[string]any{"name": "a", "key": "k"}}},
+		},
+		Marked: [][]string{{"vars", "token"}, {"inputs", "hosts", "0", "key"}},
+	}
+	for src, want := range map[string]bool{
+		"${{ vars.token }}":                          true,
+		"${{ var.token }}":                           true,
+		"${{ vars.token * 2 }}":                      true,
+		"x-${{ vars.region }}-${{ vars.token }}":     true,
+		"${{ vars.token == 'x' ? 'a' : 'b' }}":       true,
+		"${{ length(vars.token) > 3 }}":              true,
+		"${{ length(vars.*) }}":                      true,
+		"${{ vars.* get inputs.hosts[0].name }}":     true,
+		"${{ inputs.hosts }}":                        true,
+		"${{ inputs.hosts.*.key }}":                  true,
+		"${{ map(inputs.hosts, h => h.name) }}":      true,
+		"${{ fromJSON(vars.token) }}":                true,
+		"${{ vars.region }}":                         false,
+		"${{ vars.missing }}":                        false,
+		"${{ false && vars.token }}":                 false,
+		"${{ vars.region == 'x' ? vars.token : 1 }}": false,
+		"${{ inputs.hosts.*.name }}":                 false,
+		"${{ inputs.hosts[0].name }}":                false,
+		"${{ toJSON(vars) }}":                        false,
+		"text":                                       false,
+	} {
+		tmpl, err := expr.ParseTemplate(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, vErr := tmpl.Eval(scope)
+		got, marked, err := tmpl.EvalMarked(scope)
+		if marked != want || fmt.Sprint(got, err) != fmt.Sprint(v, vErr) {
+			t.Errorf("%s: marked %v, %v, %v; want marked %v, and %v, %v as Eval gives", src, marked, got, err, want, v, vErr)
+		}
+	}
+}
+
+// A template is marked by what it reads through the workflow around it: a
+// relative reference to a string that reads a marked value, or an input's
+// default that does.
+func TestMarkedThroughWorkflow(t *testing.T) {
+	w := &expr.Workflow{
+		Root: map[string]any{
+			"w":      map[string]any{"a": "${{ vars.token }}", "b": "${{ 1 }}", "l": []any{"${{ ..a }}"}},
+			"inputs": map[string]any{"x": map[string]any{"default": "${{ vars.token }}-x"}},
+		},
+		Definitions: []string{"inputs"},
+	}
+	scope := expr.Scope{
+		Contexts: map[string]any{"vars": map[string]any{"token": "t"}, "inputs": map[string]any{}},
+		Marked:   [][]string{{"vars", "token"}},
+	}
+	for src, want := range map[string]bool{
+		"${{ .a }}":         true,
+		"${{ length(.l) }}": true,
+		"${{ .b }}":         false,
+		"${{ inputs.x }}":   true,
+	} {
+		tmpl, err := expr.ParseTemplate(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, marked, err := tmpl.EvalMarked(w.Scope([]string{"w", "z"}, scope)); err != nil || marked != want {
+			t.Errorf("%s = %v, %v, marked %v; want marked %v", src, v, err, marked, want)
+		}
+	}
+}
