@@ -213,7 +213,9 @@ each       = "map" | "filter" .
   Otherwise it negates what follows: `-inputs.num`.
 - **Slices after a group** are text that `get` reads as a slice:
   `(start):(end)`, `(start):5` and `(start):` are the string `start:end`, and
-  `2:(len x)` is `2:` followed by the group's value.
+  `2:(len x)` is `2:` followed by the group's value. That is text even when
+  the word reads like a reference: `inputs.list.1:(2)` is the string
+  `inputs.list.1:2`, and nothing is read.
 - **Functions** check their number of arguments when they're parsed. Their
   names are case-sensitive.
 

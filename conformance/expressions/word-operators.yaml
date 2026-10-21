@@ -153,6 +153,19 @@ cases:
     value: [h3]
   - expr: inputs.hosts get 1:(len inputs.hosts)
     value: [h2, h3]
+  # A word that ends in : before a group makes text, the word and the group's
+  # value, even when the word reads like a reference. Like any string an
+  # expression builds, it is data: nothing is read at the path it spells.
+  - expr: inputs.hosts.1:(2)
+    value: inputs.hosts.1:2
+  - expr: inputs.hosts.0:(inputs.idx)
+    value: inputs.hosts.0:1
+  - expr: env.IDX:(1)
+    value: env.IDX:1
+  - expr: map(inputs.hosts, h => h.0:(1))
+    value: [h.0:1, h.0:1, h.0:1]
+  - expr: inputs.hosts get 1:(2)
+    value: [h2]
 
   - expr: 2 range 5
     value: [2, 3, 4]
