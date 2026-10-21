@@ -4,13 +4,11 @@ description: >-
   default it can't evaluate, such as one that reads a secret. Any other value
   holding ${{ }} is data, and stays as it is.
 source: Meridian
-contexts:
-  vars:
-    REGION: us-east
 inputs:
-  region: ${{ vars.REGION }}
-  note: ${{ vars.REGION }}
+  region: ${{ inputs.site }}
+  note: ${{ inputs.site }}
 expect:
   inputs:
+    site: us-east
     region: us-east
-    note: ${{ vars.REGION }}
+    note: ${{ inputs.site }}

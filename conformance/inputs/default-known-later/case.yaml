@@ -1,4 +1,8 @@
-description: A default that reads something the compiler doesn't have, such as env or a secret variable, stays an expression until the run is underway.
+description: >-
+  A default that reads something the compiler doesn't have, such as env or a
+  secret variable, stays an expression until the run is underway. So does
+  one that reads a variable that isn't a secret: the compiler has its value,
+  but a plan never holds a variable's value.
 source: Meridian
 contexts:
   vars:
@@ -9,4 +13,4 @@ expect:
   inputs:
     dir: ${{ env.PW_PARENT_JOB_DIR }}
     token: ${{ vars.TOKEN }}
-    region: us-east
+    region: ${{ vars.REGION }}

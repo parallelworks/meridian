@@ -53,6 +53,7 @@
   "input_not_option_list": "The input \"{input}\" takes a list of its options, not {value}.",
   "input_not_option": "The input \"{input}\" has no option {value}. Its options are {options}.",
   "input_not_text": "The input \"{input}\" takes text, not {value}.",
+  "input_looks_secret": "The input \"{input}\" looks like it holds a secret, but it isn't a password input, so a value given for it is kept with the run, and isn't masked in logs. If it holds a secret, make it a password input.",
 
   "duplicate_step_id": "Steps {first} and {second} of the job \"{job}\" both have the id \"{id}\".",
   "needs_not_known": "A job's needs must be known when the run is created, but these read {name}, which isn't known until the run is underway.",
@@ -79,6 +80,7 @@
   "no_matrix": "The job \"{job}\" has no matrix, so matrix.{key} is the text {text}.",
   "undefined_matrix_key": "The matrix of the job \"{job}\" has no key \"{key}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "undefined_session": "The workflow has no session \"{name}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
+  "variable_looks_secret": "The {context, select, org {organization} other {user}} variable \"{name}\" looks like it holds a secret, but it isn't a secret variable, so its value isn't masked in logs. If it holds a secret, make it a secret variable.",
   "expression_failed": "The expression failed: {reason}.",
   "word_not_reference": "The word {word} is the text {text}, because {head} isn't a context. Quote it if text is what you mean.",
   "hyphenated_name": "The expression {written}-{word} subtracts the text {text} from {written}, which is NaN. To read {name}, write {fix}.{defines, select, input { The workflow has an input \"{defined}\".} job { The workflow has a job \"{defined}\".} step { The job \"{job}\" has a step with the id \"{defined}\".} matrix { The matrix of the job \"{job}\" has a key \"{defined}\".} session { The workflow has a session \"{defined}\".} other {}}",

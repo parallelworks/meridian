@@ -1,9 +1,12 @@
 on:
   execute:
     inputs:
+      site:
+        type: string
+        default: us-east
       region:
         type: string
-        default: ${{ vars.REGION }}
+        default: ${{ inputs.site }}
       note:
         type: string
 jobs:

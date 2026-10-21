@@ -1,0 +1,21 @@
+description: >-
+  The plan names the variables the run reads that aren't secrets, beside the
+  secrets it reads, and holds none of their values: an input whose default
+  reads one is evaluated as the run starts, and a password input among them
+  is one of the run's secrets. A read of each variable of a context, as
+  vars.* is, names the context.
+source: Meridian
+contexts:
+  org:
+    REGION: us-east
+  vars:
+    ZONE: b
+    TOKEN: unused
+secret-variables: [TOKEN]
+expect:
+  plan:
+    /run/inputs: {size: 2}
+    /run/deferredInputs/region/${{/0/src: " org.REGION "
+    /run/deferredInputs/key/${{/0/src: " vars.ZONE "
+    /run/variables: [org.REGION, vars, vars.ZONE]
+    /run/secrets: [inputs.key, vars.TOKEN]

@@ -144,6 +144,18 @@ func (e *Evaluator) Eval(location []string) (any, error) {
 	return r.resolve(v, location)
 }
 
+// EvalMarked evaluates what the workflow holds at location, as Eval does,
+// and reports whether the evaluation read a value its scope marks, as
+// Template.EvalMarked does: whether the expressions there read one, or a
+// string, list or mapping they read did, though it was made in an earlier
+// evaluation.
+func (e *Evaluator) EvalMarked(location []string) (any, bool, error) {
+	b := e.eval.scope.budget
+	outer := b.noting()
+	v, err := e.Eval(location)
+	return v, b.done(outer), err
+}
+
 // A workflowEval evaluates the expressions in a workflow that its
 // evaluations reach, each at its own location. active holds the locations
 // being evaluated, so that expressions that read each other fail instead
@@ -163,6 +175,10 @@ type workflowEval struct {
 	// walks counts the walks of what values read, to mark the values each
 	// walk reaches.
 	walks int
+	// marked holds the values whose making read a value the scope marks,
+	// so that an evaluation that reads one reads it too. It is nil until
+	// there is one.
+	marked map[*made]bool
 }
 
 func newWorkflowEval(w *Workflow, scope Scope) *workflowEval {
@@ -204,6 +220,14 @@ func (ev *workflowEval) keep(k string, m, outer *made, before cost, v any) {
 	m.v, m.cost = v, spent.minus(m.read)
 	ev.done[k] = m
 	ev.noteRead(m, spent)
+}
+
+// mark notes that making m read a value the scope marks.
+func (ev *workflowEval) mark(m *made) {
+	if ev.marked == nil {
+		ev.marked = map[*made]bool{}
+	}
+	ev.marked[m] = true
 }
 
 // noteRead notes that the value being made read m, which counted c.
@@ -270,13 +294,16 @@ func (r *workflowResolver) evalAt(t *Template, location []string, k string) (any
 	m, outer, before := ev.begin()
 	scope := ev.scope
 	scope.Resolver = &workflowResolver{eval: ev, location: location}
-	v, err := t.Eval(scope)
+	v, marked, err := t.EvalMarked(scope)
 	if err != nil {
 		ev.making = outer
 		if IsUnknown(err) {
 			return nil, err
 		}
 		return nil, located(err, location)
+	}
+	if marked {
+		ev.mark(m)
 	}
 	ev.keep(k, m, outer, before, v)
 	return v, nil
@@ -287,7 +314,9 @@ func (r *workflowResolver) evalAt(t *Template, location []string, k string) (any
 func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 	ev := r.eval
 	k := strings.Join(location, "\x00")
+	b := ev.scope.budget
 	if m, ok := ev.done[k]; ok && ev.count(m) {
+		b.marked = b.marked || ev.marked[m]
 		return m.v, nil
 	}
 	switch v := v.(type) {
@@ -304,25 +333,35 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 		return r.evalAt(t, location, k)
 	case []any:
 		m, outer, before := ev.begin()
+		wasMarked := b.noting()
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
 			if out[i], err = r.resolve(item, appendPath(location, strconv.Itoa(i))); err != nil {
 				ev.making = outer
+				b.done(wasMarked)
 				return nil, err
 			}
+		}
+		if b.done(wasMarked) {
+			ev.mark(m)
 		}
 		ev.keep(k, m, outer, before, out)
 		return out, nil
 	case map[string]any:
 		m, outer, before := ev.begin()
+		wasMarked := b.noting()
 		out := make(map[string]any, len(v))
 		for key, item := range jsonvalue.Sorted(v) {
 			var err error
 			if out[key], err = r.resolve(item, appendPath(location, key)); err != nil {
 				ev.making = outer
+				b.done(wasMarked)
 				return nil, err
 			}
+		}
+		if b.done(wasMarked) {
+			ev.mark(m)
 		}
 		ev.keep(k, m, outer, before, out)
 		return out, nil

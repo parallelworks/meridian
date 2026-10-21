@@ -7,9 +7,6 @@ description: >-
   row has rows of its own, for which the first [index] is the outer row's
   and the second the inner row's.
 source: Meridian
-contexts:
-  vars:
-    REGION: us-east
 inputs:
   workers:
     - name: a
@@ -17,12 +14,13 @@ inputs:
     - name: b
       scheduler: pbs
       partition: ""
-      region: ${{ vars.REGION }}
+      region: ${{ inputs.site }}
       disks:
         - size: 20
         - {}
 expect:
   inputs:
+    site: us-east
     workers:
       - name: a
         scheduler: slurm

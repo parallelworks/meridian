@@ -1,6 +1,9 @@
 on:
   execute:
     inputs:
+      region:
+        type: string
+        default: us-east
       hosts:
         type: list
         template:
@@ -9,11 +12,11 @@ on:
           zone:
             type: string
         default:
-          - name: ${{ vars.REGION }}-1
+          - name: ${{ inputs.region }}-1
       cluster:
         type: compute-clusters
         default:
-          name: ${{ vars.REGION }}
+          name: ${{ inputs.region }}
 jobs:
   main:
     steps:

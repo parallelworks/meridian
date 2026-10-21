@@ -1,0 +1,27 @@
+description: >-
+  A default that reads an organization or user variable that isn't a secret
+  stays an expression until the run is underway, as one that reads a secret
+  does: the compiler has the variable's value, but a plan never holds it. So
+  does a default with a part that reads one, such as a field of a mapping or
+  of a list's row, and a default that reads an input whose value does. What
+  decides which inputs the run has, an input's hidden, ignore and optional,
+  reads their values: extra is ignored, and note is optional.
+source: Meridian
+contexts:
+  org:
+    REGION: us-east
+  vars:
+    FEATURE: "off"
+inputs:
+  extra: given
+expect:
+  inputs:
+    region: ${{ org.REGION }}
+    site: ${{ inputs.region }}-1
+    cluster:
+      name: ${{ org.REGION }}
+      size: 2
+    hosts:
+      - name: a
+        zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+    fixed: fixed

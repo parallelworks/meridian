@@ -1,0 +1,14 @@
+description: >-
+  A matrix that reads a variable isn't expanded when the run is created,
+  since a plan never holds a variable's value, nor values made from one: the
+  plan holds the job once, with its strategy, which is expanded once the run
+  is underway.
+source: Meridian
+contexts:
+  vars:
+    SITES: "[1, 2]"
+expect:
+  plan:
+    /jobs/0/key: probe
+    /jobs/0/strategy/matrix/site/${{/0/src: " fromJSON(vars.SITES) "
+    /run/variables: [vars.SITES]

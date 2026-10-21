@@ -87,6 +87,14 @@ type Scope struct {
 	// outermost first: the first [index] in a reference is Index[0], the
 	// second Index[1].
 	Index []int
+	// Marked holds the paths of the values in Contexts that are marked,
+	// such as the secrets a runner masks: each is a context's name, vars
+	// rather than var, then the names that lead to the value from it, a
+	// list's items by their indexes, as in [vars token]. An evaluation that
+	// reads a marked value, a list or mapping that holds one, or a part of
+	// one, is marked, whatever it makes of it: see Template.EvalMarked. Nil
+	// marks nothing.
+	Marked [][]string
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of
@@ -112,6 +120,27 @@ type budget struct {
 	active int
 	// clock reads the time: now, or a test's clock.
 	clock func() time.Time
+	// marked is set once what is being evaluated reads a value its scope
+	// marks (Scope.Marked). An evaluation that another reads, such as an
+	// input's default, notes what it read on its own, and adds that to its
+	// reader's.
+	marked bool
+}
+
+// noting starts noting whether what is evaluated next reads a marked value,
+// and returns whether what was evaluated before it did, for done.
+func (b *budget) noting() (outer bool) {
+	outer, b.marked = b.marked, false
+	return outer
+}
+
+// done stops noting, and reports whether what was evaluated since noting
+// read a marked value. What it read was read by what is around it too,
+// which outer says had read one before.
+func (b *budget) done(outer bool) bool {
+	marked := b.marked
+	b.marked = outer || marked
+	return marked
 }
 
 // Budgeted returns scope with one budget for what templates do, which every
@@ -796,6 +825,9 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
+	if e.scope.Marked != nil && marks(e.scope.Marked, r.context, path) {
+		e.scope.budget.marked = true
+	}
 	f := follower{e: e, at: r.at}
 	var v any
 	if r.context == "inputs" {
@@ -815,6 +847,28 @@ func (e *evaluator) ref(r *ref) (any, error) {
 		return v, nil
 	}
 	return e.known(r.at, root, path, v)
+}
+
+// marks reports whether what a reference reads by following path in
+// context is marked, or holds a marked value, or is part of one: whether
+// path leads to one of the paths in marked, or one of them leads to it. A *
+// in path reads each item.
+func marks(marked [][]string, context string, path []string) bool {
+	for _, m := range marked {
+		if len(m) == 0 || m[0] != context {
+			continue
+		}
+		m = m[1:]
+		n := min(len(m), len(path))
+		i := 0
+		for i < n && (path[i] == m[i] || path[i] == "*") {
+			i++
+		}
+		if i == n {
+			return true
+		}
+	}
+	return false
 }
 
 // known returns v, which the reference at offset at read by following path

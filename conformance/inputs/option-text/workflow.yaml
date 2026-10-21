@@ -1,18 +1,21 @@
 on:
   execute:
     inputs:
+      home:
+        type: string
+        default: us-east
       region:
         type: dropdown
         options:
           - label: My region
-            value: ${{ vars.REGION }}
+            value: ${{ inputs.home }}
           - label: us-west
             value: us-west
       regions:
         type: multi-dropdown
         options:
           - label: My region
-            value: ${{ vars.REGION }}
+            value: ${{ inputs.home }}
           - label: us-west
             value: us-west
       site:
@@ -24,7 +27,7 @@ on:
         options:
           east:
             - label: My region
-              value: ${{ vars.REGION }}
+              value: ${{ inputs.home }}
           west:
             - label: us-west
               value: us-west

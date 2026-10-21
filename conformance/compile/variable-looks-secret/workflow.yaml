@@ -1,0 +1,26 @@
+on:
+  execute:
+    inputs:
+      hf:
+        type: password
+        default: ${{ org.HF_TOKEN }}
+      api_token:
+        type: string
+        optional: true
+      secretary:
+        type: string
+        optional: true
+      max_tokens:
+        type: number
+        default: 10
+      hosts:
+        type: list
+        optional: true
+        template:
+          ssh-private-key:
+            type: editor
+jobs:
+  main:
+    steps:
+      - run: echo ${{ org.HF_TOKEN }} ${{ vars.apiKey }} ${{ vars.tokenizer }} ${{ vars.DB_PASSWORD }}
+      - run: echo ${{ vars.apiKey }}

@@ -43,6 +43,13 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	for k := range inputs.secrets {
 		c.secrets["inputs."+k] = true
 	}
+	for _, f := range inputs.fields {
+		// A password whose default is evaluated as the run starts is one of
+		// its secrets then.
+		if f.typ == "password" && (f.deferred || f.variable) && !f.ignored {
+			c.secrets["inputs."+strings.Join(f.path, ".")] = true
+		}
+	}
 	for _, v := range p.Run.DeferredInputs {
 		for _, e := range v.Exprs() {
 			for _, r := range e.Refs() {
@@ -51,8 +58,10 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		}
 	}
 	p.Run.Secrets = slices.Sorted(maps.Keys(c.secrets))
+	p.Run.Variables = c.variables(p)
 
 	c.diags.Sort()
+	c.diags = slices.DeleteFunc(c.diags, repeatedVariable())
 	if c.diags.HasErrors() {
 		return nil, c.diags
 	}
@@ -142,6 +151,46 @@ func (r *reporter) reportError(loc []string, shift int, err error) {
 	report(problems.ExpressionFailed, problems.Params{"reason": err.Error()}, 0, "")
 }
 
+// workflowParams are the params of the problems a value can have that show
+// the workflow, such as an input's or a job's name, or Meridian's own
+// limits, rather than the value.
+var workflowParams = map[string]bool{
+	"input": true, "job": true, "key": true, "name": true, "type": true, "what": true,
+	"options": true, "min": true, "max": true, "limit": true, "op": true,
+}
+
+// mask returns params, those of a problem with a value that read a variable,
+// with what they show of the value masked: each param but those that show
+// the workflow is problems.Masked, and there is no suggestion, which would
+// be near the value. A variable can hold a secret, so a diagnostic never
+// quotes one.
+func mask(params problems.Params) problems.Params {
+	out := make(problems.Params, len(params))
+	for name, v := range params {
+		if !workflowParams[name] {
+			v = problems.Masked
+		}
+		out[name] = v
+	}
+	if _, ok := params["suggested"]; ok {
+		problems.WithSuggestion(out, "", false)
+	}
+	return out
+}
+
+// maskedIf returns err, an error evaluating an expression, with its params
+// masked if the evaluation read a variable. Only an *expr.EvalError shows
+// the values an expression read: a syntax error shows the workflow's text,
+// and a budget error Meridian's limits.
+func maskedIf(marked bool, err error) error {
+	if ee, ok := errors.AsType[*expr.EvalError](err); ok && marked {
+		c := *ee
+		c.Params = mask(ee.Params)
+		return &c
+	}
+	return err
+}
+
 // run compiles what the plan holds about the run as a whole.
 func (c *compiler) run(source plan.Source) plan.Run {
 	w := c.doc.Value
@@ -151,7 +200,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		Name:      str(w["name"]),
 		Icon:      str(w["icon"]),
 		Thumbnail: str(w["thumbnail"]),
-		Inputs:    plan.DataOf(c.inputs.values),
+		Inputs:    plan.DataOf(c.inputs.kept()),
 		Env:       c.values([]string{"env"}, runCreated, nil),
 		Timeout:   c.value([]string{"timeout"}, runCreated, nil),
 
@@ -167,13 +216,15 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		c.check([]string{key}, w[key], runCreated, nil)
 	}
 	c.checkDefinitions(definitionsPath, lookup(w, definitionsPath))
+	c.checkInputNames(c.inputs.fields)
 	return r
 }
 
 // checkDefinitions reports the probable mistakes in the expressions in v, at
 // loc in the input definitions, such as inputs.pw-user written for
-// inputs['pw-user']. Resolving the inputs reports the errors of the
-// expressions it evaluates.
+// inputs['pw-user'], and reads of variables whose names look like a
+// secret's. Resolving the inputs reports the errors of the expressions it
+// evaluates.
 func (c *compiler) checkDefinitions(loc []string, v any) {
 	switch v := v.(type) {
 	case string:
@@ -188,6 +239,9 @@ func (c *compiler) checkDefinitions(loc []string, v any) {
 		for at, e := range t.Exprs() {
 			for _, p := range e.Check() {
 				c.reportProblem(in, at+p.Offset, p, nil)
+			}
+			for _, r := range e.Refs() {
+				c.checkVariableName(r, in, at+r.Offset)
 			}
 		}
 	case []any:

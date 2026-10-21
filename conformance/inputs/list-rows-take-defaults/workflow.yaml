@@ -1,6 +1,9 @@
 on:
   execute:
     inputs:
+      site:
+        type: string
+        default: us-east
       workers:
         type: list
         template:
@@ -14,7 +17,7 @@ on:
             default: default
           region:
             type: string
-            default: ${{ vars.REGION }}
+            default: ${{ inputs.site }}
           cores:
             type: number
             default: "${{ inputs.workers.[index].is_slurm ? 4 : 1 }}"

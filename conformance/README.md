@@ -52,8 +52,9 @@ expect:
 ```
 
 - `expect.inputs` are the run's input values. A value that stays an
-  expression until the run is underway is its text, and `expect.secrets` are
-  the values of password inputs, by their path.
+  expression until the run is underway, such as a default that reads a
+  variable, is its text, and `expect.secrets` are the values of password
+  inputs, by their path.
 - `contexts` are what expressions read besides inputs, such as `org` and
   `vars`, and `secret-variables` names the variables whose values the
   compiler doesn't have.

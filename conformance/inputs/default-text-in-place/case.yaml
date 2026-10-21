@@ -5,23 +5,21 @@ description: >-
   rows, or a mapping default, with the text of what it can't evaluate. Any
   other string holding ${{ }} is data, even the same text in another place.
 source: Meridian
-contexts:
-  vars:
-    REGION: us-east
 inputs:
   hosts:
-    - name: ${{ vars.REGION }}-1
-      zone: ${{ vars.REGION }}-1
-    - name: ${{ vars.REGION }}-1
+    - name: ${{ inputs.region }}-1
+      zone: ${{ inputs.region }}-1
+    - name: ${{ inputs.region }}-1
   cluster:
-    name: ${{ vars.REGION }}
-    note: ${{ vars.REGION }}
+    name: ${{ inputs.region }}
+    note: ${{ inputs.region }}
 expect:
   inputs:
+    region: us-east
     hosts:
       - name: us-east-1
-        zone: ${{ vars.REGION }}-1
-      - name: ${{ vars.REGION }}-1
+        zone: ${{ inputs.region }}-1
+      - name: ${{ inputs.region }}-1
     cluster:
       name: us-east
-      note: ${{ vars.REGION }}
+      note: ${{ inputs.region }}

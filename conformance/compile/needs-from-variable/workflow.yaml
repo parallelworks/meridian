@@ -1,0 +1,8 @@
+jobs:
+  build:
+    steps:
+      - run: make
+  test:
+    needs: ${{ vars.AFTER }}
+    steps:
+      - run: make test

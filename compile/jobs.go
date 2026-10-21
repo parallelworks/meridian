@@ -152,12 +152,21 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 
 // resolveNeeds reads a job's needs: one job's name, a list of them, or an
 // expression of what is known when the run is created that gives either. A
-// name followed by :any waits for any one instance of a matrix job.
+// name followed by :any waits for any one instance of a matrix job. The
+// expression can read a variable, since the plan holds only the jobs it
+// names, but a problem with what it gives doesn't show it.
 func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 	loc := appendPath(info.loc, "needs")
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
 		return
+	}
+	fromVariable := false
+	report := func(k *problems.Kind, params problems.Params) {
+		if fromVariable {
+			params = mask(params)
+		}
+		c.reportAt(k, loc, params)
 	}
 	if s, isString := raw.(string); isString {
 		parsed, checked := c.checkString(loc, s, runCreated, info)
@@ -165,16 +174,19 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 			return
 		}
 		if t, isTemplate := parsed.(*expr.Template); isTemplate {
-			v, err := t.Eval(expr.Scope{Contexts: compileTimeContexts(c.opts, c.inputs.evalValues())})
+			v, marked, err := t.EvalMarked(expr.Scope{
+				Contexts: compileTimeContexts(c.opts, c.inputs.evalValues()),
+				Marked:   c.inputs.marks,
+			})
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				c.reportAt(problems.NeedsNotKnown, loc, problems.Params{"name": u.Name})
 				return
 			}
 			if err != nil {
-				c.reportError(loc, 0, err)
+				c.reportError(loc, 0, maskedIf(marked, err))
 				return
 			}
-			raw = v
+			raw, fromVariable = v, marked
 		}
 	}
 	var list []string
@@ -185,24 +197,23 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 		for _, item := range v {
 			s, ok := item.(string)
 			if !ok {
-				c.reportAt(problems.NeedsItemNotName, loc, problems.Params{"value": problems.Show(item)})
+				report(problems.NeedsItemNotName, problems.Params{"value": problems.Show(item)})
 				return
 			}
 			list = append(list, s)
 		}
 	default:
-		c.reportAt(problems.NeedsNotName, loc, problems.Params{"value": problems.Show(raw)})
+		report(problems.NeedsNotName, problems.Params{"value": problems.Show(raw)})
 		return
 	}
 	for _, need := range list {
 		job, anyInstance := strings.CutSuffix(need, ":any")
 		switch {
 		case job == info.name:
-			c.reportAt(problems.NeedsItself, loc, problems.Params{"job": info.name})
+			report(problems.NeedsItself, problems.Params{"job": info.name})
 		case !slices.Contains(names, job):
 			s, ok := hint.Suggest(job, names)
-			c.reportAt(problems.NeedsUnknownJob, loc,
-				problems.WithSuggestion(problems.Params{"job": info.name, "needed": job}, s, ok))
+			report(problems.NeedsUnknownJob, problems.WithSuggestion(problems.Params{"job": info.name, "needed": job}, s, ok))
 		case !info.needed[job]:
 			info.needed[job] = true
 			info.needs = append(info.needs, plan.Need{Job: job, Any: anyInstance})

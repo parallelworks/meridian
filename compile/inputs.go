@@ -48,8 +48,10 @@ type Inputs struct {
 	// left out.
 	Values map[string]any
 	// Deferred are the defaults that read something the compiler doesn't
-	// know, such as a secret variable, by their input's path, as in
-	// group.name. They are evaluated once the run is underway.
+	// know, such as a secret variable, or an organization or user
+	// variable, whose values a plan never holds, by their input's path, as
+	// in group.name. They are evaluated once the run is underway, and
+	// their inputs aren't in Values or Secrets.
 	Deferred map[string]plan.Value
 	// Secrets are the values of password inputs, by their path in the
 	// values, such as k8s.token. The plan doesn't hold them.
@@ -67,7 +69,10 @@ type Options struct {
 	// Contexts are what expressions read when the run is created, besides
 	// inputs: org, vars, remote and sessions. The value of a secret
 	// variable is an expr.Unknown, so that an expression that reads it is
-	// evaluated once the run is underway.
+	// evaluated once the run is underway. The plan holds no organization
+	// or user variable's value, secret or not: the compiler reads them to
+	// decide the run's shape, such as which inputs are ignored and which
+	// jobs a job needs, and keeps what else reads them an expression.
 	Contexts map[string]any
 }
 
@@ -79,7 +84,7 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // docs/design.md describes. It reports every problem it finds.
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
-	return &Inputs{Values: r.values, Deferred: r.deferred(), Secrets: r.secrets}, r.diags
+	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets}, r.diags
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
@@ -92,6 +97,7 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 		budget:   expr.Scope{}.Budgeted(),
 		values:   jsonvalue.CloneMap(submitted),
 		secrets:  map[string]any{},
+		marks:    [][]string{{"org"}, {"vars"}},
 	}
 	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
 	r.fields = r.collect(defs, definitionsPath, nil, nil)
@@ -133,9 +139,13 @@ type field struct {
 	optional   bool
 	// deferred is set for an input whose value is evaluated once the run is
 	// underway, because its default, or a part of its value, reads something
-	// the compiler doesn't know. dflt holds what is evaluated then.
-	deferred bool
-	dflt     plan.Value
+	// the compiler doesn't know. variable is set for one whose value reads
+	// an organization or user variable, which the compiler knows but a plan
+	// never holds: what the compiler evaluates reads its value, and the
+	// plan holds what is evaluated as the run starts in its place. dflt
+	// holds what is evaluated then.
+	deferred, variable bool
+	dflt               plan.Value
 
 	// index holds the indexes of the list rows that a field of a list's
 	// template is for, outermost first, and in is the input whose value
@@ -160,10 +170,13 @@ type text struct{ path, loc []string }
 
 // A laterPart is a part of an input's value, at path in it, that is
 // evaluated once the run is underway: v, a workflow's JSON values with its
-// templates parsed.
+// templates parsed. variable is set for a part that reads a variable, whose
+// value the compiler knows, and keeps in the values, until the plan holds
+// its expressions in its place.
 type laterPart struct {
-	path []string
-	v    any
+	path     []string
+	v        any
+	variable bool
 }
 
 type inputResolver struct {
@@ -176,7 +189,10 @@ type inputResolver struct {
 	budget  expr.Scope
 	values  map[string]any
 	secrets map[string]any
-	fields  []*field
+	// marks are the paths in the contexts of what reads a variable: org,
+	// vars, and the parts of the values that read them.
+	marks  [][]string
+	fields []*field
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
 	rows []*field
@@ -371,29 +387,37 @@ func (r *inputResolver) prepare(f *field) bool {
 
 // evalPending evaluates f's texts, or else its default, and fills in its
 // value with them. What reads something the compiler doesn't know is
-// evaluated once the run is underway.
+// evaluated once the run is underway, and so is what reads a variable,
+// whose value the plan doesn't hold, though the compiler fills it in.
 func (r *inputResolver) evalPending(f *field) {
 	if f.texts == nil {
 		loc := appendPath(f.loc, "default")
-		switch v, err := r.evalAt(loc, f.index); {
+		switch v, marked, err := r.evalAt(loc, f.index); {
 		case expr.IsUnknown(err):
-			r.deferPart(f, nil, f.def["default"])
+			r.deferPart(f, nil, f.def["default"], false)
 		case err != nil:
-			r.reportError(loc, 0, err)
+			r.reportError(loc, 0, maskedIf(marked, err))
 		default:
 			r.setDefault(f, v)
+			if marked {
+				r.deferPart(f, nil, f.def["default"], true)
+			}
 		}
 		return
 	}
 	value := lookup(r.values, f.path)
 	for _, t := range f.texts {
-		switch v, err := r.evalAt(t.loc, f.index); {
+		text := lookup(value, t.path)
+		switch v, marked, err := r.evalAt(t.loc, f.index); {
 		case expr.IsUnknown(err):
-			r.deferPart(f, t.path, lookup(value, t.path))
+			r.deferPart(f, t.path, text, false)
 		case err != nil:
-			r.reportError(t.loc, 0, err)
+			r.reportError(t.loc, 0, maskedIf(marked, err))
 		default:
 			r.set(slices.Concat(f.path, t.path), v)
+			if marked {
+				r.deferPart(f, t.path, text, true)
+			}
 		}
 	}
 }
@@ -527,20 +551,26 @@ func expressionOptions(options any, loc []string) []exprOption {
 // deferPart records that the part of f's value at path, raw in the
 // workflow, is evaluated once the run is underway. The value of f's input
 // is then evaluated as the run starts, all of it, with raw's expressions
-// in that part, parsed for f's rows.
-func (r *inputResolver) deferPart(f *field, path []string, raw any) {
+// in that part, parsed for f's rows. A part that reads a variable keeps
+// its value until then, and what reads it reads a variable too.
+func (r *inputResolver) deferPart(f *field, path []string, raw any, variable bool) {
 	v, err := parseFor(raw, f.index)
 	if err != nil {
 		return // The workflow's own text, which parsed when it was loaded.
 	}
 	in := f.holder()
-	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v})
+	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})
+	if variable {
+		r.marks = append(r.marks, slices.Concat([]string{"inputs"}, f.path, path))
+	}
 	r.changed()
 }
 
-// holdLater takes each input with parts evaluated once the run is underway
-// out of the values: its value is evaluated as the run starts, with those
-// parts' expressions where they are.
+// holdLater makes what the plan holds of each input with parts evaluated
+// once the run is underway: its value, with those parts' expressions where
+// they are. An input with a part the compiler doesn't know leaves the
+// values; one whose parts read only variables stays, for what the compiler
+// evaluates.
 func (r *inputResolver) holdLater() {
 	for _, f := range r.fields {
 		if f.later == nil {
@@ -554,8 +584,13 @@ func (r *inputResolver) holdLater() {
 				setIn(held, p.path, p.v)
 			}
 		}
-		f.deferred, f.dflt = true, plan.Literal(held)
-		r.remove(f.path)
+		f.dflt = plan.Literal(held)
+		if slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
+			f.deferred = true
+			r.remove(f.path)
+		} else {
+			f.variable = true
+		}
 	}
 }
 
@@ -639,12 +674,13 @@ func (r *inputResolver) condition(f *field, key string) bool {
 	v := raw
 	if _, isString := raw.(string); isString {
 		var err error
-		if v, err = r.evalAt(appendPath(f.loc, key), f.index); err != nil {
+		var marked bool
+		if v, marked, err = r.evalAt(appendPath(f.loc, key), f.index); err != nil {
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				r.reportAt(problems.InputConditionNotKnown, appendPath(f.loc, key),
 					problems.Params{"key": key, "input": f.label(), "name": u.Name})
 			} else {
-				r.reportError(appendPath(f.loc, key), 0, err)
+				r.reportError(appendPath(f.loc, key), 0, maskedIf(marked, err))
 			}
 			return false
 		}
@@ -671,8 +707,9 @@ func (r *inputResolver) drop(f *field) {
 
 // evalAt evaluates what is at loc in the workflow, where it is, for the list
 // rows at index, with the values so far: the expressions in a string, and in
-// each string of a list or mapping.
-func (r *inputResolver) evalAt(loc []string, index []int) (any, error) {
+// each string of a list or mapping. marked is set if it read a variable,
+// or a value that did.
+func (r *inputResolver) evalAt(loc []string, index []int) (v any, marked bool, err error) {
 	key := fmt.Sprint(index)
 	ev, ok := r.evaluators[key]
 	if !ok {
@@ -682,13 +719,14 @@ func (r *inputResolver) evalAt(loc []string, index []int) (any, error) {
 		scope := r.budget
 		scope.Contexts = r.contexts
 		scope.Index = index
+		scope.Marked = r.marks
 		ev = r.workflow.Evaluator(scope)
 		if r.evaluators == nil {
 			r.evaluators = map[string]*expr.Evaluator{}
 		}
 		r.evaluators[key] = ev
 	}
-	return ev.Eval(loc)
+	return ev.EvalMarked(loc)
 }
 
 // set sets the value at path, and remove removes it.
@@ -703,8 +741,8 @@ func (r *inputResolver) remove(path []string) {
 }
 
 // changed notes that what expressions read of the values changed: the
-// values, or what is known of them. The evaluations that follow read them
-// anew.
+// values, or what is known of them, or which read a variable. The
+// evaluations that follow read them anew.
 func (r *inputResolver) changed() {
 	r.evaluators, r.contexts = nil, nil
 }
@@ -714,7 +752,7 @@ func (r *inputResolver) changed() {
 func (r *inputResolver) deferred() map[string]plan.Value {
 	var out map[string]plan.Value
 	for _, f := range r.fields {
-		if f.deferred && !f.ignored {
+		if (f.deferred || f.variable) && !f.ignored {
 			if out == nil {
 				out = map[string]plan.Value{}
 			}
@@ -752,11 +790,28 @@ func (r *inputResolver) evalValues() any {
 			setIn(values, f.path, expr.Unknown{Name: "inputs"})
 		default:
 			for _, p := range f.later {
-				setIn(values, slices.Concat(f.path, p.path), expr.Unknown{Name: "inputs"})
+				if !p.variable {
+					setIn(values, slices.Concat(f.path, p.path), expr.Unknown{Name: "inputs"})
+				}
 			}
 		}
 	}
 	return values
+}
+
+// kept returns the values a plan keeps: all but those of the inputs that
+// read a variable, which it holds as what is evaluated as the run starts.
+func (r *inputResolver) kept() map[string]any {
+	out, copied := r.values, false
+	for _, f := range r.fields {
+		if f.variable {
+			if !copied {
+				out, copied = jsonvalue.CloneMap(r.values), true
+			}
+			deletePath(out, f.path)
+		}
+	}
+	return out
 }
 
 // compileTimeContexts returns the contexts known when the run is created:
@@ -771,7 +826,10 @@ func compileTimeContexts(opts Options, inputs any) map[string]any {
 
 // checkValues checks each value against its input's type, converts numbers
 // and booleans given as text, resolves platform types, and moves password
-// values to the secrets.
+// values to the secrets. The value of an input that reads a variable is
+// checked too, and kept for what the compiler evaluates, but what is wrong
+// with it is reported without it, and a password's isn't one of the
+// secrets: it is evaluated again as the run starts.
 func (r *inputResolver) checkValues() {
 	for _, f := range r.fields {
 		if f.header || f.ignored || f.deferred {
@@ -787,11 +845,16 @@ func (r *inputResolver) checkValues() {
 		out, bad := r.checkValue(f, v)
 		if bad.kind != nil {
 			bad.params["input"] = f.label()
+			if f.variable {
+				bad.params = mask(bad.params)
+			}
 			r.reportAt(bad.kind, f.loc, bad.params)
 			continue
 		}
 		if f.typ == "password" {
-			r.secrets[strings.Join(f.path, ".")] = out
+			if !f.variable {
+				r.secrets[strings.Join(f.path, ".")] = out
+			}
 			r.remove(f.path)
 			continue
 		}

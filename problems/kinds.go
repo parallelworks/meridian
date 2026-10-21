@@ -16,6 +16,9 @@ import "github.com/parallelworks/foundation/problem"
 //     one's JSON, joined with ", ";
 //   - a pattern or a piece of an expression as it is.
 //
+// A value that came from an organization or user variable, or was made
+// from one, is never shown: a param that would show it is Masked.
+//
 // suggested is true when suggestion holds a name that was probably meant.
 
 // Loading a workflow file.
@@ -94,6 +97,7 @@ var (
 	InputNotOptionList     = define(Error, "input_not_option_list", "Input takes a list of its options", "input", "value")
 	InputNotOption         = define(Error, "input_not_option", "Not one of an input's options", "input", "value", "options")
 	InputNotText           = define(Error, "input_not_text", "Input takes text", "input", "value")
+	InputLooksSecret       = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
 )
 
 // A workflow's jobs.
@@ -123,6 +127,7 @@ var (
 	NoMatrix                   = define(Warning, "no_matrix", "Job has no matrix", "job", "key", "text")
 	UndefinedMatrixKey         = define(Warning, "undefined_matrix_key", "No such matrix key", "job", "key", "suggested", "suggestion")
 	UndefinedSession           = define(Warning, "undefined_session", "No such session", "name", "suggested", "suggestion")
+	VariableLooksSecret        = define(Warning, "variable_looks_secret", "Variable that looks like it holds a secret", "context", "name")
 	ExpressionFailed           = define(Error, "expression_failed", "Expression failed", "reason")
 	WordNotReference           = define(Warning, "word_not_reference", "Word that looks like a reference", "word", "text", "head")
 	HyphenatedName             = define(Warning, "hyphenated_name", "Hyphenated name without brackets", "written", "word", "text", "name", "fix", "defines", "defined", "job")

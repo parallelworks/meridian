@@ -7,11 +7,11 @@ description: >-
 source: Meridian
 contexts:
   vars:
-    REGION: us-east
     TOKEN: unused
 secret-variables: [TOKEN]
 expect:
   inputs:
+    region: us-east
     hosts:
       - name: us-east-1
         token: ${{ vars.TOKEN }}
