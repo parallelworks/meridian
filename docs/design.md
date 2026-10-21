@@ -265,8 +265,11 @@ ACTIVATE's launch form and its backend do together:
   number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
-  name, and is kept, as ACTIVATE keeps it. A submitted value that isn't
-  JSON, such as NaN or text that isn't UTF-8, is an error.
+  name, and is kept, as ACTIVATE keeps it. A value that isn't JSON, such
+  as NaN or text that isn't UTF-8, is an error, whether it was submitted or
+  a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
+  can't encode such a run's values, and fails it as it starts. One in a
+  list's rows is reported at the row's field.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an

@@ -248,9 +248,10 @@
   },
   "input_not_json": {
     "title": "不是 JSON 的输入值",
-    "why": "运行的输入值是 JSON，而该值包含 JSON 无法表示的内容，例如 NaN 或非 UTF-8 文本。",
+    "why": "运行的输入值是 JSON，而该值包含 JSON 无法表示的内容，例如 NaN 或非 UTF-8 文本。它是这样提交的，或者是输入默认值中的表达式得出的：0/0 得出 NaN，1/0 得出无穷大。",
     "fix": [
-      "以 JSON 形式提交该值。"
+      "以 JSON 形式提交该值。",
+      "如果是输入的默认值得出的，请修改表达式，使其得出 JSON 能表示的值。连字符表示减法，因此 inputs.pw-user 得出 NaN：请用 inputs['pw-user'] 读取该输入。"
     ]
   },
   "unknown_input": {

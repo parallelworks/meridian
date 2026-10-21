@@ -248,9 +248,10 @@
   },
   "input_not_json": {
     "title": "Valor de entrada que no es JSON",
-    "why": "Los valores de entrada de una ejecución son JSON, y este contiene algo que JSON no puede contener, como NaN o texto que no es UTF-8.",
+    "why": "Los valores de entrada de una ejecución son JSON, y este contiene algo que JSON no puede contener, como NaN o texto que no es UTF-8. Se envió así, o lo dio una expresión del valor predeterminado de la entrada: 0/0 da NaN, y 1/0 un infinito.",
     "fix": [
-      "Envía el valor como JSON."
+      "Envía el valor como JSON.",
+      "Si lo dio el valor predeterminado de la entrada, cambia la expresión para que dé un valor que JSON pueda contener. Un guion resta, así que inputs.pw-user da NaN: lee la entrada como inputs['pw-user']."
     ]
   },
   "unknown_input": {

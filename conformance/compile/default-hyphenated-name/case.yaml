@@ -1,0 +1,17 @@
+description: >-
+  A default of inputs.pw-user subtracts the text "user" from inputs.pw,
+  which is NaN, so the compiler warns about the hyphen, and the value isn't
+  JSON, which a plan can't hold, so it is an error and there is no plan.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: hyphenated_name
+      path: /on/execute/inputs/owner/default
+      line: 9
+      column: 22
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/owner
+      line: 7
+      column: 7

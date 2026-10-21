@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -316,6 +317,48 @@ jobs:
 				t.Errorf("%s in %s: the value was kept", name, key)
 			}
 		}
+	}
+}
+
+// A default that gives a value that isn't JSON, as 0/0 gives NaN, is an
+// error at its input, or at the field of a list's rows that holds it, and
+// the value is dropped, as a submitted one is, so that the values are JSON.
+func TestDefaultsMustBeJSON(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      s:
+        type: string
+        default: ${{ 0/0 }}
+      rows:
+        type: list
+        template:
+          n:
+            type: string
+            default: ${{ 1/0 }}
+        default: [{}]
+      fine:
+        type: string
+        default: ${{ 1/2 }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	var got []string
+	for _, d := range diags {
+		got = append(got, fmt.Sprintf("%s at %s: %v %v", d.Code, d.Path(), d.Params["input"], d.Params["value"]))
+	}
+	want := []string{
+		"input_not_json at /on/execute/inputs/s: s NaN",
+		"input_not_json at /on/execute/inputs/rows/template/n: rows.0.n +Inf",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("diagnostics\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := json.Marshal(inputs.Values); err != nil || !reflect.DeepEqual(inputs.Values, map[string]any{"fine": "0.5"}) {
+		t.Errorf("values = %v (%v), want fine's alone", inputs.Values, err)
 	}
 }
 

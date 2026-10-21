@@ -76,42 +76,42 @@ func deletePath(values map[string]any, path []string) {
 // notJSON finds the first part of v that isn't a JSON value of the kinds the
 // compiler takes, and says what it is, as the param what of a message that
 // says so: a number that isn't finite, text or a key that isn't UTF-8, or a
-// Go type, with the number or the type's name. It returns "" if v is JSON.
-// JSON values are nil, booleans, finite float64, int and int64 numbers,
-// UTF-8 text, and lists and mappings of them.
-func notJSON(v any) (what, value string) {
+// Go type, with the number or the type's name, and its path in v. It
+// returns "" if v is JSON. JSON values are nil, booleans, finite float64,
+// int and int64 numbers, UTF-8 text, and lists and mappings of them.
+func notJSON(v any) (what, value string, at []string) {
 	switch v := v.(type) {
 	case nil, bool, int, int64:
-		return "", ""
+		return "", "", nil
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return "number", formatNumber(v)
+			return "number", formatNumber(v), nil
 		}
-		return "", ""
+		return "", "", nil
 	case string:
 		if !utf8.ValidString(v) {
-			return "text", ""
+			return "text", "", nil
 		}
-		return "", ""
+		return "", "", nil
 	case []any:
-		for _, item := range v {
-			if what, value := notJSON(item); what != "" {
-				return what, value
+		for i, item := range v {
+			if what, value, at := notJSON(item); what != "" {
+				return what, value, append([]string{strconv.Itoa(i)}, at...)
 			}
 		}
-		return "", ""
+		return "", "", nil
 	case map[string]any:
 		for k, item := range jsonvalue.Sorted(v) {
 			if !utf8.ValidString(k) {
-				return "key", ""
+				return "key", "", []string{k}
 			}
-			if what, value := notJSON(item); what != "" {
-				return what, value
+			if what, value, at := notJSON(item); what != "" {
+				return what, value, append([]string{k}, at...)
 			}
 		}
-		return "", ""
+		return "", "", nil
 	}
-	return "go_type", fmt.Sprintf("%T", v)
+	return "go_type", fmt.Sprintf("%T", v), nil
 }
 
 // toNumber returns v as a number: a number, or text that is one.
