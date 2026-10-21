@@ -2,11 +2,13 @@ package problems
 
 import (
 	jsonv2 "encoding/json/v2"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"maps"
 	"math"
+	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -419,5 +421,97 @@ func TestShow(t *testing.T) {
 		if got := Show(tc.v); got != tc.want {
 			t.Errorf("Show(%v) = %q, want %q", tc.v, got, tc.want)
 		}
+	}
+}
+
+// showWhole is how Show showed a value before it wrote only what it shows:
+// its whole text as fmt prints it, and its whole JSON, if it has any.
+func showWhole(v any) string {
+	s := fmt.Sprint(v)
+	if b, err := jsonv2.Marshal(v, shown); err == nil {
+		s = string(b)
+	}
+	if utf8.RuneCountInString(s) > maxShown {
+		r := []rune(s)
+		s = string(r[:maxShown-1]) + "…"
+	}
+	return s
+}
+
+// Show shows what it showed when it wrote values whole: random values of
+// all kinds and sizes, the characters JSON escapes, and values that aren't
+// JSON, whose text fmt prints.
+func TestShowAsWhole(t *testing.T) {
+	deep := func(n int) any {
+		var v any = "x"
+		for range n {
+			v = []any{v}
+		}
+		return v
+	}
+	values := []any{
+		nil, true, "", 0, int64(-1) << 62, 1.5, math.Copysign(0, -1), 1e21, 1e-7, math.MaxFloat64,
+		math.NaN(), math.Inf(1), float32(1.5), complex(1, 2), []any(nil), map[string]any(nil),
+		[]string{"a"},
+		map[string]string{"a": "b"},
+		struct{ A int }{1},
+		make(chan int),
+		[]any{math.NaN()},
+		map[string]any{"a": math.Inf(-1)},
+		deep(maxPlainDepth - 1), deep(maxPlainDepth), deep(maxPlainDepth + 1), deep(10001),
+		strings.Repeat("é", 50), strings.Repeat("😀", 50), strings.Repeat("\xff", 50), strings.Repeat("\xe2\x80\xa8", 50),
+		append(slices.Repeat([]any{"item"}, 100), math.NaN()),
+	}
+	pieces := []string{"a", "é", "😀", "\xff", "\xe2\x80", "\xe2\x80\xa8", "\xe2\x80\xa9", "<", "&", `"`, `\`, "\n", "\x00", "\x1f", "\x7f", " "}
+	r := rand.New(rand.NewPCG(5, 6))
+	text := func() string {
+		var b strings.Builder
+		for range r.IntN(30) {
+			b.WriteString(pieces[r.IntN(len(pieces))])
+		}
+		return b.String()
+	}
+	var random func(depth int) any
+	random = func(depth int) any {
+		switch k := r.IntN(10); {
+		case k == 0:
+			return nil
+		case k == 1:
+			return r.IntN(2) == 0
+		case k == 2:
+			return []float64{0, 1e21, 1e20, -2.5e-7, 123456789, 0.1, math.NaN(), math.Inf(1)}[r.IntN(8)]
+		case k == 3:
+			return r.IntN(1000) - 500
+		case k <= 6 || depth > 3:
+			return text()
+		case k <= 8:
+			l := make([]any, r.IntN(12))
+			for i := range l {
+				l[i] = random(depth + 1)
+			}
+			return l
+		}
+		m := map[string]any{}
+		for range r.IntN(8) {
+			m[text()] = random(depth + 1)
+		}
+		return m
+	}
+	for range 20000 {
+		values = append(values, random(0))
+	}
+	for _, v := range values {
+		if got, want := Show(v), showWhole(v); got != want {
+			t.Fatalf("Show(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+// Show writes no more of a value than it shows.
+func BenchmarkShow(b *testing.B) {
+	l := slices.Repeat([]any{"item"}, 1_000_000)
+	b.ReportAllocs()
+	for b.Loop() {
+		Show(l)
 	}
 }
