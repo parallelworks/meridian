@@ -25,3 +25,7 @@ func Work(e *Expr, scope Scope) (any, int, error) {
 	v, err := ev.eval(e.root)
 	return v, ev.worked, err
 }
+
+// ToJSON returns v as toJSON writes it with indent, and the length jsonLen
+// counts for it.
+func ToJSON(v any, indent string) (string, int) { return toJSON(v, indent), jsonLen(v, indent, 0) }

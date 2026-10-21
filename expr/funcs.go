@@ -86,7 +86,13 @@ var functions = map[string]function{
 		return e.join(at, a[0], sep)
 	}},
 	"toJSON": {minArgs: 1, maxArgs: 1, reads: true, eval: func(e *evaluator, at int, a []any) (any, error) {
-		return e.built(at, toJSON(a[0], "  "))
+		// It counts the text before making it, so that text too large to
+		// build is never made.
+		n := jsonLen(a[0], "  ", 0)
+		if err := e.spend(at, n); err != nil {
+			return nil, err
+		}
+		return string(appendJSON(make([]byte, 0, n), a[0], "  ", 0)), nil
 	}},
 	"map": {minArgs: 2, maxArgs: 2, each: func(_, result any) (any, bool) {
 		return result, true

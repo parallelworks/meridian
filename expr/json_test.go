@@ -1,7 +1,8 @@
 package expr_test
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,15 +28,15 @@ func TestJSONRoundTrip(t *testing.T) {
 			if src == "" || err != nil {
 				continue
 			}
-			data, err := json.Marshal(tmpl)
+			data, err := tmpl.MarshalJSON()
 			if err != nil {
 				t.Fatalf("%s: Marshal: %v", src, err)
 			}
 			var back expr.Template
-			if err := json.Unmarshal(data, &back); err != nil {
+			if err := back.UnmarshalJSON(data); err != nil {
 				t.Fatalf("%s: Unmarshal %s: %v", src, data, err)
 			}
-			again, err := json.Marshal(&back)
+			again, err := back.MarshalJSON()
 			if err != nil || string(again) != string(data) {
 				t.Fatalf("%s: encodes as %s, then %s (%v)", src, data, again, err)
 			}
@@ -66,7 +67,7 @@ func TestJSONEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(tmpl)
+	data, err := tmpl.MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +76,11 @@ func TestJSONEncoding(t *testing.T) {
 		t.Errorf("got  %s\nwant %s", data, want)
 	}
 	var back expr.Template
-	if err := json.Unmarshal(data, &back); err != nil || back.String() != tmpl.String() {
+	if err := back.UnmarshalJSON(data); err != nil || back.String() != tmpl.String() {
 		t.Errorf("decoded %q, %v; want %q", back.String(), err, tmpl.String())
 	}
 
-	data, err = json.Marshal(mustParse(t, "map(inputs.l, (h, i) => h.name + i)"))
+	data, err = mustParse(t, "map(inputs.l, (h, i) => h.name + i)").MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,17 +94,17 @@ func TestJSONEncoding(t *testing.T) {
 // A lambda's body counts toward a decoded tree's depth as it does a parsed
 // one's: the call and the lambda are two levels.
 func TestJSONLambdaDepth(t *testing.T) {
-	data, err := json.Marshal(mustParse(t, "map(l, x => "+strings.Repeat("!", 198)+"x)"))
+	data, err := mustParse(t, "map(l, x => "+strings.Repeat("!", 198)+"x)").MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var e expr.Expr
-	if err := json.Unmarshal(data, &e); err != nil {
+	if err := e.UnmarshalJSON(data); err != nil {
 		t.Errorf("198 ! in a lambda: %v", err)
 	}
 	deeper := strings.Replace(string(data), `"body":`, `"body":{"op":"!","x":`, 1)
 	deeper = strings.Replace(deeper, `,"lambda"`, `},"lambda"`, 1)
-	if err := json.Unmarshal([]byte(deeper), &e); err == nil || !strings.Contains(err.Error(), "nests more than 200 levels deep") {
+	if err := e.UnmarshalJSON([]byte(deeper)); err == nil || !strings.Contains(err.Error(), "nests more than 200 levels deep") {
 		t.Errorf("199: %v, want the depth limit", err)
 	}
 }
@@ -145,10 +146,129 @@ func TestJSONDecodeErrors(t *testing.T) {
 		{"a lambda's unknown key", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["x"],"body":{"lit":1},"x":{"lit":1}}]}}`, `a lambda node has no "x"`},
 		{"a parameter outside a lambda", `{"src":"x","tree":{"param":"x","path":[]}}`, `"x" isn't a parameter of a lambda around it`},
 		{"another lambda's parameter", `{"src":"x","tree":{"call":"map","args":[{"call":"map","args":[{"lit":[]},{"lambda":["y"],"body":{"param":"y"}}]},{"lambda":["x"],"body":{"param":"y"}}]}}`, `"y" isn't a parameter of a lambda around it`},
+		{"a parameter read before its lambda", `{"src":"x","tree":{"call":"map","args":[{"param":"x"},{"body":{"param":"x"},"lambda":["x"]}]}}`, `"x" isn't a parameter of a lambda around it`},
+		{"an empty key", `{"src":"x","tree":{"ref":"inputs","path":[],"":1}}`, `a ref node has no ""`},
+		{"a key of a node in another case", `{"src":"x","tree":{"Lit":1}}`, "a node has no kind"},
+		{"no tree", `{"src":"x"}`, `has no "tree"`},
+		{"a tree that is null", `{"src":"x","tree":null}`, "a node has no kind"},
+		{"a key twice in a segment", `{"src":"x","tree":{"ref":"inputs","path":[{"quoted":"a","quoted":"b"}]}}`, "duplicate object member name"},
+		{"a segment of two keys", `{"src":"x","tree":{"ref":"inputs","path":[{"quoted":"a","bare":"b"}]}}`, "a path segment is a name or an object with one key"},
+		{"a segment that is a number", `{"src":"x","tree":{"ref":"inputs","path":[1]}}`, "a path segment is a name or an object with one key"},
+		{"a negation that isn't true or false", `{"src":"x","tree":{"op":"in","not":1,"x":{"lit":1},"y":{"lit":2}}}`, "not is true or false"},
+		{"up that isn't whole", `{"src":"x","tree":{"up":1.0,"path":[]}}`, "goes up at least one level"},
+		{"a slice of one", `{"src":"x","tree":{"slice":[{"lit":1}]}}`, "a slice is [start, end]"},
+		{"a slice of three", `{"src":"x","tree":{"slice":[{"lit":1},null,{"lit":2}]}}`, "a slice is [start, end]"},
+		{"a literal out of range", `{"src":"x","tree":{"lit":[1e400]}}`, "out of range"},
+		{"invalid UTF-8", "{\"src\":\"\xff\",\"tree\":{\"lit\":1}}", "invalid UTF-8"},
+		{"a lone surrogate", `{"src":"\ud800","tree":{"lit":1}}`, "surrogate"},
+		{"more than one value", `{"src":"x","tree":{"lit":1}} {}`, "more than one JSON value"},
 	} {
 		var e expr.Expr
-		if err := json.Unmarshal([]byte(tc.data), &e); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if err := e.UnmarshalJSON([]byte(tc.data)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want an error with %q", tc.name, err, tc.want)
 		}
+	}
+	for _, data := range []string{`{}`, `[1]`, `[[]]`, `["a",{"src":"x"}]`, `["a"] ["b"]`} {
+		var tmpl expr.Template
+		if err := tmpl.UnmarshalJSON([]byte(data)); err == nil {
+			t.Errorf("template %s: decoded", data)
+		}
+	}
+}
+
+// What encoding/json read in a tree still decodes: null where a string, a
+// number or a list is, a negation that a unary operator doesn't read, and
+// any value for [index] and .*.
+func TestJSONDecodeAccepts(t *testing.T) {
+	for _, data := range []string{
+		`{"src":null,"tree":{"word":null}}`,
+		`{"src":"x","tree":{"concat":null,"x":{"lit":1}}}`,
+		`{"src":"x","tree":{"op":"!","not":"unread","x":{"lit":1}}}`,
+		`{"src":"x","tree":{"op":"in","not":null,"x":{"lit":1},"y":{"lit":[]}}}`,
+		`{"src":"x","tree":{"ref":"inputs","path":null}}`,
+		`{"src":"x","tree":{"ref":"inputs","path":[null,{"quoted":null},{"index":5},{"each":[]}]}}`,
+		`{"tree":{"lit":{"b":[1,{"c":null}],"a":"\u0041"}},"src":"x"}`,
+	} {
+		var e expr.Expr
+		if err := e.UnmarshalJSON([]byte(data)); err != nil {
+			t.Errorf("%s: %v", data, err)
+		}
+	}
+	for _, data := range []string{`null`, `[]`, `[null,"a"]`} {
+		var tmpl expr.Template
+		if err := tmpl.UnmarshalJSON([]byte(data)); err != nil {
+			t.Errorf("template %s: %v", data, err)
+		}
+	}
+}
+
+// Each kind of node encodes as encoding/json wrote it: keys in sorted order,
+// and <, >, &, U+2028 and U+2029 escaped.
+func TestJSONEncodesEachKind(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"'it''s <b>' && 'a\u2028\tb'", `{"src":"'it''s \u003cb\u003e' \u0026\u0026 'a\u2028\tb'","tree":{"op":"\u0026\u0026","x":{"lit":"it's \u003cb\u003e"},"y":{"lit":"a\u2028\tb"}}}`},
+		{`[1, 1e21, 1e-7, 0.5, -2, {"b": null, "a": [true, "<"]}]`, `{"src":"[1, 1e21, 1e-7, 0.5, -2, {\"b\": null, \"a\": [true, \"\u003c\"]}]","tree":{"lit":[1,1e+21,1e-7,0.5,-2,{"a":[true,"\u003c"],"b":null}]}}`},
+		{`NaN || Infinity || -Infinity`, `{"src":"NaN || Infinity || -Infinity","tree":{"op":"||","x":{"op":"||","x":{"num":"NaN"},"y":{"num":"Infinity"}},"y":{"op":"-","x":{"num":"Infinity"}}}}`},
+		{`debug`, `{"src":"debug","tree":{"word":"debug"}}`},
+		{`inputs['my-key'].x[index].*[hidden]`, `{"src":"inputs['my-key'].x[index].*[hidden]","tree":{"path":[{"quoted":"my-key"},"x",{"index":true},{"each":true},{"bare":"hidden"}],"ref":"inputs"}}`},
+		{`..x.y`, `{"src":"..x.y","tree":{"path":["x","y"],"up":2}}`},
+		{`a !in b`, `{"src":"a !in b","tree":{"not":true,"op":"in","x":{"word":"a"},"y":{"word":"b"}}}`},
+		{`length inputs.x`, `{"src":"length inputs.x","tree":{"op":"length","x":{"path":["x"],"ref":"inputs"}}}`},
+		{`a ? b : c`, `{"src":"a ? b : c","tree":{"else":{"word":"c"},"if":{"word":"a"},"then":{"word":"b"}}}`},
+		{`(fromJSON inputs.j).a[0]`, `{"src":"(fromJSON inputs.j).a[0]","tree":{"member":{"op":"fromJSON","x":{"path":["j"],"ref":"inputs"}},"path":["a","0"]}}`},
+		{`inputs.x get (1):(2)`, `{"src":"inputs.x get (1):(2)","tree":{"op":"get","x":{"path":["x"],"ref":"inputs"},"y":{"slice":[{"lit":1},{"lit":2}]}}}`},
+		{`inputs.x get (1):`, `{"src":"inputs.x get (1):","tree":{"op":"get","x":{"path":["x"],"ref":"inputs"},"y":{"slice":[{"lit":1},null]}}}`},
+		{`2:(len inputs.x)`, `{"src":"2:(len inputs.x)","tree":{"concat":"2:","x":{"op":"len","x":{"path":["x"],"ref":"inputs"}}}}`},
+		{`filter(inputs.j, v => v > 1).*`, `{"src":"filter(inputs.j, v =\u003e v \u003e 1).*","tree":{"member":{"args":[{"path":["j"],"ref":"inputs"},{"body":{"op":"\u003e","x":{"param":"v","path":[]},"y":{"lit":1}},"lambda":["v"]}],"call":"filter"},"path":[{"each":true}]}}`},
+		{`case(a, 1, 2)`, `{"src":"case(a, 1, 2)","tree":{"args":[{"word":"a"},{"lit":1},{"lit":2}],"call":"case"}}`},
+	} {
+		data, err := mustParse(t, tc.src).MarshalJSON()
+		if err != nil || string(data) != tc.want {
+			t.Errorf("%s: got  %s, %v\nwant %s", tc.src, data, err, tc.want)
+		}
+		var back expr.Expr
+		if err := back.UnmarshalJSON([]byte(tc.want)); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		}
+		if again, err := back.MarshalJSON(); err != nil || string(again) != tc.want {
+			t.Errorf("%s: decoded and encoded as %s, %v", tc.src, again, err)
+		}
+	}
+}
+
+// chain returns an expression that nests depth levels deep, the most being
+// 200: a chain of additions, each a level under the one after it.
+func chain(depth int) string { return strings.Repeat("1+", depth) + "1" }
+
+func BenchmarkMarshal(b *testing.B) {
+	for _, depth := range []int{10, 200} {
+		e := mustParse(b, chain(depth))
+		b.Run(fmt.Sprintf("depth=%d", depth), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := jsonv2.Marshal(e); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkUnmarshal(b *testing.B) {
+	for _, depth := range []int{10, 200} {
+		data, err := jsonv2.Marshal(mustParse(b, chain(depth)))
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(fmt.Sprintf("depth=%d", depth), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				var e expr.Expr
+				if err := jsonv2.Unmarshal(data, &e); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

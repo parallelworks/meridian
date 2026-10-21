@@ -1,18 +1,20 @@
 package expr_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/problems"
 )
 
-func mustParse(t *testing.T, src string) *expr.Expr {
+func mustParse(t testing.TB, src string) *expr.Expr {
 	t.Helper()
 	e, err := expr.Parse(src)
 	if err != nil {
@@ -290,15 +292,46 @@ func FuzzExpression(f *testing.F) {
 	}
 	w := &expr.Workflow{Root: map[string]any{"x": "${{ .y }}", "y": []any{"${{ ..x }}"}}}
 	f.Fuzz(func(t *testing.T, src string) {
+		valid := utf8.ValidString(src)
 		if e, err := expr.Parse(src); err == nil {
-			_, _ = e.Eval(scope)
+			want, wantErr := e.Eval(scope)
 			_, _ = e.Eval(w.Scope([]string{"z", "w"}, scope))
 			e.Refs()
 			e.StatusChecks()
 			e.CheckCondition()
+
+			// The tree survives a trip through JSON: it decodes, encodes to
+			// the same bytes, and has the same source and value. JSON holds
+			// only UTF-8, as a workflow does, and writes each byte of
+			// invalid UTF-8 as U+FFFD.
+			data, err := e.MarshalJSON()
+			if err != nil {
+				t.Fatalf("%q: %v", src, err)
+			}
+			var back expr.Expr
+			if err := back.UnmarshalJSON(data); err != nil {
+				t.Fatalf("%q: %s: %v", src, data, err)
+			}
+			if again, err := back.MarshalJSON(); err != nil || !bytes.Equal(again, data) || valid && back.String() != src {
+				t.Fatalf("%q: encodes as %s, then as %s (%v)", src, data, again, err)
+			}
+			if got, err := back.Eval(scope); valid && ((err == nil) != (wantErr == nil) || err == nil && !equal(got, want)) {
+				t.Fatalf("%q: after JSON, %s, %v; want %s, %v", src, show(got), err, show(want), wantErr)
+			}
 		}
 		if tmpl, err := expr.ParseTemplate(src); err == nil {
 			_, _ = tmpl.Eval(scope)
+			data, err := tmpl.MarshalJSON()
+			if err != nil {
+				t.Fatalf("%q: %v", src, err)
+			}
+			var back expr.Template
+			if err := back.UnmarshalJSON(data); err != nil {
+				t.Fatalf("%q: %s: %v", src, data, err)
+			}
+			if again, err := back.MarshalJSON(); err != nil || !bytes.Equal(again, data) || valid && back.String() != src {
+				t.Fatalf("%q: encodes as %s, then as %s (%v)", src, data, again, err)
+			}
 		}
 	})
 }

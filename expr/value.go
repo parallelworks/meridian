@@ -1,8 +1,8 @@
 package expr
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"maps"
 	"math"
 	"math/big"
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // Values are JSON's: nil, bool, numbers, string, []any and map[string]any.
@@ -197,15 +199,8 @@ func formatNumber(n float64) string {
 		return "0"
 	}
 	// encoding/json chooses between the two forms as JavaScript does.
-	if abs := math.Abs(n); abs >= 1e-6 && abs < 1e21 {
-		return strconv.FormatFloat(n, 'f', -1, 64)
-	}
-	s := strconv.FormatFloat(n, 'e', -1, 64)
-	// Go writes e-07 where JavaScript writes e-7.
-	if i := strings.IndexByte(s, 'e'); i >= 0 && len(s) > i+3 && s[i+2] == '0' {
-		s = s[:i+2] + s[i+3:]
-	}
-	return s
+	var b [32]byte
+	return string(appendFloat(b[:0], n))
 }
 
 // stringOf converts v to a string as JavaScript's String() does, except
@@ -232,89 +227,144 @@ func stringOf(v any) string {
 
 // toJSON encodes v as JSON, with mapping keys in sorted order and indent as
 // the indentation of each level, or on one line if indent is empty. A number
-// JSON can't hold, NaN or an infinity, is null, as in JavaScript.
+// JSON can't hold, NaN or an infinity, is null, as in JavaScript. Unlike
+// encoding/json's default, it doesn't escape <, > and &, which mean nothing
+// special in a workflow.
 func toJSON(v any, indent string) string {
-	var b bytes.Buffer
-	writeJSON(&b, v, indent, 0)
-	return b.String()
+	return string(appendJSON(nil, v, indent, 0))
 }
 
-func writeJSON(b *bytes.Buffer, v any, indent string, depth int) {
+func appendJSON(b []byte, v any, indent string, depth int) []byte {
 	newline := func(depth int) {
 		if indent != "" {
-			b.WriteByte('\n')
+			b = append(b, '\n')
 			for range depth {
-				b.WriteString(indent)
+				b = append(b, indent...)
 			}
 		}
 	}
 	switch v := v.(type) {
 	case nil:
-		b.WriteString("null")
+		b = append(b, "null"...)
 	case bool:
-		b.WriteString(strconv.FormatBool(v))
+		b = strconv.AppendBool(b, v)
 	case string:
-		writeJSONString(b, v)
+		b = appendString(b, v, false)
 	case []any:
 		if len(v) == 0 {
-			b.WriteString("[]")
-			return
+			return append(b, "[]"...)
 		}
-		b.WriteByte('[')
+		b = append(b, '[')
 		for i, item := range v {
 			if i > 0 {
-				b.WriteByte(',')
+				b = append(b, ',')
 			}
 			newline(depth + 1)
-			writeJSON(b, item, indent, depth+1)
+			b = appendJSON(b, item, indent, depth+1)
 		}
 		newline(depth)
-		b.WriteByte(']')
+		b = append(b, ']')
 	case map[string]any:
 		if len(v) == 0 {
-			b.WriteString("{}")
-			return
+			return append(b, "{}"...)
 		}
-		b.WriteByte('{')
+		b = append(b, '{')
 		for i, k := range slices.Sorted(maps.Keys(v)) {
 			if i > 0 {
-				b.WriteByte(',')
+				b = append(b, ',')
 			}
 			newline(depth + 1)
-			writeJSONString(b, k)
-			b.WriteByte(':')
+			b = append(appendString(b, k, false), ':')
 			if indent != "" {
-				b.WriteByte(' ')
+				b = append(b, ' ')
 			}
-			writeJSON(b, v[k], indent, depth+1)
+			b = appendJSON(b, v[k], indent, depth+1)
 		}
 		newline(depth)
-		b.WriteByte('}')
+		b = append(b, '}')
 	case int64:
-		b.WriteString(strconv.FormatInt(v, 10))
+		b = strconv.AppendInt(b, v, 10)
 	default:
 		n, ok := number(v)
 		if !ok || math.IsNaN(n) || math.IsInf(n, 0) {
-			b.WriteString("null")
-			return
+			return append(b, "null"...)
 		}
-		b.WriteString(formatNumber(n))
+		b = append(b, formatNumber(n)...)
 	}
+	return b
 }
 
-// writeJSONString writes s as a JSON string. Unlike encoding/json's default,
-// it doesn't escape <, > and &, which mean nothing special in a workflow.
-func writeJSONString(b *bytes.Buffer, s string) {
-	enc := json.NewEncoder(b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(s) // A string always encodes.
-	b.Truncate(b.Len() - 1)
+// jsonLen returns the length of v's JSON as toJSON writes it, at depth, so
+// that what writing it would build is known without writing it.
+func jsonLen(v any, indent string, depth int) int {
+	newline := func(depth int) int {
+		if indent == "" {
+			return 0
+		}
+		return len("\n") + depth*len(indent)
+	}
+	switch v := v.(type) {
+	case nil:
+		return len("null")
+	case bool:
+		if v {
+			return len("true")
+		}
+		return len("false")
+	case string:
+		return stringLen(v, false)
+	case []any:
+		if len(v) == 0 {
+			return len("[]")
+		}
+		n := len("[]") + len(v) - 1 + newline(depth)
+		for _, item := range v {
+			n += newline(depth+1) + jsonLen(item, indent, depth+1)
+		}
+		return n
+	case map[string]any:
+		if len(v) == 0 {
+			return len("{}")
+		}
+		n := len("{}") + len(v) - 1 + newline(depth)
+		for k, item := range v {
+			n += newline(depth+1) + stringLen(k, false) + len(":") + jsonLen(item, indent, depth+1)
+			if indent != "" {
+				n += len(" ")
+			}
+		}
+		return n
+	case int64:
+		var b [20]byte
+		return len(strconv.AppendInt(b[:0], v, 10))
+	}
+	n, ok := number(v)
+	switch {
+	case !ok || math.IsNaN(n) || math.IsInf(n, 0):
+		return len("null")
+	case n == 0:
+		return len("0")
+	}
+	var b [32]byte
+	return len(appendFloat(b[:0], n))
 }
+
+// lax reads JSON as encoding/json has always read it here: a key given twice
+// has its later value, and invalid UTF-8 is replaced.
+var lax = jsonv2.JoinOptions(
+	jsontext.AllowDuplicateNames(true),
+	jsontext.AllowInvalidUTF8(true),
+	jsonv2.WithUnmarshalers(jsonv2.UnmarshalFromFunc(func(dec *jsontext.Decoder, v *any) error {
+		out, err := jsonvalue.Decode(dec, parseFloat)
+		*v = out
+		return err
+	})),
+)
 
 // parseJSON decodes JSON text into values.
 func parseJSON(s string) (any, error) {
 	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	if err := jsonv2.Unmarshal([]byte(s), &v, lax); err != nil {
 		return nil, err
 	}
 	return v, nil

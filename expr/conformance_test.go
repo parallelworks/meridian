@@ -2,7 +2,6 @@ package expr_test
 
 import (
 	"cmp"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -111,12 +110,12 @@ func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(tmpl)
+	data, err := tmpl.MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var stored expr.Template
-	if err := json.Unmarshal(data, &stored); err != nil {
+	if err := stored.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)
 	}
 	index := scope.Index
