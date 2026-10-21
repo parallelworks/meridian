@@ -17,10 +17,16 @@ export CGO_ENABLED := 0
 
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# check runs the tests on 32-bit x86 too, where they run natively: on x86-64
+# Linux, as CI does.
+ifeq ($(shell go env GOHOSTOS GOHOSTARCH),linux amd64)
+TEST_386 := test-386
+endif
 
 .PHONY: check
-check: tidy-check lint vulncheck cgo-check test test-race bench build ## Run all checks, tests and builds
+check: tidy-check lint vulncheck cgo-check test test-race $(TEST_386) bench build ## Run all checks, tests and builds
 
 .PHONY: tidy-check
 tidy-check: ## Verify both Go modules are tidy
@@ -49,6 +55,10 @@ cgo-check: ## Verify that no package or dependency uses cgo
 .PHONY: test
 test: ## Run tests
 	$(FIPS) go test -shuffle=on -cover ./...
+
+.PHONY: test-386
+test-386: ## Run tests on 32-bit x86, where an int is 32 bits (needs x86 Linux)
+	$(FIPS) GOARCH=386 go test -shuffle=on ./...
 
 .PHONY: bench
 bench: ## Run each benchmark once, to check that it still runs
