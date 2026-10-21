@@ -161,7 +161,8 @@ func (e *Evaluator) EvalMarked(location []string) (any, bool, error) {
 // being evaluated, so that expressions that read each other fail instead
 // of recursing forever, and done the values of those evaluated, and of the
 // lists and mappings resolved, so that reading one again doesn't make it
-// again.
+// again. Both hold locations by their JSON Pointers, which tell apart any
+// two, whatever their keys hold.
 type workflowEval struct {
 	workflow *Workflow
 	scope    Scope
@@ -282,12 +283,12 @@ type workflowResolver struct {
 	location []string
 }
 
-// evalAt evaluates t, the template of the string at location, whose key is
-// k.
+// evalAt evaluates t, the template of the string at location, whose JSON
+// Pointer is k.
 func (r *workflowResolver) evalAt(t *Template, location []string, k string) (any, error) {
 	ev := r.eval
 	if ev.active[k] {
-		return nil, &EvalError{Location: jsonptr.Format(location), Kind: problems.ExpressionsReadEachOther}
+		return nil, &EvalError{Location: k, Kind: problems.ExpressionsReadEachOther}
 	}
 	ev.active[k] = true
 	defer delete(ev.active, k)
@@ -313,7 +314,7 @@ func (r *workflowResolver) evalAt(t *Template, location []string, k string) (any
 // expressions, and those in each string of a list or mapping.
 func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 	ev := r.eval
-	k := strings.Join(location, "\x00")
+	k := jsonptr.Format(location)
 	b := ev.scope.budget
 	if m, ok := ev.done[k]; ok && ev.count(m) {
 		b.marked = b.marked || ev.marked[m]

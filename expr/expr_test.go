@@ -258,6 +258,37 @@ func TestWorkflowErrors(t *testing.T) {
 	}
 }
 
+// An Evaluator tells the strings at any two locations apart, whatever their
+// keys hold: a key with a NUL, a / or a ~ in it isn't a path of other keys,
+// so a string there neither reads the value of one at such a path nor
+// reads itself through it.
+func TestEvaluatorLocations(t *testing.T) {
+	w := &expr.Workflow{Root: map[string]any{
+		"a\x00b": "${{ 'one' }}",
+		"a":      map[string]any{"b": "${{ 'two' }}"},
+		"a/b":    "${{ 'three' }}",
+		"c\x00d": "${{ .c.d }}-x",
+		"c":      map[string]any{"d": "${{ 'y' }}"},
+		"~1":     "${{ .['/'] }}-z",
+		"/":      "${{ 'w' }}",
+	}}
+	ev := w.Evaluator(expr.Scope{})
+	for _, tc := range []struct {
+		location []string
+		want     string
+	}{
+		{[]string{"a\x00b"}, "one"},
+		{[]string{"a", "b"}, "two"},
+		{[]string{"a/b"}, "three"},
+		{[]string{"c\x00d"}, "y-x"},
+		{[]string{"~1"}, "w-z"},
+	} {
+		if got, err := ev.Eval(tc.location); err != nil || got != tc.want {
+			t.Errorf("%q = %v, %v; want %s", tc.location, got, err, tc.want)
+		}
+	}
+}
+
 // Results can be changed without changing the expression.
 func TestLiteralsAreCopied(t *testing.T) {
 	e := mustParse(t, `{"a": [1]}`)
