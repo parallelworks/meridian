@@ -1,4 +1,7 @@
-description: Conditions read the other inputs' defaults. pvc_name is hidden because pvc_persist defaults to false, so it isn't required.
+description: >-
+  Conditions read the other inputs' defaults: pvc_persist defaults to false,
+  so pvc_name is hidden, and its ignore, which reads that, ignores it. It has
+  no value, and isn't required.
 source: ACTIVATE's tests
 inputs:
   targetType: kubernetes-cluster

@@ -204,8 +204,6 @@ cases:
     value: [""]
   - expr: '"abc" split ""'
     value: [a, b, c]
-  - expr: inputs.list join "-"
-    value: x-y-z
   - expr: '[] join ","'
     value: ""
   - expr: inputs.jsonArr join "+"

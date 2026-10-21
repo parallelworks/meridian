@@ -1,7 +1,7 @@
 description: >-
   An unknown key that differs from a defined one only in case, hyphens and
   underscores is ignored, as ACTIVATE ignores it, with a suggestion.
-source: Public workflows that ACTIVATE runs
+source: Meridian, after public workflows that ACTIVATE runs
 expect:
   diagnostics:
     - severity: warning

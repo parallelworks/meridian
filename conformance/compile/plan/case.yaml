@@ -1,4 +1,8 @@
-description: The plan holds the run's inputs and env, and each job with its needs, steps and outputs, in the order of their names.
+description: >-
+  The plan holds the run's name, inputs and env, and each job, in the order
+  of their names, with its needs, if:, steps and outputs. An expression that
+  can't be evaluated until the run is underway, such as env's or an
+  output's, is kept as it is written.
 source: Meridian
 expect:
   plan:
@@ -10,4 +14,7 @@ expect:
     /jobs/0/steps/0/id: greet
     /jobs/0/steps/0/path: /jobs/build/steps/0
     /jobs/1/key: test
+    /run/env/GREETING/${{/1/src: " inputs.who "
+    /jobs/0/outputs/done/${{/0/src: " steps.greet.outputs.done "
     /jobs/1/needs: [{job: build}]
+    /jobs/1/if/${{/0/src: " needs.build.outputs.done == 'yes' "

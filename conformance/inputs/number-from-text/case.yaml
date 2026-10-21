@@ -1,4 +1,6 @@
-description: A number given as text is converted. A string input given a number or a boolean gets its text.
+description: >-
+  A number given as text, even with spaces around it, is converted, and a
+  number input's default is its value.
 source: Meridian
 inputs:
   count: " 4 "

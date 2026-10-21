@@ -1,4 +1,4 @@
-format: 2
+format: 999
 jobs:
   main:
     steps:

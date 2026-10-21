@@ -145,8 +145,8 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
 ### Conformance
 
 The conformance suite pins the format's meaning. Each case is a workflow,
-with the inputs and contexts it is given, and either what it compiles to or
-the problems it has. Cases come from ACTIVATE's own tests, from public
+or an expression, with the inputs and contexts it is given, and what it
+loads, resolves or compiles to, the problems it has, or both. Cases come from ACTIVATE's own tests, from public
 workflows and from Meridian. They live in `conformance/`, in areas, and each
 package runs the cases of its own: `format` for loading and validation,
 `expressions` for what expressions evaluate to, `inputs` for a run's input

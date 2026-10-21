@@ -8,3 +8,4 @@ expect:
       path: /format
       line: 1
       column: 9
+      params: {format: "999", latest: "1"}
