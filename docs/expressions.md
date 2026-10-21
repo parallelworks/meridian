@@ -460,7 +460,12 @@ time the template evaluates it:
   as `+`, `==`, `&&`, `??`, `in`, `!in` or `get`; and the ternary `? :`;
 - a call of a function, `case` and the status functions among them;
 - each name, index, `[index]` or `*` of a path: `inputs.a[0].b` has three,
-  and counts 32 with its operand;
+  and counts 32 with its operand. A name read to look something up counts
+  its bytes instead, if they are more than 8: a name or index of a path,
+  quoted or bare, and a lambda's parameter each time it is read. So
+  `inputs.cluster_name` counts 8 for the context and 12 for the name, and a
+  parameter named `an_element` 10. Context names, function names and bare
+  words are steps of 8;
 - each item that a `.*` visits. The rest of the path is followed from each
   item, and counts again for each: `inputs.l.*.a` over a list of three items
   counts 8 for the operand, 8 each for `l` and `*`, and 16 for each item, 72;
@@ -491,19 +496,26 @@ early, as `==` could at the first byte two strings differ in.
 | --- | --- |
 | `==`, `!=`, `===`, `!==`, `<`, `>`, `<=` and `>=` | Both operands |
 | `contains`, `in`, `includes`, `startsWith` and `endsWith`, the functions and the word operators | Both operands |
-| `length` | A string; a list's or mapping's length reads nothing |
+| `length` | A string, and the list or mapping it holds as JSON; a list's or mapping's length reads nothing |
 | `trim`, `upper` and `lower` | The operand |
-| `keys` and `values` | The operand |
+| `keys` and `values` | The operand, and the list or mapping a string holds as JSON |
 | `toJSON` | The value |
 | `fromJSON` | The text, or the value, which it gives back, if it isn't a string |
 | `format` | The format string and each argument |
-| `join`, the function and the word operator | The list or string, and the separator: `','` when it isn't given |
+| `join`, the function and the word operator | The list or string, the list or mapping a string holds as JSON, and the separator: `','` when it isn't given |
 | `split` | The string and the separator |
 | A list or mapping written as JSON | Itself, each time it is evaluated |
-| A name or index of a path, and `get`, that read into a string | The string, for a character of it or a key of the JSON it holds |
+| A name or index of a path, and `get`, that read into a string | The string, and the JSON value it holds, which they read from, or else a character of it |
 | `get` | Its key, if it is text |
 | Arithmetic, `-`, `abs`, `floor`, `ceil`, `round` and `range` | A string they convert to a number |
-| `map`, `filter` and `.*` | A string they go through, which holds the items as JSON; a mapping's keys, which they go through in order: 8 for each and its bytes |
+| `map`, `filter` and `.*` | A string they go through, and the list or mapping it holds as JSON; a mapping's keys, which they go through in order: 8 for each and its bytes |
+
+A string read as the JSON it holds counts the value it holds too, by the
+size rule, each time, as `fromJSON` counts what it reads. A path and `get`
+read any JSON value, and read a string that the JSON holds in turn the same
+way; `length`, `keys`, `values`, `join`, `map`, `filter` and `.*` read a list
+or mapping, with space around it or not. A string that doesn't hold JSON
+counts only its size.
 
 Every other operation reads nothing, however large its operands: reading a
 reference, a path through lists and mappings, `get` of them by a number,

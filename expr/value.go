@@ -322,6 +322,12 @@ func parseJSON(s string) (any, error) {
 	return v, nil
 }
 
+// jsonValue returns the value that s holds as JSON, if it holds any.
+func jsonValue(s string) (any, bool) {
+	v, err := parseJSON(s)
+	return v, err == nil
+}
+
 // collection returns the list or mapping that a string holds as JSON, or v
 // itself. Outputs are always strings, so operators that work on lists and
 // mappings accept them in JSON.
@@ -464,13 +470,20 @@ func property(v any, key string) (any, bool) {
 		if parsed, err := parseJSON(v); err == nil {
 			return property(parsed, key)
 		}
-		runes := []rune(v)
-		if start, end, ok := sliceBounds(key, len(runes)); ok {
-			return string(runes[start:end]), true
-		}
-		if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < len(runes) {
-			return string(runes[i]), true
-		}
+		return character(v, key)
+	}
+	return nil, false
+}
+
+// character returns the character of a string that doesn't hold JSON at an
+// index, or its slice, such as 1:3.
+func character(s, key string) (any, bool) {
+	runes := []rune(s)
+	if start, end, ok := sliceBounds(key, len(runes)); ok {
+		return string(runes[start:end]), true
+	}
+	if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < len(runes) {
+		return string(runes[i]), true
 	}
 	return nil, false
 }
@@ -592,11 +605,10 @@ func entries(v any) (keys, items []any, ok bool) {
 	return nil, nil, false
 }
 
-// elements returns a list's items, or a mapping's values in the order of
-// their keys. A string that holds a JSON list or mapping is read, once, as
-// its value.
-func elements(v any) []any {
-	switch c := collection(v).(type) {
+// elements returns the items of c, a collection: a list's items, or a
+// mapping's values in the order of their keys.
+func elements(c any) []any {
+	switch c := c.(type) {
 	case []any:
 		return c
 	case map[string]any:

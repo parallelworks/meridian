@@ -308,8 +308,8 @@ func TestWork(t *testing.T) {
 		{"inputs.missing.*.a", 24},
 		{"(inputs.l).*.a", 80},
 		// Going through a mapping reads its keys, 8 for each and its
-		// bytes, and through a string the string, which holds the items as
-		// JSON.
+		// bytes, and through a string the string, and the list or mapping
+		// it holds as JSON.
 		{"inputs.a.*", 41},
 		{"inputs.l.*.*", 106},
 		{"(inputs.s).*", 35},
@@ -317,7 +317,7 @@ func TestWork(t *testing.T) {
 		{"filter(inputs.l, x => false)", 72},
 		{"filter(inputs.l, x => length(filter(inputs.w, y => false)))", 240},
 		{"map(inputs.l, x => x.a)", 144},
-		{"map('[1]', x => x)", 51},
+		{"map('[1]', x => x)", 67},
 		{"filter(inputs.a, x => false)", 49},
 		// An operation that reads values counts their sizes.
 		{"'abc' == 'de'", 29},
@@ -346,10 +346,20 @@ func TestWork(t *testing.T) {
 		{"[1, 2]", 40},
 		{`{"k": "v"}`, 18},
 		// A name, an index or get that reads into a string reads it, and
-		// get reads a key that is text.
+		// the value it holds as JSON, if it holds any. length, keys,
+		// values and join read a string's JSON list or mapping. get reads a
+		// key that is text.
 		{"inputs.s[0]", 27},
 		{"inputs.s get 0", 35},
+		{"'[1, 2]' get 1", 62},
+		{"length('[1, 2]')", 54},
+		{`keys '{"a": 1}'`, 41},
 		{"inputs.a get 'b'", 33},
+		// A name read to look something up counts its bytes, if they are
+		// more than 8.
+		{"inputs['a quoted name']", 21},
+		{"inputs.a_missing_name.b", 30},
+		{"map(inputs.w, an_element => an_element)", 79},
 		// Converting text to a number reads it.
 		{"inputs.t * 1", 34},
 		{"'12' - 1", 26},

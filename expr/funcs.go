@@ -149,8 +149,12 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 // counts what it builds before building it, because a long separator is
 // repeated for every item.
 func (e *evaluator) join(at int, v any, sep string) (any, error) {
+	c := collection(v)
+	if err := e.work(at, heldWork(v, c)); err != nil {
+		return nil, err
+	}
 	var list []any
-	switch c := collection(v).(type) {
+	switch c := c.(type) {
 	case string:
 		return c, nil
 	case []any:
@@ -233,6 +237,16 @@ func roundHalfUp(n float64) float64 {
 func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 	if err := e.work(at, operandReads(op, v)); err != nil {
 		return nil, err
+	}
+	switch op {
+	case "length", "len", "keys", "values":
+		// These read a string as the list or mapping it holds as JSON, if
+		// it holds one, which counts too.
+		c := collection(v)
+		if err := e.work(at, heldWork(v, c)); err != nil {
+			return nil, err
+		}
+		v = c
 	}
 	switch op {
 	case "!":

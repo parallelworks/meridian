@@ -58,11 +58,10 @@ const (
 )
 
 // maxGroupTime is Meridian's own limit on how long the templates of a group
-// spend evaluating, together. It is a backstop: the work a template does is
-// counted by what its steps and reads cost, and this bounds the costs that
-// the count misses, for workflows that do far more than any real one. It
-// isn't part of the format, since how long evaluating takes depends on the
-// machine.
+// spend evaluating, together. It is a backstop that work within the limits
+// never reaches: the work a template does is counted by what its steps and
+// reads cost, so a group at its limit takes a few seconds. It isn't part of
+// the format, since how long evaluating takes depends on the machine.
 const maxGroupTime = 10 * time.Second
 
 // clockEvery is how many steps a group's templates take between reads of
@@ -414,6 +413,10 @@ func (e *evaluator) eval(n node) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The parameter's name counts its bytes, beyond the step.
+		if err := e.work(n.at, nameWork(n.name)-step); err != nil {
+			return nil, err
+		}
 		if err := e.pathWork(n.at, path); err != nil {
 			return nil, err
 		}
@@ -519,10 +522,8 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		if err := e.read(n.at, a, b); err != nil {
 			return nil, err
 		}
-	case "get", "range":
-		// get reads a string it reads into, as a path's name does, and a
-		// key that is text, which it looks up or reads as an index. range
-		// reads text it converts to a number.
+	case "range":
+		// range reads text it converts to a number.
 		if err := e.readText(n.at, a, b); err != nil {
 			return nil, err
 		}
@@ -563,8 +564,13 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		if !ok {
 			return nil, nil
 		}
-		v, _ := property(a, k)
-		return v, nil
+		// get reads a key that is text, which it looks up or reads as an
+		// index, and a string it reads into, as a path's name does.
+		if err := e.readText(n.at, b); err != nil {
+			return nil, err
+		}
+		v, _, err := lookup(a, k, func(w int) error { return e.work(n.at, w) })
+		return v, err
 	case "range":
 		return e.rangeOf(n.at, a, b)
 	case "split":
@@ -668,10 +674,11 @@ func (e *evaluator) each(n *call, fn function) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := e.work(n.at, traversal(v)); err != nil {
+	c := collection(v)
+	if err := e.work(n.at, traversal(v, c)); err != nil {
 		return nil, err
 	}
-	keys, items, ok := entries(v)
+	keys, items, ok := entries(c)
 	if !ok {
 		return nil, e.errorAt(n.at, problems.NotListOrMapping, problems.Params{"name": n.name, "value": problems.Show(v)})
 	}
@@ -737,7 +744,10 @@ func (e *evaluator) known(at int, root any, path []string, v any) (any, error) {
 		return nil, &UnknownError{Offset: at, Name: u.Name}
 	}
 	if i := slices.IndexFunc(path, makesList); i >= 0 {
-		from, _, _ := walk(root, path[:i], nil)
+		from, ok := source(root, path[:i])
+		if !ok {
+			return v, nil
+		}
 		if _, ok := e.unknown(from); !ok {
 			return v, nil
 		}
@@ -762,6 +772,27 @@ func (e *evaluator) known(at int, root any, path []string, v any) (any, error) {
 // makesList reports whether a path's segment makes a new list when it reads
 // one: a *, or a slice such as 1:3.
 func makesList(name string) bool { return name == "*" || strings.Contains(name, ":") }
+
+// source returns what path leads to from root through lists and mappings
+// alone, which a list a reference makes is made from. ok is false if it
+// leads through anything else, such as text, where nothing unknown is, or
+// nowhere.
+func source(root any, path []string) (any, bool) {
+	v := root
+	for _, name := range path {
+		switch v.(type) {
+		case []any, map[string]any:
+		default:
+			return nil, false
+		}
+		next, ok := property(v, name)
+		if !ok {
+			return nil, false
+		}
+		v = next
+	}
+	return v, true
+}
 
 // An identity tells a list or a mapping from any other while it is held:
 // where its items are, and how many a list has.
@@ -917,29 +948,83 @@ func (e *evaluator) names(at int, path []segment) ([]string, error) {
 }
 
 // pathWork counts the steps of following path, which the node at offset at
-// reads, from where it starts: one for each segment up to its first *, and
-// for that *. walk counts the rest as it follows the path.
+// reads, from where it starts: the segments up to its first *, and that *.
+// walk counts the rest as it follows the path.
 func (e *evaluator) pathWork(at int, path []string) error {
-	return e.work(at, step*segments(path))
+	return e.work(at, namesWork(path))
 }
 
-// segments returns how many segments of path are followed from where it
-// starts: those up to its first *, and the *.
-func segments(path []string) int {
-	if i := slices.Index(path, "*"); i >= 0 {
-		return i + 1
+// nameWork returns what reading a segment of a path counts: a name or an
+// index, which it looks up, the bytes written, or 8 if that is more, and a *
+// a step.
+func nameWork(name string) int {
+	if name == "*" {
+		return step
 	}
-	return len(path)
+	return max(step, len(name))
 }
 
-// traversal returns what going through v's items reads besides them: a
-// string, which holds them as JSON, and a mapping's keys, which they are
-// gone through in the order of, 8 for each and its bytes. A list's items
-// are gone through as they are.
-func traversal(v any) int {
+// namesWork returns what the segments of path that are followed from where
+// it starts count: those up to its first *, and that *.
+func namesWork(path []string) int {
+	n := 0
+	for _, name := range path {
+		n += nameWork(name)
+		if name == "*" {
+			break
+		}
+	}
+	return n
+}
+
+// heldWork returns what reading v as c, the list or mapping it holds as
+// JSON (collection), reads besides v itself: the value, if v is a string
+// that holds one.
+func heldWork(v, c any) int {
+	if _, isString := v.(string); !isString {
+		return 0
+	}
+	if _, isString := c.(string); isString {
+		return 0
+	}
+	return size(c)
+}
+
+// lookup returns the property name of v, as property does, and counts with
+// charge what it reads of a string: the string, and the value it holds as
+// JSON, if it holds any, which the name is read from in turn. A string that
+// doesn't hold JSON is read for a character of it.
+func lookup(v any, name string, charge func(n int) error) (any, bool, error) {
+	for {
+		s, isString := v.(string)
+		if !isString {
+			next, ok := property(v, name)
+			return next, ok, nil
+		}
+		if err := charge(len(s)); err != nil {
+			return nil, false, err
+		}
+		parsed, ok := jsonValue(s)
+		if !ok {
+			next, ok := character(s, name)
+			return next, ok, nil
+		}
+		if err := charge(size(parsed)); err != nil {
+			return nil, false, err
+		}
+		v = parsed
+	}
+}
+
+// traversal returns what going through v's items reads besides them, given
+// c, what v holds (collection): a string, and the list or mapping it holds as
+// JSON, if it holds one, and a mapping's keys, which they are gone through in
+// the order of, 8 for each and its bytes. A list's items are gone through as
+// they are.
+func traversal(v, c any) int {
 	switch v := v.(type) {
 	case string:
-		return len(v)
+		return len(v) + heldWork(v, c)
 	case map[string]any:
 		n := 8 * len(v)
 		for k := range v {
@@ -953,37 +1038,41 @@ func traversal(v any) int {
 // walk follows a path from v. A * reads the rest of the path from each item
 // of a list or mapping, and returns the results that have it as a list. ok is
 // false if the path leads nowhere. charge, if it isn't nil, counts the work
-// of what the path reads that its segments don't (pathWork), before it is
-// read: a string that a name reads into, and for each *, its traversal and a
-// step for each item and for each segment of the rest of the path followed
-// from the item, up to its next *. An error from charge stops the walk.
+// of what the path reads that its segments don't (pathWork): a string that a
+// name reads into (lookup), and for each *, its traversal, and for each item
+// a step and the segments of the rest of the path followed from it, up to
+// its next *. An error from charge stops the walk.
 func walk(v any, path []string, charge func(n int) error) (any, bool, error) {
 	for i, name := range path {
 		if _, ok := v.(Unknown); ok {
 			return v, true, nil
 		}
 		if name != "*" {
-			if s, isString := v.(string); isString && charge != nil {
-				if err := charge(len(s)); err != nil {
+			var next any
+			ok := false
+			if charge == nil {
+				next, ok = property(v, name)
+			} else {
+				var err error
+				if next, ok, err = lookup(v, name, charge); err != nil {
 					return nil, false, err
 				}
 			}
-			next, ok := property(v, name)
 			if !ok {
 				return nil, false, nil
 			}
 			v = next
 			continue
 		}
-		rest := path[i+1:]
+		rest, c := path[i+1:], collection(v)
 		if charge != nil {
-			if err := charge(traversal(v)); err != nil {
+			if err := charge(traversal(v, c)); err != nil {
 				return nil, false, err
 			}
 		}
-		items := elements(v)
+		items := elements(c)
 		if charge != nil {
-			if err := charge(len(items) * step * (1 + segments(rest))); err != nil {
+			if err := charge(len(items) * (step + namesWork(rest))); err != nil {
 				return nil, false, err
 			}
 		}

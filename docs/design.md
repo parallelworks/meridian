@@ -458,14 +458,15 @@ language's limits never reaches it. A group that passes one fails with
 `expressions_build_too_much` or `expressions_too_much_work`, which say the
 group did too much together, rather than with an expression's error.
 
-The net bounds time too, as a backstop: a group's templates spend at most
-10 seconds of wall-clock time evaluating, together. The work count prices
-each step and each read by what it costs, so the cap is for the costs it
-misses, and stops a workflow that does far more than any real one. It isn't
-a limit a workflow is written to, since how long evaluating takes depends
-on the machine. The evaluator reads the clock every 256 steps its group
-takes, each node it evaluates and each run of a lambda, and a group that
-passes the cap fails with `expressions_too_slow`.
+The net bounds time too, as a backstop that work within the limits never
+reaches: a group's templates spend at most 10 seconds of wall-clock time
+evaluating, together. The work count prices each step and each read by
+what it costs, so a template at its limit takes well under a second, and a
+group at its own a few seconds. The cap isn't a limit a workflow is written
+to, since how long evaluating takes depends on the machine. The evaluator
+reads the clock every 256 steps its group takes, each node it evaluates and
+each run of a lambda, and a group that passes the cap fails with
+`expressions_too_slow`.
 
 Values that come from secrets are masked wherever they appear in logs,
 including inside strings built from them.
