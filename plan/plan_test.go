@@ -248,7 +248,13 @@ func TestDecodeRefuses(t *testing.T) {
 		"a template without an expression": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":["x"]}`, 1),
 		"a bad template beside a key":      strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"${{":"x"},"y":1}`, 1),
 		"a $ that marks nothing":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"yaml":"x"}}`, 1),
-		"a version that isn't a number":    strings.Replace(string(good), `"version":1`, `"version":"1"`, 1),
+		// The value of a first key that starts with $, beside another.
+		"a $ that marks nothing, nested":             strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":[{"$":{"yaml":"x"}}],"y":1}`, 1),
+		"an unmarked $ key, nested":                  strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"$yaml":"x"},"y":1}`, 1),
+		"a number out of range, nested":              strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"a":1e400},"y":1}`, 1),
+		"a template without an expression, in parts": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":[{"${{":["x"]}],"y":1}`, 1),
+		"a key twice, nested":                        strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"a":1,"a":2},"y":1}`, 1),
+		"a version that isn't a number":              strings.Replace(string(good), `"version":1`, `"version":"1"`, 1),
 	} {
 		if !strings.Contains(string(good), `"timeout":"1h"`) {
 			t.Fatalf("the sample plan changed: %s", good)
