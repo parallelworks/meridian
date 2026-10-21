@@ -151,8 +151,9 @@ order:
    their declarations and apply defaults, look up execution groups, and fetch
    and compile the workflows that `uses:` names, with cycle detection and a
    depth limit.
-5. **Expand** matrices whose values are known, and link each step's
-   `cleanup:` command to the end of its job.
+5. **Expand** matrices whose values are known and read no organization or
+   user variable, and link each step's `cleanup:` command to the end of
+   its job.
 6. **Check expressions.** Parse every `${{ }}`, evaluate what is already
    known, and check every reference that is left, with its position:
    - Reading a context where it isn't known yet is an error, such as `steps`
@@ -167,6 +168,16 @@ order:
      workflow a step calls can read inputs its caller passes without
      defining them. A step reading a step that doesn't run before it is an
      error, since ACTIVATE fails the step.
+   - Reading a variable that isn't a secret, or defining an input that takes
+     text rather than a password, whose name looks like a secret's is a
+     warning: a plain variable's value isn't masked, and a text input's is
+     kept with the run. A name looks like a secret's when one of its words,
+     split at `_`, `-`, `.`, spaces and changes of case, is `token`,
+     `password`, `passwd`, `pwd`, `passphrase`, `secret`, `apikey`,
+     `privatekey`, `accesskey`, `credential` or `credentials`, or two in a
+     row are `api key`, `private key` or `access key`, so `HF_TOKEN` and
+     `apiKey` do and `tokenizer` doesn't. A variable is warned about once,
+     where it is first read.
 7. **Emit** the plan.
 
 The compiler does no I/O of its own: files, networks and platforms are
@@ -190,7 +201,10 @@ the problem details that Parallel Works' services share
   number's range, use foundation's own rules, such as `too_long`.
 - **Params**, the values its message shows. Data from the workflow or the
   run, such as a key or a value, is shown as data (a quoted name, compact
-  JSON), so that only the words around it are translated.
+  JSON), so that only the words around it are translated. A value that an
+  organization or user variable gave, or that was made from one, is never
+  shown: a variable can hold a secret, so a param that would show it is
+  `***`, and a suggestion near it is left out.
 - **Its message in every language** the catalog has, written in ICU
   MessageFormat: English, Spanish, Japanese, Korean and Chinese, the
   languages of foundation's own catalogs. A diagnostic's detail is its
@@ -257,11 +271,20 @@ ACTIVATE's launch form and its backend do together:
 - **What the compiler doesn't have.** A default that reads something not
   known when the run is created, such as `env` or a secret variable, stays an
   expression in the plan, beside the inputs' values, and is evaluated as the
-  run starts. An input's value stays whole, even if only part of it reads
-  such a thing: a part of a mapping or list default, a form's text, or a
-  row's default, whose `[index]` is kept in the plan. The secret variables
-  it reads are among the run's secrets. A `password` input's value isn't in
-  the plan: it is one of the run's secrets.
+  run starts, then checked against its input's type as the others' values
+  are. An input's value stays whole, even if only part of it reads such a
+  thing: a part of a mapping or list default, a form's text, or a row's
+  default, whose `[index]` is kept in the plan. The secret variables it
+  reads are among the run's secrets. A `password` input's value isn't in the
+  plan: it is one of the run's secrets.
+- **Variables.** A plan never holds an organization or user variable's
+  value, secret or not ([The plan](#the-plan)). A default that reads `org`
+  or `vars`, or an input whose value reads one, stays an expression in the
+  plan in the same way, its input's whole value, and is evaluated as the
+  run starts. The compiler evaluates it all the same, since what decides
+  the run's shape reads its value: the inputs' `hidden`, `ignore` and
+  `optional`, and the jobs' `needs`. It checks it against its input's type
+  too, but a problem with it doesn't show the value.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
 API: it evaluates conditions and defaults against the submitted values
@@ -277,10 +300,11 @@ release continues from the same plan.
 It holds:
 
 - **The run:** the workflow's source and revision, its format and metadata,
-  the resolved inputs, workflow `env` and the run's timeout. A revision names
-  the exact text that ran: a Git commit, or the SHA-256 digest of the text
-  when no commit has it, as for a file with uncommitted changes or a workflow
-  a platform stores.
+  the resolved inputs and the defaults evaluated as it starts, workflow
+  `env`, the run's timeout, and the secrets and variables it reads. A
+  revision names the exact text that ran: a Git commit, or the SHA-256
+  digest of the text when no commit has it, as for a file with uncommitted
+  changes or a workflow a platform stores.
 - **Jobs**, one per job instance: dependencies (on all instances of a job,
   or `:any` of them), matrix values, the job's `if:`, its group, resources
   and `retry:`, steps, outputs, timeout and `env`.
@@ -306,10 +330,28 @@ Each job instance has a key: the job's name, or for a matrix instance its
 name, `#` and its index, as in `build#2`. A matrix whose values come from
 `needs` can't be expanded when the run is created, so the plan holds the
 job once, with its strategy, and the coordinator expands it when the jobs it
-needs have finished.
+needs have finished. A matrix that reads a variable, or an input whose
+value reads one, is held the same way, and expanded as the run starts.
 
-The plan holds no secret values. It names the secrets a run needs, and each
-attempt receives them when it is claimed.
+The plan holds no secret values. It names the secrets a run needs, secret
+variables and `password` inputs, and each attempt receives them when it is
+claimed.
+
+Nor does the plan hold the value of an organization or user variable, secret
+or not, or a value made from one. People keep secrets in plain variables
+too, and a plan is kept with every run's record, where whoever can see the
+run can read it. So what reads a variable stays an expression: an input's
+default, as the run's deferred inputs, and a matrix, as its job's strategy.
+The plan names the variables a run reads that aren't secrets, as
+`org.<name>` and `vars.<name>`, found in every expression it holds; a read
+of each variable of a context, as `vars.*` is, names the context, `org` or
+`vars`. (In format 1, `vars` alone is a word, not a read of the context.)
+
+What decides the run's shape still reads variables when the run is created:
+an input's `hidden`, `ignore` and `optional`, and a job's `needs`. The plan
+holds only what they decided, which inputs the run has and which jobs each
+job waits for. That can say something of a variable's value, such as that
+it names a job, which is accepted: the plan has to hold the run's shape.
 
 Plan encodings change the way the format does: by addition. A change that
 can't be an addition gets a new plan version, and releases keep reading the
@@ -319,19 +361,27 @@ without that part. Keys match exactly, and a key given twice is refused.
 
 ## Expressions
 
-Expressions are evaluated in four places, and what an expression can refer
+Expressions are evaluated in five places, and what an expression can refer
 to depends on where it is evaluated:
 
 | When | Evaluated by | Adds these contexts | Used by |
 | --- | --- | --- | --- |
-| The run is created | Compiler | `inputs`, `org` and `vars` (organization and user variables), `remote` (the repository the workflow came from), workflow `env`, `sessions` from a session provider | Everything that is known by then |
+| The run is created | Compiler | `inputs`, `org` and `vars` (organization and user variables), `remote` (the repository the workflow came from), workflow `env`, `sessions` from a session provider | Everything that is known by then and reads no variable, and what decides the run's shape, which can: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
+| The run starts | Coordinator | `org` and `vars`, read once for the run, and the secrets the run needs | Input defaults the compiler leaves to it, such as those that read a variable or a secret, and matrices that read a variable |
 | A job's dependencies have finished | Coordinator | `needs`, status functions, `env` | Job `if:`, and `strategy:`, `runs-on:`, `resources:`, `retry:`, `timeout:` and `working-directory:` that use them |
 | A step is about to run | Worker | `steps`, `job`, `env` | Step `if:`, `run:`, `with:`, `env:` and the rest of the step |
 | A job ends | Worker | | Job `outputs:` |
 
+The compiler reads `org` and `vars` for what decides the run's shape, and
+to check the values of inputs whose defaults read them, but a plan holds
+none of their values ([The plan](#the-plan)): everything else that reads one
+is evaluated once the run is underway, with the values the run read as it
+started ([Variables](#variables)).
+
 `matrix` is known once a job's matrix is expanded: when the run is created,
-or, for a matrix that uses `needs`, when its dependencies have finished. A
-job's `strategy:` is what is expanded, so it can't read `matrix`.
+or, for a matrix that reads a variable, when the run starts, or, for a
+matrix that uses `needs`, when its dependencies have finished. A job's
+`strategy:` is what is expanded, so it can't read `matrix`.
 
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`). A job's default `if:` is
@@ -469,7 +519,12 @@ each run of a lambda, and a group that passes the cap fails with
 `expressions_too_slow`.
 
 Values that come from secrets are masked wherever they appear in logs,
-including inside strings built from them.
+including inside strings built from them. So are values made from them: an
+evaluation can say whether it read a value its scope marks
+(`Template.EvalMarked`), and one that read a secret is marked whatever it
+made of it, whether `${{ vars.token }}`, `${{ vars.token * 2 }}` or a
+condition the secret decided. The mark is conservative: anything a template
+reads from a secret marks all of what it gives.
 
 ## Interfaces
 
@@ -607,9 +662,38 @@ and a failure that ends a run would usually happen again.
 A person reruns a run with `meridian rerun`, either all of it or only its
 failed jobs and the jobs that depend on them. A rerun uses the run's stored
 plan, so it runs the same revision with the same inputs, and the jobs it
-doesn't rerun keep their outcomes and outputs. Each attempt of a job, and
-each retry of a step, keeps its own logs, so earlier attempts can still be
-read.
+doesn't rerun keep their outcomes and outputs; only what reads a variable
+reads its value as it is then ([Variables](#variables)). Each attempt of a
+job, and each retry of a step, keeps its own logs, so earlier attempts can
+still be read.
+
+### Variables
+
+A run reads organization and user variables through the Variables
+interface, and keeps none of their values in its records
+([The plan](#the-plan)).
+
+- **Once for each run.** As a run starts, the coordinator reads the
+  variables its plan lists, a context's whole when the plan names it alone,
+  and holds them in memory for that run. It evaluates the defaults and
+  matrices the compiler left to it with them, and each attempt receives
+  them when it is claimed, so every expression of the run reads the same
+  values.
+- **A rerun reads them again.** It sees each variable's value as it is
+  then, not as it was when the run first started. If the Variables
+  interface keeps versions of a variable, a run could record the versions
+  it read, so that a rerun reads the same ones.
+- **Secrets are masked; plain variables aren't.** A secret variable's
+  value is masked in logs, and so is a value an expression made from one,
+  which its evaluation marks. A plain variable's value isn't masked: a
+  variable that holds a secret should be a secret variable, and the
+  compiler warns when a plain variable's name, such as `HF_TOKEN`, looks
+  like a secret's.
+- **What a script does with a value can't be followed.** A secret that a
+  step's script transforms, such as by encoding it in base64, isn't known
+  to come from the secret, and isn't masked.
+- **Diagnostics never quote a variable's value.** Warnings and errors kept
+  with a run show `***` in place of a value that came from a variable.
 
 ### Leases and fencing
 
@@ -656,6 +740,10 @@ workflow of their own, and finishes the job once they have all finished,
 with their combined outcome and outputs. Jobs that need it wait for all its
 instances, as they do for any matrix. The compiler still checks that the
 jobs and outputs the matrix refers to exist; only the values wait.
+
+A matrix that reads a variable, whose values a plan doesn't hold, is stored
+the same way, and the coordinator expands it as the run starts, with the
+variables the run read then.
 
 `fail-fast` and `max-parallel` apply to these matrices as to any other: the
 coordinator cancels the remaining instances when one fails, and places no
@@ -766,8 +854,8 @@ errors as RFC 9457 problem details. Meridian's coordinator and a platform
 that embeds Meridian serve the same API.
 
 - **Claim:** exchange the bootstrap token for the attempt's credential, and
-  receive the job from the plan, its secrets, and its dependencies' outcomes
-  and outputs.
+  receive the job from the plan, its secrets, the variables the run read as
+  it started, and its dependencies' outcomes and outputs.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
 - **Step events:** a step started, or finished with its exit code.
@@ -925,6 +1013,10 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   in its logs. Locally, a secret a run will need later, such as the value of
   a `password` input, is kept in a file only the user can read and deleted
   when the run ends.
+- **Variables** stay out of the plan and the run's records too, secret or
+  not, since people keep secrets in plain variables. A run reads them as it
+  starts and holds them in memory while it runs, and its diagnostics never
+  quote one ([Variables](#variables)).
 - **Untrusted input is bounded:** workflow size, YAML aliases, expressions,
   outputs and log volume.
 
