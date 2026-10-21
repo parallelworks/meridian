@@ -11,6 +11,13 @@ func WithClock(scope Scope, now func() time.Time) Scope {
 	return scope
 }
 
+// Counted returns what the group that shares scope's budget has counted:
+// what its templates built, the work they did and the steps they took.
+func Counted(scope Scope) (built, work, steps int) {
+	c := scope.budget.counted()
+	return c.built, c.work, c.steps
+}
+
 // Work evaluates e in scope, as Eval does, and returns the work it counted.
 func Work(e *Expr, scope Scope) (any, int, error) {
 	ev := newEvaluator(scope)

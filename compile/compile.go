@@ -80,20 +80,38 @@ type reporter struct {
 	diags problems.Diagnostics
 }
 
-// report reports a problem of kind k at pos, with what is at loc in the
-// workflow.
-func (r *reporter) report(k *problems.Kind, pos problems.Position, loc []string, params problems.Params) {
-	r.reportPointer(k, pos, jsonptr.Format(loc), params)
-}
-
+// reportPointer reports a problem of kind k at pos, with what is at pointer
+// in the workflow.
 func (r *reporter) reportPointer(k *problems.Kind, pos problems.Position, pointer string, params problems.Params) {
 	r.diags = append(r.diags, k.At(r.doc.File, pos, pointer, params))
+}
+
+// A spot is a string in the workflow, at loc, whose expressions the
+// compiler checks. It finds the string's JSON Pointer, and where its
+// places are in the file, once a problem is reported in it.
+type spot struct {
+	doc     *format.Document
+	loc     []string
+	pointer string
+	locator *format.Locator
+}
+
+func (r *reporter) spot(loc []string) *spot { return &spot{doc: r.doc, loc: loc} }
+
+// reportIn reports a problem of kind k at byte offset at in the string in.
+func (r *reporter) reportIn(in *spot, at int, k *problems.Kind, params problems.Params) {
+	if in.locator == nil {
+		in.pointer = jsonptr.Format(in.loc)
+		in.locator = in.doc.Locator(in.pointer)
+	}
+	r.reportPointer(k, in.locator.Locate(at), in.pointer, params)
 }
 
 // reportAt reports a problem of kind k with what is at loc: a mapping, such
 // as an input's definition, at its key, and anything else where it starts.
 func (r *reporter) reportAt(k *problems.Kind, loc []string, params problems.Params) {
-	r.report(k, r.doc.ReportPosition(jsonptr.Format(loc)), loc, params)
+	pointer := jsonptr.Format(loc)
+	r.reportPointer(k, r.doc.ReportPosition(pointer), pointer, params)
 }
 
 // reportError reports err, an error parsing or evaluating the expressions in
@@ -159,14 +177,17 @@ func (c *compiler) run(source plan.Source) plan.Run {
 func (c *compiler) checkDefinitions(loc []string, v any) {
 	switch v := v.(type) {
 	case string:
-		t, err := expr.ParseTemplate(v)
+		if !strings.Contains(v, "${{") {
+			return
+		}
+		t, err := c.inputs.workflow.Template(v)
 		if err != nil {
 			return
 		}
-		ptr := jsonptr.Format(loc)
+		in := c.spot(loc)
 		for at, e := range t.Exprs() {
 			for _, p := range e.Check() {
-				c.reportProblem(c.doc.Locate(ptr, at+p.Offset), loc, p, nil)
+				c.reportProblem(in, at+p.Offset, p, nil)
 			}
 		}
 	case []any:
@@ -242,8 +263,9 @@ func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 			// A lone word stays a word: always means always(), and any other
 			// is text, which is true.
 			if e, err := expr.Parse(cond); err == nil {
+				in := c.spot(loc)
 				for _, p := range e.CheckCondition() {
-					c.reportProblem(c.doc.Locate(jsonptr.Format(loc), start+p.Offset), loc, p, job)
+					c.reportProblem(in, start+p.Offset, p, job)
 				}
 			}
 			return plan.Literal(s)
@@ -303,8 +325,9 @@ func (c *compiler) checkString(loc []string, s string, ph phase, job *jobInfo) (
 	if t == nil {
 		return s, ok
 	}
+	in := c.spot(loc)
 	for at, e := range t.Exprs() {
-		ok = c.checkExpr(loc, at, e, e.Check(), ph, job) && ok
+		ok = c.checkExpr(in, at, e, e.Check(), ph, job) && ok
 	}
 	return t, ok
 }
@@ -319,12 +342,13 @@ func (c *compiler) checkCondition(loc []string, s string, shift int, ph phase, j
 		return s, ok
 	}
 	_, whole := t.Expr()
+	in := c.spot(loc)
 	for at, e := range t.Exprs() {
 		found := e.Check()
 		if whole {
 			found = e.CheckCondition()
 		}
-		ok = c.checkExpr(loc, at+shift, e, found, ph, job) && ok
+		ok = c.checkExpr(in, at+shift, e, found, ph, job) && ok
 	}
 	return t, ok
 }
@@ -347,26 +371,24 @@ func (c *compiler) parse(loc []string, s string, shift int) (*expr.Template, boo
 	return t, true
 }
 
-// checkExpr checks e, an expression whose source is at byte offset at in the
-// string at loc, and reports problems, its probable mistakes. It returns
+// checkExpr checks e, an expression whose source is at byte offset at in
+// the string in, and reports problems, its probable mistakes. It returns
 // false if e has an error.
-func (c *compiler) checkExpr(loc []string, at int, e *expr.Expr, found []expr.Problem, ph phase, job *jobInfo) bool {
-	ptr := jsonptr.Format(loc)
-	pos := func(offset int) problems.Position { return c.doc.Locate(ptr, at+offset) }
+func (c *compiler) checkExpr(in *spot, at int, e *expr.Expr, found []expr.Problem, ph phase, job *jobInfo) bool {
 	for _, p := range found {
-		c.reportProblem(pos(p.Offset), loc, p, job)
+		c.reportProblem(in, at+p.Offset, p, job)
 	}
 	ok := true
 	if e.Relative() {
-		c.report(problems.RelativeOutsideDefinitions, pos(0), loc, nil)
+		c.reportIn(in, at, problems.RelativeOutsideDefinitions, nil)
 		ok = false
 	}
 	if used, _ := e.StatusChecks(); used && !ph.has("status") {
-		c.report(problems.StatusNotKnown, pos(0), loc, problems.Params{"phase": ph.name()})
+		c.reportIn(in, at, problems.StatusNotKnown, problems.Params{"phase": ph.name()})
 		ok = false
 	}
 	for _, r := range e.Refs() {
-		ok = c.checkRef(r, ph, job, pos(r.Offset), loc) && ok
+		ok = c.checkRef(r, ph, job, in, at+r.Offset) && ok
 	}
 	return ok
 }

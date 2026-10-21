@@ -1,6 +1,7 @@
 package format_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -107,6 +108,26 @@ func FuzzLoad(f *testing.F) {
 			t.Fatalf("document %v with diagnostics %v", doc, diags)
 		}
 	})
+}
+
+// Each input matches one of the forms of an input, which are many.
+func BenchmarkLoadInputs(b *testing.B) {
+	var w strings.Builder
+	w.WriteString("on:\n  execute:\n    inputs:\n")
+	for i := range 50 {
+		fmt.Fprintf(&w, "      s%02d: {type: string, default: text}\n", i)
+		fmt.Fprintf(&w, "      n%02d: {type: number, default: 3, min: 1}\n", i)
+		fmt.Fprintf(&w, "      b%02d: {type: boolean, default: true}\n", i)
+		fmt.Fprintf(&w, "      d%02d: {type: dropdown, options: [a, b, c], default: a}\n", i)
+	}
+	w.WriteString("jobs:\n  main:\n    steps:\n      - run: echo\n")
+	data := []byte(w.String())
+	b.SetBytes(int64(len(data)))
+	for b.Loop() {
+		if doc, diags := format.Load("workflow.yaml", data); doc == nil {
+			b.Fatal(diags)
+		}
+	}
 }
 
 func BenchmarkLoad(b *testing.B) {
