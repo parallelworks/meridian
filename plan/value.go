@@ -86,6 +86,61 @@ func parseValue(v any) (any, error) {
 // IsZero reports whether the Value is unset.
 func (v Value) IsZero() bool { return !v.set }
 
+// Depth returns how many levels the Value's JSON nests, as a plan writes
+// it: none for a scalar, and for a list or a mapping one more than its
+// deepest item. A mapping whose only key starts with $ is two more, since
+// it is written inside {"$": ...}, and a template nests as its parts' JSON
+// does, inside {"${{": ...}.
+func (v Value) Depth() int { return valueDepth(v.v) }
+
+func valueDepth(v any) int {
+	switch v := v.(type) {
+	case nil, bool, string, int64, float64:
+		return 0
+	case *expr.Template:
+		parts, _ := v.MarshalJSON()
+		return 1 + jsonDepth(parts)
+	case []any:
+		depth := 0
+		for _, item := range v {
+			depth = max(depth, valueDepth(item))
+		}
+		return 1 + depth
+	case map[string]any:
+		depth := 0
+		for _, item := range v {
+			depth = max(depth, valueDepth(item))
+		}
+		if marked(v) {
+			return 2 + depth
+		}
+		return 1 + depth
+	}
+	data, _ := jsonv2.Marshal(v, encoding)
+	return jsonDepth(data)
+}
+
+// jsonDepth returns how many levels JSON nests.
+func jsonDepth(data []byte) int {
+	depth, deepest := 0, 0
+	inString := false
+	for i := 0; i < len(data); i++ {
+		switch c := data[i]; {
+		case inString && c == '\\':
+			i++
+		case c == '"':
+			inString = !inString
+		case inString:
+		case c == '[' || c == '{':
+			depth++
+			deepest = max(deepest, depth)
+		case c == ']' || c == '}':
+			depth--
+		}
+	}
+	return deepest
+}
+
 // Literal returns the Value's JSON value if it holds no expressions.
 func (v Value) Literal() (any, bool) {
 	if hasTemplate(v.v) {

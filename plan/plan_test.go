@@ -2,8 +2,10 @@ package plan_test
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"reflect"
@@ -337,6 +339,105 @@ func TestDataStaysData(t *testing.T) {
 	m := d.Get().(map[string]any)
 	if _, ok := m["${{"].([]any); !ok || m["n"] != int64(1)<<60 {
 		t.Errorf("Data decoded as %#v", m)
+	}
+}
+
+// nest returns leaf inside depth mappings, each holding the next under key
+// beside the keys and values of others.
+func nest(depth int, key string, leaf any, others ...any) any {
+	v := leaf
+	for range depth {
+		m := map[string]any{key: v}
+		for i := 0; i < len(others); i += 2 {
+			m[others[i].(string)] = others[i+1]
+		}
+		v = m
+	}
+	return v
+}
+
+// A Value's and Data's Depth is how many levels their JSON nests, and a
+// plan holds as many as MaxDepth.
+func TestDepth(t *testing.T) {
+	deepLiteral := "${{ " + strings.Repeat("[", 50) + strings.Repeat("]", 50) + " }}"
+	for _, v := range []plan.Value{
+		plan.Literal("text"), plan.Literal(nil), plan.Literal(int64(1)),
+		plan.Literal([]any(nil)), plan.Literal(map[string]any(nil)), plan.Literal([]any{}),
+		plan.Literal([]any{[]any{1, []any{}}, map[string]any{"a": map[string]any{}}}),
+		plan.Literal(map[string]any{"$only": map[string]any{"$only": "x"}}),
+		plan.Literal(map[string]any{"$first": map[string]any{"$only": "x"}, "b": 1}),
+		plan.Literal([]string{"a"}),
+		mustValue(t, "${{ inputs.x }}"),
+		mustValue(t, map[string]any{"$out": deepLiteral, "list": []any{"${{ fromJSON('[]') }}"}}),
+	} {
+		data, err := v.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := v.Depth(), jsonDepth(t, data); got != want {
+			t.Errorf("Depth of %s = %d, want %d", data, got, want)
+		}
+	}
+	for _, d := range []plan.Data{
+		plan.DataOf(nil), plan.DataOf("x"), plan.DataOf([]any(nil)), plan.DataOf(map[string]any(nil)),
+		plan.DataOf([]any{[]any(nil), map[string]any{"$": map[string]any{"$x": []any{}}}}),
+	} {
+		data, err := d.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := d.Depth(), jsonDepth(t, data); got != want {
+			t.Errorf("Depth of %s = %d, want %d", data, got, want)
+		}
+	}
+
+	// A step's with: is five levels deep in a plan: in the plan, its jobs,
+	// a job, its steps and a step.
+	for name, tc := range map[string]struct {
+		value func(extra int) any
+		step  int
+	}{
+		"lists":           {func(extra int) any { return nestList(plan.MaxDepth - 5 + extra) }, 1},
+		"marked mappings": {func(extra int) any { return nest((plan.MaxDepth-5)/2+extra, "$a", int64(1)) }, 2},
+	} {
+		at := plan.Literal(tc.value(0))
+		past := plan.Literal(tc.value(1))
+		if 5+at.Depth() > plan.MaxDepth || 5+past.Depth() <= plan.MaxDepth || past.Depth()-at.Depth() != tc.step {
+			t.Fatalf("%s: depths %d and %d", name, at.Depth(), past.Depth())
+		}
+		data, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: at}}}}})
+		if err != nil {
+			t.Errorf("%s: a plan as deep as MaxDepth: %v", name, err)
+		} else if _, err := plan.Decode(data); err != nil {
+			t.Errorf("%s: a plan as deep as MaxDepth doesn't decode: %v", name, err)
+		}
+		if _, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: past}}}}}); err == nil {
+			t.Errorf("%s: a plan deeper than MaxDepth encoded", name)
+		}
+	}
+}
+
+func nestList(depth int) any {
+	var v any = int64(1)
+	for range depth {
+		v = []any{v}
+	}
+	return v
+}
+
+// jsonDepth returns how many levels JSON nests.
+func jsonDepth(t *testing.T, data []byte) int {
+	t.Helper()
+	dec := jsontext.NewDecoder(bytes.NewReader(data))
+	deepest := 0
+	for {
+		if _, err := dec.ReadToken(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatal(err)
+			}
+			return deepest
+		}
+		deepest = max(deepest, dec.StackDepth())
 	}
 }
 

@@ -99,6 +99,7 @@ var (
 	InputNotOption         = define(Error, "input_not_option", "Not one of an input's options", "input", "value", "options")
 	InputNotText           = define(Error, "input_not_text", "Input takes text", "input", "value")
 	InputLooksSecret       = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
+	InputTooDeep           = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
 )
 
 // A workflow's jobs.
@@ -135,6 +136,7 @@ var (
 	ConditionWord              = define(Warning, "condition_word", "Word that decides a condition", "word", "text")
 	OlderAlways                = define(Warning, "older_always", "Older spelling of always()")
 	ReplacedKeyword            = define(Warning, "replaced_keyword", "Replaced if: keyword", "word", "text", "replacement")
+	ValueTooDeep               = define(Error, "value_too_deep", "Value nests too deeply", "max")
 )
 
 // Parsing an expression.
