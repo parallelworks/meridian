@@ -1,0 +1,16 @@
+description: >-
+  A default that reads something the compiler doesn't have through a *
+  stays an expression until the run is underway, though the * reads its
+  other items from text that holds JSON.
+source: Meridian
+contexts:
+  vars:
+    TOKEN: unused
+secret-variables: [TOKEN]
+expect:
+  inputs:
+    cluster:
+      config: '{"zone": "z1"}'
+      token: ${{ vars.TOKEN }}
+    zones: ${{ inputs.cluster.*.zone }}
+    zones_text: ${{ toJSON(inputs.cluster.*.zone) }}

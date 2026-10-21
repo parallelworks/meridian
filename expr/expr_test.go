@@ -364,7 +364,8 @@ func BenchmarkEval(b *testing.B) {
 // A value that isn't known yet, such as a secret's, makes what reads it
 // unknown, and leaves the rest of the context readable. A slice or a .*
 // holds it only if it reads it, and reading the same parts again in a
-// template finds the same.
+// template finds the same. A .* that reads other items from text that holds
+// JSON finds it too.
 func TestUnknownValues(t *testing.T) {
 	scope := expr.Scope{Contexts: map[string]any{
 		"vars": map[string]any{"PUBLIC": "p", "TOKEN": expr.Unknown{Name: "secret"}},
@@ -372,6 +373,9 @@ func TestUnknownValues(t *testing.T) {
 			"list":  []any{"a", expr.Unknown{Name: "secret"}},
 			"rows":  []any{map[string]any{"n": "x"}, map[string]any{"n": expr.Unknown{Name: "secret"}}},
 			"known": []any{map[string]any{"n": "y"}},
+			// Items that a path reads into as JSON, beside one that isn't.
+			"texts": map[string]any{"a": `{"n": "z"}`, "b": map[string]any{"n": expr.Unknown{Name: "secret"}}},
+			"jsons": []any{`{"n": "z"}`, `[1]`},
 		},
 	}}
 	for src, want := range map[string]any{
@@ -401,6 +405,9 @@ func TestUnknownValues(t *testing.T) {
 		"length(inputs.rows[0:1].*.n) + length(inputs.rows.*.n)":       nil,
 		"length(inputs.rows.*.missing) + length(inputs.rows.*.n)":      nil,
 		"length(inputs.rows.*.missing) + length(inputs.rows[0:1].*.n)": 1.0,
+		"inputs.texts.*.n":                                             nil,
+		"inputs.texts.a.n":                                             "z",
+		"length(inputs.jsons.*.n)":                                     1.0,
 	} {
 		got, err := mustParse(t, src).Eval(scope)
 		ue, unknown := errors.AsType[*expr.UnknownError](err)

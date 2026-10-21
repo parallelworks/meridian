@@ -1236,7 +1236,7 @@ type follower struct {
 	at     int
 	charge func(n int) error
 	// throughText is set once a path reads into a string: what it reads
-	// from there is new.
+	// from there is new. A * sets it if each item's path does.
 	throughText bool
 }
 
@@ -1369,8 +1369,14 @@ func (f *follower) walk(v any, path []string) (any, bool, error) {
 		if err := f.count(len(items) * (step + namesWork(rest))); err != nil {
 			return nil, false, err
 		}
+		// What the * makes is new if what each item's path reads is: if it
+		// read into a string, or the items are read from one. An item that
+		// isn't can be or hold an Unknown, as another that reads into a
+		// string can't.
 		out, flatten := make([]any, 0, len(items)), slices.Contains(rest, "*")
+		fromText, allText := f.throughText, true
 		for _, item := range items {
+			f.throughText = fromText
 			w, ok, err := f.walk(item, rest)
 			if err != nil {
 				return nil, false, err
@@ -1378,12 +1384,14 @@ func (f *follower) walk(v any, path []string) (any, bool, error) {
 			if !ok {
 				continue
 			}
+			allText = allText && f.throughText
 			if list, isList := w.([]any); isList && flatten {
 				out = append(out, list...)
 			} else {
 				out = append(out, w)
 			}
 		}
+		f.throughText = allText
 		return out, true, nil
 	}
 	return v, true, nil
