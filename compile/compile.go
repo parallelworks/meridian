@@ -223,8 +223,8 @@ func (c *compiler) run(source plan.Source) plan.Run {
 // checkDefinitions reports the probable mistakes in the expressions in v, at
 // loc in the input definitions, such as inputs.pw-user written for
 // inputs['pw-user'], and reads of variables whose names look like a
-// secret's. Resolving the inputs reports the errors of the expressions it
-// evaluates.
+// secret's. Resolving the inputs reports their syntax errors, and the
+// errors of the expressions it evaluates.
 func (c *compiler) checkDefinitions(loc []string, v any) {
 	switch v := v.(type) {
 	case string:
@@ -233,7 +233,7 @@ func (c *compiler) checkDefinitions(loc []string, v any) {
 		}
 		t, err := c.inputs.workflow.Template(v)
 		if err != nil {
-			return
+			return // Resolving the inputs reported it.
 		}
 		in := c.spot(loc)
 		for at, e := range t.Exprs() {

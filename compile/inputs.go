@@ -101,6 +101,7 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 	}
 	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
 	r.fields = r.collect(defs, definitionsPath, nil, nil)
+	r.checkSyntax(append(make([]string, 0, 16), definitionsPath...), defs)
 	r.checkJSON(r.values)
 	r.checkUnknown(r.values, nil)
 	for _, f := range r.fields {
@@ -269,6 +270,33 @@ func (f *field) label() string {
 	return name
 }
 
+// checkSyntax reports the syntax errors in the expressions in v, at loc in
+// the input definitions: in a default, an option, a label or anywhere else,
+// whether or not resolving the inputs evaluates it. An evaluation that
+// reads one reports the same diagnostic, which sorting the diagnostics
+// drops, so each is reported once. It appends to loc in place, so that the
+// walk reuses one path: the caller's loc must own the room after it.
+func (r *inputResolver) checkSyntax(loc []string, v any) {
+	switch v := v.(type) {
+	case string:
+		if !strings.Contains(v, "${{") {
+			return
+		}
+		if _, err := r.workflow.Template(v); err != nil {
+			r.reportError(loc, 0, err)
+		}
+	case []any:
+		for i, item := range v {
+			r.checkSyntax(append(loc, strconv.Itoa(i)), item)
+		}
+	case map[string]any:
+		// The diagnostics are sorted, so the keys' order doesn't matter.
+		for k, item := range v {
+			r.checkSyntax(append(loc, k), item)
+		}
+	}
+}
+
 // checkJSON reports, and drops, submitted values that aren't JSON values,
 // which a plan can't hold.
 func (r *inputResolver) checkJSON(values map[string]any) {
@@ -367,7 +395,7 @@ func (r *inputResolver) prepare(f *field) bool {
 	// The workflow keeps what it parses, for the evaluation.
 	reads, err := r.workflow.Exprs(appendPath(f.loc, "default"))
 	if err != nil {
-		return false // The schema checks reported it.
+		return false // checkSyntax reported it.
 	}
 	if reads == nil {
 		r.setDefault(f, f.def["default"])
@@ -483,7 +511,7 @@ func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
 	for _, t := range texts {
 		exprs, err := r.workflow.Exprs(t.loc)
 		if err != nil {
-			continue // The workflow's own text, which parsed when it was loaded.
+			continue // checkSyntax reported it.
 		}
 		reads = append(reads, exprs...)
 	}
@@ -556,7 +584,7 @@ func expressionOptions(options any, loc []string) []exprOption {
 func (r *inputResolver) deferPart(f *field, path []string, raw any, variable bool) {
 	v, err := parseFor(raw, f.index)
 	if err != nil {
-		return // The workflow's own text, which parsed when it was loaded.
+		return // checkSyntax reported it.
 	}
 	in := f.holder()
 	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})

@@ -1,0 +1,32 @@
+on:
+  execute:
+    inputs:
+      home:
+        type: string
+        default: us-east
+      region:
+        type: dropdown
+        options:
+          - us-west
+          - ${{ inputs.home + }}
+      zone:
+        type: dropdown
+        default: a
+        options:
+          - label: A
+            value: a
+          - label: B
+            value: ${{ inputs.home + '-b' + }}
+      site:
+        type: dropdown
+        optional: true
+        option-key: ${{ inputs.home }}
+        options:
+          us-east:
+            - ${{ inputs.home ?? }}
+          us-west:
+            - west
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,0 +1,33 @@
+description: >-
+  A syntax error in an input's label is an error, and so is one in its
+  description, tooltip, placeholder or condition, as it is wherever it is
+  in the input definitions. Each is reported once, where it is: a
+  condition's too, though it is evaluated.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/name/label
+      line: 6
+      column: 29
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/name/description
+      line: 7
+      column: 50
+    - severity: error
+      code: unexpected_text
+      path: /on/execute/inputs/site/tooltip
+      line: 12
+      column: 38
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/site/placeholder
+      line: 13
+      column: 50
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/size/hidden
+      line: 17
+      column: 36

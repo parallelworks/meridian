@@ -235,6 +235,9 @@ ACTIVATE's launch form and its backend do together:
   default that is an expression is evaluated with the other inputs' values,
   defaults included, in whatever order they need; defaults that read each
   other are an error.
+- **Syntax.** Every expression in the input definitions must parse, in a
+  default, an option, a label or anywhere else, whether or not the run
+  evaluates it. A syntax error is reported once, where it is.
 - **A form's text.** A form sends the text of an expression it can't
   evaluate itself, such as a default that reads a secret. A submitted value
   that is exactly the text of an input's default means the default. So does

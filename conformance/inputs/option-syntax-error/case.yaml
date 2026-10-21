@@ -1,0 +1,25 @@
+description: >-
+  A syntax error in one of an input's options is an error, whether or not
+  the option is chosen: in a list of options, in an option's value, and in
+  options in groups. It is reported once, where it is, though the value
+  submitted is the option's text, which means that option.
+source: Meridian
+inputs:
+  region: ${{ inputs.home + }}
+expect:
+  diagnostics:
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/region/options/1
+      line: 11
+      column: 31
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/zone/options/1/value
+      line: 19
+      column: 45
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/site/options/us-east/0
+      line: 26
+      column: 34
