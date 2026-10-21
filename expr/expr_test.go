@@ -475,9 +475,10 @@ func TestUnknownValues(t *testing.T) {
 // only the rest of the context isn't, and neither is one that doesn't
 // evaluate the reference, nor vars alone, which is a word. A failed
 // evaluation is marked too. A reference reads a marked value however it
-// writes the keys that lead to it, as a slice or an index written 00 does.
-// A group that evaluates many templates, which indexes the marked paths,
-// finds the same.
+// writes the keys that lead to it, as a slice or an index written 00 does,
+// and an index of a slice from the list's start reads only the item it
+// counts to. A group that evaluates many templates, which indexes the
+// marked paths, finds the same.
 func TestMarked(t *testing.T) {
 	scope := expr.Scope{
 		Contexts: map[string]any{
@@ -519,6 +520,8 @@ func TestMarked(t *testing.T) {
 		"${{ inputs.hosts['+0'].key }}":              true,
 		"${{ inputs.hosts[-0].key }}":                true,
 		"${{ inputs.hosts[0:1][0].key }}":            true,
+		"${{ inputs.hosts[:][00].key }}":             true,
+		"${{ inputs.hosts[1:][0].key }}":             false,
 		"${{ inputs.hosts[-1:].*.key }}":             true,
 		"${{ inputs.hosts[0:1].*.name }}":            false,
 		"${{ inputs.hosts[00].name }}":               false,

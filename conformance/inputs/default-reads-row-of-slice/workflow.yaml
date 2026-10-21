@@ -1,0 +1,29 @@
+on:
+  execute:
+    inputs:
+      a:
+        type: string
+        default: ${{ inputs.rows[1:].0.x }}
+      other:
+        type: list
+        template:
+          v:
+            type: string
+            default: ${{ inputs.a }}-v
+        default:
+          - {}
+      rows:
+        type: list
+        template:
+          n:
+            type: string
+          x:
+            type: string
+            default: x-${{ inputs.other[index].v }}
+        default:
+          - n: p
+          - n: q
+jobs:
+  main:
+    steps:
+      - run: echo ok

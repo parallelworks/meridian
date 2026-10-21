@@ -1,7 +1,9 @@
 package reach_test
 
 import (
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -58,9 +60,11 @@ func path(s string) []string {
 // A path's patterns are the path itself when its keys read a list and a
 // mapping alike. An index written another way reads a list's item by its
 // index and a mapping's key as written. A slice reads a list's items, and
-// the key after it one of them, any of them; it is a mapping's key as
-// written too. A path with more than four keys that read two ways reaches
-// all under the first of them.
+// the index after it one of them: the item it counts to from where the
+// slice starts, or slices of it start, if their bounds count from the
+// list's start, and any of them if one counts from its end. A slice is a
+// mapping's key as written too. A path with more than four keys that read
+// two ways reaches all under the first of them.
 func TestPatterns(t *testing.T) {
 	for _, tc := range []struct {
 		read string
@@ -77,9 +81,17 @@ func TestPatterns(t *testing.T) {
 		{"rows.007", []string{"rows.007", "rows.7"}},
 		{"rows.0:1", []string{"rows.0:1", "rows"}},
 		{"rows.-1:", []string{"rows.-1:", "rows"}},
-		{"rows.0:1.0.x", []string{"rows.0:1.0.x", "rows.*.x"}},
+		{"rows.0:1.0.x", []string{"rows.0:1.0.x", "rows.0.x"}},
+		{"rows.1:.0.x", []string{"rows.1:.0.x", "rows.1.x"}},
+		{"rows.1:3.1.x", []string{"rows.1:3.1.x", "rows.2.x"}},
+		{"rows.1:2.1.x", []string{"rows.1:2.1.x"}},
+		{"rows.:2.00.x", []string{"rows.:2.00.x", "rows.:2.0.x", "rows.0.x"}},
 		{"rows.-1:.00.x", []string{"rows.-1:.00.x", "rows.-1:.0.x", "rows.*.x"}},
-		{"rows.1:.:1.0.x", []string{"rows.1:.:1.0.x", "rows.1:.*.x", "rows.*.x"}},
+		{"rows.1:.:-1.0.x", []string{"rows.1:.:-1.0.x", "rows.1:.*.x", "rows.*.x"}},
+		{"rows.1:.:1.0.x", []string{"rows.1:.:1.0.x", "rows.1:.0.x", "rows.1.x"}},
+		{"rows.2:.1:.0.x", []string{"rows.2:.1:.0.x", "rows.2:.1.x", "rows.3.x"}},
+		{"rows.1:3.5:.0.x", []string{"rows.1:3.5:.0.x", "rows.1:3.5.x"}},
+		{"rows." + strconv.Itoa(math.MaxInt) + ":.1.x", []string{"rows." + strconv.Itoa(math.MaxInt) + ":.1.x", "rows.*.x"}},
 		{"rows.0:1.*.x", []string{"rows.0:1.*.x", "rows.*.x"}},
 		{"rows.0:1.x", []string{"rows.0:1.x"}},
 		{"rows.0:1.-1.x", []string{"rows.0:1.-1.x"}},
@@ -156,8 +168,13 @@ func TestReaches(t *testing.T) {
 		{"rows.-1:", "rows.4.x", true},
 		{"rows.:", "rows.0.x", true},
 		{"rows.0:1.0.x", "rows.0.x", true},
-		{"rows.1:.0.x", "rows.3.x", true},
-		{"rows.1:.0.y", "rows.3.x", false},
+		{"rows.1:.0.x", "rows.1.x", true},
+		{"rows.1:.0.x", "rows.3.x", false},
+		{"rows.1:.0.x", "rows.0.x", false},
+		{"rows.1:.0.y", "rows.1.x", false},
+		{"rows.-1:.0.x", "rows.3.x", true},
+		{"rows.0:1.1.x", "rows.1.x", false},
+		{"rows.0:1.1.x", "rows", true},
 		{"rows.-1:.*.x", "rows.3.x", true},
 		{"rows.-1:.x", "rows.3.x", false},
 		{"rows.-1:.x", "rows", true},
@@ -170,6 +187,66 @@ func TestReaches(t *testing.T) {
 	} {
 		if got := reaches(t, path(tc.read), path(tc.value)); got != tc.want {
 			t.Errorf("%s reaches %s: %v, want %v", tc.read, tc.value, got, tc.want)
+		}
+	}
+}
+
+// A path of indexes and slices, slices of slices among them, reaches each
+// item of a list it reads, whatever the list's length, as a path reads
+// them with Index and Slice. One whose slices' bounds all count from the
+// list's start reaches no other item.
+func TestPatternsReachWhatPathsRead(t *testing.T) {
+	keys := []string{"0", "1", "2", "00", "+1", "-0", "-1", ":", "1:", "2:", ":2", "0:1", "1:3", "3:1", "-1:", ":-1", "-2:-1"}
+	fromEnd := func(k string) bool { return strings.Contains(k, ":") && strings.Contains(k, "-") && k != "-0" }
+	// read returns the item of a list of n items whose x path reads, and
+	// whether it reads one: it reads slices of the list's items, by their
+	// indexes, until its last key, an index, reads an item. An item has
+	// only x, so a path with more keys after the index reads nothing.
+	read := func(n int, path []string) (int, bool) {
+		items := make([]int, n)
+		for i := range items {
+			items[i] = i
+		}
+		for j, k := range path {
+			if start, end, ok := reach.Slice(k, len(items)); ok {
+				items = items[start:end]
+				continue
+			}
+			if i, ok := reach.Index(k); ok && i < len(items) {
+				return items[i], j == len(path)-1
+			}
+			return 0, false
+		}
+		return 0, false
+	}
+	var paths [][]string
+	for _, a := range keys {
+		paths = append(paths, []string{a})
+		for _, b := range keys {
+			paths = append(paths, []string{a, b})
+			for _, c := range keys {
+				paths = append(paths, []string{a, b, c})
+			}
+		}
+	}
+	const longest = 6
+	for _, p := range paths {
+		r := slices.Concat([]string{"rows"}, p, []string{"x"})
+		exact := !slices.ContainsFunc(p, fromEnd)
+		var reached [longest]bool
+		for i := range longest {
+			reached[i] = reaches(t, r, []string{"rows", strconv.Itoa(i), "x"})
+		}
+		for n := range longest + 1 {
+			item, ok := read(n, p)
+			for i, got := range reached[:n] {
+				switch {
+				case ok && i == item && !got:
+					t.Fatalf("%s reads item %d of %d, but doesn't reach it", strings.Join(r, "."), i, n)
+				case exact && got && (!ok || i != item):
+					t.Fatalf("%s reaches item %d of %d, which it doesn't read", strings.Join(r, "."), i, n)
+				}
+			}
 		}
 	}
 }

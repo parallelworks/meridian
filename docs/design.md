@@ -382,8 +382,10 @@ ACTIVATE's launch form and its backend do together:
   default that is an expression is evaluated with the other inputs' values,
   defaults included, in whatever order they need; defaults that read each
   other are an error. A default reads what its paths can reach, however
-  they are written: a `*` or a slice of a list reads its rows, and
-  `rows[00]` the row `rows[0]` does.
+  they are written: a `*` or a slice of a list reads its rows, `rows[00]`
+  the row `rows[0]` does, and `rows[1:][0]` the row `rows[1]`. An index of
+  a slice that counts from the list's end, as `rows[-1:][0]` is, reads any
+  of the rows, since which one depends on how many there are.
 - **Syntax.** Every expression in the input definitions must parse, in a
   default, an option, a label or anywhere else, whether or not the run
   evaluates it. A syntax error is reported once, where it is.

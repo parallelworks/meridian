@@ -111,10 +111,12 @@ const maxForks = 4
 // A key that is a whole number reads a list's item by its index however it
 // is written, and a mapping's key as it is written. A slice reads a list's
 // items, and the key after it reads the slice, as it would the list: one
-// that is a whole number reads one of the items, any of them, and * each of
-// them. A slice of a mapping is the key it is written as, such as 0:1. A
-// path with more than maxForks keys that each go two ways reaches all under
-// where the first of them is read.
+// that is a whole number reads one of the items, and * each of them. Which
+// item is known if the slice's bounds count from the list's start, as 1:
+// and 0:2 do, and else, as with -2:, it is any of them. A slice of a
+// mapping is the key it is written as, such as 0:1. A path with more than
+// maxForks keys that each go two ways reaches all under where the first of
+// them is read.
 //
 // The patterns are new, or read itself, and the caller can keep them.
 func Patterns(read []string) iter.Seq[[]string] {
@@ -134,40 +136,114 @@ func Patterns(read []string) iter.Seq[[]string] {
 		case n > maxForks:
 			yield(slices.Clone(read[:first]))
 		default:
-			expand(make([]string, 0, len(read)), read, false, yield)
+			expand(make([]string, 0, len(read)), read, nil, yield)
 		}
 	}
 }
 
+// A window is where a slice's items are in the list it was made from, as
+// far as its bounds tell without the list: from start, and before end, or
+// to the list's end if end is -1. exact is false if a bound counts from
+// the list's end, which only its length tells, and then where they are
+// isn't known.
+type window struct {
+	start, end int
+	exact      bool
+}
+
+// whole is the window of a list's items: all of them.
+var whole = window{0, -1, true}
+
+// slice returns the window of what key, a slice, reads of w's items.
+func (w window) slice(key string) window {
+	from, to, _ := strings.Cut(key, ":")
+	start, end := 0, -1
+	if from != "" {
+		start, _ = atoi(from)
+	}
+	if to != "" {
+		end, _ = atoi(to)
+	}
+	if start < 0 || to != "" && end < 0 {
+		return window{}
+	}
+	s, known := w.at(start)
+	if !known {
+		return window{}
+	}
+	e := w.end
+	if end >= 0 {
+		if e, known = w.at(end); !known {
+			return window{}
+		}
+		if w.end >= 0 {
+			e = min(e, w.end)
+		}
+	}
+	if e >= 0 {
+		e = max(e, s)
+	}
+	return window{s, e, true}
+}
+
+// at returns the index in the list of the item at i, which isn't negative,
+// in w. known is false if w isn't exact, or the index is too large for an
+// int.
+func (w window) at(i int) (j int, known bool) {
+	j = w.start + i
+	return j, w.exact && j >= w.start
+}
+
+// item returns the key of the list's item that the index i reads of w: its
+// index, or * if which one isn't known. ok is false if w has no item at i.
+func (w window) item(i int) (key string, ok bool) {
+	j, known := w.at(i)
+	switch {
+	case !known:
+		return "*", true
+	case w.end >= 0 && j >= w.end:
+		return "", false
+	}
+	return strconv.Itoa(j), true
+}
+
 // expand yields the patterns of the path rest, from where prefix leads:
-// a list, if sliced is set, that a slice made. It reports false if yield
-// does, to stop.
-func expand(prefix, rest []string, sliced bool, yield func([]string) bool) bool {
+// the items of a list in window w, if it isn't nil, that a slice made. It
+// reports false if yield does, to stop.
+func expand(prefix, rest []string, w *window, yield func([]string) bool) bool {
 	for j, k := range rest {
 		i, index := Index(k)
 		switch {
 		case k == "*":
-			prefix, sliced = append(prefix, k), false
+			prefix, w = append(prefix, k), nil
 		case isSlice(k):
 			// A slice of a mapping is a key, and a slice of a slice is a
 			// slice of the list.
-			if !sliced {
-				if !expand(slices.Concat(prefix, []string{k}), rest[j+1:], false, yield) {
+			of := whole
+			if w == nil {
+				if !expand(slices.Concat(prefix, []string{k}), rest[j+1:], nil, yield) {
 					return false
 				}
-				sliced = true
+			} else {
+				of = *w
 			}
-		case sliced:
-			// An index of a slice reads one of the list's items, any of
-			// them. A slice has no other keys, so this way the path reaches
-			// no further: the list it read on the way here, the way that
-			// reads the slice as a mapping's key reaches as well.
+			sliced := of.slice(k)
+			w = &sliced
+		case w != nil:
+			// An index of a slice reads one of the list's items, if it has
+			// one there. A slice has no other keys, so this way the path
+			// reaches no further: the list it read on the way here, the way
+			// that reads the slice as a mapping's key reaches as well.
 			if !index {
 				return true
 			}
-			prefix, sliced = append(prefix, "*"), false
+			item, ok := w.item(i)
+			if !ok {
+				return true
+			}
+			prefix, w = append(prefix, item), nil
 		case index && !canonical(k):
-			if !expand(slices.Concat(prefix, []string{k}), rest[j+1:], false, yield) {
+			if !expand(slices.Concat(prefix, []string{k}), rest[j+1:], nil, yield) {
 				return false
 			}
 			prefix = append(prefix, strconv.Itoa(i))
