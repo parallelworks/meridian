@@ -2,8 +2,10 @@ package plan_test
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"reflect"
@@ -246,7 +248,13 @@ func TestDecodeRefuses(t *testing.T) {
 		"a template without an expression": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":["x"]}`, 1),
 		"a bad template beside a key":      strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"${{":"x"},"y":1}`, 1),
 		"a $ that marks nothing":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"yaml":"x"}}`, 1),
-		"a version that isn't a number":    strings.Replace(string(good), `"version":1`, `"version":"1"`, 1),
+		// The value of a first key that starts with $, beside another.
+		"a $ that marks nothing, nested":             strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":[{"$":{"yaml":"x"}}],"y":1}`, 1),
+		"an unmarked $ key, nested":                  strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"$yaml":"x"},"y":1}`, 1),
+		"a number out of range, nested":              strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"a":1e400},"y":1}`, 1),
+		"a template without an expression, in parts": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":[{"${{":["x"]}],"y":1}`, 1),
+		"a key twice, nested":                        strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"a":1,"a":2},"y":1}`, 1),
+		"a version that isn't a number":              strings.Replace(string(good), `"version":1`, `"version":"1"`, 1),
 	} {
 		if !strings.Contains(string(good), `"timeout":"1h"`) {
 			t.Fatalf("the sample plan changed: %s", good)
@@ -337,6 +345,144 @@ func TestDataStaysData(t *testing.T) {
 	m := d.Get().(map[string]any)
 	if _, ok := m["${{"].([]any); !ok || m["n"] != int64(1)<<60 {
 		t.Errorf("Data decoded as %#v", m)
+	}
+}
+
+// nest returns leaf inside depth mappings, each holding the next under key
+// beside the keys and values of others.
+func nest(depth int, key string, leaf any, others ...any) any {
+	v := leaf
+	for range depth {
+		m := map[string]any{key: v}
+		for i := 0; i < len(others); i += 2 {
+			m[others[i].(string)] = others[i+1]
+		}
+		v = m
+	}
+	return v
+}
+
+// Mappings nested in the value of a mapping's first key that starts with $,
+// whose meaning is known only once the mapping ends, decode in one pass:
+// as deeply as a plan can nest them, as a mapping's only key, beside other
+// keys, and as a template's key.
+func TestDecodeNestedMarks(t *testing.T) {
+	// A list under each ${{ is read as a template's parts until the
+	// mapping goes on.
+	var templateKeys any = []any{"x"}
+	for range plan.MaxDepth/2 - 3 {
+		templateKeys = []any{map[string]any{"${{": templateKeys, "b": int64(1)}}
+	}
+	for name, v := range map[string]any{
+		"only keys":        nest(plan.MaxDepth/2-3, "$a", int64(1)),
+		"first keys":       nest(plan.MaxDepth-6, "$a", int64(1), "b", int64(1)),
+		"template keys":    templateKeys,
+		"templates within": nest(plan.MaxDepth/2-5, "$a", map[string]any{"$x": "${{ inputs.x }}"}, "b", int64(1)),
+	} {
+		value, err := plan.ValueOf(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: value}}}}}
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		back, err := plan.Decode(data)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if again, err := plan.Encode(back); err != nil || !bytes.Equal(again, data) {
+			t.Errorf("%s: decoding and encoding changed it (%v)", name, err)
+		}
+		if got, want := len(back.Exprs()), len(p.Exprs()); got != want || name == "templates within" && got == 0 {
+			t.Errorf("%s: %d expressions after a round trip, not %d", name, got, want)
+		}
+	}
+}
+
+// A Value's and Data's Depth is how many levels their JSON nests, and a
+// plan holds as many as MaxDepth.
+func TestDepth(t *testing.T) {
+	deepLiteral := "${{ " + strings.Repeat("[", 50) + strings.Repeat("]", 50) + " }}"
+	for _, v := range []plan.Value{
+		plan.Literal("text"), plan.Literal(nil), plan.Literal(int64(1)),
+		plan.Literal([]any(nil)), plan.Literal(map[string]any(nil)), plan.Literal([]any{}),
+		plan.Literal([]any{[]any{1, []any{}}, map[string]any{"a": map[string]any{}}}),
+		plan.Literal(map[string]any{"$only": map[string]any{"$only": "x"}}),
+		plan.Literal(map[string]any{"$first": map[string]any{"$only": "x"}, "b": 1}),
+		plan.Literal([]string{"a"}),
+		mustValue(t, "${{ inputs.x }}"),
+		mustValue(t, map[string]any{"$out": deepLiteral, "list": []any{"${{ fromJSON('[]') }}"}}),
+	} {
+		data, err := v.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := v.Depth(), jsonDepth(t, data); got != want {
+			t.Errorf("Depth of %s = %d, want %d", data, got, want)
+		}
+	}
+	for _, d := range []plan.Data{
+		plan.DataOf(nil), plan.DataOf("x"), plan.DataOf([]any(nil)), plan.DataOf(map[string]any(nil)),
+		plan.DataOf([]any{[]any(nil), map[string]any{"$": map[string]any{"$x": []any{}}}}),
+	} {
+		data, err := d.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := d.Depth(), jsonDepth(t, data); got != want {
+			t.Errorf("Depth of %s = %d, want %d", data, got, want)
+		}
+	}
+
+	// A step's with: is five levels deep in a plan: in the plan, its jobs,
+	// a job, its steps and a step.
+	for name, tc := range map[string]struct {
+		value func(extra int) any
+		step  int
+	}{
+		"lists":           {func(extra int) any { return nestList(plan.MaxDepth - 5 + extra) }, 1},
+		"marked mappings": {func(extra int) any { return nest((plan.MaxDepth-5)/2+extra, "$a", int64(1)) }, 2},
+	} {
+		at := plan.Literal(tc.value(0))
+		past := plan.Literal(tc.value(1))
+		if 5+at.Depth() > plan.MaxDepth || 5+past.Depth() <= plan.MaxDepth || past.Depth()-at.Depth() != tc.step {
+			t.Fatalf("%s: depths %d and %d", name, at.Depth(), past.Depth())
+		}
+		data, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: at}}}}})
+		if err != nil {
+			t.Errorf("%s: a plan as deep as MaxDepth: %v", name, err)
+		} else if _, err := plan.Decode(data); err != nil {
+			t.Errorf("%s: a plan as deep as MaxDepth doesn't decode: %v", name, err)
+		}
+		if _, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: past}}}}}); err == nil {
+			t.Errorf("%s: a plan deeper than MaxDepth encoded", name)
+		}
+	}
+}
+
+func nestList(depth int) any {
+	var v any = int64(1)
+	for range depth {
+		v = []any{v}
+	}
+	return v
+}
+
+// jsonDepth returns how many levels JSON nests.
+func jsonDepth(t *testing.T, data []byte) int {
+	t.Helper()
+	dec := jsontext.NewDecoder(bytes.NewReader(data))
+	deepest := 0
+	for {
+		if _, err := dec.ReadToken(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatal(err)
+			}
+			return deepest
+		}
+		deepest = max(deepest, dec.StackDepth())
 	}
 }
 
@@ -452,9 +598,11 @@ type passThrough struct{}
 
 func (passThrough) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
 
-// benchmarkPlans returns plans to encode and decode: a public workflow's,
-// and one from a workflow as large as a file can be whose expressions each
-// nest as deeply as they can, 200 levels.
+// benchmarkPlans returns plans to encode and decode: a public workflow's;
+// one from a workflow as large as a file can be whose expressions each nest
+// as deeply as they can, 200 levels; and one from a file as large whose
+// step's with: nests mappings in the value of a first key that starts with
+// $, each one in the next, 8,527 levels.
 func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
 	b.Helper()
 	spack, err := (&conformance.Case{Name: "format/public-spack-builder"}).Workflow()
@@ -467,6 +615,9 @@ func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
 	for deep.Len()+len(step) <= format.DefaultMaxSize {
 		deep.WriteString(step)
 	}
+	head := "jobs:\n  marked:\n    steps:\n      - uses: marketplace/x\n        with: {k: "
+	levels := (format.DefaultMaxSize - len(head) - len("1}\n")) / len("{$a: , b: 1}")
+	marked := head + strings.Repeat("{$a: ", levels) + "1" + strings.Repeat(", b: 1}", levels) + "}\n"
 	plans := map[string]*plan.Plan{}
 	for name, w := range map[string]struct {
 		data   []byte
@@ -474,6 +625,7 @@ func benchmarkPlans(b *testing.B) map[string]*plan.Plan {
 	}{
 		"spack-builder": {spack, map[string]any{"cluster": map[string]any{"resource": "x"}}},
 		"deep":          {[]byte(deep.String()), nil},
+		"marked":        {[]byte(marked), nil},
 	} {
 		p, diags := compile.Compile("workflow.yaml", w.data, w.inputs, compile.Options{Inputs: passThrough{}})
 		if p == nil {

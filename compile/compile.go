@@ -217,6 +217,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 	}
 	c.checkDefinitions(definitionsPath, lookup(w, definitionsPath))
 	c.checkInputNames(c.inputs.fields)
+	c.checkInputDepths(r)
 	return r
 }
 
@@ -281,7 +282,7 @@ func (c *compiler) value(loc []string, ph phase, job *jobInfo) plan.Value {
 	if !ok {
 		return plan.Value{}
 	}
-	return plan.Literal(v)
+	return c.planned(loc, v)
 }
 
 // values compiles a mapping of values, such as an env:.
@@ -309,7 +310,7 @@ func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 	}
 	s, isString := raw.(string)
 	if !isString {
-		return plan.Literal(raw)
+		return c.planned(loc, raw)
 	}
 	shift := 0
 	if cond, start, bare := bareCondition(s); bare {
@@ -331,7 +332,7 @@ func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 	if !ok {
 		return plan.Value{}
 	}
-	return plan.Literal(v)
+	return c.planned(loc, v)
 }
 
 // bareCondition returns s, an if: written without ${{ }}, without the space

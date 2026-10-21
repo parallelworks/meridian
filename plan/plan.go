@@ -214,10 +214,16 @@ func (p *Plan) Exprs() []*expr.Expr {
 }
 
 // Encode encodes a plan as JSON. The same plan always encodes to the same
-// bytes.
+// bytes. It fails for a plan whose JSON would nest more than MaxDepth
+// levels.
 func Encode(p *Plan) ([]byte, error) {
 	return jsonv2.Marshal(p, encoding)
 }
+
+// MaxDepth is how many levels a plan's JSON can nest: the limit of
+// encoding/json/jsontext, which writes and reads it. A Value or Data nests
+// within the levels around it in the plan, as its Depth says.
+const MaxDepth = 10000
 
 var (
 	// encoding writes a plan as encoding/json always has, so that its bytes

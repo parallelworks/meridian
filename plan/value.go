@@ -2,13 +2,13 @@ package plan
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
@@ -85,6 +85,61 @@ func parseValue(v any) (any, error) {
 
 // IsZero reports whether the Value is unset.
 func (v Value) IsZero() bool { return !v.set }
+
+// Depth returns how many levels the Value's JSON nests, as a plan writes
+// it: none for a scalar, and for a list or a mapping one more than its
+// deepest item. A mapping whose only key starts with $ is two more, since
+// it is written inside {"$": ...}, and a template nests as its parts' JSON
+// does, inside {"${{": ...}.
+func (v Value) Depth() int { return valueDepth(v.v) }
+
+func valueDepth(v any) int {
+	switch v := v.(type) {
+	case nil, bool, string, int64, float64:
+		return 0
+	case *expr.Template:
+		parts, _ := v.MarshalJSON()
+		return 1 + jsonDepth(parts)
+	case []any:
+		depth := 0
+		for _, item := range v {
+			depth = max(depth, valueDepth(item))
+		}
+		return 1 + depth
+	case map[string]any:
+		depth := 0
+		for _, item := range v {
+			depth = max(depth, valueDepth(item))
+		}
+		if marked(v) {
+			return 2 + depth
+		}
+		return 1 + depth
+	}
+	data, _ := jsonv2.Marshal(v, encoding)
+	return jsonDepth(data)
+}
+
+// jsonDepth returns how many levels JSON nests.
+func jsonDepth(data []byte) int {
+	depth, deepest := 0, 0
+	inString := false
+	for i := 0; i < len(data); i++ {
+		switch c := data[i]; {
+		case inString && c == '\\':
+			i++
+		case c == '"':
+			inString = !inString
+		case inString:
+		case c == '[' || c == '{':
+			depth++
+			deepest = max(deepest, depth)
+		case c == ']' || c == '}':
+			depth--
+		}
+	}
+	return deepest
+}
 
 // Literal returns the Value's JSON value if it holds no expressions.
 func (v Value) Literal() (any, bool) {
@@ -322,19 +377,39 @@ func decodeMapping(dec *jsontext.Decoder) (any, error) {
 		k := tok.String()
 		var item any
 		if first && strings.HasPrefix(k, "$") {
-			// Whether k is the only key is known only after its value.
-			var raw jsontext.Value
-			if raw, err = dec.ReadValue(); err != nil {
+			// What k's value is depends on whether k is the only key, which
+			// is known only after the value. So the value is read once as
+			// it is written, and then taken as one or the other, rather
+			// than read again for each level of mappings nested this way.
+			var n any
+			if k == templateKey && dec.PeekKind() == '[' {
+				// Most are a template's parts, which are kept as JSON for
+				// the template to decode.
+				var raw jsontext.Value
+				if raw, err = dec.ReadValue(); err != nil {
+					return nil, err
+				}
+				raw = raw.Clone()
+				if dec.PeekKind() == '}' {
+					if _, err := dec.ReadToken(); err != nil {
+						return nil, err
+					}
+					return decodeTemplate(raw)
+				}
+				n, err = readWritten(jsontext.NewDecoder(bytes.NewBuffer(raw)))
+			} else {
+				n, err = readWritten(dec)
+			}
+			if err != nil {
 				return nil, err
 			}
-			raw = raw.Clone()
 			if dec.PeekKind() == '}' {
 				if _, err := dec.ReadToken(); err != nil {
 					return nil, err
 				}
-				return decodeMarked(k, raw)
+				return markedValue(k, n)
 			}
-			item, err = decodeFrom(raw, decodeValue)
+			item, err = writtenValue(n)
 		} else {
 			item, err = decodeValue(dec)
 		}
@@ -347,46 +422,169 @@ func decodeMapping(dec *jsontext.Decoder) (any, error) {
 	return m, err
 }
 
-// decodeMarked decodes the value of a mapping whose only key, k, starts
-// with $: a template's parts, or a mapping whose only key starts with $.
-func decodeMarked(k string, raw jsontext.Value) (any, error) {
-	switch k {
-	case templateKey:
-		t := new(expr.Template)
-		if err := t.UnmarshalJSON(raw); err != nil {
-			return nil, err
-		}
-		if t.IsText() {
-			return nil, errors.New("plan: a template has no expressions")
-		}
-		return t, nil
-	case dataKey:
-		return decodeFrom(raw, func(dec *jsontext.Decoder) (any, error) {
-			if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '{' || dec.PeekKind() == '}' {
-				return nil, cmp.Or(err, errUnmarked)
-			}
-			tok, err := dec.ReadToken()
+// decodeTemplate decodes a template's parts.
+func decodeTemplate(raw jsontext.Value) (*expr.Template, error) {
+	t := new(expr.Template)
+	if err := t.UnmarshalJSON(raw); err != nil {
+		return nil, err
+	}
+	if t.IsText() {
+		return nil, errors.New("plan: a template has no expressions")
+	}
+	return t, nil
+}
+
+// JSON as it is written, read before what it holds is known: nil, bools,
+// strings and lists as JSON values are, a number as its text, and an object
+// as its members, in order, so that a template's parts are written again
+// exactly as they were read.
+type (
+	writtenNumber string
+	writtenObject []writtenMember
+	writtenMember struct {
+		key   string
+		value any
+	}
+)
+
+// readWritten reads a JSON value as it is written.
+func readWritten(dec *jsontext.Decoder) (any, error) {
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return nil, err
+	}
+	switch tok.Kind() {
+	case 'n':
+		return nil, nil
+	case 'f', 't':
+		return tok.Bool(), nil
+	case '"':
+		return tok.String(), nil
+	case '0':
+		return writtenNumber(tok.String()), nil
+	case '[':
+		list := []any{}
+		for dec.PeekKind() != ']' {
+			item, err := readWritten(dec)
 			if err != nil {
 				return nil, err
 			}
-			k := tok.String()
-			if !strings.HasPrefix(k, "$") {
-				return nil, errUnmarked
+			list = append(list, item)
+		}
+		_, err := dec.ReadToken()
+		return list, err
+	}
+	var obj writtenObject
+	for dec.PeekKind() != '}' {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return nil, err
+		}
+		key := tok.String()
+		item, err := readWritten(dec)
+		if err != nil {
+			return nil, err
+		}
+		obj = append(obj, writtenMember{key, item})
+	}
+	_, err = dec.ReadToken()
+	return obj, err
+}
+
+// writtenValue returns the value that n, JSON as it is written, holds, as
+// decodeValue reads it.
+func writtenValue(n any) (any, error) {
+	switch n := n.(type) {
+	case []any:
+		list := make([]any, len(n))
+		for i, item := range n {
+			var err error
+			if list[i], err = writtenValue(item); err != nil {
+				return nil, fmt.Errorf("%d: %w", i, err)
 			}
-			item, err := decodeValue(dec)
+		}
+		return list, nil
+	case writtenObject:
+		if len(n) == 1 && strings.HasPrefix(n[0].key, "$") {
+			return markedValue(n[0].key, n[0].value)
+		}
+		m := make(map[string]any, len(n))
+		for _, member := range n {
+			item, err := writtenValue(member.value)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", k, err)
+				return nil, fmt.Errorf("%s: %w", member.key, err)
 			}
-			if dec.PeekKind() != '}' {
-				return nil, errUnmarked
-			}
-			return map[string]any{k: item}, nil
-		})
+			m[member.key] = item
+		}
+		return m, nil
+	case writtenNumber:
+		return number(string(n))
+	}
+	return n, nil
+}
+
+// markedValue returns what n, the value of a mapping whose only key, k,
+// starts with $, marks: a template's parts, or a mapping whose only key
+// starts with $.
+func markedValue(k string, n any) (any, error) {
+	switch k {
+	case templateKey:
+		raw, err := appendWritten(nil, n)
+		if err != nil {
+			return nil, err
+		}
+		return decodeTemplate(raw)
+	case dataKey:
+		obj, ok := n.(writtenObject)
+		if !ok || len(obj) != 1 || !strings.HasPrefix(obj[0].key, "$") {
+			return nil, errUnmarked
+		}
+		item, err := writtenValue(obj[0].value)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", obj[0].key, err)
+		}
+		return map[string]any{obj[0].key: item}, nil
 	}
 	return nil, errUnmarked
 }
 
-// decodeFrom decodes raw, one JSON value, with decode.
-func decodeFrom(raw jsontext.Value, decode func(*jsontext.Decoder) (any, error)) (any, error) {
-	return decode(jsontext.NewDecoder(bytes.NewBuffer(raw)))
+// appendWritten appends the JSON of n, JSON as it is written, to b.
+func appendWritten(b []byte, n any) ([]byte, error) {
+	switch n := n.(type) {
+	case nil:
+		return append(b, "null"...), nil
+	case bool:
+		return strconv.AppendBool(b, n), nil
+	case string:
+		return jsontext.AppendQuote(b, n)
+	case writtenNumber:
+		return append(b, n...), nil
+	case []any:
+		b = append(b, '[')
+		for i, item := range n {
+			if i > 0 {
+				b = append(b, ',')
+			}
+			var err error
+			if b, err = appendWritten(b, item); err != nil {
+				return nil, err
+			}
+		}
+		return append(b, ']'), nil
+	}
+	b = append(b, '{')
+	for i, member := range n.(writtenObject) {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		var err error
+		if b, err = jsontext.AppendQuote(b, member.key); err != nil {
+			return nil, err
+		}
+		b = append(b, ':')
+		if b, err = appendWritten(b, member.value); err != nil {
+			return nil, err
+		}
+	}
+	return append(b, '}'), nil
 }

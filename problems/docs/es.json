@@ -373,6 +373,13 @@
       "Si la entrada contiene un secreto, dale type: password."
     ]
   },
+  "input_too_deep": {
+    "title": "El valor de la entrada se anida demasiado",
+    "why": "Los valores de entrada de una ejecución se guardan con ella como JSON, que se anida como máximo 10 000 niveles, contando los niveles que rodean un valor en la ejecución. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+    "fix": [
+      "Da a la entrada un valor, o un valor predeterminado, que se anide menos."
+    ]
+  },
   "duplicate_step_id": {
     "title": "Dos pasos con el mismo id",
     "why": "El id de un paso lo nombra para los pasos que vienen después, así que dos pasos de un trabajo no pueden compartirlo.",
@@ -595,6 +602,13 @@
     "why": "La palabra fue una palabra clave de if:. Ahora es texto, que siempre es verdadero.",
     "fix": [
       "Usa la función de estado que indica el mensaje."
+    ]
+  },
+  "value_too_deep": {
+    "title": "El valor se anida demasiado",
+    "why": "Una ejecución se guarda como JSON, que se anida como máximo 10 000 niveles. Un valor cuenta los niveles que lo rodean en la ejecución, más o menos tantos como los que lo rodean en el flujo de trabajo. Un mapa cuya única clave empieza por $ cuenta como dos niveles, y una expresión cuenta los niveles de su forma analizada, como uno por cada operador y uno por cada lista o mapa que escribe. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+    "fix": [
+      "Anida menos el valor."
     ]
   },
   "expression_empty": {

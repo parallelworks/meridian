@@ -130,6 +130,24 @@ func BenchmarkLoadInputs(b *testing.B) {
 	}
 }
 
+// Each of 2,000 inputs has a key the schema doesn't define, which is
+// explained against each of an input's forms.
+func BenchmarkLoadUnknownKeys(b *testing.B) {
+	var w strings.Builder
+	w.WriteString("on:\n  execute:\n    inputs:\n")
+	for i := range 2000 {
+		fmt.Fprintf(&w, "      i%d: {type: string, zz: 1}\n", i)
+	}
+	w.WriteString("jobs:\n  main:\n    steps:\n      - run: echo\n")
+	data := []byte(w.String())
+	b.SetBytes(int64(len(data)))
+	for b.Loop() {
+		if doc, diags := format.Load("workflow.yaml", data); doc == nil {
+			b.Fatal(diags)
+		}
+	}
+}
+
 func BenchmarkLoad(b *testing.B) {
 	data, err := (&conformance.Case{Name: "format/public-spack-builder"}).Workflow()
 	if err != nil {

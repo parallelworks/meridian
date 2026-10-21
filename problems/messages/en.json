@@ -54,6 +54,7 @@
   "input_not_option": "The input \"{input}\" has no option {value}. Its options are {options}.",
   "input_not_text": "The input \"{input}\" takes text, not {value}.",
   "input_looks_secret": "The input \"{input}\" looks like it holds a secret, but it isn't a password input, so a value given for it is kept with the run, and isn't masked in logs. If it holds a secret, make it a password input.",
+  "input_too_deep": "The value of the input \"{input}\" nests too deeply to be kept with the run, which can nest at most {max} levels.",
 
   "duplicate_step_id": "Steps {first} and {second} of the job \"{job}\" both have the id \"{id}\".",
   "needs_not_known": "A job's needs must be known when the run is created, but these read {name}, which isn't known until the run is underway.",
@@ -87,6 +88,7 @@
   "condition_word": "The word {word} is the text {text}, which is always true. A condition needs a comparison, or a status function such as failure().",
   "older_always": "The word always is the older spelling of always(). Use always().",
   "replaced_keyword": "The word {word} is the text {text}, which is always true. The if: keyword it was is now {replacement}.",
+  "value_too_deep": "The value nests too deeply to be kept with the run, which can nest at most {max} levels.",
 
   "expression_empty": "The expression is empty.",
   "expression_too_deep": "The expression nests more than {max} levels deep.",

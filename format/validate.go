@@ -35,6 +35,9 @@ var schemas = map[int]func() *formatSchema{
 type formatSchema struct {
 	*jsonschema.Schema
 	doc any
+	// places holds the *schemaPlace of each schema location that an error
+	// came from, since many errors come from the same ones.
+	places sync.Map
 	// probe is the schema as the if of another, {"if": schema, "else":
 	// false}, which values match as they match the schema. The library
 	// evaluates an if without the details of why a value doesn't match,
@@ -75,7 +78,7 @@ func parseSchema(id string, data []byte) (*formatSchema, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &formatSchema{s, doc, probe}, nil
+	return &formatSchema{Schema: s, doc: doc, probe: probe}, nil
 }
 
 // maxPasses bounds how many times validate drops unknown keys and validates
@@ -145,15 +148,14 @@ type unknownKey struct {
 func (s *formatSchema) explain(e *jsonschema.ValidationError, x *explanation) {
 	switch k := e.ErrorKind.(type) {
 	case *kind.AdditionalProperties:
-		obj, _ := s.lookup(e.SchemaURL).(map[string]any)
+		place := s.place(e.SchemaURL)
+		obj, _ := place.value.(map[string]any)
 		if namesEntries(e.InstanceLocation, obj) {
 			x.errors = append(x.errors, e)
 			return
 		}
-		props, _ := obj["properties"].(map[string]any)
-		defined := slices.Sorted(maps.Keys(props))
 		for _, key := range k.Properties {
-			x.unknown = append(x.unknown, unknownKey{e.InstanceLocation, key, defined})
+			x.unknown = append(x.unknown, unknownKey{e.InstanceLocation, key, place.defined})
 		}
 	case *kind.Schema, *kind.Group, *kind.AllOf, *kind.Reference:
 		for _, c := range e.Causes {
@@ -282,20 +284,36 @@ func namesEntries(loc []string, schema map[string]any) bool {
 	return ok
 }
 
-// lookup returns the schema JSON at an error's schema location, a URI whose
-// fragment is a JSON Pointer.
+// lookup returns the schema JSON at an error's schema location.
 func (s *formatSchema) lookup(location string) any {
+	return s.place(location).value
+}
+
+// A schemaPlace is what validate reads at a schema location: the schema
+// JSON there, and for an object's schema, the keys it defines, in order.
+type schemaPlace struct {
+	value   any
+	defined []string
+}
+
+// place returns what is at an error's schema location, a URI whose
+// fragment is a JSON Pointer. It finds each location once.
+func (s *formatSchema) place(location string) *schemaPlace {
+	if p, ok := s.places.Load(location); ok {
+		return p.(*schemaPlace)
+	}
+	p := new(schemaPlace)
 	_, frag, _ := strings.Cut(location, "#")
-	frag, err := url.PathUnescape(frag)
-	if err != nil {
-		return nil
+	if frag, err := url.PathUnescape(frag); err == nil {
+		if tokens, err := jsonptr.Split(frag); err == nil {
+			p.value, _ = jsonptr.Lookup(s.doc, tokens)
+		}
 	}
-	tokens, err := jsonptr.Split(frag)
-	if err != nil {
-		return nil
-	}
-	v, _ := jsonptr.Lookup(s.doc, tokens)
-	return v
+	obj, _ := p.value.(map[string]any)
+	props, _ := obj["properties"].(map[string]any)
+	p.defined = slices.Sorted(maps.Keys(props))
+	stored, _ := s.places.LoadOrStore(location, p)
+	return stored.(*schemaPlace)
 }
 
 // unknownKey reports a key the schema doesn't define, as a problem of kind

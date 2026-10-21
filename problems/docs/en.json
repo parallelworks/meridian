@@ -320,6 +320,12 @@
       "If the input holds a secret, give it type: password."
     ]
   },
+  "input_too_deep": {
+    "why": "A run's input values are kept with it as JSON, which nests at most 10,000 levels, counting the levels around a value in the run. The limit is Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Give the input a value, or a default, that nests less deeply."
+    ]
+  },
   "duplicate_step_id": {
     "why": "A step's id names it for the steps after it, so two steps of a job can't share one.",
     "fix": [
@@ -510,6 +516,12 @@
     "why": "The word was once an if: keyword. It is text now, which is always true.",
     "fix": [
       "Use the status function the message names."
+    ]
+  },
+  "value_too_deep": {
+    "why": "A run is kept as JSON, which nests at most 10,000 levels. A value counts the levels around it in the run, about as many as the workflow has around it. A mapping whose only key starts with $ counts as two levels, and an expression counts the levels of its parsed form, such as one for each operator, and one for each list or mapping it writes. The limit is Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Nest the value less deeply."
     ]
   },
   "expression_empty": {

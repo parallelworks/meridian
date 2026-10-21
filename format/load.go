@@ -45,6 +45,7 @@ type Document struct {
 	// so that a place in a string can be found in the file.
 	styles map[string]yaml.Style
 	lines  []string
+	runes  *lineRunes
 }
 
 // Position returns where the value at a JSON Pointer (RFC 6901) starts, or
@@ -117,6 +118,7 @@ func (l *Loader) Load(name string, data []byte) (*Document, problems.Diagnostics
 		keys:      p.keys,
 		styles:    p.styles,
 		lines:     strings.Split(string(data), "\n"),
+		runes:     new(lineRunes),
 	}, p.diags
 }
 
