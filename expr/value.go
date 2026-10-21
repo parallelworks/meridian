@@ -11,8 +11,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // Values are JSON's: nil, bool, numbers, string, []any and map[string]any.
@@ -560,61 +558,6 @@ func length(v any) float64 {
 		return float64(len(v))
 	}
 	return 0
-}
-
-// keys returns a mapping's keys in sorted order.
-func keys(v any) []any {
-	m, _ := collection(v).(map[string]any)
-	out := make([]any, 0, len(m))
-	for _, k := range slices.Sorted(maps.Keys(m)) {
-		out = append(out, k)
-	}
-	return out
-}
-
-// values returns a mapping's values in the order of their keys.
-func values(v any) []any {
-	m, _ := collection(v).(map[string]any)
-	out := make([]any, 0, len(m))
-	for _, item := range jsonvalue.Sorted(m) {
-		out = append(out, item)
-	}
-	return out
-}
-
-// entries returns what map() and filter() go through: a list's items, with
-// their indexes, or a mapping's values in the order of their keys, with the
-// keys. A string that holds a JSON list or mapping is read as its value, and
-// null has no items. ok is false for anything else.
-func entries(v any) (keys, items []any, ok bool) {
-	switch c := collection(v).(type) {
-	case nil:
-		return nil, nil, true
-	case []any:
-		keys = make([]any, len(c))
-		for i := range c {
-			keys[i] = float64(i)
-		}
-		return keys, c, true
-	case map[string]any:
-		for k, item := range jsonvalue.Sorted(c) {
-			keys, items = append(keys, k), append(items, item)
-		}
-		return keys, items, true
-	}
-	return nil, nil, false
-}
-
-// elements returns the items of c, a collection: a list's items, or a
-// mapping's values in the order of their keys.
-func elements(c any) []any {
-	switch c := c.(type) {
-	case []any:
-		return c
-	case map[string]any:
-		return values(c)
-	}
-	return nil
 }
 
 // size estimates the bytes a value takes, to bound what an evaluation can

@@ -80,7 +80,7 @@ var functions = map[string]function{
 		}
 		// The separator it reads when it isn't given is ",".
 		const sep = ","
-		if err := e.read(at, sep); err != nil {
+		if _, err := e.read(at, nil, sep); err != nil {
 			return nil, err
 		}
 		return e.join(at, a[0], sep)
@@ -204,24 +204,6 @@ func (e *evaluator) rangeOf(at int, start, end any) (any, error) {
 	return e.built(at, out)
 }
 
-// operandReads returns the work of what the prefix operator op reads of its
-// operand v. upper, lower, trim, keys, values and fromJSON read it, which
-// costs its size. length reads a string, whose characters it counts or which
-// it reads as JSON, and -, abs, floor, ceil, round and range a string they
-// convert to a number, but not a list's or a mapping's length or any other
-// number, which they know.
-func operandReads(op string, v any) int {
-	switch op {
-	case "upper", "lower", "trim", "keys", "values", "fromJSON":
-		return size(v)
-	case "length", "len", "-", "abs", "floor", "ceil", "round", "range":
-		if s, ok := v.(string); ok {
-			return len(s)
-		}
-	}
-	return 0
-}
-
 // roundHalfUp rounds n to a whole number as JavaScript's Math.round does: a
 // half rounds up, toward +Infinity, so -2.5 is -2. n+0.5 rounded down would
 // round 0.49999999999999994 to 1, because the sum rounds to 1.
@@ -233,47 +215,83 @@ func roundHalfUp(n float64) float64 {
 	return r
 }
 
-// prefix applies a unary operator.
+// prefix applies a unary operator. upper, lower, trim, keys, values and
+// fromJSON read their operand, which costs its size. length reads a string,
+// whose characters it counts or which it reads as JSON, and -, abs, floor,
+// ceil, round and range a string they convert to a number, but not a list's
+// or a mapping's length or any other number, which they know.
 func (e *evaluator) prefix(at int, op string, v any) (any, error) {
-	if err := e.work(at, operandReads(op, v)); err != nil {
-		return nil, err
-	}
-	switch op {
-	case "length", "len", "keys", "values":
-		// These read a string as the list or mapping it holds as JSON, if
-		// it holds one, which counts too.
-		c := collection(v)
-		if err := e.work(at, heldWork(v, c)); err != nil {
-			return nil, err
-		}
-		v = c
-	}
 	switch op {
 	case "!":
 		return !truthy(v), nil
 	case "-":
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
 		return -toNumber(v), nil
 	case "length", "len":
-		return length(v), nil
+		// A string that holds a JSON list or mapping is read as its value,
+		// which counts too.
+		c := collection(v)
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
+		if err := e.work(at, heldWork(v, c)); err != nil {
+			return nil, err
+		}
+		return length(c), nil
 	case "upper":
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
 		return e.built(at, strings.ToUpper(stringOf(v)))
 	case "lower":
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
 		return e.built(at, strings.ToLower(stringOf(v)))
 	case "trim":
-		return strings.TrimSpace(stringOf(v)), nil
-	case "keys":
-		return keys(v), nil
-	case "values":
-		return values(v), nil
-	case "abs":
-		return math.Abs(toNumber(v)), nil
-	case "floor":
-		return math.Floor(toNumber(v)), nil
-	case "ceil":
-		return math.Ceil(toNumber(v)), nil
-	case "round":
-		return roundHalfUp(toNumber(v)), nil
+		return e.read(at, strings.TrimSpace(stringOf(v)), v)
+	case "keys", "values":
+		// A mapping's keys or values, in the order of its keys, and none
+		// of anything else. A string that holds a JSON mapping is read as
+		// its value, which counts too.
+		c := collection(v)
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
+		if err := e.work(at, heldWork(v, c)); err != nil {
+			return nil, err
+		}
+		m, _ := c.(map[string]any)
+		keys := e.sortedKeys(m)
+		out := make([]any, len(keys))
+		for i, k := range keys {
+			if op == "keys" {
+				out[i] = k
+			} else {
+				out[i] = m[k]
+			}
+		}
+		return out, nil
+	case "abs", "floor", "ceil", "round":
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
+		n := toNumber(v)
+		switch op {
+		case "abs":
+			return math.Abs(n), nil
+		case "floor":
+			return math.Floor(n), nil
+		case "ceil":
+			return math.Ceil(n), nil
+		}
+		return roundHalfUp(n), nil
 	case "fromJSON":
+		if _, err := e.read(at, nil, v); err != nil {
+			return nil, err
+		}
 		s, ok := v.(string)
 		if !ok {
 			return v, nil
@@ -284,6 +302,9 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 		}
 		return e.built(at, parsed)
 	case "range":
+		if err := e.readText(at, v); err != nil {
+			return nil, err
+		}
 		return e.rangeOf(at, 0.0, v)
 	}
 	return nil, e.errorAt(at, problems.UnknownOperator, problems.Params{"op": op})
