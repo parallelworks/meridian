@@ -109,7 +109,7 @@ func newInputResolver(doc *format.Document, submitted map[string]any, opts Optio
 		values:       jsonvalue.CloneMap(submitted),
 		secrets:      map[string]any{},
 		secretsLater: map[string]bool{},
-		marks:        [][]string{{"org"}, {"vars"}},
+		marks:        expr.NewMarks([]string{"org"}, []string{"vars"}),
 	}
 }
 
@@ -237,7 +237,7 @@ type inputResolver struct {
 	// marks are the paths in the contexts of what reads a variable or a
 	// password: org, vars, password inputs, password fields of lists' rows,
 	// and the parts of the values that read them.
-	marks  [][]string
+	marks  *expr.Marks
 	fields []*field
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
@@ -447,7 +447,7 @@ func holdsPassword(def map[string]any) bool {
 // evaluated as the run starts, and what is wrong with it isn't shown.
 func (r *inputResolver) markPassword(f *field) {
 	if f.typ == "password" {
-		r.marks = append(r.marks, slices.Concat([]string{"inputs"}, f.path))
+		r.marks.Add(slices.Concat([]string{"inputs"}, f.path))
 	}
 }
 
@@ -885,7 +885,7 @@ func (r *inputResolver) deferPart(f *field, path []string, raw any, variable boo
 	in := f.holder()
 	in.addLater(laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})
 	if variable {
-		r.marks = append(r.marks, slices.Concat([]string{"inputs"}, f.path, path))
+		r.marks.Add(slices.Concat([]string{"inputs"}, f.path, path))
 	}
 	r.refresh(slices.Concat(f.path, path))
 }

@@ -391,10 +391,10 @@ func BenchmarkMarked(b *testing.B) {
 	for _, n := range []int{10, 1000, 10000} {
 		b.Run(strconv.Itoa(n), func(b *testing.B) {
 			rows := make([]any, n)
-			marked := [][]string{{"org"}, {"vars"}}
+			marked := expr.NewMarks([]string{"org"}, []string{"vars"})
 			for i := range n {
 				rows[i] = map[string]any{"x": "v", "y": "w"}
-				marked = append(marked, []string{"inputs", "rows", strconv.Itoa(i), "x"})
+				marked.Add([]string{"inputs", "rows", strconv.Itoa(i), "x"})
 			}
 			scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"rows": rows}}, Marked: marked}
 			e := mustParse(b, "inputs.rows[5].y")
@@ -484,7 +484,7 @@ func TestMarked(t *testing.T) {
 			"vars":   map[string]any{"token": "s3cret", "region": "us-east"},
 			"inputs": map[string]any{"hosts": []any{map[string]any{"name": "a", "key": "k"}}},
 		},
-		Marked: [][]string{{"vars", "token"}, {"inputs", "hosts", "0", "key"}},
+		Marked: expr.NewMarks([]string{"vars", "token"}, []string{"inputs", "hosts", "0", "key"}),
 	}
 	many := scope.Budgeted()
 	for range 100 {
@@ -542,34 +542,53 @@ func TestMarked(t *testing.T) {
 	}
 }
 
-// The evaluations that share a budget find the paths appended to Marked
-// since they began, and another Marked's paths in its place, before and
-// after they have evaluated enough to index the paths.
-func TestMarkedAppended(t *testing.T) {
-	scope := expr.Scope{Contexts: map[string]any{"vars": map[string]any{"a": "1", "b": "2"}}}.Budgeted()
-	marked := make([][]string, 0, 4)
-	marked = append(marked, []string{"vars", "a"})
+// The evaluations that share a budget find the paths added to Marks since
+// they began, and other Marks' paths in their place, before and after they
+// have evaluated enough to index the paths. Marks keep the paths they are
+// given as they were, and copies of Marks made with room for more paths
+// each find the paths added to them, and none added to the others, however
+// many evaluations read the others before.
+func TestMarksAdded(t *testing.T) {
+	scope := expr.Scope{Contexts: map[string]any{"vars": map[string]any{"a": "1", "b": "2", "c": "3"}}}.Budgeted()
+	given := []string{"vars", "a"}
+	m := expr.NewMarks(given)
+	given[1] = "b"
+	base := expr.NewMarks([]string{"vars", "a"}, []string{"vars", "x"}, []string{"vars", "y"})
+	b, c := *base, *base
 	for _, tc := range []struct {
-		marked [][]string
-		src    string
-		want   bool
+		name  string
+		marks *expr.Marks
+		// add is added to the marks before the template is evaluated.
+		add  []string
+		src  string
+		want bool
 	}{
-		{marked, "${{ vars.a }}", true},
-		{marked, "${{ vars.b }}", false},
-		{append(marked, []string{"vars", "b"}), "${{ vars.b }}", true},
-		{marked, "${{ vars.b }}", false},
-		{[][]string{{"vars", "b"}}, "${{ vars.a }}", false},
-		{[][]string{{"vars", "b"}}, "${{ vars.b }}", true},
-		{[][]string{}, "${{ vars.a }}", false},
+		{"m", m, nil, "${{ vars.a }}", true},
+		{"m", m, nil, "${{ vars.b }}", false},
+		{"m", m, []string{"vars", "b"}, "${{ vars.b }}", true},
+		{"other", expr.NewMarks([]string{"vars", "b"}), nil, "${{ vars.a }}", false},
+		{"other", expr.NewMarks([]string{"vars", "b"}), nil, "${{ vars.b }}", true},
+		{"none", expr.NewMarks(), nil, "${{ vars.a }}", false},
+		{"nil", nil, nil, "${{ vars.a }}", false},
+		{"b", &b, []string{"vars", "b"}, "${{ vars.b }}", true},
+		{"c", &c, []string{"vars", "c"}, "${{ vars.c }}", true},
+		{"c", &c, nil, "${{ vars.b }}", false},
+		{"b", &b, nil, "${{ vars.c }}", false},
+		{"base", base, []string{"vars", "x"}, "${{ vars.b }}", false},
+		{"b", &b, nil, "${{ vars.b }}", true},
+		{"c", &c, nil, "${{ vars.a }}", true},
 	} {
 		tmpl, err := expr.ParseTemplate(tc.src)
 		if err != nil {
 			t.Fatal(err)
 		}
-		scope.Marked = tc.marked
+		if tc.add != nil {
+			tc.marks.Add(tc.add)
+		}
+		scope.Marked = tc.marks
 		for i := range 100 {
 			if _, marked, err := tmpl.EvalMarked(scope); err != nil || marked != tc.want {
-				t.Errorf("%s with %q marked, evaluation %d: marked %v, %v; want %v", tc.src, tc.marked, i, marked, err, tc.want)
+				t.Errorf("%s with %s's marks, evaluation %d: marked %v, %v; want %v", tc.src, tc.name, i, marked, err, tc.want)
 				break
 			}
 		}
@@ -589,7 +608,7 @@ func TestMarkedThroughWorkflow(t *testing.T) {
 	}
 	scope := expr.Scope{
 		Contexts: map[string]any{"vars": map[string]any{"token": "t"}, "inputs": map[string]any{}},
-		Marked:   [][]string{{"vars", "token"}},
+		Marked:   expr.NewMarks([]string{"vars", "token"}),
 	}
 	for src, want := range map[string]bool{
 		"${{ .a }}":         true,

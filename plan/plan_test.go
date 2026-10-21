@@ -526,7 +526,7 @@ func TestValue(t *testing.T) {
 func TestValueMarked(t *testing.T) {
 	scope := expr.Scope{
 		Contexts: map[string]any{"vars": map[string]any{"token": "t", "region": "r"}},
-		Marked:   [][]string{{"vars", "token"}},
+		Marked:   expr.NewMarks([]string{"vars", "token"}),
 	}
 	for v, want := range map[string]bool{
 		`{"a": "${{ vars.region }}", "b": ["${{ vars.token * 2 }}"]}`: true,

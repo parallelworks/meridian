@@ -87,19 +87,11 @@ type Scope struct {
 	// outermost first: the first [index] in a reference is Index[0], the
 	// second Index[1].
 	Index []int
-	// Marked holds the paths of the values in Contexts that are marked,
-	// such as the secrets a runner masks: each is a context's name, vars
-	// rather than var, then the names that lead to the value from it, a
-	// list's items by their indexes, as in [vars token]. An evaluation that
-	// reads a marked value, a list or mapping that holds one, or a part of
-	// one, is marked, whatever it makes of it: see Template.EvalMarked. A
-	// reference reads a marked value however it spells the keys that lead
-	// to it, as a slice or a * does a list's items. Nil marks nothing.
-	//
-	// The evaluations that share a budget (Budgeted) index the paths, so
-	// Marked's paths must not change while they are in use, though more can
-	// be appended to it.
-	Marked [][]string
+	// Marked marks values in Contexts, such as the secrets a runner masks.
+	// An evaluation that reads a marked value, a list or mapping that holds
+	// one, or a part of one, is marked, whatever it makes of it: see
+	// Template.EvalMarked. Nil marks nothing.
+	Marked *Marks
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of

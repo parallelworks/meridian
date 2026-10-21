@@ -602,7 +602,7 @@ func TestEvaluatorCountsAsAnew(t *testing.T) {
 		values := map[string]any{"h": xs(size)}
 		w := &expr.Workflow{Root: root}
 		marked := inputs(values)
-		marked.Marked = [][]string{{"inputs", "h"}}
+		marked.Marked = expr.NewMarks([]string{"inputs", "h"})
 		anew, kept := inputs(values).Budgeted(), marked.Budgeted()
 		ev := w.Evaluator(kept)
 		for i := range 6 * len(locations) {
