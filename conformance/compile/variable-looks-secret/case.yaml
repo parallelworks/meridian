@@ -4,16 +4,17 @@ description: >-
   does defining an input that takes text whose name looks like a secret's. A
   name looks like a secret's when one of its words, split at _, -, . and
   changes of case, is a word such as token or password, or two in a row are
-  such as private key, as in apiKey and APIKey: tokenizer, secretary and
-  max_tokens don't. A secret
-  variable and a password input don't warn.
+  such as private key: tokenizer, secretary and max_tokens don't. A run of
+  capitals before a lower-case letter ends a word before its last capital,
+  so GITHUBToken is github and token. A secret variable and a password input
+  don't warn.
 source: Meridian
 contexts:
   org:
     HF_TOKEN: unused
   vars:
     apiKey: unused
-    APIKey: unused
+    GITHUBToken: unused
     tokenizer: unused
     DB_PASSWORD: unused
 secret-variables: [DB_PASSWORD]
@@ -36,7 +37,7 @@ expect:
       path: /jobs/main/steps/1/run
       line: 26
       column: 23
-      params: {context: vars, name: APIKey}
+      params: {context: vars, name: GITHUBToken}
     - severity: warning
       code: input_looks_secret
       path: /on/execute/inputs/api_token
