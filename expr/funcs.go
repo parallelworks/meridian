@@ -153,10 +153,11 @@ func format(e *evaluator, at int, tmpl string, args []any) (any, error) {
 // join joins a list's items, as strings, with sep. A string joins to itself,
 // and anything else to "". The function and the word operator share it. It
 // counts what it builds before building it, because a long separator is
-// repeated for every item.
+// repeated for every item. What reads v counts its size first, a string's
+// before it is parsed.
 func (e *evaluator) join(at int, v any, sep string) (any, error) {
 	c := collection(v)
-	if err := e.work(at, heldWork(v, c)); err != nil {
+	if err := e.did(at, heldWork(v, c)); err != nil {
 		return nil, err
 	}
 	var list []any
@@ -238,11 +239,8 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 	case "length", "len":
 		// A string that holds a JSON list or mapping is read as its value,
 		// which counts too.
-		c := collection(v)
-		if err := e.readText(at, v); err != nil {
-			return nil, err
-		}
-		if err := e.work(at, heldWork(v, c)); err != nil {
+		c, err := e.collection(at, v)
+		if err != nil {
 			return nil, err
 		}
 		return length(c), nil
@@ -262,12 +260,14 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 		// A mapping's keys or values, in the order of its keys, and none
 		// of anything else. A string that holds a JSON mapping is read as
 		// its value, which counts too.
-		c := collection(v)
-		if _, err := e.read(at, nil, v); err != nil {
+		c, err := e.collection(at, v)
+		if err != nil {
 			return nil, err
 		}
-		if err := e.work(at, heldWork(v, c)); err != nil {
-			return nil, err
+		if _, isString := v.(string); !isString {
+			if _, err := e.read(at, nil, v); err != nil {
+				return nil, err
+			}
 		}
 		m, _ := c.(map[string]any)
 		keys := e.sortedKeys(m)

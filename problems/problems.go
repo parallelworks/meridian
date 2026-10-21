@@ -14,8 +14,10 @@ import (
 	"embed"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -109,17 +111,83 @@ func WithSuggestion(params Params, name string, ok bool) Params {
 func List(items []string) string { return strings.Join(items, ", ") }
 
 // Show shows a value from a workflow or a run in a message: as compact JSON,
-// cut to 40 characters.
+// cut to 40 characters, or as fmt prints it if it isn't JSON, as NaN isn't.
 func Show(v any) string {
-	s := fmt.Sprint(v)
-	if b, err := jsonv2.Marshal(v, shown); err == nil {
+	var s string
+	if plain(v, 0) {
+		// Only the JSON that is shown is written: as much as holds the
+		// characters shown and one more, so a list of a million items
+		// isn't written whole. A plain value is JSON, and the only error
+		// is the writer's once it has what it needs.
+		var w shownWriter
+		_ = jsonv2.MarshalWrite(&w, v, shown)
+		s = string(w)
+	} else if b, err := jsonv2.Marshal(v, shown); err == nil {
 		s = string(b)
+	} else {
+		s = fmt.Sprint(v)
 	}
 	if utf8.RuneCountInString(s) > maxShown {
 		r := []rune(s)
 		s = string(r[:maxShown-1]) + "…"
 	}
 	return s
+}
+
+// plain reports whether v, depth lists and mappings deep, is made of values
+// that are JSON, as a workflow's are: null, booleans, strings, finite
+// float64s, ints and int64s, and lists and mappings of them, nested less
+// than maxPlainDepth deep. Show writes no more of a plain value than it
+// shows, and the rest of it as it always has.
+func plain(v any, depth int) bool {
+	switch v := v.(type) {
+	case nil, bool, string, int, int64:
+		return true
+	case float64:
+		return !math.IsNaN(v) && !math.IsInf(v, 0)
+	case []any:
+		if depth >= maxPlainDepth {
+			return false
+		}
+		for _, item := range v {
+			if !plain(item, depth+1) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		if depth >= maxPlainDepth {
+			return false
+		}
+		for _, item := range v {
+			if !plain(item, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// maxPlainDepth is how deeply a plain value's lists and mappings nest, well
+// within how deeply JSON's encoder nests them.
+const maxPlainDepth = 1000
+
+// A shownWriter keeps the start of what is written to it: enough for the
+// characters Show shows and one more, each of at most 4 bytes. It fails a
+// write past that.
+type shownWriter []byte
+
+// errShown is a shownWriter's error once it has what Show needs.
+var errShown = errors.New("problems: written as much as is shown")
+
+func (w *shownWriter) Write(p []byte) (int, error) {
+	n := min(len(p), 4*(maxShown+1)-len(*w))
+	*w = append(*w, p[:n]...)
+	if n < len(p) {
+		return n, errShown
+	}
+	return n, nil
 }
 
 // Masked is what a param shows in place of a value that came from an

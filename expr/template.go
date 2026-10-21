@@ -198,7 +198,14 @@ func (t *Template) Eval(scope Scope) (any, error) {
 		v, err := t.parts[0].expr.Eval(scope)
 		return v, offsetError(err, t.parts[0].at)
 	}
-	ev := newEvaluator(scope)
+	if t.IsText() {
+		// Text evaluates nothing, and is its value.
+		return t.src, nil
+	}
+	ev, err := newEvaluator(scope)
+	if err != nil {
+		return nil, err
+	}
 	defer ev.stop()
 	var b strings.Builder
 	for _, p := range t.parts {

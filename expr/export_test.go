@@ -20,7 +20,10 @@ func Counted(scope Scope) (built, work, steps int) {
 
 // Work evaluates e in scope, as Eval does, and returns the work it counted.
 func Work(e *Expr, scope Scope) (any, int, error) {
-	ev := newEvaluator(scope)
+	ev, err := newEvaluator(scope)
+	if err != nil {
+		return nil, 0, err
+	}
 	defer ev.stop()
 	v, err := ev.eval(e.root)
 	return v, ev.worked, err
