@@ -1,0 +1,32 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          zone:
+            type: string
+            default: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+        default:
+          - name: a
+      last:
+        type: string
+        default: ${{ toJSON(inputs.hosts[-1:]) }}
+      names:
+        type: string
+        default: ${{ join(inputs.hosts[0:1].*.name, ',') }}
+      signed:
+        type: string
+        default: ${{ inputs.hosts['+0'].zone }} ${{ inputs.hosts[-0].zone }}
+      slice:
+        type: string
+        default: ${{ toJSON(inputs.hosts[0:1]) }}
+      zero:
+        type: string
+        default: ${{ inputs.hosts[00].zone }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

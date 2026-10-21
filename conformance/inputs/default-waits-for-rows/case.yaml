@@ -1,0 +1,20 @@
+description: >-
+  A default that reads a list's rows waits for their fields' defaults,
+  however its path reaches them: through a *, a slice, or an index written
+  00. A field of the rows reads them the same way, and waits only for the
+  fields it reads: each row's lead reads the first row's zone.
+source: Meridian
+expect:
+  inputs:
+    all: us-east-a,us-east-b
+    first: us-east-a
+    head: us-east-a
+    last: us-east-b
+    region: us-east
+    sites:
+      - lead: us-east-a
+        name: a
+        zone: us-east-a
+      - lead: us-east-a
+        name: b
+        zone: us-east-b

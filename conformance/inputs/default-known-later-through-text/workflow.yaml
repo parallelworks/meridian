@@ -1,0 +1,25 @@
+on:
+  execute:
+    inputs:
+      cluster:
+        type: group
+        items:
+          config:
+            type: string
+            default: '{"zone": "z1"}'
+          token:
+            type: string
+            default: ${{ vars.TOKEN }}
+      zones:
+        type: list
+        template:
+          zone:
+            type: string
+        default: ${{ inputs.cluster.*.zone }}
+      zones_text:
+        type: string
+        default: ${{ toJSON(inputs.cluster.*.zone) }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

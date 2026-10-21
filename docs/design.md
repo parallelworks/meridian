@@ -236,7 +236,9 @@ ACTIVATE's launch form and its backend do together:
   its options, takes its default. A default of `""` gives no value. A
   default that is an expression is evaluated with the other inputs' values,
   defaults included, in whatever order they need; defaults that read each
-  other are an error.
+  other are an error. A default reads what its paths can reach, however
+  they are written: a `*` or a slice of a list reads its rows, and
+  `rows[00]` the row `rows[0]` does.
 - **Syntax.** Every expression in the input definitions must parse, in a
   default, an option, a label or anywhere else, whether or not the run
   evaluates it. A syntax error is reported once, where it is.
@@ -292,12 +294,13 @@ ACTIVATE's launch form and its backend do together:
   reads are among the run's secrets.
 - **Variables.** A plan never holds an organization or user variable's
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
-  or `vars`, or an input whose value reads one, stays an expression in the
-  plan in the same way, its input's whole value, and is evaluated as the
-  run starts. The compiler evaluates it all the same, since what decides
-  the run's shape reads its value: the inputs' `hidden`, `ignore` and
-  `optional`, and the jobs' `needs`. It checks it against its input's type
-  too, but a problem with it doesn't show the value.
+  or `vars`, or a part of an input's value that reads one, stays an
+  expression in the plan in the same way, its input's whole value, and is
+  evaluated as the run starts. The compiler evaluates it all the same,
+  since what decides the run's shape reads its value: the inputs'
+  `hidden`, `ignore` and `optional`, and the jobs' `needs`. It checks it
+  against its input's type too, but a problem with it doesn't show the
+  value.
 - **Passwords.** A plan never holds a `password` input's value, wherever
   the input is: on its own, in a group or a wizard step, or a field of a
   list's or a repeated step's rows. The value is one of the run's secrets,

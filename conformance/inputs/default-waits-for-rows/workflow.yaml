@@ -1,0 +1,36 @@
+on:
+  execute:
+    inputs:
+      all:
+        type: string
+        default: ${{ join(inputs.sites.*.zone, ',') }}
+      first:
+        type: string
+        default: ${{ inputs.sites[00].zone }}
+      head:
+        type: string
+        default: ${{ join(inputs.sites[:1].*.zone, ',') }}
+      last:
+        type: string
+        default: ${{ inputs.sites[-1:].0.zone }}
+      region:
+        type: string
+        default: us-east
+      sites:
+        type: list
+        template:
+          lead:
+            type: string
+            default: ${{ inputs.sites[:1].0.zone }}
+          name:
+            type: string
+          zone:
+            type: string
+            default: ${{ inputs.region }}-${{ inputs.sites[index].name }}
+        default:
+          - name: a
+          - name: b
+jobs:
+  main:
+    steps:
+      - run: echo ok

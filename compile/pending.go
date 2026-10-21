@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"container/heap"
 	"slices"
+
+	"github.com/parallelworks/meridian/internal/reach"
 )
 
 // pendingFields are the fields whose values wait for expressions to be
@@ -19,8 +21,8 @@ import (
 // can fill it in.
 type pendingFields struct {
 	// paths holds the fields that wait by their paths in the values, and
-	// reads by each path that their expressions read.
-	paths, reads pathTrie
+	// reads by the patterns of each path that their expressions read.
+	paths, reads reach.Trie[*pendingField]
 	all          []*pendingField
 	ready        readyFields
 	// pass is the pass that the field being filled in is in.
@@ -33,7 +35,8 @@ type pendingFields struct {
 // A pendingField is a field that waits.
 type pendingField struct {
 	f *field
-	// reads are the paths in the values that f's expressions read.
+	// reads are the patterns of the paths in the values that f's
+	// expressions read (reach.Patterns).
 	reads [][]string
 	// pos is its place among the fields that wait, and pass the earliest
 	// pass that can fill it in.
@@ -52,7 +55,7 @@ func (q *pendingFields) add(f *field) {
 	for _, e := range f.reads {
 		for _, ref := range e.Refs() {
 			if ref.Context == "inputs" {
-				p.reads = append(p.reads, indexPath(ref.Path, f.index))
+				p.reads = slices.AppendSeq(p.reads, reach.Patterns(indexPath(ref.Path, f.index)))
 			}
 		}
 	}
@@ -60,26 +63,26 @@ func (q *pendingFields) add(f *field) {
 	// f waits for the fields it reads, and the fields that read f wait for
 	// it.
 	q.stamp++
-	for _, path := range p.reads {
-		q.paths.overlapping(path, func(w *pendingField) {
+	for _, pattern := range p.reads {
+		for w := range q.paths.Reached(pattern) {
 			if w.stamp != q.stamp {
 				w.stamp = q.stamp
 				w.readers = append(w.readers, p)
 				p.waits++
 			}
-		})
+		}
 	}
 	q.stamp++
-	q.reads.overlapping(f.path, func(r *pendingField) {
+	for r := range q.reads.Reaching(f.path) {
 		if r.stamp != q.stamp {
 			r.stamp = q.stamp
 			p.readers = append(p.readers, r)
 			r.waits++
 		}
-	})
-	q.paths.add(f.path, p)
-	for _, path := range p.reads {
-		q.reads.add(path, p)
+	}
+	q.paths.Add(f.path, p)
+	for _, pattern := range p.reads {
+		q.reads.Add(pattern, p)
 	}
 	if p.waits == 0 {
 		heap.Push(&q.ready, readyField{p, p.pass})
@@ -100,9 +103,9 @@ func (q *pendingFields) next() *pendingField {
 		}
 		p.done = true
 		q.pass = p.pass
-		q.paths.remove(p.f.path, p)
-		for _, path := range p.reads {
-			q.reads.remove(path, p)
+		q.paths.Remove(p.f.path, p)
+		for _, pattern := range p.reads {
+			q.reads.Remove(pattern, p)
 		}
 		return p
 	}
@@ -164,61 +167,4 @@ func (h *readyFields) Pop() any {
 	x := old[len(old)-1]
 	*h = old[:len(old)-1]
 	return x
-}
-
-// A pathTrie holds fields by paths in the values, such as an input's path
-// or a path an expression reads, so that those whose paths overlap a path
-// are found without comparing it with every one.
-type pathTrie struct {
-	fields   []*pendingField
-	children map[string]*pathTrie
-}
-
-func (t *pathTrie) add(path []string, p *pendingField) {
-	for _, k := range path {
-		c, ok := t.children[k]
-		if !ok {
-			if t.children == nil {
-				t.children = map[string]*pathTrie{}
-			}
-			c = &pathTrie{}
-			t.children[k] = c
-		}
-		t = c
-	}
-	t.fields = append(t.fields, p)
-}
-
-func (t *pathTrie) remove(path []string, p *pendingField) {
-	for _, k := range path {
-		if t = t.children[k]; t == nil {
-			return
-		}
-	}
-	t.fields = slices.DeleteFunc(t.fields, func(f *pendingField) bool { return f == p })
-}
-
-// overlapping calls yield for each field whose path overlaps path: one
-// leads to the other, as a list leads to its rows. A field held by more
-// than one of its paths can be yielded more than once.
-func (t *pathTrie) overlapping(path []string, yield func(*pendingField)) {
-	for _, k := range path {
-		for _, p := range t.fields {
-			yield(p)
-		}
-		if t = t.children[k]; t == nil {
-			return
-		}
-	}
-	t.each(yield)
-}
-
-// each calls yield for each field at t's path and under it.
-func (t *pathTrie) each(yield func(*pendingField)) {
-	for _, p := range t.fields {
-		yield(p)
-	}
-	for _, c := range t.children {
-		c.each(yield)
-	}
 }

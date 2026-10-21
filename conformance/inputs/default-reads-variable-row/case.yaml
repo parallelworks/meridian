@@ -1,0 +1,21 @@
+description: >-
+  A default that reads a part of an input whose value reads an organization
+  or user variable stays an expression until the run is underway, however
+  its path reaches that part: a slice of a list reads its rows, as 0:1 reads
+  the first and -1: the last, and a row's index can be written 00, +0 or -0
+  as well as 0. One that reads only the parts that don't read a variable,
+  as names reads the rows' names, has its value.
+source: Meridian
+contexts:
+  org:
+    REGION: us-east
+expect:
+  inputs:
+    hosts:
+      - name: a
+        zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+    last: ${{ toJSON(inputs.hosts[-1:]) }}
+    names: a
+    signed: ${{ inputs.hosts['+0'].zone }} ${{ inputs.hosts[-0].zone }}
+    slice: ${{ toJSON(inputs.hosts[0:1]) }}
+    zero: ${{ inputs.hosts[00].zone }}
