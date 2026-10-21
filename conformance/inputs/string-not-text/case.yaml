@@ -1,6 +1,6 @@
 description: >-
   An input that takes text, such as a string or an editor, takes a list or
-  a mapping as an error. A number or a boolean is converted to its text.
+  a mapping as an error.
 source: Meridian
 inputs:
   name: [a, b]

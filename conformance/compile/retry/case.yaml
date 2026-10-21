@@ -1,6 +1,5 @@
 description: >-
-  The plan holds a job's retry, with its reasons, and a step's retry, as
-  they are written.
+  The plan holds a job's retry, with its reasons, and a step's retry.
 source: Meridian
 expect:
   plan:
