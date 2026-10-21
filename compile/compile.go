@@ -60,7 +60,7 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	p.Run.Variables = c.variables(p)
 
 	c.diags.Sort()
-	c.diags = slices.DeleteFunc(c.diags, repeatedVariable())
+	c.diags = listed(slices.DeleteFunc(c.diags, repeatedVariable()))
 	if c.diags.HasErrors() {
 		return nil, c.diags
 	}
@@ -73,6 +73,59 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	return p, c.diags
 }
 
+// maxListed is how many problems of each kind Compile and ResolveInputs
+// list. A workflow, or a run's submitted values, can have far more than
+// anyone reads, and a plan keeps its warnings: problems.ProblemsNotListed
+// counts the rest.
+const maxListed = 100
+
+// listed returns ds, which are sorted, with the first maxListed diagnostics
+// of each code. For a code with more, one of problems.ProblemsNotListed,
+// where the first it leaves out is, counts them, with what one that ds has
+// already counts, as the unknown inputs past the limit have.
+func listed(ds problems.Diagnostics) problems.Diagnostics {
+	notListed := problems.ProblemsNotListed.Code()
+	seen := map[string]int{}
+	over := false
+	for _, d := range ds {
+		seen[string(d.Code)]++
+		over = over || d.Code == notListed || seen[string(d.Code)] > maxListed
+	}
+	if !over {
+		return ds
+	}
+	// rest is the first diagnostic of a code that isn't listed, and how
+	// many aren't.
+	type rest struct {
+		first problems.Diagnostic
+		count int
+	}
+	left := map[string]*rest{}
+	out := make(problems.Diagnostics, 0, len(ds))
+	clear(seen)
+	for _, d := range ds {
+		code, count := string(d.Code), 1
+		if d.Code == notListed {
+			code, _ = d.Params["code"].(string)
+			count, _ = d.Params["count"].(int)
+		} else if seen[code]++; seen[code] <= maxListed {
+			out = append(out, d)
+			continue
+		}
+		if left[code] == nil {
+			left[code] = &rest{first: d}
+		}
+		left[code].count += count
+	}
+	for code, r := range jsonvalue.Sorted(left) {
+		out = append(out, problems.ProblemsNotListed.At(r.first.File(), r.first.Position(), r.first.Path(), problems.Params{
+			"code": code, "count": r.count, "limit": maxListed,
+		}))
+	}
+	out.Sort()
+	return out
+}
+
 type compiler struct {
 	reporter
 	opts   Options
@@ -80,6 +133,11 @@ type compiler struct {
 	// secrets are the secret variables and inputs the run reads.
 	secrets  map[string]bool
 	jobInfos map[string]*jobInfo
+	// jobNames, names and sessionNames are the names of the jobs, the
+	// inputs and the sessions, for the checks of what references name.
+	jobNames     *nameList
+	names        *inputNames
+	sessionNames *nameList
 }
 
 // A reporter collects the problems found in a workflow.
@@ -215,7 +273,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 	for _, key := range []string{"sessions", "links"} {
 		c.check([]string{key}, w[key], runCreated, nil)
 	}
-	c.checkDefinitions(definitionsPath, lookup(w, definitionsPath))
+	c.checkDefinitions(slices.Clip(definitionsPath), lookup(w, definitionsPath))
 	c.checkInputNames(c.inputs.fields)
 	c.checkInputDepths(r)
 	return r
@@ -225,7 +283,8 @@ func (c *compiler) run(source plan.Source) plan.Run {
 // loc in the input definitions, such as inputs.pw-user written for
 // inputs['pw-user'], and reads of variables whose names look like a
 // secret's. Resolving the inputs reports their syntax errors, and the
-// errors of the expressions it evaluates.
+// errors of the expressions it evaluates. It appends to loc in place, as
+// check does.
 func (c *compiler) checkDefinitions(loc []string, v any) {
 	switch v := v.(type) {
 	case string:
@@ -247,11 +306,11 @@ func (c *compiler) checkDefinitions(loc []string, v any) {
 		}
 	case []any:
 		for i, item := range v {
-			c.checkDefinitions(appendPath(loc, strconv.Itoa(i)), item)
+			c.checkDefinitions(append(loc, strconv.Itoa(i)), item)
 		}
 	case map[string]any:
 		for k, item := range jsonvalue.Sorted(v) {
-			c.checkDefinitions(appendPath(loc, k), item)
+			c.checkDefinitions(append(loc, k), item)
 		}
 	}
 }
@@ -278,7 +337,7 @@ func (c *compiler) value(loc []string, ph phase, job *jobInfo) plan.Value {
 	if !ok {
 		return plan.Value{}
 	}
-	v, ok := c.check(loc, raw, ph, job)
+	v, ok := c.check(slices.Clip(loc), raw, ph, job)
 	if !ok {
 		return plan.Value{}
 	}
@@ -348,7 +407,10 @@ func bareCondition(s string) (cond string, start int, ok bool) {
 
 // check checks every string in raw, the value at loc in the workflow, and
 // returns raw with the expressions in each string parsed, as a plan Value
-// holds them. ok is false if a string has an error.
+// holds them. ok is false if a string has an error. It appends to loc in
+// place, so that the walk of a deep value reuses one path: the caller's loc
+// must own the room after it, and nothing keeps loc once a string's check
+// is done.
 func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) (any, bool) {
 	switch v := raw.(type) {
 	case string:
@@ -357,7 +419,7 @@ func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) (any, bo
 		out, ok := make([]any, len(v)), true
 		for i, item := range v {
 			var itemOK bool
-			out[i], itemOK = c.check(appendPath(loc, strconv.Itoa(i)), item, ph, job)
+			out[i], itemOK = c.check(append(loc, strconv.Itoa(i)), item, ph, job)
 			ok = ok && itemOK
 		}
 		return out, ok
@@ -365,7 +427,7 @@ func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) (any, bo
 		out, ok := make(map[string]any, len(v)), true
 		for k, item := range jsonvalue.Sorted(v) {
 			var itemOK bool
-			out[k], itemOK = c.check(appendPath(loc, k), item, ph, job)
+			out[k], itemOK = c.check(append(loc, k), item, ph, job)
 			ok = ok && itemOK
 		}
 		return out, ok

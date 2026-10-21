@@ -351,6 +351,14 @@ the same way beside a successful result. A plan keeps its warnings' codes
 and params but not their text, so each reader sees them in their own
 language.
 
+A workflow, or the values submitted for a run, can have far more problems
+of one kind than anyone reads, such as a value for each of a hundred
+thousand inputs the workflow doesn't define, and a plan keeps its
+warnings. So the compiler lists the first 100 problems of each kind, in
+order, and one more, `problems_not_listed`, where the first it leaves out
+is, counts the rest. A run's unknown inputs past the first 100 aren't
+looked at for a suggestion either.
+
 Limits on a run's size are Meridian's own, which whoever runs it sets in
 the compiler's options (`Options.Limits`): the workflow file's size, 100 KiB
 by default, as in ACTIVATE; the number of jobs; a matrix's instances, 256 by
@@ -394,6 +402,8 @@ ACTIVATE's launch form and its backend do together:
   input is, and their conditions aren't evaluated.
 - **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
   values are complete, and are true when they are true or the text `true`.
+  One that reads what isn't known until the run starts, such as a secret,
+  or an input whose value is evaluated then, any part of it, is an error.
   An ignored input has no value, even one that was submitted. An input with
   no value and no default is required unless it is optional, or hidden or in
   a hidden group; a boolean with none is `false`. Every missing input is
@@ -750,8 +760,9 @@ has its own count.
 Meridian adds a safety net of its own, which isn't part of the format: the
 templates it evaluates together as a group build at most 64 MiB between
 them, and do at most 256 MiB of work, eight templates at their limit. A
-group is all of a run's input defaults and conditions, or every template in
-one value, such as a step's `with:`. The net bounds what a group does
+group is all of what decides a run's shape when it is created, its input
+defaults and conditions and its jobs' `needs:`, or every template in one
+value, such as a step's `with:`. The net bounds what a group does
 however many templates it has, and each of these caps, for every group, is
 at least one template's limit, so a template on its own that keeps to the
 language's limits never reaches it. A group that passes one fails with

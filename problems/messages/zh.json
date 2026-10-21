@@ -120,5 +120,6 @@
   "not_list_or_mapping": "函数 {name}() 接受列表或映射，而不是 {value}。",
   "expressions_build_too_much": "此处一起求值的表达式合计生成的数据超过 {limit} MiB。",
   "expressions_too_much_work": "此处一起求值的表达式合计工作量超过 {limit} MiB。",
-  "expressions_too_slow": "此处一起求值的表达式合计耗时超过 {limit} 秒。"
+  "expressions_too_slow": "此处一起求值的表达式合计耗时超过 {limit} 秒。",
+  "problems_not_listed": "代码为 {code} 的问题只列出前 {limit} 个，其余 {count} 个未列出。"
 }

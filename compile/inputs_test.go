@@ -544,3 +544,130 @@ jobs:
 		t.Errorf("values %v, %v; want %v", inputs.Values, diags, want)
 	}
 }
+
+// The submitted values for inputs the workflow doesn't define are each a
+// warning that suggests the name probably meant, the first 100 of them, in
+// the order of their names, a group's in its place; and one more warning,
+// where the rest would be, counts them. The values are kept.
+func TestUnknownInputsListed(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      name: {type: string, optional: true}
+      group: {type: group, items: {host: {type: string, optional: true}}}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	submitted := map[string]any{"group": map[string]any{"hots": "x"}}
+	for i := range 250 {
+		submitted[fmt.Sprintf("n%03d", i)] = i
+	}
+	inputs, diags := compile.ResolveInputs(doc, submitted, compile.Options{})
+	var listed []string
+	var more problems.Diagnostics
+	for _, d := range diags {
+		switch d.Code {
+		case problems.UnknownInput.Code():
+			listed = append(listed, d.Params["input"].(string))
+		case problems.ProblemsNotListed.Code():
+			more = append(more, d)
+		default:
+			t.Errorf("unexpected %s", d)
+		}
+	}
+	want := []string{"group.hots"}
+	for i := range 99 {
+		want = append(want, fmt.Sprintf("n%03d", i))
+	}
+	slices.Sort(listed)
+	slices.Sort(want)
+	if !slices.Equal(listed, want) {
+		t.Errorf("listed %v, want %v", listed, want)
+	}
+	if len(more) != 1 || more[0].Params["code"] != "unknown_input" || more[0].Params["count"] != 151 ||
+		more[0].Params["limit"] != 100 || more[0].Path() != "/on/execute/inputs" {
+		t.Errorf("the rest: %v, want one that counts 151 at /on/execute/inputs", more)
+	}
+	if len(inputs.Values) != 251 {
+		t.Errorf("%d values, want 251", len(inputs.Values))
+	}
+}
+
+// A condition that reads an input whose value is evaluated as the run
+// starts, all of it, isn't known when the run is created, whichever default
+// was evaluated last: here z's, which gives "" and so sets no value, after
+// the field x of l's row, which reads a secret.
+func TestConditionReadsInputHeldForTheRun(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      c: {type: string, optional: true, hidden: '${{ inputs.l[0].y == "b" }}'}
+      l:
+        type: list
+        template:
+          x: {type: string, default: '${{ vars.S }}'}
+          y: {type: string, default: b}
+      z: {type: string, optional: true, default: "${{ '' }}"}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"S": expr.Unknown{Name: "vars"}}}}
+	inputs, diags := compile.ResolveInputs(doc, map[string]any{"l": []any{map[string]any{}}}, opts)
+	if len(diags) != 1 || diags[0].Code != problems.InputConditionNotKnown.Code() || diags[0].Params["input"] != "c" {
+		t.Errorf("diagnostics %v, want %s for c", diags, problems.InputConditionNotKnown.Code())
+	}
+	if _, ok := inputs.Deferred["l"]; !ok {
+		t.Errorf("deferred %v, want l", inputs.Deferred)
+	}
+}
+
+// A dropdown's and a multi-dropdown's options match a value by their text,
+// so that the option 8 matches the value "8".
+func TestOptionsMatchByText(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      one: {type: dropdown, optional: true, options: [8, "9", true, 1.5, {value: 2, label: Two}, x]}
+      many: {type: multi-dropdown, optional: true, options: [8, "9", true, 1.5, {value: 2, label: Two}, x]}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	for _, tc := range []struct {
+		value any
+		ok    bool
+	}{
+		{8, true},
+		{"8", true},
+		{8.0, true},
+		{"8.0", false},
+		{9, true},
+		{"9", true},
+		{"true", true},
+		{true, true},
+		{1.5, true},
+		{"1.5", true},
+		{2, true},
+		{"2", true},
+		{"Two", false},
+		{"x", true},
+		{"y", false},
+		{[]any{8}, false},
+	} {
+		for _, input := range []string{"one", "many"} {
+			v := tc.value
+			if input == "many" {
+				v = []any{"x", tc.value}
+			}
+			_, diags := compile.ResolveInputs(doc, map[string]any{input: v}, compile.Options{})
+			if got := !diags.HasErrors(); got != tc.ok {
+				t.Errorf("%s given %#v: %v, want ok %v", input, v, diags, tc.ok)
+			}
+		}
+	}
+}

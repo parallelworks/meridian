@@ -4,6 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -212,5 +215,95 @@ jobs:
 		if !strings.HasSuffix(words[i], w) {
 			t.Errorf("warning %d is %q, want it to end %q", i, words[i], w)
 		}
+	}
+}
+
+// Compile lists the first 100 problems of each kind, and one more, where the
+// first it leaves out is, counts the rest: a workflow with 130 references to
+// inputs that aren't there has 100 warnings of them, and one that counts
+// 30, which the plan keeps too. Errors are listed the same way.
+func TestProblemsListedPerKind(t *testing.T) {
+	var run strings.Builder
+	for i := range 130 {
+		fmt.Fprintf(&run, "${{ inputs.no%03d }} ", i)
+	}
+	data := "jobs:\n  main:\n    steps:\n      - run: " + run.String() + "${{ matrix.x }}\n"
+	p, diags := compile.Compile("workflow.yaml", []byte(data), nil, compile.Options{})
+	if p == nil {
+		t.Fatal(diags)
+	}
+	counts := map[string]int{}
+	for _, d := range diags {
+		counts[string(d.Code)]++
+	}
+	want := map[string]int{"undefined_input": 100, "no_matrix": 1, "problems_not_listed": 1}
+	if !maps.Equal(counts, want) {
+		t.Errorf("diagnostics by code %v, want %v", counts, want)
+	}
+	i := slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.ProblemsNotListed.Code() })
+	// The 101st reference is after "      - run: " and 100 of them, 20
+	// bytes each, and its "${{ ".
+	column := 14 + 100*20 + 4
+	if d := diags[i]; d.Params["code"] != "undefined_input" || d.Params["count"] != 30 || d.Params["limit"] != 100 ||
+		d.Position() != (problems.Position{Line: 4, Column: column}) {
+		t.Errorf("the rest: %v at %v, want 30 of undefined_input at 4:%d", d.Params, d.Position(), column)
+	}
+	if len(p.Warnings) != len(diags) {
+		t.Fatalf("the plan has %d warnings, and Compile returns %d", len(p.Warnings), len(diags))
+	}
+	for i, w := range p.Warnings {
+		if w.Code != diags[i].Code || !maps.Equal(w.Params, diags[i].Params) || w.Detail != "" {
+			t.Errorf("the plan's warning %d is %v, want %v without its detail", i, w, diags[i])
+		}
+	}
+
+	var jobs strings.Builder
+	jobs.WriteString("jobs:\n")
+	for i := range 105 {
+		fmt.Fprintf(&jobs, "  j%03d:\n    needs: [nope]\n    steps: [{run: echo}]\n", i)
+	}
+	p, diags = compile.Compile("workflow.yaml", []byte(jobs.String()), nil, compile.Options{})
+	counts = map[string]int{}
+	for _, d := range diags {
+		counts[string(d.Code)]++
+	}
+	want = map[string]int{"needs_unknown_job": 100, "problems_not_listed": 1}
+	if p != nil || !maps.Equal(counts, want) {
+		t.Errorf("105 jobs that need a job that isn't there: diagnostics by code %v, want %v", counts, want)
+	}
+}
+
+// A job's needs is evaluated in one group with the inputs' defaults and
+// conditions, and the other jobs' needs, which share one budget: once eight
+// defaults have done all the 256 MiB of work the group may, a needs can do
+// none; and eight needs that each do almost 32 MiB of it leave none for a
+// ninth, though each is within the language's limit on its own.
+func TestNeedsShareTheInputsBudget(t *testing.T) {
+	notListed := func(diags problems.Diagnostics) []string {
+		var out []string
+		for _, d := range diags.Errors() {
+			out = append(out, string(d.Code)+" "+d.Path())
+		}
+		return out
+	}
+	var b strings.Builder
+	b.WriteString("on:\n  execute:\n    inputs:\n      half:\n        type: string\n")
+	for i := range 8 {
+		fmt.Fprintf(&b, "      d%d:\n        type: boolean\n        default: ${{ inputs.half == inputs.half }}\n", i)
+	}
+	b.WriteString("jobs:\n  main:\n    steps: [{run: echo}]\n  next:\n    needs: ${{ 'main' }}\n    steps: [{run: echo}]\n")
+	_, diags := compile.Compile("workflow.yaml", []byte(b.String()), map[string]any{"half": strings.Repeat("x", 16<<20-20)}, compile.Options{})
+	if got, want := notListed(diags), []string{"expressions_too_much_work /jobs/next/needs"}; !slices.Equal(got, want) {
+		t.Errorf("a needs after defaults that spend the budget: %v, want %v", got, want)
+	}
+
+	b.Reset()
+	b.WriteString("on:\n  execute:\n    inputs:\n      half:\n        type: string\njobs:\n  main:\n    steps: [{run: echo}]\n")
+	for i := range 9 {
+		fmt.Fprintf(&b, "  next%d:\n    needs: ${{ inputs.half == inputs.half && 'main' }}\n    steps: [{run: echo}]\n", i)
+	}
+	_, diags = compile.Compile("workflow.yaml", []byte(b.String()), map[string]any{"half": strings.Repeat("x", 16<<20-64)}, compile.Options{})
+	if got, want := notListed(diags), []string{"expressions_too_much_work /jobs/next8/needs"}; !slices.Equal(got, want) {
+		t.Errorf("nine needs that each do almost 32 MiB of work: %v, want %v", got, want)
 	}
 }

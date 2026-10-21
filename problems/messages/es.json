@@ -120,5 +120,6 @@
   "not_list_or_mapping": "La función {name}() recibe una lista o un mapa, no {value}.",
   "expressions_build_too_much": "Las expresiones que se evalúan juntas aquí construyen más de {limit} MiB entre todas.",
   "expressions_too_much_work": "Las expresiones que se evalúan juntas aquí hacen más de {limit} MiB de trabajo entre todas.",
-  "expressions_too_slow": "Las expresiones que se evalúan juntas aquí tardaron más de {limit, plural, one {# segundo} other {# segundos}} entre todas."
+  "expressions_too_slow": "Las expresiones que se evalúan juntas aquí tardaron más de {limit, plural, one {# segundo} other {# segundos}} entre todas.",
+  "problems_not_listed": "Solo se enumeran los primeros {limit} problemas con el código {code}; {count, plural, one {# más no se enumera} other {# más no se enumeran}}."
 }

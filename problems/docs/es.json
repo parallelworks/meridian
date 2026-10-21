@@ -855,5 +855,12 @@
     "fix": [
       "Haz menos trabajo en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda, o leyendo menos de un valor grande en cada lambda."
     ]
+  },
+  "problems_not_listed": {
+    "title": "Más problemas de un mismo tipo",
+    "why": "Meridian enumera como mucho los primeros 100 problemas de cada tipo que encuentra en un flujo de trabajo y en los valores enviados para una ejecución, para que un flujo de trabajo o unos valores con muchísimos de ellos no produzcan una lista de problemas, ni un plan, igual de grande. Los demás de ese tipo se cuentan aquí.",
+    "fix": [
+      "Corrige los problemas enumerados y vuelve a comprobar el flujo de trabajo para ver los demás."
+    ]
   }
 }

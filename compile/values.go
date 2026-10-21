@@ -152,13 +152,10 @@ func formatNumber(n float64) string {
 	return strconv.FormatFloat(n, 'f', -1, 64)
 }
 
-// looseEqual compares an option with a value by their text, so that the
-// option 8 matches the value "8".
-func looseEqual(a, b any) bool {
-	return describeRaw(a) == describeRaw(b)
-}
-
-func describeRaw(v any) string {
+// looseKey returns what an option is compared with a value by: its text,
+// so that the option 8 matches the value "8". An option matches a value
+// with the same key.
+func looseKey(v any) string {
 	if n, ok := toNumber(v); ok {
 		if _, isString := v.(string); !isString {
 			return formatNumber(n)
