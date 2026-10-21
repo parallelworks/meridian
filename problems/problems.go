@@ -122,6 +122,11 @@ func Show(v any) string {
 	return s
 }
 
+// Masked is what a param shows in place of a value that came from an
+// organization or user variable, or was made from one: a variable can hold
+// a secret, so a message never quotes one.
+const Masked = "***"
+
 // shown is how Show encodes a value: as encoding/json always has, with
 // mappings in the order of their keys, a nil list or mapping as null, U+2028
 // and U+2029 escaped and invalid UTF-8 replaced, but without escaping <, >

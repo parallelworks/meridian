@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -40,19 +41,27 @@ type Run struct {
 	// inputs left out: a mapping.
 	Inputs Data `json:"inputs,omitzero"`
 	// DeferredInputs are the defaults of inputs that read what is known
-	// only once the run is underway, such as a secret variable, by their
-	// input's path, as in group.name. An input's value that reads such a
-	// thing in only a part of it, such as one of a list's rows, is one too,
-	// with that part's expressions in it. They are evaluated as the run
-	// starts, with the other inputs' values, and give the inputs' values.
+	// only once the run is underway, such as a secret variable, or what the
+	// plan never holds, an organization or user variable, by their input's
+	// path, as in group.name. An input's value that reads such a thing in
+	// only a part of it, such as one of a list's rows, is one too, with that
+	// part's expressions in it. They are evaluated as the run starts, with
+	// the other inputs' values, and give the inputs' values.
 	DeferredInputs map[string]Value `json:"deferredInputs,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`
 	// Timeout is the run's timeout:.
 	Timeout Value `json:"timeout,omitzero"`
-	// Secrets names the secret variables the run reads. Their values are
-	// never in the plan; each attempt receives them when it is claimed.
+	// Secrets names the secret variables the run reads, and its password
+	// inputs, as in vars.token and inputs.token. Their values are never in
+	// the plan; each attempt receives them when it is claimed.
 	Secrets []string `json:"secrets,omitempty"`
+	// Variables names the organization and user variables the run reads
+	// that aren't secrets, as in org.region and vars.region, in order. A
+	// context's name alone, org or vars, means the run reads all of it, as
+	// vars.* does. Their values are never in the plan either: the run reads
+	// them once, as it starts.
+	Variables []string `json:"variables,omitempty"`
 	// Permissions are the workflow's permissions:.
 	Permissions []string `json:"permissions,omitempty"`
 }
@@ -156,6 +165,44 @@ type StepRetry struct {
 	Interval     Value `json:"interval,omitzero"`
 	Timeout      Value `json:"timeout,omitzero"`
 	CleanOnRetry bool  `json:"cleanOnRetry,omitzero"`
+}
+
+// Exprs returns every expression the plan holds, in its run and its jobs.
+// The plan of a workflow that a step runs holds its own.
+func (p *Plan) Exprs() []*expr.Expr {
+	var out []*expr.Expr
+	add := func(vs ...Value) {
+		for _, v := range vs {
+			out = append(out, v.Exprs()...)
+		}
+	}
+	addAll := func(m map[string]Value) {
+		for _, v := range jsonvalue.Sorted(m) {
+			add(v)
+		}
+	}
+	addAll(p.Run.DeferredInputs)
+	addAll(p.Run.Env)
+	add(p.Run.Timeout)
+	for _, j := range p.Jobs {
+		if s := j.Strategy; s != nil {
+			add(s.Matrix, s.FailFast, s.MaxParallel)
+		}
+		add(j.If, j.RunsOn, j.Resources, j.SSH, j.Timeout, j.WorkingDirectory)
+		if r := j.Retry; r != nil {
+			add(r.MaxRetries, r.Interval)
+		}
+		addAll(j.Env)
+		for _, s := range j.Steps {
+			add(s.Name, s.If, s.Run, s.With, s.WorkingDirectory, s.SSH, s.Timeout, s.IgnoreErrors, s.Cleanup)
+			addAll(s.Env)
+			if r := s.Retry; r != nil {
+				add(r.MaxRetries, r.Interval, r.Timeout)
+			}
+		}
+		addAll(j.Outputs)
+	}
+	return out
 }
 
 // Encode encodes a plan as JSON. The same plan always encodes to the same

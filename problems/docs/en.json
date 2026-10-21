@@ -313,6 +313,12 @@
       "Submit the value as text."
     ]
   },
+  "input_looks_secret": {
+    "why": "The input's name, such as api_token, suggests it holds a secret, but it takes text. A text input's value is kept with the run, where whoever can see the run can read it, and isn't masked in the run's logs. A password input's value is a secret: it isn't kept with the run, and is masked. A name looks like a secret's when one of its words, split at _, -, . and changes of case, is a word such as token, password or secret.",
+    "fix": [
+      "If the input holds a secret, give it type: password."
+    ]
+  },
   "duplicate_step_id": {
     "why": "A step's id names it for the steps after it, so two steps of a job can't share one.",
     "fix": [
@@ -461,6 +467,12 @@
     "why": "An expression reads a session the workflow doesn't define.",
     "fix": [
       "Correct the session's name, or add it to sessions:."
+    ]
+  },
+  "variable_looks_secret": {
+    "why": "An expression reads an organization or user variable whose name, such as HF_TOKEN, suggests it holds a secret, but it isn't a secret variable. A variable's value is masked in the run's logs only if it is a secret, so a secret in a plain variable shows wherever a step writes it. A name looks like a secret's when one of its words, split at _, -, . and changes of case, is a word such as token, password or secret.",
+    "fix": [
+      "If the variable holds a secret, make it a secret variable."
     ]
   },
   "expression_failed": {

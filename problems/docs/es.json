@@ -365,6 +365,13 @@
       "Envía el valor como texto."
     ]
   },
+  "input_looks_secret": {
+    "title": "Entrada que parece contener un secreto",
+    "why": "El nombre de la entrada, como api_token, sugiere que contiene un secreto, pero recibe texto. El valor de una entrada de texto se guarda con la ejecución, donde cualquiera que pueda ver la ejecución puede leerlo, y no se enmascara en sus registros. El valor de una entrada de contraseña es un secreto: no se guarda con la ejecución y se enmascara. Un nombre parece el de un secreto cuando una de sus palabras, separadas por _, -, . y los cambios de mayúsculas a minúsculas, es una palabra como token, password o secret.",
+    "fix": [
+      "Si la entrada contiene un secreto, dale type: password."
+    ]
+  },
   "duplicate_step_id": {
     "title": "Dos pasos con el mismo id",
     "why": "El id de un paso lo nombra para los pasos que vienen después, así que dos pasos de un trabajo no pueden compartirlo.",
@@ -538,6 +545,13 @@
     "why": "Una expresión lee una sesión que el flujo de trabajo no define.",
     "fix": [
       "Corrige el nombre de la sesión o añádela a sessions:."
+    ]
+  },
+  "variable_looks_secret": {
+    "title": "Variable que parece contener un secreto",
+    "why": "Una expresión lee una variable de la organización o del usuario cuyo nombre, como HF_TOKEN, sugiere que contiene un secreto, pero no es una variable secreta. El valor de una variable solo se enmascara en los registros de la ejecución si es secreta, así que un secreto guardado en una variable normal se ve allí donde un paso lo escriba. Un nombre parece el de un secreto cuando una de sus palabras, separadas por _, -, . y los cambios de mayúsculas a minúsculas, es una palabra como token, password o secret.",
+    "fix": [
+      "Si la variable contiene un secreto, conviértela en una variable secreta."
     ]
   },
   "expression_failed": {

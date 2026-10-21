@@ -117,18 +117,32 @@ func hasTemplate(v any) bool {
 // more than that together, and an *expr.UnknownError if a template reads
 // something scope doesn't have yet.
 func (v Value) Eval(scope expr.Scope) (any, error) {
-	return evalValue(v.v, scope.Budgeted())
+	out, _, err := v.EvalMarked(scope)
+	return out, err
 }
 
-func evalValue(v any, scope expr.Scope) (any, error) {
+// EvalMarked evaluates the Value as Eval does, and reports whether one of
+// its templates read a value that scope marks, as
+// expr.Template.EvalMarked does: then what the Value gives is made from it,
+// or decided by it.
+func (v Value) EvalMarked(scope expr.Scope) (out any, marked bool, err error) {
+	out, err = evalValue(v.v, scope.Budgeted(), &marked)
+	return out, marked, err
+}
+
+// evalValue evaluates the templates in v, and notes in marked whether one
+// read a marked value.
+func evalValue(v any, scope expr.Scope, marked *bool) (any, error) {
 	switch v := v.(type) {
 	case *expr.Template:
-		return v.Eval(scope)
+		out, m, err := v.EvalMarked(scope)
+		*marked = *marked || m
+		return out, err
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
-			if out[i], err = evalValue(item, scope); err != nil {
+			if out[i], err = evalValue(item, scope, marked); err != nil {
 				return nil, err
 			}
 		}
@@ -137,7 +151,7 @@ func evalValue(v any, scope expr.Scope) (any, error) {
 		out := make(map[string]any, len(v))
 		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = evalValue(item, scope); err != nil {
+			if out[k], err = evalValue(item, scope, marked); err != nil {
 				return nil, err
 			}
 		}

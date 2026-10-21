@@ -70,8 +70,9 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int
 		if _, ok := sessions[path[0]]; !ok {
 			f = suggesting(problems.UndefinedSession, problems.Params{"name": path[0]}, path[0], slices.Sorted(maps.Keys(sessions)))
 		}
-	case "vars":
+	case "org", "vars":
 		c.recordSecret(r)
+		c.checkVariableName(r, in, at)
 	}
 	if f.kind == nil {
 		return true
@@ -139,12 +140,16 @@ func (c *compiler) defines(r expr.Ref, job *jobInfo) (defines, defined, in strin
 
 // recordSecret records the secret variable r reads, if it reads one.
 func (c *compiler) recordSecret(r expr.Ref) {
-	if r.Context != "vars" || len(r.Path) == 0 {
-		return
+	if (r.Context == "org" || r.Context == "vars") && len(r.Path) > 0 && c.isSecret(r.Context, r.Path[0]) {
+		c.secrets[r.Context+"."+r.Path[0]] = true
 	}
-	if u, ok := mapping(c.opts.Contexts["vars"])[r.Path[0]].(expr.Unknown); ok && u.Name != "" {
-		c.secrets["vars."+r.Path[0]] = true
-	}
+}
+
+// isSecret reports whether the variable name in context, org or vars, is a
+// secret: one whose value the caller's contexts don't give.
+func (c *compiler) isSecret(context, name string) bool {
+	u, ok := mapping(c.opts.Contexts[context])[name].(expr.Unknown)
+	return ok && u.Name != ""
 }
 
 func jobName(job *jobInfo) string {

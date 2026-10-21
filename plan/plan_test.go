@@ -2,9 +2,12 @@ package plan_test
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"errors"
 	"math"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +38,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 			Inputs:         plan.DataOf(map[string]any{"name": "Alice", "n": int64(3), "note": "${{ not.parsed }}"}),
 			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
 			Env:            map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
+			Variables:      []string{"org.REGION", "vars"},
 		},
 		Jobs: []plan.Job{{
 			Key:     "build#1",
@@ -370,6 +374,27 @@ func TestValue(t *testing.T) {
 	}
 }
 
+// A Value is marked if one of its templates reads a value its scope marks.
+func TestValueMarked(t *testing.T) {
+	scope := expr.Scope{
+		Contexts: map[string]any{"vars": map[string]any{"token": "t", "region": "r"}},
+		Marked:   [][]string{{"vars", "token"}},
+	}
+	for v, want := range map[string]bool{
+		`{"a": "${{ vars.region }}", "b": ["${{ vars.token * 2 }}"]}`: true,
+		`{"a": "${{ vars.region }}", "b": ["vars.token"]}`:            false,
+	} {
+		var raw any
+		if err := json.Unmarshal([]byte(v), &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, marked, err := mustValue(t, raw).EvalMarked(scope)
+		if err != nil || marked != want {
+			t.Errorf("%s = %v, %v, marked %v; want marked %v", v, got, err, marked, want)
+		}
+	}
+}
+
 // A Value's templates are one group. Each has the language's limits on
 // what it builds, 8 MiB, and the work it does, 32 MiB, and together they
 // share Meridian's budget for a group, 64 MiB and 256 MiB.
@@ -527,4 +552,53 @@ func FuzzPlanRoundTrip(f *testing.F) {
 			t.Fatalf("decoding and encoding changed the plan:\n%s\n%s (%v)", data, again, err)
 		}
 	})
+}
+
+// Exprs finds the expressions of every Value a plan holds: every Value
+// field of the run, a job and a step, found by reflection, holds one that
+// reads a variable named after it. It leaves out those of the plan of a
+// workflow a step runs, which holds its own.
+func TestExprsReachEveryValue(t *testing.T) {
+	value := reflect.TypeFor[plan.Value]()
+	var want []string
+	var fill func(v reflect.Value, path string)
+	fill = func(v reflect.Value, path string) {
+		switch typ := v.Type(); {
+		case typ == value:
+			want = append(want, path)
+			v.Set(reflect.ValueOf(mustValue(t, "${{ vars['"+path+"'] }}")))
+		case typ.Kind() == reflect.Struct:
+			for i := range typ.NumField() {
+				if typ.Field(i).IsExported() {
+					fill(v.Field(i), path+"."+typ.Field(i).Name)
+				}
+			}
+		case typ.Kind() == reflect.Pointer && typ != reflect.TypeFor[*plan.Plan]():
+			v.Set(reflect.New(typ.Elem()))
+			fill(v.Elem(), path)
+		case typ.Kind() == reflect.Slice && typ.Elem().Kind() == reflect.Struct:
+			v.Set(reflect.MakeSlice(typ, 1, 1))
+			fill(v.Index(0), path)
+		case typ.Kind() == reflect.Map && typ.Elem() == value:
+			item := reflect.New(value).Elem()
+			fill(item, path)
+			v.Set(reflect.MakeMap(typ))
+			v.SetMapIndex(reflect.ValueOf("k"), item)
+		}
+	}
+	var p plan.Plan
+	fill(reflect.ValueOf(&p).Elem(), "plan")
+	p.Jobs[0].Steps[0].Workflow = &plan.Plan{Run: plan.Run{Env: map[string]plan.Value{"X": mustValue(t, "${{ vars.nested }}")}}}
+
+	var got []string
+	for _, e := range p.Exprs() {
+		for _, r := range e.Refs() {
+			got = append(got, r.Path[0])
+		}
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if len(want) < 25 || !slices.Equal(got, want) {
+		t.Errorf("Exprs reads\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
 }

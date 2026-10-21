@@ -5,18 +5,16 @@ description: >-
   itself. So does each choice of a multi-dropdown, and a choice from options
   in groups. Any other value holding ${{ }} is data.
 source: Meridian
-contexts:
-  vars:
-    REGION: us-east
 inputs:
-  region: ${{ vars.REGION }}
-  regions: ["${{ vars.REGION }}", us-west]
-  grouped: ${{ vars.REGION }}
-  note: ${{ vars.REGION }}
+  region: ${{ inputs.home }}
+  regions: ["${{ inputs.home }}", us-west]
+  grouped: ${{ inputs.home }}
+  note: ${{ inputs.home }}
 expect:
   inputs:
+    home: us-east
     region: us-east
     regions: [us-east, us-west]
     grouped: us-east
     site: east
-    note: ${{ vars.REGION }}
+    note: ${{ inputs.home }}

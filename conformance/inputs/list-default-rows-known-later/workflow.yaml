@@ -1,6 +1,9 @@
 on:
   execute:
     inputs:
+      region:
+        type: string
+        default: us-east
       hosts:
         type: list
         template:
@@ -12,7 +15,7 @@ on:
             type: number
             default: 1
         default:
-          - name: ${{ vars.REGION }}-1
+          - name: ${{ inputs.region }}-1
             token: ${{ vars.TOKEN }}
 jobs:
   main:

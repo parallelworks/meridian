@@ -1,0 +1,11 @@
+description: >-
+  needs can be an expression that reads a variable: which jobs a job waits
+  for is decided when the run is created, and the plan holds the jobs it
+  names rather than the variable's value.
+source: Meridian
+contexts:
+  vars:
+    AFTER: build
+expect:
+  plan:
+    /jobs/1/needs: [{job: build}]

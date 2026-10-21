@@ -1,0 +1,16 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: string
+        default: ${{ org.REGION }}
+      key:
+        type: password
+        default: ${{ vars.ZONE }}-key
+      size:
+        type: number
+        default: 2
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.region }} ${{ vars.ZONE }} ${{ vars.TOKEN }} ${{ join(vars.*, ',') }}

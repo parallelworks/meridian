@@ -1,0 +1,37 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: string
+        default: ${{ org.REGION }}
+      site:
+        type: string
+        default: ${{ inputs.region }}-1
+      cluster:
+        type: compute-clusters
+        default:
+          name: ${{ org.REGION }}
+          size: 2
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          zone:
+            type: string
+            default: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+        default:
+          - name: a
+      fixed:
+        type: string
+        default: fixed
+      extra:
+        type: string
+        ignore: ${{ vars.FEATURE != 'on' }}
+      note:
+        type: string
+        optional: ${{ inputs.site == 'us-east-1' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
