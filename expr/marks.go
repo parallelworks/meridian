@@ -1,6 +1,85 @@
 package expr
 
-import "github.com/parallelworks/meridian/internal/reach"
+import (
+	"iter"
+	"slices"
+
+	"github.com/parallelworks/meridian/internal/reach"
+)
+
+// Marks are the paths of the values in a scope's contexts that are marked
+// (Scope.Marked), such as the secrets a runner masks. Each is a context's
+// name, vars rather than var, then the names that lead to the value from
+// it, a list's items by their indexes, as in [vars token]. A reference
+// reads a marked value however it spells the keys that lead to it, as a
+// slice or a * does a list's items. The zero Marks mark nothing.
+//
+// Marks are a value, as a slice is: a copy holds the paths it was copied
+// with and those added to it since, and none added to the Marks it was
+// copied from. So a scope holds the paths its Marked held when it was set,
+// and not those added to the Marks it was set from after. The paths are
+// kept where they never change, so that the evaluations that share a
+// budget (Scope.Budgeted), which index them, find each path their scope's
+// Marks hold, however Marks are copied, added to or assigned.
+//
+// Marks aren't safe for concurrent use: Add mustn't run while another
+// goroutine reads the same Marks, or a copy of them, as an evaluation does.
+type Marks struct {
+	// s holds the paths, and these Marks are its first n.
+	s *markStore
+	n int
+}
+
+// A markStore holds the paths of Marks. Add only appends to it, so the
+// first n paths of a store never change: Marks, and an index of them, of
+// a store's first n paths stay what they are.
+type markStore struct {
+	paths [][]string
+}
+
+// NewMarks returns Marks that mark the values at paths.
+func NewMarks(paths ...[]string) Marks {
+	var m Marks
+	m.Add(paths...)
+	return m
+}
+
+// Add marks the values at paths. It keeps copies of them, so the caller
+// can change those it gives.
+func (m *Marks) Add(paths ...[]string) {
+	if len(paths) == 0 {
+		return
+	}
+	if m.s == nil || m.n != len(m.s.paths) {
+		// Other Marks hold the paths of m's store past m's own, so m's go
+		// in a store of their own.
+		m.s = &markStore{paths: slices.Clone(m.paths())}
+	}
+	for _, p := range paths {
+		m.s.paths = append(m.s.paths, slices.Clone(p))
+	}
+	m.n = len(m.s.paths)
+}
+
+// paths returns the paths m holds, which mustn't be changed.
+func (m Marks) paths() [][]string {
+	if m.s == nil {
+		return nil
+	}
+	return m.s.paths[:m.n:m.n]
+}
+
+// All returns the paths m holds, in the order they were added. Each is a
+// copy, which the caller can change.
+func (m Marks) All() iter.Seq[[]string] {
+	return func(yield func([]string) bool) {
+		for _, p := range m.paths() {
+			if !yield(slices.Clone(p)) {
+				return
+			}
+		}
+	}
+}
 
 // scanChecks is how many references a group checks against the paths its
 // scope marks by comparing each with every path, before it indexes them:
@@ -13,27 +92,27 @@ const scanChecks = 32
 // (Scope.Marked): how many references it has checked against them, and
 // once it has checked scanChecks, the paths by their contexts, so that a
 // reference finds the marked values it reaches without comparing its path
-// with each. It holds the paths appended to Marked since it was made too.
+// with each. It holds the paths added to the Marks since it was made too.
 type markIndex struct {
-	// first is Marked's first path, and n how many paths it had when a
-	// reference was last checked.
-	first    *[]string
+	// of is the store of the Marks it knows, and n how many of its paths
+	// they held when a reference was last checked.
+	of       *markStore
 	n        int
 	checks   int
 	contexts map[string]*reach.Trie[struct{}]
 }
 
-// update makes x what the group knows of marked, which isn't empty: it adds
-// the paths appended to marked since, or starts anew if marked isn't what
-// x is of.
-func (x *markIndex) update(marked [][]string) {
-	if x.first != &marked[0] || x.n > len(marked) {
-		*x = markIndex{first: &marked[0]}
+// update makes x what the group knows of m: it adds m's paths past those x
+// knows, or starts anew if m's are in another store, or are fewer, as those
+// of Marks copied before x's were added to are.
+func (x *markIndex) update(m Marks) {
+	if x.of != m.s || x.n > m.n {
+		*x = markIndex{of: m.s}
 	}
 	if x.contexts != nil {
-		x.add(marked[x.n:])
+		x.add(m.s.paths[x.n:m.n])
 	}
-	x.n = len(marked)
+	x.n = m.n
 }
 
 // add indexes paths.
@@ -56,17 +135,17 @@ func (x *markIndex) add(paths [][]string) {
 // path can reach one of the values the scope marks, however its keys are
 // written (reach.Patterns).
 func (e *evaluator) marks(context string, path []string) bool {
-	marked := e.scope.Marked
-	if len(marked) == 0 {
+	m := e.scope.Marked
+	if m.n == 0 {
 		return false
 	}
 	x := &e.scope.budget.marks
-	x.update(marked)
+	x.update(m)
 	if x.contexts == nil {
 		if x.checks++; x.checks <= scanChecks {
 			for p := range reach.Patterns(path) {
-				for _, m := range marked {
-					if len(m) > 0 && m[0] == context && reach.Reaches(p, m[1:]) {
+				for _, marked := range m.paths() {
+					if len(marked) > 0 && marked[0] == context && reach.Reaches(p, marked[1:]) {
 						return true
 					}
 				}
@@ -74,7 +153,7 @@ func (e *evaluator) marks(context string, path []string) bool {
 			return false
 		}
 		x.contexts = map[string]*reach.Trie[struct{}]{}
-		x.add(marked)
+		x.add(m.paths())
 	}
 	t := x.contexts[context]
 	if t == nil {

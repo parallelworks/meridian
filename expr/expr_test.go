@@ -258,6 +258,75 @@ func TestWorkflowErrors(t *testing.T) {
 	}
 }
 
+// An Evaluator tells the strings at any two locations apart, whatever their
+// keys hold: a key with a NUL, a / or a ~ in it isn't a path of other keys,
+// so a string there neither reads the value of one at such a path nor
+// reads itself through it. A key * is a key, not each of the others.
+func TestEvaluatorLocations(t *testing.T) {
+	w := &expr.Workflow{Root: map[string]any{
+		"a\x00b": "${{ 'one' }}",
+		"a":      map[string]any{"b": "${{ 'two' }}"},
+		"a/b":    "${{ 'three' }}",
+		"c\x00d": "${{ .c.d }}-x",
+		"c":      map[string]any{"d": "${{ 'y' }}"},
+		"~1":     "${{ .['/'] }}-z",
+		"/":      "${{ 'w' }}",
+		"m":      map[string]any{"*": "${{ 'star' }}", "a": "${{ 'a' }}", "s": "${{ .['*'] }}-s"},
+	}}
+	ev := w.Evaluator(expr.Scope{})
+	for _, tc := range []struct {
+		location []string
+		want     string
+	}{
+		{[]string{"a\x00b"}, "one"},
+		{[]string{"a", "b"}, "two"},
+		{[]string{"a/b"}, "three"},
+		{[]string{"c\x00d"}, "y-x"},
+		{[]string{"~1"}, "w-z"},
+		{[]string{"m", "*"}, "star"},
+		{[]string{"m", "s"}, "star-s"},
+	} {
+		if got, err := ev.Eval(tc.location); err != nil || got != tc.want {
+			t.Errorf("%q = %v, %v; want %s", tc.location, got, err, tc.want)
+		}
+	}
+	if exprs, err := w.Exprs([]string{"m", "*"}); err != nil || len(exprs) != 1 {
+		t.Errorf("the expressions at m.* are %d, %v; want the one there", len(exprs), err)
+	}
+}
+
+// A path's indexes and slices' bounds are whole numbers of 64 bits on every
+// platform, so they read the same where an int is 32 bits: a bound past the
+// end is the end, an index past it reads nothing, and [3000000000] is a
+// number, which reads the values before the input definitions, as [3] does.
+func TestLargeIndexes(t *testing.T) {
+	w := &expr.Workflow{
+		Root:        map[string]any{"defs": map[string]any{"m": map[string]any{"3000000000": "def"}}},
+		Definitions: []string{"defs"},
+	}
+	scope := w.Scope([]string{"x"}, inputs(map[string]any{
+		"l": []any{"a", "b", "c"},
+		"s": "abc",
+		"m": map[string]any{"3000000000": "val"},
+	}))
+	for src, want := range map[string]any{
+		"toJSON(inputs.l[3000000000:])":          "[]",
+		"toJSON(inputs.l['3000000000:'])":        "[]",
+		"toJSON(inputs.l[9223372036854775807:])": "[]",
+		"join(inputs.l[1:3000000000], ',')":      "b,c",
+		"join(inputs.l[-3000000000:], ',')":      "a,b,c",
+		"toJSON(inputs.l[:-3000000000])":         "[]",
+		"inputs.s[1:3000000000]":                 "bc",
+		"inputs.l[3000000000]":                   nil,
+		"inputs.l['03000000000']":                nil,
+		"inputs.m[3000000000]":                   "val",
+	} {
+		if got, err := mustParse(t, src).Eval(scope); err != nil || got != want {
+			t.Errorf("%s = %v, %v; want %v", src, got, err, want)
+		}
+	}
+}
+
 // Results can be changed without changing the expression.
 func TestLiteralsAreCopied(t *testing.T) {
 	e := mustParse(t, `{"a": [1]}`)
@@ -391,10 +460,10 @@ func BenchmarkMarked(b *testing.B) {
 	for _, n := range []int{10, 1000, 10000} {
 		b.Run(strconv.Itoa(n), func(b *testing.B) {
 			rows := make([]any, n)
-			marked := [][]string{{"org"}, {"vars"}}
+			marked := expr.NewMarks([]string{"org"}, []string{"vars"})
 			for i := range n {
 				rows[i] = map[string]any{"x": "v", "y": "w"}
-				marked = append(marked, []string{"inputs", "rows", strconv.Itoa(i), "x"})
+				marked.Add([]string{"inputs", "rows", strconv.Itoa(i), "x"})
 			}
 			scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{"rows": rows}}, Marked: marked}
 			e := mustParse(b, "inputs.rows[5].y")
@@ -475,16 +544,17 @@ func TestUnknownValues(t *testing.T) {
 // only the rest of the context isn't, and neither is one that doesn't
 // evaluate the reference, nor vars alone, which is a word. A failed
 // evaluation is marked too. A reference reads a marked value however it
-// writes the keys that lead to it, as a slice or an index written 00 does.
-// A group that evaluates many templates, which indexes the marked paths,
-// finds the same.
+// writes the keys that lead to it, as a slice or an index written 00 does,
+// and an index of a slice from the list's start reads only the item it
+// counts to. A group that evaluates many templates, which indexes the
+// marked paths, finds the same.
 func TestMarked(t *testing.T) {
 	scope := expr.Scope{
 		Contexts: map[string]any{
 			"vars":   map[string]any{"token": "s3cret", "region": "us-east"},
 			"inputs": map[string]any{"hosts": []any{map[string]any{"name": "a", "key": "k"}}},
 		},
-		Marked: [][]string{{"vars", "token"}, {"inputs", "hosts", "0", "key"}},
+		Marked: expr.NewMarks([]string{"vars", "token"}, []string{"inputs", "hosts", "0", "key"}),
 	}
 	many := scope.Budgeted()
 	for range 100 {
@@ -519,6 +589,8 @@ func TestMarked(t *testing.T) {
 		"${{ inputs.hosts['+0'].key }}":              true,
 		"${{ inputs.hosts[-0].key }}":                true,
 		"${{ inputs.hosts[0:1][0].key }}":            true,
+		"${{ inputs.hosts[:][00].key }}":             true,
+		"${{ inputs.hosts[1:][0].key }}":             false,
 		"${{ inputs.hosts[-1:].*.key }}":             true,
 		"${{ inputs.hosts[0:1].*.name }}":            false,
 		"${{ inputs.hosts[00].name }}":               false,
@@ -542,37 +614,88 @@ func TestMarked(t *testing.T) {
 	}
 }
 
-// The evaluations that share a budget find the paths appended to Marked
-// since they began, and another Marked's paths in its place, before and
-// after they have evaluated enough to index the paths.
-func TestMarkedAppended(t *testing.T) {
-	scope := expr.Scope{Contexts: map[string]any{"vars": map[string]any{"a": "1", "b": "2"}}}.Budgeted()
-	marked := make([][]string, 0, 4)
-	marked = append(marked, []string{"vars", "a"})
+// The evaluations that share a budget find the paths added to Marks since
+// they began, and other Marks' paths in their place, before and after they
+// have evaluated enough to index the paths, as a group of their own does.
+// Marks keep the paths they are given as they were. Copies of Marks each
+// find the paths added to them, and none added to the others: copies made
+// with room for more paths, and Marks assigned an earlier copy of
+// themselves and then added to, while a later copy is read. Marks assigned
+// others with as many paths find the others' paths.
+func TestMarksAdded(t *testing.T) {
+	contexts := map[string]any{"vars": map[string]any{"a": "1", "b": "2", "c": "3", "x": "4", "y": "5"}}
+	scope := expr.Scope{Contexts: contexts}.Budgeted()
+	given := []string{"vars", "a"}
+	m := expr.NewMarks(given)
+	given[1] = "b"
+	other, none, zero := expr.NewMarks([]string{"vars", "b"}), expr.NewMarks(), expr.Marks{}
+	base := expr.NewMarks([]string{"vars", "a"}, []string{"vars", "x"}, []string{"vars", "y"})
+	b, c := base, base
+	r := expr.NewMarks([]string{"vars", "a"})
+	old := expr.NewMarks([]string{"vars", "a"}, []string{"vars", "b"}, []string{"vars", "c"})
+	later := old
+	later.Add([]string{"vars", "x"})
+	back := old
+	add := func(m *expr.Marks, path ...string) func() { return func() { m.Add(path) } }
 	for _, tc := range []struct {
-		marked [][]string
-		src    string
-		want   bool
+		name  string
+		marks *expr.Marks
+		// do is done before the template is evaluated.
+		do   func()
+		src  string
+		want bool
 	}{
-		{marked, "${{ vars.a }}", true},
-		{marked, "${{ vars.b }}", false},
-		{append(marked, []string{"vars", "b"}), "${{ vars.b }}", true},
-		{marked, "${{ vars.b }}", false},
-		{[][]string{{"vars", "b"}}, "${{ vars.a }}", false},
-		{[][]string{{"vars", "b"}}, "${{ vars.b }}", true},
-		{[][]string{}, "${{ vars.a }}", false},
+		{"m", &m, nil, "${{ vars.a }}", true},
+		{"m", &m, nil, "${{ vars.b }}", false},
+		{"m", &m, add(&m, "vars", "b"), "${{ vars.b }}", true},
+		{"other", &other, nil, "${{ vars.a }}", false},
+		{"other", &other, nil, "${{ vars.b }}", true},
+		{"none", &none, nil, "${{ vars.a }}", false},
+		{"zero", &zero, nil, "${{ vars.a }}", false},
+		{"b", &b, add(&b, "vars", "b"), "${{ vars.b }}", true},
+		{"c", &c, add(&c, "vars", "c"), "${{ vars.c }}", true},
+		{"c", &c, nil, "${{ vars.b }}", false},
+		{"b", &b, nil, "${{ vars.c }}", false},
+		{"base", &base, add(&base, "vars", "x"), "${{ vars.b }}", false},
+		{"b", &b, nil, "${{ vars.b }}", true},
+		{"c", &c, nil, "${{ vars.a }}", true},
+		{"r", &r, nil, "${{ vars.a }}", true},
+		{"r", &r, func() { r = expr.NewMarks([]string{"vars", "b"}) }, "${{ vars.b }}", true},
+		{"r", &r, nil, "${{ vars.a }}", false},
+		{"later", &later, nil, "${{ vars.x }}", true},
+		{"back", &back, add(&back, "vars", "y"), "${{ vars.y }}", true},
+		{"back", &back, nil, "${{ vars.x }}", false},
+		{"later", &later, nil, "${{ vars.x }}", true},
+		{"later", &later, nil, "${{ vars.y }}", false},
 	} {
 		tmpl, err := expr.ParseTemplate(tc.src)
 		if err != nil {
 			t.Fatal(err)
 		}
-		scope.Marked = tc.marked
+		if tc.do != nil {
+			tc.do()
+		}
+		scope.Marked = *tc.marks
 		for i := range 100 {
 			if _, marked, err := tmpl.EvalMarked(scope); err != nil || marked != tc.want {
-				t.Errorf("%s with %q marked, evaluation %d: marked %v, %v; want %v", tc.src, tc.marked, i, marked, err, tc.want)
+				t.Errorf("%s with %s's marks, evaluation %d: marked %v, %v; want %v", tc.src, tc.name, i, marked, err, tc.want)
 				break
 			}
 		}
+		if _, marked, _ := tmpl.EvalMarked(expr.Scope{Contexts: contexts, Marked: *tc.marks}); marked != tc.want {
+			t.Errorf("%s with %s's marks in a group of its own: marked %v; want %v", tc.src, tc.name, marked, tc.want)
+		}
+	}
+	// All gives copies of the paths.
+	var paths []string
+	for range 2 {
+		for p := range m.All() {
+			paths = append(paths, strings.Join(p, "."))
+			p[0] = "changed"
+		}
+	}
+	if got := strings.Join(paths, " "); got != "vars.a vars.b vars.a vars.b" {
+		t.Errorf("m's paths, read twice, are %s; want vars.a vars.b, twice", got)
 	}
 }
 
@@ -589,7 +712,7 @@ func TestMarkedThroughWorkflow(t *testing.T) {
 	}
 	scope := expr.Scope{
 		Contexts: map[string]any{"vars": map[string]any{"token": "t"}, "inputs": map[string]any{}},
-		Marked:   [][]string{{"vars", "token"}},
+		Marked:   expr.NewMarks([]string{"vars", "token"}),
 	}
 	for src, want := range map[string]bool{
 		"${{ .a }}":         true,

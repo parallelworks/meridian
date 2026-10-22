@@ -1,0 +1,17 @@
+description: >-
+  A default that reads an item of a slice whose bounds count from the
+  list's start waits only for the row that item is: rows[1:].0 is the
+  second row. So a waits for the second row's x, which reads other's
+  second row, which there isn't, and not for the first row's, which reads
+  other's first row, whose v reads a.
+source: Meridian
+expect:
+  inputs:
+    a: x-
+    other:
+      - v: x--v
+    rows:
+      - n: p
+        x: x-x--v
+      - n: q
+        x: x-

@@ -72,6 +72,13 @@ jobs:
           # the mode explicit so that a future edit cannot silently drop it.
           GODEBUG: fips140=only
         run: make test
+      # An int is 32 bits on 32-bit platforms, which x86-64 Linux runs
+      # natively. With CI set, as Actions sets it, the target fails rather
+      # than skip the tests if the runner can't run them.
+      - name: Test on 32-bit x86
+        env:
+          GODEBUG: fips140=only
+        run: make test-386
       # Once each, to catch a benchmark that no longer runs, not to measure.
       - name: Run each benchmark once
         env:

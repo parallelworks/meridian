@@ -352,16 +352,17 @@ func (r *jsonReader) number() (any, error) {
 		}
 	}
 	r.pos = i
-	// A whole number of up to 15 digits is a float64 exactly.
+	// A whole number of up to 15 digits is a float64 exactly, and an
+	// int64, however wide an int is.
 	if i == whole && whole-digits <= 15 {
-		n := 0
+		var n int64
 		for _, d := range []byte(s[digits:whole]) {
-			n = n*10 + int(d-'0')
+			n = n*10 + int64(d-'0')
 		}
 		switch {
 		case digits > start:
 			return math.Copysign(float64(n), -1), nil
-		case n < len(smallWholes):
+		case n < int64(len(smallWholes)):
 			return smallWholes[n], nil
 		}
 		return float64(n), nil

@@ -1020,7 +1020,8 @@ func closingBracket(s string, i int) int {
 }
 
 // bracketSegment reads what is in brackets: a key in any of the three kinds
-// of quotes, [index], a number, or a bare key.
+// of quotes, [index], a number, or a bare key. A number is a whole number of
+// 64 bits on every platform.
 func bracketSegment(content string) segment {
 	content = strings.TrimSpace(content)
 	if len(content) >= 2 && strings.IndexByte("'\"`", content[0]) >= 0 && content[len(content)-1] == content[0] {
@@ -1029,7 +1030,7 @@ func bracketSegment(content string) segment {
 	if content == "index" {
 		return segment{name: content, kind: index}
 	}
-	if _, err := strconv.Atoi(content); err == nil {
+	if _, err := strconv.ParseInt(content, 10, 64); err == nil {
 		return segment{name: content, kind: field}
 	}
 	return segment{name: content, kind: bareKey}

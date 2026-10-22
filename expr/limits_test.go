@@ -506,11 +506,16 @@ func TestGroupWorkBudget(t *testing.T) {
 // 400 templates that each read a string of 4 MiB as the JSON list it
 // holds, 32 MiB more, and fail, stop their group after a few, without
 // parsing the string again: seven pass 256 MiB of work, and two 64 MiB
-// built. The rest fail on the group's work or build, well before its
-// clock.
+// built. The rest fail on the group's work or build. Templates that read
+// the string through the workflow around them, a relative reference or an
+// input's definition, stop as soon.
 func TestGroupCountsFailedTemplates(t *testing.T) {
 	j := "[" + strings.Repeat("1,", 2<<20) + "1]"
 	read := len(j) + (2<<20+1)*16
+	w := &expr.Workflow{
+		Root:        map[string]any{"w": map[string]any{"j": j}, "defs": map[string]any{"d": map[string]any{"j": j}}},
+		Definitions: []string{"defs"},
+	}
 	for _, tc := range []struct {
 		src            string
 		failed         int
@@ -524,10 +529,12 @@ func TestGroupCountsFailedTemplates(t *testing.T) {
 		{"length(inputs.j.*) > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 40 + read, 0},
 		{"map(inputs.j, x => x)", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 24 + read, 0},
 		{"length(fromJSON(inputs.j))", 2, problems.ExpressionTooLarge, problems.ExpressionsBuildTooMuch, 32 + read, read - len(j)},
+		{"length(.j.*) > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 40 + read, 0},
+		{"inputs.d.j[0] > 0", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 40 + read, 0},
 	} {
 		// The clock stands still, so that only work and builds stop the group,
 		// however slow the machine, such as one testing with the race detector.
-		group := expr.WithClock(inputs(map[string]any{"j": j}), every(0).read)
+		group := w.Scope([]string{"w", "x"}, expr.WithClock(inputs(map[string]any{"j": j}), every(0).read))
 		e := mustParse(t, tc.src)
 		for i := range 400 {
 			_, err := e.Eval(group)
@@ -602,7 +609,7 @@ func TestEvaluatorCountsAsAnew(t *testing.T) {
 		values := map[string]any{"h": xs(size)}
 		w := &expr.Workflow{Root: root}
 		marked := inputs(values)
-		marked.Marked = [][]string{{"inputs", "h"}}
+		marked.Marked = expr.NewMarks([]string{"inputs", "h"})
 		anew, kept := inputs(values).Budgeted(), marked.Budgeted()
 		ev := w.Evaluator(kept)
 		for i := range 6 * len(locations) {

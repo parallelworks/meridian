@@ -17,10 +17,10 @@ export CGO_ENABLED := 0
 
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: check
-check: tidy-check lint vulncheck cgo-check test test-race bench build ## Run all checks, tests and builds
+check: tidy-check lint vulncheck cgo-check test test-race test-386 bench build ## Run all checks, tests and builds
 
 .PHONY: tidy-check
 tidy-check: ## Verify both Go modules are tidy
@@ -49,6 +49,22 @@ cgo-check: ## Verify that no package or dependency uses cgo
 .PHONY: test
 test: ## Run tests
 	$(FIPS) go test -shuffle=on -cover ./...
+
+# test-386 first builds and runs a small test binary for 32-bit x86, which
+# x86-64 Linux runs natively unless its kernel was built or booted without
+# 32-bit support, and macOS doesn't. Where that fails, it says why and skips
+# the tests, except in CI, which must run them.
+.PHONY: test-386
+test-386: ## Run tests on 32-bit x86, where an int is 32 bits, if this machine runs its programs
+	@probe=$$(mktemp -d) && trap 'rm -rf "$$probe"' EXIT && \
+	if ! out=$$($(FIPS) GOARCH=386 go test -c -o "$$probe/probe.test" ./internal/jsonptr 2>&1 && \
+		"$$probe/probe.test" -test.run='^$$' 2>&1); then \
+		echo "test-386: this machine can't build or run 32-bit x86 programs:"; echo "$$out"; \
+		if [ -n "$$CI" ]; then exit 1; fi; \
+		echo "test-386: skipped"; exit 0; \
+	fi && \
+	echo '$(FIPS) GOARCH=386 go test -shuffle=on ./...' && \
+	$(FIPS) GOARCH=386 go test -shuffle=on ./...
 
 .PHONY: bench
 bench: ## Run each benchmark once, to check that it still runs
