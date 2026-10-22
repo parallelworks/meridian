@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -277,7 +278,7 @@ func TestGitEnv(t *testing.T) {
 	common := []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS_REQUIRE=never", "LC_ALL=C", "LANGUAGE="}
 	kept := []string{
 		"HOME=/home/u", "PATH=/bin", "GIT_SSH_COMMAND=ssh -i k", "GIT_SSL_CERT=/c.pem", "GIT_SSL_KEY=/k.pem",
-		"SSH_ASKPASS=/usr/bin/x", "DISPLAY=:0", "HTTPS_PROXY=http://proxy:3128", "DBUS_SESSION_BUS_ADDRESS=unix:path=/b",
+		"DISPLAY=:0", "HTTPS_PROXY=http://proxy:3128", "DBUS_SESSION_BUS_ADDRESS=unix:path=/b",
 		"XDG_RUNTIME_DIR=/run/user/1000", "GH_TOKEN=t", "GITHUB_TOKEN=t", "GCM_CREDENTIAL_STORE=secretservice",
 		"LD_LIBRARY_PATH=/opt/lib",
 	}
@@ -328,16 +329,19 @@ func TestSSHCommand(t *testing.T) {
 // TestGitErrorClasses checks how git's messages are told apart.
 func TestGitErrorClasses(t *testing.T) {
 	for stderr, want := range map[string]string{
-		"fatal: couldn't find remote ref nope":                                                               "not found",
-		"remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found":           "not found",
-		"fatal: could not read Username for 'https://github.com': terminal prompts disabled":                 "denied",
-		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.":      "denied",
-		"Host key verification failed.\nfatal: Could not read from remote repository.":                       "denied",
-		"remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://gitlab.com/a/b.git/'":  "denied",
-		"fatal: unable to access 'https://x/': The requested URL returned error: 403":                        "denied",
-		"error: object 1234: badTimezone: invalid author/committer line\nfatal: fsck error in packed object": "malformed",
-		"fatal: unable to access 'https://x/': Could not resolve host: x":                                    "other",
-		"error: RPC failed; curl 56 Recv failure: Connection reset by peer":                                  "other",
+		"fatal: couldn't find remote ref nope":                                                                         "not found",
+		"remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found":                     "not found",
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled":                           "denied",
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.":                "denied",
+		"error: cannot open '/home/u/.cache/meridian/sources/github.com/a/b.git/FETCH_HEAD': Permission denied":        "other",
+		"fatal: Unable to create '/c/b.git/shallow.lock': Permission denied":                                           "other",
+		"remote: API rate limit exceeded\nfatal: unable to access 'https://x/': The requested URL returned error: 403": "other",
+		"Host key verification failed.\nfatal: Could not read from remote repository.":                                 "denied",
+		"remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://gitlab.com/a/b.git/'":            "denied",
+		"fatal: unable to access 'https://x/': The requested URL returned error: 403":                                  "denied",
+		"error: object 1234: badTimezone: invalid author/committer line\nfatal: fsck error in packed object":           "malformed",
+		"fatal: unable to access 'https://x/': Could not resolve host: x":                                              "other",
+		"error: RPC failed; curl 56 Recv failure: Connection reset by peer":                                            "other",
 	} {
 		e := &gitError{stderr: stderr}
 		got := "other"
@@ -368,7 +372,7 @@ func TestSourcesAccessDenied(t *testing.T) {
 	s.remote = func(_, repo string) string { return server.URL + "/" + repo + ".git" }
 	_, err := s.Resolve(t.Context(), "github/acme/private@main")
 	p := wantProblem(t, err, problems.SourceAccessDenied)
-	if p.Params["ref"] != "github/acme/private/workflow.yaml@main" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
+	if p.Params["location"] != "github/acme/private/workflow.yaml@main" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 	if errors.Is(err, compile.ErrNotFound) {
@@ -554,6 +558,26 @@ func TestSourcesCacheIsPrivate(t *testing.T) {
 		}
 		if perm := info.Mode().Perm(); perm != 0o700 {
 			t.Errorf("%s has mode %04o, want 0700", dir, perm)
+		}
+	}
+}
+
+// TestGitEnvCase checks that the GIT_ variables git doesn't get are left
+// out whatever their case on Windows, which looks variables up regardless
+// of case, and only as written elsewhere.
+func TestGitEnvCase(t *testing.T) {
+	env := gitEnv([]string{"Git_Dir=/elsewhere", "git_exec_path=/x", "Ssh_AskPass=/a"}, "")
+	if runtime.GOOS == "windows" {
+		for _, kv := range env {
+			if name, _, _ := strings.Cut(kv, "="); strings.EqualFold(name, "GIT_DIR") || strings.EqualFold(name, "GIT_EXEC_PATH") || strings.EqualFold(name, "SSH_ASKPASS") {
+				t.Errorf("gitEnv kept %s", kv)
+			}
+		}
+		return
+	}
+	for _, want := range []string{"Git_Dir=/elsewhere", "git_exec_path=/x", "Ssh_AskPass=/a"} {
+		if !slices.Contains(env, want) {
+			t.Errorf("gitEnv left out %s, which isn't one of git's variables here", want)
 		}
 	}
 }

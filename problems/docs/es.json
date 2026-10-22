@@ -1332,8 +1332,7 @@
     "title": "Propietario oculto por un espacio de nombres de usuario",
     "why": "Meridian comprueba que cada directorio en el camino hacia los suyos es tuyo o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. En un espacio de nombres de usuario que no asocia root, como los que crean unshare --user, Apptainer, bubblewrap y algunos entornos de CI, un directorio cuyo propietario no está asociado aparece como propiedad de nobody, así que Meridian no puede saber quién podría cambiarlo, y lo rechaza en lugar de suponerlo.",
     "fix": [
-      "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root y el propietario del directorio.",
-      "O elige directorios con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR cuyos padres el espacio de nombres asocie todos a ti o a root."
+      "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root."
     ]
   },
   "path_links_too_many": {

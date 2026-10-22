@@ -1332,8 +1332,7 @@
     "title": "所有者被用户命名空间隐藏",
     "why": "与 OpenSSH 检查通往用户密钥的路径一样，Meridian 会检查通往其目录的路径上的每个目录都属于您或 root。在不映射 root 的用户命名空间中（例如 unshare --user、Apptainer、bubblewrap 和某些 CI 沙箱所创建的），所有者未被映射的目录会显示为属于 nobody，因此 Meridian 无法判断谁能更改它，于是拒绝它而不作假设。",
     "fix": [
-      "在用户命名空间之外运行 Meridian，或在映射 root 和该目录所有者的命名空间中运行。",
-      "或者通过 MERIDIAN_CONFIG_DIR、MERIDIAN_STATE_DIR 和 MERIDIAN_CACHE_DIR 选择其所有父目录都被命名空间映射到您或 root 的目录。"
+      "在用户命名空间之外运行 Meridian，或在映射 root 的命名空间中运行。"
     ]
   },
   "path_links_too_many": {

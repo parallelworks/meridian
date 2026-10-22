@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -382,9 +383,9 @@ func (s *Sources) fetch(ctx context.Context, repo string, r sourceRef, rev strin
 		case gerr.notFound():
 			return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": r.repoName(), "revision": rev, "reason": gerr.message()})
 		case gerr.denied():
-			return "", problems.SourceAccessDenied.Problem(problems.Params{"ref": r.location(), "reason": gerr.message()})
+			return "", problems.SourceAccessDenied.Problem(problems.Params{"location": r.location(), "reason": gerr.message()})
 		case gerr.malformed():
-			return "", problems.SourceObjectsInvalid.Problem(problems.Params{"ref": r.location(), "reason": gerr.message()})
+			return "", problems.SourceObjectsInvalid.Problem(problems.Params{"location": r.location(), "reason": gerr.message()})
 		}
 		return "", err
 	}
@@ -551,23 +552,41 @@ var gitKeep = []string{
 	"GIT_PROXY_SSL_CERT", "GIT_PROXY_SSL_KEY", "GIT_PROXY_SSL_CAINFO", "GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED",
 }
 
-// gitSet are the variables Meridian sets for git, which it takes from no
-// one else.
-var gitSet = []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS_REQUIRE", "LC_ALL", "LANGUAGE"}
+// gitDrop are the variables Meridian takes from no one for git: those it
+// sets itself, and SSH_ASKPASS, a graphical askpass program, which
+// OpenSSH before 8.4 runs whatever SSH_ASKPASS_REQUIRE says.
+var gitDrop = []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "LC_ALL", "LANGUAGE"}
+
+// sameVar says whether a and b name the same environment variable: on
+// Windows, which looks them up regardless of case, whatever their case.
+func sameVar(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// gitVar says whether name starts with GIT_, as sameVar compares names.
+func gitVar(name string) bool {
+	return len(name) >= 4 && sameVar(name[:4], "GIT_")
+}
 
 // gitEnv is the environment git runs in: the user's, but for the
-// variables that start with GIT_ that gitKeep doesn't name, with no prompt
-// for a password or by an askpass program, and ssh as the ssh command when
-// it isn't "". Git's messages are in English, so that what they say can
-// be told apart.
+// variables that start with GIT_ that gitKeep doesn't name, and those
+// gitDrop names, with no prompt for a password or by an askpass program,
+// and ssh as the ssh command when it isn't "". Git's messages are in
+// English, so that what they say can be told apart.
 func gitEnv(environ []string, ssh string) []string {
-	env := make([]string, 0, len(environ)+len(gitSet)+1)
+	named := func(list []string, name string) bool {
+		return slices.ContainsFunc(list, func(v string) bool { return sameVar(v, name) })
+	}
+	env := make([]string, 0, len(environ)+len(gitDrop)+1)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		switch {
-		case slices.Contains(gitSet, name):
-		case strings.HasPrefix(name, "GIT_") && !slices.Contains(gitKeep, name):
-		case ssh != "" && name == "GIT_SSH_COMMAND":
+		case named(gitDrop, name):
+		case gitVar(name) && !named(gitKeep, name):
+		case ssh != "" && sameVar(name, "GIT_SSH_COMMAND"):
 		default:
 			env = append(env, kv)
 		}
@@ -610,10 +629,17 @@ func (e *gitError) notFound() bool {
 
 // denied says whether git failed because the remote refused it: it asked
 // for credentials git doesn't have, as a missing or private repository
-// does, refused those it gave, or its host's key couldn't be checked.
+// does, refused those it gave, or its host's key couldn't be checked. It
+// matches only what a remote says: ssh's "Permission denied (publickey)"
+// and the like, not a local file's "Permission denied", in Meridian's
+// cache. A 403 that mentions a rate limit is the remote asking for less,
+// which may not happen again.
 func (e *gitError) denied() bool {
+	if e.says("rate limit") {
+		return false
+	}
 	return e.says("could not read username", "could not read password", "terminal prompts disabled",
-		"permission denied", "host key verification failed", "authentication failed", "access denied",
+		"permission denied (", "host key verification failed", "authentication failed", "access denied",
 		"returned error: 401", "returned error: 403")
 }
 

@@ -1144,8 +1144,7 @@
   "owner_unmapped": {
     "why": "Meridian checks that every directory on the way to its own belongs to you or to root, as OpenSSH checks the way to a user's keys. In a user namespace that doesn't map root, as unshare --user, Apptainer, bubblewrap and some CI sandboxes make, a directory whose owner isn't mapped shows as owned by nobody, so Meridian can't tell who could change it, and refuses it rather than assume.",
     "fix": [
-      "Run Meridian outside the user namespace, or in one that maps root and the directory's owner.",
-      "Or choose directories with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR whose every parent the namespace maps to you or to root."
+      "Run Meridian outside the user namespace, or in one that maps root."
     ]
   },
   "path_links_too_many": {

@@ -122,8 +122,8 @@ var (
 	SourceTooLarge         = define(Error, "source_too_large", "Workflow file in a repository too large", "location", "commit", "limit")
 	SourceChanged          = define(Error, "source_changed", "Workflow isn't the text it was pinned to", "location", "commit", "digest", "pinned")
 	SourceNotPinned        = define(Error, "source_not_pinned", "Workflow not pinned", "location", "revision")
-	SourceAccessDenied     = define(Error, "source_access_denied", "Access to a repository denied", "ref", "reason")
-	SourceObjectsInvalid   = define(Error, "source_objects_invalid", "Malformed Git objects", "ref", "reason")
+	SourceAccessDenied     = define(Error, "source_access_denied", "Access to a repository denied", "location", "reason")
+	SourceObjectsInvalid   = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
 )
 
 // A workflow's jobs.

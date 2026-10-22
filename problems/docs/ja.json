@@ -1332,8 +1332,7 @@
     "title": "ユーザー名前空間に隠された所有者",
     "why": "Meridian は、OpenSSH がユーザーの鍵への経路を確認するのと同じく、自分のディレクトリへ至る途中の各ディレクトリがあなたか root のものであることを確認します。unshare --user、Apptainer、bubblewrap、一部の CI サンドボックスが作るような、root を対応づけないユーザー名前空間では、所有者が対応づけられていないディレクトリは nobody の所有に見えます。そのため Meridian は誰が変更できるかを判別できず、推測せずに拒否します。",
     "fix": [
-      "ユーザー名前空間の外で Meridian を実行するか、root とディレクトリの所有者を対応づける名前空間で実行してください。",
-      "または、MERIDIAN_CONFIG_DIR、MERIDIAN_STATE_DIR、MERIDIAN_CACHE_DIR で、親がすべて名前空間によってあなたか root に対応づけられるディレクトリを選んでください。"
+      "ユーザー名前空間の外で Meridian を実行するか、root を対応づける名前空間で実行してください。"
     ]
   },
   "path_links_too_many": {

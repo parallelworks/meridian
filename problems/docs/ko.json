@@ -1332,8 +1332,7 @@
     "title": "사용자 네임스페이스에 가려진 소유자",
     "why": "Meridian은 OpenSSH가 사용자 키로 가는 경로를 확인하듯, 자신의 디렉터리로 가는 중간의 각 디렉터리가 사용자나 root의 것인지 확인합니다. unshare --user, Apptainer, bubblewrap, 일부 CI 샌드박스가 만드는 것처럼 root를 매핑하지 않는 사용자 네임스페이스에서는 소유자가 매핑되지 않은 디렉터리가 nobody의 것으로 보입니다. 그래서 Meridian은 누가 바꿀 수 있는지 알 수 없어, 추측하지 않고 거부합니다.",
     "fix": [
-      "사용자 네임스페이스 밖에서 Meridian을 실행하거나, root와 디렉터리 소유자를 매핑하는 네임스페이스에서 실행하세요.",
-      "또는 MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR, MERIDIAN_CACHE_DIR로 모든 상위 디렉터리가 네임스페이스에서 사용자나 root로 매핑되는 디렉터리를 고르세요."
+      "사용자 네임스페이스 밖에서 Meridian을 실행하거나, root를 매핑하는 네임스페이스에서 실행하세요."
     ]
   },
   "path_links_too_many": {

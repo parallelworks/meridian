@@ -33,11 +33,12 @@ type InputResolver interface {
 	// and returns what the run sees for it, such as a cluster's details for
 	// its name. It returns ErrInputType for a type it doesn't provide. An
 	// error that is, or wraps, a *problem.Problem of one of the problems
-	// package's kinds of error in its workflow registry is reported as that
-	// kind, with its params and the input's name as input; any other error,
-	// a problem of a warning's kind or of the command's among them, is
-	// input_rejected, with the error's text as its reason, so that an
-	// error never becomes a warning that lets the value through.
+	// package's kinds of error, foundation's shared rules among them, but
+	// not the command's, is reported as that kind, with its params and the
+	// input's name as input; any other error, a problem of a warning's kind
+	// or of the command's among them, is input_rejected, with the error's
+	// text as its reason, so that an error never becomes a warning that
+	// lets the value through.
 	ResolveInput(typ string, definition map[string]any, value any) (any, error)
 }
 
@@ -1432,13 +1433,14 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		case errors.Is(err, ErrInputType):
 			return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
 		case err != nil:
-			// A problem of one of the workflow's kinds of error is reported as
-			// itself, so that each reader sees it in their own language. Any
-			// other error, a warning's kind among them, which would let the
-			// value through, is the platform's reason, as it gives it.
+			// A problem of one of the kinds of error a workflow can have,
+			// foundation's shared rules among them, is reported as itself, so
+			// that each reader sees it in their own language. Any other error,
+			// a warning's kind among them, which would let the value through,
+			// or the command's own, is the platform's reason, as it gives it.
 			if p, ok := errors.AsType[*problem.Problem](err); ok {
-				_, workflow := problems.Registry.Lookup(p.Code)
-				if k, ok := problems.Lookup(p.Code); ok && workflow && k.Severity() == problems.Error {
+				_, command := problems.CommandRegistry.Lookup(p.Code)
+				if k, ok := problems.Lookup(p.Code); ok && !command && k.Severity() == problems.Error {
 					return wrong(k, maps.Clone(p.Params))
 				}
 			}

@@ -98,6 +98,14 @@ func TestPlatformInputProblem(t *testing.T) {
 		t.Errorf("Message = %q, want %q", d.Message(), want)
 	}
 
+	// One of foundation's shared rules is reported as itself, as one of
+	// Meridian's own kinds of error is.
+	choice := problem.InvalidChoice.New("the cluster isn't one of the platform's").With("allowed", `"a", "b"`)
+	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{choice}})
+	if len(diags) != 1 || diags[0].Code != problem.InvalidChoice.Code || diags[0].Params["allowed"] != `"a", "b"` || diags[0].Params["input"] != "cluster" {
+		t.Errorf("a foundation rule's problem: %v", diags)
+	}
+
 	// A problem of a kind that isn't one of the workflow's errors, which
 	// would turn a rejection into a warning or a problem of the command's,
 	// is the platform's reason.
