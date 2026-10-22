@@ -1,11 +1,12 @@
 // Package conformance holds the workflow format's conformance suite: cases
 // that pin what workflows mean, for any implementation of the format to run.
 //
-// In the format, inputs and compile areas, each case is a directory, such as
-// format/yaml-alias, with a workflow.yaml and a case.yaml that says what the
-// workflow must produce. A case's directory can hold other files the
-// workflow refers to. In the expressions area, each file holds cases that
-// pin what expressions evaluate to.
+// In the format, inputs, compile and contexts areas, each case is a
+// directory, such as format/yaml-alias, with a workflow.yaml and a
+// case.yaml that says what the workflow must produce. A case's directory
+// can hold other files the workflow refers to. In the expressions area,
+// each file holds cases that pin what expressions evaluate to, and in the
+// matrices area, cases that pin how matrices expand.
 package conformance
 
 import (
@@ -23,7 +24,7 @@ import (
 
 // FS holds the cases.
 //
-//go:embed format expressions inputs compile
+//go:embed format expressions inputs compile matrices contexts
 var FS embed.FS
 
 // A Case is one conformance case.
@@ -49,6 +50,9 @@ type Case struct {
 	// name a platform's resources. Otherwise a platform takes every value
 	// given for one as it is.
 	NoPlatform bool `yaml:"no-platform,omitempty"`
+	// Jobs are what is known of each job, by name, where the phases after
+	// the run starts evaluate it, in the contexts area.
+	Jobs map[string]JobState `yaml:"jobs,omitempty"`
 	// Expect is what the workflow must produce.
 	Expect Expect `yaml:"expect"`
 }
@@ -76,6 +80,50 @@ type Expect struct {
 	// Plan holds values the compiled plan must have, by JSON Pointer into
 	// its JSON encoding, in the compile area.
 	Plan map[string]any `yaml:"plan,omitempty"`
+	// Skipped are the JSON Pointers of the jobs and steps whose if: is
+	// false, in the contexts area. Every other job and step there runs.
+	Skipped []string `yaml:"skipped,omitempty"`
+}
+
+// JobState is what is known of a job where the phases after the run
+// starts evaluate it: when its dependencies have finished, and as each of
+// its steps is about to run.
+type JobState struct {
+	// Needs are the results of the jobs it needs, by name.
+	Needs map[string]NeedResult `yaml:"needs,omitempty"`
+	// Cancelled says the run is being cancelled.
+	Cancelled bool `yaml:"cancelled,omitempty"`
+	// Index and Matrix are the matrix instance's index, from 0, and its
+	// values, for a job with a matrix.
+	Index  *int           `yaml:"index,omitempty"`
+	Matrix map[string]any `yaml:"matrix,omitempty"`
+	// Attempt is the attempt's number, from 1, and Group and Member where
+	// it was placed: the job context's.
+	Attempt int    `yaml:"attempt,omitempty"`
+	Group   string `yaml:"group,omitempty"`
+	Member  string `yaml:"member,omitempty"`
+	// Steps are how its steps ended, in order: those before a step, as it
+	// is about to run, and all of them, for its outputs.
+	Steps []StepResult `yaml:"steps,omitempty"`
+}
+
+// NeedResult is how a job that another needs ended.
+type NeedResult struct {
+	// Result is its outcome: success, failure, cancelled or skipped.
+	Result string `yaml:"result"`
+	// NeedsFailed says it was skipped because a job it needs failed, was
+	// cancelled or was skipped so in turn, rather than by its own if:.
+	NeedsFailed bool              `yaml:"needs-failed,omitempty"`
+	Outputs     map[string]string `yaml:"outputs,omitempty"`
+	// Steps are the outputs of its steps that have ids, by id.
+	Steps map[string]map[string]string `yaml:"steps,omitempty"`
+}
+
+// StepResult is how a step ended: its outcome, as its job counts it, and
+// what it wrote to its outputs.
+type StepResult struct {
+	Outcome string            `yaml:"outcome"`
+	Outputs map[string]string `yaml:"outputs,omitempty"`
 }
 
 // A Diagnostic is an error or warning a case expects. Line and Column are
@@ -193,6 +241,92 @@ type ExpressionCase struct {
 	// Warnings, if set, are the byte offsets in the expression of each
 	// probable mistake it has. A case without it doesn't check them.
 	Warnings []int `yaml:"warnings,omitempty"`
+}
+
+// A MatrixFile is a file of matrix cases.
+type MatrixFile struct {
+	// Name is the file's path, such as matrices/include.yaml.
+	Name string
+	// Description says what the file's cases pin.
+	Description string `yaml:"description"`
+	// Source is where the cases come from.
+	Source string `yaml:"source"`
+	// Contexts are what the cases' strategies read, unless a case says
+	// otherwise, as an expression case's scope's are.
+	Contexts map[string]any `yaml:"contexts,omitempty"`
+	Cases    []MatrixCase   `yaml:"cases"`
+}
+
+// A MatrixCase is a job's strategy: and what it expands to: exactly one of
+// its instances and an error.
+type MatrixCase struct {
+	// Description says what the case pins.
+	Description string `yaml:"description,omitempty"`
+	// Strategy is the job's strategy:, whose strings can hold expressions.
+	Strategy map[string]any `yaml:"strategy"`
+	// Contexts replace each of the file's contexts they name.
+	Contexts map[string]any `yaml:"contexts,omitempty"`
+	// Limit is how many instances a matrix may have, which isn't part of
+	// the format: whoever runs a workflow sets it. 0 is Meridian's default,
+	// 256.
+	Limit int `yaml:"limit,omitempty"`
+	// Instances are the matrix values of each instance, in the order of
+	// their indexes.
+	Instances []map[string]any `yaml:"instances,omitempty"`
+	// FailFast and MaxParallel are what the strategy's fail-fast: and
+	// max-parallel: are, checked when they are set: whether the remaining
+	// instances are cancelled when one fails, and how many run at a time,
+	// 0 for no limit.
+	FailFast    *bool `yaml:"fail-fast,omitempty"`
+	MaxParallel *int  `yaml:"max-parallel,omitempty"`
+	// Error is the code of the problem the matrix has, and Path the JSON
+	// Pointer, from the job, of where it is.
+	Error string `yaml:"error,omitempty"`
+	Path  string `yaml:"path,omitempty"`
+}
+
+// ContextsFor returns the contexts of a case in f: f's, with those the case
+// replaces.
+func (f *MatrixFile) ContextsFor(c *MatrixCase) map[string]any {
+	out := maps.Clone(f.Contexts)
+	if out == nil {
+		out = map[string]any{}
+	}
+	maps.Copy(out, c.Contexts)
+	return out
+}
+
+// MatrixFiles returns the files of matrix cases, in name order.
+func MatrixFiles() ([]MatrixFile, error) {
+	entries, err := fs.ReadDir(FS, "matrices")
+	if err != nil {
+		return nil, err
+	}
+	var files []MatrixFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		name := path.Join("matrices", e.Name())
+		data, err := fs.ReadFile(FS, name)
+		if err != nil {
+			return nil, err
+		}
+		f := MatrixFile{Name: name}
+		if err := decode(data, &f); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		for i, c := range f.Cases {
+			if (c.Error == "") == (c.Instances == nil) {
+				return nil, fmt.Errorf("%s: case %d has %d of instances and error, not 1", name, i+1, count(c.Error != "", c.Instances != nil))
+			}
+			if (c.Error == "") != (c.Path == "") {
+				return nil, fmt.Errorf("%s: case %d has an error without a path, or a path without an error", name, i+1)
+			}
+		}
+		files = append(files, f)
+	}
+	return files, nil
 }
 
 // ScopeFor returns the scope of a case in f: f's scope, with the parts the

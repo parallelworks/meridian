@@ -1,0 +1,58 @@
+description: >-
+  A job's if: is decided by how the jobs it needs ended, and a step's by how
+  the steps before it did. A job fails, for failure(), when one it needs
+  failed, or was skipped because one it needs had, and succeeds, for
+  success(), otherwise: one its own if: skipped counts as a success. An if:
+  that doesn't call a status function is true only if success() is, and
+  the word always means always(). Here a failed, so b is skipped, and so is
+  c, which needs b, while a job that runs on failure() after b runs.
+source: ACTIVATE's executor, and Meridian
+jobs:
+  b:
+    needs:
+      a: {result: failure}
+  c:
+    needs:
+      b: {result: skipped, needs-failed: true}
+  on-failure:
+    needs:
+      b: {result: skipped, needs-failed: true}
+    steps:
+      - {outcome: success}
+  anyway:
+    needs:
+      b: {result: skipped, needs-failed: true}
+    steps:
+      - {outcome: success}
+  after-optional:
+    needs:
+      optional: {result: skipped}
+    steps:
+      - {outcome: success}
+      - {outcome: skipped}
+      - {outcome: success}
+      - {outcome: success}
+  plain-false:
+    needs:
+      a: {result: failure}
+  cancelled:
+    needs:
+      a: {result: failure}
+expect:
+  diagnostics:
+    - severity: warning
+      code: older_always
+      path: /jobs/anyway/if
+  skipped:
+    - /jobs/b
+    - /jobs/c
+    - /jobs/optional
+    - /jobs/plain-false
+    - /jobs/cancelled
+    - /jobs/after-optional/steps/1
+  values:
+    /jobs/on-failure/steps/0/run: echo on-failure
+    /jobs/anyway/steps/0/run: echo anyway
+    /jobs/after-optional/steps/0/run: echo after-optional
+    /jobs/after-optional/steps/2/run: echo always
+    /jobs/after-optional/steps/3/run: echo after-failure

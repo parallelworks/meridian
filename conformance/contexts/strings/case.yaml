@@ -1,0 +1,23 @@
+description: >-
+  A name that org, vars, remote, sessions, env, needs or steps doesn't have
+  reads as "", as their values are strings, and one that inputs, matrix or
+  job doesn't have as null.
+source: Meridian
+contexts:
+  org: {SITE: east}
+  vars: {REGION: eu}
+jobs:
+  main:
+    steps:
+      - {outcome: success}
+expect:
+  diagnostics:
+    - severity: warning
+      code: undefined_input
+      path: /jobs/main/steps/1/run
+    - severity: warning
+      code: undefined_session
+      path: /jobs/main/steps/0/run
+  values:
+    /jobs/main/steps/0/run: "[] [] [] [] []"
+    /jobs/main/steps/1/run: true true eu east

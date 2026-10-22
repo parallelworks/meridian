@@ -8,6 +8,8 @@ These cases pin what workflows mean, in areas:
 | `expressions` | What `${{ }}` expressions evaluate to |
 | `inputs` | A run's input values: defaults, conditions, types and what's required |
 | `compile` | The plan a workflow compiles to, and the problems with its jobs and expressions |
+| `matrices` | How a job's `strategy:` expands into its instances |
+| `contexts` | What each context holds in each phase after the run starts, and what a job's and a step's values evaluate to |
 
 ## Format
 
@@ -114,6 +116,94 @@ expect:
 
 Diagnostics list every error and warning the workflow compiles with, its
 loading's included. A case with errors has no plan.
+
+## Matrices
+
+Each file holds cases of a job's `strategy:` and what it expands to: the
+matrix values of each of its instances, in order, or the problem it has.
+
+```yaml
+description: >-
+  Each exclude entry removes the combinations that have all of its values.
+source: ACTIVATE's matrix expansion
+contexts:
+  inputs: {skip: windows}
+cases:
+  - strategy:
+      matrix:
+        os: [linux, windows]
+        exclude:
+          - {os: "${{ inputs.skip }}"}
+    instances:
+      - {os: linux}
+  - strategy:
+      matrix:
+        os: []
+    error: matrix_empty
+    path: /strategy/matrix
+```
+
+- `strategy` is the job's `strategy:`, whose strings can hold expressions,
+  which read `contexts`: the file's, with those a case gives in place of
+  each it names. A strategy is evaluated where the job's dependencies have
+  finished, so it can read `needs`.
+- A case expects exactly one of `instances`, each instance's matrix values,
+  and `error`, the code of the problem the matrix has, with `path`, the JSON
+  Pointer of where it is from the job, such as `/strategy/matrix/exclude/0`.
+  `fail-fast` and `max-parallel` are checked when they are set.
+- `limit` is the most instances a matrix may have, which isn't part of the
+  format: whoever runs the workflow sets it. Without it, it is Meridian's
+  default, 256.
+
+## Contexts
+
+Each case is a directory like a compile case, whose `case.yaml` also says
+what is known of each job, by name, where the phases after the run starts
+evaluate it, and what the job's and its steps' values evaluate to there:
+
+```yaml
+description: >-
+  A step's env: reads the job's.
+source: Meridian
+jobs:
+  main:
+    needs:
+      build: {result: success, outputs: {group: gpus}}
+    steps:
+      - {outcome: success, outputs: {PORT: "8080"}}
+expect:
+  skipped: [/jobs/optional]
+  values:
+    /jobs/main/steps/1/run: echo 8080
+    /jobs/main/outputs/port: "8080"
+```
+
+- The run's values are the case's: its `inputs`, as they are submitted, its
+  `contexts`, the variables, `remote` and `sessions`, and the workflow's
+  `env:`, which holds no expressions, so that the case needs nothing the
+  run evaluates as it starts. A variable `secret-variables` names is a
+  secret.
+- A job's `needs` are the results of the jobs it needs: `result`, its
+  outcome; `outputs`; `steps`, its steps' outputs by id; and `needs-failed`,
+  set for a job skipped because one it needs failed, rather than by its own
+  `if:`. `cancelled` says the run is being cancelled. A matrix job's
+  `index` and `matrix` are those of the instance evaluated. `attempt`, from
+  1, `group` and `member` are the job context's. `steps` are how the job's
+  steps ended, in order, each with its `outcome` and the `outputs` it
+  wrote.
+- Each job is evaluated where its dependencies have finished, and each of
+  its steps as it is about to run, up to the one after the last that
+  `steps` gives, and its `outputs:` once `steps` gives every step.
+- `expect.skipped` lists the JSON Pointers of the jobs and steps whose
+  `if:` is false, and every other job and step evaluated runs.
+- `expect.values` are the values at JSON Pointers into the workflow, as
+  their phase gives them: a step's `run`, `name`, `cleanup`,
+  `working-directory` and `with`, and `env/<name>`, which is the
+  environment the step runs with, its own `env:` or not; a job's
+  `outputs/<name>`; and its `runs-on`, or `runs-on/execution-group`, which
+  is the execution group it names.
+- `expect.diagnostics` are those of compiling the workflow and of each
+  phase together.
 
 ## Expressions
 

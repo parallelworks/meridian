@@ -1,0 +1,17 @@
+description: >-
+  steps holds, for each step that has an id and has had its turn, the
+  outputs it wrote, as strings, which a name it didn't write reads as "". A
+  step reads those before it, and the job's outputs read them all.
+source: Meridian
+jobs:
+  main:
+    steps:
+      - {outcome: success, outputs: {A: "1"}}
+      - {outcome: success, outputs: {C: "3"}}
+      - {outcome: success, outputs: {D: "4"}}
+expect:
+  values:
+    /jobs/main/steps/2/run: 'echo {"outputs":{"A":"1"}} []'
+    /jobs/main/outputs/first: '{"outputs":{"A":"1"}}'
+    /jobs/main/outputs/third: '{"outputs":{"D":"4"}}'
+    /jobs/main/outputs/a: "1"

@@ -1,0 +1,33 @@
+description: >-
+  needs holds, for each job a job needs, its result, its outcome; its
+  outputs, as strings; and the outputs of its steps that have ids, by id.
+  Text made of one, as a run: of it alone is, is its JSON.
+  A name it doesn't have reads as "", as needs holds strings. It is known
+  where a job's dependencies have finished, as its runs-on: is evaluated,
+  and in its steps.
+source: Meridian
+jobs:
+  test:
+    needs:
+      build:
+        result: success
+        outputs: {group: gpus, binary: ./app}
+        steps:
+          compile: {binary: ./app}
+      probe:
+        result: skipped
+    steps:
+      - {outcome: success}
+      - {outcome: success}
+      - {outcome: success}
+      - {outcome: success}
+expect:
+  skipped:
+    - /jobs/probe
+  values:
+    /jobs/test/runs-on/execution-group: gpus
+    /jobs/test/steps/0/run: success skipped gpus
+    /jobs/test/steps/1/run: ./app
+    /jobs/test/steps/2/run: "[] []"
+    /jobs/test/steps/3/run: '{"outputs":{"binary":"./app","group":"gpus"},"result":"success","steps":{"compile":{"outputs":{"binary":"./app"}}}}'
+    /jobs/test/steps/4/run: '{"outputs":{},"result":"skipped","steps":{}}'

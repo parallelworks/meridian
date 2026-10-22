@@ -1,0 +1,12 @@
+jobs:
+  main:
+    steps:
+      - id: first
+        run: echo A=1 >> $OUTPUTS
+      - run: echo unnamed
+      - id: third
+        run: echo ${{ steps.first }} [${{ steps.first.outputs.B }}]
+    outputs:
+      first: ${{ steps.first }}
+      third: ${{ steps.third }}
+      a: ${{ steps.first.outputs.A }}

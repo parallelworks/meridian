@@ -1,0 +1,16 @@
+env:
+  WHERE: workflow
+  A: from-workflow
+jobs:
+  main:
+    env:
+      WHERE: job
+      B: ${{ env.A }}-and-job
+    steps:
+      - run: echo ${{ env.WHERE }} ${{ env.B }}
+        env:
+          WHERE: step
+          C: ${{ env.WHERE }}
+      - run: echo ${{ env.WHERE }} [${{ env.C }}] [${{ env.MISSING }}]
+    outputs:
+      where: ${{ env.WHERE }}

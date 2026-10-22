@@ -1,0 +1,10 @@
+jobs:
+  setup:
+    steps:
+      - id: ports
+        run: echo PORT=8080 >> $OUTPUTS
+      - run: echo PORT=9090 HOST=h >> $OUTPUTS
+      - run: echo ${{ needs.setup.outputs.PORT }} ${{ needs.setup.outputs.HOST }} ${{ needs.setup.steps.ports.outputs.PORT }}
+    outputs:
+      port: ${{ needs.setup.steps.ports.outputs.PORT }}
+      latest: ${{ needs.setup.outputs.PORT }}
