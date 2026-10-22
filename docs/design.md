@@ -377,12 +377,17 @@ its resolvers into a plan, in order:
    - In format 1, reading an input, matrix key or session that doesn't
      exist is a warning: ACTIVATE reads it as null or `""` and runs, and a
      workflow a step calls can read inputs its caller passes without
-     defining them. A step reading a step that doesn't exist or doesn't run
-     before it is an error, since ACTIVATE fails the step; in a job's
-     outputs and a step's `cleanup:`, which read it as `""`, it is a
-     warning. A step's key other than `outputs`, such as
-     `steps.build.result`, is a warning, and reads as its own text, as
-     format 1 reads a word it doesn't know.
+     defining them. Format 1 reads `steps` only as
+     `steps.<id>.outputs.<name>`. A step reading one of a step that doesn't
+     exist or doesn't run before it is an error, since ACTIVATE fails the
+     step; in a job's outputs and a step's `cleanup:`, which read it as
+     `""`, it is a warning. Any other reference to `steps`, such as
+     `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
+     step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
+     and reads as its own text, as format 1 reads a word it doesn't know.
+     No known workflow has one: none of the 220 that
+     [Bug fixes to format 1](#bug-fixes-to-format-1) counts reads `steps`
+     but through `needs.<job>.steps`.
    - Reading a variable that isn't a secret, or defining an input that takes
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is

@@ -530,7 +530,7 @@
   },
   "output_steps_unknown_key": {
     "title": "La salida lee una clave desconocida de un paso",
-    "why": "Cada paso de steps tiene outputs, y nada más, así que esta salida del trabajo está vacía.",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que esta salida del trabajo lee otra clave como el propio texto de la referencia, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee steps.<id>.outputs."
     ]
@@ -544,9 +544,16 @@
   },
   "cleanup_steps_unknown_key": {
     "title": "Un cleanup: lee una clave desconocida de un paso",
-    "why": "Cada paso de steps tiene outputs, y nada más, así que lo que lee este cleanup: está vacío.",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que este cleanup: lee otra clave como el propio texto de la referencia, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee steps.<id>.outputs."
+    ]
+  },
+  "steps_read_whole": {
+    "title": "Paso leído entero",
+    "why": "El formato 1 lee las salidas de un paso de steps una a una, por nombre, y cualquier otra referencia a steps, como steps.build o steps.build.outputs, como una palabra que no conoce: como su propio texto.",
+    "fix": [
+      "Lee cada salida por su nombre: steps.<id>.outputs.<name>."
     ]
   },
   "no_matrix": {

@@ -530,7 +530,7 @@
   },
   "output_steps_unknown_key": {
     "title": "出力がステップの不明なキーを参照",
-    "why": "steps の各ステップにあるのは outputs だけなので、このジョブの出力は空になります。",
+    "why": "steps の各ステップにあるのは outputs だけなので、このジョブの出力はほかのキーを参照自体のテキストとして読み取ります。形式 1 が知らない語を読み取るのと同じです。",
     "fix": [
       "steps.<id>.outputs を読み取ってください。"
     ]
@@ -544,9 +544,16 @@
   },
   "cleanup_steps_unknown_key": {
     "title": "cleanup: がステップの不明なキーを参照",
-    "why": "steps の各ステップにあるのは outputs だけなので、この cleanup: が読み取る値は空になります。",
+    "why": "steps の各ステップにあるのは outputs だけなので、この cleanup: はほかのキーを参照自体のテキストとして読み取ります。形式 1 が知らない語を読み取るのと同じです。",
     "fix": [
       "steps.<id>.outputs を読み取ってください。"
+    ]
+  },
+  "steps_read_whole": {
+    "title": "ステップ全体の読み取り",
+    "why": "形式 1 は steps からステップの出力を名前で 1 つずつ読み取り、steps.build や steps.build.outputs のような steps へのその他の参照は、知らない語として、それ自体のテキストとして読み取ります。",
+    "fix": [
+      "各出力を名前で読み取ってください: steps.<id>.outputs.<name>。"
     ]
   },
   "no_matrix": {

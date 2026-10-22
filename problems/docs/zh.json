@@ -530,7 +530,7 @@
   },
   "output_steps_unknown_key": {
     "title": "输出读取了步骤的未知键",
-    "why": "steps 中的每个步骤只有 outputs，因此此作业输出为空。",
+    "why": "steps 中的每个步骤只有 outputs，因此此作业输出将其他键读作引用本身的文本，与格式 1 读取它不认识的单词的方式相同。",
     "fix": [
       "读取 steps.<id>.outputs。"
     ]
@@ -544,9 +544,16 @@
   },
   "cleanup_steps_unknown_key": {
     "title": "cleanup: 读取了步骤的未知键",
-    "why": "steps 中的每个步骤只有 outputs，因此此 cleanup: 读取的值为空。",
+    "why": "steps 中的每个步骤只有 outputs，因此此 cleanup: 将其他键读作引用本身的文本，与格式 1 读取它不认识的单词的方式相同。",
     "fix": [
       "读取 steps.<id>.outputs。"
+    ]
+  },
+  "steps_read_whole": {
+    "title": "整体读取步骤",
+    "why": "格式 1 按名称逐个从 steps 读取步骤的输出，并将对 steps 的其他引用（例如 steps.build 或 steps.build.outputs）当作它不认识的单词，读作其本身的文本。",
+    "fix": [
+      "按名称读取每个输出：steps.<id>.outputs.<name>。"
     ]
   },
   "no_matrix": {

@@ -244,17 +244,20 @@ func TestEvalPartsRandom(t *testing.T) {
 	}
 }
 
-// A scope's Text hook makes a reference to a path its context doesn't
-// have read as its own text, as format 1 reads a word it doesn't know.
+// A scope's Text hook makes a reference read as its own text, as format 1
+// reads a word it doesn't know, whether its context has the path or not.
 func TestScopeText(t *testing.T) {
 	contexts := map[string]any{"steps": map[string]any{"a": map[string]any{"outputs": map[string]any{"x": "1"}}}}
 	text := func(context string, path []string) bool {
-		return context == "steps" && len(path) >= 2 && path[1] != "outputs"
+		return context == "steps" && (len(path) < 3 || path[1] != "outputs")
 	}
 	for src, want := range map[string]any{
 		"steps.a.result":          "steps.a.result",
 		"steps['a'].result":       "steps['a'].result",
 		"steps.b.conclusion.more": "steps.b.conclusion.more",
+		"steps.a":                 "steps.a",
+		"steps.a.outputs":         "steps.a.outputs",
+		"steps.*":                 "steps.*",
 		"steps.a.outputs.x":       "1",
 		"steps.a.outputs.y":       "",
 	} {

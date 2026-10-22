@@ -1,9 +1,11 @@
 description: >-
-  steps.<id> has an earlier step's outputs, and nothing else. A step that
-  reads a step the job doesn't have is an error, as ACTIVATE fails the
-  step. Another key of one reads as its own text, as format 1 reads a word
-  it doesn't know, and is a warning.
-source: Meridian
+  steps.<id> has an earlier step's outputs, and nothing else, which format 1
+  reads by name, as steps.<id>.outputs.<name>. A step that reads one of a
+  step the job doesn't have is an error, as ACTIVATE fails the step. Any
+  other reference to steps, such as another key of a step, steps.<id> or
+  steps.<id>.outputs, whatever step it names, reads as its own text, as
+  format 1 reads a word it doesn't know, and is a warning.
+source: Meridian, and ACTIVATE's parser
 expect:
   diagnostics:
     - severity: warning
@@ -18,3 +20,21 @@ expect:
       line: 7
       column: 23
       params: {job: build, id: compil, suggested: "true", suggestion: compile}
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/build/steps/3/run
+      line: 8
+      column: 23
+      params: {id: compile, text: steps.compile}
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/build/steps/3/run
+      line: 8
+      column: 44
+      params: {id: compile, text: steps.compile.outputs}
+    - severity: warning
+      code: steps_unknown_key
+      path: /jobs/build/steps/3/run
+      line: 8
+      column: 73
+      params: {id: nope, key: result}

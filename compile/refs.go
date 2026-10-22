@@ -363,11 +363,13 @@ func (c *compiler) checkEnvRef(name string, ph phase, job *jobInfo, in *spot) fi
 	return suggesting(problems.UndefinedEnv, problems.Params{"name": name}, name, newNameList(slices.Compact(names)))
 }
 
-// checkStepRef checks that steps.<path> names an earlier step of the job.
-// In one of the job's outputs, which are read once its steps have run, a
-// step that isn't there is a warning, as the output is empty, and so it is
-// in a step's cleanup:, which runs once every step has, its own and later
-// ones among them.
+// checkStepRef checks that steps.<path> names an output of an earlier step
+// of the job, as steps.<id>.outputs.<name>. Any other reference to steps,
+// such as steps.<id> or steps.<id>.result, is a warning, as format 1 reads
+// it as its own text. In one of the job's outputs, which are read once its
+// steps have run, a step that isn't there is a warning, as the output is
+// empty, and so it is in a step's cleanup:, which runs once every step
+// has, its own and later ones among them.
 func (c *compiler) checkStepRef(path []string, job *jobInfo, output bool) finding {
 	id := path[0]
 	reach := job.step
@@ -380,6 +382,14 @@ func (c *compiler) checkStepRef(path []string, job *jobInfo, output bool) findin
 		undefined, unknownKey = problems.OutputUndefinedStep, problems.OutputStepsUnknownKey
 	case job.cleanup:
 		undefined, unknownKey = problems.CleanupUndefinedStep, problems.CleanupStepsUnknownKey
+	}
+	// Format 1 reads steps only as steps.<id>.outputs.<name>, and any other
+	// reference to it as its own text, whatever step it names.
+	switch {
+	case len(path) >= 2 && path[1] != "outputs":
+		return finding{unknownKey, problems.Params{"id": id, "key": path[1]}}
+	case len(path) < 3:
+		return finding{problems.StepsReadWhole, problems.Params{"id": id, "text": "steps." + strings.Join(path, ".")}}
 	}
 	i, ok := job.stepIDs[id]
 	if !ok || i >= reach {
@@ -397,9 +407,6 @@ func (c *compiler) checkStepRef(path []string, job *jobInfo, output bool) findin
 			job.earlier, job.earlierAt = newNameList(earlier), reach
 		}
 		return suggesting(undefined, problems.Params{"job": job.name, "id": id}, id, job.earlier)
-	}
-	if len(path) >= 2 && path[1] != "outputs" {
-		return finding{unknownKey, problems.Params{"id": id, "key": path[1]}}
 	}
 	return finding{}
 }

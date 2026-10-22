@@ -454,7 +454,7 @@
     ]
   },
   "output_steps_unknown_key": {
-    "why": "Each step in steps has outputs, and nothing else, so this job output is empty.",
+    "why": "Each step in steps has outputs, and nothing else, so this job output reads another key as the reference's own text, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read steps.<id>.outputs."
     ]
@@ -466,9 +466,15 @@
     ]
   },
   "cleanup_steps_unknown_key": {
-    "why": "Each step in steps has outputs, and nothing else, so what this cleanup: reads is empty.",
+    "why": "Each step in steps has outputs, and nothing else, so this cleanup: reads another key as the reference's own text, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read steps.<id>.outputs."
+    ]
+  },
+  "steps_read_whole": {
+    "why": "Format 1 reads a step's outputs from steps one by one, by name, and any other reference to steps, such as steps.build or steps.build.outputs, as a word it doesn't know: as its own text.",
+    "fix": [
+      "Read each output by its name: steps.<id>.outputs.<name>."
     ]
   },
   "no_matrix": {

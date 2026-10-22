@@ -1,10 +1,12 @@
 description: >-
   steps holds, for each step that has an id and has had its turn, the
-  outputs it wrote, as strings. A step reads those before it, and the job's
+  outputs it wrote, as strings, which format 1 reads by name, as
+  steps.<id>.outputs.<name>. A step reads those before it, and the job's
   outputs read them all. A name it didn't write reads as "" in a step whose
-  if: is the word always, and fails anywhere else (output_not_written). A
-  key of a step other than outputs reads as its own text, as format 1 reads
-  a word it doesn't know, with a warning.
+  if: is the word always, and fails anywhere else (output_not_written). Any
+  other reference to steps, such as steps.<id>, steps.<id>.outputs or a
+  step's key other than outputs, reads as its own text, as format 1 reads a
+  word it doesn't know, with a warning.
 source: Meridian, and ACTIVATE's parser
 jobs:
   main:
@@ -20,12 +22,28 @@ expect:
       path: /jobs/main/steps/1/run
       params: {id: first, key: result}
     - severity: warning
+      code: steps_read_whole
+      path: /jobs/main/steps/2/run
+      params: {id: first, text: steps.first}
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/main/steps/2/run
+      params: {id: first, text: steps.first.outputs}
+    - severity: warning
       code: older_always
       path: /jobs/main/steps/3/if
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/main/outputs/first
+      params: {id: first, text: steps.first}
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/main/outputs/third
+      params: {id: third, text: steps.third.outputs}
   values:
     /jobs/main/steps/1/run: echo steps.first.result
-    /jobs/main/steps/2/run: 'echo {"outputs":{"A":"1"}}'
+    /jobs/main/steps/2/run: echo steps.first steps.first.outputs 1
     /jobs/main/steps/3/run: echo []
-    /jobs/main/outputs/first: '{"outputs":{"A":"1"}}'
-    /jobs/main/outputs/third: '{"outputs":{"D":"4"}}'
+    /jobs/main/outputs/first: steps.first
+    /jobs/main/outputs/third: steps.third.outputs
     /jobs/main/outputs/a: "1"

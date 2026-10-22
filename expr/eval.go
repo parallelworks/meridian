@@ -107,13 +107,13 @@ type Scope struct {
 	// the context. A runner reads some names strictly with it, as format 1
 	// reads an output that no step wrote.
 	Missing func(context string, path []string) (*problems.Kind, problems.Params)
-	// Text, if it isn't nil, is asked about each reference to a path that
-	// its context doesn't have: when it reports true, the reference reads
-	// as its own text, as format 1 reads a word it doesn't know, with its
-	// names joined by dots, as steps.build.result. path is the
-	// reference's, in the context. A runner gives it for a path that
-	// format 1 doesn't read from its context, such as a step's key other
-	// than outputs.
+	// Text, if it isn't nil, is asked about each reference before it is
+	// read: when it reports true, the reference reads as its own text, as
+	// format 1 reads a word it doesn't know, with its names joined by dots,
+	// as steps.build.result, and reads nothing of the context. path is the
+	// reference's, in the context. A runner gives it for a reference that
+	// format 1 doesn't read from its context, such as steps.build or a
+	// step's key other than outputs.
 	Text func(context string, path []string) bool
 
 	// budget counts what the templates that share it have done together,
@@ -893,6 +893,9 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
+	if e.scope.Text != nil && e.scope.Text(r.context, path) {
+		return r.text(), nil
+	}
 	if e.scope.Marked.n > 0 || e.scope.Private.n > 0 {
 		e.reads(r.context, path)
 	}
@@ -905,9 +908,6 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	} else {
 		if v, ok, err = f.walk(root, path); err != nil {
 			return nil, err
-		}
-		if !ok && e.scope.Text != nil && e.scope.Text(r.context, path) {
-			return r.text(), nil
 		}
 		if !ok && contexts[r.context].strings {
 			if e.scope.Missing != nil {

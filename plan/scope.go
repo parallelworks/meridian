@@ -265,8 +265,9 @@ type Contexts struct {
 //   - matrix (Ready): Matrix, a mapping, empty for a job without a matrix.
 //   - job (JobEnv): name, key, attempt, a number, group and member.
 //   - steps (Step): for each step of Steps, by its id, its outputs. A
-//     step's key other than outputs reads as its own text, as
-//     steps.build.result, as format 1 reads it (expr.Scope.Text).
+//     reference that doesn't go on to an output by name, such as
+//     steps.build, steps.build.outputs or steps.build.result, reads as its
+//     own text, as format 1 reads it (expr.Scope.Text).
 //
 // The status functions are known from Strategy on, as Status says.
 //
@@ -356,7 +357,7 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
 		}
 		contexts["steps"] = steps
-		scope.Text = otherStepKey
+		scope.Text = stepText
 	}
 	for _, name := range c.Unknown {
 		path := splitPath(name)
@@ -391,10 +392,12 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	return scope
 }
 
-// otherStepKey reports whether path, in context, is a step's key other than
-// outputs, as steps.build.result, which format 1 reads as its own text.
-func otherStepKey(context string, path []string) bool {
-	return context == "steps" && len(path) >= 2 && path[1] != "outputs"
+// stepText reports whether path, in context, is a reference to steps that
+// doesn't go on to an output by name, as steps.build, steps.build.outputs
+// and steps.build.result don't, which format 1 reads as its own text: it
+// reads steps only as steps.<id>.outputs.<name>.
+func stepText(context string, path []string) bool {
+	return context == "steps" && (len(path) < 3 || path[1] != "outputs")
 }
 
 // mapping returns d, the mapping that is context's value, or an empty one
