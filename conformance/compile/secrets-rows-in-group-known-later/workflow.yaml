@@ -1,0 +1,23 @@
+on:
+  execute:
+    inputs:
+      sites:
+        type: list
+        template:
+          name:
+            type: string
+          access:
+            type: group
+            items:
+              keys:
+                type: list
+                template:
+                  key:
+                    type: password
+        default:
+          - name: main
+            access: ${{ fromJSON(vars.ACCESS) }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

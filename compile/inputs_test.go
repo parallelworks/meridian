@@ -410,6 +410,24 @@ func TestDefaultsShareABudget(t *testing.T) {
 	}
 }
 
+// A submitted value is compared with what its default gives only if the
+// default can read a variable or a password, so nine values submitted for
+// defaults that would each build 8 MiB, and read neither, don't evaluate
+// them.
+func TestSubmittedDefaultsReadNothingMarked(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("on:\n  execute:\n    inputs:\n      half:\n        type: string\n")
+	submitted := map[string]any{"half": strings.Repeat("x", 4<<20)}
+	for i := range 9 {
+		fmt.Fprintf(&b, "      d%d:\n        type: string\n        default: ${{ inputs.half + inputs.half }}\n", i)
+		submitted[fmt.Sprintf("d%d", i)] = "given"
+	}
+	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
+	if _, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{}); len(diags) != 0 {
+		t.Errorf("nine submitted values: %v, want none", diags)
+	}
+}
+
 // The group of all the inputs' defaults does at most 256 MiB of work,
 // though each default can do 32 MiB: eight can, and nine can't.
 func TestDefaultsShareAWorkBudget(t *testing.T) {

@@ -36,6 +36,8 @@ var scaledWorkloads = []scaled{
 	{name: "a multi-dropdown's options and its submitted items", n: 250, workload: multiDropdown},
 	{name: "references to inputs that aren't there, near those that are", n: 300, workload: nearMissReferences},
 	{name: "a value nested deep in a matrix", n: 500, workload: deepValue, stageOnly: true},
+	{name: "a form's values for rows whose defaults read their passwords", n: 1000, workload: formRows, timed: true},
+	{name: "defaults that read rows of a list held for the run's start", n: 300, workload: heldRowReads, timed: true},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
@@ -205,6 +207,26 @@ func nearMissReferences(n int) ([]byte, map[string]any) {
 		fmt.Fprintf(&run, "${{inputs.ni%04d}}${{inputs.in%04dx}}", i, i)
 	}
 	return withInputs(lines, "jobs:\n  main:\n    steps:\n      - run: "+run.String()+"\n"), nil
+}
+
+// formRows is n rows a form submits for a list whose template's field has
+// a default that reads the row's password, each with what the default
+// gives, which the compiler compares with it.
+func formRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"creds: {type: list, template: {pass: {type: password}, hint: {type: string, default: '${{ inputs.creds.[index].pass }}'}}}",
+	}, ""), map[string]any{"creds": rows(n, func() map[string]any { return map[string]any{"pass": "s", "hint": "s"} })}
+}
+
+// heldRowReads is a list of n rows held for the run's start, as a field of
+// its rows reads env, which the compiler doesn't have, and n
+// inputs whose defaults each read another row of it.
+func heldRowReads(n int) ([]byte, map[string]any) {
+	lines := []string{"rows: {type: list, template: {t: {type: string, default: '${{ env.HOME }}'}, x: {type: string, default: b}}}"}
+	for i := range n {
+		lines = append(lines, fmt.Sprintf("i%d: {default: '${{ inputs.rows[%d].x }}'}", i, i))
+	}
+	return withInputs(lines, ""), map[string]any{"rows": rows(n, emptyRow)}
 }
 
 // deepValue is a matrix whose include holds a mapping nested n deep.

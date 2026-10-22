@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -136,6 +138,22 @@ func TestDiagnosticsHideVariables(t *testing.T) {
 	}
 }
 
+// Two inputs can have the same path, as an input and a wizard step's input
+// beside it do. A problem with the value there doesn't show it when a
+// variable gave it, whichever input's problem it is.
+func TestDiagnosticsHideVariablesAtSharedPaths(t *testing.T) {
+	src := inputs(
+		"n: {type: number, optional: true}",
+		"s: {type: step, title: Step, options: {n: {type: string, default: '${{ vars.X }}'}}}",
+	)
+	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"X": "s3cr3t"}}}
+	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, opts)
+	i := slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputNotNumber.Code() })
+	if i < 0 || diags[i].Params["value"] != problems.Masked || strings.Contains(fmt.Sprint(diags), "s3cr3t") {
+		t.Errorf("diagnostics %v, want %s with the value masked", diags, problems.InputNotNumber.Code())
+	}
+}
+
 // inputs returns a workflow with the input definitions defs, each a line of
 // YAML, and a job.
 func inputs(defs ...string) string {
@@ -235,6 +253,78 @@ func TestPlanHoldsNoVariableFromRows(t *testing.T) {
 		if _, ok := p.Run.DeferredInputs["summary"]; !ok {
 			t.Errorf("%s: summary isn't evaluated as the run starts", read)
 		}
+	}
+}
+
+// variableSentinel starts each value of a variable that no plan or
+// diagnostic may hold.
+const variableSentinel = "VARIABLE-SENTINEL-"
+
+// No plan, and no diagnostic, holds an organization or user variable's
+// value, nor what a launch form made from one. Each inputs and compile
+// conformance workflow whose case gives variables is compiled with each
+// one's value its own text, unless it is a secret: with the case's inputs,
+// and with what a form submits for them, which evaluates each default it
+// can, those that read a variable too, and sends what it gives.
+func TestVariablesNeverInPlans(t *testing.T) {
+	given, forms := 0, 0
+	for _, area := range []string{"inputs", "compile"} {
+		cases, err := conformance.Cases(area)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cases {
+			opts := compile.Options{Contexts: contexts(c)}
+			if !c.NoPlatform {
+				opts.Inputs = passThrough{}
+			}
+			changed := false
+			for _, name := range []string{"org", "vars"} {
+				vars, _ := opts.Contexts[name].(map[string]any)
+				vars = maps.Clone(vars)
+				for k, v := range vars {
+					if _, ok := v.(string); ok {
+						vars[k], changed = variableSentinel+k, true
+					}
+				}
+				if vars != nil {
+					opts.Contexts[name] = vars
+				}
+			}
+			data, err := c.Workflow()
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, diags := format.Load("workflow.yaml", data)
+			if !changed || diags.HasErrors() {
+				continue
+			}
+			form := compile.FormValues(doc, c.Inputs, opts)
+			if strings.Contains(fmt.Sprint(form), variableSentinel) {
+				forms++
+			}
+			for _, submitted := range []map[string]any{c.Inputs, form} {
+				given++
+				p, diags := compile.Compile("workflow.yaml", data, submitted, opts)
+				for _, d := range diags {
+					if strings.Contains(fmt.Sprint(d.Params), variableSentinel) || strings.Contains(d.Message(), variableSentinel) {
+						t.Errorf("%s: %s shows a variable's value", c.Name, d)
+					}
+				}
+				if p != nil {
+					encoded, err := plan.Encode(p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if bytes.Contains(encoded, []byte(variableSentinel)) {
+						t.Errorf("%s: the plan holds a variable's value: %s", c.Name, encoded)
+					}
+				}
+			}
+		}
+	}
+	if given == 0 || forms == 0 {
+		t.Fatalf("compiled %d times, %d of them with a form that read a variable", given, forms)
 	}
 }
 

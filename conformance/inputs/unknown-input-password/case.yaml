@@ -1,0 +1,30 @@
+description: >-
+  A value for an input the workflow doesn't define is a warning, and is
+  kept. One whose name is a password field's, as a repeated step's password
+  sent beside the step rather than in its rows is, or is close to the name
+  of a password input, as a misspelling is, is taken for a password: it is
+  kept among the run's secrets, and not with its values.
+source: Meridian
+inputs:
+  host: a
+  key: HUNTER2SECRET
+  pasword: HUNTER2SECRET
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: host}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: key}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: pasword, suggested: "true", suggestion: password}
+  inputs:
+    host: a
+  secrets:
+    key: HUNTER2SECRET
+    pasword: HUNTER2SECRET

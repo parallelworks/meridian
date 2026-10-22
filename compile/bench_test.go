@@ -163,3 +163,11 @@ func BenchmarkNearMissReferences(b *testing.B) { benchmarkWorkload(b, nearMissRe
 
 // A matrix whose include holds a mapping nested deep.
 func BenchmarkDeepValue(b *testing.B) { benchmarkWorkload(b, deepValue, 9999) }
+
+// The rows a form submits for a list whose template's field has a default
+// that reads the row's password, each with what the default gives.
+func BenchmarkFormRows(b *testing.B) { benchmarkWorkload(b, formRows, 2000) }
+
+// Inputs whose defaults each read a row of a list held for the run's
+// start.
+func BenchmarkHeldRowReads(b *testing.B) { benchmarkWorkload(b, heldRowReads, 1000) }

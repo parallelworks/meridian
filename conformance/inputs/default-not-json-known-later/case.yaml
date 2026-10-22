@@ -1,0 +1,37 @@
+description: >-
+  An input whose value stays an expression until the run is underway,
+  because a part of it reads a secret, holds the rest of its value as the
+  compiler has it, so that part must be JSON too: a default in its rows, or
+  a form's text it evaluated, that gives NaN or an infinity is an error at
+  the innermost field that holds it, as it is for an input the compiler
+  knows.
+source: Meridian
+contexts:
+  vars:
+    TOKEN: unused
+secret-variables: [TOKEN]
+inputs:
+  racks:
+    - disks:
+        - {}
+  modes: ["${{ vars.TOKEN }}", "${{ 1/0 }}"]
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/hosts/template/weight
+      line: 10
+      column: 11
+      params: {input: hosts.0.weight, what: number, value: NaN}
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/racks/template/disks/template/size
+      line: 24
+      column: 15
+      params: {input: racks.0.disks.0.size, what: number, value: "-Inf"}
+    - severity: error
+      code: input_not_json
+      path: /on/execute/inputs/modes
+      line: 27
+      column: 7
+      params: {input: modes, what: number, value: +Inf}

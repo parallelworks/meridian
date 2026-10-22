@@ -1,0 +1,32 @@
+description: >-
+  A launch form evaluates a default that reads an organization or user
+  variable, and sends what it gives. A submitted value that is what the
+  default gives means the default, as its text does, so the plan holds the
+  expression, not the variable's value: a number given as the text it
+  gives, or as a number, is it too, and so is what a default gives that
+  reads the variable through another input's default. The form evaluated a
+  default before its input had a value, so one that reads its own input
+  reads it without one. Any other value is data.
+source: Meridian
+contexts:
+  vars:
+    REGION: us-east
+    REPLICAS: "3"
+  org:
+    OWNER: research
+inputs:
+  region: us-east
+  zone: us-east-a
+  replicas: 3
+  owner: someone-else
+  mirror: us-east
+  label: us-east
+expect:
+  inputs:
+    owner: someone-else
+  deferred:
+    region: ${{ vars.REGION }}
+    zone: ${{ vars.REGION }}-a
+    replicas: ${{ vars.REPLICAS }}
+    mirror: ${{ ..region.default }}
+    label: ${{ vars.REGION }}${{ inputs.label ?? '' }}

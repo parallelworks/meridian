@@ -2,6 +2,7 @@ package compile_test
 
 import (
 	"encoding/json/v2"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -22,9 +23,11 @@ const sentinel = "HUNTER2-SENTINEL"
 // workflow is compiled with its case's inputs, and the password given for
 // each password input it has, and for each password field of a list's or a
 // repeated step's rows, in a row of its own if the case gives none: as
-// text, and as a list, which a password doesn't take.
+// text, and as a list, which a password doesn't take. Given as text, it is
+// compiled too with what a launch form submits, which evaluates each
+// default it can, those that read a password too, and sends what it gives.
 func TestPasswordsNeverInPlans(t *testing.T) {
-	given, kept := 0, 0
+	given, kept, forms := 0, 0, 0
 	for _, area := range []string{"format", "inputs", "compile"} {
 		cases, err := conformance.Cases(area)
 		if err != nil {
@@ -40,16 +43,29 @@ func TestPasswordsNeverInPlans(t *testing.T) {
 				continue
 			}
 			defs, _ := jsonptr.Lookup(doc.Value, []string{"on", "execute", "inputs"})
+			opts := compile.Options{Contexts: contexts(c)}
+			if !c.NoPlatform {
+				opts.Inputs = passThrough{}
+			}
+			var submissions []map[string]any
 			for _, password := range []any{sentinel, []any{sentinel}} {
 				submitted := jsonvalue.CloneMap(c.Inputs)
 				if !withPassword(defs, submitted, password) {
 					break
 				}
-				given++
-				opts := compile.Options{Contexts: contexts(c)}
-				if !c.NoPlatform {
-					opts.Inputs = passThrough{}
+				submissions = append(submissions, submitted)
+				if password == sentinel {
+					// forms counts those that send what a default made from
+					// the password, beside the password.
+					form := compile.FormValues(doc, submitted, opts)
+					if sentinels(t, form) > sentinels(t, submitted) {
+						forms++
+					}
+					submissions = append(submissions, form)
 				}
+			}
+			for _, submitted := range submissions {
+				given++
 				p, diags := compile.Compile("workflow.yaml", data, submitted, opts)
 				for _, d := range diags {
 					if holdsSentinel(t, d) {
@@ -77,8 +93,8 @@ func TestPasswordsNeverInPlans(t *testing.T) {
 			}
 		}
 	}
-	if given == 0 || kept == 0 {
-		t.Fatalf("given a password %d times, and %d kept among the secrets", given, kept)
+	if given == 0 || kept == 0 || forms == 0 {
+		t.Fatalf("given a password %d times, %d of them by a form that read it, and %d kept among the secrets", given, forms, kept)
 	}
 }
 
@@ -141,11 +157,96 @@ func withPassword(defs any, values map[string]any, password any) bool {
 // holdsSentinel reports whether v's JSON holds the sentinel.
 func holdsSentinel(t *testing.T, v any) bool {
 	t.Helper()
+	return sentinels(t, v) > 0
+}
+
+// sentinels counts the sentinels in v's JSON.
+func sentinels(t *testing.T, v any) int {
+	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.Contains(string(data), sentinel)
+	return strings.Count(string(data), sentinel)
+}
+
+// A value given for a list's or a repeated step's rows with a password
+// among their inputs, that isn't the shape the inputs say on the way to the
+// password, is an error that doesn't show it, and is dropped: neither the
+// plan nor the values hold it.
+func TestPasswordsInTheWrongShape(t *testing.T) {
+	nested := "creds: {type: list, template: {inner: {type: list, template: {pass: {type: password}}}}}"
+	for _, tc := range []struct {
+		name, def string
+		value     any
+		kind      *problems.Kind
+		path      string
+		input     string
+	}{
+		{
+			"a row that isn't a mapping", "creds: {type: list, template: {pass: {type: password}}}",
+			[]any{sentinel},
+			problems.InputGroupNotMapping, "/on/execute/inputs/creds/template", "creds.0",
+		},
+		{
+			"a repeated step's row that isn't a mapping", "creds: {type: step, title: Creds, multi: true, options: {pass: {type: password}}}",
+			[]any{sentinel},
+			problems.InputGroupNotMapping, "/on/execute/inputs/creds/options", "creds.0",
+		},
+		{
+			"a group in a row that isn't a mapping", "creds: {type: list, template: {g: {type: group, items: {pass: {type: password}}}}}",
+			[]any{map[string]any{"g": sentinel}},
+			problems.InputGroupNotMapping, "/on/execute/inputs/creds/template/g", "creds.0.g",
+		},
+		{
+			"a list in a row that isn't a list", nested,
+			[]any{map[string]any{"inner": sentinel}},
+			problems.InputNotList, "/on/execute/inputs/creds/template/inner", "creds.0.inner",
+		},
+		{
+			"a row of a list in a row that isn't a mapping", nested,
+			[]any{map[string]any{"inner": []any{sentinel}}},
+			problems.InputGroupNotMapping, "/on/execute/inputs/creds/template/inner/template", "creds.0.inner.0",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := inputs(tc.def)
+			submitted := map[string]any{"creds": tc.value}
+			p, diags := compile.Compile("workflow.yaml", []byte(src), submitted, compile.Options{})
+			if p != nil || len(diags) != 1 || diags[0].Code != tc.kind.Code() || diags[0].Path() != tc.path ||
+				diags[0].Params["input"] != tc.input || diags[0].Params["value"] != problems.Masked {
+				t.Fatalf("plan %v, diagnostics %v, want %s at %s for %s, masked", p != nil, diags, tc.kind.Code(), tc.path, tc.input)
+			}
+			inputs, _ := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+			if holdsSentinel(t, inputs.Values) || holdsSentinel(t, inputs.Deferred) || holdsSentinel(t, diags) {
+				t.Errorf("values %v, deferred %v or diagnostics hold the password", inputs.Values, inputs.Deferred)
+			}
+		})
+	}
+}
+
+// A form can't evaluate defaults that read each other, so values submitted
+// for them are compared with what their defaults give in no order: each is
+// data. One whose default reads them, and a password, is compared once
+// they are, and means its default.
+func TestSubmittedDefaultsThatReadEachOther(t *testing.T) {
+	src := inputs(
+		"pw: {type: password}",
+		"a: {type: string, default: '${{ inputs.b }}'}",
+		"b: {type: string, default: '${{ inputs.a }}'}",
+		"c: {type: string, default: '${{ inputs.pw }}-${{ inputs.a }}'}",
+	)
+	submitted := map[string]any{"pw": sentinel, "a": "x", "b": "x", "c": sentinel + "-x"}
+	inputs, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if want := map[string]any{"a": "x", "b": "x"}; !reflect.DeepEqual(inputs.Values, want) {
+		t.Errorf("values %v, want %v", inputs.Values, want)
+	}
+	if _, ok := inputs.Deferred["c"]; !ok || len(inputs.Deferred) != 1 {
+		t.Errorf("deferred %v, want c", inputs.Deferred)
+	}
 }
 
 // A diagnostic never quotes a password's value, or a value made from one:

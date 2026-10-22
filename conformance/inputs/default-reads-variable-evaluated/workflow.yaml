@@ -1,0 +1,25 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: string
+        default: ${{ vars.REGION }}
+      zone:
+        type: string
+        default: ${{ vars.REGION }}-a
+      replicas:
+        type: number
+        default: ${{ vars.REPLICAS }}
+      owner:
+        type: string
+        default: ${{ org.OWNER }}
+      mirror:
+        type: string
+        default: ${{ ..region.default }}
+      label:
+        type: string
+        default: ${{ vars.REGION }}${{ inputs.label ?? '' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
