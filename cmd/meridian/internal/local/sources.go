@@ -617,7 +617,22 @@ func (e *gitError) Unwrap() error { return e.err }
 
 // message is what git said, on one line.
 func (e *gitError) message() string {
-	return strings.Join(strings.Fields(e.stderr), " ")
+	return redactUserinfo(strings.Join(strings.Fields(e.stderr), " "))
+}
+
+// userinfoPattern is a URL's scheme and userinfo, as in
+// https://user:password@ or https://token@: everything of the authority
+// up to its last @, so that a password with an @ in it goes whole.
+var userinfoPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/?#\s'"]+@`)
+
+// redactUserinfo returns s with the userinfo of each URL in it, which can
+// hold a password or a token, as ***. What git says becomes a problem's
+// reason, which a run can keep, so a credential in a URL that a user's
+// insteadOf rewrites a remote to must never reach it, whether or not git
+// leaves it out itself. ssh's user@host, which has no scheme and holds no
+// secret, is left as it is.
+func redactUserinfo(s string) string {
+	return userinfoPattern.ReplaceAllString(s, "${1}"+problems.Masked+"@")
 }
 
 // notFound says whether git failed because the repository or the revision

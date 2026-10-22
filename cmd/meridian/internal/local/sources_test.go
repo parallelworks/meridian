@@ -581,3 +581,29 @@ func TestGitEnvCase(t *testing.T) {
 		}
 	}
 }
+
+// TestGitMessageRedactsUserinfo checks that a credential in a URL that git
+// quotes never reaches a problem's reason.
+func TestGitMessageRedactsUserinfo(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"fatal: unable to access 'https://x-access-token:SECRET123@github.com/a/b.git/': The requested URL returned error: 403": "fatal: unable to access 'https://***@github.com/a/b.git/': The requested URL returned error: 403",
+		"fatal: repository 'https://ghp_SECRET123@github.com/a/b.git/' not found":                                               "fatal: repository 'https://***@github.com/a/b.git/' not found",
+		"fatal: unable to access 'http://user:p%40ss@host:8080/x': Could not resolve host: host":                                "fatal: unable to access 'http://***@host:8080/x': Could not resolve host: host",
+		"fatal: could not read from ssh://deploy:SECRET123@git.example.com/r.git and\nhttps://t@x/y":                            "fatal: could not read from ssh://***@git.example.com/r.git and https://***@x/y",
+		"git@github.com: Permission denied (publickey).":                                                                        "git@github.com: Permission denied (publickey).",
+		"fatal: unable to access 'https://user:SECRET123@more@host/x': error":                                                   "fatal: unable to access 'https://***@host/x': error",
+		"fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: github.com":                             "fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: github.com",
+	} {
+		e := &gitError{args: []string{"fetch"}, stderr: stderr, err: errors.New("exit status 128")}
+		if got := e.message(); got != want {
+			t.Errorf("message() = %q, want %q", got, want)
+		}
+		if strings.Contains(e.Error(), "SECRET123") || strings.Contains(e.Error(), "p%40ss") {
+			t.Errorf("Error() = %q holds the credential", e.Error())
+		}
+	}
+	p := problems.SourceAccessDenied.Problem(problems.Params{"location": "github/a/b/workflow.yaml@main", "reason": (&gitError{stderr: "fatal: unable to access 'https://x:SECRET123@github.com/a/b.git/': The requested URL returned error: 401"}).message()})
+	if strings.Contains(p.Detail, "SECRET123") || strings.Contains(fmt.Sprint(p.Params), "SECRET123") {
+		t.Errorf("the problem holds the credential: %v", p)
+	}
+}
