@@ -96,6 +96,9 @@
   "matrix_empty": "矩阵没有任何组合，因此该作业没有实例。",
   "matrix_too_large": "矩阵的组合超过 {limit} 个，这是矩阵允许的最大数量。",
   "output_masked": "输出“{name}”包含机密，其中的机密已被遮盖。",
+  "output_not_written": "{of, select, step {步骤“{owner}”没有写入输出“{name}”} other {作业“{owner}”没有输出“{name}”}}，因此读取它的表达式失败。",
+  "working_directory_variable": "工作目录中原样保留了 {variable}：此处不会展开 shell 变量。请改用读取 env 的表达式，例如 env.PW_JOB_DIR。",
+  "undefined_env": "此处 env.{name} 读取为“”：工作流、作业和步骤的 env: 都没有定义它，格式 1 也不提供它。{suggested, select, true {你是指“{suggestion}”吗？} other {}}",
 
   "expression_empty": "表达式为空。",
   "expression_too_deep": "表达式的嵌套超过 {max} 层。",

@@ -129,6 +129,7 @@ var (
 	NoMatrix                   = define(Warning, "no_matrix", "Job has no matrix", "job", "key", "text")
 	UndefinedMatrixKey         = define(Warning, "undefined_matrix_key", "No such matrix key", "job", "key", "suggested", "suggestion")
 	UndefinedSession           = define(Warning, "undefined_session", "No such session", "name", "suggested", "suggestion")
+	UndefinedEnv               = define(Warning, "undefined_env", "No such env variable", "name", "suggested", "suggestion")
 	VariableLooksSecret        = define(Warning, "variable_looks_secret", "Variable that looks like it holds a secret", "context", "name")
 	ExpressionFailed           = define(Error, "expression_failed", "Expression failed", "reason")
 	WordNotReference           = define(Warning, "word_not_reference", "Word that looks like a reference", "word", "text", "head")
@@ -151,6 +152,8 @@ var (
 	MatrixEmpty           = define(Error, "matrix_empty", "Matrix without combinations")
 	MatrixTooLarge        = define(Error, "matrix_too_large", "Matrix with too many combinations", "limit")
 	OutputMasked          = define(Warning, "output_masked", "Output that holds a secret", "name")
+	OutputNotWritten      = define(Error, "output_not_written", "Output that nothing wrote", "of", "owner", "name")
+	WorkingDirectoryVar   = define(Error, "working_directory_variable", "Shell variable in a working directory", "variable")
 )
 
 // Parsing an expression.

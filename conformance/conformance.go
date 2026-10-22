@@ -90,6 +90,11 @@ type Expect struct {
 	// password, and not from a secret, so kept only with the run's secrets.
 	// Every other output there isn't.
 	Private []string `yaml:"private,omitempty"`
+	// NeedsFailed are the JSON Pointers of the jobs skipped because a job
+	// they need failed, in the contexts area, which the jobs that need them
+	// read as failed. Every other job skipped there was skipped by its own
+	// if:.
+	NeedsFailed []string `yaml:"needs-failed,omitempty"`
 }
 
 // JobState is what is known of a job where the phases after the run
@@ -104,6 +109,11 @@ type JobState struct {
 	// values, for a job with a matrix.
 	Index  *int           `yaml:"index,omitempty"`
 	Matrix map[string]any `yaml:"matrix,omitempty"`
+	// Try is the try its steps are evaluated at, from 0, and Env the
+	// variables the worker defines for them, such as
+	// PW_WORKFLOW_STEP_CURRENT_RETRY, which env reads over the rest.
+	Try int               `yaml:"try,omitempty"`
+	Env map[string]string `yaml:"env,omitempty"`
 	// Attempt is the attempt's number, from 1, and Group and Member where
 	// it was placed: the job context's.
 	Attempt int    `yaml:"attempt,omitempty"`
@@ -119,8 +129,11 @@ type NeedResult struct {
 	// Result is its outcome: success, failure, cancelled or skipped.
 	Result string `yaml:"result"`
 	// NeedsFailed says it was skipped because a job it needs failed, was
-	// cancelled or was skipped so in turn, rather than by its own if:.
+	// cancelled or was skipped so in turn, rather than by its own if:, or
+	// for a matrix job that one of its instances was. Cancelled says one of
+	// a matrix job's instances was cancelled, whatever its result.
 	NeedsFailed bool              `yaml:"needs-failed,omitempty"`
+	Cancelled   bool              `yaml:"cancelled,omitempty"`
 	Outputs     map[string]string `yaml:"outputs,omitempty"`
 	// Steps are the outputs of its steps that have ids, by id.
 	Steps map[string]map[string]string `yaml:"steps,omitempty"`

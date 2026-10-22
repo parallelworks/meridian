@@ -96,6 +96,9 @@ func TestContextsConformance(t *testing.T) {
 			if g, w := slices.Sorted(slices.Values(r.private)), slices.Sorted(slices.Values(c.Expect.Private)); !slices.Equal(g, w) {
 				t.Errorf("private outputs %q, want %q", g, w)
 			}
+			if g, w := slices.Sorted(slices.Values(r.needsFailed)), slices.Sorted(slices.Values(c.Expect.NeedsFailed)); !slices.Equal(g, w) {
+				t.Errorf("skipped because their needs failed %q, want %q", g, w)
+			}
 			for pointer, want := range c.Expect.Values {
 				got, ok := r.got[pointer]
 				if !ok {
@@ -157,9 +160,9 @@ type contextsRun struct {
 	run plan.RunValues
 	// got holds the values evaluated, by their JSON Pointers, and skipped
 	// the JSON Pointers of the jobs and steps skipped.
-	got              map[string]any
-	skipped, private []string
-	diags            problems.Diagnostics
+	got                           map[string]any
+	skipped, needsFailed, private []string
+	diags                         problems.Diagnostics
 }
 
 // job evaluates job, with what state says is known of it.
@@ -168,7 +171,9 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	ctx := t.Context()
 	in := plan.ReadyInput{Run: r.run, Cancelled: state.Cancelled, Needs: map[string]plan.JobResult{}}
 	for name, n := range state.Needs {
-		in.Needs[name] = plan.JobResult{Outcome: plan.Outcome(n.Result), Outputs: n.Outputs, Steps: n.Steps, NeedsFailed: n.NeedsFailed}
+		in.Needs[name] = plan.JobResult{
+			Outcome: plan.Outcome(n.Result), Outputs: n.Outputs, Steps: n.Steps, NeedsFailed: n.NeedsFailed, Cancelled: n.Cancelled,
+		}
 	}
 	if state.Index != nil {
 		in.Instance = &plan.Instance{
@@ -184,6 +189,9 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		return
 	case ready.Skipped:
 		r.skipped = append(r.skipped, job.Path)
+		if ready.NeedsFailed {
+			r.needsFailed = append(r.needsFailed, job.Path)
+		}
 		return
 	case ready.Job == nil:
 		return // a matrix the case gives no instance of
@@ -197,7 +205,7 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		attempt = 1
 	}
 	js := plan.JobState{
-		Run: job.Reads(r.run), Needs: in.Needs, Cancelled: state.Cancelled,
+		Run: job.Reads(r.run), Needs: in.Needs, Cancelled: state.Cancelled, Try: state.Try, Env: state.Env,
 		Job: plan.JobContext{Name: job.Name, Key: rj.Key, Attempt: attempt, Group: state.Group, Member: state.Member},
 	}
 	js.Masked = append(js.Run.Masked(), rj.Masked...)
@@ -224,6 +232,12 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		r.got[path+"/working-directory"], r.got[path+"/with"] = s.WorkingDirectory, s.With.Get()
 		for name, v := range s.Env {
 			r.got[path+"/env/"+name] = v
+		}
+		switch {
+		case s.NoSSH:
+			r.got[path+"/ssh"] = nil
+		case s.SSH != nil:
+			r.got[path+"/ssh"] = s.SSH.SSH.Get()
 		}
 	}
 	if len(state.Steps) < len(rj.Steps) {

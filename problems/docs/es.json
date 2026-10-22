@@ -675,6 +675,27 @@
       "Deja el secreto fuera de la salida y léelo donde se necesite."
     ]
   },
+  "output_not_written": {
+    "title": "Salida que nada escribió",
+    "why": "El formato 1 lee una salida de un trabajo, needs.<job>.outputs.<name>, y la de un paso, steps.<id>.outputs.<name>, de forma estricta donde un trabajo o un paso está por ejecutarse, y en los outputs: de un trabajo cuando sus pasos tuvieron éxito: una que nada escribió hace fallar lo que la lee, en vez de leerse como \"\", para que un comando como rm -rf con una ruta vacía nunca se ejecute. Un paso o un trabajo cuyo if: es la palabra always, y un if: en sí, la leen como \"\".",
+    "fix": [
+      "Escribe la salida en el paso o el trabajo que lee la expresión, o léela con un valor por defecto, como needs.<job>.outputs.<name> || 'valor', en un paso cuyo if: es always."
+    ]
+  },
+  "working_directory_variable": {
+    "title": "Variable del shell en un directorio de trabajo",
+    "why": "Un directorio de trabajo se usa tal cual, y ningún shell expande las variables que contiene, así que $HOME o ${PW_JOB_DIR} serían un directorio con ese nombre. El formato 1 hace fallar el paso en su lugar.",
+    "fix": [
+      "Lee el valor con una expresión, como env.PW_JOB_DIR, o escribe la ruta completa."
+    ]
+  },
+  "undefined_env": {
+    "title": "Variable de env sin definir",
+    "why": "env contiene lo que definen los env: del flujo de trabajo, del trabajo y del paso, y las variables que el formato 1 da a un paso, como PW_JOB_DIR y OUTPUTS. Un nombre que ninguno define se lee como \"\", contenga lo que contenga el entorno en el que se ejecuta el paso, ya que una expresión se evalúa antes de que el paso se ejecute.",
+    "fix": [
+      "Define la variable en un env:, o léela en el script del paso, como $NAME."
+    ]
+  },
   "expression_empty": {
     "title": "Expresión vacía",
     "why": "No hay nada entre ${{ y }}.",

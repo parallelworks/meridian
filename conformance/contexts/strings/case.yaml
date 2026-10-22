@@ -18,6 +18,10 @@ expect:
     - severity: warning
       code: undefined_session
       path: /jobs/main/steps/0/run
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/steps/0/run
+      params: {name: MISSING}
   values:
     /jobs/main/steps/0/run: "[] [] [] [] []"
     /jobs/main/steps/1/run: true true eu east

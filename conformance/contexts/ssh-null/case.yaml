@@ -1,0 +1,15 @@
+description: >-
+  A step runs on its job's ssh: host unless it has an ssh: of its own: one
+  that names another host runs it there, and ssh: null runs it where its
+  job runs without its ssh:, as format 1 does.
+source: ACTIVATE's workflow schema, and Meridian
+jobs:
+  main:
+    steps:
+      - {outcome: success}
+      - {outcome: success}
+      - {outcome: success}
+expect:
+  values:
+    /jobs/main/steps/1/ssh: null
+    /jobs/main/steps/2/ssh: {remoteHost: other.example.org}

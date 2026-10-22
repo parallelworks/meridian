@@ -5,7 +5,10 @@ description: >-
   success(), otherwise: one its own if: skipped counts as a success. An if:
   that doesn't call a status function is true only if success() is, and
   the word always means always(). Here a failed, so b is skipped, and so is
-  c, which needs b, while a job that runs on failure() after b runs.
+  c, which needs b, while a job that runs on failure() after b runs. A
+  matrix job one of whose instances failed and another was cancelled reads
+  as both, and one an instance of was skipped because its needs failed
+  reads as failed, as format 1 reads each instance.
 source: ACTIVATE's executor, and Meridian
 jobs:
   b:
@@ -32,12 +35,20 @@ jobs:
       - {outcome: skipped}
       - {outcome: success}
       - {outcome: success}
-  plain-false:
+  plain:
     needs:
       a: {result: failure}
   cancelled:
     needs:
       a: {result: failure}
+  after-matrix:
+    needs:
+      a: {result: failure, cancelled: true}
+    steps:
+      - {outcome: success}
+  after-instance:
+    needs:
+      a: {result: success, needs-failed: true}
 expect:
   diagnostics:
     - severity: warning
@@ -47,12 +58,20 @@ expect:
     - /jobs/b
     - /jobs/c
     - /jobs/optional
-    - /jobs/plain-false
+    - /jobs/plain
     - /jobs/cancelled
+    - /jobs/after-instance
     - /jobs/after-optional/steps/1
+  needs-failed:
+    - /jobs/b
+    - /jobs/c
+    - /jobs/plain
+    - /jobs/cancelled
+    - /jobs/after-instance
   values:
     /jobs/on-failure/steps/0/run: echo on-failure
     /jobs/anyway/steps/0/run: echo anyway
     /jobs/after-optional/steps/0/run: echo after-optional
     /jobs/after-optional/steps/2/run: echo always
     /jobs/after-optional/steps/3/run: echo after-failure
+    /jobs/after-matrix/steps/0/run: echo after-matrix

@@ -1,6 +1,9 @@
 package plan
 
 import (
+	"regexp"
+
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -12,7 +15,12 @@ import (
 // runs-on:.
 func (e *evaluation) target(job *Job) Target {
 	if !job.SSH.IsZero() {
-		return Target{Inline: e.inline(job.SSH, at(job.Path, "ssh"))}
+		pointer := at(job.Path, "ssh")
+		v, _, ok := e.value(job.SSH, pointer)
+		if !ok {
+			return Target{}
+		}
+		return Target{Inline: e.inline(v, pointer)}
 	}
 	if job.RunsOn.IsZero() {
 		return Target{}
@@ -125,16 +133,12 @@ func mappingData(v any) (Data, bool) {
 	return Data{}, false
 }
 
-// inline evaluates a format 1 ssh:, v, at pointer: the group of one member
-// it makes, on the host it names.
-func (e *evaluation) inline(v Value, pointer string) *Inline {
-	out, read, ok := e.value(v, pointer)
-	if !ok {
-		return nil
-	}
-	m, isMapping := out.(map[string]any)
+// inline reads a format 1 ssh:, v, as evaluated at pointer: the group of
+// one member it makes, on the host it names.
+func (e *evaluation) inline(v any, pointer string) *Inline {
+	m, isMapping := v.(map[string]any)
 	if !isMapping {
-		e.reportType(pointer, out, read, "object")
+		e.reportType(pointer, v, expr.Read{}, "object")
 		return nil
 	}
 	return &Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: DataOf(m)}
@@ -191,8 +195,9 @@ func (e *evaluation) jobRetry(r *JobRetry, pointer string) *ReadyJobRetry {
 }
 
 // duration evaluates a duration, v, at pointer, the value of key, in
-// seconds, or def when it is unset, or null or "", as format 1 reads one
-// it has none of.
+// seconds, or def when it is unset, or null, "" or 0 without a unit, as
+// format 1 reads one it has none of. A job's or a step's timeout: has none
+// by default, so 0s is none too, where format 1 times out at once.
 func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 	if v.IsZero() {
 		return def
@@ -201,7 +206,7 @@ func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 	if !ok {
 		return 0
 	}
-	if out == nil || out == "" {
+	if out == nil || out == "" || bareZero(out) {
 		return def
 	}
 	seconds, ok := ParseDuration(out)
@@ -231,22 +236,44 @@ func (e *evaluation) count(v Value, pointer, key string, def int) int {
 	return n
 }
 
-// directory evaluates a working-directory:, v, at pointer: its text, and
-// whether it is null, which a step's is to opt out of its job's.
-func (e *evaluation) directory(v Value, pointer string) (dir string, null bool) {
+// A workingDirectory is a working-directory: as evaluated: its text, and
+// whether it is null, which a step's is to opt out of its job's, with
+// where it is and what it read.
+type workingDirectory struct {
+	dir     string
+	null    bool
+	pointer string
+	read    expr.Read
+}
+
+// directory evaluates a working-directory:, v, at pointer.
+func (e *evaluation) directory(v Value, pointer string) workingDirectory {
 	if v.IsZero() {
-		return "", false
+		return workingDirectory{}
 	}
 	out, read, ok := e.value(v, pointer)
 	if !ok {
-		return "", false
+		return workingDirectory{}
 	}
 	switch out := out.(type) {
 	case nil:
-		return "", true
+		return workingDirectory{null: true}
 	case string:
-		return out, false
+		return workingDirectory{dir: out, pointer: pointer, read: read}
 	}
 	e.reportType(pointer, out, read, "string", "null")
-	return "", false
+	return workingDirectory{}
+}
+
+// shellVariable is a shell variable as a shell would expand it, in what
+// isn't a shell's: $NAME or ${NAME}.
+var shellVariable = regexp.MustCompile(`\$\{[^}]*\}?|\$[A-Za-z_][A-Za-z0-9_]*`)
+
+// checkDirectory reports a working directory that keeps a shell variable,
+// which would be a directory of that name, as format 1 fails the step for
+// one.
+func (e *evaluation) checkDirectory(d workingDirectory) {
+	if v := shellVariable.FindString(d.dir); v != "" {
+		e.report(problems.WorkingDirectoryVar, d.pointer, problems.Params{"variable": v}, d.read)
+	}
 }

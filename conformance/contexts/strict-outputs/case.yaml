@@ -1,0 +1,54 @@
+description: >-
+  An output that nothing wrote fails what reads it, as format 1 reads one
+  strictly, so that rm -rf of an empty path never runs: a step's values, a
+  job's runs-on:, and its outputs: once its steps succeeded. An if: reads
+  one as "", and so does a step whose if: is the word always, and a job's
+  values when its if: is, but not its steps'.
+source: ACTIVATE's executor, and Meridian
+jobs:
+  test:
+    needs:
+      build: {result: success, outputs: {other: x}}
+    steps:
+      - {outcome: failure}
+      - {outcome: success}
+      - {outcome: success}
+  place:
+    needs:
+      build: {result: success}
+  lenient:
+    needs:
+      build: {result: success}
+    steps:
+      - {outcome: success}
+  report:
+    steps:
+      - {outcome: success}
+expect:
+  diagnostics:
+    - severity: error
+      code: output_not_written
+      path: /jobs/test/steps/0/run
+      params: {of: job, owner: build, name: dir}
+    - severity: error
+      code: output_not_written
+      path: /jobs/place/runs-on
+      params: {of: job, owner: build, name: group}
+    - severity: error
+      code: output_not_written
+      path: /jobs/report/outputs/dir
+      params: {of: step, owner: a, name: dir}
+    - severity: error
+      code: output_not_written
+      path: /jobs/lenient/steps/0/run
+      params: {of: job, owner: build, name: dir}
+    - severity: warning
+      code: older_always
+      path: /jobs/test/steps/1/if
+    - severity: warning
+      code: older_always
+      path: /jobs/lenient/if
+  values:
+    /jobs/test/steps/1/run: echo []
+    /jobs/test/steps/2/run: echo checked
+    /jobs/lenient/runs-on: -pool

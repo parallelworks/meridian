@@ -99,6 +99,9 @@
   "matrix_empty": "The matrix has no combinations, so the job would have no instances.",
   "matrix_too_large": "The matrix has more than {limit} combinations, the most a matrix may have.",
   "output_masked": "The output \"{name}\" held a secret, which is masked in it.",
+  "output_not_written": "{of, select, step {The step \"{owner}\" wrote no output \"{name}\"} other {The job \"{owner}\" has no output \"{name}\"}}, so what reads it fails.",
+  "working_directory_variable": "The working directory keeps {variable} as it is: shell variables aren't expanded there. Use an expression that reads env, such as env.PW_JOB_DIR, instead.",
+  "undefined_env": "Reading env.{name} gives \"\" here: no env: of the workflow, the job or the step defines it, and format 1 doesn't give it.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
 
   "expression_empty": "The expression is empty.",
   "expression_too_deep": "The expression nests more than {max} levels deep.",

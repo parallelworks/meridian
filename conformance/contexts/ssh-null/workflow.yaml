@@ -1,0 +1,11 @@
+jobs:
+  main:
+    ssh:
+      remoteHost: login.example.org
+    steps:
+      - run: hostname
+      - run: hostname
+        ssh: null
+      - run: hostname
+        ssh:
+          remoteHost: ${{ 'other.example.org' }}

@@ -579,6 +579,24 @@
       "Leave the secret out of the output, and read it where it is needed instead."
     ]
   },
+  "output_not_written": {
+    "why": "Format 1 reads a job's output, needs.<job>.outputs.<name>, and a step's, steps.<id>.outputs.<name>, strictly where a job or a step is about to run, and in a job's outputs: once its steps succeeded: one that nothing wrote fails what reads it, rather than read as \"\", so that a command such as rm -rf with an empty path never runs. A step or a job whose if: is the word always, and an if: itself, read it as \"\".",
+    "fix": [
+      "Write the output in the step or job that the expression reads, or read it with a default, such as needs.<job>.outputs.<name> || 'value', in a step whose if: is always."
+    ]
+  },
+  "working_directory_variable": {
+    "why": "A working directory is used as it is, and no shell expands the variables in it, so $HOME or ${PW_JOB_DIR} would be a directory of that name. Format 1 fails the step instead.",
+    "fix": [
+      "Read the value with an expression, such as env.PW_JOB_DIR, or write the path out."
+    ]
+  },
+  "undefined_env": {
+    "why": "env holds what the workflow's, the job's and the step's env: define, and the variables format 1 gives a step, such as PW_JOB_DIR and OUTPUTS. A name none of them defines reads as \"\", whatever the environment the step runs in holds, since an expression is evaluated before the step runs.",
+    "fix": [
+      "Define the variable in an env:, or read it in the step's script, as $NAME."
+    ]
+  },
   "expression_empty": {
     "why": "There is nothing between ${{ and }}.",
     "fix": [

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -107,6 +108,23 @@ func TestCombine(t *testing.T) {
 	blocked := plan.Combine([]plan.JobResult{{Outcome: plan.OutcomeSkipped}, {Outcome: plan.OutcomeSkipped, NeedsFailed: true}})
 	if blocked.Outcome != plan.OutcomeSkipped || !blocked.NeedsFailed {
 		t.Errorf("all skipped, one for its needs: %+v", blocked)
+	}
+	// As format 1 reads each instance of a job its dependents need: one
+	// skipped for its needs fails the job for them, whatever the rest did,
+	// and one cancelled cancels it for them, though another failed.
+	blocked = plan.Combine([]plan.JobResult{{Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSkipped, NeedsFailed: true}})
+	if blocked.Outcome != plan.OutcomeSuccess || !blocked.NeedsFailed || blocked.Cancelled {
+		t.Errorf("one skipped for its needs, one succeeded: %+v", blocked)
+	}
+	both := plan.Combine([]plan.JobResult{{Outcome: plan.OutcomeFailure}, {Outcome: plan.OutcomeCancelled}})
+	if both.Outcome != plan.OutcomeFailure || !both.Cancelled || both.NeedsFailed {
+		t.Errorf("one failed, one cancelled: %+v", both)
+	}
+	for _, needs := range []plan.JobResult{blocked, both} {
+		status, ok := plan.ReadyStatus(map[string]plan.JobResult{"m": needs})
+		if ok || !status.Failed || status.Cancelled != needs.Cancelled {
+			t.Errorf("after %+v: %+v, needs succeeded %v", needs, status, ok)
+		}
 	}
 }
 
@@ -336,7 +354,7 @@ jobs:
 `, nil)
 	run := runValues(t, p, nil)
 	for name, want := range map[string]string{
-		"group":  `{"target":{"group":"gpus"},"resources":{"milliCPU":250,"memory":1610612736,"gpu":2},"retry":{"reasons":["worker-lost"],"maxRetries":3,"intervalSeconds":60},"timeoutSeconds":7200,"workingDirectory":"/scratch"}`,
+		"group":  `{"target":{"group":"gpus"},"resources":{"milliCPU":250,"memory":1610612736,"gpu":2},"retry":{"reasons":["worker-lost"],"maxRetries":3,"intervalSeconds":60},"timeoutSeconds":7200}`,
 		"env":    `{"target":{"environment":{"cluster":"owner/hpc","name":"large","params":{"walltime":"01:00:00"}}},"resources":{"milliCPU":4000,"memory":1000},"retry":{"reasons":["worker-lost"],"maxRetries":5,"intervalSeconds":300}}`,
 		"target": `{"target":{"computeTarget":{"mode":"worker","targetId":"abc","newWorker":true}},"resources":{"milliCPU":1500,"memory":2000},"timeoutSeconds":300}`,
 		"ssh":    `{"target":{"inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":{"disconnect-timeout":10,"remoteHost":"host"}}}}`,
@@ -348,12 +366,11 @@ jobs:
 		}
 		rj := *r.Job
 		data, err := json.Marshal(struct {
-			Target           plan.Target         `json:"target,omitzero"`
-			Resources        plan.Resources      `json:"resources,omitzero"`
-			Retry            *plan.ReadyJobRetry `json:"retry,omitzero"`
-			TimeoutSeconds   int64               `json:"timeoutSeconds,omitzero"`
-			WorkingDirectory string              `json:"workingDirectory,omitempty"`
-		}{rj.Target, rj.Resources, rj.Retry, rj.TimeoutSeconds, rj.WorkingDirectory}, json.Deterministic(true))
+			Target         plan.Target         `json:"target,omitzero"`
+			Resources      plan.Resources      `json:"resources,omitzero"`
+			Retry          *plan.ReadyJobRetry `json:"retry,omitzero"`
+			TimeoutSeconds int64               `json:"timeoutSeconds,omitzero"`
+		}{rj.Target, rj.Resources, rj.Retry, rj.TimeoutSeconds}, json.Deterministic(true))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -383,7 +400,6 @@ jobs:
       max-retries: ${{ inputs.text }}
       interval: ${{ inputs.text }}
     timeout: ${{ -1 }}
-    working-directory: ${{ 1 }}
     steps: [{run: "true"}]
   private:
     resources:
@@ -404,7 +420,6 @@ jobs:
 			"resources_invalid /jobs/bad/resources/gpu 1.5",
 			"resources_invalid /jobs/bad/resources/memory \"8GB\"",
 			"runs_on_invalid /jobs/bad/runs-on 5",
-			"wrong_type /jobs/bad/working-directory",
 		},
 		"private": {
 			"duration_invalid /jobs/private/timeout ***",
@@ -450,13 +465,14 @@ jobs:
         env:
           TOKEN: plain
           X: ${{ env.TOKEN }}
+          Y: ${{ vars.token }}-y
         retry: {}
         ignore-errors: ${{ 'true' }}
         cleanup: rm -rf ${{ env.W }}
         working-directory: null
         timeout: 1m
         shell: sh {0}
-      - run: echo ${{ steps.first.outputs.o }} ${{ needs.main.outputs.o }} ${{ env.TOKEN }}
+      - run: echo ${{ steps.first.outputs.o }} ${{ env.TOKEN }}
         if: failure()
         working-directory: ""
         ssh:
@@ -484,7 +500,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"s3cret"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"cleanup":"rm -rf workflow","masked":["s3cret"]}`; string(data) != want {
+	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"cleanup":"rm -rf workflow","masked":["s3cret","s3cret-y"]}`; string(data) != want {
 		t.Errorf("step 0:\n%s\nwant\n%s", data, want)
 	}
 	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"o": "1"}}}
@@ -497,8 +513,8 @@ jobs:
 	if err != nil || len(diags) > 0 || s.Skipped {
 		t.Fatal(s, diags, err)
 	}
-	if s.Run != "echo 1 1 s3cret" || s.WorkingDirectory != "/job" || s.SSH == nil || s.SSH.SSH.Get().(map[string]any)["remoteHost"] != "h" ||
-		!slices.Equal(s.Masked, []string{"s3cret", "echo 1 1 s3cret"}) {
+	if s.Run != "echo 1 s3cret" || s.WorkingDirectory != "/job" || s.SSH == nil || s.SSH.SSH.Get().(map[string]any)["remoteHost"] != "h" ||
+		!slices.Equal(s.Masked, []string{"s3cret", "echo 1 s3cret"}) || s.OutlivesCancel {
 		t.Errorf("step 1: %+v", s)
 	}
 	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
@@ -555,7 +571,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(end.Outputs) != "map[empty: holds:*** made:*** plain:1 x:1 y:a ***]" || end.Private != nil {
+	if fmt.Sprint(end.Outputs) != "map[empty: holds:*** made:*** plain:1]" || end.Private != nil {
 		t.Errorf("outputs %v, private %q", end.Outputs, end.Private)
 	}
 	want := []string{
@@ -703,4 +719,189 @@ jobs:
 	if s.TimeoutSeconds != 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 5, TimeoutSeconds: 30}) {
 		t.Errorf("timeout %d, retry %+v", s.TimeoutSeconds, s.Retry)
 	}
+}
+
+// A step outlives its job's cancelling when its if: can be true once the
+// job is stopping, as format 1 reads one, whether or not the job is.
+func TestStepOutlivesCancel(t *testing.T) {
+	forms := map[string]bool{
+		"always": true, "${{ always }}": true, "${{ 'always' }}": true,
+		"always()": true, "cancelled()": true, "canceled()": true, "${{ !success() }}": true, "${{ !failure() }}": true,
+		"${{ always() && inputs.x == 'y' }}": true,
+		"success()":                          false, "failure()": false, "${{ !cancelled() }}": false,
+		"${{ inputs.x == 'y' }}": false, "": false,
+	}
+	var b strings.Builder
+	b.WriteString("on:\n  execute:\n    inputs:\n      x: {type: string, default: y}\njobs:\n  main:\n    steps:\n      - run: \"true\"\n")
+	var order []string
+	for form := range forms {
+		order = append(order, form)
+		fmt.Fprintf(&b, "      - run: \"true\"\n")
+		if form != "" {
+			fmt.Fprintf(&b, "        if: %q\n", form)
+		}
+	}
+	p := compiled(t, b.String(), nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, form := range order {
+		ran := false
+		for _, before := range []struct {
+			outcome   plan.Outcome
+			cancelled bool
+		}{{plan.OutcomeSuccess, false}, {plan.OutcomeSuccess, true}, {plan.OutcomeFailure, false}} {
+			cancelled := before.cancelled
+			state := plan.JobState{Run: run, Steps: make([]plan.StepResult, i+1), Cancelled: cancelled}
+			for j := range state.Steps {
+				state.Steps[j].Outcome = before.outcome
+			}
+			s, diags, err := ready.Job.Step(t.Context(), i+1, state)
+			if err != nil || diags.HasErrors() {
+				t.Fatalf("%q: %v, %v", form, diags, err)
+			}
+			if s.Skipped {
+				continue
+			}
+			ran = true
+			if s.OutlivesCancel != forms[form] {
+				t.Errorf("if: %q, cancelled %v, outlives a cancel: %v, want %v", form, cancelled, s.OutlivesCancel, forms[form])
+			}
+		}
+		if !ran {
+			t.Errorf("if: %q never runs", form)
+		}
+	}
+}
+
+// Step evaluates a step again for each try, with the worker's variables
+// over the env, and reads its if: and retry: at the first: a later try runs
+// whatever its if: gives, and has no Retry.
+func TestStepTries(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    working-directory: ${{ env.PW_PARENT_JOB_DIR }}/work
+    env:
+      PW_JOB_DIR: overridden
+    steps:
+      - run: echo try ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }} in ${{ env.PW_JOB_DIR }}
+        if: ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY == '0' }}
+        retry:
+          max-retries: 2
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for try, want := range []string{"echo try 0 in /runs/r/j", "echo try 1 in /runs/r/j"} {
+		state := plan.JobState{Run: run, Try: try, Env: map[string]string{
+			"PW_WORKFLOW_STEP_CURRENT_RETRY": strconv.Itoa(try), "PW_JOB_DIR": "/runs/r/j", "PW_PARENT_JOB_DIR": "/runs/r",
+		}}
+		s, diags, err := ready.Job.Step(t.Context(), 0, state)
+		if err != nil || len(diags) > 0 {
+			t.Fatal(diags, err)
+		}
+		if s.Skipped || s.Run != want || s.WorkingDirectory != "/runs/r/work" || (s.Retry != nil) != (try == 0) {
+			t.Errorf("try %d: %+v", try, s)
+		}
+	}
+}
+
+// A working directory that keeps a shell variable fails the step, as no
+// shell expands it, and one made from a variable doesn't show it.
+func TestStepWorkingDirectoryVariable(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    working-directory: $HOME/work
+    steps:
+      - run: "true"
+      - run: "true"
+        working-directory: ${{ vars.dir }}
+      - run: "true"
+        working-directory: /tmp/${{ 'x' }}
+`, map[string]any{"vars": map[string]any{"dir": "${PRIVATE}"}})
+	run := runValues(t, p, map[string]string{"dir": "${PRIVATE}"})
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"working_directory_variable /jobs/main/working-directory $HOME", "working_directory_variable /jobs/main/steps/1/working-directory ***", ""} {
+		s, diags, err := ready.Job.Step(t.Context(), i, plan.JobState{Run: run, Steps: make([]plan.StepResult, i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, d := range diags {
+			got = append(got, fmt.Sprintf("%s %s %v", d.Code, d.Path(), d.Params["variable"]))
+		}
+		if fmt.Sprint(got) != fmt.Sprint(slices.DeleteFunc([]string{want}, func(s string) bool { return s == "" })) || (want == "") != (s != nil) {
+			t.Errorf("step %d: %q, %+v", i, got, s)
+		}
+	}
+}
+
+// Durations and counts read as format 1 writes them, and what it reads as
+// left out is the default: 0 without a unit. What isn't one is a problem,
+// as a bug fix to format 1 makes it.
+func TestDurationsAndCounts(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      v: {type: string, default: ""}
+      n: {type: string, default: ""}
+jobs:
+  main:
+    steps:
+      - run: "true"
+        timeout: ${{ inputs.v }}
+        retry:
+          interval: ${{ inputs.v }}
+          timeout: ${{ inputs.v }}
+          max-retries: ${{ inputs.n }}
+`, nil)
+	for _, tc := range []struct{ v, n, want string }{
+		{"+5m", "2", "timeout 300, retry {MaxRetries:2 IntervalSeconds:300 TimeoutSeconds:300 CleanOnRetry:false}"},
+		{"0", "+3", "timeout 0, retry {MaxRetries:3 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:false}"},
+		{"+0", "-1", "timeout 0, retry {MaxRetries:0 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:false}"},
+		{"0s", "0", "timeout 0, retry {MaxRetries:0 IntervalSeconds:0 TimeoutSeconds:0 CleanOnRetry:false}"},
+		{"3", "7", "timeout 3, retry {MaxRetries:7 IntervalSeconds:3 TimeoutSeconds:3 CleanOnRetry:false}"},
+		{"3", " 7", "[count_invalid]"},
+		{"", "", "timeout 0, retry {MaxRetries:10 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:false}"},
+		{"-5m", "3.5", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
+		{"3.5", "1e3", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
+		{" 7 ", "0x10", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
+		{"1e3", "2d", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
+	} {
+		run := runValues(t, p, nil)
+		run.Inputs = plan.DataOf(map[string]any{"v": tc.v, "n": tc.n})
+		ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, diags, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := fmt.Sprintf("[%s]", strings.Join(slices.Sorted(slices.Values(codeList(diags))), " "))
+		if s != nil {
+			got = fmt.Sprintf("timeout %d, retry %+v", s.TimeoutSeconds, *s.Retry)
+		}
+		if got != tc.want {
+			t.Errorf("%q, %q: %s, want %s", tc.v, tc.n, got, tc.want)
+		}
+	}
+}
+
+func codeList(ds problems.Diagnostics) []string {
+	var out []string
+	for _, d := range ds {
+		out = append(out, string(d.Code))
+	}
+	return out
 }

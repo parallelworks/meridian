@@ -675,6 +675,27 @@
       "不要把机密放进输出，而是在需要的地方读取它。"
     ]
   },
+  "output_not_written": {
+    "title": "没有任何内容写入的输出",
+    "why": "格式 1 在作业或步骤即将运行时，以及步骤成功后的作业 outputs: 中，严格读取作业的输出 needs.<job>.outputs.<name> 和步骤的输出 steps.<id>.outputs.<name>：没有任何内容写入的输出不会读作 \"\"，而会让读取它的内容失败，这样带空路径的 rm -rf 之类的命令永远不会运行。if: 为单词 always 的步骤或作业，以及 if: 本身，会把它读作 \"\"。",
+    "fix": [
+      "在表达式读取的步骤或作业中写入该输出，或者在 if: 为 always 的步骤中带默认值读取它，例如 needs.<job>.outputs.<name> || 'value'。"
+    ]
+  },
+  "working_directory_variable": {
+    "title": "工作目录中的 shell 变量",
+    "why": "工作目录按原样使用，没有 shell 会展开其中的变量，因此 $HOME 或 ${PW_JOB_DIR} 会成为同名的目录。格式 1 会改为让该步骤失败。",
+    "fix": [
+      "用表达式读取该值，例如 env.PW_JOB_DIR，或者直接写出路径。"
+    ]
+  },
+  "undefined_env": {
+    "title": "未定义的 env 变量",
+    "why": "env 包含工作流、作业和步骤的 env: 所定义的内容，以及格式 1 提供给步骤的变量，例如 PW_JOB_DIR 和 OUTPUTS。它们都没有定义的名称会读作 \"\"，无论步骤运行的环境中有什么，因为表达式在步骤运行之前求值。",
+    "fix": [
+      "在 env: 中定义该变量，或在步骤的脚本中以 $NAME 读取它。"
+    ]
+  },
   "expression_empty": {
     "title": "空表达式",
     "why": "${{ 和 }} 之间没有内容。",

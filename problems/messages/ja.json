@@ -96,6 +96,9 @@
   "matrix_empty": "マトリックスに組み合わせがないため、ジョブのインスタンスがありません。",
   "matrix_too_large": "マトリックスの組み合わせが、マトリックスに許される最大数の {limit} を超えています。",
   "output_masked": "出力「{name}」にはシークレットが含まれていたため、その部分はマスクされています。",
+  "output_not_written": "{of, select, step {ステップ「{owner}」は出力「{name}」を書き込んでいない} other {ジョブ「{owner}」には出力「{name}」がない}}ため、それを読み取る式は失敗します。",
+  "working_directory_variable": "作業ディレクトリに {variable} がそのまま残っています。シェル変数はここでは展開されません。代わりに env.PW_JOB_DIR のように env を読み取る式を使ってください。",
+  "undefined_env": "ここでは env.{name} は「」として読み取られます。ワークフロー、ジョブ、ステップのどの env: にも定義されておらず、形式 1 も与えません。{suggested, select, true {「{suggestion}」のことですか?} other {}}",
 
   "expression_empty": "式が空です。",
   "expression_too_deep": "式の入れ子が {max} 段階を超えています。",

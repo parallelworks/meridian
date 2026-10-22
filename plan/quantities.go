@@ -15,15 +15,17 @@ import (
 // group's offer.
 
 // durationPattern is a duration as format 1 writes one: whole seconds, or a
-// whole number of seconds, minutes, hours or days.
-var durationPattern = regexp.MustCompile(`^([0-9]+)([smhd]?)$`)
+// whole number of seconds, minutes, hours or days, with a + before it or
+// not.
+var durationPattern = regexp.MustCompile(`^\+?([0-9]+)([smhd]?)$`)
 
 // durationUnits are a duration's units, in seconds.
 var durationUnits = map[string]int64{"": 1, "s": 1, "m": 60, "h": 60 * 60, "d": 24 * 60 * 60}
 
 // ParseDuration reads a duration in seconds, as a timeout: is written: a
 // whole number of seconds, or text of one, alone or with s, m, h or d after
-// it, such as 300 or 10m. Null and "" are none, 0.
+// it, such as 300, 10m or +5m. Null and "" are none, 0. A negative one
+// isn't a duration.
 func ParseDuration(v any) (int64, bool) {
 	v = wide(v)
 	switch v := v.(type) {
@@ -58,8 +60,8 @@ func ParseDuration(v any) (int64, bool) {
 }
 
 // readCount reads how many times something may run again, as format 1
-// reads it: a number, or text that reads as one, with a fraction rounded
-// down and a negative number 0.
+// reads it: a number, with a fraction rounded down, or text of a whole
+// number, such as an output; a negative one is 0.
 func readCount(v any) (int, bool) {
 	v = wide(v)
 	var n float64
@@ -69,11 +71,11 @@ func readCount(v any) (int, bool) {
 	case float64:
 		n = v
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		i, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			return 0, false
 		}
-		n = f
+		n = float64(i)
 	default:
 		return 0, false
 	}
@@ -115,6 +117,20 @@ func wide(v any) any {
 		return int64(n)
 	}
 	return v
+}
+
+// bareZero reports whether v is 0 without a unit, as a number or text,
+// which format 1 reads as a retry's interval or timeout left out.
+func bareZero(v any) bool {
+	switch v := wide(v).(type) {
+	case int64:
+		return v == 0
+	case float64:
+		return v == 0
+	case string:
+		return strings.Trim(v, "+0") == "" && strings.Contains(v, "0")
+	}
+	return false
 }
 
 // cpuPattern is a number of CPUs: cores, or thousandths of one with m.

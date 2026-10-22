@@ -1,17 +1,23 @@
 description: >-
   In a job's own steps and outputs, needs holds the job itself, whose outputs
-  are those its steps have written so far, the later step's where two wrote
-  the same name, and whose steps are its steps that have ids, as format 1
-  reads them.
-source: ACTIVATE's workflows, and Meridian
+  are those its steps without an id have written so far, the later step's
+  where two wrote the same name, and whose steps are its steps that have
+  ids, as format 1 reads them: a step with an id writes outputs of its own,
+  which only steps and needs.<job>.steps read, so the late step's PORT
+  isn't the job's. The job's outputs are those, and its outputs: over them.
+source: ACTIVATE's workflows and executor, and Meridian
 jobs:
   setup:
     steps:
       - {outcome: success, outputs: {PORT: "8080"}}
       - {outcome: success, outputs: {PORT: "9090", HOST: h}}
+      - {outcome: success, outputs: {PORT: "7070"}}
       - {outcome: success}
 expect:
   values:
-    /jobs/setup/steps/2/run: echo 9090 h 8080
+    /jobs/setup/steps/3/run: echo 9090 h 8080
     /jobs/setup/outputs/port: "8080"
     /jobs/setup/outputs/latest: "9090"
+    /jobs/setup/outputs/late: "7070"
+    /jobs/setup/outputs/PORT: "9090"
+    /jobs/setup/outputs/HOST: h

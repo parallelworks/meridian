@@ -163,6 +163,43 @@ Behavior that workflows rely on is kept, even where it is surprising. Behavior
 no workflow could rely on, such as a crash or a silently wrong result, is
 fixed, and its case records the fix.
 
+### Bug fixes to format 1
+
+Each of these changes what format 1 means where it was plainly a bug, and
+ACTIVATE takes the same fix. Each counts the 402 distinct workflows we know
+of.
+
+- **A matrix job's output** is the instance's with the highest index, not
+  the last to finish's. None of the 22 matrix jobs has `outputs:`, and
+  nothing reads a matrix job's outputs.
+- **An `if:` whose value is null is false**, as `docs/expressions.md` says
+  conditions go by truthiness, where format 1 ran the job or step. All 7
+  `if:`s that are a bare reference read a boolean input that has a
+  default, and none of those inputs is hidden or ignored, so none is null.
+- **A duration or a count that isn't one is a problem**, where format 1
+  ignored a timeout it couldn't read and fell back to a retry's defaults:
+  an expression's value for a job's or a step's `timeout:`, a retry's
+  `interval:` or `timeout:` (`duration_invalid`), or `max-retries:`
+  (`count_invalid`). A literal one is a schema error already. 11 workflows
+  take retry values from expressions, of inputs whose defaults read as one
+  and of outputs a step wrote, and none takes a timeout from one. In
+  detail: `+5m` is a duration, as in format 1;
+  null, `""` and `0` without a unit are the default, as format 1 reads a
+  value it has none of, so a retry waits 5 seconds and a step's timeout is
+  none; `0s` is 0, which for a job's or a step's timeout is none, where
+  format 1 timed out at once; a negative duration, such as `-5m`, which
+  format 1 timed out at once or ignored, is a problem; `max-retries:` text
+  must be a whole number, so `3.5` and ` 3` are problems where format 1
+  retried 10 times, and a number's fraction is rounded down, as in format
+  1.
+- **A matrix key whose values aren't a list, and an `include` or `exclude`
+  entry that isn't a mapping**, are problems (`matrix_not_list`,
+  `matrix_entry_not_mapping`), where format 1 dropped them silently. All
+  14 strategies outside Meridian's own tests use lists.
+- **A job's `outputs:` read `env`**: the workflow's `env:`, the job's, and
+  the variables the worker defines, where format 1 gave them none. None of
+  the known workflows reads `env` in `outputs:`.
+
 ## Phases
 
 A run is evaluated at five points, its phases. Each phase is one function of
@@ -218,7 +255,7 @@ What an expression can read is its contexts, each a mapping:
 | `remote` | Where a fetched workflow came from, as strings, such as `remote.repo` and `remote.branch`. | Create |
 | `sessions` | The workflow's `sessions:`, by name, as strings, as the session provider gives them. | Create |
 | `env` | The workflow's `env:`, then the job's over it, then the step's over that, as strings. Each reads the ones under it, and the workflow's reads none. | Start, the workflow's; Step, the job's and the step's |
-| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are its steps' so far. | Ready |
+| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are those its steps without an `id` wrote so far. | Ready |
 | `matrix` | The job instance's matrix values. | Ready, once the matrix is expanded |
 | `job` | The job instance: `job.name`, the job's name; `job.key`, the instance's, as in `build#2`; `job.attempt`, from 1; and `job.group` and `job.member`, where it was placed. | Step |
 | `steps` | `steps.<id>.outputs.<name>`, for each step that ran before this one, as strings. | Step |
@@ -952,9 +989,15 @@ name, `#` and its index from 0, as in `build#2`.
   has the value of the one with the highest index, so it doesn't depend on
   which finished last, as it does in ACTIVATE and GitHub Actions. No
   workflow can rely on which instance finishes last, so this is made as a
-  bug fix ([The workflow format](#the-workflow-format)).
+  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). As format 1
+  reads each instance of a job its dependents need, the job fails for them
+  when an instance was skipped because its needs failed, whatever the rest
+  did, and is cancelled for them, for `cancelled()`, when an instance was
+  cancelled, though another failed.
 - **`needs: <job>:any`** waits for any one instance, and `needs.<job>` is
-  then that instance's outcome and outputs ([On hopper](#on-hopper)).
+  then the first instance to succeed, or to be skipped by its own `if:`, or
+  else, once every instance has ended, a failed one, as format 1 waits
+  ([On hopper](#on-hopper)).
 - **Size.** A matrix has at least one instance and at most 256 by default,
   a limit of Meridian's ([Compiling](#compiling)), not the format's. A
   matrix with no instance, or more than the limit, fails where it is
@@ -1399,6 +1442,44 @@ member's running workers reconnect to it.
 - **The environment.** Steps get the environment variables format 1 defines,
   such as `OUTPUTS`, `PW_JOB_DIR` and `PW_JOB_ID`. Variables that only a
   platform can fill, such as an API key, are set only when one supplies them.
+- **The env context on the worker.** As in format 1, `env` reads the
+  workflow's `env:`, the job's over it, the step's over that, and the
+  variables the worker defines over all, such as `PW_PARENT_JOB_DIR` and
+  `PW_WORKFLOW_STEP_CURRENT_RETRY` (`plan.JobState.Env`). A value of a job's
+  or a step's `env:` that reads `env` reads that `env:`'s values that
+  don't. A credential, such as the platform's API key that format 1 gives a
+  step as `PW_API_KEY`, is in the step's environment but never in the `env`
+  context: none of the workflows we know of reads one in an expression, so
+  no expression's value is made from one. A job's `working-directory:` is
+  evaluated on the worker too, where the run directory is known: 24 jobs
+  in 4 known workflows read `env.PW_PARENT_JOB_DIR` in it. The compiler
+  warns about `env.<name>` that nothing defines where it is read.
+- **Each try is evaluated.** A step is evaluated again for each try of its
+  `retry:`, so that what reads `env.PW_WORKFLOW_STEP_CURRENT_RETRY` reads the
+  try's, as format 1's failover does: 8 known workflows read it in a retried
+  step's `with:`. Its `if:` and `retry:` are those of its first try.
+- **Outputs that nothing wrote.** As in format 1, a job's output or a
+  step's that nothing wrote fails the expression that reads it
+  (`output_not_written`) where a job or a step is about to run, and in a
+  job's `outputs:` once its steps succeeded, so that a command such as
+  `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path. An
+  `if:` reads one as `""`, and so does a step whose `if:` is the word
+  `always`, and a job's own values when its `if:` is. A step with an `id`
+  writes outputs of its own, which `steps.<id>` reads; the job's outputs are
+  those its steps without one write, with its `outputs:` over them.
+- **A host of a step's own.** A format 1 `ssh:` on a job runs its steps on
+  the host it names, and a step's runs it on its own: `ssh: null` runs the
+  step where the job runs without its `ssh:`, and an empty or null
+  `remoteHost` runs it there too, with a note in its log, as format 1 does.
+  534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
+- **A step that outlives its job's cancelling.** A step whose `if:` can be
+  true once its job is stopping, the word `always`, `always()`,
+  `cancelled()`, `!success()` or `!failure()`, runs even once the job is
+  being cancelled or has run past its timeout, and runs its course, as in
+  format 1 (`plan.ReadyStep.OutlivesCancel`).
+- **A working directory is used as it is.** One that keeps a shell
+  variable, such as `$HOME`, fails the step, as in format 1, since no shell
+  expands it.
 - **Containers.** On a member that runs containers, the worker runs on the
   host, outside the container. It creates the job's container, runs each
   step in it with the runtime's `exec`, and removes the container when the

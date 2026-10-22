@@ -100,6 +100,13 @@ type Scope struct {
 	// while what it made from a marked one is masked too. Eval and
 	// EvalMarked ignore it. The zero Marks mark nothing.
 	Private Marks
+	// Missing, if it isn't nil, is asked about each reference to a name
+	// that a context whose values are strings doesn't have, which otherwise
+	// reads as "": it returns the problem the reference is, which the
+	// evaluation fails with, or nil, for "". path is the reference's, in
+	// the context. A runner reads some names strictly with it, as format 1
+	// reads an output that no step wrote.
+	Missing func(context string, path []string) (*problems.Kind, problems.Params)
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of
@@ -892,6 +899,11 @@ func (e *evaluator) ref(r *ref) (any, error) {
 			return nil, err
 		}
 		if !ok && contexts[r.context].strings {
+			if e.scope.Missing != nil {
+				if k, params := e.scope.Missing(r.context, path); k != nil {
+					return nil, e.errorAt(r.at, k, params)
+				}
+			}
 			return "", nil
 		}
 	}

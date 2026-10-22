@@ -73,7 +73,7 @@ func TestNewScopePhases(t *testing.T) {
 			"${{ inputs.name }} ${{ org.site }} ${{ vars.region }} ${{ remote.repo }} ${{ sessions.desk }}",
 			[]string{"Alice east eu r d", "Alice east eu r d", "Alice east eu r d", "Alice east eu r d", "Alice east eu r d", "Alice east eu r d", "Alice east eu r d"},
 		},
-		{"${{ env.WHERE }}", []string{"unknown env", "workflow", "workflow", "workflow", "workflow", "step", "job"}},
+		{"${{ env.WHERE }}", []string{"unknown env", "workflow", "workflow", "workflow", "job", "step", "job"}},
 		{"${{ env.TOKEN }}", []string{"unknown env", "t0k", "t0k", "t0k", "t0k", "plain", "t0k"}},
 		{"${{ needs.build }}", []string{
 			"unknown needs", "unknown needs",

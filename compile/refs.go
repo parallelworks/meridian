@@ -3,11 +3,13 @@ package compile
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -164,6 +166,8 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int
 			}
 			f = suggesting(problems.UndefinedSession, problems.Params{"name": path[0]}, path[0], c.sessionNames)
 		}
+	case "env":
+		f = c.checkEnvRef(path[0], ph, job, in)
 	case "org", "vars":
 		c.checkVariableName(r, in, at)
 	}
@@ -323,6 +327,40 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding 
 		return finding{problems.NeedsUnknownKey, problems.Params{"job": name, "key": path[1]}}
 	}
 	return finding{}
+}
+
+// checkEnvRef checks that env.<name>, read in phase ph in job (nil outside
+// jobs) at the string in, names a variable env holds there: one the
+// workflow's env: defines; once the job's env: is evaluated, one of
+// format 1's (plan.IsFormatVariable) and one the job's env: defines, as do
+// its working-directory:, its steps and its outputs:; and in a step, one
+// its own env: does. Any other reads as "", which is a warning.
+func (c *compiler) checkEnvRef(name string, ph phase, job *jobInfo, in *spot) finding {
+	env := func(loc ...string) map[string]any { return mapping(lookup(c.doc.Value, loc)) }
+	defined := []map[string]any{env("env")}
+	if job != nil {
+		dir := slices.Equal(in.loc, appendPath(job.loc, "working-directory"))
+		if ph >= jobEnv || dir {
+			if plan.IsFormatVariable(name) {
+				return finding{}
+			}
+		}
+		if ph >= jobEnv || dir {
+			defined = append(defined, env(appendPath(job.loc, "env")...))
+		}
+		if ph == stepRuns && job.step >= 0 {
+			defined = append(defined, env(appendPath(job.loc, "steps", strconv.Itoa(job.step), "env")...))
+		}
+	}
+	var names []string
+	for _, m := range defined {
+		if _, ok := m[name]; ok {
+			return finding{}
+		}
+		names = append(names, slices.Collect(maps.Keys(m))...)
+	}
+	slices.Sort(names)
+	return suggesting(problems.UndefinedEnv, problems.Params{"name": name}, name, newNameList(slices.Compact(names)))
 }
 
 // checkStepRef checks that steps.<path> names an earlier step of the job.

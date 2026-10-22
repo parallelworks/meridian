@@ -1,8 +1,10 @@
 description: >-
   env holds the workflow's env:, then the job's over it, then the step's
-  over that, as strings. A job's env: reads the workflow's, a step's env:
-  reads the job's, and the rest of a step reads the step's. A job's outputs
-  read the job's, and a name env doesn't have reads as "".
+  over that, as strings. A job's env: reads the workflow's, and the rest of
+  a step reads the step's. A value of a job's or a step's env: that reads
+  env reads that env:'s values that don't, over what it is laid on, as
+  format 1 lays them, so E is the job's D and C the step's WHERE. A job's outputs read the job's, and a name env doesn't
+  have reads as "", which the compiler warns about.
 source: Meridian
 jobs:
   main:
@@ -10,10 +12,20 @@ jobs:
       - {outcome: success}
       - {outcome: success}
 expect:
+  diagnostics:
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/steps/1/run
+      params: {name: C}
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/steps/1/run
+      params: {name: MISSING}
   values:
     /jobs/main/steps/0/run: echo step from-workflow-and-job
-    /jobs/main/steps/0/env/C: job
+    /jobs/main/steps/0/env/C: step
     /jobs/main/steps/0/env/B: from-workflow-and-job
     /jobs/main/steps/0/env/A: from-workflow
+    /jobs/main/steps/0/env/E: d-e
     /jobs/main/steps/1/run: echo job [] []
     /jobs/main/outputs/where: job

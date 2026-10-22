@@ -6,6 +6,8 @@ jobs:
     env:
       WHERE: job
       B: ${{ env.A }}-and-job
+      D: d
+      E: ${{ env.D }}-e
     steps:
       - run: echo ${{ env.WHERE }} ${{ env.B }}
         env:

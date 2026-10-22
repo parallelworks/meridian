@@ -29,6 +29,19 @@ func newEvaluation(phase Phase, c Contexts) *evaluation {
 	return &evaluation{phase: phase, scope: NewScope(phase, c)}
 }
 
+// next returns an evaluation in phase of c, which keeps e's problems and
+// what e noted to mask.
+func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
+	return &evaluation{phase: phase, scope: NewScope(phase, c), diags: e.diags, masked: e.masked, seen: e.seen, masker: e.masker}
+}
+
+// alwaysWord reports whether an if:, v, is the word always, as the plan
+// holds it written without ${{ }}.
+func alwaysWord(v Value) bool {
+	lit, ok := v.Literal()
+	return ok && lit == "always"
+}
+
 // value evaluates v, at pointer in the workflow, and notes the strings of
 // what each of its templates that read a secret gives, which are to be
 // masked: not those of the rest of v, nor the text of a boolean, a number or
@@ -68,38 +81,51 @@ func (e *evaluation) mask(s string) {
 	}
 }
 
-// condition evaluates an if:, v, at pointer, and reports whether what it
-// is on runs, with the status functions as the scope's Status says: the
+// A decision is what an if: decided.
+type decision struct {
+	// run is whether what the if: is on runs, and always whether its value
+	// is the word always, the older spelling of always(), which format 1
+	// reads more leniently (Contexts.StrictOutputs).
+	run, always bool
+	// outlivesCancel is whether it can be true once its job is stopping:
+	// always or its word, cancelled(), or a negated success() or failure(),
+	// as format 1 reads it.
+	outlivesCancel bool
+}
+
+// condition evaluates an if:, v, at pointer, and decides whether what it is
+// on runs, with the status functions as the scope's Status says: the
 // default if:, success(), when v is unset; an if: whose value is the word
 // always, always(); one that calls a status function, its value's
 // truthiness; and any other, its truthiness and success(), whose place it
 // doesn't take. ok is false if it fails.
-func (e *evaluation) condition(v Value, pointer string) (run, ok bool) {
+func (e *evaluation) condition(v Value, pointer string) (d decision, ok bool) {
 	status := e.scope.Status
 	success := !status.Failed && !status.Cancelled
 	if v.IsZero() {
-		return success, true
+		return decision{run: success}, true
 	}
 	out, read, err := v.EvalRead(e.scope)
 	if err != nil {
 		e.reportError(pointer, err, read)
-		return false, false
+		return decision{}, false
 	}
 	if s, isString := out.(string); isString && s == "always" {
-		return true, true
+		return decision{run: true, always: true, outlivesCancel: true}, true
 	}
-	return expr.Truthy(out) && (success || callsStatus(v)), true
+	used, afterCancel := statusChecks(v)
+	return decision{run: expr.Truthy(out) && (success || used), outlivesCancel: afterCancel}, true
 }
 
-// callsStatus reports whether one of v's expressions calls a status
-// function.
-func callsStatus(v Value) bool {
+// statusChecks reports whether one of v's expressions calls a status
+// function, and whether one can be true once its job is stopping
+// (expr.Expr.StatusChecks).
+func statusChecks(v Value) (used, afterCancel bool) {
 	for _, e := range v.Exprs() {
-		if used, _ := e.StatusChecks(); used {
-			return true
-		}
+		u, a := e.StatusChecks()
+		used, afterCancel = used || u, afterCancel || a
 	}
-	return false
+	return used, afterCancel
 }
 
 // readsContext reports whether one of v's expressions reads context.

@@ -7,6 +7,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A Phase is when in a run an expression is evaluated, which decides the
@@ -215,8 +216,8 @@ type Contexts struct {
 	// (Instance.Private and Instance.Secret).
 	Private, Secrets []string
 	// Needs are the results of the jobs this one needs, by job name. In
-	// Step and End, the job's own is there too, whose outputs are its
-	// steps' so far.
+	// Step and End, the job's own is there too, whose outputs are those its
+	// steps without an id wrote so far, and whose steps those with one.
 	Needs map[string]JobResult
 	// Status is how the job or step got here, for the status functions.
 	Status expr.Status
@@ -226,13 +227,23 @@ type Contexts struct {
 	// Job is the job context.
 	Job JobContext
 	// JobEnv is the job's env:, and StepEnv the step's, as evaluated: env
-	// reads them over the workflow's (Run.Env), the job's from Step on and
-	// the step's in Step. A name that one of them gives is marked only as
-	// Private and Secrets mark it, whatever Run's mark the workflow's value
-	// of the name.
+	// reads them over the workflow's (Run.Env), the job's from JobEnv on,
+	// where it holds the values evaluated so far, and the step's in Step. A
+	// name that one of them gives is marked only as Private and Secrets mark
+	// it, whatever Run's mark the workflow's value of the name.
 	JobEnv, StepEnv map[string]string
+	// WorkerEnv holds the variables the worker defines for the job's steps
+	// (JobState.Env), which env reads over all the rest from JobEnv on, as
+	// format 1 lays them.
+	WorkerEnv map[string]string
 	// Steps are the outputs of the job's steps that have run, by step id.
 	Steps map[string]map[string]string
+	// StrictOutputs is set where format 1 reads an output strictly: a job
+	// output, needs.<job>.outputs.<name>, or a step's, steps.<id>.outputs.
+	// <name> or needs.<job>.steps.<id>.outputs.<name>, that nothing wrote
+	// fails the expression that reads it (output_not_written), rather than
+	// read as "".
+	StrictOutputs bool
 }
 
 // NewScope returns the scope an expression evaluated in phase reads: each
@@ -246,8 +257,8 @@ type Contexts struct {
 //
 //   - inputs (Create): Run.Inputs, a mapping.
 //   - org, vars, remote and sessions (Create): Run's, by name, strings.
-//   - env (Start): Run.Env, then from Step JobEnv over it, and in Step
-//     StepEnv over that, strings.
+//   - env (Start): Run.Env, then from JobEnv JobEnv over it, in Step
+//     StepEnv over that, and from JobEnv WorkerEnv over all, strings.
 //   - needs (Strategy): for each job of Needs, result, its outcome, when
 //     it has one; outputs, by name, strings; and steps, by step id, each
 //     with its outputs.
@@ -282,21 +293,30 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	var layered map[string]bool
 	if phase >= PhaseStart {
 		env := stringsContext(r.Env)
-		if phase >= PhaseStep {
-			layered = map[string]bool{}
-			layers := []map[string]string{c.JobEnv}
-			if phase == PhaseStep {
-				layers = append(layers, c.StepEnv)
-			}
-			for _, layer := range layers {
-				for k, v := range layer {
-					env[k], layered[k] = v, true
+		var layers []map[string]string
+		if phase >= PhaseJobEnv {
+			layers = append(layers, c.JobEnv)
+		}
+		if phase == PhaseStep {
+			layers = append(layers, c.StepEnv)
+		}
+		if phase >= PhaseJobEnv {
+			layers = append(layers, c.WorkerEnv)
+		}
+		for _, layer := range layers {
+			for k, v := range layer {
+				if layered == nil {
+					layered = map[string]bool{}
 				}
+				env[k], layered[k] = v, true
 			}
 		}
 		contexts["env"] = env
 	}
 	scope := expr.Scope{Contexts: contexts}
+	if c.StrictOutputs {
+		scope.Missing = strictOutputs(c.Needs, c.Steps)
+	}
 	if phase >= PhaseStrategy {
 		contexts["needs"] = needsContext(c.Needs)
 		for name, r := range c.Needs {
@@ -368,6 +388,40 @@ func (c *Contexts) mapping(context string, d Data) map[string]any {
 		return jsonvalue.CloneMap(m)
 	}
 	return m
+}
+
+// strictOutputs returns what reads the outputs of needs and steps strictly
+// (Contexts.StrictOutputs): an output a job or a step has no value for is
+// output_not_written. A name past an output's, which reads the JSON it
+// holds, and a job or a step the contexts don't have, read as "".
+func strictOutputs(needs map[string]JobResult, steps map[string]map[string]string) func(string, []string) (*problems.Kind, problems.Params) {
+	missing := func(outputs map[string]string, of, owner, name string) (*problems.Kind, problems.Params) {
+		if _, ok := outputs[name]; ok {
+			return nil, nil
+		}
+		return problems.OutputNotWritten, problems.Params{"of": of, "owner": owner, "name": name}
+	}
+	return func(context string, path []string) (*problems.Kind, problems.Params) {
+		switch {
+		case context == "steps" && len(path) >= 3 && path[1] == "outputs":
+			if outputs, ok := steps[path[0]]; ok {
+				return missing(outputs, "step", path[0], path[2])
+			}
+		case context != "needs" || len(path) < 3:
+		case path[1] == "outputs":
+			if r, ok := needs[path[0]]; ok {
+				return missing(r.Outputs, "job", path[0], path[2])
+			}
+		case path[1] == "steps" && len(path) >= 5 && path[3] == "outputs":
+			if r, ok := needs[path[0]]; ok {
+				if outputs, ok := r.Steps[path[2]]; ok {
+					return missing(outputs, "step", path[2], path[4])
+				}
+				return problems.OutputNotWritten, problems.Params{"of": "step", "owner": path[2], "name": path[4]}
+			}
+		}
+		return nil, nil
+	}
 }
 
 // stringsContext returns a context whose values are strings, m's.

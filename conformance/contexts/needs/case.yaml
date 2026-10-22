@@ -2,7 +2,9 @@ description: >-
   needs holds, for each job a job needs, its result, its outcome; its
   outputs, as strings; and the outputs of its steps that have ids, by id.
   Text made of one, as a run: of it alone is, is its JSON.
-  A name it doesn't have reads as "", as needs holds strings. It is known
+  A name it doesn't have reads as "", as needs holds strings, but for an
+  output, which reads as "" only in a step whose if: is the word always,
+  and fails anywhere else (output_not_written). It is known
   where a job's dependencies have finished, as its runs-on: is evaluated,
   and in its steps.
 source: Meridian
@@ -22,6 +24,10 @@ jobs:
       - {outcome: success}
       - {outcome: success}
 expect:
+  diagnostics:
+    - severity: warning
+      code: older_always
+      path: /jobs/test/steps/2/if
   skipped:
     - /jobs/probe
   values:
