@@ -393,6 +393,25 @@ func TestTaintFollowsWhatDefaultsRead(t *testing.T) {
 			[]string{"pw: {type: password}", "l: {type: list, template: {v: {type: string}}, default: [{v: '${{ inputs.pw }}'}]}", "copy: {type: string, default: '${{ inputs.l[1].v }}'}"},
 			map[string]any{"pw": sentinel, "l": []any{map[string]any{"v": "added"}, map[string]any{"v": sentinel}}, "copy": sentinel},
 		},
+		{
+			"a default that reads a field of each input, one that reads a password",
+			[]string{
+				"g: {type: group, items: {gp: {type: password}}}",
+				"h: {type: group, items: {x: {type: string, default: '${{ inputs.g.gp }}'}}}",
+				`copy: {type: string, default: '${{ join(inputs.*.x, ",") }}'}`,
+			},
+			map[string]any{"g": map[string]any{"gp": sentinel}, "h": map[string]any{"x": sentinel}, "copy": sentinel},
+		},
+		{
+			"a default that reads a list's default row by a relative reference",
+			[]string{"pw: {type: password}", "l: {type: list, template: {v: {type: string}}, default: [{v: '${{ inputs.pw }}'}]}", "copy: {type: string, default: '${{ ..l.default[0].v }}'}"},
+			map[string]any{"pw": sentinel, "copy": sentinel},
+		},
+		{
+			"a row's default that reads, by a relative reference, one that reads its row's password",
+			[]string{"l: {type: list, template: {p: {type: password}, g: {type: string, default: '${{ inputs.l[index].p }}'}, h: {type: string, default: '${{ ..g.default }}'}}}"},
+			map[string]any{"l": []any{map[string]any{"p": sentinel, "g": sentinel, "h": sentinel}}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), tc.submitted, compile.Options{})

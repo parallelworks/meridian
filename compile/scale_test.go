@@ -42,6 +42,8 @@ var scaledWorkloads = []scaled{
 	{name: "submitted rows whose template's default reads the whole list, with passwords", n: 1000, workload: crossPasswordRows, timed: true},
 	{name: "submitted rows whose template's default gives the whole list's JSON and a password", n: 1000, workload: wholeListRows, timed: true},
 	{name: "values for unknown inputs taken for passwords, beside a form's rows", n: 1000, workload: unknownPasswordsAndRows, timed: true},
+	{name: "submitted defaults that each read the next, the last a password", n: 250, workload: chainedPasswordDefaults, timed: true},
+	{name: "submitted defaults that each read the one before by a relative reference", n: 250, workload: relativeDefaults, timed: true},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
@@ -274,6 +276,35 @@ func unknownPasswordsAndRows(n int) ([]byte, map[string]any) {
 		submitted[fmt.Sprintf("u%d", i)] = map[string]any{"pass": "s"}
 	}
 	return data, submitted
+}
+
+// chainedPasswordDefaults is n inputs whose defaults each read the next
+// input, the last a password, each given a value: what can read the
+// password is found from the last.
+func chainedPasswordDefaults(n int) ([]byte, map[string]any) {
+	lines := []string{"pw: {type: password}"}
+	submitted := map[string]any{"pw": "s"}
+	for i := range n {
+		next := fmt.Sprintf("a%d", i+1)
+		if i == n-1 {
+			next = "pw"
+		}
+		lines = append(lines, fmt.Sprintf("a%d: {type: string, default: '${{ inputs.%s }}'}", i, next))
+		submitted[fmt.Sprintf("a%d", i)] = "v"
+	}
+	return withInputs(lines, ""), submitted
+}
+
+// relativeDefaults is n inputs whose defaults each read the one before's
+// by a relative reference, each given a value.
+func relativeDefaults(n int) ([]byte, map[string]any) {
+	lines := []string{"a0: {type: string, default: x}"}
+	submitted := map[string]any{}
+	for i := 1; i < n; i++ {
+		lines = append(lines, fmt.Sprintf("a%d: {type: string, default: '${{ ..a%d.default }}'}", i, i-1))
+		submitted[fmt.Sprintf("a%d", i)] = "x"
+	}
+	return withInputs(lines, ""), submitted
 }
 
 // deepValue is a matrix whose include holds a mapping nested n deep.

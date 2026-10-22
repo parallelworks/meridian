@@ -345,8 +345,12 @@ type inputResolver struct {
 	// taint holds the paths in the values, as patterns with * for a row's
 	// index, whose values can read a variable or a password, and
 	// secretTaint those whose values can read a password or a secret
-	// variable (taintInputs).
+	// variable (taintInputs). taintNodes holds the strings in the workflow
+	// that taintInputs looked at, by their locations, and taintOrder them
+	// in the order it found them.
 	taint, secretTaint patterns
+	taintNodes         map[string]*taintNode
+	taintOrder         []*taintNode
 	// compareScope holds the budget that comparing what a form sent with
 	// what made it spends (compare): a group of its own, so that what it
 	// spends doesn't decide the run's shape. comparisons holds what each
@@ -616,12 +620,16 @@ func (r *inputResolver) marked(path []string) bool {
 // doesn't define that are taken for passwords, and those of the strings in
 // defaults, and of options, that can read one (reads), until there are no
 // more. A row's index is * in them.
+//
+// Each string is looked at once, with the strings its relative references
+// reach (taintNode). A string can read one if its expressions read a path
+// that can, or a string it reaches can; and then so can the places in the
+// values that hold what it gives (propagateTaint). A string is looked at
+// again only when a path is added that its expressions can read, so the
+// order in which defaults read each other doesn't make it looked at again
+// and again.
 func (r *inputResolver) taintInputs() {
-	type place struct {
-		path, loc         []string
-		tainted, secretly bool
-	}
-	var places []*place
+	r.taintNodes = map[string]*taintNode{}
 	var walk func(fields []*field, prefix []string)
 	walk = func(fields []*field, prefix []string) {
 		for _, f := range fields {
@@ -635,10 +643,10 @@ func (r *inputResolver) taintInputs() {
 				if rows && len(at) > 0 {
 					at = slices.Concat([]string{"*"}, at[1:])
 				}
-				places = append(places, &place{path: slices.Concat(path, at), loc: loc})
+				r.taintPlace(slices.Concat(path, at), loc)
 			})
 			for _, o := range f.findOptions().exprs {
-				places = append(places, &place{path: path, loc: o.loc})
+				r.taintPlace(path, o.loc)
 			}
 			if defs, loc := f.rowInputs(); defs != nil {
 				walk(r.template(defs, loc).fields, appendPath(path, "*"))
@@ -650,19 +658,170 @@ func (r *inputResolver) taintInputs() {
 		r.taint.add(path)
 		r.secretTaint.add(path)
 	}
-	for more := true; more; {
-		more = false
-		for _, p := range places {
-			if !p.tainted && r.reads(p.loc, nil, false) {
-				p.tainted, more = true, true
-				r.taint.add(p.path)
-			}
-			if !p.secretly && r.reads(p.loc, nil, true) {
-				p.secretly, more = true, true
-				r.secretTaint.add(p.path)
+	// Each string's relative references, as it is found, which can find
+	// more.
+	for i := 0; i < len(r.taintOrder); i++ {
+		r.linkTaintNode(r.taintOrder[i])
+	}
+	r.propagateTaint(&r.taint, anyRead)
+	r.propagateTaint(&r.secretTaint, secretRead)
+}
+
+// A taintNode is a string in the workflow that holds an expression, as
+// taintInputs sees it: what its expressions read, the strings their
+// relative references reach, and what it can read, as reads says.
+type taintNode struct {
+	loc  []string
+	refs []expr.Ref
+	// rels are the strings its relative references reach, and readers the
+	// strings whose relative references reach it.
+	rels, readers []*taintNode
+	// places are the places in the values of what it gives.
+	places []*taintPlace
+	// reads is whether it can read a variable or a password, for any of
+	// the list rows it is evaluated for, by what is read (a readKind).
+	reads [2]bool
+}
+
+// A taintPlace is a place in the values, as a pattern with * for a row's
+// index, that holds what one or more strings give; tainted is whether
+// they can read a variable or a password, by what is read.
+type taintPlace struct {
+	path    []string
+	tainted [2]bool
+}
+
+// A readKind is what reads looks for: a variable or a password, or a
+// password or a secret variable.
+type readKind int
+
+const (
+	anyRead readKind = iota
+	secretRead
+)
+
+// taintNode returns the node of the string at loc, a new one if there
+// isn't one yet.
+func (r *inputResolver) taintNode(loc []string) *taintNode {
+	key := jsonptr.Format(loc)
+	if n := r.taintNodes[key]; n != nil {
+		return n
+	}
+	n := &taintNode{loc: loc}
+	r.taintNodes[key] = n
+	r.taintOrder = append(r.taintOrder, n)
+	return n
+}
+
+// taintPlace notes that path, a place in the values, holds what the
+// strings at loc give.
+func (r *inputResolver) taintPlace(path, loc []string) {
+	p := &taintPlace{path: path}
+	exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+		n := r.taintNode(at)
+		n.places = append(n.places, p)
+	})
+}
+
+// linkTaintNode notes what n's expressions read, and the strings their
+// relative references reach (relativeLocs), which are evaluated in turn.
+func (r *inputResolver) linkTaintNode(n *taintNode) {
+	exprs, err := r.workflow.Exprs(n.loc)
+	if err != nil {
+		return // checkSyntax reports it.
+	}
+	for _, e := range exprs {
+		n.refs = append(n.refs, e.Refs()...)
+		for _, rel := range e.Relatives() {
+			for _, loc := range r.relativeLocs(n.loc, rel) {
+				exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+					m := r.taintNode(at)
+					n.rels = append(n.rels, m)
+					m.readers = append(m.readers, n)
+				})
 			}
 		}
 	}
+}
+
+// propagateTaint finds, as reads says for kind, the strings that can read
+// a variable or a password, for any row, and the places in the values,
+// added to taint, that hold what they give, until there are no more. A
+// string is looked at again only when a place is added whose input its
+// expressions read.
+func (r *inputResolver) propagateTaint(taint *patterns, kind readKind) {
+	secret := kind == secretRead
+	// byInput holds the strings that read an input, by its name, and
+	// whole those that read a path that can be any input's.
+	byInput := map[string][]*taintNode{}
+	var whole []*taintNode
+	for _, n := range r.taintOrder {
+		for _, ref := range n.refs {
+			if ref.Context != "inputs" {
+				continue
+			}
+			for p := range reach.Patterns(anyRow(ref.Path)) {
+				if len(p) == 0 || p[0] == "*" {
+					whole = append(whole, n)
+				} else {
+					byInput[p[0]] = append(byInput[p[0]], n)
+				}
+			}
+		}
+	}
+	var queue []*taintNode
+	reads := func(n *taintNode) {
+		if !n.reads[kind] {
+			n.reads[kind] = true
+			queue = append(queue, n)
+		}
+	}
+	check := func(n *taintNode) {
+		if !n.reads[kind] && r.readsRefs(n.refs, secret) {
+			reads(n)
+		}
+	}
+	// recheck checks nodes again, and returns those that still can't read
+	// one.
+	recheck := func(nodes []*taintNode) []*taintNode {
+		for _, n := range nodes {
+			check(n)
+		}
+		return slices.DeleteFunc(nodes, func(n *taintNode) bool { return n.reads[kind] })
+	}
+	for _, n := range r.taintOrder {
+		check(n)
+	}
+	for len(queue) > 0 {
+		n := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, m := range n.readers {
+			reads(m)
+		}
+		for _, p := range n.places {
+			if !p.tainted[kind] {
+				p.tainted[kind] = true
+				taint.add(p.path)
+				byInput[p.path[0]] = recheck(byInput[p.path[0]])
+				whole = recheck(whole)
+			}
+		}
+	}
+}
+
+// anyRow returns path, a path an expression reads, with * in place of
+// each [index]: the path it reads for any row.
+func anyRow(path []string) []string {
+	if !slices.Contains(path, "[index]") {
+		return path
+	}
+	path = slices.Clone(path)
+	for i, k := range path {
+		if k == "[index]" {
+			path[i] = "*"
+		}
+	}
+	return path
 }
 
 // exprStrings calls yield with the location in the workflow, and the path
@@ -685,50 +844,33 @@ func exprStrings(v any, loc, at []string, yield func(loc, at []string)) {
 	}
 }
 
-// reads reports whether what the workflow holds at loc, evaluated for the
-// list rows at index, or for any row if index is nil, can read a variable
-// or a password, or with secret set, a password or a secret variable: the
-// expressions in each of its strings, and in the definitions their
-// relative references reach (relativeLocs), which are evaluated in turn.
-// An expression can read one if it reads org or vars, or a secret
-// variable, or a path of the inputs' values whose value can (taintInputs).
-func (r *inputResolver) reads(loc []string, index []int, secret bool) bool {
-	seen := map[string]bool{}
-	var readsAt func(loc []string) bool
-	readsAt = func(loc []string) bool {
-		key := jsonptr.Format(loc)
-		if seen[key] {
-			return false
-		}
-		seen[key] = true
-		found := false
-		exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
-			exprs, err := r.workflow.Exprs(at)
-			if err != nil || found {
-				return
-			}
-			for _, e := range exprs {
-				if r.readsRefs(e.Refs(), index, secret) {
-					found = true
-					return
-				}
-				for _, rel := range e.Relatives() {
-					if slices.ContainsFunc(r.relativeLocs(at, rel), readsAt) {
-						found = true
-						return
-					}
-				}
-			}
-		})
-		return found
+// reads reports whether what the workflow holds at loc, evaluated for any
+// list row, can read a variable or a password, or with secret set, a
+// password or a secret variable: the expressions in each of its strings,
+// and in the definitions their relative references reach (relativeLocs),
+// which are evaluated in turn. An expression can read one if it reads org
+// or vars, or a secret variable, or a path of the inputs' values whose
+// value can (taintInputs). Those paths have * for each row's index, so
+// what can read one for a row can for each.
+//
+// loc is one of the places taintInputs found, whose strings it decided.
+func (r *inputResolver) reads(loc []string, secret bool) bool {
+	kind := anyRead
+	if secret {
+		kind = secretRead
 	}
-	return readsAt(loc)
+	found := false
+	exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+		n := r.taintNodes[jsonptr.Format(at)]
+		// One taintInputs didn't find, which it can't decide, can.
+		found = found || n == nil || n.reads[kind]
+	})
+	return found
 }
 
-// readsRefs reports whether refs, for the list rows at index, or for any
-// row if index is nil, can read a variable or a password, or with secret
-// set, a password or a secret variable.
-func (r *inputResolver) readsRefs(refs []expr.Ref, index []int, secret bool) bool {
+// readsRefs reports whether refs, for any list row, can read a variable or
+// a password, or with secret set, a password or a secret variable.
+func (r *inputResolver) readsRefs(refs []expr.Ref, secret bool) bool {
 	taint := &r.taint
 	if secret {
 		taint = &r.secretTaint
@@ -740,16 +882,7 @@ func (r *inputResolver) readsRefs(refs []expr.Ref, index []int, secret bool) boo
 				return true
 			}
 		case "inputs":
-			path := ref.Path
-			if index == nil {
-				path = slices.Clone(path)
-				for i, k := range path {
-					if k == "[index]" {
-						path[i] = "*"
-					}
-				}
-			}
-			for p := range reach.Patterns(indexPath(path, index)) {
+			for p := range reach.Patterns(anyRow(ref.Path)) {
 				if taint.overlaps(p) {
 					return true
 				}
@@ -794,21 +927,30 @@ func (r *inputResolver) relativeLocs(loc []string, rel expr.RelativeRef) [][]str
 	var out [][]string
 	for _, k := range rel.Path {
 		var next [][]string
+		each := k == "*" || k == "[index]"
 		for _, l := range at {
 			switch v := lookup(r.doc.Value, l).(type) {
 			case string:
 				out = append(out, l)
 			case map[string]any:
-				for key := range jsonvalue.Sorted(v) {
-					if k == "*" || k == "[index]" || k == key {
-						next = append(next, appendPath(l, key))
+				if !each {
+					if _, ok := v[k]; ok {
+						next = append(next, appendPath(l, k))
 					}
+					continue
+				}
+				for key := range jsonvalue.Sorted(v) {
+					next = append(next, appendPath(l, key))
 				}
 			case []any:
-				for i := range v {
-					if key := strconv.Itoa(i); k == "*" || k == "[index]" || k == key {
-						next = append(next, appendPath(l, key))
+				if !each {
+					if i, err := strconv.Atoi(k); err == nil && i >= 0 && i < len(v) && strconv.Itoa(i) == k {
+						next = append(next, appendPath(l, k))
 					}
+					continue
+				}
+				for i := range v {
+					next = append(next, appendPath(l, strconv.Itoa(i)))
 				}
 			}
 		}
@@ -1261,7 +1403,7 @@ func (r *inputResolver) compare(f *field) {
 			i := slices.IndexFunc(gave, func(res comparison) bool { return res.ok && sameValue(part, res.v) })
 			switch {
 			case i >= 0:
-				if loc := c.locs[i]; r.reads(loc, f.index, false) {
+				if loc := c.locs[i]; r.reads(loc, false) {
 					raw := lookup(r.doc.Value, loc)
 					r.noteEvaluation(f, path, loc, raw)
 					r.deferPart(f, path, raw, true)
@@ -1269,7 +1411,7 @@ func (r *inputResolver) compare(f *field) {
 			case c.option && f.findOptions().literal(part):
 			case f.typ == "password" && len(path) == 0:
 				// A password is a secret, whatever made it.
-			case slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, f.index, true) }):
+			case slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, true) }):
 				r.holdPath(f.holder(), slices.Concat(f.path, path), heldDerived)
 			default:
 				r.holdPath(f.holder(), slices.Concat(f.path, path), heldPrivate)
@@ -1672,7 +1814,7 @@ func (r *inputResolver) findTexts(f *field) {
 		f.reads = append(f.reads, exprs...)
 	}
 	f.candidates = slices.DeleteFunc(candidates, func(c candidate) bool {
-		return !slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, f.index, false) })
+		return !slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, false) })
 	})
 }
 
