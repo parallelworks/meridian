@@ -525,7 +525,9 @@ func TestGroupCountsFailedTemplates(t *testing.T) {
 		{"map(inputs.j, x => x)", 7, problems.ExpressionTooMuchWork, problems.ExpressionsTooMuchWork, 24 + read, 0},
 		{"length(fromJSON(inputs.j))", 2, problems.ExpressionTooLarge, problems.ExpressionsBuildTooMuch, 32 + read, read - len(j)},
 	} {
-		group := inputs(map[string]any{"j": j}).Budgeted()
+		// The clock stands still, so that only work and builds stop the group,
+		// however slow the machine, such as one testing with the race detector.
+		group := expr.WithClock(inputs(map[string]any{"j": j}), every(0).read)
 		e := mustParse(t, tc.src)
 		for i := range 400 {
 			_, err := e.Eval(group)
