@@ -8,5 +8,6 @@ expect:
       code: extra_document_invalid
       path: ""
       line: 6
+      column: 0
   values:
     /jobs/main/steps/0/run: "echo hello"

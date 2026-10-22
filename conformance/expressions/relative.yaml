@@ -94,6 +94,7 @@ cases:
   # Through a mapping to a template, the path past it reads its value too.
   - at: /field24/item
     value: three
+    warnings: []
   # Past plain text, the path reads a character of it.
   - at: /field24/char
     value: p

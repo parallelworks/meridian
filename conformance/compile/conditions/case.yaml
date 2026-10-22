@@ -4,7 +4,7 @@ description: >-
   older spelling of always(), and words that decide a condition, such as the
   removed keyword completed, are warnings. A word is text, which is never
   false, so !debug is always false.
-source: ACTIVATE's tests
+source: ACTIVATE's tests, and Meridian
 expect:
   diagnostics:
     - severity: warning

@@ -79,13 +79,14 @@ type Expect struct {
 }
 
 // A Diagnostic is an error or warning a case expects. Line and Column are
-// each checked when they are set.
+// each checked when they are set: column 0 says the diagnostic has a line
+// but no column, and line 0 that it is about the whole file.
 type Diagnostic struct {
 	Severity string `yaml:"severity"`
 	Code     string `yaml:"code"`
 	Path     string `yaml:"path"`
-	Line     int    `yaml:"line,omitempty"`
-	Column   int    `yaml:"column,omitempty"`
+	Line     *int   `yaml:"line,omitempty"`
+	Column   *int   `yaml:"column,omitempty"`
 	// Params are the values of some of the diagnostic's params, by name.
 	// A kind's params are part of its contract, as its code is. Those
 	// listed must have these values, and the others aren't checked. A

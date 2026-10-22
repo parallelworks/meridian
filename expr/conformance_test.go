@@ -54,21 +54,14 @@ func canonical(t *testing.T, v any) string {
 	return string(data)
 }
 
-// unhurried returns scope in a group of its own whose clock never moves, so
-// that a case's evaluation passes Meridian's limit on a group's time only
-// if it passes the others, however slow the machine running the tests is.
-// No case evaluates for anywhere near the 10 seconds a group may take.
-func unhurried(scope expr.Scope) expr.Scope {
-	return expr.WithClock(scope, func() time.Time { return time.Time{} })
-}
+// stopped is a clock that never moves, so that an evaluation passes
+// Meridian's limit on a group's time only if it passes the others, however
+// slow the machine running the tests is. No case evaluates for anywhere
+// near the 10 seconds a group may take.
+func stopped() time.Time { return time.Time{} }
 
 func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.ExpressionCase) {
 	s := f.ScopeFor(c)
-	scope := unhurried(expr.Scope{Contexts: s.Contexts, Index: s.Index})
-	if s.Status != nil {
-		scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
-	}
-
 	src, location := c.Template, []string(nil)
 	if c.At != "" {
 		var err error
@@ -82,10 +75,20 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		}
 		src = s
 	}
-	if f.Workflow != nil {
-		w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
-		scope = w.Scope(location, scope)
+	// newScope returns the case's scope, whose evaluations are a group of
+	// their own, with a stopped clock.
+	newScope := func() expr.Scope {
+		scope := expr.WithClock(expr.Scope{Contexts: s.Contexts, Index: s.Index}, stopped)
+		if s.Status != nil {
+			scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
+		}
+		if f.Workflow != nil {
+			w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
+			scope = w.Scope(location, scope)
+		}
+		return scope
 	}
+	scope := newScope()
 
 	var got any
 	var err error
@@ -130,16 +133,19 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		if c.Expr != "" {
 			src = "${{" + c.Expr + "}}"
 		}
-		checkParsedFor(t, src, scope, c.Value)
+		// Evaluated again, in a group of its own, without the Index, though
+		// what reads the workflow still has it.
+		again := newScope()
+		again.Index = nil
+		checkParsedFor(t, src, scope.Index, again, c.Value)
 	}
 }
 
-// checkParsedFor checks that src, parsed for its scope's list items, has
-// the value it has with them as the scope's Index, after a trip through
-// JSON, with no Index in the scope.
-func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
+// checkParsedFor checks that src, parsed for the list items index, has the
+// value want after a trip through JSON, in scope, which has no Index.
+func checkParsedFor(t *testing.T, src string, index []int, scope expr.Scope, want any) {
 	t.Helper()
-	tmpl, err := expr.ParseTemplateFor(src, scope.Index)
+	tmpl, err := expr.ParseTemplateFor(src, index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,9 +157,7 @@ func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
 	if err := stored.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)
 	}
-	index := scope.Index
-	scope.Index = nil
-	if got, err := stored.Eval(unhurried(scope)); err != nil || !equal(got, want) {
+	if got, err := stored.Eval(scope); err != nil || !equal(got, want) {
 		t.Errorf("parsed for %v: got %s, %v; want %s", index, show(got), err, show(want))
 	}
 }

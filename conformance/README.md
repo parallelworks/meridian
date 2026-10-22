@@ -31,7 +31,8 @@ expect:
   without any loads cleanly. `code` is the problem's code, which says what is
   wrong without depending on a message's wording or language; Meridian's
   `problems` package lists them. `path` is a JSON Pointer, and `line` and
-  `column` are each checked when they are set.
+  `column` are each checked when they are set: `column: 0` says the
+  diagnostic is on a line but has no column.
 - A diagnostic's `params` are values its message shows, which are part of
   its kind's contract as its code is, such as the name an unknown key's
   warning suggests:
@@ -44,8 +45,21 @@ expect:
   ```
 
   The params listed must have these values, and those it doesn't list
-  aren't checked. A param is text or a number: a yes or no is the text
-  `"true"` or `"false"`, and a value from the workflow is its compact JSON.
+  aren't checked. [`problems/kinds.go`](../problems/kinds.go) names each
+  kind's params where it defines the kind, and its first comment says what
+  they hold. In short:
+
+  - A param is text or a number, as each kind has it: `too_short`'s `min`
+    is the number `1`, but `input_above_max`'s `value` and `max` are text,
+    `"9"` and `"8"`. A yes or no is the text `"true"` or `"false"`.
+  - A name or a key is as it is written, and a list of them is each in
+    double quotes, joined with `", "`, as `'"run", "uses"'`.
+  - A value from the workflow or the run is its JSON, as `problems.Show`
+    writes it: compact, with a mapping's keys in sorted order, `<`, `>` and
+    `&` as they are, U+2028 and U+2029 escaped, and cut to 40 characters,
+    the last of them `…`. A value from a variable or a password is `***`.
+  - Where a diagnostic is, its file, line and column, are params too, which
+    a case checks with `line` and `column` rather than `params`.
 - `expect.values` lists values the loaded workflow must have, by JSON Pointer.
 
 ## Inputs

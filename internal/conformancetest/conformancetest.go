@@ -5,7 +5,7 @@ package conformancetest
 import (
 	jsonv2 "encoding/json/v2"
 	"fmt"
-	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,43 +17,91 @@ import (
 // CheckDiagnostics checks that got has each diagnostic a case expects, and
 // no others. One expected without a line matches on any line, one without a
 // column in any column, and one matches whatever values the params it
-// doesn't list have. Those that say more are matched first, so that one
-// that says less doesn't take the diagnostic another needs.
+// doesn't list have. Each expected diagnostic is paired with one of got,
+// and the pairing is the largest there is, so that one that says less
+// never takes the diagnostic another needs.
 func CheckDiagnostics(t testing.TB, want []conformance.Diagnostic, got problems.Diagnostics) {
 	t.Helper()
-	unmatched := slices.Clone(got)
-	want = slices.Clone(want)
-	slices.SortStableFunc(want, func(a, b conformance.Diagnostic) int { return specificity(b) - specificity(a) })
-	for _, w := range want {
-		i := slices.IndexFunc(unmatched, func(d problems.Diagnostic) bool {
-			pos := d.Position()
-			return d.Severity().String() == w.Severity && string(d.Code) == w.Code && d.Path() == w.Path &&
-				(w.Line == 0 || pos.Line == w.Line) && (w.Column == 0 || pos.Column == w.Column) &&
-				hasParams(t, d, w.Params)
-		})
-		if i < 0 {
-			t.Errorf("missing %s %s at %q, line %d, column %d, params %s; got:\n%s",
-				w.Severity, w.Code, w.Path, w.Line, w.Column, Canonical(t, w.Params), describe(t, got))
-			continue
+	fits := make([][]bool, len(want))
+	for i, w := range want {
+		fits[i] = make([]bool, len(got))
+		for j, d := range got {
+			fits[i][j] = matches(t, w, d)
 		}
-		unmatched = slices.Delete(unmatched, i, i+1)
 	}
-	for _, d := range unmatched {
-		t.Errorf("unexpected %s (path %q, params %s)", d, d.Path(), Canonical(t, d.Params))
+	pairedWith := pair(fits, len(got))
+	paired := make([]bool, len(got))
+	for _, j := range pairedWith {
+		if j >= 0 {
+			paired[j] = true
+		}
+	}
+	for i, w := range want {
+		if pairedWith[i] < 0 {
+			t.Errorf("missing %s %s at %q, line %s, column %s, params %s; got:\n%s",
+				w.Severity, w.Code, w.Path, optional(w.Line), optional(w.Column), Canonical(t, w.Params), describe(t, got))
+		}
+	}
+	for j, d := range got {
+		if !paired[j] {
+			t.Errorf("unexpected %s (path %q, params %s)", d, d.Path(), Canonical(t, d.Params))
+		}
 	}
 }
 
-// specificity counts what an expected diagnostic says beyond its severity,
-// code and path.
-func specificity(w conformance.Diagnostic) int {
-	n := len(w.Params)
-	if w.Line != 0 {
-		n++
+// matches reports whether d is a diagnostic w expects.
+func matches(t testing.TB, w conformance.Diagnostic, d problems.Diagnostic) bool {
+	pos := d.Position()
+	return d.Severity().String() == w.Severity && string(d.Code) == w.Code && d.Path() == w.Path &&
+		(w.Line == nil || pos.Line == *w.Line) && (w.Column == nil || pos.Column == *w.Column) &&
+		hasParams(t, d, w.Params)
+}
+
+// pair pairs each of the expected diagnostics with one of n that fits it,
+// fits[i][j] saying whether the jth fits the ith, as many as can be. It
+// returns the index each is paired with, or -1. It finds the largest
+// pairing by augmenting paths, which for a case's few diagnostics is
+// quick.
+func pair(fits [][]bool, n int) []int {
+	pairedWith := make([]int, len(fits))
+	owner := make([]int, n)
+	for j := range owner {
+		owner[j] = -1
 	}
-	if w.Column != 0 {
-		n++
+	var augment func(i int, seen []bool) bool
+	augment = func(i int, seen []bool) bool {
+		for j, ok := range fits[i] {
+			if !ok || seen[j] {
+				continue
+			}
+			seen[j] = true
+			if owner[j] < 0 || augment(owner[j], seen) {
+				owner[j] = i
+				return true
+			}
+		}
+		return false
 	}
-	return n
+	for i := range fits {
+		augment(i, make([]bool, n))
+	}
+	for i := range pairedWith {
+		pairedWith[i] = -1
+	}
+	for j, i := range owner {
+		if i >= 0 {
+			pairedWith[i] = j
+		}
+	}
+	return pairedWith
+}
+
+// optional shows a line or column a case may leave out.
+func optional(n *int) string {
+	if n == nil {
+		return "any"
+	}
+	return strconv.Itoa(*n)
 }
 
 // hasParams reports whether d's params have the values want gives them.

@@ -156,6 +156,10 @@ cases:
   - expr: "inputs.type == secrets.TOKEN"
     value: false
     warnings: [15]
+  # In a template, each is at its offset in the template.
+  - template: "x ${{ input.type }} and ${{ inputs.type == secrets.TOKEN }}"
+    value: x input.type and false
+    warnings: [6, 43]
   - expr: inputs.pvc == New
     value: true
     warnings: []
