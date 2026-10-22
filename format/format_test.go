@@ -59,6 +59,31 @@ func TestUnknownKeysAreDropped(t *testing.T) {
 	}
 }
 
+// A whole number is an int64, and one too large for an int64 is a float64,
+// as JSON's numbers are: still a number, not text.
+func TestLoadWholeNumbers(t *testing.T) {
+	doc, diags := format.Load("workflow.yaml", []byte(`configurations:
+  numbers:
+    inputs:
+      small: 9223372036854775807
+      large: 18446744073709551615
+      negative: -9223372036854775808
+`+hello))
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	inputs := doc.Value["configurations"].(map[string]any)["numbers"].(map[string]any)["inputs"].(map[string]any)
+	for key, want := range map[string]any{
+		"small":    int64(math.MaxInt64),
+		"large":    float64(math.MaxUint64),
+		"negative": int64(math.MinInt64),
+	} {
+		if got := inputs[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
 func TestDocumentPosition(t *testing.T) {
 	doc, diags := format.Load("workflow.yaml", []byte(hello))
 	if doc == nil {

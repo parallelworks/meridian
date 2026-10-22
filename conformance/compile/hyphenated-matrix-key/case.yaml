@@ -1,0 +1,33 @@
+description: >-
+  A hyphen is a minus sign, so matrix.python-version subtracts the text
+  "version" from matrix.python. That is a warning, which says when the job's
+  matrix has the key with the hyphen that was probably meant, as it has
+  python-version and not node-version, as well as the warning that the
+  matrix has no key python or node.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: hyphenated_name
+      path: /jobs/build/steps/0/run
+      line: 8
+      column: 23
+      params: {written: matrix.python, name: python-version, defines: matrix, defined: python-version, job: build}
+    - severity: warning
+      code: undefined_matrix_key
+      path: /jobs/build/steps/0/run
+      line: 8
+      column: 23
+      params: {job: build, key: python}
+    - severity: warning
+      code: hyphenated_name
+      path: /jobs/build/steps/0/run
+      line: 8
+      column: 52
+      params: {written: matrix.node, name: node-version, defines: none}
+    - severity: warning
+      code: undefined_matrix_key
+      path: /jobs/build/steps/0/run
+      line: 8
+      column: 52
+      params: {job: build, key: node}
