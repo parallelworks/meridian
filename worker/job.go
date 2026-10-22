@@ -191,7 +191,7 @@ func (a *attempt) setUp() *problem.Problem {
 		}
 	}
 	fail := func(k *problems.Kind, params problems.Params) *problem.Problem {
-		p := a.maskProblem(k.Type().New(k.Message(params)), params)
+		p := a.maskProblem(k.Problem(params))
 		for _, l := range logs {
 			l.Error("the job failed before its first step", "problem", p.Detail)
 		}
@@ -636,10 +636,10 @@ func (a *attempt) maskDiagnostics(ds problems.Diagnostics) problems.Diagnostics 
 	return out
 }
 
-// maskProblem returns p, with params, and what it says masked.
-func (a *attempt) maskProblem(p *problem.Problem, params problems.Params) *problem.Problem {
+// maskProblem returns p with what it says masked.
+func (a *attempt) maskProblem(p *problem.Problem) *problem.Problem {
 	p.Detail = a.mask.Mask(p.Detail)
-	p.Params = a.maskParams(params)
+	p.Params = a.maskParams(p.Params)
 	return p
 }
 

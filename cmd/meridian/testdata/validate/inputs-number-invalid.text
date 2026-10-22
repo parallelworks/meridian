@@ -1,0 +1,4 @@
+$ meridian validate --format text --inputs inputs.json ../../conformance/inputs/number-invalid/workflow.yaml
+../../conformance/inputs/number-invalid/workflow.yaml:4:7: error: The input "count" is 9, more than its maximum of 8. (input_above_max)
+../../conformance/inputs/number-invalid/workflow.yaml:8:7: error: The input "other" takes a number, not "many". (input_not_number)
+exit status 1

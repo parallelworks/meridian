@@ -943,9 +943,9 @@
   },
   "outputs_not_file": {
     "title": "$OUTPUTS 不是文件",
-    "why": "工作进程从 $OUTPUTS 所指的文件读取步骤的输出。为免那里的 FIFO 使它永远等待，它只读取普通文件，并且不经由符号链接读取；该步骤在那里放置了别的东西，因此无法读取其输出，步骤失败。工作进程会为后续步骤重新创建该文件。",
+    "why": "工作进程从 $OUTPUTS 所指的文件，或那里的符号链接所指的东西读取步骤的输出，与格式 1 一样。为免那里的 FIFO 使它永远等待，它只读取普通文件，并且不等待地打开它；该步骤在那里放置了别的东西，因此无法读取其输出，步骤失败。格式 1 则会永远等待，这是一个缺陷。工作进程会为后续步骤在那里重新放置一个文件。",
     "fix": [
-      "用 >> 将输出写入 $OUTPUTS，并保持该文件不动。"
+      "用 >> 将输出写入 $OUTPUTS，或将它设为指向普通文件的链接。"
     ]
   },
   "log_not_kept": {
@@ -953,6 +953,498 @@
     "why": "在无法连接到协调器时，工作进程会继续运行作业的步骤，并将其日志保存在磁盘上（最多到一个上限），以便在能够连接时发送。超过上限后，或者磁盘已满时，它不会保留步骤输出的内容，因此日志会缺少这部分内容。",
     "fix": [
       "检查作业运行所在的主机与协调器之间的连接，以及存放工作进程目录（默认在 TMPDIR 中）的磁盘的空间。"
+    ]
+  },
+  "workflow_too_large": {
+    "title": "工作流过大",
+    "why": "工作流文件会被整体读取，因此其大小有上限。此工作流来自标准输入等流，Meridian 在其超过上限时停止了读取。",
+    "fix": [
+      "将较长的脚本从工作流中移出，放到由步骤运行的文件中。",
+      "检查该流是否为您想要的工作流，而不是永不结束的设备或管道。"
+    ]
+  },
+  "execution_group_unknown": {
+    "title": "未知的执行组",
+    "why": "execution-groups 输入的值是运行工作流的人的某个执行组的名称。在其本机上，这些组是内置的 local 组，以及 Meridian 配置目录中 groups.yaml 定义的组。",
+    "fix": [
+      "从消息列出的组中选择一个。",
+      "或者在 Meridian 配置目录的 groups.yaml 中定义该组。"
+    ]
+  },
+  "source_ref_invalid": {
+    "title": "不是对 Git 中工作流的引用",
+    "why": "Meridian 从 GitHub 或 GitLab 上的 Git 仓库读取步骤的 uses: 所指定的工作流：github/ 或 gitlab/，仓库的所有者和名称，仓库中的工作流文件（未指定时为 workflow.yaml），以及 @ 和分支、标签或提交（未指定时为默认分支）。不允许可能被理解为其他内容的部分，例如路径中的 .. 或以 - 开头的修订。",
+    "fix": [
+      "将引用写为 github/<所有者>/<仓库>/<路径>@<修订>，或以 gitlab/ 开头的相同形式。"
+    ]
+  },
+  "source_on_platform": {
+    "title": "平台存储的工作流",
+    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流。",
+    "fix": [
+      "在存储所用工作流的平台上运行该工作流。",
+      "或者通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>/<路径>@<修订>。"
+    ]
+  },
+  "source_revision_not_found": {
+    "title": "没有该仓库或修订",
+    "why": "Meridian 使用 git 获取 uses: 指定的修订，但 git 未找到该仓库，或仓库中没有该分支、标签或提交。git 无法用您的凭据读取的私有仓库看起来也可能是这样。",
+    "fix": [
+      "检查仓库的所有者和名称，以及 @ 后面的修订。",
+      "检查 git 能否用您的凭据获取该仓库，例如使用 git ls-remote 和仓库的 URL。"
+    ]
+  },
+  "source_file_not_found": {
+    "title": "仓库中没有该工作流文件",
+    "why": "uses: 指定仓库中的一个文件（未指定时为 workflow.yaml），而其修订所指的提交中没有该名称的文件。目录不是工作流文件。",
+    "fix": [
+      "检查引用中仓库名称后面的路径。",
+      "检查该修订中是否有此文件：默认分支中可能没有。"
+    ]
+  },
+  "source_too_large": {
+    "title": "仓库中的工作流文件过大",
+    "why": "Meridian 会整体读取步骤所用的工作流，因此像对任何工作流一样限制其大小。",
+    "fix": [
+      "检查引用指定的是工作流文件，而不是仓库中的其他文件。",
+      "将工作流拆分为若干个较小的工作流，并通过 uses: 相互调用。"
+    ]
+  },
+  "source_changed": {
+    "title": "工作流不是固定时的文本",
+    "why": "运行会将其步骤所用的每个工作流固定到一个提交及其文本的 SHA-256 摘要，使运行及其重新运行执行相同的代码。该提交中的文本摘要不同，只可能是仓库的历史或 Meridian 保存的副本被更改了。",
+    "fix": [
+      "不要重新运行此运行。请启动一个新的运行，它会重新固定工作流。",
+      "查明谁能够更改仓库的历史或 Meridian 的缓存目录。"
+    ]
+  },
+  "source_not_pinned": {
+    "title": "未固定的工作流",
+    "why": "运行按创建运行时固定的提交和摘要读取其步骤所用的每个工作流，而不会按可能已移动的分支读取。此工作流的记录缺少其中之一。",
+    "fix": [
+      "启动一个新的运行，它会重新固定工作流。"
+    ]
+  },
+  "directory_variable_relative": {
+    "title": "目录变量不是绝对路径",
+    "why": "MERIDIAN_CONFIG_DIR、MERIDIAN_STATE_DIR 和 MERIDIAN_CACHE_DIR 用于选择 Meridian 的目录。每个都必须是绝对路径，这样它指定的目录才不会取决于运行 Meridian 的位置。",
+    "fix": [
+      "将该变量设置为绝对路径，或取消设置。"
+    ]
+  },
+  "home_unknown": {
+    "title": "没有主目录",
+    "why": "除非 MERIDIAN_CONFIG_DIR、MERIDIAN_STATE_DIR 和 MERIDIAN_CACHE_DIR 选择了其他位置，Meridian 会将其配置、状态和缓存保存在主目录中的目录里。",
+    "fix": [
+      "将 HOME 设置为您的主目录。",
+      "或者将消息指出的变量设置为绝对路径。"
+    ]
+  },
+  "directory_unavailable": {
+    "title": "无法创建或打开目录",
+    "why": "Meridian 在首次需要时创建其状态目录和缓存目录，但操作系统拒绝了或失败了。",
+    "fix": [
+      "修复原因所指出的问题，例如您无法写入的父目录。",
+      "或者通过 MERIDIAN_STATE_DIR 或 MERIDIAN_CACHE_DIR 选择其他目录。"
+    ]
+  },
+  "not_a_directory": {
+    "title": "不是目录",
+    "why": "Meridian 将其配置、状态和缓存保存在目录中，而它要使用的路径上是其他东西。",
+    "fix": [
+      "移走该路径上的内容，或者通过 MERIDIAN_CONFIG_DIR、MERIDIAN_STATE_DIR 或 MERIDIAN_CACHE_DIR 选择其他目录。"
+    ]
+  },
+  "directory_not_owned": {
+    "title": "其他用户的目录",
+    "why": "Meridian 的目录保存您的配置、包装运行密钥的密钥、日志以及私有仓库的副本。其他用户拥有的目录，是该用户可以更改的目录。",
+    "fix": [
+      "通过 MERIDIAN_CONFIG_DIR、MERIDIAN_STATE_DIR 或 MERIDIAN_CACHE_DIR 选择您自己的目录。"
+    ]
+  },
+  "directory_not_private": {
+    "title": "其他用户可读或可改的目录",
+    "why": "Meridian 的状态目录保存包装运行密钥的密钥，缓存目录保存可能是私有的仓库副本，因此只能由您读取。对于曾经开放的目录，其中的内容可能已被读取，因此 Meridian 不会自行收紧其权限。",
+    "fix": [
+      "确认其中的内容未被读取或更改后，对该目录运行 chmod 700。",
+      "或者通过 MERIDIAN_STATE_DIR 或 MERIDIAN_CACHE_DIR 选择新的目录。"
+    ]
+  },
+  "path_unsafe": {
+    "title": "经过他人可改目录的路径",
+    "why": "能够更改通往 Meridian 目录路径上某个目录的用户，可以在 Meridian 检查之后把其中的内容换成自己的。与 OpenSSH 一样，Meridian 只接受这样的路径目录：它属于您或 root，且只有您或 root 能更改它；或者像 /tmp 那样，其粘滞位阻止其他用户删除不属于他们的内容，并且其下一级属于您。",
+    "fix": [
+      "选择一个只有您或 root 能更改其父目录的目录，例如主目录中的目录，或 mktemp -d -p /var/tmp 创建的目录。",
+      "或者请该目录的所有者对其运行 chmod go-w。"
+    ]
+  },
+  "network_filesystem": {
+    "title": "数据库位于网络文件系统上",
+    "why": "SQLite 的锁在网络文件系统上无法可靠工作，而集群上的主目录通常就在这类文件系统上，因此 Meridian 不会把数据库放在那里。",
+    "fix": [
+      "将 MERIDIAN_STATE_DIR 设置为本地磁盘上只有您能更改且会长期保留的目录：其中保存数据库和包装运行密钥的密钥，目录丢失它们也会丢失。可以使用 mktemp -d -p /var/tmp 创建的目录，或节点持久本地磁盘上的目录，但不要使用 /tmp 中的目录，重启可能会清空它。"
+    ]
+  },
+  "filesystem_unknown": {
+    "title": "无法判断文件系统",
+    "why": "Meridian 在打开数据库之前会检查其目录不在网络文件系统上，但操作系统没有给出答案。",
+    "fix": [
+      "修复原因所指出的问题，或者通过 MERIDIAN_STATE_DIR 选择其他目录。"
+    ]
+  },
+  "file_unreadable": {
+    "title": "无法读取文件",
+    "why": "Meridian 需要读取该文件，但操作系统拒绝了或失败了。",
+    "fix": [
+      "修复原因所指出的问题，例如不存在的路径或您无法读取的文件。"
+    ]
+  },
+  "file_not_regular": {
+    "title": "不是普通文件",
+    "why": "Meridian 只从普通文件读取其配置、密钥和变量的值，以免读取时在管道上永远等待，或从设备读取。",
+    "fix": [
+      "改为指定一个普通文件。"
+    ]
+  },
+  "file_not_owned": {
+    "title": "其他用户的文件",
+    "why": "拥有 Meridian 的文件或保存变量值的文件的用户，可以更改其中的内容，例如作业的运行位置，或保护运行密钥的密钥。",
+    "fix": [
+      "用您自己的文件替换它。"
+    ]
+  },
+  "file_not_private": {
+    "title": "其他用户可读或可改的文件",
+    "why": "该文件保存密钥或保护密钥的内容：包装运行密钥记录的密钥、变量文件（因为普通变量中也会保存密钥），或密钥变量的值。只能由您读取。",
+    "fix": [
+      "对该文件运行 chmod 600。"
+    ]
+  },
+  "file_changeable": {
+    "title": "其他用户可改的文件",
+    "why": "能够更改您的组或变量值的用户，可以把您的作业发送到他们选择的地方，或决定您的作业读取什么。",
+    "fix": [
+      "对该文件运行 chmod go-w。"
+    ]
+  },
+  "file_over_limit": {
+    "title": "文件超出 Meridian 读取的大小",
+    "why": "Meridian 会整体读取其配置文件、变量的文件和输入文件，因此限制它们的大小。",
+    "fix": [
+      "检查路径指定的是您想要的文件，并减小文件的大小。"
+    ]
+  },
+  "config_yaml_syntax": {
+    "title": "配置文件不是有效的 YAML",
+    "why": "Meridian 的配置文件 groups.yaml 和 variables.yaml 都是 YAML。",
+    "fix": [
+      "修复原因所指出的那一行的 YAML。"
+    ]
+  },
+  "config_extra_document": {
+    "title": "包含多个 YAML 文档的配置文件",
+    "why": "Meridian 的每个配置文件都是一个 YAML 文档。--- 之后的第二个文档更可能是错误，而不是应当忽略的内容。",
+    "fix": [
+      "删除 --- 及其后面的内容，或者将后面的内容移入第一个文档。"
+    ]
+  },
+  "config_not_mapping": {
+    "title": "不是映射的配置文件",
+    "why": "groups.yaml 将每个组的名称映射到该组，variables.yaml 包含 org 和 vars，二者都是按名称排列的变量映射。",
+    "fix": [
+      "按 docs/design.md 所示，将文件写成映射。"
+    ]
+  },
+  "config_key_unknown": {
+    "title": "配置文件中的未知键",
+    "why": "Meridian 会严格读取其配置文件，以便拼错的键成为错误，而不是悄无声息地不起作用的设置。",
+    "fix": [
+      "更正键的拼写，或将其删除。"
+    ]
+  },
+  "config_key_repeated": {
+    "title": "配置文件中重复的键",
+    "why": "配置文件的映射中出现两次的键，更可能是错误，而不是要替换的值：例如把密钥变量又写成了普通变量。",
+    "fix": [
+      "删除其中之一。"
+    ]
+  },
+  "config_wrong_type": {
+    "title": "类型错误的配置值",
+    "why": "Meridian 配置文件中的每个键只接受一种类型的值。",
+    "fix": [
+      "为该键提供消息所指类型的值。"
+    ]
+  },
+  "group_name_invalid": {
+    "title": "无效的组名",
+    "why": "组的名称是作业指定它的方式，也是尝试记录其运行位置的方式。",
+    "fix": [
+      "重命名该组。"
+    ]
+  },
+  "group_empty": {
+    "title": "没有成员的组",
+    "why": "组是作业可以运行的地方：一个有序的成员列表，每个成员是一个后端及其设置。没有成员的组什么也运行不了。",
+    "fix": [
+      "为该组添加成员，或将其删除。"
+    ]
+  },
+  "member_invalid": {
+    "title": "无效的成员",
+    "why": "成员的名称由字母、数字、_、- 和 . 组成，并以字母或数字开头。其 backend 为 local、ssh、kubernetes、slurm 或 pbs；isolation 指定容器运行时（如 podman）或 host；cpu 为核数（如 4 或 0.5）或千分之一核数（如 500m）；memory 为字节数或带后缀的数（如 8Gi 或 512M）；gpu 为整数。max-walltime、margin 和 default-timeout 为整秒的时长，如 24h、90m 或 30s。",
+    "fix": [
+      "按其键的要求更正该值。"
+    ]
+  },
+  "member_repeated": {
+    "title": "两个同名的成员",
+    "why": "成员的名称在其组中标识它，也在放置到它上面的尝试的记录中标识它。",
+    "fix": [
+      "重命名其中一个成员。"
+    ]
+  },
+  "variable_name_invalid": {
+    "title": "无效的变量名",
+    "why": "表达式以 org.<名称> 或 vars.<名称> 的形式读取变量，因此名称不能包含点，也不能以数字开头。",
+    "fix": [
+      "重命名该变量。"
+    ]
+  },
+  "variable_no_value": {
+    "title": "没有值的变量",
+    "why": "variables.yaml 中的变量要么是它的值，要么是说明其值所在位置的映射。名称后面什么也没有的变量两者都不是。",
+    "fix": [
+      "为该变量提供值，或将其删除。空值请写作 \"\"。"
+    ]
+  },
+  "variable_form_invalid": {
+    "title": "既不是文本也不是映射的变量",
+    "why": "variables.yaml 中的变量要么是它的值，要么是一个映射，其中包含 value（值本身）、env（值所在的环境变量）或 file（值所在的文件）之一，密钥变量还需 secret: true。",
+    "fix": [
+      "将变量写成文本或这样的映射。"
+    ]
+  },
+  "variable_sources": {
+    "title": "没有恰好一个 value、env 或 file 的变量",
+    "why": "变量的映射说明其唯一的值在哪里：在 value 本身中、在环境变量（env）中，或在文件（file）中。",
+    "fix": [
+      "保留 value、env 和 file 中的一个，删除其他的。"
+    ]
+  },
+  "variable_secret_inline": {
+    "title": "保存了值的密钥变量",
+    "why": "密钥的值不放在变量文件中，以便在不包含它的情况下读取、共享和复制该文件。",
+    "fix": [
+      "将值移到环境变量或只有您能读取的文件中，并用 env 或 file 指定它。"
+    ]
+  },
+  "variable_env_unset": {
+    "title": "变量的环境变量未设置",
+    "why": "variables.yaml 指出该变量的值在一个环境变量中，但在 Meridian 运行的环境里，它未设置或为空。只有当运行读取该变量时，Meridian 才会读取这个环境变量。",
+    "fix": [
+      "在运行 Meridian 之前设置该环境变量。",
+      "或者更改 variables.yaml 中该变量的值所在的位置。"
+    ]
+  },
+  "variable_file_unreadable": {
+    "title": "无法读取变量的文件",
+    "why": "variables.yaml 指出该变量的值在一个文件中，只有当运行读取该变量时，Meridian 才会读取该文件。",
+    "fix": [
+      "修复原因所指出的问题，或者更改 variables.yaml 中该变量的值所在的位置。"
+    ]
+  },
+  "variable_file_home": {
+    "title": "变量的文件位于未知的主目录中",
+    "why": "以 ~/ 开头的文件路径位于您的主目录中，Meridian 通过 HOME 找到主目录。",
+    "fix": [
+      "将 HOME 设置为您的主目录，或写出文件的完整路径。"
+    ]
+  },
+  "key_file_invalid": {
+    "title": "不是密钥的密钥文件",
+    "why": "密钥文件保存 32 字节的 AES-256 密钥，用于包装运行密钥记录的数据密钥。它由 Meridian 创建，不应被其他任何东西更改。",
+    "fix": [
+      "如果您有密钥文件的副本，请将其恢复。",
+      "否则请将其删除：Meridian 会创建新的密钥文件，但由旧密钥包装数据密钥的运行将无法恢复。"
+    ]
+  },
+  "key_unwrap_failed": {
+    "title": "无法解包的数据密钥",
+    "why": "每个运行的密钥记录都用其专属的数据密钥加密，而密钥文件中的密钥使用绑定到运行 ID 的 AES-256-GCM 包装该数据密钥。无法打开的已包装密钥，是用其他密钥生成的、从其他运行移来的，或已被更改。",
+    "fix": [
+      "如果密钥文件被替换了，请恢复包装该运行密钥的那个密钥文件。",
+      "否则请重新运行该运行，它会重新读取其变量和密码。"
+    ]
+  },
+  "key_wrapping_unknown": {
+    "title": "以未知方式包装的数据密钥",
+    "why": "已包装的数据密钥会说明其包装方式，以便后续版本的 Meridian 能以其他方式包装密钥。此密钥是由此版本不了解的版本包装的。",
+    "fix": [
+      "使用启动该运行的 Meridian 版本或更新的版本恢复该运行。"
+    ]
+  },
+  "git_unavailable": {
+    "title": "无法运行 git",
+    "why": "Meridian 通过运行 git 从 Git 仓库读取步骤的 uses: 所指定的工作流，因此 git 必须已安装且在 PATH 中。",
+    "fix": [
+      "安装 git，或将其加入 PATH。"
+    ]
+  },
+  "command_missing": {
+    "title": "没有命令",
+    "why": "meridian 命令执行若干操作之一，由其第一个参数指定。",
+    "fix": [
+      "运行 meridian help 查看命令列表。"
+    ]
+  },
+  "command_unknown": {
+    "title": "未知的命令",
+    "why": "meridian 命令的第一个参数指定要执行的操作，而这个参数不对应任何操作。",
+    "fix": [
+      "运行 meridian help 查看命令列表。"
+    ]
+  },
+  "command_not_built": {
+    "title": "尚未构建的命令",
+    "why": "Meridian 是分阶段构建的，docs/design.md 所描述的此命令将在后续阶段加入。",
+    "fix": [
+      "使用已构建的命令（例如 meridian validate），或使用 Meridian 的后续版本。"
+    ]
+  },
+  "arguments_invalid": {
+    "title": "命令不接受的参数",
+    "why": "每个命令都接受各自的参数，例如一个工作流文件。",
+    "fix": [
+      "运行 meridian help 加上命令名称，查看它接受的参数。"
+    ]
+  },
+  "flag_unknown": {
+    "title": "未知的选项",
+    "why": "每个命令都有各自的选项。",
+    "fix": [
+      "运行 meridian help 加上命令名称，查看其选项。"
+    ]
+  },
+  "flag_needs_value": {
+    "title": "缺少值的选项",
+    "why": "此选项接受一个值，值跟在选项后面（如 -format json），或跟在 = 后面（如 -format=json）。",
+    "fix": [
+      "为该选项提供值。"
+    ]
+  },
+  "flag_value_invalid": {
+    "title": "选项不接受的值",
+    "why": "此选项只接受某些值，meridian help 中列出了这些值。",
+    "fix": [
+      "运行 meridian help 加上命令名称，查看该选项接受的值。"
+    ]
+  },
+  "flag_syntax": {
+    "title": "不是选项的参数",
+    "why": "选项由 - 或 -- 加上名称组成，如果接受值，则后接 = 和值。",
+    "fix": [
+      "将选项写为 -名称 或 -名称=值。"
+    ]
+  },
+  "input_path_invalid": {
+    "title": "不是以点连接的名称的输入路径",
+    "why": "-input 按路径设置输入：输入的名称，或组的名称、一个点和输入的名称，例如 cluster.size。",
+    "fix": [
+      "将路径写成以点连接的名称，其中不能有空名称。"
+    ]
+  },
+  "input_path_conflict": {
+    "title": "经过某个值的输入路径",
+    "why": "-input 组.名称=值 用于设置组中的输入。此处，路径所经过的部分已经有自己的值，来自另一个 -input 或输入文件。",
+    "fix": [
+      "为每个输入只提供一个值，组中的输入请按其路径提供。"
+    ]
+  },
+  "inputs_file_invalid": {
+    "title": "不是 JSON 的输入文件",
+    "why": "-inputs 读取一个按名称排列输入值的 JSON 对象，其中同一个键不能出现两次。",
+    "fix": [
+      "在原因指出的位置修复 JSON。"
+    ]
+  },
+  "inputs_file_not_object": {
+    "title": "不是对象的输入文件",
+    "why": "-inputs 读取一个 JSON 对象，其键为输入的名称，值为输入的值。",
+    "fix": [
+      "将这些值写成一个 JSON 对象。"
+    ]
+  },
+  "inputs_file_extra": {
+    "title": "包含多个值的输入文件",
+    "why": "-inputs 只读取一个 JSON 对象，但它后面还有内容。",
+    "fix": [
+      "删除对象后面的内容，或将其移入对象中。"
+    ]
+  },
+  "inputs_number_too_large": {
+    "title": "数字过大",
+    "why": "Meridian 将输入文件中的数字读取为 64 位数字，而这个数字放不下。",
+    "fix": [
+      "如果该输入接受文本，请将数字加上引号，作为文本提供。"
+    ]
+  },
+  "interrupted": {
+    "title": "已中断",
+    "why": "Meridian 收到了中断或停止请求（例如来自 Ctrl-C），因此停止了。",
+    "fix": [
+      "重新运行该命令。第二次中断会立即停止 Meridian。"
+    ]
+  },
+  "unexpected_error": {
+    "title": "意外错误",
+    "why": "一个 Meridian 没有更具体问题来描述的错误使命令停止了。",
+    "fix": [
+      "修复原因所指出的问题，然后重新运行该命令。",
+      "如果这看起来像是 Meridian 的缺陷，请连同您运行的命令一起报告。"
+    ]
+  },
+  "source_access_denied": {
+    "title": "仓库访问被拒绝",
+    "why": "仓库要求 git 所没有的凭据，或拒绝了它提供的凭据，或者无法验证其主机的密钥。当服务器要求凭据而不是说明仓库不存在时，不存在的仓库看起来也是这样。Meridian 从不回答密码或口令的提示。",
+    "fix": [
+      "检查引用中的所有者和仓库是否有误。",
+      "为 git 提供无需提示即可使用的凭据，例如凭据助手、令牌或代理中的 ssh 密钥，并事先用 ssh 接受主机的密钥。"
+    ]
+  },
+  "source_objects_invalid": {
+    "title": "格式错误的 Git 对象",
+    "why": "Meridian 让 git 检查其获取的每个对象，以免格式错误的提交或树（例如为利用 Git 工具缺陷而构造的）进入其仓库副本。",
+    "fix": [
+      "查明仓库中为何有格式错误的对象，或使用其他修订。"
+    ]
+  },
+  "owner_unmapped": {
+    "title": "所有者被用户命名空间隐藏",
+    "why": "与 OpenSSH 检查通往用户密钥的路径一样，Meridian 会检查通往其目录的路径上的每个目录都属于您或 root。在不映射 root 的用户命名空间中（例如 unshare --user、Apptainer、bubblewrap 和某些 CI 沙箱所创建的），所有者未被映射的目录会显示为属于 nobody，因此 Meridian 无法判断谁能更改它，于是拒绝它而不作假设。",
+    "fix": [
+      "在用户命名空间之外运行 Meridian，或在映射 root 的命名空间中运行。"
+    ]
+  },
+  "path_links_too_many": {
+    "title": "符号链接过多的路径",
+    "why": "Meridian 会像内核一样跟随通往其目录路径上的符号链接，并在与内核相同的数量后停止，这通常是一个指回自身的链接。",
+    "fix": [
+      "找到指回自身的链接并修复它，或选择其他目录。"
+    ]
+  },
+  "mount_not_found": {
+    "title": "找不到挂载",
+    "why": "该目录位于 FUSE 文件系统上，它可能是本地的，也可能是网络的；Meridian 根据 /proc/self/mountinfo 中挂载的类型区分二者，但其中没有它的挂载。",
+    "fix": [
+      "为 MERIDIAN_STATE_DIR 选择一个不在 FUSE 文件系统上的目录。"
+    ]
+  },
+  "member_settings_not_json": {
+    "title": "JSON 无法容纳的成员设置",
+    "why": "成员的 settings 会以 JSON 形式传给其后端的驱动，而 JSON 中没有非数字或无穷大的数。",
+    "fix": [
+      "将成员 settings 中的数写成有限数，或写成带引号的文本。"
     ]
   }
 }

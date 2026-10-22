@@ -1551,6 +1551,9 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   from, so references to it should pin a commit. One that names a branch is
   pinned when the run is created, so the run and its reruns run the same
   code. Untrusted code belongs in a group whose members use microVMs.
+  GitHub serves a commit from a repository's whole fork network, so
+  `github/<owner>/<repo>@<commit>` can name a commit that only a fork of
+  the repository has: pin a commit you have seen in the repository itself.
 - **Workers are trusted with one attempt.** A worker's credential covers
   one attempt and expires, and the coordinator checks every write against
   the attempt's lease.
@@ -1632,15 +1635,63 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian worker`, `meridian relay` | Started by backends, not by people. |
 
 Execution groups and variables live in Meridian's config directory, and
-`--group` picks a group. A built-in `local` group needs no config. Groups
-are never read from the repository a workflow comes from, so cloning a
-workflow can't send its jobs to your SSH hosts.
+`--group` picks a group. A built-in `local` group needs no config: one
+member, this machine, which names host isolation explicitly, and which a
+group of the same name in the config replaces. Groups are never read from
+the repository a workflow comes from, so cloning a workflow can't send its
+jobs to your SSH hosts.
+
+- **`groups.yaml`** holds each group by name, with its members in order:
+  each one's backend, its settings, its isolation, the resources it offers
+  (`cpu: 4`, `memory: 8Gi`, `gpu: 1`), and its walltime limit, margin and
+  default timeout.
+- **`variables.yaml`** holds `org` and `vars`. A plain variable is its
+  value, and any variable can instead name an environment variable or a
+  file that holds it. A secret one is marked `secret: true`, and always
+  names where its value is, which is read only as a run starts.
+
+Meridian refuses either file if another user can change it, and the
+variables file if another user can read it, since people keep secrets in
+plain variables too. A file that holds a variable's value must be the
+user's, and only they may change it, or read it when it holds a secret's,
+and the directories on the way to it are checked as Meridian's own are.
 
 The database, the key that wraps secret records, and logs live in
-Meridian's state directory. SQLite can't lock reliably on a network
-filesystem, which is where home directories on clusters often are, so
-Meridian refuses to open a database there and says how to choose a local
-path.
+Meridian's state directory, which only its user can read. SQLite can't lock
+reliably on a network filesystem, which is where home directories on
+clusters often are, so Meridian refuses to open a database there and says
+how to choose a local path: one that only the user can change, and that
+lasts, since it holds the database and the key, such as one that
+`mktemp -d -p /var/tmp` makes, but not one in `/tmp`, which a reboot can
+empty. On Linux the directories are the XDG base
+directories' `meridian`, as `~/.config/meridian` and
+`~/.local/state/meridian`; on macOS both are
+`~/Library/Application Support/Meridian`. `MERIDIAN_CONFIG_DIR`,
+`MERIDIAN_STATE_DIR` and `MERIDIAN_CACHE_DIR` choose others, and the cache
+directory holds copies of the repositories that `uses:` names. As OpenSSH
+checks the directories on the way to a user's keys, Meridian checks those
+on the way to each of its own: each must belong to the user or to root,
+and no one else may change it, unless its sticky bit, as `/tmp`'s, keeps
+others from removing what follows it, which must be the user's. In a user
+namespace that doesn't map root, as `unshare --user`, Apptainer, bubblewrap
+and some CI sandboxes make, `/` and much else show as owned by the kernel's
+overflow ID, and Meridian can't tell who owns them: it refuses them, saying
+so, rather than assume that no one else can change them. So Meridian's own
+directories and config must be used outside such a namespace, or in one
+that maps root; a worker in a container, which uses none of them, isn't
+affected.
+
+Every problem the command reports is a kind, with its code, its params and
+its message in each language, as a workflow's are: its own, such as a
+config file another user can change, are in the problems package's
+`command` registry, at `/problems/command/<code>`.
+
+`meridian validate` writes each error and warning as compilers do,
+`file:line:column: severity: message (code)`, or with `--format json` as
+an API sends them ([Compiling](#compiling)): a workflow with errors is an
+RFC 9457 validation problem, with its warnings beside them. It exits 0
+for a workflow without errors, 1 for one with, and 2 when it couldn't
+compile it.
 
 ## Editors and web UIs
 
