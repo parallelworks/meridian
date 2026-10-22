@@ -90,8 +90,8 @@ type Scope struct {
 	// Marked marks values in Contexts, such as the secrets a runner masks.
 	// An evaluation that reads a marked value, a list or mapping that holds
 	// one, or a part of one, is marked, whatever it makes of it: see
-	// Template.EvalMarked. Nil marks nothing.
-	Marked *Marks
+	// Template.EvalMarked. The zero Marks mark nothing.
+	Marked Marks
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of
@@ -149,7 +149,9 @@ func (b *budget) done(outer bool) bool {
 // language's limits, and the group has Meridian's wider ones, which aren't
 // part of the format: its templates build at most 64 MiB together, do at
 // most 256 MiB of work, and spend at most 10 seconds evaluating.
-// A scope that has a budget keeps it.
+// A scope that has a budget keeps it. A group isn't safe for concurrent
+// use: its evaluations happen one at a time, though one can be nested in
+// another, as a template that reads another is.
 func (s Scope) Budgeted() Scope {
 	if s.budget == nil {
 		s.budget = &budget{clock: now}
@@ -867,7 +869,7 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
-	if e.scope.Marked != nil && e.marks(r.context, path) {
+	if e.scope.Marked.n > 0 && e.marks(r.context, path) {
 		e.scope.budget.marked = true
 	}
 	f := follower{e: e, at: r.at}

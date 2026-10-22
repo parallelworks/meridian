@@ -578,54 +578,86 @@ func TestMarked(t *testing.T) {
 
 // The evaluations that share a budget find the paths added to Marks since
 // they began, and other Marks' paths in their place, before and after they
-// have evaluated enough to index the paths. Marks keep the paths they are
-// given as they were, and copies of Marks made with room for more paths
-// each find the paths added to them, and none added to the others, however
-// many evaluations read the others before.
+// have evaluated enough to index the paths, as a group of their own does.
+// Marks keep the paths they are given as they were. Copies of Marks each
+// find the paths added to them, and none added to the others: copies made
+// with room for more paths, and Marks assigned an earlier copy of
+// themselves and then added to, while a later copy is read. Marks assigned
+// others with as many paths find the others' paths.
 func TestMarksAdded(t *testing.T) {
-	scope := expr.Scope{Contexts: map[string]any{"vars": map[string]any{"a": "1", "b": "2", "c": "3"}}}.Budgeted()
+	contexts := map[string]any{"vars": map[string]any{"a": "1", "b": "2", "c": "3", "x": "4", "y": "5"}}
+	scope := expr.Scope{Contexts: contexts}.Budgeted()
 	given := []string{"vars", "a"}
 	m := expr.NewMarks(given)
 	given[1] = "b"
+	other, none, zero := expr.NewMarks([]string{"vars", "b"}), expr.NewMarks(), expr.Marks{}
 	base := expr.NewMarks([]string{"vars", "a"}, []string{"vars", "x"}, []string{"vars", "y"})
-	b, c := *base, *base
+	b, c := base, base
+	r := expr.NewMarks([]string{"vars", "a"})
+	old := expr.NewMarks([]string{"vars", "a"}, []string{"vars", "b"}, []string{"vars", "c"})
+	later := old
+	later.Add([]string{"vars", "x"})
+	back := old
+	add := func(m *expr.Marks, path ...string) func() { return func() { m.Add(path) } }
 	for _, tc := range []struct {
 		name  string
 		marks *expr.Marks
-		// add is added to the marks before the template is evaluated.
-		add  []string
+		// do is done before the template is evaluated.
+		do   func()
 		src  string
 		want bool
 	}{
-		{"m", m, nil, "${{ vars.a }}", true},
-		{"m", m, nil, "${{ vars.b }}", false},
-		{"m", m, []string{"vars", "b"}, "${{ vars.b }}", true},
-		{"other", expr.NewMarks([]string{"vars", "b"}), nil, "${{ vars.a }}", false},
-		{"other", expr.NewMarks([]string{"vars", "b"}), nil, "${{ vars.b }}", true},
-		{"none", expr.NewMarks(), nil, "${{ vars.a }}", false},
-		{"nil", nil, nil, "${{ vars.a }}", false},
-		{"b", &b, []string{"vars", "b"}, "${{ vars.b }}", true},
-		{"c", &c, []string{"vars", "c"}, "${{ vars.c }}", true},
+		{"m", &m, nil, "${{ vars.a }}", true},
+		{"m", &m, nil, "${{ vars.b }}", false},
+		{"m", &m, add(&m, "vars", "b"), "${{ vars.b }}", true},
+		{"other", &other, nil, "${{ vars.a }}", false},
+		{"other", &other, nil, "${{ vars.b }}", true},
+		{"none", &none, nil, "${{ vars.a }}", false},
+		{"zero", &zero, nil, "${{ vars.a }}", false},
+		{"b", &b, add(&b, "vars", "b"), "${{ vars.b }}", true},
+		{"c", &c, add(&c, "vars", "c"), "${{ vars.c }}", true},
 		{"c", &c, nil, "${{ vars.b }}", false},
 		{"b", &b, nil, "${{ vars.c }}", false},
-		{"base", base, []string{"vars", "x"}, "${{ vars.b }}", false},
+		{"base", &base, add(&base, "vars", "x"), "${{ vars.b }}", false},
 		{"b", &b, nil, "${{ vars.b }}", true},
 		{"c", &c, nil, "${{ vars.a }}", true},
+		{"r", &r, nil, "${{ vars.a }}", true},
+		{"r", &r, func() { r = expr.NewMarks([]string{"vars", "b"}) }, "${{ vars.b }}", true},
+		{"r", &r, nil, "${{ vars.a }}", false},
+		{"later", &later, nil, "${{ vars.x }}", true},
+		{"back", &back, add(&back, "vars", "y"), "${{ vars.y }}", true},
+		{"back", &back, nil, "${{ vars.x }}", false},
+		{"later", &later, nil, "${{ vars.x }}", true},
+		{"later", &later, nil, "${{ vars.y }}", false},
 	} {
 		tmpl, err := expr.ParseTemplate(tc.src)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if tc.add != nil {
-			tc.marks.Add(tc.add)
+		if tc.do != nil {
+			tc.do()
 		}
-		scope.Marked = tc.marks
+		scope.Marked = *tc.marks
 		for i := range 100 {
 			if _, marked, err := tmpl.EvalMarked(scope); err != nil || marked != tc.want {
 				t.Errorf("%s with %s's marks, evaluation %d: marked %v, %v; want %v", tc.src, tc.name, i, marked, err, tc.want)
 				break
 			}
 		}
+		if _, marked, _ := tmpl.EvalMarked(expr.Scope{Contexts: contexts, Marked: *tc.marks}); marked != tc.want {
+			t.Errorf("%s with %s's marks in a group of its own: marked %v; want %v", tc.src, tc.name, marked, tc.want)
+		}
+	}
+	// All gives copies of the paths.
+	var paths []string
+	for range 2 {
+		for p := range m.All() {
+			paths = append(paths, strings.Join(p, "."))
+			p[0] = "changed"
+		}
+	}
+	if got := strings.Join(paths, " "); got != "vars.a vars.b vars.a vars.b" {
+		t.Errorf("m's paths, read twice, are %s; want vars.a vars.b, twice", got)
 	}
 }
 

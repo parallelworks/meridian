@@ -237,7 +237,7 @@ type inputResolver struct {
 	// marks are the paths in the contexts of what reads a variable or a
 	// password: org, vars, password inputs, password fields of lists' rows,
 	// and the parts of the values that read them.
-	marks  *expr.Marks
+	marks  expr.Marks
 	fields []*field
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
