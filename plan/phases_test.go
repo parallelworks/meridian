@@ -1418,3 +1418,47 @@ func TestCombineSecrets(t *testing.T) {
 		t.Errorf("%+v", got)
 	}
 }
+
+// A step's clean-on-retry: is true unless the workflow says otherwise, and
+// an expression's value reads as true or false as format 1 reads it, or
+// as true. A plan written before it was a Value, which leaves it unset, is
+// false.
+func TestStepCleanOnRetry(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      clean: {type: boolean, default: false}
+      text: {type: string, default: "false"}
+jobs:
+  main:
+    steps:
+      - run: "true"
+        retry: {max-retries: 1}
+      - run: "true"
+        retry: {max-retries: 1, clean-on-retry: false}
+      - run: "true"
+        retry: {max-retries: 1, clean-on-retry: true}
+      - run: "true"
+        retry: {max-retries: 1, clean-on-retry: "${{ inputs.clean }}"}
+      - run: "true"
+        retry: {max-retries: 1, clean-on-retry: "${{ inputs.text }}"}
+      - run: "true"
+        retry: {max-retries: 1, clean-on-retry: "${{ null }}"}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []bool{true, false, true, false, false, true} {
+		s, diags, err := ready.Job.Step(t.Context(), i, plan.JobState{Run: run, Steps: make([]plan.StepResult, i)})
+		if err != nil || len(diags) > 0 || s.Retry == nil || s.Retry.CleanOnRetry != want {
+			t.Errorf("step %d: %+v, %v, %v, want clean-on-retry %v", i, s, diags, err, want)
+		}
+	}
+	old := &plan.ReadyJob{Key: "j", Steps: []plan.Step{{Path: "/jobs/j/steps/0", Run: mustValue(t, "true"), Retry: &plan.StepRetry{}}}}
+	if s, _, err := old.Step(t.Context(), 0, plan.JobState{}); err != nil || s.Retry == nil || s.Retry.CleanOnRetry {
+		t.Errorf("a plan without clean-on-retry: %+v, %v", s, err)
+	}
+}
