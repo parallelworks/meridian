@@ -21,7 +21,8 @@ type Plan struct {
 	// Version is the plan encoding's version.
 	Version int `json:"version"`
 	Run     Run `json:"run"`
-	// Jobs are the run's job instances, in the order of their keys.
+	// Jobs are the run's jobs, each once, in the order of their names. A
+	// matrix job's instances are made as the run goes (Expand).
 	Jobs []Job `json:"jobs"`
 	// Warnings are the compiler's warnings, which are kept with the run so
 	// that they reach whoever runs the workflow.
@@ -72,6 +73,21 @@ type Run struct {
 	Variables []string `json:"variables,omitempty"`
 	// Permissions are the workflow's permissions:.
 	Permissions []string `json:"permissions,omitempty"`
+	// Limits are Meridian's limits on the run's size that the phases after
+	// Create apply, so that every replica, and every rerun, applies the
+	// same ones. The compiler sets none yet; when it first does, the plan's
+	// version rises, so that a replica of a release that doesn't know them
+	// leaves the run alone.
+	Limits Limits `json:"limits,omitzero"`
+}
+
+// Limits are Meridian's limits on a run's size, which whoever runs the
+// workflow sets, and which aren't part of the format. A zero field is the
+// default. The compiler sets none yet: they come with its Options.Limits.
+type Limits struct {
+	// MaxInstances is how many instances a matrix can have, or 0 for
+	// DefaultMaxInstances.
+	MaxInstances int `json:"maxInstances,omitzero"`
 }
 
 // A Source is where a workflow came from, and the exact text that ran.
@@ -82,21 +98,27 @@ type Source struct {
 	// Revision is a Git commit, or "sha256:" and the SHA-256 digest of the
 	// text when no commit has it.
 	Revision string `json:"revision"`
+	// Digest is "sha256:" and the SHA-256 digest of the text, which a
+	// workflow that a step's uses: names is pinned to beside its commit,
+	// so that reading it again by its pin gives the same text or fails.
+	// The compiler doesn't set it yet, for the run's own source or any
+	// other; when it first does, the plan's version rises.
+	Digest string `json:"digest,omitempty"`
 }
 
-// A Job is one instance of a job: the job itself, or one combination of its
-// matrix values.
+// A Job is one of the workflow's jobs. A matrix job is one Job, whose
+// instances are made from its Strategy as the run goes.
 type Job struct {
-	// Key identifies the instance in the run: the job's name, or for a
-	// matrix instance its name, a # and its index, as in build#2.
+	// Key is the job's name. A matrix instance's key, its name, # and its
+	// index, as in build#2, is its Instance's.
 	Key string `json:"key"`
 	// Name is the job's name in the workflow.
 	Name string `json:"name"`
-	// Matrix holds a matrix instance's values: a mapping.
+	// Matrix is unused: a matrix instance's values are its Instance's. The
+	// compiler never sets it, and it goes with the plan's next version.
 	Matrix Data `json:"matrix,omitzero"`
-	// Strategy is the matrix of a job whose values aren't known until its
-	// dependencies have finished, which the coordinator expands then. A job
-	// with a Strategy has no instances yet.
+	// Strategy is the job's strategy:. Start expands its matrix when its
+	// values are known by then, and Ready otherwise, when it reads needs.
 	Strategy *Strategy `json:"strategy,omitzero"`
 	// Needs are the jobs this one waits for.
 	Needs []Need `json:"needs,omitempty"`
@@ -150,7 +172,10 @@ type Step struct {
 	Run Value `json:"run,omitzero"`
 	// Uses names a built-in action, or the workflow the step runs.
 	Uses string `json:"uses,omitempty"`
-	// Workflow is the compiled workflow a step's uses: runs.
+	// Workflow is unused: the compiler never sets it. It gives way to the
+	// pinned reference of the workflow a step's uses: names, a Source with
+	// its Digest, from which the step's child run is compiled when the
+	// step runs.
 	Workflow         *Plan            `json:"workflow,omitzero"`
 	With             Value            `json:"with,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`

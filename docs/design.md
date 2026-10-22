@@ -60,6 +60,8 @@ Meridian is a set of Go packages:
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
 | `coordinator` | Stores runs, schedules and places jobs, and serves the worker API. |
 | `worker` | Runs one attempt of a job and reports on it. |
+| `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
+| `backend` | Execution groups and their members, and the interface that starts workers on a member. |
 | `backend/…` | Start workers: `local`, `ssh`, `kubernetes`, `slurm`, `pbs`. |
 | `runtime/…` | Drive container runtimes: Podman, Docker, Apptainer, Apple's `container`. |
 | `cmd/meridian` | The command. |
@@ -173,9 +175,9 @@ phase's inputs and keep what it gives, so every implementation, whether
 | --- | --- | --- | --- | --- |
 | Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
-| Ready | A job's dependencies have finished | `plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
-| Step | A job starts on its worker, and each of its steps is about to run | `plan.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
-| End | A job's steps have run | `plan.End`, in the worker | | The job's `outputs:` |
+| Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
+| Step | A job starts on its worker, and each of its steps is about to run | `plan.ReadyJob.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
+| End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
 Each phase reads the contexts of the phases before it too.
 
@@ -183,9 +185,10 @@ Each phase reads the contexts of the phases before it too.
   through resolvers ([Interfaces](#interfaces)), and Ready, Step and End
   reach nothing. Given the same inputs and resolver answers, a phase gives
   the same result, byte for byte.
-- **One scope.** One function builds the contexts an expression reads in
-  each phase, and the compiler, coordinator, worker and WebAssembly package
-  all use it, so a context has one shape everywhere ([Contexts](#contexts)).
+- **One scope.** One function, `plan.NewScope`, builds the contexts an
+  expression reads in each phase, and the compiler, coordinator, worker and
+  WebAssembly package all use it, so a context has one shape everywhere
+  ([Contexts](#contexts)).
 - **What each gives.** Create gives the plan, the run's passwords and its
   diagnostics ([Compiling](#compiling)). Start gives the run's completed
   values, or fails the run ([Starting a run](#starting-a-run)). Ready gives
@@ -368,8 +371,10 @@ defaults are high enough for every workflow in the conformance suite. An
 expression's depth, `range`, and what one template builds and does are the
 language's limits, the same wherever a workflow runs. A plan's JSON nests at
 most 10,000 levels, as deep as its encoding reads, so a value nested deeper
-is an error. Today the file's size and the nets are fixed, and there are no
-others.
+is an error. The plan records the limits that the phases after Create
+apply, such as a matrix's instances, so every coordinator replica, and
+every rerun, applies the same ones. Today the file's size and the nets are
+fixed, there are no others, and the plan records none.
 
 ### Inputs
 
@@ -508,7 +513,11 @@ the run waits for ([On hopper](#on-hopper)).
 4. **Expand** each matrix whose values are known by now, written out or
    read from inputs or variables ([Matrices](#matrices)), so a matrix that
    can't be expanded fails the run before any job runs.
-5. **Keep** the variables it read in the secret record, and what it
+5. **Make the sessions** of the workflow's `sessions:`, through the
+   Sessions interface, under the names Create gave them. Create only
+   checks them, since a run that is created may never start, and making
+   them again for the same run makes nothing more.
+6. **Keep** the variables it read in the secret record, and what it
    evaluated there or as run state, by whether evaluating it read a
    variable or a password ([Phases](#phases)), and its diagnostics with the
    run, all in the transaction that ends its hopper job.
@@ -651,7 +660,9 @@ sees one version.
   to its encoding, an addition among them; an addition's upgrade changes
   nothing. Each version's encoding is described by a JSON Schema, kept in
   this repository, so the plan is a contract a platform can read too. The
-  trees of stored expressions are part of it.
+  trees of stored expressions are part of it, and so are the worker API's
+  bodies, which carry a run's values and the job Ready evaluated
+  ([The worker API](#the-worker-api)).
 - **The version says who can read it.** The run record keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -818,15 +829,18 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 | Events | Run, job and step events as they happen | The command's progress display |
 
-A resolver may be missing. Then the workflow features that need it fail to
-compile, with an error saying which interface was missing.
+The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
+are interfaces in `compile`, the coordinator's, Keys, Logs and Events, in
+`coordinator`, and the backends' `Driver` in `backend`. A resolver may be
+missing. Then the workflow features that need it fail to compile, with an
+error saying which interface was missing.
 
 Resolvers get the caller's context, so cancellation, deadlines and traces
 reach them. They report what is wrong as a problem, a kind and its params
 ([Compiling](#compiling)), rather than as text, so that a platform's reason
 reaches each reader in their own language. Today the Inputs resolver
-returns a Go error, and the compiler is given variables as mappings, not
-through an interface.
+takes no context and returns a Go error, and the compiler uses none of the
+others: it is given variables as mappings, in `Options.Contexts`.
 
 ## Durable execution
 
@@ -897,6 +911,10 @@ key is the job's name, `#` and its index from 0, as in `build#2`.
   each with the same function where its values are known, and checks that
   the jobs and outputs a matrix reads exist; only the values wait. Today the
   compiler keeps every `strategy:` in the plan, and nothing expands one.
+- **A matrix job's `if:`** that doesn't read `matrix` is evaluated before
+  the matrix is expanded, so a job it skips has no instances. One that
+  reads `matrix` is evaluated for each instance: format 1 allows it, as
+  GitHub Actions doesn't, and the compiler accepts it.
 - **One hopper job.** A matrix job is one hopper job, whichever phase
   expanded it. When it is ready, the coordinator inserts its instances as a
   hopper workflow of their own, and finishes the job once they have all
@@ -1080,13 +1098,14 @@ and checks neither declared list.
 
 ### Leases and fencing
 
-A running attempt holds a lease of its own, with a token and a fencing
-number that grows with every attempt. The worker renews it with heartbeats,
-through whichever coordinator replica it reaches, and every write it makes
-(step events, logs, outputs, the result) carries the token and number. A
-write from a superseded attempt fails, and the worker that made it stops its
-job. hopper's leases today belong to the client that claimed a job; per-job
-leases are something it doesn't have yet.
+A running attempt holds a lease of its own, with a fencing number that
+grows with every attempt. The worker renews it with heartbeats, through
+whichever coordinator replica it reaches, and every write it makes (step
+events, logs, outputs, the result) carries the attempt's credential, which
+names the attempt, and is stored only while the attempt holds the job's
+fencing number. A write from a superseded attempt fails, and the worker
+that made it stops its job. hopper's leases today belong to the client
+that claimed a job; per-job leases are something it doesn't have yet.
 
 Fencing numbers keep a superseded attempt's reports out of the store, but
 not what it writes elsewhere, such as checkpoints in the run directory.
@@ -1234,13 +1253,17 @@ with three things:
 - the coordinator's address;
 - the SHA-256 hash of the coordinator's TLS public key, for a connection that
   goes over TLS;
-- a bootstrap token: random, single-use and short-lived, valid for this one
-  attempt, and stored only as a hash. It travels in the job's environment or
-  in a file only the user can read, never on a command line, where other
-  users could see it in `ps`.
+- a bootstrap token: random and single-use, valid for this one attempt until
+  the attempt is claimed or its placement withdrawn, however long a
+  scheduler's queue holds the job, and stored only as a hash. It travels in
+  the job's environment or in a file only the user can read, never on a
+  command line, where other users could see it in `ps`.
 
-The worker exchanges the bootstrap token for the attempt's credential when
-it claims the attempt.
+The coordinator looks for the attempt's placement before it makes the
+token, and makes one only for a placement that doesn't exist yet. When the
+worker claims the attempt, it presents the bootstrap token with a
+credential it makes itself, which is the attempt's credential from then on,
+so the credential never travels from the coordinator.
 
 ### The worker API
 
@@ -1248,10 +1271,10 @@ The API is HTTP with JSON bodies, versioned in its path (`/v1/`), with
 errors as RFC 9457 problem details. Meridian's coordinator and a platform
 that embeds Meridian serve the same API.
 
-- **Claim:** exchange the bootstrap token for the attempt's credential, and
-  receive the job as Ready evaluated it; the values of its own job's
-  secrets and variables, and of the inputs Start completed that it reads;
-  and its dependencies' outcomes and outputs.
+- **Claim:** present the bootstrap token and the worker's credential, and
+  receive the job as Ready evaluated it, encoded as its plan is; the values
+  of its own job's secrets and variables, and of the inputs Start completed
+  that it reads; and its dependencies' outcomes and outputs.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
 - **Step events:** a step started, or finished with its exit code.
@@ -1267,10 +1290,25 @@ retrying after a dropped connection can't apply a report twice. A write
 from a superseded attempt fails with a `fenced` problem.
 
 The attempt credential is an opaque random token, stored as a hash, that
-expires unless heartbeats renew it. It lets its holder do one thing: report
-on its own attempt. A step that reads it gains nothing that its job couldn't
-already do, so on backends where steps and their worker run as the same
-user, no further separation is needed.
+lasts until the attempt ends, so that a worker cut off from the coordinator
+can still deliver what it spooled. For a job that fences itself it lasts
+only while heartbeats renew it, and lapses with the lease. It lets its
+holder do one thing: report on its own attempt. A step that reads it gains
+nothing that its job couldn't already do, so on backends where steps and
+their worker run as the same user, no further separation is needed.
+
+The API's bodies are versioned by the run's plan version: a change to a
+body is a change to the plan's encoding, and raises the plan's version, as
+any other does ([Plans across versions](#plans-across-versions)). A field
+added in a later version is left out when it is empty, and each side sends
+it only for a run whose version has it, so each side reads the other's
+bodies strictly, refusing a field it doesn't know. A worker says, as it
+claims, the newest plan version it reads, and the coordinator refuses one
+that doesn't read the run's before it sends anything of the run. A replica
+answers a worker only for a run whose version it reads, as it claims only
+such runs, and otherwise asks it to try again, which reaches another. The
+claim's request comes before the worker knows the run's version, so it
+never changes.
 
 ### Connections
 
@@ -1280,14 +1318,24 @@ Workers only connect out, and nothing listens on a host where jobs run.
 | --- | --- |
 | `local` | A Unix socket in a directory only the user can open. |
 | `ssh` | A Unix socket on the host that the coordinator forwards over its SSH connection, so no port opens on either side. |
-| `slurm`, `pbs` | TLS 1.3 to the coordinator on the login node, checked against its key's hash. |
+| `slurm`, `pbs` | TLS 1.3 to the coordinator, through `meridian relay` on the login node, checked against its key's hash. |
 | `kubernetes` | TLS 1.3 to the coordinator's address, checked the same way. |
 
 A coordinator outside a cluster drives Slurm or PBS over SSH to the login
 node. There it starts `meridian relay`, the same binary, which accepts
-workers over TLS and forwards their connections to the coordinator over SSH.
-Compute nodes reach the login node but not the coordinator's machine, and
-the coordinator's machine opens no port.
+workers' connections and forwards them to the coordinator over SSH, still
+encrypted: TLS ends at the coordinator, not at the relay, and the
+coordinator's replicas share one key, so the hash a worker is started with
+holds whichever replica it reaches. Compute nodes reach the login node but
+not the coordinator's machine, and the coordinator's machine opens no port.
+
+One replica at a time holds what a member's workers connect through, such
+as the forwarded socket or the relay, under a lease in the store, and
+serves every attempt that reaches it there, of whichever job: any replica
+can serve any job. It closes the connection only when it gives the lease
+up. A replica that takes the lease over, once its holder has stopped
+renewing it, sets the connection up again at the same address, so the
+member's running workers reconnect to it.
 
 ### Running steps
 

@@ -20,7 +20,7 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: check
-check: tidy-check lint vulncheck cgo-check test test-race test-386 bench build ## Run all checks, tests and builds
+check: tidy-check lint vulncheck cgo-check test test-race test-386 bench build wasm ## Run all checks, tests and builds
 
 .PHONY: tidy-check
 tidy-check: ## Verify both Go modules are tidy
@@ -77,3 +77,12 @@ test-race: ## Run tests with the race detector (needs cgo and a C compiler on Li
 .PHONY: build
 build: ## Build static binaries
 	$(FIPS) go build -trimpath ./...
+
+# The packages an editor's WebAssembly runs: the phases, and what they
+# import. None may need what WebAssembly lacks.
+WASM_PKGS := ./format ./expr ./compile ./plan ./problems ./backend
+
+.PHONY: wasm
+wasm: ## Build the packages editors run as WebAssembly, for WASI and for browsers
+	GOOS=wasip1 GOARCH=wasm go build $(WASM_PKGS)
+	GOOS=js GOARCH=wasm go build $(WASM_PKGS)

@@ -92,6 +92,14 @@ type Scope struct {
 	// one, or a part of one, is marked, whatever it makes of it: see
 	// Template.EvalMarked. The zero Marks mark nothing.
 	Marked Marks
+	// Private marks the values in Contexts that a run keeps private: an
+	// organization's or a user's variables, the passwords, and what was
+	// made from them. Only EvalRead reports reading one, as it reports
+	// reading a value Marked marks, apart: what an evaluation made from a
+	// private value is kept out of the plan and run state, and never shown,
+	// while what it made from a marked one is masked too. Eval and
+	// EvalMarked ignore it. The zero Marks mark nothing.
+	Private Marks
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of
