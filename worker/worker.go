@@ -31,9 +31,11 @@ type Config struct {
 	// rest of it.
 	Environ []string
 	// Dir is where the worker makes the directory it keeps its own files
-	// in as it runs, which only its user can read: its spooled logs, and
-	// its steps' scripts and $OUTPUTS files. "" is os.TempDir(). Run
-	// removes the directory before it returns.
+	// in as it runs, which only its user can use: its spooled logs, and
+	// its steps' scripts and $OUTPUTS files. "" is os.TempDir(). If a step
+	// removes the directory, the worker makes another, with another name,
+	// rather than trust whatever is at the old path. Run removes them
+	// before it returns.
 	Dir string
 	// SpoolLimit is the most bytes of logs the worker keeps on disk that
 	// the coordinator hasn't stored, or 0 for DefaultSpoolLimit. Past it,
@@ -59,9 +61,10 @@ const DefaultSpoolLimit = 1 << 30
 // whatever the job's outcome. It returns an error when it couldn't claim
 // the attempt; when the attempt ended without it, because another attempt
 // superseded it, the coordinator no longer accepts its credential, or, for
-// a job that fences itself, its lease was about to lapse; and when ctx is
-// done before the job's steps have ended, once it has stopped them and,
-// for its flush period, sent what it had. Then the coordinator decides how
+// a job that fences itself, its lease was about to lapse, once it has sent
+// what it had until the lease lapsed; and when ctx is done before the
+// job's steps have ended, once it has stopped them and, for its flush
+// period after that, sent what it had. Then the coordinator decides how
 // the attempt ended. When ctx is done once they have ended, it sends the
 // attempt's end in that period.
 //
@@ -101,11 +104,11 @@ func run(ctx context.Context, cfg Config, ph phases, tm timing) error {
 	if limit <= 0 {
 		limit = DefaultSpoolLimit
 	}
-	dir, err := os.MkdirTemp(cfg.Dir, "meridian-worker-")
+	files, err := makePrivateDir(cfg.Dir)
 	if err != nil {
-		return fmt.Errorf("worker: making its directory: %w", err)
+		return err
 	}
-	defer os.RemoveAll(dir)
+	defer files.removeAll()
 
 	c := newClient(ep, tm, log)
 	defer c.close()
@@ -123,11 +126,11 @@ func run(ctx context.Context, cfg Config, ph phases, tm timing) error {
 		ph:      ph,
 		tm:      tm,
 		log:     log,
-		dir:     dir,
+		files:   files,
 		environ: stepsEnv,
 		worker:  worker,
 		events:  newEventQueue(),
-		spool:   newSpool(dir, limit),
+		spool:   newSpool(files, limit),
 	}
 	return a.run(ctx)
 }

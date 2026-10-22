@@ -133,6 +133,7 @@
   "container_not_supported": "The job's steps are to run in the container \"{image}\", with \"{runtime}\", and this worker can't run containers yet. It doesn't run them on the host instead, which would isolate them less.",
   "job_unreadable": "The worker couldn't read the job it claimed: {reason}.",
   "run_dir_unusable": "The worker couldn't use the run's directory \"{path}\": {reason}.",
+  "env_name_invalid": "The platform gives the job's steps a variable named {name}, which no variable can be named: a name can't be empty, or hold = or NUL.",
   "uses_not_supported": "The step uses \"{uses}\", and this worker can't run a step that uses an action or a workflow yet.",
   "step_ssh_not_supported": "The step's ssh: names another host to run it on, and this worker can't run a step on another host yet.",
   "step_not_started": "The step's command couldn't be started: {reason}.",

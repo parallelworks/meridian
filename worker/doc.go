@@ -32,6 +32,11 @@
 // so, rather than run them on the host: a job never gets weaker isolation
 // than it asks for.
 //
+// What the worker keeps of its own, its spooled logs and its steps'
+// scripts and $OUTPUTS files, is in a directory only its user can use,
+// which it holds open, and never trusts the path of again once it is
+// gone, making another (privateDir).
+//
 // # The coordinator
 //
 // Every request is safe to repeat, and the worker repeats one whose answer

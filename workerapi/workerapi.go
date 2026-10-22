@@ -252,7 +252,13 @@ type Claim struct {
 	Group   string `json:"group,omitempty"`
 	Member  string `json:"member,omitempty"`
 	// LeaseSeconds is how long the lease lasts after a heartbeat, and
-	// HeartbeatSeconds how often the worker sends one.
+	// HeartbeatSeconds how often the worker sends one. For a job that
+	// fences itself, the worker sends them often enough to try three
+	// times before it would start stopping the job (SelfFencing), more
+	// often than HeartbeatSeconds if need be, saying so in its log, and
+	// gives up on one that hasn't been answered in a third of the time
+	// then left, to send another: a coordinator gives such a job a
+	// HeartbeatSeconds of a fifth of LeaseSeconds at most.
 	LeaseSeconds     int64 `json:"leaseSeconds"`
 	HeartbeatSeconds int64 `json:"heartbeatSeconds"`
 	// SelfFencing is set for a job whose retry: lists worker-lost, which
@@ -261,12 +267,14 @@ type Claim struct {
 	// last heartbeat that succeeded, or the claim, on whichever of its
 	// monotonic and wall clocks has gone further: once six tenths of
 	// LeaseSeconds have passed without a renewal, it may start stopping
-	// the job, sending every process group the attempt started SIGTERM;
+	// the job, sending every process group the attempt started SIGTERM,
+	// so that a step has at most two tenths of the lease to handle it;
 	// and by nine tenths it has sent them all SIGKILL, and stopped waiting
-	// for them. A process that left its group, as with setsid, isn't the
-	// worker's to stop. The coordinator starts a new attempt only once the
-	// lease has lapsed for LeaseSeconds and a margin, by the store's
-	// clock.
+	// for them. It stops renewing the lease then, and sends what it has
+	// until the lease lapses. A process that left its group, as with
+	// setsid, isn't the worker's to stop. The coordinator starts a new
+	// attempt only once LeaseSeconds have passed since the last renewal,
+	// and a margin, by the store's clock.
 	SelfFencing bool `json:"selfFencing,omitzero"`
 	// Run is the part of the run that the job reads (plan.Job.Reads): its
 	// inputs' values, variables and secrets among them. The worker masks
@@ -322,9 +330,19 @@ type Control struct {
 	// Version grows each time the coordinator asks something more.
 	Version int64 `json:"version"`
 	// Cancel asks the worker to stop its job: to send each running step
-	// SIGTERM, then SIGKILL after GraceSeconds, run the cleanup commands,
-	// and complete the attempt as cancelled. Reason says why: cancelled,
-	// timeout for the run's, or fail-fast.
+	// SIGTERM, then SIGKILL after GraceSeconds, or its own grace period
+	// for 0, run the cleanup commands, and complete the attempt. Reason
+	// says why: cancelled, timeout for the run's, or fail-fast. A later
+	// Cancel that gives less time makes SIGKILL sooner; one that gives
+	// more doesn't make it later.
+	//
+	// As in format 1, a step whose if: is cancel-aware, as always() is
+	// (plan.ReadyStep.OutlivesCancel), still runs after a cancellation,
+	// and to its end, so a job can end otherwise than cancelled, as
+	// success when such steps were the last to run and none of its steps
+	// was cancelled. The run's outcome comes from the coordinator's own
+	// record that it cancelled the run, as format 1's comes from its
+	// record of an external cancellation, not from its jobs'.
 	Cancel       bool        `json:"cancel,omitzero"`
 	Reason       plan.Reason `json:"reason,omitempty"`
 	GraceSeconds int64       `json:"graceSeconds,omitzero"`

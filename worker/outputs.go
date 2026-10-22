@@ -5,8 +5,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // maxOutputs is the most bytes of $OUTPUTS the worker reads: a job's
@@ -21,8 +21,8 @@ const maxOutputsLine = bufio.MaxScanTokenSize - 1
 // errOutputsTooLarge is what readOutputs returns for a file larger than
 // maxOutputs, errOutputsLineTooLong for one with a line longer than
 // maxOutputsLine, and errOutputsNotFile for a path a step put something
-// other than a file at, such as a FIFO, which reading would wait on, or a
-// symbolic link.
+// other than a regular file at, such as a FIFO, which reading would wait
+// on.
 var (
 	errOutputsTooLarge    = errors.New("worker: $OUTPUTS is too large")
 	errOutputsLineTooLong = errors.New("worker: a line of $OUTPUTS is too long")
@@ -34,17 +34,14 @@ var (
 // its first = and the value after it, each with the white space around it
 // trimmed, and the two characters \n, \t and \r in a value made a newline,
 // a tab and a carriage return; a name written again has its last value.
-// It returns the file's size too, and errOutputsTooLarge, without reading
-// it, for one larger than maxOutputs. As format 1, it reads nothing of a
-// file with a line longer than maxOutputsLine, and returns
+// It reads the file name in the worker's directory d, or what a symbolic
+// link there names, as format 1 follows it: the step's user can read it
+// anyway. It returns the file's size too, and errOutputsTooLarge, without
+// reading it, for one larger than maxOutputs. As format 1, it reads nothing
+// of a file with a line longer than maxOutputsLine, and returns
 // errOutputsLineTooLong.
-func readOutputs(path string) (map[string]string, int64, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNonBlock, 0) //nolint:gosec // a $OUTPUTS file in the worker's own directory
-	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
-		// A symbolic link, which O_NOFOLLOW refuses: ELOOP, or EMLINK on
-		// FreeBSD.
-		return nil, 0, errOutputsNotFile
-	}
+func readOutputs(d *privateDir, name string) (map[string]string, int64, error) {
+	f, err := openOutputs(d, name)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -68,6 +65,30 @@ func readOutputs(path string) (map[string]string, int64, error) {
 	}
 	outputs, err := parseOutputs(string(data))
 	return outputs, int64(len(data)), err
+}
+
+// openOutputs opens $OUTPUTS without waiting for a FIFO's writer: the
+// file name in d, or what a symbolic link there names.
+func openOutputs(d *privateDir, name string) (*os.File, error) {
+	dir, root, err := d.current()
+	if err != nil {
+		return nil, err
+	}
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return root.OpenFile(name, os.O_RDONLY|openNoFollow|openNonBlock, 0)
+	}
+	target, err := root.Readlink(name)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	return os.OpenFile(target, os.O_RDONLY|openNonBlock, 0) //nolint:gosec // what a step's link names, which its user can read
 }
 
 var unescapeOutput = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")

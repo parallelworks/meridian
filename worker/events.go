@@ -156,6 +156,10 @@ func (q *eventQueue) send(ctx context.Context, c *client, stop func(error)) {
 			}
 			return
 		}
+		if last := events[len(events)-1].Seq; ack.Seq > last {
+			stop(fmt.Errorf("worker: the coordinator says it stored the events up to %d, past the last the worker sent, %d", ack.Seq, last))
+			return
+		}
 		if ack.Seq < events[0].Seq {
 			// The coordinator stored none of them: wait before trying
 			// again, rather than ask it again at once.

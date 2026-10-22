@@ -45,12 +45,12 @@ func runProcess(cmd *exec.Cmd, out io.Writer, stop <-chan stopRequest, started f
 		_, _ = io.Copy(out, r)
 		close(copied)
 	}()
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	exited := make(chan int, 1)
+	go func() { exited <- waitExit(cmd) }()
 
 	var (
 		cause     = noStop
-		waitErr   error
+		exit      int
 		kill      *time.Timer
 		killC     <-chan time.Time
 		killAt    time.Time
@@ -66,7 +66,7 @@ func runProcess(cmd *exec.Cmd, out io.Writer, stop <-chan stopRequest, started f
 	}()
 	for running || printing {
 		select {
-		case waitErr = <-exited:
+		case exit = <-exited:
 			running, exited = false, nil
 		case <-copied:
 			printing, copied = false, nil
@@ -96,22 +96,22 @@ func runProcess(cmd *exec.Cmd, out io.Writer, stop <-chan stopRequest, started f
 			r.Close()
 		}
 	}
-	if waitErr != nil {
-		if exit, ok := errors.AsType[*exec.ExitError](waitErr); ok {
-			return exit.ExitCode(), cause, nil
-		}
-		return -1, cause, nil
+	return exit, cause, nil
+}
+
+// exitOf returns the exit status cmd.Wait reports, or -1 if a signal ended
+// the process.
+func exitOf(err error) int {
+	if err == nil {
+		return 0
 	}
-	return 0, cause, nil
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+		return exit.ExitCode()
+	}
+	return -1
 }
 
 // signalGroup sends sig to every process in a process group that is left.
 func signalGroup(group int, sig syscall.Signal) {
 	_ = syscall.Kill(-group, sig)
-}
-
-// groupAlive reports whether a process group has a process left that the
-// worker can signal.
-func groupAlive(group int) bool {
-	return syscall.Kill(-group, 0) == nil
 }

@@ -21,7 +21,9 @@ func runProcess(*exec.Cmd, io.Writer, <-chan stopRequest, func(int)) (int, stopC
 
 func signalGroup(int, syscall.Signal) {}
 
-func groupAlive(int) bool { return false }
+func liveGroupsOf([]int) map[int]bool { return nil }
+
+const holdsLeaders = false
 
 func checkPeer(*net.UnixConn, string) error { return errNotUnix }
 

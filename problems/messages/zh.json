@@ -126,6 +126,7 @@
   "container_not_supported": "作业的步骤应使用“{runtime}”在容器“{image}”中运行，而此工作进程尚不能运行容器。它也不会改为在主机上运行这些步骤，因为那样隔离会更弱。",
   "job_unreadable": "工作进程无法读取它领取的作业：{reason}",
   "run_dir_unusable": "工作进程无法使用运行目录“{path}”：{reason}",
+  "env_name_invalid": "平台为作业的步骤提供了一个名为 {name} 的变量，但任何变量都不能使用这个名称：名称不能为空，也不能包含 = 或 NUL。",
   "uses_not_supported": "该步骤使用了“{uses}”，而此工作进程尚不能运行使用操作或工作流的步骤。",
   "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而此工作进程尚不能在另一台主机上运行步骤。",
   "step_not_started": "无法启动该步骤的命令：{reason}",

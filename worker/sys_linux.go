@@ -5,7 +5,6 @@ package worker
 import (
 	"fmt"
 	"net"
-	"os"
 	"syscall"
 )
 
@@ -27,7 +26,7 @@ func checkPeer(conn *net.UnixConn, path string) error {
 	if credErr != nil {
 		return credErr
 	}
-	if int(cred.Uid) != os.Getuid() && cred.Uid != 0 {
+	if !peerAllowed(int(cred.Uid)) {
 		return fmt.Errorf("worker: the coordinator's socket %s is served by user %d, not this one or root", path, cred.Uid)
 	}
 	return nil

@@ -885,6 +885,13 @@
       "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
     ]
   },
+  "env_name_invalid": {
+    "title": "Variable de la plataforma con un nombre que ninguna variable puede tener",
+    "why": "Una plataforma da a los pasos de un trabajo variables propias, como PW_USER, en la reclamación del intento. El worker pone cada una en el entorno de un paso, donde un nombre no puede estar vacío ni contener = o NUL, así que rechaza el intento antes de que se ejecute ningún paso, en lugar de ejecutar los pasos sin la variable. El trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Infórmalo a quien gestione la plataforma: la plataforma dio la variable."
+    ]
+  },
   "uses_not_supported": {
     "title": "Paso con uses: que el worker aún no puede ejecutar",
     "why": "Un paso que usa con uses: una acción, como parallelworks/checkout, o un flujo de trabajo, la ejecuta en lugar de un comando. Esta versión del worker de Meridian solo ejecuta pasos con run:, así que el paso falla.",

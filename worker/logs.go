@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 
@@ -27,11 +26,12 @@ type logKey struct {
 // coordinator keeps running. A log's bytes are kept in a file of its own,
 // which is removed as soon as it is made. The file is emptied whenever the
 // coordinator has all of it, and while a step goes on printing, its
-// unsent bytes are copied to a new file once those sent are four times as
-// many, and compactAt at least, so the disk holds what is still to send,
-// and of what has been sent at most four times as much, or compactAt.
+// unsent bytes are copied to a new file once those sent are compactAt at
+// least, and four times as many, or as many as the limit: the disk holds
+// what is still to send, and less than the limit of what has been sent,
+// besides the unsent bytes again while they are copied.
 type spool struct {
-	dir   string
+	dir   *privateDir
 	limit int64
 
 	mu sync.Mutex
@@ -45,7 +45,7 @@ type spool struct {
 	changed chan struct{}
 }
 
-func newSpool(dir string, limit int64) *spool {
+func newSpool(dir *privateDir, limit int64) *spool {
 	return &spool{dir: dir, limit: limit, changed: make(chan struct{})}
 }
 
@@ -80,25 +80,19 @@ func (s *spool) open(key logKey) *logStream {
 	return l
 }
 
-// newFile makes a file for a log's bytes, which has no name: the open
-// file keeps its bytes, and nothing is left behind however the worker
-// ends. It makes the spool's directory again if a step has removed it.
+// newFile makes a file for a log's bytes, in the worker's directory, which
+// has no name: the open file keeps its bytes, and nothing is left behind
+// however the worker ends.
 func (s *spool) newFile() (*os.File, error) {
 	s.mu.Lock()
 	s.made++
-	name := filepath.Join(s.dir, "log-"+strconv.Itoa(s.made))
+	name := "log-" + strconv.Itoa(s.made)
 	s.mu.Unlock()
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|openNoFollow, 0o600) //nolint:gosec // a new file in the worker's own directory
+	f, _, err := s.dir.create(name, os.O_RDWR|os.O_EXCL)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Remove(name); err != nil {
-		f.Close()
-		return nil, err
-	}
+	s.dir.remove(name)
 	return f, nil
 }
 
@@ -181,28 +175,20 @@ func (s *spool) next() (*upload, <-chan struct{}) {
 // compactAt is how many bytes a log's file holds that the coordinator has,
 // at least, before the worker copies those it hasn't to a new file: when
 // they are at least four times as many, so that what it copies is at most
-// a quarter of what it frees.
+// a quarter of what it frees, or as many as the spool's limit.
 const compactAt = 16 << 10
 
 // stored records that the coordinator's log is length bytes long, and has
-// ended if ended is set.
-func (s *spool) stored(l *logStream, length int64, ended bool) {
+// ended if ended is set. It reports whether the log's file should be
+// compacted, which compact does without s.mu.
+func (s *spool) stored(l *logStream, length int64, ended bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.notify()
 	length = min(length, l.length)
 	if length > l.stored {
 		s.pending -= length - l.stored
 		l.stored = length
-	}
-	switch sent, unsent := l.stored-l.base, l.length-l.stored; {
-	case l.file == nil:
-	case unsent == 0 && sent > 0:
-		// The coordinator has every byte: start the file again.
-		if err := l.file.Truncate(0); err == nil {
-			l.base = l.length
-		}
-	case sent >= compactAt && sent >= 4*unsent:
-		s.compact(l)
 	}
 	if ended && l.closed && l.stored == l.length {
 		l.ended = true
@@ -215,37 +201,62 @@ func (s *spool) stored(l *logStream, length int64, ended bool) {
 				break
 			}
 		}
+		return false
 	}
-	s.notify()
+	switch sent, unsent := l.stored-l.base, l.length-l.stored; {
+	case l.file == nil:
+	case unsent == 0 && sent > 0:
+		// The coordinator has every byte: start the file again.
+		if err := l.file.Truncate(0); err == nil {
+			l.base = l.length
+		}
+	case sent >= compactAt && (sent >= 4*unsent || sent >= s.limit):
+		return true
+	}
+	return false
 }
 
 // compact copies the bytes of a log the coordinator doesn't have to a new
-// file, which holds only them. The worker keeps the old file if it can't.
-// Its caller holds s.mu, so the step's writes wait for it, but it copies a
-// quarter of what it frees at most.
+// file, which holds only them, and the log goes on there; the worker keeps
+// the old file if it can't. Only the uploader, which calls it, reads a
+// log's bytes or drops them, and those it copies are written already, so
+// it copies them without s.mu, and the step's writes don't wait for it;
+// what the step writes as it copies, it copies after, holding s.mu.
 func (s *spool) compact(l *logStream) {
-	s.mu.Unlock()
 	f, err := s.newFile()
-	s.mu.Lock()
 	if err != nil {
 		return
 	}
-	unsent := io.NewSectionReader(l.file, l.stored-l.base, l.length-l.stored)
-	if _, err := io.Copy(io.NewOffsetWriter(f, 0), unsent); err != nil {
+	s.mu.Lock()
+	old, from, to, base := l.file, l.stored-l.base, l.length-l.base, l.stored
+	s.mu.Unlock()
+	if _, err := io.Copy(io.NewOffsetWriter(f, 0), io.NewSectionReader(old, from, to-from)); err != nil {
 		f.Close()
 		return
 	}
-	l.file.Close()
-	l.file, l.base = f, l.stored
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if more := l.length - l.base - to; more > 0 {
+		if _, err := io.Copy(io.NewOffsetWriter(f, to-from), io.NewSectionReader(old, to, more)); err != nil {
+			f.Close()
+			return
+		}
+	}
+	old.Close()
+	l.file, l.base = f, base
 }
 
 // lose records that the bytes of a log after the coordinator's length
-// can't be read from its file, which has failed: they are dropped, and
+// can't be read from f, its file, which has failed: they are dropped, and
 // the log goes on in a new file, if the worker can make one.
 func (s *spool) lose(l *logStream, f *os.File) {
+	next, _ := s.newFile()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if l.file != f {
+		if next != nil {
+			next.Close()
+		}
 		return
 	}
 	lost := l.length - l.stored
@@ -253,10 +264,7 @@ func (s *spool) lose(l *logStream, f *os.File) {
 	l.dropped += lost
 	l.length = l.stored
 	l.file.Close()
-	s.mu.Unlock()
-	l.file, _ = s.newFile()
-	s.mu.Lock()
-	l.base = l.stored
+	l.file, l.base = next, l.stored
 	s.notify()
 }
 
@@ -346,7 +354,9 @@ func (s *spool) send(ctx context.Context, c *client, stop func(error)) {
 		} else {
 			stalls = 0
 		}
-		s.stored(u.log, ack.Length, ack.Ended)
+		if s.stored(u.log, ack.Length, ack.Ended) {
+			s.compact(u.log)
+		}
 	}
 }
 

@@ -206,6 +206,7 @@ var (
 	ContainerNotSupported = define(Error, "container_not_supported", "Container the worker can't run yet", "runtime", "image")
 	JobUnreadable         = define(Error, "job_unreadable", "Job the worker couldn't read", "reason")
 	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
+	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
 	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
 	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
 	StepNotStarted        = define(Error, "step_not_started", "Step's command not started", "reason")

@@ -53,6 +53,9 @@ const (
 	forget
 	// redirect answers with a redirect to the same path.
 	redirect
+	// hang holds the request until the worker gives up on it, as a
+	// connection that is half open would.
+	hang
 )
 
 // A fakeCoordinator serves the worker API for one attempt, in memory, as
@@ -152,6 +155,10 @@ func (f *fakeCoordinator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		return
+	}
+	if flt == hang {
+		<-r.Context().Done()
 		return
 	}
 	if flt == redirect {
@@ -420,9 +427,14 @@ func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 		cfg.Dir = f.t.TempDir()
 	}
 	if cfg.Log == nil {
-		cfg.Log = slog.New(slog.NewTextHandler(testWriter{f.t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		cfg.Log = testLogger(f.t)
 	}
 	return run(ctx, cfg, fakePhases(), testTiming)
+}
+
+// testLogger returns a logger that writes to a test's log.
+func testLogger(t *testing.T) *slog.Logger {
+	return slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 // testWriter writes to a test's log.

@@ -759,6 +759,12 @@
       "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
     ]
   },
+  "env_name_invalid": {
+    "why": "A platform gives a job's steps variables of its own, such as PW_USER, in the attempt's claim. The worker sets each in a step's environment, where a name can't be empty or hold = or NUL, so it refuses the attempt before any step runs, rather than run the steps without the variable. The job is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Report it to whoever runs the platform: the platform gave the variable."
+    ]
+  },
   "uses_not_supported": {
     "why": "A step that uses: an action, such as parallelworks/checkout, or a workflow runs it rather than a command. This version of Meridian's worker runs only steps with run:, so the step fails.",
     "fix": [

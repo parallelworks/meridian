@@ -855,17 +855,19 @@ func TestTLS(t *testing.T) {
 
 // TestOutputsNotFile checks that a step that puts something other than a
 // file at $OUTPUTS, such as a FIFO, which reading would wait on forever,
-// or a symbolic link, fails, and that the steps after it have a file
-// again.
+// fails, and that the steps after it have a file again; and that a
+// symbolic link a step puts there is followed, as format 1 follows it,
+// unless it names something other than a file.
 func TestOutputsNotFile(t *testing.T) {
 	t.Parallel()
 	fifo := command(`rm -f "$OUTPUTS"; mkfifo "$OUTPUTS"`)
-	link := command(`ln -sf /etc/hostname "$OUTPUTS"`)
-	after := command("echo a=1 >> $OUTPUTS")
-	for _, s := range []*plan.Step{&link, &after} {
+	link := command(`printf 'l=1\n' > "$PW_JOB_DIR/target"; ln -sf "$PW_JOB_DIR/target" "$OUTPUTS"`)
+	through := command("echo a=2 >> $OUTPUTS")
+	device := command(`ln -sf /dev/null "$OUTPUTS"`)
+	for _, s := range []*plan.Step{&link, &through, &device} {
 		s.If = plan.Literal("always()")
 	}
-	f := newFakeCoordinator(t, newJob(fifo, link, after))
+	f := newFakeCoordinator(t, newJob(fifo, link, through, device))
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	if err := f.runWorker(ctx, Config{}); err != nil {
@@ -873,16 +875,22 @@ func TestOutputsNotFile(t *testing.T) {
 	}
 	checkEvents(t, f,
 		"started 0.0", "finished 0.0 failure 0",
-		"started 1.0", "finished 1.0 failure 0",
+		"started 1.0", "finished 1.0 success 0",
 		"started 2.0", "finished 2.0 success 0",
+		"started 3.0", "finished 3.0 failure 0",
 	)
-	for step := range 2 {
+	for _, step := range []int{0, 3} {
 		if got := codes(f.finishedEvent(step, 0, false).Diagnostics); !slices.Equal(got, []string{"outputs_not_file"}) {
 			t.Errorf("step %d's diagnostics are %v", step, got)
 		}
 	}
-	if got := f.finishedEvent(2, 0, false).Outputs; !reflect.DeepEqual(got, map[string]string{"a": "1"}) {
-		t.Errorf("the last step's outputs are %v", got)
+	for step, want := range map[int]map[string]string{1: {"l": "1"}, 2: {"a": "2"}} {
+		if got := f.finishedEvent(step, 0, false).Outputs; !reflect.DeepEqual(got, want) {
+			t.Errorf("step %d's outputs are %v, want %v", step, got, want)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(f.claim.RunDir, "target")); err != nil || string(data) != "l=1\na=2\n" {
+		t.Errorf("the file the link names holds %q (%v): the step after it didn't write through it", data, err)
 	}
 }
 

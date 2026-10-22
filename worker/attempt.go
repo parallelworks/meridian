@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"os/exec"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -20,7 +23,7 @@ type attempt struct {
 	ph      phases
 	tm      timing
 	log     *slog.Logger
-	dir     string
+	files   *privateDir
 	environ []string
 	worker  workerapi.Worker
 	events  *eventQueue
@@ -34,9 +37,6 @@ type attempt struct {
 	job    *plan.ReadyJob
 	mask   masker
 	masked []string
-	// jobOutputs is the $OUTPUTS file of the job's steps that have no id,
-	// which they share, as in format 1.
-	jobOutputs string
 	// scripts counts the scripts written, to name each.
 	scripts int
 	// firstStarted is set once the coordinator has stored that a step is
@@ -71,11 +71,16 @@ type attempt struct {
 	// cancelSend the one the worker sends with.
 	cancelJob  context.CancelFunc
 	cancelSend context.CancelFunc
+	// stopBeating stops the heartbeats, once a job that fences itself has
+	// stopped: renewing the lease would keep a new attempt from starting.
+	stopBeating context.CancelFunc
 
 	// groupsMu guards groups, the process groups the attempt started that
-	// may have a process left.
+	// may have a process left, by number, with the leader's command, once
+	// its step has ended, where the worker holds it unreaped
+	// (holdsLeaders).
 	groupsMu sync.Mutex
-	groups   map[int]bool
+	groups   map[int]*exec.Cmd
 
 	// leaseMu guards renewed, when the worker sent the last heartbeat that
 	// succeeded, and renewal, closed and replaced when it changes.
@@ -95,14 +100,19 @@ func (a *attempt) run(ctx context.Context) error {
 	a.stopChanged = make(chan struct{})
 	a.halted, a.cancelled, a.anyJobFailed, a.timedOut = newSignal(), newSignal(), newSignal(), newSignal()
 	a.reaped = make(chan struct{})
-	a.groups = map[int]bool{}
+	a.groups = map[int]*exec.Cmd{}
 	a.renewed, a.renewal = a.claimed, make(chan struct{})
 	// What the worker sends goes on while its job runs and after: until
-	// the coordinator has the attempt's end, or the attempt has ended
-	// without the worker, or, once ctx is done, for the flush period.
+	// the coordinator has the attempt's end; or the attempt has ended
+	// without the worker, or, for a job that fences itself, the lease has
+	// lapsed; or, once ctx is done, for the flush period after the job's
+	// steps have stopped, so that a step in its grace period keeps what it
+	// prints last.
 	send, cancelSend := context.WithCancel(context.WithoutCancel(ctx))
 	jobCtx, cancelJob := context.WithCancel(send)
-	a.cancelSend, a.cancelJob = cancelSend, cancelJob
+	beat, stopBeating := context.WithCancel(send)
+	a.cancelSend, a.cancelJob, a.stopBeating = cancelSend, cancelJob, stopBeating
+	stepsStopped := make(chan struct{})
 	var wg sync.WaitGroup
 	defer func() {
 		cancelSend()
@@ -110,35 +120,46 @@ func (a *attempt) run(ctx context.Context) error {
 		if a.halted.fired() {
 			<-a.reaped
 		}
+		a.reapLeaders()
 		a.spool.close()
 	}()
 	defer context.AfterFunc(ctx, func() {
 		a.stopJob(ctx.Err(), time.Now().Add(a.tm.grace), a.tm.afterKill)
-		time.AfterFunc(a.tm.flush, cancelSend)
+		go func() {
+			<-stepsStopped
+			time.AfterFunc(a.tm.flush, cancelSend)
+		}()
 	})()
 
 	wg.Go(func() { a.events.send(send, a.client, a.halt) })
 	wg.Go(func() { a.spool.send(send, a.client, a.halt) })
-	wg.Go(func() { a.heartbeat(send) })
+	wg.Go(func() { a.heartbeat(beat) })
 	wg.Go(func() { a.control(send) })
 	if a.claim.SelfFencing {
 		wg.Go(func() { a.fence(send) })
 	}
 
-	if end := a.execute(jobCtx); end != nil {
+	end := a.execute(jobCtx)
+	close(stepsStopped)
+	if end != nil {
 		err := a.deliver(send, end)
 		if err == nil || !a.halted.fired() {
 			return err
 		}
 	}
-	if ctx.Err() == nil || !errors.Is(a.haltErr, ctx.Err()) {
+	stopped := ctx.Err() != nil && errors.Is(a.haltErr, ctx.Err())
+	if !stopped && !errors.Is(a.haltErr, errLeaseLapsed) {
 		return a.haltErr
 	}
-	// Stopped from outside, as by its scheduler, before its job ended:
-	// send what it has, in the flush period, but not the attempt's end.
-	// The coordinator decides how it ended.
+	// Stopped from outside, as by its scheduler, before its job ended, or
+	// before its lease lapsed: send what it has, while what it sends can
+	// be stored, but not the attempt's end. The coordinator decides how
+	// it ended.
 	if a.events.wait(a.events.lastSeq(), send.Done()) == nil {
 		_ = a.spool.wait(send.Done())
+	}
+	if !stopped {
+		return a.haltErr
 	}
 	return fmt.Errorf("worker: stopped before the attempt ended: %w", ctx.Err())
 }
@@ -203,24 +224,56 @@ func (a *attempt) cancel(ctl *workerapi.Control) {
 func (a *attempt) startedGroup(group int) {
 	a.groupsMu.Lock()
 	defer a.groupsMu.Unlock()
-	a.groups[group] = true
+	a.groups[group] = nil
+}
+
+// endedGroup records that the leader of a process group the attempt
+// started has exited, unreaped where the worker holds it: cmd reaps it.
+func (a *attempt) endedGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil || !holdsLeaders {
+		return
+	}
+	a.groupsMu.Lock()
+	defer a.groupsMu.Unlock()
+	if _, ok := a.groups[cmd.Process.Pid]; ok {
+		a.groups[cmd.Process.Pid] = cmd
+	}
 }
 
 // liveGroups returns the process groups the attempt started that have a
-// process left, and forgets the rest, so that it never signals a group
-// whose number is used again.
+// process left, and forgets the rest, reaping their leaders, so that it
+// never signals a group whose number is given to another.
 func (a *attempt) liveGroups() []int {
 	a.groupsMu.Lock()
 	defer a.groupsMu.Unlock()
+	groups := slices.Collect(maps.Keys(a.groups))
+	alive := liveGroupsOf(groups)
 	var live []int
-	for group := range a.groups {
-		if groupAlive(group) {
+	for _, group := range groups {
+		switch cmd := a.groups[group]; {
+		case alive[group]:
 			live = append(live, group)
-		} else {
+		case cmd != nil:
+			_ = cmd.Wait()
+			delete(a.groups, group)
+		case !holdsLeaders:
 			delete(a.groups, group)
 		}
 	}
 	return live
+}
+
+// reapLeaders reaps the leaders of the process groups the attempt started
+// that the worker holds, at its end.
+func (a *attempt) reapLeaders() {
+	a.groupsMu.Lock()
+	defer a.groupsMu.Unlock()
+	for group, cmd := range a.groups {
+		if cmd != nil {
+			_ = cmd.Wait()
+		}
+		delete(a.groups, group)
+	}
 }
 
 // reap stops every process group the attempt started, once its job is
@@ -273,16 +326,30 @@ func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 
 // heartbeat renews the attempt's lease every heartbeat period, and stops
 // the job if the coordinator says that the attempt has ended without the
-// worker.
+// worker. For a job that fences itself, it renews it often enough to try
+// three times before the worker must start stopping the job, more often
+// than the coordinator asks if need be, and gives up on a heartbeat that
+// hasn't been answered in a third of what is left then, to send another
+// at once, as a connection that is half open would hold it.
 func (a *attempt) heartbeat(ctx context.Context) {
 	period := seconds(max(a.claim.HeartbeatSeconds, 1))
+	timeout := period
+	if a.claim.SelfFencing {
+		stopAfter := a.leaseTimes().stopAfter
+		if most := max(stopAfter/3, 100*time.Millisecond); period > most {
+			a.log.Warn("heartbeating more often than the coordinator asks, to renew the lease before the job must stop",
+				"asked", period, "every", most)
+			period = most
+		}
+		timeout = max(min(period, (stopAfter-period)/3), 100*time.Millisecond)
+	}
 	wait, failures := period, 0
 	for {
 		if sleep(ctx, wait) != nil {
 			return
 		}
 		sent := time.Now()
-		err := a.client.heartbeat(ctx, period)
+		err := a.client.heartbeat(ctx, timeout)
 		switch {
 		case err == nil:
 			a.renew(sent)
@@ -325,6 +392,24 @@ func (a *attempt) sinceRenewed() (time.Duration, <-chan struct{}) {
 	return max(monotonic, wall), renewal
 }
 
+// leaseTimes are when a job that fences itself stops, counted from the
+// last renewal of its lease: from stopAfter, the worker stops it, with
+// grace between SIGTERM and SIGKILL; by killAfter, it has sent every
+// process group SIGKILL, and waits afterKill for their output, which ends
+// a margin before the lease lapses (workerapi.Claim.SelfFencing).
+type leaseTimes struct {
+	lease, stopAfter, killAfter, afterKill, grace time.Duration
+}
+
+func (a *attempt) leaseTimes() leaseTimes {
+	lease := seconds(a.claim.LeaseSeconds)
+	margin := lease / 10
+	t := leaseTimes{lease: lease, afterKill: min(a.tm.afterKill, lease/10), grace: min(a.tm.grace, lease/5)}
+	t.stopAfter = lease - t.grace - t.afterKill - margin
+	t.killAfter = lease - t.afterKill - margin
+	return t
+}
+
 // fence stops the job of an attempt that fences itself, so that a new
 // attempt can't run beside it, as a Kubernetes controller that can't
 // renew its lease stops leading before it lapses: once so long has passed
@@ -332,32 +417,31 @@ func (a *attempt) sinceRenewed() (time.Duration, <-chan struct{}) {
 // their grace period, the time the worker waits for their output, and a
 // margin left before the lease lapses, it stops them all, so that they
 // have been sent SIGKILL, and the worker has stopped waiting for them, a
-// tenth of the lease before it lapses (workerapi.Claim.SelfFencing).
+// tenth of the lease before it lapses. It stops renewing the lease, and
+// goes on sending what it has until the lease lapses.
 func (a *attempt) fence(ctx context.Context) {
-	lease := seconds(a.claim.LeaseSeconds)
-	margin := lease / 10
-	afterKill := min(a.tm.afterKill, lease/10)
-	grace := min(a.tm.grace, lease/5)
-	stopAfter := lease - grace - afterKill - margin
-	killAfter := lease - afterKill - margin
+	t := a.leaseTimes()
 	// The monotonic clock a timer runs on stops while the host is
-	// suspended, so the wall clock is read every so often too.
-	poll := min(max(lease/20, 10*time.Millisecond), time.Second)
+	// suspended, so the wall clock is read every so often too: a step can
+	// run for up to that long once a host that was suspended past the
+	// lease resumes.
+	poll := min(max(t.lease/20, 10*time.Millisecond), time.Second)
 	for {
 		since, renewal := a.sinceRenewed()
-		if since >= stopAfter {
-			a.log.Warn("stopping the job before its lease lapses", "lease", lease, "since", since)
-			a.stopJob(errLeaseLapsed, time.Now().Add(killAfter-since), afterKill)
-			a.cancelSend()
+		if since >= t.stopAfter {
+			a.log.Warn("stopping the job before its lease lapses", "lease", t.lease, "since", since)
+			a.stopBeating()
+			a.stopJob(errLeaseLapsed, time.Now().Add(t.killAfter-since), t.afterKill)
+			time.AfterFunc(t.lease-since, a.cancelSend)
 			return
 		}
-		t := time.NewTimer(min(stopAfter-since, poll))
+		timer := time.NewTimer(min(t.stopAfter-since, poll))
 		select {
-		case <-t.C:
+		case <-timer.C:
 		case <-renewal:
 		case <-ctx.Done():
 		}
-		t.Stop()
+		timer.Stop()
 		if ctx.Err() != nil {
 			return
 		}

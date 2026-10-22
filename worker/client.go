@@ -71,11 +71,14 @@ type client struct {
 	credential string
 	timing     timing
 	log        *slog.Logger
+	// peer checks who serves a Unix socket (checkPeer).
+	peer func(*net.UnixConn, string) error
 }
 
 // newClient returns a client for the coordinator at ep: over a Unix socket,
 // or over TLS 1.3 to a coordinator whose public key has ep's hash.
 func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
+	c := &client{timing: tm, log: log, peer: checkPeer}
 	t := &http.Transport{
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
@@ -91,7 +94,7 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 			}
 			// The token and the credential go only to a coordinator of
 			// this user's, or root's.
-			if err := checkPeer(conn.(*net.UnixConn), ep.address); err != nil {
+			if err := c.peer(conn.(*net.UnixConn), ep.address); err != nil {
 				conn.Close()
 				return nil, &peerError{err}
 			}
@@ -114,7 +117,8 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 	// A redirect is refused: the worker talks only to the coordinator it
 	// was given.
 	refuse := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &client{base: base, http: &http.Client{Transport: t, CheckRedirect: refuse}, transport: t, timing: tm, log: log}
+	c.base, c.http, c.transport = base, &http.Client{Transport: t, CheckRedirect: refuse}, t
+	return c
 }
 
 // pinned returns a check that a TLS connection's peer holds the public key

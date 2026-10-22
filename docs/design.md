@@ -1123,7 +1123,15 @@ lease stops leading:
   process group the attempt started SIGKILL, and stopped waiting for them,
   as `workerapi.Claim.SelfFencing` says. It shortens the grace period of a
   cancellation in progress to do so. A process that left its group, as
-  with `setsid`, isn't its to stop.
+  with `setsid`, isn't its to stop. It then stops renewing the lease, and
+  sends what it has until the lease lapses. It reads the wall clock at
+  least every second, so once a host that was suspended past the lease
+  resumes, a step can run for up to about a second more.
+- **Its heartbeats** come often enough to try three times before it would
+  start stopping the job, more often than the coordinator asks if need
+  be, and it gives up on one that hasn't been answered in a third of the
+  time then left, to send another, so that one heartbeat held by a
+  connection that is half open doesn't stop the job.
 - **The coordinator waits** until the lease has lapsed for that period and a
   margin, by the store's clock, before it starts a new attempt. Neither
   side reads the other's clock; each only measures the period.
@@ -1150,7 +1158,10 @@ waking up or `meridian run` restarting must not make them all look lost.
 - **Cancelling a run is stored first.** Jobs that haven't been placed are
   cancelled in the store; workers are told to stop and send each running
   step SIGTERM, then SIGKILL after a grace period; placements in progress
-  are withdrawn (`scancel`, `qdel`, deleting the pod).
+  are withdrawn (`scancel`, `qdel`, deleting the pod). The run's outcome
+  comes from that record, as format 1's comes from its record of an
+  external cancellation, since a job whose last steps were cancel-aware
+  can end otherwise than cancelled (below).
 - **Timeouts:** the worker enforces step and job timeouts. The coordinator
   enforces the run's timeout, and a job's as a backstop. As in format 1, a
   step's `timeout:`, and its `retry:`'s, bound each of its tries, and a try
@@ -1198,10 +1209,12 @@ outputs are its `steps.<id>.outputs`, and the steps without one share the
 job's, whose outputs are the job's, with its `outputs:` over them; each
 step's result holds what it wrote, and End puts the job's together. As in
 format 1, a file with a line of 64 KiB or longer is read as holding none,
-and the step's event warns of it. A file is read only if it is a regular
-file, not through a symbolic link, so that a FIFO there can't make the
-worker wait. A job's outputs are capped at 1 MB and a run's at 50 MB, a
-limit of Meridian's, which format 1 doesn't have: the worker reads no more
+and the step's event warns of it. A symbolic link a step puts there is
+followed, as format 1 follows it, but what is read must be a regular file,
+opened without waiting, so that a FIFO there fails the step rather than make
+the worker wait forever, as it makes format 1 wait, which is a bug; format 1
+is to fail it too. A job's outputs are capped at 1 MB and a run's at 50 MB,
+a limit of Meridian's, which format 1 doesn't have: the worker reads no more
 than 1 MiB of a step's file, and a step whose file is larger fails, but for
 one without an `id` whose job's shared file was already larger, which can't
 add to it. Before the worker reports a job's outputs, it checks them against
@@ -1418,13 +1431,22 @@ member's running workers reconnect to it.
   ([Leases and fencing](#leases-and-fencing)). Past the limit, or once the
   disk is full, a log keeps nothing more until there is room, and the
   step's event says how much it lost. A log's file holds what the
-  coordinator hasn't stored, and, besides, at most four times as much, or
-  16 KiB, of what it has.
+  coordinator hasn't stored, and of what it has, less than the limit, and
+  at most four times as much, or 16 KiB, but while the worker copies what
+  is unsent to a new file, when it holds both.
 - **What the worker keeps** of its own, its spooled logs, its steps'
-  scripts and `$OUTPUTS` files, is in a directory only its user can read,
-  under `TMPDIR` by default. A step that removes it, as `rm -rf
-  "$TMPDIR"/*` does, removes only their names: the worker makes it again,
-  and a problem it has with its own files fails a step, never the attempt.
+  scripts and `$OUTPUTS` files, is in a directory only its user can use,
+  under `TMPDIR` by default, which it holds open and makes every file in
+  through that. A step that removes it, as `rm -rf "$TMPDIR"/*` does,
+  removes only their names, and the worker never trusts what is at its
+  path again, as another user could make a directory of that name in a
+  shared `/tmp`: it makes a new directory, with a new name, which it
+  checks is a directory of its user's that no one else can use. A problem
+  it has with its own files fails a step, never the attempt.
+- **When it is stopped from outside**, as by its scheduler, it stops the
+  job's steps, and sends what it has for a while once they have stopped,
+  so that a step in its grace period keeps what it printed last: the
+  attempt's end too, if the steps had ended.
 - **It talks only to its coordinator.** Over a Unix socket, it checks that
   the process at the other end runs as its user, or as root, before it
   sends a token, where the system says (`SO_PEERCRED` on Linux), and

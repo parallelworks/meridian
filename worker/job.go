@@ -208,6 +208,11 @@ func (a *attempt) setUp() *problem.Problem {
 	a.mask.Add(job.Masked...)
 	a.masked = append(a.masked, job.Masked...)
 	info("read the job", "key", job.Key)
+	for _, name := range slices.Sorted(maps.Keys(a.claim.Env)) {
+		if name == "" || strings.ContainsAny(name, "=\x00") {
+			return fail(problems.EnvNameInvalid, problems.Params{"name": problems.Show(name)})
+		}
+	}
 	if c := a.claim.Container; c != nil {
 		// Never weaker isolation than asked for: the steps don't run on
 		// the host instead.
@@ -216,7 +221,6 @@ func (a *attempt) setUp() *problem.Problem {
 	if err := os.MkdirAll(a.claim.RunDir, 0o700); err != nil {
 		return fail(problems.RunDirUnusable, problems.Params{"path": a.claim.RunDir, "reason": err.Error()})
 	}
-	a.jobOutputs = filepath.Join(a.dir, "outputs")
 	info("running the job's steps on the host", "dir", a.claim.RunDir)
 	return nil
 }
@@ -273,17 +277,18 @@ func (a *attempt) runStep(i int, rs *plan.ReadyStep, diags problems.Diagnostics)
 	// A step with an id has $OUTPUTS of its own, its steps.<id>.outputs;
 	// the steps without one share the job's, as in format 1, and each
 	// wrote what it changed.
-	outputsPath := a.jobOutputs
+	outputsName := jobOutputs
 	var before map[string]string
 	var beforeErr error
 	if rs.ID != "" {
-		outputsPath = filepath.Join(a.dir, "outputs-"+strconv.Itoa(i))
+		outputsName = "outputs-" + strconv.Itoa(i)
 	}
-	if err := a.makeOutputs(outputsPath, rs.ID != ""); err != nil {
+	outputsPath, err := a.makeOutputs(outputsName, rs.ID != "")
+	if err != nil {
 		return notStarted(err)
 	}
 	if rs.ID == "" {
-		before, _, beforeErr = readOutputs(outputsPath)
+		before, _, beforeErr = readOutputs(a.files, outputsName)
 	}
 	dir := a.workingDirectory(rs)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -335,7 +340,7 @@ func (a *attempt) runStep(i int, rs *plan.ReadyStep, diags problems.Diagnostics)
 			return end
 		}
 		// What a try wrote is its step's, however it ended, as in format 1.
-		got, size, err := readOutputs(outputsPath)
+		got, size, err := readOutputs(a.files, outputsName)
 		switch {
 		case errors.Is(err, errOutputsNotFile):
 			tryDiags = append(tryDiags, problems.OutputsNotFile.At("", problems.Position{}, path, nil))
@@ -439,15 +444,16 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 	stream := a.spool.open(key)
 	w := a.mask.Writer(stream)
 	exit, cause, err := func() (int, stopCause, error) {
-		file, err := a.writeScript(script)
+		name, file, err := a.writeScript(script)
 		if err != nil {
 			return -1, noStop, err
 		}
-		defer os.Remove(file)
+		defer a.files.remove(name)
 		cmd := shellCommand(rs.Shell, file)
 		cmd.Dir, cmd.Env = dir, env
 		requests, unwatch := a.watch(s)
 		defer unwatch()
+		defer a.endedGroup(cmd)
 		return runProcess(cmd, w, requests, a.startedGroup)
 	}()
 	w.Close()
@@ -462,50 +468,52 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 	return exit, cause, diags
 }
 
-// ensureDir makes the worker's directory again, if a step removed it, as
-// rm -rf "$TMPDIR"/* does: the files it had open are kept, unlinked, and
-// it makes new ones there.
-func (a *attempt) ensureDir() error {
-	return os.MkdirAll(a.dir, 0o700)
-}
+// jobOutputs is the name of the $OUTPUTS file the job's steps without an
+// id share, as in format 1.
+const jobOutputs = "outputs"
 
-// writeScript writes a command to a script of its own, which only the
-// worker's user can read, since it can hold secrets, and returns its path.
-func (a *attempt) writeScript(command string) (string, error) {
-	if err := a.ensureDir(); err != nil {
-		return "", err
-	}
+// writeScript writes a command to a script of its own, in the worker's
+// directory, which only its user can read, since it can hold secrets, and
+// returns its name and its path.
+func (a *attempt) writeScript(command string) (string, string, error) {
 	a.scripts++
-	path := filepath.Join(a.dir, "script-"+strconv.Itoa(a.scripts)+".sh")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|openNoFollow, 0o600) //nolint:gosec // a new file in the worker's own directory
+	name := "script-" + strconv.Itoa(a.scripts) + ".sh"
+	f, path, err := a.files.create(name, os.O_WRONLY|os.O_EXCL)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	_, err = f.WriteString(command + "\n")
-	return path, errors.Join(err, f.Close())
+	return name, path, errors.Join(err, f.Close())
 }
 
-// makeOutputs makes path, in the worker's directory, an $OUTPUTS file: an
-// empty one if empty is set, or else the one there, unless a step has
-// removed it, or put something else in its place.
-func (a *attempt) makeOutputs(path string, empty bool) error {
-	if err := a.ensureDir(); err != nil {
-		return err
+// makeOutputs makes name, in the worker's directory, an $OUTPUTS file, and
+// returns its path: an empty one if empty is set, or else the one there. A
+// step may have removed it, or put something else in its place: a
+// symbolic link to a regular file is kept, as format 1 follows it, and
+// anything else is replaced.
+func (a *attempt) makeOutputs(name string, empty bool) (string, error) {
+	path, root, err := a.files.current()
+	if err != nil {
+		return "", err
 	}
-	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		if err := os.Remove(path); err != nil {
-			return err
+	if info, err := root.Lstat(name); err == nil {
+		keep := !empty && info.Mode().IsRegular()
+		if !empty && info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Stat(filepath.Join(path, name))
+			keep = err == nil && target.Mode().IsRegular()
+		}
+		if keep {
+			return filepath.Join(path, name), nil
+		}
+		if err := root.Remove(name); err != nil {
+			return "", err
 		}
 	}
-	flags := os.O_WRONLY | os.O_CREATE | openNoFollow | openNonBlock
-	if empty {
-		flags |= os.O_TRUNC
-	}
-	f, err := os.OpenFile(path, flags, 0o600) //nolint:gosec // a file in the worker's own directory
+	f, path, err := a.files.create(name, os.O_WRONLY|os.O_EXCL)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return f.Close()
+	return path, f.Close()
 }
 
 // shellOK reports whether a step's shell: is one format 1 runs, bash or
