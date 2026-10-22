@@ -181,32 +181,32 @@ func (v Value) Eval(scope expr.Scope) (any, error) {
 // expr.Template.EvalMarked does: then what the Value gives is made from it,
 // or decided by it.
 func (v Value) EvalMarked(scope expr.Scope) (out any, marked bool, err error) {
-	out, err = evalValue(v.v, scope.Budgeted(), &marked)
-	return out, marked, err
+	out, read, err := v.EvalRead(scope)
+	return out, read.Marked, err
 }
 
 // EvalRead evaluates the Value as Eval does, and reports what its templates
 // read of the values scope marks, as expr.Template.EvalRead does: whether
 // what it gives is to be masked, and whether it is private.
-//
-// It isn't built yet, and returns an error that says so.
 func (v Value) EvalRead(scope expr.Scope) (out any, read expr.Read, err error) {
-	return nil, expr.Read{}, errNotImplemented
+	out, err = evalValue(v.v, scope.Budgeted(), &read)
+	return out, read, err
 }
 
-// evalValue evaluates the templates in v, and notes in marked whether one
-// read a marked value.
-func evalValue(v any, scope expr.Scope, marked *bool) (any, error) {
+// evalValue evaluates the templates in v, and notes in read what they read
+// of the values scope marks.
+func evalValue(v any, scope expr.Scope, read *expr.Read) (any, error) {
 	switch v := v.(type) {
 	case *expr.Template:
-		out, m, err := v.EvalMarked(scope)
-		*marked = *marked || m
+		out, r, err := v.EvalRead(scope)
+		read.Marked = read.Marked || r.Marked
+		read.Private = read.Private || r.Private
 		return out, err
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
-			if out[i], err = evalValue(item, scope, marked); err != nil {
+			if out[i], err = evalValue(item, scope, read); err != nil {
 				return nil, err
 			}
 		}
@@ -215,7 +215,7 @@ func evalValue(v any, scope expr.Scope, marked *bool) (any, error) {
 		out := make(map[string]any, len(v))
 		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = evalValue(item, scope, marked); err != nil {
+			if out[k], err = evalValue(item, scope, read); err != nil {
 				return nil, err
 			}
 		}

@@ -125,29 +125,30 @@ type budget struct {
 	active int
 	// clock reads the time: now, or a test's clock.
 	clock func() time.Time
-	// marked is set once what is being evaluated reads a value its scope
-	// marks (Scope.Marked). An evaluation that another reads, such as an
-	// input's default, notes what it read on its own, and adds that to its
-	// reader's.
-	marked bool
-	// marks is what the group knows of the paths the scope marks.
-	marks markIndex
+	// read is what is being evaluated has read of the values its scope
+	// marks (Scope.Marked and Scope.Private). An evaluation that another
+	// reads, such as an input's default, notes what it read on its own, and
+	// adds that to its reader's.
+	read Read
+	// marks and private are what the group knows of the paths the scope's
+	// Marked and Private mark.
+	marks, private markIndex
 }
 
-// noting starts noting whether what is evaluated next reads a marked value,
-// and returns whether what was evaluated before it did, for done.
-func (b *budget) noting() (outer bool) {
-	outer, b.marked = b.marked, false
+// noting starts noting what is evaluated next reads of the marked values,
+// and returns what was evaluated before it read, for done.
+func (b *budget) noting() (outer Read) {
+	outer, b.read = b.read, Read{}
 	return outer
 }
 
-// done stops noting, and reports whether what was evaluated since noting
-// read a marked value. What it read was read by what is around it too,
-// which outer says had read one before.
-func (b *budget) done(outer bool) bool {
-	marked := b.marked
-	b.marked = outer || marked
-	return marked
+// done stops noting, and reports what was evaluated since noting read of
+// the marked values. What it read was read by what is around it too, which
+// outer says had read some before.
+func (b *budget) done(outer Read) Read {
+	read := b.read
+	b.read = outer.or(read)
+	return read
 }
 
 // Budgeted returns scope with one budget for what templates do, which every
@@ -877,8 +878,8 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
-	if e.scope.Marked.n > 0 && e.marks(r.context, path) {
-		e.scope.budget.marked = true
+	if e.scope.Marked.n > 0 || e.scope.Private.n > 0 {
+		e.reads(r.context, path)
 	}
 	f := follower{e: e, at: r.at}
 	var v any

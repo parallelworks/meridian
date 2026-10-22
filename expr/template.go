@@ -234,10 +234,8 @@ func (t *Template) Eval(scope Scope) (any, error) {
 // what it gives too. A failed evaluation is marked as well, so that what
 // reports the error can leave out the values it shows.
 func (t *Template) EvalMarked(scope Scope) (v any, marked bool, err error) {
-	scope = scope.Budgeted()
-	outer := scope.budget.noting()
-	v, err = t.Eval(scope)
-	return v, scope.budget.done(outer), err
+	v, read, err := t.EvalRead(scope)
+	return v, read.Marked, err
 }
 
 // offsetError moves an error's offset from its expression to the template.
