@@ -120,5 +120,6 @@
   "not_list_or_mapping": "{name}() 함수에는 {value} 값이 아니라 목록 또는 매핑을 지정해야 합니다.",
   "expressions_build_too_much": "이곳에서 함께 평가되는 표현식들이 합쳐서 {limit}MiB를 넘는 데이터를 만듭니다.",
   "expressions_too_much_work": "이곳에서 함께 평가되는 표현식들의 작업량이 합쳐서 {limit}MiB를 넘습니다.",
-  "expressions_too_slow": "이곳에서 함께 평가되는 표현식들의 평가에 합쳐서 {limit}초보다 오래 걸렸습니다."
+  "expressions_too_slow": "이곳에서 함께 평가되는 표현식들의 평가에 합쳐서 {limit}초보다 오래 걸렸습니다.",
+  "problems_not_listed": "코드 {code}의 문제는 처음 {limit}개만 나열합니다. 나머지 {count}개는 나열하지 않습니다."
 }

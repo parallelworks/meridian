@@ -3,8 +3,10 @@ package compile
 import (
 	"cmp"
 	"container/heap"
+	"iter"
 	"slices"
 
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/reach"
 )
 
@@ -21,10 +23,12 @@ import (
 // can fill it in.
 type pendingFields struct {
 	// paths holds the fields that wait by their paths in the values, and
-	// reads by the patterns of each path that their expressions read.
-	paths, reads reach.Trie[*pendingField]
-	all          []*pendingField
-	ready        readyFields
+	// reads by the patterns of each path that their expressions read: a
+	// set of them at each, which pathSets and readSets hold by the path.
+	paths, reads       reach.Trie[*fieldSet]
+	pathSets, readSets map[string]*fieldSet
+	all                []*pendingField
+	ready              readyFields
 	// pass is the pass that the field being filled in is in.
 	pass int
 	// stamp marks the fields found while a field is added, so that each
@@ -47,6 +51,58 @@ type pendingField struct {
 	readers []*pendingField
 	done    bool
 	stamp   int
+	// sets are the sets it is in, at its path and at what it reads.
+	sets []*fieldSet
+}
+
+// A fieldSet is the fields that wait at one path, or read one pattern. A
+// field leaves the sets it is in once it is filled in: it is skipped, and
+// dropped from a set once half of the set is, so that a field leaves a set
+// that thousands of others are in, as a pattern many rows read is, without
+// going through them.
+type fieldSet struct {
+	fields []*pendingField
+	done   int
+}
+
+// addAt adds p to the set at path in t, which sets holds by their paths,
+// making the set if there is none.
+func addAt(t *reach.Trie[*fieldSet], sets *map[string]*fieldSet, path []string, p *pendingField) {
+	key := jsonptr.Format(path)
+	s := (*sets)[key]
+	if s == nil {
+		if *sets == nil {
+			*sets = map[string]*fieldSet{}
+		}
+		s = &fieldSet{}
+		(*sets)[key] = s
+		t.Add(path, s)
+	}
+	s.fields = append(s.fields, p)
+	p.sets = append(p.sets, s)
+}
+
+// leave notes that p is done, and so leaves each set it is in.
+func (p *pendingField) leave() {
+	for _, s := range p.sets {
+		if s.done++; s.done*2 > len(s.fields) {
+			s.fields = slices.DeleteFunc(s.fields, func(f *pendingField) bool { return f.done })
+			s.done = 0
+		}
+	}
+}
+
+// waitingIn returns the fields that wait in the sets of seq.
+func waitingIn(seq iter.Seq[*fieldSet]) iter.Seq[*pendingField] {
+	return func(yield func(*pendingField) bool) {
+		for s := range seq {
+			for _, p := range s.fields {
+				if !p.done && !yield(p) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // add adds f, which waits, after the others.
@@ -64,7 +120,7 @@ func (q *pendingFields) add(f *field) {
 	// it.
 	q.stamp++
 	for _, pattern := range p.reads {
-		for w := range q.paths.Reached(pattern) {
+		for w := range waitingIn(q.paths.Reached(pattern)) {
 			if w.stamp != q.stamp {
 				w.stamp = q.stamp
 				w.readers = append(w.readers, p)
@@ -73,16 +129,16 @@ func (q *pendingFields) add(f *field) {
 		}
 	}
 	q.stamp++
-	for r := range q.reads.Reaching(f.path) {
+	for r := range waitingIn(q.reads.Reaching(f.path)) {
 		if r.stamp != q.stamp {
 			r.stamp = q.stamp
 			p.readers = append(p.readers, r)
 			r.waits++
 		}
 	}
-	q.paths.Add(f.path, p)
+	addAt(&q.paths, &q.pathSets, f.path, p)
 	for _, pattern := range p.reads {
-		q.reads.Add(pattern, p)
+		addAt(&q.reads, &q.readSets, pattern, p)
 	}
 	if p.waits == 0 {
 		heap.Push(&q.ready, readyField{p, p.pass})
@@ -102,11 +158,8 @@ func (q *pendingFields) next() *pendingField {
 			continue
 		}
 		p.done = true
+		p.leave()
 		q.pass = p.pass
-		q.paths.Remove(p.f.path, p)
-		for _, pattern := range p.reads {
-			q.reads.Remove(pattern, p)
-		}
 		return p
 	}
 	return nil

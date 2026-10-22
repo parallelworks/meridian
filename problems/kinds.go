@@ -191,3 +191,10 @@ var (
 	ExpressionsTooMuchWork  = define(Error, "expressions_too_much_work", "Expressions do too much work together", "limit")
 	ExpressionsTooSlow      = define(Error, "expressions_too_slow", "Expressions take too long together", "limit")
 )
+
+// Meridian's own limit on the problems of each kind it lists, which counts
+// the rest: a workflow, or a run's submitted values, can have more than any
+// reader goes through, and a plan keeps its warnings.
+var (
+	ProblemsNotListed = define(Warning, "problems_not_listed", "More problems of one kind", "code", "count", "limit")
+)

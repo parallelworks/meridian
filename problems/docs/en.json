@@ -245,7 +245,8 @@
   "input_condition_not_known": {
     "why": "An input's hidden:, ignore: or optional: is decided when the run is created, but it reads something that isn't known then, such as a secret.",
     "fix": [
-      "Make the condition read only inputs and what is known when the run is created."
+      "Make the condition read only inputs and what is known when the run is created.",
+      "If the condition reads an input whose value isn't known until the run starts, because its default, or a row's, reads such a thing, make the condition read something else, or make that input's value known when the run is created."
     ]
   },
   "platform_input": {
@@ -717,21 +718,27 @@
     ]
   },
   "expressions_build_too_much": {
-    "why": "Meridian evaluates some expressions together, and bounds what they build between them as well as what each one builds. Each of these is within the language's limit, but together they build more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
+    "why": "Meridian evaluates some expressions together, and bounds what they build between them as well as what each one builds. Each of these is within the language's limit, but together they build more than Meridian allows. The limit is Meridian's own, not part of the workflow format. The expressions evaluated together are a run's input defaults and conditions with its jobs' needs:, or the templates in one value, such as a step's with:.",
     "fix": [
       "Build less in these expressions, such as by reading part of a value rather than all of it."
     ]
   },
   "expressions_too_much_work": {
-    "why": "Meridian evaluates some expressions together, and bounds the work they do between them as well as the work each one does. Each of these is within the language's limit, but together they do more than Meridian allows. The limit is Meridian's own, not part of the workflow format.",
+    "why": "Meridian evaluates some expressions together, and bounds the work they do between them as well as the work each one does. Each of these is within the language's limit, but together they do more than Meridian allows. The limit is Meridian's own, not part of the workflow format. The expressions evaluated together are a run's input defaults and conditions with its jobs' needs:, or the templates in one value, such as a step's with:.",
     "fix": [
       "Do less work in these expressions, such as by going through part of a list rather than all of it."
     ]
   },
   "expressions_too_slow": {
-    "why": "Meridian evaluates some expressions together, and stops them once evaluating them has taken 10 seconds between them. This is a safeguard behind the language's limit on the work each expression does, and Meridian's on the work they do together, against workflows that do far more than any real one. It isn't a limit of the workflow format, since how long evaluating takes depends on the machine.",
+    "why": "Meridian evaluates some expressions together, and stops them once evaluating them has taken 10 seconds between them. This is a safeguard behind the language's limit on the work each expression does, and Meridian's on the work they do together, against workflows that do far more than any real one. It isn't a limit of the workflow format, since how long evaluating takes depends on the machine. The expressions evaluated together are a run's input defaults and conditions with its jobs' needs:, or the templates in one value, such as a step's with:.",
     "fix": [
       "Do less work in these expressions, such as by going through part of a list rather than all of it, or by reading less of a large value in each lambda."
+    ]
+  },
+  "problems_not_listed": {
+    "why": "Meridian lists at most the first 100 problems of each kind that it finds in a workflow and the values submitted for a run, so that a workflow or values with very many of them don't make a list of problems, or a plan, as large. The rest of the kind are counted here instead.",
+    "fix": [
+      "Fix the problems that are listed, and check the workflow again to see the rest."
     ]
   }
 }

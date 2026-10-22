@@ -286,7 +286,8 @@
     "title": "No se conoce la condición de la entrada",
     "why": "El hidden:, ignore: u optional: de una entrada se decide cuando se crea la ejecución, pero lee algo que entonces no se conoce, como un secreto.",
     "fix": [
-      "Haz que la condición lea solo entradas y lo que se conoce cuando se crea la ejecución."
+      "Haz que la condición lea solo entradas y lo que se conoce cuando se crea la ejecución.",
+      "Si la condición lee una entrada cuyo valor no se conoce hasta que empieza la ejecución, porque su valor predeterminado, o el de una fila, lee algo así, haz que la condición lea otra cosa o que el valor de esa entrada se conozca cuando se crea la ejecución."
     ]
   },
   "platform_input": {
@@ -837,23 +838,30 @@
   },
   "expressions_build_too_much": {
     "title": "Las expresiones construyen demasiado en conjunto",
-    "why": "Meridian evalúa algunas expresiones juntas y limita lo que construyen entre todas, además de lo que construye cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas construyen más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+    "why": "Meridian evalúa algunas expresiones juntas y limita lo que construyen entre todas, además de lo que construye cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas construyen más de lo que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo. Las expresiones que se evalúan juntas son los valores predeterminados y las condiciones de las entradas de una ejecución, con los needs: de sus trabajos, o las plantillas de un mismo valor, como el with: de un paso.",
     "fix": [
       "Construye menos en estas expresiones, por ejemplo leyendo una parte de un valor en lugar de todo."
     ]
   },
   "expressions_too_much_work": {
     "title": "Las expresiones hacen demasiado trabajo en conjunto",
-    "why": "Meridian evalúa algunas expresiones juntas y limita el trabajo que hacen entre todas, además del que hace cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas hacen más trabajo del que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
+    "why": "Meridian evalúa algunas expresiones juntas y limita el trabajo que hacen entre todas, además del que hace cada una. Cada una de estas está dentro del límite del lenguaje, pero juntas hacen más trabajo del que Meridian permite. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo. Las expresiones que se evalúan juntas son los valores predeterminados y las condiciones de las entradas de una ejecución, con los needs: de sus trabajos, o las plantillas de un mismo valor, como el with: de un paso.",
     "fix": [
       "Haz menos trabajo en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda."
     ]
   },
   "expressions_too_slow": {
     "title": "Las expresiones tardan demasiado en conjunto",
-    "why": "Meridian evalúa algunas expresiones juntas y las detiene cuando su evaluación ha tardado 10 segundos entre todas. Es una protección, detrás del límite del lenguaje sobre el trabajo de cada expresión y el de Meridian sobre el trabajo que hacen juntas, contra flujos de trabajo que hacen mucho más que cualquier flujo real. No es un límite del formato del flujo de trabajo, porque lo que tarda la evaluación depende de la máquina.",
+    "why": "Meridian evalúa algunas expresiones juntas y las detiene cuando su evaluación ha tardado 10 segundos entre todas. Es una protección, detrás del límite del lenguaje sobre el trabajo de cada expresión y el de Meridian sobre el trabajo que hacen juntas, contra flujos de trabajo que hacen mucho más que cualquier flujo real. No es un límite del formato del flujo de trabajo, porque lo que tarda la evaluación depende de la máquina. Las expresiones que se evalúan juntas son los valores predeterminados y las condiciones de las entradas de una ejecución, con los needs: de sus trabajos, o las plantillas de un mismo valor, como el with: de un paso.",
     "fix": [
       "Haz menos trabajo en estas expresiones, por ejemplo recorriendo una parte de una lista en lugar de toda, o leyendo menos de un valor grande en cada lambda."
+    ]
+  },
+  "problems_not_listed": {
+    "title": "Más problemas de un mismo tipo",
+    "why": "Meridian enumera como mucho los primeros 100 problemas de cada tipo que encuentra en un flujo de trabajo y en los valores enviados para una ejecución, para que un flujo de trabajo o unos valores con muchísimos de ellos no produzcan una lista de problemas, ni un plan, igual de grande. Los demás de ese tipo se cuentan aquí.",
+    "fix": [
+      "Corrige los problemas enumerados y vuelve a comprobar el flujo de trabajo para ver los demás."
     ]
   }
 }

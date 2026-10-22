@@ -126,3 +126,40 @@ func BenchmarkWarnings(b *testing.B) {
 		benchmarkCompile(b, []byte("jobs:\n  main:\n    steps:\n      - run: |\n"+strings.Repeat("          echo ${{ a.b }}\n", 3500)))
 	})
 }
+
+func benchmarkWorkload(b *testing.B, workload func(n int) ([]byte, map[string]any), sizes ...int) {
+	for _, n := range sizes {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			data, submitted := workload(n)
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _ = compile.Compile("workflow.yaml", data, submitted, compile.Options{})
+			}
+		})
+	}
+}
+
+// Submitted list rows whose template's field has a default that reads
+// another input.
+func BenchmarkListRows(b *testing.B) { benchmarkWorkload(b, listRows, 2000, 20000) }
+
+// Inputs whose ignore is an expression.
+func BenchmarkIgnoredInputs(b *testing.B) { benchmarkWorkload(b, ignoredInputs, 2000) }
+
+// Inputs whose defaults are expressions, beside ten times as many submitted
+// list rows.
+func BenchmarkDefaultsAndRows(b *testing.B) { benchmarkWorkload(b, defaultsAndRows, 300) }
+
+// Jobs whose needs is an expression, beside ten times as many submitted
+// list rows.
+func BenchmarkNeedsAndRows(b *testing.B) { benchmarkWorkload(b, needsAndRows, 300) }
+
+// A multi-dropdown with as many options as submitted items.
+func BenchmarkMultiDropdown(b *testing.B) { benchmarkWorkload(b, multiDropdown, 2000) }
+
+// Inputs, and twice as many references to inputs that aren't there, each a
+// letter off one that is.
+func BenchmarkNearMissReferences(b *testing.B) { benchmarkWorkload(b, nearMissReferences, 1200) }
+
+// A matrix whose include holds a mapping nested deep.
+func BenchmarkDeepValue(b *testing.B) { benchmarkWorkload(b, deepValue, 9999) }

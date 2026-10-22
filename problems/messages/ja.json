@@ -120,5 +120,6 @@
   "not_list_or_mapping": "関数 {name}() には、{value} ではなくリストまたはマッピングを指定してください。",
   "expressions_build_too_much": "ここでまとめて評価される式が作成するデータが、合計で {limit} MiB を超えています。",
   "expressions_too_much_work": "ここでまとめて評価される式の処理量が、合計で {limit} MiB を超えています。",
-  "expressions_too_slow": "ここでまとめて評価される式の評価に、合計で {limit} 秒を超える時間がかかりました。"
+  "expressions_too_slow": "ここでまとめて評価される式の評価に、合計で {limit} 秒を超える時間がかかりました。",
+  "problems_not_listed": "コード {code} の問題は最初の {limit} 件だけを挙げています。残りの {count} 件は挙げていません。"
 }

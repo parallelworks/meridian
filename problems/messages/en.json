@@ -126,5 +126,7 @@
 
   "expressions_build_too_much": "The expressions evaluated together here build more than {limit} MiB between them.",
   "expressions_too_much_work": "The expressions evaluated together here do more than {limit} MiB of work between them.",
-  "expressions_too_slow": "The expressions evaluated together here took more than {limit, plural, one {# second} other {# seconds}} between them."
+  "expressions_too_slow": "The expressions evaluated together here took more than {limit, plural, one {# second} other {# seconds}} between them.",
+
+  "problems_not_listed": "Only the first {limit} problems with the code {code} are listed; {count, plural, one {# more isn't} other {# more aren't}}."
 }

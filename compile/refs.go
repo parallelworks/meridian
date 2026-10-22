@@ -7,6 +7,7 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -26,9 +27,96 @@ type finding struct {
 
 // suggesting returns a finding of kind k with params, and what of names
 // name was probably meant to be, if any.
-func suggesting(k *problems.Kind, params problems.Params, name string, names []string) finding {
-	s, ok := hint.Suggest(name, names)
+func suggesting(k *problems.Kind, params problems.Params, name string, names *nameList) finding {
+	s, ok := names.suggest(name)
 	return finding{k, problems.WithSuggestion(params, s, ok)}
+}
+
+// A nameList is the names a misspelled name is probably one of. It finds
+// what each name it is asked about was probably meant to be once, however
+// often the workflow misspells it.
+type nameList struct {
+	names []string
+	found map[string]suggestion
+}
+
+// A suggestion is what hint.Suggest found for a name.
+type suggestion struct {
+	name string
+	ok   bool
+}
+
+func newNameList(names []string) *nameList { return &nameList{names: names} }
+
+// suggest returns the name of the list that name probably meant, as
+// hint.Suggest does.
+func (l *nameList) suggest(name string) (string, bool) {
+	if s, ok := l.found[name]; ok {
+		return s.name, s.ok
+	}
+	s, ok := hint.Suggest(name, l.names)
+	if l.found == nil {
+		l.found = map[string]suggestion{}
+	}
+	l.found[name] = suggestion{s, ok}
+	return s, ok
+}
+
+// inputNames is what the checks of references find of the inputs' names,
+// found once: the names of the inputs at the top, the last input with each
+// name there, and the paths of those that aren't headers; and the same of
+// each group's inputs, once a reference reads one.
+type inputNames struct {
+	top     *nameList
+	byKey   map[string]*field
+	defined map[string]bool
+	groups  map[*field]*groupNames
+}
+
+// groupNames is the names of a group's inputs, and the last with each name.
+type groupNames struct {
+	names *nameList
+	byKey map[string]*field
+}
+
+// inputNames returns what the checks of references find of the inputs'
+// names, finding it the first time.
+func (c *compiler) inputNames() *inputNames {
+	if c.names != nil {
+		return c.names
+	}
+	n := &inputNames{byKey: map[string]*field{}, defined: map[string]bool{}, groups: map[*field]*groupNames{}}
+	var top []string
+	for _, f := range c.inputs.fields {
+		if !f.header {
+			n.defined[jsonptr.Format(f.path)] = true
+		}
+		if len(f.path) == 1 {
+			n.byKey[f.key] = f
+			if !f.header {
+				top = append(top, f.key)
+			}
+		}
+	}
+	n.top = newNameList(top)
+	c.names = n
+	return n
+}
+
+// group returns the names of f's inputs, finding them the first time.
+func (n *inputNames) group(f *field) *groupNames {
+	g := n.groups[f]
+	if g == nil {
+		g = &groupNames{byKey: map[string]*field{}}
+		names := make([]string, 0, len(f.children))
+		for _, child := range f.children {
+			names = append(names, child.key)
+			g.byKey[child.key] = child
+		}
+		g.names = newNameList(names)
+		n.groups[f] = g
+	}
+	return g
 }
 
 // checkRef checks a reference that an expression evaluated in phase ph
@@ -63,13 +151,18 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int
 				"job": jobName(job), "key": path[0], "text": problems.Show("matrix." + path[0]),
 			}}
 		case job.matrixKeys != nil && !job.matrixKeys[path[0]]:
-			f = suggesting(problems.UndefinedMatrixKey, problems.Params{"job": job.name, "key": path[0]},
-				path[0], slices.Sorted(maps.Keys(job.matrixKeys)))
+			if job.matrixNames == nil {
+				job.matrixNames = newNameList(slices.Sorted(maps.Keys(job.matrixKeys)))
+			}
+			f = suggesting(problems.UndefinedMatrixKey, problems.Params{"job": job.name, "key": path[0]}, path[0], job.matrixNames)
 		}
 	case "sessions":
 		sessions := mapping(c.doc.Value["sessions"])
 		if _, ok := sessions[path[0]]; !ok {
-			f = suggesting(problems.UndefinedSession, problems.Params{"name": path[0]}, path[0], slices.Sorted(maps.Keys(sessions)))
+			if c.sessionNames == nil {
+				c.sessionNames = newNameList(slices.Sorted(maps.Keys(sessions)))
+			}
+			f = suggesting(problems.UndefinedSession, problems.Params{"name": path[0]}, path[0], c.sessionNames)
 		}
 	case "org", "vars":
 		c.checkVariableName(r, in, at)
@@ -104,10 +197,8 @@ func (c *compiler) defines(r expr.Ref, job *jobInfo) (defines, defined, in strin
 	}
 	name := r.Path[0]
 	if r.Context == "inputs" {
-		for _, f := range c.inputs.fields {
-			if !f.header && slices.Equal(f.path, r.Path) {
-				return "input", strings.Join(r.Path, "."), ""
-			}
+		if c.inputNames().defined[jsonptr.Format(r.Path)] {
+			return "input", strings.Join(r.Path, "."), ""
 		}
 		return "", "", ""
 	}
@@ -182,35 +273,19 @@ func jobName(job *jobInfo) string {
 // checkInputRef checks that inputs.<path> names an input, and an input in
 // it for a group's.
 func (c *compiler) checkInputRef(path []string) finding {
-	var top []string
-	for _, f := range c.inputs.fields {
-		if len(f.path) == 1 && !f.header {
-			top = append(top, f.key)
-		}
-	}
-	var f *field
-	for _, cand := range c.inputs.fields {
-		if len(cand.path) == 1 && cand.key == path[0] {
-			f = cand
-		}
-	}
+	names := c.inputNames()
+	f := names.byKey[path[0]]
 	if f == nil {
-		return suggesting(problems.UndefinedInput, problems.Params{"name": path[0]}, path[0], top)
+		return suggesting(problems.UndefinedInput, problems.Params{"name": path[0]}, path[0], names.top)
 	}
 	for _, key := range path[1:] {
 		if !f.container || f.flatten || definitionKeys[key] || key == "*" || key == "[index]" {
 			return finding{}
 		}
-		var next *field
-		var names []string
-		for _, child := range f.children {
-			names = append(names, child.key)
-			if child.key == key {
-				next = child
-			}
-		}
+		g := names.group(f)
+		next := g.byKey[key]
 		if next == nil {
-			return suggesting(problems.UndefinedNestedInput, problems.Params{"group": strings.Join(f.path, "."), "name": key}, key, names)
+			return suggesting(problems.UndefinedNestedInput, problems.Params{"group": strings.Join(f.path, "."), "name": key}, key, g.names)
 		}
 		f = next
 	}
@@ -229,7 +304,7 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding 
 	case job == nil:
 		return finding{problems.NeedsOutsideJob, nil}
 	case !ok:
-		return suggesting(problems.UndefinedJob, problems.Params{"job": name}, name, slices.Sorted(maps.Keys(c.jobInfos)))
+		return suggesting(problems.UndefinedJob, problems.Params{"job": name}, name, c.jobNames)
 	case !job.needed[name] && !self:
 		return finding{problems.JobNotNeeded, problems.Params{"job": job.name, "needed": name}}
 	case len(path) == 1:
@@ -260,18 +335,21 @@ func (c *compiler) checkStepRef(path []string, job *jobInfo, output bool) findin
 		if ok {
 			return finding{problems.StepNotEarlier, problems.Params{"id": id}}
 		}
-		var earlier []string
-		for k, j := range job.stepIDs {
-			if j < job.step {
-				earlier = append(earlier, k)
+		if job.earlier == nil || job.earlierAt != job.step {
+			var earlier []string
+			for k, j := range job.stepIDs {
+				if j < job.step {
+					earlier = append(earlier, k)
+				}
 			}
+			slices.Sort(earlier)
+			job.earlier, job.earlierAt = newNameList(earlier), job.step
 		}
-		slices.Sort(earlier)
 		k := problems.UndefinedStep
 		if output {
 			k = problems.OutputUndefinedStep
 		}
-		return suggesting(k, problems.Params{"job": job.name, "id": id}, id, earlier)
+		return suggesting(k, problems.Params{"job": job.name, "id": id}, id, job.earlier)
 	}
 	if len(path) >= 2 && path[1] != "outputs" {
 		k := problems.StepsUnknownKey

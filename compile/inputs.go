@@ -1,8 +1,10 @@
 package compile
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -86,13 +89,19 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // docs/design.md describes. It reports every problem it finds.
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
-	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets}, r.diags
+	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets}, listed(r.diags)
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
 // compiler's checks of what reads them.
 func resolveInputs(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
-	r := &inputResolver{
+	r := newInputResolver(doc, submitted, opts)
+	r.resolve()
+	return r
+}
+
+func newInputResolver(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
+	return &inputResolver{
 		doc:          doc,
 		opts:         opts,
 		workflow:     &expr.Workflow{Root: doc.Value, Definitions: definitionsPath},
@@ -102,14 +111,20 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 		secretsLater: map[string]bool{},
 		marks:        [][]string{{"org"}, {"vars"}},
 	}
-	defs, _ := lookup(doc.Value, definitionsPath).(map[string]any)
+}
+
+func (r *inputResolver) resolve() {
+	defs, _ := lookup(r.doc.Value, definitionsPath).(map[string]any)
 	r.fields = r.collect(defs, definitionsPath, nil, nil)
+	for i, f := range r.fields {
+		f.seq = i
+	}
 	r.checkSyntax(append(make([]string, 0, 16), definitionsPath...), defs)
 	for _, f := range r.fields {
 		r.markPassword(f)
 	}
 	r.checkJSON(r.values)
-	r.checkUnknown(r.values, nil)
+	r.checkUnknownInputs()
 	for _, f := range r.fields {
 		if f.header {
 			r.remove(f.path)
@@ -119,7 +134,6 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 	r.applyConditions()
 	r.checkValues()
 	r.diags.Sort()
-	return r
 }
 
 // A field is an input definition.
@@ -163,14 +177,28 @@ type field struct {
 	// holds the rows. Both are nil for an input.
 	index []int
 	in    *field
+	// rows holds the fields of a list's or a repeated step's rows, once its
+	// value is known, by the rows' indexes: none for a row that isn't a
+	// mapping.
+	rows [][]*field
+	// seq is the field's place among the inputs' fields and then the rows'
+	// fields, the order evalValues fills in their values.
+	seq int
+	// options is what checking the value reads of the field's options,
+	// once it is read, which the fields of a list's rows share with its
+	// template's.
+	options *options
 	// texts are the strings in the value that are a form's text for an
 	// expression, and reads the expressions that filling in the value
 	// reads: its default's, or its texts'.
 	texts []text
 	reads []*expr.Expr
 	// later holds the parts of an input's value that are evaluated once the
-	// run is underway, until they are in dflt.
-	later []laterPart
+	// run is underway, until they are in dflt, and laterAt their indexes by
+	// their paths, so that the parts at a row, however deep, are found
+	// without going through every row's.
+	later   []laterPart
+	laterAt *reach.Trie[int]
 }
 
 // A text is a string in a value, at path in it, that is the text of the
@@ -195,8 +223,9 @@ type inputResolver struct {
 	opts     Options
 	workflow *expr.Workflow
 	// budget holds the one budget that every evaluation of the inputs'
-	// expressions shares: they are one group, for Meridian's limit on what
-	// a group builds. Each template has the language's limit as well.
+	// expressions shares, and the jobs' needs: what decides the run's shape
+	// is one group, for Meridian's limits on what a group does. Each
+	// template has the language's limits as well.
 	budget expr.Scope
 	values map[string]any
 	// secrets are the values of password inputs, by their paths, and
@@ -213,11 +242,51 @@ type inputResolver struct {
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
 	rows []*field
+	// templates holds the fields of each list's template, and each repeated
+	// step's inputs, collected once with their paths in a row, by where they
+	// are in the workflow.
+	templates map[string]*template
+	// byPath holds the inputs' fields by their paths in the values, once
+	// the view changes, to find those whose values a change reaches
+	// (fieldsAt). Rows are found from their lists.
+	byPath *reach.Trie[*field]
+	// view is what expressions read of the values (evalValues): made when
+	// they are first read, and then changed where the values, or what is
+	// known of them, change (refresh). contexts are what evaluations read,
+	// the view among them.
+	view     map[string]any
+	contexts map[string]any
 	// evaluators evaluate expressions with the values as they are, one for
-	// the rows at each index, and contexts are what they read. Both are
-	// made again once the values change.
+	// the rows at each index. They are made again once the values change.
 	evaluators map[string]*expr.Evaluator
-	contexts   map[string]any
+	// unknown counts the submitted values for inputs the workflow doesn't
+	// define.
+	unknown int
+	// checkView, which tests set, is called each time the view changes, and
+	// each time an evaluation is to read it.
+	checkView func()
+}
+
+// A template is the fields of a list's template, or a repeated step's
+// inputs, with their paths in a row, and the index in fields of each one's
+// group, or -1.
+type template struct {
+	fields []*field
+	groups []int
+}
+
+// options is what checking a field's value reads of its options, found
+// once for the field.
+type options struct {
+	found bool
+	// values are its options' values (optionValues), and exprs those that
+	// hold expressions (expressionOptions). template is set if any holds
+	// one, and empty if one is "".
+	values          []any
+	exprs           []exprOption
+	template, empty bool
+	// keys holds each value's looseKey, once a value is checked.
+	keys map[string]bool
 }
 
 // collect returns the fields that the definitions in defs, at loc in the
@@ -303,12 +372,56 @@ func (f *field) evaluatedLater() (later, known bool) {
 	in := f.holder()
 	at := f.path[len(in.path):]
 	known = true
-	for _, p := range in.later {
-		if len(p.path) <= len(at) && slices.Equal(p.path, at[:len(p.path)]) {
+	for _, p := range in.partsAround(at) {
+		if len(p.path) <= len(at) {
 			later, known = true, known && p.variable
 		}
 	}
 	return later, later && known
+}
+
+// addLater adds p to the parts of f's value that are evaluated once the run
+// is underway.
+func (f *field) addLater(p laterPart) {
+	if f.laterAt == nil {
+		f.laterAt = &reach.Trie[int]{}
+	}
+	f.laterAt.Add(p.path, len(f.later))
+	f.later = append(f.later, p)
+}
+
+// partsAround returns the parts of f's value evaluated once the run is
+// underway that are at at, a path in the value, on the way to it, or under
+// it, in the order they were added.
+func (f *field) partsAround(at []string) iter.Seq2[int, laterPart] {
+	return func(yield func(int, laterPart) bool) {
+		if len(at) == 0 {
+			for i, p := range f.later {
+				if !yield(i, p) {
+					return
+				}
+			}
+			return
+		}
+		if f.laterAt == nil {
+			return
+		}
+		// Reached reads a * in at as any key, so it can find more than
+		// these, which related leaves out.
+		found := slices.Sorted(f.laterAt.Reached(at))
+		for _, i := range slices.Compact(found) {
+			if p := f.later[i]; related(p.path, at) && !yield(i, p) {
+				return
+			}
+		}
+	}
+}
+
+// related reports whether one of two paths leads to the other, or they are
+// the same.
+func related(a, b []string) bool {
+	n := min(len(a), len(b))
+	return slices.Equal(a[:n], b[:n])
 }
 
 // holdsPassword reports whether def, an input's definition, is a password
@@ -393,25 +506,54 @@ func (r *inputResolver) checkJSON(values map[string]any) {
 	}
 }
 
-// checkUnknown reports submitted values for inputs the workflow doesn't
-// define, at path in the values.
-func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
-	known := map[string]*field{}
+// checkUnknownInputs reports the submitted values for inputs the workflow
+// doesn't define: the first maxListed one by one, which suggest the name
+// each probably meant, and then how many more there are. The values are
+// kept.
+func (r *inputResolver) checkUnknownInputs() {
+	known := map[string]*knownInputs{}
 	for _, f := range r.fields {
 		if !f.container || !f.flatten {
-			if slices.Equal(f.path[:len(f.path)-1], path) {
-				known[f.key] = f
+			at := jsonptr.Format(f.path[:len(f.path)-1])
+			if known[at] == nil {
+				known[at] = &knownInputs{byKey: map[string]*field{}}
 			}
+			known[at].byKey[f.key] = f
 		}
 	}
-	var names []string
+	r.checkUnknown(r.values, nil, known)
+	if more := r.unknown - maxListed; more > 0 {
+		r.reportAt(problems.ProblemsNotListed, definitionsPath, problems.Params{
+			"code": string(problems.UnknownInput.Code()), "count": more, "limit": maxListed,
+		})
+	}
+}
+
+// knownInputs are the inputs whose values are in a mapping, by their keys,
+// and their names, sorted, once a value there isn't one of them.
+type knownInputs struct {
+	byKey map[string]*field
+	names []string
+}
+
+// checkUnknown reports submitted values for inputs the workflow doesn't
+// define, at path in the values, which known holds the inputs of by the
+// paths of the mappings they are in.
+func (r *inputResolver) checkUnknown(values map[string]any, path []string, known map[string]*knownInputs) {
+	inputs := known[jsonptr.Format(path)]
+	if inputs == nil {
+		inputs = &knownInputs{}
+	}
 	for key, v := range jsonvalue.Sorted(values) {
-		f, ok := known[key]
+		f, ok := inputs.byKey[key]
 		if !ok {
-			if names == nil {
-				names = slices.Sorted(maps.Keys(known))
+			if r.unknown++; r.unknown > maxListed {
+				continue
 			}
-			s, ok := hint.Suggest(key, names)
+			if inputs.names == nil {
+				inputs.names = slices.Sorted(maps.Keys(inputs.byKey))
+			}
+			s, ok := hint.Suggest(key, inputs.names)
 			params := problems.Params{"input": strings.Join(appendPath(path, key), ".")}
 			r.reportAt(problems.UnknownInput, definitionsPath, problems.WithSuggestion(params, strings.Join(appendPath(path, s), "."), ok))
 			continue
@@ -429,7 +571,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string) {
 			delete(values, key)
 			continue
 		}
-		r.checkUnknown(child, f.path)
+		r.checkUnknown(child, f.path, known)
 	}
 }
 
@@ -532,7 +674,8 @@ func (r *inputResolver) evalPending(f *field) {
 		case err != nil:
 			r.reportError(t.loc, 0, maskedIf(marked, err))
 		default:
-			r.set(slices.Concat(f.path, t.path), v)
+			// A copy, as the value can be part of what the evaluation read.
+			r.set(slices.Concat(f.path, t.path), jsonvalue.Clone(v))
 			if marked {
 				r.deferPart(f, t.path, text, true)
 			}
@@ -542,7 +685,7 @@ func (r *inputResolver) evalPending(f *field) {
 
 // setDefault sets f's value to its default, unless the default is "", which
 // gives no value. The value is a copy, so that filling in a list's rows
-// doesn't change the workflow.
+// doesn't change the workflow, nor what the evaluation read.
 func (r *inputResolver) setDefault(f *field, v any) {
 	if v != "" && v != nil {
 		r.set(f.path, jsonvalue.Clone(v))
@@ -558,21 +701,72 @@ func (r *inputResolver) collectRows(f *field) []*field {
 		return nil
 	}
 	rows, _ := lookup(r.values, f.path).([]any)
+	t := r.template(defs, loc)
 	var out []*field
 	for i, row := range rows {
-		if _, ok := row.(map[string]any); !ok {
+		if _, ok := row.(map[string]any); !ok || len(t.fields) == 0 {
 			continue
 		}
 		index := append(slices.Clip(f.index), i)
-		for _, c := range r.collect(defs, loc, appendPath(f.path, strconv.Itoa(i)), nil) {
+		fields := t.row(appendPath(f.path, strconv.Itoa(i)))
+		for _, c := range fields {
 			c.index, c.in = index, f.holder()
+			c.seq = len(r.fields) + len(r.rows) + len(out)
 			r.markPassword(c)
 			out = append(out, c)
 		}
+		if f.rows == nil {
+			f.rows = make([][]*field, len(rows))
+		}
+		f.rows[i] = fields
 	}
 	if len(out) > 0 {
 		r.rows = append(r.rows, out...)
-		r.changed()
+		r.refresh(f.path)
+	}
+	return out
+}
+
+// template returns the fields that defs, at loc in the workflow, define
+// for each row of a list or a repeated step, collected once.
+func (r *inputResolver) template(defs map[string]any, loc []string) *template {
+	key := jsonptr.Format(loc)
+	if t, ok := r.templates[key]; ok {
+		return t
+	}
+	t := &template{fields: r.collect(defs, loc, nil, nil)}
+	at := make(map[*field]int, len(t.fields))
+	for i, f := range t.fields {
+		f.options = &options{} // which each row's field shares
+		at[f] = i
+		g, ok := at[f.group]
+		if !ok {
+			g = -1
+		}
+		t.groups = append(t.groups, g)
+	}
+	if r.templates == nil {
+		r.templates = map[string]*template{}
+	}
+	r.templates[key] = t
+	return t
+}
+
+// row returns the fields of the row at path: a copy of each of the
+// template's, with its path in the row's value, in the row's own groups.
+func (t *template) row(path []string) []*field {
+	structs := make([]field, len(t.fields))
+	out := make([]*field, len(t.fields))
+	for i, tf := range t.fields {
+		f := &structs[i]
+		*f = *tf
+		f.path = slices.Concat(path, tf.path)
+		f.group, f.children = nil, nil
+		if g := t.groups[i]; g >= 0 {
+			f.group = out[g]
+			f.group.children = append(f.group.children, f)
+		}
+		out[i] = f
 	}
 	return out
 }
@@ -584,18 +778,27 @@ func (r *inputResolver) collectRows(f *field) []*field {
 func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
 	value := lookup(r.values, f.path)
 	var texts []text
-	for _, p := range defaultTexts(f.def["default"], value, nil) {
+	// items holds the keys of the paths of one key that have a text, so
+	// that each item of a list has one.
+	items := map[string]bool{}
+	for _, p := range defaultTexts(f.def["default"], value, nil, nil) {
 		texts = append(texts, text{p, slices.Concat(f.loc, []string{"default"}, p)})
+		if len(p) == 1 {
+			items[p[0]] = true
+		}
 	}
-	for _, o := range expressionOptions(f.def["options"], appendPath(f.loc, "options")) {
+	for _, o := range f.findOptions().exprs {
 		if value == o.value {
 			texts = append(texts, text{nil, o.loc})
 		}
 		list, _ := value.([]any)
 		for i, item := range list {
-			p := []string{strconv.Itoa(i)}
-			if item == o.value && !slices.ContainsFunc(texts, func(t text) bool { return slices.Equal(t.path, p) }) {
-				texts = append(texts, text{p, o.loc})
+			if item != o.value {
+				continue
+			}
+			if k := strconv.Itoa(i); !items[k] {
+				items[k] = true
+				texts = append(texts, text{[]string{k}, o.loc})
 			}
 		}
 	}
@@ -610,25 +813,26 @@ func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
 	return texts, reads
 }
 
-// defaultTexts returns the paths, from path, of the strings in v that are
-// the text of an expression in the same place in def.
-func defaultTexts(def, v any, path []string) [][]string {
-	var out [][]string
+// defaultTexts appends to out the paths, from path, of the strings in v
+// that are the text of an expression in the same place in def. It appends
+// to path in place, so that the walk reuses one path, and copies the paths
+// it keeps.
+func defaultTexts(def, v any, path []string, out [][]string) [][]string {
 	switch def := def.(type) {
 	case string:
 		if s, ok := v.(string); ok && s == def && strings.Contains(s, "${{") {
-			out = append(out, path)
+			out = append(out, slices.Clone(path))
 		}
 	case []any:
 		list, _ := v.([]any)
 		for i := range min(len(def), len(list)) {
-			out = append(out, defaultTexts(def[i], list[i], appendPath(path, strconv.Itoa(i)))...)
+			out = defaultTexts(def[i], list[i], append(path, strconv.Itoa(i)), out)
 		}
 	case map[string]any:
 		m, _ := v.(map[string]any)
 		for k, d := range jsonvalue.Sorted(def) {
 			if item, ok := m[k]; ok {
-				out = append(out, defaultTexts(d, item, appendPath(path, k))...)
+				out = defaultTexts(d, item, append(path, k), out)
 			}
 		}
 	}
@@ -679,11 +883,11 @@ func (r *inputResolver) deferPart(f *field, path []string, raw any, variable boo
 		return // checkSyntax reported it.
 	}
 	in := f.holder()
-	in.later = append(in.later, laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})
+	in.addLater(laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})
 	if variable {
 		r.marks = append(r.marks, slices.Concat([]string{"inputs"}, f.path, path))
 	}
-	r.changed()
+	r.refresh(slices.Concat(f.path, path))
 }
 
 // holdLater makes what the plan holds of each input with parts evaluated
@@ -739,7 +943,11 @@ func (r *inputResolver) holdLater() {
 		}
 		f.dflt = plan.Literal(held)
 		if slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
+			// A part of its value isn't known until the run starts, so
+			// what expressions read of it is unknown, all of it, from
+			// here on.
 			f.deferred = true
+			r.refresh(f.path)
 		} else {
 			f.variable = true
 		}
@@ -776,16 +984,26 @@ func (r *inputResolver) missing(f *field) bool {
 	if s, isString := v.(string); isString && s != "" && s == f.def["default"] && strings.Contains(s, "${{") {
 		return true
 	}
-	return v == "" && !hasEmptyOption(f.def["options"])
+	return v == "" && !f.findOptions().empty
 }
 
-func hasEmptyOption(options any) bool {
-	for _, o := range optionValues(options) {
-		if o == "" {
-			return true
-		}
+// findOptions returns what checking f's value reads of its options,
+// finding it the first time.
+func (f *field) findOptions() *options {
+	if f.options == nil {
+		f.options = &options{}
 	}
-	return false
+	o := f.options
+	if o.found {
+		return o
+	}
+	o.found = true
+	raw := f.def["options"]
+	o.values = optionValues(raw)
+	o.exprs = expressionOptions(raw, appendPath(f.loc, "options"))
+	o.template = hasTemplate(raw)
+	o.empty = slices.ContainsFunc(o.values, func(v any) bool { return v == "" })
+	return o
 }
 
 // applyConditions evaluates each input's hidden, ignore and optional, drops
@@ -794,14 +1012,14 @@ func (r *inputResolver) applyConditions() {
 	for _, f := range r.fields {
 		if f.group != nil && f.group.ignored {
 			f.ignored = true
-			r.changed()
+			r.refresh(f.path)
 			continue
 		}
 		f.hidden = r.condition(f, "hidden") || f.group != nil && f.group.hidden
 		if f.ignored = r.condition(f, "ignore"); f.ignored {
 			// What expressions read of f changes, before its value is
 			// dropped.
-			r.changed()
+			r.refresh(f.path)
 		}
 		f.optional = r.condition(f, "optional")
 		if f.ignored {
@@ -869,16 +1087,11 @@ func (r *inputResolver) drop(f *field) {
 // each string of a list or mapping. marked is set if it read a variable,
 // or a value that did.
 func (r *inputResolver) evalAt(loc []string, index []int) (v any, marked bool, err error) {
-	key := fmt.Sprint(index)
+	key := indexKey(index)
 	ev, ok := r.evaluators[key]
 	if !ok {
-		if r.contexts == nil {
-			r.contexts = compileTimeContexts(r.opts, r.evalValues())
-		}
-		scope := r.budget
-		scope.Contexts = r.contexts
+		scope := r.scope()
 		scope.Index = index
-		scope.Marked = r.marks
 		ev = r.workflow.Evaluator(scope)
 		if r.evaluators == nil {
 			r.evaluators = map[string]*expr.Evaluator{}
@@ -888,22 +1101,172 @@ func (r *inputResolver) evalAt(loc []string, index []int) (v any, marked bool, e
 	return ev.EvalMarked(loc)
 }
 
+// indexKey returns the key of the evaluator for the list rows at index.
+func indexKey(index []int) string {
+	b := make([]byte, 0, 4*len(index))
+	for _, i := range index {
+		b = strconv.AppendInt(b, int64(i), 10)
+		b = append(b, ',')
+	}
+	return string(b)
+}
+
+// scope returns the scope that what the compiler evaluates with the
+// inputs' values reads: the values as they are (evalValues), and the marks,
+// in the inputs' group, which shares one budget.
+func (r *inputResolver) scope() expr.Scope {
+	if r.view == nil {
+		r.view = r.evalValues()
+		r.contexts = compileTimeContexts(r.opts, r.view)
+	}
+	if r.checkView != nil {
+		r.checkView()
+	}
+	scope := r.budget
+	scope.Contexts = r.contexts
+	scope.Marked = r.marks
+	return scope
+}
+
 // set sets the value at path, and remove removes it.
 func (r *inputResolver) set(path []string, v any) {
 	setIn(r.values, path, v)
-	r.changed()
+	r.refresh(path)
 }
 
 func (r *inputResolver) remove(path []string) {
 	deletePath(r.values, path)
-	r.changed()
+	r.refresh(path)
 }
 
-// changed notes that what expressions read of the values changed: the
-// values, or what is known of them, or which read a variable. The
-// evaluations that follow read them anew.
-func (r *inputResolver) changed() {
-	r.evaluators, r.contexts = nil, nil
+// refresh notes that what expressions read of the values changed at path,
+// or under it: the values, or what is known of them, or which read a
+// variable. The evaluations that follow read them anew, and the view is
+// made at path what evalValues would make it now: the values there, each
+// field's value, where it has none, as evalValues fills it in, and what is
+// unknown, there, on the way to path and under it. Nothing else in the view
+// changes.
+func (r *inputResolver) refresh(path []string) {
+	r.evaluators = nil
+	if r.view == nil {
+		return
+	}
+	if v, ok := jsonptr.Lookup(r.values, path); ok {
+		setIn(r.view, path, jsonvalue.Clone(v))
+	} else {
+		deletePath(r.view, path)
+	}
+	// fill holds the fields whose values are at path or under it, which
+	// are filled in in the order evalValues fills them in, as of two with
+	// the same path the first's value is kept; and holders the inputs on
+	// the way to path, at it or under it, with parts evaluated once the run
+	// is underway.
+	var fill, holders []*field
+	for f := range r.fieldsAt().Reached(path) {
+		if !related(f.path, path) {
+			continue
+		}
+		if f.later != nil {
+			holders = append(holders, f)
+		}
+		fill = appendUnder(fill, f, path)
+	}
+	slices.SortFunc(fill, func(a, b *field) int { return cmp.Compare(a.seq, b.seq) })
+	for _, f := range fill {
+		if v, ok := f.filledWith(); ok {
+			if _, has := jsonptr.Lookup(r.view, f.path); !has {
+				setIn(r.view, f.path, v)
+			}
+		}
+	}
+	slices.SortFunc(holders, func(a, b *field) int { return cmp.Compare(a.seq, b.seq) })
+	for _, f := range holders {
+		f.markUnknown(r.view, path)
+	}
+	if r.checkView != nil {
+		r.checkView()
+	}
+}
+
+// fieldsAt returns the inputs' fields by their paths in the values, putting
+// them there the first time.
+func (r *inputResolver) fieldsAt() *reach.Trie[*field] {
+	if r.byPath == nil {
+		r.byPath = &reach.Trie[*field]{}
+		for _, f := range r.fields {
+			r.byPath.Add(f.path, f)
+		}
+	}
+	return r.byPath
+}
+
+// appendUnder appends to out f, if its value is at path or under it, and
+// the fields of its rows whose values are.
+func appendUnder(out []*field, f *field, path []string) []*field {
+	if len(f.path) >= len(path) {
+		out = append(out, f)
+		for _, row := range f.rows {
+			for _, c := range row {
+				out = appendUnder(out, c, path)
+			}
+		}
+		return out
+	}
+	// path is in f's value: in one of its rows, if any.
+	if i, ok := rowIndex(path[len(f.path)], len(f.rows)); ok {
+		for _, c := range f.rows[i] {
+			if related(c.path, path) {
+				out = appendUnder(out, c, path)
+			}
+		}
+	}
+	return out
+}
+
+// rowIndex returns the index of the row that key, a key of a path, names
+// among n rows, as a row's fields' paths write it.
+func rowIndex(key string, n int) (int, bool) {
+	i, err := strconv.Atoi(key)
+	return i, err == nil && i >= 0 && i < n && strconv.Itoa(i) == key
+}
+
+// filledWith returns the value evalValues gives f where it has none, and
+// whether it gives one: null, or false for a boolean without a default,
+// which is the value it gets, rather than its definition. A container, a
+// header and an input evaluated once the run is underway, and the fields of
+// its rows, get none.
+func (f *field) filledWith() (any, bool) {
+	if f.container || f.header || f.deferred && !f.ignored || f.in != nil && f.in.deferred {
+		return nil, false
+	}
+	if f.typ == "boolean" && !f.hasDefault {
+		return false, true
+	}
+	return nil, true
+}
+
+// markUnknown marks in values, as evalValues does, what is evaluated of
+// f's value once the run is underway, at path, on the way to it or under
+// it, or everywhere if path is nil: all of it, if f is deferred, or else
+// the parts that don't read only variables and passwords, whose values the
+// compiler knows.
+func (f *field) markUnknown(values map[string]any, path []string) {
+	unknown := expr.Unknown{Name: "inputs"}
+	switch {
+	case f.ignored:
+	case f.deferred:
+		setIn(values, f.path, unknown)
+	default:
+		var at []string
+		if len(path) > len(f.path) {
+			at = path[len(f.path):]
+		}
+		for _, p := range f.partsAround(at) {
+			if !p.variable {
+				setIn(values, slices.Concat(f.path, p.path), unknown)
+			}
+		}
+	}
 }
 
 // deferred returns the defaults that are evaluated once the run is
@@ -924,36 +1287,23 @@ func (r *inputResolver) deferred() map[string]plan.Value {
 // evalValues returns the values for expressions to read: each input with no
 // value null, or false for a boolean, which is the value it gets, rather than
 // its definition, and so is each field of a row; and what is evaluated once
-// the run is underway unknown.
-func (r *inputResolver) evalValues() any {
+// the run is underway unknown. The view is made with it, and kept as it
+// would make it (refresh).
+func (r *inputResolver) evalValues() map[string]any {
 	values := jsonvalue.CloneMap(r.values)
 	for _, fields := range [][]*field{r.fields, r.rows} {
 		for _, f := range fields {
-			if f.container || f.header || f.deferred && !f.ignored || f.in != nil && f.in.deferred {
+			v, ok := f.filledWith()
+			if !ok {
 				continue
 			}
-			if _, ok := jsonptr.Lookup(values, f.path); ok {
-				continue
+			if _, has := jsonptr.Lookup(values, f.path); !has {
+				setIn(values, f.path, v)
 			}
-			var v any
-			if f.typ == "boolean" && !f.hasDefault {
-				v = false
-			}
-			setIn(values, f.path, v)
 		}
 	}
 	for _, f := range r.fields {
-		switch {
-		case f.ignored:
-		case f.deferred:
-			setIn(values, f.path, expr.Unknown{Name: "inputs"})
-		default:
-			for _, p := range f.later {
-				if !p.variable {
-					setIn(values, slices.Concat(f.path, p.path), expr.Unknown{Name: "inputs"})
-				}
-			}
-		}
+		f.markUnknown(values, nil)
 	}
 	return values
 }
@@ -1152,30 +1502,61 @@ func (r *inputResolver) checkJSONValue(f *field, v any) (*field, finding) {
 	if what == "" {
 		return f, finding{}
 	}
-	in, path := f, slices.Concat(f.path, at)
-	for _, row := range r.rows {
-		if len(row.path) > len(in.path) && len(row.path) <= len(path) && slices.Equal(row.path, path[:len(row.path)]) {
-			in = row
+	return r.innermostRow(f, slices.Concat(f.path, at)), finding{problems.InputNotJSON, problems.Params{"what": what, "value": value}}
+}
+
+// innermostRow returns the innermost field of lists' rows whose value holds
+// the value at path, a path in f's value, or f if none does. Of fields with
+// the same path, it returns the first.
+func (r *inputResolver) innermostRow(f *field, path []string) *field {
+	in := f
+	var walk func(g *field)
+	walk = func(g *field) {
+		if len(g.path) >= len(path) {
+			return
+		}
+		i, ok := rowIndex(path[len(g.path)], len(g.rows))
+		if !ok {
+			return
+		}
+		for _, c := range g.rows[i] {
+			if len(c.path) > len(path) || !slices.Equal(c.path, path[:len(c.path)]) {
+				continue
+			}
+			if len(c.path) > len(in.path) || in != f && len(c.path) == len(in.path) && c.seq < in.seq {
+				in = c
+			}
+			walk(c)
 		}
 	}
-	return in, finding{problems.InputNotJSON, problems.Params{"what": what, "value": value}}
+	for g := range r.fieldsAt().Reached(path) {
+		if len(g.path) <= len(path) && related(g.path, path) {
+			walk(g)
+		}
+	}
+	return in
 }
 
 // checkOption checks that v is one of a dropdown's options, when they are
-// written in the workflow rather than computed.
+// written in the workflow rather than computed: that its looseKey is one of
+// theirs.
 func checkOption(f *field, v any) finding {
-	options := optionValues(f.def["options"])
-	if len(options) == 0 || hasTemplate(f.def["options"]) {
+	o := f.findOptions()
+	if len(o.values) == 0 || o.template {
 		return finding{}
 	}
-	for _, o := range options {
-		if looseEqual(o, v) {
-			return finding{}
+	if o.keys == nil {
+		o.keys = make(map[string]bool, len(o.values))
+		for _, value := range o.values {
+			o.keys[looseKey(value)] = true
 		}
 	}
-	shown := make([]string, len(options))
-	for i, o := range options {
-		shown[i] = problems.Show(o)
+	if o.keys[looseKey(v)] {
+		return finding{}
+	}
+	shown := make([]string, len(o.values))
+	for i, value := range o.values {
+		shown[i] = problems.Show(value)
 	}
 	return finding{problems.InputNotOption, problems.Params{"value": problems.Show(v), "options": problems.List(shown)}}
 }

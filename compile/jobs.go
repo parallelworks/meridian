@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
-	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -82,9 +81,15 @@ type jobInfo struct {
 	stepIDs map[string]int
 	step    int
 	// matrix is set for a job with a strategy:, and matrixKeys holds its
-	// matrix's keys when the workflow writes them out.
-	matrix     bool
-	matrixKeys map[string]bool
+	// matrix's keys when the workflow writes them out, and matrixNames
+	// them sorted, once a reference reads a key it doesn't have.
+	matrix      bool
+	matrixKeys  map[string]bool
+	matrixNames *nameList
+	// earlier holds the ids of the steps before step earlierAt, once a
+	// reference there reads a step that isn't one.
+	earlier   *nameList
+	earlierAt int
 }
 
 // jobs compiles the workflow's jobs, in the order of their names.
@@ -95,9 +100,9 @@ func (c *compiler) jobs() []plan.Job {
 	for _, name := range names {
 		infos[name] = c.jobInfo(name, mapping(defs[name]))
 	}
-	c.jobInfos = infos
+	c.jobInfos, c.jobNames = infos, newNameList(names)
 	for _, name := range names {
-		c.resolveNeeds(infos[name], names)
+		c.resolveNeeds(infos[name])
 	}
 	c.checkCycles(infos, names)
 	jobs := make([]plan.Job, 0, len(names))
@@ -155,7 +160,7 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 // name followed by :any waits for any one instance of a matrix job. The
 // expression can read a variable, since the plan holds only the jobs it
 // names, but a problem with what it gives doesn't show it.
-func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
+func (c *compiler) resolveNeeds(info *jobInfo) {
 	loc := appendPath(info.loc, "needs")
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
@@ -174,10 +179,9 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 			return
 		}
 		if t, isTemplate := parsed.(*expr.Template); isTemplate {
-			v, marked, err := t.EvalMarked(expr.Scope{
-				Contexts: compileTimeContexts(c.opts, c.inputs.evalValues()),
-				Marked:   c.inputs.marks,
-			})
+			// What decides the run's shape is one group with the inputs'
+			// defaults and conditions, which shares their budget.
+			v, marked, err := t.EvalMarked(c.inputs.scope())
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				c.reportAt(problems.NeedsNotKnown, loc, problems.Params{"name": u.Name})
 				return
@@ -211,8 +215,8 @@ func (c *compiler) resolveNeeds(info *jobInfo, names []string) {
 		switch {
 		case job == info.name:
 			report(problems.NeedsItself, problems.Params{"job": info.name})
-		case !slices.Contains(names, job):
-			s, ok := hint.Suggest(job, names)
+		case c.jobInfos[job] == nil:
+			s, ok := c.jobNames.suggest(job)
 			report(problems.NeedsUnknownJob, problems.WithSuggestion(problems.Params{"job": info.name, "needed": job}, s, ok))
 		case !info.needed[job]:
 			info.needed[job] = true
