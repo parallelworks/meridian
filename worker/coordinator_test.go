@@ -429,7 +429,7 @@ func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 	if cfg.Log == nil {
 		cfg.Log = testLogger(f.t)
 	}
-	return run(ctx, cfg, fakePhases(), testTiming)
+	return run(ctx, cfg, fakePhases(), testTiming, func() error { return nil })
 }
 
 // testLogger returns a logger that writes to a test's log.

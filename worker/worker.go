@@ -75,19 +75,21 @@ const DefaultSpoolLimit = 1 << 30
 // job's steps among them, can't read the attempt's credential from its
 // memory.
 func Run(ctx context.Context, cfg Config) error {
-	if err := harden(); err != nil {
-		return err
-	}
-	return run(ctx, cfg, planPhases, defaultTiming)
+	return run(ctx, cfg, planPhases, defaultTiming, harden)
 }
 
-func run(ctx context.Context, cfg Config, ph phases, tm timing) error {
+// run is Run, with the phases and timing it uses, and protect, which
+// hardens the process once its environment says what to claim.
+func run(ctx context.Context, cfg Config, ph phases, tm timing, protect func() error) error {
 	environ := cfg.Environ
 	if environ == nil {
 		environ = os.Environ()
 	}
 	ep, stepsEnv, err := readEnv(environ)
 	if err != nil {
+		return err
+	}
+	if err := protect(); err != nil {
 		return err
 	}
 	log := cfg.Log

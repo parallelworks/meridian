@@ -126,7 +126,7 @@ func init() {
 		{name: "resume", args: "<run>", summary: "Picks up a run whose coordinator stopped."},
 		{name: "rerun", args: "<run>", summary: "Runs a run again, or only its failed jobs."},
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
-		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people."},
+		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},
 		{name: "relay", summary: "Forwards workers' connections to a coordinator. Started by backends, not by people."},
 		{name: "version", summary: "Shows Meridian's version.", run: runVersion},
 	}
