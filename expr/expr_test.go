@@ -289,6 +289,38 @@ func TestEvaluatorLocations(t *testing.T) {
 	}
 }
 
+// A path's indexes and slices' bounds are whole numbers of 64 bits on every
+// platform, so they read the same where an int is 32 bits: a bound past the
+// end is the end, an index past it reads nothing, and [3000000000] is a
+// number, which reads the values before the input definitions, as [3] does.
+func TestLargeIndexes(t *testing.T) {
+	w := &expr.Workflow{
+		Root:        map[string]any{"defs": map[string]any{"m": map[string]any{"3000000000": "def"}}},
+		Definitions: []string{"defs"},
+	}
+	scope := w.Scope([]string{"x"}, inputs(map[string]any{
+		"l": []any{"a", "b", "c"},
+		"s": "abc",
+		"m": map[string]any{"3000000000": "val"},
+	}))
+	for src, want := range map[string]any{
+		"toJSON(inputs.l[3000000000:])":          "[]",
+		"toJSON(inputs.l['3000000000:'])":        "[]",
+		"toJSON(inputs.l[9223372036854775807:])": "[]",
+		"join(inputs.l[1:3000000000], ',')":      "b,c",
+		"join(inputs.l[-3000000000:], ',')":      "a,b,c",
+		"toJSON(inputs.l[:-3000000000])":         "[]",
+		"inputs.s[1:3000000000]":                 "bc",
+		"inputs.l[3000000000]":                   nil,
+		"inputs.l['03000000000']":                nil,
+		"inputs.m[3000000000]":                   "val",
+	} {
+		if got, err := mustParse(t, src).Eval(scope); err != nil || got != want {
+			t.Errorf("%s = %v, %v; want %v", src, got, err, want)
+		}
+	}
+}
+
 // Results can be changed without changing the expression.
 func TestLiteralsAreCopied(t *testing.T) {
 	e := mustParse(t, `{"a": [1]}`)

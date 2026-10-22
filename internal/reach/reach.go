@@ -20,15 +20,27 @@ import (
 
 // Index reads key as the index of a list's item, as a path does: a whole
 // number, such as 0, 00, +0 or -0, reads the item at that index if the list
-// has one. ok is false if key isn't one, or is negative, as no item's is.
+// has one. ok is false if key isn't one, or is negative, as no item's is, or
+// is too large for an int, as no list is that long. Which keys are whole
+// numbers is the same on every platform: those that fit in 64 bits.
 func Index(key string) (i int, ok bool) {
-	i, ok = atoi(key)
+	n, ok := index(key)
+	if !ok || int64(int(n)) != n {
+		return 0, false
+	}
+	return int(n), true
+}
+
+// index reads key as the index of a list's item, as Index does, in 64 bits
+// on every platform.
+func index(key string) (int64, bool) {
+	i, ok := atoi(key)
 	return i, ok && i >= 0
 }
 
-// atoi reads s as a whole number, as strconv.Atoi does, without making an
-// error for what isn't one, as most keys aren't.
-func atoi(s string) (int, bool) {
+// atoi reads s as a whole number of 64 bits, as strconv.ParseInt does,
+// without making an error for what isn't one, as most keys aren't.
+func atoi(s string) (int64, bool) {
 	digits := s
 	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
 		digits = digits[1:]
@@ -41,36 +53,38 @@ func atoi(s string) (int, bool) {
 			return 0, false
 		}
 	}
-	i, err := strconv.Atoi(s)
+	i, err := strconv.ParseInt(s, 10, 64)
 	return i, err == nil
 }
 
 // Slice reads key as a slice of something n long, a list or a string, as a
 // path does: 1:3, :2 or -2:. A negative bound counts from the end, and the
-// bounds are clamped to [0, n]. ok is false if key isn't a slice.
+// bounds are clamped to [0, n]. ok is false if key isn't a slice. A bound
+// is a whole number of 64 bits on every platform, so a slice such as
+// 3000000000: reads the same where an int is 32 bits.
 func Slice(key string, n int) (start, end int, ok bool) {
 	from, to, found := strings.Cut(key, ":")
 	if !found {
 		return 0, 0, false
 	}
-	start, end = 0, n
+	s, e := int64(0), int64(n)
 	if from != "" {
-		if start, ok = atoi(from); !ok {
+		if s, ok = atoi(from); !ok {
 			return 0, 0, false
 		}
 	}
 	if to != "" {
-		if end, ok = atoi(to); !ok {
+		if e, ok = atoi(to); !ok {
 			return 0, 0, false
 		}
 	}
-	clamp := func(i int) int {
+	clamp := func(i int64) int {
 		if i < 0 {
-			i += n
+			i += int64(n)
 		}
-		return min(max(i, 0), n)
+		return int(min(max(i, 0), int64(n)))
 	}
-	start, end = clamp(start), clamp(end)
+	start, end = clamp(s), clamp(e)
 	return start, max(start, end), true
 }
 
@@ -87,7 +101,7 @@ func forks(key string) bool {
 	if strings.IndexByte(key, ':') >= 0 {
 		return isSlice(key)
 	}
-	_, ok := Index(key)
+	_, ok := index(key)
 	return ok && !canonical(key)
 }
 
@@ -145,9 +159,9 @@ func Patterns(read []string) iter.Seq[[]string] {
 // far as its bounds tell without the list: from start, and before end, or
 // to the list's end if end is -1. exact is false if a bound counts from
 // the list's end, which only its length tells, and then where they are
-// isn't known.
+// isn't known. Indexes are of 64 bits, as Slice reads bounds.
 type window struct {
-	start, end int
+	start, end int64
 	exact      bool
 }
 
@@ -157,7 +171,7 @@ var whole = window{0, -1, true}
 // slice returns the window of what key, a slice, reads of w's items.
 func (w window) slice(key string) window {
 	from, to, _ := strings.Cut(key, ":")
-	start, end := 0, -1
+	start, end := int64(0), int64(-1)
 	if from != "" {
 		start, _ = atoi(from)
 	}
@@ -187,16 +201,16 @@ func (w window) slice(key string) window {
 }
 
 // at returns the index in the list of the item at i, which isn't negative,
-// in w. known is false if w isn't exact, or the index is too large for an
-// int.
-func (w window) at(i int) (j int, known bool) {
+// in w. known is false if w isn't exact, or the index is too large for 64
+// bits.
+func (w window) at(i int64) (j int64, known bool) {
 	j = w.start + i
 	return j, w.exact && j >= w.start
 }
 
 // item returns the key of the list's item that the index i reads of w: its
 // index, or * if which one isn't known. ok is false if w has no item at i.
-func (w window) item(i int) (key string, ok bool) {
+func (w window) item(i int64) (key string, ok bool) {
 	j, known := w.at(i)
 	switch {
 	case !known:
@@ -204,7 +218,7 @@ func (w window) item(i int) (key string, ok bool) {
 	case w.end >= 0 && j >= w.end:
 		return "", false
 	}
-	return strconv.Itoa(j), true
+	return strconv.FormatInt(j, 10), true
 }
 
 // expand yields the patterns of the path rest, from where prefix leads:
@@ -212,7 +226,7 @@ func (w window) item(i int) (key string, ok bool) {
 // reports false if yield does, to stop.
 func expand(prefix, rest []string, w *window, yield func([]string) bool) bool {
 	for j, k := range rest {
-		i, index := Index(k)
+		i, isIndex := index(k)
 		switch {
 		case k == "*":
 			prefix, w = append(prefix, k), nil
@@ -234,7 +248,7 @@ func expand(prefix, rest []string, w *window, yield func([]string) bool) bool {
 			// one there. A slice has no other keys, so this way the path
 			// reaches no further: the list it read on the way here, the way
 			// that reads the slice as a mapping's key reaches as well.
-			if !index {
+			if !isIndex {
 				return true
 			}
 			item, ok := w.item(i)
@@ -242,11 +256,11 @@ func expand(prefix, rest []string, w *window, yield func([]string) bool) bool {
 				return true
 			}
 			prefix, w = append(prefix, item), nil
-		case index && !canonical(k):
+		case isIndex && !canonical(k):
 			if !expand(slices.Concat(prefix, []string{k}), rest[j+1:], nil, yield) {
 				return false
 			}
-			prefix = append(prefix, strconv.Itoa(i))
+			prefix = append(prefix, strconv.FormatInt(i, 10))
 		default:
 			prefix = append(prefix, k)
 		}

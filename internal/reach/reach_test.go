@@ -1,7 +1,6 @@
 package reach_test
 
 import (
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,16 +9,21 @@ import (
 	"github.com/parallelworks/meridian/internal/reach"
 )
 
+// An index is a whole number that isn't negative. One too large for an int,
+// where an int is 32 bits, is an index of no list's item.
 func TestIndex(t *testing.T) {
 	for key, want := range map[string]int{"0": 0, "00": 0, "+0": 0, "-0": 0, "12": 12, "007": 7} {
 		if i, ok := reach.Index(key); !ok || i != want {
 			t.Errorf("Index(%q) = %d, %v; want %d", key, i, ok, want)
 		}
 	}
-	for _, key := range []string{"-1", "x", "", " 0", "1.0", "0x1", "1:2", "*", "1_0"} {
+	for _, key := range []string{"-1", "x", "", " 0", "1.0", "0x1", "1:2", "*", "1_0", "99999999999999999999"} {
 		if i, ok := reach.Index(key); ok {
 			t.Errorf("Index(%q) = %d; want none", key, i)
 		}
+	}
+	if i, ok := reach.Index("3000000000"); ok != (strconv.IntSize == 64) || ok && strconv.Itoa(i) != "3000000000" {
+		t.Errorf("Index(3000000000) = %d, %v with %d-bit ints", i, ok, strconv.IntSize)
 	}
 }
 
@@ -37,12 +41,18 @@ func TestSlice(t *testing.T) {
 		{"3:1", 3, 3},
 		{"-9:9", 0, 5},
 		{"+1:", 1, 5},
+		{"3000000000:", 5, 5},
+		{":3000000000", 0, 5},
+		{"-3000000000:", 0, 5},
+		{":-3000000000", 0, 0},
+		{"9223372036854775807:", 5, 5},
+		{"-9223372036854775808:", 0, 5},
 	} {
 		if start, end, ok := reach.Slice(tc.key, 5); !ok || start != tc.start || end != tc.end {
 			t.Errorf("Slice(%q, 5) = %d, %d, %v; want %d, %d", tc.key, start, end, ok, tc.start, tc.end)
 		}
 	}
-	for _, key := range []string{"0", "a:1", "1:b", "::", "*"} {
+	for _, key := range []string{"0", "a:1", "1:b", "::", "*", "99999999999999999999:", ":-99999999999999999999"} {
 		if _, _, ok := reach.Slice(key, 5); ok {
 			t.Errorf("Slice(%q, 5) is a slice; want none", key)
 		}
@@ -91,7 +101,9 @@ func TestPatterns(t *testing.T) {
 		{"rows.1:.:1.0.x", []string{"rows.1:.:1.0.x", "rows.1:.0.x", "rows.1.x"}},
 		{"rows.2:.1:.0.x", []string{"rows.2:.1:.0.x", "rows.2:.1.x", "rows.3.x"}},
 		{"rows.1:3.5:.0.x", []string{"rows.1:3.5:.0.x", "rows.1:3.5.x"}},
-		{"rows." + strconv.Itoa(math.MaxInt) + ":.1.x", []string{"rows." + strconv.Itoa(math.MaxInt) + ":.1.x", "rows.*.x"}},
+		{"rows.9223372036854775807:.1.x", []string{"rows.9223372036854775807:.1.x", "rows.*.x"}},
+		{"rows.3000000000:.1.x", []string{"rows.3000000000:.1.x", "rows.3000000001.x"}},
+		{"rows.03000000000.x", []string{"rows.03000000000.x", "rows.3000000000.x"}},
 		{"rows.0:1.*.x", []string{"rows.0:1.*.x", "rows.*.x"}},
 		{"rows.0:1.x", []string{"rows.0:1.x"}},
 		{"rows.0:1.-1.x", []string{"rows.0:1.-1.x"}},
