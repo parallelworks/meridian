@@ -6,6 +6,8 @@ on:
       name:
         type: string
         default: 8080
+      flag:
+        type: string
 jobs:
   main:
     steps:

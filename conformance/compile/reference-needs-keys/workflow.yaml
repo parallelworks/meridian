@@ -1,0 +1,12 @@
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: make
+  test:
+    needs: [build]
+    steps:
+      - run: echo ${{ needs.build.steps.compile.outputs.bin }} ${{ needs.build.result }}
+      - run: echo ${{ needs.build.steps.nope.outputs.bin }}
+      - run: echo ${{ needs.build.bogus }}
+      - run: echo ${{ needs.buld.outputs.bin }}

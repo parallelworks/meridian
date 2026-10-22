@@ -2,18 +2,22 @@ package expr_test
 
 import (
 	"cmp"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 func TestConformance(t *testing.T) {
@@ -24,23 +28,40 @@ func TestConformance(t *testing.T) {
 	for _, f := range files {
 		t.Run(strings.TrimSuffix(strings.TrimPrefix(f.Name, "expressions/"), ".yaml"), func(t *testing.T) {
 			t.Parallel()
+			scope, workflow := canonical(t, f.Scope), canonical(t, f.Workflow)
 			for i, c := range f.Cases {
 				name := cmp.Or(c.Expr, c.Template, c.At)
 				t.Run(fmt.Sprintf("%d %s", i+1, name), func(t *testing.T) {
 					runCase(t, &f, &c)
 				})
 			}
+			// The cases share the file's scope and workflow, so a case that
+			// changed them would change what the cases after it see.
+			if canonical(t, f.Scope) != scope || canonical(t, f.Workflow) != workflow {
+				t.Error("evaluating the cases changed the file's scope or workflow")
+			}
 		})
 	}
 }
 
+// canonical encodes v as JSON, with mappings in the order of their keys.
+func canonical(t *testing.T, v any) string {
+	t.Helper()
+	data, err := jsonv2.Marshal(v, jsonv2.Deterministic(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// stopped is a clock that never moves, so that an evaluation passes
+// Meridian's limit on a group's time only if it passes the others, however
+// slow the machine running the tests is. No case evaluates for anywhere
+// near the 10 seconds a group may take.
+func stopped() time.Time { return time.Time{} }
+
 func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.ExpressionCase) {
 	s := f.ScopeFor(c)
-	scope := expr.Scope{Contexts: s.Contexts, Index: s.Index}
-	if s.Status != nil {
-		scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
-	}
-
 	src, location := c.Template, []string(nil)
 	if c.At != "" {
 		var err error
@@ -54,35 +75,50 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		}
 		src = s
 	}
-	if f.Workflow != nil {
-		w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
-		scope = w.Scope(location, scope)
+	// newScope returns the case's scope, whose evaluations are a group of
+	// their own, with a stopped clock.
+	newScope := func() expr.Scope {
+		scope := expr.WithClock(expr.Scope{Contexts: s.Contexts, Index: s.Index}, stopped)
+		if s.Status != nil {
+			scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
+		}
+		if f.Workflow != nil {
+			w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
+			scope = w.Scope(location, scope)
+		}
+		return scope
 	}
+	scope := newScope()
 
 	var got any
 	var err error
 	if c.Expr != "" {
 		var e *expr.Expr
 		if e, err = expr.Parse(c.Expr); err == nil {
-			checkWarnings(t, c, e)
+			checkWarnings(t, c, func(yield func(int, *expr.Expr) bool) { yield(0, e) })
 			got, err = e.Eval(scope)
 		}
 	} else {
 		var tmpl *expr.Template
 		if tmpl, err = expr.ParseTemplate(src); err == nil {
+			checkWarnings(t, c, tmpl.Exprs())
 			got, err = tmpl.Eval(scope)
 		}
 	}
 
 	switch {
 	case c.Error == "syntax":
-		if _, ok := errors.AsType[*expr.SyntaxError](err); !ok {
+		e, ok := errors.AsType[*expr.SyntaxError](err)
+		if !ok {
 			t.Fatalf("got %v, %v; want a syntax error", show(got), err)
 		}
+		checkCode(t, c, e.Kind)
 	case c.Error == "eval":
-		if _, ok := errors.AsType[*expr.EvalError](err); !ok {
+		e, ok := errors.AsType[*expr.EvalError](err)
+		if !ok {
 			t.Fatalf("got %v, %v; want an evaluation error", show(got), err)
 		}
+		checkCode(t, c, e.Kind)
 	case c.Error != "":
 		t.Fatalf("unknown error kind %q", c.Error)
 	case c.Unknown != "":
@@ -97,16 +133,19 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		if c.Expr != "" {
 			src = "${{" + c.Expr + "}}"
 		}
-		checkParsedFor(t, src, scope, c.Value)
+		// Evaluated again, in a group of its own, without the Index, though
+		// what reads the workflow still has it.
+		again := newScope()
+		again.Index = nil
+		checkParsedFor(t, src, scope.Index, again, c.Value)
 	}
 }
 
-// checkParsedFor checks that src, parsed for its scope's list items, has
-// the value it has with them as the scope's Index, after a trip through
-// JSON, with no Index in the scope.
-func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
+// checkParsedFor checks that src, parsed for the list items index, has the
+// value want after a trip through JSON, in scope, which has no Index.
+func checkParsedFor(t *testing.T, src string, index []int, scope expr.Scope, want any) {
 	t.Helper()
-	tmpl, err := expr.ParseTemplateFor(src, scope.Index)
+	tmpl, err := expr.ParseTemplateFor(src, index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,31 +157,42 @@ func checkParsedFor(t *testing.T, src string, scope expr.Scope, want any) {
 	if err := stored.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)
 	}
-	index := scope.Index
-	scope.Index = nil
 	if got, err := stored.Eval(scope); err != nil || !equal(got, want) {
 		t.Errorf("parsed for %v: got %s, %v; want %s", index, show(got), err, show(want))
 	}
 }
 
-// checkWarnings checks the probable mistakes the case's expression has, if
-// the case lists them.
-func checkWarnings(t *testing.T, c *conformance.ExpressionCase, e *expr.Expr) {
+// checkWarnings checks the probable mistakes of the case's expressions, each
+// with its byte offset in the expression or template, if the case lists
+// them.
+func checkWarnings(t *testing.T, c *conformance.ExpressionCase, exprs iter.Seq2[int, *expr.Expr]) {
 	t.Helper()
 	if c.Warnings == nil {
 		return
 	}
-	problems := e.Check()
-	if c.Condition {
-		problems = e.CheckCondition()
-	}
+	var found []expr.Problem
 	var offsets []int
-	for _, p := range problems {
-		offsets = append(offsets, p.Offset)
+	for at, e := range exprs {
+		ps := e.Check()
+		if c.Condition {
+			ps = e.CheckCondition()
+		}
+		for _, p := range ps {
+			found = append(found, p)
+			offsets = append(offsets, at+p.Offset)
+		}
 	}
 	slices.Sort(offsets)
 	if !slices.Equal(offsets, c.Warnings) {
-		t.Errorf("warnings at %v (%v), want at %v", offsets, problems, c.Warnings)
+		t.Errorf("warnings at %v (%v), want at %v", offsets, found, c.Warnings)
+	}
+}
+
+// checkCode checks the code of an error's kind, if the case gives it.
+func checkCode(t *testing.T, c *conformance.ExpressionCase, k *problems.Kind) {
+	t.Helper()
+	if c.Code != "" && string(k.Code()) != c.Code {
+		t.Errorf("got %s, want %s", k.Code(), c.Code)
 	}
 }
 

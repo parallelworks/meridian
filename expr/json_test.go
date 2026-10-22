@@ -156,6 +156,8 @@ func TestJSONDecodeErrors(t *testing.T) {
 		{"a segment that is a number", `{"src":"x","tree":{"ref":"inputs","path":[1]}}`, "a path segment is a name or an object with one key"},
 		{"a negation that isn't true or false", `{"src":"x","tree":{"op":"in","not":1,"x":{"lit":1},"y":{"lit":2}}}`, "not is true or false"},
 		{"up that isn't whole", `{"src":"x","tree":{"up":1.0,"path":[]}}`, "goes up at least one level"},
+		{"a path that isn't a list", `{"src":"x","tree":{"ref":"inputs","path":"x"}}`, "a path is a list"},
+		{"an empty slice", `{"src":"x","tree":{"slice":[]}}`, "a slice is [start, end]"},
 		{"a slice of one", `{"src":"x","tree":{"slice":[{"lit":1}]}}`, "a slice is [start, end]"},
 		{"a slice of three", `{"src":"x","tree":{"slice":[{"lit":1},null,{"lit":2}]}}`, "a slice is [start, end]"},
 		{"a literal out of range", `{"src":"x","tree":{"lit":[1e400]}}`, "out of range"},

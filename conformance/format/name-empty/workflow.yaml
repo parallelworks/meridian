@@ -1,0 +1,5 @@
+name: ""
+jobs:
+  main:
+    steps:
+      - run: echo hello

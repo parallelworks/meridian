@@ -1,0 +1,18 @@
+description: >-
+  steps.<id> has an earlier step's outputs, and nothing else. A step that
+  reads another key of one, or a step the job doesn't have, is an error.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: steps_unknown_key
+      path: /jobs/build/steps/1/run
+      line: 6
+      column: 23
+      params: {id: compile, key: bogus}
+    - severity: error
+      code: undefined_step
+      path: /jobs/build/steps/2/run
+      line: 7
+      column: 23
+      params: {job: build, id: compil, suggested: "true", suggestion: compile}

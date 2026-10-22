@@ -145,16 +145,17 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
 ### Conformance
 
 The conformance suite pins the format's meaning. Each case is a workflow,
-with the inputs and contexts it is given, and either what it compiles to or
-the problems it has. Cases come from ACTIVATE's own tests, from public
-workflows and from Meridian. They live in `conformance/`, in areas, and each
-package runs the cases of its own: `format` for loading and validation,
-`expressions` for what expressions evaluate to, `inputs` for a run's input
-values, and `compile` for plans and the problems with jobs and expressions.
-Cases for the later phases come with them: Start's values and its check of
-the run's shape, matrix expansion, the shape of each context in each phase,
-and runs, with the outcomes and outputs they must end with, status
-functions and step retries among them.
+or an expression, with the inputs and contexts it is given, and what it
+loads, resolves or compiles to, the problems it has, or both. Cases come
+from ACTIVATE's own tests, from public workflows and from Meridian. They
+live in `conformance/`, in areas, and each package runs the cases of its
+own: `format` for loading and validation, `expressions` for what
+expressions evaluate to, `inputs` for a run's input values, and `compile`
+for plans and the problems with jobs and expressions. Cases for the later
+phases come with them: Start's values and its check of the run's shape,
+matrix expansion, the shape of each context in each phase, and runs, with
+the outcomes and outputs they must end with, status functions and step
+retries among them.
 
 Behavior that workflows rely on is kept, even where it is surprising. Behavior
 no workflow could rely on, such as a crash or a silently wrong result, is
@@ -406,9 +407,9 @@ ACTIVATE's launch form and its backend do together:
   template's fields. A repeated step given no value has none. A header has
   no value.
 - **Types.** A number or a boolean given as text, such as `"5"` or
-  `"true"`, is converted, and a text input given a number gets its text.
-  Anything else that doesn't fit the input's type is an error, as is a
-  number outside its `min` and `max`, or a choice that isn't one of a
+  `"true"`, is converted, and a text input given a number or a boolean gets
+  its text. Anything else that doesn't fit the input's type is an error, as
+  is a number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
   name, and is kept, as ACTIVATE keeps it. A value that isn't JSON, such

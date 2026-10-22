@@ -41,15 +41,29 @@ func TestInputsConformance(t *testing.T) {
 			}
 			inputs, diags := compile.ResolveInputs(doc, c.Inputs, opts)
 			conformancetest.CheckDiagnostics(t, c.Expect.Diagnostics, diags)
-			if diags.HasErrors() {
-				return
+			check := func(what string, got, want map[string]any) {
+				t.Helper()
+				if !diags.HasErrors() {
+					if g, w := conformancetest.Canonical(t, got), conformancetest.Canonical(t, orEmpty(want)); g != w {
+						t.Errorf("%s = %s, want %s", what, g, w)
+					}
+					return
+				}
+				// A run with errors doesn't start, so a case with errors
+				// lists only the values it checks, such as those of the
+				// inputs that were given good ones.
+				for name, w := range want {
+					g, ok := got[name]
+					if !ok {
+						t.Errorf("%s has no %s, want %s", what, name, conformancetest.Canonical(t, w))
+					} else if g, w := conformancetest.Canonical(t, g), conformancetest.Canonical(t, w); g != w {
+						t.Errorf("%s.%s = %s, want %s", what, name, g, w)
+					}
+				}
 			}
-			if g, w := conformancetest.Canonical(t, withTemplates(t, inputs)), conformancetest.Canonical(t, orEmpty(c.Expect.Inputs)); g != w {
-				t.Errorf("inputs = %s, want %s", g, w)
-			}
-			if g, w := conformancetest.Canonical(t, inputs.Secrets), conformancetest.Canonical(t, orEmpty(c.Expect.Secrets)); g != w {
-				t.Errorf("secrets = %s, want %s", g, w)
-			}
+			check("inputs", inputs.Values, c.Expect.Inputs)
+			check("deferred", deferredText(t, inputs.Deferred), c.Expect.Deferred)
+			check("secrets", inputs.Secrets, c.Expect.Secrets)
 		})
 	}
 }
@@ -74,12 +88,12 @@ func contexts(c conformance.Case) map[string]any {
 	return out
 }
 
-// withTemplates returns the values with each deferred default as its
+// deferredText returns the deferred values by their paths, each as its
 // text.
-func withTemplates(t *testing.T, inputs *compile.Inputs) map[string]any {
+func deferredText(t *testing.T, deferred map[string]plan.Value) map[string]any {
 	t.Helper()
-	values := inputs.Values
-	for path, v := range inputs.Deferred {
+	out := make(map[string]any, len(deferred))
+	for path, v := range deferred {
 		data, err := json.Marshal(v)
 		if err != nil {
 			t.Fatal(err)
@@ -88,19 +102,9 @@ func withTemplates(t *testing.T, inputs *compile.Inputs) map[string]any {
 		if err := json.Unmarshal(data, &raw); err != nil {
 			t.Fatal(err)
 		}
-		keys := strings.Split(path, ".")
-		m := values
-		for _, k := range keys[:len(keys)-1] {
-			next, ok := m[k].(map[string]any)
-			if !ok {
-				next = map[string]any{}
-				m[k] = next
-			}
-			m = next
-		}
-		m[keys[len(keys)-1]] = templateText(raw)
+		out[path] = templateText(raw)
 	}
-	return values
+	return out
 }
 
 // templateText returns v, a Value's JSON, with each template as its text.

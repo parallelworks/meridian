@@ -1,0 +1,11 @@
+description: >-
+  Formats are numbered from 1, so format 0 isn't one.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: must_equal
+      path: /format
+      line: 1
+      column: 9
+      params: {allowed: "1"}

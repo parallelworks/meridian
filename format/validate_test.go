@@ -1,6 +1,7 @@
 package format
 
 import (
+	"hash/fnv"
 	"math/rand/v2"
 	"testing"
 
@@ -13,10 +14,11 @@ import (
 
 // The probe, which validate tries first, matches the values the schema
 // matches: those of every conformance case's workflow, and of each with a
-// part of it changed.
+// part of it changed. The changes to a case's workflow are random, from a
+// seed that is the case's name, so that they are the same each time
+// whatever other cases there are.
 func TestProbeMatchesSchema(t *testing.T) {
 	s := schemas[1]()
-	rng := rand.New(rand.NewPCG(1, 2))
 	replacements := []any{nil, true, int64(3), 2.5, "", "text", "${{ inputs.x }}", []any{}, []any{"a"}, map[string]any{}, map[string]any{"type": "string"}}
 	for _, area := range []string{"format", "inputs", "compile"} {
 		cases, err := conformance.Cases(area)
@@ -30,6 +32,9 @@ func TestProbeMatchesSchema(t *testing.T) {
 			}
 			p := &parser{file: "workflow.yaml", keys: map[string]problems.Position{}, values: map[string]problems.Position{}, styles: map[string]yaml.Style{}}
 			v := p.parse(data, DefaultMaxSize)
+			name := fnv.New64a()
+			name.Write([]byte(c.Name))
+			rng := rand.New(rand.NewPCG(name.Sum64(), 2))
 			for i := range 50 {
 				w := v
 				if i > 0 {

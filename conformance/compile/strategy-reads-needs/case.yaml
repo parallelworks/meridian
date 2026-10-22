@@ -1,0 +1,7 @@
+description: >-
+  A matrix can read needs, the outputs and results of the jobs its job
+  needs, since it is expanded once they have finished.
+source: Meridian
+expect:
+  plan:
+    /jobs/1/strategy/matrix/shard/${{/0/src: " fromJSON(needs.plan.outputs.shards) "

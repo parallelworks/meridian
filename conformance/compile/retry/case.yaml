@@ -1,0 +1,7 @@
+description: >-
+  The plan holds a job's retry, with its reasons, and a step's retry.
+source: Meridian
+expect:
+  plan:
+    /jobs/0/retry: {reasons: [worker-lost], maxRetries: 3, interval: 30s}
+    /jobs/0/steps/0/retry: {maxRetries: 2, interval: 10s, timeout: 1m, cleanOnRetry: true}

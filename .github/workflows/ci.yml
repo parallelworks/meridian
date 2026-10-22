@@ -72,6 +72,11 @@ jobs:
           # the mode explicit so that a future edit cannot silently drop it.
           GODEBUG: fips140=only
         run: make test
+      # Once each, to catch a benchmark that no longer runs, not to measure.
+      - name: Run each benchmark once
+        env:
+          GODEBUG: fips140=only
+        run: make bench
       - name: Build
         run: make build
 

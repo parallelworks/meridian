@@ -1,0 +1,11 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          type: string
+jobs:
+  main:
+    steps:
+      - run: echo ok

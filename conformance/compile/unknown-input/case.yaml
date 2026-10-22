@@ -1,0 +1,16 @@
+description: >-
+  The problems with a run's input values are among the problems the
+  workflow compiles with, and a warning, such as a value for an input the
+  workflow doesn't define, is kept with the plan.
+source: Meridian
+inputs:
+  clustr_name: y
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: clustr_name, suggested: "true", suggestion: cluster_name}
+  plan:
+    /run/inputs: {cluster_name: x, clustr_name: "y"}
+    /warnings/0/code: unknown_input

@@ -16,6 +16,8 @@ inputs:
   extra: given
 expect:
   inputs:
+    fixed: fixed
+  deferred:
     region: ${{ org.REGION }}
     site: ${{ inputs.region }}-1
     cluster:
@@ -24,4 +26,3 @@ expect:
     hosts:
       - name: a
         zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
-    fixed: fixed

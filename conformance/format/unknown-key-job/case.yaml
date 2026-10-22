@@ -1,7 +1,7 @@
 description: >-
   A key a job doesn't define is an unknown key: early-cancel belongs on a
   step.
-source: Public workflows that ACTIVATE runs
+source: Meridian, after public workflows that ACTIVATE runs
 expect:
   diagnostics:
     - severity: warning

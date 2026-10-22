@@ -1,0 +1,8 @@
+jobs:
+  build:
+    if: ${{ job.status == 'success' }}
+    runs-on: ${{ job.id }}
+    env:
+      STATUS: ${{ job.status }}
+    steps:
+      - run: echo ${{ job.status }}

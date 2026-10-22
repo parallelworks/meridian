@@ -1,11 +1,19 @@
-description: A boolean given as the text true or false is converted; any other value is an error.
+description: >-
+  A boolean given as the text true or false, in any case and with spaces
+  around it, is converted; any other value is an error.
 source: Meridian
 inputs:
   a: "TRUE"
   b: "false"
   c: "yes"
+  d: " true "
 expect:
   diagnostics:
     - severity: error
       code: input_not_boolean
       path: /on/execute/inputs/c
+      params: {input: c, value: '"yes"'}
+  inputs:
+    a: true
+    b: false
+    d: true

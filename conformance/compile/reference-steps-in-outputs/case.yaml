@@ -1,0 +1,23 @@
+description: >-
+  A job's outputs read its steps' outputs once its steps have run. An output
+  that reads a step the job doesn't have, or another key of one than its
+  outputs, is empty, and a warning.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: output_undefined_step
+      path: /jobs/build/outputs/missing
+      line: 7
+      column: 20
+      params: {job: build, id: compil, suggested: "true", suggestion: compile}
+    - severity: warning
+      code: output_steps_unknown_key
+      path: /jobs/build/outputs/other
+      line: 8
+      column: 18
+      params: {id: compile, key: bogus}
+  plan:
+    /jobs/0/outputs/bin/${{/0/src: " steps.compile.outputs.bin "
+    /warnings/0/code: output_undefined_step
+    /warnings/1/code: output_steps_unknown_key

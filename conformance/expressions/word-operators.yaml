@@ -53,9 +53,11 @@ cases:
     value: true
   - expr: "'x' in ['xy', 'z']"
     error: syntax
+    code: invalid_json_literal
   # A branch that isn't taken is still parsed, so it is an error there too.
   - expr: "false && 'x' in ['xy', 'z']"
     error: syntax
+    code: invalid_json_literal
   - expr: '''x'' in ["xy", "z"]'
     value: false
   - expr: "'bt' in inputs.string"
@@ -177,6 +179,7 @@ cases:
     value: [-2, -1, 0]
   - expr: 9007199254740992 range 9007199254740994
     error: eval
+    code: range_out_of_bounds
   - expr: 5 range 6
     value: [5]
   - expr: 5 range 5
@@ -185,10 +188,13 @@ cases:
     value: []
   - expr: 1 range 2.5
     error: eval
+    code: range_not_whole
   - expr: 1 range "abc"
     error: eval
+    code: range_not_whole
   - expr: 5 range 10006
     error: eval
+    code: range_too_long
 
   - expr: inputs.csv split ","
     value: [a, b, c, d]
@@ -198,8 +204,6 @@ cases:
     value: [""]
   - expr: '"abc" split ""'
     value: [a, b, c]
-  - expr: inputs.list join "-"
-    value: x-y-z
   - expr: '[] join ","'
     value: ""
   - expr: inputs.jsonArr join "+"

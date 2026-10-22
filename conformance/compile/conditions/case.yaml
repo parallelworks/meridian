@@ -2,8 +2,9 @@ description: >-
   An if written without ${{ }} is an expression when it has an operator, a
   dot, parentheses or brackets, and a lone word stays a word. always, the
   older spelling of always(), and words that decide a condition, such as the
-  removed keyword completed, are warnings.
-source: ACTIVATE's tests
+  removed keyword completed, are warnings. A word is text, which is never
+  false, so !debug is always false.
+source: ACTIVATE's tests, and Meridian
 expect:
   diagnostics:
     - severity: warning
@@ -16,5 +17,13 @@ expect:
       path: /jobs/build/steps/2/if
       line: 15
       column: 18
+      params: {word: completed, replacement: success()}
+    - severity: warning
+      code: condition_word
+      path: /jobs/build/steps/4/if
+      line: 19
+      column: 18
+      params: {word: debug}
   plan:
     /jobs/0/steps/1/if: always
+    /jobs/0/steps/5/if/${{/0/src: " inputs[mode] "

@@ -1,8 +1,9 @@
 description: >-
-  A matrix that reads a variable isn't expanded when the run is created,
-  since a plan never holds a variable's value, nor values made from one: the
-  plan holds the job once, with its strategy, which is expanded once the run
-  is underway.
+  A matrix is expanded as the run starts, not when it is created, so the
+  plan holds its job once, with its strategy as it is written. One that
+  reads a variable stays the expression that reads it, as a plan never
+  holds a variable's value, and the plan names the variable, for the run to
+  read as it starts.
 source: Meridian
 contexts:
   vars:

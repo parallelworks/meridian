@@ -248,6 +248,8 @@ func TestDecodeRefuses(t *testing.T) {
 		"a template without an expression": strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"${{":["x"]}`, 1),
 		"a bad template beside a key":      strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"${{":"x"},"y":1}`, 1),
 		"a $ that marks nothing":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"yaml":"x"}}`, 1),
+		"a $ that marks two keys":          strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{"$a":1,"$b":2}}`, 1),
+		"a $ that marks an empty mapping":  strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$":{}}`, 1),
 		// The value of a first key that starts with $, beside another.
 		"a $ that marks nothing, nested":             strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":[{"$":{"yaml":"x"}}],"y":1}`, 1),
 		"an unmarked $ key, nested":                  strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$x":{"$yaml":"x"},"y":1}`, 1),
@@ -689,19 +691,98 @@ func FuzzPlanRoundTrip(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, workflow []byte) {
 		p, _ := compile.Compile("workflow.yaml", workflow, nil, compile.Options{Inputs: passThrough{}})
-		if p == nil {
+		roundTrip(t, p)
+	})
+}
+
+// Every plan the compiler makes with values submitted for a run decodes,
+// and encodes as it did: here value, as JSON if it is JSON and as text if
+// it isn't, for each of the workflow's inputs.
+func FuzzPlanRoundTripWithValues(f *testing.F) {
+	values := []string{"text", "", "3", "true", "null", `"22"`, `[{"name": "a"}]`, `{"name": "x", "size": 2}`, `{"${{": [" vars.KEY "]}`}
+	i := 0
+	for _, area := range []string{"compile", "format", "inputs"} {
+		cases, err := conformance.Cases(area)
+		if err != nil {
+			f.Fatal(err)
+		}
+		for _, c := range cases {
+			data, err := c.Workflow()
+			if err != nil {
+				f.Fatal(err)
+			}
+			f.Add(data, values[i%len(values)])
+			i++
+		}
+	}
+	f.Fuzz(func(t *testing.T, workflow []byte, value string) {
+		doc, _ := format.Load("workflow.yaml", workflow)
+		if doc == nil {
 			return
 		}
-		data, err := plan.Encode(p)
-		if err != nil {
-			t.Fatal(err)
+		var v any = value
+		if err := json.Unmarshal([]byte(value), &v); err != nil {
+			v = value
 		}
-		back, err := plan.Decode(data)
-		if err != nil {
-			t.Fatalf("%v\n%s", err, data)
+		submitted := map[string]any{}
+		on, _ := doc.Value["on"].(map[string]any)
+		execute, _ := on["execute"].(map[string]any)
+		inputs, _ := execute["inputs"].(map[string]any)
+		for name := range inputs {
+			submitted[name] = v
 		}
-		if again, err := plan.Encode(back); err != nil || !bytes.Equal(again, data) {
-			t.Fatalf("decoding and encoding changed the plan:\n%s\n%s (%v)", data, again, err)
+		p, _ := compile.Compile("workflow.yaml", workflow, submitted, compile.Options{Inputs: passThrough{}})
+		roundTrip(t, p)
+	})
+}
+
+// roundTrip checks that p, if there is one, encodes, and decodes to a plan
+// that encodes to the same bytes.
+func roundTrip(t *testing.T, p *plan.Plan) {
+	t.Helper()
+	if p == nil {
+		return
+	}
+	data, err := plan.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := plan.Decode(data)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, data)
+	}
+	if again, err := plan.Encode(back); err != nil || !bytes.Equal(again, data) {
+		t.Fatalf("decoding and encoding changed the plan:\n%s\n%s (%v)", data, again, err)
+	}
+}
+
+// FuzzDecode checks that Decode never panics, whatever it is given, and
+// that a plan it decodes encodes, and decodes again to a plan that encodes
+// to the same bytes.
+func FuzzDecode(f *testing.F) {
+	for _, name := range []string{"edges", "spack-builder"} {
+		data, err := os.ReadFile("testdata/" + name + ".json")
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(data)
+	}
+	f.Add([]byte(`{"version":1,"run":{"source":{"location":"w","revision":"r"},"format":1,"timeout":{"$":{"$a":1}}},"jobs":[]}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p, err := plan.Decode(data)
+		if err != nil {
+			return
+		}
+		encoded, err := plan.Encode(p)
+		if err != nil {
+			t.Fatalf("a decoded plan doesn't encode: %v\n%s", err, data)
+		}
+		back, err := plan.Decode(encoded)
+		if err != nil {
+			t.Fatalf("an encoded plan doesn't decode: %v\n%s", err, encoded)
+		}
+		if again, err := plan.Encode(back); err != nil || !bytes.Equal(again, encoded) {
+			t.Fatalf("decoding and encoding changed the plan:\n%s\n%s (%v)", encoded, again, err)
 		}
 	})
 }

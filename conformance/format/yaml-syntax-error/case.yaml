@@ -1,5 +1,6 @@
 description: >-
-  A file that isn't valid YAML is an error on the line where parsing failed.
+  A file that isn't valid YAML is an error on the line where parsing failed,
+  without a column.
 source: ACTIVATE's YAML loader tests
 expect:
   diagnostics:
@@ -7,3 +8,4 @@ expect:
       code: yaml_syntax
       path: ""
       line: 3
+      column: 0

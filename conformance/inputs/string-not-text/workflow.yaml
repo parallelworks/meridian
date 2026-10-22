@@ -1,0 +1,11 @@
+on:
+  execute:
+    inputs:
+      name:
+        type: string
+      script:
+        type: editor
+jobs:
+  main:
+    steps:
+      - run: echo ok

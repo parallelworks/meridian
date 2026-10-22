@@ -1,0 +1,8 @@
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux]
+        include: ${{ fromJSON(vars.EXTRA) }}
+    steps:
+      - run: echo ${{ matrix.os }} ${{ matrix.arch }}

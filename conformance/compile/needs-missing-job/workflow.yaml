@@ -3,6 +3,6 @@ jobs:
     steps:
       - run: make
   test:
-    needs: [biuld]
+    needs: [buld]
     steps:
       - run: make test

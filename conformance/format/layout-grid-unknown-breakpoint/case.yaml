@@ -1,5 +1,7 @@
 description: >-
-  A grid's breakpoints are base, sm, md and lg.
+  A grid's breakpoints are base, sm, md and lg. Another key, such as
+  phone, is ignored with a warning, as an unknown key is, which leaves
+  columns without a breakpoint: an error, as columns needs one.
 source: ACTIVATE's workflow schema tests
 expect:
   diagnostics:

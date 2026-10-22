@@ -1,0 +1,16 @@
+on:
+  execute:
+    inputs:
+      shown:
+        type: string
+        hidden: ${{ vars.TOKEN == 'x' }}
+      kept:
+        type: string
+        ignore: ${{ vars.TOKEN }}
+      given:
+        type: string
+        optional: ${{ vars.TOKEN != '' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

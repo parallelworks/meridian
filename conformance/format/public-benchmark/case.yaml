@@ -1,6 +1,7 @@
 description: >-
   A benchmark that serves its results: an unquoted on: key, a document start
-  marker, a session type, job outputs from steps.<id>.outputs, a step's env:,
-  and a step's ssh:.
+  marker, a session type, a job output that reads steps.<id>.outputs, a
+  step's env:, and a step's ssh:. The step it reads is named benchmark and
+  has no id, which loading doesn't check.
 source: https://github.com/parallelworks/activate-benchmark/blob/90418e4d017d55d12778c92ef51c70e02f5d7971/workflow.yaml
 license: Apache-2.0

@@ -15,3 +15,7 @@ jobs:
         if: ${{ !completed }}
       - run: echo d
         if: failure() && inputs.mode == 'debug'
+      - run: echo e
+        if: ${{ !debug }}
+      - run: echo f
+        if: inputs[mode]

@@ -1,0 +1,17 @@
+description: >-
+  A step runs a command or uses an action, not both. One with run and uses
+  matches both forms of a step.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: keys_not_allowed_together
+      path: /jobs/main/steps/0
+      line: 4
+      column: 9
+      params: {keys: '"run", "uses"'}
+    - severity: error
+      code: several_forms
+      path: /jobs/main/steps/0
+      line: 4
+      column: 9

@@ -1,0 +1,13 @@
+jobs:
+  simulate:
+    retry:
+      reasons: [worker-lost]
+      max-retries: 3
+      interval: 30s
+    steps:
+      - run: ./simulate
+        retry:
+          max-retries: 2
+          interval: 10s
+          timeout: 1m
+          clean-on-retry: true

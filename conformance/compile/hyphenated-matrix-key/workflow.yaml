@@ -1,0 +1,8 @@
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux]
+        python-version: ['3.12']
+    steps:
+      - run: echo ${{ matrix.python-version }} ${{ matrix.node-version }}

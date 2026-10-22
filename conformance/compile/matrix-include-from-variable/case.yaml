@@ -1,0 +1,11 @@
+description: >-
+  A matrix whose include is an expression has keys that aren't known until
+  the run starts, so reading one its values don't name isn't a warning.
+source: Meridian
+contexts:
+  vars:
+    EXTRA: '[{"arch": "arm"}]'
+expect:
+  plan:
+    /jobs/0/strategy/matrix/include/${{/0/src: " fromJSON(vars.EXTRA) "
+    /run/variables: [vars.EXTRA]

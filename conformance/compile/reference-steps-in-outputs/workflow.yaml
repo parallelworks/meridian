@@ -1,0 +1,9 @@
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: make
+    outputs:
+      missing: ${{ steps.compil.outputs.bin }}
+      other: ${{ steps.compile.bogus }}
+      bin: ${{ steps.compile.outputs.bin }}

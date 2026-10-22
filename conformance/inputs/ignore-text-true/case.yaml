@@ -1,4 +1,7 @@
-description: hidden, ignore and optional are true when they are true, or an expression whose value is the text "true" in any case.
+description: >-
+  ignore is true when it is an expression whose value is the text "true" in
+  any case, as hidden and optional are: an input whose ignore is 'TRUE' has
+  no value, though one was submitted.
 source: ACTIVATE's tests
 inputs:
   regular_field: regular_value

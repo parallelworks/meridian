@@ -3,6 +3,9 @@ on:
     inputs:
       flag:
         type: boolean
+      off:
+        type: string
+        default: ${{ inputs.flag === false }}
 jobs:
   main:
     steps:

@@ -1,7 +1,13 @@
-description: steps.<id> must name an earlier step of the job. A job's outputs read any of its steps.
+description: >-
+  steps.<id> must name an earlier step of the job, not a later one or the
+  step itself. A job's outputs read any of its steps.
 source: Meridian
 expect:
   diagnostics:
     - severity: error
       code: step_not_earlier
       path: /jobs/build/steps/0/run
+    - severity: error
+      code: step_not_earlier
+      path: /jobs/build/steps/3/run
+      params: {id: self}

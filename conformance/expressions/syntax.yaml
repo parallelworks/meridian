@@ -63,38 +63,56 @@ cases:
   # Errors.
   - expr: inputs.a = true
     error: syntax
+    code: unexpected_text
   - expr: inputs.a inputs.b
     error: syntax
+    code: unexpected_text
   - expr: "  "
     error: syntax
+    code: expression_empty
   - expr: "inputs.a ? 1"
     error: syntax
+    code: ternary_missing_colon
   - expr: nope(1)
     error: syntax
+    code: not_a_function
+  - expr: "contains(inputs.a : 'x')"
+    error: syntax
+    code: call_missing_comma
   - expr: success(1)
     error: syntax
+    code: wrong_argument_count
   - expr: 1 +
     error: syntax
+    code: expression_ends_early
   - expr: "'open"
     error: syntax
+    code: unclosed_string
   - expr: (1 + 2
     error: syntax
+    code: expected_close_paren
   # Each group counts one level of nesting, so 200 groups nest and 201 don't.
   # Format 1 counted two levels for each group before, so at most 99 nested.
   - expr: "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
     value: 1
   - expr: "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
     error: syntax
+    code: expression_too_deep
   # Each prefix operator counts one level.
   - expr: "length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length 'a'"
     value: 0
   - expr: "length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length length 'a'"
     error: syntax
+    code: expression_too_deep
   - expr: "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((("
     error: syntax
+    code: expression_too_deep
   - expr: "------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------1"
     error: syntax
+    code: expression_too_deep
   - expr: "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true"
     error: syntax
+    code: expression_too_deep
   - expr: "1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1"
     error: syntax
+    code: expression_too_deep

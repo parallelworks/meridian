@@ -1,0 +1,8 @@
+jobs:
+  build:
+    steps:
+      - run: make
+  test:
+    needs: [build, build]
+    steps:
+      - run: make test

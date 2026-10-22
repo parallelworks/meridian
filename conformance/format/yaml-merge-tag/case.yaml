@@ -1,0 +1,11 @@
+description: >-
+  A value tagged !!merge is a merge key written another way, so it is an
+  error as << is.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: yaml_merge_key
+      path: /jobs/main/steps/0/run
+      line: 4
+      column: 14

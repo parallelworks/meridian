@@ -1,0 +1,13 @@
+description: >-
+  A list input's value is a list of rows. Anything else is an error.
+source: Meridian
+inputs:
+  hosts: web-1
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_list
+      path: /on/execute/inputs/hosts
+      line: 4
+      column: 7
+      params: {input: hosts, value: '"web-1"'}

@@ -2,7 +2,7 @@ description: >-
   Operators work as JavaScript's do: && and || return one of their operands,
   == converts before comparing and === doesn't, + joins when either side is a
   string, and the other arithmetic converts both sides to numbers.
-source: ACTIVATE's documentation and tests
+source: ACTIVATE's documentation and tests, and Meridian
 scope:
   contexts:
     inputs:
@@ -132,6 +132,25 @@ cases:
     value: false
   - expr: "'1' == true"
     value: true
+  # null equals null, and lists and mappings are equal when their items are,
+  # as === compares them, in the same order, and a mapping's keys in any
+  # order.
+  - expr: null === null
+    value: true
+  - expr: null !== null
+    value: false
+  - expr: "[null] == [null]"
+    value: true
+  - expr: "fromJSON('{\"a\": 1, \"k\": [null]}') == fromJSON('{\"k\": [null], \"a\": 1}')"
+    value: true
+  - expr: "fromJSON('{\"a\": 1}') === fromJSON('{\"a\": 1}')"
+    value: true
+  - expr: "fromJSON('{\"a\": 1}') == fromJSON('{\"a\": 1, \"b\": 2}')"
+    value: false
+  - expr: "fromJSON('{\"a\": 1}') == fromJSON('{\"a\": \"1\"}')"
+    value: false
+  - expr: "fromJSON('[\"x\", \"y\"]') == fromJSON('[\"y\", \"x\"]')"
+    value: false
   - expr: "'b' < 'a'"
     value: false
   - expr: "'10' < '9'"
@@ -300,14 +319,19 @@ cases:
   # Format 1 allowed it before, with ?? binding tighter than both.
   - expr: inputs.missing || false ?? true
     error: syntax
+    code: coalesce_mixed
   - expr: inputs.missing ?? false || true
     error: syntax
+    code: coalesce_mixed
   - expr: true && inputs.missing ?? 'x'
     error: syntax
+    code: coalesce_mixed
   - expr: inputs.missing ?? true and false
     error: syntax
+    code: coalesce_mixed
   - expr: inputs.missing or null ?? 'x'
     error: syntax
+    code: coalesce_mixed
   - expr: (inputs.missing || null) ?? 'x'
     value: x
   - expr: inputs.missing ?? (false && true)
@@ -349,6 +373,7 @@ cases:
   # 1:2 is a word; parentheses make this work.
   - expr: "true ? false?1:2 : 3"
     error: syntax
+    code: ternary_missing_colon
   - expr: "true ? (false?1:2) : 3"
     value: 2
 

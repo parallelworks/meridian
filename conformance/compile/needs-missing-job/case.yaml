@@ -7,3 +7,4 @@ expect:
       path: /jobs/test/needs
       line: 6
       column: 12
+      params: {job: test, needed: buld, suggested: "true", suggestion: build}

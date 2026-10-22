@@ -1,0 +1,17 @@
+description: >-
+  needs decides which jobs a job waits for when the run is created, so one
+  that reads something the compiler doesn't have, such as a secret variable,
+  is an error.
+source: Meridian
+contexts:
+  vars:
+    AFTER: unused
+secret-variables: [AFTER]
+expect:
+  diagnostics:
+    - severity: error
+      code: needs_not_known
+      path: /jobs/test/needs
+      line: 6
+      column: 12
+      params: {name: vars}
