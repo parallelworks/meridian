@@ -121,5 +121,16 @@
   "expressions_build_too_much": "此处一起求值的表达式合计生成的数据超过 {limit} MiB。",
   "expressions_too_much_work": "此处一起求值的表达式合计工作量超过 {limit} MiB。",
   "expressions_too_slow": "此处一起求值的表达式合计耗时超过 {limit} 秒。",
-  "problems_not_listed": "代码为 {code} 的问题只列出前 {limit} 个，其余 {count} 个未列出。"
+  "problems_not_listed": "代码为 {code} 的问题只列出前 {limit} 个，其余 {count} 个未列出。",
+
+  "container_not_supported": "作业的步骤应使用“{runtime}”在容器“{image}”中运行，而此工作进程尚不能运行容器。它也不会改为在主机上运行这些步骤，因为那样隔离会更弱。",
+  "job_unreadable": "工作进程无法读取它领取的作业：{reason}",
+  "run_dir_unusable": "工作进程无法使用运行目录“{path}”：{reason}",
+  "uses_not_supported": "该步骤使用了“{uses}”，而此工作进程尚不能运行使用操作或工作流的步骤。",
+  "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而此工作进程尚不能在另一台主机上运行步骤。",
+  "step_not_started": "无法启动该步骤的命令：{reason}",
+  "step_timed_out": "该步骤的运行超过了 {limit} 秒的超时时间，已被停止。",
+  "outputs_too_large": "该步骤向 $OUTPUTS 写入了 {size} 字节，超过了 {limit} 字节的上限。",
+  "outputs_line_too_long": "$OUTPUTS 中有一行达到或超过 {limit} 字节，因此与格式 1 一样，该文件中的输出都不会被读取。",
+  "log_not_kept": "工作进程未保留该步骤日志中的 {size} 字节：它无法连接到协调器，而在能够连接之前最多只保留 {limit} 字节的日志。"
 }

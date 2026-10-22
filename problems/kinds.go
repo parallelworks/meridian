@@ -198,3 +198,19 @@ var (
 var (
 	ProblemsNotListed = define(Warning, "problems_not_listed", "More problems of one kind", "code", "count", "limit")
 )
+
+// Running a job on a worker. A step's are diagnostics of its finished
+// event, at the step's path; the setup's are the problem with which an
+// attempt that failed before its first step ends, and is placed again.
+var (
+	ContainerNotSupported = define(Error, "container_not_supported", "Container the worker can't run yet", "runtime", "image")
+	JobUnreadable         = define(Error, "job_unreadable", "Job the worker couldn't read", "reason")
+	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
+	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
+	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
+	StepNotStarted        = define(Error, "step_not_started", "Step's command not started", "reason")
+	StepTimedOut          = define(Error, "step_timed_out", "Step ran past its timeout", "limit")
+	OutputsTooLarge       = define(Error, "outputs_too_large", "Step's outputs too large", "size", "limit")
+	OutputsLineTooLong    = define(Warning, "outputs_line_too_long", "Line of $OUTPUTS too long", "limit")
+	LogNotKept            = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")
+)

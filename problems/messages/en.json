@@ -128,5 +128,16 @@
   "expressions_too_much_work": "The expressions evaluated together here do more than {limit} MiB of work between them.",
   "expressions_too_slow": "The expressions evaluated together here took more than {limit, plural, one {# second} other {# seconds}} between them.",
 
-  "problems_not_listed": "Only the first {limit} problems with the code {code} are listed; {count, plural, one {# more isn't} other {# more aren't}}."
+  "problems_not_listed": "Only the first {limit} problems with the code {code} are listed; {count, plural, one {# more isn't} other {# more aren't}}.",
+
+  "container_not_supported": "The job's steps are to run in the container \"{image}\", with \"{runtime}\", and this worker can't run containers yet. It doesn't run them on the host instead, which would isolate them less.",
+  "job_unreadable": "The worker couldn't read the job it claimed: {reason}.",
+  "run_dir_unusable": "The worker couldn't use the run's directory \"{path}\": {reason}.",
+  "uses_not_supported": "The step uses \"{uses}\", and this worker can't run a step that uses an action or a workflow yet.",
+  "step_ssh_not_supported": "The step's ssh: names another host to run it on, and this worker can't run a step on another host yet.",
+  "step_not_started": "The step's command couldn't be started: {reason}.",
+  "step_timed_out": "The step ran past its timeout of {limit, plural, one {# second} other {# seconds}}, and was stopped.",
+  "outputs_too_large": "The step wrote {size} bytes to $OUTPUTS, more than the limit of {limit}.",
+  "outputs_line_too_long": "A line in $OUTPUTS is {limit} bytes or longer, so, as format 1 does, none of the outputs in the file are read.",
+  "log_not_kept": "The worker didn't keep {size} bytes of the step's log: it couldn't reach the coordinator, and keeps at most {limit} bytes of logs until it can."
 }

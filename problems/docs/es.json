@@ -863,5 +863,75 @@
     "fix": [
       "Corrige los problemas enumerados y vuelve a comprobar el flujo de trabajo para ver los demás."
     ]
+  },
+  "container_not_supported": {
+    "title": "Contenedor que el worker aún no puede ejecutar",
+    "why": "Los pasos de un trabajo se ejecutan en un contenedor cuando el miembro en el que se colocó aísla los trabajos en uno, como hacen por omisión los miembros local y ssh. Esta versión del worker de Meridian solo ejecuta pasos en el host. Meridian nunca ejecuta un trabajo con un aislamiento más débil que el que pide su miembro, así que el intento falla antes de que se ejecute ningún paso, y el trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Indica el aislamiento en el host en la configuración de los miembros donde se ejecuta el trabajo, si lo que quieres es ejecutar sus pasos en el host."
+    ]
+  },
+  "job_unreadable": {
+    "title": "Trabajo que el worker no pudo leer",
+    "why": "Un worker lee el trabajo que reclama con el mismo rigor con que se lee un plan, y rechaza uno con una parte que no conoce, en lugar de ejecutar el trabajo sin ella. Esto ocurre cuando el worker y el coordinador son de versiones de Meridian que codifican un trabajo de forma distinta. No se ejecutó ningún paso, así que el trabajo se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "run_dir_unusable": {
+    "title": "Directorio de la ejecución que el worker no pudo usar",
+    "why": "Cada ejecución tiene un directorio, PW_JOB_DIR, donde se ejecutan sus pasos por omisión. El worker lo crea si no existe y, si no puede, por el motivo indicado, el intento falla antes de que se ejecute ningún paso. El trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
+    ]
+  },
+  "uses_not_supported": {
+    "title": "Paso con uses: que el worker aún no puede ejecutar",
+    "why": "Un paso que usa con uses: una acción, como parallelworks/checkout, o un flujo de trabajo, la ejecuta en lugar de un comando. Esta versión del worker de Meridian solo ejecuta pasos con run:, así que el paso falla.",
+    "fix": [
+      "Haz el trabajo del paso con un comando run: en su lugar."
+    ]
+  },
+  "step_ssh_not_supported": {
+    "title": "Paso en otro host",
+    "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Esta versión del worker de Meridian solo ejecuta pasos en el host donde se ejecuta, así que el paso falla en lugar de ejecutarse en el host equivocado.",
+    "fix": [
+      "Mueve el paso a un trabajo que se ejecute en ese host, mediante el ssh: del trabajo o un grupo de ejecución."
+    ]
+  },
+  "step_not_started": {
+    "title": "Comando del paso no iniciado",
+    "why": "El worker escribe el comando del paso en un script e inicia con él el shell del paso en el directorio de trabajo del paso, que crea si no existe. Eso falló, por el motivo indicado, así que el comando nunca se ejecutó.",
+    "fix": [
+      "Comprueba que el shell del paso está en el host y que su directorio de trabajo se puede crear allí."
+    ]
+  },
+  "step_timed_out": {
+    "title": "El paso superó su tiempo límite",
+    "why": "El timeout: de un paso, y el timeout de su retry: para cada intento, limitan cuánto tiempo se ejecuta. A un paso que supera uno de ellos, el worker le envía SIGTERM y, después, SIGKILL si no ha terminado tras un periodo de gracia. Un paso que superó su propio timeout: no se vuelve a intentar; un intento que superó el timeout de su retry: sí, mientras al paso le queden reintentos.",
+    "fix": [
+      "Aumenta el tiempo límite, o haz que el paso termine antes."
+    ]
+  },
+  "outputs_too_large": {
+    "title": "Salidas del paso demasiado grandes",
+    "why": "Las salidas de un trabajo se guardan con su ejecución y se dan a los trabajos que lo necesitan, así que Meridian limita a 1 MiB cada archivo de salidas que escribe un paso, el archivo que indica $OUTPUTS. El límite es de Meridian, no del formato de flujo de trabajo.",
+    "fix": [
+      "Escribe los resultados grandes en un archivo del directorio de la ejecución y da su ruta como salida."
+    ]
+  },
+  "outputs_line_too_long": {
+    "title": "Línea de $OUTPUTS demasiado larga",
+    "why": "El formato 1 lee $OUTPUTS línea a línea, y no lee nada de un archivo con una línea de 64 KiB o más. Meridian lo lee igual, para que un flujo de trabajo signifique lo mismo que antes. Los pasos sin id comparten el archivo de su trabajo, así que una línea larga en él oculta también lo que escriben los pasos posteriores.",
+    "fix": [
+      "Escribe los valores grandes en un archivo del directorio de la ejecución y da su ruta como salida."
+    ]
+  },
+  "log_not_kept": {
+    "title": "Registro no guardado completo",
+    "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
+    "fix": [
+      "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador."
+    ]
   }
 }

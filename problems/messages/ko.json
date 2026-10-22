@@ -121,5 +121,16 @@
   "expressions_build_too_much": "이곳에서 함께 평가되는 표현식들이 합쳐서 {limit}MiB를 넘는 데이터를 만듭니다.",
   "expressions_too_much_work": "이곳에서 함께 평가되는 표현식들의 작업량이 합쳐서 {limit}MiB를 넘습니다.",
   "expressions_too_slow": "이곳에서 함께 평가되는 표현식들의 평가에 합쳐서 {limit}초보다 오래 걸렸습니다.",
-  "problems_not_listed": "코드 {code}의 문제는 처음 {limit}개만 나열합니다. 나머지 {count}개는 나열하지 않습니다."
+  "problems_not_listed": "코드 {code}의 문제는 처음 {limit}개만 나열합니다. 나머지 {count}개는 나열하지 않습니다.",
+
+  "container_not_supported": "작업의 단계는 ‘{runtime}’(으)로 ‘{image}’ 컨테이너에서 실행되어야 하는데, 이 워커는 아직 컨테이너를 실행할 수 없습니다. 격리가 약해지므로 대신 호스트에서 실행하지도 않습니다.",
+  "job_unreadable": "워커가 요청한 작업을 읽을 수 없습니다: {reason}",
+  "run_dir_unusable": "워커가 실행 디렉터리 ‘{path}’을(를) 사용할 수 없습니다: {reason}",
+  "uses_not_supported": "단계가 ‘{uses}’을(를) 사용하는데, 이 워커는 아직 액션이나 워크플로를 사용하는 단계를 실행할 수 없습니다.",
+  "step_ssh_not_supported": "단계의 ssh:가 실행할 다른 호스트를 지정하는데, 이 워커는 아직 다른 호스트에서 단계를 실행할 수 없습니다.",
+  "step_not_started": "단계의 명령을 시작할 수 없습니다: {reason}",
+  "step_timed_out": "단계가 {limit}초의 제한 시간을 넘겨 실행되어 중지되었습니다.",
+  "outputs_too_large": "단계가 $OUTPUTS에 {size}바이트를 써서, 한도인 {limit}바이트를 초과했습니다.",
+  "outputs_line_too_long": "$OUTPUTS의 한 줄이 {limit}바이트 이상이므로, 형식 1과 마찬가지로 이 파일의 출력은 하나도 읽지 않습니다.",
+  "log_not_kept": "워커가 단계 로그 중 {size}바이트를 보관하지 않았습니다. 코디네이터에 연결할 수 없었으며, 연결될 때까지 로그를 최대 {limit}바이트까지만 보관합니다."
 }

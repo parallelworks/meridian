@@ -121,5 +121,16 @@
   "expressions_build_too_much": "ここでまとめて評価される式が作成するデータが、合計で {limit} MiB を超えています。",
   "expressions_too_much_work": "ここでまとめて評価される式の処理量が、合計で {limit} MiB を超えています。",
   "expressions_too_slow": "ここでまとめて評価される式の評価に、合計で {limit} 秒を超える時間がかかりました。",
-  "problems_not_listed": "コード {code} の問題は最初の {limit} 件だけを挙げています。残りの {count} 件は挙げていません。"
+  "problems_not_listed": "コード {code} の問題は最初の {limit} 件だけを挙げています。残りの {count} 件は挙げていません。",
+
+  "container_not_supported": "ジョブのステップはコンテナ「{image}」で「{runtime}」を使って実行されることになっていますが、このワーカーはまだコンテナを実行できません。分離が弱くなるため、代わりにホストで実行することもしません。",
+  "job_unreadable": "ワーカーは要求したジョブを読み取れませんでした: {reason}",
+  "run_dir_unusable": "ワーカーは実行のディレクトリ「{path}」を使用できませんでした: {reason}",
+  "uses_not_supported": "ステップは「{uses}」を使用していますが、このワーカーはアクションやワークフローを使用するステップをまだ実行できません。",
+  "step_ssh_not_supported": "ステップの ssh: が実行先として別のホストを指定していますが、このワーカーはまだ別のホストでステップを実行できません。",
+  "step_not_started": "ステップのコマンドを開始できませんでした: {reason}",
+  "step_timed_out": "ステップは {limit} 秒のタイムアウトを過ぎても実行されていたため、停止されました。",
+  "outputs_too_large": "ステップは $OUTPUTS に {size} バイトを書き込み、上限の {limit} バイトを超えています。",
+  "outputs_line_too_long": "$OUTPUTS の行が {limit} バイト以上あるため、形式 1 と同じく、このファイルの出力は 1 つも読み取られません。",
+  "log_not_kept": "ワーカーはステップのログのうち {size} バイトを保持しませんでした。コーディネーターに接続できず、接続できるまでに保持するログは最大 {limit} バイトです。"
 }

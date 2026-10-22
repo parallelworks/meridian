@@ -740,5 +740,65 @@
     "fix": [
       "Fix the problems that are listed, and check the workflow again to see the rest."
     ]
+  },
+  "container_not_supported": {
+    "why": "A job's steps run in a container when the member it was placed on isolates jobs in one, as local and ssh members do by default. This version of Meridian's worker runs steps only on the host. Meridian never runs a job with weaker isolation than its member asks for, so the attempt fails before any step runs, and the job is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Name host isolation in the settings of the members the job runs on, if running its steps on the host is what you want."
+    ]
+  },
+  "job_unreadable": {
+    "why": "A worker reads the job it claims as strictly as a plan is read, and refuses one with a part it doesn't know, rather than run the job without it. This happens when the worker and the coordinator are from versions of Meridian that encode a job differently. No step ran, so the job is placed again.",
+    "fix": [
+      "Start workers of the same version of Meridian as the coordinator."
+    ]
+  },
+  "run_dir_unusable": {
+    "why": "Each run has a directory, PW_JOB_DIR, where its steps run by default. The worker makes it if it doesn't exist, and if it can't, for the reason given, the attempt fails before any step runs. The job is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
+    ]
+  },
+  "uses_not_supported": {
+    "why": "A step that uses: an action, such as parallelworks/checkout, or a workflow runs it rather than a command. This version of Meridian's worker runs only steps with run:, so the step fails.",
+    "fix": [
+      "Do the step's work with a run: command instead."
+    ]
+  },
+  "step_ssh_not_supported": {
+    "why": "A format 1 step's ssh: runs the step on another host over SSH. This version of Meridian's worker runs steps only on the host it runs on, so the step fails rather than run on the wrong host.",
+    "fix": [
+      "Move the step to a job that runs on that host, through the job's ssh: or an execution group."
+    ]
+  },
+  "step_not_started": {
+    "why": "The worker writes the step's command to a script, and starts the step's shell with it in the step's working directory, which it makes if it doesn't exist. That failed, for the reason given, so the command never ran.",
+    "fix": [
+      "Check that the step's shell is on the host, and that its working directory can be made there."
+    ]
+  },
+  "step_timed_out": {
+    "why": "A step's timeout:, and its retry:'s timeout for each try, limit how long it runs. The worker sends a step that runs past one SIGTERM, then SIGKILL if it hasn't ended after a grace period. A step that ran past its own timeout: isn't tried again; a try past its retry:'s timeout is, while the step has retries left.",
+    "fix": [
+      "Raise the timeout, or make the step finish sooner."
+    ]
+  },
+  "outputs_too_large": {
+    "why": "A job's outputs are kept with its run and given to the jobs that need it, so Meridian limits each file of outputs that a step writes, the file $OUTPUTS names, to 1 MiB. The limit is Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Write large results to a file in the run's directory, and give its path as the output."
+    ]
+  },
+  "outputs_line_too_long": {
+    "why": "Format 1 reads $OUTPUTS a line at a time, and reads none of a file with a line of 64 KiB or longer. Meridian reads it the same way, so that a workflow means what it did. The steps without an id share their job's file, so a long line there also hides what the steps after it write.",
+    "fix": [
+      "Write large values to a file in the run's directory, and give its path as the output."
+    ]
+  },
+  "log_not_kept": {
+    "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, it doesn't keep what the steps print, so the log is missing that much of it.",
+    "fix": [
+      "Check the connection between the host the job ran on and the coordinator."
+    ]
   }
 }

@@ -1,0 +1,149 @@
+package worker
+
+import (
+	"bufio"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/parallelworks/meridian/workerapi"
+)
+
+// TestReadEnv checks how a worker reads where its coordinator is, and its
+// bootstrap token, from its environment, and that its steps get none of
+// it.
+func TestReadEnv(t *testing.T) {
+	t.Parallel()
+	key := "sha256:" + strings.Repeat("ab", 32)
+	for _, tc := range []struct {
+		name    string
+		environ []string
+		address string
+		token   string
+		tls     bool
+		fails   bool
+	}{
+		{name: "socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "/run/c.sock", token: "t"},
+		{name: "tls", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "login1:7443", token: "t", tls: true},
+		{name: "last wins", environ: []string{"MERIDIAN_COORDINATOR=/a", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_COORDINATOR=/b"}, address: "/b", token: "t"},
+		{name: "no coordinator", environ: []string{"MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
+		{name: "tls without a key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
+		{name: "a key that isn't sha256", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + strings.Repeat("ab", 32), "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
+		{name: "a short key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=sha256:abab", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
+		{name: "a key for a socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
+		{name: "no token", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock"}, fails: true},
+		{name: "two tokens", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_BOOTSTRAP_TOKEN_FILE=/x"}, fails: true},
+	} {
+		environ := append(slices.Clone(tc.environ), "PATH=/bin", "HOME=/home/u")
+		ep, rest, err := readEnv(environ)
+		if tc.fails {
+			if err == nil {
+				t.Errorf("%s: read %v", tc.name, tc.environ)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if ep.address != tc.address || ep.token != tc.token || ep.socket() == tc.tls || (len(ep.keyHash) == 32) != tc.tls {
+			t.Errorf("%s: got %+v", tc.name, ep)
+		}
+		if tc.tls && hex.EncodeToString(ep.keyHash) != strings.Repeat("ab", 32) {
+			t.Errorf("%s: the key's hash is %x", tc.name, ep.keyHash)
+		}
+		if want := []string{"PATH=/bin", "HOME=/home/u"}; !reflect.DeepEqual(rest, want) {
+			t.Errorf("%s: the steps get %v, want %v", tc.name, rest, want)
+		}
+	}
+}
+
+// TestTokenFile checks that a worker reads its bootstrap token from a file
+// only its user can read, and removes it, and refuses one others can read.
+func TestTokenFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	private, shared := filepath.Join(dir, "private"), filepath.Join(dir, "shared")
+	if err := os.WriteFile(private, []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o640); err != nil { //nolint:gosec // a file others can read, which the worker refuses
+		t.Fatal(err)
+	}
+	ep, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + private})
+	if err != nil || ep.token != "token" {
+		t.Fatalf("got %q, %v", ep.token, err)
+	}
+	if _, err := os.Stat(private); !os.IsNotExist(err) {
+		t.Errorf("the token's file is still there: %v", err)
+	}
+	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + shared}); err == nil {
+		t.Error("read a token from a file others can read")
+	}
+}
+
+// TestCredential checks that each credential is 32 random bytes, as hex.
+func TestCredential(t *testing.T) {
+	t.Parallel()
+	a, b := newCredential(), newCredential()
+	if len(a) != 64 || a == b {
+		t.Errorf("credentials %q and %q", a, b)
+	}
+	if _, err := hex.DecodeString(a); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestParseOutputs checks that $OUTPUTS is read as format 1 reads it.
+func TestParseOutputs(t *testing.T) {
+	t.Parallel()
+	got, err := parseOutputs(" a = 1 \nb=x=y\nno equals\nc=line\\nnext\\ttab\r\na=2\n=empty\nlast=no newline")
+	want := map[string]string{"a": "2", "b": "x=y", "c": "line\nnext\ttab", "": "empty", "last": "no newline"}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, %v, want %q", got, err, want)
+	}
+	// A file with a line too long for bufio.Scanner, with which format 1
+	// reads it, isn't read, as in format 1.
+	for _, n := range []int{bufio.MaxScanTokenSize - 3, bufio.MaxScanTokenSize - 2, bufio.MaxScanTokenSize - 1} {
+		for _, text := range []string{"b=" + strings.Repeat("v", n), "a=1\nb=" + strings.Repeat("v", n) + "\n", "b=" + strings.Repeat("v", n) + "\r\n"} {
+			scanner := bufio.NewScanner(strings.NewReader(text))
+			for scanner.Scan() {
+			}
+			got, err := parseOutputs(text)
+			if (err == nil) != (scanner.Err() == nil) || err == nil && len(got["b"]) < n {
+				t.Errorf("a file of %d bytes: got %d outputs and %v; bufio.Scanner: %v", len(text), len(got), err, scanner.Err())
+			}
+		}
+	}
+	if got := written(map[string]string{"a": "1", "b": "2"}, map[string]string{"a": "1", "b": "3", "c": "4"}); !reflect.DeepEqual(got, map[string]string{"b": "3", "c": "4"}) {
+		t.Errorf("written: got %v", got)
+	}
+}
+
+// TestShellCommand checks how a step's shell: runs its script: {0} is the
+// script's path, which comes last without one, and format 1's default is
+// a bash that isn't a login shell.
+func TestShellCommand(t *testing.T) {
+	t.Parallel()
+	const script = "/tmp/a dir/script.sh"
+	for _, tc := range []struct {
+		shell string
+		want  []string
+	}{
+		{"", []string{"/bin/bash", script}},
+		{"bash -l {0}", []string{"bash", "-l", script}},
+		{"sh -e", []string{"sh", "-e", script}},
+		{"/usr/bin/bash --noprofile --norc -eo pipefail {0}", []string{"/usr/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", script}},
+	} {
+		if got := shellCommand(tc.shell, script).Args; !slices.Equal(got, tc.want) {
+			t.Errorf("%q: got %q, want %q", tc.shell, got, tc.want)
+		}
+	}
+}

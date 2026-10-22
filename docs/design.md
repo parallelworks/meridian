@@ -1145,23 +1145,42 @@ waking up or `meridian run` restarting must not make them all look lost.
   step SIGTERM, then SIGKILL after a grace period; placements in progress
   are withdrawn (`scancel`, `qdel`, deleting the pod).
 - **Timeouts:** the worker enforces step and job timeouts. The coordinator
-  enforces the run's timeout, and a job's as a backstop.
+  enforces the run's timeout, and a job's as a backstop. As in format 1, a
+  step's `timeout:`, and its `retry:`'s, bound each of its tries, and a try
+  past the step's own `timeout:` isn't tried again.
+- **Once a job is stopping**, cancelled or past its timeout, its steps that
+  haven't started don't run. Each is still readied, so that one whose `if:`
+  is false is skipped, but one that would run ends cancelled, or failed
+  after a timeout, without starting. Format 1 starts such a step and stops
+  it at once, so no workflow can rely on its running.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
-  fails. The coordinator tells the step's worker.
+  fails. The coordinator tells the step's worker. A step it stops is
+  cancelled, and its job ends cancelled, as in format 1.
 - **A step's `cleanup:` command** runs at the end of its job if the step
-  ran, whatever the job's outcome, in reverse order.
+  ran, whatever the job's outcome, in reverse order. As in format 1, it runs
+  as a step of its own, with its step's shell, working directory,
+  environment and `ignore-errors:`, but no timeout or retry, and a
+  cancellation doesn't stop it; one that fails fails the job. A worker whose
+  attempt ended without it, because another superseded it or its lease
+  lapsed, runs none: another attempt may be running, and a cleanup could
+  remove what it is using.
 
 ### Outputs
 
-A step writes outputs to the file named by `$OUTPUTS`. A job's outputs are
-capped at 1 MB and a run's at 50 MB. Before the worker reports a job's
-outputs, it checks them against the values of the secrets its attempt
-received, and an output that holds one is reported with it masked, `***`,
-as logs are, and a warning that names the output; GitHub Actions leaves
-such an output out. When a job is claimed, it receives its dependencies'
-outcomes and outputs with it, rather than reading each one back. hopper
-keeps finalized jobs' outputs only in its history, so this, too, needs
-something hopper doesn't have yet.
+A step writes outputs to the file named by `$OUTPUTS`, a line `name=value`
+each. As in format 1, a step with an `id` has a file of its own, whose
+outputs are its `steps.<id>.outputs`, and the steps without one share the
+job's, whose outputs are the job's, with its `outputs:` over them; each
+step's result holds what it wrote, and End puts the job's together. As in
+format 1, a file with a line of 64 KiB or longer is read as holding none,
+and the step's event warns of it. A job's outputs are capped at 1 MB and a
+run's at 50 MB. Before the worker reports a job's outputs, it checks them
+against the values of the secrets its attempt received, and an output that
+holds one is reported with it masked, `***`, as logs are, and a warning that
+names the output; GitHub Actions leaves such an output out. When a job is
+claimed, it receives its dependencies' outcomes and outputs with it, rather
+than reading each one back. hopper keeps finalized jobs' outputs only in its
+history, so this, too, needs something hopper doesn't have yet.
 
 ## The coordinator
 
@@ -1352,12 +1371,25 @@ member's running workers reconnect to it.
   host, outside the container. It creates the job's container, runs each
   step in it with the runtime's `exec`, and removes the container when the
   job ends.
+- **A step ends when its output closes**, as in format 1, not when its
+  shell exits: what it starts in the background and leaves writing to its
+  output is still the step's. It runs in a process group of its own, which
+  is what SIGTERM and SIGKILL stop.
 - **Logs** are masked on the worker, before they leave the host, and so are
   outputs ([Outputs](#outputs)).
 - **While the coordinator is unreachable**, a worker keeps running its steps,
   spools logs and events to disk up to a limit, and delivers them in order
   when it reconnects, unless its job fences itself
-  ([Leases and fencing](#leases-and-fencing)).
+  ([Leases and fencing](#leases-and-fencing)). Past the limit, a log keeps
+  nothing more until the coordinator has stored more of it, and the step's
+  event says how much it lost.
+
+Today the worker runs steps only on the host. A job whose steps are to run
+in a container fails before its first step, with a problem that says so,
+rather than run them on the host, and a step that `uses:` an action or a
+workflow, or runs on another host with `ssh:`, fails. Its events are kept
+in memory while the coordinator is unreachable, since each is small but for
+a step's outputs, which are capped.
 
 ## Backends and isolation
 
