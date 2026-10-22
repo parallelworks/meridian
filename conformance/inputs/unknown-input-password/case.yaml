@@ -3,18 +3,34 @@ description: >-
   kept. One whose name is a password field's, as a repeated step's password
   sent beside the step rather than in its rows is, or is close to the name
   of a password input, as a misspelling is, is taken for a password: it is
-  kept among the run's secrets, and not with its values.
+  kept among the run's secrets, and not with its values. So is a mapping or
+  a list that holds a key named as a password field, as a flattened wizard
+  step's inputs sent under the step's name do, or whose name is close to
+  that of an input with a password among its inputs. A text whose name is
+  close to such an input's is data.
 source: Meridian
 inputs:
   host: a
   key: HUNTER2SECRET
   pasword: HUNTER2SECRET
+  creds:
+    token: HUNTER2SECRET
+  hostz:
+    - b
 expect:
   diagnostics:
     - severity: warning
       code: unknown_input
       path: /on/execute/inputs
+      params: {input: creds}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
       params: {input: host}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: hostz, suggested: "true", suggestion: hosts}
     - severity: warning
       code: unknown_input
       path: /on/execute/inputs
@@ -28,3 +44,6 @@ expect:
   secrets:
     key: HUNTER2SECRET
     pasword: HUNTER2SECRET
+    creds:
+      token: HUNTER2SECRET
+    hostz: [b]

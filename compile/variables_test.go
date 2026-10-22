@@ -265,7 +265,9 @@ const variableSentinel = "VARIABLE-SENTINEL-"
 // conformance workflow whose case gives variables is compiled with each
 // one's value its own text, unless it is a secret: with the case's inputs,
 // and with what a form submits for them, which evaluates each default it
-// can, those that read a variable too, and sends what it gives.
+// can, those that read a variable too, and sends what it gives; and with
+// that sent as ACTIVATE's form can send it otherwise (formShapes), and
+// once the variables have changed.
 func TestVariablesNeverInPlans(t *testing.T) {
 	given, forms := 0, 0
 	for _, area := range []string{"inputs", "compile"} {
@@ -278,17 +280,19 @@ func TestVariablesNeverInPlans(t *testing.T) {
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}
+			// later holds the variables as they are once they have changed.
+			later := compile.Options{Inputs: opts.Inputs, Contexts: maps.Clone(opts.Contexts)}
 			changed := false
 			for _, name := range []string{"org", "vars"} {
 				vars, _ := opts.Contexts[name].(map[string]any)
-				vars = maps.Clone(vars)
+				vars, changedVars := maps.Clone(vars), maps.Clone(vars)
 				for k, v := range vars {
 					if _, ok := v.(string); ok {
-						vars[k], changed = variableSentinel+k, true
+						vars[k], changedVars[k], changed = variableSentinel+k, "changed", true
 					}
 				}
 				if vars != nil {
-					opts.Contexts[name] = vars
+					opts.Contexts[name], later.Contexts[name] = vars, changedVars
 				}
 			}
 			data, err := c.Workflow()
@@ -303,9 +307,17 @@ func TestVariablesNeverInPlans(t *testing.T) {
 			if strings.Contains(fmt.Sprint(form), variableSentinel) {
 				forms++
 			}
-			for _, submitted := range []map[string]any{c.Inputs, form} {
+			type run struct {
+				submitted map[string]any
+				opts      compile.Options
+			}
+			runs := []run{{c.Inputs, opts}, {form, later}}
+			for _, submitted := range formShapes(form) {
+				runs = append(runs, run{submitted, opts})
+			}
+			for _, run := range runs {
 				given++
-				p, diags := compile.Compile("workflow.yaml", data, submitted, opts)
+				p, diags := compile.Compile("workflow.yaml", data, run.submitted, run.opts)
 				for _, d := range diags {
 					if strings.Contains(fmt.Sprint(d.Params), variableSentinel) || strings.Contains(d.Message(), variableSentinel) {
 						t.Errorf("%s: %s shows a variable's value", c.Name, d)

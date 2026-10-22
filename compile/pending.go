@@ -37,13 +37,9 @@ type pendingFields struct {
 	stamp int
 }
 
-// A pendingField is a field that waits: for its value to be filled in, or
-// with candidate set, for that part of its submitted value to be compared
-// with what an expression gives (inputResolver.compare). A field can wait
-// for both, and for each of its candidates.
+// A pendingField is a field that waits.
 type pendingField struct {
-	f         *field
-	candidate *candidate
+	f *field
 	// reads are the patterns of the paths in the values that f's
 	// expressions read (reach.Patterns).
 	reads [][]string
@@ -124,12 +120,9 @@ func waitingIn(seq iter.Seq[*fieldSet]) iter.Seq[*pendingField] {
 	}
 }
 
-// add adds f, which waits for the values reads read, after the others: to
-// be filled in, or with c set, for the candidate c of its value to be
-// compared. The fields that read the value at path, f's or the candidate's,
-// wait for it in turn.
-func (q *pendingFields) add(f *field, path []string, reads []*expr.Expr, c *candidate) {
-	p := &pendingField{f: f, candidate: c, pos: len(q.all), pass: q.pass, reads: readPatterns(reads, f.index)}
+// add adds f, which waits, after the others.
+func (q *pendingFields) add(f *field) {
+	p := &pendingField{f: f, pos: len(q.all), pass: q.pass, reads: readPatterns(f.reads, f.index)}
 	q.all = append(q.all, p)
 	// f waits for the fields it reads, and the fields that read f wait for
 	// it.
@@ -144,14 +137,14 @@ func (q *pendingFields) add(f *field, path []string, reads []*expr.Expr, c *cand
 		}
 	}
 	q.stamp++
-	for r := range waitingIn(q.reads.Reaching(path)) {
+	for r := range waitingIn(q.reads.Reaching(f.path)) {
 		if r.stamp != q.stamp {
 			r.stamp = q.stamp
 			p.readers = append(p.readers, r)
 			r.waits++
 		}
 	}
-	addAt(&q.paths, &q.pathSets, path, p)
+	addAt(&q.paths, &q.pathSets, f.path, p)
 	for _, pattern := range p.reads {
 		addAt(&q.reads, &q.readSets, pattern, p)
 	}
@@ -198,113 +191,13 @@ func (q *pendingFields) filled(p *pendingField) {
 	}
 }
 
-// waiting returns the fields that still wait to be filled in, in the order
-// they started to.
+// waiting returns the fields that still wait, in the order they started
+// to.
 func (q *pendingFields) waiting() []*field {
 	var out []*field
 	for _, p := range q.all {
-		if !p.done && p.candidate == nil {
+		if !p.done {
 			out = append(out, p.f)
-		}
-	}
-	return out
-}
-
-// release is for when no field can be filled in, and some still wait: each
-// waits for a field that waits for it, however indirectly. It returns, as
-// done, the first comparison of each such cycle of fields that has one, to
-// be compared with the values as they are: a comparison changes no value,
-// only what reads a variable or a password, which those that wait for it
-// in the cycle can't know of it. A form can't evaluate defaults that read
-// each other either. It returns none if no cycle has a comparison, as for
-// defaults that read each other.
-func (q *pendingFields) release() []*pendingField {
-	var out []*pendingField
-	for _, cycle := range q.cycles() {
-		first := -1
-		for i, p := range cycle {
-			if p.candidate != nil && (first < 0 || p.pos < cycle[first].pos) {
-				first = i
-			}
-		}
-		if first >= 0 {
-			p := cycle[first]
-			p.done, p.pass = true, q.pass
-			p.leave()
-			out = append(out, p)
-		}
-	}
-	slices.SortFunc(out, func(a, b *pendingField) int { return cmp.Compare(a.pos, b.pos) })
-	return out
-}
-
-// cycles returns the cycles of fields that wait for each other, however
-// indirectly: the strongly connected components, of more than one field,
-// of the fields that still wait, each a field's readers waiting for it.
-// It finds them as Tarjan's algorithm does, without recursion.
-func (q *pendingFields) cycles() [][]*pendingField {
-	type node struct {
-		index, low int
-		onStack    bool
-	}
-	nodes := map[*pendingField]*node{}
-	var out [][]*pendingField
-	// path holds the fields walked that aren't yet in a component.
-	var path []*pendingField
-	// frame is where the walk is in one field's readers.
-	type frame struct {
-		p    *pendingField
-		next int
-	}
-	index := 0
-	for _, root := range q.all {
-		if root.done || nodes[root] != nil {
-			continue
-		}
-		walk := []frame{{p: root}}
-		nodes[root] = &node{index: index, low: index, onStack: true}
-		index++
-		path = append(path, root)
-		for len(walk) > 0 {
-			top := &walk[len(walk)-1]
-			n := nodes[top.p]
-			if top.next < len(top.p.readers) {
-				r := top.p.readers[top.next]
-				top.next++
-				if r.done {
-					continue
-				}
-				switch m := nodes[r]; {
-				case m == nil:
-					nodes[r] = &node{index: index, low: index, onStack: true}
-					index++
-					path = append(path, r)
-					walk = append(walk, frame{p: r})
-				case m.onStack:
-					n.low = min(n.low, m.index)
-				}
-				continue
-			}
-			walk = walk[:len(walk)-1]
-			if len(walk) > 0 {
-				parent := nodes[walk[len(walk)-1].p]
-				parent.low = min(parent.low, n.low)
-			}
-			if n.low != n.index {
-				continue
-			}
-			i := len(path) - 1
-			for path[i] != top.p {
-				i--
-			}
-			component := slices.Clone(path[i:])
-			path = path[:i]
-			for _, p := range component {
-				nodes[p].onStack = false
-			}
-			if len(component) > 1 {
-				out = append(out, component)
-			}
 		}
 	}
 	return out

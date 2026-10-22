@@ -13,6 +13,13 @@ on:
       password:
         type: password
         optional: true
+      creds:
+        type: step
+        title: Credentials
+        options:
+          token:
+            type: password
+            optional: true
 jobs:
   main:
     steps:

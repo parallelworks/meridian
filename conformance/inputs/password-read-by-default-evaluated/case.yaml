@@ -4,8 +4,10 @@ description: >-
   can't evaluate. A submitted value that is what an input's default, or one
   of its options, gives, when that reads a password, means the default, as
   its text does: it is made from the password, so it stays an expression
-  until the run is underway, in a list's row too. Any other value is data,
-  as typed text is.
+  until the run is underway, in a list's row too. Any other value there,
+  such as what the form gave before the password changed, or what the
+  person typed in its place, can hold the password too, so it is kept as a
+  secret.
 source: Meridian
 inputs:
   pw: HUNTER2SECRET
@@ -17,10 +19,11 @@ inputs:
     - user: a
       pass: HUNTER2SECRET
       hint: HUNTER2SECRET
+    - user: b
+      pass: HUNTER3SECRET
+      hint: HUNTER3SECRET
   note: typed
 expect:
-  inputs:
-    note: typed
   deferred:
     copy: ${{ inputs.pw }}
     dsn: postgres://app:${{ inputs.pw }}@db
@@ -29,6 +32,10 @@ expect:
     creds:
       - user: a
         hint: ${{ inputs.creds.[index].pass }}
+      - user: b
+        hint: ${{ inputs.creds.[index].pass }}
   secrets:
     pw: HUNTER2SECRET
     creds.0.pass: HUNTER2SECRET
+    creds.1.pass: HUNTER3SECRET
+    note: typed

@@ -171,3 +171,9 @@ func BenchmarkFormRows(b *testing.B) { benchmarkWorkload(b, formRows, 2000) }
 // Inputs whose defaults each read a row of a list held for the run's
 // start.
 func BenchmarkHeldRowReads(b *testing.B) { benchmarkWorkload(b, heldRowReads, 1000) }
+
+// Submitted rows whose template's default reads the whole list, without
+// and with a password in each row.
+func BenchmarkCrossRows(b *testing.B) { benchmarkWorkload(b, crossRows, 2000) }
+
+func BenchmarkCrossPasswordRows(b *testing.B) { benchmarkWorkload(b, crossPasswordRows, 2000) }

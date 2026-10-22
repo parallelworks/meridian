@@ -60,6 +60,19 @@ func setIn(v any, path []string, x any) {
 	}
 }
 
+// clearPath removes the value at path in v, a mapping or list, as
+// deletePath does, and makes a list's item there null, as a list can't
+// leave it out without moving the items after it.
+func clearPath(v any, path []string) {
+	if n := len(path); n > 0 && isIndex(path[n-1]) {
+		if _, isList := lookup(v, path[:n-1]).([]any); isList {
+			setIn(v, path, nil)
+			return
+		}
+	}
+	deletePath(v, path)
+}
+
 // deletePath removes the value at path in v, a mapping or list, if a
 // mapping holds one there: it follows the lists on the way, as setIn does.
 func deletePath(v any, path []string) {

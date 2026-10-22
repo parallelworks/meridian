@@ -172,7 +172,8 @@ jobs:
 
 // A row's default that reads a secret is evaluated once the run is
 // underway, with the row's index in it, since no scope gives it then; and
-// the list's value with it, all of it.
+// the list's value with it, all of it. A value given in its place can hold
+// the secret, so it is kept as a secret, which the run's start puts back.
 func TestRowDefaultKnownLater(t *testing.T) {
 	doc := load(t, `on:
   execute:
@@ -219,9 +220,12 @@ jobs:
 		"inputs": map[string]any{"names": submitted["names"]},
 		"vars":   map[string]any{"TOKEN": "s"},
 	}})
-	want := []any{map[string]any{"name": "x", "token": "s-a"}, map[string]any{"name": "y", "token": "given"}}
+	want := []any{map[string]any{"name": "x", "token": "s-a"}, map[string]any{"name": "y"}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("the deferred value is %v, %v; want %v", got, err, want)
+	}
+	if inputs.Secrets["hosts.1.token"] != "given" {
+		t.Errorf("secrets %v, want hosts.1.token given", inputs.Secrets)
 	}
 }
 
@@ -425,6 +429,32 @@ func TestSubmittedDefaultsReadNothingMarked(t *testing.T) {
 	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
 	if _, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{}); len(diags) != 0 {
 		t.Errorf("nine submitted values: %v, want none", diags)
+	}
+}
+
+// Comparing what a form sent with what made it spends a budget of its own,
+// so nine comparisons that each build 8 MiB leave the inputs' group what it
+// had, for a condition that builds 8 MiB after them. A part whose
+// comparison the budget stops is kept as a secret, as one that isn't what
+// made it is.
+func TestComparisonsHaveTheirOwnBudget(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("on:\n  execute:\n    inputs:\n      pw:\n        type: password\n      half:\n        type: string\n")
+	b.WriteString("      shown:\n        type: string\n        optional: true\n        hidden: ${{ length(inputs.half + inputs.half) == 1 }}\n")
+	submitted := map[string]any{"pw": "s", "half": strings.Repeat("x", 4<<20)}
+	for i := range 9 {
+		fmt.Fprintf(&b, "      d%d:\n        type: string\n        default: ${{ inputs.half + inputs.half + inputs.pw }}\n", i)
+		submitted[fmt.Sprintf("d%d", i)] = "given"
+	}
+	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
+	inputs, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{})
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics %v, want none", diags)
+	}
+	for i := range 9 {
+		if name := fmt.Sprintf("d%d", i); inputs.Secrets[name] != "given" {
+			t.Errorf("secrets %v, want %s kept as a secret", inputs.Secrets, name)
+		}
 	}
 }
 

@@ -59,11 +59,12 @@ type Run struct {
 	// each of a context's for a read of every variable of the context, as
 	// vars.* is; and its passwords, by their paths in the inputs' values: a
 	// password input, as in inputs.token, a password field of a list's row,
-	// as in inputs.creds.0.pass, and a list whose rows have one and are
-	// evaluated as the run starts, all of it, as in inputs.creds. Their
-	// values are never in the plan; each attempt receives them when it is
-	// claimed. As the run starts, each password's value is put in the
-	// inputs' values at its path.
+	// as in inputs.creds.0.pass, a list whose rows have one and are
+	// evaluated as the run starts, all of it, as in inputs.creds, and a
+	// submitted value that the compiler keeps as one, as it can hold one or
+	// a variable's value. Their values are never in the plan; each attempt
+	// receives them when it is claimed. As the run starts, each password's
+	// value is put in the inputs' values at its path.
 	Secrets []string `json:"secrets,omitempty"`
 	// Variables names the organization and user variables the run reads
 	// that aren't secrets, as in org.region and vars.region, in order. A
@@ -199,7 +200,8 @@ type StepRetry struct {
 	Timeout    Value `json:"timeout,omitzero"`
 	// CleanOnRetry is the step's clean-on-retry: true or false, or an
 	// expression that gives one. The compiler fills in true, the format's
-	// default, for a retry: without one.
+	// default, for a retry: without one. Unset, as in a plan a release
+	// wrote before it was a Value, which held only true, means false.
 	CleanOnRetry Value `json:"cleanOnRetry,omitzero"`
 }
 

@@ -16,9 +16,6 @@ on:
       mirror:
         type: string
         default: ${{ ..region.default }}
-      label:
-        type: string
-        default: ${{ vars.REGION }}${{ inputs.label ?? '' }}
 jobs:
   main:
     steps:

@@ -38,6 +38,10 @@ var scaledWorkloads = []scaled{
 	{name: "a value nested deep in a matrix", n: 500, workload: deepValue, stageOnly: true},
 	{name: "a form's values for rows whose defaults read their passwords", n: 1000, workload: formRows, timed: true},
 	{name: "defaults that read rows of a list held for the run's start", n: 300, workload: heldRowReads, timed: true},
+	{name: "submitted rows whose template's default reads the whole list", n: 1000, workload: crossRows, timed: true},
+	{name: "submitted rows whose template's default reads the whole list, with passwords", n: 1000, workload: crossPasswordRows, timed: true},
+	{name: "submitted rows whose template's default gives the whole list's JSON and a password", n: 1000, workload: wholeListRows, timed: true},
+	{name: "values for unknown inputs taken for passwords, beside a form's rows", n: 1000, workload: unknownPasswordsAndRows, timed: true},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
@@ -227,6 +231,49 @@ func heldRowReads(n int) ([]byte, map[string]any) {
 		lines = append(lines, fmt.Sprintf("i%d: {default: '${{ inputs.rows[%d].x }}'}", i, i))
 	}
 	return withInputs(lines, ""), map[string]any{"rows": rows(n, emptyRow)}
+}
+
+// crossRows is n submitted rows of a list whose template's field has a
+// default that reads the whole list, each with a value for it.
+func crossRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"l: {type: list, template: {name: {type: string}, total: {type: number, default: '${{ length(inputs.l) }}'}}}",
+	}, ""), map[string]any{"l": rows(n, func() map[string]any { return map[string]any{"name": "a", "total": n} })}
+}
+
+// crossPasswordRows is crossRows with a password field in each row, so
+// that each row's value for the field that reads the list is compared with
+// what its default gives.
+func crossPasswordRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"l: {type: list, template: {pass: {type: password}, total: {type: number, default: '${{ length(inputs.l) }}'}}}",
+	}, ""), map[string]any{"l": rows(n, func() map[string]any { return map[string]any{"pass": "s", "total": n} })}
+}
+
+// wholeListRows is n submitted rows of a list whose template's field has a
+// default that gives the whole list's JSON and a password, each with a
+// value of its own for the field, which is compared with what the default
+// gives, a text as long as the list.
+func wholeListRows(n int) ([]byte, map[string]any) {
+	list := make([]any, n)
+	for i := range list {
+		list[i] = map[string]any{"p": "s", "h": fmt.Sprintf("v%d", i)}
+	}
+	return withInputs([]string{
+		"pw: {type: password}",
+		"l: {type: list, template: {p: {type: password}, h: {type: string, default: '${{ toJSON(inputs.l) }}${{ inputs.pw }}'}}}",
+	}, ""), map[string]any{"pw": "s", "l": list}
+}
+
+// unknownPasswordsAndRows is formRows, beside n values for inputs the
+// workflow doesn't define, each a mapping that holds a password field's
+// name, and so taken for a password.
+func unknownPasswordsAndRows(n int) ([]byte, map[string]any) {
+	data, submitted := formRows(n)
+	for i := range n {
+		submitted[fmt.Sprintf("u%d", i)] = map[string]any{"pass": "s"}
+	}
+	return data, submitted
 }
 
 // deepValue is a matrix whose include holds a mapping nested n deep.

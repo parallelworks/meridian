@@ -4,9 +4,9 @@ description: >-
   default gives means the default, as its text does, so the plan holds the
   expression, not the variable's value: a number given as the text it
   gives, or as a number, is it too, and so is what a default gives that
-  reads the variable through another input's default. The form evaluated a
-  default before its input had a value, so one that reads its own input
-  reads it without one. Any other value is data.
+  reads the variable through another input's default. Any other value
+  there, such as what the person typed in its place, can hold the
+  variable's value, so it is kept as a secret.
 source: Meridian
 contexts:
   vars:
@@ -20,13 +20,11 @@ inputs:
   replicas: 3
   owner: someone-else
   mirror: us-east
-  label: us-east
 expect:
-  inputs:
-    owner: someone-else
   deferred:
     region: ${{ vars.REGION }}
     zone: ${{ vars.REGION }}-a
     replicas: ${{ vars.REPLICAS }}
     mirror: ${{ ..region.default }}
-    label: ${{ vars.REGION }}${{ inputs.label ?? '' }}
+  secrets:
+    owner: someone-else
