@@ -145,6 +145,10 @@ func TestCredentialKey(t *testing.T) {
 		"accessToken": true, "aws-secret-access-key": true, "x.pin": true, "credentials": true, "pwd": true,
 		"keyboard": false, "passport": false, "token_count_x": true, "tokenizer": false, "dbname": false, "": false,
 		"user": false, "host": false, "PIN": true, "pinned": false,
+		"apikey": true, "secretkey": true, "accesskey": true, "privatekey": true, "clientsecret": true, "authtoken": true,
+		"passphrase": true, "passcode": true, "pw": true, "secrets": true, "tokens": true, "keys": true,
+		"password2": true, "Password1": true, "OAuth2Token": true, "token_v2": true, "creds": true,
+		"monkey": false, "turkey": false, "auth": false, "bearer": false, "x-api-key": true, "DBPassword": true,
 	} {
 		if got := credentialKey(key); got != want {
 			t.Errorf("credentialKey(%q) = %v, want %v (words %q)", key, got, want, keyWords(key))
@@ -152,9 +156,11 @@ func TestCredentialKey(t *testing.T) {
 	}
 	fields := credentialFields([]string{
 		`{"user":"svc","password":"hunt3r2","nested":{"apiKey":"k3y1","list":["a"]},"keys":["aaaa"],"token":["tok1","true"],"pin":"12"}`,
+		`{"creds":{"value":"abcd","user":"ab"},"pin2":1234,"port":5432,"hosts":[{"name":"h1","pin":"4821"}]}`,
 		`not json`, `["x"]`, `{"bad": `,
 	})
-	if want := map[string]bool{"hunt3r2": true, "k3y1": true, "tok1": true}; !maps.Equal(fields, want) {
+	want := map[string]bool{"hunt3r2": true, "k3y1": true, "tok1": true, "aaaa": true, "abcd": true, "1234": true, "4821": true}
+	if !maps.Equal(fields, want) {
 		t.Errorf("credentialFields = %v, want %v", fields, want)
 	}
 }

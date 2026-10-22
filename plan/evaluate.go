@@ -3,6 +3,8 @@ package plan
 import (
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -31,7 +33,7 @@ type evaluation struct {
 }
 
 func newEvaluation(phase Phase, c Contexts) *evaluation {
-	return &evaluation{phase: phase, scope: NewScope(phase, c), secrets: &secretTexts{run: c.Run}}
+	return &evaluation{phase: phase, scope: NewScope(phase, c), secrets: &secretTexts{run: c.Run, needs: c.Needs}}
 }
 
 // next returns an evaluation in phase of c, which keeps e's problems and
@@ -42,46 +44,74 @@ func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
 	}
 }
 
-// secretTexts are what a run's secrets' texts, RunValues.Masked, hold that
-// mask notes though it is short: the fields of a structured secret that a
-// credential is kept in (credentialFields), found the first time they are
-// needed.
+// secretTexts are the secrets' own texts a phase knows of, the run's
+// (RunValues.Masked) and those of the outputs of the jobs it needs that
+// hold one (JobResult.Secrets), and what they hold that mask notes though
+// it is short: the fields of a structured secret that a credential is kept
+// in (credentialFields), found the first time they are needed.
 type secretTexts struct {
 	run    RunValues
+	needs  map[string]JobResult
+	own    []string
 	fields map[string]bool
 	found  bool
 }
 
+// find finds the secrets' own texts and their credential fields.
+func (t *secretTexts) find() {
+	if t.found {
+		return
+	}
+	t.found = true
+	needsOwn, _ := needsSecrets(t.needs)
+	t.own = slices.Concat(t.run.ownTexts(), needsOwn)
+	t.fields = credentialFields(t.own)
+}
+
 // field reports whether s is one of the secrets' credential fields.
 func (t *secretTexts) field(s string) bool {
-	if !t.found {
-		t.fields, t.found = credentialFields(t.run.ownTexts()), true
-	}
+	t.find()
 	return t.fields[s]
 }
 
-// credentialFields returns the strings that texts hold, read as JSON,
-// under a key a credential is kept under (credentialKey), such as the
-// password of {"user":"svc","password":"hunt3r2"}: each of at least
-// minField bytes, but true, false and null. A text that isn't a JSON object
-// or list holds none.
+// ownStrings returns the secrets' own texts and their credential fields,
+// in order: what a job's outputs that hold a secret's own text hold.
+func (t *secretTexts) ownStrings() []string {
+	t.find()
+	return slices.Concat(t.own, slices.Sorted(maps.Keys(t.fields)))
+}
+
+// credentialFields returns what texts hold, read as JSON, under a key a
+// credential is kept under (credentialKey), at any depth below it, such as
+// the password of {"user":"svc","password":"hunt3r2"} and the value of
+// {"creds":{"value":"abcd"}}: each string, and each number's text, of at
+// least minField bytes, but true, false and null. A text that isn't a JSON
+// object or list holds none.
 func credentialFields(texts []string) map[string]bool {
 	fields := map[string]bool{}
-	var walk func(v any, key string)
-	walk = func(v any, key string) {
+	var walk func(v any, credential bool)
+	walk = func(v any, credential bool) {
+		var text string
 		switch v := v.(type) {
 		case map[string]any:
 			for k, item := range v {
-				walk(item, k)
+				walk(item, credential || credentialKey(k))
 			}
+			return
 		case []any:
 			for _, item := range v {
-				walk(item, key)
+				walk(item, credential)
 			}
+			return
 		case string:
-			if len(v) >= minField && !jsonWord(v) && credentialKey(key) {
-				fields[v] = true
-			}
+			text = v
+		case float64:
+			text = strconv.FormatFloat(v, 'f', -1, 64)
+		default:
+			return
+		}
+		if credential && len(text) >= minField && !jsonWord(text) {
+			fields[text] = true
 		}
 	}
 	for _, text := range texts {
@@ -90,7 +120,7 @@ func credentialFields(texts []string) map[string]bool {
 		}
 		var v any
 		if jsonv2.Unmarshal([]byte(text), &v) == nil {
-			walk(v, "")
+			walk(v, false)
 		}
 	}
 	return fields
@@ -98,25 +128,44 @@ func credentialFields(texts []string) map[string]bool {
 
 // credentialWords are the words of a key that a credential is kept under.
 var credentialWords = map[string]bool{
-	"password": true, "passwd": true, "pass": true, "pwd": true, "secret": true, "token": true,
-	"key": true, "pin": true, "credential": true, "credentials": true,
+	"password": true, "passwords": true, "passwd": true, "pass": true, "passphrase": true, "passcode": true,
+	"pwd": true, "pw": true, "secret": true, "secrets": true, "token": true, "tokens": true,
+	"key": true, "keys": true, "pin": true, "credential": true, "credentials": true, "cred": true, "creds": true,
+}
+
+// credentialHeads are what a key written in lower case without breaks
+// starts with before a credential word, as apikey and clientsecret do.
+var credentialHeads = map[string]bool{
+	"access": true, "account": true, "admin": true, "api": true, "app": true, "auth": true, "bearer": true,
+	"client": true, "db": true, "encryption": true, "id": true, "master": true, "oauth": true, "private": true,
+	"refresh": true, "root": true, "secret": true, "service": true, "session": true, "signing": true,
+	"ssh": true, "user": true,
 }
 
 // credentialKey reports whether key is one a credential is kept under: it,
-// or one of its words, split at _, -, . and changes of case, is a
-// credential word, whatever its case, as password, api_key, accessToken
-// and db.password are, and keyboard and passport aren't.
+// or one of its words, split at _, -, ., digits and changes of case, is a
+// credential word, or a word written without breaks that is a head and a
+// credential word, as apikey and authtoken are, whatever its case. So
+// password, api_key, accessToken, password2, OAuth2Token and
+// clientsecret are, and keyboard, monkey, passport and pinned aren't.
 func credentialKey(key string) bool {
 	for _, word := range keyWords(key) {
-		if credentialWords[strings.ToLower(word)] {
+		word = strings.ToLower(word)
+		if credentialWords[word] {
 			return true
+		}
+		for c := range credentialWords {
+			if head, ok := strings.CutSuffix(word, c); ok && credentialHeads[head] {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// keyWords splits a key into its words, at _, -, . and changes of case:
-// apiKey, API_KEY and APIKey are api and key.
+// keyWords splits a key into its words, at _, -, ., runs of digits, which
+// are words of their own, and changes of case: apiKey, API_KEY and APIKey
+// are api and key, and OAuth2Token is OAuth, 2 and Token.
 func keyWords(key string) []string {
 	var words []string
 	runes := []rune(key)
@@ -131,6 +180,9 @@ func keyWords(key string) []string {
 		case r == '_' || r == '-' || r == '.':
 			cut(i)
 			start = i + 1
+		case i > start && unicode.IsDigit(r) != unicode.IsDigit(runes[i-1]):
+			cut(i)
+			start = i
 		case i > start && unicode.IsUpper(r) &&
 			(unicode.IsLower(runes[i-1]) || i+1 < len(runes) && unicode.IsUpper(runes[i-1]) && unicode.IsLower(runes[i+1])):
 			cut(i)
@@ -186,7 +238,15 @@ const (
 // bytes long, or a credential field of a structured secret
 // (credentialFields).
 func (e *evaluation) mask(s string) {
-	if e.seen[s] || !e.masks(s) {
+	if e.masks(s) {
+		e.maskOwn(s)
+	}
+}
+
+// maskOwn notes s, a secret's own text, which is masked however short,
+// but for "".
+func (e *evaluation) maskOwn(s string) {
+	if s == "" || e.seen[s] {
 		return
 	}
 	if e.seen == nil {

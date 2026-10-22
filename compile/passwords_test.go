@@ -785,3 +785,60 @@ func TestDiagnosticsHidePasswords(t *testing.T) {
 		})
 	}
 }
+
+// A password beside, or in a row of, a value the compiler holds as derived
+// is masked as a secret's own text, however short, though the derived
+// value holds it too: as when a list held as derived has rows with a
+// password field.
+func TestDerivedValuesMaskPasswords(t *testing.T) {
+	opts := compile.Options{Contexts: map[string]any{
+		"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}, "ROWS": expr.Unknown{Name: "vars"}},
+	}}
+	for _, tc := range []struct {
+		name      string
+		defs      []string
+		submitted map[string]any
+	}{
+		{
+			"row field over a secret default, beside a password",
+			[]string{"creds: {type: list, template: {host: {type: string, default: '${{ vars.SECRET }}'}, pass: {type: password}}}"},
+			map[string]any{"creds": []any{map[string]any{"host": "h1", "pass": "pw1"}}},
+		},
+		{
+			"a list whose default reads a secret, rows with a password",
+			[]string{"creds: {type: list, default: '${{ fromJSON(vars.ROWS) }}', template: {user: {type: string}, pass: {type: password}}}"},
+			map[string]any{"creds": []any{map[string]any{"user": "typed", "pass": "pw1"}}},
+		},
+		{
+			"a group whose field reads a secret, beside a password",
+			[]string{"db: {type: group, items: {host: {type: string, default: '${{ vars.SECRET }}'}, pass: {type: password}}}"},
+			map[string]any{"db": map[string]any{"host": "typed", "pass": "pw1"}},
+		},
+		{
+			"a string over a default that reads a password",
+			[]string{"pw: {type: password}", "dsn: {type: string, default: 'u:${{ inputs.pw }}'}"},
+			map[string]any{"pw": "pw1", "dsn": "typed"},
+		},
+		{
+			"a list over a default made from a password",
+			[]string{"pw: {type: password}", "l: {type: list, default: '${{ fromJSON(format(''[{{\"p\":\"{0}\"}}]'', inputs.pw)) }}', template: {p: {type: password}, q: {type: string}}}"},
+			map[string]any{"pw": "pw1", "l": []any{map[string]any{"p": "pw2", "q": "typed"}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), tc.submitted, opts)
+			if p == nil || len(p.Run.Derived) == 0 {
+				t.Fatal(p, diags)
+			}
+			masked := plan.RunValues{Inputs: plan.DataOf(tc.submitted), Secrets: p.Run.Secrets, Derived: p.Run.Derived}.Masked()
+			for _, pw := range []string{"pw1", "pw2"} {
+				if strings.Contains(fmt.Sprint(tc.submitted), pw) && !slices.Contains(masked, pw) {
+					t.Errorf("password %q isn't masked: %q", pw, masked)
+				}
+			}
+			if slices.Contains(masked, "typed") {
+				t.Errorf("a short derived value is masked: %q", masked)
+			}
+		})
+	}
+}

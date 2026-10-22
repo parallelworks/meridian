@@ -65,15 +65,21 @@ type JobResult struct {
 	// coordinator keeps their values only in the run's secret record, and
 	// the jobs that need the job read them as private. Secrets names those
 	// of them that hold a secret (EndResult.Secrets), which the jobs that
-	// need the job read as secrets, masking what they make of one.
+	// need the job read as secrets, masking what they make of one; Derived
+	// names those of them only made from one (EndResult.Derived), which
+	// they mask as what is made from a secret, where they mask the rest
+	// however short, as a secret's own text.
 	Private []string `json:"private,omitempty"`
 	Secrets []string `json:"secrets,omitempty"`
+	Derived []string `json:"derived,omitempty"`
 	// Steps are the outputs of its steps that have ids, by id, as the steps
 	// wrote them: needs.<job>.steps.<id>.outputs.<name>. SecretSteps names,
 	// by id, those that hold a secret (EndResult.SecretSteps), which are
-	// private, and secrets to the jobs that need the job.
-	Steps       map[string]map[string]string `json:"steps,omitempty"`
-	SecretSteps map[string][]string          `json:"secretSteps,omitempty"`
+	// private, and secrets to the jobs that need the job, and DerivedSteps
+	// those of them only made from one, as Derived does.
+	Steps        map[string]map[string]string `json:"steps,omitempty"`
+	SecretSteps  map[string][]string          `json:"secretSteps,omitempty"`
+	DerivedSteps map[string][]string          `json:"derivedSteps,omitempty"`
 	// NeedsFailed is set for a job that was skipped because a job it needs
 	// failed, was cancelled or was itself skipped so (ReadyResult), or for
 	// a matrix job one of whose instances was. The jobs that need it read
@@ -107,8 +113,8 @@ type JobResult struct {
 func Combine(instances []JobResult) JobResult {
 	var out JobResult
 	failed, cancelled, skipped, needsFailed := false, false, true, false
-	private, secret := map[string]bool{}, map[string]bool{}
-	secretSteps := map[string]map[string]bool{}
+	private, secret, derived := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	secretSteps, derivedSteps := map[string]map[string]bool{}, map[string]map[string]bool{}
 	for _, r := range instances {
 		switch r.Outcome {
 		case OutcomeFailure:
@@ -125,16 +131,18 @@ func Combine(instances []JobResult) JobResult {
 			}
 			out.Outputs[name] = v
 			private[name], secret[name] = slices.Contains(r.Private, name), slices.Contains(r.Secrets, name)
+			derived[name] = slices.Contains(r.Derived, name)
 		}
 		for id, outputs := range r.Steps {
 			if out.Steps == nil {
 				out.Steps = map[string]map[string]string{}
 			}
 			if out.Steps[id] == nil {
-				out.Steps[id], secretSteps[id] = map[string]string{}, map[string]bool{}
+				out.Steps[id], secretSteps[id], derivedSteps[id] = map[string]string{}, map[string]bool{}, map[string]bool{}
 			}
 			for name, v := range outputs {
 				out.Steps[id][name], secretSteps[id][name] = v, slices.Contains(r.SecretSteps[id], name)
+				derivedSteps[id][name] = slices.Contains(r.DerivedSteps[id], name)
 			}
 		}
 	}
@@ -144,6 +152,9 @@ func Combine(instances []JobResult) JobResult {
 		}
 		if secret[name] {
 			out.Secrets = append(out.Secrets, name)
+			if derived[name] {
+				out.Derived = append(out.Derived, name)
+			}
 		}
 	}
 	for id, names := range jsonvalue.Sorted(secretSteps) {
@@ -155,6 +166,12 @@ func Combine(instances []JobResult) JobResult {
 				out.SecretSteps = map[string][]string{}
 			}
 			out.SecretSteps[id] = append(out.SecretSteps[id], name)
+			if derivedSteps[id][name] {
+				if out.DerivedSteps == nil {
+					out.DerivedSteps = map[string][]string{}
+				}
+				out.DerivedSteps[id] = append(out.DerivedSteps[id], name)
+			}
 		}
 	}
 	switch {

@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -158,30 +159,32 @@ func JoinRunValues(record, state RunValues) RunValues {
 // Masked returns the strings of each value that Secrets names, as a Masker
 // takes them: a string as it is, and each string in a list or a mapping,
 // but never the text of a boolean, a number or null (Masker). A secret's
-// own text is given however short; one that Derived names gives only
-// what is masked of what is made from a secret: each of its strings of at
-// least 8 bytes, or that is a credential field of a secret's own text
-// (credentialFields). Each is given once, the secrets' own texts first,
-// in the order of Secrets, and an empty one not at all.
+// own text is given however short, and so is each credential field it
+// holds (credentialFields), such as a password a script can take out of a
+// secret's JSON; one that Derived names gives only what is masked of what
+// is made from a secret: each of its strings of at least 8 bytes, or that
+// is a credential field of a secret's own text. A string that a secret's
+// own text gives is own, though a derived value gives it too. Each is
+// given once, the secrets' own texts first, in the order of Secrets, and
+// an empty one not at all.
 func (r RunValues) Masked() []string {
 	own, derived := r.secretStrings()
-	var fields map[string]bool
+	return maskedFrom(own, derived, credentialFields(own))
+}
+
+// maskedFrom returns what a Masker is given of secrets' own texts, own,
+// what is made from one, derived, and the own texts' credential fields,
+// fields: each of own, each of fields, and each of derived that is at
+// least minDerived bytes or one of fields, once, in that order.
+func maskedFrom(own, derived []string, fields map[string]bool) []string {
+	out := slices.Clone(own)
+	out = append(out, slices.Sorted(maps.Keys(fields))...)
 	for _, s := range derived {
-		if len(s) >= minDerived {
-			own = append(own, s)
-			continue
-		}
-		if len(s) < minField || jsonWord(s) {
-			continue
-		}
-		if fields == nil {
-			fields = credentialFields(r.ownTexts())
-		}
-		if fields[s] {
-			own = append(own, s)
+		if len(s) >= minDerived || fields[s] {
+			out = append(out, s)
 		}
 	}
-	return compactStrings(own)
+	return compactStrings(out)
 }
 
 // ownTexts returns the strings of each secret's own text: of each value
@@ -193,27 +196,68 @@ func (r RunValues) ownTexts() []string {
 
 // secretStrings returns the strings of each value that Secrets names, as
 // Masked gives them, those of the secrets' own texts and those of the
-// values that Derived names apart, each once and none empty.
+// values that Derived names apart, each once and none empty. A string is
+// own if any secret's own text gives it, whatever derived value gives it
+// too, as a password in a row of a list held as derived is: the own texts
+// are found first.
 func (r RunValues) secretStrings() (own, derived []string) {
 	all := r.tree()
 	seen := map[string]bool{}
-	for _, name := range r.Secrets {
-		v, ok := jsonptr.Lookup(all, splitPath(name))
-		if !ok {
-			continue
+	for _, wantDerived := range []bool{false, true} {
+		for _, name := range r.Secrets {
+			if slices.Contains(r.Derived, name) != wantDerived {
+				continue
+			}
+			v, ok := jsonptr.Lookup(all, splitPath(name))
+			if !ok {
+				continue
+			}
+			maskedStrings(v, func(s string) {
+				if s == "" || seen[s] {
+					return
+				}
+				seen[s] = true
+				if wantDerived {
+					derived = append(derived, s)
+				} else {
+					own = append(own, s)
+				}
+			})
 		}
-		isDerived := slices.Contains(r.Derived, name)
-		maskedStrings(v, func(s string) {
-			if s == "" || seen[s] {
+	}
+	return own, derived
+}
+
+// needsSecrets returns the values of the outputs, and of their steps'
+// outputs, of the jobs in needs that hold a secret (JobResult.Secrets and
+// SecretSteps), as secretStrings returns a run's: those that hold a
+// secret's own text, and those only made from one (JobResult.Derived and
+// DerivedSteps), apart, each once and none empty, in the order of the
+// jobs' names.
+func needsSecrets(needs map[string]JobResult) (own, derived []string) {
+	seen := map[string]bool{}
+	for _, wantDerived := range []bool{false, true} {
+		add := func(v string, isDerived bool) {
+			if v == "" || seen[v] || isDerived != wantDerived {
 				return
 			}
-			seen[s] = true
+			seen[v] = true
 			if isDerived {
-				derived = append(derived, s)
+				derived = append(derived, v)
 			} else {
-				own = append(own, s)
+				own = append(own, v)
 			}
-		})
+		}
+		for _, r := range jsonvalue.Sorted(needs) {
+			for _, name := range r.Secrets {
+				add(r.Outputs[name], slices.Contains(r.Derived, name))
+			}
+			for id, names := range jsonvalue.Sorted(r.SecretSteps) {
+				for _, name := range names {
+					add(r.Steps[id][name], slices.Contains(r.DerivedSteps[id], name))
+				}
+			}
+		}
 	}
 	return own, derived
 }

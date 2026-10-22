@@ -187,10 +187,13 @@ type ReadyStep struct {
 	// that read one gave, such as an env value that reads one, and that
 	// each ${{ }} in one that read one gave, such as a field of a
 	// structured secret, but not the rest of a value, nor a boolean, a
-	// number or null (Masker). Each is at least 8 bytes, or at least 4 and
-	// held by a secret's own text, and isn't true, false or null. The
-	// worker masks each wherever it appears in the job's logs and outputs,
-	// as it masks the secrets themselves.
+	// number or null (Masker). Each is at least 8 bytes, or a credential
+	// field of a secret's own text (credentialFields). They hold too the
+	// outputs of the jobs it needs that hold a secret: those that hold a
+	// secret's own text however short, and those only made from one as what
+	// is made from a secret is (JobResult.Derived). The worker masks each
+	// wherever it appears in the job's logs and outputs, as it masks the
+	// secrets themselves.
 	Masked []string `json:"masked,omitempty"`
 	// OutlivesCancel is set when the step's if: can be true once its job is
 	// stopping: it is the word always, or calls always() or cancelled(),
@@ -477,12 +480,19 @@ type EndResult struct {
 	// Secrets names those of them that hold a secret: made from one, or
 	// holding one's text, as the job's logs show it. The jobs that need the
 	// job read them as secrets (JobResult.Secrets): what they make of one is
-	// masked in their logs and problems, and private.
+	// masked in their logs and problems, and private. Derived names those of
+	// them that hold no secret's own text, nor a credential field of one,
+	// but only what was made from one, such as its length, which the jobs
+	// that need the job mask as what is made from a secret, where they mask
+	// the rest however short.
 	Secrets []string
+	Derived []string
 	// SecretSteps names, by step id, the outputs of the job's steps that
 	// have ids that hold a secret's text, which are private, and secrets to
-	// the jobs that need the job (JobResult.SecretSteps).
-	SecretSteps map[string][]string
+	// the jobs that need the job (JobResult.SecretSteps), and DerivedSteps
+	// those of them that hold only what was made from one, as Derived does.
+	SecretSteps  map[string][]string
+	DerivedSteps map[string][]string
 }
 
 // End is the End phase: it gives the job's outputs, on its worker, once the
@@ -541,9 +551,17 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 		private[name] = read.Private
 		secret[name] = text != "" && (read.Marked || c.leak.Mask(text) != text)
 	}
+	// What holds a secret's own text, or a credential field of one, the
+	// jobs that need the job mask however short; the rest only as what is
+	// made from a secret.
+	own := newLeakMasker(e.secrets.ownStrings()...)
+	holdsOwn := func(v string) bool { return own.Mask(v) != v }
 	for name, s := range jsonvalue.Sorted(secret) {
 		if s {
 			out.Secrets = append(out.Secrets, name)
+			if !holdsOwn(out.Outputs[name]) {
+				out.Derived = append(out.Derived, name)
+			}
 		}
 	}
 	for name := range jsonvalue.Sorted(out.Outputs) {
@@ -553,10 +571,19 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	}
 	for i := range j.Steps {
 		if names := c.secretSteps[j.Steps[i].ID]; j.Steps[i].ID != "" && len(names) > 0 {
+			id := j.Steps[i].ID
 			if out.SecretSteps == nil {
 				out.SecretSteps = map[string][]string{}
 			}
-			out.SecretSteps[j.Steps[i].ID] = names
+			out.SecretSteps[id] = names
+			for _, name := range names {
+				if !holdsOwn(c.Steps[id][name]) {
+					if out.DerivedSteps == nil {
+						out.DerivedSteps = map[string][]string{}
+					}
+					out.DerivedSteps[id] = append(out.DerivedSteps[id], name)
+				}
+			}
 		}
 	}
 	return out, e.diags, nil
@@ -645,10 +672,11 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 			c.jobMarks[name] = expr.Read{Private: true, Marked: true}
 		}
 		for _, s := range given.Masked {
-			e.mask(s)
+			e.maskOwn(s)
 		}
 	} else {
 		e.masker = NewMasker(state.Masked...)
+		e.needsMasked(state.Needs)
 		c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
 	}
 	for _, r := range state.Steps {
@@ -656,6 +684,17 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		c.Status.Cancelled = c.Status.Cancelled || r.Outcome == OutcomeCancelled || r.CleanupOutcome == OutcomeCancelled
 	}
 	return c, e
+}
+
+// needsMasked notes the outputs of the jobs in needs that hold a secret,
+// which the job reads as secrets (needsSecrets): one that holds a secret's
+// own text however short, as its credential fields are, and one only made
+// from one as what is made from a secret is.
+func (e *evaluation) needsMasked(needs map[string]JobResult) {
+	own, derived := needsSecrets(needs)
+	for _, s := range maskedFrom(own, derived, credentialFields(own)) {
+		e.maskOwn(s)
+	}
 }
 
 // variables returns the variables of env that keep says to.

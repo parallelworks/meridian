@@ -948,7 +948,7 @@ func TestRunValuesDerivedAndPrivate(t *testing.T) {
 		Derived: []string{"inputs.typed", "inputs.typed_short", "inputs.field"},
 		Private: []string{"inputs.region"},
 	}
-	want := []string{`{"user":"svc","password":"hunt3r2"}`, "hunter2-secret", "abc1", "typed-over-1", "hunt3r2"}
+	want := []string{`{"user":"svc","password":"hunt3r2"}`, "hunter2-secret", "abc1", "hunt3r2", "typed-over-1"}
 	if got := run.Masked(); !slices.Equal(got, want) {
 		t.Errorf("Masked() = %q, want %q", got, want)
 	}
@@ -1003,5 +1003,111 @@ jobs:
 	end, _, err := ready.Job.End(t.Context(), state2)
 	if err != nil || fmt.Sprint(end.Outputs, end.Private, end.Secrets) != "map[region:eu-west typed:pin1] [region typed] [typed]" {
 		t.Errorf("End %+v, %v", end, err)
+	}
+}
+
+// An output that holds a secret's own text, however short, reaches the
+// jobs that need the job as one: they mask it however short, and an
+// output of theirs that holds it holds a secret. One that holds only what
+// was made from a secret (EndResult.Derived) is masked as what is made
+// from one.
+func TestNeedsShortSecret(t *testing.T) {
+	rjA, runA := readyMain(t, `
+jobs:
+  main:
+    steps:
+      - run: "true"
+    outputs:
+      pin: ${{ vars.pin }}
+      has: ${{ vars.pin != '' && 'yes' || 'no' }}
+`, map[string]string{"pin": "4821"}, "pin")
+	endA, _, err := rjA.End(t.Context(), plan.JobState{Run: runA, Masked: runA.Masked(), Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess}}})
+	if err != nil || fmt.Sprint(endA.Secrets, endA.Derived) != "[has pin] [has]" {
+		t.Fatalf("a: %+v, %v", endA, err)
+	}
+	resA := plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: endA.Outputs, Private: endA.Private, Secrets: endA.Secrets, Derived: endA.Derived}
+	p := compiled(t, `
+jobs:
+  a:
+    steps:
+      - run: "true"
+    outputs:
+      pin: ${{ 'x' }}
+      has: ${{ 'x' }}
+  main:
+    needs: [a]
+    steps:
+      - run: ./unlock.sh
+        env:
+          PIN: ${{ needs.a.outputs.pin }}
+          HAS: ${{ needs.a.outputs.has }}
+      - run: "true"
+`, nil)
+	run := runValues(t, p, nil)
+	needs := map[string]plan.JobResult{"a": resA}
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+	if err != nil || ready.Job == nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: job(t, p, "main").Reads(run), Masked: run.Masked(), Needs: needs}
+	s, _, err := ready.Job.Step(t.Context(), 0, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Masked = append(state.Masked, s.Masked...)
+	if log := plan.NewMasker(state.Masked...).Mask("unlocking with PIN 4821: yes"); log != "unlocking with PIN ***: yes" {
+		t.Errorf("b's log %q", log)
+	}
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"used": "pin=4821", "said": "yes"}}, {Outcome: plan.OutcomeSuccess}}
+	end, _, err := ready.Job.End(t.Context(), state)
+	if err != nil || fmt.Sprint(end.Private, end.Secrets, end.Derived) != "[used] [used] []" {
+		t.Errorf("b: %+v, %v", end, err)
+	}
+}
+
+// End names each output that holds a secret, the cleanups' among them, and
+// those of them that hold only what was made from one, and keeps the rest
+// as they are; Combine keeps both.
+func TestEndNamesSecrets(t *testing.T) {
+	token := "tok_" + strings.Repeat("Z", 36)
+	rj, run := readyMain(t, `
+jobs:
+  main:
+    env:
+      HAS: ${{ vars.token != '' && 'yes' || 'no' }}
+      DB: ${{ fromJSON(vars.db).dbname }}
+    steps:
+      - id: a
+        run: "true"
+      - run: "true"
+        cleanup: "true"
+    outputs:
+      ok: ${{ steps.a.outputs.ok }}
+      summary: ${{ steps.a.outputs.summary }}
+      held: ${{ steps.a.outputs.held }}
+      made: ${{ format('x{0}', vars.token) }}
+      has: ${{ env.HAS }}
+      region: ${{ vars.region }}
+`, map[string]string{"token": token, "db": `{"dbname":"orders","password":"hunt3r2"}`, "region": "eu"}, "token", "db")
+	state := plan.JobState{Run: run, Masked: run.Masked(), Steps: []plan.StepResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"ok": "true", "summary": "12 orders shipped yes", "held": "got " + token}},
+		{Outcome: plan.OutcomeCancelled, Outputs: map[string]string{"w": "w " + token, "plain": "fine"}, CleanupOutcome: plan.OutcomeSuccess, CleanupOutputs: map[string]string{"c": "pw hunt3r2"}},
+	}}
+	end, _, err := rj.End(t.Context(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(end.Private, end.Secrets, end.Derived); got != "[c has held made region w] [c has held made w] [has]" {
+		t.Errorf("private, secrets and derived %s", got)
+	}
+	if end.Outputs["held"] != "got "+token || end.Outputs["c"] != "pw hunt3r2" {
+		t.Errorf("outputs %q", end.Outputs)
+	}
+	r := plan.Combine([]plan.JobResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: end.Outputs, Private: end.Private, Secrets: end.Secrets, Derived: end.Derived},
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"made": "plain"}},
+	})
+	if got := fmt.Sprintf("%s %v %v", r.Outputs["made"], r.Secrets, r.Derived); got != "plain [c has held w] [has]" {
+		t.Errorf("combined %s", got)
 	}
 }

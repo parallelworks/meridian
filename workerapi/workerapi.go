@@ -384,6 +384,11 @@ type Complete struct {
 	Outputs        map[string]string `json:"outputs,omitempty"`
 	PrivateOutputs []string          `json:"privateOutputs,omitempty"`
 	SecretOutputs  []string          `json:"secretOutputs,omitempty"`
+	// DerivedOutputs names those of SecretOutputs that hold only what was
+	// made from a secret (plan.EndResult.Derived), and
+	// DerivedStepOutputs those of SecretStepOutputs (plan.EndResult.DerivedSteps).
+	DerivedOutputs     []string            `json:"derivedOutputs,omitempty"`
+	DerivedStepOutputs map[string][]string `json:"derivedStepOutputs,omitempty"`
 	// StepOutputs are the outputs of the job's steps that have ids, by id,
 	// as they wrote them, none of them masked (plan.JobResult.Steps), and
 	// SecretStepOutputs names, by id, those that hold a secret

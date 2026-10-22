@@ -1291,12 +1291,21 @@ secret record ([Run data](#run-data)).
   it, and not only within the command. A secret in one value of a step's
   `with:` masks only what that value's template gave. A string made from a
   secret is masked when it is at least 8 bytes, or when it is a credential
-  field of a structured secret: a string of at least 4 bytes, but `true`,
-  `false` or `null`, that a secret's text, read as JSON, holds under a key
-  a credential is kept under, one that is, or has among its words split at
-  `_`, `-`, `.` and changes of case, `password`, `passwd`, `pass`, `pwd`,
-  `secret`, `token`, `key`, `pin`, `credential` or `credentials`, whatever
-  its case, as `password`, `api_key` and `accessToken` do. It is never
+  field of a structured secret: a string, or a number's text, of at least
+  4 bytes, but `true`, `false` or `null`, that a secret's text, read as
+  JSON, holds under a key a credential is kept under, at any depth below
+  it, as `{"creds":{"value":"abcd"}}` holds `abcd`. Such a key is one that
+  is, or has among its words split at `_`, `-`, `.`, digits and changes of
+  case, `password`, `passwords`, `passwd`, `pass`, `passphrase`,
+  `passcode`, `pwd`, `pw`, `secret`, `secrets`, `token`, `tokens`, `key`,
+  `keys`, `pin`, `credential`, `credentials`, `cred` or `creds`, or a word
+  written without breaks that is one of these after a head such as `api`,
+  `access`, `auth`, `client`, `private` or `secret`, whatever its case: as
+  `password`, `api_key`, `accessToken`, `password2`, `OAuth2Token`,
+  `apikey` and `clientsecret` do, and `keyboard`, `monkey` and `passport`
+  don't. Each credential field of a secret's own text is masked however
+  it is made, so a password that a step's script takes out of a secret's
+  JSON, as `jq` does, is masked in its logs. It is never
   given another short one, such as a `yes` that a secret decided, or a
   database's name or a region a structured secret holds, which common text
   holds too, nor the text of a boolean, a number or null that one decided,
@@ -1334,7 +1343,9 @@ secret record ([Run data](#run-data)).
   private and secrets ([Outputs](#outputs)).
 - **What a script does with a value can't be followed.** A secret that a
   step's script transforms, such as by encoding it in base64, isn't known
-  to come from the secret, and isn't masked.
+  to come from the secret, and isn't masked, but for a credential field a
+  script takes out of a structured secret, which is masked whatever made
+  it.
 - **A job masks only its own secrets.** A job's worker masks the secrets
   its attempt received, which are those its expressions read. A secret
   another job wrote to the run directory, which the job's steps can read
@@ -1448,9 +1459,16 @@ read. Instead:
   jobs that need the job read it as a secret, so what they make of it is
   masked in their logs and problems, and an output they make of it holds a
   secret too. Logs and problems mask the secret's text in it, as they do
-  everywhere. That End counts an output as holding a secret when it holds
-  a string made from one costs only privacy, never a changed value.
-  GitHub Actions leaves such an output out.
+  everywhere. An output that holds a secret's own text, or a credential
+  field of one, however short, reaches the jobs that need the job as such:
+  they mask it however short, count it among the secrets' own texts, and
+  find an output of theirs that holds it, as a dependent's step that writes
+  a 4-digit PIN it was given does. One that holds only what was made from a
+  secret, such as its length, End names as derived (`EndResult.Derived`,
+  `JobResult.Derived`), and the jobs that need the job mask it as what is
+  made from a secret is. That End counts an output as holding a secret when
+  it holds a string made from one costs only privacy, never a changed
+  value. GitHub Actions leaves such an output out.
 - **An output made from an organization or user variable or a password**,
   and not from a secret, isn't masked, since a plain variable isn't, but
   is private: End names it, the coordinator keeps its value only in the
