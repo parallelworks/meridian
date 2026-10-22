@@ -97,7 +97,7 @@
   "matrix_entry_not_mapping": "매트릭스의 ‘{key}’ 항목은 각각 {value} 값이 아니라 매트릭스 키를 값에 대응시키는 매핑이어야 합니다.",
   "matrix_empty": "매트릭스에 조합이 없으므로 작업의 인스턴스가 없습니다.",
   "matrix_too_large": "매트릭스의 조합이 매트릭스에 허용되는 최대 개수인 {limit}개보다 많습니다.",
-  "output_masked": "‘{name}’ 출력에 시크릿이 들어 있었으므로 해당 부분은 마스킹됩니다.",
+  "output_holds_secret": "‘{name}’ 출력에 시크릿이 들어 있습니다. 이 작업이 필요한 작업은 이를 그대로 시크릿으로 읽습니다. 실행 상태에는 저장되지 않으며 로그에서는 마스킹됩니다.",
   "output_not_written": "{of, select, step {‘{owner}’ 단계가 ‘{name}’ 출력을 쓰지 않았으므로} other {‘{owner}’ 작업에 ‘{name}’ 출력이 없으므로}} 이를 읽는 표현식이 실패합니다.",
   "working_directory_variable": "작업 디렉터리에 {variable}이(가) 그대로 남아 있습니다. 셸 변수는 여기서 확장되지 않습니다. 대신 env.PW_JOB_DIR처럼 env를 읽는 표현식을 사용하세요.",
   "undefined_env": "여기서 env.{name}은(는) ‘’로 읽힙니다. 워크플로, 작업, 단계의 어느 env:에도 정의되어 있지 않고 형식 1도 여기서는 주지 않습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도했나요?} other {}}",

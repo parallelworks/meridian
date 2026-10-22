@@ -208,8 +208,13 @@ expect:
   a job they need failed, which the jobs that need them read as failed.
   Every other job skipped was skipped by its own `if:`.
 - `expect.private` lists the JSON Pointers of the job outputs that are
-  private: made from a variable or a password and not from a secret, so
-  kept only with the run's secrets. No other output is.
+  private: made from a variable, a password or a secret, or holding a
+  secret, so kept only with the run's secrets. No other output is.
+- `expect.secret-outputs` lists the JSON Pointers of the job outputs that
+  hold a secret, made from one or holding one's text, and of the outputs
+  of steps with ids that hold one's text, as
+  `/jobs/<job>/steps/<index>/outputs/<name>`: each keeps its value, and
+  the jobs that need the job read it as a secret. No other output does.
 - `expect.values` are the values at JSON Pointers into the workflow, as
   their phase gives them: a step's `run`, `name`, `working-directory` and
   `with`; its `cleanup`, the command it runs once the job's steps have;

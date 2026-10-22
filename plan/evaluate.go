@@ -1,9 +1,11 @@
 package plan
 
 import (
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
@@ -40,26 +42,108 @@ func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
 	}
 }
 
-// secretTexts are the texts of a run's secrets, RunValues.Masked, found
-// the first time they are needed.
+// secretTexts are what a run's secrets' texts, RunValues.Masked, hold that
+// mask notes though it is short: the fields of a structured secret that a
+// credential is kept in (credentialFields), found the first time they are
+// needed.
 type secretTexts struct {
-	run   RunValues
-	texts []string
-	found bool
+	run    RunValues
+	fields map[string]bool
+	found  bool
 }
 
-// contain reports whether one of the secrets' texts holds s.
-func (t *secretTexts) contain(s string) bool {
+// field reports whether s is one of the secrets' credential fields.
+func (t *secretTexts) field(s string) bool {
 	if !t.found {
-		t.texts, t.found = t.run.Masked(), true
+		t.fields, t.found = credentialFields(t.run.Masked()), true
 	}
-	for _, text := range t.texts {
-		if strings.Contains(text, s) {
+	return t.fields[s]
+}
+
+// credentialFields returns the strings that texts hold, read as JSON,
+// under a key a credential is kept under (credentialKey), such as the
+// password of {"user":"svc","password":"hunt3r2"}: each of at least
+// minField bytes, but true, false and null. A text that isn't a JSON object
+// or list holds none.
+func credentialFields(texts []string) map[string]bool {
+	fields := map[string]bool{}
+	var walk func(v any, key string)
+	walk = func(v any, key string) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, item := range v {
+				walk(item, k)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item, key)
+			}
+		case string:
+			if len(v) >= minField && !jsonWord(v) && credentialKey(key) {
+				fields[v] = true
+			}
+		}
+	}
+	for _, text := range texts {
+		if t := strings.TrimSpace(text); t == "" || t[0] != '{' && t[0] != '[' {
+			continue
+		}
+		var v any
+		if jsonv2.Unmarshal([]byte(text), &v) == nil {
+			walk(v, "")
+		}
+	}
+	return fields
+}
+
+// credentialWords are the words of a key that a credential is kept under.
+var credentialWords = map[string]bool{
+	"password": true, "passwd": true, "pass": true, "pwd": true, "secret": true, "token": true,
+	"key": true, "pin": true, "credential": true, "credentials": true,
+}
+
+// credentialKey reports whether key is one a credential is kept under: it,
+// or one of its words, split at _, -, . and changes of case, is a
+// credential word, whatever its case, as password, api_key, accessToken
+// and db.password are, and keyboard and passport aren't.
+func credentialKey(key string) bool {
+	for _, word := range keyWords(key) {
+		if credentialWords[strings.ToLower(word)] {
 			return true
 		}
 	}
 	return false
 }
+
+// keyWords splits a key into its words, at _, -, . and changes of case:
+// apiKey, API_KEY and APIKey are api and key.
+func keyWords(key string) []string {
+	var words []string
+	runes := []rune(key)
+	start := 0
+	cut := func(i int) {
+		if i > start {
+			words = append(words, string(runes[start:i]))
+		}
+	}
+	for i, r := range runes {
+		switch {
+		case r == '_' || r == '-' || r == '.':
+			cut(i)
+			start = i + 1
+		case i > start && unicode.IsUpper(r) &&
+			(unicode.IsLower(runes[i-1]) || i+1 < len(runes) && unicode.IsUpper(runes[i-1]) && unicode.IsLower(runes[i+1])):
+			cut(i)
+			start = i
+		}
+	}
+	cut(len(runes))
+	return words
+}
+
+// jsonWord reports whether s is true, false or null, which a secret
+// deciding masks nowhere.
+func jsonWord(s string) bool { return s == "true" || s == "false" || s == "null" }
 
 // value evaluates v, at pointer in the workflow, and notes the strings of
 // what each of its templates that read a secret gives, and each expression
@@ -89,17 +173,18 @@ func (e *evaluation) text(v Value, pointer string) (string, expr.Read, bool) {
 // minDerived is how long a string made from a secret must be for a phase
 // to give it to mask: a shorter one, such as yes, would mask common text
 // wherever it appears. A secret's own text is masked however short, and an
-// output made from one is masked whole (End). minField is how long one
-// that a secret's own text holds must be, such as a password that
-// fromJSON took from a secret's JSON.
+// output made from one is private and a secret (End). minField is how
+// long a shorter one must be that a structured secret keeps a credential
+// in, such as a password that fromJSON took from a secret's JSON
+// (credentialFields).
 const (
 	minDerived = 8
 	minField   = 4
 )
 
 // mask notes s, text made from a secret, if it is at least minDerived
-// bytes long, or at least minField and in a secret's own text, but for the
-// JSON words true, false and null.
+// bytes long, or a credential field of a structured secret
+// (credentialFields).
 func (e *evaluation) mask(s string) {
 	if e.seen[s] || !e.masks(s) {
 		return
@@ -119,10 +204,10 @@ func (e *evaluation) masks(s string) bool {
 	switch {
 	case len(s) >= minDerived:
 		return true
-	case len(s) < minField || s == "true" || s == "false" || s == "null":
+	case len(s) < minField || jsonWord(s):
 		return false
 	}
-	return e.secrets != nil && e.secrets.contain(s)
+	return e.secrets != nil && e.secrets.field(s)
 }
 
 // A decision is what an if: decided.

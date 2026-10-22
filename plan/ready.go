@@ -58,15 +58,22 @@ const (
 // outcome, which needs.<job>.result reads, and its outputs.
 type JobResult struct {
 	Outcome Outcome `json:"outcome"`
-	// Outputs are the job's outputs, by name, with secrets masked.
+	// Outputs are the job's outputs, by name, as End gave them: as they
+	// were made, none of them masked, as format 1 passes them.
 	Outputs map[string]string `json:"outputs,omitempty"`
 	// Private names the outputs that are private (EndResult.Private): the
 	// coordinator keeps their values only in the run's secret record, and
-	// the jobs that need the job read them as private.
+	// the jobs that need the job read them as private. Secrets names those
+	// of them that hold a secret (EndResult.Secrets), which the jobs that
+	// need the job read as secrets, masking what they make of one.
 	Private []string `json:"private,omitempty"`
-	// Steps are the outputs of its steps that have ids, by id, with secrets
-	// masked: needs.<job>.steps.<id>.outputs.<name>.
-	Steps map[string]map[string]string `json:"steps,omitempty"`
+	Secrets []string `json:"secrets,omitempty"`
+	// Steps are the outputs of its steps that have ids, by id, as the steps
+	// wrote them: needs.<job>.steps.<id>.outputs.<name>. SecretSteps names,
+	// by id, those that hold a secret (EndResult.SecretSteps), which are
+	// private, and secrets to the jobs that need the job.
+	Steps       map[string]map[string]string `json:"steps,omitempty"`
+	SecretSteps map[string][]string          `json:"secretSteps,omitempty"`
 	// NeedsFailed is set for a job that was skipped because a job it needs
 	// failed, was cancelled or was itself skipped so (ReadyResult), or for
 	// a matrix job one of whose instances was. The jobs that need it read
@@ -88,7 +95,8 @@ type JobResult struct {
 // outcome is failure if an instance failed, otherwise cancelled if one was
 // cancelled, skipped if all were skipped, and success otherwise; an output,
 // or a step's, that more than one instance set has the value of the one
-// with the highest index, and is private if that instance's is. It is
+// with the highest index, and is private, or a secret, if that instance's
+// is. It is
 // skipped because its needs failed (NeedsFailed) if one of its instances
 // was, and Cancelled if one was cancelled, as format 1 reads each instance
 // of a job its dependents need.
@@ -99,7 +107,8 @@ type JobResult struct {
 func Combine(instances []JobResult) JobResult {
 	var out JobResult
 	failed, cancelled, skipped, needsFailed := false, false, true, false
-	private := map[string]bool{}
+	private, secret := map[string]bool{}, map[string]bool{}
+	secretSteps := map[string]map[string]bool{}
 	for _, r := range instances {
 		switch r.Outcome {
 		case OutcomeFailure:
@@ -115,21 +124,37 @@ func Combine(instances []JobResult) JobResult {
 				out.Outputs = map[string]string{}
 			}
 			out.Outputs[name] = v
-			private[name] = slices.Contains(r.Private, name)
+			private[name], secret[name] = slices.Contains(r.Private, name), slices.Contains(r.Secrets, name)
 		}
 		for id, outputs := range r.Steps {
 			if out.Steps == nil {
 				out.Steps = map[string]map[string]string{}
 			}
 			if out.Steps[id] == nil {
-				out.Steps[id] = map[string]string{}
+				out.Steps[id], secretSteps[id] = map[string]string{}, map[string]bool{}
 			}
-			maps.Copy(out.Steps[id], outputs)
+			for name, v := range outputs {
+				out.Steps[id][name], secretSteps[id][name] = v, slices.Contains(r.SecretSteps[id], name)
+			}
 		}
 	}
-	for name, p := range jsonvalue.Sorted(private) {
-		if p {
+	for name := range jsonvalue.Sorted(private) {
+		if private[name] {
 			out.Private = append(out.Private, name)
+		}
+		if secret[name] {
+			out.Secrets = append(out.Secrets, name)
+		}
+	}
+	for id, names := range jsonvalue.Sorted(secretSteps) {
+		for name, s := range jsonvalue.Sorted(names) {
+			if !s {
+				continue
+			}
+			if out.SecretSteps == nil {
+				out.SecretSteps = map[string][]string{}
+			}
+			out.SecretSteps[id] = append(out.SecretSteps[id], name)
 		}
 	}
 	switch {

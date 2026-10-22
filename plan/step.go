@@ -44,17 +44,38 @@ type JobState struct {
 	// job's env: and outputs:, such as PW_JOB_DIR, PW_PARENT_JOB_DIR,
 	// OUTPUTS and, for a try, PW_WORKFLOW_STEP_CURRENT_RETRY, which env
 	// reads over the workflow's, the job's and the step's, as format 1 lays
-	// them. It holds no credential, such as the platform's API key that
-	// format 1 gives a step's environment as PW_API_KEY: no workflow we
-	// know of reads one in an expression, so no expression reads one, and
-	// the worker gives it only to the step's process.
+	// them. The plan reads only those format 1 defines (IsFormatVariable),
+	// and in the job's env:, working-directory: and outputs: only those it
+	// defines as the job starts (IsJobStartVariable), so a credential the
+	// worker passes, such as the platform's API key that format 1 gives a
+	// step's environment as PW_API_KEY, reaches no expression.
 	Env map[string]string
+	// JobEnv is the job's env: as the JobEnv phase gave it, as the job
+	// started, which Step, Cleanup and End read rather than evaluate the
+	// job's env: again. Without it, each evaluates the job's env: itself,
+	// as JobEnv does, with state.
+	JobEnv *JobEnv
 	// Masked are the values the worker masks, as a Masker takes them: the
 	// run's secrets' (RunValues.Masked), the job's (ReadyJob.Masked), and
-	// those of each step so far (ReadyStep.Masked). End masks the job's
-	// outputs with them, as the worker masks its logs and its steps'
-	// outputs.
+	// those of each step so far (ReadyStep.Masked). End and the steps tell
+	// with them which of the job's outputs, and its steps', hold a secret,
+	// as the worker masks its logs with them.
 	Masked []string
+}
+
+// A JobEnv is the job's env: as the JobEnv phase evaluated it, as the job
+// started on its worker.
+type JobEnv struct {
+	// Env holds the values of the job's env:, by name.
+	Env map[string]string `json:"env,omitempty"`
+	// Private and Secrets name those made from an organization or user
+	// variable or a password, and from a secret.
+	Private []string `json:"private,omitempty"`
+	Secrets []string `json:"secrets,omitempty"`
+	// Masked are the strings it made from a secret, as ReadyStep.Masked
+	// holds them, which the worker masks; each ReadyStep.Masked holds them
+	// too.
+	Masked []string `json:"masked,omitempty"`
 }
 
 // formatVariables are the names of the variables format 1 gives a step,
@@ -192,9 +213,10 @@ type ReadyStepRetry struct {
 }
 
 // Step is the Step phase: it evaluates the step at index in the job, on
-// the job's worker, as a try of the step is about to run. It evaluates the
-// job's env: first, with the job context, and the job's working-directory:,
-// as the job starts, then the step's if:, with the status functions true or
+// the job's worker, as a try of the step is about to run. It reads the
+// job's env: as JobEnv gave it (state.JobEnv), or evaluates it first as
+// JobEnv does, and evaluates the job's working-directory: as the job
+// starts, then the step's if:, with the status functions true or
 // false as state.Steps and state.Cancelled say, and gives the step Skipped
 // if it is false. Otherwise it evaluates the step's env: and then the rest
 // of the step, and gives the step. The worker has Step evaluate the step
@@ -432,45 +454,54 @@ const (
 	defaultStepTryTimeout = 30
 )
 
-// EndResult is what End gives of a job: its outputs, and which of them are
-// private.
+// EndResult is what End gives of a job: its outputs, and which of them,
+// and of its steps' outputs, are private, or hold a secret.
 type EndResult struct {
 	// Outputs are the job's outputs, by name, as format 1 has them: what
 	// its steps without an id wrote, the later step's where two wrote the
 	// same name, what its cleanups wrote over that, and its outputs: over
-	// all, each masked. A step with an id
-	// writes outputs of its own, which the worker gives as its own
+	// all, as they were made, none of them masked, as format 1 passes them
+	// to the jobs that need the job. A step with an id writes outputs of
+	// its own, which the worker gives as its steps wrote them
 	// (JobResult.Steps).
 	Outputs map[string]string
-	// Private names the outputs: made from an organization or user variable
-	// or a password, and not from a secret, which is masked whole. The
-	// coordinator keeps their values only in the run's secret record, and
-	// gives them to the jobs that need the job, which read them as private
-	// (JobResult.Private).
+	// Private names the outputs that are private: made from an
+	// organization or user variable, a password or a secret, or holding a
+	// secret. The coordinator keeps their values only in the run's secret
+	// record, never in run state, and gives them to the jobs that need the
+	// job, which read them as private (JobResult.Private).
 	Private []string
+	// Secrets names those of them that hold a secret: made from one, or
+	// holding one's text, as the job's logs show it. The jobs that need the
+	// job read them as secrets (JobResult.Secrets): what they make of one is
+	// masked in their logs and problems, and private.
+	Secrets []string
+	// SecretSteps names, by step id, the outputs of the job's steps that
+	// have ids that hold a secret's text, which are private, and secrets to
+	// the jobs that need the job (JobResult.SecretSteps).
+	SecretSteps map[string][]string
 }
 
 // End is the End phase: it gives the job's outputs, on its worker, once the
 // job's steps and their cleanups have run: what its steps without an id
 // wrote, merged in their order, what its cleanups wrote over them, in the
-// order they ran, and its outputs:, evaluated, over all. It masks each
-// with a Masker of state.Masked, and of what it made from a secret, such as a value of the
-// job's env:, and masks the whole of an output: that was made from a
-// secret, with a warning that names it (output_masked), and one when a
-// value of its holds a secret. What one of its outputs: is made of masks
-// none of the others. A step's output that held a secret is masked too,
-// and its warning is the worker's, which reports the step's outputs. Its
-// expressions read the job's env: and needs, with the job itself, as
-// Step's do, and steps, with each of the job's steps that has an id. They
-// read an output that nothing wrote strictly once the job's steps
-// succeeded (Contexts.StrictOutputs), as format 1 does.
+// order they ran, and its outputs:, evaluated, over all, each as it was
+// made, as format 1 gives them. An output made from a secret, or that
+// holds a secret's text, as the job's logs show one but for a line of it,
+// is private and a secret (EndResult.Secrets), and so is a step's output
+// that holds one (EndResult.SecretSteps), each with a warning that names
+// it (output_holds_secret); one made from a variable or a password is
+// private. Its expressions read the job's env: and needs, with the job
+// itself, as Step's do, and steps, with each of the job's steps that has
+// an id. They read an output that nothing wrote strictly once the job's
+// steps succeeded (Contexts.StrictOutputs), as format 1 does.
 //
 // End reaches nothing, and gives the same outputs for the same job and
 // state, byte for byte. Its diagnostics are as Step's, at the job's
-// outputs:; an error among them fails the job, and an output whose
-// expression fails is left out. It returns an error when ctx is done
-// before it finishes, ctx.Err(), and for state.Steps that aren't one for
-// each of the job's steps.
+// outputs:, and never show a secret: an error among them fails the job,
+// and an output whose expression fails is left out. It returns an error
+// when ctx is done before it finishes, ctx.Err(), and for state.Steps that
+// aren't one for each of the job's steps.
 func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -487,22 +518,12 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	// its steps succeeded, as format 1 does.
 	c.StrictOutputs = !c.Status.Failed && !c.Status.Cancelled
 	e = c.evaluation(PhaseEnd, e)
-	out := &EndResult{}
-	set := func(name, v string) {
-		if out.Outputs == nil {
-			out.Outputs = map[string]string{}
-		}
-		out.Outputs[name] = v
-	}
-	for name, v := range jsonvalue.Sorted(c.Needs[j.Name].Outputs) {
-		set(name, e.masker.Mask(v))
-	}
+	out := &EndResult{Outputs: maps.Clone(c.Needs[j.Name].Outputs)}
+	private, secret := map[string]bool{}, maps.Clone(c.secretOutputs)
 	for name, v := range jsonvalue.Sorted(j.Outputs) {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		// An output's value is evaluated without noting what it is made of
-		// to mask, so that it masks none of the others.
 		pointer := at(j.Path, "outputs", name)
 		value, read, err := v.EvalRead(e.scope)
 		if err != nil {
@@ -510,17 +531,39 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 			continue
 		}
 		text := expr.Text(value)
-		masked := e.masker.Mask(text)
-		if read.Marked && text != "" {
-			masked = problems.Masked
+		if out.Outputs == nil {
+			out.Outputs = map[string]string{}
 		}
-		if masked != text {
-			e.report(problems.OutputMasked, pointer, problems.Params{"name": name}, expr.Read{})
+		out.Outputs[name] = text
+		private[name] = read.Private
+		secret[name] = text != "" && (read.Marked || c.leak.Mask(text) != text)
+	}
+	for name, s := range jsonvalue.Sorted(secret) {
+		if !s {
+			continue
 		}
-		if read.Private && !read.Marked {
+		pointer := j.Path
+		if _, ok := j.Outputs[name]; ok {
+			pointer = at(j.Path, "outputs", name)
+		}
+		e.report(problems.OutputHoldsSecret, pointer, problems.Params{"name": name}, expr.Read{})
+		out.Secrets = append(out.Secrets, name)
+	}
+	for name := range jsonvalue.Sorted(out.Outputs) {
+		if private[name] || secret[name] {
 			out.Private = append(out.Private, name)
 		}
-		set(name, masked)
+	}
+	for i, s := range j.Steps {
+		if names := c.secretSteps[s.ID]; s.ID != "" && len(names) > 0 {
+			for _, name := range names {
+				e.report(problems.OutputHoldsSecret, j.Steps[i].Path, problems.Params{"name": name}, expr.Read{})
+			}
+			if out.SecretSteps == nil {
+				out.SecretSteps = map[string][]string{}
+			}
+			out.SecretSteps[s.ID] = names
+		}
 	}
 	return out, e.diags, nil
 }
@@ -536,21 +579,59 @@ type stepContexts struct {
 	jobMarks, stepMarks map[string]expr.Read
 	// leaks are the paths of the job's steps' outputs that hold a secret,
 	// as they were written, which every evaluation marks as a secret, so
-	// that a problem with what reads one doesn't show it.
-	leaks [][]string
+	// that a problem with what reads one doesn't show it: secretSteps, by
+	// step id, and secretOutputs, of the job's own, by name. leak tells
+	// them, and tells End the outputs: that hold one.
+	leaks         [][]string
+	secretSteps   map[string][]string
+	secretOutputs map[string]bool
+	leak          *Masker
 	// stepVariables are the worker's variables a step reads: those of
 	// JobState.Env that format 1 defines.
 	stepVariables map[string]string
 }
 
-// jobEnv evaluates the job's env:, with the job context, as the job
-// starts, and returns the contexts of its steps, without needs or steps,
-// and the evaluation, which holds its problems and the text of what it
-// made from a secret. The job's env: reads only the worker's variables
-// that format 1 defines as a job starts (IsJobStartVariable), so that it gives
-// the same values for each step. The job fails, for failure(), when a step
-// of it failed, and is cancelled, for cancelled(), when state.Cancelled
-// says so or a step of it was cancelled, as one early-cancel: stops is.
+// JobEnv is the JobEnv phase: it evaluates the job's env:, on the job's
+// worker, once, as the job starts, with the job context, and only the
+// worker's variables that format 1 defines as a job starts
+// (IsJobStartVariable), as format 1 does: what it gives is the same for
+// each step, which reads it in state.JobEnv. Its values that read each
+// other are evaluated in the order they read each other (Step). It
+// reaches nothing, and gives the same result for the same job and state,
+// byte for byte. Its diagnostics are the problems of the job's env:, as
+// Step's are; an error among them fails the job, and there is no result.
+// It returns an error when ctx is done before it finishes, ctx.Err().
+func (j *ReadyJob) JobEnv(ctx context.Context, state JobState) (*JobEnv, problems.Diagnostics, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	state.JobEnv = nil
+	c, e := j.jobEnv(state)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if e.diags.HasErrors() {
+		return nil, e.diags, nil
+	}
+	out := &JobEnv{Env: c.JobEnv, Masked: e.masked}
+	for name, read := range jsonvalue.Sorted(c.jobMarks) {
+		if read.Private {
+			out.Private = append(out.Private, name)
+		}
+		if read.Marked {
+			out.Secrets = append(out.Secrets, name)
+		}
+	}
+	return out, e.diags, nil
+}
+
+// jobEnv gives the job's env:, with the job context, as the job starts:
+// state.JobEnv, or else evaluated as JobEnv does, and returns the contexts
+// of its steps, without needs or steps, and the evaluation, which holds
+// its problems and the text of what it made from a secret. The job fails,
+// for failure(), when a step of it failed, and is cancelled, for
+// cancelled(), when state.Cancelled says so or a step of it was
+// cancelled, as one early-cancel: stops is.
 func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 	c := &stepContexts{
 		Run: state.Run, Needs: state.Needs, Status: expr.Status{Cancelled: state.Cancelled},
@@ -559,8 +640,23 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
-	e.masker = NewMasker(state.Masked...)
-	c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
+	if given := state.JobEnv; given != nil {
+		e.masker = NewMasker(slices.Concat(state.Masked, given.Masked)...)
+		c.JobEnv = maps.Clone(given.Env)
+		c.jobMarks = map[string]expr.Read{}
+		for _, name := range given.Private {
+			c.jobMarks[name] = expr.Read{Private: true}
+		}
+		for _, name := range given.Secrets {
+			c.jobMarks[name] = expr.Read{Private: true, Marked: true}
+		}
+		for _, s := range given.Masked {
+			e.mask(s)
+		}
+	} else {
+		e.masker = NewMasker(state.Masked...)
+		c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
+	}
 	for _, r := range state.Steps {
 		c.Status.Failed = c.Status.Failed || r.Outcome == OutcomeFailure
 		c.Status.Cancelled = c.Status.Cancelled || r.Outcome == OutcomeCancelled
@@ -754,15 +850,16 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 // addSelf gives c the needs of the job's steps, with the job itself, and
 // its steps' outputs by id, from what its steps so far, state.Steps, and
 // the cleanups that have run wrote, and notes the outputs that hold a
-// secret: what the worker masks (state.Masked), and what the job's env:
-// made from one (masked), as each can show, but for its lines, which plain
-// text can hold too. Each output is checked once.
+// secret: the job's secrets (state.Run), what the worker masks
+// (state.Masked), and what the job's env: made from one (masked), as each
+// can show, but for its lines, which plain text can hold too. Each output
+// is checked once.
 func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
 		needs = map[string]JobResult{}
 	}
-	leak := newLeakMasker(slices.Concat(state.Masked, masked)...)
+	leak := newLeakMasker(slices.Concat(state.Run.Masked(), state.Masked, masked)...)
 	self := JobResult{Outputs: map[string]string{}}
 	selfLeaks := map[string]bool{}
 	steps := map[string]map[string]string{}
@@ -784,6 +881,10 @@ func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
 				self.Outputs[name], selfLeaks[name] = v, leaked
 			case leaked:
 				c.leaks = append(c.leaks, []string{"steps", id, "outputs", name}, []string{"needs", j.Name, "steps", id, "outputs", name})
+				if c.secretSteps == nil {
+					c.secretSteps = map[string][]string{}
+				}
+				c.secretSteps[id] = append(c.secretSteps[id], name)
 			}
 		}
 	}
@@ -794,11 +895,14 @@ func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
 			self.Outputs[name], selfLeaks[name] = v, leak.Mask(v) != v
 		}
 	}
+	c.secretOutputs = map[string]bool{}
 	for name, leaked := range jsonvalue.Sorted(selfLeaks) {
 		if leaked {
 			c.leaks = append(c.leaks, []string{"needs", j.Name, "outputs", name})
+			c.secretOutputs[name] = true
 		}
 	}
+	c.leak = leak
 	self.Steps = steps
 	needs[j.Name] = self
 	c.Needs, c.Steps = needs, steps

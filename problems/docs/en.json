@@ -585,10 +585,10 @@
       "Make the matrix smaller, or ask whoever runs the workflow for a higher limit."
     ]
   },
-  "output_masked": {
-    "why": "A job's outputs are kept with the run, where whoever can see the run reads them. This output held the value of a secret, so it is kept with the secret masked as ***. An output made from a secret, or from a step's output that held one, is masked whole, since what in it came from the secret can't be told from the rest.",
+  "output_holds_secret": {
+    "why": "A job's output, or a step's, holds a secret: it was made from one, or holds one's text. Format 1 passes outputs to the jobs that need them as they are, and so does Meridian, which keeps this one with the run's secrets rather than in the run's state, where whoever can see the run would read it. The jobs that read it read it as a secret, so what they make of it is masked in their logs, and the secret's text is masked in this job's logs.",
     "fix": [
-      "Leave the secret out of the output, and read it where it is needed instead."
+      "Leave the secret out of the output, and read it where it is needed instead, unless the jobs that need this one need it."
     ]
   },
   "output_not_written": {

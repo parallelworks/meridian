@@ -88,10 +88,16 @@ type Expect struct {
 	// step and cleanup: there runs.
 	Skipped []string `yaml:"skipped,omitempty"`
 	// Private are the JSON Pointers of the job outputs that are private, in
-	// the contexts area: made from an organization or user variable or a
-	// password, and not from a secret, so kept only with the run's secrets.
-	// Every other output there isn't.
+	// the contexts area: made from an organization or user variable, a
+	// password or a secret, or holding a secret, so kept only with the
+	// run's secrets. Every other output there isn't.
 	Private []string `yaml:"private,omitempty"`
+	// SecretOutputs are the JSON Pointers of the job outputs that hold a
+	// secret, in the contexts area, made from one or holding one's text,
+	// and of the outputs of steps with ids that hold one's text, as
+	// /jobs/<job>/steps/<index>/outputs/<name>: the jobs that need the job
+	// read them as secrets. Every other output there isn't one.
+	SecretOutputs []string `yaml:"secret-outputs,omitempty"`
 	// NeedsFailed are the JSON Pointers of the jobs skipped because a job
 	// they need failed, in the contexts area, which the jobs that need them
 	// read as failed. Every other job skipped there was skipped by its own

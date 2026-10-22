@@ -2,6 +2,7 @@ package plan
 
 import (
 	"bytes"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -133,5 +134,27 @@ func TestShownFormsLength(t *testing.T) {
 				t.Fatalf("%q shows as %q", v, f)
 			}
 		}
+	}
+}
+
+// A key a credential is kept under is one of the credential words, or has
+// one among its words, whatever its case.
+func TestCredentialKey(t *testing.T) {
+	for key, want := range map[string]bool{
+		"password": true, "PASSWORD": true, "db_password": true, "api_key": true, "apiKey": true, "APIKey": true,
+		"accessToken": true, "aws-secret-access-key": true, "x.pin": true, "credentials": true, "pwd": true,
+		"keyboard": false, "passport": false, "token_count_x": true, "tokenizer": false, "dbname": false, "": false,
+		"user": false, "host": false, "PIN": true, "pinned": false,
+	} {
+		if got := credentialKey(key); got != want {
+			t.Errorf("credentialKey(%q) = %v, want %v (words %q)", key, got, want, keyWords(key))
+		}
+	}
+	fields := credentialFields([]string{
+		`{"user":"svc","password":"hunt3r2","nested":{"apiKey":"k3y1","list":["a"]},"keys":["aaaa"],"token":["tok1","true"],"pin":"12"}`,
+		`not json`, `["x"]`, `{"bad": `,
+	})
+	if want := map[string]bool{"hunt3r2": true, "k3y1": true, "tok1": true}; !maps.Equal(fields, want) {
+		t.Errorf("credentialFields = %v, want %v", fields, want)
 	}
 }

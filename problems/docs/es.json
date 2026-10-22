@@ -682,11 +682,11 @@
       "Haz la matriz más pequeña, o pide a quien ejecuta el flujo de trabajo un límite más alto."
     ]
   },
-  "output_masked": {
+  "output_holds_secret": {
     "title": "Salida que contiene un secreto",
-    "why": "Las salidas de un trabajo se guardan con la ejecución, donde las lee quien puede ver la ejecución. Esta salida contenía el valor de un secreto, así que se guarda con el secreto enmascarado como ***. Una salida hecha a partir de un secreto, o de la salida de un paso que contenía uno, se enmascara entera, ya que no se puede distinguir lo que en ella viene del secreto del resto.",
+    "why": "Una salida de un trabajo, o de un paso, contiene un secreto: se hizo a partir de uno, o contiene su texto. El formato 1 pasa las salidas tal cual a los trabajos que las necesitan, y Meridian también, que guarda esta con los secretos de la ejecución en lugar de en el estado de la ejecución, donde la leería quien pueda ver la ejecución. Los trabajos que la leen la leen como un secreto, así que lo que hacen con ella se enmascara en sus registros, y el texto del secreto se enmascara en los registros de este trabajo.",
     "fix": [
-      "Deja el secreto fuera de la salida y léelo donde se necesite."
+      "Deja el secreto fuera de la salida y léelo donde se necesite, a menos que los trabajos que necesitan este lo necesiten."
     ]
   },
   "output_not_written": {

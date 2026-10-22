@@ -270,9 +270,11 @@ type Contexts struct {
 //
 // It marks two sets of values, which an evaluation reports reading apart
 // (expr.Read): Scope.Marked, the secrets, which Run.Secrets and Secrets
-// name; and Scope.Private, the private values, which are org and vars,
-// every secret, what Run.Private and Private name, and the outputs of
-// Needs that are private (JobResult.Private).
+// name, and the outputs of Needs, and of their steps, that hold a secret
+// (JobResult.Secrets and JobResult.SecretSteps); and Scope.Private, the
+// private values, which are org and vars, every secret, what Run.Private
+// and Private name, and the outputs of Needs that are private
+// (JobResult.Private).
 //
 // The scope has no budget: the caller makes one for each group of
 // templates (expr.Scope.Budgeted). Its Resolver and Index are the caller's
@@ -322,6 +324,16 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 		for name, r := range c.Needs {
 			for _, output := range r.Private {
 				scope.Private.Add([]string{"needs", name, "outputs", output})
+			}
+			for _, output := range r.Secrets {
+				scope.Marked.Add([]string{"needs", name, "outputs", output})
+				scope.Private.Add([]string{"needs", name, "outputs", output})
+			}
+			for id, outputs := range r.SecretSteps {
+				for _, output := range outputs {
+					scope.Marked.Add([]string{"needs", name, "steps", id, "outputs", output})
+					scope.Private.Add([]string{"needs", name, "steps", id, "outputs", output})
+				}
 			}
 		}
 		status := c.Status

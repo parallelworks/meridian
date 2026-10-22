@@ -97,7 +97,7 @@
   "matrix_entry_not_mapping": "Cada entrada de “{key}” en la matriz debe ser un mapa de claves de la matriz a valores, no {value}.",
   "matrix_empty": "La matriz no tiene combinaciones, así que el trabajo no tendría instancias.",
   "matrix_too_large": "La matriz tiene más de {limit} combinaciones, el máximo que puede tener una matriz.",
-  "output_masked": "La salida “{name}” contenía un secreto, que se enmascara en ella.",
+  "output_holds_secret": "La salida “{name}” contiene un secreto. Los trabajos que necesitan este trabajo la leen tal cual, como un secreto; se guarda fuera del estado de la ejecución y se enmascara en los registros.",
   "output_not_written": "{of, select, step {El paso “{owner}” no escribió ninguna salida “{name}”} other {El trabajo “{owner}” no tiene ninguna salida “{name}”}}, así que lo que la lee falla.",
   "working_directory_variable": "El directorio de trabajo conserva {variable} tal cual: las variables del shell no se expanden ahí. Usa en su lugar una expresión que lea env, como env.PW_JOB_DIR.",
   "undefined_env": "Leer env.{name} da “” aquí: ningún env: del flujo de trabajo, del trabajo o del paso la define, y el formato 1 no la da aquí.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",

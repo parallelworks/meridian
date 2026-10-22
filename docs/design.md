@@ -241,7 +241,7 @@ phase's inputs and keep what it gives, so every implementation, whether
 | Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
 | Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
-| Step | A job starts on its worker, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
+| Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
 | End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
 Each phase reads the contexts of the phases before it too.
@@ -1191,14 +1191,19 @@ secret record ([Run data](#run-data)).
   `${{ fromJSON(vars.creds).token }}`, is masked wherever a command prints
   it, and not only within the command. A secret in one value of a step's
   `with:` masks only what that value's template gave. A string made from a
-  secret is masked when it is at least 8 bytes, or when a secret's own text
-  holds it as it is and it is at least 4 bytes and isn't `true`, `false`
-  or `null`, as a password in a secret's JSON is. It is never given a
-  shorter one, such as a `yes` that a secret decided, nor the text of a
-  boolean, a number or null that one decided, such as whether a token is
-  set, which would mask every `yes` or `true` in the job's logs and
-  outputs. A job output made from a secret, of whatever type, is masked
-  whole instead ([Outputs](#outputs)).
+  secret is masked when it is at least 8 bytes, or when it is a credential
+  field of a structured secret: a string of at least 4 bytes, but `true`,
+  `false` or `null`, that a secret's text, read as JSON, holds under a key
+  a credential is kept under, one that is, or has among its words split at
+  `_`, `-`, `.` and changes of case, `password`, `passwd`, `pass`, `pwd`,
+  `secret`, `token`, `key`, `pin`, `credential` or `credentials`, whatever
+  its case, as `password`, `api_key` and `accessToken` do. It is never
+  given another short one, such as a `yes` that a secret decided, or a
+  database's name or a region a structured secret holds, which common text
+  holds too, nor the text of a boolean, a number or null that one decided,
+  such as whether a token is set, which would mask every `yes` or `true`
+  in the job's logs. A job output made from a secret, of whatever type, is
+  private and a secret instead ([Outputs](#outputs)).
 - **A secret is masked as it can be shown.** Its shown forms are masked
   too: without the line breaks it ends with; as JSON escapes it in a
   string, as Go's `encoding/json/v2` writes it, as `encoding/json` writes
@@ -1213,8 +1218,8 @@ secret record ([Run data](#run-data)).
   what the job's logs mask, as it can show, but for a line of a secret,
   which plain text can hold too: a secret's own text, or a string made
   from one that is masked. A job's later steps read such an output as a
-  secret, and an output made from it is masked whole. End masks the job's
-  outputs as its logs are masked, lines and all.
+  secret, and it, and an output made from it, keep their values, but are
+  private and secrets ([Outputs](#outputs)).
 - **What a script does with a value can't be followed.** A secret that a
   step's script transforms, such as by encoding it in base64, isn't known
   to come from the secret, and isn't masked.
@@ -1309,21 +1314,36 @@ waking up or `meridian run` restarting must not make them all look lost.
 ### Outputs
 
 A step writes outputs to the file named by `$OUTPUTS`. A job's outputs are
-capped at 1 MB and a run's at 50 MB. Before the worker reports a job's
-outputs, it checks them against the values of the secrets its attempt
-received, and an output that holds one is reported with it masked, `***`,
-as logs are, and a warning that names the output; GitHub Actions leaves
-such an output out. An output that an expression made from a secret, or
-from a step's output that held one, is masked whole. A job's outputs are
-format 1's: what its steps wrote, the later step's where two wrote the same
-name, and its `outputs:` over them.
+capped at 1 MB and a run's at 50 MB. A job's outputs are format 1's: what
+its steps wrote, the later step's where two wrote the same name, what its
+cleanups wrote over that, and its `outputs:` over all. The worker reports
+what each step wrote as it wrote it, and End decides which outputs are
+private and which hold a secret; an event shows a step's outputs masked
+as its logs are.
 
-An output made from an organization or user variable or a password, and
-not from a secret, isn't masked, since a plain variable isn't, but is
-private: End names it, the coordinator keeps its value only in the secret
-record, never in run state, and the jobs that need the job receive it with
-their needs and read it as private, so what they make of it is kept out of
-run state too. When a job is claimed, it receives its dependencies'
+An output keeps its value, as format 1 passes it to the jobs that need the
+job, whatever it was made from: masking it would change what those jobs
+read. Instead:
+
+- **An output that holds a secret** is private and a secret: one made from
+  a secret, or that holds a secret's text as the job's logs mask it, but
+  for a line of one, and so is a step's output that holds a secret's text.
+  End names it with a warning (`output_holds_secret`); the coordinator
+  keeps its value only in the secret record, never in run state; and the
+  jobs that need the job read it as a secret, so what they make of it is
+  masked in their logs and problems, and an output they make of it holds a
+  secret too. Logs and problems mask the secret's text in it, as they do
+  everywhere. That End counts an output as holding a secret when it holds
+  a string made from one costs only privacy, never a changed value.
+  GitHub Actions leaves such an output out.
+- **An output made from an organization or user variable or a password**,
+  and not from a secret, isn't masked, since a plain variable isn't, but
+  is private: End names it, the coordinator keeps its value only in the
+  secret record, never in run state, and the jobs that need the job
+  receive it with their needs and read it as private, so what they make of
+  it is kept out of run state too.
+
+ When a job is claimed, it receives its dependencies'
 outcomes and outputs with it, rather than reading each one back. hopper
 keeps finalized jobs' outputs only in its history, so this, too, needs
 something hopper doesn't have yet.
@@ -1520,10 +1540,11 @@ member's running workers reconnect to it.
   or a step's `env:` that reads others of it reads their values, evaluated
   in the order they read each other, as in format 1; one that reads
   itself, and values that read each other, read what is under the `env:`
-  ([Bug fixes to format 1](#bug-fixes-to-format-1)). The job's `env:` and
-  `working-directory:` are evaluated as the job starts, with only the
-  variables format 1 defines then, not `OUTPUTS` or the retry counters, so
-  they are the same for each step. A credential, such as the platform's API
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)). The job's `env:` is
+  evaluated once, as the job starts (`plan.ReadyJob.JobEnv`), and its steps
+  and outputs read what it gave (`plan.JobState.JobEnv`); it and the job's
+  `working-directory:` read only the variables format 1 defines then, not
+  `OUTPUTS` or the retry counters, so they are the same for each step. A credential, such as the platform's API
   key that format 1 gives a step as `PW_API_KEY`, is in the step's
   environment but never in the `env` context: the plan reads only the
   variables format 1 defines (`plan.IsFormatVariable`), whatever the worker

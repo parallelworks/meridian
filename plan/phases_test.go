@@ -500,7 +500,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"masked":["s3cret","s3cret-y"]}`; string(data) != want {
+	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"masked":["s3cret-y"]}`; string(data) != want {
 		t.Errorf("step 0:\n%s\nwant\n%s", data, want)
 	}
 	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"o": "1"}}}
@@ -514,7 +514,7 @@ jobs:
 		t.Fatal(s, diags, err)
 	}
 	if s.Run != "echo 1 s3cret" || s.WorkingDirectory != "/job" || s.SSH == nil || s.SSH.SSH.Get().(map[string]any)["remoteHost"] != "h" ||
-		!slices.Equal(s.Masked, []string{"s3cret", "echo 1 s3cret"}) || s.OutlivesCancel {
+		!slices.Equal(s.Masked, []string{"echo 1 s3cret"}) || s.OutlivesCancel {
 		t.Errorf("step 1: %+v", s)
 	}
 	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
@@ -601,7 +601,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret yes 1","env":{"W":"workflow"},"masked":["s3cret","rm -rf workflow 2 [] s3cret yes 1"],"outlivesCancel":true}`; string(data) != want {
+	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret yes 1","env":{"W":"workflow"},"masked":["rm -rf workflow 2 [] s3cret yes 1"],"outlivesCancel":true}`; string(data) != want {
 		t.Errorf("cleanup 0:\n%s\nwant\n%s", data, want)
 	}
 	if s, _, err := rj.Cleanup(t.Context(), 2, state); err != nil || s.Name != "POST Step 2" || s.Run != "echo 2 1 true" || !s.OutlivesCancel {
@@ -632,10 +632,10 @@ jobs:
 }
 
 // End gives a job's outputs, its steps' merged in their order with its
-// outputs: over them, with what holds a secret masked, and a warning that
-// names each of its outputs: that does. One made from a step's output that
-// holds a secret is masked whole, as one made from a secret is, and a
-// problem with one shows no part of the secret.
+// outputs: over them, as they were made: one made from a secret, or that
+// holds one, is private and a secret, with a warning that names it, as is
+// a step's output that holds one, and one made from a variable is
+// private. A problem with one shows no part of the secret.
 func TestEnd(t *testing.T) {
 	p := compiled(t, `
 jobs:
@@ -663,13 +663,15 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(end.Outputs) != "map[empty: holds:*** made:*** plain:1]" || end.Private != nil {
-		t.Errorf("outputs %v, private %q", end.Outputs, end.Private)
+	if fmt.Sprint(end.Outputs) != "map[empty: holds:a s3cret made:6 plain:1]" || fmt.Sprint(end.Private) != "[empty holds made]" ||
+		fmt.Sprint(end.Secrets) != "[holds made]" || fmt.Sprint(end.SecretSteps) != "map[a:[y]]" {
+		t.Errorf("outputs %v, private %q, secrets %q, %q", end.Outputs, end.Private, end.Secrets, end.SecretSteps)
 	}
 	want := []string{
 		"from_json_invalid /jobs/main/outputs/fails",
-		"output_masked /jobs/main/outputs/holds",
-		"output_masked /jobs/main/outputs/made",
+		"output_holds_secret /jobs/main/outputs/holds",
+		"output_holds_secret /jobs/main/outputs/made",
+		"output_holds_secret /jobs/main/steps/0",
 	}
 	if got := codes(diags); !slices.Equal(got, want) {
 		t.Errorf("diagnostics %q, want %q", got, want)
@@ -1262,5 +1264,127 @@ jobs:
 		if s, _, err := ready.Job.Cleanup(t.Context(), i, state); err != nil || s.Name != want {
 			t.Errorf("cleanup %d: %+v, %v, want %q", i, s, err, want)
 		}
+	}
+}
+
+// JobEnv evaluates the job's env: once, as the job starts, and Step,
+// Cleanup and End read what it gave rather than evaluate it again, so it
+// is the same for each step, and its problems are its own.
+func TestJobEnv(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    env:
+      STOPPING: ${{ cancelled() }}
+      TOKEN: ${{ vars.token }}-x
+      REGION: ${{ vars.region }}
+      DIR: ${{ env.PW_JOB_DIR }}
+    steps:
+      - run: echo $STOPPING ${{ env.STOPPING }} ${{ env.TOKEN }} ${{ env.REGION }} ${{ env.DIR }}
+        if: always()
+        cleanup: echo ${{ env.STOPPING }}
+    outputs:
+      token: ${{ env.TOKEN }}
+      region: ${{ env.REGION }}
+`, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "region": "eu"}})
+	run := runValues(t, p, map[string]string{"token": "s3cret-value", "region": "eu"})
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rj := ready.Job
+	state := plan.JobState{Run: run, Masked: run.Masked(), Env: map[string]string{"PW_JOB_DIR": "/j"}}
+	env, diags, err := rj.JobEnv(t.Context(), state)
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	data, err := json.Marshal(env, json.Deterministic(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"env":{"DIR":"/j","REGION":"eu","STOPPING":"false","TOKEN":"s3cret-value-x"},"private":["REGION","TOKEN"],"secrets":["TOKEN"],"masked":["s3cret-value","s3cret-value-x"]}`; string(data) != want {
+		t.Errorf("JobEnv:\n%s\nwant\n%s", data, want)
+	}
+	// The run is cancelled once the job has started: the job's env: is
+	// what it was, and a step that reads it again reads the same.
+	state.Cancelled, state.Env = true, nil
+	without, _, _ := rj.Step(t.Context(), 0, state)
+	state.JobEnv = env
+	with, _, err := rj.Step(t.Context(), 0, state)
+	if err != nil || with.Run != "echo $STOPPING false s3cret-value-x eu /j" || with.Env["STOPPING"] != "false" || without.Run != "echo $STOPPING true s3cret-value-x eu " {
+		t.Errorf("Step with JobEnv %+v; without %+v; %v", with, without, err)
+	}
+	if !slices.Equal(with.Masked, []string{"s3cret-value", "s3cret-value-x", "echo $STOPPING false s3cret-value-x eu /j"}) {
+		t.Errorf("Masked = %q", with.Masked)
+	}
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess}}
+	if s, _, err := rj.Cleanup(t.Context(), 0, state); err != nil || s.Run != "echo false" {
+		t.Errorf("Cleanup with JobEnv: %+v, %v", s, err)
+	}
+	end, _, err := rj.End(t.Context(), state)
+	if err != nil || fmt.Sprint(end.Outputs, end.Private, end.Secrets) != "map[region:eu token:s3cret-value-x] [region token] [token]" {
+		t.Errorf("End with JobEnv: %+v, %v", end, err)
+	}
+	if _, diags, err := rj.JobEnv(t.Context(), plan.JobState{Run: run, Needs: map[string]plan.JobResult{}}); err != nil || len(diags) > 0 {
+		t.Errorf("JobEnv without the worker's variables: %v, %v", diags, err)
+	}
+}
+
+// A job reads the outputs of a job it needs, and of its steps, that hold a
+// secret as secrets: what it makes of one is masked, and an output it
+// makes of one holds a secret too.
+func TestNeedsSecretOutputs(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  a:
+    steps:
+      - id: login
+        run: "true"
+  b:
+    needs: [a]
+    steps:
+      - run: echo ${{ needs.a.outputs.dsn }} ${{ needs.a.steps.login.outputs.key }} ${{ needs.a.outputs.plain }}
+    outputs:
+      dsn: ${{ needs.a.outputs.dsn }}
+      key: ${{ needs.a.steps.login.outputs.key }}
+      plain: ${{ needs.a.outputs.plain }}
+`, nil)
+	run := runValues(t, p, nil)
+	needs := map[string]plan.JobResult{"a": {
+		Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"dsn": "pg://u:hunt3r2@db", "plain": "p"},
+		Private: []string{"dsn"}, Secrets: []string{"dsn"},
+		Steps: map[string]map[string]string{"login": {"key": "k3y-value"}}, SecretSteps: map[string][]string{"login": {"key"}},
+	}}
+	ready, _, err := job(t, p, "b").Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: run, Needs: needs}
+	s, _, err := ready.Job.Step(t.Context(), 0, state)
+	if err != nil || !slices.Equal(s.Masked, []string{"pg://u:hunt3r2@db", "k3y-value", "echo pg://u:hunt3r2@db k3y-value p"}) {
+		t.Errorf("step %+v, %v", s, err)
+	}
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess}}
+	end, _, err := ready.Job.End(t.Context(), state)
+	if err != nil || fmt.Sprint(end.Outputs, end.Private, end.Secrets) != "map[dsn:pg://u:hunt3r2@db key:k3y-value plain:p] [dsn key] [dsn key]" {
+		t.Errorf("End %+v, %v", end, err)
+	}
+}
+
+// Combine keeps which outputs, and steps' outputs, are private or secrets
+// as the instance with the highest index gave them.
+func TestCombineSecrets(t *testing.T) {
+	got := plan.Combine([]plan.JobResult{
+		{
+			Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "1", "b": "s"}, Private: []string{"b"}, Secrets: []string{"b"},
+			Steps: map[string]map[string]string{"x": {"k": "s", "l": "p"}}, SecretSteps: map[string][]string{"x": {"k"}},
+		},
+		{
+			Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "t"}, Private: []string{"a"}, Secrets: []string{"a"},
+			Steps: map[string]map[string]string{"x": {"k": "plain"}},
+		},
+	})
+	if fmt.Sprint(got.Outputs, got.Private, got.Secrets, got.Steps, got.SecretSteps) != "map[a:t b:s] [a b] [a b] map[x:map[k:plain l:p]] map[]" {
+		t.Errorf("%+v", got)
 	}
 }

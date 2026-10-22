@@ -3,6 +3,7 @@ package plan_test
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -55,7 +56,7 @@ jobs:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(diags) != 3 {
+		if len(diags) != 4 {
 			t.Fatalf("%q: %v", secret, diags)
 		}
 		for _, d := range diags {
@@ -108,7 +109,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if end.Outputs["ok"] != "true" || end.Outputs["json"] != `{"deployed":true}` || end.Outputs["has"] != "***" {
+	if end.Outputs["ok"] != "true" || end.Outputs["json"] != `{"deployed":true}` || end.Outputs["has"] != "true" || fmt.Sprint(end.Secrets) != "[has]" {
 		t.Errorf("outputs %v, %q", end.Outputs, codes(diags))
 	}
 	var out bytes.Buffer
@@ -120,8 +121,8 @@ jobs:
 	}
 }
 
-// What one output: is made of masks none of the others, so they don't
-// depend on the order of their names.
+// What one output: is made of makes none of the others private or a
+// secret, so they don't depend on the order of their names.
 func TestEndOutputsIndependent(t *testing.T) {
 	p := compiled(t, `
 jobs:
@@ -142,11 +143,11 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if end.Outputs["a_zone"] != "us-6" || end.Outputs["z_zone"] != "us-6" || end.Outputs["length"] != "***" {
+	if end.Outputs["a_zone"] != "us-6" || end.Outputs["z_zone"] != "us-6" || end.Outputs["length"] != "6" {
 		t.Errorf("outputs %v, %q", end.Outputs, codes(diags))
 	}
-	if fmt.Sprint(end.Private) != "[a_zone z_zone]" {
-		t.Errorf("private outputs %q", end.Private)
+	if fmt.Sprint(end.Private, end.Secrets) != "[a_zone length z_zone] [length]" {
+		t.Errorf("private outputs %q, secrets %q", end.Private, end.Secrets)
 	}
 }
 
@@ -474,8 +475,8 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if end.Outputs["ok"] != "true" || end.Outputs["json"] != "{\n    },\n  \"done\": true\n}" || end.Outputs["kind"] != "***" {
-		t.Errorf("outputs %q, %q", end.Outputs, codes(diags))
+	if end.Outputs["ok"] != "true" || end.Outputs["json"] != "{\n    },\n  \"done\": true\n}" || end.Outputs["kind"] != "apiVersion: v1" || end.Secrets != nil {
+		t.Errorf("outputs %q, secrets %q, %q", end.Outputs, end.Secrets, codes(diags))
 	}
 	m := plan.NewMasker(secret)
 	for s, want := range map[string]string{
@@ -613,7 +614,7 @@ func BenchmarkMask(b *testing.B) {
 
 // readyMain compiles workflow with vars, those named in secret unknown as
 // secret variables are, and readies its job main.
-func readyMain(t *testing.T, workflow string, vars map[string]string, secret ...string) (*plan.ReadyJob, plan.RunValues) {
+func readyMain(t testing.TB, workflow string, vars map[string]string, secret ...string) (*plan.ReadyJob, plan.RunValues) {
 	t.Helper()
 	ctxVars := map[string]any{}
 	for k, v := range vars {
@@ -658,8 +659,8 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]string{"pw": "***", "user": "svc", "ssl": "true"}; !maps.Equal(end.Outputs, want) {
-		t.Errorf("outputs %q, want %q", end.Outputs, want)
+	if want := map[string]string{"pw": "hunt3r2", "user": "svc", "ssl": "true"}; !maps.Equal(end.Outputs, want) || fmt.Sprint(end.Secrets) != "[pw]" {
+		t.Errorf("outputs %q, secrets %q, want %q", end.Outputs, end.Secrets, want)
 	}
 	m := plan.NewMasker(state.Masked...)
 	for log, want := range map[string]string{
@@ -739,8 +740,8 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]string{"a": "***", "b": "", "c": "***"}; !maps.Equal(end.Outputs, want) {
-		t.Errorf("outputs %q, %q", end.Outputs, codes(diags))
+	if want := map[string]string{"a": "s3cret-tok-x", "b": "", "c": "s3cret-tok-x"}; !maps.Equal(end.Outputs, want) || fmt.Sprint(end.Secrets) != "[a c]" {
+		t.Errorf("outputs %q, secrets %q, %q", end.Outputs, end.Secrets, codes(diags))
 	}
 }
 
@@ -766,7 +767,7 @@ jobs:
 	}
 	steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"y": "x " + token}}, {Outcome: plan.OutcomeCancelled, Outputs: map[string]string{"w": "w " + token}}}
 	end, _, err := rj.End(t.Context(), plan.JobState{Run: run, Masked: run.Masked(), Steps: steps})
-	if err != nil || end.Outputs["w"] != "w ***" {
+	if err != nil || end.Outputs["w"] != "w "+token || fmt.Sprint(end.Secrets, end.SecretSteps) != "[w] map[a:[y]]" {
 		t.Errorf("outputs %q, %v", end, err)
 	}
 }
@@ -802,4 +803,131 @@ func BenchmarkMaskRandomTokens(b *testing.B) {
 			_ = m.Mask(text)
 		}
 	})
+}
+
+// Of a structured secret's short fields, only those kept under a key a
+// credential is kept under are masked, such as a password, and not the
+// rest, such as a database's name or a region, which common text holds.
+func TestMaskCredentialFieldsOnly(t *testing.T) {
+	dsn := `{"host":"db.internal","port":"5432","user":"app","password":"hunt3r2","dbname":"orders","sslmode":"require"}`
+	aws := `{"aws_access_key_id":"AKIAIOSFODNN7EXAMPLE","aws_secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY","region":"us-east-1","output":"json"}`
+	kube := `{"apiVersion":"v1","kind":"Config","clusters":[{"name":"prod","cluster":{"server":"https://10.0.0.1:6443"}}],"users":[{"name":"admin","user":{"token":"eyJhbGciOi.payload.sig","pin":"4821"}}],"contexts":[{"name":"prod","context":{"cluster":"prod","user":"admin","namespace":"default"}}],"current-context":"prod"}`
+	for _, tc := range []struct {
+		name, secret, workflow string
+		masked                 []string
+		logs                   map[string]string
+	}{
+		{"dsn", dsn, `
+jobs:
+  main:
+    steps:
+      - run: psql "port=${{ fromJSON(vars.s).port }} password=${{ fromJSON(vars.s).password }} dbname=${{ fromJSON(vars.s).dbname }} sslmode=${{ fromJSON(vars.s).sslmode }}"
+`, []string{"hunt3r2", `psql "port=5432 password=hunt3r2 dbname=orders sslmode=require"`}, map[string]string{
+			"processing 5432 orders": "processing 5432 orders", "Requirement already satisfied": "Requirement already satisfied",
+			"auth failed for hunt3r2": "auth failed for ***",
+		}},
+		{"aws", aws, `
+jobs:
+  main:
+    steps:
+      - run: aws configure set output ${{ fromJSON(vars.s).output }}
+`, []string{"aws configure set output json"}, map[string]string{"writing json report": "writing json report"}},
+		{"kube", kube, `
+jobs:
+  main:
+    steps:
+      - uses: workflow/deploy
+        with:
+          config: ${{ fromJSON(vars.s) }}
+`, []string{"https://10.0.0.1:6443", "4821", "eyJhbGciOi.payload.sig"}, map[string]string{
+			"namespace: default": "namespace: default", "Running on prod": "Running on prod", "user admin logged in": "user admin logged in",
+			"pin 4821 accepted": "pin *** accepted",
+		}},
+	} {
+		rj, run := readyMain(t, tc.workflow, map[string]string{"s": tc.secret}, "s")
+		s, diags, err := rj.Step(t.Context(), 0, plan.JobState{Run: run, Masked: run.Masked()})
+		if err != nil || s == nil {
+			t.Fatal(diags, err)
+		}
+		if !slices.Equal(s.Masked, tc.masked) {
+			t.Errorf("%s: Masked = %q, want %q", tc.name, s.Masked, tc.masked)
+		}
+		m := plan.NewMasker(append(run.Masked(), s.Masked...)...)
+		for log, want := range tc.logs {
+			if got := m.Mask(log); got != want {
+				t.Errorf("%s: Mask(%q) = %q, want %q", tc.name, log, got, want)
+			}
+		}
+	}
+}
+
+// A step's output that holds a structured secret's field that isn't a
+// credential, such as a database's name, holds no secret.
+func TestOutputHoldsNoField(t *testing.T) {
+	rj, run := readyMain(t, `
+jobs:
+  main:
+    env:
+      DB: ${{ fromJSON(vars.s).dbname }}
+    steps:
+      - id: a
+        run: "true"
+      - run: "true"
+    outputs:
+      summary: ${{ steps.a.outputs.summary }}
+`, map[string]string{"s": `{"dbname":"orders","password":"hunt3r2"}`}, "s")
+	state := plan.JobState{Run: run, Masked: run.Masked(), Steps: []plan.StepResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"summary": "12 orders shipped"}}, {Outcome: plan.OutcomeSuccess},
+	}}
+	end, diags, err := rj.End(t.Context(), state)
+	if err != nil || end.Outputs["summary"] != "12 orders shipped" || end.Private != nil || len(diags) > 0 {
+		t.Errorf("End %+v, %v, %v", end, diags, err)
+	}
+}
+
+// A template of many expressions notes each string once.
+func TestMaskManyParts(t *testing.T) {
+	var b strings.Builder
+	for range 2000 {
+		b.WriteString("${{ fromJSON(vars.s).password }} ${{ vars.s }} ")
+	}
+	rj, run := readyMain(t, "jobs:\n  main:\n    steps:\n      - run: "+b.String()+"\n", map[string]string{"s": `{"password":"hunt3r2"}`}, "s")
+	s, diags, err := rj.Step(t.Context(), 0, plan.JobState{Run: run, Masked: run.Masked()})
+	if err != nil || s == nil || len(s.Masked) != 3 {
+		t.Errorf("%v, %v, masked %d", diags, err, len(s.Masked))
+	}
+}
+
+// BenchmarkStepStructuredSecret evaluates a step whose job's env: reads a
+// structured secret of many fields whole, with and without the job's env:
+// as JobEnv gave it.
+func BenchmarkStepStructuredSecret(b *testing.B) {
+	for _, n := range []int{5000, 20000} {
+		m := map[string]string{}
+		for i := range n {
+			m[fmt.Sprintf("k%06d", i)] = fmt.Sprintf("v%04d", i%10000)
+		}
+		data, err := json.Marshal(m)
+		if err != nil {
+			b.Fatal(err)
+		}
+		rj, run := readyMain(b, "jobs:\n  main:\n    env:\n      CFG: ${{ fromJSON(vars.s) }}\n    steps:\n      - run: \"true\"\n", map[string]string{"s": string(data)}, "s")
+		state := plan.JobState{Run: run, Masked: run.Masked()}
+		b.Run(fmt.Sprintf("%d fields", n), func(b *testing.B) {
+			for b.Loop() {
+				_, _, _ = rj.Step(b.Context(), 0, state)
+			}
+		})
+		env, _, err := rj.JobEnv(b.Context(), state)
+		if err != nil {
+			b.Fatal(err)
+		}
+		with := state
+		with.JobEnv = env
+		b.Run(fmt.Sprintf("%d fields, JobEnv given", n), func(b *testing.B) {
+			for b.Loop() {
+				_, _, _ = rj.Step(b.Context(), 0, with)
+			}
+		})
+	}
 }

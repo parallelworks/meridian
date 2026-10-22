@@ -96,6 +96,9 @@ func TestContextsConformance(t *testing.T) {
 			if g, w := slices.Sorted(slices.Values(r.private)), slices.Sorted(slices.Values(c.Expect.Private)); !slices.Equal(g, w) {
 				t.Errorf("private outputs %q, want %q", g, w)
 			}
+			if g, w := slices.Sorted(slices.Values(r.secrets)), slices.Sorted(slices.Values(c.Expect.SecretOutputs)); !slices.Equal(g, w) {
+				t.Errorf("secret outputs %q, want %q", g, w)
+			}
 			if g, w := slices.Sorted(slices.Values(r.needsFailed)), slices.Sorted(slices.Values(c.Expect.NeedsFailed)); !slices.Equal(g, w) {
 				t.Errorf("skipped because their needs failed %q, want %q", g, w)
 			}
@@ -160,9 +163,9 @@ type contextsRun struct {
 	run plan.RunValues
 	// got holds the values evaluated, by their JSON Pointers, and skipped
 	// the JSON Pointers of the jobs and steps skipped.
-	got                           map[string]any
-	skipped, needsFailed, private []string
-	diags                         problems.Diagnostics
+	got                                    map[string]any
+	skipped, needsFailed, private, secrets []string
+	diags                                  problems.Diagnostics
 }
 
 // job evaluates job, with what state says is known of it.
@@ -215,6 +218,15 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		Job: plan.JobContext{Name: job.Name, Key: rj.Key, Attempt: attempt, Group: state.Group, Member: state.Member},
 	}
 	js.Masked = append(js.Run.Masked(), rj.Masked...)
+	env, diags, err := rj.JobEnv(ctx, js)
+	r.diags = append(r.diags, diags...)
+	switch {
+	case err != nil:
+		t.Fatalf("the env: of %s: %v", job.Name, err)
+	case env == nil:
+		return
+	}
+	js.JobEnv = env
 	for i := range rj.Steps {
 		if i > len(state.Steps) {
 			return
@@ -282,6 +294,14 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	}
 	for _, name := range end.Private {
 		r.private = append(r.private, job.Path+"/outputs/"+name)
+	}
+	for _, name := range end.Secrets {
+		r.secrets = append(r.secrets, job.Path+"/outputs/"+name)
+	}
+	for _, step := range rj.Steps {
+		for _, name := range end.SecretSteps[step.ID] {
+			r.secrets = append(r.secrets, step.Path+"/outputs/"+name)
+		}
 	}
 }
 

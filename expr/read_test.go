@@ -2,6 +2,8 @@ package expr_test
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/expr"
@@ -181,6 +183,63 @@ func TestEvalParts(t *testing.T) {
 		wv, wread, werr := tmpl.EvalRead(scope)
 		if got != want || fmt.Sprint(v, read, err) != fmt.Sprint(wv, wread, werr) {
 			t.Errorf("%s: parts %q, want %q; %v, %+v, %v, and EvalRead %v, %+v, %v", src, got, want, v, read, err, wv, wread, werr)
+		}
+	}
+}
+
+// EvalParts gives what EvalRead gives for random templates, its value, its
+// error, what it read and what it counted, and its expressions' reads
+// together are the template's.
+func TestEvalPartsRandom(t *testing.T) {
+	contexts := map[string]any{
+		"vars":   map[string]any{"creds": `{"token":"tok_abc","n":5,"l":["a","b"]}`, "region": "us-east", "bad": "x"},
+		"inputs": map[string]any{"s": "plain", "l": []any{"p", "q"}, "m": map[string]any{"k": "v"}},
+	}
+	scope := expr.Scope{
+		Contexts: contexts,
+		Marked:   expr.NewMarks([]string{"vars", "creds"}),
+		Private:  expr.NewMarks([]string{"vars"}),
+	}
+	exprs := []string{
+		"fromJSON(vars.creds).token", "vars.region", "inputs.s", "1 + 2", "fromJSON(vars.bad)",
+		"fromJSON(vars.creds)", "inputs.l", "format('{0}-{1}', inputs.s, vars.region)",
+		"vars.creds == '' ? 'no' : 'yes'", "fromJSON(vars.creds).n", "join(fromJSON(vars.creds).l, ',')",
+		"inputs.m", "'${{ not }}'", "null", "toJSON(inputs.l)",
+	}
+	texts := []string{"", " ", "x ", " y", "--a=", "${", "}}", "$ {{", "\\"}
+	r := rand.New(rand.NewPCG(8, 9))
+	for range 5000 {
+		var b strings.Builder
+		for range 1 + r.IntN(4) {
+			b.WriteString(texts[r.IntN(len(texts))])
+			if r.IntN(4) > 0 {
+				b.WriteString("${{ " + exprs[r.IntN(len(exprs))] + " }}")
+			}
+		}
+		src := b.String()
+		tmpl, err := expr.ParseTemplate(src)
+		if err != nil {
+			continue
+		}
+		var all expr.Read
+		var parts []string
+		s1 := scope.Budgeted()
+		v, read, err := tmpl.EvalParts(s1, func(v any, r expr.Read) {
+			all = all.Or(r)
+			parts = append(parts, fmt.Sprint(v))
+		})
+		s2 := scope.Budgeted()
+		wv, wread, werr := tmpl.EvalRead(s2)
+		if fmt.Sprint(v, read, err) != fmt.Sprint(wv, wread, werr) {
+			t.Fatalf("%q: %v %+v %v, EvalRead %v %+v %v", src, v, read, err, wv, wread, werr)
+		}
+		b1, w1, st1 := expr.Counted(s1)
+		b2, w2, st2 := expr.Counted(s2)
+		if b1 != b2 || w1 != w2 || st1 != st2 {
+			t.Fatalf("%q: counted %d %d %d, EvalRead %d %d %d", src, b1, w1, st1, b2, w2, st2)
+		}
+		if err == nil && all != read {
+			t.Fatalf("%q: parts read %+v, the whole %+v", src, all, read)
 		}
 	}
 }
