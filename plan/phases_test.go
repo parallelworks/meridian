@@ -1330,6 +1330,42 @@ jobs:
 	}
 }
 
+// A cleanup that failed fails the job, for the cleanups after it, and End
+// reads outputs that nothing wrote leniently after it, as format 1 has it.
+func TestCleanupFailureFailsJob(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - if: success()
+        run: "true"
+        cleanup: echo first
+      - run: "true"
+        cleanup: exit 1
+    outputs:
+      none: ${{ needs.main.outputs.none }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: run, Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSuccess}}}
+	if s, _, err := ready.Job.Cleanup(t.Context(), 0, state); err != nil || s.Skipped {
+		t.Errorf("cleanup 0 before the other failed: %+v, %v", s, err)
+	}
+	if _, diags, _ := ready.Job.End(t.Context(), state); len(diags) != 1 || diags[0].Code != "output_not_written" {
+		t.Errorf("End after the cleanups succeeded: %v", diags)
+	}
+	state.Steps[1].CleanupOutcome = plan.OutcomeFailure
+	if s, _, err := ready.Job.Cleanup(t.Context(), 0, state); err != nil || !s.Skipped {
+		t.Errorf("cleanup 0 after the other failed: %+v, %v", s, err)
+	}
+	if end, diags, err := ready.Job.End(t.Context(), state); err != nil || len(diags) > 0 || end.Outputs["none"] != "" {
+		t.Errorf("End after a cleanup failed: %+v, %v, %v", end, diags, err)
+	}
+}
+
 // A job reads the outputs of a job it needs, and of its steps, that hold a
 // secret as secrets: what it makes of one is masked, and an output it
 // makes of one holds a secret too.

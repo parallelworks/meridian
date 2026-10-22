@@ -523,7 +523,7 @@
   },
   "steps_unknown_key": {
     "title": "Clave desconocida de un paso",
-    "why": "Cada paso de steps tiene outputs, y nada más.",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que otra clave se lee como null. ACTIVATE la leía como su propio texto, como steps.build.result, que ningún flujo de trabajo pretende.",
     "fix": [
       "Lee steps.<id>.outputs."
     ]

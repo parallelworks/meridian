@@ -1,10 +1,12 @@
 description: >-
   steps.<id> has an earlier step's outputs, and nothing else. A step that
-  reads another key of one, or a step the job doesn't have, is an error.
+  reads a step the job doesn't have is an error, as ACTIVATE fails the
+  step. Another key of one reads as null, and is a warning, as a bug fix to
+  format 1: ACTIVATE read it as its own text.
 source: Meridian
 expect:
   diagnostics:
-    - severity: error
+    - severity: warning
       code: steps_unknown_key
       path: /jobs/build/steps/1/run
       line: 6

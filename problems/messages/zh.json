@@ -73,7 +73,7 @@
   "step_not_earlier": "步骤“{id}”不会在此步骤之前运行，因此此处无法知道它的输出。",
   "undefined_step": "作业“{job}”中没有 id 为“{id}”的先前步骤。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "output_undefined_step": "作业“{job}”中没有 id 为“{id}”的步骤，因此此输出为空。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
-  "steps_unknown_key": "steps.{id} 中没有键“{key}”，它只有 outputs。",
+  "steps_unknown_key": "steps.{id} 中没有键“{key}”，它只有 outputs，因此这里读作 null。",
   "output_steps_unknown_key": "steps.{id} 中没有键“{key}”，它只有 outputs，因此此输出为空。",
   "cleanup_undefined_step": "作业“{job}”中没有 id 为“{id}”的步骤，因此此 cleanup: 从中读取的值为空。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "cleanup_steps_unknown_key": "steps.{id} 中没有键“{key}”，它只有 outputs，因此此 cleanup: 从中读取的值为空。",

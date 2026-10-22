@@ -76,7 +76,7 @@
   "step_not_earlier": "The step \"{id}\" doesn't run before this one, so its outputs aren't known here.",
   "undefined_step": "No earlier step of the job \"{job}\" has the id \"{id}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
-  "steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs.",
+  "steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this reads as null.",
   "output_steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this output is empty.",
   "cleanup_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so what this cleanup: reads of it is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "cleanup_steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so what this cleanup: reads of it is empty.",

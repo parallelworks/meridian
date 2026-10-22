@@ -523,7 +523,7 @@
   },
   "steps_unknown_key": {
     "title": "ステップの不明なキー",
-    "why": "steps の各ステップにあるのは outputs だけです。",
+    "why": "steps の各ステップにあるのは outputs だけなので、ほかのキーは null として読み取られます。ACTIVATE は steps.build.result のようにその参照自体のテキストとして読み取っていましたが、それを意図するワークフローはありません。",
     "fix": [
       "steps.<id>.outputs を読み取ってください。"
     ]

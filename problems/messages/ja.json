@@ -73,7 +73,7 @@
   "step_not_earlier": "ステップ「{id}」はこのステップより前に実行されないため、その出力はここではわかりません。",
   "undefined_step": "ジョブ「{job}」のこれより前のステップに、id が「{id}」のものはありません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "output_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この出力は空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
-  "steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs です。",
+  "steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs なので、これは null として読み取られます。",
   "output_steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs なので、この出力は空になります。",
   "cleanup_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この cleanup: がそこから読み取る値は空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "cleanup_steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs なので、この cleanup: がそこから読み取る値は空になります。",

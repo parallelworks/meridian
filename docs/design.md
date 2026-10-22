@@ -166,11 +166,12 @@ fixed, and its case records the fix.
 ### Bug fixes to format 1
 
 Each of these changes what format 1 means where it was plainly a bug, and
-ACTIVATE takes the same fix. Each counts the 402 distinct workflows we know
-of.
+ACTIVATE takes the same fix. Each counts the same workflows: the known
+workflows but Meridian's own copies of them, each file once by the hash of
+its content, 220 files.
 
 - **A matrix job's output** is the instance's with the highest index, not
-  the last to finish's. None of the 22 matrix jobs has `outputs:`, and
+  the last to finish's. None of the 14 matrix jobs has `outputs:`, and
   nothing reads a matrix job's outputs.
 - **An `if:` whose value is null is false**, as `docs/expressions.md` says
   conditions go by truthiness, where format 1 ran the job or step. All 7
@@ -200,33 +201,38 @@ of.
 - **A matrix key whose values aren't a list, and an `include` or `exclude`
   entry that isn't a mapping**, are problems (`matrix_not_list`,
   `matrix_entry_not_mapping`), where format 1 dropped them silently. All
-  14 strategies outside Meridian's own tests use lists.
+  14 strategies give each key a list, written out, from a list input or
+  from `range`.
 - **A job's `outputs:` read `env`**: the workflow's `env:`, the job's, and
   the variables the worker defines, where format 1 left an expression that
   read it as its text. ACTIVATE takes the same fix by passing the job's
-  `env` to the parse of its outputs. None of the 12 jobs with `outputs:`
+  `env` to the parse of its outputs. None of the 7 jobs with `outputs:`
   reads `env` in them.
 - **`matrix.<key>` in a job without a matrix is null**, where ACTIVATE gave
   the text `matrix.<key>` when no job of the workflow had a `strategy:`,
   and null when another job had one, so that what a job read depended on
   the workflow's other jobs. The compiler warns of it (`no_matrix`).
   ACTIVATE takes the same fix by always passing a matrix, empty for a job
-  without one, where the run is created. No known workflow but Meridian's
-  own test of the warning reads `matrix` in a job without a matrix.
+  without one, where the run is created. No known workflow reads `matrix`
+  in a job without a matrix.
 - **A value of an `env:` that reads itself, or values of one that read each
   other, read what is under the `env:`**: for a job's, the workflow's
   `env:`, and for a step's, the job's over that, where format 1 recursed
   until it failed. Values that read others of the same `env:` are
   evaluated in the order they read each other, as in format 1. None of the
-  136 `env:` blocks of the known workflows has a value that reads another
-  of its own block.
+  123 `env:` blocks has a value that reads another of its own block.
 - **A step's `cleanup:` reads `steps.<its own id>` as its step wrote it,
-  and a job's `outputs:` read the outputs of a step with an `id` and a
-  `cleanup:`**, where ACTIVATE's copy of the step that runs the cleanup
-  kept the step's `id`, and so emptied its outputs before the cleanup and
-  the job's `outputs:` read them. ACTIVATE takes the same fix by leaving
-  the `id` out of the copy. None of the 165 `cleanup:`s of the known
-  workflows is on a step with an `id`, and none reads `steps`.
+  and so do the cleanups after it and the job's `outputs:`, for a step
+  with an `id` and a `cleanup:`**, where ACTIVATE's copy of the step that
+  runs the cleanup kept the step's `id`, and so emptied its outputs before
+  the cleanup, the cleanups after it, which run in reverse order, and the
+  job's `outputs:` read them. ACTIVATE takes the same fix by leaving the
+  `id` out of the copy. None of the 155 `cleanup:`s is on a step with an
+  `id`, and none reads `steps`.
+- **`steps.<id>` with a key other than `outputs` reads as null, with a
+  warning (`steps_unknown_key`)**, where ACTIVATE read it as its own text,
+  such as `steps.build.result`, which no workflow means. ACTIVATE takes
+  the same fix by reading it as null. No known workflow reads one.
 
 ## Phases
 
@@ -376,9 +382,11 @@ its resolvers into a plan, in order:
      exist is a warning: ACTIVATE reads it as null or `""` and runs, and a
      workflow a step calls can read inputs its caller passes without
      defining them. A step reading a step that doesn't exist or doesn't run
-     before it, or a step's key other than `outputs`, is an error, since
-     ACTIVATE fails the step; in a job's outputs, which read it as `""`, it
-     is a warning.
+     before it is an error, since ACTIVATE fails the step; in a job's
+     outputs and a step's `cleanup:`, which read it as `""`, it is a
+     warning. A step's key other than `outputs` is a warning, and reads as
+     null, where ACTIVATE read it as its own text
+     ([Bug fixes to format 1](#bug-fixes-to-format-1)).
    - Reading a variable that isn't a secret, or defining an input that takes
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is
@@ -990,9 +998,9 @@ it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
 differs for an `include` entry that names no matrix key: it makes it a
 combination of its own, where GitHub Actions adds it to every combination.
 Format 1 keeps ACTIVATE's for now. Whether to take GitHub Actions' as a bug
-fix ([The workflow format](#the-workflow-format)) is open: of the 402
-workflows we know of, none has an `include` entry that names no matrix
-key, and only one of Meridian's own tests has one at all. An entry also matches the combinations earlier entries made, and
+fix ([The workflow format](#the-workflow-format)) is open: of the 220
+known workflows ([Bug fixes to format 1](#bug-fixes-to-format-1)), none
+has an `include` entry that names no matrix key, nor any `include` at all. An entry also matches the combinations earlier entries made, and
 two values match when they are equal, or a string and a number or a
 boolean whose text it is, as in ACTIVATE. Each instance's key is the job's
 name, `#` and its index from 0, as in `build#2`.
@@ -1304,12 +1312,14 @@ waking up or `meridian run` restarting must not make them all look lost.
   format 1 runs a copy of the step. The step's `if:` is evaluated again,
   with the job's status as it ends and without `success()`, so a step with
   no `if:` is cleaned up whatever the job's outcome, and one whose `if:` is
-  false then isn't: 40 of the 165 `cleanup:`s of the known workflows are
+  false then isn't: 37 of the 155 `cleanup:`s of the known workflows are
   on a step with an `if:`, and none of those calls a status function. It is
   evaluated as it runs (`plan.ReadyJob.Cleanup`), with every step's
   outputs, its own and later ones' among them, and reads one that nothing
   wrote as `""`. What it writes to `$OUTPUTS` is the job's, over what its
-  steps wrote.
+  steps wrote. A cleanup that fails fails the job, as a step does: the
+  cleanups after it read `failure()` as true, and the job's `outputs:`
+  read an output that nothing wrote as `""`.
 
 ### Outputs
 

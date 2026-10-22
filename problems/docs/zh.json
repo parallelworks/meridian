@@ -523,7 +523,7 @@
   },
   "steps_unknown_key": {
     "title": "步骤的未知键",
-    "why": "steps 中的每个步骤只有 outputs。",
+    "why": "steps 中的每个步骤只有 outputs，因此其他键读作 null。ACTIVATE 曾将其读作引用本身的文本，例如 steps.build.result，但没有工作流是这个意思。",
     "fix": [
       "读取 steps.<id>.outputs。"
     ]

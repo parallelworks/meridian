@@ -148,7 +148,7 @@ var (
 	StepNotEarlier             = define(Error, "step_not_earlier", "Step doesn't run before this", "id")
 	UndefinedStep              = define(Error, "undefined_step", "No such earlier step", "job", "id", "suggested", "suggestion")
 	OutputUndefinedStep        = define(Warning, "output_undefined_step", "Output reads no such step", "job", "id", "suggested", "suggestion")
-	StepsUnknownKey            = define(Error, "steps_unknown_key", "Unknown key of a step", "id", "key")
+	StepsUnknownKey            = define(Warning, "steps_unknown_key", "Unknown key of a step", "id", "key")
 	OutputStepsUnknownKey      = define(Warning, "output_steps_unknown_key", "Output reads an unknown key of a step", "id", "key")
 	CleanupUndefinedStep       = define(Warning, "cleanup_undefined_step", "Cleanup reads no such step", "job", "id", "suggested", "suggestion")
 	CleanupStepsUnknownKey     = define(Warning, "cleanup_steps_unknown_key", "Cleanup reads an unknown key of a step", "id", "key")

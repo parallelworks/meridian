@@ -124,10 +124,13 @@ type StepResult struct {
 	// Outputs are what the step wrote to $OUTPUTS, by name, as written:
 	// the job's later steps and its outputs: read them unmasked.
 	Outputs map[string]string
-	// CleanupOutputs are what the step's cleanup: wrote to $OUTPUTS, once
-	// it has run: they are the job's outputs, over its steps', as format 1
-	// has them, merged in the order the cleanups ran, the reverse of their
-	// steps'.
+	// CleanupOutcome and CleanupOutputs are how the step's cleanup: ended,
+	// once it has run, and what it wrote to $OUTPUTS. A cleanup that failed
+	// fails the job, and one that was cancelled cancels it, as a step does,
+	// for the cleanups after it and End. Its outputs are the job's, over
+	// its steps', as format 1 has them, merged in the order the cleanups
+	// ran, the reverse of their steps'.
+	CleanupOutcome Outcome
 	CleanupOutputs map[string]string
 }
 
@@ -629,9 +632,9 @@ func (j *ReadyJob) JobEnv(ctx context.Context, state JobState) (*JobEnv, problem
 // state.JobEnv, or else evaluated as JobEnv does, and returns the contexts
 // of its steps, without needs or steps, and the evaluation, which holds
 // its problems and the text of what it made from a secret. The job fails,
-// for failure(), when a step of it failed, and is cancelled, for
-// cancelled(), when state.Cancelled says so or a step of it was
-// cancelled, as one early-cancel: stops is.
+// for failure(), when a step of it, or a cleanup that has run, failed, and
+// is cancelled, for cancelled(), when state.Cancelled says so or a step
+// or a cleanup of it was cancelled, as one early-cancel: stops is.
 func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 	c := &stepContexts{
 		Run: state.Run, Needs: state.Needs, Status: expr.Status{Cancelled: state.Cancelled},
@@ -658,8 +661,8 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
 	}
 	for _, r := range state.Steps {
-		c.Status.Failed = c.Status.Failed || r.Outcome == OutcomeFailure
-		c.Status.Cancelled = c.Status.Cancelled || r.Outcome == OutcomeCancelled
+		c.Status.Failed = c.Status.Failed || r.Outcome == OutcomeFailure || r.CleanupOutcome == OutcomeFailure
+		c.Status.Cancelled = c.Status.Cancelled || r.Outcome == OutcomeCancelled || r.CleanupOutcome == OutcomeCancelled
 	}
 	return c, e
 }

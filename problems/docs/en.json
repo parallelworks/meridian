@@ -448,7 +448,7 @@
     ]
   },
   "steps_unknown_key": {
-    "why": "Each step in steps has outputs, and nothing else.",
+    "why": "Each step in steps has outputs, and nothing else, so another key reads as null. ACTIVATE read it as its own text, such as steps.build.result, which no workflow means.",
     "fix": [
       "Read steps.<id>.outputs."
     ]
