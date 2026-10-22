@@ -62,7 +62,9 @@ type Expect struct {
 	// Diagnostics are every error and warning loading the workflow
 	// produces, in any order. None means it loads cleanly.
 	Diagnostics []Diagnostic `yaml:"diagnostics,omitempty"`
-	// Values are values the loaded workflow must have, by JSON Pointer.
+	// Values are values the loaded workflow must have, by JSON Pointer, in
+	// the format area, and in the contexts area the values the phases after
+	// the run starts give at the JSON Pointers of what they evaluate.
 	Values map[string]any `yaml:"values,omitempty"`
 	// Inputs are the run's input values, in the inputs area, without those
 	// in Deferred. A run with errors doesn't start, so in a case with

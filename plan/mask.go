@@ -46,9 +46,9 @@ func (m *Masker) Add(values ...string) {
 	m.values = slices.Compact(next)
 }
 
-// masked returns the values m masks, which mustn't be changed, and the
+// snapshot returns the values m masks, which mustn't be changed, and the
 // length of the longest.
-func (m *Masker) masked() ([]string, int) {
+func (m *Masker) snapshot() ([]string, int) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.values, m.longest
@@ -59,7 +59,7 @@ func (m *Masker) masked() ([]string, int) {
 // cover, as one. Two values that are next to each other are masked one
 // after the other.
 func (m *Masker) Mask(s string) string {
-	values, _ := m.masked()
+	values, _ := m.snapshot()
 	return masked(s, find(s, values))
 }
 
@@ -138,7 +138,7 @@ type maskWriter struct {
 
 func (mw *maskWriter) Write(p []byte) (int, error) {
 	mw.held = append(mw.held, p...)
-	values, longest := mw.m.masked()
+	values, longest := mw.m.snapshot()
 	s := string(mw.held)
 	spans := find(s, values)
 	// What a value could start at and go on past what has been given is
@@ -182,7 +182,7 @@ func startsValue(s string, values []string) bool {
 // Close writes what the writer holds back, masked.
 func (mw *maskWriter) Close() error {
 	s := string(mw.held)
-	values, _ := mw.m.masked()
+	values, _ := mw.m.snapshot()
 	mw.held = nil
 	return mw.write(masked(s, find(s, values)))
 }

@@ -191,7 +191,8 @@ func (e *evaluation) jobRetry(r *JobRetry, pointer string) *ReadyJobRetry {
 }
 
 // duration evaluates a duration, v, at pointer, the value of key, in
-// seconds, or def when it is unset.
+// seconds, or def when it is unset, or null or "", as format 1 reads one
+// it has none of.
 func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 	if v.IsZero() {
 		return def
@@ -199,6 +200,9 @@ func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 	out, read, ok := e.value(v, pointer)
 	if !ok {
 		return 0
+	}
+	if out == nil || out == "" {
+		return def
 	}
 	seconds, ok := ParseDuration(out)
 	if !ok {
@@ -208,7 +212,7 @@ func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 }
 
 // count evaluates how many times something may run again, v, at pointer,
-// the value of key, or def when it is unset.
+// the value of key, or def when it is unset, or null or "".
 func (e *evaluation) count(v Value, pointer, key string, def int) int {
 	if v.IsZero() {
 		return def
@@ -217,7 +221,7 @@ func (e *evaluation) count(v Value, pointer, key string, def int) int {
 	if !ok {
 		return 0
 	}
-	if out == nil {
+	if out == nil || out == "" {
 		return def
 	}
 	n, ok := readCount(out)

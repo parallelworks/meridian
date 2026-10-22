@@ -668,3 +668,36 @@ func TestParseQuantities(t *testing.T) {
 		check("ParseDuration", result{n, ok}, in, want)
 	}
 }
+
+// A retry's interval, timeout and max-retries that an expression gives as
+// null or "" are its defaults, as format 1 reads them, and a timeout: is
+// none.
+func TestStepRetryEmpty(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      empty: {type: string, default: ""}
+jobs:
+  main:
+    steps:
+      - run: "true"
+        timeout: ${{ inputs.empty }}
+        retry:
+          max-retries: ${{ inputs.empty }}
+          interval: ${{ inputs.empty }}
+          timeout: ${{ inputs.missing }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, diags, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	if s.TimeoutSeconds != 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 5, TimeoutSeconds: 30}) {
+		t.Errorf("timeout %d, retry %+v", s.TimeoutSeconds, s.Retry)
+	}
+}
