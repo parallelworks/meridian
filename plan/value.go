@@ -185,6 +185,15 @@ func (v Value) EvalMarked(scope expr.Scope) (out any, marked bool, err error) {
 	return out, marked, err
 }
 
+// EvalRead evaluates the Value as Eval does, and reports what its templates
+// read of the values scope marks, as expr.Template.EvalRead does: whether
+// what it gives is to be masked, and whether it is private.
+//
+// It isn't built yet, and returns an error that says so.
+func (v Value) EvalRead(scope expr.Scope) (out any, read expr.Read, err error) {
+	return nil, expr.Read{}, errNotImplemented
+}
+
 // evalValue evaluates the templates in v, and notes in marked whether one
 // read a marked value.
 func evalValue(v any, scope expr.Scope, marked *bool) (any, error) {

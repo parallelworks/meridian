@@ -371,8 +371,10 @@ defaults are high enough for every workflow in the conformance suite. An
 expression's depth, `range`, and what one template builds and does are the
 language's limits, the same wherever a workflow runs. A plan's JSON nests at
 most 10,000 levels, as deep as its encoding reads, so a value nested deeper
-is an error. Today the file's size and the nets are fixed, and there are no
-others.
+is an error. The plan records the limits that the phases after Create
+apply, such as a matrix's instances, so every coordinator replica, and
+every rerun, applies the same ones. Today the file's size and the nets are
+fixed, there are no others, and the plan records none.
 
 ### Inputs
 
@@ -511,7 +513,11 @@ the run waits for ([On hopper](#on-hopper)).
 4. **Expand** each matrix whose values are known by now, written out or
    read from inputs or variables ([Matrices](#matrices)), so a matrix that
    can't be expanded fails the run before any job runs.
-5. **Keep** the variables it read in the secret record, and what it
+5. **Make the sessions** of the workflow's `sessions:`, through the
+   Sessions interface, under the names Create gave them. Create only
+   checks them, since a run that is created may never start, and making
+   them again for the same run makes nothing more.
+6. **Keep** the variables it read in the secret record, and what it
    evaluated there or as run state, by whether evaluating it read a
    variable or a password ([Phases](#phases)), and its diagnostics with the
    run, all in the transaction that ends its hopper job.
@@ -822,8 +828,9 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Events | Run, job and step events as they happen | The command's progress display |
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
-are interfaces in `compile`, and the coordinator's, Keys, Logs and Events,
-in `coordinator`. A resolver may be missing. Then the workflow features
+are interfaces in `compile`, the coordinator's, Keys, Logs and Events, in
+`coordinator`, and the backends' `Driver` in `backend`. A resolver may be
+missing. Then the workflow features
 that need it fail to compile, with an error saying which interface was
 missing.
 
@@ -903,6 +910,10 @@ key is the job's name, `#` and its index from 0, as in `build#2`.
   each with the same function where its values are known, and checks that
   the jobs and outputs a matrix reads exist; only the values wait. Today the
   compiler keeps every `strategy:` in the plan, and nothing expands one.
+- **A matrix job's `if:`** that doesn't read `matrix` is evaluated before
+  the matrix is expanded, so a job it skips has no instances. One that
+  reads `matrix` is evaluated for each instance: format 1 allows it, as
+  GitHub Actions doesn't, and the compiler accepts it.
 - **One hopper job.** A matrix job is one hopper job, whichever phase
   expanded it. When it is ready, the coordinator inserts its instances as a
   hopper workflow of their own, and finishes the job once they have all
@@ -1086,12 +1097,13 @@ and checks neither declared list.
 
 ### Leases and fencing
 
-A running attempt holds a lease of its own, with a token and a fencing
-number that grows with every attempt. The worker renews it with heartbeats,
-through whichever coordinator replica it reaches, and every write it makes
-(step events, logs, outputs, the result) carries the token and number. A
-write from a superseded attempt fails, and the worker that made it stops its
-job. hopper's leases today belong to the client that claimed a job; per-job
+A running attempt holds a lease of its own, with a fencing number that
+grows with every attempt. The worker renews it with heartbeats, through
+whichever coordinator replica it reaches, and every write it makes (step
+events, logs, outputs, the result) carries the attempt's credential, which
+names the attempt, and is stored only while the attempt holds the job's
+fencing number. A write from a superseded attempt fails, and the worker
+that made it stops its job. hopper's leases today belong to the client that claimed a job; per-job
 leases are something it doesn't have yet.
 
 Fencing numbers keep a superseded attempt's reports out of the store, but
@@ -1240,13 +1252,17 @@ with three things:
 - the coordinator's address;
 - the SHA-256 hash of the coordinator's TLS public key, for a connection that
   goes over TLS;
-- a bootstrap token: random, single-use and short-lived, valid for this one
-  attempt, and stored only as a hash. It travels in the job's environment or
-  in a file only the user can read, never on a command line, where other
-  users could see it in `ps`.
+- a bootstrap token: random and single-use, valid for this one attempt until
+  the attempt is claimed or its placement withdrawn, however long a
+  scheduler's queue holds the job, and stored only as a hash. It travels in
+  the job's environment or in a file only the user can read, never on a
+  command line, where other users could see it in `ps`.
 
-The worker exchanges the bootstrap token for the attempt's credential when
-it claims the attempt.
+The coordinator looks for the attempt's placement before it makes the
+token, and makes one only for a placement that doesn't exist yet. When the
+worker claims the attempt, it presents the bootstrap token with a
+credential it makes itself, which is the attempt's credential from then on,
+so the credential never travels from the coordinator.
 
 ### The worker API
 
@@ -1254,8 +1270,8 @@ The API is HTTP with JSON bodies, versioned in its path (`/v1/`), with
 errors as RFC 9457 problem details. Meridian's coordinator and a platform
 that embeds Meridian serve the same API.
 
-- **Claim:** exchange the bootstrap token for the attempt's credential, and
-  receive the job as Ready evaluated it; the values of its own job's
+- **Claim:** present the bootstrap token and the worker's credential, and
+  receive the job as Ready evaluated it, encoded as its plan is; the values of its own job's
   secrets and variables, and of the inputs Start completed that it reads;
   and its dependencies' outcomes and outputs.
 - **Heartbeat:** renew the lease.
@@ -1273,8 +1289,10 @@ retrying after a dropped connection can't apply a report twice. A write
 from a superseded attempt fails with a `fenced` problem.
 
 The attempt credential is an opaque random token, stored as a hash, that
-expires unless heartbeats renew it. It lets its holder do one thing: report
-on its own attempt. A step that reads it gains nothing that its job couldn't
+lasts until the attempt ends, so that a worker cut off from the coordinator
+can still deliver what it spooled. For a job that fences itself it lasts
+only while heartbeats renew it, and lapses with the lease. It lets its
+holder do one thing: report on its own attempt. A step that reads it gains nothing that its job couldn't
 already do, so on backends where steps and their worker run as the same
 user, no further separation is needed.
 

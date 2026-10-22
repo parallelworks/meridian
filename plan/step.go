@@ -3,14 +3,15 @@ package plan
 import (
 	"context"
 
+	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/problems"
 )
 
 // JobState is what a worker knows of its job as it runs it, which Step
 // and End read.
 type JobState struct {
-	// Run is what the run knows as a whole: the part of it the job reads,
-	// as the attempt received it when it was claimed.
+	// Run is the part of the run that the job reads, as the attempt
+	// received it when it was claimed.
 	Run RunValues
 	// Needs are the results of the jobs the job needs, by job name.
 	Needs map[string]JobResult
@@ -22,6 +23,12 @@ type JobState struct {
 	Steps []StepResult
 	// Cancelled is set once the job is being cancelled, for cancelled().
 	Cancelled bool
+	// Masked are the values the worker masks, as a Masker takes them: the
+	// run's secrets' (RunValues.Masked), the job's (ReadyJob.Masked), and
+	// those of each step so far (ReadyStep.Masked). End masks the job's
+	// outputs with them, as the worker masks its logs and its steps'
+	// outputs.
+	Masked []string
 }
 
 // A StepResult is how a step ended.
@@ -44,12 +51,15 @@ type ReadyStep struct {
 	ID    string `json:"id,omitempty"`
 	// Name is the step's name:, or "" without one.
 	Name string `json:"name,omitempty"`
+	// Skipped is set when the step's if: is false: the step doesn't run,
+	// its outcome is skipped, and nothing below is set.
+	Skipped bool `json:"skipped,omitzero"`
 	// Run is the command a run: step runs.
 	Run string `json:"run,omitempty"`
 	// Uses names the built-in action or the workflow a uses: step runs, as
-	// the plan holds it, and With is its with:.
+	// the plan holds it, and With is its with:, a mapping.
 	Uses string `json:"uses,omitempty"`
-	With any    `json:"with,omitempty"`
+	With Data   `json:"with,omitzero"`
 	// Shell is the step's shell:, in which {0} is the script's path, or ""
 	// for the default, a bash that isn't a login shell.
 	Shell string `json:"shell,omitempty"`
@@ -62,8 +72,11 @@ type ReadyStep struct {
 	// its job's when it has none, or "" for the run directory, as a step's
 	// working-directory: null asks.
 	WorkingDirectory string `json:"workingDirectory,omitempty"`
-	// SSH is the step's format 1 ssh:, evaluated, or nil without one.
-	SSH any `json:"ssh,omitempty"`
+	// SSH is the host a format 1 step's ssh: runs it on, outside any
+	// container: a member with the ssh backend and host isolation, whose
+	// settings are the ssh: mapping, evaluated, as a job's is (Target).
+	// It is nil without one.
+	SSH *backend.Member `json:"ssh,omitzero"`
 	// TimeoutSeconds is the step's timeout:, in seconds, or 0 for none.
 	TimeoutSeconds int64 `json:"timeoutSeconds,omitzero"`
 	// Retry is the step's retry:, with its defaults, or nil without one.
@@ -77,8 +90,9 @@ type ReadyStep struct {
 	// job if the step ran, or "".
 	Cleanup string `json:"cleanup,omitempty"`
 	// Masked are the values above that Step made from a secret, such as an
-	// env value that reads one: the worker masks each wherever it appears
-	// in the step's logs and outputs, as it masks the secrets themselves.
+	// env value that reads one, as a Masker takes them: the worker masks
+	// each wherever it appears in the job's logs and outputs, as it masks
+	// the secrets themselves.
 	Masked []string `json:"masked,omitempty"`
 }
 
@@ -97,15 +111,17 @@ type ReadyStepRetry struct {
 // the job's worker, as the step is about to run. It evaluates the job's
 // env: first, with the job context, then the step's if:, with the status
 // functions true or false as state.Steps and state.Cancelled say, and
-// gives nil if it is false: the step is skipped. Otherwise it evaluates
-// the step's env: and then the rest of the step, and gives the step.
+// gives the step Skipped if it is false. Otherwise it evaluates the step's
+// env: and then the rest of the step, and gives the step.
 //
 // Step reaches nothing, and gives the same result for the same job, index
 // and state, byte for byte. Its diagnostics are the step's problems, such
 // as an expression that fails, at the step's path and with no file
 // position, and never show a value made from a variable or a password; an
-// error among them fails the step. It returns an error only when ctx is
-// done before it finishes, and then ctx.Err().
+// error among them fails the step. It returns an error when ctx is done
+// before it finishes, ctx.Err(), and for an index that isn't one of the
+// job's steps, or state.Steps that aren't one for each step before it,
+// which are its caller's mistakes.
 //
 // It isn't built yet, and returns an error that says so.
 func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyStep, problems.Diagnostics, error) {
@@ -113,14 +129,16 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 }
 
 // End is the End phase: it evaluates the job's outputs:, on its worker,
-// once the job's steps have run, and gives them by name. An output that
-// holds a secret's value, or was made from a secret, is given with the
-// secret masked, problems.Masked, and a warning that names the output.
+// once the job's steps have run, and gives them by name. It masks each
+// with a Masker of state.Masked, and masks the whole of one that was made
+// from a secret: an output that holds a secret is given with it masked,
+// problems.Masked, and a warning that names the output.
 //
 // End reaches nothing, and gives the same outputs for the same job and
 // state, byte for byte. Its diagnostics are as Step's, at the job's
-// outputs:; an error among them fails the job. It returns an error only
-// when ctx is done before it finishes, and then ctx.Err().
+// outputs:; an error among them fails the job. It returns an error when
+// ctx is done before it finishes, ctx.Err(), and for state.Steps that
+// aren't one for each of the job's steps.
 //
 // It isn't built yet, and returns an error that says so.
 func (j *ReadyJob) End(ctx context.Context, state JobState) (map[string]string, problems.Diagnostics, error) {

@@ -6,8 +6,15 @@ import (
 	"github.com/parallelworks/meridian/expr"
 )
 
-// errNotImplemented is what the phases that aren't built yet return.
+// errNotImplemented is what the parts of the phases that aren't built yet
+// return.
 var errNotImplemented = errors.New("plan: not implemented")
+
+// notImplemented stops a caller of a part of the phases that isn't built
+// yet and has no error to return, rather than give it a wrong answer.
+func notImplemented(what string) {
+	panic("plan: " + what + " is not implemented") //nolint:forbidigo // a stub that a track of the runner builds; its contract is its doc comment
+}
 
 // A Phase is when in a run an expression is evaluated, which decides the
 // contexts it reads (docs/design.md, Phases and Contexts). Each of the five
@@ -25,7 +32,8 @@ const (
 	// values, secret ones included, the passwords, and the workflow's env.
 	PhaseStart
 	// PhaseStrategy is in Ready, before a matrix is expanded: needs and the
-	// status functions. A job's strategy: is evaluated here.
+	// status functions. A job's strategy: is evaluated here, and a matrix
+	// job's if: that doesn't read matrix.
 	PhaseStrategy
 	// PhaseReady is the rest of Ready (Job.Ready): matrix. A job's if:,
 	// runs-on:, resources:, retry:, timeout:, working-directory: and ssh:
@@ -43,17 +51,40 @@ const (
 	PhaseEnd
 )
 
+// String returns the phase's name in a problem's params, such as
+// context_not_known's phase, as the compiler has always given it:
+// run_created for Create and Start, whose expressions the compiler checks
+// as the run is created, strategy, job_ready and job_env, and other for
+// Step and End. The names are part of the problems' contract.
+func (p Phase) String() string {
+	switch p {
+	case PhaseCreate, PhaseStart:
+		return "run_created"
+	case PhaseStrategy:
+		return "strategy"
+	case PhaseReady:
+		return "job_ready"
+	case PhaseJobEnv:
+		return "job_env"
+	}
+	return "other"
+}
+
 // RunValues are what the phases after Start read of the run as a whole:
-// the plan's, completed by Start (compile.StartResult). They hold
-// variables' values and passwords, which the coordinator keeps only in the
-// run's secret record, and an attempt receives the part its job reads when
-// it is claimed.
+// the plan's, completed by Start (compile.StartResult). An attempt receives
+// the part its job reads when it is claimed (Job.Reads).
+//
+// A value is named by its path: its context, then the keys that lead to it
+// from there, a list's items by their indexes, joined with dots, as
+// Run.Secrets names one: inputs.creds.0.pass, vars.token, env.TOKEN. A
+// context's name alone is all of it. The names of the format's inputs,
+// variables and env never hold a dot.
 type RunValues struct {
 	// Format is the workflow's format, whose rules evaluation follows.
 	Format int `json:"format"`
-	// Inputs are the run's input values, complete: the plan's, with what
-	// Start evaluated and each password at its path.
-	Inputs map[string]any `json:"inputs,omitempty"`
+	// Inputs are the run's input values, complete, a mapping: the plan's,
+	// with what Start evaluated and each password at its path.
+	Inputs Data `json:"inputs,omitzero"`
 	// Env is the workflow's env:, as Start evaluated it.
 	Env map[string]string `json:"env,omitempty"`
 	// Org and Vars are the organization's and the user's variables, by name,
@@ -64,12 +95,47 @@ type RunValues struct {
 	// when it was created.
 	Remote   map[string]string `json:"remote,omitempty"`
 	Sessions map[string]string `json:"sessions,omitempty"`
-	// Secrets names each value above that is a secret or was made from one,
-	// by its path from its context, as Run.Secrets names them: vars.token,
-	// inputs.creds.0.pass, and what Start made from a secret, such as
-	// env.TOKEN or inputs.deploy. Each is marked in a phase's scope, so what
-	// an expression makes from it is masked too.
+	// Private names what of the above was made from an organization or user
+	// variable or a password, such as inputs.region or env.TOKEN, besides
+	// what is private whole: org, vars, and the passwords, which Secrets
+	// names. The coordinator keeps what is private only in the run's secret
+	// record, never shows it, and keeps the rest as run state too (Split).
+	Private []string `json:"private,omitempty"`
+	// Secrets names each value above that is a secret or was made from one:
+	// a secret variable, as in vars.token; a password, as in
+	// inputs.creds.0.pass; and what Start made from a secret, such as
+	// env.TOKEN. Each is private, and masked, and so is what an expression
+	// makes from it.
 	Secrets []string `json:"secrets,omitempty"`
+}
+
+// Split splits r into what the coordinator keeps only in the run's secret
+// record, the values that are private, and what it keeps as run state, for
+// whoever can see the run: the rest, with Private and Secrets, which name
+// values but hold none. JoinRunValues puts them together again.
+//
+// It isn't built yet, and stops its caller.
+func (r RunValues) Split() (record, state RunValues) {
+	notImplemented("RunValues.Split")
+	return
+}
+
+// JoinRunValues returns the run's values from what Split split them into.
+//
+// It isn't built yet, and stops its caller.
+func JoinRunValues(record, state RunValues) RunValues {
+	notImplemented("JoinRunValues")
+	return RunValues{}
+}
+
+// Masked returns the text of each value that Secrets names, as a Masker
+// takes it: a string as it is, and anything else as its JSON, with each
+// string in it on its own too.
+//
+// It isn't built yet, and stops its caller.
+func (r RunValues) Masked() []string {
+	notImplemented("RunValues.Masked")
+	return nil
 }
 
 // JobContext is the job context: the job instance an expression is
@@ -96,21 +162,21 @@ type Contexts struct {
 	// plain variables only.
 	Run RunValues
 	// Unknown names the values that exist but aren't known yet, by their
-	// paths, as Run.Secrets names them: a secret variable's when the run is
-	// created, as in vars.token. An expression that reads one is evaluated
-	// later (expr.UnknownError).
+	// paths: a secret variable's when the run is created, as in vars.token.
+	// An expression that reads one is evaluated later (expr.UnknownError).
 	Unknown []string
-	// Secrets names the values made from a secret in this phase, besides
-	// Run.Secrets: a value of the job's env: that read one (env.TOKEN), or
-	// matrix for an instance whose matrix values were (Instance.Secret).
-	Secrets []string
+	// Private and Secrets name what this phase made, besides Run's, from a
+	// variable or a password, and from a secret: a value of the job's env:
+	// (env.TOKEN), or matrix for an instance's matrix values
+	// (Instance.Private and Instance.Secret).
+	Private, Secrets []string
 	// Needs are the results of the jobs this one needs, by job name.
 	Needs map[string]JobResult
 	// Status is how the job or step got here, for the status functions.
 	Status expr.Status
-	// Matrix holds the instance's matrix values, or nothing for a job
-	// without a matrix.
-	Matrix map[string]any
+	// Matrix holds the instance's matrix values, a mapping, or nothing for
+	// a job without a matrix.
+	Matrix Data
 	// Job is the job context.
 	Job JobContext
 	// JobEnv is the job's env:, and StepEnv the step's, as evaluated: env
@@ -124,17 +190,21 @@ type Contexts struct {
 // context phase knows, in its one shape (docs/design.md, Contexts), and no
 // other, so that reading a later one is an expr.UnknownError. A context
 // that is known but empty is there all the same, so that a name it doesn't
-// have reads as "" or null. Run.Secrets and Secrets are marked
-// (expr.Scope.Marked), and Unknown's values are expr.Unknown.
+// have reads as "" or null. Unknown's values are expr.Unknown.
+//
+// It marks two sets of values, which an evaluation reports reading apart
+// (expr.Read): Scope.Marked, the secrets, which Run.Secrets and Secrets
+// name; and Scope.Private, the private values, which are org and vars,
+// every secret, and what Run.Private and Private name.
 //
 // The scope has no budget: the caller makes one for each group of
 // templates (expr.Scope.Budgeted). Its Resolver and Index are the caller's
-// to set, for input definitions.
+// to set, for input definitions. The compiler, the coordinator, the worker
+// and the WebAssembly package all build their scopes with NewScope, so a
+// context has one shape everywhere.
 //
-// The compiler, the coordinator, the worker and the WebAssembly package
-// all build their scopes with NewScope, so a context has one shape
-// everywhere. It isn't built yet, and returns an empty scope, in which
-// every context is unknown.
+// It isn't built yet, and stops its caller.
 func NewScope(phase Phase, c Contexts) expr.Scope {
+	notImplemented("NewScope")
 	return expr.Scope{}
 }

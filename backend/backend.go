@@ -1,13 +1,29 @@
-// Package backend defines execution groups, their members, and the
-// interface through which the coordinator starts workers on a member:
-// local, ssh, kubernetes, slurm or pbs, each a package under this one.
+// Package backend defines execution groups, their members, and the Driver
+// through which the coordinator starts workers on a member: local, ssh,
+// kubernetes, slurm or pbs, each a package under this one.
 //
-// This package holds only types and interfaces, so that the compiler,
-// which builds to WebAssembly, can read a group without importing a
-// backend.
+// This package holds only types and the interface, so that the compiler
+// and the plan, which build to WebAssembly, can name a group without
+// importing a backend.
+//
+// # Errors
+//
+// An error from a Driver that is, or wraps, a foundation *problem.Problem
+// says what is wrong with the member or with what was asked of it, such as
+// a scheduler that rejected a job: the coordinator records it with the
+// attempt, and its Code is the reason it compares, so that a job two
+// members fail for the same reason fails. Any other error means the driver
+// couldn't answer, such as a host it can't reach, and the coordinator
+// tries again.
 package backend
 
-import "context"
+import (
+	"context"
+	"encoding/json/jsontext"
+	"io"
+
+	"github.com/parallelworks/foundation/problem"
+)
 
 // A Group is an execution group: a named source of capacity, whose members
 // a job is placed on in order (docs/design.md, Execution groups).
@@ -21,59 +37,87 @@ type Group struct {
 type Member struct {
 	// Name identifies the member in its group, in an attempt's record.
 	Name string `json:"name"`
-	// Backend names the backend that starts workers on the member: local,
-	// ssh, kubernetes, slurm or pbs.
+	// Backend names the backend whose Driver starts workers on the member:
+	// local, ssh, kubernetes, slurm or pbs.
 	Backend string `json:"backend"`
-	// Settings are the backend's settings for the member, such as an SSH
-	// host, a Slurm partition and account, or a Kubernetes namespace, as
-	// JSON. Each backend defines its own.
-	Settings map[string]any `json:"settings,omitempty"`
+	// Settings are the backend's settings for the member, as JSON, which
+	// its driver decodes, refusing what it doesn't know: an SSH host, a
+	// Slurm partition and account, a Kubernetes namespace. The ssh
+	// backend's are format 1's ssh: keys.
+	Settings jsontext.Value `json:"settings,omitempty"`
 	// Isolation is how the member isolates jobs: the container runtime it
 	// names, such as podman, docker or apptainer, or host. "" is the
 	// backend's default, and a member never gets weaker isolation than it
-	// names: a member whose runtime is missing fails its jobs.
+	// names: one whose runtime is missing fails its jobs.
 	Isolation string `json:"isolation,omitempty"`
-	// Resources are what the member offers a job.
+	// Resources are the most the member offers a job.
 	Resources Resources `json:"resources,omitzero"`
+	// MaxWalltimeSeconds is the longest walltime the member allows a job,
+	// MarginSeconds what it adds to a job's timeout: for its walltime, for
+	// starting the worker, pulling the image, running cleanup: commands and
+	// reporting, and DefaultTimeoutSeconds the timeout of a job that has
+	// none. Each is 0 when the member doesn't say, and its driver's Probe
+	// may know it, as a scheduler's partition does.
+	MaxWalltimeSeconds    int64 `json:"maxWalltimeSeconds,omitzero"`
+	MarginSeconds         int64 `json:"marginSeconds,omitzero"`
+	DefaultTimeoutSeconds int64 `json:"defaultTimeoutSeconds,omitzero"`
 }
 
-// Resources are what a member offers a job. A job fits a member that
-// offers at least what its resources: asks for, and a job that asks for
-// nothing fits every member. A zero field offers none of that resource.
+// Resources are CPUs, memory and GPUs: what a job's resources: asks for,
+// or the most a member offers. A zero field is undeclared: a job that
+// doesn't declare one asks for none of it, and a member that doesn't
+// leaves it to its driver's Probe.
 type Resources struct {
-	// MilliCPU is in thousandths of a core.
+	// MilliCPU is in thousandths of a core: 4 is 4000, and 500m 500.
 	MilliCPU int64 `json:"milliCPU,omitzero"`
-	// Memory is in bytes.
+	// Memory is in bytes: 8Gi is 8 << 30.
 	Memory int64 `json:"memory,omitzero"`
 	GPU    int   `json:"gpu,omitzero"`
 }
 
-// A Backend starts workers on its members. The coordinator holds one for
-// each backend a group's members name, and calls it for whichever replica
-// handles a job, so a Backend keeps no state of its own between calls:
-// what it needs to find a placement again is in the placement.
-type Backend interface {
-	// Start places a worker for an attempt on m. It returns once the
+// A Driver starts workers on the members of one backend. The coordinator
+// holds one for each backend its groups' members name, and any of its
+// replicas calls it for any job, so a Driver keeps no state between calls
+// that another replica would need: what it needs to find a placement again
+// is in the placement, and in the member.
+type Driver interface {
+	// Probe says whether m can run a job that asks for demand now: whether
+	// it is healthy and can offer what the job asks for, within its longest
+	// walltime, and if so how soon it would start it. Placement leaves out
+	// a member whose Fit has a Problem, and ranks the rest by their
+	// Availability, in the group's order within each.
+	Probe(ctx context.Context, m *Member, demand Demand) (Fit, error)
+	// Connect makes m's workers able to reach the coordinator, at
+	// coordinator, where this replica listens, and returns the endpoint
+	// they reach it at from where they run: the coordinator's own Unix
+	// socket for local; a Unix socket on the host that the driver's SSH
+	// connection forwards, for ssh; or meridian relay on a login node, over
+	// TLS, for slurm and pbs. It returns the same endpoint each time for the
+	// same member, so that a worker placed through an earlier Connect, by
+	// this replica or one that has stopped, reaches the coordinator through
+	// a later one: a replica that takes a run over calls Connect for each
+	// member that has its attempts running. Close stops what it set up.
+	Connect(ctx context.Context, m *Member, coordinator Endpoint) (Endpoint, io.Closer, error)
+	// Place starts a worker for an attempt on m, and returns once the
 	// backend has the work, as a process started, a pod created or a batch
 	// job submitted, not once the worker runs.
 	//
-	// Placement is idempotent. The placement carries the attempt's ID, in
-	// a Slurm or PBS job's name, a pod's label or a process's arguments,
-	// and Start first looks for one that carries it, as Find does, and
-	// returns that one rather than place the attempt twice. A coordinator
-	// that crashed between placing and recording a placement places it
-	// again with the same request.
-	Start(ctx context.Context, m *Member, req StartRequest) (Placement, error)
+	// Placing is idempotent. The placement carries the attempt's ID, in a
+	// Slurm or PBS job's name, a pod's label or a process's arguments. The
+	// coordinator calls Find first, and makes the attempt's bootstrap token
+	// and calls Place only when Find found none, so a coordinator that
+	// crashed between placing and recording a placement finds it, and never
+	// places the attempt twice.
+	Place(ctx context.Context, m *Member, req PlaceRequest) (Placement, error)
 	// Find returns the placement on m that carries an attempt's ID, and
 	// false if there is none.
 	Find(ctx context.Context, m *Member, attempt string) (Placement, bool, error)
-	// Check reports whether a placement's worker is alive: whether a
-	// process runs, a pod hasn't ended, or a scheduler still has the job,
-	// queued or running. A worker that stops heartbeating is checked here
-	// before it is declared lost. A check that can't decide, such as one
-	// over an SSH connection that is down, returns Unknown and the error
-	// that says why, and the attempt isn't lost.
-	Check(ctx context.Context, m *Member, p Placement) (State, error)
+	// Check says what has become of a placement's worker. A worker that
+	// stops heartbeating is checked here before it is declared lost. A
+	// check that can't decide, such as one over an SSH connection that is
+	// down, gives Unknown and an error that says why, and the attempt isn't
+	// lost.
+	Check(ctx context.Context, m *Member, p Placement) (Status, error)
 	// Cancel withdraws a placement: it removes a scheduler's job (scancel,
 	// qdel), deletes a pod, or stops a process. The coordinator tells a
 	// running worker to stop through the worker API first, and cancels its
@@ -82,58 +126,150 @@ type Backend interface {
 	Cancel(ctx context.Context, m *Member, p Placement) error
 }
 
-// A StartRequest is what a backend starts a worker with.
-type StartRequest struct {
+// Demand is what a job asks of a member.
+type Demand struct {
+	Resources Resources
+	// TimeoutSeconds is the job's timeout:, or 0 when it has none, and the
+	// member's default applies.
+	TimeoutSeconds int64
+}
+
+// A Fit is what a member says of a job: whether it can run it, and how
+// soon.
+type Fit struct {
+	// Problem says why the member can't run the job: it is unhealthy,
+	// can't offer what the job asks for, or allows no walltime as long as
+	// the job's timeout and its margin. It is nil when it can.
+	Problem *problem.Problem
+	// Availability is how soon the member would start the job.
+	Availability Availability
+	// MaxWalltimeSeconds, MarginSeconds and DefaultTimeoutSeconds are the
+	// member's: its Member's, or else what its backend says, such as a
+	// partition's limit and default. Each is 0 when there is none.
+	MaxWalltimeSeconds    int64
+	MarginSeconds         int64
+	DefaultTimeoutSeconds int64
+}
+
+// Availability is how soon a member would start a job, which placement
+// ranks members by, the lower first. The zero Availability is none, a
+// Fit's with a Problem.
+type Availability int
+
+const (
+	// StartsNow is a member with what the job asks for free now.
+	StartsNow Availability = iota + 1
+	// HasCapacity is a member that has what the job asks for, but busy:
+	// it starts the job when work of its own ends.
+	HasCapacity
+	// WouldQueue is a member whose scheduler would queue the job.
+	WouldQueue
+)
+
+// An Endpoint is where a worker reaches the coordinator.
+type Endpoint struct {
+	// Address is a Unix socket's path, which starts with /, or a host and
+	// port, as in login1:7443, for TLS 1.3.
+	Address string
+	// KeyHash is sha256: and the hex of the SHA-256 digest of the
+	// coordinator's TLS public key, as DER SubjectPublicKeyInfo, which the
+	// worker checks the connection against; "" for a Unix socket.
+	KeyHash string
+}
+
+// A PlaceRequest is what a driver starts a worker with.
+type PlaceRequest struct {
 	// Attempt is the attempt's ID, unique across runs, which the placement
 	// carries.
 	Attempt string
 	// Name is a name for the work that a person can read, such as the run's
 	// ID and the job's key, for a scheduler's queue.
 	Name string
-	// Coordinator is the address the worker reaches the coordinator at, and
-	// KeyHash the hash of its TLS public key, or "" for a Unix socket, as
-	// workerapi.EnvCoordinator and workerapi.EnvKeyHash give them to the
-	// worker.
-	Coordinator string
-	KeyHash     string
-	// BootstrapToken is the attempt's bootstrap token: random, single-use
-	// and short-lived, which the worker exchanges for the attempt's
-	// credential. It goes in the worker's environment, or in a file only
-	// the user can read (workerapi.EnvBootstrapToken and
-	// workerapi.EnvBootstrapTokenFile), and never on a command line, where
-	// other users could see it, nor in a log.
+	// Coordinator is where the worker reaches the coordinator, as Connect
+	// gave it.
+	Coordinator Endpoint
+	// BootstrapToken is the attempt's bootstrap token: random and
+	// single-use, valid until the attempt is claimed or its placement
+	// withdrawn, however long a scheduler queues it. The coordinator keeps
+	// only its hash. It goes in the worker's environment, or in a file only
+	// the user can read, and never on a command line, where other users
+	// could see it, nor in a log.
 	BootstrapToken string
-	// TimeoutSeconds is the job's timeout:, in seconds, or 0 for none. A
-	// scheduler is asked for it, plus a margin the member sets, as the
-	// job's walltime.
+	// TimeoutSeconds is the job's timeout, or the member's default, in
+	// seconds, or 0 for none. A scheduler is asked for it, and the
+	// member's margin, as the job's walltime.
 	TimeoutSeconds int64
-	// Resources is the job's resources:, as Ready evaluated it, which a
-	// scheduler or Kubernetes is asked for; nil for none.
-	Resources any
+	// Resources are what the job's resources: asks for.
+	Resources Resources
+	// Image is the image the job's steps run in, as repository@sha256:
+	// and its digest, or "" for steps that run on the host.
+	Image string
+	// RunDir is the run's directory on the member, where steps run by
+	// default.
+	RunDir string
+	// SchedulerParams are the scheduler's parameters a format 1 runs-on:
+	// gives, as JSON, or nothing.
+	SchedulerParams jsontext.Value
+	// TraceParent is the W3C traceparent of the attempt's span, which the
+	// worker continues, or "".
+	TraceParent string
 }
 
-// A Placement is a worker that a backend started for an attempt. The
+// A Placement is a worker that a driver started for an attempt. The
 // coordinator records it with the attempt.
 type Placement struct {
 	// Attempt is the ID of the attempt it is for.
 	Attempt string `json:"attempt"`
 	// ID is the backend's own name for it: a Slurm or PBS job's ID, a pod's
-	// name, or a process's ID.
+	// name, or a process's ID with its start time, so that another process
+	// given the same ID later isn't taken for it.
 	ID string `json:"id"`
 }
 
-// A State is what a backend says of a placement's worker.
+// A Status is what has become of a placement's worker.
+type Status struct {
+	State State
+	// End is why a Dead placement's worker ended, when its backend knows.
+	End End
+}
+
+// A State is where a placement's worker is.
 type State int
 
 const (
 	// Unknown is a check that couldn't decide. It counts as not lost.
 	Unknown State = iota
-	// Alive is a worker that runs, or will once a scheduler starts it.
-	Alive
-	// Dead is a worker that has ended or will never start.
+	// Queued is a worker that a scheduler holds, that hasn't started.
+	Queued
+	// Running is a worker that runs.
+	Running
+	// Dead is a worker that has ended, or will never start.
 	Dead
-	// TimedOut is a worker that a scheduler ended at its job's time limit,
-	// as Slurm's TIMEOUT state says: dead, but timed out rather than lost
-	// (plan.ReasonTimeout).
-	TimedOut
+)
+
+// An End is why a placement's worker ended, as its backend says. The
+// coordinator turns it into the attempt's reason: EndTimedOut into
+// plan.ReasonTimeout and EndOutOfMemory into plan.ReasonOutOfMemory; any
+// other end of a worker that didn't complete its attempt is
+// plan.ReasonWorkerLost once a step has started, and
+// plan.ReasonSetupFailed before.
+type End string
+
+const (
+	// EndExited is a worker that exited, as one does once it has completed
+	// its attempt.
+	EndExited End = "exited"
+	// EndTimedOut is a worker a scheduler ended at its job's time limit,
+	// as Slurm's TIMEOUT state says.
+	EndTimedOut End = "timeout"
+	// EndOutOfMemory is a worker a scheduler or the kernel ended for using
+	// more memory than its job may.
+	EndOutOfMemory End = "out-of-memory"
+	// EndPreempted is a worker a scheduler ended to make room for other
+	// work.
+	EndPreempted End = "preempted"
+	// EndNodeFailed is a worker whose node failed.
+	EndNodeFailed End = "node-failed"
+	// EndWithdrawn is a placement that Cancel withdrew.
+	EndWithdrawn End = "withdrawn"
 )
