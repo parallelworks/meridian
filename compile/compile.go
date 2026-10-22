@@ -208,43 +208,15 @@ func (r *reporter) reportError(loc []string, shift int, err error) {
 	report(problems.ExpressionFailed, problems.Params{"reason": err.Error()}, 0, "")
 }
 
-// workflowParams are the params of the problems a value can have that show
-// the workflow, such as an input's or a job's name, or Meridian's own
-// limits, rather than the value.
-var workflowParams = map[string]bool{
-	"input": true, "job": true, "key": true, "name": true, "type": true, "what": true,
-	"options": true, "min": true, "max": true, "limit": true, "op": true,
-}
+// mask masks params as problems.MaskValues does.
+func mask(params problems.Params) problems.Params { return problems.MaskValues(params) }
 
-// mask returns params, those of a problem with a value that read a variable
-// or a password, or that holds a password, with what they show of the
-// value masked: each param but those that show the workflow is
-// problems.Masked, and there is no suggestion, which would be near the
-// value. A variable can hold a secret, and a password is one, so a
-// diagnostic never quotes one.
-func mask(params problems.Params) problems.Params {
-	out := make(problems.Params, len(params))
-	for name, v := range params {
-		if !workflowParams[name] {
-			v = problems.Masked
-		}
-		out[name] = v
-	}
-	if _, ok := params["suggested"]; ok {
-		problems.WithSuggestion(out, "", false)
-	}
-	return out
-}
-
-// maskedIf returns err, an error evaluating an expression, with its params
-// masked if the evaluation read a variable or a password. Only an
-// *expr.EvalError shows the values an expression read: a syntax error
-// shows the workflow's text, and a budget error Meridian's limits.
+// maskedIf returns err, an error evaluating an expression, with what it
+// shows of the values it read masked (expr.Masked) if the evaluation read
+// a variable or a password.
 func maskedIf(marked bool, err error) error {
-	if ee, ok := errors.AsType[*expr.EvalError](err); ok && marked {
-		c := *ee
-		c.Params = mask(ee.Params)
-		return &c
+	if marked {
+		return expr.Masked(err)
 	}
 	return err
 }

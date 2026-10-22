@@ -1,7 +1,6 @@
 package plan
 
 import (
-	jsonv2 "encoding/json/v2"
 	"slices"
 	"strings"
 
@@ -144,10 +143,10 @@ func JoinRunValues(record, state RunValues) RunValues {
 	return out
 }
 
-// Masked returns the text of each value that Secrets names, as a Masker
-// takes it: a string as it is, and anything else as its JSON, with each
-// string in it on its own too. Each text is given once, in the order of
-// Secrets, and an empty one not at all.
+// Masked returns the strings of each value that Secrets names, as a Masker
+// takes them: a string as it is, and each string in a list or a mapping,
+// but never the text of a boolean, a number or null (Masker). Each is given
+// once, in the order of Secrets, and an empty one not at all.
 func (r RunValues) Masked() []string {
 	all := r.tree()
 	var out []string
@@ -160,39 +159,27 @@ func (r RunValues) Masked() []string {
 	}
 	for _, name := range r.Secrets {
 		if v, ok := jsonptr.Lookup(all, splitPath(name)); ok {
-			maskedTexts(v, add)
+			maskedStrings(v, add)
 		}
 	}
 	return out
 }
 
-// maskedTexts gives add the text of v, a value made from a secret, as a
-// Masker takes it: a string as it is, and anything else as its JSON, then
-// each string in it on its own.
-func maskedTexts(v any, add func(string)) {
-	if s, ok := v.(string); ok {
-		add(s)
-		return
-	}
-	if data, err := jsonv2.Marshal(v, jsonv2.Deterministic(true)); err == nil {
-		add(string(data))
-	}
-	var walk func(v any)
-	walk = func(v any) {
-		switch v := v.(type) {
-		case string:
-			add(v)
-		case []any:
-			for _, item := range v {
-				walk(item)
-			}
-		case map[string]any:
-			for _, item := range jsonvalue.Sorted(v) {
-				walk(item)
-			}
+// maskedStrings gives add each string of v, a value made from a secret: v
+// itself if it is one, or each in it if it is a list or a mapping.
+func maskedStrings(v any, add func(string)) {
+	switch v := v.(type) {
+	case string:
+		add(v)
+	case []any:
+		for _, item := range v {
+			maskedStrings(item, add)
+		}
+	case map[string]any:
+		for _, item := range jsonvalue.Sorted(v) {
+			maskedStrings(item, add)
 		}
 	}
-	walk(v)
 }
 
 // JobContext is the job context: the job instance an expression is
@@ -273,7 +260,8 @@ type Contexts struct {
 // It marks two sets of values, which an evaluation reports reading apart
 // (expr.Read): Scope.Marked, the secrets, which Run.Secrets and Secrets
 // name; and Scope.Private, the private values, which are org and vars,
-// every secret, and what Run.Private and Private name.
+// every secret, what Run.Private and Private name, and the outputs of
+// Needs that are private (JobResult.Private).
 //
 // The scope has no budget: the caller makes one for each group of
 // templates (expr.Scope.Budgeted). Its Resolver and Index are the caller's
@@ -311,6 +299,11 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	scope := expr.Scope{Contexts: contexts}
 	if phase >= PhaseStrategy {
 		contexts["needs"] = needsContext(c.Needs)
+		for name, r := range c.Needs {
+			for _, output := range r.Private {
+				scope.Private.Add([]string{"needs", name, "outputs", output})
+			}
+		}
 		status := c.Status
 		scope.Status = &status
 	}

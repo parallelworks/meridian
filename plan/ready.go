@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -59,6 +60,10 @@ type JobResult struct {
 	Outcome Outcome `json:"outcome"`
 	// Outputs are the job's outputs, by name, with secrets masked.
 	Outputs map[string]string `json:"outputs,omitempty"`
+	// Private names the outputs that are private (EndResult.Private): the
+	// coordinator keeps their values only in the run's secret record, and
+	// the jobs that need the job read them as private.
+	Private []string `json:"private,omitempty"`
 	// Steps are the outputs of its steps that have ids, by id, with secrets
 	// masked: needs.<job>.steps.<id>.outputs.<name>.
 	Steps map[string]map[string]string `json:"steps,omitempty"`
@@ -75,8 +80,9 @@ type JobResult struct {
 // outcome is failure if an instance failed, otherwise cancelled if one was
 // cancelled, skipped if all were skipped, and success otherwise; an output,
 // or a step's, that more than one instance set has the value of the one
-// with the highest index. A job all of whose instances were skipped is
-// skipped because its needs failed if one of them was.
+// with the highest index, and is private if that instance's is. A job all
+// of whose instances were skipped is skipped because its needs failed if
+// one of them was.
 //
 // Which instance's output a job gives is a bug fix to format 1, in which
 // it is the last to finish's: no workflow can rely on which that is, and
@@ -84,6 +90,7 @@ type JobResult struct {
 func Combine(instances []JobResult) JobResult {
 	var out JobResult
 	failed, cancelled, skipped, needsFailed := false, false, true, false
+	private := map[string]bool{}
 	for _, r := range instances {
 		switch r.Outcome {
 		case OutcomeFailure:
@@ -98,6 +105,7 @@ func Combine(instances []JobResult) JobResult {
 				out.Outputs = map[string]string{}
 			}
 			out.Outputs[name] = v
+			private[name] = slices.Contains(r.Private, name)
 		}
 		for id, outputs := range r.Steps {
 			if out.Steps == nil {
@@ -107,6 +115,11 @@ func Combine(instances []JobResult) JobResult {
 				out.Steps[id] = map[string]string{}
 			}
 			maps.Copy(out.Steps[id], outputs)
+		}
+	}
+	for name, p := range jsonvalue.Sorted(private) {
+		if p {
+			out.Private = append(out.Private, name)
 		}
 	}
 	switch {
@@ -123,81 +136,95 @@ func Combine(instances []JobResult) JobResult {
 }
 
 // Reads returns the part of run that the job reads, which is what an
-// attempt of it receives when it is claimed: what the expressions that
-// its worker evaluates read, in its env:, its steps and its outputs:, of
-// the inputs, org and vars, each input or variable they name, or all of a
-// context that one reads whole, as inputs.* does; and the workflow's env,
-// which every step's environment holds, remote and sessions, whole.
+// attempt of it receives when it is claimed: what the expressions that its
+// worker evaluates read, in its env:, its steps and its outputs:, of the
+// inputs, org and vars; and the workflow's env, which every step's
+// environment holds, remote and sessions, whole. Of the inputs, it gives
+// what each reference's path leads to, as far as the path names a key of a
+// mapping or an index of a list, and all of what the path reads from
+// there, as a * or a slice does, or text holding JSON; an item of a list
+// before one it gives is null. Of org and vars, it gives each variable a
+// reference names, and all of a context one reads whole, as vars.* does.
 // Private and Secrets name what of it they name. What Ready evaluated, such
 // as an instance's matrix values, an attempt receives in its ReadyJob. The
 // coordinator never gives an attempt more.
 func (j *Job) Reads(run RunValues) RunValues {
-	// names holds the names each context's reads name, and whole the
-	// contexts read whole.
-	names := map[string]map[string]bool{"inputs": {}, "org": {}, "vars": {}}
-	whole := map[string]bool{}
+	all := run.tree()
+	var grants [][]string
 	for _, v := range j.workerValues() {
 		for _, e := range v.Exprs() {
 			for _, r := range e.Refs() {
-				if names[r.Context] == nil {
-					continue
-				}
-				if len(r.Path) == 0 || r.Path[0] == "*" || r.Path[0] == "[index]" {
-					whole[r.Context] = true
-				} else {
-					names[r.Context][r.Path[0]] = true
+				switch r.Context {
+				case "inputs":
+					grants = append(grants, granted(all, r.Path))
+				case "org", "vars":
+					path := []string{r.Context}
+					if len(r.Path) > 0 && r.Path[0] != "*" && r.Path[0] != "[index]" {
+						path = append(path, r.Path[0])
+					}
+					grants = append(grants, path)
 				}
 			}
 		}
 	}
-	reads := func(context, name string) bool {
-		if n := names[context]; n != nil {
-			return whole[context] || n[name]
-		}
-		return true
-	}
-	out := RunValues{
-		Format: run.Format, Env: maps.Clone(run.Env), Remote: maps.Clone(run.Remote), Sessions: maps.Clone(run.Sessions),
-	}
-	if inputs, ok := run.Inputs.Get().(map[string]any); ok {
-		read := map[string]any{}
-		for name, v := range inputs {
-			if reads("inputs", name) {
-				read[name] = jsonvalue.Clone(v)
-			}
-		}
-		out.Inputs = DataOf(read)
-	}
-	for _, c := range []struct {
-		name     string
-		from, to *map[string]string
-	}{{"org", &run.Org, &out.Org}, {"vars", &run.Vars, &out.Vars}} {
-		for name, v := range *c.from {
-			if reads(c.name, name) {
-				if *c.to == nil {
-					*c.to = map[string]string{}
-				}
-				(*c.to)[name] = v
-			}
+	grants = outermost(grants)
+	read := map[string]any{}
+	for _, path := range grants {
+		if v, ok := jsonptr.Lookup(all, path); ok {
+			setPath(read, path, jsonvalue.Clone(v))
 		}
 	}
-	kept := func(paths []string) []string {
+	out := fromTree(read)
+	out.Format = run.Format
+	out.Env, out.Remote, out.Sessions = maps.Clone(run.Env), maps.Clone(run.Remote), maps.Clone(run.Sessions)
+	if !run.Inputs.IsZero() && out.Inputs.IsZero() {
+		out.Inputs = DataOf(map[string]any{})
+	}
+	kept := func(names []string) []string {
 		var out []string
-		for _, p := range paths {
-			path := splitPath(p)
-			if len(path) == 1 && names[path[0]] != nil {
-				if whole[path[0]] || len(names[path[0]]) > 0 {
-					out = append(out, p)
-				}
-				continue
-			}
-			if reads(path[0], path[1]) {
-				out = append(out, p)
+		for _, name := range names {
+			path := splitPath(name)
+			if path[0] != "inputs" && path[0] != "org" && path[0] != "vars" ||
+				slices.ContainsFunc(grants, func(g []string) bool { return isPrefix(g, path) || isPrefix(path, g) }) {
+				out = append(out, name)
 			}
 		}
 		return out
 	}
 	out.Private, out.Secrets = kept(run.Private), kept(run.Secrets)
+	return out
+}
+
+// granted returns the path, inputs first, of what a reference to the
+// inputs that follows path reads of all, the run's values: each key of a
+// mapping and index of a list it names, up to what it reads all of, as a *,
+// a slice or an index spelled otherwise do, or text, which it reads the
+// JSON of.
+func granted(all map[string]any, path []string) []string {
+	out := []string{"inputs"}
+	v := all["inputs"]
+	for _, key := range path {
+		if key == "*" || key == "[index]" {
+			return out
+		}
+		switch c := v.(type) {
+		case map[string]any:
+			v = c[key]
+		case []any:
+			n, ok := index(key)
+			if !ok {
+				return out
+			}
+			if n < len(c) {
+				v = c[n]
+			} else {
+				v = nil
+			}
+		default:
+			return out
+		}
+		out = append(out, key)
+	}
 	return out
 }
 
@@ -303,8 +330,10 @@ type ReadyJob struct {
 	// Instance.Secret).
 	Private []string `json:"private,omitempty"`
 	Secrets []string `json:"secrets,omitempty"`
-	// Masked are the values Ready made from a secret, as a Masker takes
-	// them: the worker masks them, as it masks the run's secrets.
+	// Masked are the strings Ready made from a secret, as a Masker takes
+	// them: each string that a template that read one gave, and those of
+	// an instance's matrix values made from one. The worker masks them, as
+	// it masks the run's secrets.
 	Masked []string `json:"masked,omitempty"`
 	// Path is the JSON Pointer of the job in the workflow, for messages.
 	Path string `json:"path"`
@@ -482,7 +511,7 @@ func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.
 	e := newEvaluation(PhaseReady, c)
 	if i := in.Instance; i != nil && i.Secret {
 		// The instance's matrix values were made from a secret.
-		maskedTexts(i.Matrix.Get(), e.mask)
+		maskedStrings(i.Matrix.Get(), e.mask)
 	}
 	run, ok := e.condition(j.If, at(j.Path, "if"))
 	switch {

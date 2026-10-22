@@ -272,7 +272,7 @@ jobs:
 		t.Fatalf("plain#1: %+v, %v, %v", r, diags, err)
 	}
 	if rj := r.Job; rj.Key != "plain#1" || rj.Target.Group != "mac" || fmt.Sprint(rj.Matrix.Get()) != "map[os:mac]" ||
-		!slices.Equal(rj.Private, []string{"matrix"}) || !slices.Equal(rj.Secrets, []string{"matrix"}) || !slices.Equal(rj.Masked, []string{`{"os":"mac"}`, "mac"}) {
+		!slices.Equal(rj.Private, []string{"matrix"}) || !slices.Equal(rj.Secrets, []string{"matrix"}) || !slices.Equal(rj.Masked, []string{"mac"}) {
 		t.Errorf("plain#1 is %+v", rj)
 	}
 	r, _, _ = job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed})
@@ -507,7 +507,7 @@ jobs:
 	state.Steps[0].Outputs["o"] = "a secret-ish value"
 	state.Steps[0].Outcome = plan.OutcomeSuccess
 	s, diags, _ = rj.Step(t.Context(), 2, state)
-	if s != nil || !slices.Equal(codes(diags), []string{"from_json_invalid /jobs/main/steps/2/run"}) || !strings.Contains(fmt.Sprint(diags[0].Params["text"]), "a *** value") || strings.Contains(fmt.Sprint(diags), "secret-ish") {
+	if s != nil || !slices.Equal(codes(diags), []string{"from_json_invalid /jobs/main/steps/2/run"}) || diags[0].Params["text"] != problems.Masked || strings.Contains(fmt.Sprint(diags), "secret-ish") {
 		t.Errorf("step 2: %+v, %v", s, diags)
 	}
 	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeFailure})
@@ -523,8 +523,11 @@ jobs:
 	}
 }
 
-// End gives a job's outputs, with what holds a secret masked, and a
-// warning that names each.
+// End gives a job's outputs, its steps' merged in their order with its
+// outputs: over them, with what holds a secret masked, and a warning that
+// names each of its outputs: that does. One made from a step's output that
+// holds a secret is masked whole, as one made from a secret is, and a
+// problem with one shows no part of the secret.
 func TestEnd(t *testing.T) {
 	p := compiled(t, `
 jobs:
@@ -548,12 +551,12 @@ jobs:
 		Run: run, Masked: run.Masked(),
 		Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1", "y": "a s3cret"}}},
 	}
-	outputs, diags, err := ready.Job.End(t.Context(), state)
+	end, diags, err := ready.Job.End(t.Context(), state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(outputs) != "map[empty: holds:a *** made:*** plain:1]" {
-		t.Errorf("outputs %v", outputs)
+	if fmt.Sprint(end.Outputs) != "map[empty: holds:*** made:*** plain:1 x:1 y:a ***]" || end.Private != nil {
+		t.Errorf("outputs %v, private %q", end.Outputs, end.Private)
 	}
 	want := []string{
 		"from_json_invalid /jobs/main/outputs/fails",
@@ -563,7 +566,7 @@ jobs:
 	if got := codes(diags); !slices.Equal(got, want) {
 		t.Errorf("diagnostics %q, want %q", got, want)
 	}
-	if strings.Contains(fmt.Sprint(diags), "s3cret") {
+	if strings.Contains(fmt.Sprint(diags), "s3cret") || diags[0].Params["text"] != problems.Masked {
 		t.Errorf("a diagnostic shows the secret: %v", diags)
 	}
 	state.Steps = nil

@@ -189,24 +189,33 @@ func (v Value) EvalMarked(scope expr.Scope) (out any, marked bool, err error) {
 // read of the values scope marks, as expr.Template.EvalRead does: whether
 // what it gives is to be masked, and whether it is private.
 func (v Value) EvalRead(scope expr.Scope) (out any, read expr.Read, err error) {
-	out, err = evalValue(v.v, scope.Budgeted(), &read)
+	return v.evalLeaves(scope, nil)
+}
+
+// evalLeaves evaluates the Value as EvalRead does, and calls leaf, if it
+// isn't nil, with what each of its templates gives and read, so that what
+// a template that read a secret gave can be told from what the rest did.
+func (v Value) evalLeaves(scope expr.Scope, leaf func(out any, read expr.Read)) (out any, read expr.Read, err error) {
+	out, err = evalValue(v.v, scope.Budgeted(), &read, leaf)
 	return out, read, err
 }
 
-// evalValue evaluates the templates in v, and notes in read what they read
-// of the values scope marks.
-func evalValue(v any, scope expr.Scope, read *expr.Read) (any, error) {
+// evalValue evaluates the templates in v, notes in read what they read of
+// the values scope marks, and calls leaf, if it isn't nil, for each.
+func evalValue(v any, scope expr.Scope, read *expr.Read, leaf func(any, expr.Read)) (any, error) {
 	switch v := v.(type) {
 	case *expr.Template:
 		out, r, err := v.EvalRead(scope)
-		read.Marked = read.Marked || r.Marked
-		read.Private = read.Private || r.Private
+		*read = read.Or(r)
+		if err == nil && leaf != nil {
+			leaf(out, r)
+		}
 		return out, err
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
-			if out[i], err = evalValue(item, scope, read); err != nil {
+			if out[i], err = evalValue(item, scope, read, leaf); err != nil {
 				return nil, err
 			}
 		}
@@ -215,7 +224,7 @@ func evalValue(v any, scope expr.Scope, read *expr.Read) (any, error) {
 		out := make(map[string]any, len(v))
 		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = evalValue(item, scope, read); err != nil {
+			if out[k], err = evalValue(item, scope, read, leaf); err != nil {
 				return nil, err
 			}
 		}

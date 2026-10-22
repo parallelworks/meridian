@@ -637,7 +637,9 @@ release, the shape's decisions, or each job's secrets and variables.
 
 The secret record holds what a run needs that the plan can't: its
 passwords, from Create; the variables it read at Start, plain and secret;
-and what Start made from them.
+what Start made from them; and the job outputs made from a variable or a
+password but not from a secret, which jobs that need them read
+([Outputs](#outputs)).
 
 - **Encrypted.** The coordinator stores it beside the run, in the same
   database, encrypted with AES-256-GCM under a data key of its own, which
@@ -1105,9 +1107,25 @@ secret record ([Run data](#run-data)).
   variable that holds a secret should be a secret variable, and the
   compiler warns when a plain variable's name, such as `HF_TOKEN`, looks
   like a secret's.
+- **What is masked is text.** The masker is given strings: a secret's own
+  text, however short, unless it is empty, which is never masked; and each
+  string an expression made from one, a template at a time, so a secret
+  in one value of a step's `with:` masks only what that value's template
+  gave. It is never given the text of a boolean, a number or null that a
+  secret decided, such as whether a token is set, which would mask every
+  `true` in the job's logs and outputs. A job output made from a secret,
+  of whatever type, is masked whole instead ([Outputs](#outputs)). A
+  secret is masked as a log or an output can show it too: without the line
+  breaks it ends with, each of its lines of at least 4 bytes, as a key
+  printed a line at a time shows, and as JSON escapes it in a string.
 - **What a script does with a value can't be followed.** A secret that a
   step's script transforms, such as by encoding it in base64, isn't known
   to come from the secret, and isn't masked.
+- **A job masks only its own secrets.** A job's worker masks the secrets
+  its attempt received, which are those its expressions read. A secret
+  another job wrote to the run directory, which the job's steps can read
+  too, isn't masked in its logs: giving every attempt every secret, so that
+  it could, would give each one more than it reads.
 - **Diagnostics never quote a variable's value.** Warnings and errors kept
   with a run show `***` in place of a value that came from a variable.
 - **Permissions.** Format 1's `permissions:` lists what the run's token for
@@ -1181,7 +1199,17 @@ capped at 1 MB and a run's at 50 MB. Before the worker reports a job's
 outputs, it checks them against the values of the secrets its attempt
 received, and an output that holds one is reported with it masked, `***`,
 as logs are, and a warning that names the output; GitHub Actions leaves
-such an output out. When a job is claimed, it receives its dependencies'
+such an output out. An output that an expression made from a secret, or
+from a step's output that held one, is masked whole. A job's outputs are
+format 1's: what its steps wrote, the later step's where two wrote the same
+name, and its `outputs:` over them.
+
+An output made from an organization or user variable or a password, and
+not from a secret, isn't masked, since a plain variable isn't, but is
+private: End names it, the coordinator keeps its value only in the secret
+record, never in run state, and the jobs that need the job receive it with
+their needs and read it as private, so what they make of it is kept out of
+run state too. When a job is claimed, it receives its dependencies'
 outcomes and outputs with it, rather than reading each one back. hopper
 keeps finalized jobs' outputs only in its history, so this, too, needs
 something hopper doesn't have yet.

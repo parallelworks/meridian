@@ -110,3 +110,46 @@ func TestEvalReadThroughWorkflow(t *testing.T) {
 		}
 	}
 }
+
+// No operator or function drops a mark: what is made of a secret, or
+// decided by one, reads both marks.
+func TestEvalReadThroughOperators(t *testing.T) {
+	scope := expr.Scope{
+		Contexts: map[string]any{
+			"vars":   map[string]any{"token": "s3cret", "json": `{"a":"s3cret","b":[1,2]}`, "key": "a", "region": "eu"},
+			"inputs": map[string]any{"m": map[string]any{"a": "x", "b": "y"}, "l": []any{"p", "q"}, "hosts": []any{map[string]any{"n": "h", "pw": "s3cret"}}},
+		},
+		Marked:  expr.NewMarks([]string{"vars", "token"}, []string{"vars", "json"}, []string{"vars", "key"}, []string{"inputs", "hosts", "0", "pw"}),
+		Private: expr.NewMarks([]string{"vars"}, []string{"inputs", "hosts", "0", "pw"}),
+	}
+	for _, src := range []string{
+		"${{ format('{0}!', vars.token) }}",
+		"${{ join(fromJSON(vars.json).b, ',') }}",
+		"${{ toJSON(vars.*) }}",
+		"${{ fromJSON(vars.json).a }}",
+		"${{ contains(vars.token, 's') }}",
+		"${{ 'a' + vars.token }}",
+		"${{ vars.token || 'x' }}",
+		"${{ 'x' && vars.token }}",
+		"${{ inputs.hosts.*.pw }}",
+		"${{ inputs.hosts[0] }}",
+		"${{ inputs.hosts }}",
+		"${{ vars.token == 'x' }}",
+		"${{ vars.token != '' ? 'set' : 'unset' }}",
+		"${{ map(inputs.hosts, h => h.n) }}",
+		"${{ filter(inputs.hosts, h => h.pw == 'x') }}",
+		"${{ length(vars.token) }}",
+		"${{ startsWith(vars.token, 's') }}",
+		"${{ var.token }}",
+		"${{ fromJSON(vars.json)['a'] }}",
+		"${{ vars.*.length }}",
+	} {
+		tmpl, err := expr.ParseTemplate(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if v, read, err := tmpl.EvalRead(scope.Budgeted()); !read.Marked || !read.Private {
+			t.Errorf("%s = %v, %v: read %+v", src, v, err, read)
+		}
+	}
+}

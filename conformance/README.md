@@ -196,11 +196,15 @@ expect:
   `steps` gives, and its `outputs:` once `steps` gives every step.
 - `expect.skipped` lists the JSON Pointers of the jobs and steps whose
   `if:` is false, and every other job and step evaluated runs.
+- `expect.private` lists the JSON Pointers of the job outputs that are
+  private: made from a variable or a password and not from a secret, so
+  kept only with the run's secrets. No other output is.
 - `expect.values` are the values at JSON Pointers into the workflow, as
   their phase gives them: a step's `run`, `name`, `cleanup`,
   `working-directory` and `with`, and `env/<name>`, which is the
   environment the step runs with, its own `env:` or not; a job's
-  `outputs/<name>`; and its `runs-on`, or `runs-on/execution-group`, which
+  `outputs/<name>`, each of its outputs, those its steps wrote among them;
+  and its `runs-on`, or `runs-on/execution-group`, which
   is the execution group it names.
 - `expect.diagnostics` are those of compiling the workflow and of each
   phase together.

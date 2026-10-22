@@ -2,6 +2,7 @@ package plan_test
 
 import (
 	"bytes"
+	"errors"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -109,5 +110,63 @@ func TestMaskerConcurrent(t *testing.T) {
 	wg.Wait()
 	if got := m.Mask("ab"); got != "******" {
 		t.Errorf("Mask = %q", got)
+	}
+}
+
+// A writer that fails part of a write: what it didn't write is written
+// first by the next write, once.
+type flakyWriter struct {
+	out  bytes.Buffer
+	fail int
+}
+
+func (w *flakyWriter) Write(p []byte) (int, error) {
+	if w.fail > 0 {
+		w.fail--
+		n := len(p) / 2
+		w.out.Write(p[:n])
+		return n, errors.New("short")
+	}
+	return w.out.Write(p)
+}
+
+// A Writer that its writer fails writes nothing twice, and a write after
+// Close fails. Writes from more than one goroutine are each masked whole.
+func TestMaskWriterFailures(t *testing.T) {
+	var out flakyWriter
+	out.fail = 1
+	w := plan.NewMasker("s3cret").Writer(&out)
+	if n, err := w.Write([]byte("one s3cret two\n")); n != 15 || err == nil {
+		t.Errorf("a failed write: %d, %v", n, err)
+	}
+	if _, err := w.Write([]byte("three\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if out.out.String() != "one *** two\nthree\n" {
+		t.Errorf("wrote %q", out.out.String())
+	}
+	if _, err := w.Write([]byte("late")); err == nil {
+		t.Error("a write after Close")
+	}
+
+	var shared bytes.Buffer
+	cw := plan.NewMasker("s3cret").Writer(&shared)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 100 {
+				_, _ = cw.Write([]byte("s3cret\n"))
+			}
+		})
+	}
+	wg.Wait()
+	if err := cw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("***\n", 800); shared.String() != want {
+		t.Errorf("concurrent writes gave %d bytes, want %d", shared.Len(), len(want))
 	}
 }

@@ -370,8 +370,11 @@ type Complete struct {
 	// Code is the reason placement compares, so a job two members fail for
 	// the same reason fails. It is nil otherwise.
 	Problem *problem.Problem `json:"problem,omitempty"`
-	// Outputs are the job's outputs, as End gave them.
-	Outputs map[string]string `json:"outputs,omitempty"`
+	// Outputs are the job's outputs, as End gave them, and PrivateOutputs
+	// names those that are private (plan.EndResult.Private), whose values
+	// the coordinator keeps only in the run's secret record.
+	Outputs        map[string]string `json:"outputs,omitempty"`
+	PrivateOutputs []string          `json:"privateOutputs,omitempty"`
 	// Diagnostics are End's problems with the job's outputs.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
 }

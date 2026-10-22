@@ -2,7 +2,6 @@ package plan
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -93,18 +92,20 @@ func (e *ExpandError) Error() string { return e.Kind.Message(e.Params) }
 // matrix's values are known when the run is created, Start expands one
 // whose values are known when the run starts, and Ready one that reads
 // needs. It counts the instances before it makes them, so a matrix far
-// over the limit costs no more than one at it. It looks at no more than
-// 2^24 combinations of its keys' values, and exclude entries of more than
-// one key to check them against, together: a matrix with more than that to
-// look at before its exclude entries take it down to the limit is over the
-// limit too.
+// over the limit costs no more than one at it: it reads each value of a
+// key once, to index it by its text, and looks at no more than 2^24
+// combinations of its keys' values, comparisons of an exclude or include
+// entry's values with them, and entries checked against them, together. A
+// matrix with more than that to look at is over the limit too.
 //
 // It returns an *ExpandError for a matrix that has no instance, more than
 // limits.MaxInstances or an entry of the wrong shape, and the error of
 // evaluating the strategy otherwise: an *expr.UnknownError when it reads
 // what scope doesn't have yet, such as needs when the run is created. The
-// params of either show no value made from what scope marks as private.
-// When ctx is done before it finishes, it returns ctx.Err().
+// params of either show no value made from what scope marks as private,
+// nor a key of a matrix whose keys are made from one, which an error's
+// Path leaves out too. When ctx is done before it finishes, it returns
+// ctx.Err().
 func Expand(ctx context.Context, job *Job, scope expr.Scope, limits Limits) (*Expansion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -120,15 +121,26 @@ func Expand(ctx context.Context, job *Job, scope expr.Scope, limits Limits) (*Ex
 	values := make([]any, 3)
 	for i, v := range []Value{s.Matrix, s.FailFast, s.MaxParallel} {
 		out, r, err := v.EvalRead(scope)
-		read.Marked, read.Private = read.Marked || r.Marked, read.Private || r.Private
+		read = read.Or(r)
 		if err != nil {
-			return nil, maskedError(err, read)
+			if read.Private {
+				err = expr.Masked(err)
+			}
+			return nil, err
 		}
 		values[i] = out
 	}
-	x := expansion{ctx: ctx, pointer: jsonptr.Append(job.Path, "strategy", "matrix"), private: read.Private, max: limits.MaxInstances}
+	x := &expansion{
+		ctx: ctx, pointer: jsonptr.Append(job.Path, "strategy", "matrix"), private: read.Private,
+		max: limits.MaxInstances, written: map[string]bool{"include": true, "exclude": true},
+	}
 	if x.max <= 0 {
 		x.max = DefaultMaxInstances
+	}
+	if m, ok := s.Matrix.v.(map[string]any); ok {
+		for k := range m {
+			x.written[k] = true
+		}
 	}
 	combos, err := x.combinations(values[0])
 	if err != nil {
@@ -155,24 +167,12 @@ func Expand(ctx context.Context, job *Job, scope expr.Scope, limits Limits) (*Ex
 	return e, nil
 }
 
-// maskedError returns err, an error evaluating a strategy that read what
-// read says, with the params that show a value masked if it read a private
-// value.
-func maskedError(err error, read expr.Read) error {
-	if ee, ok := errors.AsType[*expr.EvalError](err); ok && read.Private {
-		c := *ee
-		c.Params = maskParams(ee.Params)
-		return &c
-	}
-	return err
-}
-
 // maxLooks is how much Expand looks at to count a matrix's combinations,
 // whatever its exclude entries remove: each combination of its keys' values,
-// and each exclude entry of more than one key it checks one against.
-// It is Meridian's own limit, so that a matrix whose keys have far more
-// combinations than it may have, and exclude entries that remove most of
-// them, can't make Expand look at each.
+// each comparison of an entry's value with a key's, and each entry it checks
+// one against. It is Meridian's own limit, so that a matrix whose keys have
+// far more combinations than it may have, and exclude entries that remove
+// most of them, can't make Expand look at each.
 const maxLooks = 1 << 24
 
 // An expansion is a matrix being expanded.
@@ -180,18 +180,45 @@ type expansion struct {
 	ctx context.Context
 	// pointer is the matrix's JSON Pointer, and private is set when its
 	// values were made from a private value, so that a problem with them
-	// doesn't show them.
+	// doesn't show them. written holds the keys the workflow writes, which
+	// show nothing of a value.
 	pointer string
 	private bool
-	// max is the most instances the matrix may have.
-	max int
+	written map[string]bool
+	// max is the most instances the matrix may have, and looks counts what
+	// it has looked at, toward maxLooks.
+	max   int
+	looks int
+}
+
+// look counts n more looks, and fails once there are more than maxLooks,
+// or ctx is done, which it checks every 4096 looks.
+func (x *expansion) look(n int) error {
+	before := x.looks
+	x.looks += n
+	if x.looks>>12 == before>>12 {
+		return nil
+	}
+	if err := x.ctx.Err(); err != nil {
+		return err
+	}
+	if x.looks > maxLooks {
+		return x.fail(problems.MatrixTooLarge, problems.Params{"limit": x.max})
+	}
+	return nil
 }
 
 // fail returns an *ExpandError of kind k at the JSON Pointer of keys under
-// the matrix's.
+// the matrix's. For a matrix made from a private value, the params that
+// show a value are masked, and so is a key the workflow doesn't write,
+// which the JSON Pointer leaves out.
 func (x *expansion) fail(k *problems.Kind, params problems.Params, keys ...string) error {
 	if x.private {
-		params = maskParams(params)
+		params = problems.MaskValues(params)
+		if key, ok := params["key"].(string); ok && !x.written[key] {
+			params["key"] = problems.Masked
+			keys = nil
+		}
 	}
 	return &ExpandError{Kind: k, Params: params, Path: jsonptr.Append(x.pointer, keys...)}
 }
@@ -203,7 +230,7 @@ func (x *expansion) combinations(m any) ([]map[string]any, error) {
 		return nil, x.fail(problems.WrongType, problems.Params{"count": 1, "type1": "object", "has_got": true, "got": typeName(m)})
 	}
 	var keys []string
-	var lists [][]any
+	var lists []*valueList
 	var includes, excludes []map[string]any
 	for k, v := range jsonvalue.Sorted(matrix) {
 		if k == "include" || k == "exclude" {
@@ -222,20 +249,21 @@ func (x *expansion) combinations(m any) ([]map[string]any, error) {
 		if !ok {
 			return nil, x.fail(problems.MatrixNotList, problems.Params{"key": k, "value": problems.Show(v)}, k)
 		}
-		keys, lists = append(keys, k), append(lists, list)
+		if err := x.look(len(list)); err != nil {
+			return nil, err
+		}
+		keys, lists = append(keys, k), append(lists, newValueList(list))
 	}
 	combos, err := x.product(keys, lists, excludes)
 	if err != nil {
 		return nil, err
 	}
-	for i, include := range includes {
-		if i%64 == 0 {
-			if err := x.ctx.Err(); err != nil {
-				return nil, err
-			}
-		}
+	for _, include := range includes {
 		merged := false
 		for _, c := range combos {
+			if err := x.look(1); err != nil {
+				return nil, err
+			}
 			if matchesIncluded(c, include, keys) {
 				for k, v := range include {
 					c[k] = jsonvalue.Clone(v)
@@ -277,80 +305,128 @@ func (x *expansion) entries(key string, v any) ([]map[string]any, error) {
 	return out, nil
 }
 
+// A valueList is a key's values, indexed by what they match: a scalar by
+// its text, null apart, and lists and mappings, which match only those
+// whose items match, in a list of their own.
+type valueList struct {
+	values     []any
+	byText     map[string][]int
+	nulls      []int
+	containers []int
+}
+
+func newValueList(values []any) *valueList {
+	l := &valueList{values: values, byText: map[string][]int{}}
+	for i, v := range values {
+		switch v.(type) {
+		case nil:
+			l.nulls = append(l.nulls, i)
+		case []any, map[string]any:
+			l.containers = append(l.containers, i)
+		default:
+			t := expr.Text(v)
+			l.byText[t] = append(l.byText[t], i)
+		}
+	}
+	return l
+}
+
+// matching returns the indexes, in order, of the values that match want,
+// and counts what it compares toward the matrix's looks.
+func (x *expansion) matching(l *valueList, want any) ([]int, error) {
+	switch want.(type) {
+	case nil:
+		return l.nulls, x.look(1)
+	case []any, map[string]any:
+		var out []int
+		for _, i := range l.containers {
+			if err := x.look(1); err != nil {
+				return nil, err
+			}
+			if sameValue(l.values[i], want) {
+				out = append(out, i)
+			}
+		}
+		return out, nil
+	}
+	return l.byText[expr.Text(want)], x.look(1)
+}
+
 // product returns the combinations of the values of keys, which lists
 // holds, the first key changing slowest, without those an entry of
 // excludes matches. It fails if there are more than the matrix may have.
-func (x *expansion) product(keys []string, lists [][]any, excludes []map[string]any) ([]map[string]any, error) {
+func (x *expansion) product(keys []string, lists []*valueList, excludes []map[string]any) ([]map[string]any, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
 	// allowed holds the indexes of each key's values that no exclude entry
 	// of that key alone removes, and others the entries of more than one
-	// key, as which of each of their keys' values they match.
-	allowed := make([][]int, len(keys))
-	for k, list := range lists {
-		allowed[k] = make([]int, len(list))
-		for i := range list {
-			allowed[k][i] = i
-		}
-	}
+	// key, as the indexes of the values of each of their keys they match.
+	removed := make([]map[int]bool, len(keys))
 	type entry struct {
 		keys  []int
-		match [][]bool
+		match [][]int
 	}
 	var others []entry
 	for _, ex := range excludes {
 		e := entry{}
-		known := true
+		matches := true
 		for name, want := range jsonvalue.Sorted(ex) {
 			k, ok := slices.BinarySearch(keys, name)
 			if !ok {
-				known = false
+				// A combination has only the matrix's keys.
+				matches = false
 				break
 			}
-			match := make([]bool, len(lists[k]))
-			for i, v := range lists[k] {
-				match[i] = sameValue(v, want)
+			match, err := x.matching(lists[k], want)
+			if err != nil {
+				return nil, err
+			}
+			if len(match) == 0 {
+				matches = false
+				break
 			}
 			e.keys, e.match = append(e.keys, k), append(e.match, match)
 		}
 		switch {
-		case !known:
-			// A combination has only the matrix's keys, so the entry
-			// matches none.
+		case !matches:
+			// The entry matches no combination.
 		case len(e.keys) == 0:
 			return nil, nil
 		case len(e.keys) == 1:
-			k, match := e.keys[0], e.match[0]
-			allowed[k] = slices.DeleteFunc(allowed[k], func(i int) bool { return match[i] })
+			k := e.keys[0]
+			if removed[k] == nil {
+				removed[k] = map[int]bool{}
+			}
+			for _, i := range e.match[0] {
+				removed[k][i] = true
+			}
 		default:
 			others = append(others, e)
 		}
 	}
-	for _, a := range allowed {
-		if len(a) == 0 {
+	allowed := make([][]int, len(keys))
+	for k, l := range lists {
+		for i := range l.values {
+			if !removed[k][i] {
+				allowed[k] = append(allowed[k], i)
+			}
+		}
+		if len(allowed[k]) == 0 {
 			return nil, nil
 		}
 	}
 	var kept [][]int
 	at := make([]int, len(keys))
-	for looks, next := 0, 0; ; {
-		if looks >= next {
-			if err := x.ctx.Err(); err != nil {
-				return nil, err
-			}
-			if looks > maxLooks {
-				return nil, x.fail(problems.MatrixTooLarge, problems.Params{"limit": x.max})
-			}
-			next = looks + 1<<12
+	for {
+		if err := x.look(1 + len(others)); err != nil {
+			return nil, err
 		}
-		looks++
 		excluded := false
 		for _, e := range others {
-			looks++
 			all := true
 			for j, k := range e.keys {
-				if !e.match[j][allowed[k][at[k]]] {
+				if _, ok := slices.BinarySearch(e.match[j], allowed[k][at[k]]); !ok {
 					all = false
 					break
 				}
@@ -386,7 +462,7 @@ func (x *expansion) product(keys []string, lists [][]any, excludes []map[string]
 	for i, combo := range kept {
 		c := make(map[string]any, len(keys))
 		for k, j := range combo {
-			c[keys[k]] = jsonvalue.Clone(lists[k][j])
+			c[keys[k]] = jsonvalue.Clone(lists[k].values[j])
 		}
 		combos[i] = c
 	}

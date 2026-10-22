@@ -317,7 +317,7 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 	k := jsonptr.Format(location)
 	b := ev.scope.budget
 	if m, ok := ev.done[k]; ok && ev.count(m) {
-		b.read = b.read.or(ev.marked[m])
+		b.read = b.read.Or(ev.marked[m])
 		return m.v, nil
 	}
 	switch v := v.(type) {

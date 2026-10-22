@@ -18,10 +18,11 @@ import (
 // Marks are a value, as a slice is: a copy holds the paths it was copied
 // with and those added to it since, and none added to the Marks it was
 // copied from. So a scope holds the paths its Marked and Private held when
-// they were set, and not those added to the Marks they were set from after. The paths are
-// kept where they never change, so that the evaluations that share a
-// budget (Scope.Budgeted), which index them, find each path their scope's
-// Marks hold, however Marks are copied, added to or assigned.
+// they were set, and not those added to the Marks they were set from
+// after. The paths are kept where they never change, so that the
+// evaluations that share a budget (Scope.Budgeted), which index them, find
+// each path their scope's Marks hold, however Marks are copied, added to or
+// assigned.
 //
 // Marks aren't safe for concurrent use: Add mustn't run while another
 // goroutine reads the same Marks, or a copy of them, as an evaluation does.

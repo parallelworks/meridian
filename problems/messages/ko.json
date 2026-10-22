@@ -96,6 +96,7 @@
   "matrix_empty": "매트릭스에 조합이 없으므로 작업의 인스턴스가 없습니다.",
   "matrix_too_large": "매트릭스의 조합이 매트릭스에 허용되는 최대 개수인 {limit}개보다 많습니다.",
   "output_masked": "‘{name}’ 출력에 시크릿이 들어 있었으므로 해당 부분은 마스킹됩니다.",
+
   "expression_empty": "표현식이 비어 있습니다.",
   "expression_too_deep": "표현식의 중첩이 {max}단계를 넘습니다.",
   "expression_ends_early": "표현식이 완성되기 전에 끝났습니다.",

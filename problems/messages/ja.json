@@ -96,6 +96,7 @@
   "matrix_empty": "マトリックスに組み合わせがないため、ジョブのインスタンスがありません。",
   "matrix_too_large": "マトリックスの組み合わせが、マトリックスに許される最大数の {limit} を超えています。",
   "output_masked": "出力「{name}」にはシークレットが含まれていたため、その部分はマスクされています。",
+
   "expression_empty": "式が空です。",
   "expression_too_deep": "式の入れ子が {max} 段階を超えています。",
   "expression_ends_early": "式が完成する前に終わっています。",

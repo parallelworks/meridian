@@ -93,6 +93,9 @@ func TestContextsConformance(t *testing.T) {
 			if g, w := slices.Sorted(slices.Values(r.skipped)), slices.Sorted(slices.Values(c.Expect.Skipped)); !slices.Equal(g, w) {
 				t.Errorf("skipped %q, want %q", g, w)
 			}
+			if g, w := slices.Sorted(slices.Values(r.private)), slices.Sorted(slices.Values(c.Expect.Private)); !slices.Equal(g, w) {
+				t.Errorf("private outputs %q, want %q", g, w)
+			}
 			for pointer, want := range c.Expect.Values {
 				got, ok := r.got[pointer]
 				if !ok {
@@ -154,9 +157,9 @@ type contextsRun struct {
 	run plan.RunValues
 	// got holds the values evaluated, by their JSON Pointers, and skipped
 	// the JSON Pointers of the jobs and steps skipped.
-	got     map[string]any
-	skipped []string
-	diags   problems.Diagnostics
+	got              map[string]any
+	skipped, private []string
+	diags            problems.Diagnostics
 }
 
 // job evaluates job, with what state says is known of it.
@@ -227,13 +230,19 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		return
 	}
 	js.Steps = toResults(state.Steps)
-	outputs, diags, err := rj.End(ctx, js)
+	end, diags, err := rj.End(ctx, js)
 	r.diags = append(r.diags, diags...)
 	if err != nil {
 		t.Fatalf("ending %s: %v", job.Name, err)
 	}
-	for name, v := range outputs {
+	if end == nil {
+		return
+	}
+	for name, v := range end.Outputs {
 		r.got[job.Path+"/outputs/"+name] = v
+	}
+	for _, name := range end.Private {
+		r.private = append(r.private, job.Path+"/outputs/"+name)
 	}
 }
 

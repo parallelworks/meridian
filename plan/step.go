@@ -91,10 +91,12 @@ type ReadyStep struct {
 	// Cleanup is the step's cleanup: command, which runs at the end of its
 	// job if the step ran, or "".
 	Cleanup string `json:"cleanup,omitempty"`
-	// Masked are the values above that Step made from a secret, such as an
-	// env value that reads one, as a Masker takes them: the worker masks
-	// each wherever it appears in the job's logs and outputs, as it masks
-	// the secrets themselves.
+	// Masked are the strings Step made from a secret, as a Masker takes
+	// them: each string that a template of the job's env: or the step's
+	// that read one gave, such as an env value that reads one, but not the
+	// rest of a value, nor a boolean, a number or null (Masker). The
+	// worker masks each wherever it appears in the job's logs and outputs,
+	// as it masks the secrets themselves.
 	Masked []string `json:"masked,omitempty"`
 }
 
@@ -151,7 +153,7 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.Needs, c.Steps = j.withSelf(state)
+	c.addSelf(j, state, e.masker)
 	e = c.evaluation(PhaseStep, e)
 	rs := &ReadyStep{Index: index, ID: s.ID}
 	run, ok := e.condition(s.If, at(s.Path, "if"))
@@ -227,13 +229,31 @@ const (
 	defaultStepTryTimeout = 30
 )
 
-// End is the End phase: it evaluates the job's outputs:, on its worker,
-// once the job's steps have run, and gives them by name. It masks each
-// with a Masker of state.Masked, and of what it made from a secret, such
-// as a value of the job's env:, and masks the whole of one that was made
-// from a secret: an output that holds a secret is given with it masked,
-// problems.Masked, and a warning that names the output (output_masked).
-// Its expressions read the job's env: and needs, with the job itself, as
+// EndResult is what End gives of a job: its outputs, and which of them are
+// private.
+type EndResult struct {
+	// Outputs are the job's outputs, by name, as format 1 has them: what
+	// its steps wrote, the later step's where two wrote the same name, and
+	// its outputs: over that, each masked.
+	Outputs map[string]string
+	// Private names the outputs: made from an organization or user variable
+	// or a password, and not from a secret, which is masked whole. The
+	// coordinator keeps their values only in the run's secret record, and
+	// gives them to the jobs that need the job, which read them as private
+	// (JobResult.Private).
+	Private []string
+}
+
+// End is the End phase: it gives the job's outputs, on its worker, once the
+// job's steps have run: what its steps wrote, merged in their order, and
+// its outputs:, evaluated, over them. It masks each with a Masker of
+// state.Masked, and of what it made from a secret, such as a value of the
+// job's env:, and masks the whole of an output: that was made from a
+// secret, with a warning that names it (output_masked), and one when a
+// value of its holds a secret. What one of its outputs: is made of masks
+// none of the others. A step's output that held a secret is masked too,
+// and its warning is the worker's, which reports the step's outputs. Its
+// expressions read the job's env: and needs, with the job itself, as
 // Step's do, and steps, with each of the job's steps that has an id.
 //
 // End reaches nothing, and gives the same outputs for the same job and
@@ -242,7 +262,7 @@ const (
 // expression fails is left out. It returns an error when ctx is done
 // before it finishes, ctx.Err(), and for state.Steps that aren't one for
 // each of the job's steps.
-func (j *ReadyJob) End(ctx context.Context, state JobState) (map[string]string, problems.Diagnostics, error) {
+func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -253,18 +273,33 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (map[string]string, 
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.Needs, c.Steps = j.withSelf(state)
+	c.addSelf(j, state, e.masker)
 	e = c.evaluation(PhaseEnd, e)
-	var outputs map[string]string
+	out := &EndResult{}
+	set := func(name, v string) {
+		if out.Outputs == nil {
+			out.Outputs = map[string]string{}
+		}
+		out.Outputs[name] = v
+	}
+	for _, r := range state.Steps {
+		for name, v := range r.Outputs {
+			set(name, e.masker.Mask(v))
+		}
+	}
 	for name, v := range jsonvalue.Sorted(j.Outputs) {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
+		// An output's value is evaluated without noting what it is made of
+		// to mask, so that it masks none of the others.
 		pointer := at(j.Path, "outputs", name)
-		text, read, ok := e.text(v, pointer)
-		if !ok {
+		value, read, err := v.EvalRead(e.scope)
+		if err != nil {
+			e.reportError(pointer, err, read)
 			continue
 		}
+		text := expr.Text(value)
 		masked := e.masker.Mask(text)
 		if read.Marked && text != "" {
 			masked = problems.Masked
@@ -272,12 +307,12 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (map[string]string, 
 		if masked != text {
 			e.report(problems.OutputMasked, pointer, problems.Params{"name": name}, expr.Read{})
 		}
-		if outputs == nil {
-			outputs = map[string]string{}
+		if read.Private && !read.Marked {
+			out.Private = append(out.Private, name)
 		}
-		outputs[name] = masked
+		set(name, masked)
 	}
-	return outputs, e.diags, nil
+	return out, e.diags, nil
 }
 
 // stepContexts are the contexts of a job's steps: the ready job's, and its
@@ -289,6 +324,10 @@ type stepContexts struct {
 	// step's were made, by name, for those made from a private value.
 	private, secrets    []string
 	jobMarks, stepMarks map[string]expr.Read
+	// leaks are the paths of the job's steps' outputs that hold a secret,
+	// as they were written, which every evaluation marks as a secret, so
+	// that a problem with what reads one doesn't show it.
+	leaks [][]string
 }
 
 // jobEnv evaluates the job's env:, with the job context, and returns the
@@ -331,6 +370,10 @@ func (c *stepContexts) evaluation(phase Phase, e *evaluation) *evaluation {
 	}
 	next := newEvaluation(phase, c.Contexts)
 	next.diags, next.masked, next.seen, next.masker = e.diags, e.masked, e.seen, e.masker
+	for _, path := range c.leaks {
+		next.scope.Marked.Add(path)
+		next.scope.Private.Add(path)
+	}
 	return next
 }
 
@@ -372,15 +415,23 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 	return out, marks
 }
 
-// withSelf returns the needs of the job's steps, with the job itself, and
-// its steps' outputs by id, from what its steps so far, state.Steps, wrote.
-func (j *ReadyJob) withSelf(state JobState) (map[string]JobResult, map[string]map[string]string) {
+// addSelf gives c the needs of the job's steps, with the job itself, and
+// its steps' outputs by id, from what its steps so far, state.Steps, wrote,
+// and notes the outputs that hold a secret masker masks.
+func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masker *Masker) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
 		needs = map[string]JobResult{}
 	}
 	self := JobResult{Outputs: map[string]string{}}
 	steps := map[string]map[string]string{}
+	leaks := func(outputs map[string]string, path ...string) {
+		for name, v := range jsonvalue.Sorted(outputs) {
+			if masker.Mask(v) != v {
+				c.leaks = append(c.leaks, append(slices.Clone(path), name))
+			}
+		}
+	}
 	for i, r := range state.Steps {
 		maps.Copy(self.Outputs, r.Outputs)
 		if id := j.Steps[i].ID; id != "" {
@@ -389,9 +440,12 @@ func (j *ReadyJob) withSelf(state JobState) (map[string]JobResult, map[string]ma
 				outputs = map[string]string{}
 			}
 			steps[id] = outputs
+			leaks(outputs, "steps", id, "outputs")
+			leaks(outputs, "needs", j.Name, "steps", id, "outputs")
 		}
 	}
+	leaks(self.Outputs, "needs", j.Name, "outputs")
 	self.Steps = steps
 	needs[j.Name] = self
-	return needs, steps
+	c.Needs, c.Steps = needs, steps
 }

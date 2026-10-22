@@ -147,7 +147,7 @@ func (b *budget) noting() (outer Read) {
 // outer says had read some before.
 func (b *budget) done(outer Read) Read {
 	read := b.read
-	b.read = outer.or(read)
+	b.read = outer.Or(read)
 	return read
 }
 

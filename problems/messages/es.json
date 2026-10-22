@@ -96,6 +96,7 @@
   "matrix_empty": "La matriz no tiene combinaciones, así que el trabajo no tendría instancias.",
   "matrix_too_large": "La matriz tiene más de {limit} combinaciones, el máximo que puede tener una matriz.",
   "output_masked": "La salida “{name}” contenía un secreto, que se enmascara en ella.",
+
   "expression_empty": "La expresión está vacía.",
   "expression_too_deep": "La expresión tiene más de {max} niveles de anidamiento.",
   "expression_ends_early": "La expresión termina antes de estar completa.",

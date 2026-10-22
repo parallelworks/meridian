@@ -29,17 +29,19 @@ func newEvaluation(phase Phase, c Contexts) *evaluation {
 	return &evaluation{phase: phase, scope: NewScope(phase, c)}
 }
 
-// value evaluates v, at pointer in the workflow, and notes the text of what
-// it gives if that was made from a secret. ok is false, and the problem
-// reported, if it fails.
+// value evaluates v, at pointer in the workflow, and notes the strings of
+// what each of its templates that read a secret gives, which are to be
+// masked: not those of the rest of v, nor the text of a boolean, a number or
+// null (Masker). ok is false, and the problem reported, if it fails.
 func (e *evaluation) value(v Value, pointer string) (out any, read expr.Read, ok bool) {
-	out, read, err := v.EvalRead(e.scope)
+	out, read, err := v.evalLeaves(e.scope, func(out any, read expr.Read) {
+		if read.Marked {
+			maskedStrings(out, e.mask)
+		}
+	})
 	if err != nil {
 		e.reportError(pointer, err, read)
 		return nil, read, false
-	}
-	if read.Marked {
-		maskedTexts(out, e.mask)
 	}
 	return out, read, true
 }
@@ -113,10 +115,15 @@ func readsContext(v Value, context string) bool {
 }
 
 // report reports a problem of kind k with what is at pointer, with the
-// params that show a value masked if read says it is private.
+// params that show a value masked if read says it is private
+// (problems.MaskValues). On the worker, the text of each param is masked
+// as the job's logs are too, after its value is shown, as a last guard: a
+// value read that holds a secret is marked as one, and one that the phase
+// shows itself is masked before it is shown (reportInvalid), since what
+// shows a value can quote it, escape it or cut it short.
 func (e *evaluation) report(k *problems.Kind, pointer string, params problems.Params, read expr.Read) {
 	if read.Private {
-		params = maskParams(params)
+		params = problems.MaskValues(params)
 	}
 	if e.masker != nil {
 		masked := make(problems.Params, len(params))
@@ -135,6 +142,9 @@ func (e *evaluation) report(k *problems.Kind, pointer string, params problems.Pa
 // kind k, with v as its param value, and key, if it isn't "", as its param
 // key.
 func (e *evaluation) reportInvalid(k *problems.Kind, pointer, key string, v any, read expr.Read) {
+	if e.masker != nil {
+		v = maskStrings(v, e.masker)
+	}
 	params := problems.Params{"value": problems.Show(v)}
 	if key != "" {
 		params["key"] = key
@@ -201,30 +211,26 @@ func (e *evaluation) reportError(pointer string, err error, read expr.Read) {
 	e.report(problems.ExpressionFailed, pointer, problems.Params{"reason": err.Error()}, read)
 }
 
-// workflowParams are the params of the problems a value can have that show
-// the workflow, such as a key or a job's name, or Meridian's own limits,
-// rather than the value, as the compiler has them.
-var workflowParams = map[string]bool{
-	"input": true, "job": true, "key": true, "name": true, "type": true, "what": true,
-	"options": true, "min": true, "max": true, "limit": true, "op": true,
-}
-
-// maskParams returns params, those of a problem with a value made from a
-// variable or a password, with what they show of the value masked: each
-// param but those that show the workflow is problems.Masked, and there is
-// no suggestion, which would be near the value.
-func maskParams(params problems.Params) problems.Params {
-	out := make(problems.Params, len(params))
-	for name, v := range params {
-		if !workflowParams[name] {
-			v = problems.Masked
+// maskStrings returns v, JSON values, with each string in it masked by
+// masker.
+func maskStrings(v any, masker *Masker) any {
+	switch v := v.(type) {
+	case string:
+		return masker.Mask(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = maskStrings(item, masker)
 		}
-		out[name] = v
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[masker.Mask(k)] = maskStrings(item, masker)
+		}
+		return out
 	}
-	if _, ok := params["suggested"]; ok {
-		problems.WithSuggestion(out, "", false)
-	}
-	return out
+	return v
 }
 
 // at returns the JSON Pointer of keys under pointer.

@@ -231,10 +231,18 @@ func ParseGPU(v any) (int, bool) {
 	return int(n), true
 }
 
+// maxDigits is the most characters scaled reads of a number, which is more
+// than any quantity an int64 holds needs, so that it doesn't do arithmetic
+// on a number as long as a workflow can give.
+const maxDigits = 64
+
 // scaled returns decimal, a non-negative number written in digits with an
 // optional fraction, times unit, if that is a whole number that an int64
 // holds.
 func scaled(decimal string, unit *big.Int) (int64, bool) {
+	if len(decimal) > maxDigits {
+		return 0, false
+	}
 	whole, frac, _ := strings.Cut(decimal, ".")
 	n, ok := new(big.Int).SetString(whole+frac, 10)
 	if !ok || n.Sign() < 0 {

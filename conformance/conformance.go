@@ -85,6 +85,11 @@ type Expect struct {
 	// Skipped are the JSON Pointers of the jobs and steps whose if: is
 	// false, in the contexts area. Every other job and step there runs.
 	Skipped []string `yaml:"skipped,omitempty"`
+	// Private are the JSON Pointers of the job outputs that are private, in
+	// the contexts area: made from an organization or user variable or a
+	// password, and not from a secret, so kept only with the run's secrets.
+	// Every other output there isn't.
+	Private []string `yaml:"private,omitempty"`
 }
 
 // JobState is what is known of a job where the phases after the run

@@ -1,5 +1,11 @@
 package expr
 
+import (
+	"errors"
+
+	"github.com/parallelworks/meridian/problems"
+)
+
 // Read is what an evaluation read of the values its scope marks: whether
 // what it gives was made from, or decided by, a value Scope.Marked marks,
 // and whether by one Scope.Private marks. Each is conservative, as
@@ -15,9 +21,23 @@ type Read struct {
 	Private bool
 }
 
-// or returns what r and s read together.
-func (r Read) or(s Read) Read {
+// Or returns what r and s read together.
+func (r Read) Or(s Read) Read {
 	return Read{Marked: r.Marked || s.Marked, Private: r.Private || s.Private}
+}
+
+// Masked returns err, an error evaluating an expression that read a
+// variable or a password, with what it shows of the values it read masked
+// (problems.MaskValues). Only an *EvalError shows them: a syntax error
+// shows the workflow's text, and a budget error Meridian's limits, which
+// are returned as they are.
+func Masked(err error) error {
+	if ee, ok := errors.AsType[*EvalError](err); ok {
+		c := *ee
+		c.Params = problems.MaskValues(ee.Params)
+		return &c
+	}
+	return err
 }
 
 // EvalRead evaluates the template as Eval does, and reports what it read of
