@@ -30,19 +30,23 @@ var networkMagic = map[int64]string{
 	0x19830326: "beegfs",
 	0xaad7aaea: "panfs",
 	0x20030528: "orangefs",
+	// Cluster filesystems, on disks that other machines write to.
+	0x7461636f: "ocfs2",
+	0x01161970: "gfs2",
 }
 
 // fuseMagic is FUSE's statfs magic number. A FUSE filesystem can be a
-// network one, such as sshfs, or a local one, such as fuse-overlayfs, so
-// its subtype, from the mount table, decides.
+// local one, such as fuse-overlayfs, or a network one, such as sshfs, so
+// its subtype, from the mount table, decides: one that isn't known to be
+// local is taken to be a network one.
 const fuseMagic = 0x65735546
 
-// networkFUSE are the subtypes of FUSE filesystems whose files are on other
-// machines.
-var networkFUSE = map[string]bool{
-	"sshfs": true, "glusterfs": true, "s3fs": true, "rclone": true, "gcsfuse": true,
-	"ceph-fuse": true, "juicefs": true, "mfs": true, "lizardfs": true, "blobfuse": true,
-	"blobfuse2": true, "goofys": true, "seaweedfs": true, "davfs": true, "cvmfs2": true,
+// localFUSE are the subtypes of FUSE filesystems known to keep their files
+// on this machine's disks.
+var localFUSE = map[string]bool{
+	"fuse-overlayfs": true, "gocryptfs": true, "encfs": true, "cryfs": true, "securefs": true,
+	"squashfuse": true, "squashfuse_ll": true, "bindfs": true, "lxcfs": true, "ntfs-3g": true,
+	"fuseblk": true, "apfs-fuse": true,
 }
 
 // networkFS says whether path is on a network filesystem, and its type.
@@ -74,8 +78,15 @@ func networkFS(path string) (fsType string, network bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
+	return fsType, fuseNetwork(fsType), nil
+}
+
+// fuseNetwork says whether a FUSE filesystem of type fsType, as the mount
+// table writes it, as fuse.sshfs or fuseblk, is a network one: one that
+// isn't known to be local.
+func fuseNetwork(fsType string) bool {
 	sub, _ := strings.CutPrefix(fsType, "fuse.")
-	return fsType, networkFUSE[sub], nil
+	return !localFUSE[sub]
 }
 
 // mountType returns the type of the filesystem mounted where path, an

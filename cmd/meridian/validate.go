@@ -9,8 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,15 +28,15 @@ import (
 // maxInputsSize is the largest file of input values validate reads.
 const maxInputsSize = 1 << 20
 
+// formats are what validate's -format takes.
+var formats = []string{"text", "json"}
+
 // runValidate compiles a workflow without running it, with the user's
 // variables and groups, and the input values given, and reports every
 // error and warning.
 func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	var set []string
 	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name; it can be given again", func(s string) error {
-		if !strings.Contains(s, "=") {
-			return errors.New("an input is given as path=value")
-		}
 		set = append(set, s)
 		return nil
 	})
@@ -45,32 +47,36 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		return flagError(c, fs, err)
 	}
 	if len(positional) != 1 {
-		return c.errorf("validate takes one workflow file, or - for standard input; run meridian help validate")
+		return c.failf(problems.ArgumentsInvalid, problems.Params{"command": "validate"})
 	}
-	if *out != "text" && *out != "json" {
-		return c.errorf("-format is text or json, not %q", *out)
+	if !slices.Contains(formats, *out) {
+		return c.failf(problems.FlagValueInvalid, problems.Params{"command": "validate", "flag": "format", "value": *out})
 	}
-	path := positional[0]
+	for _, s := range set {
+		if !strings.Contains(s, "=") {
+			return c.failf(problems.FlagValueInvalid, problems.Params{"command": "validate", "flag": "input", "value": s})
+		}
+	}
 
 	dirs, err := local.Locate(c.getenv)
 	if err != nil {
-		return c.errorf("%v", err)
+		return c.fail(err)
 	}
 	cfg, err := local.LoadConfig(dirs.Config, c.getenv)
 	if err != nil {
-		return c.errorf("%v", err)
+		return c.fail(err)
 	}
 	contexts, err := cfg.Contexts(ctx)
 	if err != nil {
-		return c.errorf("%v", err)
+		return c.fail(err)
 	}
-	submitted, err := submittedInputs(*inputsFile, set)
+	submitted, err := submittedInputs(ctx, c, *inputsFile, set)
 	if err != nil {
-		return c.errorf("%v", err)
+		return c.fail(err)
 	}
-	name, data, tooLarge, err := readWorkflow(c, path)
+	name, data, tooLarge, err := readWorkflow(ctx, c, positional[0])
 	if err != nil {
-		return c.errorf("can't read the workflow: %v", err)
+		return c.fail(err)
 	}
 	diags := tooLarge
 	if diags == nil {
@@ -82,7 +88,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		err = writeText(c.stdout, diags)
 	}
 	if err != nil {
-		return c.errorf("%v", err)
+		return c.fail(err)
 	}
 	if diags.HasErrors() {
 		return exitInvalid
@@ -93,49 +99,101 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 // stdinName is what diagnostics call a workflow read from standard input.
 const stdinName = "<stdin>"
 
+// content is what read read of a file.
+type content struct {
+	// data is its bytes, when there are at most read's limit.
+	data []byte
+	// over says it is larger than the limit, and size how large, or -1 for
+	// a stream, which read stops reading past the limit.
+	over bool
+	size int64
+}
+
+// read reads the file at path, or standard input for -, up to limit bytes.
+// It stats a regular file larger than limit rather than read it. It reads
+// in a goroutine of its own, so that ctx's end, as on an interrupt, stops
+// it waiting on a pipe or a FIFO that never ends, with problems.Interrupted.
+// It returns the operating system's error as it is.
+func read(ctx context.Context, c *cli, path string, limit int) (content, error) {
+	type result struct {
+		content
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r := c.stdin
+		if path != "-" {
+			f, err := os.Open(path) //nolint:gosec // the file the user named
+			if err != nil {
+				done <- result{err: err}
+				return
+			}
+			defer f.Close()
+			if info, err := f.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > int64(limit) {
+				done <- result{over: true, size: info.Size()}
+				return
+			}
+			r = f
+		}
+		data, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+		if len(data) > limit {
+			done <- result{over: true, size: -1}
+			return
+		}
+		done <- result{content{data: data, size: int64(len(data))}, err}
+	}()
+	select {
+	case r := <-done:
+		return r.content, r.err
+	case <-ctx.Done():
+		return content{}, problems.Interrupted.Problem(nil)
+	}
+}
+
 // readWorkflow reads the workflow file at path, or standard input for -,
 // and returns its name for diagnostics and its text. A file larger than
-// the compiler reads isn't kept: it is a diagnostic, with its size.
-func readWorkflow(c *cli, path string) (string, []byte, problems.Diagnostics, error) {
-	name, r := stdinName, c.stdin
-	if path != "-" {
-		f, err := os.Open(path) //nolint:gosec // the workflow the user named
-		if err != nil {
-			return "", nil, nil, err
-		}
-		defer f.Close()
-		name, r = path, f
+// the compiler reads isn't kept: it is a diagnostic, with its size if it
+// is a regular file.
+func readWorkflow(ctx context.Context, c *cli, path string) (string, []byte, problems.Diagnostics, error) {
+	name := path
+	if path == "-" {
+		name = stdinName
 	}
 	limit := format.DefaultMaxSize
-	data, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
-	if err != nil {
+	got, err := read(ctx, c, path, limit)
+	switch {
+	case isProblem(err):
 		return "", nil, nil, err
+	case err != nil:
+		return "", nil, nil, problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
+	case got.over && got.size < 0:
+		return name, nil, problems.Diagnostics{problems.WorkflowTooLarge.At(name, problems.Position{}, "", problems.Params{"limit": limit})}, nil
+	case got.over:
+		return name, nil, problems.Diagnostics{problems.FileTooLarge.At(name, problems.Position{}, "", problems.Params{"size": got.size, "limit": limit})}, nil
 	}
-	if len(data) <= limit {
-		return name, data, nil, nil
-	}
-	rest, err := io.Copy(io.Discard, r)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	size := int64(len(data)) + rest
-	return name, nil, problems.Diagnostics{problems.FileTooLarge.At(name, problems.Position{}, "", problems.Params{"size": size, "limit": limit})}, nil
+	return name, got.data, nil, nil
+}
+
+// isProblem says whether err is, or wraps, a problem.
+func isProblem(err error) bool {
+	_, ok := errors.AsType[*problem.Problem](err)
+	return ok
 }
 
 // submittedInputs returns the input values of the JSON file, if any, with
 // each path=value of set over them.
-func submittedInputs(file string, set []string) (map[string]any, error) {
+func submittedInputs(ctx context.Context, c *cli, file string, set []string) (map[string]any, error) {
 	values := map[string]any{}
 	if file != "" {
 		var err error
-		if values, err = readInputsFile(file); err != nil {
-			return nil, fmt.Errorf("-inputs %s: %w", file, err)
+		if values, err = readInputsFile(ctx, c, file); err != nil {
+			return nil, err
 		}
 	}
 	for _, s := range set {
 		path, value, _ := strings.Cut(s, "=")
 		if err := setPath(values, path, value); err != nil {
-			return nil, fmt.Errorf("-input %s: %w", s, err)
+			return nil, err
 		}
 	}
 	return values, nil
@@ -144,30 +202,34 @@ func submittedInputs(file string, set []string) (map[string]any, error) {
 // readInputsFile reads a JSON object of input values. A number is an
 // int64 when it is a whole one that fits, as YAML reads one, and a float64
 // otherwise.
-func readInputsFile(name string) (map[string]any, error) {
-	f, err := os.Open(name) //nolint:gosec // the file of inputs the user named
-	if err != nil {
+func readInputsFile(ctx context.Context, c *cli, name string) (map[string]any, error) {
+	got, err := read(ctx, c, name, maxInputsSize)
+	switch {
+	case isProblem(err):
 		return nil, err
+	case err != nil:
+		return nil, problems.FileUnreadable.Problem(problems.Params{"path": name, "reason": err.Error()})
+	case got.over:
+		return nil, problems.FileOverLimit.Problem(problems.Params{"path": name, "limit": maxInputsSize})
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxInputsSize+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxInputsSize {
-		return nil, fmt.Errorf("it is larger than %d bytes", maxInputsSize)
-	}
-	dec := jsontext.NewDecoder(bytes.NewReader(data))
+	at := problems.Params{problems.ParamFile: name}
+	dec := jsontext.NewDecoder(bytes.NewReader(got.data))
 	v, err := jsonvalue.Decode(dec, jsonNumber)
 	if err != nil {
-		return nil, err
+		if p, ok := errors.AsType[*problem.Problem](err); ok {
+			p.Params[problems.ParamFile] = name
+			return nil, p
+		}
+		params := maps.Clone(at)
+		params["reason"] = err.Error()
+		return nil, problems.InputsFileInvalid.Problem(params)
 	}
 	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("it has more than one JSON value")
+		return nil, problems.InputsFileExtra.Problem(at)
 	}
 	values, ok := v.(map[string]any)
 	if !ok {
-		return nil, errors.New("it isn't a JSON object of input values by name")
+		return nil, problems.InputsFileNotObject.Problem(at)
 	}
 	return values, nil
 }
@@ -180,7 +242,7 @@ func jsonNumber(s string) (any, error) {
 	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsInf(f, 0) {
-		return nil, fmt.Errorf("%s is too large a number", s)
+		return nil, problems.InputsNumberTooLarge.Problem(problems.Params{"number": s})
 	}
 	return f, nil
 }
@@ -191,7 +253,7 @@ func setPath(values map[string]any, path, value string) error {
 	names := strings.Split(path, ".")
 	for i, name := range names {
 		if name == "" {
-			return errors.New("an input's path is names joined with dots")
+			return problems.InputPathInvalid.Problem(problems.Params{"path": path})
 		}
 		if i == len(names)-1 {
 			values[name] = value
@@ -205,7 +267,7 @@ func setPath(values map[string]any, path, value string) error {
 			continue
 		}
 		if values, ok = next.(map[string]any); !ok {
-			return fmt.Errorf("%s has a value already, which isn't a group of inputs", strings.Join(names[:i+1], "."))
+			return problems.InputPathConflict.Problem(problems.Params{"path": strings.Join(names[:i+1], ".")})
 		}
 	}
 	return nil

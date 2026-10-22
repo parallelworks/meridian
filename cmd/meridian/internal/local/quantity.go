@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -62,10 +63,14 @@ func parseMemory(s string) (int64, error) {
 	return n, nil
 }
 
+// decimalPattern is a decimal number, as a quantity writes one: digits,
+// and a point and more digits. big.Rat would read 0x10, 1e3 and 1/2 too.
+var decimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+
 // scaled reads text, a decimal number, and returns it times scale, which
 // must be a whole number that fits an int64.
 func scaled(text string, scale int64) (int64, error) {
-	if text == "" || strings.ContainsAny(text, "eE+_") || strings.HasPrefix(text, ".") || strings.HasSuffix(text, ".") {
+	if !decimalPattern.MatchString(text) {
 		return 0, fmt.Errorf("%q isn't a decimal number", text)
 	}
 	r, ok := new(big.Rat).SetString(text)

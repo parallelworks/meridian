@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // runVersion shows Meridian's version: its module's, the commit it was
@@ -21,7 +22,7 @@ func runVersion(_ context.Context, c *cli, fs *flag.FlagSet, args []string) int 
 		return flagError(c, fs, err)
 	}
 	if len(positional) > 0 {
-		return c.errorf("version takes no arguments")
+		return c.failf(problems.ArgumentsInvalid, problems.Params{"command": "version"})
 	}
 	version, commit := "(devel)", ""
 	if info, ok := debug.ReadBuildInfo(); ok {

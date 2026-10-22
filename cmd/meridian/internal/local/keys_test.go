@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 func dataKey(t *testing.T) []byte {
@@ -65,24 +67,25 @@ func TestKeysUnwrapRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.Unwrap(t.Context(), "run-2", wrapped); err == nil {
-		t.Error("Unwrap gave a key wrapped for another run")
+	_, err = k.Unwrap(t.Context(), "run-2", wrapped)
+	if p := wantProblem(t, err, problems.KeyUnwrapFailed); p.Params["run"] != "run-2" {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
 	changed := bytes.Clone(wrapped)
 	changed[len(changed)-1] ^= 1
-	if _, err := k.Unwrap(t.Context(), "run-1", changed); err == nil {
-		t.Error("Unwrap gave a key from a changed wrapping")
-	}
-	if _, err := k.Unwrap(t.Context(), "run-1", nil); err == nil {
-		t.Error("Unwrap gave a key from nothing")
-	}
+	_, err = k.Unwrap(t.Context(), "run-1", changed)
+	wantProblem(t, err, problems.KeyUnwrapFailed)
+	_, err = k.Unwrap(t.Context(), "run-1", nil)
+	wantProblem(t, err, problems.KeyWrappingUnknown)
 	other := append([]byte{wrapVersion + 1}, wrapped[1:]...)
-	if _, err := k.Unwrap(t.Context(), "run-1", other); err == nil {
-		t.Error("Unwrap gave a key from a wrapping of another version")
+	_, err = k.Unwrap(t.Context(), "run-1", other)
+	wantProblem(t, err, problems.KeyWrappingUnknown)
+	another := NewKeys(t.TempDir())
+	if _, err := another.Wrap(t.Context(), "run-0", dataKey(t)); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := NewKeys(t.TempDir()).Unwrap(t.Context(), "run-1", wrapped); err == nil {
-		t.Error("Unwrap gave a key under another key file")
-	}
+	_, err = another.Unwrap(t.Context(), "run-1", wrapped)
+	wantProblem(t, err, problems.KeyUnwrapFailed)
 }
 
 func TestKeysWrapRefusesShortKey(t *testing.T) {
@@ -109,9 +112,8 @@ func TestKeysRefuseOpenKeyFile(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, keySize), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t)); err == nil {
-		t.Error("Wrap used a key file other users can read")
-	}
+	_, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t))
+	wantProblem(t, err, problems.FileNotPrivate)
 }
 
 func TestKeysRefuseShortKeyFile(t *testing.T) {
@@ -119,8 +121,9 @@ func TestKeysRefuseShortKeyFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, KeyFile), []byte("short"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t)); err == nil {
-		t.Error("Wrap used a key file that isn't a key")
+	_, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t))
+	if p := wantProblem(t, err, problems.KeyFileInvalid); p.Params["size"] != 5 {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
 }
 

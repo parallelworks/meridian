@@ -189,3 +189,49 @@ func TestLogsConcurrentRepeats(t *testing.T) {
 		t.Errorf("Read = %q, %v", data, err)
 	}
 }
+
+// TestLogNames checks that log names stay within what a filesystem allows
+// a name, and stay apart on one that ignores case.
+func TestLogNames(t *testing.T) {
+	l := newLogs(t, t.TempDir())
+	long := strings.Repeat("j", 255)
+	keys := []coordinator.LogKey{
+		{Run: "r1", Job: long + "#12", Attempt: 1, Part: workerapi.LogSetup},
+		{Run: "r1", Job: long + "#13", Attempt: 1, Part: workerapi.LogSetup},
+		{Run: "Run", Job: "build", Attempt: 1, Part: workerapi.LogSetup},
+		{Run: "run", Job: "build", Attempt: 1, Part: workerapi.LogSetup},
+		{Run: "RUN", Job: "Build", Attempt: 1, Part: workerapi.LogSetup},
+	}
+	seen := map[string]bool{}
+	for i, k := range keys {
+		if _, _, err := l.Append(t.Context(), k, 0, []byte{byte('a' + i)}, false); err != nil {
+			t.Fatalf("Append(%.40v): %v", k, err)
+		}
+		path, err := l.path(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		folded := strings.ToLower(path)
+		if seen[folded] {
+			t.Errorf("%s is another log's path on a filesystem that ignores case", path)
+		}
+		seen[folded] = true
+	}
+	for i, k := range keys {
+		if data, _, err := l.Read(t.Context(), k, 0, 10); err != nil || string(data) != string(rune('a'+i)) {
+			t.Errorf("Read(%.40v) = %q, %v", k, data, err)
+		}
+	}
+	for _, s := range []string{long, long + "#1", strings.Repeat("%", 200), strings.Repeat("é", 100)} {
+		name := escapeName(s)
+		if len(name) > maxName {
+			t.Errorf("escapeName gives %d bytes for %.20q", len(name), s)
+		}
+		if strings.ToLower(name) != name && !strings.Contains(name, "%") {
+			t.Errorf("escapeName(%.20q) = %q has upper case", s, name)
+		}
+	}
+	if escapeName(long+"#12") == escapeName(long+"#13") {
+		t.Error("two long names that differ at their end are cut to one")
+	}
+}

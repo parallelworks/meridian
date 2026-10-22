@@ -3,15 +3,16 @@ package local
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // configDir returns a config directory holding files, by name, each
@@ -104,29 +105,44 @@ local:
 }
 
 func TestGroupsFileRefuses(t *testing.T) {
-	for name, text := range map[string]string{
-		"unknown key":       "g:\n  members:\n    - {name: a, backend: local, colour: red}\n",
-		"unknown group key": "g:\n  members: []\n  priority: 1\n",
-		"no members":        "g:\n  members: []\n",
-		"no name":           "g:\n  members:\n    - {backend: local}\n",
-		"bad backend":       "g:\n  members:\n    - {name: a, backend: docker}\n",
-		"two names":         "g:\n  members:\n    - {name: a, backend: local}\n    - {name: a, backend: ssh}\n",
-		"group name":        "-g:\n  members:\n    - {name: a, backend: local}\n",
-		"isolation":         "g:\n  members:\n    - {name: a, backend: local, isolation: Pod Man}\n",
-		"cpu":               "g:\n  members:\n    - {name: a, backend: local, resources: {cpu: lots}}\n",
-		"memory":            "g:\n  members:\n    - {name: a, backend: local, resources: {memory: 8GB}}\n",
-		"gpu":               "g:\n  members:\n    - {name: a, backend: local, resources: {gpu: -1}}\n",
-		"walltime":          "g:\n  members:\n    - {name: a, backend: local, max-walltime: 1.5s}\n",
-		"repeated key":      "g:\n  members:\n    - {name: a, backend: local}\ng:\n  members:\n    - {name: b, backend: local}\n",
-		"not yaml":          "g: [",
+	for name, tc := range map[string]struct {
+		text string
+		kind *problems.Kind
+		line int
+	}{
+		"unknown key":       {"g:\n  members:\n    - {name: a, backend: local, colour: red}\n", problems.ConfigKeyUnknown, 3},
+		"unknown group key": {"g:\n  members: []\n  priority: 1\n", problems.ConfigKeyUnknown, 3},
+		"no members":        {"g:\n  members: []\n", problems.GroupEmpty, 1},
+		"members not list":  {"g:\n  members: {name: a}\n", problems.ConfigWrongType, 2},
+		"member not map":    {"g:\n  members:\n    - a\n", problems.ConfigWrongType, 3},
+		"no name":           {"g:\n  members:\n    - {backend: local}\n", problems.MemberInvalid, 3},
+		"bad backend":       {"g:\n  members:\n    - {name: a, backend: docker}\n", problems.MemberInvalid, 3},
+		"two names":         {"g:\n  members:\n    - {name: a, backend: local}\n    - {name: a, backend: ssh}\n", problems.MemberRepeated, 4},
+		"group name":        {"-g:\n  members:\n    - {name: a, backend: local}\n", problems.GroupNameInvalid, 1},
+		"isolation":         {"g:\n  members:\n    - {name: a, backend: local, isolation: Pod Man}\n", problems.MemberInvalid, 3},
+		"cpu":               {"g:\n  members:\n    - {name: a, backend: local, resources: {cpu: lots}}\n", problems.MemberInvalid, 3},
+		"cpu hex":           {"g:\n  members:\n    - {name: a, backend: local, resources: {cpu: 0x10}}\n", problems.MemberInvalid, 3},
+		"memory":            {"g:\n  members:\n    - {name: a, backend: local, resources: {memory: 8GB}}\n", problems.MemberInvalid, 3},
+		"gpu":               {"g:\n  members:\n    - {name: a, backend: local, resources: {gpu: -1}}\n", problems.MemberInvalid, 3},
+		"gpu text":          {"g:\n  members:\n    - {name: a, backend: local, resources: {gpu: one}}\n", problems.ConfigWrongType, 3},
+		"walltime":          {"g:\n  members:\n    - {name: a, backend: local, max-walltime: 1.5s}\n", problems.MemberInvalid, 3},
+		"settings":          {"g:\n  members:\n    - {name: a, backend: ssh, settings: [host]}\n", problems.ConfigWrongType, 3},
+		"settings repeated": {"g:\n  members:\n    - {name: a, backend: ssh, settings: {host: a, host: b}}\n", problems.ConfigYAMLSyntax, 3},
+		"repeated group":    {"g:\n  members:\n    - {name: a, backend: local}\ng:\n  members:\n    - {name: b, backend: local}\n", problems.ConfigKeyRepeated, 4},
+		"repeated key":      {"g:\n  members:\n    - {name: a, backend: local, name: b}\n", problems.ConfigKeyRepeated, 3},
+		"not yaml":          {"g: [", problems.ConfigYAMLSyntax, 0},
+		"not a mapping":     {"- g\n", problems.ConfigNotMapping, 1},
+		"two documents":     {"g:\n  members:\n    - {name: a, backend: local}\n---\nh: {}\n", problems.ConfigExtraDocument, 4},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := LoadConfig(configDir(t, map[string]string{GroupsFile: text}), env(nil))
-			if err == nil {
-				t.Fatal("LoadConfig succeeded")
+			dir := configDir(t, map[string]string{GroupsFile: tc.text})
+			_, err := LoadConfig(dir, env(nil))
+			p := wantProblem(t, err, tc.kind)
+			if p.Params[problems.ParamFile] != filepath.Join(dir, GroupsFile) {
+				t.Errorf("the problem's file is %v", p.Params[problems.ParamFile])
 			}
-			if !strings.Contains(err.Error(), GroupsFile) {
-				t.Errorf("the error %q doesn't name the file", err)
+			if line, _ := p.Params[problems.ParamLine].(int); line != tc.line {
+				t.Errorf("the problem is at line %d, want %d", line, tc.line)
 			}
 		})
 	}
@@ -136,14 +152,14 @@ func TestConfigFilesOthersCanChange(t *testing.T) {
 	for _, tc := range []struct {
 		file string
 		mode os.FileMode
-		ok   bool
+		kind *problems.Kind
 	}{
-		{GroupsFile, 0o644, true},
-		{GroupsFile, 0o664, false},
-		{GroupsFile, 0o646, false},
-		{VariablesFile, 0o600, true},
-		{VariablesFile, 0o640, false},
-		{VariablesFile, 0o604, false},
+		{GroupsFile, 0o644, nil},
+		{GroupsFile, 0o664, problems.FileChangeable},
+		{GroupsFile, 0o646, problems.FileChangeable},
+		{VariablesFile, 0o600, nil},
+		{VariablesFile, 0o640, problems.FileNotPrivate},
+		{VariablesFile, 0o604, problems.FileNotPrivate},
 	} {
 		dir := configDir(t, map[string]string{tc.file: "{}\n"})
 		path := filepath.Join(dir, tc.file)
@@ -151,13 +167,37 @@ func TestConfigFilesOthersCanChange(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err := LoadConfig(dir, env(nil))
-		if (err == nil) != tc.ok {
-			t.Errorf("LoadConfig with %s at %04o: %v", tc.file, tc.mode, err)
+		if tc.kind == nil {
+			if err != nil {
+				t.Errorf("LoadConfig with %s at %04o: %v", tc.file, tc.mode, err)
+			}
+			continue
 		}
-		if err != nil && !strings.Contains(err.Error(), "chmod") {
-			t.Errorf("the error %q doesn't say how to fix it", err)
+		p := wantProblem(t, err, tc.kind)
+		if p.Params["path"] != path || p.Params["mode"] != fmt.Sprintf("%04o", tc.mode) {
+			t.Errorf("the problem's params are %v", p.Params)
 		}
 	}
+}
+
+// TestConfigDirOthersCanChange checks that a config directory others can
+// change is refused, since they could replace the files in it.
+func TestConfigDirOthersCanChange(t *testing.T) {
+	dir := configDir(t, map[string]string{GroupsFile: "{}\n"})
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(dir, env(nil))
+	wantProblem(t, err, problems.PathUnsafe)
+}
+
+func TestConfigFIFO(t *testing.T) {
+	dir := t.TempDir()
+	if err := mkfifo(filepath.Join(dir, GroupsFile)); err != nil {
+		t.Skipf("can't make a FIFO: %v", err)
+	}
+	_, err := LoadConfig(dir, env(nil))
+	wantProblem(t, err, problems.FileNotRegular)
 }
 
 func TestPlatformGroupsNotFound(t *testing.T) {
@@ -181,11 +221,13 @@ func TestResolveInput(t *testing.T) {
 		}
 	}
 	_, err := c.ResolveInput("execution-groups", nil, "cpu")
-	if err == nil || !strings.Contains(err.Error(), `"gpu", "local"`) {
-		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", err)
+	p := wantProblem(t, err, problems.ExecutionGroupUnknown)
+	if p.Params["value"] != "cpu" || p.Params["groups"] != `"gpu", "local"` {
+		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", p.Params)
 	}
-	if _, err := c.ResolveInput("execution-groups", nil, 3); err == nil {
-		t.Error("ResolveInput took a number for a group's name")
+	_, err = c.ResolveInput("execution-groups", nil, 3)
+	if p := wantProblem(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
+		t.Errorf("ResolveInput of a number: %v", p.Params)
 	}
 	if _, err := c.ResolveInput("slurm-partitions", nil, "debug"); !errors.Is(err, compile.ErrInputType) {
 		t.Errorf("ResolveInput of a type it doesn't provide: %v", err)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
@@ -70,6 +72,36 @@ func TestPlatformInputs(t *testing.T) {
 	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 1 || diags[0].Code != problems.PlatformInput.Code() {
 		t.Errorf("a type the platform doesn't provide: %v", diags)
+	}
+}
+
+// rejects is a platform that rejects every value with err.
+type rejects struct{ err error }
+
+func (r rejects) ResolveInput(string, map[string]any, any) (any, error) { return nil, r.err }
+
+// TestPlatformInputProblem checks that a resolver's problem of one of
+// Meridian's kinds is reported as that kind, with the input's name, and
+// that one of a kind Meridian doesn't have is the platform's reason.
+func TestPlatformInputProblem(t *testing.T) {
+	doc := load(t, clusterWorkflow)
+	p := problems.ExecutionGroupUnknown.Problem(problems.Params{"value": "gpu", "groups": problems.QuoteAll([]string{"local"})})
+	_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{fmt.Errorf("resolving: %w", p)}})
+	if len(diags) != 1 || diags[0].Code != problems.ExecutionGroupUnknown.Code() {
+		t.Fatalf("a resolver's problem: %v", diags)
+	}
+	d := diags[0]
+	if d.Params["input"] != "cluster" || d.Params["value"] != "gpu" || d.Params["groups"] != `"local"` || d.Path() != "/on/execute/inputs/cluster" {
+		t.Errorf("the problem is %s, with %v at %s", d, d.Params, d.Path())
+	}
+	if want := `The input "cluster" names the execution group "gpu", which isn't one of the groups: "local".`; d.Message() != want {
+		t.Errorf("Message = %q, want %q", d.Message(), want)
+	}
+
+	other := &problem.Problem{Code: "quota_exceeded", Detail: "the quota is spent"}
+	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{other}})
+	if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || diags[0].Params["reason"] != "the quota is spent" {
+		t.Errorf("a platform's own problem: %v", diags)
 	}
 }
 

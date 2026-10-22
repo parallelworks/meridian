@@ -4,18 +4,20 @@ package local
 
 import (
 	"io/fs"
-	"os"
 	"syscall"
 )
 
-// checkOwner checks that the file info describes belongs to the user.
-func checkOwner(_ string, info fs.FileInfo) error {
+// fileOwner returns the user ID of the owner of the file info describes.
+func fileOwner(info fs.FileInfo) (int, bool) {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return nil
+		return 0, false
 	}
-	if int(st.Uid) != os.Getuid() {
-		return errNotOwner
-	}
-	return nil
+	return int(st.Uid), true
 }
+
+// openFlags are the flags a config file, a key file or a variable's file
+// is opened with besides O_RDONLY: O_NONBLOCK, so that opening a FIFO
+// doesn't wait for a writer, and its file info says what it is first.
+// Reading a regular file ignores it.
+const openFlags = syscall.O_NONBLOCK

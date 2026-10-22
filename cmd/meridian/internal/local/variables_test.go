@@ -1,6 +1,7 @@
 package local
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 const variables = `
@@ -157,25 +159,86 @@ func TestContextsWithoutFile(t *testing.T) {
 }
 
 func TestVariablesFileRefuses(t *testing.T) {
-	for name, text := range map[string]string{
-		"secret in the file": "org:\n  t: {secret: true, value: x}\n",
-		"secret alone":       "org:\n  t: {secret: true}\n",
-		"two sources":        "org:\n  t: {env: A, file: b}\n",
-		"no value":           "org:\n  t:\n",
-		"unknown key":        "org:\n  t: {env: A, from: b}\n",
-		"list":               "org:\n  t: [a]\n",
-		"secret not bool":    "org:\n  t: {secret: maybe, env: A}\n",
-		"env not text":       "org:\n  t: {env: [A]}\n",
-		"unknown context":    "users:\n  t: x\n",
-		"name":               "vars:\n  a.b: x\n",
-		"name start":         "vars:\n  1a: x\n",
-		"relative home":      "vars:\n  a: {file: ~/x}\n",
+	for name, tc := range map[string]struct {
+		text string
+		kind *problems.Kind
+	}{
+		"secret in the file": {"org:\n  t: {secret: true, value: x}\n", problems.VariableSecretInline},
+		"secret alone":       {"org:\n  t: {secret: true}\n", problems.VariableSources},
+		"two sources":        {"org:\n  t: {env: A, file: b}\n", problems.VariableSources},
+		"no value":           {"org:\n  t:\n", problems.VariableNoValue},
+		"unknown key":        {"org:\n  t: {env: A, from: b}\n", problems.ConfigKeyUnknown},
+		"repeated key":       {"org:\n  t: {secret: true, file: f, secret: false}\n", problems.ConfigKeyRepeated},
+		"repeated variable":  {"org:\n  t: a\n  t: b\n", problems.ConfigKeyRepeated},
+		"list":               {"org:\n  t: [a]\n", problems.VariableFormInvalid},
+		"secret not bool":    {"org:\n  t: {secret: maybe, env: A}\n", problems.ConfigWrongType},
+		"env not text":       {"org:\n  t: {env: [A]}\n", problems.ConfigWrongType},
+		"context not map":    {"org: [a]\n", problems.ConfigWrongType},
+		"unknown context":    {"users:\n  t: x\n", problems.ConfigKeyUnknown},
+		"name":               {"vars:\n  a.b: x\n", problems.VariableNameInvalid},
+		"name start":         {"vars:\n  1a: x\n", problems.VariableNameInvalid},
+		"relative home":      {"vars:\n  a: {file: ~/x}\n", problems.VariableFileHome},
+		"two documents":      {"vars: {}\n---\norg: {}\n", problems.ConfigExtraDocument},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: text}), env(map[string]string{"HOME": "home"}))
-			if err == nil {
-				t.Fatal("LoadConfig succeeded")
-			}
+			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: tc.text}), env(map[string]string{"HOME": "home"}))
+			wantProblem(t, err, tc.kind)
 		})
+	}
+}
+
+// TestVariableFileModes checks that a variable's value is read only from a
+// file that is the user's and that no one else can change, nor read when
+// it holds a secret's, as the file opened says.
+func TestVariableFileModes(t *testing.T) {
+	for _, tc := range []struct {
+		secret bool
+		mode   os.FileMode
+		kind   *problems.Kind
+	}{
+		{true, 0o600, nil},
+		{true, 0o640, problems.FileNotPrivate},
+		{true, 0o666, problems.FileNotPrivate},
+		{false, 0o644, nil},
+		{false, 0o664, problems.FileChangeable},
+		{false, 0o666, problems.FileChangeable},
+	} {
+		dir := configDir(t, map[string]string{
+			VariablesFile: fmt.Sprintf("org:\n  v: {secret: %t, file: v.txt}\n", tc.secret),
+			"v.txt":       "value\n",
+		})
+		if err := os.Chmod(filepath.Join(dir, "v.txt"), tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		c, err := LoadConfig(dir, env(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.Read(t.Context(), []string{"org.v"}, true)
+		if tc.kind == nil {
+			if err != nil || got["org.v"].Value != "value" {
+				t.Errorf("secret %t at %04o: %v, %v", tc.secret, tc.mode, got, err)
+			}
+			continue
+		}
+		wantProblem(t, err, tc.kind)
+	}
+}
+
+// TestContextsUnreadable checks that a plain variable whose value can't be
+// read is unknown when a run is created, so that only a run that reads it
+// fails, as it starts.
+func TestContextsUnreadable(t *testing.T) {
+	c := variablesConfig(t, nil)
+	got, err := c.Contexts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got["vars"].(map[string]any)["build"]; v != (expr.Unknown{Name: "vars"}) {
+		t.Errorf("vars.build, whose environment variable isn't set, is %v", v)
+	}
+	_, err = c.Read(t.Context(), []string{"vars.build"}, false)
+	if p := wantProblem(t, err, problems.VariableEnvUnset); p.Params["env"] != "BUILD" || p.Params["variable"] != "vars.build" {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
 }

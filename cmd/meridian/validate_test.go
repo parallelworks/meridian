@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -271,9 +274,9 @@ func TestValidateTooLarge(t *testing.T) {
 	if want := diags.Error() + "\n"; r.code != exitInvalid || r.stdout != want {
 		t.Errorf("meridian validate of a large file = %+v, want %q", r, want)
 	}
+	// Standard input's size isn't known, and isn't read past the limit.
 	r = runCLI(t, emptyEnv(t), text, "validate", "-")
-	_, diags = compile.Compile("<stdin>", []byte(text), nil, compile.Options{})
-	if want := diags.Error() + "\n"; r.code != exitInvalid || r.stdout != want {
+	if want := "<stdin>: error: The workflow is more than 102,400 bytes, the limit on its size. (workflow_too_large)\n"; r.code != exitInvalid || r.stdout != want {
 		t.Errorf("meridian validate of a large standard input = %+v, want %q", r, want)
 	}
 }
@@ -332,6 +335,75 @@ jobs:
 		r := runCLI(t, env, "", "validate", "--input", "group="+group, workflow)
 		if r.code != code {
 			t.Errorf("meridian validate with group %s = %+v", group, r)
+		}
+	}
+}
+
+// TestValidateDevZero checks that a stream that never ends is read only to
+// the limit.
+func TestValidateDevZero(t *testing.T) {
+	if _, err := os.Stat("/dev/zero"); err != nil {
+		t.Skip("there is no /dev/zero")
+	}
+	r := runCLI(t, emptyEnv(t), "", "validate", "/dev/zero")
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(workflow_too_large)") {
+		t.Errorf("meridian validate /dev/zero = %+v", r)
+	}
+}
+
+// TestValidateInterrupted checks that an interrupt, which cancels the
+// command's context, stops it waiting on a pipe that never ends.
+func TestValidateInterrupted(t *testing.T) {
+	stdin, w := io.Pipe()
+	defer w.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	var stdout, stderr strings.Builder
+	env := emptyEnv(t)
+	c := &cli{stdin: stdin, stdout: &stdout, stderr: &stderr, getenv: func(name string) string { return env[name] }}
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, c, []string{"validate", "-"}) }()
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitError || stderr.String() != "meridian: error: Meridian was interrupted. (interrupted)\n" {
+			t.Errorf("an interrupted meridian validate: %d, %q", code, stderr.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("meridian validate kept waiting on its standard input after an interrupt")
+	}
+}
+
+// TestValidateControlCharacters checks that a key's control characters
+// reach the terminal escaped: they can't clear it, or start a line that
+// reads as another diagnostic.
+func TestValidateControlCharacters(t *testing.T) {
+	workflow := writeFile(t, "w.yaml", "jobs:\n  a:\n    steps:\n      - run: echo\n        \"x\\e[2J\\nsrc/main.go:1:1: error: injected\": 1\n")
+	r := runCLI(t, emptyEnv(t), "", "validate", workflow)
+	if strings.ContainsAny(r.stdout, "\x1b\a") || strings.Count(r.stdout, "\n") != 1 || !strings.Contains(r.stdout, `x\x1b[2J\nsrc/main.go:1:1: error: injected`) {
+		t.Errorf("meridian validate wrote %q", r.stdout)
+	}
+}
+
+// TestValidateProblems checks the problems validate reports besides a
+// workflow's: each a kind, at the file when one is to blame.
+func TestValidateProblems(t *testing.T) {
+	workflow := writeFile(t, "w.yaml", groupInputs)
+	inputs := writeFile(t, "bad.json", `{count: 1}`)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"validate", filepath.Join(t.TempDir(), "none.yaml")}, "(file_unreadable)"},
+		{[]string{"validate", "--inputs", inputs, workflow}, inputs + ": error: The file isn't valid JSON: "},
+		{[]string{"validate", "--inputs", writeFile(t, "l.json", "[1]"), workflow}, "(inputs_file_not_object)"},
+		{[]string{"validate", "--inputs", writeFile(t, "two.json", "{} {}"), workflow}, "(inputs_file_extra)"},
+		{[]string{"validate", "--inputs", writeFile(t, "huge.json", `{"count": 1e999}`), workflow}, "(inputs_number_too_large)"},
+		{[]string{"validate", "--input", "cluster..size=1", workflow}, "(input_path_invalid)"},
+		{[]string{"validate", "--input", "count=1", "--input", "count.size=2", workflow}, "(input_path_conflict)"},
+	} {
+		r := runCLI(t, emptyEnv(t), "", tc.args...)
+		if r.code != exitError || !strings.Contains(r.stderr, tc.want) {
+			t.Errorf("meridian %q = %+v, want %s", tc.args, r, tc.want)
 		}
 	}
 }

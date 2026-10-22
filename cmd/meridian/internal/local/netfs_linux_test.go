@@ -66,3 +66,14 @@ func TestNetworkFSLocal(t *testing.T) {
 		t.Skipf("the test's temporary directory is on a network filesystem, %s", fsType)
 	}
 }
+
+func TestFUSENetwork(t *testing.T) {
+	for fsType, want := range map[string]bool{
+		"fuse.sshfs": true, "fuse.glusterfs": true, "fuse.rclone": true, "fuse": true, "fuse.unheard-of": true,
+		"fuse.fuse-overlayfs": false, "fuse.gocryptfs": false, "fuseblk": false, "fuse.lxcfs": false,
+	} {
+		if got := fuseNetwork(fsType); got != want {
+			t.Errorf("fuseNetwork(%s) = %t, want %t", fsType, got, want)
+		}
+	}
+}

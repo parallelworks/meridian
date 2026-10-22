@@ -4,6 +4,9 @@ package local
 
 import "io/fs"
 
-// checkOwner checks that the file info describes belongs to the user,
+// fileOwner returns the user ID of the owner of the file info describes,
 // which only Unix systems say.
-func checkOwner(string, fs.FileInfo) error { return nil }
+func fileOwner(fs.FileInfo) (int, bool) { return 0, false }
+
+// openFlags are the flags a file is opened with besides O_RDONLY.
+const openFlags = 0

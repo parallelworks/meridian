@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // KeyFile is the name of the key file in the state directory.
@@ -37,7 +38,10 @@ const wrapVersion = 1
 //
 // Wrap creates the key file the first time it is needed, and Unwrap never
 // does: a key file that has gone can't unwrap what the one before it
-// wrapped, and a new one wouldn't either.
+// wrapped, and a new one wouldn't either. A key file that isn't the user's
+// own, or that others can read, a wrapped key that won't open, and one
+// wrapped some other way are problems, which won't go away by trying
+// again; a data key that isn't 32 bytes is the caller's mistake.
 type Keys struct {
 	dir string
 
@@ -59,7 +63,7 @@ func (k *Keys) Wrap(ctx context.Context, runID string, key []byte) ([]byte, erro
 		return nil, err
 	}
 	if len(key) != keySize {
-		return nil, fmt.Errorf("a data key is %d bytes, not %d", keySize, len(key))
+		return nil, fmt.Errorf("local: a data key is %d bytes, not %d", keySize, len(key))
 	}
 	aead, err := k.cipher(true)
 	if err != nil {
@@ -75,7 +79,7 @@ func (k *Keys) Unwrap(ctx context.Context, runID string, wrapped []byte) ([]byte
 		return nil, err
 	}
 	if len(wrapped) == 0 || wrapped[0] != wrapVersion {
-		return nil, errors.New("the wrapped key isn't one this version of Meridian wraps")
+		return nil, problems.KeyWrappingUnknown.Problem(problems.Params{"run": runID})
 	}
 	aead, err := k.cipher(false)
 	if err != nil {
@@ -83,7 +87,7 @@ func (k *Keys) Unwrap(ctx context.Context, runID string, wrapped []byte) ([]byte
 	}
 	key, err := aead.Open(nil, nil, wrapped[1:], associated(runID))
 	if err != nil {
-		return nil, fmt.Errorf("can't unwrap run %s's data key with %s: it was wrapped under another key or for another run, or has been changed", runID, filepath.Join(k.dir, KeyFile))
+		return nil, problems.KeyUnwrapFailed.Problem(problems.Params{"run": runID, "path": filepath.Join(k.dir, KeyFile)})
 	}
 	return key, nil
 }
@@ -129,27 +133,31 @@ func (k *Keys) cipher(create bool) (cipher.AEAD, error) {
 }
 
 // readKeyFile reads the key in the key file in root, which must belong to
-// the user and be readable only by them.
+// the user and be readable only by them. A key file that isn't there is
+// fs.ErrNotExist.
 func readKeyFile(root *os.Root) ([]byte, error) {
 	path := filepath.Join(root.Name(), KeyFile)
-	f, err := root.Open(KeyFile)
-	if err != nil {
+	f, err := root.OpenFile(KeyFile, os.O_RDONLY|openFlags, 0)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, err
+	}
+	if err != nil {
+		return nil, unreadable(path, err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, unreadable(path, err)
 	}
-	if err := checkPrivateInfo(path, "key file", info); err != nil {
+	if err := checkPrivateInfo(path, info); err != nil {
 		return nil, err
 	}
 	key, err := io.ReadAll(io.LimitReader(f, keySize+1))
 	if err != nil {
-		return nil, err
+		return nil, unreadable(path, err)
 	}
 	if len(key) != keySize {
-		return nil, fmt.Errorf("the key file %s isn't a key: it has %d bytes, not %d", path, len(key), keySize)
+		return nil, problems.KeyFileInvalid.Problem(problems.Params{"path": path, "size": len(key)})
 	}
 	return key, nil
 }

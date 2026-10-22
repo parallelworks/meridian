@@ -2,17 +2,15 @@ package local
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"io/fs"
-	"os"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // The contexts a variable is in: organization variables, read as
@@ -21,6 +19,9 @@ const (
 	contextOrg  = "org"
 	contextVars = "vars"
 )
+
+// variableKeys are the keys of a variable written as a mapping.
+var variableKeys = []string{"value", "env", "file", "secret"}
 
 // A variable is one of the variables file's: its value, or where its value
 // is, and whether it is a secret.
@@ -36,122 +37,140 @@ const (
 //	  deploy_key: {secret: true, file: ~/.config/meridian/deploy_key}
 //	  build: {env: BUILD_NUMBER}
 //
-// A secret names where its value is, and is never in the file. Its value
-// is read only when a run asks for it, as it starts. A file's value has a
-// newline at its end, if there is one, removed.
+// A secret names where its value is, and is never in the file. A value in
+// an environment variable or a file is read only when a run asks for it,
+// as it starts. A file's value has a newline at its end, if there is one,
+// removed. A file that holds a value must belong to the user, and no other
+// user may change it, nor read it if it holds a secret's.
 type variable struct {
+	// name is the variable's name as the plan writes it, as org.region.
+	name   string
 	value  string
 	env    string
 	file   string
 	secret bool
-	// read is whether the file gave the variable, which YAML's decoder
-	// leaves false for a null, which it doesn't give UnmarshalYAML.
-	read bool
-}
-
-// UnmarshalYAML reads a variable as the variables file writes one.
-func (v *variable) UnmarshalYAML(n *yaml.Node) error {
-	v.read = true
-	switch n.Kind {
-	case yaml.ScalarNode:
-		if n.Tag == "!!null" {
-			return fmt.Errorf("line %d: a variable has no value", n.Line)
-		}
-		v.value = n.Value
-		return nil
-	case yaml.MappingNode:
-	default:
-		return fmt.Errorf("line %d: a variable is its value, or a mapping with value, env or file, and secret", n.Line)
-	}
-	sources := 0
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		key, val := n.Content[i], n.Content[i+1]
-		if key.Value == "secret" {
-			if err := val.Decode(&v.secret); err != nil {
-				return fmt.Errorf("line %d: secret is true or false", val.Line)
-			}
-			continue
-		}
-		if val.Kind != yaml.ScalarNode || val.Tag == "!!null" {
-			return fmt.Errorf("line %d: %s is text", val.Line, key.Value)
-		}
-		switch key.Value {
-		case "value":
-			v.value = val.Value
-		case "env":
-			v.env = val.Value
-		case "file":
-			v.file = val.Value
-		default:
-			return fmt.Errorf("line %d: a variable has no key %q: it has value, env, file and secret", key.Line, key.Value)
-		}
-		sources++
-	}
-	switch {
-	case sources != 1:
-		return fmt.Errorf("line %d: a variable has one of value, env and file", n.Line)
-	case v.secret && v.env == "" && v.file == "":
-		return fmt.Errorf("line %d: a secret variable names the environment variable (env) or the file (file) that holds its value, rather than hold it in this file", n.Line)
-	}
-	return nil
-}
-
-// variablesFile is the variables file.
-type variablesFile struct {
-	Org  map[string]variable `yaml:"org"`
-	Vars map[string]variable `yaml:"vars"`
 }
 
 // loadVariables reads the variables file at path, in dir.
 func (c *Config) loadVariables(dir, path string) error {
 	// Variables can hold secrets, as people keep them in plain variables
 	// too, so only the user may read the file.
-	data, err := readConfig(path, func(info fs.FileInfo) error { return checkPrivateInfo(path, "variables file", info) })
+	data, err := readConfig(path, func(info fs.FileInfo) error { return checkPrivateInfo(path, info) })
 	if err != nil || data == nil {
 		return err
 	}
-	var file variablesFile
-	if err := decodeStrict(path, data, &file); err != nil {
+	f := configFile{path}
+	root, err := f.parse(data)
+	if err != nil || root == nil {
 		return err
 	}
-	for context, vars := range map[string]map[string]variable{contextOrg: file.Org, contextVars: file.Vars} {
-		for name, v := range vars {
-			if !variableNamePattern.MatchString(name) {
-				return fmt.Errorf("%s: a variable in %s is named %q: a variable's name has letters, digits, _ and -, and starts with a letter or _", path, context, name)
+	contexts, err := f.pairs(root, []string{contextOrg, contextVars})
+	if err != nil {
+		return err
+	}
+	for _, ctx := range contexts {
+		context := ctx.key.Value
+		if ctx.value.Kind == yaml.ScalarNode && ctx.value.Tag == "!!null" {
+			continue
+		}
+		if err := f.mapping(context, ctx.value); err != nil {
+			return err
+		}
+		vars, err := f.pairs(ctx.value, nil)
+		if err != nil {
+			return err
+		}
+		for _, p := range vars {
+			if !variableNamePattern.MatchString(p.key.Value) {
+				return f.problem(problems.VariableNameInvalid, p.key, problems.Params{"context": context, "name": p.key.Value})
 			}
-			if !v.read {
-				return fmt.Errorf("%s: %s.%s has no value", path, context, name)
+			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.getenv)
+			if err != nil {
+				return err
 			}
-			if v.file != "" {
-				if v.file, err = expandHome(v.file, dir, c.getenv); err != nil {
-					return fmt.Errorf("%s: %s.%s: %w", path, context, name, err)
-				}
-			}
-			c.variables[context+"."+name] = v
+			c.variables[v.name] = v
 		}
 	}
 	return nil
+}
+
+// variable reads the variable name, whose key and value n are, as the
+// variables file writes one.
+func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv func(string) string) (variable, error) {
+	v := variable{name: name}
+	at := func(k *problems.Kind, n *yaml.Node) error {
+		return f.problem(k, n, problems.Params{"variable": name})
+	}
+	switch {
+	case n.Kind == yaml.ScalarNode && n.Tag == "!!null":
+		return v, at(problems.VariableNoValue, key)
+	case n.Kind == yaml.ScalarNode:
+		v.value = n.Value
+		return v, nil
+	case n.Kind != yaml.MappingNode:
+		return v, at(problems.VariableFormInvalid, n)
+	}
+	pairs, err := f.pairs(n, variableKeys)
+	if err != nil {
+		return v, err
+	}
+	sources := 0
+	for _, p := range pairs {
+		k := p.key.Value
+		if k == "secret" {
+			if p.value.Tag != "!!bool" || p.value.Decode(&v.secret) != nil {
+				return v, f.problem(problems.ConfigWrongType, p.value, problems.Params{"key": k, "want": "boolean"})
+			}
+			continue
+		}
+		text, err := f.text(k, p.value)
+		if err != nil {
+			return v, err
+		}
+		switch k {
+		case "value":
+			v.value = text
+		case "env":
+			v.env = text
+		default:
+			file, ok := expandHome(text, dir, getenv)
+			if !ok {
+				return v, f.problem(problems.VariableFileHome, p.value, problems.Params{"variable": name, "file": text})
+			}
+			v.file = file
+		}
+		sources++
+	}
+	switch {
+	case sources != 1:
+		return v, at(problems.VariableSources, n)
+	case v.secret && v.env == "" && v.file == "":
+		return v, at(problems.VariableSecretInline, n)
+	}
+	return v, nil
 }
 
 // Read returns the variables that names name, by their names as the plan
 // writes them, org.<name> or vars.<name>, with org or vars alone for every
 // variable of that context. A variable the file doesn't have is left out.
 // A secret's value is read from where the file says only when secrets is
-// true; otherwise it is left out.
+// true; otherwise it is left out. A value that can't be read is a problem
+// that says why; a name that is neither org's nor vars' is the caller's
+// mistake.
 func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[string]compile.Variable, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	out := map[string]compile.Variable{}
 	for _, name := range names {
-		context, key, one := strings.Cut(name, ".")
+		context, _, one := strings.Cut(name, ".")
 		if context != contextOrg && context != contextVars {
-			return nil, fmt.Errorf("%q isn't a variable's name, which is org.<name> or vars.<name>", name)
+			return nil, fmt.Errorf("local: %q isn't a variable's name, which is org.<name> or vars.<name>", name)
 		}
 		var full []string
 		if one {
 			if _, ok := c.variables[name]; ok {
-				full = []string{context + "." + key}
+				full = []string{name}
 			}
 		} else {
 			for k := range c.variables {
@@ -166,7 +185,7 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 			if !v.secret || secrets {
 				value, err := c.resolve(v)
 				if err != nil {
-					return nil, fmt.Errorf("variable %s: %w", k, err)
+					return nil, err
 				}
 				got.Value = value
 			}
@@ -179,25 +198,27 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 // Contexts returns the org and vars contexts as the compiler reads them
 // when a run is created, in compile.Options.Contexts: each plain
 // variable's value, and each secret as an expr.Unknown, since the compiler
-// reads no secret's value then.
+// reads no secret's value then. A plain variable whose value can't be read
+// is unknown too, so that only a run that reads it fails, when it starts.
 func (c *Config) Contexts(ctx context.Context) (map[string]any, error) {
-	vars, err := c.Read(ctx, []string{contextOrg, contextVars}, false)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	org, user := map[string]any{}, map[string]any{}
 	out := map[string]any{contextOrg: org, contextVars: user}
-	for k, v := range vars {
+	for k, v := range c.variables {
 		context, name, _ := strings.Cut(k, ".")
 		m := org
 		if context == contextVars {
 			m = user
 		}
-		if v.Secret {
-			m[name] = expr.Unknown{Name: context}
-		} else {
-			m[name] = v.Value
+		var value any = expr.Unknown{Name: context}
+		if !v.secret {
+			if s, err := c.resolve(v); err == nil {
+				value = s
+			}
 		}
+		m[name] = value
 	}
 	return out, nil
 }
@@ -209,15 +230,11 @@ func (c *Config) resolve(v variable) (string, error) {
 	case v.env != "":
 		value, ok := lookupEnv(c.getenv, v.env)
 		if !ok {
-			return "", fmt.Errorf("its value is in the environment variable %s, which isn't set", v.env)
+			return "", problems.VariableEnvUnset.Problem(problems.Params{"variable": v.name, "env": v.env})
 		}
 		return value, nil
 	case v.file != "":
-		value, err := readValueFile(v.file)
-		if err != nil {
-			return "", fmt.Errorf("its value is in %s, which can't be read: %w", v.file, err)
-		}
-		return value, nil
+		return readValueFile(v)
 	}
 	return v.value, nil
 }
@@ -229,27 +246,26 @@ func lookupEnv(getenv func(string) string, name string) (string, bool) {
 	return v, v != ""
 }
 
-// readValueFile reads a variable's value from the file at path, without
-// the newline at its end.
-func readValueFile(path string) (string, error) {
-	f, err := os.Open(path) //nolint:gosec // the file the user's variables file names
+// readValueFile reads v's value from its file, without the newline at its
+// end. The file must belong to the user, and no other user may change it,
+// nor read it when it holds a secret, as the file opened says.
+func readValueFile(v variable) (string, error) {
+	f, err := openRegular(v.file, func(info fs.FileInfo) error {
+		if v.secret {
+			return checkPrivateInfo(v.file, info)
+		}
+		return checkUnchangeable(v.file, info)
+	})
 	if err != nil {
-		return "", err
+		if isProblem(err) {
+			return "", err
+		}
+		return "", problems.VariableFileUnreadable.Problem(problems.Params{"variable": v.name, "file": v.file, "reason": err.Error()})
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	data, err := readLimited(f, v.file, maxConfigSize)
 	if err != nil {
 		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("it isn't a regular file")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
-	if err != nil {
-		return "", err
-	}
-	if len(data) > maxConfigSize {
-		return "", fmt.Errorf("it is larger than %d bytes", maxConfigSize)
 	}
 	s := strings.TrimSuffix(string(data), "\n")
 	return strings.TrimSuffix(s, "\r"), nil

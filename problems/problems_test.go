@@ -25,7 +25,7 @@ import (
 var languages = []string{"en", "es", "ja", "ko", "zh"}
 
 func TestCatalog(t *testing.T) {
-	problemtest.CheckGoCatalog(t, Catalog, Registry)
+	problemtest.CheckGoCatalog(t, Catalog, Registry, CommandRegistry)
 	if got := Catalog.Languages(); !slices.Equal(got, languages) {
 		t.Errorf("the catalog is in %v, want %v", got, languages)
 	}
@@ -44,7 +44,7 @@ func TestCatalog(t *testing.T) {
 		}
 		// The localizer falls back to English for a code a language
 		// lacks, so a missing translation renders without an error.
-		for _, typ := range Registry.Types() {
+		for _, typ := range slices.Concat(Registry.Types(), CommandRegistry.Types()) {
 			if _, ok := msgs[typ.Code]; !ok {
 				t.Errorf("%s catalog has no message for %s", lang, typ.Code)
 			}
@@ -73,7 +73,7 @@ func TestEveryKindIsReported(t *testing.T) {
 	if len(defined) != len(Kinds()) {
 		t.Fatalf("kinds.go names %d kinds, and Kinds() returns %d", len(defined), len(Kinds()))
 	}
-	for _, dir := range []string{"../format", "../compile", "../expr", "../plan"} {
+	for _, dir := range []string{"../format", "../compile", "../expr", "../plan", "../cmd/meridian", "../cmd/meridian/internal/local"} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
@@ -124,7 +124,9 @@ func TestDocs(t *testing.T) {
 	for _, lang := range languages {
 		docs := read(lang)
 		for _, k := range Kinds() {
-			if _, ours := Registry.Lookup(k.Code()); !ours {
+			_, workflow := Registry.Lookup(k.Code())
+			_, command := CommandRegistry.Lookup(k.Code())
+			if !workflow && !command {
 				continue // foundation documents its rules
 			}
 			d, ok := docs[k.Code()]
@@ -513,5 +515,51 @@ func BenchmarkShow(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		Show(l)
+	}
+}
+
+// TestControlCharactersEscaped checks that a message shows a param's
+// control characters escaped, so that a key in a workflow can't move a
+// terminal's cursor or start a line that reads as another diagnostic,
+// while the params themselves keep what the workflow has.
+func TestControlCharactersEscaped(t *testing.T) {
+	key := "a\x1b[2J\a\x7f\u0085b\nsrc/main.go:1:1: error: injected"
+	params := Params{"key": key, "suggested": "false", "suggestion": ""}
+	want := `The key "a\x1b[2J\a\x7f\u0085b\nsrc/main.go:1:1: error: injected" isn't known here, so it's ignored.`
+	if got := UnknownKey.Message(params); got != want {
+		t.Errorf("Message = %q, want %q", got, want)
+	}
+	d := UnknownKey.At("w\n.yaml", Position{1, 2}, "/a", params)
+	if d.Params["key"] != key {
+		t.Errorf("the param is %q, not the key as it is", d.Params["key"])
+	}
+	for _, lang := range languages {
+		if got := d.Localize(lang); strings.ContainsFunc(got, isControl) {
+			t.Errorf("%s message %q has a control character", lang, got)
+		}
+	}
+	if got := d.String(); strings.ContainsFunc(got, isControl) || !strings.HasPrefix(got, `w\n.yaml:1:2: warning: `) {
+		t.Errorf("String = %q", got)
+	}
+	for in, want := range map[string]string{"plain": "plain", "tab\there": `tab\there`, "\r\n": `\r\n`, "é and 日本": "é and 日本"} {
+		if got := EscapeControl(in); got != want {
+			t.Errorf("EscapeControl(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestKindProblem(t *testing.T) {
+	p := MemberInvalid.Problem(Params{"group": "gpu", "key": "cpu", "value": "lots", ParamFile: "groups.yaml", ParamLine: 4})
+	if p.Code != "member_invalid" || p.Type != "/problems/command/member_invalid" || p.Status != 422 {
+		t.Errorf("Problem = %+v", p)
+	}
+	if want := `A member of the group "gpu" has cpu: lots, which isn't valid.`; p.Detail != want {
+		t.Errorf("Detail = %q, want %q", p.Detail, want)
+	}
+	if p.Params[ParamLine] != 4 || p.Params[ParamFile] != "groups.yaml" {
+		t.Errorf("Params = %v", p.Params)
+	}
+	if p := ExecutionGroupUnknown.Problem(Params{"value": "cpu", "groups": `"local"`}); p.Type != "/problems/workflow/execution_group_unknown" {
+		t.Errorf("a workflow kind's problem has type %s", p.Type)
 	}
 }

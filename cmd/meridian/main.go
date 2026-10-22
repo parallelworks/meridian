@@ -8,7 +8,9 @@
 //
 // Run meridian help for its commands. Its exit status is 0 when it did
 // what it was asked, 1 when a workflow it was given has errors, and 2 when
-// it couldn't do what it was asked, such as for a command it doesn't know.
+// it couldn't do what it was asked, such as for a command it doesn't know,
+// or when it was interrupted. Every problem it reports is one of the
+// problems package's kinds, with its code.
 package main
 
 import (
@@ -19,11 +21,15 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // The command's exit statuses.
@@ -38,6 +44,9 @@ const (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// The first interrupt cancels ctx, which stops what the command waits
+	// on; a second, which is no longer caught, stops the process at once.
+	context.AfterFunc(ctx, stop)
 	code := run(ctx, &cli{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, getenv: os.Getenv}, os.Args[1:])
 	stop()
 	os.Exit(code)
@@ -51,11 +60,31 @@ type cli struct {
 	getenv         func(string) string
 }
 
-// errorf writes a message saying why the command couldn't do what it was
-// asked, and returns exitError.
-func (c *cli) errorf(format string, args ...any) int {
-	fmt.Fprintf(c.stderr, "meridian: "+format+"\n", args...)
+// fail writes the problem err is, or wraps, as compilers write an error,
+// and returns exitError. A cancelled context is problems.Interrupted, since
+// only an interrupt cancels the command's, and any other error that isn't
+// a problem problems.UnexpectedError, with its text as the reason.
+func (c *cli) fail(err error) int {
+	p, ok := errors.AsType[*problem.Problem](err)
+	switch {
+	case ok:
+	case errors.Is(err, context.Canceled):
+		p = problems.Interrupted.Problem(nil)
+	default:
+		p = problems.UnexpectedError.Problem(problems.Params{"reason": err.Error()})
+	}
+	d := problems.Diagnostic{Type: p.Type, Code: p.Code, Detail: p.Detail, Params: p.Params}
+	line := d.String()
+	if d.File() == "" {
+		line = "meridian: " + line
+	}
+	fmt.Fprintln(c.stderr, line)
 	return exitError
+}
+
+// failf writes a problem of kind k with params, and returns exitError.
+func (c *cli) failf(k *problems.Kind, params problems.Params) int {
+	return c.fail(k.Problem(params))
 }
 
 // A command is one of meridian's commands.
@@ -94,8 +123,9 @@ func init() {
 // run runs the command args name, and returns its exit status.
 func run(ctx context.Context, c *cli, args []string) int {
 	if len(args) == 0 {
+		code := c.failf(problems.CommandMissing, nil)
 		usage(c.stderr)
-		return exitError
+		return code
 	}
 	name, rest := args[0], args[1:]
 	switch name {
@@ -109,9 +139,9 @@ func run(ctx context.Context, c *cli, args []string) int {
 		return unknown(c, name)
 	}
 	if cmd.run == nil {
-		return c.errorf("%s isn't built yet: docs/design.md, under The meridian command, says what it will do", name)
+		return c.failf(problems.CommandNotBuilt, problems.Params{"command": name})
 	}
-	return cmd.run(ctx, c, flagSet(c, cmd), rest)
+	return cmd.run(ctx, c, flagSet(cmd), rest)
 }
 
 // lookup returns the command named name.
@@ -131,10 +161,8 @@ func unknown(c *cli, name string) int {
 	for i, cmd := range commands {
 		names[i] = cmd.name
 	}
-	if s, ok := hint.Suggest(name, names); ok {
-		return c.errorf("there is no command %q; did you mean %q? Run meridian help for the commands", name, s)
-	}
-	return c.errorf("there is no command %q; run meridian help for the commands", name)
+	s, ok := hint.Suggest(name, names)
+	return c.failf(problems.CommandUnknown, problems.WithSuggestion(problems.Params{"command": name}, s, ok))
 }
 
 // help shows the commands, or one command's usage.
@@ -152,9 +180,9 @@ func help(ctx context.Context, c *cli, args []string) int {
 			fmt.Fprintf(c.stdout, "usage: meridian %s\n\n%s\n\nIt isn't built yet.\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
 			return exitOK
 		}
-		return cmd.run(ctx, c, flagSet(c, cmd), []string{"-h"})
+		return cmd.run(ctx, c, flagSet(cmd), []string{"-h"})
 	default:
-		return c.errorf("help takes one command, or none")
+		return c.failf(problems.ArgumentsInvalid, problems.Params{"command": "help"})
 	}
 }
 
@@ -176,7 +204,7 @@ func usage(w io.Writer) {
 // parseFlags parses args with fs, allowing flags among the positional
 // arguments, as in meridian validate workflow.yaml --input n=1, and
 // returns the positional arguments. Every argument after -- is
-// positional. It returns flag.ErrHelp for -h, having written the usage.
+// positional. It returns flag.ErrHelp for -h.
 func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	for {
@@ -197,31 +225,49 @@ func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-// flagSet returns a flag set for cmd, which writes what is wrong with its
-// arguments to c's standard error.
-func flagSet(c *cli, cmd command) *flag.FlagSet {
+// flagSet returns a flag set for cmd, which writes nothing itself:
+// flagError reports what is wrong with its arguments.
+func flagSet(cmd command) *flag.FlagSet {
 	fs := flag.NewFlagSet(cmd.name, flag.ContinueOnError)
-	fs.SetOutput(c.stderr)
-	// flagError writes the usage, where it belongs.
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	return fs
 }
 
+// The errors package flag gives, which flagError tells apart.
+var (
+	flagUnknownRE = regexp.MustCompile(`^flag provided but not defined: -+(.*)$`)
+	flagNeedsRE   = regexp.MustCompile(`^flag needs an argument: -+(.*)$`)
+	flagValueRE   = regexp.MustCompile(`^invalid (?:boolean )?value "(.*)" for flag -+([^:]*): `)
+	flagSyntaxRE  = regexp.MustCompile(`^bad flag syntax: (.*)$`)
+)
+
 // flagError returns the exit status of a command whose arguments fs
-// couldn't parse, having written its usage to standard output for -h, and
-// where to find it to standard error otherwise, after what fs wrote of
-// what was wrong.
+// couldn't parse: exitOK for -h, having written its usage to standard
+// output, and exitError otherwise, having written what was wrong.
 func flagError(c *cli, fs *flag.FlagSet, err error) int {
+	name := fs.Name()
 	if !errors.Is(err, flag.ErrHelp) {
-		fmt.Fprintf(c.stderr, "Run meridian help %s for its options.\n", fs.Name())
-		return exitError
+		msg := err.Error()
+		switch {
+		case flagUnknownRE.MatchString(msg):
+			return c.failf(problems.FlagUnknown, problems.Params{"command": name, "flag": flagUnknownRE.FindStringSubmatch(msg)[1]})
+		case flagNeedsRE.MatchString(msg):
+			return c.failf(problems.FlagNeedsValue, problems.Params{"command": name, "flag": flagNeedsRE.FindStringSubmatch(msg)[1]})
+		case flagValueRE.MatchString(msg):
+			m := flagValueRE.FindStringSubmatch(msg)
+			return c.failf(problems.FlagValueInvalid, problems.Params{"command": name, "flag": m[2], "value": m[1]})
+		case flagSyntaxRE.MatchString(msg):
+			return c.failf(problems.FlagSyntax, problems.Params{"command": name, "argument": flagSyntaxRE.FindStringSubmatch(msg)[1]})
+		}
+		return c.fail(err)
 	}
-	cmd, _ := lookup(fs.Name())
+	cmd, _ := lookup(name)
 	fmt.Fprintf(c.stdout, "usage: meridian %s [options]\n\n%s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
 	var options strings.Builder
 	fs.SetOutput(&options)
 	fs.PrintDefaults()
-	fs.SetOutput(c.stderr)
+	fs.SetOutput(io.Discard)
 	if options.Len() > 0 {
 		fmt.Fprintf(c.stdout, "\noptions:\n%s", options.String())
 	}

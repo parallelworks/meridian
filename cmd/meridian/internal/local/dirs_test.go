@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 func env(vars map[string]string) func(string) string {
@@ -64,15 +66,17 @@ func TestLocate(t *testing.T) {
 }
 
 func TestLocateRefuses(t *testing.T) {
-	for name, vars := range map[string]map[string]string{
-		"no home":           {},
-		"relative home":     {"HOME": "home"},
-		"relative override": {"HOME": "/home/u", EnvStateDir: "state"},
+	for name, tc := range map[string]struct {
+		vars map[string]string
+		kind *problems.Kind
+	}{
+		"no home":           {map[string]string{}, problems.HomeUnknown},
+		"relative home":     {map[string]string{"HOME": "home"}, problems.HomeUnknown},
+		"relative override": {map[string]string{"HOME": "/home/u", EnvStateDir: "state"}, problems.DirectoryVariableRelative},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Locate(env(vars)); err == nil {
-				t.Error("Locate succeeded")
-			}
+			_, err := Locate(env(tc.vars))
+			wantProblem(t, err, tc.kind)
 		})
 	}
 }
@@ -102,9 +106,9 @@ func TestEnsureStateRefusesOpenDirectory(t *testing.T) {
 	if err := os.Chmod(d.State, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := d.EnsureState()
-	if err == nil || !strings.Contains(err.Error(), "chmod 700 "+d.State) {
-		t.Errorf("EnsureState = %v, want an error that says to chmod 700", err)
+	p := wantProblem(t, d.EnsureState(), problems.DirectoryNotPrivate)
+	if p.Params["path"] != d.State || p.Params["mode"] != "0755" {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
 }
 
@@ -113,9 +117,7 @@ func TestEnsureStateRefusesFile(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := (Dirs{State: path}).EnsureState(); err == nil {
-		t.Error("EnsureState succeeded for a file")
-	}
+	wantProblem(t, (Dirs{State: path}).EnsureState(), problems.DirectoryUnavailable)
 }
 
 func TestEnsureStateFollowsLink(t *testing.T) {
@@ -150,12 +152,46 @@ func TestDatabaseRefusesNetworkFilesystem(t *testing.T) {
 	detectNetworkFS = func(string) (string, bool, error) { return "nfs4", true, nil }
 	d := Dirs{State: filepath.Join(t.TempDir(), "state")}
 	_, err := d.Database()
-	if err == nil {
-		t.Fatal("Database succeeded on a network filesystem")
-	}
-	for _, want := range []string{d.State, "nfs4", EnvStateDir + "="} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("Database's error %q doesn't say %q", err, want)
+	p := wantProblem(t, err, problems.NetworkFilesystem)
+	for _, want := range []string{d.State, "nfs4", EnvStateDir} {
+		if !strings.Contains(p.Detail, want) {
+			t.Errorf("Database's problem %q doesn't say %q", p.Detail, want)
 		}
+	}
+}
+
+// TestEnsureStateRefusesOpenParent checks that a state directory under a
+// directory others can change is refused, before Meridian creates
+// anything in it: they could replace it once it was checked.
+func TestEnsureStateRefusesOpenParent(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	d := Dirs{State: filepath.Join(parent, "meridian")}
+	p := wantProblem(t, d.EnsureState(), problems.PathUnsafe)
+	if p.Params["dir"] != parent {
+		t.Errorf("the unsafe directory is %v, want %s", p.Params["dir"], parent)
+	}
+	if _, err := os.Stat(d.State); err == nil {
+		t.Error("EnsureState created the directory before refusing it")
+	}
+}
+
+// TestEnsureStateInStickyDirectory checks that a directory of the user's in
+// one whose sticky bit keeps others from removing it, as /tmp is, is safe.
+func TestEnsureStateInStickyDirectory(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "tmp")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Dirs{State: filepath.Join(parent, "meridian")}).EnsureState(); err != nil {
+		t.Errorf("EnsureState in a sticky directory: %v", err)
 	}
 }

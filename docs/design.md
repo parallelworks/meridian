@@ -1448,6 +1448,9 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   from, so references to it should pin a commit. One that names a branch is
   pinned when the run is created, so the run and its reruns run the same
   code. Untrusted code belongs in a group whose members use microVMs.
+  GitHub serves a commit from a repository's whole fork network, so
+  `github/<owner>/<repo>@<commit>` can name a commit that only a fork of
+  the repository has: pin a commit you have seen in the repository itself.
 - **Workers are trusted with one attempt.** A worker's credential covers
   one attempt and expires, and the coordinator checks every write against
   the attempt's lease.
@@ -1546,7 +1549,8 @@ jobs to your SSH hosts.
 
 Meridian refuses either file if another user can change it, and the
 variables file if another user can read it, since people keep secrets in
-plain variables too.
+plain variables too. A file that holds a variable's value must be the
+user's, and only they may change it, or read it when it holds a secret's.
 
 The database, the key that wraps secret records, and logs live in
 Meridian's state directory, which only its user can read. SQLite can't lock
@@ -1557,7 +1561,16 @@ directories' `meridian`, as `~/.config/meridian` and
 `~/.local/state/meridian`; on macOS both are
 `~/Library/Application Support/Meridian`. `MERIDIAN_CONFIG_DIR`,
 `MERIDIAN_STATE_DIR` and `MERIDIAN_CACHE_DIR` choose others, and the cache
-directory holds copies of the repositories that `uses:` names.
+directory holds copies of the repositories that `uses:` names. As OpenSSH
+checks the directories on the way to a user's keys, Meridian checks those
+on the way to each of its own: each must belong to the user or to root,
+and no one else may change it, unless its sticky bit, as `/tmp`'s, keeps
+others from removing what follows it, which must be the user's.
+
+Every problem the command reports is a kind, with its code, its params and
+its message in each language, as a workflow's are: its own, such as a
+config file another user can change, are in the problems package's
+`command` registry, at `/problems/command/<code>`.
 
 `meridian validate` writes each error and warning as compilers do,
 `file:line:column: severity: message (code)`, or with `--format json` as

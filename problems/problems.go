@@ -1,5 +1,5 @@
-// Package problems defines the problems Meridian reports about a workflow,
-// and the diagnostics that report them.
+// Package problems defines the problems Meridian reports, and the
+// diagnostics that report them.
 //
 // Each Kind of problem has a stable code, a severity, and the params its
 // message shows. Its message is in Catalog, one ICU MessageFormat message per
@@ -7,6 +7,15 @@
 // foundation's problem.FieldError, so a platform shows it, translates it and
 // links it to its page like any other problem: the code's type URI is
 // /problems/workflow/<code>.
+//
+// The meridian command's own problems, with its directories, its config,
+// its key and its arguments, are kinds too, in CommandRegistry, whose type
+// URIs are /problems/command/<code>. A resolver returns a kind's Problem for
+// what is wrong, so that its caller reports it with its code and params.
+//
+// A message shows a param's control characters escaped, as \n or \x1b,
+// rather than as themselves: a key in a workflow could otherwise move a
+// terminal's cursor, or start a line that reads as another diagnostic.
 package problems
 
 import (
@@ -17,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"net/url"
 	"slices"
@@ -222,9 +232,12 @@ const (
 var files embed.FS
 
 var (
-	// Registry holds every kind's problem type, for a platform's problem
-	// pages.
+	// Registry holds the problem types of the kinds a workflow or a run can
+	// have, for a platform's problem pages.
 	Registry = problem.NewRegistry("workflow")
+	// CommandRegistry holds the problem types of the meridian command's own
+	// kinds: its directories, its config, its key and its arguments.
+	CommandRegistry = problem.NewRegistry("command")
 	// Catalog holds each kind's message, in each language.
 	Catalog = problem.MustCatalog(sub("messages"))
 	// Docs holds the text of each kind's documentation page, in each
@@ -256,6 +269,12 @@ type Kind struct {
 // of params.
 func define(severity Severity, code, title string, params ...string) *Kind {
 	return add(Registry.Define(problem.Type{Code: problem.Code(code), Status: 422, Title: title, Params: params}), severity)
+}
+
+// defineCommand adds one of the meridian command's own kinds, an error, to
+// CommandRegistry. Every problem of the kind has each of params.
+func defineCommand(code, title string, params ...string) *Kind {
+	return add(CommandRegistry.Define(problem.Type{Code: problem.Code(code), Status: 422, Title: title, Params: params}), Error)
 }
 
 // shared makes one of foundation's rules, which every API shares, a kind of
@@ -292,10 +311,70 @@ func (k *Kind) Severity() Severity { return k.severity }
 
 // Message returns the kind's message with params, in English.
 func (k *Kind) Message(params Params) string {
-	if msg, ok := localizer.Message("en", k.typ.Code, params); ok {
+	if msg, ok := localizer.Message("en", k.typ.Code, displayed(params)); ok {
 		return msg
 	}
 	return string(k.typ.Code)
+}
+
+// Problem returns a problem of the kind with params, whose detail is its
+// message in English, for a resolver to return for what is wrong: its
+// caller reports it with its code and params, which each reader sees in
+// their own language. Params may hold where it is, as ParamFile and
+// ParamLine, besides the kind's own.
+func (k *Kind) Problem(params Params) *problem.Problem {
+	p := k.typ.New("")
+	p.Params = make(Params, len(params))
+	for name, v := range params {
+		if b, ok := v.(bool); ok {
+			v = strconv.FormatBool(b)
+		}
+		p.Params[name] = v
+	}
+	p.Detail = k.Message(p.Params)
+	return p
+}
+
+// displayed returns params with each text's control characters escaped, for
+// a message to show: params itself when none has any.
+func displayed(params Params) Params {
+	var out Params
+	for name, v := range params {
+		s, ok := v.(string)
+		if !ok || !strings.ContainsFunc(s, isControl) {
+			continue
+		}
+		if out == nil {
+			out = maps.Clone(params)
+		}
+		out[name] = EscapeControl(s)
+	}
+	if out == nil {
+		return params
+	}
+	return out
+}
+
+// isControl says whether r is a control character: C0, DEL or C1.
+func isControl(r rune) bool { return r < 0x20 || r >= 0x7f && r <= 0x9f }
+
+// EscapeControl returns s with each control character, C0, DEL or C1,
+// escaped as Go writes it in a string, as \n, \t or \x1b, so that showing
+// s shows them rather than having a terminal act on them.
+func EscapeControl(s string) string {
+	if !strings.ContainsFunc(s, isControl) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if !isControl(r) {
+			b.WriteRune(r)
+			continue
+		}
+		q := strconv.QuoteRune(r)
+		b.WriteString(q[1 : len(q)-1])
+	}
+	return b.String()
 }
 
 // At returns a diagnostic of the kind about the value at pointer, a JSON
@@ -416,7 +495,7 @@ func (d Diagnostic) Message() string {
 // English when Catalog doesn't have lang. A kind this version doesn't know
 // gives its detail.
 func (d Diagnostic) Localize(lang string) string {
-	if msg, ok := localizer.Message(lang, d.Code, d.Params); ok {
+	if msg, ok := localizer.Message(lang, d.Code, displayed(d.Params)); ok {
 		return msg
 	}
 	if d.Detail != "" {
@@ -431,7 +510,7 @@ func (d Diagnostic) Localize(lang string) string {
 func (d Diagnostic) String() string {
 	var b strings.Builder
 	if f := d.File(); f != "" {
-		b.WriteString(f)
+		b.WriteString(EscapeControl(f))
 		b.WriteString(":")
 	}
 	if p := d.Position().String(); p != "" {

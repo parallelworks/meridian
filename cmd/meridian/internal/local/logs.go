@@ -2,6 +2,8 @@ package local
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/maphash"
@@ -79,20 +81,38 @@ func (l *Logs) path(key coordinator.LogKey) (string, error) {
 	return filepath.Join(escapeName(key.Run), escapeName(key.Job), strconv.Itoa(key.Attempt), name), nil
 }
 
-// escapeName escapes s for a file's name: letters, digits, _ and - are
-// themselves, and every other byte is % and its hex, so that a name is
-// never empty, ., .. or a path.
+// maxName is the longest name escapeName gives, well within the 255 bytes
+// most filesystems allow a name.
+const maxName = 128
+
+// escapeName escapes s for a file's name: lower-case letters, digits, _
+// and - are themselves, and every other byte is % and its hex in upper
+// case, so that a name is never empty, ., .. or a path, and two names
+// differ even on a filesystem that ignores case. A name that would be
+// longer than maxName is cut short, and ends with ~ and the start of the
+// SHA-256 digest of s, which tells it from others cut the same.
 func escapeName(s string) string {
 	var b strings.Builder
 	for i := range len(s) {
 		c := s[i]
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-' {
 			b.WriteByte(c)
 		} else {
 			fmt.Fprintf(&b, "%%%02X", c)
 		}
 	}
-	return b.String()
+	name := b.String()
+	if len(name) <= maxName {
+		return name
+	}
+	sum := sha256.Sum256([]byte(s))
+	suffix := "~" + hex.EncodeToString(sum[:8])
+	cut := maxName - len(suffix)
+	// Cut before an escape rather than within one.
+	if i := strings.LastIndexByte(name[:cut], '%'); i >= cut-2 {
+		cut = i
+	}
+	return name[:cut] + suffix
 }
 
 // lock returns the lock that serializes the appends of the log at path:

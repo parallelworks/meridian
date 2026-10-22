@@ -12,8 +12,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/parallelworks/foundation/problem"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/backend"
@@ -70,11 +72,18 @@ var (
 // variables that hold variables' values, when they are read, and HOME, for
 // a path that starts with ~/.
 //
-// Neither file may be changeable by another user, who could otherwise send
-// the user's jobs to a host of their choosing, or give them values. The
-// variables file must be readable only by the user, since people keep
-// secrets in plain variables too.
+// The directory, and every directory on the way to it, must belong to the
+// user or to root, and only they may change it. Neither file may be
+// changeable by another user, who could otherwise send the user's jobs to
+// a host of their choosing, or give them values. The variables file must
+// be readable only by the user, since people keep secrets in plain
+// variables too.
 func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
+	if _, err := os.Stat(dir); err == nil {
+		if err := checkSafePath(dir, true); err != nil {
+			return nil, err
+		}
+	}
 	c := &Config{getenv: getenv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
 	if err := c.loadGroups(filepath.Join(dir, GroupsFile)); err != nil {
 		return nil, err
@@ -88,49 +97,165 @@ func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
 	return c, nil
 }
 
-// readConfig reads the config file at path, after check checks the file it
-// opened, or returns nil when there is none.
-func readConfig(path string, check func(fs.FileInfo) error) ([]byte, error) {
-	f, err := os.Open(path) //nolint:gosec // the user's own config file, which check checks
-
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+// openRegular opens the file at path, without waiting on a FIFO, and
+// checks the file it opened with check, which has it whole or not at all.
+func openRegular(path string, check func(fs.FileInfo) error) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|openFlags, 0) //nolint:gosec // a file the user's config names, which check checks
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	info, err := f.Stat()
+	if err == nil {
+		err = check(info)
+	}
 	if err != nil {
+		f.Close()
 		return nil, err
 	}
-	if err := check(info); err != nil {
-		return nil, err
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
+	return f, nil
+}
+
+// readLimited reads f whole, if it is at most limit bytes.
+func readLimited(f *os.File, path string, limit int) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
-		return nil, err
+		return nil, problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
-	if len(data) > maxConfigSize {
-		return nil, fmt.Errorf("%s is larger than %d bytes", path, maxConfigSize)
+	if len(data) > limit {
+		return nil, problems.FileOverLimit.Problem(problems.Params{"path": path, "limit": limit})
 	}
 	return data, nil
 }
 
-// decodeStrict decodes the YAML document data into v, refusing keys v
-// doesn't have. An empty document leaves v as it is.
-func decodeStrict(path string, data []byte, v any) error {
+// readConfig reads the config file at path, after check checks the file it
+// opened, or returns nil when there is none.
+func readConfig(path string, check func(fs.FileInfo) error) ([]byte, error) {
+	f, err := openRegular(path, check)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, unreadable(path, err)
+	}
+	defer f.Close()
+	return readLimited(f, path, maxConfigSize)
+}
+
+// unreadable returns err, from opening the file at path, as a problem:
+// itself when it is one, and FileUnreadable, with what the operating
+// system said, otherwise.
+func unreadable(path string, err error) error {
+	if isProblem(err) {
+		return err
+	}
+	return problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
+}
+
+// isProblem says whether err is, or wraps, a problem: what is wrong, which
+// says why, rather than what the operating system said.
+func isProblem(err error) bool {
+	_, ok := errors.AsType[*problem.Problem](err)
+	return ok
+}
+
+// A configFile is a config file as it is read: its path, for the problems
+// it has.
+type configFile struct {
+	path string
+}
+
+// problem returns a problem of kind k with params, at n, or at the file
+// when n is nil.
+func (f configFile) problem(k *problems.Kind, n *yaml.Node, params problems.Params) error {
+	if params == nil {
+		params = problems.Params{}
+	}
+	params[problems.ParamFile] = f.path
+	if n != nil && n.Line > 0 {
+		params[problems.ParamLine] = n.Line
+		params[problems.ParamColumn] = n.Column
+	}
+	return k.Problem(params)
+}
+
+// parse reads data, one YAML document, and returns the mapping it is, or
+// nil for an empty one.
+func (f configFile) parse(data []byte) (*yaml.Node, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%s: %w", path, err)
+	var doc yaml.Node
+	if err := dec.Decode(&doc); errors.Is(err, io.EOF) {
+		return nil, nil
+	} else if err != nil {
+		return nil, f.problem(problems.ConfigYAMLSyntax, nil, problems.Params{"reason": err.Error()})
+	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, f.problem(problems.ConfigExtraDocument, &extra, nil)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	root := deref(doc.Content[0])
+	switch {
+	case root.Kind == yaml.ScalarNode && root.Tag == "!!null":
+		return nil, nil
+	case root.Kind != yaml.MappingNode:
+		return nil, f.problem(problems.ConfigNotMapping, root, nil)
+	}
+	return root, nil
+}
+
+// deref follows n, if it is an alias, to what it names.
+func deref(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	return n
+}
+
+// A pair is a key of a mapping and its value.
+type pair struct {
+	key, value *yaml.Node
+}
+
+// pairs returns the keys and values of n, a mapping, refusing a key given
+// twice, and, when allowed isn't nil, a key it doesn't list.
+func (f configFile) pairs(n *yaml.Node, allowed []string) ([]pair, error) {
+	seen := map[string]*yaml.Node{}
+	var out []pair
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], deref(n.Content[i+1])
+		if first, ok := seen[k.Value]; ok {
+			return nil, f.problem(problems.ConfigKeyRepeated, k, problems.Params{"key": k.Value, "first_line": first.Line})
+		}
+		seen[k.Value] = k
+		if allowed != nil && !slices.Contains(allowed, k.Value) {
+			return nil, f.problem(problems.ConfigKeyUnknown, k, problems.Params{"key": k.Value, "keys": problems.QuoteAll(allowed)})
+		}
+		out = append(out, pair{k, v})
+	}
+	return out, nil
+}
+
+// mapping checks that n, key's value, is a mapping.
+func (f configFile) mapping(key string, n *yaml.Node) error {
+	if n.Kind != yaml.MappingNode {
+		return f.problem(problems.ConfigWrongType, n, problems.Params{"key": key, "want": "mapping"})
 	}
 	return nil
 }
 
-// namePattern is what the name of a group, a member or a variable can be:
-// letters, digits, _ and -, and . too in a group's or a member's, but
-// never first.
+// text returns n, key's value, which must be text: a scalar, which YAML
+// may read as a number or a boolean, as it is written.
+func (f configFile) text(key string, n *yaml.Node) (string, error) {
+	if n.Kind != yaml.ScalarNode || n.Tag == "!!null" {
+		return "", f.problem(problems.ConfigWrongType, n, problems.Params{"key": key, "want": "text"})
+	}
+	return n.Value, nil
+}
+
+// The name of a group, a member or a variable can be letters, digits, _
+// and -, and . too in a group's or a member's, but never first.
 var (
 	groupNamePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
@@ -140,64 +265,71 @@ var (
 // backends are the backends a member can name.
 var backends = []string{"local", "ssh", "kubernetes", "slurm", "pbs"}
 
-// groupsFile is the groups file: each group by its name.
-type groupsFile map[string]struct {
-	Members []memberFile `yaml:"members"`
-}
+// The keys a group, a member and its resources have.
+var (
+	groupKeys     = []string{"members"}
+	memberKeys    = []string{"name", "backend", "settings", "isolation", "resources", "max-walltime", "margin", "default-timeout"}
+	resourcesKeys = []string{"cpu", "memory", "gpu"}
+)
 
-// memberFile is one member of a group, as the groups file writes it.
-type memberFile struct {
-	Name      string         `yaml:"name"`
-	Backend   string         `yaml:"backend"`
-	Settings  map[string]any `yaml:"settings"`
-	Isolation string         `yaml:"isolation"`
-	Resources struct {
-		CPU    string `yaml:"cpu"`
-		Memory string `yaml:"memory"`
-		GPU    int    `yaml:"gpu"`
-	} `yaml:"resources"`
-	MaxWalltime    string `yaml:"max-walltime"`
-	Margin         string `yaml:"margin"`
-	DefaultTimeout string `yaml:"default-timeout"`
-}
-
-// loadGroups reads the groups file at path.
+// loadGroups reads the groups file at path: each group by its name, with
+// its members in order.
 func (c *Config) loadGroups(path string) error {
-	data, err := readConfig(path, func(info fs.FileInfo) error { return checkUnchangeable(path, "groups file", info) })
+	data, err := readConfig(path, func(info fs.FileInfo) error { return checkUnchangeable(path, info) })
 	if err != nil || data == nil {
 		return err
 	}
-	var file groupsFile
-	if err := decodeStrict(path, data, &file); err != nil {
+	f := configFile{path}
+	root, err := f.parse(data)
+	if err != nil || root == nil {
 		return err
 	}
-	for _, name := range slices.Sorted(maps.Keys(file)) {
-		g, err := group(name, file[name].Members)
+	groups, err := f.pairs(root, nil)
+	if err != nil {
+		return err
+	}
+	for _, g := range groups {
+		group, err := f.group(g.key, g.value)
 		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return err
 		}
-		c.groups[name] = g
+		c.groups[group.Name] = group
 	}
 	return nil
 }
 
-// group checks the group name and its members.
-func group(name string, members []memberFile) (*backend.Group, error) {
+// group reads the group key names, which n holds.
+func (f configFile) group(key, n *yaml.Node) (*backend.Group, error) {
+	name := key.Value
 	if !groupNamePattern.MatchString(name) {
-		return nil, fmt.Errorf("a group is named %q: a group's name has letters, digits, _, - and ., and starts with a letter or digit", name)
+		return nil, f.problem(problems.GroupNameInvalid, key, problems.Params{"group": name})
 	}
-	if len(members) == 0 {
-		return nil, fmt.Errorf("group %q has no members", name)
+	if err := f.mapping(name, n); err != nil {
+		return nil, err
+	}
+	pairs, err := f.pairs(n, groupKeys)
+	if err != nil {
+		return nil, err
 	}
 	g := &backend.Group{Name: name}
+	var members *yaml.Node
+	for _, p := range pairs {
+		members = p.value
+	}
+	if members == nil || members.Kind == yaml.SequenceNode && len(members.Content) == 0 {
+		return nil, f.problem(problems.GroupEmpty, key, problems.Params{"group": name})
+	}
+	if members.Kind != yaml.SequenceNode {
+		return nil, f.problem(problems.ConfigWrongType, members, problems.Params{"key": "members", "want": "list"})
+	}
 	seen := map[string]bool{}
-	for i, mf := range members {
-		m, err := member(mf)
+	for i, mn := range members.Content {
+		m, err := f.member(name, i, deref(mn))
 		if err != nil {
-			return nil, fmt.Errorf("group %q, member %d: %w", name, i+1, err)
+			return nil, err
 		}
 		if seen[m.Name] {
-			return nil, fmt.Errorf("group %q has two members named %q", name, m.Name)
+			return nil, f.problem(problems.MemberRepeated, mn, problems.Params{"group": name, "member": m.Name})
 		}
 		seen[m.Name] = true
 		g.Members = append(g.Members, m)
@@ -205,54 +337,116 @@ func group(name string, members []memberFile) (*backend.Group, error) {
 	return g, nil
 }
 
-// member checks a member as the groups file writes it, and returns it as
-// the coordinator reads it.
-func member(mf memberFile) (backend.Member, error) {
-	m := backend.Member{Name: mf.Name, Backend: mf.Backend, Isolation: mf.Isolation}
+// member reads the member at index i of the group named group, which n
+// holds, and returns it as the coordinator reads it.
+func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, error) {
+	var m backend.Member
+	if err := f.mapping(fmt.Sprintf("members[%d]", i+1), n); err != nil {
+		return m, err
+	}
+	pairs, err := f.pairs(n, memberKeys)
+	if err != nil {
+		return m, err
+	}
+	invalid := func(at *yaml.Node, key, value string) error {
+		return f.problem(problems.MemberInvalid, at, problems.Params{"group": group, "key": key, "value": problems.Show(value)})
+	}
+	for _, p := range pairs {
+		key, v := p.key.Value, p.value
+		switch key {
+		case "settings":
+			if err := f.mapping(key, v); err != nil {
+				return m, err
+			}
+			var settings map[string]any
+			if err := v.Decode(&settings); err != nil {
+				return m, f.problem(problems.ConfigYAMLSyntax, v, problems.Params{"reason": err.Error()})
+			}
+			if m.Settings, err = settingsJSON(settings); err != nil {
+				return m, invalid(v, key, err.Error())
+			}
+		case "resources":
+			if err := f.resources(group, v, &m.Resources); err != nil {
+				return m, err
+			}
+		default:
+			text, err := f.text(key, v)
+			if err != nil {
+				return m, err
+			}
+			switch key {
+			case "name":
+				m.Name = text
+			case "backend":
+				m.Backend = text
+			case "isolation":
+				m.Isolation = text
+			default:
+				seconds, err := parseSeconds(text)
+				if err != nil {
+					return m, invalid(v, key, text)
+				}
+				switch key {
+				case "max-walltime":
+					m.MaxWalltimeSeconds = seconds
+				case "margin":
+					m.MarginSeconds = seconds
+				default:
+					m.DefaultTimeoutSeconds = seconds
+				}
+			}
+			switch {
+			case key == "name" && !groupNamePattern.MatchString(text),
+				key == "backend" && !slices.Contains(backends, text),
+				key == "isolation" && !isolationPattern.MatchString(text):
+				return m, invalid(v, key, text)
+			}
+		}
+	}
 	switch {
-	case !groupNamePattern.MatchString(m.Name):
-		return m, fmt.Errorf("its name is %q: a member's name has letters, digits, _, - and ., and starts with a letter or digit", m.Name)
-	case !slices.Contains(backends, m.Backend):
-		return m, fmt.Errorf("its backend is %q, not one of %s", m.Backend, problems.QuoteAll(backends))
-	case m.Isolation != "" && !isolationPattern.MatchString(m.Isolation):
-		return m, fmt.Errorf("its isolation is %q: it names a container runtime, such as podman, or host", m.Isolation)
-	case mf.Resources.GPU < 0:
-		return m, fmt.Errorf("its resources' gpu is %d, less than 0", mf.Resources.GPU)
-	}
-	var err error
-	if mf.Settings != nil {
-		if m.Settings, err = settingsJSON(mf.Settings); err != nil {
-			return m, fmt.Errorf("its settings: %w", err)
-		}
-	}
-	if mf.Resources.CPU != "" {
-		if m.Resources.MilliCPU, err = parseCPU(mf.Resources.CPU); err != nil {
-			return m, fmt.Errorf("its resources' cpu: %w", err)
-		}
-	}
-	if mf.Resources.Memory != "" {
-		if m.Resources.Memory, err = parseMemory(mf.Resources.Memory); err != nil {
-			return m, fmt.Errorf("its resources' memory: %w", err)
-		}
-	}
-	m.Resources.GPU = mf.Resources.GPU
-	for _, d := range []struct {
-		key  string
-		text string
-		into *int64
-	}{
-		{"max-walltime", mf.MaxWalltime, &m.MaxWalltimeSeconds},
-		{"margin", mf.Margin, &m.MarginSeconds},
-		{"default-timeout", mf.DefaultTimeout, &m.DefaultTimeoutSeconds},
-	} {
-		if d.text == "" {
-			continue
-		}
-		if *d.into, err = parseSeconds(d.text); err != nil {
-			return m, fmt.Errorf("its %s: %w", d.key, err)
-		}
+	case m.Name == "":
+		return m, invalid(n, "name", "")
+	case m.Backend == "":
+		return m, invalid(n, "backend", "")
 	}
 	return m, nil
+}
+
+// resources reads a member's resources, which n holds, into r.
+func (f configFile) resources(group string, n *yaml.Node, r *backend.Resources) error {
+	if err := f.mapping("resources", n); err != nil {
+		return err
+	}
+	pairs, err := f.pairs(n, resourcesKeys)
+	if err != nil {
+		return err
+	}
+	for _, p := range pairs {
+		key, v := p.key.Value, p.value
+		text, err := f.text(key, v)
+		if err != nil {
+			return err
+		}
+		invalid := f.problem(problems.MemberInvalid, v, problems.Params{"group": group, "key": key, "value": problems.Show(text)})
+		switch key {
+		case "cpu":
+			if r.MilliCPU, err = parseCPU(text); err != nil {
+				return invalid
+			}
+		case "memory":
+			if r.Memory, err = parseMemory(text); err != nil {
+				return invalid
+			}
+		default:
+			if v.Tag != "!!int" {
+				return f.problem(problems.ConfigWrongType, v, problems.Params{"key": key, "want": "number"})
+			}
+			if r.GPU, err = strconv.Atoi(text); err != nil || r.GPU < 0 {
+				return invalid
+			}
+		}
+	}
+	return nil
 }
 
 // GroupNames returns the names of the execution groups, in order.
@@ -294,33 +488,37 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 
 // ResolveInput provides the execution-groups input type, whose value is the
 // name of one of the config's groups, and no other: the input types that
-// name a scheduler's partitions, accounts and queues come later.
+// name a scheduler's partitions, accounts and queues come later. A value
+// that names none of them is problems.ExecutionGroupUnknown, which the
+// compiler reports with the input's name.
 func (c *Config) ResolveInput(typ string, _ map[string]any, value any) (any, error) {
 	if typ != "execution-groups" {
 		return nil, compile.ErrInputType
 	}
 	name, ok := value.(string)
-	if !ok {
-		return nil, errors.New("an execution group is given by its name, which is text")
-	}
-	if _, ok := c.groups[name]; !ok {
-		return nil, fmt.Errorf("no execution group is named %q; the groups are %s", name, problems.QuoteAll(c.GroupNames()))
+	if _, known := c.groups[name]; !ok || !known {
+		shown := name
+		if !ok {
+			shown = problems.Show(value)
+		}
+		return nil, problems.ExecutionGroupUnknown.Problem(problems.Params{"value": shown, "groups": problems.QuoteAll(c.GroupNames())})
 	}
 	return name, nil
 }
 
 // expandHome turns a path that starts with ~/ into one in the home
-// directory, and a relative one into one in dir.
-func expandHome(path, dir string, getenv func(string) string) (string, error) {
+// directory, and a relative one into one in dir. It reports false for a
+// path that starts with ~/ when HOME isn't an absolute path.
+func expandHome(path, dir string, getenv func(string) string) (string, bool) {
 	if rest, ok := strings.CutPrefix(path, "~/"); ok {
 		home := getenv("HOME")
 		if !filepath.IsAbs(home) {
-			return "", fmt.Errorf("%s starts with ~/, and HOME isn't set to an absolute path", path)
+			return "", false
 		}
-		return filepath.Join(home, rest), nil
+		return filepath.Join(home, rest), true
 	}
 	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
+		return filepath.Clean(path), true
 	}
-	return filepath.Join(dir, path), nil
+	return filepath.Join(dir, path), true
 }

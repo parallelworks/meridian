@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/hint"
@@ -29,7 +31,11 @@ var ErrInputType = errors.New("compile: no such input type")
 type InputResolver interface {
 	// ResolveInput checks the value given for an input of a platform type
 	// and returns what the run sees for it, such as a cluster's details for
-	// its name. It returns ErrInputType for a type it doesn't provide.
+	// its name. It returns ErrInputType for a type it doesn't provide. An
+	// error that is, or wraps, a *problem.Problem of one of the problems
+	// package's kinds is reported as that kind, with its params and the
+	// input's name as input; any other is input_rejected, with the error's
+	// text as its reason.
 	ResolveInput(typ string, definition map[string]any, value any) (any, error)
 }
 
@@ -1424,6 +1430,14 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		case errors.Is(err, ErrInputType):
 			return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
 		case err != nil:
+			// A problem of one of Meridian's kinds is reported as itself, so
+			// that each reader sees it in their own language; any other
+			// error is the platform's reason, as it gives it.
+			if p, ok := errors.AsType[*problem.Problem](err); ok {
+				if k, ok := problems.Lookup(p.Code); ok {
+					return wrong(k, maps.Clone(p.Params))
+				}
+			}
 			return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
 		}
 		if what, bad, _ := notJSON(out); what != "" {

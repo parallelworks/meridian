@@ -5,8 +5,8 @@
 // (docs/design.md, Interfaces).
 //
 //   - Variables reads organization and user variables from a variables file
-//     in the config directory, and a secret's value from the environment
-//     variable or file it names, only when it is asked for one.
+//     in the config directory, and a value from the environment variable or
+//     file it names, only when it is asked for one.
 //   - Groups gives the execution groups of the groups file in the config
 //     directory, and a built-in local group that needs no config.
 //   - Inputs provides the input types the user's config knows: an
@@ -18,9 +18,15 @@
 //
 // There is no local Sessions: a workflow with sessions doesn't run here.
 //
-// Every directory and file here that holds the user's config or state is
-// readable only by its user, and the package refuses one that others can
-// change.
+// Every directory and file here that holds the user's config or state
+// belongs to its user, and so does every directory on the way to it, as
+// OpenSSH requires of a user's keys: the package refuses one that others
+// can change, or read where it holds a secret.
+//
+// What is wrong is a *problem.Problem of one of the problems package's
+// kinds, which says why and what to do; any other error is one the
+// operating system or git gave, which may not happen again, or a caller's
+// mistake.
 package local
 
 import (
@@ -30,6 +36,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // The environment variables that choose Meridian's directories in place of
@@ -84,7 +92,7 @@ func Locate(getenv func(string) string) (Dirs, error) {
 func dir(getenv func(string) string, env, xdg, home, xdgDefault, darwin string) (string, error) {
 	if d := getenv(env); d != "" {
 		if !filepath.IsAbs(d) {
-			return "", fmt.Errorf("%s is %q, which isn't an absolute path", env, d)
+			return "", problems.DirectoryVariableRelative.Problem(problems.Params{"variable": env, "value": d})
 		}
 		return filepath.Clean(d), nil
 	}
@@ -96,7 +104,7 @@ func dir(getenv func(string) string, env, xdg, home, xdgDefault, darwin string) 
 		}
 	}
 	if !filepath.IsAbs(home) {
-		return "", fmt.Errorf("can't find Meridian's directories: HOME isn't set to an absolute path, and %s isn't set", env)
+		return "", problems.HomeUnknown.Problem(problems.Params{"variable": env})
 	}
 	if runtime.GOOS == "darwin" {
 		return filepath.Join(home, darwin), nil
@@ -105,18 +113,29 @@ func dir(getenv func(string) string, env, xdg, home, xdgDefault, darwin string) 
 }
 
 // EnsureState creates the state directory if it isn't there, readable
-// only by its user, and checks that it is. A state directory that another
-// user can read or change is refused, with the command that fixes it,
-// rather than used: it holds the key that wraps runs' secrets.
+// only by its user, and checks that it, and every directory on the way to
+// it, is safe. A state directory that another user can read or change is
+// refused, with the command that fixes it, rather than tightened: it holds
+// the key that wraps runs' secrets, and what was in it may have been read.
 func (d Dirs) EnsureState() error {
-	return ensurePrivateDir(d.State, "state directory")
+	return ensurePrivateDir(d.State)
 }
 
 // EnsureCache creates the cache directory if it isn't there, readable only
-// by its user, and checks that it is: it can hold copies of private
-// repositories.
+// by its user, and checks it as EnsureState checks the state directory: it
+// can hold copies of private repositories.
 func (d Dirs) EnsureCache() error {
-	return ensurePrivateDir(d.Cache, "cache directory")
+	return ensurePrivateDir(d.Cache)
+}
+
+// CheckConfig checks the config directory, if it is there: that it, and
+// every directory on the way to it, belongs to the user or to root, and
+// that no other user can change it. LoadConfig checks the files in it.
+func (d Dirs) CheckConfig() error {
+	if _, err := os.Stat(d.Config); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return checkSafePath(d.Config, true)
 }
 
 // DatabaseFile is the name of the database in the state directory.
@@ -133,11 +152,10 @@ func (d Dirs) Database() (string, error) {
 	}
 	fsType, network, err := detectNetworkFS(d.State)
 	if err != nil {
-		return "", fmt.Errorf("can't tell what filesystem the state directory %s is on: %w", d.State, err)
+		return "", problems.FilesystemUnknown.Problem(problems.Params{"path": d.State, "reason": err.Error()})
 	}
 	if network {
-		return "", fmt.Errorf("the state directory %s is on a network filesystem (%s), where SQLite can't lock its database reliably; "+
-			"set %s to a directory on a local disk, such as %s=/var/tmp/$USER/meridian", d.State, fsType, EnvStateDir, EnvStateDir)
+		return "", problems.NetworkFilesystem.Problem(problems.Params{"path": d.State, "type": fsType})
 	}
 	return filepath.Join(d.State, DatabaseFile), nil
 }
@@ -147,32 +165,38 @@ func (d Dirs) Database() (string, error) {
 var detectNetworkFS = networkFS
 
 // ensurePrivateDir creates the directory path if it isn't there, readable
-// only by its user, and checks that it is.
-func ensurePrivateDir(path, what string) error {
+// only by its user, and checks that it is, and that every directory on the
+// way to it is safe, before it creates anything and after.
+func ensurePrivateDir(path string) error {
+	if err := checkSafePath(path, false); err != nil {
+		return err
+	}
 	// The XDG specification asks for 0700 for the directories it creates,
 	// the parents included.
 	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf("can't create the %s: %w", what, err)
+		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
-	return checkPrivateDir(path, what)
+	if err := checkSafePath(path, false); err != nil {
+		return err
+	}
+	return checkPrivateDir(path)
 }
 
 // checkPrivateDir checks that path is a directory that belongs to the user
 // and that no other user can read or change. It follows a symbolic link,
 // so that a state directory can be a link to one on a local disk.
-func checkPrivateDir(path, what string) error {
+func checkPrivateDir(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("the %s %s isn't a directory", what, path)
-	}
-	if err := checkOwner(path, info); err != nil {
-		return fmt.Errorf("the %s %s %w", what, path, err)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return fmt.Errorf("the %s %s can be read or changed by other users (its mode is %04o); run chmod 700 %s", what, path, perm, path)
+	switch {
+	case !info.IsDir():
+		return problems.NotADirectory.Problem(problems.Params{"path": path})
+	case !ownedByUser(info):
+		return problems.DirectoryNotOwned.Problem(problems.Params{"path": path})
+	case info.Mode().Perm()&0o077 != 0:
+		return problems.DirectoryNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", info.Mode().Perm())})
 	}
 	return nil
 }
@@ -180,15 +204,12 @@ func checkPrivateDir(path, what string) error {
 // checkPrivateInfo checks that the file info describes, at path, is a
 // regular file that belongs to the user and that no other user can read
 // or change.
-func checkPrivateInfo(path, what string, info fs.FileInfo) error {
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("the %s %s isn't a regular file", what, path)
-	}
-	if err := checkOwner(path, info); err != nil {
-		return fmt.Errorf("the %s %s %w", what, path, err)
+func checkPrivateInfo(path string, info fs.FileInfo) error {
+	if err := checkOwnFile(path, info); err != nil {
+		return err
 	}
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return fmt.Errorf("the %s %s can be read or changed by other users (its mode is %04o); run chmod 600 %s", what, path, perm, path)
+		return problems.FileNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", perm)})
 	}
 	return nil
 }
@@ -197,18 +218,31 @@ func checkPrivateInfo(path, what string, info fs.FileInfo) error {
 // regular file that belongs to the user and that no other user can
 // change: one who could would decide where the user's jobs run, or what
 // they read.
-func checkUnchangeable(path, what string, info fs.FileInfo) error {
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("the %s %s isn't a regular file", what, path)
-	}
-	if err := checkOwner(path, info); err != nil {
-		return fmt.Errorf("the %s %s %w", what, path, err)
+func checkUnchangeable(path string, info fs.FileInfo) error {
+	if err := checkOwnFile(path, info); err != nil {
+		return err
 	}
 	if perm := info.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf("the %s %s can be changed by other users (its mode is %04o); run chmod go-w %s", what, path, perm, path)
+		return problems.FileChangeable.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", perm)})
 	}
 	return nil
 }
 
-// errNotOwner is what checkOwner returns for a file another user owns.
-var errNotOwner = errors.New("belongs to another user")
+// checkOwnFile checks that the file info describes, at path, is a regular
+// file that belongs to the user.
+func checkOwnFile(path string, info fs.FileInfo) error {
+	if !info.Mode().IsRegular() {
+		return problems.FileNotRegular.Problem(problems.Params{"path": path})
+	}
+	if !ownedByUser(info) {
+		return problems.FileNotOwned.Problem(problems.Params{"path": path})
+	}
+	return nil
+}
+
+// ownedByUser says whether the file info describes belongs to the user,
+// which only Unix systems say: elsewhere it is true.
+func ownedByUser(info fs.FileInfo) bool {
+	uid, ok := fileOwner(info)
+	return !ok || uid == os.Getuid()
+}

@@ -73,8 +73,8 @@ func TestNotBuilt(t *testing.T) {
 
 func TestUnknownCommand(t *testing.T) {
 	r := runCLI(t, nil, "", "valdate", "w.yaml")
-	if r.code != exitError || !strings.Contains(r.stderr, `there is no command "valdate"; did you mean "validate"?`) {
-		t.Errorf("meridian valdate = %+v", r)
+	if want := "meridian: error: There is no command \"valdate\". Did you mean \"validate\"? (command_unknown)\n"; r.code != exitError || r.stderr != want {
+		t.Errorf("meridian valdate = %+v, want %q", r, want)
 	}
 	r = runCLI(t, nil, "", "frobnicate")
 	if r.code != exitError || strings.Contains(r.stderr, "did you mean") {
@@ -92,7 +92,7 @@ func TestHelpCommand(t *testing.T) {
 		t.Errorf("meridian validate -h = %+v", r)
 	}
 	r = runCLI(t, nil, "", "validate", "--lang", "ja")
-	if r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "-lang") || !strings.Contains(r.stderr, "meridian help validate") {
+	if r.code != exitError || r.stdout != "" || r.stderr != "meridian: error: The command meridian validate has no option -lang. (flag_unknown)\n" {
 		t.Errorf("meridian validate --lang ja = %+v", r)
 	}
 	r = runCLI(t, nil, "", "help", "version")
@@ -154,6 +154,32 @@ func TestParseFlags(t *testing.T) {
 		}
 		if !slices.Equal(positional, tc.positional) || !slices.Equal(input, tc.input) || *format != tc.format {
 			t.Errorf("parseFlags(%q) = %q, input %q, format %s; want %q, %q, %s", tc.args, positional, input, *format, tc.positional, tc.input, tc.format)
+		}
+	}
+}
+
+// TestUsageProblems checks that each problem with the command's arguments
+// is a kind, with its code, on standard error.
+func TestUsageProblems(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		code string
+	}{
+		{nil, "command_missing"},
+		{[]string{"frobnicate"}, "command_unknown"},
+		{[]string{"run", "w.yaml"}, "command_not_built"},
+		{[]string{"help", "a", "b"}, "arguments_invalid"},
+		{[]string{"version", "extra"}, "arguments_invalid"},
+		{[]string{"validate"}, "arguments_invalid"},
+		{[]string{"validate", "--lang", "ja", "w.yaml"}, "flag_unknown"},
+		{[]string{"validate", "w.yaml", "--format"}, "flag_needs_value"},
+		{[]string{"validate", "--format", "xml", "w.yaml"}, "flag_value_invalid"},
+		{[]string{"validate", "--input", "count", "w.yaml"}, "flag_value_invalid"},
+		{[]string{"validate", "---format=json", "w.yaml"}, "flag_syntax"},
+	} {
+		r := runCLI(t, nil, "", tc.args...)
+		if r.code != exitError || r.stdout != "" || !strings.HasPrefix(r.stderr, "meridian: error: ") || !strings.Contains(r.stderr, "("+tc.code+")\n") {
+			t.Errorf("meridian %q = %+v, want %s", tc.args, r, tc.code)
 		}
 	}
 }
