@@ -358,16 +358,18 @@ func TestPasswordsNeverInPlansFromActivateForms(t *testing.T) {
 
 // What a default can read a password through is found to its end, from
 // the definitions alone: a default that reads one that reads one, in any
-// order; an option made from one; a read of each of a group's inputs; and
-// a list's default row, read at another index, as a person can add a row
-// before it. A form's value in such a default's place holds none in the
-// plan.
+// order; an option made from one; a read of each of a group's inputs; a
+// list's default row, read at another index, as a person can add a row
+// before it; and what a relative reference reaches, by any key that reads
+// a list's item or a slice of it, or in what a string gives. A form's
+// value in such a default's place holds none in the plan.
 func TestTaintFollowsWhatDefaultsRead(t *testing.T) {
-	for _, tc := range []struct {
+	type taintCase struct {
 		name      string
 		defs      []string
 		submitted map[string]any
-	}{
+	}
+	cases := []taintCase{
 		{
 			"a default that reads a default that reads a password, before them",
 			[]string{
@@ -408,11 +410,40 @@ func TestTaintFollowsWhatDefaultsRead(t *testing.T) {
 			map[string]any{"pw": sentinel, "copy": sentinel},
 		},
 		{
+			"a default that reads, by a relative reference, a key of what a string gives",
+			[]string{
+				"g: {type: group, items: {gp: {type: password}}}",
+				"cfg: {type: string, default: '${{ toJSON(inputs.g) }}'}",
+				"copy: {type: string, default: '${{ ..cfg.default.gp }}'}",
+			},
+			map[string]any{"g": map[string]any{"gp": sentinel}, "copy": sentinel},
+		},
+		{
+			"a default that reads a slice of a list's default rows by a relative reference",
+			[]string{"pw: {type: password}", "ld: {type: list, template: {v: {type: string}}, default: [{v: '${{ inputs.pw }}'}]}", "copy: {type: string, default: '${{ toJSON(..ld.default[0:1]) }}'}"},
+			map[string]any{"pw": sentinel, "copy": `[{"v":"` + sentinel + `"}]`},
+		},
+		{
+			"a default that reads an item of a slice of a list's default rows by a relative reference",
+			[]string{"pw: {type: password}", "ld: {type: list, template: {v: {type: string}}, default: [{v: '${{ inputs.pw }}'}]}", "copy: {type: string, default: '${{ ..ld.default[0:1][0].v }}'}"},
+			map[string]any{"pw": sentinel, "copy": sentinel},
+		},
+		{
 			"a row's default that reads, by a relative reference, one that reads its row's password",
 			[]string{"l: {type: list, template: {p: {type: password}, g: {type: string, default: '${{ inputs.l[index].p }}'}, h: {type: string, default: '${{ ..g.default }}'}}}"},
 			map[string]any{"l": []any{map[string]any{"p": sentinel, "g": sentinel, "h": sentinel}}},
 		},
-	} {
+	}
+	// A relative reference reads a list's item, or a slice of it, by any
+	// key that reads one.
+	for _, key := range []string{"0:1", ":1", "-2:-1", "00", "+0"} {
+		cases = append(cases, taintCase{
+			"a default that reads an option made from a password by a relative reference, at " + key,
+			[]string{"pw: {type: password}", "choice: {type: dropdown, options: ['${{ inputs.pw }}', none]}", "copy: {type: string, default: '${{ toJSON(..choice.options[" + key + "]) }}'}"},
+			map[string]any{"pw": sentinel, "choice": "none", "copy": `["` + sentinel + `"]`},
+		})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), tc.submitted, compile.Options{})
 			if p == nil {

@@ -918,7 +918,8 @@ func (r *inputResolver) secretVariable(ref expr.Ref) bool {
 // relativeLocs returns the locations in the workflow of what rel, a
 // relative reference in the string at loc, reaches: where it leads, and a
 // string on the way, which is evaluated and read from. A * or an [index]
-// in its path reaches each key there.
+// in its path reaches each key there, and a slice of a list each item in
+// it, all of which can be read.
 func (r *inputResolver) relativeLocs(loc []string, rel expr.RelativeRef) [][]string {
 	if rel.Up > len(loc) {
 		return nil
@@ -944,8 +945,15 @@ func (r *inputResolver) relativeLocs(loc []string, rel expr.RelativeRef) [][]str
 				}
 			case []any:
 				if !each {
-					if i, err := strconv.Atoi(k); err == nil && i >= 0 && i < len(v) && strconv.Itoa(i) == k {
-						next = append(next, appendPath(l, k))
+					// A key reads a list as property does: a slice, all of
+					// each of whose items it reads, as what comes after it
+					// reads the slice; or an index.
+					if start, end, ok := reach.Slice(k, len(v)); ok {
+						for i := start; i < end; i++ {
+							out = append(out, appendPath(l, strconv.Itoa(i)))
+						}
+					} else if i, ok := reach.Index(k); ok && i < len(v) {
+						next = append(next, appendPath(l, strconv.Itoa(i)))
 					}
 					continue
 				}
