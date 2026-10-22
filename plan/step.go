@@ -492,9 +492,9 @@ type EndResult struct {
 // made, as format 1 gives them. An output made from a secret, or that
 // holds a secret's text, as the job's logs show one but for a line of it,
 // is private and a secret (EndResult.Secrets), and so is a step's output
-// that holds one (EndResult.SecretSteps), each with a warning that names
-// it (output_holds_secret); one made from a variable or a password is
-// private. Its expressions read the job's env: and needs, with the job
+// that holds one (EndResult.SecretSteps): the coordinator keeps them out
+// of run state, and the jobs that need the job read them as secrets. One
+// made from a variable or a password is private. Its expressions read the job's env: and needs, with the job
 // itself, as Step's do, and steps, with each of the job's steps that has
 // an id. They read an output that nothing wrote strictly once the job's
 // steps succeeded (Contexts.StrictOutputs), as format 1 does.
@@ -542,30 +542,21 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 		secret[name] = text != "" && (read.Marked || c.leak.Mask(text) != text)
 	}
 	for name, s := range jsonvalue.Sorted(secret) {
-		if !s {
-			continue
+		if s {
+			out.Secrets = append(out.Secrets, name)
 		}
-		pointer := j.Path
-		if _, ok := j.Outputs[name]; ok {
-			pointer = at(j.Path, "outputs", name)
-		}
-		e.report(problems.OutputHoldsSecret, pointer, problems.Params{"name": name}, expr.Read{})
-		out.Secrets = append(out.Secrets, name)
 	}
 	for name := range jsonvalue.Sorted(out.Outputs) {
 		if private[name] || secret[name] {
 			out.Private = append(out.Private, name)
 		}
 	}
-	for i, s := range j.Steps {
-		if names := c.secretSteps[s.ID]; s.ID != "" && len(names) > 0 {
-			for _, name := range names {
-				e.report(problems.OutputHoldsSecret, j.Steps[i].Path, problems.Params{"name": name}, expr.Read{})
-			}
+	for i := range j.Steps {
+		if names := c.secretSteps[j.Steps[i].ID]; j.Steps[i].ID != "" && len(names) > 0 {
 			if out.SecretSteps == nil {
 				out.SecretSteps = map[string][]string{}
 			}
-			out.SecretSteps[s.ID] = names
+			out.SecretSteps[j.Steps[i].ID] = names
 		}
 	}
 	return out, e.diags, nil

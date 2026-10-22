@@ -2,8 +2,10 @@ description: >-
   steps holds, for each step that has an id and has had its turn, the
   outputs it wrote, as strings. A step reads those before it, and the job's
   outputs read them all. A name it didn't write reads as "" in a step whose
-  if: is the word always, and fails anywhere else (output_not_written).
-source: Meridian
+  if: is the word always, and fails anywhere else (output_not_written). A
+  key of a step other than outputs reads as its own text, as format 1 reads
+  a word it doesn't know, with a warning.
+source: Meridian, and ACTIVATE's parser
 jobs:
   main:
     steps:
@@ -14,9 +16,14 @@ jobs:
 expect:
   diagnostics:
     - severity: warning
+      code: steps_unknown_key
+      path: /jobs/main/steps/1/run
+      params: {id: first, key: result}
+    - severity: warning
       code: older_always
       path: /jobs/main/steps/3/if
   values:
+    /jobs/main/steps/1/run: echo steps.first.result
     /jobs/main/steps/2/run: 'echo {"outputs":{"A":"1"}}'
     /jobs/main/steps/3/run: echo []
     /jobs/main/outputs/first: '{"outputs":{"A":"1"}}'

@@ -243,3 +243,27 @@ func TestEvalPartsRandom(t *testing.T) {
 		}
 	}
 }
+
+// A scope's Text hook makes a reference to a path its context doesn't
+// have read as its own text, as format 1 reads a word it doesn't know.
+func TestScopeText(t *testing.T) {
+	contexts := map[string]any{"steps": map[string]any{"a": map[string]any{"outputs": map[string]any{"x": "1"}}}}
+	text := func(context string, path []string) bool {
+		return context == "steps" && len(path) >= 2 && path[1] != "outputs"
+	}
+	for src, want := range map[string]any{
+		"steps.a.result":          "steps.a.result",
+		"steps['a'].result":       "steps['a'].result",
+		"steps.b.conclusion.more": "steps.b.conclusion.more",
+		"steps.a.outputs.x":       "1",
+		"steps.a.outputs.y":       "",
+	} {
+		v, err := mustParse(t, src).Eval(expr.Scope{Contexts: contexts, Text: text})
+		if err != nil || v != want {
+			t.Errorf("%s = %#v, %v, want %#v", src, v, err, want)
+		}
+	}
+	if v, err := mustParse(t, "steps.a.result").Eval(expr.Scope{Contexts: contexts}); err != nil || v != "" {
+		t.Errorf("without Text: %#v, %v", v, err)
+	}
+}

@@ -56,7 +56,7 @@ jobs:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(diags) != 4 {
+		if len(diags) != 3 {
 			t.Fatalf("%q: %v", secret, diags)
 		}
 		for _, d := range diags {

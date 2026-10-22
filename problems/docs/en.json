@@ -448,7 +448,7 @@
     ]
   },
   "steps_unknown_key": {
-    "why": "Each step in steps has outputs, and nothing else, so another key reads as null. ACTIVATE read it as its own text, such as steps.build.result, which no workflow means.",
+    "why": "Each step in steps has outputs, and nothing else, so another key reads as the reference's own text, such as steps.build.result, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read steps.<id>.outputs."
     ]
@@ -583,12 +583,6 @@
     "why": "Meridian runs a matrix of at most a limit of combinations, 256 unless whoever runs the workflow sets another. It also stops counting a matrix's combinations once it has looked at about 16 million of them and of the exclude entries it checks them against, so a matrix far larger than the limit before its exclude entries remove most of it is too large as well. The limits are Meridian's own, not part of the workflow format.",
     "fix": [
       "Make the matrix smaller, or ask whoever runs the workflow for a higher limit."
-    ]
-  },
-  "output_holds_secret": {
-    "why": "A job's output, or a step's, holds a secret: it was made from one, or holds one's text. Format 1 passes outputs to the jobs that need them as they are, and so does Meridian, which keeps this one with the run's secrets rather than in the run's state, where whoever can see the run would read it. The jobs that read it read it as a secret, so what they make of it is masked in their logs, and the secret's text is masked in this job's logs.",
-    "fix": [
-      "Leave the secret out of the output, and read it where it is needed instead, unless the jobs that need this one need it."
     ]
   },
   "output_not_written": {

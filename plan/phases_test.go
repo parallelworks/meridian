@@ -633,9 +633,8 @@ jobs:
 
 // End gives a job's outputs, its steps' merged in their order with its
 // outputs: over them, as they were made: one made from a secret, or that
-// holds one, is private and a secret, with a warning that names it, as is
-// a step's output that holds one, and one made from a variable is
-// private. A problem with one shows no part of the secret.
+// holds one, is private and a secret, as is a step's output that holds
+// one, and one made from a variable is private. A problem with one shows no part of the secret.
 func TestEnd(t *testing.T) {
 	p := compiled(t, `
 jobs:
@@ -667,12 +666,7 @@ jobs:
 		fmt.Sprint(end.Secrets) != "[holds made]" || fmt.Sprint(end.SecretSteps) != "map[a:[y]]" {
 		t.Errorf("outputs %v, private %q, secrets %q, %q", end.Outputs, end.Private, end.Secrets, end.SecretSteps)
 	}
-	want := []string{
-		"from_json_invalid /jobs/main/outputs/fails",
-		"output_holds_secret /jobs/main/outputs/holds",
-		"output_holds_secret /jobs/main/outputs/made",
-		"output_holds_secret /jobs/main/steps/0",
-	}
+	want := []string{"from_json_invalid /jobs/main/outputs/fails"}
 	if got := codes(diags); !slices.Equal(got, want) {
 		t.Errorf("diagnostics %q, want %q", got, want)
 	}

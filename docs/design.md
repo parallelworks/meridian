@@ -229,10 +229,6 @@ its content, 220 files.
   job's `outputs:` read them. ACTIVATE takes the same fix by leaving the
   `id` out of the copy. None of the 155 `cleanup:`s is on a step with an
   `id`, and none reads `steps`.
-- **`steps.<id>` with a key other than `outputs` reads as null, with a
-  warning (`steps_unknown_key`)**, where ACTIVATE read it as its own text,
-  such as `steps.build.result`, which no workflow means. ACTIVATE takes
-  the same fix by reading it as null. No known workflow reads one.
 
 ## Phases
 
@@ -384,9 +380,9 @@ its resolvers into a plan, in order:
      defining them. A step reading a step that doesn't exist or doesn't run
      before it is an error, since ACTIVATE fails the step; in a job's
      outputs and a step's `cleanup:`, which read it as `""`, it is a
-     warning. A step's key other than `outputs` is a warning, and reads as
-     null, where ACTIVATE read it as its own text
-     ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+     warning. A step's key other than `outputs`, such as
+     `steps.build.result`, is a warning, and reads as its own text, as
+     format 1 reads a word it doesn't know.
    - Reading a variable that isn't a secret, or defining an input that takes
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is
@@ -1338,8 +1334,9 @@ read. Instead:
 - **An output that holds a secret** is private and a secret: one made from
   a secret, or that holds a secret's text as the job's logs mask it, but
   for a line of one, and so is a step's output that holds a secret's text.
-  End names it with a warning (`output_holds_secret`); the coordinator
-  keeps its value only in the secret record, never in run state; and the
+  End names it, with no warning, since passing a token to the jobs that
+  need it is common and safe so; the coordinator keeps its value only in
+  the secret record, never in run state; and the
   jobs that need the job read it as a secret, so what they make of it is
   masked in their logs and problems, and an output they make of it holds a
   secret too. Logs and problems mask the secret's text in it, as they do

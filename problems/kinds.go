@@ -177,7 +177,6 @@ var (
 	MatrixEntryNotMapping = define(Error, "matrix_entry_not_mapping", "Matrix entry that isn't a mapping", "key", "value")
 	MatrixEmpty           = define(Error, "matrix_empty", "Matrix without combinations")
 	MatrixTooLarge        = define(Error, "matrix_too_large", "Matrix with too many combinations", "limit")
-	OutputHoldsSecret     = define(Warning, "output_holds_secret", "Output that holds a secret", "name")
 	OutputNotWritten      = define(Error, "output_not_written", "Output that nothing wrote", "of", "owner", "name")
 	WorkingDirectoryVar   = define(Error, "working_directory_variable", "Shell variable in a working directory", "variable")
 )

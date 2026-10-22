@@ -3,7 +3,7 @@ jobs:
     steps:
       - id: first
         run: echo A=1 >> $OUTPUTS
-      - run: echo unnamed
+      - run: echo ${{ steps.first.result }}
       - id: third
         run: echo ${{ steps.first }}
       - run: echo [${{ steps.first.outputs.B }}]

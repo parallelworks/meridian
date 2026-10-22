@@ -523,7 +523,7 @@
   },
   "steps_unknown_key": {
     "title": "Clave desconocida de un paso",
-    "why": "Cada paso de steps tiene outputs, y nada más, así que otra clave se lee como null. ACTIVATE la leía como su propio texto, como steps.build.result, que ningún flujo de trabajo pretende.",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que otra clave se lee como el propio texto de la referencia, como steps.build.result, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee steps.<id>.outputs."
     ]
@@ -680,13 +680,6 @@
     "why": "Meridian ejecuta una matriz de como máximo un límite de combinaciones, 256 salvo que quien ejecuta el flujo de trabajo fije otro. También deja de contar las combinaciones de una matriz cuando ha revisado unos 16 millones de ellas y de las entradas de exclude con las que las compara, así que una matriz mucho más grande que el límite antes de que sus entradas de exclude quiten la mayor parte también es demasiado grande. Los límites son propios de Meridian y no forman parte del formato del flujo de trabajo.",
     "fix": [
       "Haz la matriz más pequeña, o pide a quien ejecuta el flujo de trabajo un límite más alto."
-    ]
-  },
-  "output_holds_secret": {
-    "title": "Salida que contiene un secreto",
-    "why": "Una salida de un trabajo, o de un paso, contiene un secreto: se hizo a partir de uno, o contiene su texto. El formato 1 pasa las salidas tal cual a los trabajos que las necesitan, y Meridian también, que guarda esta con los secretos de la ejecución en lugar de en el estado de la ejecución, donde la leería quien pueda ver la ejecución. Los trabajos que la leen la leen como un secreto, así que lo que hacen con ella se enmascara en sus registros, y el texto del secreto se enmascara en los registros de este trabajo.",
-    "fix": [
-      "Deja el secreto fuera de la salida y léelo donde se necesite, a menos que los trabajos que necesitan este lo necesiten."
     ]
   },
   "output_not_written": {

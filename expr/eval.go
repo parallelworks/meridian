@@ -107,6 +107,14 @@ type Scope struct {
 	// the context. A runner reads some names strictly with it, as format 1
 	// reads an output that no step wrote.
 	Missing func(context string, path []string) (*problems.Kind, problems.Params)
+	// Text, if it isn't nil, is asked about each reference to a path that
+	// its context doesn't have: when it reports true, the reference reads
+	// as its own text, as format 1 reads a word it doesn't know, with its
+	// names joined by dots, as steps.build.result. path is the
+	// reference's, in the context. A runner gives it for a path that
+	// format 1 doesn't read from its context, such as a step's key other
+	// than outputs.
+	Text func(context string, path []string) bool
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of
@@ -898,6 +906,9 @@ func (e *evaluator) ref(r *ref) (any, error) {
 		if v, ok, err = f.walk(root, path); err != nil {
 			return nil, err
 		}
+		if !ok && e.scope.Text != nil && e.scope.Text(r.context, path) {
+			return r.text(), nil
+		}
 		if !ok && contexts[r.context].strings {
 			if e.scope.Missing != nil {
 				if k, params := e.scope.Missing(r.context, path); k != nil {
@@ -912,6 +923,29 @@ func (e *evaluator) ref(r *ref) (any, error) {
 		return v, nil
 	}
 	return e.known(r.at, root, path, v)
+}
+
+// text returns the reference as format 1 reads one it doesn't know: its
+// context and its path, with names after dots, a quoted key in quotes in
+// brackets, and a bare key in brackets.
+func (n *ref) text() string {
+	var b strings.Builder
+	b.WriteString(n.context)
+	for _, s := range n.path {
+		switch s.kind {
+		case quoted:
+			b.WriteString("['" + s.name + "']")
+		case bareKey:
+			b.WriteString("[" + s.name + "]")
+		case index:
+			b.WriteString("[index]")
+		case wildcard:
+			b.WriteString(".*")
+		default:
+			b.WriteString("." + s.name)
+		}
+	}
+	return b.String()
 }
 
 // known returns v, which the reference at offset at read by following path

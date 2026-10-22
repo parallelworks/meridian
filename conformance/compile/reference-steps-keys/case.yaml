@@ -1,8 +1,8 @@
 description: >-
   steps.<id> has an earlier step's outputs, and nothing else. A step that
   reads a step the job doesn't have is an error, as ACTIVATE fails the
-  step. Another key of one reads as null, and is a warning, as a bug fix to
-  format 1: ACTIVATE read it as its own text.
+  step. Another key of one reads as its own text, as format 1 reads a word
+  it doesn't know, and is a warning.
 source: Meridian
 expect:
   diagnostics:
