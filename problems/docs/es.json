@@ -537,7 +537,7 @@
   },
   "no_matrix": {
     "title": "El trabajo no tiene matriz",
-    "why": "El trabajo no tiene matriz, así que una palabra que empieza por matrix. es texto.",
+    "why": "El trabajo no tiene matriz, así que matrix.<clave> se lee como null. ACTIVATE lo leía como su propio texto cuando ningún trabajo del flujo de trabajo tenía matriz, lo que lo hacía depender de los demás trabajos del flujo de trabajo.",
     "fix": [
       "Dale al trabajo un strategy: con un matrix:, o elimina la referencia."
     ]
@@ -670,14 +670,14 @@
   },
   "output_masked": {
     "title": "Salida que contiene un secreto",
-    "why": "Las salidas de un trabajo se guardan con la ejecución, donde las lee quien puede ver la ejecución. Esta salida contenía el valor de un secreto, o se hizo a partir de uno, así que se guarda con el secreto enmascarado como ***.",
+    "why": "Las salidas de un trabajo se guardan con la ejecución, donde las lee quien puede ver la ejecución. Esta salida contenía el valor de un secreto, así que se guarda con el secreto enmascarado como ***. Una salida hecha a partir de un secreto, o de la salida de un paso que contenía uno, se enmascara entera, ya que no se puede distinguir lo que en ella viene del secreto del resto.",
     "fix": [
       "Deja el secreto fuera de la salida y léelo donde se necesite."
     ]
   },
   "output_not_written": {
     "title": "Salida que nada escribió",
-    "why": "El formato 1 lee una salida de un trabajo, needs.<job>.outputs.<name>, y la de un paso, steps.<id>.outputs.<name>, de forma estricta donde un trabajo o un paso está por ejecutarse, y en los outputs: de un trabajo cuando sus pasos tuvieron éxito: una que nada escribió hace fallar lo que la lee, en vez de leerse como \"\", para que un comando como rm -rf con una ruta vacía nunca se ejecute. Un paso o un trabajo cuyo if: es la palabra always, y un if: en sí, la leen como \"\".",
+    "why": "El formato 1 lee una salida de un trabajo, needs.<job>.outputs.<name>, y la de un paso, steps.<id>.outputs.<name>, de forma estricta donde un trabajo o un paso está por ejecutarse, y en los outputs: de un trabajo cuando sus pasos tuvieron éxito: una que nada escribió hace fallar lo que la lee, en vez de leerse como \"\", para que un comando como rm -rf con una ruta vacía nunca se ejecute. El cleanup: de un paso, un paso o un trabajo cuyo if: es la palabra always, y un if: en sí, la leen como \"\".",
     "fix": [
       "Escribe la salida en el paso o el trabajo que lee la expresión, o léela con un valor por defecto, como needs.<job>.outputs.<name> || 'valor', en un paso cuyo if: es always."
     ]

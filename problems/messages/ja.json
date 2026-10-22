@@ -75,7 +75,7 @@
   "output_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この出力は空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs です。",
   "output_steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs なので、この出力は空になります。",
-  "no_matrix": "ジョブ「{job}」にはマトリックスがないため、matrix.{key} はテキスト {text} になります。",
+  "no_matrix": "ジョブ「{job}」にはマトリックスがないため、matrix.{key} はテキスト {text} ではなく null になります。",
   "undefined_matrix_key": "ジョブ「{job}」のマトリックスにキー「{key}」はありません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "undefined_session": "ワークフローにセッション「{name}」はありません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "variable_looks_secret": "{context, select, org {組織} other {ユーザー}}の変数「{name}」はシークレットを保持しているように見えますが、シークレット変数ではないため、その値はログでマスクされません。シークレットを保持している場合は、シークレット変数にしてください。",

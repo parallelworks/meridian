@@ -190,15 +190,34 @@ of.
   format 1 timed out at once; a negative duration, such as `-5m`, which
   format 1 timed out at once or ignored, is a problem; `max-retries:` text
   must be a whole number, with space around it or not, so `3.5` is a
-  problem where format 1 retried 10 times, and ` 3` is 3; and a number's
-  fraction is rounded down, as in format 1.
+  problem where format 1 retried 10 times, and ` 3` is 3; a number's
+  fraction is rounded down in `max-retries:` and a retry's `interval:` and
+  `timeout:`, as in format 1, so a retry's `0.5` is its default; and a
+  job's or a step's `timeout:` of a number with a fraction is a problem,
+  where format 1 ignored it.
 - **A matrix key whose values aren't a list, and an `include` or `exclude`
   entry that isn't a mapping**, are problems (`matrix_not_list`,
   `matrix_entry_not_mapping`), where format 1 dropped them silently. All
   14 strategies outside Meridian's own tests use lists.
 - **A job's `outputs:` read `env`**: the workflow's `env:`, the job's, and
-  the variables the worker defines, where format 1 gave them none. None of
-  the known workflows reads `env` in `outputs:`.
+  the variables the worker defines, where format 1 left an expression that
+  read it as its text. ACTIVATE takes the same fix by passing the job's
+  `env` to the parse of its outputs. None of the 12 jobs with `outputs:`
+  reads `env` in them.
+- **`matrix.<key>` in a job without a matrix is null**, where ACTIVATE gave
+  the text `matrix.<key>` when no job of the workflow had a `strategy:`,
+  and null when another job had one, so that what a job read depended on
+  the workflow's other jobs. The compiler warns of it (`no_matrix`).
+  ACTIVATE takes the same fix by always passing a matrix, empty for a job
+  without one, where the run is created. No known workflow but Meridian's
+  own test of the warning reads `matrix` in a job without a matrix.
+- **A value of an `env:` that reads itself, or values of one that read each
+  other, read what is under the `env:`**: for a job's, the workflow's
+  `env:`, and for a step's, the job's over that, where format 1 recursed
+  until it failed. Values that read others of the same `env:` are
+  evaluated in the order they read each other, as in format 1. None of the
+  136 `env:` blocks of the known workflows has a value that reads another
+  of its own block.
 
 ## Phases
 
@@ -213,7 +232,7 @@ phase's inputs and keep what it gives, so every implementation, whether
 | Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
 | Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
-| Step | A job starts on its worker, and each of its steps is about to run | `plan.ReadyJob.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
+| Step | A job starts on its worker, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
 | End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
 Each phase reads the contexts of the phases before it too.
@@ -288,7 +307,10 @@ jobs below it through those it skips: a job whose `if:` the jobs it needs
 made false, because one failed or was cancelled, is skipped with that
 reason, which the jobs that need it read as a failure. A step fails, for
 `failure()`, when a step before it failed, as its job counts it, and is
-cancelled when its job is being cancelled.
+cancelled when its job is being cancelled or a step before it was
+cancelled, as `early-cancel:` stops one: as in format 1, that cancels the
+rest of the job, whose later steps run only if they outlive a cancel, and
+the job ends cancelled unless a step of it failed.
 
 `needs.<job>.result` is a dependency's outcome: `success`, `failure`,
 `cancelled` or `skipped`. For a matrix job it is `failure` if any instance
@@ -1152,15 +1174,28 @@ secret record ([Run data](#run-data)).
   like a secret's.
 - **What is masked is text.** The masker is given strings: a secret's own
   text, however short, unless it is empty, which is never masked; and each
-  string an expression made from one, a template at a time, so a secret
-  in one value of a step's `with:` masks only what that value's template
-  gave. It is never given the text of a boolean, a number or null that a
-  secret decided, such as whether a token is set, which would mask every
-  `true` in the job's logs and outputs. A job output made from a secret,
-  of whatever type, is masked whole instead ([Outputs](#outputs)). A
-  secret is masked as a log or an output can show it too: without the line
-  breaks it ends with, each of its lines of at least 4 bytes, as a key
-  printed a line at a time shows, and as JSON escapes it in a string.
+  string of at least 8 bytes that an expression made from one, a template
+  at a time, so a secret in one value of a step's `with:` masks only what
+  that value's template gave. It is never given a shorter one, such as a
+  `yes` that a secret decided, nor the text of a boolean, a number or null
+  that one decided, such as whether a token is set, which would mask every
+  `yes` or `true` in the job's logs and outputs. A job output made from a
+  secret, of whatever type, is masked whole instead ([Outputs](#outputs)).
+- **A secret is masked as it can be shown.** Its shown forms are masked
+  too: without the line breaks it ends with; as JSON escapes it in a
+  string, as Go's `encoding/json/v2` writes it, as `encoding/json` writes
+  it with `<`, `>` and `&` escaped, with U+2028 and U+2029 escaped, and
+  with every character outside ASCII escaped, as Python's `json.dumps`
+  writes it; and, in logs, each of its lines on its own, as a key printed
+  a line at a time shows, as GitHub Actions masks a secret of more than one
+  line line by line. A line is masked on its own only when it is at least
+  8 bytes, with a letter or a digit, and isn't `true`, `false` or `null`,
+  so that a JSON or YAML secret's `},` or `true` lines mask nothing else.
+- **What holds a secret.** A step's output holds a secret when it holds a
+  secret's own text or one of its shown forms, but a line of it: never a
+  string made from one, nor a line, which plain text can hold too. A job's
+  later steps read such an output as a secret, and an output made from it
+  is masked whole.
 - **What a script does with a value can't be followed.** A secret that a
   step's script transforms, such as by encoding it in base64, isn't known
   to come from the secret, and isn't masked.
@@ -1231,9 +1266,18 @@ waking up or `meridian run` restarting must not make them all look lost.
 - **Timeouts:** the worker enforces step and job timeouts. The coordinator
   enforces the run's timeout, and a job's as a backstop.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
-  fails. The coordinator tells the step's worker.
+  fails. The coordinator tells the step's worker. The step ends cancelled,
+  which cancels the rest of its job, as in format 1: a later step runs only
+  if it outlives a cancel, and the job ends cancelled unless a step of it
+  failed (`plan.JobState.Cancelled`). A `uses:` step whose child run was
+  cancelled from within it while its job goes on counts as skipped, as
+  format 1 goes on with the job after one.
 - **A step's `cleanup:` command** runs at the end of its job if the step
-  ran, whatever the job's outcome, in reverse order.
+  ran, whatever the job's outcome, in reverse order, as a step of its own
+  named `POST` and the step's name, which outlives a cancel and has no
+  timeout or retry of its own, as in format 1. It is evaluated as it runs
+  (`plan.ReadyJob.Cleanup`), with every step's outputs, and reads one that
+  nothing wrote as `""`.
 
 ### Outputs
 
@@ -1446,25 +1490,36 @@ member's running workers reconnect to it.
   workflow's `env:`, the job's over it, the step's over that, and the
   variables the worker defines over all, such as `PW_PARENT_JOB_DIR` and
   `PW_WORKFLOW_STEP_CURRENT_RETRY` (`plan.JobState.Env`). A value of a job's
-  or a step's `env:` that reads `env` reads that `env:`'s values that
-  don't. A credential, such as the platform's API key that format 1 gives a
-  step as `PW_API_KEY`, is in the step's environment but never in the `env`
-  context: none of the workflows we know of reads one in an expression, so
-  no expression's value is made from one. A job's `working-directory:` is
-  evaluated on the worker too, where the run directory is known: 24 jobs
-  in 4 known workflows read `env.PW_PARENT_JOB_DIR` in it. The compiler
+  or a step's `env:` that reads others of it reads their values, evaluated
+  in the order they read each other, as in format 1; one that reads
+  itself, and values that read each other, read what is under the `env:`
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)). The job's `env:` and
+  `working-directory:` are evaluated as the job starts, with only the
+  variables format 1 defines then, not `OUTPUTS` or the retry counters, so
+  they are the same for each step. A credential, such as the platform's API
+  key that format 1 gives a step as `PW_API_KEY`, is in the step's
+  environment but never in the `env` context: the plan reads only the
+  variables format 1 defines (`plan.IsFormatVariable`), whatever the worker
+  passes, and none of the workflows we know of reads one in an expression.
+  A job's `working-directory:` is evaluated on the worker, where the run
+  directory is known: 24 jobs in 4 known workflows read
+  `env.PW_PARENT_JOB_DIR` in it. The compiler
   warns about `env.<name>` that nothing defines where it is read.
 - **Each try is evaluated.** A step is evaluated again for each try of its
   `retry:`, so that what reads `env.PW_WORKFLOW_STEP_CURRENT_RETRY` reads the
   try's, as format 1's failover does: 8 known workflows read it in a retried
-  step's `with:`. Its `if:` and `retry:` are those of its first try.
+  step's `with:`. Its `if:` and `retry:` are those of its first try: a
+  later try runs whatever its `if:` would give now, and carries over
+  whether it outlives a cancel and reads outputs as its first did.
 - **Outputs that nothing wrote.** As in format 1, a job's output or a
   step's that nothing wrote fails the expression that reads it
   (`output_not_written`) where a job or a step is about to run, and in a
   job's `outputs:` once its steps succeeded, so that a command such as
   `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path. An
-  `if:` reads one as `""`, and so does a step whose `if:` is the word
-  `always`, and a job's own values when its `if:` is. A step with an `id`
+  `if:` reads one as `""`, and so do a step whose `if:` is the word
+  `always`, a job's own values and its strategy when its `if:` is, a
+  step's `cleanup:`, and a job's `outputs:` once a step of it failed or was
+  cancelled. A step with an `id`
   writes outputs of its own, which `steps.<id>` reads; the job's outputs are
   those its steps without one write, with its `outputs:` over them.
 - **A host of a step's own.** A format 1 `ssh:` on a job runs its steps on

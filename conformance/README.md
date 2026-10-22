@@ -191,15 +191,18 @@ expect:
   `cancelled` says the run is being cancelled. A matrix job's `index` and
   `matrix` are those of the instance evaluated. `attempt`, from 1, `group`
   and `member` are the job context's. `steps` are how the job's steps
-  ended, in order, each with its `outcome` and the `outputs` it wrote.
+  ended, in order, each with its `outcome` and the `outputs` it wrote: a
+  step that ended `cancelled` cancels the rest of the job.
 - Each job is evaluated where its dependencies have finished, and each of
   its steps as it is about to run, up to the one after the last that
-  `steps` gives, and its `outputs:` once `steps` gives every step. Its
-  steps are evaluated at the job's `try`, from 0, with `env`, the
-  variables the worker defines, such as `PW_WORKFLOW_STEP_CURRENT_RETRY`,
-  which `env` reads over the workflow's, the job's and the step's.
+  `steps` gives, and once `steps` gives every step, each step's
+  `cleanup:` and then its `outputs:`. Its steps are evaluated at the job's
+  `try`, from 0, after the first try, with `env`, the variables the worker
+  defines, such as `PW_WORKFLOW_STEP_CURRENT_RETRY`, which `env` reads over
+  the workflow's, the job's and the step's.
 - `expect.skipped` lists the JSON Pointers of the jobs and steps whose
-  `if:` is false, and every other job and step evaluated runs.
+  `if:` is false, and of the `cleanup:` of each step that didn't run, and
+  every other job, step and `cleanup:` evaluated runs.
 - `expect.needs-failed` lists the JSON Pointers of the jobs skipped because
   a job they need failed, which the jobs that need them read as failed.
   Every other job skipped was skipped by its own `if:`.
@@ -207,13 +210,14 @@ expect:
   private: made from a variable or a password and not from a secret, so
   kept only with the run's secrets. No other output is.
 - `expect.values` are the values at JSON Pointers into the workflow, as
-  their phase gives them: a step's `run`, `name`, `cleanup`,
-  `working-directory` and `with`, and `env/<name>`, which is the
-  environment the step runs with, its own `env:` or not; a job's
-  `outputs/<name>`, each of its outputs, those its steps wrote among them;
-  a step's `ssh`, the mapping it runs on a host with, or null when its
-  `ssh:` is null; and its `runs-on`, or `runs-on/execution-group`, which
-  is the execution group it names.
+  their phase gives them: a step's `run`, `name`, `working-directory` and
+  `with`; its `cleanup`, the command it runs once the job's steps have;
+  and `env/<name>`, which is the environment the step runs with, its own
+  `env:` or not; a job's `outputs/<name>`, each of its outputs, those its
+  steps wrote among them; a job's or a step's `ssh`, the mapping it runs
+  on a host with, or null when a step's `ssh:` is null; and a job's
+  `runs-on`, or `runs-on/execution-group`, which is the execution group it
+  names.
 - `expect.diagnostics` are those of compiling the workflow and of each
   phase together.
 

@@ -75,7 +75,7 @@
   "output_undefined_step": "‘{job}’ 작업에 id가 ‘{id}’인 단계가 없으므로 이 출력은 비어 있습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
   "steps_unknown_key": "steps.{id}에는 ‘{key}’ 키가 없습니다. steps.{id}에는 outputs가 있습니다.",
   "output_steps_unknown_key": "steps.{id}에는 ‘{key}’ 키가 없습니다. steps.{id}에는 outputs만 있으므로 이 출력은 비어 있습니다.",
-  "no_matrix": "‘{job}’ 작업에는 매트릭스가 없으므로 matrix.{key} 값은 텍스트 {text}입니다.",
+  "no_matrix": "‘{job}’ 작업에는 매트릭스가 없으므로 matrix.{key} 값은 텍스트 {text}가 아니라 null입니다.",
   "undefined_matrix_key": "‘{job}’ 작업의 매트릭스에는 ‘{key}’ 키가 없습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
   "undefined_session": "워크플로에 ‘{name}’ 세션이 없습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
   "variable_looks_secret": "{context, select, org {조직} other {사용자}} 변수 ‘{name}’은(는) 시크릿을 담고 있는 것처럼 보이지만 시크릿 변수가 아니므로, 그 값이 로그에서 마스킹되지 않습니다. 시크릿을 담고 있다면 시크릿 변수로 바꾸세요.",

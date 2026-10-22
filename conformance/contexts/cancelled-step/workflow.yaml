@@ -1,0 +1,16 @@
+jobs:
+  stream_output:
+    steps:
+      - name: Stream Output
+        early-cancel: any-job-failed
+        run: tail -f run.out
+      - name: Report
+        run: echo done
+      - name: Collect
+        if: ${{ always() }}
+        run: echo collected ${{ cancelled() }}
+      - name: Note
+        if: ${{ cancelled() }}
+        run: echo cancelled
+    outputs:
+      lines: ${{ needs.stream_output.outputs.lines }}

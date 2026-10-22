@@ -78,7 +78,7 @@
   "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs.",
   "output_steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this output is empty.",
-  "no_matrix": "The job \"{job}\" has no matrix, so matrix.{key} is the text {text}.",
+  "no_matrix": "The job \"{job}\" has no matrix, so matrix.{key} is null, not the text {text}.",
   "undefined_matrix_key": "The matrix of the job \"{job}\" has no key \"{key}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "undefined_session": "The workflow has no session \"{name}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "variable_looks_secret": "The {context, select, org {organization} other {user}} variable \"{name}\" looks like it holds a secret, but it isn't a secret variable, so its value isn't masked in logs. If it holds a secret, make it a secret variable.",

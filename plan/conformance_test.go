@@ -200,6 +200,12 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	if g := rj.Target.Group; g != "" {
 		r.got[job.Path+"/runs-on"], r.got[job.Path+"/runs-on/execution-group"] = g, g
 	}
+	switch {
+	case rj.Target.Inline != nil:
+		r.got[job.Path+"/ssh"] = rj.Target.Inline.SSH.Get()
+	case !job.SSH.IsZero():
+		r.got[job.Path+"/ssh"] = nil
+	}
 	attempt := state.Attempt
 	if attempt == 0 {
 		attempt = 1
@@ -214,7 +220,7 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 			return
 		}
 		js.Steps = toResults(state.Steps[:i])
-		s, diags, err := rj.Step(ctx, i, js)
+		s, diags, err := r.step(rj, i, js)
 		r.diags = append(r.diags, diags...)
 		if err != nil {
 			t.Fatalf("step %d of %s: %v", i, job.Name, err)
@@ -228,7 +234,7 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 			continue
 		}
 		js.Masked = append(js.Masked, s.Masked...)
-		r.got[path+"/run"], r.got[path+"/name"], r.got[path+"/cleanup"] = s.Run, s.Name, s.Cleanup
+		r.got[path+"/run"], r.got[path+"/name"] = s.Run, s.Name
 		r.got[path+"/working-directory"], r.got[path+"/with"] = s.WorkingDirectory, s.With.Get()
 		for name, v := range s.Env {
 			r.got[path+"/env/"+name] = v
@@ -244,6 +250,25 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		return
 	}
 	js.Steps = toResults(state.Steps)
+	for i, step := range slices.Backward(rj.Steps) {
+		if step.Cleanup.IsZero() {
+			continue
+		}
+		s, diags, err := rj.Cleanup(ctx, i, js)
+		r.diags = append(r.diags, diags...)
+		if err != nil {
+			t.Fatalf("cleanup of step %d of %s: %v", i, job.Name, err)
+		}
+		path := step.Path + "/cleanup"
+		switch {
+		case s == nil:
+		case s.Skipped:
+			r.skipped = append(r.skipped, path)
+		default:
+			r.got[path] = s.Run
+			js.Masked = append(js.Masked, s.Masked...)
+		}
+	}
 	end, diags, err := rj.End(ctx, js)
 	r.diags = append(r.diags, diags...)
 	if err != nil {
@@ -258,6 +283,22 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	for _, name := range end.Private {
 		r.private = append(r.private, job.Path+"/outputs/"+name)
 	}
+}
+
+// step evaluates the step at index in rj, at the try state says: a later
+// try after the first, as the worker does.
+func (r *contextsRun) step(rj *plan.ReadyJob, index int, state plan.JobState) (*plan.ReadyStep, problems.Diagnostics, error) {
+	if state.Try == 0 {
+		return rj.Step(r.t.Context(), index, state)
+	}
+	first := state
+	first.Try = 0
+	s, diags, err := rj.Step(r.t.Context(), index, first)
+	if err != nil || s == nil || s.Skipped {
+		return s, diags, err
+	}
+	state.FirstTry = s
+	return rj.Step(r.t.Context(), index, state)
 }
 
 func toResults(steps []conformance.StepResult) []plan.StepResult {

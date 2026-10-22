@@ -11,5 +11,6 @@ jobs:
       - {outcome: success}
 expect:
   values:
+    /jobs/main/ssh: {remoteHost: login.example.org}
     /jobs/main/steps/1/ssh: null
     /jobs/main/steps/2/ssh: {remoteHost: other.example.org}

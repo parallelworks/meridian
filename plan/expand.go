@@ -94,9 +94,11 @@ func (e *ExpandError) Error() string { return e.Kind.Message(e.Params) }
 // needs. It counts the instances before it makes them, so a matrix far
 // over the limit costs no more than one at it: it reads each value of a
 // key once, to index it by its text, and looks at no more than 2^24
-// combinations of its keys' values, comparisons of an exclude or include
-// entry's values with them, and entries checked against them, together. A
-// matrix with more than that to look at is over the limit too.
+// combinations of its keys' values, values an exclude entry removes,
+// comparisons of an exclude or include entry's values with them, each item
+// of a list or a mapping it compares counting, and entries checked against
+// them, together, checking its context as it goes. A matrix with more than
+// that to look at is over the limit too.
 //
 // It returns an *ExpandError for a matrix that has no instance, more than
 // limits.MaxInstances or an entry of the wrong shape, and the error of
@@ -259,9 +261,11 @@ func (x *expansion) combinations(m any) ([]map[string]any, error) {
 		return nil, err
 	}
 	for _, include := range includes {
+		// Matching an entry, and adding its values, looks at each of them.
+		cost := nodes(include)
 		merged := false
 		for _, c := range combos {
-			if err := x.look(1); err != nil {
+			if err := x.look(cost); err != nil {
 				return nil, err
 			}
 			if matchesIncluded(c, include, keys) {
@@ -338,9 +342,11 @@ func (x *expansion) matching(l *valueList, want any) ([]int, error) {
 	case nil:
 		return l.nulls, x.look(1)
 	case []any, map[string]any:
+		// Comparing a list or a mapping looks at each of its items.
+		cost := nodes(want)
 		var out []int
 		for _, i := range l.containers {
-			if err := x.look(1); err != nil {
+			if err := x.look(cost); err != nil {
 				return nil, err
 			}
 			if sameValue(l.values[i], want) {
@@ -350,6 +356,35 @@ func (x *expansion) matching(l *valueList, want any) ([]int, error) {
 		return out, nil
 	}
 	return l.byText[expr.Text(want)], x.look(1)
+}
+
+// nodes returns how many values v is made of: 1, and those its items are
+// made of.
+func nodes(v any) int {
+	n := 1
+	switch v := v.(type) {
+	case []any:
+		for _, item := range v {
+			n += nodes(item)
+		}
+	case map[string]any:
+		for _, item := range v {
+			n += nodes(item)
+		}
+	}
+	return n
+}
+
+// textKey returns what tells apart the scalar values matching tells apart,
+// and false for a list or a mapping.
+func textKey(v any) (string, bool) {
+	switch v.(type) {
+	case nil:
+		return "null", true
+	case []any, map[string]any:
+		return "", false
+	}
+	return "text:" + expr.Text(v), true
 }
 
 // product returns the combinations of the values of keys, which lists
@@ -362,7 +397,11 @@ func (x *expansion) product(keys []string, lists []*valueList, excludes []map[st
 	// allowed holds the indexes of each key's values that no exclude entry
 	// of that key alone removes, and others the entries of more than one
 	// key, as the indexes of the values of each of their keys they match.
+	// removed holds the indexes of each key's values that an entry of that
+	// key alone removes, and removedText the values those entries named, so
+	// that a value named again isn't removed again.
 	removed := make([]map[int]bool, len(keys))
+	removedText := make([]map[string]bool, len(keys))
 	type entry struct {
 		keys  []int
 		match [][]int
@@ -378,6 +417,23 @@ func (x *expansion) product(keys []string, lists []*valueList, excludes []map[st
 				matches = false
 				break
 			}
+			if len(ex) == 1 {
+				// An entry of one key that names a value an entry before it
+				// named removes nothing more.
+				if key, ok := textKey(want); ok {
+					if removedText[k][key] {
+						matches = false
+						if err := x.look(1); err != nil {
+							return nil, err
+						}
+						break
+					}
+					if removedText[k] == nil {
+						removedText[k] = map[string]bool{}
+					}
+					removedText[k][key] = true
+				}
+			}
 			match, err := x.matching(lists[k], want)
 			if err != nil {
 				return nil, err
@@ -390,11 +446,14 @@ func (x *expansion) product(keys []string, lists []*valueList, excludes []map[st
 		}
 		switch {
 		case !matches:
-			// The entry matches no combination.
+			// The entry matches no combination, or none another hasn't.
 		case len(e.keys) == 0:
 			return nil, nil
 		case len(e.keys) == 1:
 			k := e.keys[0]
+			if err := x.look(len(e.match[0])); err != nil {
+				return nil, err
+			}
 			if removed[k] == nil {
 				removed[k] = map[int]bool{}
 			}

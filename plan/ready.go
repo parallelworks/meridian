@@ -496,8 +496,10 @@ func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.
 	skipped := &ReadyResult{Skipped: true, NeedsFailed: !needsOK}
 	if j.Strategy != nil && in.Instance == nil {
 		e := newEvaluation(PhaseStrategy, c)
+		var d decision
 		if !readsContext(j.If, "matrix") {
-			d, ok := e.condition(j.If, at(j.Path, "if"))
+			var ok bool
+			d, ok = e.condition(j.If, at(j.Path, "if"))
 			switch {
 			case !ok:
 				return nil, e.diags, nil
@@ -506,8 +508,10 @@ func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.
 			}
 		}
 		// A strategy reads the outputs of the jobs it needs strictly,
-		// unless the job's if: is the word always.
-		c.StrictOutputs = !alwaysWord(j.If)
+		// unless the job's if: is the word always, as the rest of the job
+		// does; an if: that reads matrix is evaluated only for each
+		// instance.
+		c.StrictOutputs = !d.always
 		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), in.Limits)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {

@@ -3,9 +3,14 @@ package plan
 import (
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/problems"
 )
@@ -21,25 +26,49 @@ import (
 // from one, never the text of a boolean, a number or null, which would mask
 // words such as true wherever they appear (RunValues.Masked). A value that
 // is empty is never masked; any other is, however short. Each value is
-// masked as the text a log or an output can show it in too: without the
-// line breaks it ends with, each of its lines of at least 4 bytes on its
-// own, as a secret printed a line at a time shows, and as JSON writes it
-// in a string, with its quotes and line breaks escaped. What a script makes
-// of a secret otherwise, such as its base64, isn't known to be one, and
-// isn't masked.
+// masked as the text a log or an output can show it in too:
+//
+//   - without the line breaks it ends with;
+//   - each of its lines on its own, as a secret printed a line at a time
+//     shows, as GitHub Actions masks one, but for a line of fewer than 8
+//     bytes, trimmed of space, or of nothing but punctuation, or that is
+//     true, false or null, which would mask common text everywhere;
+//   - as JSON writes it in a string, with its quotes, line breaks and
+//     control characters escaped: as encoding/json/v2 does, as
+//     encoding/json does, with <, >, & and U+2028 and U+2029 escaped too,
+//     with only U+2028 and U+2029 escaped, and with every character that
+//     isn't ASCII escaped, as Python's json.dumps does.
+//
+// What a script makes of a secret otherwise, such as its base64, isn't
+// known to be one, and isn't masked.
 type Masker struct {
 	mu sync.Mutex
-	// values are the texts it masks, each once, and seen holds them.
-	// matcher finds them, made from values once it is first needed after
-	// they change.
-	values  []string
+	// lines is set when it masks each line of a value of more than one on
+	// its own.
+	lines bool
+	// seen holds the texts it masks, and pending those it hasn't made into
+	// a matcher yet. levels find the rest: each made from the texts added
+	// since the one before it was made, merged with the levels after it
+	// while they are no smaller, so that there are only as many as the
+	// bits of how many texts there are, and each text is made into a
+	// matcher only as often as there are levels.
 	seen    map[string]bool
-	matcher *matcher
+	pending []string
+	levels  []*matcher
 }
 
 // NewMasker returns a Masker that masks values.
 func NewMasker(values ...string) *Masker {
-	m := new(Masker)
+	m := &Masker{lines: true}
+	m.Add(values...)
+	return m
+}
+
+// newLeakMasker returns a Masker that masks values as they show but for
+// their lines: what tells a step's output that holds a secret, which only
+// a secret's own text, and not a line of it, can tell.
+func newLeakMasker(values ...string) *Masker {
+	m := &Masker{}
 	m.Add(values...)
 	return m
 }
@@ -49,7 +78,7 @@ func (m *Masker) Add(values ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, v := range values {
-		for _, text := range shownAs(v) {
+		for _, text := range shownAs(v, m.lines) {
 			if text == "" || m.seen[text] {
 				continue
 			}
@@ -57,47 +86,90 @@ func (m *Masker) Add(values ...string) {
 				m.seen = map[string]bool{}
 			}
 			m.seen[text] = true
-			m.values = append(m.values, text)
-			m.matcher = nil
+			m.pending = append(m.pending, text)
 		}
 	}
 }
 
-// minLine is how long a line of a value of more than one line must be to be
-// masked on its own, so that the short lines of a key, such as a PEM's last,
-// don't mask the same text everywhere in a log.
-const minLine = 4
+// minLine is how long a line of a value of more than one line must be,
+// trimmed of space, to be masked on its own.
+const minLine = 8
 
 // shownAs returns the texts that v, a value to mask, can show as: v, v
-// without the line breaks it ends with, each line of v of at least minLine
-// bytes, without its carriage return, and v as JSON writes it in a string.
-func shownAs(v string) []string {
+// without the line breaks it ends with, each of its lines that is masked
+// on its own, if lines is set, and its JSON forms (jsonForms).
+func shownAs(v string, lines bool) []string {
 	out := []string{v}
 	if strings.ContainsAny(v, "\r\n") {
 		out = append(out, strings.TrimRight(v, "\r\n"))
-		for line := range strings.SplitSeq(v, "\n") {
-			if line = strings.TrimSuffix(line, "\r"); len(line) >= minLine {
-				out = append(out, line)
+		if lines {
+			for line := range strings.SplitSeq(v, "\n") {
+				if line = strings.TrimSpace(line); maskedLine(line) {
+					out = append(out, line)
+				}
 			}
 		}
 	}
-	if quoted, err := jsontext.AppendQuote(nil, v); err == nil {
-		if escaped := string(quoted[1 : len(quoted)-1]); escaped != v {
-			out = append(out, escaped)
+	return append(out, jsonForms(v)...)
+}
+
+// maskedLine reports whether a line of a value, trimmed of space, is masked
+// on its own: one of at least minLine bytes with a letter or a digit in
+// it, which isn't true, false or null.
+func maskedLine(line string) bool {
+	switch line {
+	case "true", "false", "null":
+		return false
+	}
+	return len(line) >= minLine && strings.IndexFunc(line, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0
+}
+
+// jsonForms returns v as the JSON of a string holds it, without its quotes,
+// in each of the escapings a Masker covers, each that differs from v once.
+func jsonForms(v string) []string {
+	quoted, err := jsontext.AppendQuote(nil, v)
+	if err != nil {
+		return nil
+	}
+	base := string(quoted[1 : len(quoted)-1])
+	js := strings.NewReplacer("\u2028", `\u2028`, "\u2029", `\u2029`).Replace(base)
+	html := strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`).Replace(js)
+	var ascii strings.Builder
+	for _, r := range base {
+		switch {
+		case r < utf8.RuneSelf:
+			ascii.WriteRune(r)
+		case r > 0xffff:
+			r1, r2 := utf16.EncodeRune(r)
+			fmt.Fprintf(&ascii, `\u%04x\u%04x`, r1, r2)
+		default:
+			fmt.Fprintf(&ascii, `\u%04x`, r)
+		}
+	}
+	var out []string
+	for _, form := range []string{base, js, html, ascii.String()} {
+		if form != v && !slices.Contains(out, form) {
+			out = append(out, form)
 		}
 	}
 	return out
 }
 
-// current returns what finds m's values, which it makes if they changed
-// since it last did.
-func (m *Masker) current() *matcher {
+// current returns what finds m's values: its levels, after it makes the
+// texts added since it last did into one, and merges the levels that are
+// no larger than the one after them.
+func (m *Masker) current() finder {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.matcher == nil {
-		m.matcher = newMatcher(m.values)
+	if len(m.pending) > 0 {
+		m.levels = append(m.levels, newMatcher(m.pending))
+		m.pending = nil
+		for n := len(m.levels); n > 1 && len(m.levels[n-2].values) <= len(m.levels[n-1].values); n = len(m.levels) {
+			merged := newMatcher(slices.Concat(m.levels[n-2].values, m.levels[n-1].values))
+			m.levels = append(m.levels[:n-2], merged)
+		}
 	}
-	return m.matcher
+	return finder(slices.Clone(m.levels))
 }
 
 // Mask returns s with each value m masks replaced: each place in s where
@@ -133,15 +205,44 @@ func masked(s string, spans []span) string {
 // A span is the bytes of text from start up to end.
 type span struct{ start, end int }
 
+// A finder finds a Masker's values with each of its matchers.
+type finder []*matcher
+
+// find returns where the finder's values appear in s, in order, with those
+// that overlap as one span, and how many bytes at the end of s could be the
+// start of a value that goes on past it (matcher.held).
+func (f finder) find(s string) (spans []span, held int) {
+	for _, m := range f {
+		found, end := m.find(s)
+		spans = append(spans, found...)
+		held = max(held, m.held(end))
+	}
+	if len(f) < 2 {
+		return spans, held
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
+	out := spans[:0]
+	for _, sp := range spans {
+		if n := len(out); n > 0 && sp.start < out[n-1].end {
+			out[n-1].end = max(out[n-1].end, sp.end)
+			continue
+		}
+		out = append(out, sp)
+	}
+	return out, held
+}
+
 // A matcher finds where any of its values appear in text in one pass over
 // it, however many values it has: an Aho-Corasick automaton of its values'
 // bytes. Each state is the text read so far's longest suffix that starts a
-// value; next holds the states' edges, by state and byte, and fail each
-// state's next longest suffix that does. A matcher doesn't change once it
-// is made.
+// value; next holds the states' edges, by state and byte, but the first
+// state's, which root holds, and fail each state's next longest suffix that
+// does. A matcher doesn't change once it is made.
 type matcher struct {
-	next map[edge]int
-	fail []int
+	values []string
+	root   [256]int
+	next   map[edge]int
+	fail   []int
 	// depth is the length of each state's text, longest the length of the
 	// longest value that ends it, or 0, and more whether a value goes on
 	// past it.
@@ -156,7 +257,7 @@ type edge struct {
 }
 
 func newMatcher(values []string) *matcher {
-	m := &matcher{next: map[edge]int{}, fail: []int{0}, depth: []int{0}, longest: []int{0}, more: []bool{false}}
+	m := &matcher{values: values, next: map[edge]int{}, fail: []int{0}, depth: []int{0}, longest: []int{0}, more: []bool{false}}
 	// children are each state's edges, by the byte each reads.
 	type child struct {
 		b     byte
@@ -166,10 +267,14 @@ func newMatcher(values []string) *matcher {
 	for _, v := range values {
 		state := 0
 		for i := range len(v) {
-			next, ok := m.next[edge{state, v[i]}]
+			next, ok := m.edge(state, v[i])
 			if !ok {
 				next = len(m.fail)
-				m.next[edge{state, v[i]}] = next
+				if state == 0 {
+					m.root[v[i]] = next
+				} else {
+					m.next[edge{state, v[i]}] = next
+				}
 				m.fail = append(m.fail, 0)
 				m.depth = append(m.depth, m.depth[state]+1)
 				m.longest = append(m.longest, 0)
@@ -193,7 +298,7 @@ func newMatcher(values []string) *matcher {
 		queue = queue[1:]
 		for _, c := range children[state] {
 			for f := m.fail[state]; ; f = m.fail[f] {
-				if t, ok := m.next[edge{f, c.b}]; ok {
+				if t, ok := m.edge(f, c.b); ok {
 					m.fail[c.state] = t
 					break
 				}
@@ -208,10 +313,20 @@ func newMatcher(values []string) *matcher {
 	return m
 }
 
+// edge returns the state state's edge for b leads to, if it has one.
+func (m *matcher) edge(state int, b byte) (int, bool) {
+	if state == 0 {
+		t := m.root[b]
+		return t, t != 0
+	}
+	t, ok := m.next[edge{state, b}]
+	return t, ok
+}
+
 // step returns the state after state reads b.
 func (m *matcher) step(state int, b byte) int {
 	for {
-		if t, ok := m.next[edge{state, b}]; ok {
+		if t, ok := m.edge(state, b); ok {
 			return t
 		}
 		if state == 0 {
@@ -225,7 +340,16 @@ func (m *matcher) step(state int, b byte) int {
 // that overlap as one span, and the state it ends in.
 func (m *matcher) find(s string) (spans []span, end int) {
 	state := 0
-	for i := range len(s) {
+	for i := 0; i < len(s); i++ {
+		if state == 0 {
+			// Skip what no value starts with.
+			for i < len(s) && m.root[s[i]] == 0 {
+				i++
+			}
+			if i == len(s) {
+				break
+			}
+		}
 		state = m.step(state, s[i])
 		l := m.longest[state]
 		if l == 0 {
@@ -265,11 +389,15 @@ func (m *matcher) held(state int) int {
 // one, and each write is masked whole, after the one before it. Once w
 // fails a write, what it didn't write is written first by the next write,
 // or by Close, so nothing is written twice; Write takes what it is given
-// all the same, and says so. Writing after Close fails. Closing it doesn't
-// close w.
+// all the same, and says so, until what w hasn't written reaches 1 MiB,
+// when Write takes nothing more until w writes it. Writing after Close
+// fails. Closing it doesn't close w.
 func (m *Masker) Writer(w io.Writer) io.WriteCloser {
 	return &maskWriter{m: m, w: w}
 }
+
+// maxPending is how much a Writer keeps of what its writer hasn't written.
+const maxPending = 1 << 20
 
 // errClosed is what writing to a Writer after it is closed gives.
 var errClosed = errors.New("plan: write to a closed masking writer")
@@ -292,14 +420,18 @@ func (mw *maskWriter) Write(p []byte) (int, error) {
 	if mw.closed {
 		return 0, errClosed
 	}
+	if len(mw.pending) >= maxPending {
+		if err := mw.flush(); err != nil {
+			return 0, err
+		}
+	}
 	mw.held = append(mw.held, p...)
 	s := string(mw.held)
-	m := mw.m.current()
-	spans, end := m.find(s)
+	spans, held := mw.m.current().find(s)
 	// What a value could start at and go on past what has been given is
 	// held back. A value that starts before that is all there, and the
 	// text it covers is masked whole now or held back whole.
-	cut := len(s) - m.held(end)
+	cut := len(s) - held
 	for _, sp := range spans {
 		if sp.start < cut && sp.end > cut {
 			cut = sp.start

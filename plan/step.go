@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
@@ -25,12 +26,18 @@ type JobState struct {
 	// by index: each step before the one about to run, for Step, and every
 	// step, for End.
 	Steps []StepResult
-	// Cancelled is set once the job is being cancelled, for cancelled().
+	// Cancelled is set once the job is being cancelled, for cancelled():
+	// once the run is, or the job has run past its timeout. A step of the
+	// job that ended cancelled cancels the job too, as format 1 has it,
+	// which Step and End read from Steps.
 	Cancelled bool
 	// Try is the step's try, from 0, for Step: the worker has Step evaluate
 	// the step again for each try, as format 1 does, so that what reads
-	// env.PW_WORKFLOW_STEP_CURRENT_RETRY reads the try's.
-	Try int
+	// env.PW_WORKFLOW_STEP_CURRENT_RETRY reads the try's. FirstTry is the
+	// step as Step gave it at its first try, for a later one, which carries
+	// over what the first decided.
+	Try      int
+	FirstTry *ReadyStep
 	// Env holds the variables the worker defines for the step, or for the
 	// job's env: and outputs:, such as PW_JOB_DIR, PW_PARENT_JOB_DIR,
 	// OUTPUTS and, for a try, PW_WORKFLOW_STEP_CURRENT_RETRY, which env
@@ -61,6 +68,16 @@ var formatVariables = map[string]bool{
 	"PW_WORKFLOW_JOB_CURRENT_RETRY": true, "PW_WORKFLOW_JOB_MAX_RETRIES": true,
 }
 
+// stepVariables are the variables format 1 defines for a step alone, which
+// a job's env: doesn't read, as it is evaluated as the job starts.
+var stepVariables = map[string]bool{
+	"OUTPUTS": true, "PW_STEP_SUMMARY": true, "PW_WORKFLOW_STEP_CURRENT_RETRY": true, "PW_WORKFLOW_STEP_MAX_RETRIES": true,
+}
+
+// isJobVariable reports whether name is one of the variables format 1
+// defines as a job starts.
+func isJobVariable(name string) bool { return formatVariables[name] && !stepVariables[name] }
+
 // IsFormatVariable reports whether name is one of the variables format 1
 // gives a step, which env reads (JobState.Env), such as PW_JOB_DIR and
 // OUTPUTS. Its credential, PW_API_KEY, isn't one: the worker gives it to a
@@ -70,8 +87,11 @@ func IsFormatVariable(name string) bool { return formatVariables[name] }
 // A StepResult is how a step ended.
 type StepResult struct {
 	// Outcome is the step's outcome as its job counts it: a step that
-	// failed with ignore-errors is a success, and one whose if: was false
-	// is skipped.
+	// failed with ignore-errors is a success, one whose if: was false is
+	// skipped, and one that was stopped, as early-cancel: stops one, is
+	// cancelled, which cancels the rest of its job (JobState.Cancelled). A
+	// uses: step whose run was cancelled from within it while its job goes
+	// on counts as skipped, as format 1 goes on with the job after one.
 	Outcome Outcome
 	// Outputs are what the step wrote to $OUTPUTS, by name, as written:
 	// the job's later steps and its outputs: read them unmasked.
@@ -126,9 +146,6 @@ type ReadyStep struct {
 	IgnoreErrors bool `json:"ignoreErrors,omitzero"`
 	// EarlyCancel is the step's early-cancel:, any-job-failed or "".
 	EarlyCancel string `json:"earlyCancel,omitempty"`
-	// Cleanup is the step's cleanup: command, which runs at the end of its
-	// job if the step ran, or "".
-	Cleanup string `json:"cleanup,omitempty"`
 	// Masked are the strings Step made from a secret, as a Masker takes
 	// them: each string that a template of the job's env: or the step's
 	// that read one gave, such as an env value that reads one, but not the
@@ -142,6 +159,10 @@ type ReadyStep struct {
 	// once the job is being cancelled, or has run past its timeout, and
 	// lets it run its course, as format 1 does.
 	OutlivesCancel bool `json:"outlivesCancel,omitzero"`
+	// IfAlways is set when the step's if: is the word always: format 1
+	// reads an output that nothing wrote as "" in the step, rather than
+	// fail it (Contexts.StrictOutputs). A later try carries it over.
+	IfAlways bool `json:"ifAlways,omitzero"`
 }
 
 // ReadyStepRetry is a step's retry: as Step evaluated it, which reruns the
@@ -158,32 +179,37 @@ type ReadyStepRetry struct {
 // Step is the Step phase: it evaluates the step at index in the job, on
 // the job's worker, as a try of the step is about to run. It evaluates the
 // job's env: first, with the job context, and the job's working-directory:,
-// then the step's if:, with the status functions true or false as
-// state.Steps and state.Cancelled say, and gives the step Skipped if it is
-// false at its first try. Otherwise it evaluates the step's env: and then
-// the rest of the step, and gives the step. The worker has Step evaluate
-// the step again for each try, with the try in state.Try and state.Env:
-// a later try evaluates its if: too, but runs whatever it gives, and has no
-// Retry, which the worker reads from the first.
+// as the job starts, then the step's if:, with the status functions true or
+// false as state.Steps and state.Cancelled say, and gives the step Skipped
+// if it is false. Otherwise it evaluates the step's env: and then the rest
+// of the step, and gives the step. The worker has Step evaluate the step
+// again for each try, with the try in state.Try and state.Env: a later try
+// doesn't evaluate the if: or retry:, but carries over what the first
+// decided (state.FirstTry), and has no Retry, which the worker reads from
+// the first, as format 1 does. A step's cleanup: is the Cleanup phase's.
 //
 // The step fails, for failure(), when one before it failed as its job
 // counts it, and is cancelled, for cancelled(), when state.Cancelled says
-// so; its if: is true as a job's is (Job.Ready). In its expressions, needs
-// holds the job itself too, whose outputs are those its steps without an
-// id have written so far, the later step's where two wrote the same name,
-// and whose steps are those with one, as format 1 has them: a step with an
-// id writes outputs of its own. env holds the workflow's env:, the job's
-// over it, the step's over that and the worker's variables over all
-// (state.Env). A value of the step's env: that reads env reads the step's
-// values that don't, as format 1 lays them. A value that isn't text, where
-// text goes, such as a run: or an env: value, is its text, as a template
-// makes it. Its defaults are format 1's: a retry: tries 10 more times, 5
-// seconds apart, each try for at most 30 seconds.
+// so or one before it was cancelled, as one early-cancel: stops is; its
+// if: is true as a job's is (Job.Ready). In its expressions, needs holds
+// the job itself too, whose outputs are those its steps without an id have
+// written so far, the later step's where two wrote the same name, and
+// whose steps are those with one, as format 1 has them: a step with an id
+// writes outputs of its own. env holds the workflow's env:, the job's over
+// it, the step's over that and the worker's variables over all
+// (state.Env): only those format 1 defines (IsFormatVariable), and in the
+// job's env: and working-directory: only those it defines as the job
+// starts. A value of an env: that reads another of it reads that one's,
+// in the order they read each other, as format 1 lays them; one that reads
+// itself, or one that reads it, reads what is under it. A value that isn't
+// text, where text goes, such as a run: or an env: value, is its text, as
+// a template makes it. Its defaults are format 1's: a retry: tries 10 more
+// times, 5 seconds apart, each try for at most 30 seconds.
 //
 // What reads an output that no step or job wrote fails, as format 1 reads
-// one strictly (Contexts.StrictOutputs), but in an if:, and in the step of
-// one whose if: is the word always, or in the job's values when the job's
-// is (ReadyJob.IfAlways). A working directory that holds a shell variable,
+// one strictly (Contexts.StrictOutputs), but in an if:, and in a step whose
+// if: is the word always, or in the job's values when the job's is
+// (ReadyJob.IfAlways). A working directory that holds a shell variable,
 // such as $HOME, fails the step (working_directory_variable), since no
 // shell expands it.
 //
@@ -195,41 +221,93 @@ type ReadyStepRetry struct {
 // masked with state.Masked, and a value read from a step's output that
 // holds a secret, which the job's later steps read as it was written, is
 // masked whole. It returns an error when ctx is done before it finishes,
-// ctx.Err(), and for an index that isn't one of the job's steps, or
-// state.Steps that aren't one for each step before it, which are its
-// caller's mistakes.
+// ctx.Err(), and for an index that isn't one of the job's steps,
+// state.Steps that aren't one for each step before it, or a later try
+// without state.FirstTry, which are its caller's mistakes.
 func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyStep, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	if index < 0 || index >= len(j.Steps) {
+	switch {
+	case index < 0 || index >= len(j.Steps):
 		return nil, nil, fmt.Errorf("plan: the job %s has no step %d", j.Key, index)
-	}
-	if len(state.Steps) != index {
+	case len(state.Steps) != index:
 		return nil, nil, fmt.Errorf("plan: step %d of the job %s is given the results of %d steps before it", index, j.Key, len(state.Steps))
+	case state.Try > 0 && state.FirstTry == nil:
+		return nil, nil, fmt.Errorf("plan: try %d of step %d of the job %s is given no first try", state.Try, index, j.Key)
 	}
+	return j.step(ctx, index, state, false)
+}
+
+// Cleanup is the phase of a step's cleanup:: it evaluates the cleanup: of
+// the step at index in the job, on the job's worker, once the job's steps
+// have run, as a step of its own that runs the cleanup: command, as format
+// 1 does: one that runs whatever happened to the job, even once it is
+// being cancelled or past its timeout (OutlivesCancel), has no timeout or
+// retry: of its own, and no early-cancel:, and is named POST and the
+// step's name, or Step and its index. It is skipped if the step didn't
+// run. The worker runs the job's cleanups in the reverse order of their
+// steps, as format 1 does. It reads its job's contexts as Step does, with every step's
+// outputs, and reads an output that nothing wrote as "", as format 1
+// reads a cleanup:'s.
+//
+// Cleanup reaches nothing, and gives the same result for the same job,
+// index and state, byte for byte. Its diagnostics are as Step's, and an
+// error among them fails the cleanup. It returns an error when ctx is done
+// before it finishes, ctx.Err(), and for an index that isn't one of the
+// job's steps or one that has no cleanup:, or state.Steps that aren't one
+// for each of the job's steps, which are its caller's mistakes.
+func (j *ReadyJob) Cleanup(ctx context.Context, index int, state JobState) (*ReadyStep, problems.Diagnostics, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	switch {
+	case index < 0 || index >= len(j.Steps):
+		return nil, nil, fmt.Errorf("plan: the job %s has no step %d", j.Key, index)
+	case j.Steps[index].Cleanup.IsZero():
+		return nil, nil, fmt.Errorf("plan: step %d of the job %s has no cleanup", index, j.Key)
+	case len(state.Steps) != len(j.Steps):
+		return nil, nil, fmt.Errorf("plan: the job %s has %d steps, and is given the results of %d", j.Key, len(j.Steps), len(state.Steps))
+	case state.Steps[index].Outcome == OutcomeSkipped:
+		return &ReadyStep{Index: index, Skipped: true}, nil, nil
+	}
+	return j.step(ctx, index, state, true)
+}
+
+// step evaluates the step at index in the job for Step, or its cleanup:
+// for Cleanup.
+func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup bool) (*ReadyStep, problems.Diagnostics, error) {
 	s := &j.Steps[index]
 	c, e := j.jobEnv(state)
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state, e.masker)
+	c.addSelf(j, state)
 	e = c.evaluation(PhaseStep, e)
 	jobDir := e.directory(j.WorkingDirectory, at(j.Path, "working-directory"))
-	rs := &ReadyStep{Index: index, ID: s.ID}
-	// An if: reads an output that nothing wrote as "".
-	c.StrictOutputs = false
-	e = c.evaluation(PhaseStep, e)
-	d, ok := e.condition(s.If, at(s.Path, "if"))
+	// The step reads all of the worker's variables, and its if: reads an
+	// output that nothing wrote as "".
+	c.WorkerEnv, c.StrictOutputs = c.stepVariables, false
+	rs := &ReadyStep{Index: index}
+	var d decision
 	switch {
-	case !ok:
-		return nil, e.diags, nil
-	case !d.run && state.Try == 0:
-		rs.Skipped = true
-		return rs, e.diags, nil
+	case cleanup:
+		d = decision{run: true, outlivesCancel: true}
+	case state.Try > 0:
+		d = decision{run: true, always: state.FirstTry.IfAlways, outlivesCancel: state.FirstTry.OutlivesCancel}
+	default:
+		e = c.evaluation(PhaseStep, e)
+		var ok bool
+		if d, ok = e.condition(s.If, at(s.Path, "if")); !ok {
+			return nil, e.diags, nil
+		}
+		if !d.run {
+			rs.ID, rs.Skipped = s.ID, true
+			return rs, e.diags, nil
+		}
 	}
-	rs.OutlivesCancel = d.outlivesCancel
-	c.StrictOutputs = !d.always
+	rs.OutlivesCancel, rs.IfAlways = d.outlivesCancel, d.always && !cleanup
+	c.StrictOutputs = !d.always && !cleanup
 	c.StepEnv, c.stepMarks, e = c.layered(PhaseStep, s.Env, at(s.Path, "env"), e)
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -237,15 +315,24 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 	e = c.evaluation(PhaseStep, e)
 	rs.Env = c.env()
 	rs.Name, _, _ = e.text(s.Name, at(s.Path, "name"))
-	if !s.Run.IsZero() {
-		rs.Run, _, _ = e.text(s.Run, at(s.Path, "run"))
-	}
-	rs.Uses, rs.Shell, rs.EarlyCancel = s.Uses, s.Shell, s.EarlyCancel
-	if !s.With.IsZero() {
-		pointer := at(s.Path, "with")
-		if out, read, ok := e.value(s.With, pointer); ok {
-			if rs.With, ok = mappingData(out); !ok {
-				e.reportType(pointer, out, read, "object")
+	rs.Shell = s.Shell
+	if cleanup {
+		if rs.Name == "" {
+			rs.Name = "Step " + strconv.Itoa(index)
+		}
+		rs.Name = "POST " + rs.Name
+		rs.Run, _, _ = e.text(s.Cleanup, at(s.Path, "cleanup"))
+	} else {
+		rs.ID, rs.Uses, rs.EarlyCancel = s.ID, s.Uses, s.EarlyCancel
+		if !s.Run.IsZero() {
+			rs.Run, _, _ = e.text(s.Run, at(s.Path, "run"))
+		}
+		if !s.With.IsZero() {
+			pointer := at(s.Path, "with")
+			if out, read, ok := e.value(s.With, pointer); ok {
+				if rs.With, ok = mappingData(out); !ok {
+					e.reportType(pointer, out, read, "object")
+				}
 			}
 		}
 	}
@@ -265,13 +352,15 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 			rs.SSH = e.inline(out, pointer)
 		}
 	}
-	rs.TimeoutSeconds = e.duration(s.Timeout, at(s.Path, "timeout"), "timeout", 0)
-	if r := s.Retry; r != nil && state.Try == 0 {
+	if !cleanup {
+		rs.TimeoutSeconds = e.duration(s.Timeout, at(s.Path, "timeout"), "timeout", 0)
+	}
+	if r := s.Retry; r != nil && state.Try == 0 && !cleanup {
 		pointer := at(s.Path, "retry")
 		rs.Retry = &ReadyStepRetry{
 			MaxRetries:      e.count(r.MaxRetries, at(pointer, "max-retries"), "max-retries", defaultStepRetries),
-			IntervalSeconds: e.duration(r.Interval, at(pointer, "interval"), "interval", defaultStepInterval),
-			TimeoutSeconds:  e.duration(r.Timeout, at(pointer, "timeout"), "timeout", defaultStepTryTimeout),
+			IntervalSeconds: e.retryDuration(r.Interval, at(pointer, "interval"), "interval", defaultStepInterval),
+			TimeoutSeconds:  e.retryDuration(r.Timeout, at(pointer, "timeout"), "timeout", defaultStepTryTimeout),
 			CleanOnRetry:    r.CleanOnRetry,
 		}
 	}
@@ -279,9 +368,6 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 		if out, _, ok := e.value(s.IgnoreErrors, at(s.Path, "ignore-errors")); ok {
 			rs.IgnoreErrors = readBool(out, false)
 		}
-	}
-	if !s.Cleanup.IsZero() {
-		rs.Cleanup, _, _ = e.text(s.Cleanup, at(s.Path, "cleanup"))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -348,7 +434,7 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state, e.masker)
+	c.addSelf(j, state)
 	// The job's outputs: read an output that nothing wrote strictly once
 	// its steps succeeded, as format 1 does.
 	c.StrictOutputs = !c.Status.Failed && !c.Status.Cancelled
@@ -404,25 +490,45 @@ type stepContexts struct {
 	// as they were written, which every evaluation marks as a secret, so
 	// that a problem with what reads one doesn't show it.
 	leaks [][]string
+	// stepVariables are the worker's variables a step reads: those of
+	// JobState.Env that format 1 defines.
+	stepVariables map[string]string
 }
 
-// jobEnv evaluates the job's env:, with the job context, and returns the
-// contexts of its steps, without needs or steps, and the evaluation, which
-// holds its problems and the text of what it made from a secret.
+// jobEnv evaluates the job's env:, with the job context, as the job
+// starts, and returns the contexts of its steps, without needs or steps,
+// and the evaluation, which holds its problems and the text of what it
+// made from a secret. The job's env: reads only the worker's variables
+// that format 1 defines as a job starts (isJobVariable), so that it gives
+// the same values for each step. The job fails, for failure(), when a step
+// of it failed, and is cancelled, for cancelled(), when state.Cancelled
+// says so or a step of it was cancelled, as one early-cancel: stops is.
 func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 	c := &stepContexts{
 		Run: state.Run, Needs: state.Needs, Status: expr.Status{Cancelled: state.Cancelled},
-		Matrix: j.Matrix, Job: state.Job, Private: j.Private, Secrets: j.Secrets, WorkerEnv: state.Env,
-		StrictOutputs: !j.IfAlways,
-		private:       j.Private, secrets: j.Secrets,
+		Matrix: j.Matrix, Job: state.Job, Private: j.Private, Secrets: j.Secrets,
+		WorkerEnv: variables(state.Env, isJobVariable), StrictOutputs: !j.IfAlways,
+		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
 	e.masker = NewMasker(state.Masked...)
 	c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
 	for _, r := range state.Steps {
 		c.Status.Failed = c.Status.Failed || r.Outcome == OutcomeFailure
+		c.Status.Cancelled = c.Status.Cancelled || r.Outcome == OutcomeCancelled
 	}
 	return c, e
+}
+
+// variables returns the variables of env that keep says to.
+func variables(env map[string]string, keep func(string) bool) map[string]string {
+	out := map[string]string{}
+	for name, v := range env {
+		if keep(name) {
+			out[name] = v
+		}
+	}
+	return out
 }
 
 // evaluation returns an evaluation in phase of what c holds now, which
@@ -454,41 +560,109 @@ func (c *stepContexts) evaluation(phase Phase, e *evaluation) *evaluation {
 	return next
 }
 
-// layered evaluates an env:, env, at pointer, in phase, after e: first
-// each of its values that doesn't read env, and then each that does, over
-// those, as format 1 lays them: the job's in JobEnv, with JobEnv the
-// values so far, and the step's in Step, with StepEnv. It returns the
-// values, how those made from a private value were made, and the
-// evaluation that evaluated the last of them.
+// layered evaluates an env:, env, at pointer, in phase, after e, as
+// format 1 lays it: each value reads the others it reads once they are
+// evaluated, in the order they read each other, over what env: is laid on:
+// the job's in JobEnv, with JobEnv the values so far, and the step's in
+// Step, with StepEnv. A value that reads itself, and the values that read
+// each other, read what is under env: for each other, where format 1
+// recursed until it failed. It returns the values, how those made from a
+// private value were made, and the evaluation that evaluated the last of
+// them.
 func (c *stepContexts) layered(phase Phase, env map[string]Value, pointer string, e *evaluation) (map[string]string, map[string]expr.Read, *evaluation) {
-	first, later := map[string]Value{}, map[string]Value{}
-	for name, v := range env {
-		if readsContext(v, "env") {
-			later[name] = v
+	values, marks := map[string]string{}, map[string]expr.Read{}
+	for _, names := range readOrder(env) {
+		if phase == PhaseJobEnv {
+			c.JobEnv, c.jobMarks = values, marks
 		} else {
-			first[name] = v
+			c.StepEnv, c.stepMarks = values, marks
+		}
+		e = c.evaluation(phase, e)
+		group := make(map[string]Value, len(names))
+		for _, name := range names {
+			group[name] = env[name]
+		}
+		more, moreMarks := e.env(group, pointer)
+		values, marks = maps.Clone(values), maps.Clone(marks)
+		maps.Copy(values, more)
+		maps.Copy(marks, moreMarks)
+	}
+	if len(values) == 0 {
+		values = nil
+	}
+	if len(marks) == 0 {
+		marks = nil
+	}
+	return values, marks, e
+}
+
+// readOrder returns the names of env in groups to evaluate in order: each
+// group's values read only those of the groups before it, but for those of
+// a group that read each other, which is evaluated as one. A value that
+// reads env whole, as env.* does, reads each of the others. The groups are
+// the strongly connected components of what reads what, in an order of
+// Tarjan's that puts what is read first, with names in sorted order.
+func readOrder(env map[string]Value) [][]string {
+	names := slices.Sorted(maps.Keys(env))
+	reads := make(map[string][]string, len(env))
+	for _, name := range names {
+		for _, x := range env[name].Exprs() {
+			for _, r := range x.Refs() {
+				if r.Context != "env" {
+					continue
+				}
+				if len(r.Path) == 0 || r.Path[0] == "*" || r.Path[0] == "[index]" {
+					reads[name] = names
+					break
+				}
+				if _, ok := env[r.Path[0]]; ok {
+					reads[name] = append(reads[name], r.Path[0])
+				}
+			}
+		}
+		slices.Sort(reads[name])
+		reads[name] = slices.Compact(reads[name])
+	}
+	var (
+		order   [][]string
+		stack   []string
+		index   = map[string]int{}
+		low     = map[string]int{}
+		onStack = map[string]bool{}
+		visit   func(name string)
+	)
+	visit = func(name string) {
+		index[name], low[name] = len(index), len(index)
+		stack, onStack[name] = append(stack, name), true
+		for _, next := range reads[name] {
+			if _, seen := index[next]; !seen {
+				visit(next)
+				low[name] = min(low[name], low[next])
+			} else if onStack[next] {
+				low[name] = min(low[name], index[next])
+			}
+		}
+		if low[name] != index[name] {
+			return
+		}
+		var group []string
+		for {
+			top := stack[len(stack)-1]
+			stack, onStack[top] = stack[:len(stack)-1], false
+			group = append(group, top)
+			if top == name {
+				break
+			}
+		}
+		slices.Sort(group)
+		order = append(order, group)
+	}
+	for _, name := range names {
+		if _, seen := index[name]; !seen {
+			visit(name)
 		}
 	}
-	values, marks := e.env(first, pointer)
-	if len(later) == 0 {
-		return values, marks, e
-	}
-	if phase == PhaseJobEnv {
-		c.JobEnv, c.jobMarks = values, marks
-	} else {
-		c.StepEnv, c.stepMarks = values, marks
-	}
-	e = c.evaluation(phase, e)
-	more, moreMarks := e.env(later, pointer)
-	if values == nil {
-		values = map[string]string{}
-	}
-	maps.Copy(values, more)
-	if len(moreMarks) > 0 && marks == nil {
-		marks = map[string]expr.Read{}
-	}
-	maps.Copy(marks, moreMarks)
-	return values, marks, e
+	return order
 }
 
 // env returns the environment c gives a step: the workflow's env:, then
@@ -531,38 +705,45 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 
 // addSelf gives c the needs of the job's steps, with the job itself, and
 // its steps' outputs by id, from what its steps so far, state.Steps, wrote,
-// and notes the outputs that hold a secret masker masks.
-func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masker *Masker) {
+// and notes the outputs that hold a secret: one of the secrets the job
+// received (state.Run), as it can show, but for its lines, and not a
+// string made from one, which can be as common as yes. Each output is
+// checked once.
+func (c *stepContexts) addSelf(j *ReadyJob, state JobState) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
 		needs = map[string]JobResult{}
 	}
+	leak := newLeakMasker(state.Run.Masked()...)
 	self := JobResult{Outputs: map[string]string{}}
+	selfLeaks := map[string]bool{}
 	steps := map[string]map[string]string{}
-	leaks := func(outputs map[string]string, path ...string) {
-		for name, v := range jsonvalue.Sorted(outputs) {
-			if masker.Mask(v) != v {
-				c.leaks = append(c.leaks, append(slices.Clone(path), name))
-			}
-		}
-	}
 	for i, r := range state.Steps {
-		if j.Steps[i].ID == "" {
-			// A step with an id writes outputs of its own, and only one
-			// without one writes the job's.
-			maps.Copy(self.Outputs, r.Outputs)
-		}
-		if id := j.Steps[i].ID; id != "" {
+		id := j.Steps[i].ID
+		if id != "" {
 			outputs := maps.Clone(r.Outputs)
 			if outputs == nil {
 				outputs = map[string]string{}
 			}
 			steps[id] = outputs
-			leaks(outputs, "steps", id, "outputs")
-			leaks(outputs, "needs", j.Name, "steps", id, "outputs")
+		}
+		for name, v := range jsonvalue.Sorted(r.Outputs) {
+			leaked := leak.Mask(v) != v
+			switch {
+			case id == "":
+				// A step with an id writes outputs of its own, and only one
+				// without one writes the job's.
+				self.Outputs[name], selfLeaks[name] = v, leaked
+			case leaked:
+				c.leaks = append(c.leaks, []string{"steps", id, "outputs", name}, []string{"needs", j.Name, "steps", id, "outputs", name})
+			}
 		}
 	}
-	leaks(self.Outputs, "needs", j.Name, "outputs")
+	for name, leaked := range jsonvalue.Sorted(selfLeaks) {
+		if leaked {
+			c.leaks = append(c.leaks, []string{"needs", j.Name, "outputs", name})
+		}
+	}
 	self.Steps = steps
 	needs[j.Name] = self
 	c.Needs, c.Steps = needs, steps

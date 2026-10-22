@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"math"
 	"regexp"
 
 	"github.com/parallelworks/meridian/expr"
@@ -12,7 +13,8 @@ import (
 // doesn't fit its key, and gives the zero value for it.
 
 // target evaluates where job runs: its format 1 ssh:, or else its
-// runs-on:.
+// runs-on:. An ssh: that gives null is none, as format 1 runs such a job
+// without ssh.
 func (e *evaluation) target(job *Job) Target {
 	if !job.SSH.IsZero() {
 		pointer := at(job.Path, "ssh")
@@ -20,7 +22,9 @@ func (e *evaluation) target(job *Job) Target {
 		if !ok {
 			return Target{}
 		}
-		return Target{Inline: e.inline(v, pointer)}
+		if v != nil {
+			return Target{Inline: e.inline(v, pointer)}
+		}
 	}
 	if job.RunsOn.IsZero() {
 		return Target{}
@@ -199,12 +203,28 @@ func (e *evaluation) jobRetry(r *JobRetry, pointer string) *ReadyJobRetry {
 // format 1 reads one it has none of. A job's or a step's timeout: has none
 // by default, so 0s is none too, where format 1 times out at once.
 func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
+	return e.durationOf(v, pointer, key, def, false)
+}
+
+// retryDuration evaluates a step's retry: interval: or timeout:, v, as
+// duration does, but for a number with a fraction, which it rounds down,
+// as format 1 does: one under a second is def.
+func (e *evaluation) retryDuration(v Value, pointer, key string, def int64) int64 {
+	return e.durationOf(v, pointer, key, def, true)
+}
+
+// durationOf is duration, which rounds a number with a fraction down when
+// round is set.
+func (e *evaluation) durationOf(v Value, pointer, key string, def int64, round bool) int64 {
 	if v.IsZero() {
 		return def
 	}
 	out, read, ok := e.value(v, pointer)
 	if !ok {
 		return 0
+	}
+	if f, ok := out.(float64); ok && round && f >= 0 && f < 1<<63 {
+		out = math.Trunc(f)
 	}
 	if out == nil || out == "" || bareZero(out) {
 		return def

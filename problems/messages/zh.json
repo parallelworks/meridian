@@ -75,7 +75,7 @@
   "output_undefined_step": "作业“{job}”中没有 id 为“{id}”的步骤，因此此输出为空。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "steps_unknown_key": "steps.{id} 中没有键“{key}”，它只有 outputs。",
   "output_steps_unknown_key": "steps.{id} 中没有键“{key}”，它只有 outputs，因此此输出为空。",
-  "no_matrix": "作业“{job}”没有矩阵，因此 matrix.{key} 是文本 {text}。",
+  "no_matrix": "作业“{job}”没有矩阵，因此 matrix.{key} 是 null，而不是文本 {text}。",
   "undefined_matrix_key": "作业“{job}”的矩阵中没有键“{key}”。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "undefined_session": "工作流中没有会话“{name}”。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "variable_looks_secret": "{context, select, org {组织} other {用户}}变量“{name}”看起来保存的是密钥，但它不是密钥变量，因此它的值不会在日志中被遮盖。如果它保存的是密钥，请将其改为密钥变量。",

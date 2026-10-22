@@ -35,13 +35,6 @@ func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
 	return &evaluation{phase: phase, scope: NewScope(phase, c), diags: e.diags, masked: e.masked, seen: e.seen, masker: e.masker}
 }
 
-// alwaysWord reports whether an if:, v, is the word always, as the plan
-// holds it written without ${{ }}.
-func alwaysWord(v Value) bool {
-	lit, ok := v.Literal()
-	return ok && lit == "always"
-}
-
 // value evaluates v, at pointer in the workflow, and notes the strings of
 // what each of its templates that read a secret gives, which are to be
 // masked: not those of the rest of v, nor the text of a boolean, a number or
@@ -66,9 +59,16 @@ func (e *evaluation) text(v Value, pointer string) (string, expr.Read, bool) {
 	return expr.Text(out), read, ok
 }
 
-// mask notes s, text made from a secret.
+// minDerived is how long a string made from a secret must be for a phase
+// to give it to mask: a shorter one, such as yes, would mask common text
+// wherever it appears. A secret's own text is masked however short, and an
+// output made from one is masked whole (End).
+const minDerived = 8
+
+// mask notes s, text made from a secret, if it is at least minDerived
+// bytes long.
 func (e *evaluation) mask(s string) {
-	if s == "" || e.seen[s] {
+	if len(s) < minDerived || e.seen[s] {
 		return
 	}
 	if e.seen == nil {

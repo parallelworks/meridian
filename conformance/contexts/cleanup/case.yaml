@@ -1,0 +1,20 @@
+description: >-
+  A step's cleanup: runs once the job's steps have run, whatever happened to
+  them, as a step of its own, as format 1's cleanups do: it reads every
+  step's outputs, as they are at the end of the job, and reads an output
+  that no step wrote as "", even once a step has failed. A step that didn't
+  run doesn't clean up.
+source: ACTIVATE's script submitter tutorial and executor, and Meridian
+jobs:
+  pbs_job:
+    steps:
+      - {outcome: success, outputs: {jobid: "4242.pbs"}}
+      - {outcome: failure}
+      - {outcome: skipped}
+expect:
+  skipped:
+    - /jobs/pbs_job/steps/2
+    - /jobs/pbs_job/steps/2/cleanup
+  values:
+    /jobs/pbs_job/steps/0/cleanup: qdel "4242.pbs"
+    /jobs/pbs_job/steps/1/cleanup: echo "state=[] failed=true"

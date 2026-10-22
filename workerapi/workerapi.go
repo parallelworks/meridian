@@ -303,7 +303,10 @@ type Control struct {
 	GraceSeconds int64       `json:"graceSeconds,omitzero"`
 	// AnyJobFailed says that another job of the run failed: the worker
 	// stops each step whose early-cancel: is any-job-failed, as Cancel
-	// stops a step.
+	// stops a step. The step ends cancelled, which cancels the rest of its
+	// job, as format 1 has it: a later step runs only if it outlives a
+	// cancel (plan.ReadyStep.OutlivesCancel), cancelled() is true, and the
+	// job ends cancelled unless a step of it failed.
 	AnyJobFailed bool `json:"anyJobFailed,omitzero"`
 }
 

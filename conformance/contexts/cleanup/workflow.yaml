@@ -1,0 +1,12 @@
+jobs:
+  pbs_job:
+    steps:
+      - name: Submit PBS Job
+        run: echo "jobid=4242.pbs" >> $OUTPUTS
+        cleanup: qdel "${{ needs.pbs_job.outputs.jobid }}"
+      - name: Monitor PBS Job
+        run: exit 1
+        cleanup: echo "state=[${{ needs.pbs_job.outputs.state }}] failed=${{ failure() }}"
+      - name: Report
+        run: echo done
+        cleanup: echo never cleaned

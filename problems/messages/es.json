@@ -75,7 +75,7 @@
   "output_undefined_step": "El trabajo “{job}” no tiene ningún paso con el id “{id}”, así que esta salida está vacía.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "steps_unknown_key": "No hay ninguna clave “{key}” en steps.{id}, que tiene outputs.",
   "output_steps_unknown_key": "No hay ninguna clave “{key}” en steps.{id}, que tiene outputs, así que esta salida está vacía.",
-  "no_matrix": "El trabajo “{job}” no tiene matriz, así que matrix.{key} es el texto {text}.",
+  "no_matrix": "El trabajo “{job}” no tiene matriz, así que matrix.{key} es null, no el texto {text}.",
   "undefined_matrix_key": "La matriz del trabajo “{job}” no tiene ninguna clave “{key}”.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "undefined_session": "El flujo de trabajo no tiene ninguna sesión “{name}”.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "variable_looks_secret": "La variable {context, select, org {de la organización} other {del usuario}} “{name}” parece contener un secreto, pero no es una variable secreta, así que su valor no se enmascara en los registros. Si contiene un secreto, conviértela en una variable secreta.",

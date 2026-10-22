@@ -3,8 +3,10 @@ description: >-
   outputs, as strings; and the outputs of its steps that have ids, by id.
   Text made of one, as a run: of it alone is, is its JSON.
   A name it doesn't have reads as "", as needs holds strings, but for an
-  output, which reads as "" only in a step whose if: is the word always,
-  and fails anywhere else (output_not_written). It is known
+  output, which reads as "" in an if:, in a step whose if: is the word
+  always, in a job's values when its if: is, in a step's cleanup:, and in
+  the job's outputs: once a step of it failed or was cancelled, and fails
+  anywhere else (output_not_written). It is known
   where a job's dependencies have finished, as its runs-on: is evaluated,
   and in its steps.
 source: Meridian

@@ -290,7 +290,7 @@ jobs:
 		t.Fatalf("plain#1: %+v, %v, %v", r, diags, err)
 	}
 	if rj := r.Job; rj.Key != "plain#1" || rj.Target.Group != "mac" || fmt.Sprint(rj.Matrix.Get()) != "map[os:mac]" ||
-		!slices.Equal(rj.Private, []string{"matrix"}) || !slices.Equal(rj.Secrets, []string{"matrix"}) || !slices.Equal(rj.Masked, []string{"mac"}) {
+		!slices.Equal(rj.Private, []string{"matrix"}) || !slices.Equal(rj.Secrets, []string{"matrix"}) || rj.Masked != nil {
 		t.Errorf("plain#1 is %+v", rj)
 	}
 	r, _, _ = job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed})
@@ -500,7 +500,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"cleanup":"rm -rf workflow","masked":["s3cret","s3cret-y"]}`; string(data) != want {
+	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"masked":["s3cret-y"]}`; string(data) != want {
 		t.Errorf("step 0:\n%s\nwant\n%s", data, want)
 	}
 	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"o": "1"}}}
@@ -514,16 +514,16 @@ jobs:
 		t.Fatal(s, diags, err)
 	}
 	if s.Run != "echo 1 s3cret" || s.WorkingDirectory != "/job" || s.SSH == nil || s.SSH.SSH.Get().(map[string]any)["remoteHost"] != "h" ||
-		!slices.Equal(s.Masked, []string{"s3cret", "echo 1 s3cret"}) || s.OutlivesCancel {
+		!slices.Equal(s.Masked, []string{"echo 1 s3cret"}) || s.OutlivesCancel {
 		t.Errorf("step 1: %+v", s)
 	}
 	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
-	// A step's outputs are read as written, so a problem with one shows
-	// it masked.
-	state.Steps[0].Outputs["o"] = "a secret-ish value"
+	// A step's outputs are read as written, so a problem with one that
+	// holds a secret shows none of it.
+	state.Steps[0].Outputs["o"] = "a s3cret value"
 	state.Steps[0].Outcome = plan.OutcomeSuccess
 	s, diags, _ = rj.Step(t.Context(), 2, state)
-	if s != nil || !slices.Equal(codes(diags), []string{"from_json_invalid /jobs/main/steps/2/run"}) || diags[0].Params["text"] != problems.Masked || strings.Contains(fmt.Sprint(diags), "secret-ish") {
+	if s != nil || !slices.Equal(codes(diags), []string{"from_json_invalid /jobs/main/steps/2/run"}) || diags[0].Params["text"] != problems.Masked || strings.Contains(fmt.Sprint(diags), "s3cret") {
 		t.Errorf("step 2: %+v, %v", s, diags)
 	}
 	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeFailure})
@@ -535,6 +535,76 @@ jobs:
 		state.Steps = make([]plan.StepResult, n)
 		if _, _, err := rj.Step(t.Context(), i, state); err == nil {
 			t.Errorf("step %d with %d results before it", i, n)
+		}
+	}
+	state.Steps = make([]plan.StepResult, 1)
+	state.Try = 1
+	if _, _, err := rj.Step(t.Context(), 1, state); err == nil {
+		t.Error("a later try without its first")
+	}
+}
+
+// Cleanup evaluates a step's cleanup: once the job's steps have run, as a
+// step of its own named POST and the step's name, which runs whatever
+// happened to the job, reads every step's outputs, and reads one that
+// nothing wrote as "". It skips the cleanup of a step that didn't run.
+func TestCleanup(t *testing.T) {
+	p := compiled(t, `
+env:
+  W: workflow
+jobs:
+  main:
+    steps:
+      - id: first
+        name: first
+        run: echo jobid=1 >> $OUTPUTS
+        cleanup: rm -rf ${{ env.W }} ${{ needs.main.outputs.late }} [${{ needs.main.outputs.none }}] ${{ vars.token }}
+        timeout: 1m
+        retry: {}
+        early-cancel: any-job-failed
+        if: success()
+      - run: exit 1
+        cleanup: echo ${{ needs.main.outputs.late }} ${{ steps.first.outputs.jobid }} ${{ failure() }}
+      - run: "true"
+        cleanup: never
+      - run: "true"
+`, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
+	run := runValues(t, p, map[string]string{"token": "s3cret"})
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rj := ready.Job
+	state := plan.JobState{
+		Run: run, Cancelled: true,
+		Steps: []plan.StepResult{
+			{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"jobid": "1"}},
+			{Outcome: plan.OutcomeFailure, Outputs: map[string]string{"late": "2"}},
+			{Outcome: plan.OutcomeSkipped},
+			{Outcome: plan.OutcomeSkipped},
+		},
+	}
+	s, diags, err := rj.Cleanup(t.Context(), 0, state)
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	data, err := json.Marshal(s, json.Deterministic(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret","env":{"W":"workflow"},"masked":["rm -rf workflow 2 [] s3cret"],"outlivesCancel":true}`; string(data) != want {
+		t.Errorf("cleanup 0:\n%s\nwant\n%s", data, want)
+	}
+	if s, _, err := rj.Cleanup(t.Context(), 1, state); err != nil || s.Name != "POST Step 1" || s.Run != "echo 2 1 true" || !s.OutlivesCancel {
+		t.Errorf("cleanup 1: %+v, %v", s, err)
+	}
+	if s, diags, err := rj.Cleanup(t.Context(), 2, state); err != nil || len(diags) > 0 || !s.Skipped || s.Run != "" {
+		t.Errorf("cleanup of a step that didn't run: %+v, %v, %v", s, diags, err)
+	}
+	for i, n := range map[int]int{-1: 4, 3: 4, 4: 4, 0: 3} {
+		state.Steps = make([]plan.StepResult, n)
+		if _, _, err := rj.Cleanup(t.Context(), i, state); err == nil {
+			t.Errorf("cleanup %d with %d results", i, n)
 		}
 	}
 }
@@ -797,8 +867,9 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	var first *plan.ReadyStep
 	for try, want := range []string{"echo try 0 in /runs/r/j", "echo try 1 in /runs/r/j"} {
-		state := plan.JobState{Run: run, Try: try, Env: map[string]string{
+		state := plan.JobState{Run: run, Try: try, FirstTry: first, Env: map[string]string{
 			"PW_WORKFLOW_STEP_CURRENT_RETRY": strconv.Itoa(try), "PW_JOB_DIR": "/runs/r/j", "PW_PARENT_JOB_DIR": "/runs/r",
 		}}
 		s, diags, err := ready.Job.Step(t.Context(), 0, state)
@@ -808,6 +879,81 @@ jobs:
 		if s.Skipped || s.Run != want || s.WorkingDirectory != "/runs/r/work" || (s.Retry != nil) != (try == 0) {
 			t.Errorf("try %d: %+v", try, s)
 		}
+		first = s
+	}
+}
+
+// A later try carries over what its first try's if: decided: that it is
+// the word always, so that it reads an output that nothing wrote as "", and
+// that it outlives a cancel.
+func TestStepTryCarriesIf(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - run: echo [${{ needs.main.outputs.none }}]
+        if: always
+      - run: echo [${{ needs.main.outputs.none }}]
+        if: ${{ cancelled() || env.PW_WORKFLOW_STEP_CURRENT_RETRY == '0' }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, always := range []bool{true, false} {
+		state := plan.JobState{Run: run, Steps: make([]plan.StepResult, i), Env: map[string]string{"PW_WORKFLOW_STEP_CURRENT_RETRY": "0"}}
+		first, diags, err := ready.Job.Step(t.Context(), i, state)
+		if err != nil || (len(diags) > 0) != !always {
+			t.Fatalf("step %d: %v, %v", i, diags, err)
+		}
+		if !always {
+			// The output read strictly fails the first try; carry over
+			// what a first try that ran would give.
+			first = &plan.ReadyStep{Index: i, OutlivesCancel: true}
+		} else if !first.IfAlways || !first.OutlivesCancel {
+			t.Errorf("step %d's first try: %+v", i, first)
+		}
+		state.Try, state.FirstTry, state.Env = 1, first, map[string]string{"PW_WORKFLOW_STEP_CURRENT_RETRY": "1"}
+		s, diags, err := ready.Job.Step(t.Context(), i, state)
+		switch {
+		case err != nil:
+			t.Fatal(err)
+		case always && (len(diags) > 0 || s.Skipped || s.Run != "echo []" || !s.IfAlways || !s.OutlivesCancel):
+			t.Errorf("step %d's later try: %+v, %v", i, s, diags)
+		case !always && (s != nil || len(diags) != 1 || diags[0].Code != "output_not_written"):
+			t.Errorf("step %d's later try: %+v, %v", i, s, diags)
+		}
+	}
+}
+
+// The job's env: and working-directory: read only the variables format 1
+// defines as a job starts, the same for each step, and a step reads each
+// that format 1 defines, but none that it doesn't, such as a credential.
+func TestStepWorkerVariables(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    working-directory: /w/${{ env.OUTPUTS }}
+    env:
+      J: ${{ env.PW_JOB_DIR }}:${{ env.OUTPUTS }}:${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}
+    steps:
+      - run: echo ${{ env.J }} ${{ env.OUTPUTS }} ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }} [${{ env.PW_API_KEY }}]
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: run, Env: map[string]string{
+		"PW_JOB_DIR": "/j", "OUTPUTS": "/j/out", "PW_WORKFLOW_STEP_CURRENT_RETRY": "0", "PW_API_KEY": "k3y",
+	}}
+	s, diags, err := ready.Job.Step(t.Context(), 0, state)
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	if s.Run != "echo /j:: /j/out 0 []" || s.WorkingDirectory != "/w/" || s.Env["J"] != "/j::" {
+		t.Errorf("%+v", s)
 	}
 }
 
@@ -899,6 +1045,37 @@ jobs:
 	}
 }
 
+// A step's retry: interval: or timeout: that is a number with a fraction
+// is rounded down, as format 1 reads it, and one under a second is the
+// default; a timeout: that is one is a problem, as a duration is a whole
+// number of seconds.
+func TestStepRetryFractions(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - run: "true"
+        retry:
+          interval: ${{ 1.9 }}
+          timeout: ${{ 0.5 }}
+      - run: "true"
+        timeout: ${{ 1.5 }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, diags, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run})
+	if err != nil || len(diags) > 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 1, TimeoutSeconds: 30}) {
+		t.Errorf("retry %+v, %v, %v", s, diags, err)
+	}
+	s, diags, err = ready.Job.Step(t.Context(), 1, plan.JobState{Run: run, Steps: make([]plan.StepResult, 1)})
+	if err != nil || s != nil || !slices.Equal(codeList(diags), []string{"duration_invalid"}) {
+		t.Errorf("timeout %+v, %v, %v", s, diags, err)
+	}
+}
+
 func codeList(ds problems.Diagnostics) []string {
 	var out []string
 	for _, d := range ds {
@@ -938,5 +1115,100 @@ jobs:
 	}
 	if fmt.Sprint(end.Outputs) != "map[a:3 b:declared declared:3]" {
 		t.Errorf("outputs %v", end.Outputs)
+	}
+}
+
+// A value of an env: that reads another of it reads that one's, in the
+// order they read each other, however long the chain; one that reads
+// itself, and those that read each other, read what is under the env:.
+func TestStepEnvOrder(t *testing.T) {
+	p := compiled(t, `
+env:
+  C: wc
+  D: wd
+  S: ws
+jobs:
+  main:
+    env:
+      X: ${{ env.Y }}1
+      Y: ${{ env.Z }}2
+      Z: z
+      C: ${{ env.D }}c
+      D: ${{ env.C }}d
+      S: ${{ env.S }}s
+    steps:
+      - run: echo ${{ toJSON(env) }}
+        env:
+          A: ${{ env.B }}a
+          B: ${{ env.X }}b
+          X: ${{ env.X }}x
+          ALL: ${{ env.S }}-${{ join(env.*, ',') }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, diags, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	want := map[string]string{
+		"X": "z21x", "Y": "z2", "Z": "z", "C": "wdc", "D": "wcd", "S": "wss",
+		"B": "z21xb", "A": "z21xba", "ALL": "wss-z21xba,z21xb,wdc,wcd,wss,z21x,z2,z",
+	}
+	for name, v := range want {
+		if s.Env[name] != v {
+			t.Errorf("env %s is %q, want %q", name, s.Env[name], v)
+		}
+	}
+}
+
+// A job's ssh: that gives null is none, as format 1 runs such a job
+// without ssh.
+func TestJobSSHNull(t *testing.T) {
+	j := &plan.Job{Name: "j", Path: "/jobs/j", SSH: mustValue(t, "${{ null }}"), Steps: []plan.Step{{Path: "/jobs/j/steps/0", Run: mustValue(t, "true")}}}
+	r, diags, err := j.Ready(t.Context(), plan.ReadyInput{})
+	if err != nil || len(diags) > 0 || r.Job == nil || r.Job.Target != (plan.Target{}) {
+		t.Errorf("%+v, %v, %v", r, diags, err)
+	}
+}
+
+// A strategy reads the outputs of the jobs its job needs as the rest of
+// the job does: strictly, unless the job's if: gives the word always.
+func TestStrategyStrictOutputs(t *testing.T) {
+	for cond, want := range map[string]string{
+		"${{ 'always' }}": "",
+		"always":          "",
+		"success()":       "[output_not_written]",
+	} {
+		p := compiled(t, `
+jobs:
+  a:
+    steps:
+      - run: "true"
+  b:
+    needs: [a]
+    if: `+cond+`
+    strategy:
+      matrix:
+        x: ${{ fromJSON(needs.a.outputs.list || '[1]') }}
+    steps:
+      - run: "true"
+`, nil)
+		run := runValues(t, p, nil)
+		r, diags, err := job(t, p, "b").Ready(t.Context(), plan.ReadyInput{Run: run, Needs: map[string]plan.JobResult{"a": {Outcome: plan.OutcomeSuccess}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if len(diags) > 0 {
+			got = fmt.Sprint(codeList(diags))
+		} else if r.Expansion == nil {
+			got = "no expansion"
+		}
+		if got != want {
+			t.Errorf("if: %s: %s, want %s", cond, got, want)
+		}
 	}
 }
