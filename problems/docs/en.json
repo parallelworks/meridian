@@ -740,5 +740,429 @@
     "fix": [
       "Fix the problems that are listed, and check the workflow again to see the rest."
     ]
+  },
+  "workflow_too_large": {
+    "why": "A workflow file is read whole, so there is a limit on its size. This one came from a stream, such as standard input, which Meridian stopped reading once it passed the limit.",
+    "fix": [
+      "Move long scripts out of the workflow, into files the steps run.",
+      "Check that the stream is the workflow you meant, and not a device or a pipe that never ends."
+    ]
+  },
+  "execution_group_unknown": {
+    "why": "An execution-groups input's value is the name of one of the execution groups of the person running the workflow. On their own machine, those are the built-in local group and the groups of groups.yaml in Meridian's config directory.",
+    "fix": [
+      "Choose one of the groups the message lists.",
+      "Or define the group in groups.yaml in Meridian's config directory."
+    ]
+  },
+  "source_ref_invalid": {
+    "why": "Meridian reads a workflow that a step's uses: names from a Git repository on GitHub or GitLab: github/ or gitlab/, the repository's owner and name, the workflow's file in it, workflow.yaml unless it names another, and @ and a branch, tag or commit, the default branch unless it names one. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed.",
+    "fix": [
+      "Write the reference as github/<owner>/<repository>/<path>@<revision>, or the same with gitlab/."
+    ]
+  },
+  "source_on_platform": {
+    "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories.",
+    "fix": [
+      "Run the workflow on the platform that stores the workflow it uses.",
+      "Or name the workflow by its Git repository, as github/<owner>/<repository>/<path>@<revision>."
+    ]
+  },
+  "source_revision_not_found": {
+    "why": "Meridian fetches the revision a uses: names with git, and git found no such repository, or no such branch, tag or commit in it. A private repository that git can't read with your credentials can look the same.",
+    "fix": [
+      "Check the repository's owner and name, and the revision after @.",
+      "Check that git can fetch the repository with your credentials, as with git ls-remote and the repository's URL."
+    ]
+  },
+  "source_file_not_found": {
+    "why": "A uses: names a file in the repository, workflow.yaml unless it names another, and the commit its revision names has no file of that name. A directory isn't a workflow file.",
+    "fix": [
+      "Check the path in the reference, after the repository's name.",
+      "Check that the revision has the file: the default branch may not."
+    ]
+  },
+  "source_too_large": {
+    "why": "Meridian reads a workflow that a step uses whole, so it limits its size, as it does any workflow's.",
+    "fix": [
+      "Check that the reference names a workflow file, and not another file in the repository.",
+      "Split the workflow into smaller ones that call each other with uses:."
+    ]
+  },
+  "source_changed": {
+    "why": "A run pins each workflow its steps use to a commit and the SHA-256 digest of its text, so that the run and its reruns run the same code. The text at that commit has another digest, which can only happen if the repository's history or Meridian's copy of it was changed.",
+    "fix": [
+      "Don't rerun the run. Start a new one, which pins the workflow again.",
+      "Find out who could change the repository's history or Meridian's cache directory."
+    ]
+  },
+  "source_not_pinned": {
+    "why": "A run reads each workflow its steps use by the commit and the digest it was pinned to when the run was created, never by a branch that may have moved. This one's record is missing one of them.",
+    "fix": [
+      "Start a new run, which pins the workflow again."
+    ]
+  },
+  "directory_variable_relative": {
+    "why": "MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR choose Meridian's directories. Each must be an absolute path, so that the directory it names doesn't depend on where Meridian runs from.",
+    "fix": [
+      "Set the variable to an absolute path, or unset it."
+    ]
+  },
+  "home_unknown": {
+    "why": "Meridian keeps its config, state and cache in directories in your home directory, unless MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR choose others.",
+    "fix": [
+      "Set HOME to your home directory.",
+      "Or set the variable the message names to an absolute path."
+    ]
+  },
+  "directory_unavailable": {
+    "why": "Meridian creates its state and cache directories when it first needs them, and the operating system refused or failed.",
+    "fix": [
+      "Fix what the reason names, such as a parent directory you can't write to.",
+      "Or choose another directory with MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "not_a_directory": {
+    "why": "Meridian keeps its config, state and cache in directories, and something else is at the path it would use for one.",
+    "fix": [
+      "Move what is at the path, or choose another directory with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "directory_not_owned": {
+    "why": "Meridian's directories hold your config, the key that wraps your runs' secrets, your logs and copies of private repositories. A directory another user owns is one they can change.",
+    "fix": [
+      "Choose a directory of your own with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "directory_not_private": {
+    "why": "Meridian's state directory holds the key that wraps your runs' secrets, and its cache directory copies of repositories that may be private, so only you may read them. Meridian doesn't tighten a directory that was open, since what was in it may have been read already.",
+    "fix": [
+      "Run chmod 700 on the directory, once you're sure nothing in it was read or changed.",
+      "Or choose a new directory with MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "path_unsafe": {
+    "why": "A user who can change a directory on the way to one of Meridian's could replace what is in it with their own after Meridian checked it. As OpenSSH does, Meridian accepts a directory on the way only if it belongs to you or to root and only you or root can change it, or if its sticky bit stops other users removing what isn't theirs, as /tmp's does, and what follows it is yours.",
+    "fix": [
+      "Choose a directory whose parents only you or root can change, such as one in your home directory, or one that mktemp -d -p /var/tmp makes.",
+      "Or have the directory's owner run chmod go-w on it."
+    ]
+  },
+  "network_filesystem": {
+    "why": "SQLite's locks don't work reliably on network filesystems, which is where home directories on clusters often are, so Meridian won't keep its database there.",
+    "fix": [
+      "Set MERIDIAN_STATE_DIR to a directory on a local disk that only you can change, and that lasts: it holds the database and the key that wraps your runs' secrets, which are lost with it. One that mktemp -d -p /var/tmp makes will do, or one on the node's persistent local disk, but not one in /tmp, which a reboot can empty."
+    ]
+  },
+  "filesystem_unknown": {
+    "why": "Meridian checks that its database's directory isn't on a network filesystem before it opens the database, and the operating system didn't say.",
+    "fix": [
+      "Fix what the reason names, or choose another directory with MERIDIAN_STATE_DIR."
+    ]
+  },
+  "file_unreadable": {
+    "why": "Meridian needs to read the file, and the operating system refused or failed.",
+    "fix": [
+      "Fix what the reason names, such as a path that doesn't exist or a file you can't read."
+    ]
+  },
+  "file_not_regular": {
+    "why": "Meridian reads its config, its key and variables' values only from regular files, so that reading one can't wait forever on a pipe or read from a device.",
+    "fix": [
+      "Name a regular file instead."
+    ]
+  },
+  "file_not_owned": {
+    "why": "A user who owns one of Meridian's files, or a file that holds a variable's value, can change what it holds, such as where your jobs run, or the key that protects your runs' secrets.",
+    "fix": [
+      "Replace the file with one of your own."
+    ]
+  },
+  "file_not_private": {
+    "why": "The file holds a secret, or what protects them: the key that wraps your runs' secret records, the variables file, since people keep secrets in plain variables too, or a secret variable's value. Only you may read it.",
+    "fix": [
+      "Run chmod 600 on the file."
+    ]
+  },
+  "file_changeable": {
+    "why": "A user who could change your groups or a variable's value could send your jobs where they choose, or choose what your jobs read.",
+    "fix": [
+      "Run chmod go-w on the file."
+    ]
+  },
+  "file_over_limit": {
+    "why": "Meridian reads its config files, a variable's file and a file of inputs whole, so it limits their size.",
+    "fix": [
+      "Check that the path names the file you meant, and make the file smaller."
+    ]
+  },
+  "config_yaml_syntax": {
+    "why": "Meridian's config files, groups.yaml and variables.yaml, are YAML.",
+    "fix": [
+      "Fix the YAML at the line the reason names."
+    ]
+  },
+  "config_extra_document": {
+    "why": "Each of Meridian's config files is one YAML document. A second one, after ---, is more likely a mistake than something to ignore.",
+    "fix": [
+      "Remove the --- and what follows it, or move what follows it into the first document."
+    ]
+  },
+  "config_not_mapping": {
+    "why": "groups.yaml maps each group's name to the group, and variables.yaml has org and vars, each a mapping of variables by name.",
+    "fix": [
+      "Write the file as a mapping, as docs/design.md shows."
+    ]
+  },
+  "config_key_unknown": {
+    "why": "Meridian's config files are read strictly, so that a misspelt key is an error rather than a setting that silently does nothing.",
+    "fix": [
+      "Correct the key's spelling, or remove it."
+    ]
+  },
+  "config_key_repeated": {
+    "why": "A key given twice in a mapping in a config file is more likely a mistake than a value to replace: a secret variable written again as a plain one, for example.",
+    "fix": [
+      "Remove one of the two."
+    ]
+  },
+  "config_wrong_type": {
+    "why": "Each key in Meridian's config files takes one type of value.",
+    "fix": [
+      "Give the key a value of the type the message names."
+    ]
+  },
+  "group_name_invalid": {
+    "why": "A group's name is how a job names it, and how an attempt records where it ran.",
+    "fix": [
+      "Rename the group."
+    ]
+  },
+  "group_empty": {
+    "why": "A group is where a job can run: an ordered list of members, each a backend with its settings. A group without members could run nothing.",
+    "fix": [
+      "Give the group a member, or remove it."
+    ]
+  },
+  "member_invalid": {
+    "why": "A member's name has letters, digits, _, - and ., and starts with a letter or a digit. Its backend is local, ssh, kubernetes, slurm or pbs; its isolation names a container runtime, such as podman, or host; its cpu is a number of cores, such as 4 or 0.5, or of thousandths of one, such as 500m; its memory is a number of bytes, or a number with a suffix, such as 8Gi or 512M; and its gpu is a whole number. Its max-walltime, margin and default-timeout are durations of whole seconds, such as 24h, 90m or 30s.",
+    "fix": [
+      "Correct the value as its key needs."
+    ]
+  },
+  "member_repeated": {
+    "why": "A member's name identifies it in its group, and in the record of an attempt placed on it.",
+    "fix": [
+      "Rename one of the members."
+    ]
+  },
+  "variable_name_invalid": {
+    "why": "An expression reads a variable as org.<name> or vars.<name>, so a name can't have a dot or start with a digit.",
+    "fix": [
+      "Rename the variable."
+    ]
+  },
+  "variable_no_value": {
+    "why": "A variable in variables.yaml is its value, or a mapping that says where its value is. One with nothing after its name has neither.",
+    "fix": [
+      "Give the variable a value, or remove it. Write \"\" for an empty one."
+    ]
+  },
+  "variable_form_invalid": {
+    "why": "A variable in variables.yaml is its value, or a mapping with one of value, the value itself, env, the environment variable it is in, or file, the file it is in, and secret: true for a secret.",
+    "fix": [
+      "Write the variable as text, or as such a mapping."
+    ]
+  },
+  "variable_sources": {
+    "why": "A variable's mapping says where its one value is: in value itself, in an environment variable (env) or in a file (file).",
+    "fix": [
+      "Keep one of value, env and file, and remove the others."
+    ]
+  },
+  "variable_secret_inline": {
+    "why": "A secret's value is kept out of the variables file, so that the file can be read, shared and copied without it.",
+    "fix": [
+      "Move the value into an environment variable, or a file only you can read, and name it with env or file."
+    ]
+  },
+  "variable_env_unset": {
+    "why": "variables.yaml says the variable's value is in an environment variable, which isn't set, or is empty, where Meridian runs. Meridian reads it only when a run reads the variable.",
+    "fix": [
+      "Set the environment variable before running Meridian.",
+      "Or change where variables.yaml says the variable's value is."
+    ]
+  },
+  "variable_file_unreadable": {
+    "why": "variables.yaml says the variable's value is in a file, which Meridian reads only when a run reads the variable.",
+    "fix": [
+      "Fix what the reason names, or change where variables.yaml says the variable's value is."
+    ]
+  },
+  "variable_file_home": {
+    "why": "A file's path that starts with ~/ is in your home directory, which Meridian finds with HOME.",
+    "fix": [
+      "Set HOME to your home directory, or write the file's path in full."
+    ]
+  },
+  "key_file_invalid": {
+    "why": "The key file holds the 32-byte AES-256 key that wraps the data keys of your runs' secret records. Meridian creates it, and nothing else should change it.",
+    "fix": [
+      "If you have a copy of the key file, put it back.",
+      "Otherwise remove it: Meridian creates another, and the runs whose data keys the old one wrapped can't be resumed."
+    ]
+  },
+  "key_unwrap_failed": {
+    "why": "Each run's secret record is encrypted under a data key of its own, which the key file's key wraps with AES-256-GCM, bound to the run's ID. A wrapped key that doesn't open was made under another key, moved from another run, or changed.",
+    "fix": [
+      "If the key file was replaced, put back the one that wrapped the run's key.",
+      "Otherwise rerun the run, which reads its variables and passwords again."
+    ]
+  },
+  "key_wrapping_unknown": {
+    "why": "A wrapped data key says how it was wrapped, so that a later version of Meridian can wrap keys another way. This one was wrapped by a version this one doesn't know.",
+    "fix": [
+      "Resume the run with the version of Meridian that started it, or a newer one."
+    ]
+  },
+  "git_unavailable": {
+    "why": "Meridian reads the workflows that a step's uses: names from Git repositories by running git, which must be installed and on PATH.",
+    "fix": [
+      "Install git, or put it on PATH."
+    ]
+  },
+  "command_missing": {
+    "why": "The meridian command does one of several things, which its first argument names.",
+    "fix": [
+      "Run meridian help for the commands."
+    ]
+  },
+  "command_unknown": {
+    "why": "The meridian command's first argument names what it does, and this one names nothing it does.",
+    "fix": [
+      "Run meridian help for the commands."
+    ]
+  },
+  "command_not_built": {
+    "why": "Meridian is built in stages, and this command, which docs/design.md describes, comes in a later one.",
+    "fix": [
+      "Use a command that is built, such as meridian validate, or a later release of Meridian."
+    ]
+  },
+  "arguments_invalid": {
+    "why": "Each command takes its own arguments, such as one workflow file.",
+    "fix": [
+      "Run meridian help and the command's name for what it takes."
+    ]
+  },
+  "flag_unknown": {
+    "why": "Each command has its own options.",
+    "fix": [
+      "Run meridian help and the command's name for its options."
+    ]
+  },
+  "flag_needs_value": {
+    "why": "The option takes a value, which follows it, as in -format json, or follows an =, as in -format=json.",
+    "fix": [
+      "Give the option its value."
+    ]
+  },
+  "flag_value_invalid": {
+    "why": "The option takes only some values, which meridian help lists.",
+    "fix": [
+      "Run meridian help and the command's name for the values the option takes."
+    ]
+  },
+  "flag_syntax": {
+    "why": "An option is - or -- and its name, and = and its value if it takes one.",
+    "fix": [
+      "Write the option as -name or -name=value."
+    ]
+  },
+  "input_path_invalid": {
+    "why": "-input sets an input by its path: its name, or its group's name, a dot and its name, as in cluster.size.",
+    "fix": [
+      "Write the path as names joined with dots, without an empty one."
+    ]
+  },
+  "input_path_conflict": {
+    "why": "-input group.name=value sets an input in a group. Here, what the path goes through has a value of its own, from another -input or from the file of inputs.",
+    "fix": [
+      "Give each input one value, and a group's inputs by their paths."
+    ]
+  },
+  "inputs_file_invalid": {
+    "why": "-inputs reads a JSON object of input values by name, in which a key may not appear twice.",
+    "fix": [
+      "Fix the JSON where the reason says."
+    ]
+  },
+  "inputs_file_not_object": {
+    "why": "-inputs reads one JSON object, whose keys are inputs' names and whose values are their values.",
+    "fix": [
+      "Write the values as one JSON object."
+    ]
+  },
+  "inputs_file_extra": {
+    "why": "-inputs reads one JSON object, and something follows it.",
+    "fix": [
+      "Remove what follows the object, or move it into the object."
+    ]
+  },
+  "inputs_number_too_large": {
+    "why": "Meridian reads a number in a file of inputs as a 64-bit number, and this one doesn't fit.",
+    "fix": [
+      "Give the number as text, in quotes, if the input takes text."
+    ]
+  },
+  "interrupted": {
+    "why": "Meridian stopped because it received an interrupt or a request to stop, such as from Ctrl-C.",
+    "fix": [
+      "Run the command again. A second interrupt stops Meridian at once."
+    ]
+  },
+  "unexpected_error": {
+    "why": "An error that Meridian has no more specific problem for stopped the command.",
+    "fix": [
+      "Fix what the reason names, and run the command again.",
+      "If it looks like a bug in Meridian, report it with the command you ran."
+    ]
+  },
+  "source_access_denied": {
+    "why": "The repository asked for credentials git doesn't have, or refused the ones it gave, or its host's key couldn't be checked. A repository that doesn't exist looks the same when the server asks for credentials rather than say so. Meridian never answers a prompt for a password or a passphrase.",
+    "fix": [
+      "Check the reference's owner and repository for a mistake.",
+      "Give git credentials it can use without a prompt, such as a credential helper, a token, or an ssh key in your agent, and accept the host's key with ssh beforehand."
+    ]
+  },
+  "source_objects_invalid": {
+    "why": "Meridian has git check every object it fetches, so that a malformed commit or tree, such as one made to exploit a bug in a Git tool, never reaches its copy of the repository.",
+    "fix": [
+      "Find out why the repository has malformed objects, or use another revision."
+    ]
+  },
+  "owner_unmapped": {
+    "why": "Meridian checks that every directory on the way to its own belongs to you or to root, as OpenSSH checks the way to a user's keys. In a user namespace that doesn't map root, as unshare --user, Apptainer, bubblewrap and some CI sandboxes make, a directory whose owner isn't mapped shows as owned by nobody, so Meridian can't tell who could change it, and refuses it rather than assume.",
+    "fix": [
+      "Run Meridian outside the user namespace, or in one that maps root."
+    ]
+  },
+  "path_links_too_many": {
+    "why": "Meridian follows the symbolic links on the way to its directories, as the kernel does, and stops after as many as the kernel would, which is most likely a link that leads back to itself.",
+    "fix": [
+      "Find the link that leads back to itself, and fix it, or choose another directory."
+    ]
+  },
+  "mount_not_found": {
+    "why": "The directory is on a FUSE filesystem, which can be a local one or a network one, and Meridian tells them apart by the mount's type in /proc/self/mountinfo, which has no mount for it.",
+    "fix": [
+      "Choose a directory for MERIDIAN_STATE_DIR on a filesystem that isn't FUSE."
+    ]
+  },
+  "member_settings_not_json": {
+    "why": "A member's settings are given to its backend's driver as JSON, which has no not-a-number or infinite numbers.",
+    "fix": [
+      "Write the number in the member's settings as a finite one, or as text in quotes."
+    ]
   }
 }

@@ -1,0 +1,3 @@
+$ meridian validate --format text ../../conformance/format/yaml-alias/workflow.yaml
+../../conformance/format/yaml-alias/workflow.yaml:6:17: error: YAML aliases aren't allowed. (yaml_alias)
+exit status 1
