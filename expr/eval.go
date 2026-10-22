@@ -239,18 +239,20 @@ type Status struct {
 
 // A Resolver reads the workflow around an expression. Each method follows
 // a path through the values of the workflow's expressions as walk does,
-// with charge, which counts the work of what it reads; an error from
-// charge stops it and is returned.
+// with charge, which counts n bytes of the work of what it reads: work
+// about to be done, or, if done is set, work done already, such as reading
+// a string as the JSON it holds, which the group keeps even if it fails
+// (evaluator.did). An error from charge stops it and is returned.
 type Resolver interface {
 	// Relative returns the value of the relative reference that goes up
 	// levels from the key the expression is in and then follows path, with
 	// any expressions in it evaluated. ok is false if there is nothing
 	// there.
-	Relative(up int, path []string, charge func(n int) error) (v any, ok bool, err error)
+	Relative(up int, path []string, charge func(n int, done bool) error) (v any, ok bool, err error)
 	// Definition returns what the input definitions hold at path, with any
 	// expressions in it evaluated, or else the default of the input at
 	// path. ok is false if there is neither.
-	Definition(path []string, charge func(n int) error) (v any, ok bool, err error)
+	Definition(path []string, charge func(n int, done bool) error) (v any, ok bool, err error)
 }
 
 // Unknown is a value in a context that exists but isn't known yet, such as a
@@ -407,6 +409,13 @@ func (e *evaluator) work(at, n int) error { return e.count(at, 0, n, false) }
 // did counts n bytes of work that is done already, such as a read, and
 // fails as work does. The group keeps a count that fails all the same.
 func (e *evaluator) did(at, n int) error { return e.count(at, 0, n, true) }
+
+// charger returns what counts the work of what a Resolver reads for the
+// node at offset at: work about to be done, as work counts it, and work
+// done already, as did does.
+func (e *evaluator) charger(at int) func(n int, done bool) error {
+	return func(n int, done bool) error { return e.count(at, 0, n, done) }
+}
 
 // count counts built bytes built and w bytes of work, and fails if they
 // take the template past the language's limits, or its group past
@@ -1123,7 +1132,7 @@ func (e *evaluator) inputs(r *ref, f *follower, values any, path []string) (any,
 		}
 	}
 	if e.scope.Resolver != nil && len(path) > 0 {
-		v, ok, err := e.scope.Resolver.Definition(path, func(w int) error { return e.work(r.at, w) })
+		v, ok, err := e.scope.Resolver.Definition(path, e.charger(r.at))
 		if err != nil {
 			return nil, e.resolverError(r.at, err)
 		}
@@ -1150,7 +1159,7 @@ func (e *evaluator) relative(r *relative) (any, error) {
 	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
-	v, ok, err := e.scope.Resolver.Relative(r.up, path, func(w int) error { return e.work(r.at, w) })
+	v, ok, err := e.scope.Resolver.Relative(r.up, path, e.charger(r.at))
 	if err != nil || !ok {
 		return nil, e.resolverError(r.at, err)
 	}
@@ -1254,11 +1263,11 @@ func heldWork(v, c any) int {
 
 // A follower follows paths, as walk does, and counts the work of what they
 // read beyond their segments (pathWork): the evaluator's, for the node at
-// offset at, or else charge's, if it isn't nil.
+// offset at, or else charge's, if it isn't nil, as a Resolver's does.
 type follower struct {
 	e      *evaluator
 	at     int
-	charge func(n int) error
+	charge func(n int, done bool) error
 	// throughText is set once a path reads into a string: what it reads
 	// from there is new. A * sets it if each item's path does.
 	throughText bool
@@ -1270,7 +1279,7 @@ func (f *follower) count(n int) error {
 	case f.e != nil:
 		return f.e.work(f.at, n)
 	case f.charge != nil:
-		return f.charge(n)
+		return f.charge(n, false)
 	}
 	return nil
 }
@@ -1278,10 +1287,13 @@ func (f *follower) count(n int) error {
 // did counts n bytes of the follower's work that is done already, as count
 // does, and the evaluator's group keeps them if they fail (evaluator.did).
 func (f *follower) did(n int) error {
-	if f.e != nil {
+	switch {
+	case f.e != nil:
 		return f.e.did(f.at, n)
+	case f.charge != nil:
+		return f.charge(n, true)
 	}
-	return f.count(n)
+	return nil
 }
 
 // sortedKeys returns a mapping's keys in order, as the evaluator remembers
@@ -1356,7 +1368,7 @@ func keysWork(keys []string) int {
 // of a list or mapping, and returns the results that have it as a list. ok is
 // false if the path leads nowhere. charge, if it isn't nil, counts the work
 // of what the path reads beyond its segments, as a follower does.
-func walk(v any, path []string, charge func(n int) error) (any, bool, error) {
+func walk(v any, path []string, charge func(n int, done bool) error) (any, bool, error) {
 	f := follower{charge: charge}
 	return f.walk(v, path)
 }

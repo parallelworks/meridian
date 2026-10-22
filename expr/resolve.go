@@ -378,7 +378,7 @@ func (r *workflowResolver) raw(location []string) (any, bool) {
 // follow walks path from location in the workflow and returns the value it
 // reaches, evaluated. A string on the way is evaluated, and the rest of the
 // path read from its value, with charge, as walk does.
-func (r *workflowResolver) follow(location, path []string, charge func(n int) error) (any, bool, error) {
+func (r *workflowResolver) follow(location, path []string, charge func(n int, done bool) error) (any, bool, error) {
 	v, ok := r.raw(location)
 	if !ok {
 		return nil, false, nil
@@ -402,7 +402,7 @@ func (r *workflowResolver) follow(location, path []string, charge func(n int) er
 
 // Relative resolves a relative reference: .x is a key beside the one the
 // expression is in, and each further level goes up one more.
-func (r *workflowResolver) Relative(up int, path []string, charge func(n int) error) (any, bool, error) {
+func (r *workflowResolver) Relative(up int, path []string, charge func(n int, done bool) error) (any, bool, error) {
 	if up > len(r.location) {
 		return nil, false, nil
 	}
@@ -411,7 +411,7 @@ func (r *workflowResolver) Relative(up int, path []string, charge func(n int) er
 
 // Definition reads the input definitions at path, or else the default of
 // the input at path. An input in a group is in the group's items.
-func (r *workflowResolver) Definition(path []string, charge func(n int) error) (any, bool, error) {
+func (r *workflowResolver) Definition(path []string, charge func(n int, done bool) error) (any, bool, error) {
 	if v, ok, err := r.follow(r.eval.workflow.Definitions, path, charge); err != nil || ok {
 		return v, ok, err
 	}
