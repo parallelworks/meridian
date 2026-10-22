@@ -1,20 +1,14 @@
 package plan
 
 import (
-	"errors"
+	jsonv2 "encoding/json/v2"
+	"slices"
+	"strings"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
-
-// errNotImplemented is what the parts of the phases that aren't built yet
-// return.
-var errNotImplemented = errors.New("plan: not implemented")
-
-// notImplemented stops a caller of a part of the phases that isn't built
-// yet and has no error to return, rather than give it a wrong answer.
-func notImplemented(what string) {
-	panic("plan: " + what + " is not implemented") //nolint:forbidigo // a stub that a track of the runner builds; its contract is its doc comment
-}
 
 // A Phase is when in a run an expression is evaluated, which decides the
 // contexts it reads (docs/design.md, Phases and Contexts). Each of the five
@@ -114,28 +108,91 @@ type RunValues struct {
 // whoever can see the run: the rest, with Private and Secrets, which name
 // values but hold none. JoinRunValues puts them together again.
 //
-// It isn't built yet, and stops its caller.
+// The record holds org and vars, and each value that Private and Secrets
+// name, at its path: an item of a list at its index, after a null for each
+// item before it that isn't private. The state holds the rest, with null in
+// place of a private item of a list, so that each other item keeps its
+// index. Neither shares a list or mapping with r.
 func (r RunValues) Split() (record, state RunValues) {
-	notImplemented("RunValues.Split")
-	return
+	all, rec := r.tree(), map[string]any{}
+	for _, path := range r.privatePaths() {
+		v, ok := jsonptr.Lookup(all, path)
+		if !ok {
+			continue
+		}
+		setPath(rec, path, v)
+		removePath(all, path)
+	}
+	record, state = fromTree(rec), fromTree(all)
+	record.Format, state.Format = r.Format, r.Format
+	state.Private, state.Secrets = slices.Clone(r.Private), slices.Clone(r.Secrets)
+	return record, state
 }
 
 // JoinRunValues returns the run's values from what Split split them into.
-//
-// It isn't built yet, and stops its caller.
+// It shares no list or mapping with either.
 func JoinRunValues(record, state RunValues) RunValues {
-	notImplemented("JoinRunValues")
-	return RunValues{}
+	all, rec := state.tree(), record.tree()
+	for _, path := range state.privatePaths() {
+		if v, ok := jsonptr.Lookup(rec, path); ok {
+			setPath(all, path, v)
+		}
+	}
+	out := fromTree(all)
+	out.Format = state.Format
+	out.Private, out.Secrets = slices.Clone(state.Private), slices.Clone(state.Secrets)
+	return out
 }
 
 // Masked returns the text of each value that Secrets names, as a Masker
 // takes it: a string as it is, and anything else as its JSON, with each
-// string in it on its own too.
-//
-// It isn't built yet, and stops its caller.
+// string in it on its own too. Each text is given once, in the order of
+// Secrets, and an empty one not at all.
 func (r RunValues) Masked() []string {
-	notImplemented("RunValues.Masked")
-	return nil
+	all := r.tree()
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, name := range r.Secrets {
+		if v, ok := jsonptr.Lookup(all, splitPath(name)); ok {
+			maskedTexts(v, add)
+		}
+	}
+	return out
+}
+
+// maskedTexts gives add the text of v, a value made from a secret, as a
+// Masker takes it: a string as it is, and anything else as its JSON, then
+// each string in it on its own.
+func maskedTexts(v any, add func(string)) {
+	if s, ok := v.(string); ok {
+		add(s)
+		return
+	}
+	if data, err := jsonv2.Marshal(v, jsonv2.Deterministic(true)); err == nil {
+		add(string(data))
+	}
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			add(v)
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		case map[string]any:
+			for _, item := range jsonvalue.Sorted(v) {
+				walk(item)
+			}
+		}
+	}
+	walk(v)
 }
 
 // JobContext is the job context: the job instance an expression is
@@ -170,7 +227,9 @@ type Contexts struct {
 	// (env.TOKEN), or matrix for an instance's matrix values
 	// (Instance.Private and Instance.Secret).
 	Private, Secrets []string
-	// Needs are the results of the jobs this one needs, by job name.
+	// Needs are the results of the jobs this one needs, by job name. In
+	// Step and End, the job's own is there too, whose outputs are its
+	// steps' so far.
 	Needs map[string]JobResult
 	// Status is how the job or step got here, for the status functions.
 	Status expr.Status
@@ -180,7 +239,10 @@ type Contexts struct {
 	// Job is the job context.
 	Job JobContext
 	// JobEnv is the job's env:, and StepEnv the step's, as evaluated: env
-	// reads them over the workflow's (Run.Env).
+	// reads them over the workflow's (Run.Env), the job's from Step on and
+	// the step's in Step. A name that one of them gives is marked only as
+	// Private and Secrets mark it, whatever Run's mark the workflow's value
+	// of the name.
 	JobEnv, StepEnv map[string]string
 	// Steps are the outputs of the job's steps that have run, by step id.
 	Steps map[string]map[string]string
@@ -190,7 +252,23 @@ type Contexts struct {
 // context phase knows, in its one shape (docs/design.md, Contexts), and no
 // other, so that reading a later one is an expr.UnknownError. A context
 // that is known but empty is there all the same, so that a name it doesn't
-// have reads as "" or null. Unknown's values are expr.Unknown.
+// have reads as "" or null. Unknown's values are expr.Unknown, and a
+// context that Unknown names whole isn't there.
+//
+// The shapes are these, each context in the phases from the one named:
+//
+//   - inputs (Create): Run.Inputs, a mapping.
+//   - org, vars, remote and sessions (Create): Run's, by name, strings.
+//   - env (Start): Run.Env, then from Step JobEnv over it, and in Step
+//     StepEnv over that, strings.
+//   - needs (Strategy): for each job of Needs, result, its outcome, when
+//     it has one; outputs, by name, strings; and steps, by step id, each
+//     with its outputs.
+//   - matrix (Ready): Matrix, a mapping, empty for a job without a matrix.
+//   - job (JobEnv): name, key, attempt, a number, group and member.
+//   - steps (Step): for each step of Steps, by its id, its outputs.
+//
+// The status functions are known from Strategy on, as Status says.
 //
 // It marks two sets of values, which an evaluation reports reading apart
 // (expr.Read): Scope.Marked, the secrets, which Run.Secrets and Secrets
@@ -201,10 +279,123 @@ type Contexts struct {
 // templates (expr.Scope.Budgeted). Its Resolver and Index are the caller's
 // to set, for input definitions. The compiler, the coordinator, the worker
 // and the WebAssembly package all build their scopes with NewScope, so a
-// context has one shape everywhere.
-//
-// It isn't built yet, and stops its caller.
+// context has one shape everywhere. The scope holds c's input values and
+// matrix values as they are, which an evaluation never changes, and nothing
+// else of c.
 func NewScope(phase Phase, c Contexts) expr.Scope {
-	notImplemented("NewScope")
-	return expr.Scope{}
+	r := c.Run
+	inputs, _ := r.Inputs.Get().(map[string]any)
+	if inputs == nil {
+		inputs = map[string]any{}
+	} else if slices.ContainsFunc(c.Unknown, func(name string) bool { return strings.HasPrefix(name, "inputs.") }) {
+		// Unknown's values are put in a copy.
+		inputs = jsonvalue.CloneMap(inputs)
+	}
+	contexts := map[string]any{
+		"inputs": inputs, "org": stringsContext(r.Org), "vars": stringsContext(r.Vars),
+		"remote": stringsContext(r.Remote), "sessions": stringsContext(r.Sessions),
+	}
+	// layered holds the env names a later layer than the workflow's gives,
+	// whose values Run's marks don't mark.
+	var layered map[string]bool
+	if phase >= PhaseStart {
+		env := stringsContext(r.Env)
+		if phase >= PhaseStep {
+			layered = map[string]bool{}
+			layers := []map[string]string{c.JobEnv}
+			if phase == PhaseStep {
+				layers = append(layers, c.StepEnv)
+			}
+			for _, layer := range layers {
+				for k, v := range layer {
+					env[k], layered[k] = v, true
+				}
+			}
+		}
+		contexts["env"] = env
+	}
+	scope := expr.Scope{Contexts: contexts}
+	if phase >= PhaseStrategy {
+		contexts["needs"] = needsContext(c.Needs)
+		status := c.Status
+		scope.Status = &status
+	}
+	if phase >= PhaseReady {
+		matrix, _ := c.Matrix.Get().(map[string]any)
+		if matrix == nil {
+			matrix = map[string]any{}
+		}
+		contexts["matrix"] = matrix
+	}
+	if phase >= PhaseJobEnv {
+		j := c.Job
+		contexts["job"] = map[string]any{
+			"name": j.Name, "key": j.Key, "attempt": int64(j.Attempt), "group": j.Group, "member": j.Member,
+		}
+	}
+	if phase >= PhaseStep {
+		steps := make(map[string]any, len(c.Steps))
+		for id, outputs := range c.Steps {
+			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
+		}
+		contexts["steps"] = steps
+	}
+	for _, name := range c.Unknown {
+		path := splitPath(name)
+		if _, ok := contexts[path[0]]; !ok {
+			continue
+		}
+		if len(path) == 1 {
+			delete(contexts, path[0])
+			continue
+		}
+		setPath(contexts, path, expr.Unknown{Name: path[0]})
+	}
+	// mark marks the values names names: as private, and as secrets too if
+	// secret is set. Run's don't mark an env value a later layer gives.
+	mark := func(names []string, run, secret bool) {
+		for _, name := range names {
+			path := splitPath(name)
+			if run && len(path) > 1 && path[0] == "env" && layered[path[1]] {
+				continue
+			}
+			if secret {
+				scope.Marked.Add(path)
+			}
+			scope.Private.Add(path)
+		}
+	}
+	scope.Private.Add([]string{"org"}, []string{"vars"})
+	mark(r.Secrets, true, true)
+	mark(c.Secrets, false, true)
+	mark(r.Private, true, false)
+	mark(c.Private, false, false)
+	return scope
+}
+
+// stringsContext returns a context whose values are strings, m's.
+func stringsContext(m map[string]string) map[string]any {
+	out := anyMap(m)
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out
+}
+
+// needsContext returns the needs context of the jobs whose results needs
+// holds.
+func needsContext(needs map[string]JobResult) map[string]any {
+	out := make(map[string]any, len(needs))
+	for name, r := range needs {
+		steps := make(map[string]any, len(r.Steps))
+		for id, outputs := range r.Steps {
+			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
+		}
+		job := map[string]any{"outputs": stringsContext(r.Outputs), "steps": steps}
+		if r.Outcome != "" {
+			job["result"] = string(r.Outcome)
+		}
+		out[name] = job
+	}
+	return out
 }

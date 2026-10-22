@@ -202,8 +202,10 @@ Each phase reads the contexts of the phases before it too.
   they decide is kept: that a job is skipped, a matrix's instances, a job's
   outcome and outputs.
 
-Only Create is built. Start, matrix expansion, Ready, Step and End are
-designed here, and not built yet.
+Create, matrix expansion, Ready, Step and End are built, and so are the
+scope builder and the masker. Start is designed here, and not built yet,
+and nothing calls the phases after Create yet: the coordinator and the
+worker are designed here too.
 
 ### Contexts
 
@@ -234,9 +236,22 @@ contexts those phases know ([Inputs](#inputs)).
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`), known from Ready on. A job's
 default `if:` is `success()`, and an `if:` that calls a status function
-replaces it. An `if:` whose value is the word `always` means `always()`: it
-is the older spelling, which the compiler warns about, and a later format
-can drop it.
+replaces it: one that doesn't is true only when `success()` is too. An
+`if:` whose value is the word `always` means `always()`: it is the older
+spelling, which the compiler warns about, and a later format can drop it.
+Otherwise an `if:` goes by its value's truthiness
+([The language](#the-language)).
+
+A job fails, for `failure()`, when a job it needs failed, or was skipped
+because a job it needs had failed in turn, and is cancelled, for
+`cancelled()`, when the run is being cancelled or a job it needs was
+cancelled, as in format 1. A job its own `if:` skipped counts as a success,
+so a job that needs an optional one still runs. So a failure reaches the
+jobs below it through those it skips: a job whose `if:` the jobs it needs
+made false, because one failed or was cancelled, is skipped with that
+reason, which the jobs that need it read as a failure. A step fails, for
+`failure()`, when a step before it failed, as its job counts it, and is
+cancelled when its job is being cancelled.
 
 `needs.<job>.result` is a dependency's outcome: `success`, `failure`,
 `cancelled` or `skipped`. For a matrix job it is `failure` if any instance
@@ -901,16 +916,21 @@ combination whose matrix values it matches without changing one, or, when
 it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
 differs for an `include` entry that names no matrix key: it makes it a
 combination of its own, where GitHub Actions adds it to every combination.
-Which one format 1 keeps is decided by a scan of the known workflows, as a
-bug fix is ([The workflow format](#the-workflow-format)). Each instance's
-key is the job's name, `#` and its index from 0, as in `build#2`.
+Format 1 keeps ACTIVATE's for now. Whether to take GitHub Actions' as a bug
+fix ([The workflow format](#the-workflow-format)) is open: of the 402
+workflows we know of, none has an `include` entry that names no matrix
+key, and only one of Meridian's own tests has one at all. An entry also matches the combinations earlier entries made, and
+two values match when they are equal, or a string and a number or a
+boolean whose text it is, as in ACTIVATE. Each instance's key is the job's
+name, `#` and its index from 0, as in `build#2`.
 
 - **Where.** The coordinator expands every matrix: at Start, one whose
   values are known by then, written out or read from inputs or variables,
   and at Ready, one that reads `needs`. The compiler expands none. It checks
   each with the same function where its values are known, and checks that
   the jobs and outputs a matrix reads exist; only the values wait. Today the
-  compiler keeps every `strategy:` in the plan, and nothing expands one.
+  compiler keeps every `strategy:` in the plan and checks none with
+  `plan.Expand`, and Ready is the only phase that expands one.
 - **A matrix job's `if:`** that doesn't read `matrix` is evaluated before
   the matrix is expanded, so a job it skips has no instances. One that
   reads `matrix` is evaluated for each instance: format 1 allows it, as
@@ -1060,10 +1080,13 @@ secret record ([Run data](#run-data)).
 - **Once at Start**, the coordinator reads every variable the plan lists, a
   context's whole when the plan names it alone, and keeps them in the
   secret record, so every expression of the run reads the same values.
-- **Each job gets its own.** The plan lists, for each job, the secrets and
-  variables its expressions read, directly or through an input made from
-  one, and an attempt receives only its own job's when it is claimed. A
-  read of each variable of a context, as `vars.*` is, lists all of them.
+- **Each job gets its own.** An attempt receives only the inputs,
+  variables and secrets its own job's expressions read, directly or
+  through an input made from one, when it is claimed, which `plan.Job.Reads`
+  finds from the expressions its worker evaluates: its `env:`, its steps
+  and its `outputs:`. A read of each variable of a context, as `vars.*` is,
+  gives all of them. Every attempt receives the workflow's `env:`, which
+  every step's environment holds.
 - **Declared variables.** Format 1's `needs.organizationVariables` lists
   the organization variables a workflow requires: as in ACTIVATE, a run
   fails when it is created if the Variables interface doesn't have one,

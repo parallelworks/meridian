@@ -201,6 +201,16 @@ func formatNumber(n float64) string {
 	return string(appendFloat(b[:0], n))
 }
 
+// Text returns v's text, as a template with text around an expression
+// makes it of the expression's value: a string as it is, null as nothing,
+// a number as JavaScript writes it, and a list or mapping as JSON, with a
+// mapping's keys in sorted order.
+func Text(v any) string { return stringOf(v) }
+
+// Truthy reports whether v is true as a condition, such as an if:, takes
+// it: false, 0, NaN, "" and null are false, and everything else is true.
+func Truthy(v any) bool { return truthy(v) }
+
 // stringOf converts v to a string as JavaScript's String() does, except
 // that null is empty, as GitHub Actions makes it, and a list or a mapping is
 // its JSON. Template text, the + operator and the string operators and

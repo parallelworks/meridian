@@ -612,6 +612,69 @@
       "Anida menos el valor."
     ]
   },
+  "runs_on_invalid": {
+    "title": "runs-on no es un lugar donde ejecutar",
+    "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
+    "fix": [
+      "Haz que la expresión dé uno de ellos, como el valor de una entrada execution-groups o compute-target."
+    ]
+  },
+  "resources_invalid": {
+    "title": "Recurso que no es una cantidad",
+    "why": "El resources: de un trabajo dice qué necesita del lugar donde se ejecuta, y cada valor se lee una vez evaluadas sus expresiones. cpu es un número de núcleos, como 4 o 0.5, o un número entero de milésimas de núcleo seguido de m, como 500m. memory es un número entero de bytes, o un número seguido de una unidad: k, M, G, T, P o E para potencias de 1000, o Ki, Mi, Gi, Ti, Pi o Ei para potencias de 1024. gpu es un número entero. Ninguno puede ser negativo.",
+    "fix": [
+      "Da el valor en la forma que indica el mensaje."
+    ]
+  },
+  "duration_invalid": {
+    "title": "No es una duración",
+    "why": "Un timeout o un interval es una duración: un número entero de segundos, como 300, o un número entero seguido de s para segundos, m para minutos, h para horas o d para días, como 10m. Una expresión en él dio otra cosa.",
+    "fix": [
+      "Haz que la expresión dé una duración en esa forma."
+    ]
+  },
+  "count_invalid": {
+    "title": "No es un número de veces",
+    "why": "Cuántas veces puede volver a ejecutarse un trabajo o un paso es un número. Se acepta un número, y también un texto que se lee como uno, como una salida; una fracción se redondea hacia abajo, y un número negativo es 0. Una expresión en él dio otra cosa.",
+    "fix": [
+      "Haz que la expresión dé un número."
+    ]
+  },
+  "matrix_not_list": {
+    "title": "Valores de la matriz que no son una lista",
+    "why": "Cada clave de una matriz, salvo include y exclude, enumera los valores con los que se ejecuta el trabajo, e include y exclude enumeran entradas. Una expresión dio algo que no es una lista para una de ellas.",
+    "fix": [
+      "Haz que la expresión dé una lista, como el valor de una entrada de lista o un rango de números."
+    ]
+  },
+  "matrix_entry_not_mapping": {
+    "title": "Entrada de la matriz que no es un mapa",
+    "why": "Cada entrada de include y exclude de una matriz es un mapa de claves de la matriz a valores: una entrada de exclude quita las combinaciones que tienen todos sus valores, y una entrada de include añade sus valores a las combinaciones con las que coincide, o es una combinación propia.",
+    "fix": [
+      "Escribe cada entrada como un mapa."
+    ]
+  },
+  "matrix_empty": {
+    "title": "Matriz sin combinaciones",
+    "why": "Un trabajo con matriz se ejecuta una vez por cada combinación de los valores de su matriz. Esta matriz no tiene ninguna: una clave no enumera valores, o exclude quita todas las combinaciones, e include no añade ninguna.",
+    "fix": [
+      "Da al menos un valor a cada clave, o quita las entradas de exclude que quitan todas las combinaciones."
+    ]
+  },
+  "matrix_too_large": {
+    "title": "Matriz con demasiadas combinaciones",
+    "why": "Meridian ejecuta una matriz de como máximo un límite de combinaciones, 256 salvo que quien ejecuta el flujo de trabajo fije otro. También deja de contar las combinaciones de una matriz cuando ha revisado unos 16 millones de ellas y de las entradas de exclude con las que las compara, así que una matriz mucho más grande que el límite antes de que sus entradas de exclude quiten la mayor parte también es demasiado grande. Los límites son propios de Meridian y no forman parte del formato del flujo de trabajo.",
+    "fix": [
+      "Haz la matriz más pequeña, o pide a quien ejecuta el flujo de trabajo un límite más alto."
+    ]
+  },
+  "output_masked": {
+    "title": "Salida que contiene un secreto",
+    "why": "Las salidas de un trabajo se guardan con la ejecución, donde las lee quien puede ver la ejecución. Esta salida contenía el valor de un secreto, o se hizo a partir de uno, así que se guarda con el secreto enmascarado como ***.",
+    "fix": [
+      "Deja el secreto fuera de la salida y léelo donde se necesite."
+    ]
+  },
   "expression_empty": {
     "title": "Expresión vacía",
     "why": "No hay nada entre ${{ y }}.",

@@ -2,7 +2,12 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"maps"
+	"slices"
 
+	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -111,33 +116,282 @@ type ReadyStepRetry struct {
 // gives the step Skipped if it is false. Otherwise it evaluates the step's
 // env: and then the rest of the step, and gives the step.
 //
+// The step fails, for failure(), when one before it failed as its job
+// counts it, and is cancelled, for cancelled(), when state.Cancelled says
+// so; its if: is true as a job's is (Job.Ready). In its expressions, needs
+// holds the job itself too, whose outputs are those its steps have written
+// so far, the later step's where two wrote the same, and whose steps are
+// its steps' that have ids. A value that isn't text, where text goes, such
+// as a run: or an env: value, is its text, as a template makes it. Its
+// defaults are format 1's: a retry: tries 10 more times, 5 seconds apart,
+// each try for at most 30 seconds.
+//
 // Step reaches nothing, and gives the same result for the same job, index
 // and state, byte for byte. Its diagnostics are the step's problems, such
 // as an expression that fails, at the step's path and with no file
 // position, and never show a value made from a variable or a password; an
-// error among them fails the step. It returns an error when ctx is done
-// before it finishes, ctx.Err(), and for an index that isn't one of the
-// job's steps, or state.Steps that aren't one for each step before it,
-// which are its caller's mistakes.
-//
-// It isn't built yet, and returns an error that says so.
+// error among them fails the step, and there is no step. What they show is
+// masked with state.Masked, as a step's outputs, which the job's later
+// steps read as they were written, can hold a secret. It returns an
+// error when ctx is done before it finishes, ctx.Err(), and for an index
+// that isn't one of the job's steps, or state.Steps that aren't one for
+// each step before it, which are its caller's mistakes.
 func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyStep, problems.Diagnostics, error) {
-	return nil, nil, errNotImplemented
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if index < 0 || index >= len(j.Steps) {
+		return nil, nil, fmt.Errorf("plan: the job %s has no step %d", j.Key, index)
+	}
+	if len(state.Steps) != index {
+		return nil, nil, fmt.Errorf("plan: step %d of the job %s is given the results of %d steps before it", index, j.Key, len(state.Steps))
+	}
+	s := &j.Steps[index]
+	c, e := j.jobEnv(state)
+	if e.diags.HasErrors() {
+		return nil, e.diags, nil
+	}
+	c.Needs, c.Steps = j.withSelf(state)
+	e = c.evaluation(PhaseStep, e)
+	rs := &ReadyStep{Index: index, ID: s.ID}
+	run, ok := e.condition(s.If, at(s.Path, "if"))
+	switch {
+	case !ok:
+		return nil, e.diags, nil
+	case !run:
+		rs.Skipped = true
+		return rs, e.diags, nil
+	}
+	// The step's env: is evaluated over the job's, and the rest of the
+	// step over the step's.
+	c.StepEnv, c.stepMarks = e.env(s.Env, at(s.Path, "env"))
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	e = c.evaluation(PhaseStep, e)
+	rs.Env = c.env()
+	rs.Name, _, _ = e.text(s.Name, at(s.Path, "name"))
+	if !s.Run.IsZero() {
+		rs.Run, _, _ = e.text(s.Run, at(s.Path, "run"))
+	}
+	rs.Uses, rs.Shell, rs.EarlyCancel = s.Uses, s.Shell, s.EarlyCancel
+	if !s.With.IsZero() {
+		pointer := at(s.Path, "with")
+		if out, read, ok := e.value(s.With, pointer); ok {
+			if rs.With, ok = mappingData(out); !ok {
+				e.reportType(pointer, out, read, "object")
+			}
+		}
+	}
+	rs.WorkingDirectory = j.WorkingDirectory
+	if dir, null := e.directory(s.WorkingDirectory, at(s.Path, "working-directory")); null {
+		rs.WorkingDirectory = ""
+	} else if dir != "" {
+		rs.WorkingDirectory = dir
+	}
+	if !s.SSH.IsZero() {
+		rs.SSH = e.inline(s.SSH, at(s.Path, "ssh"))
+	}
+	rs.TimeoutSeconds = e.duration(s.Timeout, at(s.Path, "timeout"), "timeout", 0)
+	if r := s.Retry; r != nil {
+		pointer := at(s.Path, "retry")
+		rs.Retry = &ReadyStepRetry{
+			MaxRetries:      e.count(r.MaxRetries, at(pointer, "max-retries"), "max-retries", defaultStepRetries),
+			IntervalSeconds: e.duration(r.Interval, at(pointer, "interval"), "interval", defaultStepInterval),
+			TimeoutSeconds:  e.duration(r.Timeout, at(pointer, "timeout"), "timeout", defaultStepTryTimeout),
+			CleanOnRetry:    r.CleanOnRetry,
+		}
+	}
+	if !s.IgnoreErrors.IsZero() {
+		if out, _, ok := e.value(s.IgnoreErrors, at(s.Path, "ignore-errors")); ok {
+			rs.IgnoreErrors = readBool(out, false)
+		}
+	}
+	if !s.Cleanup.IsZero() {
+		rs.Cleanup, _, _ = e.text(s.Cleanup, at(s.Path, "cleanup"))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if e.diags.HasErrors() {
+		return nil, e.diags, nil
+	}
+	rs.Masked = e.masked
+	return rs, e.diags, nil
 }
+
+// The defaults of a step's retry:, format 1's.
+const (
+	defaultStepRetries    = 10
+	defaultStepInterval   = 5
+	defaultStepTryTimeout = 30
+)
 
 // End is the End phase: it evaluates the job's outputs:, on its worker,
 // once the job's steps have run, and gives them by name. It masks each
-// with a Masker of state.Masked, and masks the whole of one that was made
+// with a Masker of state.Masked, and of what it made from a secret, such
+// as a value of the job's env:, and masks the whole of one that was made
 // from a secret: an output that holds a secret is given with it masked,
-// problems.Masked, and a warning that names the output.
+// problems.Masked, and a warning that names the output (output_masked).
+// Its expressions read the job's env: and needs, with the job itself, as
+// Step's do, and steps, with each of the job's steps that has an id.
 //
 // End reaches nothing, and gives the same outputs for the same job and
 // state, byte for byte. Its diagnostics are as Step's, at the job's
-// outputs:; an error among them fails the job. It returns an error when
-// ctx is done before it finishes, ctx.Err(), and for state.Steps that
-// aren't one for each of the job's steps.
-//
-// It isn't built yet, and returns an error that says so.
+// outputs:; an error among them fails the job, and an output whose
+// expression fails is left out. It returns an error when ctx is done
+// before it finishes, ctx.Err(), and for state.Steps that aren't one for
+// each of the job's steps.
 func (j *ReadyJob) End(ctx context.Context, state JobState) (map[string]string, problems.Diagnostics, error) {
-	return nil, nil, errNotImplemented
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(state.Steps) != len(j.Steps) {
+		return nil, nil, fmt.Errorf("plan: the job %s has %d steps, and is given the results of %d", j.Key, len(j.Steps), len(state.Steps))
+	}
+	c, e := j.jobEnv(state)
+	if e.diags.HasErrors() {
+		return nil, e.diags, nil
+	}
+	c.Needs, c.Steps = j.withSelf(state)
+	e = c.evaluation(PhaseEnd, e)
+	var outputs map[string]string
+	for name, v := range jsonvalue.Sorted(j.Outputs) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		pointer := at(j.Path, "outputs", name)
+		text, read, ok := e.text(v, pointer)
+		if !ok {
+			continue
+		}
+		masked := e.masker.Mask(text)
+		if read.Marked && text != "" {
+			masked = problems.Masked
+		}
+		if masked != text {
+			e.report(problems.OutputMasked, pointer, problems.Params{"name": name}, expr.Read{})
+		}
+		if outputs == nil {
+			outputs = map[string]string{}
+		}
+		outputs[name] = masked
+	}
+	return outputs, e.diags, nil
+}
+
+// stepContexts are the contexts of a job's steps: the ready job's, and its
+// env: and the step's, with which of their values are private or secret.
+type stepContexts struct {
+	Contexts
+	// private and secrets are the ready job's Private and Secrets, and
+	// jobMarks and stepMarks say how the values of the job's env: and the
+	// step's were made, by name, for those made from a private value.
+	private, secrets    []string
+	jobMarks, stepMarks map[string]expr.Read
+}
+
+// jobEnv evaluates the job's env:, with the job context, and returns the
+// contexts of its steps, without needs or steps, and the evaluation, which
+// holds its problems and the text of what it made from a secret.
+func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
+	c := &stepContexts{
+		Run: state.Run, Needs: state.Needs, Status: expr.Status{Cancelled: state.Cancelled},
+		Matrix: j.Matrix, Job: state.Job, Private: j.Private, Secrets: j.Secrets,
+		private: j.Private, secrets: j.Secrets,
+	}
+	e := newEvaluation(PhaseJobEnv, c.Contexts)
+	e.masker = NewMasker(state.Masked...)
+	c.JobEnv, c.jobMarks = e.env(j.Env, at(j.Path, "env"))
+	for _, r := range state.Steps {
+		c.Status.Failed = c.Status.Failed || r.Outcome == OutcomeFailure
+	}
+	return c, e
+}
+
+// evaluation returns an evaluation in phase of what c holds now, which
+// keeps the problems and the text made from a secret of the one before
+// it, e.
+func (c *stepContexts) evaluation(phase Phase, e *evaluation) *evaluation {
+	marks := maps.Clone(c.jobMarks)
+	if marks == nil {
+		marks = map[string]expr.Read{}
+	}
+	for name := range c.StepEnv {
+		marks[name] = c.stepMarks[name]
+	}
+	c.Private, c.Secrets = slices.Clone(c.private), slices.Clone(c.secrets)
+	for name, read := range jsonvalue.Sorted(marks) {
+		if read.Private {
+			c.Private = append(c.Private, "env."+name)
+		}
+		if read.Marked {
+			c.Secrets = append(c.Secrets, "env."+name)
+		}
+	}
+	next := newEvaluation(phase, c.Contexts)
+	next.diags, next.masked, next.seen, next.masker = e.diags, e.masked, e.seen, e.masker
+	return next
+}
+
+// env returns the environment c gives a step: the workflow's env:, then
+// the job's over it, then the step's over that.
+func (c *stepContexts) env() map[string]string {
+	env := maps.Clone(c.Run.Env)
+	for _, layer := range []map[string]string{c.JobEnv, c.StepEnv} {
+		if len(layer) > 0 && env == nil {
+			env = map[string]string{}
+		}
+		maps.Copy(env, layer)
+	}
+	return env
+}
+
+// env evaluates an env:, at pointer, each value as a group of its own, and
+// returns its values' text, and how each was made, if it was made from a
+// private value.
+func (e *evaluation) env(env map[string]Value, pointer string) (map[string]string, map[string]expr.Read) {
+	if len(env) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(env))
+	var marks map[string]expr.Read
+	for name, v := range jsonvalue.Sorted(env) {
+		text, read, ok := e.text(v, at(pointer, name))
+		if !ok {
+			continue
+		}
+		out[name] = text
+		if read.Private {
+			if marks == nil {
+				marks = map[string]expr.Read{}
+			}
+			marks[name] = read
+		}
+	}
+	return out, marks
+}
+
+// withSelf returns the needs of the job's steps, with the job itself, and
+// its steps' outputs by id, from what its steps so far, state.Steps, wrote.
+func (j *ReadyJob) withSelf(state JobState) (map[string]JobResult, map[string]map[string]string) {
+	needs := maps.Clone(state.Needs)
+	if needs == nil {
+		needs = map[string]JobResult{}
+	}
+	self := JobResult{Outputs: map[string]string{}}
+	steps := map[string]map[string]string{}
+	for i, r := range state.Steps {
+		maps.Copy(self.Outputs, r.Outputs)
+		if id := j.Steps[i].ID; id != "" {
+			outputs := maps.Clone(r.Outputs)
+			if outputs == nil {
+				outputs = map[string]string{}
+			}
+			steps[id] = outputs
+		}
+	}
+	self.Steps = steps
+	needs[j.Name] = self
+	return needs, steps
 }

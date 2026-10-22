@@ -4,7 +4,11 @@ import (
 	"context"
 	jsonv2 "encoding/json/v2"
 	"fmt"
+	"maps"
+	"slices"
 
+	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -58,6 +62,12 @@ type JobResult struct {
 	// Steps are the outputs of its steps that have ids, by id, with secrets
 	// masked: needs.<job>.steps.<id>.outputs.<name>.
 	Steps map[string]map[string]string `json:"steps,omitempty"`
+	// NeedsFailed is set for a job that was skipped because a job it needs
+	// failed, was cancelled or was itself skipped so (ReadyResult). The
+	// jobs that need it read it as failed, as format 1 does: failure() is
+	// true for them, and success() false, as it isn't for a job skipped by
+	// its own if:.
+	NeedsFailed bool `json:"needsFailed,omitzero"`
 }
 
 // Combine returns a matrix job's result from its instances', given in the
@@ -65,25 +75,145 @@ type JobResult struct {
 // outcome is failure if an instance failed, otherwise cancelled if one was
 // cancelled, skipped if all were skipped, and success otherwise; an output,
 // or a step's, that more than one instance set has the value of the one
-// with the highest index.
+// with the highest index. A job all of whose instances were skipped is
+// skipped because its needs failed if one of them was.
 //
-// It isn't built yet, and stops its caller.
+// Which instance's output a job gives is a bug fix to format 1, in which
+// it is the last to finish's: no workflow can rely on which that is, and
+// none of those we know of reads a matrix job's outputs.
 func Combine(instances []JobResult) JobResult {
-	notImplemented("Combine")
-	return JobResult{}
+	var out JobResult
+	failed, cancelled, skipped, needsFailed := false, false, true, false
+	for _, r := range instances {
+		switch r.Outcome {
+		case OutcomeFailure:
+			failed = true
+		case OutcomeCancelled:
+			cancelled = true
+		}
+		skipped = skipped && r.Outcome == OutcomeSkipped
+		needsFailed = needsFailed || r.NeedsFailed
+		for name, v := range r.Outputs {
+			if out.Outputs == nil {
+				out.Outputs = map[string]string{}
+			}
+			out.Outputs[name] = v
+		}
+		for id, outputs := range r.Steps {
+			if out.Steps == nil {
+				out.Steps = map[string]map[string]string{}
+			}
+			if out.Steps[id] == nil {
+				out.Steps[id] = map[string]string{}
+			}
+			maps.Copy(out.Steps[id], outputs)
+		}
+	}
+	switch {
+	case failed:
+		out.Outcome = OutcomeFailure
+	case cancelled:
+		out.Outcome = OutcomeCancelled
+	case skipped:
+		out.Outcome, out.NeedsFailed = OutcomeSkipped, needsFailed
+	default:
+		out.Outcome = OutcomeSuccess
+	}
+	return out
 }
 
 // Reads returns the part of run that the job reads, which is what an
-// attempt of it receives when it is claimed: the inputs, variables, env
-// values and secrets its expressions read, directly or through an input
-// made from one, as the plan lists them for the job. The coordinator never
-// gives an attempt more.
-//
-// It isn't built yet, and stops its caller: the plan doesn't list each
-// job's reads yet.
+// attempt of it receives when it is claimed: what the expressions that
+// its worker evaluates read, in its env:, its steps and its outputs:, of
+// the inputs, org and vars, each input or variable they name, or all of a
+// context that one reads whole, as inputs.* does; and the workflow's env,
+// which every step's environment holds, remote and sessions, whole.
+// Private and Secrets name what of it they name. What Ready evaluated, such
+// as an instance's matrix values, an attempt receives in its ReadyJob. The
+// coordinator never gives an attempt more.
 func (j *Job) Reads(run RunValues) RunValues {
-	notImplemented("Job.Reads")
-	return RunValues{}
+	// names holds the names each context's reads name, and whole the
+	// contexts read whole.
+	names := map[string]map[string]bool{"inputs": {}, "org": {}, "vars": {}}
+	whole := map[string]bool{}
+	for _, v := range j.workerValues() {
+		for _, e := range v.Exprs() {
+			for _, r := range e.Refs() {
+				if names[r.Context] == nil {
+					continue
+				}
+				if len(r.Path) == 0 || r.Path[0] == "*" || r.Path[0] == "[index]" {
+					whole[r.Context] = true
+				} else {
+					names[r.Context][r.Path[0]] = true
+				}
+			}
+		}
+	}
+	reads := func(context, name string) bool {
+		if n := names[context]; n != nil {
+			return whole[context] || n[name]
+		}
+		return true
+	}
+	out := RunValues{
+		Format: run.Format, Env: maps.Clone(run.Env), Remote: maps.Clone(run.Remote), Sessions: maps.Clone(run.Sessions),
+	}
+	if inputs, ok := run.Inputs.Get().(map[string]any); ok {
+		read := map[string]any{}
+		for name, v := range inputs {
+			if reads("inputs", name) {
+				read[name] = jsonvalue.Clone(v)
+			}
+		}
+		out.Inputs = DataOf(read)
+	}
+	for _, c := range []struct {
+		name     string
+		from, to *map[string]string
+	}{{"org", &run.Org, &out.Org}, {"vars", &run.Vars, &out.Vars}} {
+		for name, v := range *c.from {
+			if reads(c.name, name) {
+				if *c.to == nil {
+					*c.to = map[string]string{}
+				}
+				(*c.to)[name] = v
+			}
+		}
+	}
+	kept := func(paths []string) []string {
+		var out []string
+		for _, p := range paths {
+			path := splitPath(p)
+			if len(path) == 1 && names[path[0]] != nil {
+				if whole[path[0]] || len(names[path[0]]) > 0 {
+					out = append(out, p)
+				}
+				continue
+			}
+			if reads(path[0], path[1]) {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	out.Private, out.Secrets = kept(run.Private), kept(run.Secrets)
+	return out
+}
+
+// workerValues returns the values of the job that its worker evaluates:
+// its env:, each of its steps' and its outputs:.
+func (j *Job) workerValues() []Value {
+	var out []Value
+	out = slices.AppendSeq(out, maps.Values(j.Env))
+	for _, s := range j.Steps {
+		out = append(out, s.Name, s.If, s.Run, s.With, s.WorkingDirectory, s.SSH, s.Timeout, s.IgnoreErrors, s.Cleanup)
+		out = slices.AppendSeq(out, maps.Values(s.Env))
+		if r := s.Retry; r != nil {
+			out = append(out, r.MaxRetries, r.Interval, r.Timeout)
+		}
+	}
+	return slices.AppendSeq(out, maps.Values(j.Outputs))
 }
 
 // ReadyInput is what the coordinator knows when a job's dependencies have
@@ -105,7 +235,8 @@ type ReadyInput struct {
 }
 
 // ReadyResult is what Ready gives: a matrix's instances, a job skipped, or
-// a job ready to place. Exactly one of its fields is set.
+// a job ready to place. Exactly one of Expansion, Skipped and Job is set,
+// and NeedsFailed only with Skipped.
 type ReadyResult struct {
 	// Expansion holds the job's matrix instances, when Ready expanded its
 	// matrix. The coordinator keeps them, and readies each instance on its
@@ -116,6 +247,12 @@ type ReadyResult struct {
 	// matrix, it is set before the matrix is expanded, and the job has no
 	// instances.
 	Skipped bool
+	// NeedsFailed is set with Skipped when the job is skipped because a job
+	// it needs failed, was cancelled or was itself skipped so, as its
+	// default if:, success(), or an if: that calls a status function,
+	// decided: format 1's dependency failure. The coordinator records it in
+	// the job's JobResult, so that the jobs that need it read it as failed.
+	NeedsFailed bool
 	// Job is the job as Ready evaluated it, to place and to run.
 	Job *ReadyJob
 }
@@ -264,30 +401,131 @@ type ReadyJobRetry struct {
 
 // Ready is the Ready phase: it evaluates what job leaves to the point at
 // which its dependencies have finished, in the coordinator, with the
-// status functions true or false as in.Needs and in.Cancelled say.
+// status functions true or false as in.Needs and in.Cancelled say: a job
+// fails, for failure(), when one it needs failed or was skipped because
+// its own needs failed (JobResult.NeedsFailed), and is cancelled, for
+// cancelled(), when the run is being cancelled or one it needs was
+// cancelled, as in format 1. A job one needs that its own if: skipped
+// counts as a success.
 //
 // For a job with a strategy: and no in.Instance, it first evaluates the
 // job's if:, if it doesn't read matrix, and gives Skipped if it is false;
 // otherwise it expands the matrix with Expand, and gives the Expansion. For
 // an instance, or a job without a strategy:, it evaluates the job's if:,
-// unless it was evaluated before the matrix was expanded, and gives
-// Skipped if it is false; otherwise it gives the job, with its runs-on:,
-// resources:, retry:, timeout:, working-directory: and ssh: evaluated. A
-// job's if: may read matrix in format 1, which GitHub Actions' doesn't:
-// the compiler accepts it, and changing that would change what a workflow
-// means.
+// and gives Skipped if it is false; otherwise it gives the job, with its
+// runs-on:, resources:, retry:, timeout:, working-directory: and ssh:
+// evaluated. An instance's if: that doesn't read matrix gives what it gave
+// before the matrix was expanded, unless the run has been cancelled since,
+// so an instance of a matrix that Start expanded is skipped as its job
+// would have been. A job's if: may read matrix in format 1, which GitHub
+// Actions' doesn't: the compiler accepts it, and changing that would change
+// what a workflow means.
+//
+// An if: is true when its value is: its truthiness, unless it is the word
+// always, which is always(); and, unless it calls a status function, it
+// is true only if success() is too, the default if:'s place it doesn't
+// take. A job it skips because success() is false is skipped because its
+// needs failed (NeedsFailed), and so is one an if: that calls a status
+// function skips while a job it needs failed or was cancelled.
 //
 // Ready reaches nothing: the same job and input give the same result, byte
 // for byte. Its diagnostics are the job's problems at the job's path, with
 // no file position, and never show a value made from a variable or a
 // password: an expression that fails, or a value that doesn't fit its key,
-// such as resources: memory that isn't a quantity, which is a kind of its
-// own, added with Ready. An error among them fails the job. It returns an error
-// only when ctx is done before it finishes, and then ctx.Err().
-//
-// It isn't built yet, and returns an error that says so.
+// such as resources: memory that isn't a quantity (resources_invalid), a
+// timeout: or retry interval: that isn't a duration (duration_invalid), a
+// retry max-retries: that isn't a number (count_invalid), a runs-on: that
+// names no place (runs_on_invalid), or a working-directory: that isn't
+// text (wrong_type). An error among them fails the job, and there is no
+// result. It returns an error only when ctx is done before it finishes,
+// and then ctx.Err().
 func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
-	return nil, nil, errNotImplemented
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	status, needsOK := in.status()
+	c := Contexts{Run: in.Run, Needs: in.Needs, Status: status}
+	skipped := &ReadyResult{Skipped: true, NeedsFailed: !needsOK}
+	if j.Strategy != nil && in.Instance == nil {
+		e := newEvaluation(PhaseStrategy, c)
+		if !readsContext(j.If, "matrix") {
+			run, ok := e.condition(j.If, at(j.Path, "if"))
+			switch {
+			case !ok:
+				return nil, e.diags, nil
+			case !run:
+				return skipped, nil, nil
+			}
+		}
+		x, err := Expand(ctx, j, e.scope, in.Limits)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, ctxErr
+			}
+			e.reportError(at(j.Path, "strategy"), err, expr.Read{})
+			return nil, e.diags, nil
+		}
+		return &ReadyResult{Expansion: x}, nil, nil
+	}
+	rj := &ReadyJob{Key: j.Key, Name: j.Name, Env: j.Env, Steps: j.Steps, Outputs: j.Outputs, Path: j.Path}
+	if i := in.Instance; i != nil {
+		rj.Key, rj.Matrix = i.Key, i.Matrix
+		if i.Private || i.Secret {
+			rj.Private = []string{"matrix"}
+		}
+		if i.Secret {
+			rj.Secrets = []string{"matrix"}
+		}
+		c.Matrix = i.Matrix
+	}
+	c.Private, c.Secrets = rj.Private, rj.Secrets
+	e := newEvaluation(PhaseReady, c)
+	if i := in.Instance; i != nil && i.Secret {
+		// The instance's matrix values were made from a secret.
+		maskedTexts(i.Matrix.Get(), e.mask)
+	}
+	run, ok := e.condition(j.If, at(j.Path, "if"))
+	switch {
+	case !ok:
+		return nil, e.diags, nil
+	case !run:
+		return skipped, nil, nil
+	}
+	rj.Target = e.target(j)
+	rj.Resources = e.resources(j.Resources, at(j.Path, "resources"))
+	rj.Retry = e.jobRetry(j.Retry, at(j.Path, "retry"))
+	rj.TimeoutSeconds = e.duration(j.Timeout, at(j.Path, "timeout"), "timeout", 0)
+	rj.WorkingDirectory, _ = e.directory(j.WorkingDirectory, at(j.Path, "working-directory"))
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if e.diags.HasErrors() {
+		return nil, e.diags, nil
+	}
+	rj.Masked = e.masked
+	return &ReadyResult{Job: rj}, e.diags, nil
+}
+
+// status returns how the job got here, for the status functions, from the
+// results of the jobs it needs and whether the run is being cancelled, and
+// whether its needs succeeded: none failed or was cancelled, or was
+// skipped because its own needs failed.
+func (in ReadyInput) status() (status expr.Status, needsOK bool) {
+	status.Cancelled = in.Cancelled
+	for _, r := range in.Needs {
+		switch {
+		case r.Outcome == OutcomeFailure, r.NeedsFailed:
+			status.Failed = true
+		case r.Outcome == OutcomeCancelled:
+			status.Cancelled = true
+		}
+	}
+	for _, r := range in.Needs {
+		if r.Outcome == OutcomeFailure || r.Outcome == OutcomeCancelled || r.NeedsFailed {
+			return status, false
+		}
+	}
+	return status, true
 }
 
 // EncodeReadyJob encodes a ready job as JSON, as Encode encodes a plan's

@@ -555,9 +555,9 @@ func TestValueRead(t *testing.T) {
 	for v, want := range map[string]expr.Read{
 		`{"a": "${{ vars.region }}", "b": ["${{ vars.token * 2 }}"]}`: {Marked: true, Private: true},
 		`{"a": "${{ vars.region }}", "b": ["vars.token"]}`:            {Private: true},
-		`["${{ 1 }}", "text"]`:                                        {},
-		`["${{ vars.token }}", "${{ fromJSON('x') }}"]`:               {Marked: true, Private: true},
-		`["${{ fromJSON(vars.region) }}"]`:                            {Private: true},
+		`["${{ 1 }}", "text"]`:                          {},
+		`["${{ vars.token }}", "${{ fromJSON('x') }}"]`: {Marked: true, Private: true},
+		`["${{ fromJSON(vars.region) }}"]`:              {Private: true},
 	} {
 		var raw any
 		if err := json.Unmarshal([]byte(v), &raw); err != nil {

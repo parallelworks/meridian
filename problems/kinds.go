@@ -139,6 +139,20 @@ var (
 	ValueTooDeep               = define(Error, "value_too_deep", "Value nests too deeply", "max")
 )
 
+// Running a workflow: what the phases after Start evaluate, and the
+// matrices they expand.
+var (
+	RunsOnInvalid         = define(Error, "runs_on_invalid", "runs-on isn't a place to run", "value")
+	ResourcesInvalid      = define(Error, "resources_invalid", "Resource that isn't a quantity", "key", "value")
+	DurationInvalid       = define(Error, "duration_invalid", "Not a duration", "key", "value")
+	CountInvalid          = define(Error, "count_invalid", "Not a number of times", "key", "value")
+	MatrixNotList         = define(Error, "matrix_not_list", "Matrix values that aren't a list", "key", "value")
+	MatrixEntryNotMapping = define(Error, "matrix_entry_not_mapping", "Matrix entry that isn't a mapping", "key", "value")
+	MatrixEmpty           = define(Error, "matrix_empty", "Matrix without combinations")
+	MatrixTooLarge        = define(Error, "matrix_too_large", "Matrix with too many combinations", "limit")
+	OutputMasked          = define(Warning, "output_masked", "Output that holds a secret", "name")
+)
+
 // Parsing an expression.
 var (
 	ExpressionEmpty     = define(Error, "expression_empty", "Empty expression")

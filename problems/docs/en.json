@@ -525,6 +525,60 @@
       "Nest the value less deeply."
     ]
   },
+  "runs_on_invalid": {
+    "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
+    "fix": [
+      "Make the expression give one of these, such as the value of an execution-groups or compute-target input."
+    ]
+  },
+  "resources_invalid": {
+    "why": "A job's resources: says what it needs from where it runs, and each value is read once its expressions are evaluated. cpu is a number of cores, such as 4 or 0.5, or a whole number of thousandths of a core followed by m, such as 500m. memory is a whole number of bytes, or a number followed by a unit: k, M, G, T, P or E for powers of 1000, or Ki, Mi, Gi, Ti, Pi or Ei for powers of 1024. gpu is a whole number. None can be negative.",
+    "fix": [
+      "Give the value in the form the message names."
+    ]
+  },
+  "duration_invalid": {
+    "why": "A timeout or an interval is a duration: a whole number of seconds, such as 300, or a whole number followed by s for seconds, m for minutes, h for hours or d for days, such as 10m. An expression in it gave something else.",
+    "fix": [
+      "Make the expression give a duration in that form."
+    ]
+  },
+  "count_invalid": {
+    "why": "How many times a job or a step may run again is a number. A number is taken, and so is text that reads as one, such as an output; a fraction is rounded down, and a negative number is 0. An expression in it gave something else.",
+    "fix": [
+      "Make the expression give a number."
+    ]
+  },
+  "matrix_not_list": {
+    "why": "Each key of a matrix other than include and exclude lists the values the job runs with, and include and exclude list entries. An expression gave something that isn't a list for one of them.",
+    "fix": [
+      "Make the expression give a list, such as a list input's value or a range of numbers."
+    ]
+  },
+  "matrix_entry_not_mapping": {
+    "why": "Each entry of a matrix's include and exclude is a mapping of matrix keys to values: an exclude entry removes the combinations that have all its values, and an include entry adds its values to the combinations it matches, or is a combination of its own.",
+    "fix": [
+      "Write each entry as a mapping."
+    ]
+  },
+  "matrix_empty": {
+    "why": "A matrix job runs once for each combination of its matrix's values. This matrix has none: a key lists no values, or exclude removes every combination, and include adds none.",
+    "fix": [
+      "Give each key at least one value, or remove the exclude entries that remove every combination."
+    ]
+  },
+  "matrix_too_large": {
+    "why": "Meridian runs a matrix of at most a limit of combinations, 256 unless whoever runs the workflow sets another. It also stops counting a matrix's combinations once it has looked at about 16 million of them and of the exclude entries it checks them against, so a matrix far larger than the limit before its exclude entries remove most of it is too large as well. The limits are Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Make the matrix smaller, or ask whoever runs the workflow for a higher limit."
+    ]
+  },
+  "output_masked": {
+    "why": "A job's outputs are kept with the run, where whoever can see the run reads them. This output held the value of a secret, or was made from one, so it is kept with the secret masked as ***.",
+    "fix": [
+      "Leave the secret out of the output, and read it where it is needed instead."
+    ]
+  },
   "expression_empty": {
     "why": "There is nothing between ${{ and }}.",
     "fix": [

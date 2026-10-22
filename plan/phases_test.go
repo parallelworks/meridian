@@ -1,0 +1,628 @@
+package plan_test
+
+import (
+	"context"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
+)
+
+// compiled compiles a workflow, which must compile without errors.
+func compiled(t testing.TB, workflow string, contexts map[string]any) *plan.Plan {
+	t.Helper()
+	p, diags := compile.Compile("workflow.yaml", []byte(workflow), nil, compile.Options{Contexts: contexts})
+	if diags.HasErrors() {
+		t.Fatalf("compiling: %v", diags)
+	}
+	return p
+}
+
+// job returns the plan's job of name.
+func job(t testing.TB, p *plan.Plan, name string) *plan.Job {
+	t.Helper()
+	for i := range p.Jobs {
+		if p.Jobs[i].Name == name {
+			return &p.Jobs[i]
+		}
+	}
+	t.Fatalf("no job %s", name)
+	return nil
+}
+
+// runValues returns the run's values of a plan whose env: holds no
+// expressions, as Start would complete them, with its user variables and
+// secrets.
+func runValues(t testing.TB, p *plan.Plan, vars map[string]string) plan.RunValues {
+	t.Helper()
+	r := plan.RunValues{Format: p.Run.Format, Inputs: p.Run.Inputs, Vars: vars, Secrets: p.Run.Secrets}
+	for name, v := range p.Run.Env {
+		lit, ok := v.Literal()
+		if !ok {
+			t.Fatalf("env %s holds an expression", name)
+		}
+		if r.Env == nil {
+			r.Env = map[string]string{}
+		}
+		r.Env[name], _ = lit.(string)
+	}
+	return r
+}
+
+// codes returns the codes of diagnostics and their paths, and their params
+// that show a value.
+func codes(ds problems.Diagnostics) []string {
+	var out []string
+	for _, d := range ds {
+		s := string(d.Code) + " " + d.Path()
+		if v, ok := d.Params["value"]; ok {
+			s += fmt.Sprintf(" %v", v)
+		}
+		out = append(out, s)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestCombine(t *testing.T) {
+	r := func(o plan.Outcome, outputs ...string) plan.JobResult {
+		res := plan.JobResult{Outcome: o}
+		for i := 0; i+1 < len(outputs); i += 2 {
+			if res.Outputs == nil {
+				res.Outputs = map[string]string{}
+			}
+			res.Outputs[outputs[i]] = outputs[i+1]
+		}
+		return res
+	}
+	for _, tc := range []struct {
+		in   []plan.JobResult
+		want plan.Outcome
+	}{
+		{[]plan.JobResult{r(plan.OutcomeSuccess), r(plan.OutcomeSuccess)}, plan.OutcomeSuccess},
+		{[]plan.JobResult{r(plan.OutcomeSuccess), r(plan.OutcomeSkipped)}, plan.OutcomeSuccess},
+		{[]plan.JobResult{r(plan.OutcomeCancelled), r(plan.OutcomeFailure), r(plan.OutcomeSuccess)}, plan.OutcomeFailure},
+		{[]plan.JobResult{r(plan.OutcomeCancelled), r(plan.OutcomeSkipped), r(plan.OutcomeSuccess)}, plan.OutcomeCancelled},
+		{[]plan.JobResult{r(plan.OutcomeSkipped), r(plan.OutcomeSkipped)}, plan.OutcomeSkipped},
+	} {
+		if got := plan.Combine(tc.in); got.Outcome != tc.want || got.NeedsFailed {
+			t.Errorf("Combine(%v) = %v, want %s", tc.in, got, tc.want)
+		}
+	}
+	got := plan.Combine([]plan.JobResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "0", "b": "0"}, Steps: map[string]map[string]string{"s": {"x": "0", "y": "0"}}},
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "1"}, Steps: map[string]map[string]string{"s": {"x": "1"}}},
+		{Outcome: plan.OutcomeSkipped},
+	})
+	if fmt.Sprint(got.Outputs, got.Steps) != "map[a:1 b:0] map[s:map[x:1 y:0]]" {
+		t.Errorf("outputs %v, steps %v: the highest index's win", got.Outputs, got.Steps)
+	}
+	blocked := plan.Combine([]plan.JobResult{{Outcome: plan.OutcomeSkipped}, {Outcome: plan.OutcomeSkipped, NeedsFailed: true}})
+	if blocked.Outcome != plan.OutcomeSkipped || !blocked.NeedsFailed {
+		t.Errorf("all skipped, one for its needs: %+v", blocked)
+	}
+}
+
+// A job reads the inputs and variables its worker's expressions name, each
+// of a context it reads whole, and the workflow's env, remote and sessions,
+// with the names of what of them is private or secret.
+func TestReads(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      a: {type: string, default: x}
+      b: {type: string, default: y}
+      c: {type: string, default: z}
+env:
+  E: e
+jobs:
+  one:
+    if: ${{ inputs.c == 'z' && vars.unread != '' }}
+    env:
+      X: ${{ inputs.a }}
+    steps:
+      - run: echo ${{ vars.token }} ${{ org.* }}
+  two:
+    steps:
+      - run: echo ${{ inputs.* }}
+    outputs:
+      v: ${{ vars.region }}
+`, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "region": "eu", "unread": "u"}, "org": map[string]any{"a": "1"}})
+	run := runValues(t, p, map[string]string{"token": "t", "region": "eu", "unread": "u"})
+	run.Org = map[string]string{"a": "1", "b": "2"}
+	run.Remote = map[string]string{"repo": "r"}
+	run.Private = []string{"inputs.b", "inputs.a", "org", "vars.region"}
+	for name, want := range map[string]string{
+		"one": `{"format":1,"inputs":{"a":"x"},"env":{"E":"e"},"org":{"a":"1","b":"2"},"vars":{"token":"t"},"remote":{"repo":"r"},"private":["inputs.a","org"],"secrets":["vars.token"]}`,
+		"two": `{"format":1,"inputs":{"a":"x","b":"y","c":"z"},"env":{"E":"e"},"vars":{"region":"eu"},"remote":{"repo":"r"},"private":["inputs.b","inputs.a","vars.region"]}`,
+	} {
+		got, err := json.Marshal(job(t, p, name).Reads(run), json.Deterministic(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("%s reads\n%s\nwant\n%s", name, got, want)
+		}
+	}
+}
+
+// Ready decides a job's if: by its needs' outcomes: one it needs that
+// failed, or was skipped because its own needs failed, fails it, and one
+// skipped by its own if: doesn't. A job it skips because of them is
+// skipped because its needs failed.
+func TestReadyStatus(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  dep:
+    steps: [{run: "true"}]
+  plain:
+    needs: [dep]
+    steps: [{run: "true"}]
+  cond:
+    needs: [dep]
+    if: ${{ needs.dep.result != 'cancelled' }}
+    steps: [{run: "true"}]
+  on-failure:
+    needs: [dep]
+    if: failure()
+    steps: [{run: "true"}]
+  on-cancel:
+    needs: [dep]
+    if: cancelled()
+    steps: [{run: "true"}]
+  word:
+    needs: [dep]
+    if: always
+    steps: [{run: "true"}]
+  value-always:
+    needs: [dep]
+    if: ${{ 'always' }}
+    steps: [{run: "true"}]
+  falsy:
+    needs: [dep]
+    if: ${{ null }}
+    steps: [{run: "true"}]
+`, nil)
+	run := runValues(t, p, nil)
+	type result struct{ skipped, needsFailed bool }
+	outcomes := []plan.JobResult{
+		{Outcome: plan.OutcomeSuccess},
+		{Outcome: plan.OutcomeSkipped},
+		{Outcome: plan.OutcomeFailure},
+		{Outcome: plan.OutcomeSkipped, NeedsFailed: true},
+		{Outcome: plan.OutcomeCancelled},
+	}
+	for name, want := range map[string][]result{
+		"plain":        {{}, {}, {true, true}, {true, true}, {true, true}},
+		"cond":         {{}, {}, {true, true}, {true, true}, {true, true}},
+		"on-failure":   {{true, false}, {true, false}, {}, {}, {true, true}},
+		"on-cancel":    {{true, false}, {true, false}, {true, true}, {true, true}, {}},
+		"word":         {{}, {}, {}, {}, {}},
+		"value-always": {{}, {}, {}, {}, {}},
+		"falsy":        {{true, false}, {true, false}, {true, true}, {true, true}, {true, true}},
+	} {
+		for i, dep := range outcomes {
+			r, diags, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run, Needs: map[string]plan.JobResult{"dep": dep}})
+			if err != nil || len(diags) > 0 {
+				t.Fatalf("%s: %v, %v", name, diags, err)
+			}
+			if got := (result{r.Skipped, r.NeedsFailed}); got != want[i] || (r.Job == nil) != r.Skipped {
+				t.Errorf("%s after %+v: skipped %v, needs failed %v; want %+v", name, dep, r.Skipped, r.NeedsFailed, want[i])
+			}
+		}
+	}
+	// A run being cancelled skips a job whose if: is success(), and runs
+	// one whose is cancelled().
+	for name, skipped := range map[string]bool{"plain": true, "on-cancel": false, "word": false} {
+		r, _, _ := job(t, p, name).Ready(t.Context(), plan.ReadyInput{
+			Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess}},
+		})
+		if r.Skipped != skipped || r.NeedsFailed {
+			t.Errorf("%s while cancelling: %+v", name, r)
+		}
+	}
+}
+
+// A matrix job whose if: doesn't read matrix is skipped before its matrix
+// is expanded; one whose if: does is expanded, and each instance decides.
+// An instance gives the job with its key and matrix values.
+func TestReadyMatrix(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  dep:
+    steps: [{run: "true"}]
+  plain:
+    needs: [dep]
+    strategy:
+      matrix:
+        os: ${{ fromJSON(needs.dep.outputs.oses) }}
+    runs-on: ${{ matrix.os }}
+    steps: [{run: "true"}]
+  reads:
+    needs: [dep]
+    if: ${{ matrix.os != 'mac' }}
+    strategy:
+      matrix:
+        os: [linux, mac]
+    steps: [{run: "true"}]
+`, nil)
+	run := runValues(t, p, nil)
+	ctx := t.Context()
+	failed := map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeFailure}}
+	if r, _, _ := job(t, p, "plain").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed}); !r.Skipped || !r.NeedsFailed {
+		t.Errorf("plain after a failure: %+v", r)
+	}
+	ok := map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"oses": `["linux","mac"]`}}}
+	r, diags, err := job(t, p, "plain").Ready(ctx, plan.ReadyInput{Run: run, Needs: ok})
+	if err != nil || len(diags) > 0 || r.Expansion == nil || len(r.Expansion.Instances) != 2 {
+		t.Fatalf("plain: %+v, %v, %v", r, diags, err)
+	}
+	in := r.Expansion.Instances[1]
+	in.Private, in.Secret = true, true
+	r, diags, err = job(t, p, "plain").Ready(ctx, plan.ReadyInput{Run: run, Needs: ok, Instance: &in})
+	if err != nil || len(diags) > 0 || r.Job == nil {
+		t.Fatalf("plain#1: %+v, %v, %v", r, diags, err)
+	}
+	if rj := r.Job; rj.Key != "plain#1" || rj.Target.Group != "mac" || fmt.Sprint(rj.Matrix.Get()) != "map[os:mac]" ||
+		!slices.Equal(rj.Private, []string{"matrix"}) || !slices.Equal(rj.Secrets, []string{"matrix"}) || !slices.Equal(rj.Masked, []string{`{"os":"mac"}`, "mac"}) {
+		t.Errorf("plain#1 is %+v", rj)
+	}
+	r, _, _ = job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed})
+	if r.Expansion == nil {
+		t.Fatalf("reads after a failure isn't expanded: %+v", r)
+	}
+	for _, in := range r.Expansion.Instances {
+		r, _, _ := job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed, Instance: &in})
+		if !r.Skipped || !r.NeedsFailed {
+			t.Errorf("%s after a failure: %+v", in.Key, r)
+		}
+		r, _, _ = job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: ok, Instance: &in})
+		if r.Skipped != (in.Matrix.Get().(map[string]any)["os"] == "mac") {
+			t.Errorf("%s: %+v", in.Key, r)
+		}
+	}
+}
+
+// Ready reads a job's runs-on:, resources:, retry:, timeout: and
+// working-directory: as the format writes them, with the design's defaults
+// for a retry:.
+func TestReadyValues(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      target:
+        type: string
+        default: ""
+jobs:
+  group:
+    runs-on: ${{ 'gpus' }}
+    resources: {cpu: 0.25, memory: 1.5Gi, gpu: "2"}
+    retry: {reasons: [worker-lost]}
+    timeout: 2h
+    working-directory: /scratch
+    steps: [{run: "true"}]
+  env:
+    runs-on:
+      environment: {cluster: owner/hpc, name: large}
+      params: {walltime: "01:00:00"}
+    resources: {cpu: 4, memory: "1000"}
+    retry: {reasons: [worker-lost], max-retries: 5, interval: 5m}
+    steps: [{run: "true"}]
+  target:
+    runs-on:
+      mode: worker
+      targetId: abc
+      newWorker: true
+    resources: {cpu: 1500m, memory: 2k}
+    timeout: ${{ 300 }}
+    steps: [{run: "true"}]
+  ssh:
+    ssh:
+      remoteHost: ${{ 'host' }}
+      disconnect-timeout: 10
+    steps: [{run: "true"}]
+  none:
+    runs-on: ${{ inputs.target }}
+    steps: [{run: "true"}]
+`, nil)
+	run := runValues(t, p, nil)
+	for name, want := range map[string]string{
+		"group":  `{"target":{"group":"gpus"},"resources":{"milliCPU":250,"memory":1610612736,"gpu":2},"retry":{"reasons":["worker-lost"],"maxRetries":3,"intervalSeconds":60},"timeoutSeconds":7200,"workingDirectory":"/scratch"}`,
+		"env":    `{"target":{"environment":{"cluster":"owner/hpc","name":"large","params":{"walltime":"01:00:00"}}},"resources":{"milliCPU":4000,"memory":1000},"retry":{"reasons":["worker-lost"],"maxRetries":5,"intervalSeconds":300}}`,
+		"target": `{"target":{"computeTarget":{"mode":"worker","targetId":"abc","newWorker":true}},"resources":{"milliCPU":1500,"memory":2000},"timeoutSeconds":300}`,
+		"ssh":    `{"target":{"inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":{"disconnect-timeout":10,"remoteHost":"host"}}}}`,
+		"none":   `{}`,
+	} {
+		r, diags, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run})
+		if err != nil || len(diags) > 0 || r.Job == nil {
+			t.Fatalf("%s: %+v, %v, %v", name, r, diags, err)
+		}
+		rj := *r.Job
+		data, err := json.Marshal(struct {
+			Target           plan.Target         `json:"target,omitzero"`
+			Resources        plan.Resources      `json:"resources,omitzero"`
+			Retry            *plan.ReadyJobRetry `json:"retry,omitzero"`
+			TimeoutSeconds   int64               `json:"timeoutSeconds,omitzero"`
+			WorkingDirectory string              `json:"workingDirectory,omitempty"`
+		}{rj.Target, rj.Resources, rj.Retry, rj.TimeoutSeconds, rj.WorkingDirectory}, json.Deterministic(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Errorf("%s:\n%s\nwant\n%s", name, data, want)
+		}
+	}
+}
+
+// A value that doesn't fit its key is a problem with the job, which shows
+// the value unless it was made from a variable or a password.
+func TestReadyProblems(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      text: {type: string, default: lots}
+jobs:
+  bad:
+    runs-on: ${{ inputs.text == 'lots' && 5 }}
+    resources:
+      cpu: ${{ inputs.text }}
+      memory: 8GB
+      gpu: ${{ 1.5 }}
+    retry:
+      reasons: [worker-lost]
+      max-retries: ${{ inputs.text }}
+      interval: ${{ inputs.text }}
+    timeout: ${{ -1 }}
+    working-directory: ${{ 1 }}
+    steps: [{run: "true"}]
+  private:
+    resources:
+      memory: ${{ vars.mem }}
+    timeout: ${{ vars.mem }}
+    steps: [{run: "true"}]
+  failing:
+    if: ${{ fromJSON(vars.mem) }}
+    steps: [{run: "true"}]
+`, map[string]any{"vars": map[string]any{"mem": "lots"}})
+	run := runValues(t, p, map[string]string{"mem": "lots"})
+	for name, want := range map[string][]string{
+		"bad": {
+			"count_invalid /jobs/bad/retry/max-retries \"lots\"",
+			"duration_invalid /jobs/bad/retry/interval \"lots\"",
+			"duration_invalid /jobs/bad/timeout -1",
+			"resources_invalid /jobs/bad/resources/cpu \"lots\"",
+			"resources_invalid /jobs/bad/resources/gpu 1.5",
+			"resources_invalid /jobs/bad/resources/memory \"8GB\"",
+			"runs_on_invalid /jobs/bad/runs-on 5",
+			"wrong_type /jobs/bad/working-directory",
+		},
+		"private": {
+			"duration_invalid /jobs/private/timeout ***",
+			"resources_invalid /jobs/private/resources/memory ***",
+		},
+		"failing": {"from_json_invalid /jobs/failing/if"},
+	} {
+		r, diags, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run})
+		if err != nil || r != nil {
+			t.Errorf("%s: %+v, %v", name, r, err)
+		}
+		if got := codes(diags); !slices.Equal(got, want) {
+			t.Errorf("%s: %q, want %q", name, got, want)
+		}
+		if name == "failing" && diags[0].Params["text"] != problems.Masked {
+			t.Errorf("failing shows %v", diags[0].Params)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := job(t, p, "bad").Ready(ctx, plan.ReadyInput{Run: run}); !errors.Is(err, context.Canceled) {
+		t.Errorf("a done context: %v", err)
+	}
+}
+
+// Step evaluates the job's env:, then the step's if:, its env: and the
+// rest of it, with format 1's defaults, and gives the values it made from a
+// secret to mask.
+func TestStep(t *testing.T) {
+	p := compiled(t, `
+env:
+  W: workflow
+jobs:
+  main:
+    working-directory: /job
+    env:
+      TOKEN: ${{ vars.token }}
+      REGION: ${{ vars.region }}
+    steps:
+      - id: first
+        name: first ${{ matrix.n }}
+        run: echo ${{ env.TOKEN }}
+        env:
+          TOKEN: plain
+          X: ${{ env.TOKEN }}
+        retry: {}
+        ignore-errors: ${{ 'true' }}
+        cleanup: rm -rf ${{ env.W }}
+        working-directory: null
+        timeout: 1m
+        shell: sh {0}
+      - run: echo ${{ steps.first.outputs.o }} ${{ needs.main.outputs.o }} ${{ env.TOKEN }}
+        if: failure()
+        working-directory: ""
+        ssh:
+          remoteHost: h
+      - run: ${{ fromJSON(steps.first.outputs.o) }}
+      - uses: workflow/mine
+        with:
+          a: ${{ env.REGION }}
+          n: [1, "${{ job.attempt }}"]
+        if: always()
+`, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "region": "eu"}})
+	run := runValues(t, p, map[string]string{"token": "s3cret", "region": "eu"})
+	run.Private = []string{}
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil || ready.Job == nil {
+		t.Fatal(err)
+	}
+	rj := ready.Job
+	state := plan.JobState{Run: job(t, p, "main").Reads(run), Job: plan.JobContext{Name: "main", Key: "main", Attempt: 1}}
+	s, diags, err := rj.Step(t.Context(), 0, state)
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	data, err := json.Marshal(s, json.Deterministic(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"s3cret"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"cleanup":"rm -rf workflow","masked":["s3cret"]}`; string(data) != want {
+		t.Errorf("step 0:\n%s\nwant\n%s", data, want)
+	}
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"o": "1"}}}
+	state.Masked = []string{"secret-ish"}
+	if s, _, _ := rj.Step(t.Context(), 1, state); s == nil || !s.Skipped {
+		t.Errorf("step 1 after a success: %+v", s)
+	}
+	state.Steps[0].Outcome = plan.OutcomeFailure
+	s, diags, err = rj.Step(t.Context(), 1, state)
+	if err != nil || len(diags) > 0 || s.Skipped {
+		t.Fatal(s, diags, err)
+	}
+	if s.Run != "echo 1 1 s3cret" || s.WorkingDirectory != "/job" || s.SSH == nil || s.SSH.SSH.Get().(map[string]any)["remoteHost"] != "h" ||
+		!slices.Equal(s.Masked, []string{"s3cret", "echo 1 1 s3cret"}) {
+		t.Errorf("step 1: %+v", s)
+	}
+	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
+	// A step's outputs are read as written, so a problem with one shows
+	// it masked.
+	state.Steps[0].Outputs["o"] = "a secret-ish value"
+	state.Steps[0].Outcome = plan.OutcomeSuccess
+	s, diags, _ = rj.Step(t.Context(), 2, state)
+	if s != nil || !slices.Equal(codes(diags), []string{"from_json_invalid /jobs/main/steps/2/run"}) || !strings.Contains(fmt.Sprint(diags[0].Params["text"]), "a *** value") || strings.Contains(fmt.Sprint(diags), "secret-ish") {
+		t.Errorf("step 2: %+v, %v", s, diags)
+	}
+	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeFailure})
+	s, diags, err = rj.Step(t.Context(), 3, state)
+	if err != nil || len(diags) > 0 || s.Uses != "workflow/mine" || fmt.Sprint(s.With.Get()) != "map[a:eu n:[1 1]]" {
+		t.Errorf("step 3: %+v, %v, %v", s, diags, err)
+	}
+	for i, n := range map[int]int{-1: 0, 4: 4, 2: 1} {
+		state.Steps = make([]plan.StepResult, n)
+		if _, _, err := rj.Step(t.Context(), i, state); err == nil {
+			t.Errorf("step %d with %d results before it", i, n)
+		}
+	}
+}
+
+// End gives a job's outputs, with what holds a secret masked, and a
+// warning that names each.
+func TestEnd(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - id: a
+        run: "true"
+    outputs:
+      plain: ${{ steps.a.outputs.x }}
+      holds: ${{ steps.a.outputs.y }}
+      made: ${{ length(vars.token) }}
+      empty: ${{ vars.token == 'x' && 'yes' || '' }}
+      fails: ${{ fromJSON(steps.a.outputs.y) }}
+`, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
+	run := runValues(t, p, map[string]string{"token": "s3cret"})
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{
+		Run: run, Masked: run.Masked(),
+		Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1", "y": "a s3cret"}}},
+	}
+	outputs, diags, err := ready.Job.End(t.Context(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(outputs) != "map[empty: holds:a *** made:*** plain:1]" {
+		t.Errorf("outputs %v", outputs)
+	}
+	want := []string{
+		"from_json_invalid /jobs/main/outputs/fails",
+		"output_masked /jobs/main/outputs/holds",
+		"output_masked /jobs/main/outputs/made",
+	}
+	if got := codes(diags); !slices.Equal(got, want) {
+		t.Errorf("diagnostics %q, want %q", got, want)
+	}
+	if strings.Contains(fmt.Sprint(diags), "s3cret") {
+		t.Errorf("a diagnostic shows the secret: %v", diags)
+	}
+	state.Steps = nil
+	if _, _, err := ready.Job.End(t.Context(), state); err == nil {
+		t.Error("End without each step's result")
+	}
+}
+
+// Expand marks its instances private and secret as the strategy read, and
+// keeps what it read out of its problems. It looks at a bounded number of
+// combinations, and stops when its context is done.
+func TestExpand(t *testing.T) {
+	strategy := func(matrix any) *plan.Job {
+		return &plan.Job{Name: "j", Path: "/jobs/j", Strategy: &plan.Strategy{Matrix: mustValue(t, matrix)}}
+	}
+	scope := plan.NewScope(plan.PhaseStrategy, plan.Contexts{Run: plan.RunValues{
+		Vars: map[string]string{"list": "[1,2]", "text": "abc"}, Inputs: plan.DataOf(map[string]any{"n": int64(2)}), Secrets: []string{"vars.list"},
+	}})
+	ctx := t.Context()
+	x, err := plan.Expand(ctx, strategy(map[string]any{"n": "${{ fromJSON(vars.list) }}"}), scope, plan.Limits{})
+	if err != nil || !x.Instances[0].Private || !x.Instances[1].Secret {
+		t.Errorf("from a secret: %+v, %v", x, err)
+	}
+	x, err = plan.Expand(ctx, strategy(map[string]any{"n": "${{ 1 range inputs.n + 1 }}"}), scope, plan.Limits{})
+	if err != nil || x.Instances[0].Private || x.Instances[1].Secret {
+		t.Errorf("from an input: %+v, %v", x, err)
+	}
+	_, err = plan.Expand(ctx, strategy(map[string]any{"n": "${{ vars.text }}"}), scope, plan.Limits{})
+	if xe, ok := errors.AsType[*plan.ExpandError](err); !ok || xe.Params["value"] != problems.Masked || xe.Params["key"] != "n" {
+		t.Errorf("a variable's text: %v", err)
+	}
+	_, err = plan.Expand(ctx, strategy(map[string]any{"n": "${{ fromJSON(vars.text) }}"}), scope, plan.Limits{})
+	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Params["text"] != problems.Masked {
+		t.Errorf("a variable's text that isn't JSON: %v", err)
+	}
+	_, err = plan.Expand(ctx, strategy(map[string]any{"n": "${{ needs.a.outputs.b }}"}), plan.NewScope(plan.PhaseStart, plan.Contexts{}), plan.Limits{})
+	if ue, ok := errors.AsType[*expr.UnknownError](err); !ok || ue.Name != "needs" {
+		t.Errorf("needs at Start: %v", err)
+	}
+	// Combinations that entries of two keys exclude, more of them than
+	// Expand looks at.
+	var values, excludes []any
+	for i := range 128 {
+		values = append(values, int64(i))
+		for j := range 128 {
+			excludes = append(excludes, map[string]any{"a": int64(i), "b": int64(j)})
+		}
+	}
+	big := map[string]any{"a": values, "b": values, "c": values, "exclude": excludes}
+	_, err = plan.Expand(ctx, strategy(big), scope, plan.Limits{})
+	if xe, ok := errors.AsType[*plan.ExpandError](err); !ok || xe.Kind != problems.MatrixTooLarge {
+		t.Errorf("a matrix of more combinations than Expand looks at: %v", err)
+	}
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := plan.Expand(done, strategy(map[string]any{"n": []any{1}}), scope, plan.Limits{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("a done context: %v", err)
+	}
+	if _, err := plan.Expand(ctx, &plan.Job{Name: "j"}, scope, plan.Limits{}); err == nil {
+		t.Error("a job without a strategy")
+	}
+}
