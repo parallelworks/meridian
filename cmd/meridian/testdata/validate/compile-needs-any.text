@@ -1,0 +1,2 @@
+$ meridian validate --format text ../../conformance/compile/needs-any/workflow.yaml
+exit status 0

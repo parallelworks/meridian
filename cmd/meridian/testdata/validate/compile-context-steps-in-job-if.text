@@ -1,0 +1,3 @@
+$ meridian validate --format text ../../conformance/compile/context-steps-in-job-if/workflow.yaml
+../../conformance/compile/context-steps-in-job-if/workflow.yaml:3:13: error: The context steps isn't known yet: this is evaluated before the job's steps run. (context_not_known)
+exit status 1

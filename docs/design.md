@@ -1529,15 +1529,42 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian worker`, `meridian relay` | Started by backends, not by people. |
 
 Execution groups and variables live in Meridian's config directory, and
-`--group` picks a group. A built-in `local` group needs no config. Groups
-are never read from the repository a workflow comes from, so cloning a
-workflow can't send its jobs to your SSH hosts.
+`--group` picks a group. A built-in `local` group needs no config: one
+member, this machine, which names host isolation explicitly, and which a
+group of the same name in the config replaces. Groups are never read from
+the repository a workflow comes from, so cloning a workflow can't send its
+jobs to your SSH hosts.
+
+- **`groups.yaml`** holds each group by name, with its members in order:
+  each one's backend, its settings, its isolation, the resources it offers
+  (`cpu: 4`, `memory: 8Gi`, `gpu: 1`), and its walltime limit, margin and
+  default timeout.
+- **`variables.yaml`** holds `org` and `vars`. A plain variable is its
+  value, and any variable can instead name an environment variable or a
+  file that holds it. A secret one is marked `secret: true`, and always
+  names where its value is, which is read only as a run starts.
+
+Meridian refuses either file if another user can change it, and the
+variables file if another user can read it, since people keep secrets in
+plain variables too.
 
 The database, the key that wraps secret records, and logs live in
-Meridian's state directory. SQLite can't lock reliably on a network
-filesystem, which is where home directories on clusters often are, so
-Meridian refuses to open a database there and says how to choose a local
-path.
+Meridian's state directory, which only its user can read. SQLite can't lock
+reliably on a network filesystem, which is where home directories on
+clusters often are, so Meridian refuses to open a database there and says
+how to choose a local path. On Linux the directories are the XDG base
+directories' `meridian`, as `~/.config/meridian` and
+`~/.local/state/meridian`; on macOS both are
+`~/Library/Application Support/Meridian`. `MERIDIAN_CONFIG_DIR`,
+`MERIDIAN_STATE_DIR` and `MERIDIAN_CACHE_DIR` choose others, and the cache
+directory holds copies of the repositories that `uses:` names.
+
+`meridian validate` writes each error and warning as compilers do,
+`file:line:column: severity: message (code)`, or with `--format json` as
+an API sends them ([Compiling](#compiling)): a workflow with errors is an
+RFC 9457 validation problem, with its warnings beside them. It exits 0
+for a workflow without errors, 1 for one with, and 2 when it couldn't
+compile it.
 
 ## Editors and web UIs
 
