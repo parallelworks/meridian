@@ -120,6 +120,13 @@ func (r *inputResolver) resolve() {
 		f.seq = i
 	}
 	r.checkSyntax(append(make([]string, 0, 16), definitionsPath...), defs)
+	// The format drops the keys it doesn't define, but every expression in
+	// the input definitions must parse, theirs too.
+	for path, v := range r.doc.Dropped() {
+		if len(path) > len(definitionsPath) && slices.Equal(path[:len(definitionsPath)], definitionsPath) {
+			r.checkSyntax(path, v)
+		}
+	}
 	for _, f := range r.fields {
 		r.markPassword(f)
 	}

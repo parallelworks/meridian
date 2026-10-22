@@ -393,7 +393,9 @@ ACTIVATE's launch form and its backend do together:
   of the rows, since which one depends on how many there are.
 - **Syntax.** Every expression in the input definitions must parse, in a
   default, an option, a label or anywhere else, whether or not the run
-  evaluates it. A syntax error is reported once, where it is.
+  evaluates it, and in a key the format doesn't define, which is a warning
+  and is otherwise ignored, too: ACTIVATE evaluates every string there. A
+  syntax error is reported once, where it is.
 - **A form's text.** A form sends the text of an expression it can't
   evaluate itself, such as a default that reads a secret. A submitted value
   that is exactly the text of an input's default means the default. So does
