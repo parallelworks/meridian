@@ -304,8 +304,13 @@ func TestVariablesNeverInPlans(t *testing.T) {
 				continue
 			}
 			form := compile.FormValues(doc, c.Inputs, opts)
-			if strings.Contains(fmt.Sprint(form), variableSentinel) {
-				forms++
+			forms += strings.Count(fmt.Sprint(form), variableSentinel)
+			// A form sends what the person typed, which the compiler
+			// compares with what its default gives.
+			for k, v := range c.Inputs {
+				if s, isText := v.(string); isText && !strings.Contains(s, "${{") && form[k] == nil {
+					t.Errorf("%s: the form doesn't send %s", c.Name, k)
+				}
 			}
 			type run struct {
 				submitted map[string]any

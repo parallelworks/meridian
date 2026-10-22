@@ -60,11 +60,17 @@ type Inputs struct {
 	// Secrets are the values of password inputs, by their path in the
 	// values, such as k8s.token, or creds.0.pass for a password field of a
 	// list's first row; and of the other submitted values that are kept as
-	// passwords are, as they can hold one or a variable's value: one for an
-	// input the workflow doesn't define, named as a password field, and one
-	// in the place of a default that reads a password or a variable that
-	// isn't what the default gives. The plan doesn't hold them.
+	// passwords are, as they can hold one: one for an input the workflow
+	// doesn't define, named as a password field, and one in the place of a
+	// default that reads a password or a secret variable that isn't what the
+	// default gives. The plan doesn't hold them.
 	Secrets map[string]any
+	// Private are the values, by their paths, that the plan doesn't hold,
+	// though they aren't secrets: each in the place of a default that reads
+	// an organization or user variable that isn't a secret, and no
+	// password, that isn't what the default gives. They are kept as a
+	// variable's value is, and aren't masked.
+	Private map[string]any
 }
 
 // Options are what the compiler reads besides the workflow.
@@ -93,7 +99,7 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // docs/design.md describes. It reports every problem it finds.
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
-	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets}, listed(r.diags)
+	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets, Private: r.private}, listed(r.diags)
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
@@ -112,6 +118,7 @@ func newInputResolver(doc *format.Document, submitted map[string]any, opts Optio
 		budget:       expr.Scope{}.Budgeted(),
 		values:       jsonvalue.CloneMap(submitted),
 		secrets:      map[string]any{},
+		private:      map[string]any{},
 		secretsLater: map[string]bool{},
 		marks:        expr.NewMarks([]string{"org"}, []string{"vars"}),
 	}
@@ -243,6 +250,33 @@ type candidate struct {
 	option, each bool
 }
 
+// A heldPart is a part of the values, at path, in the value of the input
+// in, that the plan doesn't hold (holdPath), and how it is kept.
+type heldPart struct {
+	in   *field
+	path []string
+	kind holding
+}
+
+// A holding is how a value the plan doesn't hold is kept.
+type holding int
+
+const (
+	// heldSecret is a value kept as a secret, as a password's is: one
+	// that can hold a password where the compiler can't find it.
+	heldSecret holding = iota
+	// heldDerived is a value kept as a secret in the place of what is made
+	// from a password or a secret variable, that isn't what makes it: it
+	// can be made from one, or not, and is masked as what is made from a
+	// secret is.
+	heldDerived
+	// heldPrivate is a value in the place of what is made from an
+	// organization or user variable that isn't a secret, and no password,
+	// that isn't what makes it: it is private, as such a variable's value
+	// is, and isn't masked.
+	heldPrivate
+)
+
 // An evaluation is a part of a field's value, at path in it, that the
 // compiler evaluated from raw, the workflow's value, or that a form
 // evaluated from it, which a default, a form's text or a comparison gave.
@@ -290,20 +324,29 @@ type inputResolver struct {
 	// passwords are the password inputs, and the password fields of lists'
 	// rows; unknownSecrets the paths of values submitted for inputs the
 	// workflow doesn't define that are taken for passwords; and held the
-	// paths of the other values that are kept as secrets (hold): a plan
-	// holds none of their values, which are among the secrets.
+	// other parts of the values kept out of the plan (holdPath), which are
+	// among the secrets or private (keepHeld). derived names those among
+	// the secrets that can be made from a secret, and private holds the
+	// values of the private ones, by their paths.
 	passwords      []*field
 	unknownSecrets [][]string
-	held           [][]string
+	held           []heldPart
+	derived        map[string]bool
+	private        map[string]any
 	// taint holds the paths in the values, as patterns with * for a row's
-	// index, whose values can read a variable or a password (taintInputs).
-	taint patterns
+	// index, whose values can read a variable or a password, and
+	// secretTaint those whose values can read a password or a secret
+	// variable (taintInputs).
+	taint, secretTaint patterns
 	// compareScope holds the budget that comparing what a form sent with
 	// what made it spends (compare): a group of its own, so that what it
 	// spends doesn't decide the run's shape. comparisons holds what each
 	// string compared gave, by its location and the row index it read.
 	compareScope *expr.Scope
 	comparisons  map[string]comparison
+	// compareSlow is set once a comparison runs out of the group's time,
+	// which is reported once.
+	compareSlow bool
 	// evaluated holds the parts of the values that evaluations gave, by the
 	// patterns (reach.Patterns) of the paths of the values they read.
 	evaluated reach.Trie[*evaluation]
@@ -558,16 +601,16 @@ func (r *inputResolver) marked(path []string) bool {
 }
 
 // taintInputs finds the paths in the values whose values can read a
-// variable or a password, from the input definitions alone, before any is
+// variable or a password, and those whose values can read a password or a
+// secret variable, from the input definitions alone, before any is
 // evaluated: password fields', values submitted for inputs the workflow
 // doesn't define that are taken for passwords, and those of the strings in
-// defaults, and of options, whose expressions can read one (tainted), until
-// there are no more. A row's index is * in them.
+// defaults, and of options, that can read one (reads), until there are no
+// more. A row's index is * in them.
 func (r *inputResolver) taintInputs() {
 	type place struct {
-		path  []string
-		exprs []*expr.Expr
-		done  bool
+		path, loc         []string
+		tainted, secretly bool
 	}
 	var places []*place
 	var walk func(fields []*field, prefix []string)
@@ -576,20 +619,17 @@ func (r *inputResolver) taintInputs() {
 			path := slices.Concat(prefix, f.path)
 			if f.typ == "password" {
 				r.taint.add(path)
+				r.secretTaint.add(path)
 			}
 			rows := f.typ == "list"
 			exprStrings(f.def["default"], appendPath(f.loc, "default"), nil, func(loc, at []string) {
 				if rows && len(at) > 0 {
 					at = slices.Concat([]string{"*"}, at[1:])
 				}
-				if exprs, err := r.workflow.Exprs(loc); err == nil {
-					places = append(places, &place{path: slices.Concat(path, at), exprs: exprs})
-				}
+				places = append(places, &place{path: slices.Concat(path, at), loc: loc})
 			})
 			for _, o := range f.findOptions().exprs {
-				if exprs, err := r.workflow.Exprs(o.loc); err == nil {
-					places = append(places, &place{path: path, exprs: exprs})
-				}
+				places = append(places, &place{path: path, loc: o.loc})
 			}
 			if defs, loc := f.rowInputs(); defs != nil {
 				walk(r.template(defs, loc).fields, appendPath(path, "*"))
@@ -599,13 +639,18 @@ func (r *inputResolver) taintInputs() {
 	walk(r.fields, nil)
 	for _, path := range r.unknownSecrets {
 		r.taint.add(path)
+		r.secretTaint.add(path)
 	}
 	for more := true; more; {
 		more = false
 		for _, p := range places {
-			if !p.done && r.tainted(p.exprs, nil) {
-				p.done, more = true, true
+			if !p.tainted && r.reads(p.loc, nil, false) {
+				p.tainted, more = true, true
 				r.taint.add(p.path)
+			}
+			if !p.secretly && r.reads(p.loc, nil, true) {
+				p.secretly, more = true, true
+				r.secretTaint.add(p.path)
 			}
 		}
 	}
@@ -631,38 +676,136 @@ func exprStrings(v any, loc, at []string, yield func(loc, at []string)) {
 	}
 }
 
-// tainted reports whether exprs, for the list rows at index, or for any
-// row if index is nil, can read a variable or a password: whether they
-// read org or vars, another definition, which can, or a path of the
-// inputs' values whose value can (taintInputs).
-func (r *inputResolver) tainted(exprs []*expr.Expr, index []int) bool {
-	for _, e := range exprs {
-		if e.Relative() {
-			return true
+// reads reports whether what the workflow holds at loc, evaluated for the
+// list rows at index, or for any row if index is nil, can read a variable
+// or a password, or with secret set, a password or a secret variable: the
+// expressions in each of its strings, and in the definitions their
+// relative references reach (relativeLocs), which are evaluated in turn.
+// An expression can read one if it reads org or vars, or a secret
+// variable, or a path of the inputs' values whose value can (taintInputs).
+func (r *inputResolver) reads(loc []string, index []int, secret bool) bool {
+	seen := map[string]bool{}
+	var readsAt func(loc []string) bool
+	readsAt = func(loc []string) bool {
+		key := jsonptr.Format(loc)
+		if seen[key] {
+			return false
 		}
-		for _, ref := range e.Refs() {
-			switch ref.Context {
-			case "org", "vars":
-				return true
-			case "inputs":
-				path := ref.Path
-				if index == nil {
-					path = slices.Clone(path)
-					for i, k := range path {
-						if k == "[index]" {
-							path[i] = "*"
-						}
+		seen[key] = true
+		found := false
+		exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+			exprs, err := r.workflow.Exprs(at)
+			if err != nil || found {
+				return
+			}
+			for _, e := range exprs {
+				if r.readsRefs(e.Refs(), index, secret) {
+					found = true
+					return
+				}
+				for _, rel := range e.Relatives() {
+					if slices.ContainsFunc(r.relativeLocs(at, rel), readsAt) {
+						found = true
+						return
 					}
 				}
-				for p := range reach.Patterns(indexPath(path, index)) {
-					if r.taint.overlaps(p) {
-						return true
+			}
+		})
+		return found
+	}
+	return readsAt(loc)
+}
+
+// readsRefs reports whether refs, for the list rows at index, or for any
+// row if index is nil, can read a variable or a password, or with secret
+// set, a password or a secret variable.
+func (r *inputResolver) readsRefs(refs []expr.Ref, index []int, secret bool) bool {
+	taint := &r.taint
+	if secret {
+		taint = &r.secretTaint
+	}
+	for _, ref := range refs {
+		switch ref.Context {
+		case "org", "vars":
+			if !secret || r.secretVariable(ref) {
+				return true
+			}
+		case "inputs":
+			path := ref.Path
+			if index == nil {
+				path = slices.Clone(path)
+				for i, k := range path {
+					if k == "[index]" {
+						path[i] = "*"
 					}
+				}
+			}
+			for p := range reach.Patterns(indexPath(path, index)) {
+				if taint.overlaps(p) {
+					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+// secretVariable reports whether ref, a reference to org or vars, can read
+// a secret: a variable whose value the caller's contexts don't give, one
+// it names, or any of the context's, for one that names none.
+func (r *inputResolver) secretVariable(ref expr.Ref) bool {
+	vars, ok := r.opts.Contexts[ref.Context].(map[string]any)
+	if !ok {
+		return r.opts.Contexts[ref.Context] != nil
+	}
+	secret := func(v any) bool {
+		_, ok := v.(expr.Unknown)
+		return ok
+	}
+	if unnamed(ref.Path) {
+		for _, v := range vars {
+			if secret(v) {
+				return true
+			}
+		}
+		return false
+	}
+	return secret(vars[ref.Path[0]])
+}
+
+// relativeLocs returns the locations in the workflow of what rel, a
+// relative reference in the string at loc, reaches: where it leads, and a
+// string on the way, which is evaluated and read from. A * or an [index]
+// in its path reaches each key there.
+func (r *inputResolver) relativeLocs(loc []string, rel expr.RelativeRef) [][]string {
+	if rel.Up > len(loc) {
+		return nil
+	}
+	at := [][]string{slices.Clip(loc[:len(loc)-rel.Up])}
+	var out [][]string
+	for _, k := range rel.Path {
+		var next [][]string
+		for _, l := range at {
+			switch v := lookup(r.doc.Value, l).(type) {
+			case string:
+				out = append(out, l)
+			case map[string]any:
+				for key := range jsonvalue.Sorted(v) {
+					if k == "*" || k == "[index]" || k == key {
+						next = append(next, appendPath(l, key))
+					}
+				}
+			case []any:
+				for i := range v {
+					if key := strconv.Itoa(i); k == "*" || k == "[index]" || k == key {
+						next = append(next, appendPath(l, key))
+					}
+				}
+			}
+		}
+		at = next
+	}
+	return append(out, at...)
 }
 
 // patterns holds patterns of paths, with * for any key, to find those a
@@ -967,7 +1110,7 @@ func (r *inputResolver) fillDefaults() {
 			// Its rows aren't known, and so neither are the passwords among
 			// them: all of its value is kept as a secret.
 			if f.typ != "password" && holdsPassword(f.def) {
-				r.holdPath(f.path)
+				r.holdPath(f, f.path, heldSecret)
 			}
 		}
 		r.reportAt(problems.DefaultsReadEachOther, left[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
@@ -976,6 +1119,7 @@ func (r *inputResolver) fillDefaults() {
 		r.compare(f)
 	}
 	r.holdWhole()
+	r.heldParts()
 	r.holdLater()
 }
 
@@ -1082,37 +1226,44 @@ func (r *inputResolver) noteEvaluation(f *field, path, loc []string, raw any) {
 // the run starts, as the expression, if the expression can read a variable
 // or a password, and is data if not. A choice of an option written in the
 // workflow is that option. Any other part, what a form gave before, or what
-// the person typed in its place, is kept as a secret (hold): the plan
-// doesn't hold it, but the run has it. The expressions are evaluated in a
-// group of their own (compareScope), so that comparing spends nothing of
-// what decides the run's shape; one that fails, as one that runs the
-// group's budget out does, gives nothing. Comparing changes no value, so
-// what an expression gives is the same for each candidate it is compared
-// with, at each row index it reads.
+// the person typed in its place, the plan doesn't hold, but the run has
+// (holdPath): it is a secret, masked as what is made from one is, if one of
+// its expressions can read a password or a secret variable, and private,
+// as a variable's value is, if not. A part already evaluated as the run
+// starts, or in one, is left as it is. The expressions are evaluated in a
+// group of their own (evalCompare). Comparing changes no value, so what an
+// expression gives is the same for each candidate it is compared with, at
+// each row index it reads.
 func (r *inputResolver) compare(f *field) {
 	value := lookup(r.values, f.path)
 	for _, c := range f.candidates {
-		if v, _ := jsonptr.Lookup(r.values, slices.Concat(f.path, c.path)); v == nil {
-			continue
-		}
-		gave := make([]comparison, len(c.locs))
-		for i, loc := range c.locs {
-			gave[i] = r.evalCompare(loc, f.index)
-		}
+		var gave []comparison
 		for _, path := range r.parts(f, c) {
+			if f.isText(path) {
+				continue
+			}
+			if gave == nil {
+				gave = make([]comparison, len(c.locs))
+				for i, loc := range c.locs {
+					gave[i] = r.evalCompare(loc, f.index)
+				}
+			}
 			part := lookup(value, path)
 			i := slices.IndexFunc(gave, func(res comparison) bool { return res.ok && sameValue(part, res.v) })
 			switch {
 			case i >= 0:
-				loc := c.locs[i]
-				if exprs, err := r.workflow.Exprs(loc); err == nil && r.tainted(exprs, f.index) {
+				if loc := c.locs[i]; r.reads(loc, f.index, false) {
 					raw := lookup(r.doc.Value, loc)
 					r.noteEvaluation(f, path, loc, raw)
 					r.deferPart(f, path, raw, true)
 				}
 			case c.option && f.findOptions().literal(part):
+			case f.typ == "password" && len(path) == 0:
+				// A password is a secret, whatever made it.
+			case slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, f.index, true) }):
+				r.holdPath(f.holder(), slices.Concat(f.path, path), heldDerived)
 			default:
-				r.hold(f, path)
+				r.holdPath(f.holder(), slices.Concat(f.path, path), heldPrivate)
 			}
 		}
 	}
@@ -1126,8 +1277,13 @@ type comparison struct {
 }
 
 // evalCompare evaluates what is at loc in the workflow, as evalAt does, for
-// the list rows at index, in the group that comparisons share (compare),
-// once for each row index that what it reads depends on.
+// the list rows at index, in the group that comparisons share, once for
+// each row index that what it reads depends on. The group is one of its
+// own (compareScope), so that comparing spends nothing of what decides the
+// run's shape. A comparison its budget stops gives nothing, as one that
+// fails does, and so what is compared is held, the same each time for the
+// same workflow and values; but running out of the group's time, which
+// depends on how fast the machine is, is an error.
 func (r *inputResolver) evalCompare(loc []string, index []int) comparison {
 	exprs, err := r.workflow.Exprs(loc)
 	if err != nil {
@@ -1148,6 +1304,10 @@ func (r *inputResolver) evalCompare(loc []string, index []int) comparison {
 	scope := *r.compareScope
 	scope.Contexts, scope.Marked, scope.Index = base.Contexts, base.Marked, index
 	v, err := r.workflow.Evaluator(scope).Eval(loc)
+	if be, ok := errors.AsType[*expr.BudgetError](err); ok && be.Kind == problems.ExpressionsTooSlow && !r.compareSlow {
+		r.compareSlow = true
+		r.reportError(loc, 0, err)
+	}
 	// A copy, as the value can be part of what the evaluation read.
 	res := comparison{jsonvalue.Clone(v), err == nil}
 	if r.comparisons == nil {
@@ -1165,29 +1325,76 @@ func readsIndex(e *expr.Expr) bool {
 	})
 }
 
-// hold keeps the part of f's value at path out of the plan (holdPath). A
-// password's value is one of the secrets already.
-func (r *inputResolver) hold(f *field, path []string) {
-	if f.typ != "password" || len(path) > 0 {
-		r.holdPath(slices.Concat(f.path, path))
-	}
-}
-
-// holdPath keeps the value at path in the inputs' values out of the plan,
-// among the secrets (keepHeld), as a password's value is, and what reads it
-// reads a password. The plan holds null in place of a list's item, and
-// the run's start puts the value in its place.
-func (r *inputResolver) holdPath(path []string) {
+// holdPath keeps the value at path in the inputs' values, in the value of
+// the input in, out of the plan, as kind says, and what reads it reads a
+// variable or a password. Once every part evaluated as the run starts is
+// known, a value with such parts in it is held but for them (heldParts).
+// The plan holds null in place of a list's item, and the run's start puts
+// the value in its place.
+func (r *inputResolver) holdPath(in *field, path []string, kind holding) {
 	r.mark(path)
-	r.held = append(r.held, path)
+	r.held = append(r.held, heldPart{in, path, kind})
 }
 
-// keepHeld puts the values that are kept as secrets (hold) among the
-// secrets, once they are checked: those of the inputs that have them.
+// heldParts makes the values held the parts of them that aren't evaluated
+// as the run starts: a value in a part that is is left to it, and of a
+// value with such parts in it, each of its keys or items that isn't one is
+// held instead.
+func (r *inputResolver) heldParts() {
+	var out []heldPart
+	var split func(p heldPart, at []string)
+	split = func(p heldPart, at []string) {
+		rel := at[len(p.in.path):]
+		in := false
+		for _, part := range p.in.partsAround(rel) {
+			if len(part.path) <= len(rel) {
+				return
+			}
+			in = true
+		}
+		if !in {
+			out = append(out, heldPart{p.in, at, p.kind})
+			return
+		}
+		switch v := lookup(r.values, at).(type) {
+		case map[string]any:
+			for k := range jsonvalue.Sorted(v) {
+				split(p, appendPath(at, k))
+			}
+		case []any:
+			for i := range v {
+				split(p, appendPath(at, strconv.Itoa(i)))
+			}
+		}
+	}
+	for _, p := range r.held {
+		split(p, p.path)
+	}
+	r.held = out
+}
+
+// keepHeld puts the values kept out of the plan (holdPath) among the
+// secrets, or among the private values, once they are checked: those of
+// the inputs that have them. derived names the secrets that are what can be
+// made from one.
 func (r *inputResolver) keepHeld() {
-	for _, path := range r.held {
-		if v, ok := jsonptr.Lookup(r.values, path); ok && v != nil {
-			r.secrets[strings.Join(path, ".")] = v
+	for _, p := range r.held {
+		v, ok := jsonptr.Lookup(r.values, p.path)
+		if !ok || v == nil {
+			continue
+		}
+		key := strings.Join(p.path, ".")
+		switch p.kind {
+		case heldPrivate:
+			r.private[key] = v
+		case heldDerived:
+			if r.derived == nil {
+				r.derived = map[string]bool{}
+			}
+			r.derived[key] = true
+			fallthrough
+		default:
+			r.secrets[key] = v
 		}
 	}
 }
@@ -1312,7 +1519,7 @@ func (r *inputResolver) collectRows(f *field) []*field {
 	// was given.
 	secret := holdsPassword(f.def) && !f.startsLater(f.path, false)
 	if secret && f.in != nil && value != nil && !isList {
-		r.holdPath(f.path)
+		r.holdPath(f.holder(), f.path, heldSecret)
 		return nil
 	}
 	t := r.template(defs, loc)
@@ -1321,7 +1528,7 @@ func (r *inputResolver) collectRows(f *field) []*field {
 		rowPath := appendPath(f.path, strconv.Itoa(i))
 		if _, ok := row.(map[string]any); !ok {
 			if secret && row != nil && !f.startsLater(rowPath, false) {
-				r.holdPath(rowPath)
+				r.holdPath(f.holder(), rowPath, heldSecret)
 			}
 			continue
 		}
@@ -1337,7 +1544,7 @@ func (r *inputResolver) collectRows(f *field) []*field {
 			out = append(out, c)
 			if v := lookup(r.values, c.path); c.container && !c.flatten && v != nil && holdsPassword(c.def) && !c.startsLater(c.path, false) {
 				if _, ok := v.(map[string]any); !ok {
-					r.holdPath(c.path)
+					r.holdPath(c.holder(), c.path, heldSecret)
 				}
 			}
 		}
@@ -1456,10 +1663,7 @@ func (r *inputResolver) findTexts(f *field) {
 		f.reads = append(f.reads, exprs...)
 	}
 	f.candidates = slices.DeleteFunc(candidates, func(c candidate) bool {
-		return !slices.ContainsFunc(c.locs, func(loc []string) bool {
-			exprs, err := r.workflow.Exprs(loc)
-			return err == nil && r.tainted(exprs, f.index)
-		})
+		return !slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, f.index, false) })
 	})
 }
 
@@ -1659,18 +1863,12 @@ func (r *inputResolver) holdLater() {
 		if i := slices.IndexFunc(f.later, func(p laterPart) bool { return len(p.path) == 0 }); i >= 0 {
 			held = f.later[i].v
 		}
-		// What is kept as a secret isn't held, and the run's start puts it
-		// in its place; a value kept as a secret whole is all of it.
-		whole := false
-		for _, path := range r.held {
-			whole = whole || slices.Equal(path, f.path)
-			if len(path) > len(f.path) && slices.Equal(path[:len(f.path)], f.path) {
-				clearPath(held, path[len(f.path):])
+		// What is kept out of the plan (holdPath) isn't held either, and
+		// the run's start puts it in its place.
+		for _, p := range r.held {
+			if p.in == f {
+				clearPath(held, p.path[len(f.path):])
 			}
-		}
-		if whole {
-			f.variable = true
-			continue
 		}
 		f.dflt = plan.Literal(held)
 		if slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
@@ -2096,7 +2294,9 @@ func (r *inputResolver) kept() map[string]any {
 		left = append(left, f.path)
 	}
 	left = append(left, r.unknownSecrets...)
-	left = append(left, r.held...)
+	for _, p := range r.held {
+		left = append(left, p.path)
+	}
 	if len(left) == 0 {
 		return r.values
 	}
@@ -2191,11 +2391,6 @@ func (r *inputResolver) checkKnown(f *field, passwords []*field) {
 	}
 	for _, c := range passwords {
 		setIn(known, c.path[len(f.path):], nil)
-	}
-	for _, path := range r.held {
-		if len(path) > len(f.path) && slices.Equal(path[:len(f.path)], f.path) {
-			setIn(known, path[len(f.path):], nil)
-		}
 	}
 	what, value, at := notJSON(known)
 	if what == "" {

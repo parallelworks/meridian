@@ -66,6 +66,20 @@ type Run struct {
 	// receives them when it is claimed. As the run starts, each password's
 	// value is put in the inputs' values at its path.
 	Secrets []string `json:"secrets,omitempty"`
+	// Derived names the secrets, among Secrets, that are values the run was
+	// given in the place of what is made from a password or a secret
+	// variable, that aren't what makes it, as a value a person typed over
+	// such a default is: they can be made from a secret, or not, so they are
+	// masked as what is made from a secret is, not as a secret's own text.
+	Derived []string `json:"derived,omitempty"`
+	// Private names the values the run was given that the plan doesn't
+	// hold, though they aren't secrets, by their paths in the inputs'
+	// values: each in the place of what is made from an organization or
+	// user variable that isn't a secret, and no password, that isn't what
+	// makes it. They are kept as a variable's value is, only in the run's
+	// secret record, and aren't masked. As the run starts, each is put in
+	// the inputs' values at its path.
+	Private []string `json:"private,omitempty"`
 	// Variables names the organization and user variables the run reads
 	// that aren't secrets, as in org.region and vars.region, in order. A
 	// context's name alone, org or vars, means the run reads all of it, as

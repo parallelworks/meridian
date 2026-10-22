@@ -16,6 +16,12 @@ on:
       mirror:
         type: string
         default: ${{ ..region.default }}
+      label:
+        type: string
+        default: ${{ vars.REGION }}${{ inputs.label ?? '' }}
+      key:
+        type: string
+        default: ${{ vars.KEY }}
 jobs:
   main:
     steps:

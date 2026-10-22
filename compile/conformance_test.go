@@ -64,6 +64,7 @@ func TestInputsConformance(t *testing.T) {
 			check("inputs", inputs.Values, c.Expect.Inputs)
 			check("deferred", deferredText(t, inputs.Deferred), c.Expect.Deferred)
 			check("secrets", inputs.Secrets, c.Expect.Secrets)
+			check("private", inputs.Private, c.Expect.Private)
 		})
 	}
 }

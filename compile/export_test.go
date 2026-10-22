@@ -20,7 +20,16 @@ func FormValues(doc *format.Document, submitted map[string]any, opts Options) ma
 	r := newInputResolver(&plain, submitted, opts)
 	r.marks = expr.Marks{}
 	r.fill()
-	return r.kept()
+	// What the form sends is the values before the compiler compares them,
+	// less those evaluated as the run starts because they read what the
+	// form can't evaluate either.
+	out := jsonvalue.CloneMap(r.values)
+	for _, f := range r.fields {
+		if f.deferred {
+			deletePath(out, f.path)
+		}
+	}
+	return out
 }
 
 // asText makes each password input that defs, input definitions, define a

@@ -413,11 +413,18 @@ ACTIVATE's launch form and its backend do together:
   the workflow if it is one. Anything else there can be what the form gave
   before the person changed what it read, what it gave a row they moved,
   what it evaluated otherwise than Meridian does, or what the person typed
-  over it, which the compiler can't tell apart: it is kept as a secret, by
-  its path, and the plan doesn't hold it. A list's default rows count for
-  any of its rows, since a person can delete, add and move them. What can
-  read a variable or a password is found from the definitions before
-  anything is evaluated. A default that reads its own input, which a form
+  over it, which the compiler can't tell apart, so the plan doesn't hold
+  it: it is kept by its path, but for the parts in it that are evaluated at
+  Start, and Start puts it in its place. Where the expression can read a
+  password or a secret variable, it is one of the run's secrets, which can
+  be made from one or not, and is masked as what is made from a secret is
+  rather than as a secret's own text; where it can read only variables
+  that aren't secrets, it is private, as their values are, and isn't
+  masked. A list's default rows count for any of its rows, since a person
+  can delete, add and move them. What can read a variable or a password,
+  and what a password or a secret variable, is found from the definitions
+  before anything is evaluated, following relative references to the
+  definitions they read. A default that reads its own input, which a form
   doesn't fill in, gives what the compiler gives it.
 - **Lists.** A list's default is the rows it starts with. Each row, given or
   a default, is a group of the template's fields, which take their defaults
@@ -501,7 +508,8 @@ ACTIVATE's launch form and its backend do together:
   expression in the plan in the same way, its input's whole value, and is
   evaluated at Start, and so does a submitted value that is what such an
   expression gives, as a form sends it; any other submitted value in its
-  place is one of the run's secrets (What a form sends). The compiler
+  place is private, or one of the run's secrets where the variable is one
+  (What a form sends). The compiler
   evaluates it all the same, since what decides the run's shape reads its
   value: the inputs' `hidden`, `ignore` and `optional`, and the jobs'
   `needs`. It checks it against its input's type too, but a problem with
@@ -632,9 +640,15 @@ the secret variables an expression reads, each of a context's when it reads
 every variable of the context, as `vars.*` does; and passwords, by their
 paths in the inputs' values, `password` inputs and the password fields of
 lists' rows, lists whose rows hold one and are evaluated at Start, and
-submitted values that can hold one or a variable's value, such as what a
-form made from one, which are kept as passwords are ([Inputs](#inputs)).
-Their values are in the secret record.
+submitted values that can hold one, such as what a form made from one,
+which are kept as passwords are ([Inputs](#inputs)). Of those, it names the
+submitted values in the place of what is made from a secret apart, as
+derived, since they can be made from a secret or not: they are masked as
+what is made from a secret is, rather than as a secret's own text. Their
+values are in the secret record. It names, apart again, the submitted
+values that can hold a variable's value that isn't a secret, but no
+password, which are private, as that value is: the secret record holds
+them, and nothing masks them.
 
 Nor does the plan hold the value of an organization or user variable, secret
 or not, or a value made from one. People keep secrets in plain variables

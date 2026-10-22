@@ -356,6 +356,155 @@ func TestPasswordsNeverInPlansFromActivateForms(t *testing.T) {
 	}
 }
 
+// What a default can read a password through is found to its end, from
+// the definitions alone: a default that reads one that reads one, in any
+// order; an option made from one; a read of each of a group's inputs; and
+// a list's default row, read at another index, as a person can add a row
+// before it. A form's value in such a default's place holds none in the
+// plan.
+func TestTaintFollowsWhatDefaultsRead(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		defs      []string
+		submitted map[string]any
+	}{
+		{
+			"a default that reads a default that reads a password, before them",
+			[]string{
+				"pw: {type: password}",
+				"a: {type: string, default: '${{ inputs.b }}'}",
+				"b: {type: string, default: '${{ inputs.c }}'}",
+				"c: {type: string, default: '${{ inputs.pw }}'}",
+			},
+			map[string]any{"pw": sentinel, "a": sentinel, "b": sentinel, "c": sentinel},
+		},
+		{
+			"a default that reads an option made from a password",
+			[]string{"pw: {type: password}", "choice: {type: dropdown, options: ['${{ inputs.pw }}', none]}", "copy: {type: string, default: 'x${{ inputs.choice }}'}"},
+			map[string]any{"pw": sentinel, "choice": sentinel, "copy": "x" + sentinel},
+		},
+		{
+			"a default that reads each of a group's inputs",
+			[]string{"g: {type: group, items: {gp: {type: password}}}", `copy: {type: string, default: '${{ join(inputs.g.*, ",") }}'}`},
+			map[string]any{"g": map[string]any{"gp": sentinel}, "copy": sentinel},
+		},
+		{
+			"a default that reads a list's default row at another index",
+			[]string{"pw: {type: password}", "l: {type: list, template: {v: {type: string}}, default: [{v: '${{ inputs.pw }}'}]}", "copy: {type: string, default: '${{ inputs.l[1].v }}'}"},
+			map[string]any{"pw": sentinel, "l": []any{map[string]any{"v": "added"}, map[string]any{"v": sentinel}}, "copy": sentinel},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), tc.submitted, compile.Options{})
+			if p == nil {
+				t.Fatal(diags)
+			}
+			encoded, err := plan.Encode(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), sentinel) {
+				t.Errorf("the plan holds the password: %s", encoded)
+			}
+		})
+	}
+}
+
+// A value the plan doesn't hold, in which a form's text for an expression
+// that reads a secret is, is held but for that text, which stays the
+// expression for the run's start: the run's start evaluates it, and puts
+// the rest in its place.
+func TestHeldValuesKeepTheirExpressions(t *testing.T) {
+	src := inputs("l: {type: list, default: '${{ fromJSON(org.ROWS) }}', template: {x: {type: string, default: '${{ vars.SECRET }}'}, y: {type: string}}}")
+	opts := compile.Options{Contexts: map[string]any{
+		"org":  map[string]any{"ROWS": `[{"x": "a", "y": "b"}]`},
+		"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}},
+	}}
+	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"l": []any{map[string]any{"x": "${{ vars.SECRET }}", "y": "typed"}}}, opts)
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if got := fmt.Sprint(deferredText(t, inputs.Deferred)["l"]); got != "[map[x:${{ vars.SECRET }}]]" {
+		t.Errorf("l is %s as the run starts, want x's expression", got)
+	}
+	if len(inputs.Private) != 1 || inputs.Private["l.0.y"] != "typed" {
+		t.Errorf("private %v, want l.0.y alone", inputs.Private)
+	}
+}
+
+// A part already held for the run's start as one expression, a list's
+// default row's, isn't kept as a secret because it isn't what another, its
+// row's default, gives.
+func TestPartsHeldForTheStartAreNotSecrets(t *testing.T) {
+	src := inputs(
+		"pw: {type: password}",
+		"other: {type: string, default: o}",
+		"l: {type: list, template: {h: {type: string, default: '${{ inputs.other }}${{ inputs.pw }}'}}, default: [{h: '${{ inputs.pw }}'}]}",
+	)
+	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "l": []any{map[string]any{"h": sentinel}}}, compile.Options{})
+	if len(diags) != 0 || len(inputs.Secrets) != 1 {
+		t.Errorf("secrets %v, %v; want pw's alone", inputs.Secrets, diags)
+	}
+	if got := fmt.Sprint(deferredText(t, inputs.Deferred)["l"]); got != "[map[h:${{ inputs.pw }}]]" {
+		t.Errorf("l is %s as the run starts", got)
+	}
+}
+
+// A value the plan doesn't hold, in the place of what reads a password or a
+// secret variable, is a secret, masked as what is made from one: the plan
+// names it among Secrets and Derived. One in the place of what reads only
+// an organization or user variable that isn't a secret is private, as the
+// variable's value is, and not masked. A password is a secret whatever made
+// it, masked as one.
+func TestHeldValuesAreSecretOrPrivate(t *testing.T) {
+	src := inputs(
+		"pw: {type: password}",
+		"pw2: {type: password, default: '${{ inputs.pw }}'}",
+		"dsn: {type: string, default: 'u:${{ inputs.pw }}'}",
+		"key: {type: string, default: '${{ vars.KEY }}'}",
+		"owner: {type: string, default: '${{ org.OWNER }}'}",
+	)
+	opts := compile.Options{Contexts: map[string]any{
+		"org":  map[string]any{"OWNER": "research"},
+		"vars": map[string]any{"KEY": expr.Unknown{Name: "vars"}},
+	}}
+	submitted := map[string]any{"pw": "a", "pw2": "b", "dsn": "typed", "key": "typed", "owner": "typed"}
+	p, diags := compile.Compile("workflow.yaml", []byte(src), submitted, opts)
+	if p == nil {
+		t.Fatal(diags)
+	}
+	if want := []string{"inputs.dsn", "inputs.key", "inputs.pw", "inputs.pw2"}; !slices.Equal(p.Run.Secrets, want) {
+		t.Errorf("secrets %v, want %v", p.Run.Secrets, want)
+	}
+	if want := []string{"inputs.dsn", "inputs.key"}; !slices.Equal(p.Run.Derived, want) {
+		t.Errorf("derived %v, want %v", p.Run.Derived, want)
+	}
+	if want := []string{"inputs.owner"}; !slices.Equal(p.Run.Private, want) {
+		t.Errorf("private %v, want %v", p.Run.Private, want)
+	}
+	if len(p.Run.Inputs.Get().(map[string]any)) != 0 {
+		t.Errorf("the plan holds %v", p.Run.Inputs.Get())
+	}
+}
+
+// A relative reference reads what it reaches: a value in the place of a
+// default that reads a definition that reads no variable is data, and one
+// in the place of a default that reads a definition that reads a variable
+// isn't held in the plan.
+func TestRelativeReferencesReadWhatTheyReach(t *testing.T) {
+	src := inputs(
+		"plain: {type: string, default: x}",
+		"region: {type: string, default: '${{ org.REGION }}'}",
+		"a: {type: string, default: '${{ ..plain.default }}'}",
+		"b: {type: string, default: '${{ ..region.default }}'}",
+	)
+	opts := compile.Options{Contexts: map[string]any{"org": map[string]any{"REGION": "us-east"}}}
+	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"a": "typed", "b": "typed"}, opts)
+	if len(diags) != 0 || inputs.Values["a"] != "typed" || inputs.Private["b"] != "typed" {
+		t.Errorf("values %v, private %v, %v; want a typed and b private", inputs.Values, inputs.Private, diags)
+	}
+}
+
 // A value submitted for an input the workflow doesn't define, taken for a
 // password, is read as one: a default that reads it is evaluated as the
 // run starts, and so is a value a form sent that is what the default
