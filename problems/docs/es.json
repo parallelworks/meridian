@@ -948,6 +948,13 @@
       "Escribe las salidas en $OUTPUTS con >>, o haz de él un enlace a un archivo regular."
     ]
   },
+  "outputs_removed": {
+    "title": "$OUTPUTS se eliminó mientras se ejecutaba el paso",
+    "why": "El worker guarda $OUTPUTS en un directorio propio, que ningún otro usuario puede cambiar, y lo lee cuando termina el paso. Algo eliminó ese directorio mientras se ejecutaba el paso: el propio paso u otro de tus procesos, como un limpiador de archivos temporales. El worker no confía en lo que haya en su ruta después de eso, así que no lee lo que el paso escribió ahí.",
+    "fix": [
+      "No elimines el directorio en el que está $OUTPUTS, ni lo que lo contiene."
+    ]
+  },
   "log_not_kept": {
     "title": "Registro no guardado completo",
     "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, o cuando el disco está lleno, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
@@ -1445,6 +1452,62 @@
     "why": "La configuración de un miembro se da al controlador de su backend como JSON, que no tiene números que no sean números ni infinitos.",
     "fix": [
       "Escribe el número de la configuración del miembro como uno finito, o como texto entre comillas."
+    ]
+  },
+  "worker_environment_missing": {
+    "title": "Worker iniciado sin lo que reclama",
+    "why": "Un backend inicia meridian worker con la dirección del coordinador en MERIDIAN_COORDINATOR, y el token de arranque del intento en MERIDIAN_BOOTSTRAP_TOKEN, o en un archivo que indica MERIDIAN_BOOTSTRAP_TOKEN_FILE, nunca en su línea de comandos. Sin ellos, el worker no puede reclamar un intento.",
+    "fix": [
+      "Deja que un backend inicie meridian worker: las personas no lo ejecutan."
+    ]
+  },
+  "worker_environment_invalid": {
+    "title": "Worker iniciado con lo que no puede usar",
+    "why": "MERIDIAN_COORDINATOR_KEY_SHA256 debe ser sha256: y 64 dígitos hexadecimales cuando se llega al coordinador por TLS, y no estar definida cuando es un socket Unix; y solo puede definirse una de MERIDIAN_BOOTSTRAP_TOKEN y MERIDIAN_BOOTSTRAP_TOKEN_FILE.",
+    "fix": [
+      "Deja que un backend inicie meridian worker, que las define como debe."
+    ]
+  },
+  "coordinator_peer_refused": {
+    "title": "Socket del coordinador servido por otro usuario",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. En Linux pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
+    "fix": [
+      "Inicia el worker con el socket de un coordinador que ejecutes tú, en un directorio que solo tú puedas cambiar."
+    ]
+  },
+  "coordinator_key_mismatch": {
+    "title": "Servidor sin la clave del coordinador",
+    "why": "Un worker llega a un coordinador por TLS mediante su clave: el backend le da el hash SHA-256 de la clave pública del coordinador, y el worker solo se comunica con un servidor que tenga esa clave, diga lo que diga su certificado. Este servidor tiene otra.",
+    "fix": [
+      "Comprueba que MERIDIAN_COORDINATOR indica el coordinador, o su relay, y que las réplicas del coordinador comparten una clave."
+    ]
+  },
+  "bootstrap_token_refused": {
+    "title": "Token de arranque rechazado",
+    "why": "Un token de arranque reclama un intento, una vez: el coordinador lo rechaza una vez reclamado el intento, por este worker con otra credencial o por otro, o una vez retirada su colocación. El worker termina y no ejecuta nada.",
+    "fix": [
+      "No hay nada que corregir si se canceló el intento; si no, deja que el backend inicie un worker con el token propio del intento."
+    ]
+  },
+  "run_plan_too_new": {
+    "title": "Plan de la ejecución más nuevo de lo que lee el worker",
+    "why": "El plan de una ejecución tiene versión, y un worker solo ejecuta un plan de una versión que lee, para no ejecutar nunca un trabajo sin una parte que no entiende. El coordinador rechazó la reclamación antes de enviar nada de la ejecución. No se ejecutó ningún paso, así que el intento se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "attempt_superseded": {
+    "title": "Intento terminado sin el worker",
+    "why": "Cada informe que envía un worker lleva la credencial del intento, y el coordinador solo lo guarda mientras el intento tiene el trabajo. Otro intento del trabajo sustituyó a este, o el intento terminó sin este worker, como cuando caducó su concesión. El worker detiene los pasos del trabajo, sin sus comandos cleanup:, de los que otro intento podría depender, y termina.",
+    "fix": [
+      "No hay nada que corregir: el coordinador decide cómo terminó el intento y si el trabajo vuelve a ejecutarse."
+    ]
+  },
+  "attempt_lease_lapsed": {
+    "title": "La concesión del intento iba a caducar",
+    "why": "Un trabajo cuyo retry: incluye worker-lost puede volver a ejecutarse mientras este intento quizá siga ejecutándose, aislado, así que su worker lo detiene antes de que caduque su concesión: cuando no la ha renovado durante seis décimas de ella, detiene todos los procesos que inició el intento, y a las nueve décimas ya los ha matado. No se pudo comunicar con el coordinador durante ese tiempo. Su nuevo intento reanuda el trabajo, como pide su retry:.",
+    "fix": [
+      "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y que la concesión del trabajo es lo bastante larga para los cortes que esperas."
     ]
   }
 }

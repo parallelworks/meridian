@@ -88,11 +88,11 @@ func (s *spool) newFile() (*os.File, error) {
 	s.made++
 	name := "log-" + strconv.Itoa(s.made)
 	s.mu.Unlock()
-	f, _, err := s.dir.create(name, os.O_RDWR|os.O_EXCL)
+	f, made, _, err := s.dir.create(name, os.O_RDWR|os.O_EXCL)
 	if err != nil {
 		return nil, err
 	}
-	s.dir.remove(name)
+	made.remove()
 	return f, nil
 }
 

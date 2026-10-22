@@ -135,6 +135,7 @@
   "outputs_too_large": "ステップは $OUTPUTS に {size} バイトを書き込み、上限の {limit} バイトを超えています。",
   "outputs_line_too_long": "$OUTPUTS の行が {limit} バイト以上あるため、形式 1 と同じく、このファイルの出力は 1 つも読み取られません。",
   "outputs_not_file": "ステップが $OUTPUTS に通常のファイル以外のもの（FIFO や、それへのリンクなど）を置いたため、その出力を読み取れません。",
+  "outputs_removed": "$OUTPUTS を含むワーカーのディレクトリがステップの実行中に削除されたため、その後にステップが $OUTPUTS に書き込んだものは失われます。",
   "log_not_kept": "ワーカーはステップのログのうち {size} バイトを保持しませんでした。コーディネーターに接続できない間、コーディネーターが保存していないログは最大 {limit} バイトまでしか保持せず、ディスクがいっぱいになると何も保持しません。",
 
   "workflow_too_large": "ワークフローが {limit} バイトを超えており、サイズの上限を超えています。",
@@ -204,5 +205,14 @@
   "owner_unmapped": "Meridian は {path} を確認できません。そこへ至る途中の {dir} の所有者がユーザー名前空間によって隠されているため、他のユーザーが変更できないことを確かめられません。",
   "path_links_too_many": "パス {path} は {max} 個を超えるシンボリックリンクを経由します。",
   "mount_not_found": "Meridian は /proc/self/mountinfo に {path} を含むマウントを見つけられません。",
-  "member_settings_not_json": "グループ「{group}」のメンバーの settings に、.nan や .inf など JSON で表せない値があります。"
+  "member_settings_not_json": "グループ「{group}」のメンバーの settings に、.nan や .inf など JSON で表せない値があります。",
+
+  "worker_environment_missing": "meridian worker が起動されたときの環境に {variable} が設定されていません。これは meridian worker を起動するバックエンドが設定するものです。",
+  "worker_environment_invalid": "meridian worker が起動されたときの環境では、{variable} が meridian worker の使えない形で設定されています。",
+  "coordinator_peer_refused": "Meridian は試行のトークンをコーディネーターのソケット {path} に送りません。このソケットを提供しているのはユーザー {uid} で、あなたでも root でもありません。",
+  "coordinator_key_mismatch": "{address} のサーバーはコーディネーターの鍵（ハッシュは MERIDIAN_COORDINATOR_KEY_SHA256 が示すもの）を持っていないため、meridian worker はそのサーバーと通信しません。",
+  "bootstrap_token_refused": "コーディネーターは meridian worker が起動されたときのブートストラップトークンを拒否しました。トークンの対象の試行はすでに要求されたか、その配置が取り消されています。",
+  "run_plan_too_new": "実行の計画は、この meridian が読み取れるもの（計画バージョン {version}）より新しいため、試行はそれを読み取れるワーカーにもう一度配置されます。",
+  "attempt_superseded": "コーディネーターはこの試行からの報告をもう受け付けません。ジョブの別の試行がこの試行に取って代わったか、試行がこのワーカーなしで終了しました。",
+  "attempt_lease_lapsed": "Meridian はジョブを停止しました（ジョブはもう一度実行されることがあります）。試行のリースが失効する前に更新できなかったためです。"
 }

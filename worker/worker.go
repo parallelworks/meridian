@@ -5,13 +5,16 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -32,10 +35,14 @@ type Config struct {
 	Environ []string
 	// Dir is where the worker makes the directory it keeps its own files
 	// in as it runs, which only its user can use: its spooled logs, and
-	// its steps' scripts and $OUTPUTS files. "" is os.TempDir(). If a step
+	// its steps' scripts and $OUTPUTS files. "" is XDG_RUNTIME_DIR, if the
+	// environment sets it to a directory only the user can use; else
+	// .meridian in the run's directory, if no other user can change that;
+	// and else os.TempDir(), with a warning in the log, since another user
+	// could take the name of a directory there that is removed. Whatever
 	// removes the directory, the worker makes another, with another name,
-	// rather than trust whatever is at the old path. Run removes them
-	// before it returns.
+	// rather than trust what is at the old path. Run removes them before it
+	// returns.
 	Dir string
 	// SpoolLimit is the most bytes of logs the worker keeps on disk that
 	// the coordinator hasn't stored, or 0 for DefaultSpoolLimit. Past it,
@@ -106,11 +113,9 @@ func run(ctx context.Context, cfg Config, ph phases, tm timing, protect func() e
 	if limit <= 0 {
 		limit = DefaultSpoolLimit
 	}
-	files, err := makePrivateDir(cfg.Dir)
-	if err != nil {
-		return err
+	if ep.keptTokenFile != nil {
+		log.Warn("couldn't remove the bootstrap token's file, which is good for no more than the one claim", "error", ep.keptTokenFile)
 	}
-	defer files.removeAll()
 
 	c := newClient(ep, tm, log)
 	defer c.close()
@@ -121,6 +126,11 @@ func run(ctx context.Context, cfg Config, ph phases, tm timing, protect func() e
 	}
 	c.credential = credential
 	log.Info("claimed an attempt", "run", claim.RunID, "attempt", claim.AttemptID, "number", claim.Attempt)
+	files, err := makePrivateDir(privateParent(cfg.Dir, stepsEnv, claim.RunDir, log))
+	if err != nil {
+		return err
+	}
+	defer files.removeAll()
 	a := &attempt{
 		claim:   claim,
 		claimed: claimed,
@@ -146,6 +156,9 @@ type endpoint struct {
 	// for TLS.
 	keyHash []byte
 	token   string
+	// keptTokenFile is why the worker couldn't remove the token's file,
+	// if it couldn't.
+	keptTokenFile error
 }
 
 func (e endpoint) socket() bool { return strings.HasPrefix(e.address, "/") }
@@ -168,58 +181,73 @@ func readEnv(environ []string) (endpoint, []string, error) {
 	}
 	ep := endpoint{address: vars[workerapi.EnvCoordinator]}
 	key := vars[workerapi.EnvKeySHA256]
+	missing := func(variable string) error {
+		return problems.WorkerEnvironmentMissing.Problem(problems.Params{"variable": variable})
+	}
+	invalid := func(variable string) error {
+		return problems.WorkerEnvironmentInvalid.Problem(problems.Params{"variable": variable})
+	}
 	switch {
 	case ep.address == "":
-		return ep, nil, fmt.Errorf("worker: %s isn't set", workerapi.EnvCoordinator)
+		return ep, nil, missing(workerapi.EnvCoordinator)
 	case ep.socket() && key != "":
-		return ep, nil, fmt.Errorf("worker: %s is set for a coordinator reached through the Unix socket %s", workerapi.EnvKeySHA256, ep.address)
+		// A Unix socket needs no key: one set means the backend meant TLS.
+		return ep, nil, invalid(workerapi.EnvKeySHA256)
 	case !ep.socket():
 		hexKey, ok := strings.CutPrefix(key, "sha256:")
 		hash, err := hex.DecodeString(hexKey)
 		if !ok || err != nil || len(hash) != sha256.Size {
-			return ep, nil, fmt.Errorf("worker: %s must be sha256: and 64 hex digits to reach %s over TLS", workerapi.EnvKeySHA256, ep.address)
+			return ep, nil, invalid(workerapi.EnvKeySHA256)
 		}
 		ep.keyHash = hash
 	}
 	token, file := vars[workerapi.EnvBootstrapToken], vars[workerapi.EnvBootstrapTokenFile]
 	switch {
 	case token != "" && file != "":
-		return ep, nil, fmt.Errorf("worker: both %s and %s are set", workerapi.EnvBootstrapToken, workerapi.EnvBootstrapTokenFile)
+		return ep, nil, invalid(workerapi.EnvBootstrapTokenFile)
 	case file != "":
 		var err error
 		if token, err = readTokenFile(file); err != nil {
 			return ep, nil, err
 		}
+		// The token is good for one claim, which the worker makes at once.
+		ep.keptTokenFile = os.Remove(file)
 	}
 	if token == "" {
-		return ep, nil, fmt.Errorf("worker: neither %s nor %s holds a bootstrap token", workerapi.EnvBootstrapToken, workerapi.EnvBootstrapTokenFile)
+		return ep, nil, missing(workerapi.EnvBootstrapToken)
 	}
 	ep.token = token
 	return ep, rest, nil
 }
 
 // readTokenFile reads a bootstrap token from a file of the worker's user
-// that only the user can read, not through a symbolic link, and removes
-// it.
+// that only the user can read, not through a symbolic link.
 func readTokenFile(path string) (string, error) {
+	unreadable := func(err error) (string, error) {
+		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
+			return "", problems.FileNotRegular.Problem(problems.Params{"path": path})
+		}
+		return "", problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
+	}
 	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNonBlock, 0) //nolint:gosec // the file the backend put the token in
 	if err != nil {
-		return "", fmt.Errorf("worker: reading the bootstrap token: %w", err)
+		return unreadable(err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil {
-		return "", fmt.Errorf("worker: reading the bootstrap token: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || !ownedByUser(info) {
-		return "", fmt.Errorf("worker: the bootstrap token's file %s must be a file of this user's that only it can read", path)
+	switch {
+	case err != nil:
+		return unreadable(err)
+	case !info.Mode().IsRegular():
+		return "", problems.FileNotRegular.Problem(problems.Params{"path": path})
+	case !ownedByUser(info):
+		return "", problems.FileNotOwned.Problem(problems.Params{"path": path})
+	case info.Mode().Perm()&0o077 != 0:
+		return "", problems.FileNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", info.Mode().Perm())})
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 4096))
 	if err != nil {
-		return "", fmt.Errorf("worker: reading the bootstrap token: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
-		return "", fmt.Errorf("worker: removing the bootstrap token's file: %w", err)
+		return unreadable(err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }
@@ -237,16 +265,16 @@ func newCredential() string {
 func executableDigest() (string, error) {
 	path, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("worker: finding its executable: %w", err)
+		return "", problems.FileUnreadable.Problem(problems.Params{"path": os.Args[0], "reason": err.Error()})
 	}
 	f, err := os.Open(path) //nolint:gosec // the running executable
 	if err != nil {
-		return "", fmt.Errorf("worker: reading its executable: %w", err)
+		return "", problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("worker: reading its executable: %w", err)
+		return "", problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }

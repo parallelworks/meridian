@@ -20,23 +20,26 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
-// The errors that end an attempt without the worker: it stops the job's
-// steps and exits, since nothing more it sends is stored.
+// The errors that end an attempt without the worker, which are problems of
+// meridian worker's own: it stops the job's steps and exits, since nothing
+// more it sends is stored.
 var (
 	// errUnauthorized is a 401 after the claim: the attempt has ended,
 	// or, for a job that fences itself, its credential lapsed with its
 	// lease.
-	errUnauthorized = errors.New("worker: the coordinator no longer accepts the attempt's credential")
+	errUnauthorized error = problems.AttemptSuperseded.Problem(nil)
 	// errFenced is a Fenced problem: another attempt of the job has
 	// superseded this one.
-	errFenced = errors.New("worker: another attempt of the job has superseded this one")
+	errFenced error = problems.AttemptSuperseded.Problem(nil)
 	// errPlanTooNew is a PlanTooNew problem: this worker doesn't read the
 	// run's plan version. The attempt failed before its first step, and is
 	// placed again.
-	errPlanTooNew = errors.New("worker: the run's plan is newer than this worker reads")
+	errPlanTooNew error = problems.RunPlanTooNew.Problem(problems.Params{"version": plan.Version})
 )
 
 // An outOfOrderError is an OutOfOrder problem: the coordinator expects
@@ -111,7 +114,7 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 			// certificate authority: VerifyConnection checks the key, and
 			// TLS checks that the coordinator holds it.
 			InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
-			VerifyConnection:   pinned(ep.keyHash),
+			VerifyConnection:   pinned(ep.address, ep.keyHash),
 		}
 	}
 	// A redirect is refused: the worker talks only to the coordinator it
@@ -123,7 +126,7 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 
 // pinned returns a check that a TLS connection's peer holds the public key
 // whose SHA-256 digest, of its DER SubjectPublicKeyInfo, is hash.
-func pinned(hash []byte) func(tls.ConnectionState) error {
+func pinned(address string, hash []byte) func(tls.ConnectionState) error {
 	return func(cs tls.ConnectionState) error {
 		if cs.Version != tls.VersionTLS13 {
 			return errors.New("worker: the coordinator's connection isn't TLS 1.3")
@@ -133,15 +136,12 @@ func pinned(hash []byte) func(tls.ConnectionState) error {
 		}
 		got := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
 		if subtle.ConstantTimeCompare(got[:], hash) != 1 {
-			return errKeyMismatch
+			// The worker never talks to it, and doesn't try again.
+			return problems.CoordinatorKeyMismatch.Problem(problems.Params{"address": address})
 		}
 		return nil
 	}
 }
-
-// errKeyMismatch is a TLS connection to a server whose key isn't the
-// coordinator's. The worker never talks to it, and doesn't try again.
-var errKeyMismatch = fmt.Errorf("worker: the server's TLS key isn't the one %s names", workerapi.EnvKeySHA256)
 
 // A peerError is a Unix socket served by another user. The worker never
 // talks to it, and doesn't try again.
@@ -224,11 +224,11 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		switch {
-		case ctx.Err() != nil:
+		if ctx.Err() != nil {
 			return ctx.Err()
-		case errors.Is(err, errKeyMismatch):
-			return errKeyMismatch
+		}
+		if p := problemOf(err, problems.CoordinatorKeyMismatch); p != nil {
+			return p
 		}
 		if peer, ok := errors.AsType[*peerError](err); ok {
 			return peer
@@ -281,6 +281,14 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 	return fmt.Errorf("worker: the coordinator refused %s: %s (%s): %s", cl.path, resp.Status, p.Key(), p.Detail)
 }
 
+// problemOf returns the problem of kind k that err is, or wraps, or nil.
+func problemOf(err error, k *problems.Kind) *problem.Problem {
+	if p, ok := errors.AsType[*problem.Problem](err); ok && p.Code == k.Code() {
+		return p
+	}
+	return nil
+}
+
 // intParam returns a problem's param that is a whole number, as JSON gives
 // it.
 func intParam(v any) (int64, bool) {
@@ -315,7 +323,7 @@ func (c *client) claim(ctx context.Context, token string, req workerapi.ClaimReq
 	claim := new(workerapi.Claim)
 	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathClaim, body: body, bearer: token, timeout: requestTimeout, sent: &sent}, claim)
 	if errors.Is(err, errUnauthorized) {
-		err = errors.New("worker: the coordinator refused the bootstrap token: the attempt was claimed, or its placement withdrawn")
+		err = problems.BootstrapTokenRefused.Problem(nil)
 	}
 	return claim, sent, err
 }

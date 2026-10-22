@@ -1185,7 +1185,12 @@ waking up or `meridian run` restarting must not make them all look lost.
 - **A later cancellation that gives less time**, or the attempt ending
   without the worker, makes SIGKILL sooner. When an attempt ends without
   its worker, every process group the attempt started is stopped, those of
-  steps that have ended and left processes behind among them.
+  steps that have ended and left processes behind among them. So that no
+  other group can be given such a group's number, the worker keeps the
+  group's leader, the step's shell, unreaped, on Linux, while the group
+  has a process left: `ps` shows it as defunct, and `kill -0` on its
+  process ID succeeds, until the processes the step left behind have ended
+  or the attempt ends.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
   fails, or a step of its own job did. The coordinator tells the step's
   worker. A step it stops is cancelled, and its job ends cancelled, as in
@@ -1436,13 +1441,20 @@ member's running workers reconnect to it.
   is unsent to a new file, when it holds both.
 - **What the worker keeps** of its own, its spooled logs, its steps'
   scripts and `$OUTPUTS` files, is in a directory only its user can use,
-  under `TMPDIR` by default, which it holds open and makes every file in
-  through that. A step that removes it, as `rm -rf "$TMPDIR"/*` does,
-  removes only their names, and the worker never trusts what is at its
-  path again, as another user could make a directory of that name in a
-  shared `/tmp`: it makes a new directory, with a new name, which it
-  checks is a directory of its user's that no one else can use. A problem
-  it has with its own files fails a step, never the attempt.
+  which it holds open and makes every file in through that, whose name
+  starts with a dot, so that `rm -rf "$TMPDIR"/*` passes it by. It is in a
+  directory no other user can change, so that no other user can take its
+  name once it is removed: `XDG_RUNTIME_DIR`, when it is set and private;
+  otherwise `.meridian` in the run's directory, where format 1 keeps
+  `$OUTPUTS` too, when no other user can change that; and only otherwise
+  the system's temporary directory, with a warning in the worker's log.
+  Any process of the user, the job's steps among them, or a cleaner of
+  temporary files, can still remove it. The worker then never trusts what
+  is at its path again: it makes a new directory, with a new name, which
+  it checks is a directory of its user's that no one else can use, and a
+  step whose `$OUTPUTS` went as it ran has its event say so
+  (`outputs_removed`), as what it wrote there after is lost. A problem
+  the worker has with its own files fails a step, never the attempt.
 - **When it is stopped from outside**, as by its scheduler, it stops the
   job's steps, and sends what it has for a while once they have stopped,
   so that a step in its grace period keeps what it printed last: the

@@ -833,8 +833,8 @@ func TestTLS(t *testing.T) {
 				workerapi.EnvKeySHA256 + "=" + hash,
 			}})
 			if !pinned {
-				if !errors.Is(err, errKeyMismatch) {
-					t.Fatalf("got %v, want %v", err, errKeyMismatch)
+				if problemOf(err, problems.CoordinatorKeyMismatch) == nil {
+					t.Fatalf("got %v, want coordinator_key_mismatch", err)
 				}
 				return
 			}

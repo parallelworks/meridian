@@ -813,6 +813,12 @@
       "Write outputs to $OUTPUTS with >>, or make it a link to a regular file."
     ]
   },
+  "outputs_removed": {
+    "why": "The worker keeps $OUTPUTS in a directory of its own, which no other user can change, and reads it once the step ends. Something removed that directory while the step ran: the step itself, or another of your processes, such as a cleaner of temporary files. The worker doesn't trust what is at its path after that, so it doesn't read what the step wrote there.",
+    "fix": [
+      "Don't remove the directory $OUTPUTS is in, or what holds it."
+    ]
+  },
   "log_not_kept": {
     "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, or once the disk is full, it doesn't keep what the steps print, so the log is missing that much of it.",
     "fix": [
@@ -1241,6 +1247,54 @@
     "why": "A member's settings are given to its backend's driver as JSON, which has no not-a-number or infinite numbers.",
     "fix": [
       "Write the number in the member's settings as a finite one, or as text in quotes."
+    ]
+  },
+  "worker_environment_missing": {
+    "why": "A backend starts meridian worker with the coordinator's address in MERIDIAN_COORDINATOR, and the attempt's bootstrap token in MERIDIAN_BOOTSTRAP_TOKEN, or in a file MERIDIAN_BOOTSTRAP_TOKEN_FILE names, never on its command line. Without them, the worker can't claim an attempt.",
+    "fix": [
+      "Let a backend start meridian worker: people don't run it."
+    ]
+  },
+  "worker_environment_invalid": {
+    "why": "MERIDIAN_COORDINATOR_KEY_SHA256 must be sha256: and 64 hex digits when the coordinator is reached over TLS, and unset when it is a Unix socket; and only one of MERIDIAN_BOOTSTRAP_TOKEN and MERIDIAN_BOOTSTRAP_TOKEN_FILE may be set.",
+    "fix": [
+      "Let a backend start meridian worker, which sets them as it should."
+    ]
+  },
+  "coordinator_peer_refused": {
+    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's. On Linux it asks the operating system who serves the socket, and another user does: one who could have put a socket at that path to take the token.",
+    "fix": [
+      "Start the worker with the socket of a coordinator you run, in a directory only you can change."
+    ]
+  },
+  "coordinator_key_mismatch": {
+    "why": "A worker reaches a coordinator over TLS by its key: the backend gives it the SHA-256 hash of the coordinator's public key, and the worker talks only to a server that holds that key, whatever its certificate says. This server holds another.",
+    "fix": [
+      "Check that MERIDIAN_COORDINATOR names the coordinator, or its relay, and that the coordinator's replicas share one key."
+    ]
+  },
+  "bootstrap_token_refused": {
+    "why": "A bootstrap token claims one attempt, once: the coordinator refuses it once the attempt is claimed, by this worker with another credential, or by another, or once its placement is withdrawn. The worker exits, and runs nothing.",
+    "fix": [
+      "Nothing to fix if the attempt was cancelled; otherwise, let the backend start a worker with the attempt's own token."
+    ]
+  },
+  "run_plan_too_new": {
+    "why": "A run's plan is versioned, and a worker runs only a plan of a version it reads, so that it never runs a job without a part of it it doesn't understand. The coordinator refused the claim before it sent anything of the run. No step ran, so the attempt is placed again.",
+    "fix": [
+      "Start workers of the same release of Meridian as the coordinator."
+    ]
+  },
+  "attempt_superseded": {
+    "why": "Every report a worker sends carries the attempt's credential, and the coordinator stores it only while the attempt holds the job. Another attempt of the job superseded this one, or the attempt ended without this worker, as when its lease lapsed. The worker stops the job's steps, without their cleanup: commands, which another attempt could be relying on, and exits.",
+    "fix": [
+      "Nothing to fix: the coordinator decides how the attempt ended, and whether the job runs again."
+    ]
+  },
+  "attempt_lease_lapsed": {
+    "why": "A job whose retry: lists worker-lost can run again while this attempt may still run, cut off, so its worker stops it before its lease lapses: once it hasn't renewed the lease for six tenths of it, it stops every process the attempt started, and by nine tenths has killed them. The coordinator could not be reached for that long. Its new attempt resumes the job, as its retry: asks.",
+    "fix": [
+      "Check the connection between the host the job ran on and the coordinator, and that the job's lease is long enough to ride out the outages you expect."
     ]
   }
 }

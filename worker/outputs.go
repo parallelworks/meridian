@@ -70,7 +70,7 @@ func readOutputs(d *privateDir, name string) (map[string]string, int64, error) {
 // openOutputs opens $OUTPUTS without waiting for a FIFO's writer: the
 // file name in d, or what a symbolic link there names.
 func openOutputs(d *privateDir, name string) (*os.File, error) {
-	dir, root, err := d.current()
+	dir, root, _, err := d.current()
 	if err != nil {
 		return nil, err
 	}

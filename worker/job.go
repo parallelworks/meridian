@@ -92,10 +92,10 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 			case stopped && !rs.OutlivesCancel:
 				outcome = plan.OutcomeCancelled
 			case rs.Uses != "":
-				diags = append(diags, problems.UsesNotSupported.At("", problems.Position{}, path, problems.Params{"uses": rs.Uses}))
+				diags = append(diags, a.at(problems.UsesNotSupported, path, problems.Params{"uses": rs.Uses}))
 				outcome = plan.OutcomeFailure
 			case rs.SSH != nil:
-				diags = append(diags, problems.StepSSHNotSupported.At("", problems.Position{}, path, nil))
+				diags = append(diags, a.at(problems.StepSSHNotSupported, path, nil))
 				outcome = plan.OutcomeFailure
 			}
 		}
@@ -191,7 +191,9 @@ func (a *attempt) setUp() *problem.Problem {
 		}
 	}
 	fail := func(k *problems.Kind, params problems.Params) *problem.Problem {
-		p := a.maskProblem(k.Problem(params))
+		// Masked before the message is made of them, so that it can't
+		// quote a secret, escaped or not.
+		p := a.maskProblem(k.Problem(a.maskParams(params)))
 		for _, l := range logs {
 			l.Error("the job failed before its first step", "problem", p.Detail)
 		}
@@ -269,10 +271,10 @@ func (a *attempt) runStep(i int, rs *plan.ReadyStep, diags problems.Diagnostics)
 		return stepEnd{result: plan.StepResult{Outcome: plan.OutcomeFailure}}
 	}
 	notStarted := func(err error) stepEnd {
-		return refuse(problems.StepNotStarted.At("", problems.Position{}, path, problems.Params{"reason": err.Error()}))
+		return refuse(a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()}))
 	}
 	if shell, ok := shellOK(rs.Shell); !ok {
-		return refuse(problems.ShellNotSupported.At("", problems.Position{}, path, problems.Params{"shell": shell}))
+		return refuse(a.at(problems.ShellNotSupported, path, problems.Params{"shell": shell}))
 	}
 	// A step with an id has $OUTPUTS of its own, its steps.<id>.outputs;
 	// the steps without one share the job's, as in format 1, and each
@@ -283,7 +285,7 @@ func (a *attempt) runStep(i int, rs *plan.ReadyStep, diags problems.Diagnostics)
 	if rs.ID != "" {
 		outputsName = "outputs-" + strconv.Itoa(i)
 	}
-	outputsPath, err := a.makeOutputs(outputsName, rs.ID != "")
+	outputsPath, gen, err := a.makeOutputs(outputsName, rs.ID != "")
 	if err != nil {
 		return notStarted(err)
 	}
@@ -339,19 +341,24 @@ func (a *attempt) runStep(i int, rs *plan.ReadyStep, diags problems.Diagnostics)
 		if a.halted.fired() {
 			return end
 		}
-		// What a try wrote is its step's, however it ended, as in format 1.
+		// What a try wrote is its step's, however it ended, as in format 1,
+		// unless the directory $OUTPUTS is in went as it ran: the worker
+		// doesn't trust what is at its path then.
+		if !a.files.still(gen) {
+			tryDiags = append(tryDiags, a.at(problems.OutputsRemoved, path, nil))
+		}
 		got, size, err := readOutputs(a.files, outputsName)
 		switch {
 		case errors.Is(err, errOutputsNotFile):
-			tryDiags = append(tryDiags, problems.OutputsNotFile.At("", problems.Position{}, path, nil))
+			tryDiags = append(tryDiags, a.at(problems.OutputsNotFile, path, nil))
 		case errors.Is(err, errOutputsTooLarge):
 			// Only the step that took the shared file past the limit
 			// fails; those after it can't add to it.
 			if rs.ID != "" || !errors.Is(beforeErr, errOutputsTooLarge) {
-				tryDiags = append(tryDiags, problems.OutputsTooLarge.At("", problems.Position{}, path, problems.Params{"size": size, "limit": maxOutputs}))
+				tryDiags = append(tryDiags, a.at(problems.OutputsTooLarge, path, problems.Params{"size": size, "limit": maxOutputs}))
 			}
 		case errors.Is(err, errOutputsLineTooLong):
-			tryDiags = append(tryDiags, problems.OutputsLineTooLong.At("", problems.Position{}, path, problems.Params{"limit": maxOutputsLine + 1}))
+			tryDiags = append(tryDiags, a.at(problems.OutputsLineTooLong, path, problems.Params{"limit": maxOutputsLine + 1}))
 			outputs = map[string]string{}
 		case err != nil:
 		case rs.ID == "":
@@ -374,9 +381,9 @@ func (a *attempt) runStep(i int, rs *plan.ReadyStep, diags problems.Diagnostics)
 			outcome = plan.OutcomeSuccess
 		case cause == stopStepTimeout:
 			// A step past its own timeout: isn't tried again.
-			tryDiags = append(tryDiags, problems.StepTimedOut.At("", problems.Position{}, path, problems.Params{"limit": rs.TimeoutSeconds}))
+			tryDiags = append(tryDiags, a.at(problems.StepTimedOut, path, problems.Params{"limit": rs.TimeoutSeconds}))
 		case cause == stopTryTimeout:
-			tryDiags = append(tryDiags, problems.StepTimedOut.At("", problems.Position{}, path, problems.Params{"limit": rs.Retry.TimeoutSeconds}))
+			tryDiags = append(tryDiags, a.at(problems.StepTimedOut, path, problems.Params{"limit": rs.Retry.TimeoutSeconds}))
 			retry = !last
 		default:
 			retry = !last
@@ -444,11 +451,11 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 	stream := a.spool.open(key)
 	w := a.mask.Writer(stream)
 	exit, cause, err := func() (int, stopCause, error) {
-		name, file, err := a.writeScript(script)
+		made, file, err := a.writeScript(script)
 		if err != nil {
 			return -1, noStop, err
 		}
-		defer a.files.remove(name)
+		defer made.remove()
 		cmd := shellCommand(rs.Shell, file)
 		cmd.Dir, cmd.Env = dir, env
 		requests, unwatch := a.watch(s)
@@ -460,10 +467,10 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 	stream.Close()
 	a.liveGroups()
 	if err != nil {
-		diags = append(diags, problems.StepNotStarted.At("", problems.Position{}, path, problems.Params{"reason": err.Error()}))
+		diags = append(diags, a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()}))
 	}
 	if dropped := stream.droppedBytes(); dropped > 0 {
-		diags = append(diags, problems.LogNotKept.At("", problems.Position{}, path, problems.Params{"size": dropped, "limit": a.spool.limit}))
+		diags = append(diags, a.at(problems.LogNotKept, path, problems.Params{"size": dropped, "limit": a.spool.limit}))
 	}
 	return exit, cause, diags
 }
@@ -474,27 +481,27 @@ const jobOutputs = "outputs"
 
 // writeScript writes a command to a script of its own, in the worker's
 // directory, which only its user can read, since it can hold secrets, and
-// returns its name and its path.
-func (a *attempt) writeScript(command string) (string, string, error) {
+// returns how to remove it, and its path.
+func (a *attempt) writeScript(command string) (madeFile, string, error) {
 	a.scripts++
 	name := "script-" + strconv.Itoa(a.scripts) + ".sh"
-	f, path, err := a.files.create(name, os.O_WRONLY|os.O_EXCL)
+	f, made, path, err := a.files.create(name, os.O_WRONLY|os.O_EXCL)
 	if err != nil {
-		return "", "", err
+		return madeFile{}, "", err
 	}
 	_, err = f.WriteString(command + "\n")
-	return name, path, errors.Join(err, f.Close())
+	return made, path, errors.Join(err, f.Close())
 }
 
 // makeOutputs makes name, in the worker's directory, an $OUTPUTS file, and
-// returns its path: an empty one if empty is set, or else the one there. A
-// step may have removed it, or put something else in its place: a
-// symbolic link to a regular file is kept, as format 1 follows it, and
-// anything else is replaced.
-func (a *attempt) makeOutputs(name string, empty bool) (string, error) {
-	path, root, err := a.files.current()
+// returns its path, and the directory's generation: an empty one if empty
+// is set, or else the one there. A step may have removed it, or put
+// something else in its place: a symbolic link to a regular file is kept,
+// as format 1 follows it, and anything else is replaced.
+func (a *attempt) makeOutputs(name string, empty bool) (string, int, error) {
+	path, root, gen, err := a.files.current()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if info, err := root.Lstat(name); err == nil {
 		keep := !empty && info.Mode().IsRegular()
@@ -503,17 +510,17 @@ func (a *attempt) makeOutputs(name string, empty bool) (string, error) {
 			keep = err == nil && target.Mode().IsRegular()
 		}
 		if keep {
-			return filepath.Join(path, name), nil
+			return filepath.Join(path, name), gen, nil
 		}
 		if err := root.Remove(name); err != nil {
-			return "", err
+			return "", 0, err
 		}
 	}
-	f, path, err := a.files.create(name, os.O_WRONLY|os.O_EXCL)
+	f, _, path, err := a.files.create(name, os.O_WRONLY|os.O_EXCL)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return path, f.Close()
+	return path, gen, f.Close()
 }
 
 // shellOK reports whether a step's shell: is one format 1 runs, bash or
@@ -634,6 +641,12 @@ func (a *attempt) maskDiagnostics(ds problems.Diagnostics) problems.Diagnostics 
 		out[k] = d
 	}
 	return out
+}
+
+// at returns a diagnostic of kind k at path, made of params masked, so
+// that its message can't quote a secret, escaped or not.
+func (a *attempt) at(k *problems.Kind, path string, params problems.Params) problems.Diagnostic {
+	return k.At("", problems.Position{}, path, a.maskParams(params))
 }
 
 // maskProblem returns p with what it says masked.

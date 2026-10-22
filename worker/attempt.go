@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -91,7 +92,7 @@ type attempt struct {
 
 // errLeaseLapsed is why a job that fences itself stops: the worker hasn't
 // renewed its lease for long enough that it must stop before it lapses.
-var errLeaseLapsed = errors.New("worker: the attempt's lease was about to lapse before the worker could renew it, so it stopped the job, which may run again")
+var errLeaseLapsed error = problems.AttemptLeaseLapsed.Problem(nil)
 
 // run runs the attempt: its job, and what it sends of it, until the
 // coordinator has stored its end, or the attempt ends without the worker,
@@ -301,7 +302,7 @@ func (a *attempt) reap() {
 			}
 			return
 		}
-		t := time.NewTimer(min(time.Until(kill), 50*time.Millisecond))
+		t := time.NewTimer(min(time.Until(kill), 200*time.Millisecond))
 		select {
 		case <-t.C:
 		case <-changed:

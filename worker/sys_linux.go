@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // checkPeer checks that the process at the other end of a Unix socket
@@ -27,7 +29,7 @@ func checkPeer(conn *net.UnixConn, path string) error {
 		return credErr
 	}
 	if !peerAllowed(int(cred.Uid)) {
-		return fmt.Errorf("worker: the coordinator's socket %s is served by user %d, not this one or root", path, cred.Uid)
+		return problems.CoordinatorPeerRefused.Problem(problems.Params{"path": path, "uid": int(cred.Uid)})
 	}
 	return nil
 }

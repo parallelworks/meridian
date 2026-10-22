@@ -51,12 +51,12 @@ func TestDirReplaced(t *testing.T) {
 func TestPrivateDir(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
-	d, err := makePrivateDir(parent)
+	d, err := makePrivateDir(parent, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.removeAll()
-	path, _, err := d.current()
+	path, _, _, err := d.current()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestPrivateDir(t *testing.T) {
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := d.current()
+	again, _, _, err := d.current()
 	if err != nil || again == path {
 		t.Errorf("after its directory was removed and made again, the worker uses %q (%v)", again, err)
 	}

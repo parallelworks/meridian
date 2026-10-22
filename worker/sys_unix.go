@@ -3,10 +3,11 @@
 package worker
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // ownedByUser reports whether a file belongs to the worker's user.
@@ -25,12 +26,13 @@ func peerAllowed(uid int) bool {
 // socket, that no other user could have put one at its path: its
 // directory must be the worker's user's, and writable by no one else.
 func checkSocketDir(path string) error {
-	info, err := os.Stat(filepath.Dir(path))
+	dir := filepath.Dir(path)
+	info, err := os.Stat(dir)
 	if err != nil {
-		return err
+		return problems.FileUnreadable.Problem(problems.Params{"path": dir, "reason": err.Error()})
 	}
 	if !ownedByUser(info) || info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("worker: the coordinator's socket %s must be in a directory of this user's that no one else can write to", path)
+		return problems.PathUnsafe.Problem(problems.Params{"path": path, "dir": dir})
 	}
 	return nil
 }

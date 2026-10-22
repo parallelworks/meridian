@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -25,24 +26,25 @@ func TestReadEnv(t *testing.T) {
 		address string
 		token   string
 		tls     bool
-		fails   bool
+		// fails is the kind of problem readEnv reports, if it fails.
+		fails *problems.Kind
 	}{
 		{name: "socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "/run/c.sock", token: "t"},
 		{name: "tls", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "login1:7443", token: "t", tls: true},
 		{name: "last wins", environ: []string{"MERIDIAN_COORDINATOR=/a", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_COORDINATOR=/b"}, address: "/b", token: "t"},
-		{name: "no coordinator", environ: []string{"MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
-		{name: "tls without a key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
-		{name: "a key that isn't sha256", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + strings.Repeat("ab", 32), "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
-		{name: "a short key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=sha256:abab", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
-		{name: "a key for a socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: true},
-		{name: "no token", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock"}, fails: true},
-		{name: "two tokens", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_BOOTSTRAP_TOKEN_FILE=/x"}, fails: true},
+		{name: "no coordinator", environ: []string{"MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentMissing},
+		{name: "tls without a key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a key that isn't sha256", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + strings.Repeat("ab", 32), "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a short key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=sha256:abab", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a key for a socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "no token", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock"}, fails: problems.WorkerEnvironmentMissing},
+		{name: "two tokens", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_BOOTSTRAP_TOKEN_FILE=/x"}, fails: problems.WorkerEnvironmentInvalid},
 	} {
 		environ := append(slices.Clone(tc.environ), "PATH=/bin", "HOME=/home/u")
 		ep, rest, err := readEnv(environ)
-		if tc.fails {
-			if err == nil {
-				t.Errorf("%s: read %v", tc.name, tc.environ)
+		if tc.fails != nil {
+			if problemOf(err, tc.fails) == nil {
+				t.Errorf("%s: got %v, want %s", tc.name, err, tc.fails.Code())
 			}
 			continue
 		}
@@ -85,8 +87,8 @@ func TestTokenFile(t *testing.T) {
 	if _, err := os.Stat(private); !os.IsNotExist(err) {
 		t.Errorf("the token's file is still there: %v", err)
 	}
-	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + shared}); err == nil {
-		t.Error("read a token from a file others can read")
+	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + shared}); problemOf(err, problems.FileNotPrivate) == nil {
+		t.Errorf("read a token from a file others can read: %v", err)
 	}
 	// Nor through a symbolic link, which could name another's file.
 	target, link := filepath.Join(dir, "target"), filepath.Join(dir, "link")
@@ -96,8 +98,8 @@ func TestTokenFile(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + link}); err == nil {
-		t.Error("read a token through a symbolic link")
+	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + link}); problemOf(err, problems.FileNotRegular) == nil {
+		t.Errorf("read a token through a symbolic link: %v", err)
 	}
 }
 

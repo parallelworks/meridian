@@ -21,7 +21,7 @@ func TestWorker(t *testing.T) {
 	// The test's own environment names no coordinator.
 	t.Setenv(workerapi.EnvCoordinator, "")
 	r = runCLI(t, nil, "", "worker")
-	if r.code != exitError || !strings.Contains(r.stderr, workerapi.EnvCoordinator) {
+	if r.code != exitError || !strings.Contains(r.stderr, workerapi.EnvCoordinator) || !strings.Contains(r.stderr, "(worker_environment_missing)") {
 		t.Errorf("meridian worker with no coordinator = %+v", r)
 	}
 }

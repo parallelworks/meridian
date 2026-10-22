@@ -77,8 +77,14 @@ func liveGroupsOf(groups []int) map[int]bool {
 		}
 		return live
 	}
+	uid := os.Getuid()
 	for _, e := range entries {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		// A process the worker can signal is its user's: reading only
+		// theirs makes the scan as cheap as the user's processes are few.
+		if info, err := e.Info(); err != nil || !ownedBy(info, uid) {
 			continue
 		}
 		data, err := os.ReadFile("/proc/" + e.Name() + "/stat")
@@ -99,4 +105,10 @@ func liveGroupsOf(groups []int) map[int]bool {
 		}
 	}
 	return live
+}
+
+// ownedBy reports whether info, of a file in /proc, belongs to uid.
+func ownedBy(info os.FileInfo, uid int) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == uid
 }
