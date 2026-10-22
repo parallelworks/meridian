@@ -75,7 +75,9 @@ type Run struct {
 	Permissions []string `json:"permissions,omitempty"`
 	// Limits are Meridian's limits on the run's size that the phases after
 	// Create apply, so that every replica, and every rerun, applies the
-	// same ones.
+	// same ones. The compiler sets none yet; when it first does, the plan's
+	// version rises, so that a replica of a release that doesn't know them
+	// leaves the run alone.
 	Limits Limits `json:"limits,omitzero"`
 }
 
@@ -100,7 +102,7 @@ type Source struct {
 	// workflow that a step's uses: names is pinned to beside its commit,
 	// so that reading it again by its pin gives the same text or fails.
 	// The compiler doesn't set it yet, for the run's own source or any
-	// other.
+	// other; when it first does, the plan's version rises.
 	Digest string `json:"digest,omitempty"`
 }
 

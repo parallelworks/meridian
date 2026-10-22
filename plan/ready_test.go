@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -15,8 +14,8 @@ func TestReadyJobEncoding(t *testing.T) {
 	run := mustValue(t, "echo ${{ matrix.n }}")
 	j := &plan.ReadyJob{
 		Key: "build#2", Name: "build", Matrix: plan.DataOf(map[string]any{"n": int64(1<<60 + 1)}),
-		Target:    plan.Target{Inline: &backend.Group{Name: "ssh", Members: []backend.Member{{Name: "ssh", Backend: "ssh", Isolation: "host", Settings: []byte(`{"remoteHost":"h"}`)}}}},
-		Resources: backend.Resources{MilliCPU: 500, Memory: 8 << 30},
+		Target:    plan.Target{Inline: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "h", "disconnect-timeout": int64(300)})}},
+		Resources: plan.Resources{MilliCPU: 500, Memory: 8 << 30},
 		Retry:     &plan.ReadyJobRetry{Reasons: []plan.Reason{plan.ReasonWorkerLost}, MaxRetries: 3, IntervalSeconds: 60},
 		Steps:     []plan.Step{{Run: run, Path: "/jobs/build/steps/0"}}, Path: "/jobs/build",
 	}

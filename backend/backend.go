@@ -2,9 +2,9 @@
 // through which the coordinator starts workers on a member: local, ssh,
 // kubernetes, slurm or pbs, each a package under this one.
 //
-// This package holds only types and the interface, so that the compiler
-// and the plan, which build to WebAssembly, can name a group without
-// importing a backend.
+// This package holds only types and the interface, so that the compiler,
+// which builds to WebAssembly, can name a group without importing a
+// backend.
 //
 // # Errors
 //
@@ -63,10 +63,11 @@ type Member struct {
 	DefaultTimeoutSeconds int64 `json:"defaultTimeoutSeconds,omitzero"`
 }
 
-// Resources are CPUs, memory and GPUs: what a job's resources: asks for,
-// or the most a member offers. A zero field is undeclared: a job that
-// doesn't declare one asks for none of it, and a member that doesn't
-// leaves it to its driver's Probe.
+// Resources are CPUs, memory and GPUs: the most a member offers, or what
+// a job asks of one (Demand), from the plan.Resources Ready parsed, in the
+// same units. A zero field is undeclared: a job that doesn't declare one
+// asks for none of it, and a member that doesn't leaves it to its
+// driver's Probe.
 type Resources struct {
 	// MilliCPU is in thousandths of a core: 4 is 4000, and 500m 500.
 	MilliCPU int64 `json:"milliCPU,omitzero"`
@@ -91,12 +92,17 @@ type Driver interface {
 	// coordinator, where this replica listens, and returns the endpoint
 	// they reach it at from where they run: the coordinator's own Unix
 	// socket for local; a Unix socket on the host that the driver's SSH
-	// connection forwards, for ssh; or meridian relay on a login node, over
-	// TLS, for slurm and pbs. It returns the same endpoint each time for the
-	// same member, so that a worker placed through an earlier Connect, by
-	// this replica or one that has stopped, reaches the coordinator through
-	// a later one: a replica that takes a run over calls Connect for each
-	// member that has its attempts running. Close stops what it set up.
+	// connection forwards, for ssh; or meridian relay on a login node,
+	// which forwards their TLS connections over SSH, for slurm and pbs.
+	//
+	// One replica at a time holds a member's connection, under a lease in
+	// the store, and serves every attempt that reaches the coordinator
+	// through it, of whichever job, as any replica can serve any job. It
+	// calls Connect when it takes the lease, and closes what Connect set up
+	// only when it gives the lease up. Connect returns the same endpoint
+	// each time for the same member, so that the member's running workers,
+	// placed through an earlier Connect, by this replica or one that has
+	// stopped, reach the replica that took the lease over.
 	Connect(ctx context.Context, m *Member, coordinator Endpoint) (Endpoint, io.Closer, error)
 	// Place starts a worker for an attempt on m, and returns once the
 	// backend has the work, as a process started, a pod created or a batch
@@ -173,7 +179,9 @@ type Endpoint struct {
 	Address string
 	// KeyHash is sha256: and the hex of the SHA-256 digest of the
 	// coordinator's TLS public key, as DER SubjectPublicKeyInfo, which the
-	// worker checks the connection against; "" for a Unix socket.
+	// worker checks the connection against; "" for a Unix socket. TLS ends
+	// at the coordinator, not at a relay, and its replicas share one key,
+	// so the hash holds whichever replica a worker reaches.
 	KeyHash string
 }
 

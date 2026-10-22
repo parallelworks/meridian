@@ -15,7 +15,9 @@ const DefaultMaxInstances = 256
 // An Expansion is a matrix job's instances, and how the coordinator runs
 // them, from its strategy:. Expand evaluates the strategy as one value, so
 // each of its instances is as private, and as secret, as the others, and
-// FailFast and MaxParallel are private when they are.
+// FailFast and MaxParallel follow its instances' Private and Secret: the
+// coordinator keeps them only in the run's secret record when its
+// instances are private.
 type Expansion struct {
 	// Instances are the job's instances, in the order of their indexes.
 	Instances []Instance `json:"instances"`

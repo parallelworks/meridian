@@ -3,7 +3,6 @@ package plan
 import (
 	"context"
 
-	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -73,10 +72,8 @@ type ReadyStep struct {
 	// working-directory: null asks.
 	WorkingDirectory string `json:"workingDirectory,omitempty"`
 	// SSH is the host a format 1 step's ssh: runs it on, outside any
-	// container: a member with the ssh backend and host isolation, whose
-	// settings are the ssh: mapping, evaluated, as a job's is (Target).
-	// It is nil without one.
-	SSH *backend.Member `json:"ssh,omitzero"`
+	// container, as a job's is (Target.Inline), or nil without one.
+	SSH *Inline `json:"ssh,omitzero"`
 	// TimeoutSeconds is the step's timeout:, in seconds, or 0 for none.
 	TimeoutSeconds int64 `json:"timeoutSeconds,omitzero"`
 	// Retry is the step's retry:, with its defaults, or nil without one.

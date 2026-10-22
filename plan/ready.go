@@ -5,7 +5,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"fmt"
 
-	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -126,6 +125,14 @@ type ReadyResult struct {
 // (EncodeReadyJob). What Ready evaluates is final, and never evaluated
 // again; the job's env:, steps and outputs: stay the plan's, for Step and
 // End to evaluate on the worker.
+//
+// A ReadyJob can hold private values, and secrets, such as matrix values
+// made from a variable. So the coordinator never stores one as run state:
+// Ready depends only on what is kept, so it runs Ready again when it needs
+// the job, as when a worker claims an attempt of it.
+//
+// A ReadyJob is encoded as a plan is, so each of its types is the plan's
+// own, and a change to one changes the plan's version.
 type ReadyJob struct {
 	// Key is the instance's key: the job's name, or for a matrix instance
 	// its name, # and index, as in build#2.
@@ -139,7 +146,7 @@ type ReadyJob struct {
 	// ssh:.
 	Target Target `json:"target,omitzero"`
 	// Resources are what the job's resources: asks for.
-	Resources backend.Resources `json:"resources,omitzero"`
+	Resources Resources `json:"resources,omitzero"`
 	// Retry is the job's retry:, or nil without one.
 	Retry *ReadyJobRetry `json:"retry,omitzero"`
 	// TimeoutSeconds is the job's timeout:, in seconds, or 0 for none.
@@ -180,10 +187,37 @@ type Target struct {
 	// ComputeTarget is a runs-on: that reads a compute-target input, which
 	// only a platform's Groups resolver knows.
 	ComputeTarget *ComputeTarget `json:"computeTarget,omitzero"`
-	// Inline is the group a format 1 ssh: makes: one member, named ssh,
-	// with the ssh backend and host isolation, whose settings are the ssh:
-	// mapping, evaluated.
-	Inline *backend.Group `json:"inline,omitzero"`
+	// Inline is the group a format 1 ssh: makes, from which the
+	// coordinator makes a backend.Group.
+	Inline *Inline `json:"inline,omitzero"`
+}
+
+// An Inline is the execution group a format 1 ssh: makes, of one member,
+// as the plan holds it: the coordinator makes the backend.Group, so that
+// what a backend adds to its members never changes the plan's encoding.
+type Inline struct {
+	// Name is the group's and its member's name: ssh.
+	Name string `json:"name"`
+	// Backend is the member's backend, ssh, and Isolation its isolation,
+	// host: format 1's ssh: runs its commands on the host, outside any
+	// container.
+	Backend   string `json:"backend"`
+	Isolation string `json:"isolation"`
+	// SSH is the ssh: mapping, evaluated: the ssh backend's settings,
+	// whose keys are format 1's, such as remoteHost and jumpNodeHost.
+	SSH Data `json:"ssh"`
+}
+
+// Resources are CPUs, memory and GPUs, as a job's resources: asks for
+// them, parsed. A zero field asks for none of it. The coordinator turns
+// them into the backend.Resources a member offers, which are kept in the
+// same units.
+type Resources struct {
+	// MilliCPU is in thousandths of a core: 4 is 4000, and 500m 500.
+	MilliCPU int64 `json:"milliCPU,omitzero"`
+	// Memory is in bytes: 8Gi is 8 << 30.
+	Memory int64 `json:"memory,omitzero"`
+	GPU    int   `json:"gpu,omitzero"`
 }
 
 // An Environment is a platform's scheduler environment, which a format 1

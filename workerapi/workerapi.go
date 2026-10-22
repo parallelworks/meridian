@@ -3,14 +3,32 @@
 // coordinator serves, and a platform that embeds Meridian serves the same
 // (docs/design.md, The worker API).
 //
-// The API is versioned in its paths, under /v1/. Bodies are JSON, but a
-// log upload's, which is the log's bytes, and both sides encode and decode
-// them with Marshal and Unmarshal, which refuse a member the type doesn't
-// have: a worker never runs a job without a part it doesn't understand,
-// such as the container its steps run in. A duration is in whole seconds
-// and a time is RFC 3339. An error is an RFC 9457 problem, a foundation
+// The API's paths are under /v1/. Bodies are JSON, but a log upload's,
+// which is the log's bytes, and both sides encode and decode them with
+// Marshal and Unmarshal, which refuse a member the type doesn't have: a
+// worker never runs a job without a part it doesn't understand, such as
+// the container its steps run in. A duration is in whole seconds and a
+// time is RFC 3339. An error is an RFC 9457 problem, a foundation
 // problem.Problem: one of foundation's for its status, such as
 // unauthenticated for a 401, or one of the codes below.
+//
+// # Versions
+//
+// The bodies are versioned by the run's plan version (Claim.PlanVersion):
+// a change to a body, as to any type of package plan in one, is a change
+// to the plan's encoding, and raises plan.Version. A member added in a
+// later version is left out when it is empty, and each side sends it only
+// for a run whose version has it, so each reads the other's bodies
+// strictly and never meets a member it doesn't know.
+//
+// As it claims, a worker says the newest version it reads
+// (ClaimRequest.PlanVersion), and the coordinator refuses one that doesn't
+// read the run's, with PlanTooNew, before it sends anything of the run. A
+// coordinator replica answers a worker only for a run whose version it
+// reads, as it claims only such runs; otherwise it answers 503 Service
+// Unavailable, and the worker tries again, which reaches another replica.
+// A ClaimRequest is sent before the worker knows the run's version, so it
+// never changes: what a later worker has to say comes after the claim.
 //
 // # Credentials
 //
@@ -192,7 +210,9 @@ const (
 // ParamExpected is the param of an OutOfOrder problem.
 const ParamExpected = "expected"
 
-// A ClaimRequest claims the attempt a bootstrap token is for.
+// A ClaimRequest claims the attempt a bootstrap token is for. Its members
+// never change, since a worker sends it before it knows which version the
+// run's bodies are in.
 type ClaimRequest struct {
 	// Credential is the credential the worker makes for the attempt: 32
 	// bytes from crypto/rand, as hex. The coordinator stores only its

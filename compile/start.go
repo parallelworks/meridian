@@ -60,9 +60,10 @@ type StartResult struct {
 // run_shape_changed if one differs from what p records; evaluates the
 // inputs p holds for Start, the workflow's env: and timeout:, and checks
 // each input's value as Compile does; expands each matrix whose values are
-// known by then, with plan.Expand and p's Run.Limits; and makes the run's
-// sessions, through in.Sessions. A rerun calls Start again, with the same
-// plan, and reads every variable again.
+// known by then, with plan.Expand and p's Run.Limits. Only once all of that
+// has passed does it make the run's sessions, through in.Sessions, so a
+// run that fails to start makes none. A rerun calls Start again, with the
+// same plan, and reads every variable again.
 //
 // The coordinator runs Start as the run's first job, and stores what it
 // gives in the transaction that ends that job. Given the same plan, input

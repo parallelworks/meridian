@@ -660,7 +660,9 @@ sees one version.
   to its encoding, an addition among them; an addition's upgrade changes
   nothing. Each version's encoding is described by a JSON Schema, kept in
   this repository, so the plan is a contract a platform can read too. The
-  trees of stored expressions are part of it.
+  trees of stored expressions are part of it, and so are the worker API's
+  bodies, which carry a run's values and the job Ready evaluated
+  ([The worker API](#the-worker-api)).
 - **The version says who can read it.** The run record keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -830,9 +832,8 @@ interface, and the compiler, coordinator and worker see only the interface:
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys, Logs and Events, in
 `coordinator`, and the backends' `Driver` in `backend`. A resolver may be
-missing. Then the workflow features
-that need it fail to compile, with an error saying which interface was
-missing.
+missing. Then the workflow features that need it fail to compile, with an
+error saying which interface was missing.
 
 Resolvers get the caller's context, so cancellation, deadlines and traces
 reach them. They report what is wrong as a problem, a kind and its params
@@ -1103,8 +1104,8 @@ whichever coordinator replica it reaches, and every write it makes (step
 events, logs, outputs, the result) carries the attempt's credential, which
 names the attempt, and is stored only while the attempt holds the job's
 fencing number. A write from a superseded attempt fails, and the worker
-that made it stops its job. hopper's leases today belong to the client that claimed a job; per-job
-leases are something it doesn't have yet.
+that made it stops its job. hopper's leases today belong to the client
+that claimed a job; per-job leases are something it doesn't have yet.
 
 Fencing numbers keep a superseded attempt's reports out of the store, but
 not what it writes elsewhere, such as checkpoints in the run directory.
@@ -1271,9 +1272,9 @@ errors as RFC 9457 problem details. Meridian's coordinator and a platform
 that embeds Meridian serve the same API.
 
 - **Claim:** present the bootstrap token and the worker's credential, and
-  receive the job as Ready evaluated it, encoded as its plan is; the values of its own job's
-  secrets and variables, and of the inputs Start completed that it reads;
-  and its dependencies' outcomes and outputs.
+  receive the job as Ready evaluated it, encoded as its plan is; the values
+  of its own job's secrets and variables, and of the inputs Start completed
+  that it reads; and its dependencies' outcomes and outputs.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
 - **Step events:** a step started, or finished with its exit code.
@@ -1292,9 +1293,22 @@ The attempt credential is an opaque random token, stored as a hash, that
 lasts until the attempt ends, so that a worker cut off from the coordinator
 can still deliver what it spooled. For a job that fences itself it lasts
 only while heartbeats renew it, and lapses with the lease. It lets its
-holder do one thing: report on its own attempt. A step that reads it gains nothing that its job couldn't
-already do, so on backends where steps and their worker run as the same
-user, no further separation is needed.
+holder do one thing: report on its own attempt. A step that reads it gains
+nothing that its job couldn't already do, so on backends where steps and
+their worker run as the same user, no further separation is needed.
+
+The API's bodies are versioned by the run's plan version: a change to a
+body is a change to the plan's encoding, and raises the plan's version, as
+any other does ([Plans across versions](#plans-across-versions)). A field
+added in a later version is left out when it is empty, and each side sends
+it only for a run whose version has it, so each side reads the other's
+bodies strictly, refusing a field it doesn't know. A worker says, as it
+claims, the newest plan version it reads, and the coordinator refuses one
+that doesn't read the run's before it sends anything of the run. A replica
+answers a worker only for a run whose version it reads, as it claims only
+such runs, and otherwise asks it to try again, which reaches another. The
+claim's request comes before the worker knows the run's version, so it
+never changes.
 
 ### Connections
 
@@ -1304,14 +1318,24 @@ Workers only connect out, and nothing listens on a host where jobs run.
 | --- | --- |
 | `local` | A Unix socket in a directory only the user can open. |
 | `ssh` | A Unix socket on the host that the coordinator forwards over its SSH connection, so no port opens on either side. |
-| `slurm`, `pbs` | TLS 1.3 to the coordinator on the login node, checked against its key's hash. |
+| `slurm`, `pbs` | TLS 1.3 to the coordinator, through `meridian relay` on the login node, checked against its key's hash. |
 | `kubernetes` | TLS 1.3 to the coordinator's address, checked the same way. |
 
 A coordinator outside a cluster drives Slurm or PBS over SSH to the login
 node. There it starts `meridian relay`, the same binary, which accepts
-workers over TLS and forwards their connections to the coordinator over SSH.
-Compute nodes reach the login node but not the coordinator's machine, and
-the coordinator's machine opens no port.
+workers' connections and forwards them to the coordinator over SSH, still
+encrypted: TLS ends at the coordinator, not at the relay, and the
+coordinator's replicas share one key, so the hash a worker is started with
+holds whichever replica it reaches. Compute nodes reach the login node but
+not the coordinator's machine, and the coordinator's machine opens no port.
+
+One replica at a time holds what a member's workers connect through, such
+as the forwarded socket or the relay, under a lease in the store, and
+serves every attempt that reaches it there, of whichever job: any replica
+can serve any job. It closes the connection only when it gives the lease
+up. A replica that takes the lease over, once its holder has stopped
+renewing it, sets the connection up again at the same address, so the
+member's running workers reconnect to it.
 
 ### Running steps
 
