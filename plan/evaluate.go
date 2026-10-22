@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
@@ -46,26 +47,69 @@ func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
 
 // secretTexts are the secrets' own texts a phase knows of, the run's
 // (RunValues.Masked) and those of the outputs of the jobs it needs that
-// hold one (JobResult.Secrets), and what they hold that mask notes though
-// it is short: the fields of a structured secret that a credential is kept
-// in (credentialFields), found the first time they are needed.
+// hold one (JobResult.Secrets), what they hold that mask notes though it
+// is short, the fields of a structured secret that a credential is kept in
+// (credentialFields), and what a Masker is given of them, found the first
+// time they are needed. A job's are the same for each phase of an attempt,
+// so JobEnv keeps them for its steps and End (JobEnv.own), which find
+// them, and build what masks them, once.
 type secretTexts struct {
-	run    RunValues
-	needs  map[string]JobResult
-	own    []string
-	fields map[string]bool
-	found  bool
+	run   RunValues
+	needs map[string]JobResult
+	// mu guards what follows, as an attempt's phases can share them.
+	mu    sync.Mutex
+	found bool
+	// own are the own texts, fields their credential fields, masked what a
+	// Masker is given of the run's secrets and the needs' outputs, and
+	// fromNeeds what of it the needs' outputs give (needsSecrets).
+	own       []string
+	fields    map[string]bool
+	masked    []string
+	fromNeeds []string
+	// leak masks own and fields as they show but for their lines
+	// (newLeakMasker), built the first time it is needed.
+	leak *Masker
 }
 
-// find finds the secrets' own texts and their credential fields.
+// find finds the secrets' own texts, their credential fields, and what a
+// Masker is given of them.
 func (t *secretTexts) find() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.found {
 		return
 	}
 	t.found = true
-	needsOwn, _ := needsSecrets(t.needs)
-	t.own = slices.Concat(t.run.ownTexts(), needsOwn)
-	t.fields = credentialFields(t.own)
+	runOwn, runDerived := t.run.secretStrings()
+	needsOwn, needsDerived := needsSecrets(t.needs)
+	needsFields := credentialFields(needsOwn)
+	t.own = slices.Concat(runOwn, needsOwn)
+	t.fields = credentialFields(runOwn)
+	maps.Copy(t.fields, needsFields)
+	t.masked = maskedFrom(t.own, slices.Concat(runDerived, needsDerived), t.fields)
+	t.fromNeeds = slices.Concat(needsOwn, slices.Sorted(maps.Keys(needsFields)))
+	for _, s := range needsDerived {
+		if len(s) >= minDerived || t.fields[s] {
+			t.fromNeeds = append(t.fromNeeds, s)
+		}
+	}
+}
+
+// allMasked returns what a Masker is given of the run's secrets and of the
+// outputs of the jobs it needs that hold one, as RunValues.Masked gives a
+// run's.
+func (t *secretTexts) allMasked() []string {
+	t.find()
+	return t.masked
+}
+
+// needsMasked returns what a Masker is given of the outputs of the jobs it
+// needs that hold a secret: one that holds a secret's own text however
+// short, as its credential fields are, and one only made from one as what
+// is made from a secret is (needsSecrets).
+func (t *secretTexts) needsMasked() []string {
+	t.find()
+	return t.fromNeeds
 }
 
 // field reports whether s is one of the secrets' credential fields.
@@ -74,44 +118,82 @@ func (t *secretTexts) field(s string) bool {
 	return t.fields[s]
 }
 
-// ownStrings returns the secrets' own texts and their credential fields,
-// in order: what a job's outputs that hold a secret's own text hold.
-func (t *secretTexts) ownStrings() []string {
+// leakMasker returns a Masker of the secrets' own texts and their
+// credential fields as they show but for their lines, which masks what
+// holds one, built once: what End tells an output that holds a secret's
+// own text with, and what the other Maskers of an attempt extend
+// (Masker.extend).
+func (t *secretTexts) leakMasker() *Masker {
 	t.find()
-	return slices.Concat(t.own, slices.Sorted(maps.Keys(t.fields)))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.leak == nil {
+		t.leak = newLeakMasker(slices.Concat(t.own, slices.Sorted(maps.Keys(t.fields)))...)
+	}
+	return t.leak
 }
 
 // credentialFields returns what texts hold, read as JSON, under a key a
-// credential is kept under (credentialKey), at any depth below it, such as
-// the password of {"user":"svc","password":"hunt3r2"} and the value of
-// {"creds":{"value":"abcd"}}: each string, and each number's text, of at
-// least minField bytes, but true, false and null. A text that isn't a JSON
-// object or list holds none.
+// credential is kept under (credentialKey): each string, and each number's
+// text, of at least minField bytes, but true, false and null, that is the
+// key's value or an item of a list that is, but not what a mapping under
+// it holds, which has keys of its own. A key a plural credential word
+// decides, such as secrets, holds credentials only as a list's items: its
+// value alone is a setting. So {"user":"svc","password":"hunt3r2"} holds
+// hunt3r2, {"pin":1234} 1234 and {"tokens":["tok1"]} tok1, and
+// {"token":{"type":"bearer"}}, {"tokens":"none"} and {"secrets":"inherit"}
+// nothing. A text that isn't a JSON object or list
+// holds none.
 func credentialFields(texts []string) map[string]bool {
 	fields := map[string]bool{}
-	var walk func(v any, credential bool)
-	walk = func(v any, credential bool) {
+	add := func(v any) bool {
 		var text string
 		switch v := v.(type) {
-		case map[string]any:
-			for k, item := range v {
-				walk(item, credential || credentialKey(k))
-			}
-			return
-		case []any:
-			for _, item := range v {
-				walk(item, credential)
-			}
-			return
 		case string:
 			text = v
 		case float64:
 			text = strconv.FormatFloat(v, 'f', -1, 64)
 		default:
-			return
+			return false
 		}
-		if credential && len(text) >= minField && !jsonWord(text) {
+		if len(text) >= minField && !jsonWord(text) {
 			fields[text] = true
+		}
+		return true
+	}
+	leaf := func(v any) bool {
+		switch v.(type) {
+		case string, float64, bool, nil:
+			return true
+		}
+		return false
+	}
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, item := range v {
+				credential, isPlural := credentialKey(k)
+				if items, isList := item.([]any); isList {
+					for _, x := range items {
+						if !leaf(x) {
+							walk(x)
+						} else if credential {
+							add(x)
+						}
+					}
+					continue
+				}
+				if !leaf(item) {
+					walk(item)
+				} else if credential && !isPlural {
+					add(item)
+				}
+			}
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
 		}
 	}
 	for _, text := range texts {
@@ -120,17 +202,31 @@ func credentialFields(texts []string) map[string]bool {
 		}
 		var v any
 		if jsonv2.Unmarshal([]byte(text), &v) == nil {
-			walk(v, false)
+			walk(v)
 		}
 	}
 	return fields
 }
 
-// credentialWords are the words of a key that a credential is kept under.
-var credentialWords = map[string]bool{
-	"password": true, "passwords": true, "passwd": true, "pass": true, "passphrase": true, "passcode": true,
-	"pwd": true, "pw": true, "secret": true, "secrets": true, "token": true, "tokens": true,
-	"key": true, "keys": true, "pin": true, "credential": true, "credentials": true, "cred": true, "creds": true,
+// credentialWords are the words of a key that a credential is kept under,
+// and plural those of them that name a list of them. secrets isn't one: it
+// names a section, as docker-compose's and GitHub Actions' do, which holds
+// the secrets' names or settings.
+var (
+	credentialWords = map[string]bool{
+		"password": true, "passwd": true, "pass": true, "passphrase": true, "passcode": true, "pwd": true, "pw": true,
+		"secret": true, "token": true, "pin": true, "credential": true, "cred": true,
+		"passwords": true, "tokens": true, "credentials": true, "creds": true,
+	}
+	plural = map[string]bool{"passwords": true, "tokens": true, "credentials": true, "creds": true, "keys": true}
+)
+
+// keyQualifiers are the words before key, or keys, that make a key a
+// credential is kept under, as api_key and privateKey are, where key alone,
+// as an object store's Key or a sortKey, names something else.
+var keyQualifiers = map[string]bool{
+	"api": true, "private": true, "secret": true, "access": true, "client": true, "signing": true,
+	"encryption": true, "master": true, "ssh": true, "account": true, "service": true,
 }
 
 // credentialHeads are what a key written in lower case without breaks
@@ -142,25 +238,64 @@ var credentialHeads = map[string]bool{
 	"ssh": true, "user": true,
 }
 
-// credentialKey reports whether key is one a credential is kept under: it,
-// or one of its words, split at _, -, ., digits and changes of case, is a
-// credential word, or a word written without breaks that is a head and a
-// credential word, as apikey and authtoken are, whatever its case. So
-// password, api_key, accessToken, password2, OAuth2Token and
-// clientsecret are, and keyboard, monkey, passport and pinned aren't.
-func credentialKey(key string) bool {
-	for _, word := range keyWords(key) {
-		word = strings.ToLower(word)
-		if credentialWords[word] {
-			return true
+// keyDescriptors are the last words of a key that names something about a
+// credential rather than holding one, as keyFile, tokenUrl and secret_name
+// do.
+var keyDescriptors = map[string]bool{
+	"name": true, "id": true, "type": true, "url": true, "uri": true, "endpoint": true, "path": true, "file": true,
+	"alias": true, "prefix": true, "policy": true, "length": true, "version": true, "schema": true, "region": true,
+	"arn": true, "format": true, "algorithm": true, "expiry": true, "ttl": true, "scope": true, "provider": true,
+}
+
+// credentialKey reports whether key is one a credential is kept under, and
+// whether a plural word decides it, as credentialFields reads it. Its
+// words, split at _, -, ., digits and changes of case, whatever their
+// case, decide it: it isn't one if its last word is a descriptor
+// (keyDescriptors), as keyFile and tokenUrl are, nor if its last word is
+// key or keys without a qualifier before it (keyQualifiers), as key,
+// sortKey and token-key are, where api_key and privateKey are; it is one
+// if a word is a credential word, as password, accessToken and password2
+// are, or key or keys after a qualifier; and a word written without breaks
+// is one if it is a credential word after a head (credentialHeads), or key
+// or keys after a qualifier, as apikey and clientsecret are, and keyboard,
+// monkey and passport aren't.
+func credentialKey(key string) (credential, isPlural bool) {
+	words := keyWords(key)
+	for i := range words {
+		words[i] = strings.ToLower(words[i])
+	}
+	n := len(words)
+	if n == 0 || keyDescriptors[words[n-1]] || keyDescriptors[strings.TrimSuffix(words[n-1], "s")] {
+		return false, false
+	}
+	keyWord := func(w string) bool { return w == "key" || w == "keys" }
+	if keyWord(words[n-1]) {
+		// key or keys last is one only after a qualifier: api_key is, and
+		// key, sortKey and token-key aren't.
+		if n >= 2 && keyQualifiers[words[n-2]] {
+			return true, plural[words[n-1]]
+		}
+		return false, false
+	}
+	for i, w := range words {
+		switch {
+		case credentialWords[w]:
+			return true, plural[w]
+		case keyWord(w) && i > 0 && keyQualifiers[words[i-1]]:
+			return true, plural[w]
 		}
 		for c := range credentialWords {
-			if head, ok := strings.CutSuffix(word, c); ok && credentialHeads[head] {
-				return true
+			if head, ok := strings.CutSuffix(w, c); ok && credentialHeads[head] {
+				return true, plural[c]
+			}
+		}
+		for _, c := range []string{"key", "keys"} {
+			if head, ok := strings.CutSuffix(w, c); ok && keyQualifiers[head] {
+				return true, plural[c]
 			}
 		}
 	}
-	return false
+	return false, false
 }
 
 // keyWords splits a key into its words, at _, -, ., runs of digits, which

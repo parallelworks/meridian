@@ -138,7 +138,11 @@ func TestShownFormsLength(t *testing.T) {
 }
 
 // A key a credential is kept under is one of the credential words, or has
-// one among its words, whatever its case.
+// A key a credential is kept under is one of the credential words, has one
+// among its words, or ends with key or keys after a qualifier, whatever
+// its case, and isn't one whose last word describes a credential rather
+// than holding one. Of the keys of common configs, only those that hold a
+// credential are.
 func TestCredentialKey(t *testing.T) {
 	for key, want := range map[string]bool{
 		"password": true, "PASSWORD": true, "db_password": true, "api_key": true, "apiKey": true, "APIKey": true,
@@ -146,21 +150,99 @@ func TestCredentialKey(t *testing.T) {
 		"keyboard": false, "passport": false, "token_count_x": true, "tokenizer": false, "dbname": false, "": false,
 		"user": false, "host": false, "PIN": true, "pinned": false,
 		"apikey": true, "secretkey": true, "accesskey": true, "privatekey": true, "clientsecret": true, "authtoken": true,
-		"passphrase": true, "passcode": true, "pw": true, "secrets": true, "tokens": true, "keys": true,
+		"passphrase": true, "passcode": true, "pw": true, "secrets": false, "tokens": true, "keys": false,
 		"password2": true, "Password1": true, "OAuth2Token": true, "token_v2": true, "creds": true,
 		"monkey": false, "turkey": false, "auth": false, "bearer": false, "x-api-key": true, "DBPassword": true,
 	} {
-		if got := credentialKey(key); got != want {
+		if got, _ := credentialKey(key); got != want {
 			t.Errorf("credentialKey(%q) = %v, want %v (words %q)", key, got, want, keyWords(key))
 		}
 	}
-	fields := credentialFields([]string{
-		`{"user":"svc","password":"hunt3r2","nested":{"apiKey":"k3y1","list":["a"]},"keys":["aaaa"],"token":["tok1","true"],"pin":"12"}`,
-		`{"creds":{"value":"abcd","user":"ab"},"pin2":1234,"port":5432,"hosts":[{"name":"h1","pin":"4821"}]}`,
-		`not json`, `["x"]`, `{"bad": `,
-	})
-	want := map[string]bool{"hunt3r2": true, "k3y1": true, "tok1": true, "aaaa": true, "abcd": true, "1234": true, "4821": true}
-	if !maps.Equal(fields, want) {
-		t.Errorf("credentialFields = %v, want %v", fields, want)
+	keys := []string{
+		// kubeconfig
+		"apiVersion", "kind", "clusters", "cluster", "server", "certificate-authority-data", "insecure-skip-tls-verify",
+		"contexts", "context", "namespace", "current-context", "users", "user", "client-certificate-data", "client-key-data",
+		"token", "auth-provider", "config", "cmd-path", "cmd-args", "expiry-key", "token-key", "exec", "args", "env", "preferences",
+		// docker-compose
+		"version", "services", "image", "ports", "volumes", "environment", "depends_on", "networks", "secrets", "configs",
+		"healthcheck", "restart", "build", "dockerfile", "command", "entrypoint", "labels", "env_file", "deploy", "replicas",
+		// AWS
+		"aws_access_key_id", "aws_secret_access_key", "aws_session_token", "region", "output", "role_arn", "source_profile",
+		"mfa_serial", "KeyName", "KeyType", "KeySchema", "AttributeName", "kms_key_id", "SSEKMSKeyId", "Bucket", "Key", "Prefix",
+		// Terraform
+		"terraform", "required_providers", "backend", "key", "bucket", "dynamodb_table", "encrypt", "key_name", "key_pair",
+		"public_key", "private_key", "instance_type", "ami", "tags", "count", "for_each", "lifecycle", "keepers", "pin_version",
+		// GitHub Actions
+		"on", "jobs", "runs-on", "steps", "uses", "with", "permissions", "inherit", "fetch-depth", "ref",
+		"github-token", "registry-url", "node-version", "cache", "cache-dependency-path", "persist-credentials",
+		// package.json
+		"name", "private", "scripts", "dependencies", "devDependencies", "keywords", "author", "license", "repository",
+		"publishConfig", "engines", "bin", "main", "files", "workspaces", "resolutions", "overrides",
+		// words with credential words inside, and keys that describe one
+		"keyboard", "monkey", "turkey", "spin", "spinner", "pinned", "pinyin", "pinpoint", "passport", "passenger", "bypass",
+		"compass", "passthrough", "pwm", "upward", "keystone", "keynote", "hotkeys", "tokenizer", "detokenize", "secretary",
+		"credentialsProvider", "keepalive", "keyspace", "sortKey", "partitionKey", "primaryKey", "foreignKey", "cacheKey",
+		"keyPrefix", "idempotencyKey", "routingKey", "shardKey", "dedupKey", "keyFile", "keyPath", "keyAlias", "keyId",
+		"tokenUrl", "tokenEndpoint", "tokenType", "passwordPolicy", "passwordMinLength", "pinCode", "userpass", "apppw",
+		"ownerpw", "idtoken", "rootkey", "accountkeys", "spw", "dbpwd", "pinned_version", "key_vault_name", "secret_name",
+	}
+	var got []string
+	for _, k := range keys {
+		if c, _ := credentialKey(k); c {
+			got = append(got, k)
+		}
+	}
+	want := []string{
+		"client-key-data", "token", "aws_secret_access_key", "aws_session_token", "private_key", "github-token",
+		"persist-credentials", "pinCode", "userpass", "apppw", "idtoken", "accountkeys", "dbpwd",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("credential keys %q, want %q", got, want)
+	}
+}
+
+// What a structured secret holds under a credential key is a credential
+// field: the key's value, or an item of a list that is, but not what a
+// mapping under it holds, nor a plural key's value alone. Of common
+// configs held as secrets, only their credentials are.
+func TestCredentialFieldsConfigs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		text string
+		want []string
+	}{
+		"kubeconfig": {
+			`{"apiVersion":"v1","kind":"Config","clusters":[{"name":"prod","cluster":{"server":"https://10.0.0.1:6443","certificate-authority-data":"LS0tLS1CRUd"}}],"users":[{"name":"admin","user":{"token":"eyJhbGciOi.payload.sig","client-key-data":"LS0tLS1CRUdJTiBSU0E"}}],"contexts":[{"name":"prod","context":{"cluster":"prod","user":"admin","namespace":"default"}}],"current-context":"prod"}`,
+			[]string{"LS0tLS1CRUdJTiBSU0E", "eyJhbGciOi.payload.sig"},
+		},
+		"compose": {
+			`{"version":"3.8","services":{"db":{"image":"postgres:16","environment":{"POSTGRES_PASSWORD_FILE":"/run/secrets/db_password","POSTGRES_USER":"app"},"secrets":["db_password"],"ports":["5432:5432"]}},"secrets":{"db_password":{"file":"./db_password.txt"}}}`,
+			nil,
+		},
+		"aws": {
+			`{"aws_access_key_id":"AKIAIOSFODNN7EXAMPLE","aws_secret_access_key":"wJalrXUtnFEMI/K7MDENG","region":"us-east-1","output":"json"}`,
+			[]string{"wJalrXUtnFEMI/K7MDENG"},
+		},
+		"terraform": {
+			`{"backend":{"s3":{"bucket":"tf-state","key":"prod/terraform.tfstate","region":"us-east-1","encrypt":true}},"key_name":"main","keys":["id","name","user"],"db_password":"hunt3r2","port":5432,"cache":{"key_prefix":"app","ttl":3600}}`,
+			[]string{"hunt3r2"},
+		},
+		"actions": {
+			`{"token":{"type":"bearer","scope":"repo"},"secrets":"inherit","with":{"fetch-depth":0,"token":"ghp_abcdefgh"}}`,
+			[]string{"ghp_abcdefgh"},
+		},
+		"app": {
+			`{"jwt":{"secret":"s3cr3tjwt","algorithm":"HS256","expires":3600},"redis":{"url":"redis://cache:6379","keyPrefix":"sess"},"auth":{"tokens":{"ttl":"1h","issuer":"auth"}},"pin":1234,"dbPassword":"pw12"}`,
+			[]string{"1234", "pw12", "s3cr3tjwt"},
+		},
+		"lists": {
+			`{"user":"svc","password":"hunt3r2","nested":{"apiKey":"k3y1","list":["a"]},"keys":["aaaa"],"tokens":["tok1","true"],"pin":"12","creds":{"value":"abcd"},"pin2":1234,"hosts":[{"name":"h1","pin":"4821"}]}`,
+			[]string{"1234", "4821", "hunt3r2", "k3y1", "tok1"},
+		},
+		"not json": {`not json`, nil},
+	} {
+		got := slices.Sorted(maps.Keys(credentialFields([]string{tc.text})))
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
 	}
 }

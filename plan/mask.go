@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -55,6 +56,10 @@ type Masker struct {
 	seen    map[string]bool
 	pending []string
 	levels  []*matcher
+	// parent is the Masker it extends (extend), and base what finds its
+	// values, which it shares, once it needs it, and never rebuilds.
+	parent *Masker
+	base   []*matcher
 }
 
 // NewMasker returns a Masker that masks values.
@@ -159,8 +164,15 @@ func jsonForms(v string) []string {
 // texts added since it last did into one, and merges the levels that are
 // no larger than the one after them.
 func (m *Masker) current() finder {
+	var base finder
+	if m.parent != nil {
+		base = m.parent.current()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.parent != nil && m.base == nil {
+		m.base = base
+	}
 	if len(m.pending) > 0 {
 		m.levels = append(m.levels, newMatcher(m.pending))
 		m.pending = nil
@@ -169,7 +181,20 @@ func (m *Masker) current() finder {
 			m.levels = append(m.levels[:n-2], merged)
 		}
 	}
-	return finder(slices.Clone(m.levels))
+	return finder(slices.Concat(m.base, m.levels))
+}
+
+// extend returns a Masker that masks what m does now, and what is added to
+// it from now on, which m doesn't: it shares what m builds to find its
+// values, the first time it masks, so that a Masker of a large secret is
+// built once, and only if it is used, and extended for each use. lines
+// says whether it masks each line of a value of more than one on its own,
+// as NewMasker's do. m isn't added to once it is extended: what the
+// Masker masks of m's values is what m masks when it first masks.
+func (m *Masker) extend(lines bool) *Masker {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return &Masker{lines: lines, seen: maps.Clone(m.seen), parent: m}
 }
 
 // Mask returns s with each value m masks replaced: each place in s where

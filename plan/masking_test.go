@@ -1111,3 +1111,126 @@ jobs:
 		t.Errorf("combined %s", got)
 	}
 }
+
+// resultOf returns the result of a job that ended as e gave.
+func resultOf(e *plan.EndResult) plan.JobResult {
+	return plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: e.Outputs, Private: e.Private, Secrets: e.Secrets, Derived: e.Derived}
+}
+
+// A secret's own text a job gives another as an output stays one through a
+// chain of jobs: b forwards a's PIN as an output, and writes it from a
+// step, and c, which needs b, masks it in its log and names its own output
+// that holds it a secret, not derived; b's output made from the PIN's
+// length is derived.
+func TestNeedsChain(t *testing.T) {
+	rjA, runA := readyMain(t, `
+jobs:
+  main:
+    steps:
+      - run: "true"
+    outputs:
+      pin: ${{ vars.pin }}
+      len: ${{ length(vars.pin) }}
+`, map[string]string{"pin": "4821"}, "pin")
+	endA, _, err := rjA.End(t.Context(), plan.JobState{Run: runA, Masked: runA.Masked(), Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := compiled(t, `
+jobs:
+  a:
+    steps:
+      - run: "true"
+    outputs:
+      pin: ${{ 'x' }}
+      len: ${{ 'x' }}
+  b:
+    needs: [a]
+    steps:
+      - run: ./forward.sh
+        env:
+          PIN: ${{ needs.a.outputs.pin }}
+    outputs:
+      fwd: ${{ needs.a.outputs.pin }}
+      n: ${{ needs.a.outputs.len }}
+  c:
+    needs: [b]
+    steps:
+      - run: ./use.sh
+        env:
+          A: ${{ needs.b.outputs.fwd }}
+          B: ${{ needs.b.outputs.written }}
+`, nil)
+	run := runValues(t, p, nil)
+	runJob := func(name string, needs map[string]plan.JobResult, outputs map[string]string) (*plan.EndResult, []string) {
+		ready, _, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+		if err != nil || ready.Job == nil {
+			t.Fatal(err)
+		}
+		state := plan.JobState{Run: job(t, p, name).Reads(run), Masked: run.Masked(), Needs: needs}
+		je, _, err := ready.Job.JobEnv(t.Context(), state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.JobEnv = je
+		s, _, err := ready.Job.Step(t.Context(), 0, state)
+		if err != nil || s == nil {
+			t.Fatal(err)
+		}
+		state.Masked = append(append(state.Masked, je.Masked...), s.Masked...)
+		state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: outputs}}
+		end, _, err := ready.Job.End(t.Context(), state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return end, state.Masked
+	}
+	endB, _ := runJob("b", map[string]plan.JobResult{"a": resultOf(endA)}, map[string]string{"written": "pin=4821"})
+	endC, maskedC := runJob("c", map[string]plan.JobResult{"b": resultOf(endB)}, map[string]string{"x": "used 4821"})
+	log := plan.NewMasker(maskedC...).Mask("unlocking with 4821")
+	if strings.Contains(log, "4821") {
+		t.Errorf("c's log: %q", log)
+	}
+	if !slices.Contains(endC.Secrets, "x") || slices.Contains(endC.Derived, "x") {
+		t.Errorf("c's output that holds the PIN: secrets %v derived %v", endC.Secrets, endC.Derived)
+	}
+	if slices.Contains(endB.Derived, "fwd") || !slices.Contains(endB.Derived, "n") {
+		t.Errorf("b derived %v: fwd is own text, n is made from it", endB.Derived)
+	}
+}
+
+// BenchmarkAttemptLargeSecret evaluates the steps and End of an attempt
+// whose run has a large structured secret, with the job's env: as JobEnv
+// gave it, which keeps what masks the secret for the attempt.
+func BenchmarkAttemptLargeSecret(b *testing.B) {
+	m := map[string]any{}
+	for i := range 5000 {
+		m[fmt.Sprintf("svc%05d", i)] = map[string]any{"user": "u", "password": fmt.Sprintf("pw%06d", i), "host": "h"}
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rj, run := readyMain(b, "jobs:\n  main:\n    steps:\n      - run: echo ${{ fromJSON(vars.big).svc00001.password }}\n      - run: \"true\"\n", map[string]string{"big": string(data)}, "big")
+	for b.Loop() {
+		state := plan.JobState{Run: run, Masked: run.Masked()}
+		env, _, err := rj.JobEnv(b.Context(), state)
+		if err != nil {
+			b.Fatal(err)
+		}
+		state.JobEnv = env
+		for i := range 2 {
+			state.Steps = make([]plan.StepResult, i)
+			for k := range state.Steps {
+				state.Steps[k] = plan.StepResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "plain"}}
+			}
+			if _, _, err := rj.Step(b.Context(), i, state); err != nil {
+				b.Fatal(err)
+			}
+		}
+		state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
+		if _, _, err := rj.End(b.Context(), state); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -76,6 +76,10 @@ type JobEnv struct {
 	// holds them, which the worker masks; each ReadyStep.Masked holds them
 	// too.
 	Masked []string `json:"masked,omitempty"`
+	// own are the job's secrets' texts and what masks them, as JobEnv found
+	// and built them for the attempt, which Step, Cleanup and End share
+	// rather than find and build again.
+	own *secretTexts
 }
 
 // formatVariables are the names of the variables format 1 gives a step,
@@ -330,7 +334,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state, e.masked)
+	c.addSelf(j, state, e)
 	e = c.evaluation(PhaseStep, e)
 	jobDir := e.directory(j.WorkingDirectory, at(j.Path, "working-directory"))
 	// The step reads all of the worker's variables, and its if: reads an
@@ -526,7 +530,7 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state, e.masked)
+	c.addSelf(j, state, e)
 	// The job's outputs: read an output that nothing wrote strictly once
 	// its steps succeeded, as format 1 does.
 	c.StrictOutputs = !c.Status.Failed && !c.Status.Cancelled
@@ -554,7 +558,7 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	// What holds a secret's own text, or a credential field of one, the
 	// jobs that need the job mask however short; the rest only as what is
 	// made from a secret.
-	own := newLeakMasker(e.secrets.ownStrings()...)
+	own := e.secrets.leakMasker()
 	holdsOwn := func(v string) bool { return own.Mask(v) != v }
 	for name, s := range jsonvalue.Sorted(secret) {
 		if s {
@@ -634,7 +638,7 @@ func (j *ReadyJob) JobEnv(ctx context.Context, state JobState) (*JobEnv, problem
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	out := &JobEnv{Env: c.JobEnv, Masked: e.masked}
+	out := &JobEnv{Env: c.JobEnv, Masked: e.masked, own: e.secrets}
 	for name, read := range jsonvalue.Sorted(c.jobMarks) {
 		if read.Private {
 			out.Private = append(out.Private, name)
@@ -661,8 +665,17 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
+	if given := state.JobEnv; given != nil && given.own != nil {
+		// The secrets' texts JobEnv found for this attempt, and what masks
+		// them, which it built once.
+		e.secrets = given.own
+	}
+	// The job's Masker extends one of the secrets' own texts, which an
+	// attempt builds once.
+	e.masker = e.secrets.leakMasker().extend(true)
+	e.masker.Add(state.Masked...)
 	if given := state.JobEnv; given != nil {
-		e.masker = NewMasker(slices.Concat(state.Masked, given.Masked)...)
+		e.masker.Add(given.Masked...)
 		c.JobEnv = maps.Clone(given.Env)
 		c.jobMarks = map[string]expr.Read{}
 		for _, name := range given.Private {
@@ -675,8 +688,9 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 			e.maskOwn(s)
 		}
 	} else {
-		e.masker = NewMasker(state.Masked...)
-		e.needsMasked(state.Needs)
+		for _, s := range e.secrets.needsMasked() {
+			e.maskOwn(s)
+		}
 		c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
 	}
 	for _, r := range state.Steps {
@@ -684,17 +698,6 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		c.Status.Cancelled = c.Status.Cancelled || r.Outcome == OutcomeCancelled || r.CleanupOutcome == OutcomeCancelled
 	}
 	return c, e
-}
-
-// needsMasked notes the outputs of the jobs in needs that hold a secret,
-// which the job reads as secrets (needsSecrets): one that holds a secret's
-// own text however short, as its credential fields are, and one only made
-// from one as what is made from a secret is.
-func (e *evaluation) needsMasked(needs map[string]JobResult) {
-	own, derived := needsSecrets(needs)
-	for _, s := range maskedFrom(own, derived, credentialFields(own)) {
-		e.maskOwn(s)
-	}
 }
 
 // variables returns the variables of env that keep says to.
@@ -883,16 +886,19 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 // addSelf gives c the needs of the job's steps, with the job itself, and
 // its steps' outputs by id, from what its steps so far, state.Steps, and
 // the cleanups that have run wrote, and notes the outputs that hold a
-// secret: the job's secrets (state.Run), what the worker masks
-// (state.Masked), and what the job's env: made from one (masked), as each
-// can show, but for its lines, which plain text can hold too. Each output
-// is checked once.
-func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
+// secret: the job's secrets and the outputs of the jobs it needs that hold
+// one (secretTexts), what the worker masks (state.Masked), and what the
+// evaluation, e, made from one so far, as each can show, but for its
+// lines, which plain text can hold too. Each output is checked once.
+func (c *stepContexts) addSelf(j *ReadyJob, state JobState, e *evaluation) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
 		needs = map[string]JobResult{}
 	}
-	leak := newLeakMasker(slices.Concat(state.Run.Masked(), state.Masked, masked)...)
+	leak := e.secrets.leakMasker().extend(false)
+	leak.Add(e.secrets.allMasked()...)
+	leak.Add(state.Masked...)
+	leak.Add(e.masked...)
 	self := JobResult{Outputs: map[string]string{}}
 	selfLeaks := map[string]bool{}
 	steps := map[string]map[string]string{}

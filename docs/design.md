@@ -1293,19 +1293,33 @@ secret record ([Run data](#run-data)).
   secret is masked when it is at least 8 bytes, or when it is a credential
   field of a structured secret: a string, or a number's text, of at least
   4 bytes, but `true`, `false` or `null`, that a secret's text, read as
-  JSON, holds under a key a credential is kept under, at any depth below
-  it, as `{"creds":{"value":"abcd"}}` holds `abcd`. Such a key is one that
-  is, or has among its words split at `_`, `-`, `.`, digits and changes of
-  case, `password`, `passwords`, `passwd`, `pass`, `passphrase`,
-  `passcode`, `pwd`, `pw`, `secret`, `secrets`, `token`, `tokens`, `key`,
-  `keys`, `pin`, `credential`, `credentials`, `cred` or `creds`, or a word
-  written without breaks that is one of these after a head such as `api`,
-  `access`, `auth`, `client`, `private` or `secret`, whatever its case: as
-  `password`, `api_key`, `accessToken`, `password2`, `OAuth2Token`,
-  `apikey` and `clientsecret` do, and `keyboard`, `monkey` and `passport`
-  don't. Each credential field of a secret's own text is masked however
+  JSON, holds as the value of a key a credential is kept under, or as an
+  item of a list that is, but not in a mapping under it, which has keys of
+  its own: `{"pin":1234}` holds `1234`, and `{"token":{"type":"bearer"}}`
+  nothing. Such a key is one whose words, split at `_`, `-`, `.`, digits
+  and changes of case, whatever their case, hold a credential word,
+  `password`, `passwd`, `pass`, `passphrase`, `passcode`, `pwd`, `pw`,
+  `secret`, `token`, `pin`, `credential` or `cred`, or the plurals
+  `passwords`, `tokens`, `credentials` or `creds`, whose value holds them
+  only as a list's items; or `key` or `keys` after a qualifier, `api`,
+  `private`, `secret`, `access`, `client`, `signing`, `encryption`,
+  `master`, `ssh`, `account` or `service`; or a word written without
+  breaks that is one of these after a head such as `api`, `access`,
+  `auth`, `client` or `db`. A key whose last word describes a credential
+  rather than holding one, `name`, `id`, `type`, `url`, `uri`, `endpoint`,
+  `path`, `file`, `alias`, `prefix`, `policy`, `length`, `version`,
+  `schema`, `region`, `arn`, `format`, `algorithm`, `expiry`, `ttl`,
+  `scope` or `provider`, or whose last word is `key` without a qualifier,
+  isn't one, and nor is `secrets`, which names a section in
+  docker-compose and GitHub Actions. So `password`, `api_key`,
+  `accessToken`, `password2`, `OAuth2Token`, `apikey` and `clientsecret`
+  are, and `key`, `sortKey`, `KeyName`, `keyFile`, `tokenUrl`,
+  `secret_name`, `token-key`, `keyboard`, `monkey` and `passport`
+  aren't. Each credential field of a secret's own text is masked however
   it is made, so a password that a step's script takes out of a secret's
-  JSON, as `jq` does, is masked in its logs. It is never
+  JSON, as `jq` does, is masked in its logs. What masks a job's secrets'
+  own texts is built once for each attempt (`plan.JobState.JobEnv`), as a
+  large secret's takes long to build. It is never
   given another short one, such as a `yes` that a secret decided, or a
   database's name or a region a structured secret holds, which common text
   holds too, nor the text of a boolean, a number or null that one decided,

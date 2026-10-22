@@ -187,13 +187,6 @@ func maskedFrom(own, derived []string, fields map[string]bool) []string {
 	return compactStrings(out)
 }
 
-// ownTexts returns the strings of each secret's own text: of each value
-// that Secrets names but Derived doesn't.
-func (r RunValues) ownTexts() []string {
-	own, _ := r.secretStrings()
-	return own
-}
-
 // secretStrings returns the strings of each value that Secrets names, as
 // Masked gives them, those of the secrets' own texts and those of the
 // values that Derived names apart, each once and none empty. A string is
