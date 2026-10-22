@@ -329,10 +329,11 @@ type Contexts struct {
 //     with its outputs.
 //   - matrix (Ready): Matrix, a mapping, empty for a job without a matrix.
 //   - job (JobEnv): name, key, attempt, a number, group and member.
-//   - steps (Step): for each step of Steps, by its id, its outputs. A
-//     reference that doesn't go on to an output by name, such as
-//     steps.build, steps.build.outputs or steps.build.result, reads as its
-//     own text, as format 1 reads it (expr.Scope.Text).
+//   - steps (Step): for each step of Steps, by its id, its outputs.
+//
+// A reference to needs or steps that format 1 doesn't read, such as
+// needs.build, steps.build.outputs or steps.build.result, reads as its own
+// text, as format 1 reads it (ReadsAsText).
 //
 // The status functions are known from Strategy on, as Status says.
 //
@@ -389,6 +390,7 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	}
 	if phase >= PhaseStrategy {
 		contexts["needs"] = needsContext(c.Needs)
+		scope.Text = ReadsAsText
 		for name, r := range c.Needs {
 			for _, output := range r.Private {
 				scope.Private.Add([]string{"needs", name, "outputs", output})
@@ -422,7 +424,6 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
 		}
 		contexts["steps"] = steps
-		scope.Text = stepText
 	}
 	for _, name := range c.Unknown {
 		path := splitPath(name)
@@ -457,12 +458,28 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	return scope
 }
 
-// stepText reports whether path, in context, is a reference to steps that
-// doesn't go on to an output by name, as steps.build, steps.build.outputs
-// and steps.build.result don't, which format 1 reads as its own text: it
-// reads steps only as steps.<id>.outputs.<name>.
-func stepText(context string, path []string) bool {
-	return context == "steps" && (len(path) < 3 || path[1] != "outputs")
+// ReadsAsText reports whether a reference to path, in context, reads as its
+// own text, as format 1 reads a word it doesn't know (expr.Scope.Text).
+// Format 1 reads steps only as steps.<id>.outputs.<name>, and needs only
+// as needs.<job>.outputs.<name> and needs.<job>.steps.<id>.outputs.<name>,
+// to which Meridian adds needs.<job>.result; any other reference to
+// either, such as steps.<id>, needs.<job>, needs.<job>.outputs or
+// needs.<job>.steps.<id>.result, is its own text, whatever step or job it
+// names.
+func ReadsAsText(context string, path []string) bool {
+	switch context {
+	case "steps":
+		return len(path) < 3 || path[1] != "outputs"
+	case "needs":
+		switch {
+		case len(path) >= 2 && path[1] == "result",
+			len(path) >= 3 && path[1] == "outputs",
+			len(path) >= 5 && path[1] == "steps" && path[3] == "outputs":
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // mapping returns d, the mapping that is context's value, or an empty one

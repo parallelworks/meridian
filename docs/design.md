@@ -229,6 +229,20 @@ its content, 220 files.
   job's `outputs:` read them. ACTIVATE takes the same fix by leaving the
   `id` out of the copy. None of the 155 `cleanup:`s is on a step with an
   `id`, and none reads `steps`.
+- **`needs.<job>.steps.<id>.outputs.<name>` reads the step of `<job>`**, the
+  job it names, where ACTIVATE read the step with that `id` of the job the
+  expression is in, whatever job it named. All 37 known reads name their
+  own job, so they read the same step either way. ACTIVATE takes the same
+  fix by reading the job the reference names.
+- **The platform's credential is kept out of the `env` context**, a fix for
+  security: format 1 gives a step's process `PW_API_KEY`, and gave its
+  expressions it in `env` too, so a value an expression made from it could
+  reach a log, an output or the run's state. Meridian's `env` holds only
+  the variables format 1 defines but it (`plan.IsFormatVariable`), and the
+  worker gives the key only to the step's process. No known expression
+  reads `env.PW_API_KEY`. ACTIVATE takes the same fix by leaving it out of
+  the env map its parser reads, while keeping it in the step's process
+  environment.
 
 ## Phases
 
@@ -387,7 +401,20 @@ its resolvers into a plan, in order:
      and reads as its own text, as format 1 reads a word it doesn't know.
      No known workflow has one: none of the 220 that
      [Bug fixes to format 1](#bug-fixes-to-format-1) counts reads `steps`
-     but through `needs.<job>.steps`.
+     but through `needs.<job>.steps`. So with `needs`, which format 1 reads
+     only as `needs.<job>.outputs.<name>` and
+     `needs.<job>.steps.<id>.outputs.<name>`, and Meridian as
+     `needs.<job>.result` too: any other reference to it, such as
+     `needs.build`, `needs.build.outputs`, `needs.build.steps.compile` or
+     `needs.build.status`, whatever job it names, is a warning
+     (`needs_read_whole`, `needs_unknown_key`), and reads as its own text.
+     The known workflows have 837 references to a job's outputs by name and
+     37 to its steps', and none of any other form. A plan holds an
+     expression's tree, not its text, so a reference read as its own text
+     is made again from its path: one written with dots is as written, and
+     a key in brackets is written `['key']`, or `[key]` when it had no
+     quotes, which can differ from how it was written, where ACTIVATE gives
+     the reference exactly as written.
    - Reading a variable that isn't a secret, or defining an input that takes
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is

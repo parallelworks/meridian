@@ -424,9 +424,15 @@
     ]
   },
   "needs_unknown_key": {
-    "why": "Each job in needs has outputs, result and steps, and nothing else.",
+    "why": "Each job in needs has outputs, result and steps, and nothing else, so another key reads as the reference's own text, such as needs.build.status, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read one of outputs, result or steps."
+    ]
+  },
+  "needs_read_whole": {
+    "why": "Format 1 reads a job in needs by its result, needs.<job>.result, and its outputs and its steps' outputs one by one, by name, as needs.<job>.outputs.<name> and needs.<job>.steps.<id>.outputs.<name>, and any other reference to needs, such as needs.build or needs.build.outputs, as a word it doesn't know: as its own text.",
+    "fix": [
+      "Read each output by its name: needs.<job>.outputs.<name>."
     ]
   },
   "step_not_earlier": {

@@ -495,9 +495,16 @@
   },
   "needs_unknown_key": {
     "title": "Clave desconocida de needs",
-    "why": "Cada trabajo de needs tiene outputs, result y steps, y nada más.",
+    "why": "Cada trabajo de needs tiene outputs, result y steps, y nada más, así que otra clave se lee como el propio texto de la referencia, como needs.build.status, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee outputs, result o steps."
+    ]
+  },
+  "needs_read_whole": {
+    "title": "Trabajo necesario leído entero",
+    "why": "El formato 1 lee un trabajo de needs por su result, needs.<job>.result, y sus salidas y las de sus pasos una a una, por nombre, como needs.<job>.outputs.<name> y needs.<job>.steps.<id>.outputs.<name>, y cualquier otra referencia a needs, como needs.build o needs.build.outputs, como una palabra que no conoce: como su propio texto.",
+    "fix": [
+      "Lee cada salida por su nombre: needs.<job>.outputs.<name>."
     ]
   },
   "step_not_earlier": {

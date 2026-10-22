@@ -495,9 +495,16 @@
   },
   "needs_unknown_key": {
     "title": "needs의 알 수 없는 키",
-    "why": "needs의 각 작업에는 outputs, result, steps만 있습니다.",
+    "why": "needs의 각 작업에는 outputs, result, steps만 있으므로 다른 키는 needs.build.status처럼 참조 자체의 텍스트로 읽힙니다. 형식 1이 모르는 단어를 읽는 방식과 같습니다.",
     "fix": [
       "outputs, result, steps 중 하나를 읽으세요."
+    ]
+  },
+  "needs_read_whole": {
+    "title": "필요한 작업 전체 읽기",
+    "why": "형식 1은 needs의 작업을 result(needs.<job>.result)로 읽고, 그 출력과 그 단계의 출력을 needs.<job>.outputs.<name>, needs.<job>.steps.<id>.outputs.<name>처럼 이름으로 하나씩 읽으며, needs.build나 needs.build.outputs 같은 needs의 다른 참조는 모르는 단어로, 즉 그 자체의 텍스트로 읽습니다.",
+    "fix": [
+      "각 출력을 이름으로 읽으세요: needs.<job>.outputs.<name>."
     ]
   },
   "step_not_earlier": {

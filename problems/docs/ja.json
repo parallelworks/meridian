@@ -495,9 +495,16 @@
   },
   "needs_unknown_key": {
     "title": "needs の不明なキー",
-    "why": "needs の各ジョブにあるのは outputs、result、steps だけです。",
+    "why": "needs の各ジョブにあるのは outputs、result、steps だけなので、ほかのキーは needs.build.status のように参照自体のテキストとして読み取られます。形式 1 が知らない語を読み取るのと同じです。",
     "fix": [
       "outputs、result、steps のいずれかを読み取ってください。"
+    ]
+  },
+  "needs_read_whole": {
+    "title": "必要なジョブ全体の読み取り",
+    "why": "形式 1 は needs のジョブを result（needs.<job>.result）で読み取り、その出力とそのステップの出力を needs.<job>.outputs.<name> や needs.<job>.steps.<id>.outputs.<name> のように名前で 1 つずつ読み取ります。needs.build や needs.build.outputs のような needs へのその他の参照は、知らない語として、それ自体のテキストとして読み取ります。",
+    "fix": [
+      "各出力を名前で読み取ってください: needs.<job>.outputs.<name>。"
     ]
   },
   "step_not_earlier": {

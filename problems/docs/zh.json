@@ -495,9 +495,16 @@
   },
   "needs_unknown_key": {
     "title": "needs 的未知键",
-    "why": "needs 中的每个作业只有 outputs、result 和 steps。",
+    "why": "needs 中的每个作业只有 outputs、result 和 steps，因此其他键读作引用本身的文本，例如 needs.build.status，与格式 1 读取它不认识的单词的方式相同。",
     "fix": [
       "读取 outputs、result 或 steps 之一。"
+    ]
+  },
+  "needs_read_whole": {
+    "title": "整体读取所需作业",
+    "why": "格式 1 通过 result（needs.<job>.result）读取 needs 中的作业，并按名称逐个读取其输出和其步骤的输出，例如 needs.<job>.outputs.<name> 和 needs.<job>.steps.<id>.outputs.<name>，并将对 needs 的其他引用（例如 needs.build 或 needs.build.outputs）当作它不认识的单词，读作其本身的文本。",
+    "fix": [
+      "按名称读取每个输出：needs.<job>.outputs.<name>。"
     ]
   },
   "step_not_earlier": {

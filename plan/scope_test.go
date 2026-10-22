@@ -75,13 +75,16 @@ func TestNewScopePhases(t *testing.T) {
 		},
 		{"${{ env.WHERE }}", []string{"unknown env", "workflow", "workflow", "workflow", "job", "step", "job"}},
 		{"${{ env.TOKEN }}", []string{"unknown env", "t0k", "t0k", "t0k", "t0k", "plain", "t0k"}},
-		{"${{ needs.build }}", []string{
+		{"${{ needs.build.result }} ${{ needs.build.outputs.o }} ${{ needs.build.steps.s.outputs.x }}", []string{
+			"unknown needs", "unknown needs", "success 1 2", "success 1 2", "success 1 2", "success 1 2", "success 1 2",
+		}},
+		{"${{ needs.build }} ${{ needs.build.outputs }} ${{ needs.build.steps.s.result }}", []string{
 			"unknown needs", "unknown needs",
-			`{"outputs":{"o":"1"},"result":"success","steps":{"s":{"outputs":{"x":"2"}}}}`,
-			`{"outputs":{"o":"1"},"result":"success","steps":{"s":{"outputs":{"x":"2"}}}}`,
-			`{"outputs":{"o":"1"},"result":"success","steps":{"s":{"outputs":{"x":"2"}}}}`,
-			`{"outputs":{"o":"1"},"result":"success","steps":{"s":{"outputs":{"x":"2"}}}}`,
-			`{"outputs":{"o":"1"},"result":"success","steps":{"s":{"outputs":{"x":"2"}}}}`,
+			"needs.build needs.build.outputs needs.build.steps.s.result",
+			"needs.build needs.build.outputs needs.build.steps.s.result",
+			"needs.build needs.build.outputs needs.build.steps.s.result",
+			"needs.build needs.build.outputs needs.build.steps.s.result",
+			"needs.build needs.build.outputs needs.build.steps.s.result",
 		}},
 		{"${{ failure() }} ${{ success() }}", []string{"unknown status", "unknown status", "true false", "true false", "true false", "true false", "true false"}},
 		{"${{ matrix.os }}", []string{"unknown matrix", "unknown matrix", "unknown matrix", "linux", "linux", "linux", "linux"}},

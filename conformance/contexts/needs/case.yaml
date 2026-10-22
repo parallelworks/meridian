@@ -1,15 +1,18 @@
 description: >-
   needs holds, for each job a job needs, its result, its outcome; its
-  outputs, as strings; and the outputs of its steps that have ids, by id.
-  Text made of one, as a run: of it alone is, is its JSON.
-  A name it doesn't have reads as "", as needs holds strings, but for an
+  outputs, as strings; and the outputs of its steps that have ids, by id,
+  which format 1 reads as needs.<job>.result, needs.<job>.outputs.<name>
+  and needs.<job>.steps.<id>.outputs.<name>. Any other reference to needs,
+  such as needs.<job>, needs.<job>.outputs or needs.<job>.steps.<id>,
+  reads as its own text, as format 1 reads a word it doesn't know, with a
+  warning. An output's name it doesn't have reads as "", but an
   output, which reads as "" in an if:, in a step whose if: is the word
   always, in a job's values when its if: is, in a step's cleanup:, and in
   the job's outputs: once a step of it failed or was cancelled, and fails
   anywhere else (output_not_written). It is known
   where a job's dependencies have finished, as its runs-on: is evaluated,
   and in its steps.
-source: Meridian
+source: Meridian, and ACTIVATE's parser
 jobs:
   test:
     needs:
@@ -30,6 +33,26 @@ expect:
     - severity: warning
       code: older_always
       path: /jobs/test/steps/2/if
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/3/run
+      params: {job: build, text: needs.build}
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/3/run
+      params: {job: build, text: needs.build.outputs}
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/3/run
+      params: {job: build, text: needs.build.steps.compile}
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/4/run
+      params: {job: probe, text: needs.probe}
+    - severity: warning
+      code: needs_unknown_key
+      path: /jobs/test/steps/4/run
+      params: {job: probe, key: status}
   skipped:
     - /jobs/probe
   values:
@@ -37,5 +60,5 @@ expect:
     /jobs/test/steps/0/run: success skipped gpus
     /jobs/test/steps/1/run: ./app
     /jobs/test/steps/2/run: "[] []"
-    /jobs/test/steps/3/run: '{"outputs":{"binary":"./app","group":"gpus"},"result":"success","steps":{"compile":{"outputs":{"binary":"./app"}}}}'
-    /jobs/test/steps/4/run: '{"outputs":{},"result":"skipped","steps":{}}'
+    /jobs/test/steps/3/run: needs.build needs.build.outputs needs.build.steps.compile
+    /jobs/test/steps/4/run: needs.probe needs.probe.status

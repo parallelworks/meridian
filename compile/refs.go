@@ -298,8 +298,12 @@ func (c *compiler) checkInputRef(path []string) finding {
 
 // checkNeedsRef checks that needs.<path> names a job this one needs, or in
 // its steps and outputs this job itself, whose steps' outputs so far are
-// its outputs. A job's outputs are whatever its steps write, so their names
-// aren't checked.
+// its outputs, as needs.<job>.outputs.<name>,
+// needs.<job>.steps.<id>.outputs.<name> or needs.<job>.result. Any other
+// reference to needs, such as needs.<job> or needs.<job>.<other key>, is a
+// warning, as format 1 reads it as its own text (plan.ReadsAsText). A
+// job's outputs are whatever its steps write, so their names aren't
+// checked.
 func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding {
 	name := path[0]
 	needed, ok := c.jobInfos[name]
@@ -307,24 +311,22 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding 
 	switch {
 	case job == nil:
 		return finding{problems.NeedsOutsideJob, nil}
+	case plan.ReadsAsText("needs", path):
+		// Format 1 reads any other reference to needs as its own text,
+		// whatever job it names.
+		if len(path) >= 2 && path[1] != "outputs" && path[1] != "steps" {
+			return finding{problems.NeedsUnknownKey, problems.Params{"job": name, "key": path[1]}}
+		}
+		return finding{problems.NeedsReadWhole, problems.Params{"job": name, "text": "needs." + strings.Join(path, ".")}}
 	case !ok:
 		return suggesting(problems.UndefinedJob, problems.Params{"job": name}, name, c.jobNames)
 	case !job.needed[name] && !self:
 		return finding{problems.JobNotNeeded, problems.Params{"job": job.name, "needed": name}}
-	case len(path) == 1:
-		return finding{}
 	}
-	switch path[1] {
-	case "outputs":
-	case "result":
-	case "steps":
-		if len(path) >= 3 {
-			if _, ok := needed.stepIDs[path[2]]; !ok {
-				return finding{problems.NeededJobNoStep, problems.Params{"job": name, "id": path[2]}}
-			}
+	if path[1] == "steps" {
+		if _, ok := needed.stepIDs[path[2]]; !ok {
+			return finding{problems.NeededJobNoStep, problems.Params{"job": name, "id": path[2]}}
 		}
-	default:
-		return finding{problems.NeedsUnknownKey, problems.Params{"job": name, "key": path[1]}}
 	}
 	return finding{}
 }

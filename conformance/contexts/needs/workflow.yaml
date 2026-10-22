@@ -16,5 +16,5 @@ jobs:
       - run: ${{ needs.build.steps.compile.outputs.binary }}
       - run: "[${{ needs.build.outputs.missing }}] [${{ needs.build.steps.compile.outputs.missing }}]"
         if: always
-      - run: ${{ needs.build }}
-      - run: ${{ needs.probe }}
+      - run: ${{ needs.build }} ${{ needs.build.outputs }} ${{ needs.build.steps.compile }}
+      - run: ${{ needs.probe }} ${{ needs.probe.status }}
