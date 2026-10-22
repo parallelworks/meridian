@@ -626,3 +626,45 @@ func TestExpand(t *testing.T) {
 		t.Error("a job without a strategy")
 	}
 }
+
+// The quantities a job asks for read as Kubernetes writes them, and
+// durations as format 1 does; what isn't one, or doesn't fit, isn't read.
+func TestParseQuantities(t *testing.T) {
+	type result struct {
+		n  int64
+		ok bool
+	}
+	check := func(name string, got result, in any, want result) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s(%#v) = %v, want %v", name, in, got, want)
+		}
+	}
+	for in, want := range map[any]result{
+		int64(4): {4000, true}, 0.5: {500, true}, "1.5": {1500, true}, "500m": {500, true}, "": {0, true},
+		0.0001: {0, false}, "1.5m": {0, false}, "-1": {0, false}, int64(-1): {0, false}, "4 cores": {0, false}, true: {0, false},
+	} {
+		n, ok := plan.ParseCPU(in)
+		check("ParseCPU", result{n, ok}, in, want)
+	}
+	for in, want := range map[any]result{
+		"1.5Gi": {1610612736, true}, "8G": {8e9, true}, "512Mi": {512 << 20, true}, int64(1000): {1000, true}, "2k": {2000, true},
+		"8E": {8e18, true}, "9Ei": {0, false}, "0.5": {0, false}, "8GB": {0, false}, "8gi": {0, false}, nil: {0, true},
+	} {
+		n, ok := plan.ParseMemory(in)
+		check("ParseMemory", result{n, ok}, in, want)
+	}
+	for in, want := range map[any]result{
+		"2": {2, true}, 2.0: {2, true}, int64(0): {0, true}, 2.5: {0, false}, int64(-1): {0, false}, "two": {0, false},
+	} {
+		n, ok := plan.ParseGPU(in)
+		check("ParseGPU", result{int64(n), ok}, in, want)
+	}
+	for in, want := range map[any]result{
+		"10m": {600, true}, "2d": {172800, true}, "300": {300, true}, "45s": {45, true}, int64(300): {300, true}, 60.0: {60, true},
+		"1.5h": {0, false}, int64(-1): {0, false}, "99999999999999999999": {0, false}, "9999999999999999d": {0, false}, "10 m": {0, false},
+	} {
+		n, ok := plan.ParseDuration(in)
+		check("ParseDuration", result{n, ok}, in, want)
+	}
+}

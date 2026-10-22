@@ -156,13 +156,13 @@ func (e *evaluation) resources(v Value, pointer string) Resources {
 	}
 	var r Resources
 	invalid := func(key string) { e.reportInvalid(problems.ResourcesInvalid, at(pointer, key), key, m[key], read) }
-	if r.MilliCPU, ok = readCPU(m["cpu"]); !ok {
+	if r.MilliCPU, ok = ParseCPU(m["cpu"]); !ok {
 		invalid("cpu")
 	}
-	if r.Memory, ok = readMemory(m["memory"]); !ok {
+	if r.Memory, ok = ParseMemory(m["memory"]); !ok {
 		invalid("memory")
 	}
-	if r.GPU, ok = readGPU(m["gpu"]); !ok {
+	if r.GPU, ok = ParseGPU(m["gpu"]); !ok {
 		invalid("gpu")
 	}
 	return r
@@ -200,7 +200,7 @@ func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 	if !ok {
 		return 0
 	}
-	seconds, ok := readDuration(out)
+	seconds, ok := ParseDuration(out)
 	if !ok {
 		e.reportInvalid(problems.DurationInvalid, pointer, key, out, read)
 	}

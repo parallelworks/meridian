@@ -284,13 +284,7 @@ type Contexts struct {
 // else of c.
 func NewScope(phase Phase, c Contexts) expr.Scope {
 	r := c.Run
-	inputs, _ := r.Inputs.Get().(map[string]any)
-	if inputs == nil {
-		inputs = map[string]any{}
-	} else if slices.ContainsFunc(c.Unknown, func(name string) bool { return strings.HasPrefix(name, "inputs.") }) {
-		// Unknown's values are put in a copy.
-		inputs = jsonvalue.CloneMap(inputs)
-	}
+	inputs := c.mapping("inputs", r.Inputs)
 	contexts := map[string]any{
 		"inputs": inputs, "org": stringsContext(r.Org), "vars": stringsContext(r.Vars),
 		"remote": stringsContext(r.Remote), "sessions": stringsContext(r.Sessions),
@@ -321,11 +315,7 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 		scope.Status = &status
 	}
 	if phase >= PhaseReady {
-		matrix, _ := c.Matrix.Get().(map[string]any)
-		if matrix == nil {
-			matrix = map[string]any{}
-		}
-		contexts["matrix"] = matrix
+		contexts["matrix"] = c.mapping("matrix", c.Matrix)
 	}
 	if phase >= PhaseJobEnv {
 		j := c.Job
@@ -371,6 +361,20 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	mark(r.Private, true, false)
 	mark(c.Private, false, false)
 	return scope
+}
+
+// mapping returns d, the mapping that is context's value, or an empty one
+// for nothing. It is d's own unless Unknown names a value in it, which is
+// put in a copy.
+func (c *Contexts) mapping(context string, d Data) map[string]any {
+	m, _ := d.Get().(map[string]any)
+	if m == nil {
+		return map[string]any{}
+	}
+	if slices.ContainsFunc(c.Unknown, func(name string) bool { return strings.HasPrefix(name, context+".") }) {
+		return jsonvalue.CloneMap(m)
+	}
+	return m
 }
 
 // stringsContext returns a context whose values are strings, m's.
