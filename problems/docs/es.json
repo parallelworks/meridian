@@ -906,6 +906,13 @@
       "Comprueba que el shell del paso está en el host y que su directorio de trabajo se puede crear allí."
     ]
   },
+  "shell_not_supported": {
+    "title": "Shell que el formato 1 no ejecuta",
+    "why": "El formato 1 solo ejecuta el comando de un paso con bash o sh, según indica su shell:, así que el paso falla sin ejecutarse. El esquema del flujo de trabajo no permite otro shell, así que esto solo ocurre con un plan hecho sin comprobarlo.",
+    "fix": [
+      "Ejecuta el paso con bash o sh, por nombre o por ruta, como en shell: bash -l {0}."
+    ]
+  },
   "step_timed_out": {
     "title": "El paso superó su tiempo límite",
     "why": "El timeout: de un paso, y el timeout de su retry: para cada intento, limitan cuánto tiempo se ejecuta. A un paso que supera uno de ellos, el worker le envía SIGTERM y, después, SIGKILL si no ha terminado tras un periodo de gracia. Un paso que superó su propio timeout: no se vuelve a intentar; un intento que superó el timeout de su retry: sí, mientras al paso le queden reintentos.",
@@ -927,11 +934,18 @@
       "Escribe los valores grandes en un archivo del directorio de la ejecución y da su ruta como salida."
     ]
   },
+  "outputs_not_file": {
+    "title": "$OUTPUTS no es un archivo",
+    "why": "El worker lee las salidas de un paso del archivo que indica $OUTPUTS. Solo lee un archivo regular, y no a través de un enlace simbólico, para que un FIFO ahí no lo haga esperar para siempre; el paso puso otra cosa ahí, así que no se pueden leer sus salidas, y falla. El worker vuelve a crear el archivo para los pasos siguientes.",
+    "fix": [
+      "Escribe las salidas en $OUTPUTS con >> y deja el archivo donde está."
+    ]
+  },
   "log_not_kept": {
     "title": "Registro no guardado completo",
-    "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
+    "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, o cuando el disco está lleno, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
     "fix": [
-      "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador."
+      "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y el espacio del disco que contiene el directorio del worker, que por omisión está en TMPDIR."
     ]
   }
 }

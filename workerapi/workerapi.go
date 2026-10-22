@@ -257,9 +257,16 @@ type Claim struct {
 	HeartbeatSeconds int64 `json:"heartbeatSeconds"`
 	// SelfFencing is set for a job whose retry: lists worker-lost, which
 	// can have a new attempt while this one may still run: the worker
-	// stops the job once it hasn't renewed its lease for LeaseSeconds,
-	// counted on its monotonic clock from when it sent the last heartbeat
-	// that succeeded.
+	// stops the job before its lease lapses. Counted from when it sent the
+	// last heartbeat that succeeded, or the claim, on whichever of its
+	// monotonic and wall clocks has gone further: once six tenths of
+	// LeaseSeconds have passed without a renewal, it may start stopping
+	// the job, sending every process group the attempt started SIGTERM;
+	// and by nine tenths it has sent them all SIGKILL, and stopped waiting
+	// for them. A process that left its group, as with setsid, isn't the
+	// worker's to stop. The coordinator starts a new attempt only once the
+	// lease has lapsed for LeaseSeconds and a margin, by the store's
+	// clock.
 	SelfFencing bool `json:"selfFencing,omitzero"`
 	// Run is the part of the run that the job reads (plan.Job.Reads): its
 	// inputs' values, variables and secrets among them. The worker masks
@@ -270,12 +277,32 @@ type Claim struct {
 	// RunDir is the run's directory on the worker's host (PW_JOB_DIR),
 	// where steps run by default.
 	RunDir string `json:"runDir"`
+	// Env are the variables a platform gives the job's steps, by name,
+	// such as format 1's PW_JOB_NUMBER, PW_USER and PW_PLATFORM_HOST: the
+	// worker sets them over the environment the workflow gives each step,
+	// as format 1 sets its own, and its own over them, OUTPUTS, PW_JOB_DIR
+	// and the retry counters among them. A value whose Secret is set, such
+	// as PW_API_KEY's, the worker masks as it masks the run's secrets, and
+	// never logs.
+	Env map[string]EnvVar `json:"env,omitempty"`
+	// Retry is how many earlier attempts of the job started a step: what
+	// the job's retry: has used, which a step reads as
+	// PW_WORKFLOW_JOB_CURRENT_RETRY. An attempt that failed before its
+	// first step isn't counted.
+	Retry int `json:"retry,omitzero"`
 	// Container is the container the job's steps run in, or nil for steps
 	// that run on the host.
 	Container *Container `json:"container,omitempty"`
 	// TraceParent is the W3C traceparent of the attempt's span, which the
 	// worker continues, or "".
 	TraceParent string `json:"traceParent,omitempty"`
+}
+
+// An EnvVar is a variable a platform gives a job's steps (Claim.Env).
+type EnvVar struct {
+	Value string `json:"value"`
+	// Secret is set for a value the worker masks, and never logs.
+	Secret bool `json:"secret,omitzero"`
 }
 
 // A Container is the container a job's steps run in. The worker runs on

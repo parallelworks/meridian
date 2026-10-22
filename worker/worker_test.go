@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"maps"
@@ -215,30 +217,38 @@ func TestTimeouts(t *testing.T) {
 	})
 	t.Run("job", func(t *testing.T) {
 		t.Parallel()
+		// As in format 1, a step that outlives the job's timeout runs
+		// after it, and a job past its timeout isn't cancelled: its steps'
+		// cancelled() is false.
 		after := command("echo after")
 		after.If = plan.Literal("always()")
-		j := newJob(command("sleep 30"), after)
+		onCancel := command("echo cancelled")
+		onCancel.If = plan.Literal("cancelled()")
+		j := newJob(command("sleep 30"), after, onCancel)
 		j.TimeoutSeconds = 1
 		f := newFakeCoordinator(t, j)
 		if err := f.runWorker(t.Context(), Config{}); err != nil {
 			t.Fatal(err)
 		}
-		checkEvents(t, f, "started 0.0", "finished 0.0 failure -1", "finished 1.0 failure -1")
+		checkEvents(t, f, "started 0.0", "finished 0.0 failure -1", "started 1.0", "finished 1.0 success 0", "finished 2.0 skipped -1")
 		checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
 	})
 }
 
 // TestCancel checks that a job the coordinator cancels stops: its running
 // step gets SIGTERM, and SIGKILL after the cancellation's grace period if
-// it ignores that, its other steps don't run, its cleanup: commands do,
-// and it ends cancelled.
+// it ignores that; its later steps don't run, but, as in format 1, those
+// whose if: is always() or cancelled(); its cleanup: commands run; and it
+// ends cancelled.
 func TestCancel(t *testing.T) {
 	t.Parallel()
 	stubborn := command("trap '' TERM; echo waiting; sleep 30")
 	stubborn.Cleanup = plan.Literal("echo cleaned > $PW_JOB_DIR/cleaned")
-	never := command("echo never")
-	never.If = plan.Literal("always()")
-	f := newFakeCoordinator(t, newJob(stubborn, never))
+	always := command("echo always")
+	always.If = plan.Literal("always()")
+	onCancel := command("echo cancelled")
+	onCancel.If = plan.Literal("cancelled()")
+	f := newFakeCoordinator(t, newJob(stubborn, always, command("echo skipped"), onCancel))
 	// Cancel once the step has printed, and so ignores SIGTERM.
 	var once sync.Once
 	f.fault = func(r *http.Request) fault {
@@ -256,14 +266,113 @@ func TestCancel(t *testing.T) {
 	}
 	checkEvents(t, f,
 		"started 0.0", "finished 0.0 cancelled -1",
-		"finished 1.0 cancelled -1",
+		"started 1.0", "finished 1.0 success 0",
+		"finished 2.0 skipped -1",
+		"started 3.0", "finished 3.0 success 0",
 		"cleanup started 0.0", "cleanup finished 0.0 success 0",
 	)
 	checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "waiting\n")
+	checkLog(t, f, logKey{workerapi.LogStep, 3, 0}, "cancelled\n")
 	if _, err := os.Stat(filepath.Join(f.claim.RunDir, "cleaned")); err != nil {
 		t.Errorf("the cleanup: command didn't run: %v", err)
 	}
+}
+
+// TestOutlivesCancel checks that, as in format 1, a step whose if: is
+// cancel-aware runs to its end whatever happens to its job: neither the
+// job's cancellation nor the step's own timeout: stops it, though its
+// retry:'s timeout does; and a job whose steps all ran to their ends ends
+// as they did.
+func TestOutlivesCancel(t *testing.T) {
+	t.Parallel()
+	t.Run("cancelled", func(t *testing.T) {
+		t.Parallel()
+		step := command("echo started; sleep 2; echo ended")
+		step.If, step.Timeout = plan.Literal("always()"), number(1)
+		f := newFakeCoordinator(t, newJob(step))
+		var once sync.Once
+		f.fault = func(r *http.Request) fault {
+			if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+				once.Do(func() { f.setControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 1}) })
+			}
+			return answer
+		}
+		if err := f.runWorker(t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		checkEvents(t, f, "started 0.0", "finished 0.0 success 0")
+		checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "started\nended\n")
+		// As in format 1, the job ends as its steps did: none was
+		// cancelled.
+		checkEnd(t, f, plan.OutcomeSuccess, "")
+	})
+	t.Run("retry timeout", func(t *testing.T) {
+		t.Parallel()
+		step := command("sleep 30")
+		step.If = plan.Literal("always()")
+		step.Retry = &plan.StepRetry{MaxRetries: number(0), Timeout: number(1)}
+		f := newFakeCoordinator(t, newJob(step))
+		if err := f.runWorker(t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		checkEvents(t, f, "started 0.0", "finished 0.0 failure -1")
+		if got := codes(f.finishedEvent(0, 0, false).Diagnostics); !slices.Equal(got, []string{"step_timed_out"}) {
+			t.Errorf("the step's diagnostics are %v", got)
+		}
+	})
+}
+
+// TestCancelEscalates checks that a later cancellation that gives less
+// time, or the attempt ending without the worker, makes SIGKILL sooner,
+// for a step and a cleanup: command alike.
+func TestCancelEscalates(t *testing.T) {
+	t.Parallel()
+	t.Run("cancel again", func(t *testing.T) {
+		t.Parallel()
+		f := newFakeCoordinator(t, newJob(command("trap '' TERM; echo waiting; sleep 30")))
+		var once sync.Once
+		f.fault = func(r *http.Request) fault {
+			if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+				once.Do(func() {
+					f.setControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 60})
+					f.setControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 1})
+				})
+			}
+			return answer
+		}
+		start := time.Now()
+		if err := f.runWorker(t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed > 15*time.Second {
+			t.Errorf("the step ran for %v, past the second cancellation's grace period", elapsed)
+		}
+		checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
+	})
+	t.Run("halted cleanup", func(t *testing.T) {
+		t.Parallel()
+		step := command("true")
+		step.Cleanup = plan.Literal("trap '' TERM; echo cleaning; sleep 30")
+		f := newFakeCoordinator(t, newJob(step))
+		var cleaning atomic.Bool
+		f.fault = func(r *http.Request) fault {
+			if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogCleanup) {
+				cleaning.Store(true)
+			}
+			if cleaning.Load() && r.URL.Path == workerapi.PathHeartbeat {
+				return fence
+			}
+			return answer
+		}
+		start := time.Now()
+		if err := f.runWorker(t.Context(), Config{}); !errors.Is(err, errFenced) {
+			t.Fatalf("got %v, want %v", err, errFenced)
+		}
+		if elapsed := time.Since(start); elapsed > 15*time.Second {
+			t.Errorf("the cleanup ran for %v after the attempt was superseded", elapsed)
+		}
+	})
 }
 
 // TestEarlyCancel checks that a step whose early-cancel: is
@@ -572,49 +681,6 @@ func TestFenced(t *testing.T) {
 	}
 }
 
-// TestSelfFencing checks that a worker whose job fences itself stops it
-// once it hasn't renewed its lease for a lease period, and that one whose
-// job doesn't keeps running it, cut off as long.
-func TestSelfFencing(t *testing.T) {
-	t.Parallel()
-	for _, fences := range []bool{true, false} {
-		t.Run("fences "+strconv.FormatBool(fences), func(t *testing.T) {
-			t.Parallel()
-			// Long enough that the job ends by itself only if it isn't
-			// fenced: cut off three times its lease, or ten.
-			script := "sleep 3"
-			if fences {
-				script = "sleep 10"
-			}
-			f := newFakeCoordinator(t, newJob(command(script)))
-			f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = fences, 1, 1
-			var started atomic.Bool
-			f.onEvent = func(e workerapi.Event) { started.Store(true) }
-			f.fault = func(r *http.Request) fault {
-				if started.Load() && r.URL.Path == workerapi.PathHeartbeat {
-					return unavailable
-				}
-				return answer
-			}
-			start := time.Now()
-			err := f.runWorker(t.Context(), Config{})
-			if !fences {
-				if err != nil {
-					t.Fatal(err)
-				}
-				checkEnd(t, f, plan.OutcomeSuccess, "")
-				return
-			}
-			if !errors.Is(err, errLeaseLapsed) {
-				t.Fatalf("got %v, want %v", err, errLeaseLapsed)
-			}
-			if elapsed := time.Since(start); elapsed > 8*time.Second {
-				t.Errorf("the worker took %v to stop a job whose lease is a second", elapsed)
-			}
-		})
-	}
-}
-
 // TestSetupFails checks the attempts that fail before their first step,
 // with a problem whose code placement compares: a job whose steps are to
 // run in a container, which this worker refuses rather than run them on
@@ -667,7 +733,8 @@ func TestSetupFails(t *testing.T) {
 
 // TestStepsRefused checks the steps this worker can't run, which fail
 // with a problem that says why: a uses: step, a step on another host, a
-// shell that isn't there, and outputs too large to keep.
+// shell that isn't there, outputs too large to keep, and a shell format 1
+// doesn't run.
 func TestStepsRefused(t *testing.T) {
 	t.Parallel()
 	uses := plan.Step{Uses: "parallelworks/checkout", With: plan.Literal(map[string]any{"repo": "x", "branch": "main"})}
@@ -676,7 +743,9 @@ func TestStepsRefused(t *testing.T) {
 	noShell := command("true")
 	noShell.Shell = "/nonexistent/bash {0}"
 	large := command("head -c 1100000 /dev/zero | tr '\\0' a > $OUTPUTS")
-	steps := []plan.Step{uses, onHost, noShell, large}
+	zsh := command("true")
+	zsh.Shell = "zsh {0}"
+	steps := []plan.Step{uses, onHost, noShell, large, zsh}
 	for i := range steps {
 		steps[i].If = plan.Literal("always()")
 	}
@@ -689,9 +758,10 @@ func TestStepsRefused(t *testing.T) {
 		"finished 1.0 failure -1",
 		"started 2.0", "finished 2.0 failure -1",
 		"started 3.0", "finished 3.0 failure 0",
+		"finished 4.0 failure -1",
 	)
 	checkEnd(t, f, plan.OutcomeFailure, "")
-	for step, want := range []string{"uses_not_supported", "step_ssh_not_supported", "step_not_started", "outputs_too_large"} {
+	for step, want := range []string{"uses_not_supported", "step_ssh_not_supported", "step_not_started", "outputs_too_large", "shell_not_supported"} {
 		if got := codes(f.finishedEvent(step, 0, false).Diagnostics); !slices.Equal(got, []string{want}) {
 			t.Errorf("step %d's diagnostics are %v, want %s", step, got, want)
 		}
@@ -733,22 +803,6 @@ func TestPlanTooNew(t *testing.T) {
 	}
 }
 
-// TestStopped checks that a worker whose context ends stops its job's
-// steps and sends what it has, without completing the attempt: the
-// coordinator decides how it ended.
-func TestStopped(t *testing.T) {
-	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("echo started; sleep 30")))
-	ctx, cancel := context.WithCancel(t.Context())
-	f.onEvent = func(e workerapi.Event) { cancel() }
-	if err := f.runWorker(ctx, Config{}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("got %v", err)
-	}
-	if f.end != nil {
-		t.Error("a stopped worker completed its attempt")
-	}
-}
-
 // TestTLS checks that a worker reaches a coordinator over TLS 1.3 when its
 // key has the hash the worker was given, and refuses one whose key
 // doesn't, without trying it again.
@@ -758,7 +812,15 @@ func TestTLS(t *testing.T) {
 		t.Run("pinned "+strconv.FormatBool(pinned), func(t *testing.T) {
 			t.Parallel()
 			f := newFakeCoordinator(t, newJob(command("echo over tls")))
+			// HTTP/1.1, though the server offers HTTP/2, so that a
+			// replica's 503 can send the next request to another.
+			var protos sync.Map
+			f.fault = func(r *http.Request) fault {
+				protos.Store(r.Proto, true)
+				return answer
+			}
 			srv := httptest.NewUnstartedServer(f)
+			srv.EnableHTTP2 = true
 			srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 			srv.StartTLS()
 			t.Cleanup(srv.Close)
@@ -781,6 +843,205 @@ func TestTLS(t *testing.T) {
 			}
 			checkEnd(t, f, plan.OutcomeSuccess, "")
 			checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "over tls\n")
+			protos.Range(func(proto, _ any) bool {
+				if proto != "HTTP/1.1" {
+					t.Errorf("the worker spoke %v", proto)
+				}
+				return true
+			})
 		})
+	}
+}
+
+// TestOutputsNotFile checks that a step that puts something other than a
+// file at $OUTPUTS, such as a FIFO, which reading would wait on forever,
+// or a symbolic link, fails, and that the steps after it have a file
+// again.
+func TestOutputsNotFile(t *testing.T) {
+	t.Parallel()
+	fifo := command(`rm -f "$OUTPUTS"; mkfifo "$OUTPUTS"`)
+	link := command(`ln -sf /etc/hostname "$OUTPUTS"`)
+	after := command("echo a=1 >> $OUTPUTS")
+	for _, s := range []*plan.Step{&link, &after} {
+		s.If = plan.Literal("always()")
+	}
+	f := newFakeCoordinator(t, newJob(fifo, link, after))
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := f.runWorker(ctx, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 failure 0",
+		"started 1.0", "finished 1.0 failure 0",
+		"started 2.0", "finished 2.0 success 0",
+	)
+	for step := range 2 {
+		if got := codes(f.finishedEvent(step, 0, false).Diagnostics); !slices.Equal(got, []string{"outputs_not_file"}) {
+			t.Errorf("step %d's diagnostics are %v", step, got)
+		}
+	}
+	if got := f.finishedEvent(2, 0, false).Outputs; !reflect.DeepEqual(got, map[string]string{"a": "1"}) {
+		t.Errorf("the last step's outputs are %v", got)
+	}
+}
+
+// TestSharedOutputsTooLarge checks that only the step that takes its
+// job's shared $OUTPUTS past the limit fails, and not the steps without
+// an id after it, which can't add to it.
+func TestSharedOutputsTooLarge(t *testing.T) {
+	t.Parallel()
+	shared := command("echo b=2 >> $OUTPUTS")
+	own := plan.Step{ID: "own", Run: plan.Literal("echo c=3 >> $OUTPUTS")}
+	for _, s := range []*plan.Step{&shared, &own} {
+		s.If = plan.Literal("always()")
+	}
+	f := newFakeCoordinator(t, newJob(command("head -c 1100000 /dev/zero | tr '\\0' a >> $OUTPUTS"), shared, own))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 failure 0",
+		"started 1.0", "finished 1.0 success 0",
+		"started 2.0", "finished 2.0 success 0",
+	)
+	if got := codes(f.finishedEvent(0, 0, false).Diagnostics); !slices.Equal(got, []string{"outputs_too_large"}) {
+		t.Errorf("step 0's diagnostics are %v", got)
+	}
+	if e := f.finishedEvent(1, 0, false); len(e.Diagnostics) != 0 || len(e.Outputs) != 0 {
+		t.Errorf("step 1 has the diagnostics %v and the outputs %v", codes(e.Diagnostics), e.Outputs)
+	}
+	if got := f.finishedEvent(2, 0, false).Outputs; !reflect.DeepEqual(got, map[string]string{"c": "3"}) {
+		t.Errorf("step 2's outputs are %v", got)
+	}
+}
+
+// TestDirRemoved checks that a step that removes the worker's directory,
+// as rm -rf "$TMPDIR"/* does, doesn't keep the job from going on: the
+// worker makes it again.
+func TestDirRemoved(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command(`rm -rf "$(dirname "$OUTPUTS")"`), command("echo next; echo a=1 >> $OUTPUTS")))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "next\n")
+}
+
+// TestProblemsMasked checks that a problem the worker makes from an error,
+// which can quote a value made from a secret, is masked, in a step's event
+// and in the attempt's end.
+func TestProblemsMasked(t *testing.T) {
+	t.Parallel()
+	secret := func(f *fakeCoordinator) {
+		f.claim.Run = plan.RunValues{Format: 1, Vars: map[string]string{"token": "hunter2"}, Secrets: []string{"vars.token"}}
+	}
+	t.Run("step", func(t *testing.T) {
+		t.Parallel()
+		step := command("true")
+		step.WorkingDirectory = plan.Literal("/proc/hunter2/x")
+		f := newFakeCoordinator(t, newJob(step))
+		secret(f)
+		if err := f.runWorker(t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.finishedEvent(0, 0, false).Diagnostics {
+			if strings.Contains(fmt.Sprint(d.Params, d.Detail), "hunter2") {
+				t.Errorf("diagnostic %s quotes the secret: %v, %q", d.Code, d.Params, d.Detail)
+			}
+		}
+	})
+	t.Run("setup", func(t *testing.T) {
+		t.Parallel()
+		file := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f := newFakeCoordinator(t, newJob(command("true")))
+		secret(f)
+		f.claim.RunDir = filepath.Join(file, "hunter2")
+		if err := f.runWorker(t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+		if p := end.Problem; p == nil || strings.Contains(fmt.Sprint(p.Params, p.Detail), "hunter2") {
+			t.Errorf("the attempt's problem quotes the secret: %+v", p)
+		}
+		if setup, _ := f.log(logKey{part: workerapi.LogSetup}); strings.Contains(setup, "hunter2") {
+			t.Errorf("the setup log quotes the secret: %q", setup)
+		}
+	})
+}
+
+// TestPlatformEnv checks the variables a step gets from what the worker
+// knows, and from what a platform gives the job, as format 1 lays them:
+// over the workflow's environment, with the worker's own over them, and a
+// secret one masked.
+func TestPlatformEnv(t *testing.T) {
+	t.Parallel()
+	step := command(`echo "$PW_USER $PW_JOB_ID $PW_API_KEY $PW_PARENT_JOB_DIR $PW_WORKFLOW_JOB_CURRENT_RETRY $PW_WORKFLOW_JOB_MAX_RETRIES $PW_MATRIX_INDEX"; [ "$OUTPUTS" != /x ]`)
+	step.Env = map[string]plan.Value{"PW_USER": plan.Literal("workflow"), "OUTPUTS": plan.Literal("/x")}
+	j := newJob(step)
+	j.Key, j.Matrix = "a#b#7", plan.DataOf(map[string]any{"n": int64(7)})
+	j.Retry = &plan.ReadyJobRetry{Reasons: []plan.Reason{plan.ReasonWorkerLost}, MaxRetries: 3, IntervalSeconds: 60}
+	f := newFakeCoordinator(t, j)
+	f.claim.Retry = 2
+	f.claim.Env = map[string]workerapi.EnvVar{
+		"PW_USER": {Value: "alice"}, "PW_JOB_ID": {Value: "wf-00042"}, "PW_API_KEY": {Value: "k3y-s3cret", Secret: true},
+	}
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "alice wf-00042 *** "+f.claim.RunDir+" 2 3 7\n")
+}
+
+// TestEventsLost checks that a worker whose coordinator has lost events it
+// said it had stored, which the worker no longer has, stops its job.
+func TestEventsLost(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command("true"), command("sleep 30")))
+	var forgot atomic.Bool
+	f.fault = func(r *http.Request) fault {
+		if r.URL.Path != workerapi.PathEvents {
+			return answer
+		}
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		// Forget them as the second step starts.
+		if strings.Contains(string(body), `"step":1`) && !forgot.Swap(true) {
+			return forget
+		}
+		return answer
+	}
+	start := time.Now()
+	if err := f.runWorker(t.Context(), Config{}); err == nil || !strings.Contains(err.Error(), "lost") {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Errorf("the worker took %v to stop", elapsed)
+	}
+}
+
+// TestRedirectRefused checks that a worker follows no redirect: it talks
+// only to the coordinator it was given.
+func TestRedirectRefused(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command("true")))
+	var claims atomic.Int32
+	f.fault = func(r *http.Request) fault {
+		if r.URL.Path == workerapi.PathClaim {
+			claims.Add(1)
+			return redirect
+		}
+		return answer
+	}
+	if err := f.runWorker(t.Context(), Config{}); err == nil {
+		t.Fatal("claimed through a redirect")
+	}
+	if n := claims.Load(); n != 1 {
+		t.Errorf("the worker made %d claims", n)
 	}
 }

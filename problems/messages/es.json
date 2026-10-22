@@ -129,8 +129,10 @@
   "uses_not_supported": "El paso usa “{uses}”, y este worker aún no puede ejecutar un paso que usa una acción o un flujo de trabajo.",
   "step_ssh_not_supported": "El ssh: del paso indica otro host donde ejecutarlo, y este worker aún no puede ejecutar un paso en otro host.",
   "step_not_started": "No se pudo iniciar el comando del paso: {reason}.",
+  "shell_not_supported": "El shell del paso es “{shell}”, y el formato 1 solo ejecuta el comando de un paso con bash o sh.",
   "step_timed_out": "El paso siguió ejecutándose después de su tiempo límite de {limit, plural, one {# segundo} other {# segundos}} y se detuvo.",
   "outputs_too_large": "El paso escribió {size} bytes en $OUTPUTS, más que el límite de {limit}.",
   "outputs_line_too_long": "Una línea de $OUTPUTS tiene {limit} bytes o más, así que, como en el formato 1, no se lee ninguna de las salidas del archivo.",
-  "log_not_kept": "El worker no guardó {size} bytes del registro del paso: no pudo comunicarse con el coordinador, y guarda como máximo {limit} bytes de registros hasta que pueda."
+  "outputs_not_file": "El paso puso en $OUTPUTS algo que no es un archivo, como un FIFO o un enlace simbólico, así que no se pueden leer sus salidas.",
+  "log_not_kept": "El worker no guardó {size} bytes del registro del paso: guarda como máximo {limit} bytes de registros que el coordinador no ha almacenado, mientras no puede comunicarse con él, y ninguno cuando su disco está lleno."
 }

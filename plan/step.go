@@ -91,6 +91,13 @@ type ReadyStep struct {
 	// each wherever it appears in the job's logs and outputs, as it masks
 	// the secrets themselves.
 	Masked []string `json:"masked,omitempty"`
+	// OutlivesCancel is set for a step whose if: is cancel-aware: one that
+	// calls always() or cancelled(), negates success() or failure(), or is
+	// the word always. Format 1 runs such a step to its end whatever
+	// happens to its job: neither the job's cancellation nor its timeout
+	// stops it, nor its own timeout:, though its retry:'s timeout and its
+	// early-cancel: do.
+	OutlivesCancel bool `json:"outlivesCancel,omitzero"`
 }
 
 // ReadyStepRetry is a step's retry: as Step evaluated it, with format 1's

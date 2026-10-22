@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 )
 
 // maxOutputs is the most bytes of $OUTPUTS the worker reads: a job's
@@ -18,11 +19,14 @@ const maxOutputs = 1 << 20
 const maxOutputsLine = bufio.MaxScanTokenSize - 1
 
 // errOutputsTooLarge is what readOutputs returns for a file larger than
-// maxOutputs, and errOutputsLineTooLong for one with a line longer than
-// maxOutputsLine.
+// maxOutputs, errOutputsLineTooLong for one with a line longer than
+// maxOutputsLine, and errOutputsNotFile for a path a step put something
+// other than a file at, such as a FIFO, which reading would wait on, or a
+// symbolic link.
 var (
 	errOutputsTooLarge    = errors.New("worker: $OUTPUTS is too large")
 	errOutputsLineTooLong = errors.New("worker: a line of $OUTPUTS is too long")
+	errOutputsNotFile     = errors.New("worker: $OUTPUTS isn't a file")
 )
 
 // readOutputs reads the outputs a step wrote to the file named by $OUTPUTS,
@@ -35,7 +39,12 @@ var (
 // file with a line longer than maxOutputsLine, and returns
 // errOutputsLineTooLong.
 func readOutputs(path string) (map[string]string, int64, error) {
-	f, err := os.Open(path) //nolint:gosec // a $OUTPUTS file in the worker's own directory
+	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNonBlock, 0) //nolint:gosec // a $OUTPUTS file in the worker's own directory
+	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
+		// A symbolic link, which O_NOFOLLOW refuses: ELOOP, or EMLINK on
+		// FreeBSD.
+		return nil, 0, errOutputsNotFile
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -43,6 +52,9 @@ func readOutputs(path string) (map[string]string, int64, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, errOutputsNotFile
 	}
 	if info.Size() > maxOutputs {
 		return nil, info.Size(), errOutputsTooLarge

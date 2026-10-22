@@ -63,7 +63,8 @@ func TestReadEnv(t *testing.T) {
 }
 
 // TestTokenFile checks that a worker reads its bootstrap token from a file
-// only its user can read, and removes it, and refuses one others can read.
+// only its user can read, and removes it, and refuses one others can read,
+// or a symbolic link.
 func TestTokenFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -86,6 +87,17 @@ func TestTokenFile(t *testing.T) {
 	}
 	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + shared}); err == nil {
 		t.Error("read a token from a file others can read")
+	}
+	// Nor through a symbolic link, which could name another's file.
+	target, link := filepath.Join(dir, "target"), filepath.Join(dir, "link")
+	if err := os.WriteFile(target, []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + link}); err == nil {
+		t.Error("read a token through a symbolic link")
 	}
 }
 

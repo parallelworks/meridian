@@ -129,8 +129,10 @@
   "uses_not_supported": "该步骤使用了“{uses}”，而此工作进程尚不能运行使用操作或工作流的步骤。",
   "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而此工作进程尚不能在另一台主机上运行步骤。",
   "step_not_started": "无法启动该步骤的命令：{reason}",
+  "shell_not_supported": "该步骤的 shell 为“{shell}”，而格式 1 只用 bash 或 sh 运行步骤的命令。",
   "step_timed_out": "该步骤的运行超过了 {limit} 秒的超时时间，已被停止。",
   "outputs_too_large": "该步骤向 $OUTPUTS 写入了 {size} 字节，超过了 {limit} 字节的上限。",
   "outputs_line_too_long": "$OUTPUTS 中有一行达到或超过 {limit} 字节，因此与格式 1 一样，该文件中的输出都不会被读取。",
-  "log_not_kept": "工作进程未保留该步骤日志中的 {size} 字节：它无法连接到协调器，而在能够连接之前最多只保留 {limit} 字节的日志。"
+  "outputs_not_file": "该步骤在 $OUTPUTS 处放置了文件以外的东西（例如 FIFO 或符号链接），因此无法读取它的输出。",
+  "log_not_kept": "工作进程未保留该步骤日志中的 {size} 字节：在无法连接到协调器时，它最多只保留 {limit} 字节协调器尚未存储的日志，而在磁盘已满时则一点也不保留。"
 }

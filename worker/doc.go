@@ -21,8 +21,10 @@
 // does, and its timeout:, its tries' and the job's are the worker's to
 // enforce: it sends a step past one SIGTERM, then SIGKILL after a grace
 // period. A cancellation from the coordinator stops the job the same way,
-// and a step whose early-cancel: is any-job-failed stops when another job
-// of the run fails.
+// and a step whose early-cancel: is any-job-failed stops when a job of the
+// run fails. As in format 1, a step whose if: is cancel-aware, such as
+// always(), outlives its job's cancellation and timeout, and its own
+// timeout:.
 //
 // A step that uses: an action or a workflow, or runs on another host with
 // ssh:, fails: this worker doesn't run them yet. A job whose steps are to
@@ -35,7 +37,7 @@
 // Every request is safe to repeat, and the worker repeats one whose answer
 // it didn't get, or that the coordinator asks it to, until it gets one.
 // While it can't reach the coordinator, it keeps running the job's steps,
-// and spools their logs to disk up to a limit, and their events, to send
+// spools their logs to disk, up to a limit, and keeps their events, to send
 // in order when it can. Before the first step that runs starts, it waits
 // until the coordinator has stored that it is starting, so that whether
 // the workflow's code may have run is always known.
@@ -43,9 +45,10 @@
 // The worker renews the attempt's lease with heartbeats, and polls for
 // what the coordinator asks of it. When the coordinator says that the
 // attempt has ended without it, superseded by another, or no longer
-// accepts its credential, it stops the job's steps, without their cleanup:
-// commands, and exits. A job whose retry: lists worker-lost can have a new
-// attempt while this one still runs, cut off, so its worker fences itself:
-// it stops the job once it hasn't renewed the lease for a lease period,
-// counted on its monotonic clock.
+// accepts its credential, it stops every process group the attempt
+// started, without running the steps' cleanup: commands, and exits. A job
+// whose retry: lists worker-lost can have a new attempt while this one
+// still runs, cut off, so its worker fences itself: it stops the job before
+// its lease lapses, counted on the monotonic and the wall clock
+// (workerapi.Claim.SelfFencing).
 package worker

@@ -47,9 +47,12 @@ const (
 	// that its credential isn't accepted.
 	fence
 	unauthorized
-	// forget forgets the log the request uploads to, as a coordinator
-	// that lost what it had stored would, then handles the request.
+	// forget forgets the log the request uploads to, or the events it
+	// stored, as a coordinator that lost what it had stored would, then
+	// handles the request.
 	forget
+	// redirect answers with a redirect to the same path.
+	redirect
 )
 
 // A fakeCoordinator serves the worker API for one attempt, in memory, as
@@ -64,6 +67,10 @@ type fakeCoordinator struct {
 	fault func(r *http.Request) fault
 	// onEvent, if set, is called with each event stored, with mu held.
 	onEvent func(e workerapi.Event)
+
+	// controlAtOnce makes it answer a control poll at once, rather than
+	// hold it until there is something newer.
+	controlAtOnce bool
 
 	mu         sync.Mutex
 	credential [32]byte
@@ -147,12 +154,19 @@ func (f *fakeCoordinator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if flt == redirect {
+		http.Redirect(w, r, r.URL.Path, http.StatusTemporaryRedirect)
+		return
+	}
 	if flt == forget {
 		f.mu.Lock()
 		q := r.URL.Query()
 		step, _ := strconv.Atoi(q.Get(workerapi.QueryStep))
 		try, _ := strconv.Atoi(q.Get(workerapi.QueryTry))
 		delete(f.logs, logKey{workerapi.LogPart(q.Get(workerapi.QueryPart)), step, try})
+		if r.URL.Path == workerapi.PathEvents {
+			f.events = nil
+		}
 		f.mu.Unlock()
 	}
 	rec := httptest.NewRecorder()
@@ -241,7 +255,7 @@ func (f *fakeCoordinator) handleControl(w http.ResponseWriter, r *http.Request) 
 	seen, _ := strconv.ParseInt(r.URL.Query().Get(workerapi.QueryVersion), 10, 64)
 	// Hold the poll, briefly, until there is something newer.
 	timeout := time.After(200 * time.Millisecond)
-	for f.control.Version <= seen {
+	for f.control.Version <= seen && !f.controlAtOnce {
 		changed := f.changed
 		f.mu.Unlock()
 		done := false
@@ -497,7 +511,8 @@ func literal[T any](v plan.Value) T {
 
 // fakeStep readies a step as the Step phase does, for one that holds no
 // expressions: its if: is success(), or always(), failure(), cancelled()
-// or false as written; a value of its env: that starts with secret: is a
+// or false as written, and the step outlives its job's cancellation for
+// always() and cancelled(); a value of its env: that starts with secret: is a
 // value made from a secret, which it masks.
 func fakeStep(j *plan.ReadyJob, _ context.Context, i int, st plan.JobState) (*plan.ReadyStep, problems.Diagnostics, error) {
 	if i < 0 || i >= len(j.Steps) || len(st.Steps) != i {
@@ -505,18 +520,18 @@ func fakeStep(j *plan.ReadyJob, _ context.Context, i int, st plan.JobState) (*pl
 	}
 	s := j.Steps[i]
 	failed := slices.ContainsFunc(st.Steps, func(r plan.StepResult) bool { return r.Outcome == plan.OutcomeFailure })
-	run := !failed && !st.Cancelled
+	run, outlives := !failed && !st.Cancelled, false
 	switch literal[string](s.If) {
 	case "always()":
-		run = true
+		run, outlives = true, true
 	case "failure()":
 		run = failed
 	case "cancelled()":
-		run = st.Cancelled
+		run, outlives = st.Cancelled, true
 	case "false":
 		run = false
 	}
-	rs := &plan.ReadyStep{Index: i, ID: s.ID, Name: literal[string](s.Name)}
+	rs := &plan.ReadyStep{Index: i, ID: s.ID, Name: literal[string](s.Name), OutlivesCancel: outlives}
 	if !run {
 		rs.Skipped = true
 		return rs, nil, nil

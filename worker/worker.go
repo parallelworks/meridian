@@ -59,14 +59,22 @@ const DefaultSpoolLimit = 1 << 30
 // whatever the job's outcome. It returns an error when it couldn't claim
 // the attempt; when the attempt ended without it, because another attempt
 // superseded it, the coordinator no longer accepts its credential, or, for
-// a job that fences itself, its lease lapsed; and when ctx is done first,
-// once it has stopped the job's steps and sent what it could. Then the
-// coordinator decides how the attempt ended.
+// a job that fences itself, its lease was about to lapse; and when ctx is
+// done before the job's steps have ended, once it has stopped them and,
+// for its flush period, sent what it had. Then the coordinator decides how
+// the attempt ended. When ctx is done once they have ended, it sends the
+// attempt's end in that period.
 //
 // A job whose steps are to run in a container fails before its first step,
 // with a problem that says so: this worker runs steps only on the host, and
-// never runs a job with less isolation than it asks for.
+// never runs a job with less isolation than it asks for. On Linux, Run
+// makes the process not dumpable, so that the user's other processes, the
+// job's steps among them, can't read the attempt's credential from its
+// memory.
 func Run(ctx context.Context, cfg Config) error {
+	if err := harden(); err != nil {
+		return err
+	}
 	return run(ctx, cfg, planPhases, defaultTiming)
 }
 
@@ -185,10 +193,11 @@ func readEnv(environ []string) (endpoint, []string, error) {
 	return ep, rest, nil
 }
 
-// readTokenFile reads a bootstrap token from a file only its user can
-// read, and removes the file.
+// readTokenFile reads a bootstrap token from a file of the worker's user
+// that only the user can read, not through a symbolic link, and removes
+// it.
 func readTokenFile(path string) (string, error) {
-	f, err := os.Open(path) //nolint:gosec // the file the backend put the token in
+	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNonBlock, 0) //nolint:gosec // the file the backend put the token in
 	if err != nil {
 		return "", fmt.Errorf("worker: reading the bootstrap token: %w", err)
 	}
@@ -197,8 +206,8 @@ func readTokenFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("worker: reading the bootstrap token: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("worker: the bootstrap token's file %s must be a file only its user can read", path)
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || !ownedByUser(info) {
+		return "", fmt.Errorf("worker: the bootstrap token's file %s must be a file of this user's that only it can read", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 4096))
 	if err != nil {

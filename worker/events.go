@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/parallelworks/meridian/workerapi"
@@ -81,6 +82,14 @@ func (q *eventQueue) storedUpTo(seq int64) {
 	q.notify()
 }
 
+// storedSeq returns the sequence number of the last event the
+// coordinator has stored, or 0 for none.
+func (q *eventQueue) storedSeq() int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.stored
+}
+
 // lastSeq returns the sequence number of the last event, or 0 for none.
 func (q *eventQueue) lastSeq() int64 {
 	q.mu.Lock()
@@ -134,8 +143,13 @@ func (q *eventQueue) send(ctx context.Context, c *client, stop func(error)) {
 		var order *outOfOrderError
 		switch {
 		case err == nil:
-		case errors.As(err, &order):
+		case errors.As(err, &order) && order.expected > q.storedSeq():
 			ack.Seq = order.expected - 1
+		case errors.As(err, &order):
+			// The coordinator has lost events it said it had stored,
+			// which the worker no longer has.
+			stop(fmt.Errorf("worker: the coordinator has lost the events from %d, which the worker no longer has", order.expected))
+			return
 		default:
 			if ctx.Err() == nil {
 				stop(err)

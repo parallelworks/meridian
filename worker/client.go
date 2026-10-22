@@ -85,7 +85,17 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 		base = "http://meridian"
 		t.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, "unix", ep.address)
+			conn, err := d.DialContext(ctx, "unix", ep.address)
+			if err != nil {
+				return nil, err
+			}
+			// The token and the credential go only to a coordinator of
+			// this user's, or root's.
+			if err := checkPeer(conn.(*net.UnixConn), ep.address); err != nil {
+				conn.Close()
+				return nil, &peerError{err}
+			}
+			return conn, nil
 		}
 	} else {
 		// HTTP/1.1, which a Transport with a TLS config of its own
@@ -101,7 +111,10 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 			VerifyConnection:   pinned(ep.keyHash),
 		}
 	}
-	return &client{base: base, http: &http.Client{Transport: t}, transport: t, timing: tm, log: log}
+	// A redirect is refused: the worker talks only to the coordinator it
+	// was given.
+	refuse := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client{base: base, http: &http.Client{Transport: t, CheckRedirect: refuse}, transport: t, timing: tm, log: log}
 }
 
 // pinned returns a check that a TLS connection's peer holds the public key
@@ -125,6 +138,13 @@ func pinned(hash []byte) func(tls.ConnectionState) error {
 // errKeyMismatch is a TLS connection to a server whose key isn't the
 // coordinator's. The worker never talks to it, and doesn't try again.
 var errKeyMismatch = fmt.Errorf("worker: the server's TLS key isn't the one %s names", workerapi.EnvKeySHA256)
+
+// A peerError is a Unix socket served by another user. The worker never
+// talks to it, and doesn't try again.
+type peerError struct{ err error }
+
+func (e *peerError) Error() string { return e.err.Error() }
+func (e *peerError) Unwrap() error { return e.err }
 
 func (c *client) close() { c.transport.CloseIdleConnections() }
 
@@ -205,6 +225,9 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 			return ctx.Err()
 		case errors.Is(err, errKeyMismatch):
 			return errKeyMismatch
+		}
+		if peer, ok := errors.AsType[*peerError](err); ok {
+			return peer
 		}
 		return &temporaryError{err}
 	}

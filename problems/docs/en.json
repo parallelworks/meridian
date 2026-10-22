@@ -777,6 +777,12 @@
       "Check that the step's shell is on the host, and that its working directory can be made there."
     ]
   },
+  "shell_not_supported": {
+    "why": "Format 1 runs a step's command with bash or sh only, as its shell: says, so the step fails without running. The workflow's schema allows no other shell, so this happens only for a plan made without checking it.",
+    "fix": [
+      "Run the step with bash or sh, by name or path, as in shell: bash -l {0}."
+    ]
+  },
   "step_timed_out": {
     "why": "A step's timeout:, and its retry:'s timeout for each try, limit how long it runs. The worker sends a step that runs past one SIGTERM, then SIGKILL if it hasn't ended after a grace period. A step that ran past its own timeout: isn't tried again; a try past its retry:'s timeout is, while the step has retries left.",
     "fix": [
@@ -795,10 +801,16 @@
       "Write large values to a file in the run's directory, and give its path as the output."
     ]
   },
-  "log_not_kept": {
-    "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, it doesn't keep what the steps print, so the log is missing that much of it.",
+  "outputs_not_file": {
+    "why": "The worker reads a step's outputs from the file $OUTPUTS names. It reads only a regular file, and not through a symbolic link, so that a FIFO there can't make it wait forever; the step put something else there, so its outputs can't be read, and it fails. The worker makes the file again for the steps after it.",
     "fix": [
-      "Check the connection between the host the job ran on and the coordinator."
+      "Write outputs to $OUTPUTS with >>, and leave the file where it is."
+    ]
+  },
+  "log_not_kept": {
+    "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, or once the disk is full, it doesn't keep what the steps print, so the log is missing that much of it.",
+    "fix": [
+      "Check the connection between the host the job ran on and the coordinator, and the space on the disk that holds the worker's directory, as TMPDIR does by default."
     ]
   }
 }

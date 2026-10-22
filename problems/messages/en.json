@@ -136,8 +136,10 @@
   "uses_not_supported": "The step uses \"{uses}\", and this worker can't run a step that uses an action or a workflow yet.",
   "step_ssh_not_supported": "The step's ssh: names another host to run it on, and this worker can't run a step on another host yet.",
   "step_not_started": "The step's command couldn't be started: {reason}.",
+  "shell_not_supported": "The step's shell is \"{shell}\", and format 1 runs a step's command only with bash or sh.",
   "step_timed_out": "The step ran past its timeout of {limit, plural, one {# second} other {# seconds}}, and was stopped.",
   "outputs_too_large": "The step wrote {size} bytes to $OUTPUTS, more than the limit of {limit}.",
   "outputs_line_too_long": "A line in $OUTPUTS is {limit} bytes or longer, so, as format 1 does, none of the outputs in the file are read.",
-  "log_not_kept": "The worker didn't keep {size} bytes of the step's log: it couldn't reach the coordinator, and keeps at most {limit} bytes of logs until it can."
+  "outputs_not_file": "The step put something other than a file at $OUTPUTS, such as a FIFO or a symbolic link, so its outputs can't be read.",
+  "log_not_kept": "The worker didn't keep {size} bytes of the step's log: it keeps at most {limit} bytes of logs that the coordinator hasn't stored, while it can't reach it, and none once its disk is full."
 }
