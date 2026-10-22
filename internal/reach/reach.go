@@ -39,7 +39,9 @@ func index(key string) (int64, bool) {
 }
 
 // atoi reads s as a whole number of 64 bits, as strconv.ParseInt does,
-// without making an error for what isn't one, as most keys aren't.
+// without making an error for what isn't one, as most keys aren't. Up to
+// 18 digits, which can't overflow, it adds them up itself, as strconv.Atoi
+// does for an int, since paths read their keys often.
 func atoi(s string) (int64, bool) {
 	digits := s
 	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
@@ -48,13 +50,21 @@ func atoi(s string) (int64, bool) {
 	if digits == "" {
 		return 0, false
 	}
+	var n int64
 	for i := range len(digits) {
 		if digits[i] < '0' || digits[i] > '9' {
 			return 0, false
 		}
+		n = n*10 + int64(digits[i]-'0')
 	}
-	i, err := strconv.ParseInt(s, 10, 64)
-	return i, err == nil
+	if len(digits) > 18 {
+		i, err := strconv.ParseInt(s, 10, 64)
+		return i, err == nil
+	}
+	if s[0] == '-' {
+		n = -n
+	}
+	return n, true
 }
 
 // Slice reads key as a slice of something n long, a list or a string, as a
