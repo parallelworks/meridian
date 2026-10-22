@@ -1,0 +1,5 @@
+$ meridian validate --format text ../../conformance/compile/conditions/workflow.yaml
+../../conformance/compile/conditions/workflow.yaml:13:13: warning: The word always is the older spelling of always(). Use always(). (older_always)
+../../conformance/compile/conditions/workflow.yaml:15:18: warning: The word completed is the text "completed", which is always true. The if: keyword it was is now success(). (replaced_keyword)
+../../conformance/compile/conditions/workflow.yaml:19:18: warning: The word debug is the text "debug", which is always true. A condition needs a comparison, or a status function such as failure(). (condition_word)
+exit status 0

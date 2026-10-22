@@ -947,5 +947,497 @@
     "fix": [
       "Corrige los problemas enumerados y vuelve a comprobar el flujo de trabajo para ver los demás."
     ]
+  },
+  "workflow_too_large": {
+    "title": "Flujo de trabajo demasiado grande",
+    "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",
+    "fix": [
+      "Saca los scripts largos del flujo de trabajo y ponlos en archivos que ejecuten los pasos.",
+      "Comprueba que el flujo de datos es el flujo de trabajo que querías, y no un dispositivo o una tubería que nunca termina."
+    ]
+  },
+  "execution_group_unknown": {
+    "title": "Grupo de ejecución desconocido",
+    "why": "El valor de una entrada execution-groups es el nombre de uno de los grupos de ejecución de quien ejecuta el flujo de trabajo. En su propia máquina, son el grupo local integrado y los grupos de groups.yaml en el directorio de configuración de Meridian.",
+    "fix": [
+      "Elige uno de los grupos que indica el mensaje.",
+      "O define el grupo en groups.yaml, en el directorio de configuración de Meridian."
+    ]
+  },
+  "source_ref_invalid": {
+    "title": "No es una referencia a un flujo de trabajo en Git",
+    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git en GitHub o GitLab: github/ o gitlab/, el propietario y el nombre del repositorio, el archivo del flujo de trabajo dentro de él, workflow.yaml si no nombra otro, y @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -.",
+    "fix": [
+      "Escribe la referencia como github/<propietario>/<repositorio>/<ruta>@<revisión>, o igual con gitlab/."
+    ]
+  },
+  "source_on_platform": {
+    "title": "Flujo de trabajo que guarda una plataforma",
+    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que guarda el flujo de trabajo que usa.",
+      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>/<ruta>@<revisión>."
+    ]
+  },
+  "source_revision_not_found": {
+    "title": "No existe el repositorio o la revisión",
+    "why": "Meridian obtiene con git la revisión que nombra un uses:, y git no encontró tal repositorio, o tal rama, etiqueta o confirmación en él. Un repositorio privado que git no puede leer con tus credenciales puede parecer lo mismo.",
+    "fix": [
+      "Comprueba el propietario y el nombre del repositorio, y la revisión después de @.",
+      "Comprueba que git puede obtener el repositorio con tus credenciales, como con git ls-remote y la URL del repositorio."
+    ]
+  },
+  "source_file_not_found": {
+    "title": "No existe el archivo del flujo de trabajo en el repositorio",
+    "why": "Un uses: nombra un archivo del repositorio, workflow.yaml si no nombra otro, y la confirmación que nombra su revisión no tiene ningún archivo con ese nombre. Un directorio no es un archivo de flujo de trabajo.",
+    "fix": [
+      "Comprueba la ruta de la referencia, después del nombre del repositorio.",
+      "Comprueba que la revisión tiene el archivo: puede que la rama predeterminada no lo tenga."
+    ]
+  },
+  "source_too_large": {
+    "title": "Archivo de flujo de trabajo de un repositorio demasiado grande",
+    "why": "Meridian lee entero el flujo de trabajo que usa un paso, así que limita su tamaño, como el de cualquier flujo de trabajo.",
+    "fix": [
+      "Comprueba que la referencia nombra un archivo de flujo de trabajo, y no otro archivo del repositorio.",
+      "Divide el flujo de trabajo en otros más pequeños que se llamen entre sí con uses:."
+    ]
+  },
+  "source_changed": {
+    "title": "El flujo de trabajo no es el texto al que se fijó",
+    "why": "Una ejecución fija cada flujo de trabajo que usan sus pasos a una confirmación y al resumen SHA-256 de su texto, para que la ejecución y sus repeticiones ejecuten el mismo código. El texto de esa confirmación tiene otro resumen, lo que solo puede ocurrir si se cambió la historia del repositorio o la copia que tiene Meridian.",
+    "fix": [
+      "No repitas la ejecución. Empieza una nueva, que vuelve a fijar el flujo de trabajo.",
+      "Averigua quién pudo cambiar la historia del repositorio o el directorio de caché de Meridian."
+    ]
+  },
+  "source_not_pinned": {
+    "title": "Flujo de trabajo sin fijar",
+    "why": "Una ejecución lee cada flujo de trabajo que usan sus pasos por la confirmación y el resumen a los que se fijó al crearse la ejecución, nunca por una rama que puede haberse movido. Al registro de este le falta uno de los dos.",
+    "fix": [
+      "Empieza una nueva ejecución, que vuelve a fijar el flujo de trabajo."
+    ]
+  },
+  "directory_variable_relative": {
+    "title": "Variable de directorio que no es una ruta absoluta",
+    "why": "MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR eligen los directorios de Meridian. Cada una debe ser una ruta absoluta, para que el directorio que nombra no dependa de desde dónde se ejecuta Meridian.",
+    "fix": [
+      "Asigna a la variable una ruta absoluta, o elimínala."
+    ]
+  },
+  "home_unknown": {
+    "title": "Sin directorio personal",
+    "why": "Meridian guarda su configuración, su estado y su caché en directorios dentro de tu directorio personal, salvo que MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR elijan otros.",
+    "fix": [
+      "Asigna a HOME tu directorio personal.",
+      "O asigna una ruta absoluta a la variable que nombra el mensaje."
+    ]
+  },
+  "directory_unavailable": {
+    "title": "No se puede crear ni abrir el directorio",
+    "why": "Meridian crea sus directorios de estado y de caché la primera vez que los necesita, y el sistema operativo lo rechazó o falló.",
+    "fix": [
+      "Corrige lo que indica el motivo, como un directorio padre en el que no puedes escribir.",
+      "O elige otro directorio con MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "not_a_directory": {
+    "title": "No es un directorio",
+    "why": "Meridian guarda su configuración, su estado y su caché en directorios, y en la ruta que usaría para uno hay otra cosa.",
+    "fix": [
+      "Mueve lo que hay en la ruta, o elige otro directorio con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "directory_not_owned": {
+    "title": "Directorio de otro usuario",
+    "why": "Los directorios de Meridian guardan tu configuración, la clave que envuelve los secretos de tus ejecuciones, tus registros y copias de repositorios privados. Un directorio que es de otro usuario es uno que ese usuario puede cambiar.",
+    "fix": [
+      "Elige un directorio tuyo con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "directory_not_private": {
+    "title": "Directorio que otros pueden leer o cambiar",
+    "why": "El directorio de estado de Meridian guarda la clave que envuelve los secretos de tus ejecuciones, y su directorio de caché copias de repositorios que pueden ser privados, así que solo tú puedes leerlos. Meridian no restringe un directorio que estuvo abierto, ya que lo que había en él pudo haberse leído.",
+    "fix": [
+      "Ejecuta chmod 700 sobre el directorio, cuando estés seguro de que nada en él se leyó ni se cambió.",
+      "O elige un directorio nuevo con MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+    ]
+  },
+  "path_unsafe": {
+    "title": "Ruta que pasa por un directorio que otros pueden cambiar",
+    "why": "Un usuario que puede cambiar un directorio en el camino hacia uno de los de Meridian podría sustituir lo que hay en él por algo suyo después de que Meridian lo comprobara. Como hace OpenSSH, Meridian acepta un directorio del camino solo si es tuyo o de root y solo tú o root podéis cambiarlo, o si su bit sticky impide a otros usuarios quitar lo que no es suyo, como el de /tmp, y lo que le sigue es tuyo.",
+    "fix": [
+      "Elige un directorio cuyos padres solo tú o root podáis cambiar, como uno dentro de tu directorio personal, o uno que cree mktemp -d -p /var/tmp.",
+      "O pide al propietario del directorio que ejecute chmod go-w sobre él."
+    ]
+  },
+  "network_filesystem": {
+    "title": "Base de datos en un sistema de archivos de red",
+    "why": "Los bloqueos de SQLite no funcionan de forma fiable en sistemas de archivos de red, que es donde suelen estar los directorios personales en los clústeres, así que Meridian no guarda allí su base de datos.",
+    "fix": [
+      "Asigna a MERIDIAN_STATE_DIR un directorio en un disco local que solo tú puedas cambiar y que perdure: guarda la base de datos y la clave que envuelve los secretos de tus ejecuciones, que se pierden con él. Sirve uno que cree mktemp -d -p /var/tmp, o uno en el disco local persistente del nodo, pero no uno en /tmp, que un reinicio puede vaciar."
+    ]
+  },
+  "filesystem_unknown": {
+    "title": "No se sabe el sistema de archivos",
+    "why": "Meridian comprueba que el directorio de su base de datos no está en un sistema de archivos de red antes de abrirla, y el sistema operativo no lo indicó.",
+    "fix": [
+      "Corrige lo que indica el motivo, o elige otro directorio con MERIDIAN_STATE_DIR."
+    ]
+  },
+  "file_unreadable": {
+    "title": "No se puede leer el archivo",
+    "why": "Meridian necesita leer el archivo, y el sistema operativo lo rechazó o falló.",
+    "fix": [
+      "Corrige lo que indica el motivo, como una ruta que no existe o un archivo que no puedes leer."
+    ]
+  },
+  "file_not_regular": {
+    "title": "No es un archivo normal",
+    "why": "Meridian lee su configuración, su clave y los valores de las variables solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo.",
+    "fix": [
+      "Nombra un archivo normal en su lugar."
+    ]
+  },
+  "file_not_owned": {
+    "title": "Archivo de otro usuario",
+    "why": "Un usuario que es dueño de uno de los archivos de Meridian, o de un archivo que guarda el valor de una variable, puede cambiar lo que contiene, como dónde se ejecutan tus trabajos o la clave que protege los secretos de tus ejecuciones.",
+    "fix": [
+      "Sustituye el archivo por uno tuyo."
+    ]
+  },
+  "file_not_private": {
+    "title": "Archivo que otros pueden leer o cambiar",
+    "why": "El archivo guarda un secreto, o lo que los protege: la clave que envuelve los registros secretos de tus ejecuciones, el archivo de variables, ya que también se guardan secretos en variables normales, o el valor de una variable secreta. Solo tú puedes leerlo.",
+    "fix": [
+      "Ejecuta chmod 600 sobre el archivo."
+    ]
+  },
+  "file_changeable": {
+    "title": "Archivo que otros pueden cambiar",
+    "why": "Un usuario que pudiera cambiar tus grupos o el valor de una variable podría enviar tus trabajos adonde quisiera, o elegir lo que leen tus trabajos.",
+    "fix": [
+      "Ejecuta chmod go-w sobre el archivo."
+    ]
+  },
+  "file_over_limit": {
+    "title": "Archivo más grande de lo que lee Meridian",
+    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable y un archivo de entradas, así que limita su tamaño.",
+    "fix": [
+      "Comprueba que la ruta nombra el archivo que querías, y haz el archivo más pequeño."
+    ]
+  },
+  "config_yaml_syntax": {
+    "title": "Archivo de configuración que no es YAML válido",
+    "why": "Los archivos de configuración de Meridian, groups.yaml y variables.yaml, son YAML.",
+    "fix": [
+      "Corrige el YAML en la línea que indica el motivo."
+    ]
+  },
+  "config_extra_document": {
+    "title": "Archivo de configuración con más de un documento YAML",
+    "why": "Cada archivo de configuración de Meridian es un único documento YAML. Un segundo documento, después de ---, es más probablemente un error que algo que ignorar.",
+    "fix": [
+      "Quita el --- y lo que le sigue, o pasa lo que le sigue al primer documento."
+    ]
+  },
+  "config_not_mapping": {
+    "title": "Archivo de configuración que no es un mapa",
+    "why": "groups.yaml asocia el nombre de cada grupo con el grupo, y variables.yaml tiene org y vars, cada uno un mapa de variables por nombre.",
+    "fix": [
+      "Escribe el archivo como un mapa, como muestra docs/design.md."
+    ]
+  },
+  "config_key_unknown": {
+    "title": "Clave desconocida en un archivo de configuración",
+    "why": "Los archivos de configuración de Meridian se leen de forma estricta, para que una clave mal escrita sea un error y no un ajuste que en silencio no hace nada.",
+    "fix": [
+      "Corrige cómo se escribe la clave, o quítala."
+    ]
+  },
+  "config_key_repeated": {
+    "title": "Clave repetida en un archivo de configuración",
+    "why": "Una clave que se da dos veces en un mapa de un archivo de configuración es más probablemente un error que un valor que sustituir: por ejemplo, una variable secreta escrita de nuevo como normal.",
+    "fix": [
+      "Quita una de las dos."
+    ]
+  },
+  "config_wrong_type": {
+    "title": "Valor de configuración del tipo equivocado",
+    "why": "Cada clave de los archivos de configuración de Meridian admite un tipo de valor.",
+    "fix": [
+      "Da a la clave un valor del tipo que indica el mensaje."
+    ]
+  },
+  "group_name_invalid": {
+    "title": "Nombre de grupo no válido",
+    "why": "El nombre de un grupo es como lo nombra un trabajo, y como un intento registra dónde se ejecutó.",
+    "fix": [
+      "Cambia el nombre del grupo."
+    ]
+  },
+  "group_empty": {
+    "title": "Grupo sin miembros",
+    "why": "Un grupo es donde puede ejecutarse un trabajo: una lista ordenada de miembros, cada uno un backend con su configuración. Un grupo sin miembros no podría ejecutar nada.",
+    "fix": [
+      "Da al grupo un miembro, o quítalo."
+    ]
+  },
+  "member_invalid": {
+    "title": "Miembro no válido",
+    "why": "El nombre de un miembro tiene letras, dígitos, _, - y ., y empieza por una letra o un dígito. Su backend es local, ssh, kubernetes, slurm o pbs; su isolation nombra un entorno de contenedores, como podman, o host; su cpu es un número de núcleos, como 4 o 0.5, o de milésimas de uno, como 500m; su memory es un número de bytes, o un número con un sufijo, como 8Gi o 512M; y su gpu es un número entero. Sus max-walltime, margin y default-timeout son duraciones de segundos enteros, como 24h, 90m o 30s.",
+    "fix": [
+      "Corrige el valor como necesita su clave."
+    ]
+  },
+  "member_repeated": {
+    "title": "Dos miembros con el mismo nombre",
+    "why": "El nombre de un miembro lo identifica en su grupo, y en el registro de un intento colocado en él.",
+    "fix": [
+      "Cambia el nombre de uno de los miembros."
+    ]
+  },
+  "variable_name_invalid": {
+    "title": "Nombre de variable no válido",
+    "why": "Una expresión lee una variable como org.<nombre> o vars.<nombre>, así que un nombre no puede tener un punto ni empezar por un dígito.",
+    "fix": [
+      "Cambia el nombre de la variable."
+    ]
+  },
+  "variable_no_value": {
+    "title": "Variable sin valor",
+    "why": "Una variable de variables.yaml es su valor, o un mapa que dice dónde está su valor. Una que no tiene nada después de su nombre no tiene ninguna de las dos cosas.",
+    "fix": [
+      "Da a la variable un valor, o quítala. Escribe \"\" para una vacía."
+    ]
+  },
+  "variable_form_invalid": {
+    "title": "Variable que no es texto ni un mapa",
+    "why": "Una variable de variables.yaml es su valor, o un mapa con uno de value, el propio valor, env, la variable de entorno donde está, o file, el archivo donde está, y secret: true para un secreto.",
+    "fix": [
+      "Escribe la variable como texto, o como un mapa así."
+    ]
+  },
+  "variable_sources": {
+    "title": "Variable sin exactamente uno de value, env y file",
+    "why": "El mapa de una variable dice dónde está su único valor: en value mismo, en una variable de entorno (env) o en un archivo (file).",
+    "fix": [
+      "Deja uno de value, env y file, y quita los demás."
+    ]
+  },
+  "variable_secret_inline": {
+    "title": "Variable secreta que guarda su valor",
+    "why": "El valor de un secreto se mantiene fuera del archivo de variables, para que el archivo pueda leerse, compartirse y copiarse sin él.",
+    "fix": [
+      "Pasa el valor a una variable de entorno, o a un archivo que solo tú puedas leer, y nómbralo con env o file."
+    ]
+  },
+  "variable_env_unset": {
+    "title": "No está definida la variable de entorno de una variable",
+    "why": "variables.yaml dice que el valor de la variable está en una variable de entorno, que no está definida, o está vacía, donde se ejecuta Meridian. Meridian la lee solo cuando una ejecución lee la variable.",
+    "fix": [
+      "Define la variable de entorno antes de ejecutar Meridian.",
+      "O cambia dónde dice variables.yaml que está el valor de la variable."
+    ]
+  },
+  "variable_file_unreadable": {
+    "title": "No se puede leer el archivo de una variable",
+    "why": "variables.yaml dice que el valor de la variable está en un archivo, que Meridian lee solo cuando una ejecución lee la variable.",
+    "fix": [
+      "Corrige lo que indica el motivo, o cambia dónde dice variables.yaml que está el valor de la variable."
+    ]
+  },
+  "variable_file_home": {
+    "title": "Archivo de una variable en un directorio personal desconocido",
+    "why": "La ruta de un archivo que empieza por ~/ está en tu directorio personal, que Meridian encuentra con HOME.",
+    "fix": [
+      "Asigna a HOME tu directorio personal, o escribe la ruta completa del archivo."
+    ]
+  },
+  "key_file_invalid": {
+    "title": "Archivo de clave que no es una clave",
+    "why": "El archivo de clave guarda la clave AES-256 de 32 bytes que envuelve las claves de datos de los registros secretos de tus ejecuciones. Meridian lo crea, y nada más debería cambiarlo.",
+    "fix": [
+      "Si tienes una copia del archivo de clave, restáurala.",
+      "Si no, quítalo: Meridian crea otro, y las ejecuciones cuyas claves de datos envolvió el anterior no se pueden reanudar."
+    ]
+  },
+  "key_unwrap_failed": {
+    "title": "Clave de datos que no se puede desenvolver",
+    "why": "El registro secreto de cada ejecución se cifra con una clave de datos propia, que la clave del archivo de clave envuelve con AES-256-GCM, ligada al ID de la ejecución. Una clave envuelta que no se abre se hizo con otra clave, se trajo de otra ejecución o se cambió.",
+    "fix": [
+      "Si se sustituyó el archivo de clave, restaura el que envolvió la clave de la ejecución.",
+      "Si no, repite la ejecución, que vuelve a leer sus variables y contraseñas."
+    ]
+  },
+  "key_wrapping_unknown": {
+    "title": "Clave de datos envuelta de una forma desconocida",
+    "why": "Una clave de datos envuelta dice cómo se envolvió, para que una versión posterior de Meridian pueda envolver las claves de otra forma. Esta la envolvió una versión que esta no conoce.",
+    "fix": [
+      "Reanuda la ejecución con la versión de Meridian que la empezó, o una más reciente."
+    ]
+  },
+  "git_unavailable": {
+    "title": "No se puede ejecutar git",
+    "why": "Meridian lee de repositorios Git los flujos de trabajo que nombra el uses: de un paso ejecutando git, que debe estar instalado y en PATH.",
+    "fix": [
+      "Instala git, o ponlo en PATH."
+    ]
+  },
+  "command_missing": {
+    "title": "Sin comando",
+    "why": "El comando meridian hace una de varias cosas, que nombra su primer argumento.",
+    "fix": [
+      "Ejecuta meridian help para ver los comandos."
+    ]
+  },
+  "command_unknown": {
+    "title": "Comando desconocido",
+    "why": "El primer argumento del comando meridian nombra lo que hace, y este no nombra nada que haga.",
+    "fix": [
+      "Ejecuta meridian help para ver los comandos."
+    ]
+  },
+  "command_not_built": {
+    "title": "Comando aún no construido",
+    "why": "Meridian se construye por etapas, y este comando, que describe docs/design.md, llega en una posterior.",
+    "fix": [
+      "Usa un comando que ya esté construido, como meridian validate, o una versión posterior de Meridian."
+    ]
+  },
+  "arguments_invalid": {
+    "title": "Argumentos que un comando no admite",
+    "why": "Cada comando admite sus propios argumentos, como un archivo de flujo de trabajo.",
+    "fix": [
+      "Ejecuta meridian help con el nombre del comando para ver lo que admite."
+    ]
+  },
+  "flag_unknown": {
+    "title": "Opción desconocida",
+    "why": "Cada comando tiene sus propias opciones.",
+    "fix": [
+      "Ejecuta meridian help con el nombre del comando para ver sus opciones."
+    ]
+  },
+  "flag_needs_value": {
+    "title": "Opción sin su valor",
+    "why": "La opción admite un valor, que la sigue, como en -format json, o sigue a un =, como en -format=json.",
+    "fix": [
+      "Da a la opción su valor."
+    ]
+  },
+  "flag_value_invalid": {
+    "title": "Valor que una opción no admite",
+    "why": "La opción admite solo algunos valores, que indica meridian help.",
+    "fix": [
+      "Ejecuta meridian help con el nombre del comando para ver los valores que admite la opción."
+    ]
+  },
+  "flag_syntax": {
+    "title": "Argumento que no es una opción",
+    "why": "Una opción es - o -- y su nombre, y = y su valor si admite uno.",
+    "fix": [
+      "Escribe la opción como -nombre o -nombre=valor."
+    ]
+  },
+  "input_path_invalid": {
+    "title": "Ruta de entrada que no son nombres unidos por puntos",
+    "why": "-input define una entrada por su ruta: su nombre, o el nombre de su grupo, un punto y su nombre, como en cluster.size.",
+    "fix": [
+      "Escribe la ruta como nombres unidos por puntos, sin ninguno vacío."
+    ]
+  },
+  "input_path_conflict": {
+    "title": "Ruta de entrada a través de un valor",
+    "why": "-input grupo.nombre=valor define una entrada de un grupo. Aquí, aquello por lo que pasa la ruta tiene un valor propio, de otro -input o del archivo de entradas.",
+    "fix": [
+      "Da a cada entrada un valor, y las entradas de un grupo por sus rutas."
+    ]
+  },
+  "inputs_file_invalid": {
+    "title": "Archivo de entradas que no es JSON",
+    "why": "-inputs lee un objeto JSON de valores de entrada por nombre, en el que una clave no puede aparecer dos veces.",
+    "fix": [
+      "Corrige el JSON donde indica el motivo."
+    ]
+  },
+  "inputs_file_not_object": {
+    "title": "Archivo de entradas que no es un objeto",
+    "why": "-inputs lee un objeto JSON, cuyas claves son los nombres de las entradas y cuyos valores son sus valores.",
+    "fix": [
+      "Escribe los valores como un objeto JSON."
+    ]
+  },
+  "inputs_file_extra": {
+    "title": "Archivo de entradas con más de un valor",
+    "why": "-inputs lee un objeto JSON, y algo lo sigue.",
+    "fix": [
+      "Quita lo que sigue al objeto, o pásalo al objeto."
+    ]
+  },
+  "inputs_number_too_large": {
+    "title": "Número demasiado grande",
+    "why": "Meridian lee un número de un archivo de entradas como un número de 64 bits, y este no cabe.",
+    "fix": [
+      "Da el número como texto, entre comillas, si la entrada admite texto."
+    ]
+  },
+  "interrupted": {
+    "title": "Interrumpido",
+    "why": "Meridian se detuvo porque recibió una interrupción o una petición de parar, como la de Ctrl-C.",
+    "fix": [
+      "Vuelve a ejecutar el comando. Una segunda interrupción detiene Meridian de inmediato."
+    ]
+  },
+  "unexpected_error": {
+    "title": "Error inesperado",
+    "why": "Un error para el que Meridian no tiene un problema más específico detuvo el comando.",
+    "fix": [
+      "Corrige lo que indica el motivo, y vuelve a ejecutar el comando.",
+      "Si parece un fallo de Meridian, infórmalo junto con el comando que ejecutaste."
+    ]
+  },
+  "source_access_denied": {
+    "title": "Acceso denegado al repositorio",
+    "why": "El repositorio pidió credenciales que git no tiene, o rechazó las que dio, o no se pudo comprobar la clave de su host. Un repositorio que no existe parece lo mismo cuando el servidor pide credenciales en vez de decirlo. Meridian nunca responde a una petición de contraseña o de frase de paso.",
+    "fix": [
+      "Comprueba que no haya un error en el propietario y el repositorio de la referencia.",
+      "Da a git credenciales que pueda usar sin preguntar, como un asistente de credenciales, un token o una clave ssh en tu agente, y acepta antes la clave del host con ssh."
+    ]
+  },
+  "source_objects_invalid": {
+    "title": "Objetos de Git mal formados",
+    "why": "Meridian hace que git compruebe cada objeto que obtiene, para que una confirmación o un árbol mal formados, como uno hecho para aprovechar un fallo de una herramienta de Git, nunca lleguen a su copia del repositorio.",
+    "fix": [
+      "Averigua por qué el repositorio tiene objetos mal formados, o usa otra revisión."
+    ]
+  },
+  "owner_unmapped": {
+    "title": "Propietario oculto por un espacio de nombres de usuario",
+    "why": "Meridian comprueba que cada directorio en el camino hacia los suyos es tuyo o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. En un espacio de nombres de usuario que no asocia root, como los que crean unshare --user, Apptainer, bubblewrap y algunos entornos de CI, un directorio cuyo propietario no está asociado aparece como propiedad de nobody, así que Meridian no puede saber quién podría cambiarlo, y lo rechaza en lugar de suponerlo.",
+    "fix": [
+      "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root."
+    ]
+  },
+  "path_links_too_many": {
+    "title": "Ruta con demasiados enlaces simbólicos",
+    "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
+    "fix": [
+      "Busca el enlace que lleva de vuelta a sí mismo y corrígelo, o elige otro directorio."
+    ]
+  },
+  "mount_not_found": {
+    "title": "No se encuentra el montaje",
+    "why": "El directorio está en un sistema de archivos FUSE, que puede ser local o de red, y Meridian los distingue por el tipo del montaje en /proc/self/mountinfo, que no tiene ningún montaje para él.",
+    "fix": [
+      "Elige para MERIDIAN_STATE_DIR un directorio en un sistema de archivos que no sea FUSE."
+    ]
+  },
+  "member_settings_not_json": {
+    "title": "Configuración de miembro que JSON no puede contener",
+    "why": "La configuración de un miembro se da al controlador de su backend como JSON, que no tiene números que no sean números ni infinitos.",
+    "fix": [
+      "Escribe el número de la configuración del miembro como uno finito, o como texto entre comillas."
+    ]
   }
 }
