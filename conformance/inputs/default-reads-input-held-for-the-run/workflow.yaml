@@ -1,0 +1,28 @@
+on:
+  execute:
+    inputs:
+      first:
+        type: string
+        default: ${{ inputs.sites[0].region }}
+      label:
+        type: string
+        default: ${{ inputs.first }}-label
+      sites:
+        type: list
+        template:
+          token:
+            type: string
+            default: ${{ vars.TOKEN }}
+          region:
+            type: string
+            default: east
+          zone:
+            type: string
+            default: ${{ inputs.sites.[index].region }}-a
+      other:
+        type: string
+        default: ${{ vars.REGION }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

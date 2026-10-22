@@ -485,20 +485,49 @@ ACTIVATE's launch form and its backend do together:
   of the rows, since which one depends on how many there are.
 - **Syntax.** Every expression in the input definitions must parse, in a
   default, an option, a label or anywhere else, whether or not the run
-  evaluates it. A syntax error is reported once, where it is.
-- **A form's text.** A form sends the text of an expression it can't
-  evaluate itself, such as a default that reads a secret. A submitted value
-  that is exactly the text of an input's default means the default. So does
-  a string in a submitted mapping or list that is the text of an expression
+  evaluates it, and in a key the format doesn't define, which is a warning
+  and is otherwise ignored, too: ACTIVATE evaluates every string there. A
+  syntax error is reported once, where it is.
+- **What a form sends.** A form evaluates each default it can and sends
+  what it gives, and sends the text of an expression it can't evaluate
+  itself, such as a default that reads a secret. A submitted value that is
+  exactly the text of an input's default means the default. So does a
+  string in a submitted mapping or list that is the text of an expression
   in the same place in its default, and a choice that is the text of one of
   its options' values, which means that option. Any other value holding
-  `${{ }}` is data.
+  `${{ }}` is data. A submitted value in the place of such an expression
+  that can read a variable or a password, or that one of the options can
+  have given, can be made from them, so it is read as one of them from the
+  start (Variables and Passwords, below). Once the values are filled in, it
+  means the expression if it is what the expression gives, the same JSON,
+  a number or a boolean the same as its text, as `8` and `"8"` are: the
+  plan holds the expression in its place. It means an option written in
+  the workflow if it is one. Anything else there can be what the form gave
+  before the person changed what it read, what it gave a row they moved,
+  what it evaluated otherwise than Meridian does, or what the person typed
+  over it, which the compiler can't tell apart, so the plan doesn't hold
+  it: it is kept by its path, but for the parts in it that are evaluated at
+  Start, and Start puts it in its place. Where the expression can read a
+  password or a secret variable, it is one of the run's secrets, which can
+  be made from one or not, and is masked as what is made from a secret is
+  rather than as a secret's own text; where it can read only variables
+  that aren't secrets, it is private, as their values are, and isn't
+  masked. A list's default rows count for any of its rows, since a person
+  can delete, add and move them. What can read a variable or a password,
+  and what a password or a secret variable, is found from the definitions
+  before anything is evaluated, following relative references to the
+  definitions they read. A default that reads its own input, which a form
+  doesn't fill in, gives what the compiler gives it.
 - **Lists.** A list's default is the rows it starts with. Each row, given or
   a default, is a group of the template's fields, which take their defaults
   as inputs do, in the same order as the rest; in a field's default,
   `[index]` is its row's index. A row's fields aren't checked against their
   types, but for a password field, which is checked as a `password`
-  input is, and their conditions aren't evaluated.
+  input is, and their conditions aren't evaluated. In a list or a repeated
+  step with a password among its rows' inputs, a row, or a group or list
+  of a row on the way to a password, that isn't the shape its inputs say
+  can hold a password where the compiler can't find it, so it is kept as a
+  secret, as it was given; the plan holds null in place of a row.
 - **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
   values are complete, and are true when they are true or the text `true`.
   One that reads what isn't known until the run starts, such as a secret,
@@ -506,10 +535,11 @@ ACTIVATE's launch form and its backend do together:
   until then because a part of it reads such a thing. An input whose value
   reads only variables and passwords, which the compiler knows, can be
   read.
-  An ignored input has no value, even one that was submitted. An input with
-  no value and no default is required unless it is optional, or hidden or in
-  a hidden group; a boolean with none is `false`. Every missing input is
-  reported, not only the first.
+  An ignored input has no value, even one that was submitted: a condition
+  evaluated once it is ignored reads it as null, a list with rows too. An
+  input with no value and no default is required unless it is optional, or
+  hidden or in a hidden group; a boolean with none is `false`. Every
+  missing input is reported, not only the first.
 - **Containers.** A group's values are under its name. A wizard step's
   inputs have their values beside the step's, unless `$meta.wizard.flatten`
   is `false`. A wizard step with `multi: true` repeats, as many times as the
@@ -524,11 +554,19 @@ ACTIVATE's launch form and its backend do together:
   is a number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
-  name, and is kept, as ACTIVATE keeps it. A value that isn't JSON, such
+  name, and is kept, as ACTIVATE keeps it. One whose name is a password
+  field's, wherever the workflow defines it, as a repeated step's password
+  sent beside the step is, or is close to a password input's there, as a
+  misspelling is, is kept as a password: it is one of the run's secrets,
+  and not in the plan. So is a mapping or list whose name is close to an
+  input's with a password among its inputs, or that holds a key named as a
+  password field, as a flattened wizard step's inputs sent under the
+  step's name do. A value that isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a
-  list's rows is reported at the row's field.
+  list's rows is reported at the row's field, and so is one in what the
+  compiler knows of a value that waits for Start.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
@@ -540,8 +578,13 @@ ACTIVATE's launch form and its backend do together:
   whether it is required, and with the Inputs resolver for a platform type
   ([Starting a run](#starting-a-run)). An input's value stays whole, even if
   only part of it reads such a thing: a part of a mapping or list default, a
-  form's text, or a row's default, whose `[index]` is kept in the plan. The
-  secret variables it reads are among the run's secrets.
+  form's text, or a row's default, whose `[index]` is kept in the plan. So
+  what reads any part of it, a part the compiler has too, isn't known until
+  then either: a condition that reads it is an error, and a default that
+  reads it stays an expression, and so does one that reads that default. A
+  row's default that reads another field of its row reads it as it is, as
+  a part of the same value. The secret variables it reads are among the
+  run's secrets.
 - **What definitions read.** Input definitions are evaluated at Create and
   Start, so they read `inputs`, `org`, `vars`, `remote`, `sessions` and the
   workflow's `env`, and nothing later: reading `needs`, `steps`, `matrix`,
@@ -555,22 +598,30 @@ ACTIVATE's launch form and its backend do together:
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
   or `vars`, or a part of an input's value that reads one, stays an
   expression in the plan in the same way, its input's whole value, and is
-  evaluated at Start. The compiler evaluates it all the same, since what
-  decides the run's shape reads its value: the inputs' `hidden`, `ignore`
-  and `optional`, and the jobs' `needs`. It checks it against its input's
-  type too, but a problem with it doesn't show the value.
+  evaluated at Start, and so does a submitted value that is what such an
+  expression gives, as a form sends it; any other submitted value in its
+  place is private, or one of the run's secrets where the variable is one
+  (What a form sends). The compiler
+  evaluates it all the same, since what decides the run's shape reads its
+  value: the inputs' `hidden`, `ignore` and `optional`, and the jobs'
+  `needs`. It checks it against its input's type too, but a problem with
+  it doesn't show the value.
 - **Passwords.** A plan never holds a `password` input's value, wherever
   the input is: on its own, in a group or a wizard step, or a field of a
   list's or a repeated step's rows. The value is one of the run's secrets,
   which the plan names by its path in the values, such as
   `inputs.creds.0.pass` for the field `pass` of the list `creds`'s first
   row, and it is checked against its type, but a problem with it doesn't
-  show it. A value made from a password counts as the password, as one made
-  from a variable counts as the variable: a default that reads one stays an
-  expression in the plan, and is evaluated at Start. A list held for Start
-  holds its rows without their passwords' values, which Start puts in their
-  places. A list whose rows are evaluated at Start, with a password field in
-  them, is one of the run's secrets as a whole, since the plan can't say
+  show it. What decides the run's shape reads its value, as it reads a
+  variable's. A value made from a password counts as the password, as one
+  made from a variable counts as the variable: a default that reads one
+  stays an expression in the plan, and is evaluated at Start, and so does a
+  submitted value that is what such a default gives, as a form sends it;
+  any other submitted value in its place is one of the run's secrets. A
+  list held for Start holds its rows without their passwords' values, which
+  Start puts in their places. A list, a group or a wizard step with a
+  password among its inputs whose value, or one of whose rows, is evaluated
+  at Start is one of the run's secrets as a whole, since the plan can't say
   which of its values are passwords.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
@@ -680,8 +731,16 @@ secrets the run reads, the run's for Start and each job's for its attempts:
 the secret variables an expression reads, each of a context's when it reads
 every variable of the context, as `vars.*` does; and passwords, by their
 paths in the inputs' values, `password` inputs and the password fields of
-lists' rows, and lists whose rows hold one and are evaluated at Start
-([Inputs](#inputs)). Their values are in the secret record.
+lists' rows, lists whose rows hold one and are evaluated at Start, and
+submitted values that can hold one, such as what a form made from one,
+which are kept as passwords are ([Inputs](#inputs)). Of those, it names the
+submitted values in the place of what is made from a secret apart, as
+derived, since they can be made from a secret or not: they are masked as
+what is made from a secret is, rather than as a secret's own text. Their
+values are in the secret record. It names, apart again, the submitted
+values that can hold a variable's value that isn't a secret, but no
+password, which are private, as that value is: the secret record holds
+them, and nothing masks them.
 
 Nor does the plan hold the value of an organization or user variable, secret
 or not, or a value made from one. People keep secrets in plain variables

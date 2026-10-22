@@ -1,0 +1,13 @@
+description: >-
+  A part of a list's row that is evaluated once the run is underway, and is
+  a group with a password among its inputs, here in the rows of a list in
+  it, holds passwords the plan can't name one by one, so the run's secrets
+  name the part, all of it.
+source: Meridian
+contexts:
+  vars:
+    ACCESS: unused
+secret-variables: [ACCESS]
+expect:
+  plan:
+    /run/secrets: [inputs.sites.0.access, vars.ACCESS]

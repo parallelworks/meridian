@@ -93,7 +93,7 @@ func TestContextsConformance(t *testing.T) {
 			if g, w := slices.Sorted(slices.Values(r.skipped)), slices.Sorted(slices.Values(c.Expect.Skipped)); !slices.Equal(g, w) {
 				t.Errorf("skipped %q, want %q", g, w)
 			}
-			if g, w := slices.Sorted(slices.Values(r.private)), slices.Sorted(slices.Values(c.Expect.Private)); !slices.Equal(g, w) {
+			if g, w := slices.Sorted(slices.Values(r.private)), slices.Sorted(slices.Values(c.Expect.PrivateOutputs)); !slices.Equal(g, w) {
 				t.Errorf("private outputs %q, want %q", g, w)
 			}
 			if g, w := slices.Sorted(slices.Values(r.secrets)), slices.Sorted(slices.Values(c.Expect.SecretOutputs)); !slices.Equal(g, w) {

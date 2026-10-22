@@ -500,7 +500,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"masked":["s3cret-y"]}`; string(data) != want {
+	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30,"cleanOnRetry":true},"ignoreErrors":true,"masked":["s3cret-y"]}`; string(data) != want {
 		t.Errorf("step 0:\n%s\nwant\n%s", data, want)
 	}
 	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"o": "1"}}}
@@ -804,7 +804,7 @@ jobs:
 	if err != nil || len(diags) > 0 {
 		t.Fatal(diags, err)
 	}
-	if s.TimeoutSeconds != 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 5, TimeoutSeconds: 30}) {
+	if s.TimeoutSeconds != 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 5, TimeoutSeconds: 30, CleanOnRetry: true}) {
 		t.Errorf("timeout %d, retry %+v", s.TimeoutSeconds, s.Retry)
 	}
 }
@@ -1030,14 +1030,14 @@ jobs:
           max-retries: ${{ inputs.n }}
 `, nil)
 	for _, tc := range []struct{ v, n, want string }{
-		{"+5m", "2", "timeout 300, retry {MaxRetries:2 IntervalSeconds:300 TimeoutSeconds:300 CleanOnRetry:false}"},
-		{"0", "+3", "timeout 0, retry {MaxRetries:3 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:false}"},
-		{"+0", "-1", "timeout 0, retry {MaxRetries:0 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:false}"},
-		{"0s", "0", "timeout 0, retry {MaxRetries:0 IntervalSeconds:0 TimeoutSeconds:0 CleanOnRetry:false}"},
-		{"3", "7", "timeout 3, retry {MaxRetries:7 IntervalSeconds:3 TimeoutSeconds:3 CleanOnRetry:false}"},
-		{"3", " 7\n", "timeout 3, retry {MaxRetries:7 IntervalSeconds:3 TimeoutSeconds:3 CleanOnRetry:false}"},
+		{"+5m", "2", "timeout 300, retry {MaxRetries:2 IntervalSeconds:300 TimeoutSeconds:300 CleanOnRetry:true}"},
+		{"0", "+3", "timeout 0, retry {MaxRetries:3 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:true}"},
+		{"+0", "-1", "timeout 0, retry {MaxRetries:0 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:true}"},
+		{"0s", "0", "timeout 0, retry {MaxRetries:0 IntervalSeconds:0 TimeoutSeconds:0 CleanOnRetry:true}"},
+		{"3", "7", "timeout 3, retry {MaxRetries:7 IntervalSeconds:3 TimeoutSeconds:3 CleanOnRetry:true}"},
+		{"3", " 7\n", "timeout 3, retry {MaxRetries:7 IntervalSeconds:3 TimeoutSeconds:3 CleanOnRetry:true}"},
 		{"3", "7 tries", "[count_invalid]"},
-		{"", "", "timeout 0, retry {MaxRetries:10 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:false}"},
+		{"", "", "timeout 0, retry {MaxRetries:10 IntervalSeconds:5 TimeoutSeconds:30 CleanOnRetry:true}"},
 		{"-5m", "3.5", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
 		{"3.5", "1e3", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
 		{" 7 ", "0x10", "[count_invalid duration_invalid duration_invalid duration_invalid]"},
@@ -1085,7 +1085,7 @@ jobs:
 		t.Fatal(err)
 	}
 	s, diags, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run})
-	if err != nil || len(diags) > 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 1, TimeoutSeconds: 30}) {
+	if err != nil || len(diags) > 0 || *s.Retry != (plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 1, TimeoutSeconds: 30, CleanOnRetry: true}) {
 		t.Errorf("retry %+v, %v, %v", s, diags, err)
 	}
 	s, diags, err = ready.Job.Step(t.Context(), 1, plan.JobState{Run: run, Steps: make([]plan.StepResult, 1)})

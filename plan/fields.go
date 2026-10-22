@@ -236,6 +236,19 @@ func (e *evaluation) durationOf(v Value, pointer, key string, def int64, round b
 	return seconds
 }
 
+// cleanOnRetry evaluates a step's retry: clean-on-retry:, v, at pointer:
+// true or false, or text or a number that reads as one (readBool), and
+// true, format 1's default, for anything else, such as null, as format 1
+// reads it. The compiler gives true for a retry: without one; unset, as in
+// a plan written before it was a Value, which held only true, is false.
+func (e *evaluation) cleanOnRetry(v Value, pointer string) bool {
+	if v.IsZero() {
+		return false
+	}
+	out, _, ok := e.value(v, pointer)
+	return ok && readBool(out, true)
+}
+
 // count evaluates how many times something may run again, v, at pointer,
 // the value of key, or def when it is unset, or null or "".
 func (e *evaluation) count(v Value, pointer, key string, def int) int {

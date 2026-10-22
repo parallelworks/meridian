@@ -77,8 +77,12 @@ type Expect struct {
 	// string it is written as, and a list or mapping with each template in
 	// it as its text.
 	Deferred map[string]any `yaml:"deferred,omitempty"`
-	// Secrets are the values of password inputs, by their path.
+	// Secrets are the values of password inputs, by their path, and of
+	// the other values kept as secrets.
 	Secrets map[string]any `yaml:"secrets,omitempty"`
+	// Private are the values kept out of the plan, as a variable's value
+	// is, that aren't secrets, by their path.
+	Private map[string]any `yaml:"private,omitempty"`
 	// Plan holds values the compiled plan must have, by JSON Pointer into
 	// its JSON encoding, in the compile area.
 	Plan map[string]any `yaml:"plan,omitempty"`
@@ -87,11 +91,11 @@ type Expect struct {
 	// didn't run, or whose if: is false as the job ends. Every other job,
 	// step and cleanup: there runs.
 	Skipped []string `yaml:"skipped,omitempty"`
-	// Private are the JSON Pointers of the job outputs that are private, in
-	// the contexts area: made from an organization or user variable, a
-	// password or a secret, or holding a secret, so kept only with the
-	// run's secrets. Every other output there isn't.
-	Private []string `yaml:"private,omitempty"`
+	// PrivateOutputs are the JSON Pointers of the job outputs that are
+	// private, in the contexts area: made from an organization or user
+	// variable, a password or a secret, or holding a secret, so kept only
+	// with the run's secrets. Every other output there isn't.
+	PrivateOutputs []string `yaml:"private-outputs,omitempty"`
 	// SecretOutputs are the JSON Pointers of the job outputs that hold a
 	// secret, in the contexts area, made from one or holding one's text,
 	// and of the outputs of steps with ids that hold one's text, as

@@ -206,8 +206,8 @@ type ReadyStep struct {
 
 // ReadyStepRetry is a step's retry: as Step evaluated it, which reruns the
 // step on the same worker when it fails: its max-retries:, its interval:
-// and timeout:, in seconds, with format 1's defaults, and its
-// clean-on-retry: as the plan holds it.
+// and timeout:, in seconds, and its clean-on-retry:, each with format 1's
+// default: clean-on-retry: is true unless the workflow says otherwise.
 type ReadyStepRetry struct {
 	MaxRetries      int   `json:"maxRetries"`
 	IntervalSeconds int64 `json:"intervalSeconds"`
@@ -414,7 +414,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 			MaxRetries:      e.count(r.MaxRetries, at(pointer, "max-retries"), "max-retries", defaultStepRetries),
 			IntervalSeconds: e.retryDuration(r.Interval, at(pointer, "interval"), "interval", defaultStepInterval),
 			TimeoutSeconds:  e.retryDuration(r.Timeout, at(pointer, "timeout"), "timeout", defaultStepTryTimeout),
-			CleanOnRetry:    r.CleanOnRetry,
+			CleanOnRetry:    e.cleanOnRetry(r.CleanOnRetry, at(pointer, "clean-on-retry")),
 		}
 	}
 	if !s.IgnoreErrors.IsZero() {

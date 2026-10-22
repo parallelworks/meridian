@@ -41,6 +41,29 @@ func refPath(path []segment) []string {
 	return out
 }
 
+// A RelativeRef is a relative reference an expression makes, such as
+// .hidden or ..region.default: how many keys up from the key the
+// expression is in it starts, and the path it follows from there, as a
+// Ref's Path is.
+type RelativeRef struct {
+	// Offset is the byte offset in the expression of the reference.
+	Offset int
+	Up     int
+	Path   []string
+}
+
+// Relatives returns the relative references an expression makes, in the
+// order they appear, in the bodies of its lambdas too.
+func (e *Expr) Relatives() []RelativeRef {
+	var out []RelativeRef
+	visit(e.root, func(n node) {
+		if r, ok := n.(*relative); ok {
+			out = append(out, RelativeRef{Offset: r.at, Up: r.up, Path: refPath(r.path)})
+		}
+	})
+	return out
+}
+
 // Relative reports whether the expression has a relative reference, such
 // as .hidden.
 func (e *Expr) Relative() bool {

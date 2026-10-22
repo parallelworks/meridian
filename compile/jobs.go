@@ -336,7 +336,11 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 			Interval:   c.value(at("retry", "interval"), stepRuns, info),
 			Timeout:    c.value(at("retry", "timeout"), stepRuns, info),
 		}
-		s.Retry.CleanOnRetry, _ = retry["clean-on-retry"].(bool)
+		// clean-on-retry is true unless the workflow says otherwise.
+		s.Retry.CleanOnRetry = plan.Literal(true)
+		if _, ok := retry["clean-on-retry"]; ok {
+			s.Retry.CleanOnRetry = c.value(at("retry", "clean-on-retry"), stepRuns, info)
+		}
 	}
 	return s
 }

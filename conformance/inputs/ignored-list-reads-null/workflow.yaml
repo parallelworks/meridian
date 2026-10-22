@@ -1,0 +1,20 @@
+on:
+  execute:
+    inputs:
+      extra:
+        type: list
+        ignore: true
+        template:
+          name:
+            type: string
+      summary:
+        type: string
+        default: ${{ length(inputs.extra) }}
+      warn:
+        type: string
+        optional: true
+        ignore: ${{ inputs.extra != null }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

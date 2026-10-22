@@ -57,6 +57,14 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		}
 	}
 	p.Run.Secrets = slices.Sorted(maps.Keys(c.secrets))
+	for k := range inputs.derived {
+		p.Run.Derived = append(p.Run.Derived, "inputs."+k)
+	}
+	slices.Sort(p.Run.Derived)
+	for k := range inputs.private {
+		p.Run.Private = append(p.Run.Private, "inputs."+k)
+	}
+	slices.Sort(p.Run.Private)
 	p.Run.Variables = c.variables(p)
 
 	c.diags.Sort()
