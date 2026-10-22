@@ -254,7 +254,7 @@ What an expression can read is its contexts, each a mapping:
 | `org`, `vars` | Organization and user variables, by name, as strings. `var` is another name for `vars`. | Create, for the run's shape; Start, for everything else |
 | `remote` | Where a fetched workflow came from, as strings, such as `remote.repo` and `remote.branch`. | Create |
 | `sessions` | The workflow's `sessions:`, by name, as strings, as the session provider gives them. | Create |
-| `env` | The workflow's `env:`, then the job's over it, then the step's over that, as strings. Each reads the ones under it, and the workflow's reads none. | Start, the workflow's; Step, the job's and the step's |
+| `env` | The workflow's `env:`, then the job's over it, then the step's over that, and on the worker the variables format 1 defines, such as `PW_JOB_DIR`, over all, as strings. Each reads the ones under it, and the values of its own that don't read `env`; the workflow's reads none. | Start, the workflow's; Step, the job's, the step's and the worker's |
 | `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are those its steps without an `id` wrote so far. | Ready |
 | `matrix` | The job instance's matrix values. | Ready, once the matrix is expanded |
 | `job` | The job instance: `job.name`, the job's name; `job.key`, the instance's, as in `build#2`; `job.attempt`, from 1; and `job.group` and `job.member`, where it was placed. | Step |

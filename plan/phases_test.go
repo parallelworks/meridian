@@ -905,3 +905,37 @@ func codeList(ds problems.Diagnostics) []string {
 	}
 	return out
 }
+
+// A job's outputs are those its steps without an id wrote, merged in
+// their order, the later step's where two wrote the same name, and its
+// outputs: over them, as format 1's one $OUTPUTS file has them.
+func TestEndMergesOutputsInOrder(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - run: "true"
+      - id: own
+        run: "true"
+      - run: "true"
+    outputs:
+      declared: ${{ needs.main.outputs.a }}
+      b: ${{ 'declared' }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, diags, err := ready.Job.End(t.Context(), plan.JobState{Run: run, Steps: []plan.StepResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "1", "b": "1"}},
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "own", "c": "own"}},
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "3"}},
+	}})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(diags, err)
+	}
+	if fmt.Sprint(end.Outputs) != "map[a:3 b:declared declared:3]" {
+		t.Errorf("outputs %v", end.Outputs)
+	}
+}
