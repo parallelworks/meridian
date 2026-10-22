@@ -71,8 +71,12 @@ type Expect struct {
 	// string it is written as, and a list or mapping with each template in
 	// it as its text.
 	Deferred map[string]any `yaml:"deferred,omitempty"`
-	// Secrets are the values of password inputs, by their path.
+	// Secrets are the values of password inputs, by their path, and of
+	// the other values kept as secrets.
 	Secrets map[string]any `yaml:"secrets,omitempty"`
+	// Private are the values kept out of the plan, as a variable's value
+	// is, that aren't secrets, by their path.
+	Private map[string]any `yaml:"private,omitempty"`
 	// Plan holds values the compiled plan must have, by JSON Pointer into
 	// its JSON encoding, in the compile area.
 	Plan map[string]any `yaml:"plan,omitempty"`

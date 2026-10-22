@@ -5,8 +5,10 @@ import (
 	"cmp"
 	"errors"
 	"io"
+	"iter"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,9 +38,11 @@ type Document struct {
 	Format int
 	// Value is the workflow as JSON values: map[string]any, []any, string,
 	// bool, int64, float64 and nil. Keys the format ignores, which were
-	// reported as warnings, are left out.
+	// reported as warnings, are left out (Dropped).
 	Value map[string]any
 
+	// dropped holds the keys left out of Value, by where they are.
+	dropped   []droppedKey
 	positions map[string]problems.Position
 	keys      map[string]problems.Position
 	// styles holds each string's YAML style, and lines the file's lines,
@@ -61,6 +65,29 @@ func (d *Document) KeyPosition(pointer string) problems.Position {
 		return p
 	}
 	return d.positions[pointer]
+}
+
+// A droppedKey is a key the format doesn't define, which Value leaves out:
+// its path in the workflow, and its value.
+type droppedKey struct {
+	path  []string
+	value any
+}
+
+// Dropped returns the keys the format doesn't define, which were reported
+// as warnings and are left out of Value, each by its path in the workflow,
+// with its value, in the order they were dropped. A stage that reads more
+// of the workflow than the format defines reads them here, as the compiler
+// does the syntax of every expression in the input definitions. Each path
+// is a copy, which the caller can change; the values are the document's.
+func (d *Document) Dropped() iter.Seq2[[]string, any] {
+	return func(yield func([]string, any) bool) {
+		for _, k := range d.dropped {
+			if !yield(slices.Clone(k.path), k.value) {
+				return
+			}
+		}
+	}
 }
 
 // ReportPosition returns where a diagnostic about the value at a JSON
@@ -114,6 +141,7 @@ func (l *Loader) Load(name string, data []byte) (*Document, problems.Diagnostics
 		File:      name,
 		Format:    format,
 		Value:     value.(map[string]any),
+		dropped:   p.dropped,
 		positions: p.values,
 		keys:      p.keys,
 		styles:    p.styles,
@@ -130,6 +158,8 @@ type parser struct {
 	values map[string]problems.Position
 	styles map[string]yaml.Style
 	diags  problems.Diagnostics
+	// dropped holds the keys validate dropped.
+	dropped []droppedKey
 }
 
 // report reports a problem of kind k at pos, about the value at path.

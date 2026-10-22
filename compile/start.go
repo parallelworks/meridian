@@ -24,6 +24,12 @@ type StartInput struct {
 	// by their paths in the inputs' values, creds.0.pass: whoever keeps
 	// them in the secret record names them as the plan does.)
 	Passwords map[string]any
+	// Private are the run's private values, from its secret record, by
+	// their paths, as plan.Run.Private names them: values the run was given
+	// that the plan doesn't hold, though they aren't secrets
+	// (Inputs.Private). Start puts each in the inputs' values at its path,
+	// and names it among the private values it gives (plan.RunValues).
+	Private map[string]any
 	// Inputs provides the input types that name a platform's resources, as
 	// Options.Inputs does when the run is created. Nil means there is no
 	// platform.

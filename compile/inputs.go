@@ -56,8 +56,8 @@ var platformTypes = map[string]bool{
 
 // Inputs are a run's input values.
 type Inputs struct {
-	// Values are the input values, with defaults applied and ignored inputs
-	// left out.
+	// Values are the input values, with defaults applied, and ignored inputs
+	// and passwords left out.
 	Values map[string]any
 	// Deferred are the defaults that read something the compiler doesn't
 	// know, such as a secret variable, or an organization or user variable
@@ -68,8 +68,18 @@ type Inputs struct {
 	Deferred map[string]plan.Value
 	// Secrets are the values of password inputs, by their path in the
 	// values, such as k8s.token, or creds.0.pass for a password field of a
-	// list's first row. The plan doesn't hold them.
+	// list's first row; and of the other submitted values that are kept as
+	// passwords are, as they can hold one: one for an input the workflow
+	// doesn't define, named as a password field, and one in the place of a
+	// default that reads a password or a secret variable that isn't what the
+	// default gives. The plan doesn't hold them.
 	Secrets map[string]any
+	// Private are the values, by their paths, that the plan doesn't hold,
+	// though they aren't secrets: each in the place of a default that reads
+	// an organization or user variable that isn't a secret, and no
+	// password, that isn't what the default gives. They are kept as a
+	// variable's value is, and aren't masked.
+	Private map[string]any
 }
 
 // Options are what the compiler reads besides the workflow.
@@ -98,7 +108,7 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 // docs/design.md describes. It reports every problem it finds.
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
-	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets}, listed(r.diags)
+	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets, Private: r.private}, listed(r.diags)
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
@@ -117,18 +127,36 @@ func newInputResolver(doc *format.Document, submitted map[string]any, opts Optio
 		budget:       expr.Scope{}.Budgeted(),
 		values:       jsonvalue.CloneMap(submitted),
 		secrets:      map[string]any{},
+		private:      map[string]any{},
 		secretsLater: map[string]bool{},
 		marks:        expr.NewMarks([]string{"org"}, []string{"vars"}),
 	}
 }
 
 func (r *inputResolver) resolve() {
+	r.fill()
+	r.applyConditions()
+	r.checkValues()
+	r.keepHeld()
+	r.diags.Sort()
+}
+
+// fill finds the inputs' fields, checks the syntax of their definitions
+// and the submitted values' names, and fills in the values.
+func (r *inputResolver) fill() {
 	defs, _ := lookup(r.doc.Value, definitionsPath).(map[string]any)
 	r.fields = r.collect(defs, definitionsPath, nil, nil)
 	for i, f := range r.fields {
 		f.seq = i
 	}
 	r.checkSyntax(append(make([]string, 0, 16), definitionsPath...), defs)
+	// The format drops the keys it doesn't define, but every expression in
+	// the input definitions must parse, theirs too.
+	for path, v := range r.doc.Dropped() {
+		if len(path) > len(definitionsPath) && slices.Equal(path[:len(definitionsPath)], definitionsPath) {
+			r.checkSyntax(path, v)
+		}
+	}
 	for _, f := range r.fields {
 		r.markPassword(f)
 	}
@@ -140,9 +168,6 @@ func (r *inputResolver) resolve() {
 		}
 	}
 	r.fillDefaults()
-	r.applyConditions()
-	r.checkValues()
-	r.diags.Sort()
 }
 
 // A field is an input definition.
@@ -176,10 +201,11 @@ type field struct {
 	// starts in its place. dflt holds what is evaluated then.
 	deferred, variable bool
 	dflt               plan.Value
-	// secretRows is set for a list whose rows are evaluated as the run
-	// starts, with a password field in them: the plan can't say which of
-	// its values are passwords, so the run's secrets name all of it.
-	secretRows bool
+	// secretWhole is set for a list, a group or a wizard step with a
+	// password among its inputs, whose value, or one of whose rows, is
+	// evaluated as the run starts: the plan can't say which of its values
+	// are passwords, so the run's secrets name all of it.
+	secretWhole bool
 
 	// index holds the indexes of the list rows that a field of a list's
 	// template is for, outermost first, and in is the input whose value
@@ -202,6 +228,10 @@ type field struct {
 	// reads: its default's, or its texts'.
 	texts []text
 	reads []*expr.Expr
+	// candidates are the parts of a submitted value that a form can have
+	// made from a variable or a password, as it evaluates each default and
+	// option it can and sends what it gives (compare).
+	candidates []candidate
 	// later holds the parts of an input's value that are evaluated once the
 	// run is underway, until they are in dflt, and laterAt their indexes by
 	// their paths, so that the parts at a row, however deep, are found
@@ -215,6 +245,57 @@ type field struct {
 // input's default, or one of its options' values. A form sends that text
 // for an expression it can't evaluate itself.
 type text struct{ path, loc []string }
+
+// A candidate is a part of a submitted value, at path in it, that can be
+// what one of the strings at locs in the workflow gave, one of which reads
+// a variable or a password: the string in the same place in the input's
+// default, or with a list's default rows, at the same key in any of them,
+// as a form evaluates them once and the person can delete and add rows; or
+// the input's options' values, for option set. With each set, each item
+// of the list at path can be.
+type candidate struct {
+	path         []string
+	locs         [][]string
+	option, each bool
+}
+
+// A heldPart is a part of the values, at path, in the value of the input
+// in, that the plan doesn't hold (holdPath), and how it is kept.
+type heldPart struct {
+	in   *field
+	path []string
+	kind holding
+}
+
+// A holding is how a value the plan doesn't hold is kept.
+type holding int
+
+const (
+	// heldSecret is a value kept as a secret, as a password's is: one
+	// that can hold a password where the compiler can't find it.
+	heldSecret holding = iota
+	// heldDerived is a value kept as a secret in the place of what is made
+	// from a password or a secret variable, that isn't what makes it: it
+	// can be made from one, or not, and is masked as what is made from a
+	// secret is.
+	heldDerived
+	// heldPrivate is a value in the place of what is made from an
+	// organization or user variable that isn't a secret, and no password,
+	// that isn't what makes it: it is private, as such a variable's value
+	// is, and isn't masked.
+	heldPrivate
+)
+
+// An evaluation is a part of a field's value, at path in it, that the
+// compiler evaluated from raw, the workflow's value, or that a form
+// evaluated from it, which a default, a form's text or a comparison gave.
+// done is set once it is evaluated as the run starts instead (holdWhole).
+type evaluation struct {
+	f    *field
+	path []string
+	raw  any
+	done bool
+}
 
 // A laterPart is a part of an input's value, at path in it, that is
 // evaluated once the run is underway: v, a workflow's JSON values with its
@@ -245,9 +326,44 @@ type inputResolver struct {
 	secretsLater map[string]bool
 	// marks are the paths in the contexts of what reads a variable or a
 	// password: org, vars, password inputs, password fields of lists' rows,
-	// and the parts of the values that read them.
-	marks  expr.Marks
-	fields []*field
+	// and the parts of the values that read them; and markedInputs their
+	// paths in the inputs' values.
+	marks        expr.Marks
+	markedInputs reach.Trie[struct{}]
+	// passwords are the password inputs, and the password fields of lists'
+	// rows; unknownSecrets the paths of values submitted for inputs the
+	// workflow doesn't define that are taken for passwords; and held the
+	// other parts of the values kept out of the plan (holdPath), which are
+	// among the secrets or private (keepHeld). derived names those among
+	// the secrets that can be made from a secret, and private holds the
+	// values of the private ones, by their paths.
+	passwords      []*field
+	unknownSecrets [][]string
+	held           []heldPart
+	derived        map[string]bool
+	private        map[string]any
+	// taint holds the paths in the values, as patterns with * for a row's
+	// index, whose values can read a variable or a password, and
+	// secretTaint those whose values can read a password or a secret
+	// variable (taintInputs). taintNodes holds the strings in the workflow
+	// that taintInputs looked at, by their locations, and taintOrder them
+	// in the order it found them.
+	taint, secretTaint patterns
+	taintNodes         map[string]*taintNode
+	taintOrder         []*taintNode
+	// compareScope holds the budget that comparing what a form sent with
+	// what made it spends (compare): a group of its own, so that what it
+	// spends doesn't decide the run's shape. comparisons holds what each
+	// string compared gave, by its location and the row index it read.
+	compareScope *expr.Scope
+	comparisons  map[string]comparison
+	// compareSlow is set once a comparison runs out of the group's time,
+	// which is reported once.
+	compareSlow bool
+	// evaluated holds the parts of the values that evaluations gave, by the
+	// patterns (reach.Patterns) of the paths of the values they read.
+	evaluated reach.Trie[*evaluation]
+	fields    []*field
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
 	rows []*field
@@ -269,8 +385,10 @@ type inputResolver struct {
 	// the rows at each index. They are made again once the values change.
 	evaluators map[string]*expr.Evaluator
 	// unknown counts the submitted values for inputs the workflow doesn't
-	// define.
-	unknown int
+	// define, and passwordKeys holds the names of the password fields the
+	// workflow defines, anywhere, once one is.
+	unknown      int
+	passwordKeys map[string]bool
 	// checkView, which tests set, is called each time the view changes, and
 	// each time an evaluation is to read it.
 	checkView func()
@@ -294,8 +412,24 @@ type options struct {
 	values          []any
 	exprs           []exprOption
 	template, empty bool
-	// keys holds each value's looseKey, once a value is checked.
-	keys map[string]bool
+	// keys holds each value's looseKey, once a value is checked, and
+	// literals those of the values that hold no expression, once a choice
+	// is compared (compare).
+	keys, literals map[string]bool
+}
+
+// literal reports whether v is one of the options' values that hold no
+// expression, by its looseKey, as checkOption matches them.
+func (o *options) literal(v any) bool {
+	if o.literals == nil {
+		o.literals = map[string]bool{}
+		for _, value := range o.values {
+			if !hasTemplate(value) {
+				o.literals[looseKey(value)] = true
+			}
+		}
+	}
+	return o.literals[looseKey(v)]
 }
 
 // collect returns the fields that the definitions in defs, at loc in the
@@ -456,8 +590,429 @@ func holdsPassword(def map[string]any) bool {
 // evaluated as the run starts, and what is wrong with it isn't shown.
 func (r *inputResolver) markPassword(f *field) {
 	if f.typ == "password" {
-		r.marks.Add(slices.Concat([]string{"inputs"}, f.path))
+		r.passwords = append(r.passwords, f)
+		r.mark(f.path)
 	}
+}
+
+// mark marks the value at path in the inputs' values: what reads it reads a
+// variable or a password. The evaluations that follow read the marks anew.
+func (r *inputResolver) mark(path []string) {
+	r.marks.Add(slices.Concat([]string{"inputs"}, path))
+	r.markedInputs.Add(path, struct{}{})
+	r.evaluators = nil
+}
+
+// marked reports whether the value at path in the inputs' values is
+// marked, holds a marked value, or is in one: as the value of another input
+// with the same path, as a wizard step's input can have, can be.
+func (r *inputResolver) marked(path []string) bool {
+	for range r.markedInputs.Reached(path) {
+		return true
+	}
+	return false
+}
+
+// taintInputs finds the paths in the values whose values can read a
+// variable or a password, and those whose values can read a password or a
+// secret variable, from the input definitions alone, before any is
+// evaluated: password fields', values submitted for inputs the workflow
+// doesn't define that are taken for passwords, and those of the strings in
+// defaults, and of options, that can read one (reads), until there are no
+// more. A row's index is * in them.
+//
+// Each string is looked at once, with the strings its relative references
+// reach (taintNode). A string can read one if its expressions read a path
+// that can, or a string it reaches can; and then so can the places in the
+// values that hold what it gives (propagateTaint). A string is looked at
+// again only when a path is added that its expressions can read, so the
+// order in which defaults read each other doesn't make it looked at again
+// and again.
+func (r *inputResolver) taintInputs() {
+	r.taintNodes = map[string]*taintNode{}
+	var walk func(fields []*field, prefix []string)
+	walk = func(fields []*field, prefix []string) {
+		for _, f := range fields {
+			path := slices.Concat(prefix, f.path)
+			if f.typ == "password" {
+				r.taint.add(path)
+				r.secretTaint.add(path)
+			}
+			rows := f.typ == "list"
+			exprStrings(f.def["default"], appendPath(f.loc, "default"), nil, func(loc, at []string) {
+				if rows && len(at) > 0 {
+					at = slices.Concat([]string{"*"}, at[1:])
+				}
+				r.taintPlace(slices.Concat(path, at), loc)
+			})
+			for _, o := range f.findOptions().exprs {
+				r.taintPlace(path, o.loc)
+			}
+			if defs, loc := f.rowInputs(); defs != nil {
+				walk(r.template(defs, loc).fields, appendPath(path, "*"))
+			}
+		}
+	}
+	walk(r.fields, nil)
+	for _, path := range r.unknownSecrets {
+		r.taint.add(path)
+		r.secretTaint.add(path)
+	}
+	// Each string's relative references, as it is found, which can find
+	// more.
+	for i := 0; i < len(r.taintOrder); i++ {
+		r.linkTaintNode(r.taintOrder[i])
+	}
+	r.propagateTaint(&r.taint, anyRead)
+	r.propagateTaint(&r.secretTaint, secretRead)
+}
+
+// A taintNode is a string in the workflow that holds an expression, as
+// taintInputs sees it: what its expressions read, the strings their
+// relative references reach, and what it can read, as reads says.
+type taintNode struct {
+	loc  []string
+	refs []expr.Ref
+	// rels are the strings its relative references reach, and readers the
+	// strings whose relative references reach it.
+	rels, readers []*taintNode
+	// places are the places in the values of what it gives.
+	places []*taintPlace
+	// reads is whether it can read a variable or a password, for any of
+	// the list rows it is evaluated for, by what is read (a readKind).
+	reads [2]bool
+}
+
+// A taintPlace is a place in the values, as a pattern with * for a row's
+// index, that holds what one or more strings give; tainted is whether
+// they can read a variable or a password, by what is read.
+type taintPlace struct {
+	path    []string
+	tainted [2]bool
+}
+
+// A readKind is what reads looks for: a variable or a password, or a
+// password or a secret variable.
+type readKind int
+
+const (
+	anyRead readKind = iota
+	secretRead
+)
+
+// taintNode returns the node of the string at loc, a new one if there
+// isn't one yet.
+func (r *inputResolver) taintNode(loc []string) *taintNode {
+	key := jsonptr.Format(loc)
+	if n := r.taintNodes[key]; n != nil {
+		return n
+	}
+	n := &taintNode{loc: loc}
+	r.taintNodes[key] = n
+	r.taintOrder = append(r.taintOrder, n)
+	return n
+}
+
+// taintPlace notes that path, a place in the values, holds what the
+// strings at loc give.
+func (r *inputResolver) taintPlace(path, loc []string) {
+	p := &taintPlace{path: path}
+	exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+		n := r.taintNode(at)
+		n.places = append(n.places, p)
+	})
+}
+
+// linkTaintNode notes what n's expressions read, and the strings their
+// relative references reach (relativeLocs), which are evaluated in turn.
+func (r *inputResolver) linkTaintNode(n *taintNode) {
+	exprs, err := r.workflow.Exprs(n.loc)
+	if err != nil {
+		return // checkSyntax reports it.
+	}
+	for _, e := range exprs {
+		n.refs = append(n.refs, e.Refs()...)
+		for _, rel := range e.Relatives() {
+			for _, loc := range r.relativeLocs(n.loc, rel) {
+				exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+					m := r.taintNode(at)
+					n.rels = append(n.rels, m)
+					m.readers = append(m.readers, n)
+				})
+			}
+		}
+	}
+}
+
+// propagateTaint finds, as reads says for kind, the strings that can read
+// a variable or a password, for any row, and the places in the values,
+// added to taint, that hold what they give, until there are no more. A
+// string is looked at again only when a place is added whose input its
+// expressions read.
+func (r *inputResolver) propagateTaint(taint *patterns, kind readKind) {
+	secret := kind == secretRead
+	// byInput holds the strings that read an input, by its name, and
+	// whole those that read a path that can be any input's.
+	byInput := map[string][]*taintNode{}
+	var whole []*taintNode
+	for _, n := range r.taintOrder {
+		for _, ref := range n.refs {
+			if ref.Context != "inputs" {
+				continue
+			}
+			for p := range reach.Patterns(anyRow(ref.Path)) {
+				if len(p) == 0 || p[0] == "*" {
+					whole = append(whole, n)
+				} else {
+					byInput[p[0]] = append(byInput[p[0]], n)
+				}
+			}
+		}
+	}
+	var queue []*taintNode
+	reads := func(n *taintNode) {
+		if !n.reads[kind] {
+			n.reads[kind] = true
+			queue = append(queue, n)
+		}
+	}
+	check := func(n *taintNode) {
+		if !n.reads[kind] && r.readsRefs(n.refs, secret) {
+			reads(n)
+		}
+	}
+	// recheck checks nodes again, and returns those that still can't read
+	// one.
+	recheck := func(nodes []*taintNode) []*taintNode {
+		for _, n := range nodes {
+			check(n)
+		}
+		return slices.DeleteFunc(nodes, func(n *taintNode) bool { return n.reads[kind] })
+	}
+	for _, n := range r.taintOrder {
+		check(n)
+	}
+	for len(queue) > 0 {
+		n := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, m := range n.readers {
+			reads(m)
+		}
+		for _, p := range n.places {
+			if !p.tainted[kind] {
+				p.tainted[kind] = true
+				taint.add(p.path)
+				byInput[p.path[0]] = recheck(byInput[p.path[0]])
+				whole = recheck(whole)
+			}
+		}
+	}
+}
+
+// anyRow returns path, a path an expression reads, with * in place of
+// each [index]: the path it reads for any row.
+func anyRow(path []string) []string {
+	if !slices.Contains(path, "[index]") {
+		return path
+	}
+	path = slices.Clone(path)
+	for i, k := range path {
+		if k == "[index]" {
+			path[i] = "*"
+		}
+	}
+	return path
+}
+
+// exprStrings calls yield with the location in the workflow, and the path
+// in v, of each string in v, at loc, that holds an expression.
+func exprStrings(v any, loc, at []string, yield func(loc, at []string)) {
+	switch v := v.(type) {
+	case string:
+		if strings.Contains(v, "${{") {
+			yield(loc, at)
+		}
+	case []any:
+		for i, item := range v {
+			k := strconv.Itoa(i)
+			exprStrings(item, appendPath(loc, k), appendPath(at, k), yield)
+		}
+	case map[string]any:
+		for k, item := range jsonvalue.Sorted(v) {
+			exprStrings(item, appendPath(loc, k), appendPath(at, k), yield)
+		}
+	}
+}
+
+// reads reports whether what the workflow holds at loc, evaluated for any
+// list row, can read a variable or a password, or with secret set, a
+// password or a secret variable: the expressions in each of its strings,
+// and in the definitions their relative references reach (relativeLocs),
+// which are evaluated in turn. An expression can read one if it reads org
+// or vars, or a secret variable, or a path of the inputs' values whose
+// value can (taintInputs). Those paths have * for each row's index, so
+// what can read one for a row can for each.
+//
+// loc is one of the places taintInputs found, whose strings it decided.
+func (r *inputResolver) reads(loc []string, secret bool) bool {
+	kind := anyRead
+	if secret {
+		kind = secretRead
+	}
+	found := false
+	exprStrings(lookup(r.doc.Value, loc), loc, nil, func(at, _ []string) {
+		n := r.taintNodes[jsonptr.Format(at)]
+		// One taintInputs didn't find, which it can't decide, can.
+		found = found || n == nil || n.reads[kind]
+	})
+	return found
+}
+
+// readsRefs reports whether refs, for any list row, can read a variable or
+// a password, or with secret set, a password or a secret variable.
+func (r *inputResolver) readsRefs(refs []expr.Ref, secret bool) bool {
+	taint := &r.taint
+	if secret {
+		taint = &r.secretTaint
+	}
+	for _, ref := range refs {
+		switch ref.Context {
+		case "org", "vars":
+			if !secret || r.secretVariable(ref) {
+				return true
+			}
+		case "inputs":
+			for p := range reach.Patterns(anyRow(ref.Path)) {
+				if taint.overlaps(p) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// secretVariable reports whether ref, a reference to org or vars, can read
+// a secret: a variable whose value the caller's contexts don't give, one
+// it names, or any of the context's, for one that names none.
+func (r *inputResolver) secretVariable(ref expr.Ref) bool {
+	vars, ok := r.opts.Contexts[ref.Context].(map[string]any)
+	if !ok {
+		return r.opts.Contexts[ref.Context] != nil
+	}
+	secret := func(v any) bool {
+		_, ok := v.(expr.Unknown)
+		return ok
+	}
+	if unnamed(ref.Path) {
+		for _, v := range vars {
+			if secret(v) {
+				return true
+			}
+		}
+		return false
+	}
+	return secret(vars[ref.Path[0]])
+}
+
+// relativeLocs returns the locations in the workflow of what rel, a
+// relative reference in the string at loc, reaches: where it leads, and a
+// string on the way, which is evaluated and read from. A * or an [index]
+// in its path reaches each key there, and a slice of a list each item in
+// it, all of which can be read.
+func (r *inputResolver) relativeLocs(loc []string, rel expr.RelativeRef) [][]string {
+	if rel.Up > len(loc) {
+		return nil
+	}
+	at := [][]string{slices.Clip(loc[:len(loc)-rel.Up])}
+	var out [][]string
+	for _, k := range rel.Path {
+		var next [][]string
+		each := k == "*" || k == "[index]"
+		for _, l := range at {
+			switch v := lookup(r.doc.Value, l).(type) {
+			case string:
+				out = append(out, l)
+			case map[string]any:
+				if !each {
+					if _, ok := v[k]; ok {
+						next = append(next, appendPath(l, k))
+					}
+					continue
+				}
+				for key := range jsonvalue.Sorted(v) {
+					next = append(next, appendPath(l, key))
+				}
+			case []any:
+				if !each {
+					// A key reads a list as property does: a slice, all of
+					// each of whose items it reads, as what comes after it
+					// reads the slice; or an index.
+					if start, end, ok := reach.Slice(k, len(v)); ok {
+						for i := start; i < end; i++ {
+							out = append(out, appendPath(l, strconv.Itoa(i)))
+						}
+					} else if i, ok := reach.Index(k); ok && i < len(v) {
+						next = append(next, appendPath(l, strconv.Itoa(i)))
+					}
+					continue
+				}
+				for i := range v {
+					next = append(next, appendPath(l, strconv.Itoa(i)))
+				}
+			}
+		}
+		at = next
+	}
+	return append(out, at...)
+}
+
+// patterns holds patterns of paths, with * for any key, to find those a
+// pattern overlaps without comparing it with each. The zero patterns hold
+// none.
+type patterns struct {
+	end      bool
+	children map[string]*patterns
+}
+
+// add adds p.
+func (t *patterns) add(p []string) {
+	for _, k := range p {
+		c := t.children[k]
+		if c == nil {
+			if t.children == nil {
+				t.children = map[string]*patterns{}
+			}
+			c = &patterns{}
+			t.children[k] = c
+		}
+		t = c
+	}
+	t.end = true
+}
+
+// overlaps reports whether p, or one of the patterns t holds, leads to the
+// other, or they are the same, a * in either being any key.
+func (t *patterns) overlaps(p []string) bool {
+	if t.end {
+		return true
+	}
+	if len(p) == 0 {
+		return len(t.children) > 0
+	}
+	if p[0] == "*" {
+		for _, c := range t.children {
+			if c.overlaps(p[1:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if c := t.children[p[0]]; c != nil && c.overlaps(p[1:]) {
+		return true
+	}
+	c := t.children["*"]
+	return c != nil && c.overlaps(p[1:])
 }
 
 // childPath is where a container's inputs' values are.
@@ -539,15 +1094,19 @@ func (r *inputResolver) checkUnknownInputs() {
 }
 
 // knownInputs are the inputs whose values are in a mapping, by their keys,
-// and their names, sorted, once a value there isn't one of them.
+// and their names, sorted, and those of the password inputs and of the
+// inputs with a password among theirs, once a value there isn't one of
+// them.
 type knownInputs struct {
-	byKey map[string]*field
-	names []string
+	byKey                     map[string]*field
+	names, passwords, holders []string
 }
 
 // checkUnknown reports submitted values for inputs the workflow doesn't
 // define, at path in the values, which known holds the inputs of by the
-// paths of the mappings they are in.
+// paths of the mappings they are in. A value that names a password
+// (namesPassword) is taken for one: it is kept among the secrets, and not
+// in the plan.
 func (r *inputResolver) checkUnknown(values map[string]any, path []string, known map[string]*knownInputs) {
 	inputs := known[jsonptr.Format(path)]
 	if inputs == nil {
@@ -556,6 +1115,12 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string, known
 	for key, v := range jsonvalue.Sorted(values) {
 		f, ok := inputs.byKey[key]
 		if !ok {
+			if r.namesPassword(key, v, inputs) {
+				at := appendPath(path, key)
+				r.secrets[strings.Join(at, ".")] = v
+				r.unknownSecrets = append(r.unknownSecrets, at)
+				r.mark(at)
+			}
 			if r.unknown++; r.unknown > maxListed {
 				continue
 			}
@@ -584,20 +1149,109 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string, known
 	}
 }
 
+// namesPassword reports whether v, a value submitted for an input the
+// workflow doesn't define, named key, among the inputs, is a password's: if
+// key is a password field's name, wherever the workflow defines one, as a
+// repeated step's password sent beside the step is; or is close to the
+// name of a password input among them, as a misspelling is; or v is a
+// mapping or a list, and key is close to the name of one with a password
+// among its inputs, or v holds a key that is a password field's name, as
+// a flattened wizard step's inputs sent under its name do.
+func (r *inputResolver) namesPassword(key string, v any, inputs *knownInputs) bool {
+	if r.passwordKeys == nil {
+		r.passwordKeys = map[string]bool{}
+		defs, _ := lookup(r.doc.Value, definitionsPath).(map[string]any)
+		passwordKeys(defs, r.passwordKeys)
+	}
+	if r.passwordKeys[key] || r.holdsPasswordKey(v) {
+		return true
+	}
+	if inputs.passwords == nil {
+		inputs.passwords, inputs.holders = []string{}, []string{}
+		for name, f := range jsonvalue.Sorted(inputs.byKey) {
+			switch {
+			case f.typ == "password":
+				inputs.passwords = append(inputs.passwords, name)
+			case holdsPassword(f.def):
+				inputs.holders = append(inputs.holders, name)
+			}
+		}
+	}
+	if _, ok := hint.Suggest(key, inputs.passwords); ok {
+		return true
+	}
+	switch v.(type) {
+	case map[string]any, []any:
+		_, ok := hint.Suggest(key, inputs.holders)
+		return ok
+	}
+	return false
+}
+
+// holdsPasswordKey reports whether v holds, at any depth, a key that is a
+// password field's name, wherever the workflow defines one.
+func (r *inputResolver) holdsPasswordKey(v any) bool {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, item := range v {
+			if r.passwordKeys[k] || r.holdsPasswordKey(item) {
+				return true
+			}
+		}
+	case []any:
+		return slices.ContainsFunc(v, r.holdsPasswordKey)
+	}
+	return false
+}
+
+// passwordKeys adds to out the names of the password inputs that defs,
+// input definitions, define, and those among their inputs.
+func passwordKeys(defs map[string]any, out map[string]bool) {
+	for name, v := range defs {
+		def, ok := v.(map[string]any)
+		if !ok || strings.HasPrefix(name, "$") {
+			continue
+		}
+		if def["type"] == "password" {
+			out[name] = true
+		}
+		for _, key := range []string{"items", "options", "template"} {
+			if inner, ok := def[key].(map[string]any); ok {
+				passwordKeys(inner, out)
+			}
+		}
+	}
+}
+
 // fillDefaults fills in the values. Each input without a value gets its
 // default, and so does each field of a list's rows, from the list's
 // template, once the list's rows are known. A string a form sent as the
 // text of an expression gets the expression's value. Expressions are
 // evaluated with the other inputs' values, defaults included, in the order
-// they need.
+// they need. A submitted value that a form can have made from a variable or
+// a password is read as one of them from the start, and once the values
+// are filled in, is evaluated as the run starts if it is what made it, and
+// is kept as a secret if not (compare).
 func (r *inputResolver) fillDefaults() {
+	r.taintInputs()
 	var pending pendingFields
+	var compared []*field
 	var start func(fields []*field)
 	start = func(fields []*field) {
 		for _, f := range fields {
-			if r.prepare(f) {
+			waits := r.prepare(f)
+			if waits {
 				pending.add(f)
-			} else {
+			}
+			if f.candidates != nil {
+				compared = append(compared, f)
+				for _, c := range f.candidates {
+					for _, path := range r.parts(f, c) {
+						r.mark(slices.Concat(f.path, path))
+					}
+				}
+			}
+			if !waits {
 				start(r.collectRows(f))
 			}
 		}
@@ -612,21 +1266,33 @@ func (r *inputResolver) fillDefaults() {
 		names := make([]string, len(left))
 		for i, f := range left {
 			names[i] = strings.Join(f.path, ".")
+			// Its rows aren't known, and so neither are the passwords among
+			// them: all of its value is kept as a secret.
+			if f.typ != "password" && holdsPassword(f.def) {
+				r.holdPath(f, f.path, heldSecret)
+			}
 		}
 		r.reportAt(problems.DefaultsReadEachOther, left[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
 	}
+	for _, f := range compared {
+		r.compare(f)
+	}
+	r.holdWhole()
+	r.heldParts()
 	r.holdLater()
 }
 
 // prepare fills in what it can of f's value without evaluating anything: a
 // default that has no expressions. It reports whether f waits for its
-// default's expressions, or its texts', to be evaluated.
+// default's expressions, or its texts', to be evaluated; and finds the
+// candidates of a submitted value, which are compared once the values are
+// filled in.
 func (r *inputResolver) prepare(f *field) bool {
 	if f.container || f.header {
 		return false
 	}
 	if !r.missing(f) {
-		f.texts, f.reads = r.findTexts(f)
+		r.findTexts(f)
 		return f.texts != nil
 	}
 	if !f.hasDefault {
@@ -646,7 +1312,7 @@ func (r *inputResolver) prepare(f *field) bool {
 		// expression where it is, so that what is known of them is, and
 		// their fields' defaults can be filled in too.
 		r.set(f.path, jsonvalue.Clone(rows))
-		f.texts, f.reads = r.findTexts(f)
+		r.findTexts(f)
 		return true
 	}
 	f.reads = reads
@@ -668,6 +1334,7 @@ func (r *inputResolver) evalPending(f *field) {
 			r.reportError(loc, 0, maskedIf(marked, err))
 		default:
 			r.setDefault(f, v)
+			r.noteEvaluation(f, nil, loc, f.def["default"])
 			if marked {
 				r.deferPart(f, nil, f.def["default"], true)
 			}
@@ -685,11 +1352,304 @@ func (r *inputResolver) evalPending(f *field) {
 		default:
 			// A copy, as the value can be part of what the evaluation read.
 			r.set(slices.Concat(f.path, t.path), jsonvalue.Clone(v))
+			r.noteEvaluation(f, t.path, t.loc, text)
 			if marked {
 				r.deferPart(f, t.path, text, true)
 			}
 		}
 	}
+}
+
+// noteEvaluation notes that the part of f's value at path is what the
+// expressions in raw, at loc in the workflow, gave, by the paths of the
+// values they read: if one of them is evaluated as the run starts, so is
+// the part (holdWhole).
+func (r *inputResolver) noteEvaluation(f *field, path, loc []string, raw any) {
+	exprs, err := r.workflow.Exprs(loc)
+	if err != nil {
+		return
+	}
+	e := &evaluation{f: f, path: path, raw: raw}
+	for _, p := range readPatterns(exprs, f.index) {
+		r.evaluated.Add(p, e)
+	}
+}
+
+// compare decides what each of f's candidates is: a part of f's submitted
+// value that a form can have made from a variable or a password. A form
+// evaluates each default and option it can and sends what it gives, but it
+// can send what it gave before the person changed what it read, or gave a
+// row they have since moved, and evaluates some expressions otherwise than
+// Meridian does. So a part that is what one of its expressions gives now
+// means that expression, as a form's text for it does: it is evaluated as
+// the run starts, as the expression, if the expression can read a variable
+// or a password, and is data if not. A choice of an option written in the
+// workflow is that option. Any other part, what a form gave before, or what
+// the person typed in its place, the plan doesn't hold, but the run has
+// (holdPath): it is a secret, masked as what is made from one is, if one of
+// its expressions can read a password or a secret variable, and private,
+// as a variable's value is, if not. A part already evaluated as the run
+// starts, or in one, is left as it is. The expressions are evaluated in a
+// group of their own (evalCompare). Comparing changes no value, so what an
+// expression gives is the same for each candidate it is compared with, at
+// each row index it reads.
+func (r *inputResolver) compare(f *field) {
+	value := lookup(r.values, f.path)
+	for _, c := range f.candidates {
+		var gave []comparison
+		for _, path := range r.parts(f, c) {
+			if f.isText(path) {
+				continue
+			}
+			if gave == nil {
+				gave = make([]comparison, len(c.locs))
+				for i, loc := range c.locs {
+					gave[i] = r.evalCompare(loc, f.index)
+				}
+			}
+			part := lookup(value, path)
+			i := slices.IndexFunc(gave, func(res comparison) bool { return res.ok && sameValue(part, res.v) })
+			switch {
+			case i >= 0:
+				if loc := c.locs[i]; r.reads(loc, false) {
+					raw := lookup(r.doc.Value, loc)
+					r.noteEvaluation(f, path, loc, raw)
+					r.deferPart(f, path, raw, true)
+				}
+			case c.option && f.findOptions().literal(part):
+			case f.typ == "password" && len(path) == 0:
+				// A password is a secret, whatever made it.
+			case slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, true) }):
+				r.holdPath(f.holder(), slices.Concat(f.path, path), heldDerived)
+			default:
+				r.holdPath(f.holder(), slices.Concat(f.path, path), heldPrivate)
+			}
+		}
+	}
+}
+
+// A comparison is what a string in the workflow gave, if it gave one,
+// when compare evaluated it.
+type comparison struct {
+	v  any
+	ok bool
+}
+
+// evalCompare evaluates what is at loc in the workflow, as evalAt does, for
+// the list rows at index, in the group that comparisons share, once for
+// each row index that what it reads depends on. The group is one of its
+// own (compareScope), so that comparing spends nothing of what decides the
+// run's shape. A comparison its budget stops gives nothing, as one that
+// fails does, and so what is compared is held, the same each time for the
+// same workflow and values; but running out of the group's time, which
+// depends on how fast the machine is, is an error.
+func (r *inputResolver) evalCompare(loc []string, index []int) comparison {
+	exprs, err := r.workflow.Exprs(loc)
+	if err != nil {
+		return comparison{}
+	}
+	key := jsonptr.Format(loc)
+	if slices.ContainsFunc(exprs, readsIndex) {
+		key += "|" + indexKey(index)
+	}
+	if res, ok := r.comparisons[key]; ok {
+		return res
+	}
+	if r.compareScope == nil {
+		s := expr.Scope{}.Budgeted()
+		r.compareScope = &s
+	}
+	base := r.scope()
+	scope := *r.compareScope
+	scope.Contexts, scope.Marked, scope.Index = base.Contexts, base.Marked, index
+	v, err := r.workflow.Evaluator(scope).Eval(loc)
+	if be, ok := errors.AsType[*expr.BudgetError](err); ok && be.Kind == problems.ExpressionsTooSlow && !r.compareSlow {
+		r.compareSlow = true
+		r.reportError(loc, 0, err)
+	}
+	// A copy, as the value can be part of what the evaluation read.
+	res := comparison{jsonvalue.Clone(v), err == nil}
+	if r.comparisons == nil {
+		r.comparisons = map[string]comparison{}
+	}
+	r.comparisons[key] = res
+	return res
+}
+
+// readsIndex reports whether what e gives can depend on the row index it
+// is evaluated for: whether it reads [index], or another definition.
+func readsIndex(e *expr.Expr) bool {
+	return e.Relative() || slices.ContainsFunc(e.Refs(), func(ref expr.Ref) bool {
+		return slices.Contains(ref.Path, "[index]")
+	})
+}
+
+// holdPath keeps the value at path in the inputs' values, in the value of
+// the input in, out of the plan, as kind says, and what reads it reads a
+// variable or a password. Once every part evaluated as the run starts is
+// known, a value with such parts in it is held but for them (heldParts).
+// The plan holds null in place of a list's item, and the run's start puts
+// the value in its place.
+func (r *inputResolver) holdPath(in *field, path []string, kind holding) {
+	r.mark(path)
+	r.held = append(r.held, heldPart{in, path, kind})
+}
+
+// heldParts makes the values held the parts of them that aren't evaluated
+// as the run starts: a value in a part that is is left to it, and of a
+// value with such parts in it, each of its keys or items that isn't one is
+// held instead.
+func (r *inputResolver) heldParts() {
+	var out []heldPart
+	var split func(p heldPart, at []string)
+	split = func(p heldPart, at []string) {
+		rel := at[len(p.in.path):]
+		in := false
+		for _, part := range p.in.partsAround(rel) {
+			if len(part.path) <= len(rel) {
+				return
+			}
+			in = true
+		}
+		if !in {
+			out = append(out, heldPart{p.in, at, p.kind})
+			return
+		}
+		switch v := lookup(r.values, at).(type) {
+		case map[string]any:
+			for k := range jsonvalue.Sorted(v) {
+				split(p, appendPath(at, k))
+			}
+		case []any:
+			for i := range v {
+				split(p, appendPath(at, strconv.Itoa(i)))
+			}
+		}
+	}
+	for _, p := range r.held {
+		split(p, p.path)
+	}
+	r.held = out
+}
+
+// keepHeld puts the values kept out of the plan (holdPath) among the
+// secrets, or among the private values, once they are checked: those of
+// the inputs that have them. derived names the secrets that are what can be
+// made from one.
+func (r *inputResolver) keepHeld() {
+	for _, p := range r.held {
+		v, ok := jsonptr.Lookup(r.values, p.path)
+		if !ok || v == nil {
+			continue
+		}
+		key := strings.Join(p.path, ".")
+		switch p.kind {
+		case heldPrivate:
+			r.private[key] = v
+		case heldDerived:
+			if r.derived == nil {
+				r.derived = map[string]bool{}
+			}
+			r.derived[key] = true
+			fallthrough
+		default:
+			r.secrets[key] = v
+		}
+	}
+}
+
+// parts returns the paths in f's value of the parts that c, one of its
+// candidates, is: its own, or with each set, each item there that isn't a
+// form's text.
+func (r *inputResolver) parts(f *field, c candidate) [][]string {
+	if !c.each {
+		return [][]string{c.path}
+	}
+	var out [][]string
+	list, _ := lookup(r.values, slices.Concat(f.path, c.path)).([]any)
+	for i := range list {
+		if path := appendPath(c.path, strconv.Itoa(i)); !f.isText(path) {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// isText reports whether the part of f's value at path is a form's text
+// for an expression, or is evaluated as the run starts already, or is in
+// such a part.
+func (f *field) isText(path []string) bool {
+	for _, t := range f.texts {
+		if related(t.path, path) && len(t.path) <= len(path) {
+			return true
+		}
+	}
+	return f.startsLater(slices.Concat(f.path, path), true)
+}
+
+// startsLater reports whether the value at path, f's or a part of it, is
+// in a part of its input's value that is evaluated as the run starts, or is
+// one: any such part, or with known unset, one the compiler doesn't know
+// now, whose value is the text of what is evaluated then.
+func (f *field) startsLater(path []string, known bool) bool {
+	in := f.holder()
+	at := path[len(in.path):]
+	for _, p := range in.partsAround(at) {
+		if len(p.path) <= len(at) && (known || !p.variable) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameValue reports whether a submitted value, a, is b, what an expression
+// gave, as a form sends it: a list or a mapping holds the same values, and
+// any other value has the same text (looseKey), as the number 8 and the
+// text "8" do.
+func sameValue(a, b any) bool {
+	switch a := a.(type) {
+	case nil:
+		return b == nil
+	case []any:
+		l, ok := b.([]any)
+		if !ok || len(a) != len(l) {
+			return false
+		}
+		for i := range a {
+			if !sameValue(a[i], l[i]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		m, ok := b.(map[string]any)
+		if !ok || len(a) != len(m) {
+			return false
+		}
+		for k, v := range a {
+			w, ok := m[k]
+			if !ok || !sameValue(v, w) {
+				return false
+			}
+		}
+		return true
+	}
+	switch b.(type) {
+	case nil, []any, map[string]any:
+		return false
+	}
+	// A string is its own text, which needn't be made again.
+	as, aString := a.(string)
+	bs, bString := b.(string)
+	switch {
+	case aString && bString:
+		return as == bs
+	case aString:
+		return as == looseKey(b)
+	case bString:
+		return looseKey(a) == bs
+	}
+	return looseKey(a) == looseKey(b)
 }
 
 // setDefault sets f's value to its default, unless the default is "", which
@@ -709,20 +1669,43 @@ func (r *inputResolver) collectRows(f *field) []*field {
 	if defs == nil {
 		return nil
 	}
-	rows, _ := lookup(r.values, f.path).([]any)
+	value := lookup(r.values, f.path)
+	rows, isList := value.([]any)
+	// A password among the rows' inputs is kept out of the plan wherever it
+	// is in the value, so a row, or a group or list of a row on the way to
+	// one, that isn't the shape the rows' inputs say it is, which can hold a
+	// password where the compiler can't find it, is kept as a secret, as it
+	// was given.
+	secret := holdsPassword(f.def) && !f.startsLater(f.path, false)
+	if secret && f.in != nil && value != nil && !isList {
+		r.holdPath(f.holder(), f.path, heldSecret)
+		return nil
+	}
 	t := r.template(defs, loc)
 	var out []*field
 	for i, row := range rows {
-		if _, ok := row.(map[string]any); !ok || len(t.fields) == 0 {
+		rowPath := appendPath(f.path, strconv.Itoa(i))
+		if _, ok := row.(map[string]any); !ok {
+			if secret && row != nil && !f.startsLater(rowPath, false) {
+				r.holdPath(f.holder(), rowPath, heldSecret)
+			}
+			continue
+		}
+		if len(t.fields) == 0 {
 			continue
 		}
 		index := append(slices.Clip(f.index), i)
-		fields := t.row(appendPath(f.path, strconv.Itoa(i)))
+		fields := t.row(rowPath)
 		for _, c := range fields {
 			c.index, c.in = index, f.holder()
 			c.seq = len(r.fields) + len(r.rows) + len(out)
 			r.markPassword(c)
 			out = append(out, c)
+			if v := lookup(r.values, c.path); c.container && !c.flatten && v != nil && holdsPassword(c.def) && !c.startsLater(c.path, false) {
+				if _, ok := v.(map[string]any); !ok {
+					r.holdPath(c.holder(), c.path, heldSecret)
+				}
+			}
 		}
 		if f.rows == nil {
 			f.rows = make([][]*field, len(rows))
@@ -782,25 +1765,41 @@ func (t *template) row(path []string) []*field {
 
 // findTexts finds the strings in f's value that are a form's text for an
 // expression: the one in the same place in its default, or one of its
-// options' values. It returns them, and the expressions they hold. Every
-// other string is data.
-func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
+// options' values, or with a list's default rows, the one at the same key
+// in any of them. Every other string is data. It sets f's texts, and the
+// expressions they hold; and its candidates, the other parts of the value
+// in the place of one of those expressions, or that the options can have
+// given, where one of them can read a variable or a password.
+func (r *inputResolver) findTexts(f *field) {
 	value := lookup(r.values, f.path)
 	var texts []text
+	var candidates []candidate
 	// items holds the keys of the paths of one key that have a text, so
 	// that each item of a list has one.
 	items := map[string]bool{}
-	for _, p := range defaultTexts(f.def["default"], value, nil, nil) {
-		texts = append(texts, text{p, slices.Concat(f.loc, []string{"default"}, p)})
-		if len(p) == 1 {
-			items[p[0]] = true
+	dflt, loc := f.def["default"], appendPath(f.loc, "default")
+	if rows, ok := dflt.([]any); ok && f.typ == "list" {
+		texts, candidates = rowTexts(rows, value, loc)
+	} else {
+		textPaths, candidatePaths := defaultTexts(dflt, value, nil, nil, nil)
+		for _, p := range textPaths {
+			texts = append(texts, text{p, slices.Concat(loc, p)})
+			if len(p) == 1 {
+				items[p[0]] = true
+			}
+		}
+		for _, p := range candidatePaths {
+			candidates = append(candidates, candidate{path: p, locs: [][]string{slices.Concat(loc, p)}})
 		}
 	}
+	list, isList := value.([]any)
+	var options [][]string
 	for _, o := range f.findOptions().exprs {
+		options = append(options, o.loc)
 		if value == o.value {
 			texts = append(texts, text{nil, o.loc})
+			options = nil
 		}
-		list, _ := value.([]any)
 		for i, item := range list {
 			if item != o.value {
 				continue
@@ -811,41 +1810,100 @@ func (r *inputResolver) findTexts(f *field) ([]text, []*expr.Expr) {
 			}
 		}
 	}
-	var reads []*expr.Expr
+	if options != nil && value != nil && !slices.ContainsFunc(texts, func(t text) bool { return t.path == nil }) {
+		candidates = append(candidates, candidate{locs: options, option: true, each: isList})
+	}
+	f.texts, f.reads = texts, nil
 	for _, t := range texts {
 		exprs, err := r.workflow.Exprs(t.loc)
 		if err != nil {
 			continue // checkSyntax reported it.
 		}
-		reads = append(reads, exprs...)
+		f.reads = append(f.reads, exprs...)
 	}
-	return texts, reads
+	f.candidates = slices.DeleteFunc(candidates, func(c candidate) bool {
+		return !slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, false) })
+	})
 }
 
-// defaultTexts appends to out the paths, from path, of the strings in v
-// that are the text of an expression in the same place in def. It appends
-// to path in place, so that the walk reuses one path, and copies the paths
-// it keeps.
-func defaultTexts(def, v any, path []string, out [][]string) [][]string {
+// rowTexts finds, in value, a list's submitted rows, the strings that are
+// the text of an expression in the same place in rows, the list's default
+// rows, at loc in the workflow; and the candidates in the place of an
+// expression at the same key in any default row, since a person can
+// delete, add and move the rows a form filled in from the default.
+func rowTexts(rows []any, value any, loc []string) ([]text, []candidate) {
+	// byKey holds the places of the expressions in a row, by their paths in
+	// it, and the default rows they are in.
+	type place struct {
+		at   []string
+		rows []int
+	}
+	var places []*place
+	byKey := map[string]*place{}
+	for j, row := range rows {
+		exprStrings(row, nil, nil, func(_, at []string) {
+			key := jsonptr.Format(at)
+			if byKey[key] == nil {
+				byKey[key] = &place{at: at}
+				places = append(places, byKey[key])
+			}
+			byKey[key].rows = append(byKey[key].rows, j)
+		})
+	}
+	var texts []text
+	var candidates []candidate
+	list, _ := value.([]any)
+	for i, item := range list {
+		for _, p := range places {
+			v := lookup(item, p.at)
+			if v == nil {
+				continue
+			}
+			path := slices.Concat([]string{strconv.Itoa(i)}, p.at)
+			if i < len(rows) && v == lookup(rows[i], p.at) {
+				texts = append(texts, text{path, slices.Concat(loc, path)})
+				continue
+			}
+			c := candidate{path: path}
+			for _, j := range p.rows {
+				c.locs = append(c.locs, slices.Concat(loc, []string{strconv.Itoa(j)}, p.at))
+			}
+			candidates = append(candidates, c)
+		}
+	}
+	return texts, candidates
+}
+
+// defaultTexts appends to texts the paths, from path, of the strings in v
+// that are the text of an expression in the same place in def, and to
+// candidates those of the other values in v in the place of a string in
+// def that holds one. It appends to path in place, so that the walk reuses
+// one path, and copies the paths it keeps.
+func defaultTexts(def, v any, path []string, texts, candidates [][]string) ([][]string, [][]string) {
 	switch def := def.(type) {
 	case string:
-		if s, ok := v.(string); ok && s == def && strings.Contains(s, "${{") {
-			out = append(out, slices.Clone(path))
+		if !strings.Contains(def, "${{") || v == nil {
+			break
+		}
+		if s, ok := v.(string); ok && s == def {
+			texts = append(texts, slices.Clone(path))
+		} else {
+			candidates = append(candidates, slices.Clone(path))
 		}
 	case []any:
 		list, _ := v.([]any)
 		for i := range min(len(def), len(list)) {
-			out = defaultTexts(def[i], list[i], append(path, strconv.Itoa(i)), out)
+			texts, candidates = defaultTexts(def[i], list[i], append(path, strconv.Itoa(i)), texts, candidates)
 		}
 	case map[string]any:
 		m, _ := v.(map[string]any)
 		for k, d := range jsonvalue.Sorted(def) {
 			if item, ok := m[k]; ok {
-				out = defaultTexts(d, item, append(path, k), out)
+				texts, candidates = defaultTexts(d, item, append(path, k), texts, candidates)
 			}
 		}
 	}
-	return out
+	return texts, candidates
 }
 
 // An exprOption is one of an input's options whose value holds an
@@ -885,18 +1943,27 @@ func expressionOptions(options any, loc []string) []exprOption {
 // workflow, is evaluated once the run is underway. The value of f's input
 // is then evaluated as the run starts, all of it, with raw's expressions
 // in that part, parsed for f's rows. A part that reads a variable keeps
-// its value until then, and what reads it reads a variable too.
+// its value until then, and what reads it reads a variable too. A part
+// that is evaluated as the run starts already stays one, and isn't known
+// now if either says it isn't.
 func (r *inputResolver) deferPart(f *field, path []string, raw any, variable bool) {
 	v, err := parseFor(raw, f.index)
 	if err != nil {
 		return // checkSyntax reported it.
 	}
 	in := f.holder()
-	in.addLater(laterPart{slices.Concat(f.path[len(in.path):], path), v, variable})
-	if variable {
-		r.marks.Add(slices.Concat([]string{"inputs"}, f.path, path))
+	at := slices.Concat(f.path[len(in.path):], path)
+	defer r.refresh(slices.Concat(f.path, path))
+	for i, p := range in.partsAround(at) {
+		if slices.Equal(p.path, at) {
+			in.later[i].variable = p.variable && variable
+			return
+		}
 	}
-	r.refresh(slices.Concat(f.path, path))
+	in.addLater(laterPart{at, v, variable})
+	if variable {
+		r.mark(slices.Concat(f.path, path))
+	}
 }
 
 // holdLater makes what the plan holds of each input with parts evaluated
@@ -905,23 +1972,24 @@ func (r *inputResolver) deferPart(f *field, path []string, raw any, variable boo
 // which the run's start puts in their places from the secrets. An input
 // with a part the compiler doesn't know is deferred; one whose parts read
 // only variables and passwords is held for the run's start too, but what
-// the compiler evaluates reads its value. A list whose rows a part gives,
-// with a password field in them, is a secret as a whole.
+// the compiler evaluates reads its value. A part that gives a list's rows,
+// or the value of a list, a group or a wizard step, with a password field
+// among its inputs, is a secret as a whole.
 func (r *inputResolver) holdLater() {
 	if !slices.ContainsFunc(r.fields, func(f *field) bool { return f.later != nil }) {
 		return
 	}
-	// The password fields of each input's rows, and the lists with password
-	// fields in their rows, by their paths.
+	// The password fields of each input's rows, and the lists, groups and
+	// wizard steps with password fields among their inputs, by their paths.
 	passwords := map[*field][]*field{}
-	lists := map[string]*field{}
+	holders := map[string]*field{}
 	for _, fields := range [][]*field{r.fields, r.rows} {
 		for _, f := range fields {
 			if f.typ == "password" && f.in != nil {
 				passwords[f.in] = append(passwords[f.in], f)
 			}
-			if defs, _ := f.rowInputs(); defs != nil && holdsPassword(f.def) {
-				lists[jsonptr.Format(f.path)] = f
+			if f.typ != "password" && holdsPassword(f.def) {
+				holders[jsonptr.Format(f.path)] = f
 			}
 		}
 	}
@@ -934,20 +2002,31 @@ func (r *inputResolver) holdLater() {
 			deletePath(held, c.path[len(f.path):])
 		}
 		for _, p := range f.later {
-			// A part that is a list's value, or one of its rows, gives rows
-			// whose passwords the plan can't name.
+			// A part that is the value of a list, a group or a step with a
+			// password among its inputs, or one of a list's rows, holds
+			// passwords the plan can't name.
 			at := slices.Concat(f.path, p.path)
-			l := lists[jsonptr.Format(at)]
-			if n := len(p.path); l == nil && n > 0 && isIndex(p.path[n-1]) {
-				l = lists[jsonptr.Format(at[:len(at)-1])]
+			h := holders[jsonptr.Format(at)]
+			if n := len(p.path); h == nil && n > 0 && isIndex(p.path[n-1]) {
+				h = holders[jsonptr.Format(at[:len(at)-1])]
 			}
-			if l != nil {
-				l.secretRows = true
+			if h != nil {
+				h.secretWhole = true
 			}
-			if len(p.path) == 0 {
-				held = p.v
-			} else {
+			if len(p.path) > 0 {
 				setIn(held, p.path, p.v)
+			}
+		}
+		// A part that is the whole value is all of it, whatever the other
+		// parts are.
+		if i := slices.IndexFunc(f.later, func(p laterPart) bool { return len(p.path) == 0 }); i >= 0 {
+			held = f.later[i].v
+		}
+		// What is kept out of the plan (holdPath) isn't held either, and
+		// the run's start puts it in its place.
+		for _, p := range r.held {
+			if p.in == f {
+				clearPath(held, p.path[len(f.path):])
 			}
 		}
 		f.dflt = plan.Literal(held)
@@ -959,6 +2038,47 @@ func (r *inputResolver) holdLater() {
 			r.refresh(f.path)
 		} else {
 			f.variable = true
+		}
+	}
+}
+
+// holdWhole evaluates as the run starts what an evaluation made from an
+// input that is evaluated as the run starts because a part of it reads what
+// isn't known yet: an input's value stays whole, so what is made from any
+// part of it, the parts the compiler knows too, isn't known yet either, as
+// a condition that reads it isn't. The value of an input whose evaluation
+// read such an input is then evaluated as the run starts as well, and so
+// on. Evaluations made from the input's own parts, as a row's default that
+// reads another field of its row, read the parts as they are.
+func (r *inputResolver) holdWhole() {
+	var held []*field
+	seen := map[*field]bool{}
+	for _, f := range r.fields {
+		if slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
+			held = append(held, f)
+			seen[f] = true
+		}
+	}
+	for len(held) > 0 {
+		h := held[0]
+		held = held[1:]
+		var found []*evaluation
+		for e := range r.evaluated.Reaching(h.path) {
+			if !e.done && e.f.holder() != h {
+				e.done = true
+				found = append(found, e)
+			}
+		}
+		// The trie finds them in no particular order.
+		slices.SortFunc(found, func(a, b *evaluation) int {
+			return cmp.Or(cmp.Compare(a.f.seq, b.f.seq), slices.Compare(a.path, b.path))
+		})
+		for _, e := range found {
+			r.deferPart(e.f, e.path, e.raw, false)
+			if in := e.f.holder(); !seen[in] {
+				seen[in] = true
+				held = append(held, in)
+			}
 		}
 	}
 }
@@ -1243,9 +2363,10 @@ func rowIndex(key string, n int) (int, bool) {
 // whether it gives one: null, or false for a boolean without a default,
 // which is the value it gets, rather than its definition. A container, a
 // header and an input evaluated once the run is underway, and the fields of
-// its rows, get none.
+// its rows, get none; nor do the fields of an ignored input's rows, which
+// it doesn't have.
 func (f *field) filledWith() (any, bool) {
-	if f.container || f.header || f.deferred && !f.ignored || f.in != nil && f.in.deferred {
+	if f.container || f.header || f.deferred && !f.ignored || f.in != nil && (f.in.deferred || f.in.ignored) {
 		return nil, false
 	}
 	if f.typ == "boolean" && !f.hasDefault {
@@ -1283,7 +2404,8 @@ func (f *field) markUnknown(values map[string]any, path []string) {
 func (r *inputResolver) deferred() map[string]plan.Value {
 	var out map[string]plan.Value
 	for _, f := range r.fields {
-		if (f.deferred || f.variable) && !f.ignored {
+		// One whose value can't be held, as it isn't JSON, has none.
+		if (f.deferred || f.variable) && !f.ignored && !f.dflt.IsZero() {
 			if out == nil {
 				out = map[string]plan.Value{}
 			}
@@ -1318,16 +2440,28 @@ func (r *inputResolver) evalValues() map[string]any {
 }
 
 // kept returns the values a plan keeps: all but those of the inputs
-// evaluated as the run starts, which it holds as what is evaluated then.
+// evaluated as the run starts, which it holds as what is evaluated then,
+// and the passwords', which are among the secrets.
 func (r *inputResolver) kept() map[string]any {
-	out, copied := r.values, false
+	var left [][]string
 	for _, f := range r.fields {
 		if f.deferred || f.variable {
-			if !copied {
-				out, copied = jsonvalue.CloneMap(r.values), true
-			}
-			deletePath(out, f.path)
+			left = append(left, f.path)
 		}
+	}
+	for _, f := range r.passwords {
+		left = append(left, f.path)
+	}
+	left = append(left, r.unknownSecrets...)
+	for _, p := range r.held {
+		left = append(left, p.path)
+	}
+	if len(left) == 0 {
+		return r.values
+	}
+	out := jsonvalue.CloneMap(r.values)
+	for _, path := range left {
+		clearPath(out, path)
 	}
 	return out
 }
@@ -1343,26 +2477,32 @@ func compileTimeContexts(opts Options, inputs any) map[string]any {
 }
 
 // checkValues checks each value against its input's type, converts numbers
-// and booleans given as text, resolves platform types, and moves password
-// values to the secrets: a password input's, and a password field's in a
-// list's or a repeated step's rows, which is checked as an input's is,
+// and booleans given as text, resolves platform types, and puts password
+// values among the secrets: a password input's, and a password field's in
+// a list's or a repeated step's rows, which is checked as an input's is,
 // though the rows' other fields aren't. A value that isn't JSON, which a
 // plan can't hold, such as a default that gives NaN, is reported and
 // dropped, as a submitted one is. The value of an input that reads a
 // variable or a password is checked too, and kept for what the compiler
 // evaluates, but what is wrong with it is reported without it, as is what
 // is wrong with a password's. A password whose value is evaluated as the
-// run starts isn't among the secrets, but the run's secrets name it.
+// run starts isn't among the secrets, but the run's secrets name it. Of an
+// input whose value is evaluated as the run starts because a part of it
+// reads what isn't known yet, what the compiler knows is checked to be
+// JSON (checkKnown).
 func (r *inputResolver) checkValues() {
+	// passwords holds the password fields of each input's rows, once an
+	// input is checked with checkKnown.
+	var passwords map[*field][]*field
 	for _, fields := range [][]*field{r.fields, r.rows} {
 		for _, f := range fields {
-			if f.header || f.container || f.holder().ignored {
+			if f.header || f.holder().ignored {
 				continue
 			}
-			if f.secretRows {
+			if f.secretWhole {
 				r.secretsLater[strings.Join(f.path, ".")] = true
 			}
-			if f.in != nil && f.typ != "password" {
+			if f.container || f.in != nil && f.typ != "password" {
 				continue // A row's other fields aren't checked.
 			}
 			later, known := f.deferred || f.variable, f.variable
@@ -1372,17 +2512,69 @@ func (r *inputResolver) checkValues() {
 			if later && f.typ == "password" {
 				r.secretsLater[strings.Join(f.path, ".")] = true
 			}
-			if !later || known {
+			switch {
+			case !later || known:
 				r.checkField(f, later)
+			case f.in == nil:
+				if passwords == nil {
+					passwords = map[*field][]*field{}
+					for _, c := range r.passwords {
+						if c.in != nil {
+							passwords[c.in] = append(passwords[c.in], c)
+						}
+					}
+				}
+				r.checkKnown(f, passwords[f])
 			}
 		}
 	}
 }
 
+// checkKnown checks what the compiler knows of the value of f, an input
+// whose value is evaluated as the run starts because a part of it reads
+// what isn't known yet: the plan holds the rest of the value as it is, so
+// it must be JSON, as a value that is known must. A part that isn't is
+// reported at the innermost field of the input's rows that holds it, and
+// the input has no value to hold. What the parts that read a variable or a
+// password gave isn't shown, and the input's passwords, the password
+// fields of its rows, aren't checked here.
+func (r *inputResolver) checkKnown(f *field, passwords []*field) {
+	known := jsonvalue.Clone(lookup(r.values, f.path))
+	for _, p := range f.later {
+		if !p.variable {
+			if len(p.path) == 0 {
+				return
+			}
+			setIn(known, p.path, nil)
+		}
+	}
+	for _, c := range passwords {
+		setIn(known, c.path[len(f.path):], nil)
+	}
+	what, value, at := notJSON(known)
+	if what == "" {
+		return
+	}
+	params := problems.Params{"what": what, "value": value}
+	variable := false
+	for _, p := range f.partsAround(at) {
+		variable = variable || p.variable && len(p.path) <= len(at)
+	}
+	if variable || holdsPassword(f.def) || r.marked(slices.Concat(f.path, at)) {
+		params = mask(params)
+	}
+	in := r.innermostRow(f, slices.Concat(f.path, at))
+	params["input"] = in.label()
+	r.reportAt(problems.InputNotJSON, in.loc, params)
+	f.dflt = plan.Value{}
+}
+
 // checkField checks f's value, and moves it to the secrets if f is a
 // password, unless later is set: the value is evaluated again as the run
 // starts. A value given for a password is never kept, even one of the
-// wrong type.
+// wrong type. A password's value that is checked stays among the values,
+// for what the compiler evaluates, which reads it as it reads a variable,
+// but isn't among those the plan keeps (kept).
 func (r *inputResolver) checkField(f *field, later bool) {
 	v, ok := jsonptr.Lookup(r.values, f.path)
 	if !ok || v == nil {
@@ -1397,20 +2589,23 @@ func (r *inputResolver) checkField(f *field, later bool) {
 	switch {
 	case bad.kind != nil:
 		bad.params["input"] = at.label()
-		if f.variable || password {
+		if f.variable || password || r.marked(f.path) {
 			bad.params = mask(bad.params)
 		}
 		r.reportAt(bad.kind, at.loc, bad.params)
 		if !password && bad.kind != problems.InputNotJSON {
 			return
 		}
-	case f.typ != "password":
-		r.set(f.path, out)
+		if bad.kind == problems.InputNotJSON && f.in == nil {
+			// Nor can the plan hold what is evaluated as the run starts.
+			f.dflt = plan.Value{}
+		}
+		r.remove(f.path)
 		return
-	case !later:
+	case f.typ == "password" && !later:
 		r.secrets[strings.Join(f.path, ".")] = out
 	}
-	r.remove(f.path)
+	r.set(f.path, out)
 }
 
 // checkValue checks v, the value of f, and returns it as the run sees it, or

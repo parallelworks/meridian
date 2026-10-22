@@ -1,0 +1,14 @@
+description: >-
+  A job's needs is decided when the run is created, and reads a password's
+  value as an input's ignore does, wherever the password is: the plan holds
+  only which jobs it needs.
+source: Meridian
+inputs:
+  pw: quick
+  creds:
+    - pass: quick
+expect:
+  plan:
+    /jobs/0/needs: [{job: quick}]
+    /jobs/3/needs: [{job: quick}]
+    /run/secrets: [inputs.creds.0.pass, inputs.pw]

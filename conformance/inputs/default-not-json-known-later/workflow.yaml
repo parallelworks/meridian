@@ -1,0 +1,35 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          token:
+            type: string
+            default: ${{ vars.TOKEN }}
+          weight:
+            type: string
+            default: ${{ 0/0 }}
+        default:
+          - {}
+      racks:
+        type: list
+        template:
+          token:
+            type: string
+            default: ${{ vars.TOKEN }}
+          disks:
+            type: list
+            template:
+              size:
+                type: string
+                default: ${{ -1/0 }}
+      modes:
+        type: multi-dropdown
+        options:
+          - ${{ vars.TOKEN }}
+          - ${{ 1/0 }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

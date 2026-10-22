@@ -36,6 +36,14 @@ var scaledWorkloads = []scaled{
 	{name: "a multi-dropdown's options and its submitted items", n: 250, workload: multiDropdown},
 	{name: "references to inputs that aren't there, near those that are", n: 300, workload: nearMissReferences},
 	{name: "a value nested deep in a matrix", n: 500, workload: deepValue, stageOnly: true},
+	{name: "a form's values for rows whose defaults read their passwords", n: 1000, workload: formRows, timed: true},
+	{name: "defaults that read rows of a list held for the run's start", n: 300, workload: heldRowReads, timed: true},
+	{name: "submitted rows whose template's default reads the whole list", n: 1000, workload: crossRows, timed: true},
+	{name: "submitted rows whose template's default reads the whole list, with passwords", n: 1000, workload: crossPasswordRows, timed: true},
+	{name: "submitted rows whose template's default gives the whole list's JSON and a password", n: 1000, workload: wholeListRows, timed: true},
+	{name: "values for unknown inputs taken for passwords, beside a form's rows", n: 1000, workload: unknownPasswordsAndRows, timed: true},
+	{name: "submitted defaults that each read the next, the last a password", n: 250, workload: chainedPasswordDefaults, timed: true},
+	{name: "submitted defaults that each read the one before by a relative reference", n: 250, workload: relativeDefaults, timed: true},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
@@ -205,6 +213,98 @@ func nearMissReferences(n int) ([]byte, map[string]any) {
 		fmt.Fprintf(&run, "${{inputs.ni%04d}}${{inputs.in%04dx}}", i, i)
 	}
 	return withInputs(lines, "jobs:\n  main:\n    steps:\n      - run: "+run.String()+"\n"), nil
+}
+
+// formRows is n rows a form submits for a list whose template's field has
+// a default that reads the row's password, each with what the default
+// gives, which the compiler compares with it.
+func formRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"creds: {type: list, template: {pass: {type: password}, hint: {type: string, default: '${{ inputs.creds.[index].pass }}'}}}",
+	}, ""), map[string]any{"creds": rows(n, func() map[string]any { return map[string]any{"pass": "s", "hint": "s"} })}
+}
+
+// heldRowReads is a list of n rows held for the run's start, as a field of
+// its rows reads env, which the compiler doesn't have, and n
+// inputs whose defaults each read another row of it.
+func heldRowReads(n int) ([]byte, map[string]any) {
+	lines := []string{"rows: {type: list, template: {t: {type: string, default: '${{ env.HOME }}'}, x: {type: string, default: b}}}"}
+	for i := range n {
+		lines = append(lines, fmt.Sprintf("i%d: {default: '${{ inputs.rows[%d].x }}'}", i, i))
+	}
+	return withInputs(lines, ""), map[string]any{"rows": rows(n, emptyRow)}
+}
+
+// crossRows is n submitted rows of a list whose template's field has a
+// default that reads the whole list, each with a value for it.
+func crossRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"l: {type: list, template: {name: {type: string}, total: {type: number, default: '${{ length(inputs.l) }}'}}}",
+	}, ""), map[string]any{"l": rows(n, func() map[string]any { return map[string]any{"name": "a", "total": n} })}
+}
+
+// crossPasswordRows is crossRows with a password field in each row, so
+// that each row's value for the field that reads the list is compared with
+// what its default gives.
+func crossPasswordRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"l: {type: list, template: {pass: {type: password}, total: {type: number, default: '${{ length(inputs.l) }}'}}}",
+	}, ""), map[string]any{"l": rows(n, func() map[string]any { return map[string]any{"pass": "s", "total": n} })}
+}
+
+// wholeListRows is n submitted rows of a list whose template's field has a
+// default that gives the whole list's JSON and a password, each with a
+// value of its own for the field, which is compared with what the default
+// gives, a text as long as the list.
+func wholeListRows(n int) ([]byte, map[string]any) {
+	list := make([]any, n)
+	for i := range list {
+		list[i] = map[string]any{"p": "s", "h": fmt.Sprintf("v%d", i)}
+	}
+	return withInputs([]string{
+		"pw: {type: password}",
+		"l: {type: list, template: {p: {type: password}, h: {type: string, default: '${{ toJSON(inputs.l) }}${{ inputs.pw }}'}}}",
+	}, ""), map[string]any{"pw": "s", "l": list}
+}
+
+// unknownPasswordsAndRows is formRows, beside n values for inputs the
+// workflow doesn't define, each a mapping that holds a password field's
+// name, and so taken for a password.
+func unknownPasswordsAndRows(n int) ([]byte, map[string]any) {
+	data, submitted := formRows(n)
+	for i := range n {
+		submitted[fmt.Sprintf("u%d", i)] = map[string]any{"pass": "s"}
+	}
+	return data, submitted
+}
+
+// chainedPasswordDefaults is n inputs whose defaults each read the next
+// input, the last a password, each given a value: what can read the
+// password is found from the last.
+func chainedPasswordDefaults(n int) ([]byte, map[string]any) {
+	lines := []string{"pw: {type: password}"}
+	submitted := map[string]any{"pw": "s"}
+	for i := range n {
+		next := fmt.Sprintf("a%d", i+1)
+		if i == n-1 {
+			next = "pw"
+		}
+		lines = append(lines, fmt.Sprintf("a%d: {type: string, default: '${{ inputs.%s }}'}", i, next))
+		submitted[fmt.Sprintf("a%d", i)] = "v"
+	}
+	return withInputs(lines, ""), submitted
+}
+
+// relativeDefaults is n inputs whose defaults each read the one before's
+// by a relative reference, each given a value.
+func relativeDefaults(n int) ([]byte, map[string]any) {
+	lines := []string{"a0: {type: string, default: x}"}
+	submitted := map[string]any{}
+	for i := 1; i < n; i++ {
+		lines = append(lines, fmt.Sprintf("a%d: {type: string, default: '${{ ..a%d.default }}'}", i, i-1))
+		submitted[fmt.Sprintf("a%d", i)] = "x"
+	}
+	return withInputs(lines, ""), submitted
 }
 
 // deepValue is a matrix whose include holds a mapping nested n deep.

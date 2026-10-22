@@ -1,0 +1,15 @@
+description: >-
+  An ignored input has no value, even one that was submitted, so a list
+  that is ignored, with rows submitted for it, is null to a condition that
+  reads it once it is ignored, rather than its rows' fields without their
+  values. Defaults are filled in before conditions are evaluated, so a
+  default reads its rows.
+source: Meridian
+inputs:
+  extra:
+    - name: a
+  warn: shown
+expect:
+  inputs:
+    summary: "1"
+    warn: shown

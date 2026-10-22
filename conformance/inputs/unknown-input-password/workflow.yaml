@@ -1,0 +1,26 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: step
+        title: Host
+        multi: true
+        options:
+          host:
+            type: string
+          key:
+            type: password
+      password:
+        type: password
+        optional: true
+      creds:
+        type: step
+        title: Credentials
+        options:
+          token:
+            type: password
+            optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ok

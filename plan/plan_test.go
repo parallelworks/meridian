@@ -114,7 +114,7 @@ func edgePlan(t testing.TB) *plan.Plan {
 				{
 					ID: "w", Uses: "sub.yaml", Workflow: nested, Path: "/jobs/b/steps/1",
 					With:  mustValue(t, map[string]any{"$out": "${{ inputs.x }}", "list": []any{nil, true, 1.5, int64(2)}}),
-					Retry: &plan.StepRetry{CleanOnRetry: true, MaxRetries: plan.Literal(int64(2))},
+					Retry: &plan.StepRetry{CleanOnRetry: plan.Literal(true), MaxRetries: plan.Literal(int64(2))},
 				},
 			},
 			Outputs: map[string]plan.Value{},

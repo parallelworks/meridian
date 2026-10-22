@@ -57,6 +57,13 @@ func TestUnknownKeysAreDropped(t *testing.T) {
 	if _, ok := job["early-cancel"]; ok {
 		t.Errorf("the job still has early-cancel: %v", job)
 	}
+	var dropped []string
+	for path, v := range doc.Dropped() {
+		dropped = append(dropped, fmt.Sprintf("%s=%v", strings.Join(path, "."), v))
+	}
+	if want := []string{"jobs.main.early-cancel=any-job-failed"}; !reflect.DeepEqual(dropped, want) {
+		t.Errorf("Dropped = %v, want %v", dropped, want)
+	}
 }
 
 // A whole number is an int64, and one too large for an int64 is a float64,

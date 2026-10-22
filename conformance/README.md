@@ -80,7 +80,10 @@ expect:
 ```
 
 - `expect.inputs` are the run's input values, and `expect.secrets` are the
-  values of password inputs, by their path, such as `creds.0.pass`.
+  values of password inputs, by their path, such as `creds.0.pass`, and of
+  the other values kept as secrets, as one a form can have made from a
+  password is. `expect.private` are the values kept out of the plan, as a
+  variable's value is, that aren't secrets.
 - `expect.deferred` are the values that stay expressions until the run is
   underway, such as a default that reads a variable, by their input's path,
   such as `cluster.token`. Each is its text: a list or mapping holds each of
