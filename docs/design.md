@@ -1145,7 +1145,11 @@ not assumed idempotent.
   `worker-lost`, unless the job's `retry:` lists that reason
   ([Job retries](#job-retries)).
 - **A step's `retry:`** reruns that step on the same worker when it fails,
-  as in format 1. It can't help when the worker itself is lost.
+  as in format 1. It can't help when the worker itself is lost. Its
+  `clean-on-retry:` is true unless the workflow says otherwise, as in
+  format 1, or an expression, which Step reads as format 1 does: true or
+  false, text or a number that reads as one, and true for anything else
+  (`plan.ReadyStepRetry.CleanOnRetry`).
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
   behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
@@ -1272,6 +1276,19 @@ secret record ([Run data](#run-data)).
   such as whether a token is set, which would mask every `yes` or `true`
   in the job's logs. A job output made from a secret, of whatever type, is
   private and a secret instead ([Outputs](#outputs)).
+- **What a run was given in a secret's place is masked as what is made
+  from one.** A value the run was given in the place of what is made from a
+  password or a secret variable, as one a person typed over such a
+  default is, is a secret the plan names as derived (`plan.Run.Derived`,
+  `plan.RunValues.Derived`): it can be made from a secret or not, so the
+  masker is given it as it is given what an expression makes from a
+  secret, from 8 bytes or as a credential field, and never as a secret's
+  own text, and it isn't a secret's text whose credential fields are
+  masked. What an expression makes from it is a secret, as what is made
+  from any secret is. A value the run was given in the place of what is
+  made from a variable that isn't a secret (`plan.Run.Private`,
+  `plan.RunValues.Private`) is private, as the variable's value is: the
+  phases read it as private, and nothing masks it.
 - **A secret is masked as it can be shown.** Its shown forms are masked
   too: without the line breaks it ends with; as JSON escapes it in a
   string, as Go's `encoding/json/v2` writes it, as `encoding/json` writes

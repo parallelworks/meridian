@@ -30,7 +30,7 @@ var since = map[string]int{
 
 	"RunValues.format": 1, "RunValues.inputs": 1, "RunValues.env": 1, "RunValues.org": 1,
 	"RunValues.vars": 1, "RunValues.remote": 1, "RunValues.sessions": 1,
-	"RunValues.private": 1, "RunValues.secrets": 1,
+	"RunValues.private": 1, "RunValues.secrets": 1, "RunValues.derived": 1,
 	"JobResult.outcome": 1, "JobResult.outputs": 1, "JobResult.steps": 1, "JobResult.needsFailed": 1, "JobResult.private": 1, "JobResult.cancelled": 1,
 	"JobResult.secrets": 1, "JobResult.secretSteps": 1,
 

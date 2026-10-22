@@ -90,17 +90,28 @@ type RunValues struct {
 	Remote   map[string]string `json:"remote,omitempty"`
 	Sessions map[string]string `json:"sessions,omitempty"`
 	// Private names what of the above was made from an organization or user
-	// variable or a password, such as inputs.region or env.TOKEN, besides
-	// what is private whole: org, vars, and the passwords, which Secrets
-	// names. The coordinator keeps what is private only in the run's secret
-	// record, never shows it, and keeps the rest as run state too (Split).
+	// variable or a password, such as inputs.region or env.TOKEN, and the
+	// values the run was given in the place of what is made from a variable
+	// (plan.Run.Private), besides what is private whole: org, vars, and the
+	// passwords, which Secrets names. The coordinator keeps what is private
+	// only in the run's secret record, never shows it, and keeps the rest as
+	// run state too (Split). What is private and not a secret is never
+	// masked.
 	Private []string `json:"private,omitempty"`
 	// Secrets names each value above that is a secret or was made from one:
 	// a secret variable, as in vars.token; a password, as in
-	// inputs.creds.0.pass; and what Start made from a secret, such as
+	// inputs.creds.0.pass; a value the run was given that the compiler keeps
+	// as one (plan.Run.Secrets); and what Start made from a secret, such as
 	// env.TOKEN. Each is private, and masked, and so is what an expression
 	// makes from it.
 	Secrets []string `json:"secrets,omitempty"`
+	// Derived names the secrets, among Secrets, that are values the run was
+	// given in the place of what is made from a password or a secret
+	// variable (plan.Run.Derived): they can be made from a secret, or not,
+	// so they are masked as what is made from a secret is, a string of at
+	// least 8 bytes or a credential field of a structured secret, and not
+	// as a secret's own text, which is masked however short (Masked).
+	Derived []string `json:"derived,omitempty"`
 }
 
 // Split splits r into what the coordinator keeps only in the run's secret
@@ -125,7 +136,7 @@ func (r RunValues) Split() (record, state RunValues) {
 	}
 	record, state = fromTree(rec), fromTree(all)
 	record.Format, state.Format = r.Format, r.Format
-	state.Private, state.Secrets = slices.Clone(r.Private), slices.Clone(r.Secrets)
+	state.Private, state.Secrets, state.Derived = slices.Clone(r.Private), slices.Clone(r.Secrets), slices.Clone(r.Derived)
 	return record, state
 }
 
@@ -140,27 +151,81 @@ func JoinRunValues(record, state RunValues) RunValues {
 	}
 	out := fromTree(all)
 	out.Format = state.Format
-	out.Private, out.Secrets = slices.Clone(state.Private), slices.Clone(state.Secrets)
+	out.Private, out.Secrets, out.Derived = slices.Clone(state.Private), slices.Clone(state.Secrets), slices.Clone(state.Derived)
 	return out
 }
 
 // Masked returns the strings of each value that Secrets names, as a Masker
 // takes them: a string as it is, and each string in a list or a mapping,
-// but never the text of a boolean, a number or null (Masker). Each is given
-// once, in the order of Secrets, and an empty one not at all.
+// but never the text of a boolean, a number or null (Masker). A secret's
+// own text is given however short; one that Derived names gives only
+// what is masked of what is made from a secret: each of its strings of at
+// least 8 bytes, or that is a credential field of a secret's own text
+// (credentialFields). Each is given once, the secrets' own texts first,
+// in the order of Secrets, and an empty one not at all.
 func (r RunValues) Masked() []string {
-	all := r.tree()
-	var out []string
-	seen := map[string]bool{}
-	add := func(s string) {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			out = append(out, s)
+	own, derived := r.secretStrings()
+	var fields map[string]bool
+	for _, s := range derived {
+		if len(s) >= minDerived {
+			own = append(own, s)
+			continue
+		}
+		if len(s) < minField || jsonWord(s) {
+			continue
+		}
+		if fields == nil {
+			fields = credentialFields(r.ownTexts())
+		}
+		if fields[s] {
+			own = append(own, s)
 		}
 	}
+	return compactStrings(own)
+}
+
+// ownTexts returns the strings of each secret's own text: of each value
+// that Secrets names but Derived doesn't.
+func (r RunValues) ownTexts() []string {
+	own, _ := r.secretStrings()
+	return own
+}
+
+// secretStrings returns the strings of each value that Secrets names, as
+// Masked gives them, those of the secrets' own texts and those of the
+// values that Derived names apart, each once and none empty.
+func (r RunValues) secretStrings() (own, derived []string) {
+	all := r.tree()
+	seen := map[string]bool{}
 	for _, name := range r.Secrets {
-		if v, ok := jsonptr.Lookup(all, splitPath(name)); ok {
-			maskedStrings(v, add)
+		v, ok := jsonptr.Lookup(all, splitPath(name))
+		if !ok {
+			continue
+		}
+		isDerived := slices.Contains(r.Derived, name)
+		maskedStrings(v, func(s string) {
+			if s == "" || seen[s] {
+				return
+			}
+			seen[s] = true
+			if isDerived {
+				derived = append(derived, s)
+			} else {
+				own = append(own, s)
+			}
+		})
+	}
+	return own, derived
+}
+
+// compactStrings returns ss without a string given before.
+func compactStrings(ss []string) []string {
+	seen := map[string]bool{}
+	out := ss[:0]
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
 		}
 	}
 	return out

@@ -931,3 +931,77 @@ func BenchmarkStepStructuredSecret(b *testing.B) {
 		})
 	}
 }
+
+// A value the run was given in the place of what is made from a secret
+// (RunValues.Derived) is masked as what is made from a secret is: from 8
+// bytes, or as a credential field of a secret's own text, which is masked
+// however short. One given in the place of what is made from a variable
+// (RunValues.Private) is private, and never masked. Split, JoinRunValues
+// and Reads keep both.
+func TestRunValuesDerivedAndPrivate(t *testing.T) {
+	run := plan.RunValues{
+		Inputs: plan.DataOf(map[string]any{
+			"pw": "hunter2-secret", "short": "abc1", "typed": "typed-over-1", "typed_short": "pin1", "field": "hunt3r2", "region": "eu-west",
+		}),
+		Vars:    map[string]string{"db": `{"user":"svc","password":"hunt3r2"}`},
+		Secrets: []string{"vars.db", "inputs.pw", "inputs.short", "inputs.typed", "inputs.typed_short", "inputs.field"},
+		Derived: []string{"inputs.typed", "inputs.typed_short", "inputs.field"},
+		Private: []string{"inputs.region"},
+	}
+	want := []string{`{"user":"svc","password":"hunt3r2"}`, "hunter2-secret", "abc1", "typed-over-1", "hunt3r2"}
+	if got := run.Masked(); !slices.Equal(got, want) {
+		t.Errorf("Masked() = %q, want %q", got, want)
+	}
+	record, state := run.Split()
+	if fmt.Sprint(state.Derived, state.Private) != "[inputs.typed inputs.typed_short inputs.field] [inputs.region]" {
+		t.Errorf("state names %q and %q", state.Derived, state.Private)
+	}
+	if strings.Contains(fmt.Sprint(state.Inputs.Get()), "typed") || strings.Contains(fmt.Sprint(state.Inputs.Get()), "eu-west") {
+		t.Errorf("the state holds %v", state.Inputs.Get())
+	}
+	if !slices.Equal(record.Derived, nil) || fmt.Sprint(record.Inputs.Get()) == "map[]" {
+		t.Errorf("the record %+v", record)
+	}
+	back := plan.JoinRunValues(record, state)
+	a, _ := json.Marshal(run, json.Deterministic(true))
+	b, _ := json.Marshal(back, json.Deterministic(true))
+	if string(a) != string(b) {
+		t.Errorf("joined\n%s\nwant\n%s", b, a)
+	}
+	j := &plan.Job{Name: "j", Steps: []plan.Step{{Run: mustValue(t, "${{ inputs.typed_short }} ${{ inputs.region }}")}}}
+	if got := j.Reads(run); fmt.Sprint(got.Secrets, got.Derived, got.Private) != "[inputs.typed_short] [inputs.typed_short] [inputs.region]" {
+		t.Errorf("Reads gives secrets %q, derived %q, private %q", got.Secrets, got.Derived, got.Private)
+	}
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      typed_short: {type: string, default: x}
+      region: {type: string, default: x}
+jobs:
+  main:
+    steps:
+      - id: a
+        run: echo ${{ inputs.typed_short }} ${{ inputs.region }}
+    outputs:
+      typed: ${{ inputs.typed_short }}
+      region: ${{ inputs.region }}
+`, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state2 := plan.JobState{Run: run, Masked: run.Masked()}
+	s, _, err := ready.Job.Step(t.Context(), 0, state2)
+	if err != nil || !slices.Equal(s.Masked, []string{"echo pin1 eu-west"}) {
+		t.Errorf("step %+v, %v", s, err)
+	}
+	if got := plan.NewMasker(append(state2.Masked, s.Masked...)...).Mask("pin1 eu-west"); got != "pin1 eu-west" {
+		t.Errorf("a log line %q", got)
+	}
+	state2.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess}}
+	end, _, err := ready.Job.End(t.Context(), state2)
+	if err != nil || fmt.Sprint(end.Outputs, end.Private, end.Secrets) != "map[region:eu-west typed:pin1] [region typed] [typed]" {
+		t.Errorf("End %+v, %v", end, err)
+	}
+}

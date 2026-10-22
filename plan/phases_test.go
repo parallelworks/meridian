@@ -43,7 +43,9 @@ func job(t testing.TB, p *plan.Plan, name string) *plan.Job {
 // secrets.
 func runValues(t testing.TB, p *plan.Plan, vars map[string]string) plan.RunValues {
 	t.Helper()
-	r := plan.RunValues{Format: p.Run.Format, Inputs: p.Run.Inputs, Vars: vars, Secrets: p.Run.Secrets}
+	r := plan.RunValues{
+		Format: p.Run.Format, Inputs: p.Run.Inputs, Vars: vars, Secrets: p.Run.Secrets, Derived: p.Run.Derived, Private: p.Run.Private,
+	}
 	for name, v := range p.Run.Env {
 		lit, ok := v.Literal()
 		if !ok {

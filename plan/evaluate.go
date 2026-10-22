@@ -55,7 +55,7 @@ type secretTexts struct {
 // field reports whether s is one of the secrets' credential fields.
 func (t *secretTexts) field(s string) bool {
 	if !t.found {
-		t.fields, t.found = credentialFields(t.run.Masked()), true
+		t.fields, t.found = credentialFields(t.run.ownTexts()), true
 	}
 	return t.fields[s]
 }

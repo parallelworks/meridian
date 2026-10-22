@@ -228,7 +228,7 @@ func (j *Job) Reads(run RunValues) RunValues {
 		}
 		return out
 	}
-	out.Private, out.Secrets = kept(run.Private), kept(run.Secrets)
+	out.Private, out.Secrets, out.Derived = kept(run.Private), kept(run.Secrets), kept(run.Derived)
 	return out
 }
 
