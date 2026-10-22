@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +99,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(s.Masked) != "[s3cret-value-1 s3cret-value]" {
+	if fmt.Sprint(s.Masked) != "[s3cret-value s3cret-value-1]" {
 		t.Errorf("Masked = %q", s.Masked)
 	}
 	state.Masked = append(state.Masked, s.Masked...)
@@ -390,9 +391,9 @@ func TestReadsByPath(t *testing.T) {
 }
 
 // A short string made from a secret, such as an answer it decided, masks
-// nothing: only a secret's own text, and its shown forms, are masked
-// whatever their length, and only they make a step's output that holds one
-// a secret, so a plain output that holds the short string isn't masked.
+// nothing, unless a secret's own text holds it: a secret's own text, and
+// its shown forms, are masked whatever their length, so a plain output that
+// holds the short string isn't masked.
 func TestMaskDerivedShortStrings(t *testing.T) {
 	p := compiled(t, `
 jobs:
@@ -411,7 +412,7 @@ jobs:
       user: ${{ steps.a.outputs.user }}
       note: ${{ needs.main.outputs.note }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "creds": expr.Unknown{Name: "vars"}}})
-	run := runValues(t, p, map[string]string{"token": "s3cret-value", "creds": `{"user":"admin","pass":"hunter2-pass"}`})
+	run := runValues(t, p, map[string]string{"token": "s3cret-value", "creds": `{"user":"svc","pass":"hunter2-pass"}`})
 	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
@@ -426,18 +427,18 @@ jobs:
 	}
 	state.Masked = append(state.Masked, s.Masked...)
 	state.Steps = []plan.StepResult{
-		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"answer": "yes", "host": "eyes-01", "user": "admin"}},
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"answer": "yes", "host": "eyes-01", "user": "svc"}},
 		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"note": "the eyes have it"}},
 	}
 	end, diags, err := ready.Job.End(t.Context(), state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"answer": "yes", "host": "eyes-01", "user": "admin", "note": "the eyes have it"}
+	want := map[string]string{"answer": "yes", "host": "eyes-01", "user": "svc", "note": "the eyes have it"}
 	if !maps.Equal(end.Outputs, want) || len(diags) > 0 {
 		t.Errorf("outputs %q, %q", end.Outputs, codes(diags))
 	}
-	if got := plan.NewMasker(state.Masked...).Mask("the eyes have it: yes, admin"); got != "the eyes have it: yes, admin" {
+	if got := plan.NewMasker(state.Masked...).Mask("the eyes have it: yes, svc"); got != "the eyes have it: yes, svc" {
 		t.Errorf("a log line: %q", got)
 	}
 }
@@ -608,4 +609,197 @@ func BenchmarkMask(b *testing.B) {
 			}
 		})
 	}
+}
+
+// readyMain compiles workflow with vars, those named in secret unknown as
+// secret variables are, and readies its job main.
+func readyMain(t *testing.T, workflow string, vars map[string]string, secret ...string) (*plan.ReadyJob, plan.RunValues) {
+	t.Helper()
+	ctxVars := map[string]any{}
+	for k, v := range vars {
+		ctxVars[k] = v
+	}
+	for _, k := range secret {
+		ctxVars[k] = expr.Unknown{Name: "vars"}
+	}
+	p := compiled(t, workflow, map[string]any{"vars": ctxVars})
+	run := runValues(t, p, vars)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil || ready.Job == nil {
+		t.Fatal(err)
+	}
+	return ready.Job, run
+}
+
+// A field of a structured secret is masked wherever it shows, though it is
+// short, as a secret's own text holds it, and though it is read inline, as
+// each expression that read a secret is masked: not one under 4 bytes, nor
+// a JSON word.
+func TestMaskSecretFields(t *testing.T) {
+	token := "tok_" + strings.Repeat("Z", 36)
+	rj, run := readyMain(t, `
+jobs:
+  main:
+    steps:
+      - run: mysql -u${{ fromJSON(vars.db).user }} -p${{ fromJSON(vars.db).password }} --ssl=${{ fromJSON(vars.db).ssl }}
+      - run: deploy --token ${{ fromJSON(vars.creds).token }}
+`, map[string]string{"db": `{"user":"svc","password":"hunt3r2","ssl":"true"}`, "creds": `{"user":"svc","token":"` + token + `"}`}, "db", "creds")
+	state := plan.JobState{Run: run, Masked: run.Masked()}
+	for i := range 2 {
+		s, _, err := rj.Step(t.Context(), i, state)
+		if err != nil || s == nil {
+			t.Fatal(err)
+		}
+		state.Masked = append(state.Masked, s.Masked...)
+		state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
+	}
+	state.Steps[0].Outputs = map[string]string{"pw": "hunt3r2", "user": "svc", "ssl": "true"}
+	end, _, err := rj.End(t.Context(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"pw": "***", "user": "svc", "ssl": "true"}; !maps.Equal(end.Outputs, want) {
+		t.Errorf("outputs %q, want %q", end.Outputs, want)
+	}
+	m := plan.NewMasker(state.Masked...)
+	for log, want := range map[string]string{
+		"ERROR 1045: Access denied for svc (using password: hunt3r2), ssl true": "ERROR 1045: Access denied for svc (using password: ***), ssl true",
+		"+ deploy --token " + token + "\nerror: token " + token + " expired":    "+ ***\nerror: token *** expired",
+	} {
+		if got := m.Mask(log); got != want {
+			t.Errorf("Mask(%q) = %q, want %q", log, got, want)
+		}
+	}
+}
+
+// A step's output that holds a string made from a secret holds a secret,
+// so a problem with what reads it shows none of it.
+func TestMaskLeakCheckDerived(t *testing.T) {
+	token := "tok_" + strings.Repeat("Z", 36)
+	rj, run := readyMain(t, `
+jobs:
+  main:
+    steps:
+      - id: a
+        run: echo $T
+        env:
+          T: ${{ fromJSON(vars.creds).token }}
+      - run: echo ${{ fromJSON(steps.a.outputs.y) }}
+`, map[string]string{"creds": `{"user":"svc","token":"` + token + `"}`}, "creds")
+	state := plan.JobState{Run: run, Masked: run.Masked()}
+	s, _, err := rj.Step(t.Context(), 0, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Masked = append(state.Masked, s.Masked...)
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"y": "got " + token}}}
+	_, diags, err := rj.Step(t.Context(), 1, state)
+	if err != nil || len(diags) != 1 {
+		t.Fatal(diags, err)
+	}
+	if shown := fmt.Sprint(diags, diags[0].Params); strings.Contains(shown, "ZZZZ") || diags[0].Params["text"] != problems.Masked {
+		t.Errorf("the token shows: %s", shown)
+	}
+}
+
+// Values of an env: that read each other keep what they read of a secret,
+// in a chain or a cycle.
+func TestEnvOrderKeepsMarks(t *testing.T) {
+	rj, run := readyMain(t, `
+env:
+  A: placeholder
+jobs:
+  main:
+    env:
+      A: ${{ env.A }}-x
+      B: ${{ env.C }}
+      C: ${{ env.B }}${{ env.A }}
+    steps:
+      - run: "true"
+        env:
+          D: ${{ env.E }}
+          E: ${{ env.D }}${{ env.C }}
+    outputs:
+      a: ${{ env.A }}
+      b: ${{ env.B }}
+      c: ${{ env.C }}
+`, nil)
+	run.Env["A"] = "s3cret-tok"
+	run.Secrets = append(run.Secrets, "env.A")
+	state := plan.JobState{Run: run, Masked: run.Masked()}
+	s, diags, err := rj.Step(t.Context(), 0, state)
+	if err != nil || s == nil {
+		t.Fatal(diags, err)
+	}
+	if s.Env["E"] != "s3cret-tok-x" || !slices.Contains(s.Masked, "s3cret-tok-x") {
+		t.Errorf("env %q, masked %q", s.Env, s.Masked)
+	}
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess}}
+	end, diags, err := rj.End(t.Context(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"a": "***", "b": "", "c": "***"}; !maps.Equal(end.Outputs, want) {
+		t.Errorf("outputs %q, %q", end.Outputs, codes(diags))
+	}
+}
+
+// A cleanup's problems show no secret a step's output held, and End masks
+// a cancelled step's outputs as any other's.
+func TestCleanupMasks(t *testing.T) {
+	token := "tok_" + strings.Repeat("Q", 36)
+	rj, run := readyMain(t, `
+jobs:
+  main:
+    env:
+      T: ${{ vars.token }}
+    steps:
+      - id: a
+        run: "true"
+      - run: "true"
+        cleanup: rm ${{ fromJSON(steps.a.outputs.y) }} ${{ steps.a.outputs.missing }}
+`, map[string]string{"token": token}, "token")
+	steps := []plan.StepResult{{Outcome: plan.OutcomeCancelled, Outputs: map[string]string{"y": "x " + token}}, {Outcome: plan.OutcomeCancelled}}
+	s, diags, err := rj.Cleanup(t.Context(), 1, plan.JobState{Run: run, Masked: run.Masked(), Steps: steps})
+	if err != nil || s != nil || !slices.Equal(codes(diags), []string{"from_json_invalid /jobs/main/steps/1/cleanup"}) || strings.Contains(fmt.Sprint(diags), "QQQQ") {
+		t.Errorf("cleanup %+v, %v, %v", s, diags, err)
+	}
+	steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"y": "x " + token}}, {Outcome: plan.OutcomeCancelled, Outputs: map[string]string{"w": "w " + token}}}
+	end, _, err := rj.End(t.Context(), plan.JobState{Run: run, Masked: run.Masked(), Steps: steps})
+	if err != nil || end.Outputs["w"] != "w ***" {
+		t.Errorf("outputs %q, %v", end, err)
+	}
+}
+
+// BenchmarkMaskRandomTokens masks a log with tokens whose first bytes are
+// common, and with a value that matches far into each line, which are
+// harder cases than BenchmarkMask's.
+func BenchmarkMaskRandomTokens(b *testing.B) {
+	text := strings.Repeat("2026-10-22T10:00:00Z INFO building target //pkg/foo:bar in 12.3s, cache hit ratio 0.93\n", 1<<14)
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	r := rand.New(rand.NewPCG(5, 8))
+	for _, n := range []int{3, 30} {
+		var values []string
+		for range n {
+			var v strings.Builder
+			for range 40 {
+				v.WriteByte(chars[r.IntN(len(chars))])
+			}
+			values = append(values, v.String())
+		}
+		m := plan.NewMasker(values...)
+		b.Run(fmt.Sprintf("%d tokens", n), func(b *testing.B) {
+			b.SetBytes(int64(len(text)))
+			for b.Loop() {
+				_ = m.Mask(text)
+			}
+		})
+	}
+	m := plan.NewMasker(" INFO building target //pkg/foo:baz")
+	b.Run("a value that matches far into each line", func(b *testing.B) {
+		b.SetBytes(int64(len(text)))
+		for b.Loop() {
+			_ = m.Mask(text)
+		}
+	})
 }

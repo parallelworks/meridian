@@ -3,6 +3,7 @@ package plan
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
@@ -23,22 +24,48 @@ type evaluation struct {
 	// where a step's outputs are read as they were written, which can hold
 	// a secret's value. It masks what masked holds too.
 	masker *Masker
+	// secrets are the texts of the run's secrets the phase reads, for mask.
+	secrets *secretTexts
 }
 
 func newEvaluation(phase Phase, c Contexts) *evaluation {
-	return &evaluation{phase: phase, scope: NewScope(phase, c)}
+	return &evaluation{phase: phase, scope: NewScope(phase, c), secrets: &secretTexts{run: c.Run}}
 }
 
 // next returns an evaluation in phase of c, which keeps e's problems and
 // what e noted to mask.
 func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
-	return &evaluation{phase: phase, scope: NewScope(phase, c), diags: e.diags, masked: e.masked, seen: e.seen, masker: e.masker}
+	return &evaluation{
+		phase: phase, scope: NewScope(phase, c), diags: e.diags, masked: e.masked, seen: e.seen, masker: e.masker, secrets: e.secrets,
+	}
+}
+
+// secretTexts are the texts of a run's secrets, RunValues.Masked, found
+// the first time they are needed.
+type secretTexts struct {
+	run   RunValues
+	texts []string
+	found bool
+}
+
+// contain reports whether one of the secrets' texts holds s.
+func (t *secretTexts) contain(s string) bool {
+	if !t.found {
+		t.texts, t.found = t.run.Masked(), true
+	}
+	for _, text := range t.texts {
+		if strings.Contains(text, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // value evaluates v, at pointer in the workflow, and notes the strings of
-// what each of its templates that read a secret gives, which are to be
-// masked: not those of the rest of v, nor the text of a boolean, a number or
-// null (Masker). ok is false, and the problem reported, if it fails.
+// what each of its templates that read a secret gives, and each expression
+// in one that read one, which are to be masked (mask): not those of the
+// rest of v, nor the text of a boolean, a number or null (Masker). ok is
+// false, and the problem reported, if it fails.
 func (e *evaluation) value(v Value, pointer string) (out any, read expr.Read, ok bool) {
 	out, read, err := v.evalLeaves(e.scope, func(out any, read expr.Read) {
 		if read.Marked {
@@ -62,13 +89,19 @@ func (e *evaluation) text(v Value, pointer string) (string, expr.Read, bool) {
 // minDerived is how long a string made from a secret must be for a phase
 // to give it to mask: a shorter one, such as yes, would mask common text
 // wherever it appears. A secret's own text is masked however short, and an
-// output made from one is masked whole (End).
-const minDerived = 8
+// output made from one is masked whole (End). minField is how long one
+// that a secret's own text holds must be, such as a password that
+// fromJSON took from a secret's JSON.
+const (
+	minDerived = 8
+	minField   = 4
+)
 
 // mask notes s, text made from a secret, if it is at least minDerived
-// bytes long.
+// bytes long, or at least minField and in a secret's own text, but for the
+// JSON words true, false and null.
 func (e *evaluation) mask(s string) {
-	if len(s) < minDerived || e.seen[s] {
+	if e.seen[s] || !e.masks(s) {
 		return
 	}
 	if e.seen == nil {
@@ -79,6 +112,17 @@ func (e *evaluation) mask(s string) {
 	if e.masker != nil {
 		e.masker.Add(s)
 	}
+}
+
+// masks reports whether mask notes s.
+func (e *evaluation) masks(s string) bool {
+	switch {
+	case len(s) >= minDerived:
+		return true
+	case len(s) < minField || s == "true" || s == "false" || s == "null":
+		return false
+	}
+	return e.secrets != nil && e.secrets.contain(s)
 }
 
 // A decision is what an if: decided.

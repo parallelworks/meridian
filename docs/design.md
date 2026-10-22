@@ -880,13 +880,16 @@ steps its group takes, each node it evaluates and each run of a lambda, and
 a group that passes the cap fails with `expressions_too_slow`. Today the cap
 is 10 seconds, whatever the caller's deadline.
 
-Values that come from secrets are masked wherever they appear in logs,
-including inside strings built from them. So are values made from them: an
+A secret's own text is masked wherever it appears in logs and outputs,
+however short, and so is the text of what an expression made from it,
+under the rules of [Variables and secrets](#variables-and-secrets): an
 evaluation can say whether it read a value its scope marks
-(`Template.EvalMarked`), and one that read a secret is marked whatever it
+(`Template.EvalRead`), and one that read a secret is marked whatever it
 made of it, whether `${{ vars.token }}`, `${{ vars.token * 2 }}` or a
 condition the secret decided. The mark is conservative: anything a template
-reads from a secret marks all of what it gives.
+reads from a secret marks all of what it gives, and each `${{ }}` in it
+that read one marks what that expression gave (`Template.EvalParts`). What
+is masked is text, so a boolean or a number a secret decided isn't.
 
 ## Interfaces
 
@@ -1173,14 +1176,20 @@ secret record ([Run data](#run-data)).
   compiler warns when a plain variable's name, such as `HF_TOKEN`, looks
   like a secret's.
 - **What is masked is text.** The masker is given strings: a secret's own
-  text, however short, unless it is empty, which is never masked; and each
-  string of at least 8 bytes that an expression made from one, a template
-  at a time, so a secret in one value of a step's `with:` masks only what
-  that value's template gave. It is never given a shorter one, such as a
-  `yes` that a secret decided, nor the text of a boolean, a number or null
-  that one decided, such as whether a token is set, which would mask every
-  `yes` or `true` in the job's logs and outputs. A job output made from a
-  secret, of whatever type, is masked whole instead ([Outputs](#outputs)).
+  text, however short, unless it is empty, which is never masked; and the
+  text a template made from one, and that each `${{ }}` in it that read
+  one gave, so that a field of a structured secret, such as
+  `${{ fromJSON(vars.creds).token }}`, is masked wherever a command prints
+  it, and not only within the command. A secret in one value of a step's
+  `with:` masks only what that value's template gave. A string made from a
+  secret is masked when it is at least 8 bytes, or when a secret's own text
+  holds it as it is and it is at least 4 bytes and isn't `true`, `false`
+  or `null`, as a password in a secret's JSON is. It is never given a
+  shorter one, such as a `yes` that a secret decided, nor the text of a
+  boolean, a number or null that one decided, such as whether a token is
+  set, which would mask every `yes` or `true` in the job's logs and
+  outputs. A job output made from a secret, of whatever type, is masked
+  whole instead ([Outputs](#outputs)).
 - **A secret is masked as it can be shown.** Its shown forms are masked
   too: without the line breaks it ends with; as JSON escapes it in a
   string, as Go's `encoding/json/v2` writes it, as `encoding/json` writes
@@ -1191,11 +1200,12 @@ secret record ([Run data](#run-data)).
   line line by line. A line is masked on its own only when it is at least
   8 bytes, with a letter or a digit, and isn't `true`, `false` or `null`,
   so that a JSON or YAML secret's `},` or `true` lines mask nothing else.
-- **What holds a secret.** A step's output holds a secret when it holds a
-  secret's own text or one of its shown forms, but a line of it: never a
-  string made from one, nor a line, which plain text can hold too. A job's
-  later steps read such an output as a secret, and an output made from it
-  is masked whole.
+- **What holds a secret.** A step's output holds a secret when it holds
+  what the job's logs mask, as it can show, but for a line of a secret,
+  which plain text can hold too: a secret's own text, or a string made
+  from one that is masked. A job's later steps read such an output as a
+  secret, and an output made from it is masked whole. End masks the job's
+  outputs as its logs are masked, lines and all.
 - **What a script does with a value can't be followed.** A secret that a
   step's script transforms, such as by encoding it in base64, isn't known
   to come from the secret, and isn't masked.

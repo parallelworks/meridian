@@ -1,8 +1,10 @@
 package plan
 
 import (
+	"bytes"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +58,80 @@ func TestMatcherAgainstNaive(t *testing.T) {
 		want := naiveFind(s, values)
 		if !slices.Equal(got, want) {
 			t.Fatalf("values %q in %q: %v, want %v", values, s, got, want)
+		}
+	}
+}
+
+// naiveMask masks s with every shown form of added, found naively.
+func naiveMask(s string, added []string, lines bool) string {
+	var all []string
+	for _, v := range added {
+		all = append(all, shownAs(v, lines)...)
+	}
+	return masked(s, naiveFind(s, all))
+}
+
+// A Masker that values are added to between masks, so that it has several
+// levels, masks as a naive search for every shown form does, and so does
+// its Writer, however its text is split.
+func TestMaskerLevelsAgainstNaive(t *testing.T) {
+	r := rand.New(rand.NewPCG(21, 23))
+	alpha := []string{"a", "b", "c", "\n", " ", "\"", "<", "&", "é", " ", "x9"}
+	word := func(max int) string {
+		var b strings.Builder
+		for range r.IntN(max + 1) {
+			b.WriteString(alpha[r.IntN(len(alpha))])
+		}
+		return b.String()
+	}
+	for range 5000 {
+		lines := r.IntN(2) == 0
+		m := &Masker{lines: lines}
+		var added []string
+		for range 1 + r.IntN(8) {
+			v := word(12)
+			m.Add(v)
+			added = append(added, v)
+			s := word(40)
+			if got, want := m.Mask(s), naiveMask(s, added, lines); got != want {
+				t.Fatalf("lines %v, added %q, %q: %q, want %q (levels %d)", lines, added, s, got, want, len(m.levels))
+			}
+		}
+		s := word(60)
+		var out bytes.Buffer
+		w := m.Writer(&out)
+		for rest := s; rest != ""; {
+			n := min(len(rest), 1+r.IntN(7))
+			if _, err := w.Write([]byte(rest[:n])); err != nil {
+				t.Fatal(err)
+			}
+			rest = rest[n:]
+		}
+		_ = w.Close()
+		if want := naiveMask(s, added, lines); out.String() != want {
+			t.Fatalf("writer: added %q, %q: %q, want %q", added, s, out.String(), want)
+		}
+	}
+}
+
+// No shown form of a value is shorter than the value, or than minLine, but
+// the value without the line breaks it ends with.
+func TestShownFormsLength(t *testing.T) {
+	r := rand.New(rand.NewPCG(1, 1))
+	alpha := []string{"a", "1", "\n", " ", "\"", "<", "&", "é", " ", "}", "\t"}
+	for range 50000 {
+		var b strings.Builder
+		for range r.IntN(20) {
+			b.WriteString(alpha[r.IntN(len(alpha))])
+		}
+		v := b.String()
+		for _, f := range shownAs(v, true) {
+			if f == "" {
+				continue
+			}
+			if len(f) < min(len(v), minLine) && !slices.Contains([]string{strings.TrimRight(v, "\r\n")}, f) {
+				t.Fatalf("%q shows as %q", v, f)
+			}
 		}
 	}
 }

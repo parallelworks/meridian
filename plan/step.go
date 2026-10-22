@@ -148,8 +148,11 @@ type ReadyStep struct {
 	EarlyCancel string `json:"earlyCancel,omitempty"`
 	// Masked are the strings Step made from a secret, as a Masker takes
 	// them: each string that a template of the job's env: or the step's
-	// that read one gave, such as an env value that reads one, but not the
-	// rest of a value, nor a boolean, a number or null (Masker). The
+	// that read one gave, such as an env value that reads one, and that
+	// each ${{ }} in one that read one gave, such as a field of a
+	// structured secret, but not the rest of a value, nor a boolean, a
+	// number or null (Masker). Each is at least 8 bytes, or at least 4 and
+	// held by a secret's own text, and isn't true, false or null. The
 	// worker masks each wherever it appears in the job's logs and outputs,
 	// as it masks the secrets themselves.
 	Masked []string `json:"masked,omitempty"`
@@ -282,7 +285,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state)
+	c.addSelf(j, state, e.masked)
 	e = c.evaluation(PhaseStep, e)
 	jobDir := e.directory(j.WorkingDirectory, at(j.Path, "working-directory"))
 	// The step reads all of the worker's variables, and its if: reads an
@@ -434,7 +437,7 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state)
+	c.addSelf(j, state, e.masked)
 	// The job's outputs: read an output that nothing wrote strictly once
 	// its steps succeeded, as format 1 does.
 	c.StrictOutputs = !c.Status.Failed && !c.Status.Cancelled
@@ -552,7 +555,7 @@ func (c *stepContexts) evaluation(phase Phase, e *evaluation) *evaluation {
 		}
 	}
 	next := newEvaluation(phase, c.Contexts)
-	next.diags, next.masked, next.seen, next.masker = e.diags, e.masked, e.seen, e.masker
+	next.diags, next.masked, next.seen, next.masker, next.secrets = e.diags, e.masked, e.seen, e.masker, e.secrets
 	for _, path := range c.leaks {
 		next.scope.Marked.Add(path)
 		next.scope.Private.Add(path)
@@ -704,17 +707,17 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 }
 
 // addSelf gives c the needs of the job's steps, with the job itself, and
-// its steps' outputs by id, from what its steps so far, state.Steps, wrote,
-// and notes the outputs that hold a secret: one of the secrets the job
-// received (state.Run), as it can show, but for its lines, and not a
-// string made from one, which can be as common as yes. Each output is
-// checked once.
-func (c *stepContexts) addSelf(j *ReadyJob, state JobState) {
+// its steps' outputs by id, from what its steps so far, state.Steps,
+// wrote, and notes the outputs that hold a secret: what the worker masks
+// (state.Masked), and what the job's env: made from one (masked), as each
+// can show, but for its lines, which plain text can hold too. Each output
+// is checked once.
+func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
 		needs = map[string]JobResult{}
 	}
-	leak := newLeakMasker(state.Run.Masked()...)
+	leak := newLeakMasker(slices.Concat(state.Masked, masked)...)
 	self := JobResult{Outputs: map[string]string{}}
 	selfLeaks := map[string]bool{}
 	steps := map[string]map[string]string{}

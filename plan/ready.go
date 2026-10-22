@@ -351,9 +351,10 @@ type ReadyJob struct {
 	Private []string `json:"private,omitempty"`
 	Secrets []string `json:"secrets,omitempty"`
 	// Masked are the strings Ready made from a secret, as a Masker takes
-	// them: each string that a template that read one gave, and those of
-	// an instance's matrix values made from one. The worker masks them, as
-	// it masks the run's secrets.
+	// them: each string that a template, or a ${{ }} in one, that read one
+	// gave, and those of an instance's matrix values made from one, as
+	// ReadyStep.Masked holds them. The worker masks them, as it masks the
+	// run's secrets.
 	Masked []string `json:"masked,omitempty"`
 	// Path is the JSON Pointer of the job in the workflow, for messages.
 	Path string `json:"path"`

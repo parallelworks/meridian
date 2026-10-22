@@ -500,7 +500,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"masked":["s3cret-y"]}`; string(data) != want {
+	if want := `{"index":0,"id":"first","name":"first ","run":"echo plain","shell":"sh {0}","env":{"REGION":"eu","TOKEN":"plain","W":"workflow","X":"plain","Y":"s3cret-y"},"timeoutSeconds":60,"retry":{"maxRetries":10,"intervalSeconds":5,"timeoutSeconds":30},"ignoreErrors":true,"masked":["s3cret","s3cret-y"]}`; string(data) != want {
 		t.Errorf("step 0:\n%s\nwant\n%s", data, want)
 	}
 	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"o": "1"}}}
@@ -514,7 +514,7 @@ jobs:
 		t.Fatal(s, diags, err)
 	}
 	if s.Run != "echo 1 s3cret" || s.WorkingDirectory != "/job" || s.SSH == nil || s.SSH.SSH.Get().(map[string]any)["remoteHost"] != "h" ||
-		!slices.Equal(s.Masked, []string{"echo 1 s3cret"}) || s.OutlivesCancel {
+		!slices.Equal(s.Masked, []string{"s3cret", "echo 1 s3cret"}) || s.OutlivesCancel {
 		t.Errorf("step 1: %+v", s)
 	}
 	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
@@ -592,7 +592,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret","env":{"W":"workflow"},"masked":["rm -rf workflow 2 [] s3cret"],"outlivesCancel":true}`; string(data) != want {
+	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret","env":{"W":"workflow"},"masked":["s3cret","rm -rf workflow 2 [] s3cret"],"outlivesCancel":true}`; string(data) != want {
 		t.Errorf("cleanup 0:\n%s\nwant\n%s", data, want)
 	}
 	if s, _, err := rj.Cleanup(t.Context(), 1, state); err != nil || s.Name != "POST Step 1" || s.Run != "echo 2 1 true" || !s.OutlivesCancel {

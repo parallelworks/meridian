@@ -193,21 +193,24 @@ func (v Value) EvalRead(scope expr.Scope) (out any, read expr.Read, err error) {
 }
 
 // evalLeaves evaluates the Value as EvalRead does, and calls leaf, if it
-// isn't nil, with what each of its templates gives and read, so that what
-// a template that read a secret gave can be told from what the rest did.
+// isn't nil, with what each of its templates gives and read, and what each
+// expression in one gives and read (expr.Template.EvalParts), so that what
+// a template, or an expression in it, that read a secret gave can be told
+// from what the rest did.
 func (v Value) evalLeaves(scope expr.Scope, leaf func(out any, read expr.Read)) (out any, read expr.Read, err error) {
 	out, err = evalValue(v.v, scope.Budgeted(), &read, leaf)
 	return out, read, err
 }
 
 // evalValue evaluates the templates in v, notes in read what they read of
-// the values scope marks, and calls leaf, if it isn't nil, for each.
+// the values scope marks, and calls leaf, if it isn't nil, for each, and
+// for each expression of a template of text and expressions.
 func evalValue(v any, scope expr.Scope, read *expr.Read, leaf func(any, expr.Read)) (any, error) {
 	switch v := v.(type) {
 	case *expr.Template:
-		out, r, err := v.EvalRead(scope)
+		out, r, err := v.EvalParts(scope, leaf)
 		*read = read.Or(r)
-		if err == nil && leaf != nil {
+		if _, alone := v.Expr(); err == nil && leaf != nil && !alone {
 			leaf(out, r)
 		}
 		return out, err

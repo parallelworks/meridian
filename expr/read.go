@@ -52,6 +52,21 @@ func (t *Template) EvalRead(scope Scope) (v any, read Read, err error) {
 	return v, scope.budget.done(outer), err
 }
 
+// EvalParts evaluates the template as EvalRead does, and calls part with
+// the value of each of its expressions, in order, and what that expression
+// read of the values scope marks, once it has evaluated it: a runner that
+// masks what a template made from a secret masks each expression's value
+// too, so that a field of a structured secret, such as
+// ${{ fromJSON(vars.creds).token }}, is masked wherever it shows, and not
+// only within the text around it. A template that is one expression calls
+// part with its value.
+func (t *Template) EvalParts(scope Scope, part func(v any, read Read)) (v any, read Read, err error) {
+	scope = scope.Budgeted()
+	outer := scope.budget.noting()
+	v, err = t.eval(scope, part)
+	return v, scope.budget.done(outer), err
+}
+
 // EvalRead evaluates what the workflow holds at location, as Eval does,
 // and reports what it read of the values its scope marks, as
 // Template.EvalRead does: what the expressions there read, or a string,

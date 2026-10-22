@@ -153,3 +153,34 @@ func TestEvalReadThroughOperators(t *testing.T) {
 		}
 	}
 }
+
+// EvalParts reports each expression's value and what it read, apart, and
+// gives what EvalRead gives.
+func TestEvalParts(t *testing.T) {
+	contexts := map[string]any{"vars": map[string]any{"creds": `{"token":"tok_abc","user":"svc"}`, "region": "us-east"}}
+	scope := expr.Scope{
+		Contexts: contexts,
+		Marked:   expr.NewMarks([]string{"vars", "creds"}),
+		Private:  expr.NewMarks([]string{"vars"}),
+	}
+	for src, want := range map[string]string{
+		"deploy --token ${{ fromJSON(vars.creds).token }} in ${{ vars.region }} ${{ 1 }}": `tok_abc {true true}; us-east {false true}; 1 {false false}; `,
+		"${{ fromJSON(vars.creds).user }}":                                                `svc {true true}; `,
+		"${{ vars.region }}-${{ fromJSON(vars.creds) }}":                                  `us-east {false true}; map[token:tok_abc user:svc] {true true}; `,
+		"text": ``,
+		"${{ vars.region }} ${{ fromJSON('x') }}": `us-east {false true}; `,
+	} {
+		tmpl, err := expr.ParseTemplate(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got string
+		v, read, err := tmpl.EvalParts(scope, func(v any, read expr.Read) {
+			got += fmt.Sprintf("%v {%v %v}; ", v, read.Marked, read.Private)
+		})
+		wv, wread, werr := tmpl.EvalRead(scope)
+		if got != want || fmt.Sprint(v, read, err) != fmt.Sprint(wv, wread, werr) {
+			t.Errorf("%s: parts %q, want %q; %v, %+v, %v, and EvalRead %v, %+v, %v", src, got, want, v, read, err, wv, wread, werr)
+		}
+	}
+}
