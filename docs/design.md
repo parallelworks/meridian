@@ -403,7 +403,10 @@ ACTIVATE's launch form and its backend do together:
 - **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
   values are complete, and are true when they are true or the text `true`.
   One that reads what isn't known until the run starts, such as a secret,
-  or an input whose value is evaluated then, any part of it, is an error.
+  is an error, and so is one that reads an input whose value isn't known
+  until then because a part of it reads such a thing. An input whose value
+  reads only variables and passwords, which the compiler knows, can be
+  read.
   An ignored input has no value, even one that was submitted. An input with
   no value and no default is required unless it is optional, or hidden or in
   a hidden group; a boolean with none is `false`. Every missing input is

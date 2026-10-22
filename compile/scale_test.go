@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/format"
@@ -17,14 +18,17 @@ type scaled struct {
 	// n is the smaller size, and workload makes it at a size.
 	n        int
 	workload func(n int) ([]byte, map[string]any)
-	// stageOnly is set to count what compiling allocates beyond loading.
-	stageOnly bool
+	// stageOnly is set to count what compiling allocates beyond loading,
+	// and timed to check the time compiling takes as well, for a workload
+	// whose cost, once, was work that allocated nothing.
+	stageOnly, timed bool
 }
 
 // scaledWorkloads grow with what a workflow, or a run's submitted values,
 // holds, and each once took time and memory that grew with its square.
 var scaledWorkloads = []scaled{
 	{name: "list rows whose template's default reads an input", n: 1000, workload: listRows},
+	{name: "rows nested in a row, whose fields read a variable", n: 2500, workload: nestedRows, timed: true},
 	{name: "inputs whose ignore is an expression", n: 250, workload: ignoredInputs},
 	{name: "defaults that are expressions, and a long submitted list", n: 50, workload: defaultsAndRows},
 	{name: "defaults that each read the next", n: 250, workload: chainedDefaults},
@@ -35,39 +39,57 @@ var scaledWorkloads = []scaled{
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
-// times the size allocates about four times as much, not sixteen.
+// times the size allocates about four times as much, not sixteen, and for
+// one that is timed, takes less than ten times as long, the best of three
+// runs each.
 func TestCompileScales(t *testing.T) {
 	for _, w := range scaledWorkloads {
 		t.Run(w.name, func(t *testing.T) {
-			small, large := w.allocated(t, w.n), w.allocated(t, 4*w.n)
+			small, smallTime := w.measure(t, w.n)
+			large, largeTime := w.measure(t, 4*w.n)
 			if ratio := float64(large) / float64(small); ratio > 8 {
 				t.Errorf("at %d, compiling allocates %d bytes, and at %d, %d: %.1f times as much",
 					w.n, small, 4*w.n, large, ratio)
+			}
+			if ratio := float64(largeTime) / float64(smallTime); w.timed && ratio > 10 {
+				t.Errorf("at %d, compiling takes %v, and at %d, %v: %.1f times as long",
+					w.n, smallTime, 4*w.n, largeTime, ratio)
 			}
 		})
 	}
 }
 
-// allocated returns how many bytes compiling the workload at size n
-// allocates, beyond loading it for one that counts the compile stage only.
-func (w scaled) allocated(t *testing.T, n int) uint64 {
+// measure returns how many bytes compiling the workload at size n
+// allocates, beyond loading it for one that counts the compile stage only,
+// and if it is timed, the shortest time of three that compiling it takes.
+func (w scaled) measure(t *testing.T, n int) (uint64, time.Duration) {
 	t.Helper()
 	data, submitted := w.workload(n)
 	if _, diags := format.Load("workflow.yaml", data); diags.HasErrors() {
 		t.Fatal(diags)
 	}
-	measure := func(f func()) uint64 {
+	allocated := func(f func()) uint64 {
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		f()
 		runtime.ReadMemStats(&after)
 		return after.TotalAlloc - before.TotalAlloc
 	}
-	compiled := measure(func() { _, _ = compile.Compile("workflow.yaml", data, submitted, compile.Options{}) })
-	if !w.stageOnly {
-		return compiled
+	compileIt := func() { _, _ = compile.Compile("workflow.yaml", data, submitted, compile.Options{}) }
+	bytes := allocated(compileIt)
+	if w.stageOnly {
+		bytes -= allocated(func() { _, _ = format.Load("workflow.yaml", data) })
 	}
-	return compiled - measure(func() { _, _ = format.Load("workflow.yaml", data) })
+	var best time.Duration
+	for i := 0; w.timed && i < 3; i++ {
+		runtime.GC()
+		start := time.Now()
+		compileIt()
+		if took := time.Since(start); i == 0 || took < best {
+			best = took
+		}
+	}
+	return bytes, best
 }
 
 // withInputs returns a workflow with inputs, each a line of their
@@ -103,6 +125,15 @@ func listRows(n int) ([]byte, map[string]any) {
 		"x: {type: string, default: y}",
 		"rows: {type: list, template: {a: {type: string, default: '${{ inputs.x }}'}}}",
 	}, ""), map[string]any{"rows": rows(n, emptyRow)}
+}
+
+// nestedRows is n rows of a list in one row of another, whose field's
+// default reads a variable, and so is evaluated as the run starts: each
+// row's part of the outer list's value is under its first row.
+func nestedRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"outer: {type: list, template: {inner: {type: list, template: {x: {type: string, default: '${{ vars.A }}'}}}}}",
+	}, ""), map[string]any{"outer": []any{map[string]any{"inner": rows(n, emptyRow)}}}
 }
 
 // ignoredInputs is n inputs, each ignored by an expression.

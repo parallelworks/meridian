@@ -24,7 +24,7 @@ import (
 func Compile(name string, data []byte, submitted map[string]any, opts Options) (*plan.Plan, problems.Diagnostics) {
 	doc, diags := format.Load(name, data)
 	if diags.HasErrors() {
-		return nil, diags
+		return nil, listed(diags) // Load sorts them.
 	}
 	inputs := resolveInputs(doc, submitted, opts)
 	c := &compiler{doc: doc, opts: opts, inputs: inputs, secrets: map[string]bool{}}

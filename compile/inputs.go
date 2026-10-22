@@ -194,13 +194,11 @@ type field struct {
 	texts []text
 	reads []*expr.Expr
 	// later holds the parts of an input's value that are evaluated once the
-	// run is underway, until they are in dflt. laterAt indexes them by the
-	// first key of their paths, and laterWhole holds those that are the
-	// whole value, so that the parts at a row are found without going
-	// through every row's.
-	later      []laterPart
-	laterAt    map[string][]int
-	laterWhole []int
+	// run is underway, until they are in dflt, and laterAt their indexes by
+	// their paths, so that the parts at a row, however deep, are found
+	// without going through every row's.
+	later   []laterPart
+	laterAt *reach.Trie[int]
 }
 
 // A text is a string in a value, at path in it, that is the text of the
@@ -264,7 +262,8 @@ type inputResolver struct {
 	// unknown counts the submitted values for inputs the workflow doesn't
 	// define.
 	unknown int
-	// checkView, which tests set, is called each time the view changes.
+	// checkView, which tests set, is called each time the view changes, and
+	// each time an evaluation is to read it.
 	checkView func()
 }
 
@@ -384,16 +383,11 @@ func (f *field) evaluatedLater() (later, known bool) {
 // addLater adds p to the parts of f's value that are evaluated once the run
 // is underway.
 func (f *field) addLater(p laterPart) {
-	i := len(f.later)
-	f.later = append(f.later, p)
-	if len(p.path) == 0 {
-		f.laterWhole = append(f.laterWhole, i)
-		return
-	}
 	if f.laterAt == nil {
-		f.laterAt = map[string][]int{}
+		f.laterAt = &reach.Trie[int]{}
 	}
-	f.laterAt[p.path[0]] = append(f.laterAt[p.path[0]], i)
+	f.laterAt.Add(p.path, len(f.later))
+	f.later = append(f.later, p)
 }
 
 // partsAround returns the parts of f's value evaluated once the run is
@@ -409,14 +403,13 @@ func (f *field) partsAround(at []string) iter.Seq2[int, laterPart] {
 			}
 			return
 		}
-		whole, keyed := f.laterWhole, f.laterAt[at[0]]
-		for len(whole) > 0 || len(keyed) > 0 {
-			var i int
-			if len(keyed) == 0 || len(whole) > 0 && whole[0] < keyed[0] {
-				i, whole = whole[0], whole[1:]
-			} else {
-				i, keyed = keyed[0], keyed[1:]
-			}
+		if f.laterAt == nil {
+			return
+		}
+		// Reached reads a * in at as any key, so it can find more than
+		// these, which related leaves out.
+		found := slices.Sorted(f.laterAt.Reached(at))
+		for _, i := range slices.Compact(found) {
 			if p := f.later[i]; related(p.path, at) && !yield(i, p) {
 				return
 			}
@@ -950,7 +943,8 @@ func (r *inputResolver) holdLater() {
 		}
 		f.dflt = plan.Literal(held)
 		if slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
-			// What expressions read of it is unknown, all of it, from
+			// A part of its value isn't known until the run starts, so
+			// what expressions read of it is unknown, all of it, from
 			// here on.
 			f.deferred = true
 			r.refresh(f.path)
@@ -1124,6 +1118,9 @@ func (r *inputResolver) scope() expr.Scope {
 	if r.view == nil {
 		r.view = r.evalValues()
 		r.contexts = compileTimeContexts(r.opts, r.view)
+	}
+	if r.checkView != nil {
+		r.checkView()
 	}
 	scope := r.budget
 	scope.Contexts = r.contexts

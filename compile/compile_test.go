@@ -271,6 +271,22 @@ func TestProblemsListedPerKind(t *testing.T) {
 	if p != nil || !maps.Equal(counts, want) {
 		t.Errorf("105 jobs that need a job that isn't there: diagnostics by code %v, want %v", counts, want)
 	}
+
+	// A workflow that doesn't load: 300 unknown keys, and an error.
+	var keys strings.Builder
+	keys.WriteString("env: 5\njobs:\n  main:\n    steps:\n      - run: echo\n")
+	for i := range 300 {
+		fmt.Fprintf(&keys, "    k%03d: x\n", i)
+	}
+	p, diags = compile.Compile("workflow.yaml", []byte(keys.String()), nil, compile.Options{})
+	counts = map[string]int{}
+	for _, d := range diags {
+		counts[string(d.Code)]++
+	}
+	want = map[string]int{"unknown_key": 100, "wrong_type": 1, "problems_not_listed": 1}
+	if p != nil || !maps.Equal(counts, want) {
+		t.Errorf("a workflow that doesn't load: diagnostics by code %v, want %v", counts, want)
+	}
 }
 
 // A job's needs is evaluated in one group with the inputs' defaults and
@@ -305,5 +321,77 @@ func TestNeedsShareTheInputsBudget(t *testing.T) {
 	_, diags = compile.Compile("workflow.yaml", []byte(b.String()), map[string]any{"half": strings.Repeat("x", 16<<20-64)}, compile.Options{})
 	if got, want := notListed(diags), []string{"expressions_too_much_work /jobs/next8/needs"}; !slices.Equal(got, want) {
 		t.Errorf("nine needs that each do almost 32 MiB of work: %v, want %v", got, want)
+	}
+}
+
+// suggestions returns, for each diagnostic of kind k, its params' name, or
+// else id, and what it suggests.
+func suggestions(diags problems.Diagnostics, k *problems.Kind) []string {
+	var out []string
+	for _, d := range diags {
+		if d.Code == k.Code() {
+			name, _ := d.Params["name"].(string)
+			if name == "" {
+				name, _ = d.Params["id"].(string)
+			}
+			out = append(out, name+" "+d.Params["suggestion"].(string))
+		}
+	}
+	return out
+}
+
+// Each misspelled name suggests what it probably meant: an input of the
+// workflow's, and a step before the one that reads it, each step's own.
+func TestEachMisspellingSuggests(t *testing.T) {
+	src := `on:
+  execute:
+    inputs:
+      name: {type: string, default: x}
+      value: {type: string, default: y}
+jobs:
+  main:
+    steps:
+      - id: alpha
+        run: echo ${{ inputs.namee }} ${{ inputs.valu }} ${{ inputs.namee }}
+      - id: beta
+        run: echo ${{ steps.alphaa.outputs.x }}
+      - run: echo ${{ steps.betaa.outputs.x }} ${{ steps.alphaa.outputs.x }}
+`
+	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
+	if got, want := suggestions(diags, problems.UndefinedInput), []string{"namee name", "valu value", "namee name"}; !slices.Equal(got, want) {
+		t.Errorf("inputs: %q, want %q", got, want)
+	}
+	if got, want := suggestions(diags, problems.UndefinedStep), []string{"alphaa alpha", "betaa beta", "alphaa alpha"}; !slices.Equal(got, want) {
+		t.Errorf("steps: %q, want %q", got, want)
+	}
+}
+
+// inputs.pw-user names a group's input by its path: an input pw-user in a
+// group isn't one at the top.
+func TestHyphenatedNamesInGroups(t *testing.T) {
+	src := `on:
+  execute:
+    inputs:
+      g:
+        type: group
+        items:
+          pw-user: {type: string, default: me}
+jobs:
+  main:
+    steps:
+      - run: |
+          echo ${{ inputs.g.pw-user }}
+          echo ${{ inputs.pw-user }}
+`
+	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
+	var defined []string
+	for _, d := range diags {
+		if d.Code == problems.HyphenatedName.Code() {
+			s, _ := d.Params["defined"].(string)
+			defined = append(defined, s)
+		}
+	}
+	if want := []string{"g.pw-user", ""}; !slices.Equal(defined, want) {
+		t.Errorf("hyphenated names define %q, want %q", defined, want)
 	}
 }

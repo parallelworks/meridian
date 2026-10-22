@@ -595,10 +595,11 @@ jobs:
 	}
 }
 
-// A condition that reads an input whose value is evaluated as the run
-// starts, all of it, isn't known when the run is created, whichever default
-// was evaluated last: here z's, which gives "" and so sets no value, after
-// the field x of l's row, which reads a secret.
+// A condition that reads an input whose value isn't known until the run
+// starts, because a part of it reads a secret, isn't known when the run is
+// created either, any part of the input, whichever default was evaluated
+// last: here z's, which gives "" and so sets no value, after the field x of
+// l's row, which reads the secret.
 func TestConditionReadsInputHeldForTheRun(t *testing.T) {
 	doc := load(t, `on:
   execute:
@@ -669,5 +670,92 @@ jobs:
 				t.Errorf("%s given %#v: %v, want ok %v", input, v, diags, tc.ok)
 			}
 		}
+	}
+}
+
+// A value that isn't JSON in a list's rows is reported at the innermost
+// field of the rows that holds it. Here the input a and the wizard step's
+// input a share a path, and so do their rows' fields z: the step's rows are
+// collected first, since a waits for its form's text, so the step's z,
+// whose default gives NaN, is the one reported.
+func TestNotJSONAtTheFirstRowField(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      a:
+        type: list
+        template:
+          x: {type: string}
+          z: {type: number, label: Outer}
+        default: [{x: "${{ 'q' }}"}]
+      s:
+        type: step
+        title: Step
+        options:
+          a:
+            type: list
+            template:
+              z: {type: number, label: Inner, default: '${{ 0/0 }}'}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	_, diags := compile.ResolveInputs(doc, map[string]any{"a": []any{map[string]any{"x": "${{ 'q' }}"}}}, compile.Options{})
+	if len(diags) != 1 || diags[0].Code != problems.InputNotJSON.Code() ||
+		diags[0].Path() != "/on/execute/inputs/s/options/a/template/z" || diags[0].Params["input"] != "a.0.z (Inner)" {
+		t.Errorf("diagnostics %v, want %s at the step's z", diags, problems.InputNotJSON.Code())
+	}
+}
+
+// A multi-dropdown's item that is the text of more than one of its options'
+// values means the first: here .label reads each option's label.
+func TestItemTextIsTheFirstOptions(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      m:
+        type: multi-dropdown
+        options:
+          - {label: A, value: "${{ .label }}"}
+          - {label: B, value: "${{ .label }}"}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, map[string]any{"m": []any{"${{ .label }}"}}, compile.Options{})
+	if want := []any{"A"}; len(diags) != 0 || !reflect.DeepEqual(inputs.Values["m"], want) {
+		t.Errorf("m = %v, %v; want %v", inputs.Values["m"], diags, want)
+	}
+}
+
+// A field that waits for a default reads the values once every field at
+// the path it reads is filled in, and no longer waits for one filled in
+// before it was added: l's row is added once l's default is evaluated,
+// after the input a's and before the step's a's, which share a path.
+func TestRowWaitsForWhatIsLeft(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      a: {type: string, default: "${{ 'x' }}"}
+      l:
+        type: list
+        default: "${{ fromJSON('[{}]') }}"
+        template:
+          f: {type: string, default: '${{ inputs.a }}'}
+      s:
+        type: step
+        title: Step
+        options:
+          a: {type: string, default: "${{ 'y' }}"}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	if want := []any{map[string]any{"f": "y"}}; len(diags) != 0 || !reflect.DeepEqual(inputs.Values["l"], want) {
+		t.Errorf("l = %v, %v; want %v", inputs.Values["l"], diags, want)
 	}
 }
