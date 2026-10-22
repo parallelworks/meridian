@@ -60,6 +60,8 @@ Meridian is a set of Go packages:
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
 | `coordinator` | Stores runs, schedules and places jobs, and serves the worker API. |
 | `worker` | Runs one attempt of a job and reports on it. |
+| `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
+| `backend` | Execution groups and their members, and the interface that starts workers on a member. |
 | `backend/…` | Start workers: `local`, `ssh`, `kubernetes`, `slurm`, `pbs`. |
 | `runtime/…` | Drive container runtimes: Podman, Docker, Apptainer, Apple's `container`. |
 | `cmd/meridian` | The command. |
@@ -173,9 +175,9 @@ phase's inputs and keep what it gives, so every implementation, whether
 | --- | --- | --- | --- | --- |
 | Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
-| Ready | A job's dependencies have finished | `plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
-| Step | A job starts on its worker, and each of its steps is about to run | `plan.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
-| End | A job's steps have run | `plan.End`, in the worker | | The job's `outputs:` |
+| Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
+| Step | A job starts on its worker, and each of its steps is about to run | `plan.ReadyJob.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
+| End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
 Each phase reads the contexts of the phases before it too.
 
@@ -183,9 +185,10 @@ Each phase reads the contexts of the phases before it too.
   through resolvers ([Interfaces](#interfaces)), and Ready, Step and End
   reach nothing. Given the same inputs and resolver answers, a phase gives
   the same result, byte for byte.
-- **One scope.** One function builds the contexts an expression reads in
-  each phase, and the compiler, coordinator, worker and WebAssembly package
-  all use it, so a context has one shape everywhere ([Contexts](#contexts)).
+- **One scope.** One function, `plan.NewScope`, builds the contexts an
+  expression reads in each phase, and the compiler, coordinator, worker and
+  WebAssembly package all use it, so a context has one shape everywhere
+  ([Contexts](#contexts)).
 - **What each gives.** Create gives the plan, the run's passwords and its
   diagnostics ([Compiling](#compiling)). Start gives the run's completed
   values, or fails the run ([Starting a run](#starting-a-run)). Ready gives
@@ -818,15 +821,18 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 | Events | Run, job and step events as they happen | The command's progress display |
 
-A resolver may be missing. Then the workflow features that need it fail to
-compile, with an error saying which interface was missing.
+The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
+are interfaces in `compile`, and the coordinator's, Keys, Logs and Events,
+in `coordinator`. A resolver may be missing. Then the workflow features
+that need it fail to compile, with an error saying which interface was
+missing.
 
 Resolvers get the caller's context, so cancellation, deadlines and traces
 reach them. They report what is wrong as a problem, a kind and its params
 ([Compiling](#compiling)), rather than as text, so that a platform's reason
 reaches each reader in their own language. Today the Inputs resolver
-returns a Go error, and the compiler is given variables as mappings, not
-through an interface.
+takes no context and returns a Go error, and the compiler uses none of the
+others: it is given variables as mappings, in `Options.Contexts`.
 
 ## Durable execution
 
