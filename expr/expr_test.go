@@ -261,7 +261,7 @@ func TestWorkflowErrors(t *testing.T) {
 // An Evaluator tells the strings at any two locations apart, whatever their
 // keys hold: a key with a NUL, a / or a ~ in it isn't a path of other keys,
 // so a string there neither reads the value of one at such a path nor
-// reads itself through it.
+// reads itself through it. A key * is a key, not each of the others.
 func TestEvaluatorLocations(t *testing.T) {
 	w := &expr.Workflow{Root: map[string]any{
 		"a\x00b": "${{ 'one' }}",
@@ -271,6 +271,7 @@ func TestEvaluatorLocations(t *testing.T) {
 		"c":      map[string]any{"d": "${{ 'y' }}"},
 		"~1":     "${{ .['/'] }}-z",
 		"/":      "${{ 'w' }}",
+		"m":      map[string]any{"*": "${{ 'star' }}", "a": "${{ 'a' }}", "s": "${{ .['*'] }}-s"},
 	}}
 	ev := w.Evaluator(expr.Scope{})
 	for _, tc := range []struct {
@@ -282,10 +283,15 @@ func TestEvaluatorLocations(t *testing.T) {
 		{[]string{"a/b"}, "three"},
 		{[]string{"c\x00d"}, "y-x"},
 		{[]string{"~1"}, "w-z"},
+		{[]string{"m", "*"}, "star"},
+		{[]string{"m", "s"}, "star-s"},
 	} {
 		if got, err := ev.Eval(tc.location); err != nil || got != tc.want {
 			t.Errorf("%q = %v, %v; want %s", tc.location, got, err, tc.want)
 		}
+	}
+	if exprs, err := w.Exprs([]string{"m", "*"}); err != nil || len(exprs) != 1 {
+		t.Errorf("the expressions at m.* are %d, %v; want the one there", len(exprs), err)
 	}
 }
 

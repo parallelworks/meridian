@@ -55,7 +55,7 @@ func (w *Workflow) Template(s string) (*Template, error) {
 // those in a string, or in each string of a list or mapping, in the order
 // of a mapping's keys. It fails if a string's expressions don't parse.
 func (w *Workflow) Exprs(location []string) ([]*Expr, error) {
-	v, _, _ := walk(w.Root, location, nil)
+	v, _ := locate(w.Root, location)
 	var out []*Expr
 	var add func(v any) error
 	add = func(v any) error {
@@ -372,8 +372,21 @@ func (r *workflowResolver) resolve(v any, location []string) (any, error) {
 
 // raw returns what the workflow holds at location, unevaluated.
 func (r *workflowResolver) raw(location []string) (any, bool) {
-	v, ok, _ := walk(r.eval.workflow.Root, location, nil)
-	return v, ok
+	return locate(r.eval.workflow.Root, location)
+}
+
+// locate returns what v holds at location: each of its keys reads a
+// mapping's key as it is written, * as well, or a list's item or slice, as
+// property reads one. A location is a place, not a path to read, so a *
+// in it is a key, not each item.
+func locate(v any, location []string) (any, bool) {
+	for _, k := range location {
+		var ok bool
+		if v, ok = property(v, k); !ok {
+			return nil, false
+		}
+	}
+	return v, true
 }
 
 // follow walks path from location in the workflow and returns the value it
