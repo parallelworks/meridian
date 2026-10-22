@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -58,10 +59,14 @@ type cli struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
 	getenv         func(string) string
+	// json says to write problems as RFC 9457 problem details, one a line,
+	// as validate --format json does.
+	json bool
 }
 
 // fail writes the problem err is, or wraps, as compilers write an error,
-// and returns exitError. A cancelled context is problems.Interrupted, since
+// or as RFC 9457 problem details when c.json is set, and returns
+// exitError. A cancelled context is problems.Interrupted, since
 // only an interrupt cancels the command's, and any other error that isn't
 // a problem problems.UnexpectedError, with its text as the reason.
 func (c *cli) fail(err error) int {
@@ -72,6 +77,13 @@ func (c *cli) fail(err error) int {
 		p = problems.Interrupted.Problem(nil)
 	default:
 		p = problems.UnexpectedError.Problem(problems.Params{"reason": err.Error()})
+	}
+	if c.json {
+		data, err := jsonv2.Marshal(p)
+		if err == nil {
+			fmt.Fprintf(c.stderr, "%s\n", data)
+			return exitError
+		}
 	}
 	d := problems.Diagnostic{Type: p.Type, Code: p.Code, Detail: p.Detail, Params: p.Params}
 	line := d.String()

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"math"
 	"os"
@@ -52,6 +53,8 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	if !slices.Contains(formats, *out) {
 		return c.failf(problems.FlagValueInvalid, problems.Params{"command": "validate", "flag": "format", "value": *out})
 	}
+	// From here, the command's own problems are JSON too.
+	c.json = *out == "json"
 	for _, s := range set {
 		if !strings.Contains(s, "=") {
 			return c.failf(problems.FlagValueInvalid, problems.Params{"command": "validate", "flag": "input", "value": s})
@@ -110,7 +113,8 @@ type content struct {
 }
 
 // read reads the file at path, or standard input for -, up to limit bytes.
-// It stats a regular file larger than limit rather than read it. It reads
+// It stats a regular file, standard input when it is one too, and doesn't
+// read one larger than limit. It reads
 // in a goroutine of its own, so that ctx's end, as on an interrupt, stops
 // it waiting on a pipe or a FIFO that never ends, with problems.Interrupted.
 // It returns the operating system's error as it is.
@@ -129,11 +133,15 @@ func read(ctx context.Context, c *cli, path string, limit int) (content, error) 
 				return
 			}
 			defer f.Close()
-			if info, err := f.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > int64(limit) {
+			r = f
+		}
+		// A regular file, standard input among them when it is one, has its
+		// size, and one larger than limit isn't read.
+		if st, ok := r.(interface{ Stat() (fs.FileInfo, error) }); ok {
+			if info, err := st.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > int64(limit) {
 				done <- result{over: true, size: info.Size()}
 				return
 			}
-			r = f
 		}
 		data, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
 		if len(data) > limit {

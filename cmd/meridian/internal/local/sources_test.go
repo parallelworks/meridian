@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -266,15 +268,23 @@ func TestGitEnv(t *testing.T) {
 	user := []string{
 		"HOME=/home/u", "PATH=/bin", "GIT_DIR=/elsewhere", "GIT_WORK_TREE=/w", "GIT_TERMINAL_PROMPT=1", "LC_ALL=fr_FR.UTF-8",
 		"GIT_SSH_COMMAND=ssh -i k", "GIT_SHALLOW_FILE=/s", "GIT_REPLACE_REF_BASE=refs/x/", "GIT_NO_REPLACE_OBJECTS=1",
-		"GIT_QUARANTINE_PATH=/q", "GIT_PREFIX=p/", "GIT_ASKPASS=/usr/bin/ksshaskpass", "SSH_ASKPASS=/usr/bin/x", "DISPLAY=:0",
-		"GIT_CONFIG_PARAMETERS='core.hooksPath'='/h'", "HTTPS_PROXY=http://proxy:3128",
+		"GIT_QUARANTINE_PATH=/q", "GIT_PREFIX=p/", "GIT_EXEC_PATH=/x", "GIT_TEMPLATE_DIR=/t", "GIT_ASKPASS=/usr/bin/ksshaskpass",
+		"GIT_CONFIG_PARAMETERS='core.hooksPath'='/h'", "GIT_CONFIG_COUNT=1", "GIT_SSL_CERT=/c.pem", "GIT_SSL_KEY=/k.pem",
+		"SSH_ASKPASS=/usr/bin/x", "DISPLAY=:0", "HTTPS_PROXY=http://proxy:3128", "DBUS_SESSION_BUS_ADDRESS=unix:path=/b",
+		"XDG_RUNTIME_DIR=/run/user/1000", "GH_TOKEN=t", "GITHUB_TOKEN=t", "GCM_CREDENTIAL_STORE=secretservice",
+		"LD_LIBRARY_PATH=/opt/lib", "SSH_ASKPASS_REQUIRE=force", "LANGUAGE=fr",
 	}
 	common := []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS_REQUIRE=never", "LC_ALL=C", "LANGUAGE="}
-	want := slices.Concat([]string{"HOME=/home/u", "PATH=/bin", "GIT_SSH_COMMAND=ssh -i k", "HTTPS_PROXY=http://proxy:3128"}, common)
-	if env := gitEnv(user, ""); !slices.Equal(env, want) {
+	kept := []string{
+		"HOME=/home/u", "PATH=/bin", "GIT_SSH_COMMAND=ssh -i k", "GIT_SSL_CERT=/c.pem", "GIT_SSL_KEY=/k.pem",
+		"SSH_ASKPASS=/usr/bin/x", "DISPLAY=:0", "HTTPS_PROXY=http://proxy:3128", "DBUS_SESSION_BUS_ADDRESS=unix:path=/b",
+		"XDG_RUNTIME_DIR=/run/user/1000", "GH_TOKEN=t", "GITHUB_TOKEN=t", "GCM_CREDENTIAL_STORE=secretservice",
+		"LD_LIBRARY_PATH=/opt/lib",
+	}
+	if env, want := gitEnv(user, ""), slices.Concat(kept, common); !slices.Equal(env, want) {
 		t.Errorf("gitEnv = %q, want %q", env, want)
 	}
-	want = slices.Concat([]string{"HOME=/home/u"}, common, []string{"GIT_SSH_COMMAND=" + batchSSH})
+	want := slices.Concat([]string{"HOME=/home/u"}, common, []string{"GIT_SSH_COMMAND=" + batchSSH})
 	if env := gitEnv([]string{"HOME=/home/u"}, batchSSH); !slices.Equal(env, want) {
 		t.Errorf("gitEnv with an ssh command = %q, want %q", env, want)
 	}
@@ -284,12 +294,12 @@ func TestGitEnv(t *testing.T) {
 // their own ssh command, which Meridian leaves as it is.
 func TestSSHCommand(t *testing.T) {
 	_, s := newOrigins(t)
-	if got := s.sshCommand(t.Context()); got != batchSSH {
-		t.Errorf("sshCommand = %q, want %q", got, batchSSH)
+	if got, ok := s.sshCommand(t.Context()); got != batchSSH || !ok {
+		t.Errorf("sshCommand = %q, %t, want %q", got, ok, batchSSH)
 	}
 	t.Setenv("GIT_SSH_COMMAND", "ssh -i key")
-	if got := s.sshCommand(t.Context()); got != "" {
-		t.Errorf("sshCommand with the user's = %q, want none", got)
+	if got, ok := s.sshCommand(t.Context()); got != "" || !ok {
+		t.Errorf("sshCommand with the user's = %q, %t, want none", got, ok)
 	}
 	t.Setenv("GIT_SSH_COMMAND", "")
 	global := filepath.Join(t.TempDir(), "gitconfig")
@@ -297,8 +307,72 @@ func TestSSHCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	if got := s.sshCommand(t.Context()); got != "" {
-		t.Errorf("sshCommand with the user's core.sshCommand = %q, want none", got)
+	if got, ok := s.sshCommand(t.Context()); got != "" || !ok {
+		t.Errorf("sshCommand with the user's core.sshCommand = %q, %t, want none", got, ok)
+	}
+	// A context that has ended doesn't decide: the probe has a deadline of
+	// its own.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := s.sshFor(ctx); got != "" {
+		t.Errorf("sshFor with a cancelled context = %q, want the user's own", got)
+	}
+	// A probe that fails isn't remembered.
+	s2 := sourcesFrom(t, t.TempDir())
+	s2.git = filepath.Join(t.TempDir(), "no-git")
+	if got := s2.sshFor(t.Context()); got != batchSSH || s2.sshKnown {
+		t.Errorf("sshFor without git = %q, remembered %t", got, s2.sshKnown)
+	}
+}
+
+// TestGitErrorClasses checks how git's messages are told apart.
+func TestGitErrorClasses(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"fatal: couldn't find remote ref nope":                                                               "not found",
+		"remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found":           "not found",
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled":                 "denied",
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.":      "denied",
+		"Host key verification failed.\nfatal: Could not read from remote repository.":                       "denied",
+		"remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://gitlab.com/a/b.git/'":  "denied",
+		"fatal: unable to access 'https://x/': The requested URL returned error: 403":                        "denied",
+		"error: object 1234: badTimezone: invalid author/committer line\nfatal: fsck error in packed object": "malformed",
+		"fatal: unable to access 'https://x/': Could not resolve host: x":                                    "other",
+		"error: RPC failed; curl 56 Recv failure: Connection reset by peer":                                  "other",
+	} {
+		e := &gitError{stderr: stderr}
+		got := "other"
+		switch {
+		case e.notFound():
+			got = "not found"
+		case e.denied():
+			got = "denied"
+		case e.malformed():
+			got = "malformed"
+		}
+		if got != want {
+			t.Errorf("%q is %s, want %s", stderr, got, want)
+		}
+	}
+}
+
+// TestSourcesAccessDenied checks that a remote that asks for credentials
+// git doesn't have, as a private or missing repository on github.com does,
+// is refused at once, as a problem that asking again won't change.
+func TestSourcesAccessDenied(t *testing.T) {
+	_, s := newOrigins(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	s.remote = func(_, repo string) string { return server.URL + "/" + repo + ".git" }
+	_, err := s.Resolve(t.Context(), "github/acme/private@main")
+	p := wantProblem(t, err, problems.SourceAccessDenied)
+	if p.Params["ref"] != "github/acme/private/workflow.yaml@main" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
+		t.Errorf("the problem's params are %v", p.Params)
+	}
+	if errors.Is(err, compile.ErrNotFound) {
+		t.Error("access denied is ErrNotFound")
 	}
 }
 

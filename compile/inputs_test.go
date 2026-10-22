@@ -85,23 +85,32 @@ func (r rejects) ResolveInput(string, map[string]any, any) (any, error) { return
 // that one of a kind Meridian doesn't have is the platform's reason.
 func TestPlatformInputProblem(t *testing.T) {
 	doc := load(t, clusterWorkflow)
-	p := problems.ExecutionGroupUnknown.Problem(problems.Params{"value": "gpu", "groups": problems.QuoteAll([]string{"local"})})
+	p := problems.ExecutionGroupUnknown.Problem(problems.Params{"value": problems.Show("gpu"), "groups": problems.QuoteAll([]string{"local"})})
 	_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{fmt.Errorf("resolving: %w", p)}})
 	if len(diags) != 1 || diags[0].Code != problems.ExecutionGroupUnknown.Code() {
 		t.Fatalf("a resolver's problem: %v", diags)
 	}
 	d := diags[0]
-	if d.Params["input"] != "cluster" || d.Params["value"] != "gpu" || d.Params["groups"] != `"local"` || d.Path() != "/on/execute/inputs/cluster" {
+	if d.Params["input"] != "cluster" || d.Params["value"] != `"gpu"` || d.Params["groups"] != `"local"` || d.Path() != "/on/execute/inputs/cluster" {
 		t.Errorf("the problem is %s, with %v at %s", d, d.Params, d.Path())
 	}
 	if want := `The input "cluster" names the execution group "gpu", which isn't one of the groups: "local".`; d.Message() != want {
 		t.Errorf("Message = %q, want %q", d.Message(), want)
 	}
 
-	other := &problem.Problem{Code: "quota_exceeded", Detail: "the quota is spent"}
-	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{other}})
-	if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || diags[0].Params["reason"] != "the quota is spent" {
-		t.Errorf("a platform's own problem: %v", diags)
+	// A problem of a kind that isn't one of the workflow's errors, which
+	// would turn a rejection into a warning or a problem of the command's,
+	// is the platform's reason.
+	for name, p := range map[string]*problem.Problem{
+		"a platform's own":   {Code: "quota_exceeded", Detail: "the quota is spent"},
+		"a warning's kind":   problems.InputLooksSecret.Problem(problems.Params{"input": "cluster"}),
+		"the command's kind": problems.FileNotOwned.Problem(problems.Params{"path": "/etc/passwd"}),
+	} {
+		// An error stops the run, and its plan with the value, being made.
+		_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{p}})
+		if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || diags[0].Params["reason"] != p.Detail || !diags.HasErrors() {
+			t.Errorf("%s problem: %v", name, diags)
+		}
 	}
 }
 

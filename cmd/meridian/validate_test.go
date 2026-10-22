@@ -14,12 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/problems"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files of meridian validate's output")
@@ -405,5 +407,40 @@ func TestValidateProblems(t *testing.T) {
 		if r.code != exitError || !strings.Contains(r.stderr, tc.want) {
 			t.Errorf("meridian %q = %+v, want %s", tc.args, r, tc.want)
 		}
+	}
+}
+
+// TestValidateProblemsAsJSON checks that with --format json the command's
+// own problems are RFC 9457 problem details too, on standard error.
+func TestValidateProblemsAsJSON(t *testing.T) {
+	r := runCLI(t, emptyEnv(t), "", "validate", "--format", "json", filepath.Join(t.TempDir(), "none.yaml"))
+	if r.code != exitError || r.stdout != "" {
+		t.Fatalf("meridian validate --format json of a missing file = %+v", r)
+	}
+	var p problem.Problem
+	if err := jsonv2.Unmarshal([]byte(r.stderr), &p); err != nil {
+		t.Fatalf("standard error isn't a problem: %v: %q", err, r.stderr)
+	}
+	if p.Code != problems.FileUnreadable.Code() || p.Type != "/problems/command/file_unreadable" || p.Detail == "" {
+		t.Errorf("the problem is %+v", p)
+	}
+}
+
+// TestValidateStdinRegularFile checks that standard input that is a regular
+// file larger than the limit is reported with its size, unread.
+func TestValidateStdinRegularFile(t *testing.T) {
+	text := "# " + strings.Repeat("x", format.DefaultMaxSize) + "\n"
+	f, err := os.Open(writeFile(t, "big.yaml", text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	env := emptyEnv(t)
+	var stdout, stderr strings.Builder
+	c := &cli{stdin: f, stdout: &stdout, stderr: &stderr, getenv: func(name string) string { return env[name] }}
+	code := run(t.Context(), c, []string{"validate", "-"})
+	_, diags := compile.Compile("<stdin>", []byte(text), nil, compile.Options{})
+	if want := diags.Error() + "\n"; code != exitInvalid || stdout.String() != want {
+		t.Errorf("meridian validate - of a large regular file = %d, %q, want %q", code, stdout.String(), want)
 	}
 }

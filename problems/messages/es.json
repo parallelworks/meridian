@@ -123,7 +123,7 @@
   "expressions_too_slow": "Las expresiones que se evalúan juntas aquí tardaron más de {limit, plural, one {# segundo} other {# segundos}} entre todas.",
   "problems_not_listed": "Solo se enumeran los primeros {limit} problemas con el código {code}; {count, plural, one {# más no se enumera} other {# más no se enumeran}}.",
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
-  "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución “{value}”, que no es uno de los grupos: {groups}.",
+  "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",
   "source_ref_invalid": "El uses: “{ref}” no es una referencia a un flujo de trabajo en un repositorio Git, como github/propietario/repositorio/ruta@revisión.",
   "source_on_platform": "El uses: “{ref}” nombra un flujo de trabajo que guarda una plataforma, y solo esa plataforma puede leerlo.",
   "source_revision_not_found": "Git no encontró la revisión “{revision}” del repositorio {repo}: {reason}.",
@@ -183,5 +183,11 @@
   "inputs_file_extra": "El archivo tiene más de un valor JSON.",
   "inputs_number_too_large": "El número {number} es demasiado grande.",
   "interrupted": "Meridian se interrumpió.",
-  "unexpected_error": "Meridian no pudo hacer lo que se le pidió: {reason}."
+  "unexpected_error": "Meridian no pudo hacer lo que se le pidió: {reason}.",
+  "source_access_denied": "Se denegó a Git el acceso a {ref}: {reason}.",
+  "source_objects_invalid": "Git rechazó lo que obtuvo para {ref}, que no está bien formado: {reason}.",
+  "owner_unmapped": "Meridian no puede comprobar {path}: un espacio de nombres de usuario oculta el propietario de {dir}, en el camino hacia él, así que Meridian no puede saber si otro usuario puede cambiarlo.",
+  "path_links_too_many": "La ruta {path} pasa por más de {max} enlaces simbólicos.",
+  "mount_not_found": "Meridian no encuentra en /proc/self/mountinfo el montaje que contiene {path}.",
+  "member_settings_not_json": "Un miembro del grupo “{group}” tiene una configuración que JSON no puede contener, como .nan o .inf."
 }

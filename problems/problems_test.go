@@ -534,14 +534,20 @@ func TestControlCharactersEscaped(t *testing.T) {
 		t.Errorf("the param is %q, not the key as it is", d.Params["key"])
 	}
 	for _, lang := range languages {
-		if got := d.Localize(lang); strings.ContainsFunc(got, isControl) {
+		if got := d.Localize(lang); needsEscape(got) {
 			t.Errorf("%s message %q has a control character", lang, got)
 		}
 	}
-	if got := d.String(); strings.ContainsFunc(got, isControl) || !strings.HasPrefix(got, `w\n.yaml:1:2: warning: `) {
+	if got := d.String(); needsEscape(got) || !strings.HasPrefix(got, `w\n.yaml:1:2: warning: `) {
 		t.Errorf("String = %q", got)
 	}
-	for in, want := range map[string]string{"plain": "plain", "tab\there": `tab\there`, "\r\n": `\r\n`, "é and 日本": "é and 日本"} {
+	for in, want := range map[string]string{
+		"plain": "plain", "tab\there": `tab\there`, "\r\n": `\r\n`, "é and 日本": "é and 日本", "a\x00b": `a\x00b`,
+		"8-bit CSI \x9b2J": `8-bit CSI \x9b2J`, "C1 CSI \u009b2J": `C1 CSI \u009b2J`, "half \xe2\x80": `half \xe2\x80`,
+		"bidi \u202eevil\u202c": `bidi \u202eevil\u202c`, "isolate \u2066x\u2069": `isolate \u2066x\u2069`,
+		"lines\u2028and\u2029paragraphs": `lines\u2028and\u2029paragraphs`, "zero\u200bwidth\ufeff": `zero\u200bwidth\ufeff`,
+		"tag \U000e0041": `tag \U000e0041`, "emoji 👍": "emoji 👍",
+	} {
 		if got := EscapeControl(in); got != want {
 			t.Errorf("EscapeControl(%q) = %q, want %q", in, got, want)
 		}

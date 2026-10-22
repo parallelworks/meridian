@@ -242,3 +242,28 @@ func TestContextsUnreadable(t *testing.T) {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 }
+
+// TestVariableFileDirectory checks that a value is read only from a file
+// whose directories no one else can change: one who could would swap it
+// for a link to one of the user's own files.
+func TestVariableFileDirectory(t *testing.T) {
+	shared := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "v.txt"), []byte("v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	dir := configDir(t, map[string]string{VariablesFile: "org:\n  v: {secret: true, file: " + filepath.Join(shared, "v.txt") + "}\n"})
+	c, err := LoadConfig(dir, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Read(t.Context(), []string{"org.v"}, true)
+	if p := wantProblem(t, err, problems.PathUnsafe); p.Params["dir"] != shared {
+		t.Errorf("the problem's params are %v", p.Params)
+	}
+}

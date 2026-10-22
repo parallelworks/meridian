@@ -104,8 +104,9 @@ var (
 	InputLooksSecret       = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
 	InputTooDeep           = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
 	// ExecutionGroupUnknown is what the meridian command's Inputs gives
-	// for an execution-groups input that names none of the user's groups,
-	// which are listed in groups, as QuoteAll writes them.
+	// for an execution-groups input that names none of the user's groups:
+	// value is the input's value, as Show writes it, and groups the groups
+	// there are, as QuoteAll writes them.
 	ExecutionGroupUnknown = define(Error, "execution_group_unknown", "No such execution group", "input", "value", "groups")
 )
 
@@ -121,6 +122,8 @@ var (
 	SourceTooLarge         = define(Error, "source_too_large", "Workflow file in a repository too large", "location", "commit", "limit")
 	SourceChanged          = define(Error, "source_changed", "Workflow isn't the text it was pinned to", "location", "commit", "digest", "pinned")
 	SourceNotPinned        = define(Error, "source_not_pinned", "Workflow not pinned", "location", "revision")
+	SourceAccessDenied     = define(Error, "source_access_denied", "Access to a repository denied", "ref", "reason")
+	SourceObjectsInvalid   = define(Error, "source_objects_invalid", "Malformed Git objects", "ref", "reason")
 )
 
 // A workflow's jobs.
@@ -236,6 +239,9 @@ var (
 	PathUnsafe                = defineCommand("path_unsafe", "Path through a directory others can change", "path", "dir")
 	NetworkFilesystem         = defineCommand("network_filesystem", "Database on a network filesystem", "path", "type")
 	FilesystemUnknown         = defineCommand("filesystem_unknown", "Filesystem can't be told", "path", "reason")
+	OwnerUnmapped             = defineCommand("owner_unmapped", "Owner hidden by a user namespace", "path", "dir")
+	PathLinksTooMany          = defineCommand("path_links_too_many", "Path through too many symbolic links", "path", "max")
+	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
 
 // The files the meridian command reads: its config, its key, a variable's
@@ -265,6 +271,7 @@ var (
 	GroupEmpty             = defineCommand("group_empty", "Group without members", "group")
 	MemberInvalid          = defineCommand("member_invalid", "Invalid member", "group", "key", "value")
 	MemberRepeated         = defineCommand("member_repeated", "Two members with the same name", "group", "member")
+	MemberSettingsNotJSON  = defineCommand("member_settings_not_json", "Member's settings JSON can't hold", "group")
 	VariableNameInvalid    = defineCommand("variable_name_invalid", "Invalid variable name", "context", "name")
 	VariableNoValue        = defineCommand("variable_no_value", "Variable without a value", "variable")
 	VariableFormInvalid    = defineCommand("variable_form_invalid", "Variable that's neither text nor a mapping", "variable")

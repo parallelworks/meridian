@@ -2,7 +2,6 @@ package local
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -18,35 +17,48 @@ import (
 // and what the path takes from it next is the user's or root's. A user who
 // could change one could replace what is in it, after it was checked,
 // with something of their own. It reads the filesystem through lstat and
-// readlink, which a test can replace.
+// readlink, and asks unmapped whether an owner is one a user namespace
+// hides, which a test can replace.
+//
+// In a user namespace that doesn't map root, as unshare --user,
+// Apptainer, bubblewrap and some CI sandboxes make, / and much else show
+// as owned by the kernel's overflow ID. Meridian can't tell who owns such
+// a directory, so it refuses it, as problems.OwnerUnmapped, rather than
+// assume no one else can change it.
 type pathChecker struct {
 	uid      int
 	lstat    func(string) (fs.FileInfo, error)
 	readlink func(string) (string, error)
+	unmapped func(uid int) bool
 }
 
 // maxLinks is how many symbolic links a path may go through, as Linux's
 // limit is.
 const maxLinks = 40
 
-// checkSafePath checks the directories on the way to path, an absolute
-// path, and with leaf, path itself, as a directory that holds the user's
-// files. A part of the path that isn't there yet is one Meridian will
-// create, and the directory it is created in must be safe.
+// checkSafePath checks the directories on the way to path, and with leaf,
+// path itself, as a directory that holds the user's files. A part of the
+// path that isn't there yet is one Meridian will create, and the
+// directory it is created in must be safe.
 func checkSafePath(path string, leaf bool) error {
-	return pathChecker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink}.check(path, leaf)
+	return pathChecker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink, unmapped: unmappedOwner}.check(path, leaf)
 }
 
 // check walks path from the root, following symbolic links as the kernel
 // does, and checks each directory against what it takes from it next.
 func (pc pathChecker) check(path string, leaf bool) error {
-	if !filepath.IsAbs(path) {
-		return fmt.Errorf("local: %s isn't an absolute path", path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
+	}
+	path = abs
+	unavailable := func(at string, err error) error {
+		return problems.DirectoryUnavailable.Problem(problems.Params{"path": at, "reason": err.Error()})
 	}
 	dir := string(filepath.Separator)
 	dirInfo, err := pc.lstat(dir)
 	if err != nil {
-		return err
+		return unavailable(dir, err)
 	}
 	rest := split(path)
 	links := 0
@@ -59,7 +71,7 @@ func (pc pathChecker) check(path string, leaf bool) error {
 		case "..":
 			dir = filepath.Dir(dir)
 			if dirInfo, err = pc.lstat(dir); err != nil {
-				return err
+				return unavailable(dir, err)
 			}
 			continue
 		}
@@ -70,23 +82,23 @@ func (pc pathChecker) check(path string, leaf bool) error {
 			return pc.holds(path, dir, dirInfo, next, nil)
 		}
 		if err != nil {
-			return err
+			return unavailable(next, err)
 		}
 		if err := pc.holds(path, dir, dirInfo, next, info); err != nil {
 			return err
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
 			if links++; links > maxLinks {
-				return fmt.Errorf("local: %s goes through more than %d symbolic links", path, maxLinks)
+				return problems.PathLinksTooMany.Problem(problems.Params{"path": path, "max": maxLinks})
 			}
 			target, err := pc.readlink(next)
 			if err != nil {
-				return err
+				return unavailable(next, err)
 			}
 			if filepath.IsAbs(target) {
 				dir = string(filepath.Separator)
 				if dirInfo, err = pc.lstat(dir); err != nil {
-					return err
+					return unavailable(dir, err)
 				}
 			}
 			rest = append(split(target), rest...)
@@ -110,7 +122,12 @@ func split(path string) []string {
 // the user's when info is nil. path is what is being checked, for the
 // problem.
 func (pc pathChecker) holds(path, dir string, dirInfo fs.FileInfo, entry string, info fs.FileInfo) error {
-	unsafe := func(d string) error {
+	// unsafe says that d, whose owner is owner, is unsafe, or that its owner
+	// is one the user namespace hides.
+	unsafe := func(d string, owner int) error {
+		if owner != 0 && owner != pc.uid && pc.unmapped(owner) {
+			return problems.OwnerUnmapped.Problem(problems.Params{"path": path, "dir": d})
+		}
 		return problems.PathUnsafe.Problem(problems.Params{"path": path, "dir": d})
 	}
 	owner, ok := fileOwner(dirInfo)
@@ -118,7 +135,7 @@ func (pc pathChecker) holds(path, dir string, dirInfo fs.FileInfo, entry string,
 		return nil // nothing here says who owns a file
 	}
 	if owner != 0 && owner != pc.uid {
-		return unsafe(dir)
+		return unsafe(dir, owner)
 	}
 	entryOwner := pc.uid
 	if info != nil {
@@ -128,14 +145,14 @@ func (pc pathChecker) holds(path, dir string, dirInfo fs.FileInfo, entry string,
 	if dirInfo.Mode().Perm()&0o022 != 0 {
 		switch {
 		case dirInfo.Mode()&fs.ModeSticky == 0:
-			return unsafe(dir)
+			return unsafe(dir, owner)
 		case !entryOurs:
-			return unsafe(entry)
+			return unsafe(entry, entryOwner)
 		}
 	}
 	// A symbolic link's owner decides where it points.
 	if info != nil && info.Mode()&fs.ModeSymlink != 0 && !entryOurs {
-		return unsafe(entry)
+		return unsafe(entry, entryOwner)
 	}
 	return nil
 }

@@ -39,9 +39,10 @@ var variableKeys = []string{"value", "env", "file", "secret"}
 //
 // A secret names where its value is, and is never in the file. A value in
 // an environment variable or a file is read only when a run asks for it,
-// as it starts. A file's value has a newline at its end, if there is one,
-// removed. A file that holds a value must belong to the user, and no other
-// user may change it, nor read it if it holds a secret's.
+// as it starts. A file's value has a newline, or a carriage return and a
+// newline, at its end, if there is one, removed. A file that holds a value
+// must belong to the user, and no other user may change it, nor read it if
+// it holds a secret's, and the directories on the way to it must be safe.
 type variable struct {
 	// name is the variable's name as the plan writes it, as org.region.
 	name   string
@@ -246,10 +247,16 @@ func lookupEnv(getenv func(string) string, name string) (string, bool) {
 	return v, v != ""
 }
 
-// readValueFile reads v's value from its file, without the newline at its
-// end. The file must belong to the user, and no other user may change it,
-// nor read it when it holds a secret, as the file opened says.
+// readValueFile reads v's value from its file, without the newline, or the
+// carriage return and newline, at its end. Every directory on the way to
+// the file must be safe, as checkSafePath says, so that no one else can
+// swap the file for another, or for a link to one of the user's own. The
+// file must belong to the user, and no other user may change it, nor read
+// it when it holds a secret, as the file opened says.
 func readValueFile(v variable) (string, error) {
+	if err := checkSafePath(v.file, false); err != nil {
+		return "", err
+	}
 	f, err := openRegular(v.file, func(info fs.FileInfo) error {
 		if v.secret {
 			return checkPrivateInfo(v.file, info)

@@ -32,6 +32,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/parallelworks/foundation/problem"
@@ -341,7 +342,7 @@ func displayed(params Params) Params {
 	var out Params
 	for name, v := range params {
 		s, ok := v.(string)
-		if !ok || !strings.ContainsFunc(s, isControl) {
+		if !ok || !needsEscape(s) {
 			continue
 		}
 		if out == nil {
@@ -355,24 +356,47 @@ func displayed(params Params) Params {
 	return out
 }
 
-// isControl says whether r is a control character: C0, DEL or C1.
-func isControl(r rune) bool { return r < 0x20 || r >= 0x7f && r <= 0x9f }
+// escaped says whether EscapeControl escapes r: a control character, C0,
+// DEL or C1; a format character, such as a bidirectional override or a
+// zero-width joiner; or a line or paragraph separator.
+func escaped(r rune) bool {
+	return r < 0x20 || r >= 0x7f && r <= 0x9f || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+}
 
-// EscapeControl returns s with each control character, C0, DEL or C1,
-// escaped as Go writes it in a string, as \n, \t or \x1b, so that showing
-// s shows them rather than having a terminal act on them.
+// needsEscape says whether EscapeControl changes s.
+func needsEscape(s string) bool {
+	return !utf8.ValidString(s) || strings.ContainsFunc(s, escaped)
+}
+
+// EscapeControl returns s with what a terminal or an editor would act on,
+// or show other than as it is, escaped as Go writes it in a string: each
+// control character, C0, DEL or C1, as \n, \t or \x1b; each format
+// character, such as a bidirectional override, and each line or paragraph
+// separator, as \u202e or \u2028; and each byte that isn't UTF-8, such as
+// 0x9b, an 8-bit CSI, as \x9b. Showing s then shows them.
 func EscapeControl(s string) string {
-	if !strings.ContainsFunc(s, isControl) {
+	if !needsEscape(s) {
 		return s
 	}
 	var b strings.Builder
-	for _, r := range s {
-		if !isControl(r) {
-			b.WriteRune(r)
-			continue
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case !escaped(r):
+			b.WriteString(s[i : i+size])
+		case r == '\a', r == '\b', r == '\f', r == '\n', r == '\r', r == '\t', r == '\v':
+			q := strconv.QuoteRune(r)
+			b.WriteString(q[1 : len(q)-1])
+		case r < 0x80:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r <= 0xffff:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
 		}
-		q := strconv.QuoteRune(r)
-		b.WriteString(q[1 : len(q)-1])
+		i += size
 	}
 	return b.String()
 }

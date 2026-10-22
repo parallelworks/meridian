@@ -844,14 +844,14 @@
   "path_unsafe": {
     "why": "A user who can change a directory on the way to one of Meridian's could replace what is in it with their own after Meridian checked it. As OpenSSH does, Meridian accepts a directory on the way only if it belongs to you or to root and only you or root can change it, or if its sticky bit stops other users removing what isn't theirs, as /tmp's does, and what follows it is yours.",
     "fix": [
-      "Choose a directory whose parents only you or root can change, such as one in your home directory, or one that mktemp -d makes.",
+      "Choose a directory whose parents only you or root can change, such as one in your home directory, or one that mktemp -d -p /var/tmp makes.",
       "Or have the directory's owner run chmod go-w on it."
     ]
   },
   "network_filesystem": {
     "why": "SQLite's locks don't work reliably on network filesystems, which is where home directories on clusters often are, so Meridian won't keep its database there.",
     "fix": [
-      "Set MERIDIAN_STATE_DIR to a directory on a local disk that only you can change, such as one that mktemp -d makes, or one on a node's local scratch disk."
+      "Set MERIDIAN_STATE_DIR to a directory on a local disk that only you can change, and that lasts: it holds the database and the key that wraps your runs' secrets, which are lost with it. One that mktemp -d -p /var/tmp makes will do, or one on the node's persistent local disk, but not one in /tmp, which a reboot can empty."
     ]
   },
   "filesystem_unknown": {
@@ -1126,6 +1126,44 @@
     "fix": [
       "Fix what the reason names, and run the command again.",
       "If it looks like a bug in Meridian, report it with the command you ran."
+    ]
+  },
+  "source_access_denied": {
+    "why": "The repository asked for credentials git doesn't have, or refused the ones it gave, or its host's key couldn't be checked. A repository that doesn't exist looks the same when the server asks for credentials rather than say so. Meridian never answers a prompt for a password or a passphrase.",
+    "fix": [
+      "Check the reference's owner and repository for a mistake.",
+      "Give git credentials it can use without a prompt, such as a credential helper, a token, or an ssh key in your agent, and accept the host's key with ssh beforehand."
+    ]
+  },
+  "source_objects_invalid": {
+    "why": "Meridian has git check every object it fetches, so that a malformed commit or tree, such as one made to exploit a bug in a Git tool, never reaches its copy of the repository.",
+    "fix": [
+      "Find out why the repository has malformed objects, or use another revision."
+    ]
+  },
+  "owner_unmapped": {
+    "why": "Meridian checks that every directory on the way to its own belongs to you or to root, as OpenSSH checks the way to a user's keys. In a user namespace that doesn't map root, as unshare --user, Apptainer, bubblewrap and some CI sandboxes make, a directory whose owner isn't mapped shows as owned by nobody, so Meridian can't tell who could change it, and refuses it rather than assume.",
+    "fix": [
+      "Run Meridian outside the user namespace, or in one that maps root and the directory's owner.",
+      "Or choose directories with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR whose every parent the namespace maps to you or to root."
+    ]
+  },
+  "path_links_too_many": {
+    "why": "Meridian follows the symbolic links on the way to its directories, as the kernel does, and stops after as many as the kernel would, which is most likely a link that leads back to itself.",
+    "fix": [
+      "Find the link that leads back to itself, and fix it, or choose another directory."
+    ]
+  },
+  "mount_not_found": {
+    "why": "The directory is on a FUSE filesystem, which can be a local one or a network one, and Meridian tells them apart by the mount's type in /proc/self/mountinfo, which has no mount for it.",
+    "fix": [
+      "Choose a directory for MERIDIAN_STATE_DIR on a filesystem that isn't FUSE."
+    ]
+  },
+  "member_settings_not_json": {
+    "why": "A member's settings are given to its backend's driver as JSON, which has no not-a-number or infinite numbers.",
+    "fix": [
+      "Write the number in the member's settings as a finite one, or as text in quotes."
     ]
   }
 }

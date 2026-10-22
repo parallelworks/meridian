@@ -151,6 +151,9 @@ func (d Dirs) Database() (string, error) {
 		return "", err
 	}
 	fsType, network, err := detectNetworkFS(d.State)
+	if errors.Is(err, errNoMount) {
+		return "", problems.MountNotFound.Problem(problems.Params{"path": d.State})
+	}
 	if err != nil {
 		return "", problems.FilesystemUnknown.Problem(problems.Params{"path": d.State, "reason": err.Error()})
 	}
@@ -163,6 +166,10 @@ func (d Dirs) Database() (string, error) {
 // detectNetworkFS says whether a path is on a network filesystem, and its
 // type. A test can replace it.
 var detectNetworkFS = networkFS
+
+// errNoMount is what networkFS returns for a path on a filesystem whose
+// type only the mount table says, which has no mount for it.
+var errNoMount = errors.New("local: no mount holds the path")
 
 // ensurePrivateDir creates the directory path if it isn't there, readable
 // only by its user, and checks that it is, and that every directory on the

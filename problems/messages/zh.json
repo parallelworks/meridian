@@ -123,7 +123,7 @@
   "expressions_too_slow": "此处一起求值的表达式合计耗时超过 {limit} 秒。",
   "problems_not_listed": "代码为 {code} 的问题只列出前 {limit} 个，其余 {count} 个未列出。",
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
-  "execution_group_unknown": "输入“{input}”指定的执行组“{value}”不在以下组中：{groups}。",
+  "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
   "source_ref_invalid": "uses:“{ref}”不是对 Git 仓库中工作流的引用，例如 github/owner/repository/path@revision。",
   "source_on_platform": "uses:“{ref}”指定的是平台存储的工作流，只有该平台才能读取。",
   "source_revision_not_found": "Git 未找到仓库 {repo} 的修订“{revision}”：{reason}",
@@ -183,5 +183,11 @@
   "inputs_file_extra": "文件包含多个 JSON 值。",
   "inputs_number_too_large": "数字 {number} 过大。",
   "interrupted": "Meridian 已被中断。",
-  "unexpected_error": "Meridian 未能完成所请求的操作：{reason}"
+  "unexpected_error": "Meridian 未能完成所请求的操作：{reason}",
+  "source_access_denied": "Git 被拒绝访问 {ref}：{reason}",
+  "source_objects_invalid": "Git 拒绝了为 {ref} 获取的内容，因为其格式不正确：{reason}",
+  "owner_unmapped": "Meridian 无法检查 {path}：通往它的路径上的 {dir} 的所有者被用户命名空间隐藏，因此 Meridian 无法确认其他用户不能更改它。",
+  "path_links_too_many": "路径 {path} 经过了超过 {max} 个符号链接。",
+  "mount_not_found": "Meridian 在 /proc/self/mountinfo 中找不到包含 {path} 的挂载。",
+  "member_settings_not_json": "组“{group}”的一个成员的 settings 中包含 JSON 无法容纳的值，例如 .nan 或 .inf。"
 }

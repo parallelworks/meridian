@@ -363,7 +363,7 @@ func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, e
 				return m, f.problem(problems.ConfigYAMLSyntax, v, problems.Params{"reason": err.Error()})
 			}
 			if m.Settings, err = settingsJSON(settings); err != nil {
-				return m, invalid(v, key, err.Error())
+				return m, f.problem(problems.MemberSettingsNotJSON, v, problems.Params{"group": group})
 			}
 		case "resources":
 			if err := f.resources(group, v, &m.Resources); err != nil {
@@ -497,11 +497,7 @@ func (c *Config) ResolveInput(typ string, _ map[string]any, value any) (any, err
 	}
 	name, ok := value.(string)
 	if _, known := c.groups[name]; !ok || !known {
-		shown := name
-		if !ok {
-			shown = problems.Show(value)
-		}
-		return nil, problems.ExecutionGroupUnknown.Problem(problems.Params{"value": shown, "groups": problems.QuoteAll(c.GroupNames())})
+		return nil, problems.ExecutionGroupUnknown.Problem(problems.Params{"value": problems.Show(value), "groups": problems.QuoteAll(c.GroupNames())})
 	}
 	return name, nil
 }

@@ -25,17 +25,21 @@ func (f fakeInfo) ModTime() time.Time { return time.Time{} }
 func (f fakeInfo) IsDir() bool        { return f.mode.IsDir() }
 func (f fakeInfo) Sys() any           { return &syscall.Stat_t{Uid: f.uid} }
 
-// The users of the tests: root, the user Meridian runs as, and another.
+// The users of the tests: root, the user Meridian runs as, another, and
+// nobody, the ID a user namespace shows for an owner it doesn't map.
 const (
 	root    = 0
 	user    = 1000
 	mallory = 2000
+	nobody  = 65534
 )
 
 // fakeFS is a filesystem of fakeInfos and symbolic links' targets.
 type fakeFS struct {
 	infos map[string]fakeInfo
 	links map[string]string
+	// namespace says that nobody is an owner a user namespace hides.
+	namespace bool
 }
 
 func (f fakeFS) checker() pathChecker {
@@ -53,6 +57,7 @@ func (f fakeFS) checker() pathChecker {
 			}
 			return "", fs.ErrInvalid
 		},
+		unmapped: func(uid int) bool { return uid == nobody && f.namespace },
 	}
 }
 
@@ -135,7 +140,7 @@ func TestPathChecker(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			infos := base()
 			maps.Copy(infos, tc.add)
-			err := fakeFS{infos, tc.links}.checker().check(tc.path, tc.leaf)
+			err := fakeFS{infos, tc.links, false}.checker().check(tc.path, tc.leaf)
 			if tc.unsafe == "" {
 				if err != nil {
 					t.Errorf("check(%s): %v", tc.path, err)
@@ -153,8 +158,22 @@ func TestPathChecker(t *testing.T) {
 func TestPathCheckerLinkLoop(t *testing.T) {
 	infos := base()
 	infos["/home/u/a"] = fakeInfo{fs.ModeSymlink | 0o777, user}
-	err := fakeFS{infos, map[string]string{"/home/u/a": "/home/u/a"}}.checker().check("/home/u/a/x", false)
-	if err == nil {
-		t.Error("check followed a link to itself without end")
+	err := fakeFS{infos, map[string]string{"/home/u/a": "/home/u/a"}, false}.checker().check("/home/u/a/x", false)
+	wantProblem(t, err, problems.PathLinksTooMany)
+}
+
+// TestPathCheckerUnmapped checks that, in a user namespace that doesn't map
+// root, where / is nobody's, every path is refused, as one whose owner is
+// hidden rather than one another user owns, and that a directory nobody
+// owns outside such a namespace is just another user's.
+func TestPathCheckerUnmapped(t *testing.T) {
+	infos := base()
+	infos["/"] = fakeDir(0o755, nobody)
+	infos["/home"] = fakeDir(0o755, nobody)
+	err := fakeFS{infos, nil, true}.checker().check("/home/u/.local/state/meridian", false)
+	if p := wantProblem(t, err, problems.OwnerUnmapped); p.Params["dir"] != "/" {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
+	err = fakeFS{infos, nil, false}.checker().check("/home/u/.local/state/meridian", false)
+	wantProblem(t, err, problems.PathUnsafe)
 }

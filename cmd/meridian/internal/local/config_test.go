@@ -127,6 +127,7 @@ func TestGroupsFileRefuses(t *testing.T) {
 		"gpu text":          {"g:\n  members:\n    - {name: a, backend: local, resources: {gpu: one}}\n", problems.ConfigWrongType, 3},
 		"walltime":          {"g:\n  members:\n    - {name: a, backend: local, max-walltime: 1.5s}\n", problems.MemberInvalid, 3},
 		"settings":          {"g:\n  members:\n    - {name: a, backend: ssh, settings: [host]}\n", problems.ConfigWrongType, 3},
+		"settings nan":      {"g:\n  members:\n    - {name: a, backend: ssh, settings: {weight: .nan}}\n", problems.MemberSettingsNotJSON, 3},
 		"settings repeated": {"g:\n  members:\n    - {name: a, backend: ssh, settings: {host: a, host: b}}\n", problems.ConfigYAMLSyntax, 3},
 		"repeated group":    {"g:\n  members:\n    - {name: a, backend: local}\ng:\n  members:\n    - {name: b, backend: local}\n", problems.ConfigKeyRepeated, 4},
 		"repeated key":      {"g:\n  members:\n    - {name: a, backend: local, name: b}\n", problems.ConfigKeyRepeated, 3},
@@ -222,7 +223,7 @@ func TestResolveInput(t *testing.T) {
 	}
 	_, err := c.ResolveInput("execution-groups", nil, "cpu")
 	p := wantProblem(t, err, problems.ExecutionGroupUnknown)
-	if p.Params["value"] != "cpu" || p.Params["groups"] != `"gpu", "local"` {
+	if p.Params["value"] != `"cpu"` || p.Params["groups"] != `"gpu", "local"` {
 		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", p.Params)
 	}
 	_, err = c.ResolveInput("execution-groups", nil, 3)

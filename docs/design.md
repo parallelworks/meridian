@@ -1550,13 +1550,17 @@ jobs to your SSH hosts.
 Meridian refuses either file if another user can change it, and the
 variables file if another user can read it, since people keep secrets in
 plain variables too. A file that holds a variable's value must be the
-user's, and only they may change it, or read it when it holds a secret's.
+user's, and only they may change it, or read it when it holds a secret's,
+and the directories on the way to it are checked as Meridian's own are.
 
 The database, the key that wraps secret records, and logs live in
 Meridian's state directory, which only its user can read. SQLite can't lock
 reliably on a network filesystem, which is where home directories on
 clusters often are, so Meridian refuses to open a database there and says
-how to choose a local path. On Linux the directories are the XDG base
+how to choose a local path: one that only the user can change, and that
+lasts, since it holds the database and the key, such as one that
+`mktemp -d -p /var/tmp` makes, but not one in `/tmp`, which a reboot can
+empty. On Linux the directories are the XDG base
 directories' `meridian`, as `~/.config/meridian` and
 `~/.local/state/meridian`; on macOS both are
 `~/Library/Application Support/Meridian`. `MERIDIAN_CONFIG_DIR`,
@@ -1565,7 +1569,14 @@ directory holds copies of the repositories that `uses:` names. As OpenSSH
 checks the directories on the way to a user's keys, Meridian checks those
 on the way to each of its own: each must belong to the user or to root,
 and no one else may change it, unless its sticky bit, as `/tmp`'s, keeps
-others from removing what follows it, which must be the user's.
+others from removing what follows it, which must be the user's. In a user
+namespace that doesn't map root, as `unshare --user`, Apptainer, bubblewrap
+and some CI sandboxes make, `/` and much else show as owned by the kernel's
+overflow ID, and Meridian can't tell who owns them: it refuses them, saying
+so, rather than assume that no one else can change them. So Meridian's own
+directories and config must be used outside such a namespace, or in one
+that maps root; a worker in a container, which uses none of them, isn't
+affected.
 
 Every problem the command reports is a kind, with its code, its params and
 its message in each language, as a workflow's are: its own, such as a

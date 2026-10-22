@@ -130,7 +130,7 @@
 
   "problems_not_listed": "Only the first {limit} problems with the code {code} are listed; {count, plural, one {# more isn't} other {# more aren't}}.",
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
-  "execution_group_unknown": "The input \"{input}\" names the execution group \"{value}\", which isn't one of the groups: {groups}.",
+  "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",
   "source_ref_invalid": "The uses: \"{ref}\" isn't a reference to a workflow in a Git repository, such as github/owner/repository/path@revision.",
   "source_on_platform": "The uses: \"{ref}\" names a workflow a platform stores, which only that platform can read.",
   "source_revision_not_found": "Git found no revision \"{revision}\" of the repository {repo}: {reason}.",
@@ -190,5 +190,11 @@
   "inputs_file_extra": "The file has more than one JSON value.",
   "inputs_number_too_large": "The number {number} is too large.",
   "interrupted": "Meridian was interrupted.",
-  "unexpected_error": "Meridian couldn't do what it was asked: {reason}."
+  "unexpected_error": "Meridian couldn't do what it was asked: {reason}.",
+  "source_access_denied": "Git was refused access to {ref}: {reason}.",
+  "source_objects_invalid": "Git refused what it fetched for {ref}, which isn't well formed: {reason}.",
+  "owner_unmapped": "Meridian can't check {path}: the owner of {dir}, on the way to it, is hidden by a user namespace, so Meridian can't tell that no other user can change it.",
+  "path_links_too_many": "The path {path} goes through more than {max} symbolic links.",
+  "mount_not_found": "Meridian can't find the mount that holds {path} in /proc/self/mountinfo.",
+  "member_settings_not_json": "A member of the group \"{group}\" has settings that JSON can't hold, such as .nan or .inf."
 }

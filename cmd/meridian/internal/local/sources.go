@@ -58,10 +58,13 @@ const waitDelay = time.Second
 // a repository's whole fork network, so a commit that a reference names
 // may be one that only a fork has (docs/design.md, Security).
 //
-// git runs with no hooks, without fetching submodules, checking the
-// objects it fetches, and never waiting on a prompt: a password, an
-// askpass program, or ssh's questions, unless the user's own ssh command
-// asks them. A cancelled context stops it and every process it started.
+// git runs with no hooks, without fetching submodules, and checking the
+// objects it fetches. It never asks for a password, by a prompt or an
+// askpass program, and its ssh never asks a question when the user names
+// no ssh command of their own. It runs in a session of its own, with no
+// terminal, so that an ssh command of the user's that would ask for a
+// passphrase fails rather than waits. A cancelled context stops it and
+// every process it started.
 // Sources serializes what it does to one repository's copy, across
 // processes too where the system has file locks, and otherwise tries
 // again, a few times, a git command another process held a lock against.
@@ -72,9 +75,10 @@ const waitDelay = time.Second
 // which a FIPS host configures for the whole system.
 //
 // What is wrong with a reference is a problem of one of the problems
-// package's kinds; one that names no workflow wraps compile.ErrNotFound
-// too. Any other error is git's, or the system's, which may not happen
-// again.
+// package's kinds, which asking again won't change; one that names no
+// workflow, such as a revision that isn't there, wraps compile.ErrNotFound
+// too. Any other error is git's, or the system's, such as a network that
+// is down, which may not happen again.
 type Sources struct {
 	dir string
 	// git is the git command.
@@ -85,10 +89,12 @@ type Sources struct {
 	mu    sync.Mutex
 	repos map[string]chan struct{}
 
-	sshOnce sync.Once
-	// ssh is the ssh command git runs, when the user names none: one that
-	// never prompts.
-	ssh string
+	sshMu sync.Mutex
+	// sshKnown says whether ssh is known: what git runs as its ssh
+	// command, when the user names none, one that never prompts, or ""
+	// when the user names their own.
+	sshKnown bool
+	ssh      string
 }
 
 var _ compile.Sources = (*Sources)(nil)
@@ -369,8 +375,16 @@ func (s *Sources) fetch(ctx context.Context, repo string, r sourceRef, rev strin
 		"-c", "fetch.fsckObjects=true",
 		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--depth=1",
 		"--", url, "+"+rev+":"+fetched); err != nil {
-		if gerr, ok := errors.AsType[*gitError](err); ok && gerr.notFound() {
+		gerr, ok := errors.AsType[*gitError](err)
+		switch {
+		case !ok:
+			return "", err
+		case gerr.notFound():
 			return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": r.repoName(), "revision": rev, "reason": gerr.message()})
+		case gerr.denied():
+			return "", problems.SourceAccessDenied.Problem(problems.Params{"ref": r.location(), "reason": gerr.message()})
+		case gerr.malformed():
+			return "", problems.SourceObjectsInvalid.Problem(problems.Params{"ref": r.location(), "reason": gerr.message()})
 		}
 		return "", err
 	}
@@ -442,7 +456,7 @@ func (s *Sources) run(ctx context.Context, repo, stdin string, args ...string) (
 }
 
 func (s *Sources) runOnce(ctx context.Context, repo, stdin string, args ...string) ([]byte, error) {
-	s.sshOnce.Do(func() { s.ssh = s.sshCommand(ctx) })
+	ssh := s.sshFor(ctx)
 	base := []string{"-c", "core.hooksPath=" + filepath.Join(s.dir, hooksDir)}
 	if repo != "" {
 		base = append(base, "--git-dir="+repo)
@@ -450,7 +464,7 @@ func (s *Sources) runOnce(ctx context.Context, repo, stdin string, args ...strin
 	// parseRef has checked every part of a reference that reaches args, and
 	// git reads none of it as an option.
 	cmd := exec.CommandContext(ctx, s.git, append(base, args...)...) //nolint:gosec // as above
-	cmd.Env = gitEnv(os.Environ(), s.ssh)
+	cmd.Env = gitEnv(os.Environ(), ssh)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -475,45 +489,86 @@ func (s *Sources) runOnce(ctx context.Context, repo, stdin string, args ...strin
 // doesn't have, and gives up on a host it can't reach.
 const batchSSH = "ssh -o BatchMode=yes -o ConnectTimeout=30"
 
+// sshProbeTimeout bounds asking git for the user's ssh command.
+const sshProbeTimeout = 10 * time.Second
+
+// sshFor returns the ssh command git should run, as sshCommand says, which
+// it remembers once it knows. A probe that failed is asked again next
+// time, and batchSSH, which never prompts, is used meanwhile.
+func (s *Sources) sshFor(ctx context.Context) string {
+	s.sshMu.Lock()
+	defer s.sshMu.Unlock()
+	if s.sshKnown {
+		return s.ssh
+	}
+	ssh, ok := s.sshCommand(ctx)
+	if ok {
+		s.ssh, s.sshKnown = ssh, true
+	}
+	return ssh
+}
+
 // sshCommand returns the ssh command git should run: batchSSH, unless the
 // user names their own, with GIT_SSH_COMMAND, GIT_SSH or core.sshCommand,
-// which Meridian leaves as it is.
-func (s *Sources) sshCommand(ctx context.Context) string {
+// which Meridian leaves as it is, and whether it could tell. It asks git
+// with a deadline of its own, apart from ctx's end, so that the first
+// caller's cancelled context doesn't decide for every later one.
+func (s *Sources) sshCommand(ctx context.Context) (string, bool) {
 	if os.Getenv("GIT_SSH_COMMAND") != "" || os.Getenv("GIT_SSH") != "" {
-		return ""
+		return "", true
 	}
-	cmd := exec.CommandContext(ctx, s.git, "config", "--get", "core.sshCommand") //nolint:gosec // git, with no argument of a workflow's
+	probe, cancel := context.WithTimeout(context.WithoutCancel(ctx), sshProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(probe, s.git, "config", "--get", "core.sshCommand") //nolint:gosec // git, with no argument of a workflow's
 	cmd.Env = gitEnv(os.Environ(), "")
 	cmd.Dir = os.TempDir()
-	if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
-		return ""
+	out, err := cmd.Output()
+	if err == nil {
+		if strings.TrimSpace(string(out)) != "" {
+			return "", true
+		}
+		return batchSSH, true
 	}
-	return batchSSH
+	// git config --get exits 1 for a key that isn't set.
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 {
+		return batchSSH, true
+	}
+	return batchSSH, false
 }
 
-// gitKeep are the environment variables git gets of the user's: what
-// finds their configuration, their credentials and their proxies, and
-// what Windows needs to run a program. None points git at another
-// repository than the one it is given, or changes what it reads there.
+// gitKeep are the variables of the user's environment that start with GIT_
+// that git gets: those that find their configuration, their credentials,
+// their certificates and their ssh command. None points git at another
+// repository, another program or another template than the ones it is
+// given, or changes what it reads. Every variable that doesn't start with
+// GIT_ git gets, as credential helpers, proxies and modules need them,
+// but those Meridian sets itself.
 var gitKeep = []string{
-	"HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "XDG_CONFIG_HOME",
 	"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
-	"SSH_AUTH_SOCK", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "KRB5CCNAME",
-	"GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE", "SSL_CERT_DIR",
-	"http_proxy", "https_proxy", "no_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
-	"SYSTEMROOT", "SystemRoot", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC", "TEMP", "TMP",
-	"HOMEDRIVE", "HOMEPATH",
+	"GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT",
+	"GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_SSL_CERT", "GIT_SSL_KEY", "GIT_SSL_CERT_PASSWORD_PROTECTED",
+	"GIT_SSL_VERSION", "GIT_SSL_CIPHER_LIST", "GIT_HTTP_PROXY_AUTHMETHOD", "GIT_HTTP_USER_AGENT",
+	"GIT_PROXY_SSL_CERT", "GIT_PROXY_SSL_KEY", "GIT_PROXY_SSL_CAINFO", "GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED",
 }
 
-// gitEnv is the environment git runs in: those of the user's that gitKeep
-// names, with no prompt for a password or by an askpass program, and ssh
-// as the ssh command when it isn't "". Git's messages are in English, so
-// that what they say can be told apart.
+// gitSet are the variables Meridian sets for git, which it takes from no
+// one else.
+var gitSet = []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS_REQUIRE", "LC_ALL", "LANGUAGE"}
+
+// gitEnv is the environment git runs in: the user's, but for the
+// variables that start with GIT_ that gitKeep doesn't name, with no prompt
+// for a password or by an askpass program, and ssh as the ssh command when
+// it isn't "". Git's messages are in English, so that what they say can
+// be told apart.
 func gitEnv(environ []string, ssh string) []string {
-	env := make([]string, 0, len(gitKeep)+6)
+	env := make([]string, 0, len(environ)+len(gitSet)+1)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if slices.Contains(gitKeep, name) {
+		switch {
+		case slices.Contains(gitSet, name):
+		case strings.HasPrefix(name, "GIT_") && !slices.Contains(gitKeep, name):
+		case ssh != "" && name == "GIT_SSH_COMMAND":
+		default:
 			env = append(env, kv)
 		}
 	}
@@ -551,6 +606,21 @@ func (e *gitError) message() string {
 func (e *gitError) notFound() bool {
 	return e.says("couldn't find remote ref", "repository not found", "could not be found",
 		"does not appear to be a git repository", "not our ref", "no such remote ref")
+}
+
+// denied says whether git failed because the remote refused it: it asked
+// for credentials git doesn't have, as a missing or private repository
+// does, refused those it gave, or its host's key couldn't be checked.
+func (e *gitError) denied() bool {
+	return e.says("could not read username", "could not read password", "terminal prompts disabled",
+		"permission denied", "host key verification failed", "authentication failed", "access denied",
+		"returned error: 401", "returned error: 403")
+}
+
+// malformed says whether git refused objects it fetched, as its fsck
+// checks found them.
+func (e *gitError) malformed() bool {
+	return e.says("fsck error", "error in object", "bad object", "invalid object")
 }
 
 // contended says whether git failed because another process held a lock

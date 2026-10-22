@@ -2,7 +2,6 @@ package local
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -115,7 +114,7 @@ func mountType(mountinfo io.Reader, path string) (string, error) {
 		return "", err
 	}
 	if !found {
-		return "", fmt.Errorf("no mount holds %s", path)
+		return "", errNoMount
 	}
 	return bestType, nil
 }

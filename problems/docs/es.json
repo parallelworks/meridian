@@ -983,7 +983,7 @@
     "title": "Ruta que pasa por un directorio que otros pueden cambiar",
     "why": "Un usuario que puede cambiar un directorio en el camino hacia uno de los de Meridian podría sustituir lo que hay en él por algo suyo después de que Meridian lo comprobara. Como hace OpenSSH, Meridian acepta un directorio del camino solo si es tuyo o de root y solo tú o root podéis cambiarlo, o si su bit sticky impide a otros usuarios quitar lo que no es suyo, como el de /tmp, y lo que le sigue es tuyo.",
     "fix": [
-      "Elige un directorio cuyos padres solo tú o root podáis cambiar, como uno dentro de tu directorio personal, o uno que cree mktemp -d.",
+      "Elige un directorio cuyos padres solo tú o root podáis cambiar, como uno dentro de tu directorio personal, o uno que cree mktemp -d -p /var/tmp.",
       "O pide al propietario del directorio que ejecute chmod go-w sobre él."
     ]
   },
@@ -991,7 +991,7 @@
     "title": "Base de datos en un sistema de archivos de red",
     "why": "Los bloqueos de SQLite no funcionan de forma fiable en sistemas de archivos de red, que es donde suelen estar los directorios personales en los clústeres, así que Meridian no guarda allí su base de datos.",
     "fix": [
-      "Asigna a MERIDIAN_STATE_DIR un directorio en un disco local que solo tú puedas cambiar, como uno que cree mktemp -d, o uno en el disco local de trabajo de un nodo."
+      "Asigna a MERIDIAN_STATE_DIR un directorio en un disco local que solo tú puedas cambiar y que perdure: guarda la base de datos y la clave que envuelve los secretos de tus ejecuciones, que se pierden con él. Sirve uno que cree mktemp -d -p /var/tmp, o uno en el disco local persistente del nodo, pero no uno en /tmp, que un reinicio puede vaciar."
     ]
   },
   "filesystem_unknown": {
@@ -1311,6 +1311,50 @@
     "fix": [
       "Corrige lo que indica el motivo, y vuelve a ejecutar el comando.",
       "Si parece un fallo de Meridian, infórmalo junto con el comando que ejecutaste."
+    ]
+  },
+  "source_access_denied": {
+    "title": "Acceso denegado al repositorio",
+    "why": "El repositorio pidió credenciales que git no tiene, o rechazó las que dio, o no se pudo comprobar la clave de su host. Un repositorio que no existe parece lo mismo cuando el servidor pide credenciales en vez de decirlo. Meridian nunca responde a una petición de contraseña o de frase de paso.",
+    "fix": [
+      "Comprueba que no haya un error en el propietario y el repositorio de la referencia.",
+      "Da a git credenciales que pueda usar sin preguntar, como un asistente de credenciales, un token o una clave ssh en tu agente, y acepta antes la clave del host con ssh."
+    ]
+  },
+  "source_objects_invalid": {
+    "title": "Objetos de Git mal formados",
+    "why": "Meridian hace que git compruebe cada objeto que obtiene, para que una confirmación o un árbol mal formados, como uno hecho para aprovechar un fallo de una herramienta de Git, nunca lleguen a su copia del repositorio.",
+    "fix": [
+      "Averigua por qué el repositorio tiene objetos mal formados, o usa otra revisión."
+    ]
+  },
+  "owner_unmapped": {
+    "title": "Propietario oculto por un espacio de nombres de usuario",
+    "why": "Meridian comprueba que cada directorio en el camino hacia los suyos es tuyo o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. En un espacio de nombres de usuario que no asocia root, como los que crean unshare --user, Apptainer, bubblewrap y algunos entornos de CI, un directorio cuyo propietario no está asociado aparece como propiedad de nobody, así que Meridian no puede saber quién podría cambiarlo, y lo rechaza en lugar de suponerlo.",
+    "fix": [
+      "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root y el propietario del directorio.",
+      "O elige directorios con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR cuyos padres el espacio de nombres asocie todos a ti o a root."
+    ]
+  },
+  "path_links_too_many": {
+    "title": "Ruta con demasiados enlaces simbólicos",
+    "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
+    "fix": [
+      "Busca el enlace que lleva de vuelta a sí mismo y corrígelo, o elige otro directorio."
+    ]
+  },
+  "mount_not_found": {
+    "title": "No se encuentra el montaje",
+    "why": "El directorio está en un sistema de archivos FUSE, que puede ser local o de red, y Meridian los distingue por el tipo del montaje en /proc/self/mountinfo, que no tiene ningún montaje para él.",
+    "fix": [
+      "Elige para MERIDIAN_STATE_DIR un directorio en un sistema de archivos que no sea FUSE."
+    ]
+  },
+  "member_settings_not_json": {
+    "title": "Configuración de miembro que JSON no puede contener",
+    "why": "La configuración de un miembro se da al controlador de su backend como JSON, que no tiene números que no sean números ni infinitos.",
+    "fix": [
+      "Escribe el número de la configuración del miembro como uno finito, o como texto entre comillas."
     ]
   }
 }
