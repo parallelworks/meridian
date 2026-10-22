@@ -194,10 +194,13 @@ type Step struct {
 
 // StepRetry is a step's retry:.
 type StepRetry struct {
-	MaxRetries   Value `json:"maxRetries,omitzero"`
-	Interval     Value `json:"interval,omitzero"`
-	Timeout      Value `json:"timeout,omitzero"`
-	CleanOnRetry bool  `json:"cleanOnRetry,omitzero"`
+	MaxRetries Value `json:"maxRetries,omitzero"`
+	Interval   Value `json:"interval,omitzero"`
+	Timeout    Value `json:"timeout,omitzero"`
+	// CleanOnRetry is the step's clean-on-retry: true or false, or an
+	// expression that gives one. The compiler fills in true, the format's
+	// default, for a retry: without one.
+	CleanOnRetry Value `json:"cleanOnRetry,omitzero"`
 }
 
 // Exprs returns every expression the plan holds, in its run and its jobs.
@@ -230,7 +233,7 @@ func (p *Plan) Exprs() []*expr.Expr {
 			add(s.Name, s.If, s.Run, s.With, s.WorkingDirectory, s.SSH, s.Timeout, s.IgnoreErrors, s.Cleanup)
 			addAll(s.Env)
 			if r := s.Retry; r != nil {
-				add(r.MaxRetries, r.Interval, r.Timeout)
+				add(r.MaxRetries, r.Interval, r.Timeout, r.CleanOnRetry)
 			}
 		}
 		addAll(j.Outputs)

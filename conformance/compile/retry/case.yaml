@@ -1,7 +1,12 @@
 description: >-
-  The plan holds a job's retry, with its reasons, and a step's retry.
+  The plan holds a job's retry, with its reasons, and a step's retry, whose
+  clean-on-retry is true, false, or an expression, and true, as the format's
+  default is, when the step doesn't say.
 source: Meridian
 expect:
   plan:
     /jobs/0/retry: {reasons: [worker-lost], maxRetries: 3, interval: 30s}
     /jobs/0/steps/0/retry: {maxRetries: 2, interval: 10s, timeout: 1m, cleanOnRetry: true}
+    /jobs/0/steps/1/retry: {maxRetries: 2, cleanOnRetry: false}
+    /jobs/0/steps/2/retry: {maxRetries: 2, cleanOnRetry: true}
+    /jobs/0/steps/3/retry/cleanOnRetry/${{/0/src: " inputs.clean "
