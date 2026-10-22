@@ -1234,3 +1234,43 @@ func BenchmarkAttemptLargeSecret(b *testing.B) {
 		}
 	}
 }
+
+// A JobEnv kept for one run's secrets, given to Step and End with another
+// run's, isn't used for its secrets: they are found again, so the other
+// run's secret in a step's output is still caught, and named as a
+// secret's own text.
+func TestJobEnvFromAnotherRun(t *testing.T) {
+	wf := `
+jobs:
+  main:
+    env:
+      T: ${{ vars.token }}
+    steps:
+      - id: a
+        run: "true"
+      - run: echo ${{ fromJSON(steps.a.outputs.y) }}
+    outputs:
+      y: ${{ steps.a.outputs.y }}
+`
+	tokA, tokB := "tokA_"+strings.Repeat("A", 35), "tokB_"+strings.Repeat("B", 35)
+	rj, runA := readyMain(t, wf, map[string]string{"token": tokA}, "token")
+	je, _, err := rj.JobEnv(t.Context(), plan.JobState{Run: runA, Masked: runA.Masked()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runB := runA
+	runB.Vars = map[string]string{"token": tokB}
+	state := plan.JobState{
+		Run: runB, Masked: runB.Masked(), JobEnv: je,
+		Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"y": "got " + tokB}}},
+	}
+	_, diags, err := rj.Step(t.Context(), 1, state)
+	if err != nil || len(diags) != 1 || strings.Contains(fmt.Sprint(diags, diags[0].Params), "BBBB") {
+		t.Errorf("step 1: %v, %v", diags, err)
+	}
+	state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
+	end, _, err := rj.End(t.Context(), state)
+	if err != nil || fmt.Sprint(end.Secrets, end.Derived, end.SecretSteps, end.DerivedSteps) != "[y] [] map[a:[y]] map[]" {
+		t.Errorf("End %+v, %v", end, err)
+	}
+}

@@ -1311,7 +1311,11 @@ secret record ([Run data](#run-data)).
   `schema`, `region`, `arn`, `format`, `algorithm`, `expiry`, `ttl`,
   `scope` or `provider`, or whose last word is `key` without a qualifier,
   isn't one, and nor is `secrets`, which names a section in
-  docker-compose and GitHub Actions. So `password`, `api_key`,
+  docker-compose and GitHub Actions; but a mapping under `secrets`,
+  `credentials` or `creds` holds credentials as its own values, one level
+  down, as `{"secrets":{"github":"ghp_…"}}` does, where
+  `{"secrets":{"db":{"file":"./db.txt"}}}` and `{"secrets":"inherit"}`
+  hold none. So `password`, `api_key`,
   `accessToken`, `password2`, `OAuth2Token`, `apikey` and `clientsecret`
   are, and `key`, `sortKey`, `KeyName`, `keyFile`, `tokenUrl`,
   `secret_name`, `token-key`, `keyboard`, `monkey` and `passport`
@@ -1319,7 +1323,8 @@ secret record ([Run data](#run-data)).
   it is made, so a password that a step's script takes out of a secret's
   JSON, as `jq` does, is masked in its logs. What masks a job's secrets'
   own texts is built once for each attempt (`plan.JobState.JobEnv`), as a
-  large secret's takes long to build. It is never
+  large secret's takes long to build, and found again for a state whose
+  secrets differ, as another run's or attempt's do. It is never
   given another short one, such as a `yes` that a secret decided, or a
   database's name or a region a structured secret holds, which common text
   holds too, nor the text of a boolean, a number or null that one decided,

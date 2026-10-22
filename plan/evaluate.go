@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"maps"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -69,6 +72,48 @@ type secretTexts struct {
 	// leak masks own and fields as they show but for their lines
 	// (newLeakMasker), built the first time it is needed.
 	leak *Masker
+	// sum is what they were found from (secretsSum).
+	sum [sha256.Size]byte
+}
+
+// secretsSum returns a digest of what a job's secretTexts are found from:
+// the names of the run's secrets, which of them are derived, and their
+// values' strings, and the names of the outputs, and steps' outputs, of
+// the jobs in needs that hold a secret, which of them are derived, and
+// their values. JobEnv's are used for a Step, Cleanup or End only when
+// theirs is the same, as for another run or attempt it isn't.
+func secretsSum(run RunValues, needs map[string]JobResult) [sha256.Size]byte {
+	h := sha256.New()
+	write := func(parts ...string) {
+		for _, p := range parts {
+			var n [8]byte
+			binary.BigEndian.PutUint64(n[:], uint64(len(p)))
+			h.Write(n[:])
+			h.Write([]byte(p))
+		}
+		h.Write([]byte{0})
+	}
+	write(run.Secrets...)
+	write(run.Derived...)
+	own, derived := run.secretStrings()
+	write(own...)
+	write(derived...)
+	for name, r := range jsonvalue.Sorted(needs) {
+		write(name)
+		write(r.Secrets...)
+		write(r.Derived...)
+		for id, names := range jsonvalue.Sorted(r.SecretSteps) {
+			write(id)
+			write(names...)
+			write(r.DerivedSteps[id]...)
+		}
+	}
+	needsOwn, needsDerived := needsSecrets(needs)
+	write(needsOwn...)
+	write(needsDerived...)
+	var sum [sha256.Size]byte
+	h.Sum(sum[:0])
+	return sum
 }
 
 // find finds the secrets' own texts, their credential fields, and what a
@@ -80,6 +125,7 @@ func (t *secretTexts) find() {
 		return
 	}
 	t.found = true
+	t.sum = secretsSum(t.run, t.needs)
 	runOwn, runDerived := t.run.secretStrings()
 	needsOwn, needsDerived := needsSecrets(t.needs)
 	needsFields := credentialFields(needsOwn)
@@ -112,6 +158,13 @@ func (t *secretTexts) needsMasked() []string {
 	return t.fromNeeds
 }
 
+// sameAs reports whether t was found from the secrets that run and needs
+// hold (secretsSum).
+func (t *secretTexts) sameAs(run RunValues, needs map[string]JobResult) bool {
+	t.find()
+	return t.sum == secretsSum(run, needs)
+}
+
 // field reports whether s is one of the secrets' credential fields.
 func (t *secretTexts) field(s string) bool {
 	t.find()
@@ -137,13 +190,15 @@ func (t *secretTexts) leakMasker() *Masker {
 // credential is kept under (credentialKey): each string, and each number's
 // text, of at least minField bytes, but true, false and null, that is the
 // key's value or an item of a list that is, but not what a mapping under
-// it holds, which has keys of its own. A key a plural credential word
-// decides, such as secrets, holds credentials only as a list's items: its
+// it holds, which has keys of its own, but for a section's
+// (credentialSection), whose own values are. A key a plural credential word
+// decides, such as tokens, holds credentials only as a list's items: its
 // value alone is a setting. So {"user":"svc","password":"hunt3r2"} holds
-// hunt3r2, {"pin":1234} 1234 and {"tokens":["tok1"]} tok1, and
-// {"token":{"type":"bearer"}}, {"tokens":"none"} and {"secrets":"inherit"}
-// nothing. A text that isn't a JSON object or list
-// holds none.
+// hunt3r2, {"pin":1234} 1234, {"tokens":["tok1"]} tok1 and
+// {"secrets":{"db":"hunt3r"}} hunt3r, and {"token":{"type":"bearer"}},
+// {"tokens":"none"}, {"secrets":"inherit"} and
+// {"secrets":{"db":{"file":"./db.txt"}}} nothing. A text that isn't a JSON
+// object or list holds none.
 func credentialFields(texts []string) map[string]bool {
 	fields := map[string]bool{}
 	add := func(v any) bool {
@@ -173,6 +228,17 @@ func credentialFields(texts []string) map[string]bool {
 		switch v := v.(type) {
 		case map[string]any:
 			for k, item := range v {
+				if section, isMap := item.(map[string]any); isMap && credentialSection(k) {
+					// A section's values are credentials, one level down.
+					for _, x := range section {
+						if !leaf(x) {
+							walk(x)
+						} else {
+							add(x)
+						}
+					}
+					continue
+				}
 				credential, isPlural := credentialKey(k)
 				if items, isList := item.([]any); isList {
 					for _, x := range items {
@@ -206,6 +272,22 @@ func credentialFields(texts []string) map[string]bool {
 		}
 	}
 	return fields
+}
+
+// credentialSection reports whether key names a section of credentials,
+// whose values, one level down, are credentials when it is a mapping, as
+// {"secrets":{"github":"ghp_…"}} and {"credentials":{"value":"…"}} are:
+// its last word is secrets, credentials or creds.
+func credentialSection(key string) bool {
+	words := keyWords(key)
+	if len(words) == 0 {
+		return false
+	}
+	switch strings.ToLower(words[len(words)-1]) {
+	case "secrets", "credentials", "creds":
+		return true
+	}
+	return false
 }
 
 // credentialWords are the words of a key that a credential is kept under,

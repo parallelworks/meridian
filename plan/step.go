@@ -78,7 +78,8 @@ type JobEnv struct {
 	Masked []string `json:"masked,omitempty"`
 	// own are the job's secrets' texts and what masks them, as JobEnv found
 	// and built them for the attempt, which Step, Cleanup and End share
-	// rather than find and build again.
+	// rather than find and build again, when their state's secrets are the
+	// same (secretsSum).
 	own *secretTexts
 }
 
@@ -665,9 +666,9 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
-	if given := state.JobEnv; given != nil && given.own != nil {
+	if given := state.JobEnv; given != nil && given.own != nil && given.own.sameAs(state.Run, state.Needs) {
 		// The secrets' texts JobEnv found for this attempt, and what masks
-		// them, which it built once.
+		// them, which it built once; not those of another run or attempt.
 		e.secrets = given.own
 	}
 	// The job's Masker extends one of the secrets' own texts, which an

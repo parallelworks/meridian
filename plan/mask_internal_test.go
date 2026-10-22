@@ -236,9 +236,15 @@ func TestCredentialFieldsConfigs(t *testing.T) {
 		},
 		"lists": {
 			`{"user":"svc","password":"hunt3r2","nested":{"apiKey":"k3y1","list":["a"]},"keys":["aaaa"],"tokens":["tok1","true"],"pin":"12","creds":{"value":"abcd"},"pin2":1234,"hosts":[{"name":"h1","pin":"4821"}]}`,
-			[]string{"1234", "4821", "hunt3r2", "k3y1", "tok1"},
+			[]string{"1234", "4821", "abcd", "hunt3r2", "k3y1", "tok1"},
 		},
-		"not json": {`not json`, nil},
+		"sections": {
+			`{"secrets":{"db":"hunt3r","github":"ghp_abcdefghij","nested":{"file":"./db.txt"}},"credentials":{"username":"admin","value":"hunt3r2"}}`,
+			[]string{"admin", "ghp_abcdefghij", "hunt3r", "hunt3r2"},
+		},
+		"compose sections": {`{"secrets":{"db_password":{"file":"./db_password.txt"}}}`, nil},
+		"actions inherit":  {`{"secrets":"inherit"}`, nil},
+		"not json":         {`not json`, nil},
 	} {
 		got := slices.Sorted(maps.Keys(credentialFields([]string{tc.text})))
 		if !slices.Equal(got, tc.want) {
