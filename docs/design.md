@@ -189,9 +189,9 @@ of.
   none; `0s` is 0, which for a job's or a step's timeout is none, where
   format 1 timed out at once; a negative duration, such as `-5m`, which
   format 1 timed out at once or ignored, is a problem; `max-retries:` text
-  must be a whole number, so `3.5` and ` 3` are problems where format 1
-  retried 10 times, and a number's fraction is rounded down, as in format
-  1.
+  must be a whole number, with space around it or not, so `3.5` is a
+  problem where format 1 retried 10 times, and ` 3` is 3; and a number's
+  fraction is rounded down, as in format 1.
 - **A matrix key whose values aren't a list, and an `include` or `exclude`
   entry that isn't a mapping**, are problems (`matrix_not_list`,
   `matrix_entry_not_mapping`), where format 1 dropped them silently. All

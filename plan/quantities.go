@@ -61,7 +61,8 @@ func ParseDuration(v any) (int64, bool) {
 
 // readCount reads how many times something may run again, as format 1
 // reads it: a number, with a fraction rounded down, or text of a whole
-// number, such as an output; a negative one is 0.
+// number, with space around it or not, such as an output; a negative one
+// is 0.
 func readCount(v any) (int, bool) {
 	v = wide(v)
 	var n float64
@@ -71,7 +72,7 @@ func readCount(v any) (int, bool) {
 	case float64:
 		n = v
 	case string:
-		i, err := strconv.ParseInt(v, 10, 64)
+		i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 		if err != nil {
 			return 0, false
 		}
