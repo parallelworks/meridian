@@ -459,6 +459,18 @@
       "Read steps.<id>.outputs."
     ]
   },
+  "cleanup_undefined_step": {
+    "why": "A step's cleanup: runs once all of the job's steps have, so it can read the outputs of any of them, its own step's and later ones' among them. It reads a step by an id none of the job's steps has, which is empty.",
+    "fix": [
+      "Correct the step's id, or give the step that id."
+    ]
+  },
+  "cleanup_steps_unknown_key": {
+    "why": "Each step in steps has outputs, and nothing else, so what this cleanup: reads is empty.",
+    "fix": [
+      "Read steps.<id>.outputs."
+    ]
+  },
   "no_matrix": {
     "why": "The job has no matrix, so matrix.<key> reads as null. ACTIVATE read it as its own text when no job of the workflow had a matrix, which made it depend on the workflow's other jobs.",
     "fix": [
@@ -592,7 +604,7 @@
     ]
   },
   "undefined_env": {
-    "why": "env holds what the workflow's, the job's and the step's env: define, and the variables format 1 gives a step, such as PW_JOB_DIR and OUTPUTS. A name none of them defines reads as \"\", whatever the environment the step runs in holds, since an expression is evaluated before the step runs.",
+    "why": "env holds what the workflow's, the job's and the step's env: define, and the variables format 1 gives a step, such as PW_JOB_DIR and OUTPUTS. A name none of them defines reads as \"\", whatever the environment the step runs in holds, since an expression is evaluated before the step runs. A job's env:, working-directory: and outputs: read only the variables format 1 gives as the job starts, such as PW_JOB_DIR, and not those it gives a step alone, such as OUTPUTS and PW_WORKFLOW_STEP_CURRENT_RETRY.",
     "fix": [
       "Define the variable in an env:, or read it in the step's script, as $NAME."
     ]

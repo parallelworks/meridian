@@ -27,9 +27,11 @@ type JobState struct {
 	// step, for End.
 	Steps []StepResult
 	// Cancelled is set once the job is being cancelled, for cancelled():
-	// once the run is, or the job has run past its timeout. A step of the
-	// job that ended cancelled cancels the job too, as format 1 has it,
-	// which Step and End read from Steps.
+	// once the run is. A step of the job that ended cancelled cancels the
+	// job too, as format 1 has it, which Step and End read from Steps. A
+	// job that runs past its timeout isn't cancelled: the step it was
+	// running fails, so failure() is true and cancelled() false after it,
+	// as in format 1.
 	Cancelled bool
 	// Try is the step's try, from 0, for Step: the worker has Step evaluate
 	// the step again for each try, as format 1 does, so that what reads
@@ -69,14 +71,17 @@ var formatVariables = map[string]bool{
 }
 
 // stepVariables are the variables format 1 defines for a step alone, which
-// a job's env: doesn't read, as it is evaluated as the job starts.
+// a job's env:, working-directory: and outputs: don't read, as they are
+// evaluated as the job starts or with what it started with.
 var stepVariables = map[string]bool{
 	"OUTPUTS": true, "PW_STEP_SUMMARY": true, "PW_WORKFLOW_STEP_CURRENT_RETRY": true, "PW_WORKFLOW_STEP_MAX_RETRIES": true,
 }
 
-// isJobVariable reports whether name is one of the variables format 1
-// defines as a job starts.
-func isJobVariable(name string) bool { return formatVariables[name] && !stepVariables[name] }
+// IsJobStartVariable reports whether name is one of the variables format 1
+// defines as a job starts, which a job's env:, working-directory: and
+// outputs: read (IsFormatVariable), and not one it defines for a step
+// alone, such as OUTPUTS.
+func IsJobStartVariable(name string) bool { return formatVariables[name] && !stepVariables[name] }
 
 // IsFormatVariable reports whether name is one of the variables format 1
 // gives a step, which env reads (JobState.Env), such as PW_JOB_DIR and
@@ -89,13 +94,20 @@ type StepResult struct {
 	// Outcome is the step's outcome as its job counts it: a step that
 	// failed with ignore-errors is a success, one whose if: was false is
 	// skipped, and one that was stopped, as early-cancel: stops one, is
-	// cancelled, which cancels the rest of its job (JobState.Cancelled). A
+	// cancelled, which cancels the rest of its job (JobState.Cancelled),
+	// and one that was running when its job ran past its timeout fails. A
 	// uses: step whose run was cancelled from within it while its job goes
-	// on counts as skipped, as format 1 goes on with the job after one.
+	// on counts as a success, as format 1 goes on with the job after one
+	// and cleans it up.
 	Outcome Outcome
 	// Outputs are what the step wrote to $OUTPUTS, by name, as written:
 	// the job's later steps and its outputs: read them unmasked.
 	Outputs map[string]string
+	// CleanupOutputs are what the step's cleanup: wrote to $OUTPUTS, once
+	// it has run: they are the job's outputs, over its steps', as format 1
+	// has them, merged in the order the cleanups ran, the reverse of their
+	// steps'.
+	CleanupOutputs map[string]string
 }
 
 // A ReadyStep is a step as Step evaluated it, ready to run: plain values,
@@ -245,13 +257,18 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 // Cleanup is the phase of a step's cleanup:: it evaluates the cleanup: of
 // the step at index in the job, on the job's worker, once the job's steps
 // have run, as a step of its own that runs the cleanup: command, as format
-// 1 does: one that runs whatever happened to the job, even once it is
-// being cancelled or past its timeout (OutlivesCancel), has no timeout or
-// retry: of its own, and no early-cancel:, and is named POST and the
-// step's name, or Step and its index. It is skipped if the step didn't
-// run. The worker runs the job's cleanups in the reverse order of their
-// steps, as format 1 does. It reads its job's contexts as Step does, with every step's
-// outputs, and reads an output that nothing wrote as "", as format 1
+// 1 runs a copy of the step: one that runs even once the job is being
+// cancelled or past its timeout (OutlivesCancel), has no timeout or retry:
+// of its own, and no early-cancel:, and is named POST and the step's name,
+// or Step and its index when the name isn't text. It is skipped if the
+// step didn't run, and if the step's if:, evaluated again with the job's
+// status as it ends, is false, without success(): a step with no if: is
+// cleaned up whatever happened to the job. The worker runs the job's
+// cleanups in the reverse order of their steps, and what a cleanup writes
+// to $OUTPUTS is the job's (StepResult.CleanupOutputs), as format 1 has
+// them. It reads its job's contexts as Step does, with every step's
+// outputs and those of the cleanups that ran before it, its own step's
+// among them, and reads an output that nothing wrote as "", as format 1
 // reads a cleanup:'s.
 //
 // Cleanup reaches nothing, and gives the same result for the same job,
@@ -295,7 +312,18 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	var d decision
 	switch {
 	case cleanup:
-		d = decision{run: true, outlivesCancel: true}
+		// A cleanup evaluates its step's if: again, with the job's status as
+		// it ends, as format 1 runs a copy of the step.
+		e = c.evaluation(PhaseStep, e)
+		var ok bool
+		if d, ok = e.cleanupCondition(s.If, at(s.Path, "if")); !ok {
+			return nil, e.diags, nil
+		}
+		if !d.run {
+			rs.Skipped = true
+			return rs, e.diags, nil
+		}
+		d.always, d.outlivesCancel = false, true
 	case state.Try > 0:
 		d = decision{run: true, always: state.FirstTry.IfAlways, outlivesCancel: state.FirstTry.OutlivesCancel}
 	default:
@@ -320,10 +348,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	rs.Name, _, _ = e.text(s.Name, at(s.Path, "name"))
 	rs.Shell = s.Shell
 	if cleanup {
-		if rs.Name == "" {
-			rs.Name = "Step " + strconv.Itoa(index)
-		}
-		rs.Name = "POST " + rs.Name
+		rs.Name = postName(s.Name, rs.Name, index)
 		rs.Run, _, _ = e.text(s.Cleanup, at(s.Path, "cleanup"))
 	} else {
 		rs.ID, rs.Uses, rs.EarlyCancel = s.ID, s.Uses, s.EarlyCancel
@@ -382,6 +407,24 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	return rs, e.diags, nil
 }
 
+// postName returns the name of the step that runs the cleanup: of the step
+// at index: POST and the step's name, evaluated, name, or Step and its
+// index if the name it is written with isn't text or is empty, as format 1
+// names its copy of the step.
+func postName(written Value, name string, index int) string {
+	text := false
+	switch v := written.v.(type) {
+	case string:
+		text = v != ""
+	case *expr.Template:
+		text = v.String() != ""
+	}
+	if !text {
+		return "POST Step " + strconv.Itoa(index)
+	}
+	return "POST " + name
+}
+
 // The defaults of a step's retry:, format 1's.
 const (
 	defaultStepRetries    = 10
@@ -394,7 +437,8 @@ const (
 type EndResult struct {
 	// Outputs are the job's outputs, by name, as format 1 has them: what
 	// its steps without an id wrote, the later step's where two wrote the
-	// same name, and its outputs: over that, each masked. A step with an id
+	// same name, what its cleanups wrote over that, and its outputs: over
+	// all, each masked. A step with an id
 	// writes outputs of its own, which the worker gives as its own
 	// (JobResult.Steps).
 	Outputs map[string]string
@@ -407,9 +451,10 @@ type EndResult struct {
 }
 
 // End is the End phase: it gives the job's outputs, on its worker, once the
-// job's steps have run: what its steps without an id wrote, merged in
-// their order, and its outputs:, evaluated, over them. It masks each with a Masker of
-// state.Masked, and of what it made from a secret, such as a value of the
+// job's steps and their cleanups have run: what its steps without an id
+// wrote, merged in their order, what its cleanups wrote over them, in the
+// order they ran, and its outputs:, evaluated, over all. It masks each
+// with a Masker of state.Masked, and of what it made from a secret, such as a value of the
 // job's env:, and masks the whole of an output: that was made from a
 // secret, with a warning that names it (output_masked), and one when a
 // value of its holds a secret. What one of its outputs: is made of masks
@@ -502,7 +547,7 @@ type stepContexts struct {
 // starts, and returns the contexts of its steps, without needs or steps,
 // and the evaluation, which holds its problems and the text of what it
 // made from a secret. The job's env: reads only the worker's variables
-// that format 1 defines as a job starts (isJobVariable), so that it gives
+// that format 1 defines as a job starts (IsJobStartVariable), so that it gives
 // the same values for each step. The job fails, for failure(), when a step
 // of it failed, and is cancelled, for cancelled(), when state.Cancelled
 // says so or a step of it was cancelled, as one early-cancel: stops is.
@@ -510,7 +555,7 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 	c := &stepContexts{
 		Run: state.Run, Needs: state.Needs, Status: expr.Status{Cancelled: state.Cancelled},
 		Matrix: j.Matrix, Job: state.Job, Private: j.Private, Secrets: j.Secrets,
-		WorkerEnv: variables(state.Env, isJobVariable), StrictOutputs: !j.IfAlways,
+		WorkerEnv: variables(state.Env, IsJobStartVariable), StrictOutputs: !j.IfAlways,
 		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
@@ -707,11 +752,11 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 }
 
 // addSelf gives c the needs of the job's steps, with the job itself, and
-// its steps' outputs by id, from what its steps so far, state.Steps,
-// wrote, and notes the outputs that hold a secret: what the worker masks
-// (state.Masked), and what the job's env: made from one (masked), as each
-// can show, but for its lines, which plain text can hold too. Each output
-// is checked once.
+// its steps' outputs by id, from what its steps so far, state.Steps, and
+// the cleanups that have run wrote, and notes the outputs that hold a
+// secret: what the worker masks (state.Masked), and what the job's env:
+// made from one (masked), as each can show, but for its lines, which plain
+// text can hold too. Each output is checked once.
 func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
@@ -740,6 +785,13 @@ func (c *stepContexts) addSelf(j *ReadyJob, state JobState, masked []string) {
 			case leaked:
 				c.leaks = append(c.leaks, []string{"steps", id, "outputs", name}, []string{"needs", j.Name, "steps", id, "outputs", name})
 			}
+		}
+	}
+	// The cleanups ran in the reverse order of their steps, and write the
+	// job's outputs, whatever their step's id.
+	for _, r := range slices.Backward(state.Steps) {
+		for name, v := range jsonvalue.Sorted(r.CleanupOutputs) {
+			self.Outputs[name], selfLeaks[name] = v, leak.Mask(v) != v
 		}
 	}
 	for name, leaked := range jsonvalue.Sorted(selfLeaks) {

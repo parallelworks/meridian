@@ -75,6 +75,8 @@
   "output_undefined_step": "‘{job}’ 작업에 id가 ‘{id}’인 단계가 없으므로 이 출력은 비어 있습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
   "steps_unknown_key": "steps.{id}에는 ‘{key}’ 키가 없습니다. steps.{id}에는 outputs가 있습니다.",
   "output_steps_unknown_key": "steps.{id}에는 ‘{key}’ 키가 없습니다. steps.{id}에는 outputs만 있으므로 이 출력은 비어 있습니다.",
+  "cleanup_undefined_step": "‘{job}’ 작업에 id가 ‘{id}’인 단계가 없으므로 이 cleanup:이 거기서 읽는 값은 비어 있습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
+  "cleanup_steps_unknown_key": "steps.{id}에는 ‘{key}’ 키가 없습니다. steps.{id}에는 outputs만 있으므로 이 cleanup:이 거기서 읽는 값은 비어 있습니다.",
   "no_matrix": "‘{job}’ 작업에는 매트릭스가 없으므로 matrix.{key} 값은 텍스트 {text}가 아니라 null입니다.",
   "undefined_matrix_key": "‘{job}’ 작업의 매트릭스에는 ‘{key}’ 키가 없습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
   "undefined_session": "워크플로에 ‘{name}’ 세션이 없습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
@@ -98,7 +100,7 @@
   "output_masked": "‘{name}’ 출력에 시크릿이 들어 있었으므로 해당 부분은 마스킹됩니다.",
   "output_not_written": "{of, select, step {‘{owner}’ 단계가 ‘{name}’ 출력을 쓰지 않았으므로} other {‘{owner}’ 작업에 ‘{name}’ 출력이 없으므로}} 이를 읽는 표현식이 실패합니다.",
   "working_directory_variable": "작업 디렉터리에 {variable}이(가) 그대로 남아 있습니다. 셸 변수는 여기서 확장되지 않습니다. 대신 env.PW_JOB_DIR처럼 env를 읽는 표현식을 사용하세요.",
-  "undefined_env": "여기서 env.{name}은(는) ‘’로 읽힙니다. 워크플로, 작업, 단계의 어느 env:에도 정의되어 있지 않고 형식 1도 주지 않습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도했나요?} other {}}",
+  "undefined_env": "여기서 env.{name}은(는) ‘’로 읽힙니다. 워크플로, 작업, 단계의 어느 env:에도 정의되어 있지 않고 형식 1도 여기서는 주지 않습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도했나요?} other {}}",
 
   "expression_empty": "표현식이 비어 있습니다.",
   "expression_too_deep": "표현식의 중첩이 {max}단계를 넘습니다.",

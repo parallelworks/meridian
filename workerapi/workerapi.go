@@ -326,7 +326,8 @@ type Event struct {
 	// Finished is set when the step finished, and unset when it started.
 	Finished bool `json:"finished,omitzero"`
 	// Step is the step's index in its job, from 0, and Try its retry: 0
-	// for its first run. Cleanup is set for the step's cleanup: command.
+	// for its first run. Cleanup is set for the step's cleanup: command,
+	// whose outputs are the job's (plan.StepResult.CleanupOutputs).
 	Step    int  `json:"step"`
 	Try     int  `json:"try,omitzero"`
 	Cleanup bool `json:"cleanup,omitzero"`

@@ -201,8 +201,9 @@ expect:
   defines, such as `PW_WORKFLOW_STEP_CURRENT_RETRY`, which `env` reads over
   the workflow's, the job's and the step's.
 - `expect.skipped` lists the JSON Pointers of the jobs and steps whose
-  `if:` is false, and of the `cleanup:` of each step that didn't run, and
-  every other job, step and `cleanup:` evaluated runs.
+  `if:` is false, and of the `cleanup:` of each step that didn't run or
+  whose `if:` is false as the job ends, and every other job, step and
+  `cleanup:` evaluated runs.
 - `expect.needs-failed` lists the JSON Pointers of the jobs skipped because
   a job they need failed, which the jobs that need them read as failed.
   Every other job skipped was skipped by its own `if:`.

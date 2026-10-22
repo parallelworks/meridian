@@ -75,6 +75,8 @@
   "output_undefined_step": "El trabajo “{job}” no tiene ningún paso con el id “{id}”, así que esta salida está vacía.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "steps_unknown_key": "No hay ninguna clave “{key}” en steps.{id}, que tiene outputs.",
   "output_steps_unknown_key": "No hay ninguna clave “{key}” en steps.{id}, que tiene outputs, así que esta salida está vacía.",
+  "cleanup_undefined_step": "El trabajo “{job}” no tiene ningún paso con el id “{id}”, así que lo que este cleanup: lee de él está vacío.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
+  "cleanup_steps_unknown_key": "No hay ninguna clave “{key}” en steps.{id}, que tiene outputs, así que lo que este cleanup: lee de ella está vacío.",
   "no_matrix": "El trabajo “{job}” no tiene matriz, así que matrix.{key} es null, no el texto {text}.",
   "undefined_matrix_key": "La matriz del trabajo “{job}” no tiene ninguna clave “{key}”.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "undefined_session": "El flujo de trabajo no tiene ninguna sesión “{name}”.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
@@ -98,7 +100,7 @@
   "output_masked": "La salida “{name}” contenía un secreto, que se enmascara en ella.",
   "output_not_written": "{of, select, step {El paso “{owner}” no escribió ninguna salida “{name}”} other {El trabajo “{owner}” no tiene ninguna salida “{name}”}}, así que lo que la lee falla.",
   "working_directory_variable": "El directorio de trabajo conserva {variable} tal cual: las variables del shell no se expanden ahí. Usa en su lugar una expresión que lea env, como env.PW_JOB_DIR.",
-  "undefined_env": "Leer env.{name} da “” aquí: ningún env: del flujo de trabajo, del trabajo o del paso la define, y el formato 1 no la da.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
+  "undefined_env": "Leer env.{name} da “” aquí: ningún env: del flujo de trabajo, del trabajo o del paso la define, y el formato 1 no la da aquí.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
 
   "expression_empty": "La expresión está vacía.",
   "expression_too_deep": "La expresión tiene más de {max} niveles de anidamiento.",

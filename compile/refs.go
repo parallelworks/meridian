@@ -332,18 +332,18 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding 
 // checkEnvRef checks that env.<name>, read in phase ph in job (nil outside
 // jobs) at the string in, names a variable env holds there: one the
 // workflow's env: defines; once the job's env: is evaluated, one of
-// format 1's (plan.IsFormatVariable) and one the job's env: defines, as do
-// its working-directory:, its steps and its outputs:; and in a step, one
-// its own env: does. Any other reads as "", which is a warning.
+// format 1's and one the job's env: defines, as do its working-directory:,
+// its steps and its outputs:, but for the variables format 1 defines for a
+// step alone, such as OUTPUTS, which only its steps read
+// (plan.IsFormatVariable, plan.IsJobStartVariable); and in a step, one its
+// own env: does. Any other reads as "", which is a warning.
 func (c *compiler) checkEnvRef(name string, ph phase, job *jobInfo, in *spot) finding {
 	env := func(loc ...string) map[string]any { return mapping(lookup(c.doc.Value, loc)) }
 	defined := []map[string]any{env("env")}
 	if job != nil {
 		dir := slices.Equal(in.loc, appendPath(job.loc, "working-directory"))
-		if ph >= jobEnv || dir {
-			if plan.IsFormatVariable(name) {
-				return finding{}
-			}
+		if ph == stepRuns && plan.IsFormatVariable(name) || (ph >= jobEnv || dir) && plan.IsJobStartVariable(name) {
+			return finding{}
 		}
 		if ph >= jobEnv || dir {
 			defined = append(defined, env(appendPath(job.loc, "env")...))
@@ -365,36 +365,41 @@ func (c *compiler) checkEnvRef(name string, ph phase, job *jobInfo, in *spot) fi
 
 // checkStepRef checks that steps.<path> names an earlier step of the job.
 // In one of the job's outputs, which are read once its steps have run, a
-// step that isn't there is a warning, as the output is empty.
+// step that isn't there is a warning, as the output is empty, and so it is
+// in a step's cleanup:, which runs once every step has, its own and later
+// ones among them.
 func (c *compiler) checkStepRef(path []string, job *jobInfo, output bool) finding {
 	id := path[0]
+	reach := job.step
+	if job.cleanup {
+		reach = job.steps
+	}
+	undefined, unknownKey := problems.UndefinedStep, problems.StepsUnknownKey
+	switch {
+	case output:
+		undefined, unknownKey = problems.OutputUndefinedStep, problems.OutputStepsUnknownKey
+	case job.cleanup:
+		undefined, unknownKey = problems.CleanupUndefinedStep, problems.CleanupStepsUnknownKey
+	}
 	i, ok := job.stepIDs[id]
-	if !ok || i >= job.step {
+	if !ok || i >= reach {
 		if ok {
 			return finding{problems.StepNotEarlier, problems.Params{"id": id}}
 		}
-		if job.earlier == nil || job.earlierAt != job.step {
+		if job.earlier == nil || job.earlierAt != reach {
 			var earlier []string
 			for k, j := range job.stepIDs {
-				if j < job.step {
+				if j < reach {
 					earlier = append(earlier, k)
 				}
 			}
 			slices.Sort(earlier)
-			job.earlier, job.earlierAt = newNameList(earlier), job.step
+			job.earlier, job.earlierAt = newNameList(earlier), reach
 		}
-		k := problems.UndefinedStep
-		if output {
-			k = problems.OutputUndefinedStep
-		}
-		return suggesting(k, problems.Params{"job": job.name, "id": id}, id, job.earlier)
+		return suggesting(undefined, problems.Params{"job": job.name, "id": id}, id, job.earlier)
 	}
 	if len(path) >= 2 && path[1] != "outputs" {
-		k := problems.StepsUnknownKey
-		if output {
-			k = problems.OutputStepsUnknownKey
-		}
-		return finding{k, problems.Params{"id": id, "key": path[1]}}
+		return finding{unknownKey, problems.Params{"id": id, "key": path[1]}}
 	}
 	return finding{}
 }

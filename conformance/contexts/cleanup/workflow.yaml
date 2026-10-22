@@ -4,6 +4,10 @@ jobs:
       - name: Submit PBS Job
         run: echo "jobid=4242.pbs" >> $OUTPUTS
         cleanup: qdel "${{ needs.pbs_job.outputs.jobid }}"
+      - name: Stage Results
+        if: success()
+        run: echo staged
+        cleanup: rm -rf staged
       - name: Monitor PBS Job
         run: exit 1
         cleanup: echo "state=[${{ needs.pbs_job.outputs.state }}] failed=${{ failure() }}"

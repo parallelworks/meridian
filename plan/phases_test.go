@@ -545,9 +545,11 @@ jobs:
 }
 
 // Cleanup evaluates a step's cleanup: once the job's steps have run, as a
-// step of its own named POST and the step's name, which runs whatever
-// happened to the job, reads every step's outputs, and reads one that
-// nothing wrote as "". It skips the cleanup of a step that didn't run.
+// step of its own named POST and the step's name, or its index when the
+// name isn't text, which outlives a cancel, reads every step's outputs and
+// those of the cleanups that ran before it, and reads one that nothing
+// wrote as "". It skips the cleanup of a step that didn't run, and of one
+// whose if:, evaluated with the job's status as it ends, is false.
 func TestCleanup(t *testing.T) {
 	p := compiled(t, `
 env:
@@ -557,17 +559,23 @@ jobs:
     steps:
       - id: first
         name: first
+        if: ${{ vars.token != '' }}
         run: echo jobid=1 >> $OUTPUTS
-        cleanup: rm -rf ${{ env.W }} ${{ needs.main.outputs.late }} [${{ needs.main.outputs.none }}] ${{ vars.token }}
+        cleanup: rm -rf ${{ env.W }} ${{ needs.main.outputs.late }} [${{ needs.main.outputs.none }}] ${{ vars.token }} ${{ needs.main.outputs.cleaned }} ${{ steps.first.outputs.jobid }}
         timeout: 1m
         retry: {}
         early-cancel: any-job-failed
-        if: success()
+      - if: success()
+        run: "true"
+        cleanup: echo gated
       - run: exit 1
         cleanup: echo ${{ needs.main.outputs.late }} ${{ steps.first.outputs.jobid }} ${{ failure() }}
       - run: "true"
         cleanup: never
-      - run: "true"
+      - name: ${{ '' }}
+        if: always()
+        run: "true"
+        cleanup: echo ${{ cancelled() }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": "s3cret"})
 	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
@@ -579,9 +587,10 @@ jobs:
 		Run: run, Cancelled: true,
 		Steps: []plan.StepResult{
 			{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"jobid": "1"}},
-			{Outcome: plan.OutcomeFailure, Outputs: map[string]string{"late": "2"}},
+			{Outcome: plan.OutcomeSuccess},
+			{Outcome: plan.OutcomeFailure, Outputs: map[string]string{"late": "2"}, CleanupOutputs: map[string]string{"cleaned": "yes"}},
 			{Outcome: plan.OutcomeSkipped},
-			{Outcome: plan.OutcomeSkipped},
+			{Outcome: plan.OutcomeSuccess},
 		},
 	}
 	s, diags, err := rj.Cleanup(t.Context(), 0, state)
@@ -592,16 +601,29 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret","env":{"W":"workflow"},"masked":["s3cret","rm -rf workflow 2 [] s3cret"],"outlivesCancel":true}`; string(data) != want {
+	if want := `{"index":0,"name":"POST first","run":"rm -rf workflow 2 [] s3cret yes 1","env":{"W":"workflow"},"masked":["s3cret","rm -rf workflow 2 [] s3cret yes 1"],"outlivesCancel":true}`; string(data) != want {
 		t.Errorf("cleanup 0:\n%s\nwant\n%s", data, want)
 	}
-	if s, _, err := rj.Cleanup(t.Context(), 1, state); err != nil || s.Name != "POST Step 1" || s.Run != "echo 2 1 true" || !s.OutlivesCancel {
-		t.Errorf("cleanup 1: %+v, %v", s, err)
+	if s, _, err := rj.Cleanup(t.Context(), 2, state); err != nil || s.Name != "POST Step 2" || s.Run != "echo 2 1 true" || !s.OutlivesCancel {
+		t.Errorf("cleanup 2: %+v, %v", s, err)
 	}
-	if s, diags, err := rj.Cleanup(t.Context(), 2, state); err != nil || len(diags) > 0 || !s.Skipped || s.Run != "" {
-		t.Errorf("cleanup of a step that didn't run: %+v, %v, %v", s, diags, err)
+	if s, _, err := rj.Cleanup(t.Context(), 4, state); err != nil || s.Name != "POST " || s.Run != "echo true" {
+		t.Errorf("cleanup 4: %+v, %v", s, err)
 	}
-	for i, n := range map[int]int{-1: 4, 3: 4, 4: 4, 0: 3} {
+	for _, i := range []int{1, 3} {
+		if s, diags, err := rj.Cleanup(t.Context(), i, state); err != nil || len(diags) > 0 || !s.Skipped || s.Run != "" {
+			t.Errorf("cleanup %d: %+v, %v, %v", i, s, diags, err)
+		}
+	}
+	state.Steps[2].Outcome, state.Cancelled = plan.OutcomeSuccess, false
+	if s, _, err := rj.Cleanup(t.Context(), 1, state); err != nil || s.Skipped || s.Run != "echo gated" {
+		t.Errorf("cleanup 1 of a job that succeeded: %+v, %v", s, err)
+	}
+	end, _, err := rj.End(t.Context(), state)
+	if err != nil || fmt.Sprint(end.Outputs) != "map[cleaned:yes late:2]" {
+		t.Errorf("outputs %+v, %v", end, err)
+	}
+	for i, n := range map[int]int{-1: 5, 5: 5, 4: 4, 0: 4} {
 		state.Steps = make([]plan.StepResult, n)
 		if _, _, err := rj.Cleanup(t.Context(), i, state); err == nil {
 			t.Errorf("cleanup %d with %d results", i, n)
@@ -1209,6 +1231,36 @@ jobs:
 		}
 		if got != want {
 			t.Errorf("if: %s: %s, want %s", cond, got, want)
+		}
+	}
+}
+
+// A cleanup's step is named POST and its step's name, or Step and its
+// index when the name is empty or unset, as format 1 names it.
+func TestCleanupName(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - name: ""
+        run: "true"
+        cleanup: "true"
+      - run: "true"
+        cleanup: "true"
+      - name: build ${{ 1 }}
+        run: "true"
+        cleanup: "true"
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: run, Steps: make([]plan.StepResult, 3)}
+	for i, want := range []string{"POST Step 0", "POST Step 1", "POST build 1"} {
+		state.Steps[i].Outcome = plan.OutcomeSuccess
+		if s, _, err := ready.Job.Cleanup(t.Context(), i, state); err != nil || s.Name != want {
+			t.Errorf("cleanup %d: %+v, %v, want %q", i, s, err, want)
 		}
 	}
 }

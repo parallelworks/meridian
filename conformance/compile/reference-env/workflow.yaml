@@ -8,6 +8,7 @@ jobs:
     env:
       JOB: ${{ env.WORKFLOW }}
       OTHER: ${{ env.JOB }}
+      RETRY: ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}
     steps:
       - run: echo ${{ env.WORKFLOW }} ${{ env.JOB }} ${{ env.STEP }} ${{ env.OUTPUTS }} ${{ env.PW_API_KEY }}
         env:
@@ -15,3 +16,5 @@ jobs:
       - run: echo ${{ env.STEP }} ${{ env.HOME }}
     outputs:
       job: ${{ env.JOB }}
+      file: ${{ env.OUTPUTS }}
+      dir: ${{ env.PW_JOB_DIR }}

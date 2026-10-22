@@ -535,6 +535,20 @@
       "读取 steps.<id>.outputs。"
     ]
   },
+  "cleanup_undefined_step": {
+    "title": "cleanup: 读取了不存在的步骤",
+    "why": "步骤的 cleanup: 在作业的所有步骤运行之后才运行，因此可以读取任何步骤的输出，包括它自己的步骤和之后的步骤。此 cleanup: 以作业中任何步骤都没有的 id 引用步骤，因此读取的值为空。",
+    "fix": [
+      "更正步骤的 id，或为该步骤指定这个 id。"
+    ]
+  },
+  "cleanup_steps_unknown_key": {
+    "title": "cleanup: 读取了步骤的未知键",
+    "why": "steps 中的每个步骤只有 outputs，因此此 cleanup: 读取的值为空。",
+    "fix": [
+      "读取 steps.<id>.outputs。"
+    ]
+  },
   "no_matrix": {
     "title": "作业没有矩阵",
     "why": "该作业没有矩阵，因此 matrix.<键> 读作 null。当工作流中没有任何作业带有矩阵时，ACTIVATE 会把它读作引用本身的文本，这使结果取决于工作流中的其他作业。",
@@ -691,7 +705,7 @@
   },
   "undefined_env": {
     "title": "未定义的 env 变量",
-    "why": "env 包含工作流、作业和步骤的 env: 所定义的内容，以及格式 1 提供给步骤的变量，例如 PW_JOB_DIR 和 OUTPUTS。它们都没有定义的名称会读作 \"\"，无论步骤运行的环境中有什么，因为表达式在步骤运行之前求值。",
+    "why": "env 包含工作流、作业和步骤的 env: 所定义的内容，以及格式 1 提供给步骤的变量，例如 PW_JOB_DIR 和 OUTPUTS。它们都没有定义的名称会读作 \"\"，无论步骤运行的环境中有什么，因为表达式在步骤运行之前求值。作业的 env:、working-directory: 和 outputs: 只读取格式 1 在作业开始时提供的变量，例如 PW_JOB_DIR，而不读取它只提供给步骤的变量，例如 OUTPUTS 和 PW_WORKFLOW_STEP_CURRENT_RETRY。",
     "fix": [
       "在 env: 中定义该变量，或在步骤的脚本中以 $NAME 读取它。"
     ]

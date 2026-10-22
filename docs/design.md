@@ -174,8 +174,10 @@ of.
   nothing reads a matrix job's outputs.
 - **An `if:` whose value is null is false**, as `docs/expressions.md` says
   conditions go by truthiness, where format 1 ran the job or step. All 7
-  `if:`s that are a bare reference read a boolean input that has a
-  default, and none of those inputs is hidden or ignored, so none is null.
+  `if:`s that are a bare reference read a boolean input, and none of those
+  inputs is hidden or ignored, so none is null: each has a default but
+  sl_core's `push_to_gh`, which ACTIVATE fills with `false` when it is left
+  out, as Meridian does.
 - **A duration or a count that isn't one is a problem**, where format 1
   ignored a timeout it couldn't read and fell back to a retry's defaults:
   an expression's value for a job's or a step's `timeout:`, a retry's
@@ -218,6 +220,13 @@ of.
   evaluated in the order they read each other, as in format 1. None of the
   136 `env:` blocks of the known workflows has a value that reads another
   of its own block.
+- **A step's `cleanup:` reads `steps.<its own id>` as its step wrote it,
+  and a job's `outputs:` read the outputs of a step with an `id` and a
+  `cleanup:`**, where ACTIVATE's copy of the step that runs the cleanup
+  kept the step's `id`, and so emptied its outputs before the cleanup and
+  the job's `outputs:` read them. ACTIVATE takes the same fix by leaving
+  the `id` out of the copy. None of the 165 `cleanup:`s of the known
+  workflows is on a step with an `id`, and none reads `steps`.
 
 ## Phases
 
@@ -1274,20 +1283,28 @@ waking up or `meridian run` restarting must not make them all look lost.
   step SIGTERM, then SIGKILL after a grace period; placements in progress
   are withdrawn (`scancel`, `qdel`, deleting the pod).
 - **Timeouts:** the worker enforces step and job timeouts. The coordinator
-  enforces the run's timeout, and a job's as a backstop.
+  enforces the run's timeout, and a job's as a backstop. A job that runs
+  past its timeout isn't cancelled: the step it was running fails, so
+  `failure()` is true after it and `cancelled()` false, as in format 1.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
   fails. The coordinator tells the step's worker. The step ends cancelled,
   which cancels the rest of its job, as in format 1: a later step runs only
   if it outlives a cancel, and the job ends cancelled unless a step of it
   failed (`plan.JobState.Cancelled`). A `uses:` step whose child run was
-  cancelled from within it while its job goes on counts as skipped, as
-  format 1 goes on with the job after one.
+  cancelled from within it while its job goes on counts as a success, as
+  format 1 goes on with the job after one, and cleans it up.
 - **A step's `cleanup:` command** runs at the end of its job if the step
-  ran, whatever the job's outcome, in reverse order, as a step of its own
-  named `POST` and the step's name, which outlives a cancel and has no
-  timeout or retry of its own, as in format 1. It is evaluated as it runs
-  (`plan.ReadyJob.Cleanup`), with every step's outputs, and reads one that
-  nothing wrote as `""`.
+  ran, in reverse order, as a step of its own named `POST` and the step's
+  name, which outlives a cancel and has no timeout or retry of its own, as
+  format 1 runs a copy of the step. The step's `if:` is evaluated again,
+  with the job's status as it ends and without `success()`, so a step with
+  no `if:` is cleaned up whatever the job's outcome, and one whose `if:` is
+  false then isn't: 40 of the 165 `cleanup:`s of the known workflows are
+  on a step with an `if:`, and none of those calls a status function. It is
+  evaluated as it runs (`plan.ReadyJob.Cleanup`), with every step's
+  outputs, its own and later ones' among them, and reads one that nothing
+  wrote as `""`. What it writes to `$OUTPUTS` is the job's, over what its
+  steps wrote.
 
 ### Outputs
 
@@ -1529,9 +1546,9 @@ member's running workers reconnect to it.
   `if:` reads one as `""`, and so do a step whose `if:` is the word
   `always`, a job's own values and its strategy when its `if:` is, a
   step's `cleanup:`, and a job's `outputs:` once a step of it failed or was
-  cancelled. A step with an `id`
-  writes outputs of its own, which `steps.<id>` reads; the job's outputs are
-  those its steps without one write, with its `outputs:` over them.
+  cancelled. A step with an `id` writes outputs of its own, which
+  `steps.<id>` reads; the job's outputs are those its steps without one
+  write, then those its cleanups write, with its `outputs:` over them.
 - **A host of a step's own.** A format 1 `ssh:` on a job runs its steps on
   the host it names, and a step's runs it on its own: `ssh: null` runs the
   step where the job runs without its `ssh:`, and an empty or null

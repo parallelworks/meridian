@@ -535,6 +535,20 @@
       "Lee steps.<id>.outputs."
     ]
   },
+  "cleanup_undefined_step": {
+    "title": "Un cleanup: lee un paso que no existe",
+    "why": "El cleanup: de un paso se ejecuta cuando ya se han ejecutado todos los pasos del trabajo, así que puede leer las salidas de cualquiera de ellos, incluidos su propio paso y los posteriores. Este lee un paso con un id que no tiene ninguno de los pasos del trabajo, así que lo que lee está vacío.",
+    "fix": [
+      "Corrige el id del paso o dale ese id al paso."
+    ]
+  },
+  "cleanup_steps_unknown_key": {
+    "title": "Un cleanup: lee una clave desconocida de un paso",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que lo que lee este cleanup: está vacío.",
+    "fix": [
+      "Lee steps.<id>.outputs."
+    ]
+  },
   "no_matrix": {
     "title": "El trabajo no tiene matriz",
     "why": "El trabajo no tiene matriz, así que matrix.<clave> se lee como null. ACTIVATE lo leía como su propio texto cuando ningún trabajo del flujo de trabajo tenía matriz, lo que lo hacía depender de los demás trabajos del flujo de trabajo.",
@@ -691,7 +705,7 @@
   },
   "undefined_env": {
     "title": "Variable de env sin definir",
-    "why": "env contiene lo que definen los env: del flujo de trabajo, del trabajo y del paso, y las variables que el formato 1 da a un paso, como PW_JOB_DIR y OUTPUTS. Un nombre que ninguno define se lee como \"\", contenga lo que contenga el entorno en el que se ejecuta el paso, ya que una expresión se evalúa antes de que el paso se ejecute.",
+    "why": "env contiene lo que definen los env: del flujo de trabajo, del trabajo y del paso, y las variables que el formato 1 da a un paso, como PW_JOB_DIR y OUTPUTS. Un nombre que ninguno define se lee como \"\", contenga lo que contenga el entorno en el que se ejecuta el paso, ya que una expresión se evalúa antes de que el paso se ejecute. El env:, el working-directory: y los outputs: de un trabajo leen solo las variables que el formato 1 da cuando el trabajo empieza, como PW_JOB_DIR, y no las que da solo a un paso, como OUTPUTS y PW_WORKFLOW_STEP_CURRENT_RETRY.",
     "fix": [
       "Define la variable en un env:, o léela en el script del paso, como $NAME."
     ]

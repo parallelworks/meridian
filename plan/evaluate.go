@@ -144,8 +144,23 @@ type decision struct {
 // truthiness; and any other, its truthiness and success(), whose place it
 // doesn't take. ok is false if it fails.
 func (e *evaluation) condition(v Value, pointer string) (d decision, ok bool) {
+	return e.decide(v, pointer, true)
+}
+
+// cleanupCondition evaluates the if: of a step whose cleanup: is about to
+// run, v, at pointer, as condition does, but without success(): the
+// cleanup runs when the if: is unset, the word always, or true, whatever
+// happened to the job, as format 1 evaluates its copy of the step's if:
+// with the job's status as it ends. ok is false if it fails.
+func (e *evaluation) cleanupCondition(v Value, pointer string) (d decision, ok bool) {
+	return e.decide(v, pointer, false)
+}
+
+// decide is condition, which takes success() into account when gated is
+// set, and cleanupCondition, which doesn't.
+func (e *evaluation) decide(v Value, pointer string, gated bool) (d decision, ok bool) {
 	status := e.scope.Status
-	success := !status.Failed && !status.Cancelled
+	success := !gated || !status.Failed && !status.Cancelled
 	if v.IsZero() {
 		return decision{run: success}, true
 	}

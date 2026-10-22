@@ -84,7 +84,8 @@ type Expect struct {
 	Plan map[string]any `yaml:"plan,omitempty"`
 	// Skipped are the JSON Pointers of the jobs and steps whose if: is
 	// false, in the contexts area, and of the cleanup: of each step that
-	// didn't run. Every other job, step and cleanup: there runs.
+	// didn't run, or whose if: is false as the job ends. Every other job,
+	// step and cleanup: there runs.
 	Skipped []string `yaml:"skipped,omitempty"`
 	// Private are the JSON Pointers of the job outputs that are private, in
 	// the contexts area: made from an organization or user variable or a

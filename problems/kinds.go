@@ -150,6 +150,8 @@ var (
 	OutputUndefinedStep        = define(Warning, "output_undefined_step", "Output reads no such step", "job", "id", "suggested", "suggestion")
 	StepsUnknownKey            = define(Error, "steps_unknown_key", "Unknown key of a step", "id", "key")
 	OutputStepsUnknownKey      = define(Warning, "output_steps_unknown_key", "Output reads an unknown key of a step", "id", "key")
+	CleanupUndefinedStep       = define(Warning, "cleanup_undefined_step", "Cleanup reads no such step", "job", "id", "suggested", "suggestion")
+	CleanupStepsUnknownKey     = define(Warning, "cleanup_steps_unknown_key", "Cleanup reads an unknown key of a step", "id", "key")
 	NoMatrix                   = define(Warning, "no_matrix", "Job has no matrix", "job", "key", "text")
 	UndefinedMatrixKey         = define(Warning, "undefined_matrix_key", "No such matrix key", "job", "key", "suggested", "suggestion")
 	UndefinedSession           = define(Warning, "undefined_session", "No such session", "name", "suggested", "suggestion")
