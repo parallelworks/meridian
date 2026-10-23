@@ -48,7 +48,7 @@ const maxLinks = 40
 // kind problems.PathUnsafe, OwnerUnmapped, PathLinksTooMany or
 // DirectoryUnavailable.
 func Check(path string, leaf bool) error {
-	return checker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink, unmapped: unmappedOwner}.check(path, leaf)
+	return checker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink, unmapped: Unmapped}.check(path, leaf)
 }
 
 // check walks path from the root, following symbolic links as the kernel

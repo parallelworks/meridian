@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"github.com/parallelworks/meridian/internal/safepath"
 )
 
 // holdsLeaders is set where the worker keeps each step's process group
@@ -82,9 +84,13 @@ func liveGroupsOf(groups []int) map[int]bool {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
 			continue
 		}
-		// A process the worker can signal is its user's: reading only
-		// theirs makes the scan as cheap as the user's processes are few.
-		if info, err := e.Info(); err != nil || !ownedBy(info, uid) {
+		// A process of the worker's groups is its user's, and /proc shows
+		// it as theirs, or, once it isn't dumpable, as a program that
+		// changed its user, or one that made itself so, is, as root's, or
+		// as the ID a user namespace shows for a root it doesn't map:
+		// skipping other users' makes the scan as cheap as theirs are
+		// many, and whether one is in a group is what its stat says.
+		if info, err := e.Info(); err != nil || !mayBeOurs(info, uid) {
 			continue
 		}
 		data, err := os.ReadFile("/proc/" + e.Name() + "/stat")
@@ -107,8 +113,10 @@ func liveGroupsOf(groups []int) map[int]bool {
 	return live
 }
 
-// ownedBy reports whether info, of a file in /proc, belongs to uid.
-func ownedBy(info os.FileInfo, uid int) bool {
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && int(st.Uid) == uid
+// mayBeOurs reports whether info, of a process's directory in /proc, can
+// be that of a process of the user uid: its owner is uid, or root, or one
+// a user namespace hides.
+func mayBeOurs(info os.FileInfo, uid int) bool {
+	owner, ok := safepath.Owner(info)
+	return !ok || owner == uid || owner == 0 || safepath.Unmapped(owner)
 }

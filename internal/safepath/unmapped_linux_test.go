@@ -22,7 +22,7 @@ func TestMapsUID(t *testing.T) {
 		}
 	}
 	// The test runs in a namespace that maps its own user.
-	if unmappedOwner(0) {
+	if Unmapped(0) {
 		t.Error("root's ID isn't the overflow ID, so it isn't unmapped")
 	}
 }

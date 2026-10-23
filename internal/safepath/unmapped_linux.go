@@ -55,10 +55,11 @@ var uidMap = sync.OnceValue(func() [][3]int64 {
 	return out
 })
 
-// unmappedOwner says whether uid, a file's owner, is one this user
-// namespace hides: the kernel's overflow ID, when the namespace doesn't
-// map it to a user of its own.
-func unmappedOwner(uid int) bool {
+// Unmapped says whether uid, a file's owner, is one this user namespace
+// hides: the kernel's overflow ID, when the namespace doesn't map it to a
+// user of its own, as it shows root outside a namespace that doesn't map
+// root.
+func Unmapped(uid int) bool {
 	if uid != overflowUID() {
 		return false
 	}
