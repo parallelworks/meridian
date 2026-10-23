@@ -21,7 +21,6 @@ import (
 type attempt struct {
 	claim   *workerapi.Claim
 	client  *client
-	ph      phases
 	tm      timing
 	log     *slog.Logger
 	files   *privateDir
@@ -33,10 +32,12 @@ type attempt struct {
 	// from which the job's timeout, and its lease, are counted.
 	claimed time.Time
 
-	// job is the job as the claim gives it, mask its masker, and masked
-	// the values it masks.
+	// job is the job as the claim gives it, and jobEnv its env: as the
+	// JobEnv phase gave it, for the attempt. mask masks the job's logs,
+	// and masked are the values it masks.
 	job    *plan.ReadyJob
-	mask   masker
+	jobEnv *plan.JobEnv
+	mask   *plan.Masker
 	masked []string
 	// scripts counts the scripts written, to name each.
 	scripts int

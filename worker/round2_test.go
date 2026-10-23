@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,13 +171,15 @@ func TestStoppedKeepsLastWords(t *testing.T) {
 }
 
 // TestPlatformEnvSecret checks that a secret variable a platform gives is
-// masked wherever the worker reports it: logs, outputs and problems.
+// masked wherever the worker shows it: logs, events and problems; and that
+// an output that holds it keeps its value, as format 1 passes it to the
+// jobs that need the job, and is named private and a secret.
 func TestPlatformEnvSecret(t *testing.T) {
 	t.Parallel()
 	step := command(`echo "key=$PW_API_KEY"; echo "k=$PW_API_KEY" >> $OUTPUTS`)
 	step.WorkingDirectory = plan.Literal("/proc/sekr1t-api-key/x")
 	ok := command(`echo "key=$PW_API_KEY user=$PW_USER"; echo "k=$PW_API_KEY" >> $OUTPUTS`)
-	ok.If = plan.Literal("always()")
+	ok.If = cond("always()")
 	f := newFakeCoordinator(t, newJob(step, ok))
 	f.claim.Env = map[string]workerapi.EnvVar{"PW_API_KEY": {Value: "sekr1t-api-key", Secret: true}, "PW_USER": {Value: "alice"}}
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
@@ -190,8 +193,8 @@ func TestPlatformEnvSecret(t *testing.T) {
 			t.Errorf("an event quotes the secret: %v %v", e.Outputs, e.Diagnostics)
 		}
 	}
-	if f.end == nil || strings.Contains(fmt.Sprint(f.end.Outputs), "sekr1t") {
-		t.Errorf("the job's end quotes the secret, or there is none: %+v", f.end)
+	if f.end == nil || f.end.Outputs["k"] != "sekr1t-api-key" || !slices.Equal(f.end.SecretOutputs, []string{"k"}) || !slices.Equal(f.end.PrivateOutputs, []string{"k"}) {
+		t.Errorf("the job's end doesn't keep the output private and a secret: %+v", f.end)
 	}
 }
 

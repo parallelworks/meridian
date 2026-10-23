@@ -38,6 +38,15 @@ func command(script string) plan.Step { return plan.Step{Run: plan.Literal(scrip
 
 func number(n int64) plan.Value { return plan.Literal(n) }
 
+// cond returns the Value of an expression, as a workflow's ${{ }} holds it.
+func cond(expression string) plan.Value {
+	v, err := plan.ValueOf("${{ " + expression + " }}")
+	if err != nil {
+		panic(err) //nolint:forbidigo // a test's own expression, which must parse
+	}
+	return v
+}
+
 func checkEvents(t *testing.T, f *fakeCoordinator, want ...string) {
 	t.Helper()
 	if got := f.stepEvents(); !slices.Equal(got, want) {
@@ -84,7 +93,7 @@ env | grep -c '^MERIDIAN_' || true`), Env: map[string]plan.Value{"STEP": plan.Li
 		plan.Step{Run: plan.Literal(`echo "a=3" >> $OUTPUTS; pwd`), WorkingDirectory: plan.Literal("sub/dir")},
 	)
 	j.Env = map[string]plan.Value{"CI": plan.Literal("overridden"), "STEP": plan.Literal("job")}
-	j.Outputs = map[string]plan.Value{"b": plan.Literal("steps.s.b")}
+	j.Outputs = map[string]plan.Value{"b": cond("steps.s.outputs.b")}
 	f := newFakeCoordinator(t, j)
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
 		t.Fatal(err)
@@ -126,9 +135,9 @@ env | grep -c '^MERIDIAN_' || true`), Env: map[string]plan.Value{"STEP": plan.Li
 func TestStepFails(t *testing.T) {
 	t.Parallel()
 	ignore := command("exit 4")
-	ignore.If, ignore.IgnoreErrors = plan.Literal("failure()"), plan.Literal(true)
+	ignore.If, ignore.IgnoreErrors = cond("failure()"), plan.Literal(true)
 	always := command("echo always")
-	always.If = plan.Literal("always()")
+	always.If = cond("always()")
 	f := newFakeCoordinator(t, newJob(command("echo before; exit 3"), command("echo skipped"), always, ignore))
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
 		t.Fatal(err)
@@ -152,10 +161,10 @@ func TestStepRetries(t *testing.T) {
 	t.Parallel()
 	succeeds := command(`n=$(cat count 2>/dev/null || echo 0); echo $((n+1)) > count
 echo "try $PW_WORKFLOW_STEP_CURRENT_RETRY of $PW_WORKFLOW_STEP_MAX_RETRIES"; [ "$n" -ge 2 ]`)
-	succeeds.Retry = &plan.StepRetry{MaxRetries: number(3), Interval: number(0)}
+	succeeds.Retry = &plan.StepRetry{MaxRetries: number(3), Interval: plan.Literal("0s")}
 	fails := command("exit 1")
-	fails.If = plan.Literal("always()")
-	fails.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: number(0)}
+	fails.If = cond("always()")
+	fails.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
 	f := newFakeCoordinator(t, newJob(succeeds, fails))
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
 		t.Fatal(err)
@@ -182,9 +191,9 @@ func TestTimeouts(t *testing.T) {
 		slow := command("sleep 30")
 		slow.Timeout = number(1)
 		// A step past its own timeout: isn't tried again.
-		slow.Retry = &plan.StepRetry{MaxRetries: number(2), Interval: number(0), Timeout: number(20)}
+		slow.Retry = &plan.StepRetry{MaxRetries: number(2), Interval: plan.Literal("0s"), Timeout: number(20)}
 		after := command("echo after")
-		after.If = plan.Literal("always()")
+		after.If = cond("always()")
 		f := newFakeCoordinator(t, newJob(slow, after))
 		start := time.Now()
 		if err := f.runWorker(t.Context(), Config{}); err != nil {
@@ -202,7 +211,7 @@ func TestTimeouts(t *testing.T) {
 	t.Run("try", func(t *testing.T) {
 		t.Parallel()
 		slow := command("sleep 30")
-		slow.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: number(0), Timeout: number(1)}
+		slow.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s"), Timeout: number(1)}
 		f := newFakeCoordinator(t, newJob(slow))
 		if err := f.runWorker(t.Context(), Config{}); err != nil {
 			t.Fatal(err)
@@ -221,9 +230,9 @@ func TestTimeouts(t *testing.T) {
 		// after it, and a job past its timeout isn't cancelled: its steps'
 		// cancelled() is false.
 		after := command("echo after")
-		after.If = plan.Literal("always()")
+		after.If = cond("always()")
 		onCancel := command("echo cancelled")
-		onCancel.If = plan.Literal("cancelled()")
+		onCancel.If = cond("cancelled()")
 		j := newJob(command("sleep 30"), after, onCancel)
 		j.TimeoutSeconds = 1
 		f := newFakeCoordinator(t, j)
@@ -245,9 +254,9 @@ func TestCancel(t *testing.T) {
 	stubborn := command("trap '' TERM; echo waiting; sleep 30")
 	stubborn.Cleanup = plan.Literal("echo cleaned > $PW_JOB_DIR/cleaned")
 	always := command("echo always")
-	always.If = plan.Literal("always()")
+	always.If = cond("always()")
 	onCancel := command("echo cancelled")
-	onCancel.If = plan.Literal("cancelled()")
+	onCancel.If = cond("cancelled()")
 	f := newFakeCoordinator(t, newJob(stubborn, always, command("echo skipped"), onCancel))
 	// Cancel once the step has printed, and so ignores SIGTERM.
 	var once sync.Once
@@ -289,7 +298,7 @@ func TestOutlivesCancel(t *testing.T) {
 	t.Run("cancelled", func(t *testing.T) {
 		t.Parallel()
 		step := command("echo started; sleep 2; echo ended")
-		step.If, step.Timeout = plan.Literal("always()"), number(1)
+		step.If, step.Timeout = cond("always()"), number(1)
 		f := newFakeCoordinator(t, newJob(step))
 		var once sync.Once
 		f.fault = func(r *http.Request) fault {
@@ -310,7 +319,7 @@ func TestOutlivesCancel(t *testing.T) {
 	t.Run("retry timeout", func(t *testing.T) {
 		t.Parallel()
 		step := command("sleep 30")
-		step.If = plan.Literal("always()")
+		step.If = cond("always()")
 		step.Retry = &plan.StepRetry{MaxRetries: number(0), Timeout: number(1)}
 		f := newFakeCoordinator(t, newJob(step))
 		if err := f.runWorker(t.Context(), Config{}); err != nil {
@@ -397,15 +406,19 @@ func TestEarlyCancel(t *testing.T) {
 
 // TestCleanupOrder checks that the cleanup: commands of the steps that ran
 // run at the job's end, whatever its outcome, in reverse order, each with
-// its events and log.
+// its events and log, and that those of the steps that didn't run are
+// skipped.
 func TestCleanupOrder(t *testing.T) {
 	t.Parallel()
 	steps := []plan.Step{command("true"), command("true"), command("exit 1"), command("true")}
-	steps[1].If = plan.Literal("false")
+	steps[1].If = cond("false")
 	for i := range steps {
-		steps[i].Cleanup = plan.Literal("echo " + strconv.Itoa(i) + " >> $PW_JOB_DIR/order; echo cleaning " + strconv.Itoa(i))
+		cleanup := "echo " + strconv.Itoa(i) + " >> $PW_JOB_DIR/order; echo cleaning " + strconv.Itoa(i)
+		if i == 2 {
+			cleanup += "; exit 5"
+		}
+		steps[i].Cleanup = plan.Literal(cleanup)
 	}
-	steps[2].Cleanup = plan.Literal(literal[string](steps[2].Cleanup) + "; exit 5")
 	f := newFakeCoordinator(t, newJob(steps...))
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
 		t.Fatal(err)
@@ -415,7 +428,9 @@ func TestCleanupOrder(t *testing.T) {
 		"finished 1.0 skipped -1",
 		"started 2.0", "finished 2.0 failure 1",
 		"finished 3.0 skipped -1",
+		"cleanup finished 3.0 skipped -1",
 		"cleanup started 2.0", "cleanup finished 2.0 failure 5",
+		"cleanup finished 1.0 skipped -1",
 		"cleanup started 0.0", "cleanup finished 0.0 success 0",
 	)
 	checkEnd(t, f, plan.OutcomeFailure, "")
@@ -436,7 +451,7 @@ func TestCleanupFails(t *testing.T) {
 			t.Parallel()
 			step := command("true")
 			step.Cleanup = plan.Literal(`echo "try $PW_WORKFLOW_STEP_CURRENT_RETRY of $PW_WORKFLOW_STEP_MAX_RETRIES"; exit 2`)
-			step.Retry = &plan.StepRetry{MaxRetries: number(3), Interval: number(0)}
+			step.Retry = &plan.StepRetry{MaxRetries: number(3), Interval: plan.Literal("0s")}
 			step.IgnoreErrors = plan.Literal(ignore)
 			f := newFakeCoordinator(t, newJob(step))
 			if err := f.runWorker(t.Context(), Config{}); err != nil {
@@ -454,13 +469,15 @@ func TestCleanupFails(t *testing.T) {
 }
 
 // TestSecretsMasked checks that the run's secrets, and the values the job
-// and its steps made from them, are masked in logs and outputs before
-// they leave the worker.
+// and its steps made from them, are masked in logs and events before they
+// leave the worker, and that the job's outputs keep their values, as
+// format 1 passes them to the jobs that need the job, named as End names
+// them: private, and holding a secret, or only what was made from one.
 func TestSecretsMasked(t *testing.T) {
 	t.Parallel()
-	step := command(`echo "token=$TOKEN extra=$EXTRA matrix=matrix-secret"
-echo "t=$TOKEN" >> $OUTPUTS; echo "e=$EXTRA" >> $OUTPUTS`)
-	step.Env = map[string]plan.Value{"TOKEN": plan.Literal("hunter2"), "EXTRA": plan.Literal("secret:swordfish")}
+	step := command(`echo "token=$TOKEN made=$MADE matrix=matrix-secret"
+echo "t=$TOKEN" >> $OUTPUTS; echo "m=$MADE" >> $OUTPUTS; echo "p=plain" >> $OUTPUTS`)
+	step.Env = map[string]plan.Value{"TOKEN": cond("vars.token"), "MADE": cond("vars.token == 'hunter2' && 'swordfish-made' || 'no'")}
 	j := newJob(step)
 	j.Masked = []string{"matrix-secret"}
 	f := newFakeCoordinator(t, j)
@@ -468,13 +485,16 @@ echo "t=$TOKEN" >> $OUTPUTS; echo "e=$EXTRA" >> $OUTPUTS`)
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
-	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "token=*** extra=*** matrix=***\n")
-	want := map[string]string{"t": "***", "e": "***"}
-	if got := f.finishedEvent(0, 0, false).Outputs; !reflect.DeepEqual(got, want) {
-		t.Errorf("the step's outputs are %v, want %v", got, want)
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "token=*** made=*** matrix=***\n")
+	if got, want := f.finishedEvent(0, 0, false).Outputs, map[string]string{"t": "***", "m": "***", "p": "plain"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the step's event shows its outputs as %v, want %v", got, want)
 	}
-	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); !reflect.DeepEqual(end.Outputs, want) {
+	end := checkEnd(t, f, plan.OutcomeSuccess, "")
+	if want := map[string]string{"t": "hunter2", "m": "swordfish-made", "p": "plain"}; !reflect.DeepEqual(end.Outputs, want) {
 		t.Errorf("the job's outputs are %v, want %v", end.Outputs, want)
+	}
+	if !slices.Equal(end.PrivateOutputs, []string{"m", "t"}) || !slices.Equal(end.SecretOutputs, []string{"m", "t"}) || !slices.Equal(end.DerivedOutputs, []string{"m"}) {
+		t.Errorf("the job's outputs are private %v, secret %v and derived %v", end.PrivateOutputs, end.SecretOutputs, end.DerivedOutputs)
 	}
 }
 
@@ -523,15 +543,32 @@ func TestResume(t *testing.T) {
 }
 
 // TestLostLog checks that a worker sends a log again from where the
-// coordinator says it has it to, when it has lost what it had stored.
+// coordinator says it has it to, when it has lost what it had stored that
+// the worker still has: the worker keeps a log's bytes the coordinator has
+// until it has all of them, or enough to be worth dropping (spool).
 func TestLostLog(t *testing.T) {
 	t.Parallel()
 	const size = 2*workerapi.MaxLogUpload + 1000
 	f := newFakeCoordinator(t, newJob(command("head -c "+strconv.Itoa(size)+" /dev/zero | tr '\\0' a; echo")))
+	// The first upload is held until the step has printed everything, so
+	// that the worker has more to send once it is stored, and the second
+	// is lost.
+	printed := make(chan struct{})
+	var once sync.Once
+	f.onEvent = func(e workerapi.Event) {
+		if e.Finished {
+			once.Do(func() { close(printed) })
+		}
+	}
 	var requests counter
 	f.fault = func(r *http.Request) fault {
-		if r.URL.Path == workerapi.PathLogs && r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) &&
-			requests.next(r.URL.Path) == 2 {
+		if r.URL.Path != workerapi.PathLogs || r.URL.Query().Get(workerapi.QueryPart) != string(workerapi.LogStep) {
+			return answer
+		}
+		switch requests.next(r.URL.Path) {
+		case 1:
+			<-printed
+		case 2:
 			return forget
 		}
 		return answer
@@ -747,7 +784,7 @@ func TestStepsRefused(t *testing.T) {
 	zsh.Shell = "zsh {0}"
 	steps := []plan.Step{uses, onHost, noShell, large, zsh}
 	for i := range steps {
-		steps[i].If = plan.Literal("always()")
+		steps[i].If = cond("always()")
 	}
 	f := newFakeCoordinator(t, newJob(steps...))
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
@@ -865,7 +902,7 @@ func TestOutputsNotFile(t *testing.T) {
 	through := command("echo a=2 >> $OUTPUTS")
 	device := command(`ln -sf /dev/null "$OUTPUTS"`)
 	for _, s := range []*plan.Step{&link, &through, &device} {
-		s.If = plan.Literal("always()")
+		s.If = cond("always()")
 	}
 	f := newFakeCoordinator(t, newJob(fifo, link, through, device))
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
@@ -902,7 +939,7 @@ func TestSharedOutputsTooLarge(t *testing.T) {
 	shared := command("echo b=2 >> $OUTPUTS")
 	own := plan.Step{ID: "own", Run: plan.Literal("echo c=3 >> $OUTPUTS")}
 	for _, s := range []*plan.Step{&shared, &own} {
-		s.If = plan.Literal("always()")
+		s.If = cond("always()")
 	}
 	f := newFakeCoordinator(t, newJob(command("head -c 1100000 /dev/zero | tr '\\0' a >> $OUTPUTS"), shared, own))
 	if err := f.runWorker(t.Context(), Config{}); err != nil {

@@ -442,6 +442,8 @@ type Complete struct {
 	// showing; these are what the jobs that need the job read.
 	StepOutputs       map[string]map[string]string `json:"stepOutputs,omitempty"`
 	SecretStepOutputs map[string][]string          `json:"secretStepOutputs,omitempty"`
-	// Diagnostics are End's problems with the job's outputs.
+	// Diagnostics are the problems with the job's env:, from its JobEnv
+	// phase, and End's with its outputs. A job whose env: fails has no
+	// steps that ran.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
 }

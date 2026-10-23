@@ -253,6 +253,8 @@ var (
 	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
 	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
 	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
+	StepOffJobHost        = define(Error, "step_off_job_host", "Step to run off its job's host")
+	SSHHostEmpty          = define(Warning, "ssh_host_empty", "Step's ssh: names no host")
 	StepNotStarted        = define(Error, "step_not_started", "Step's command not started", "reason")
 	ShellNotSupported     = define(Error, "shell_not_supported", "Shell format 1 doesn't run", "shell")
 	StepTimedOut          = define(Error, "step_timed_out", "Step ran past its timeout", "limit")

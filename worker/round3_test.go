@@ -25,7 +25,7 @@ func TestOutputsRemoved(t *testing.T) {
 	remade := command(`d="$(dirname "$OUTPUTS")"; rm -rf "$d"; mkdir -m 755 "$d"; echo token=s3cret >> "$OUTPUTS"`)
 	after := command(`echo b=2 >> "$OUTPUTS"`)
 	for _, s := range []*plan.Step{&remade, &after} {
-		s.If = plan.Literal("always()")
+		s.If = cond("always()")
 	}
 	f := newFakeCoordinator(t, newJob(removed, remade, after))
 	if err := f.runWorker(t.Context(), Config{}); err != nil {

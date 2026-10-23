@@ -146,6 +146,8 @@
   "env_name_invalid": "平台为作业的步骤提供了一个名为 {name} 的变量，但任何变量都不能使用这个名称：名称不能为空，也不能包含 = 或 NUL。",
   "uses_not_supported": "该步骤使用了“{uses}”，而此工作进程尚不能运行使用操作或工作流的步骤。",
   "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而此工作进程尚不能在另一台主机上运行步骤。",
+  "step_off_job_host": "该步骤的 ssh: 为 null 或没有给出 remoteHost，因此格式 1 会在其作业没有 ssh: 时运行的地方运行它，而此工作进程位于作业的 ssh: 指定的主机上，尚不能在那里运行它。",
+  "ssh_host_empty": "该步骤的 ssh: 没有给出 remoteHost，因此该步骤在其作业运行的地方运行，与格式 1 相同。",
   "step_not_started": "无法启动该步骤的命令：{reason}",
   "shell_not_supported": "该步骤的 shell 为“{shell}”，而格式 1 只用 bash 或 sh 运行步骤的命令。",
   "step_timed_out": "该步骤的运行超过了 {limit} 秒的超时时间，已被停止。",

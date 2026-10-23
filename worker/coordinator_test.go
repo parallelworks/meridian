@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -408,8 +407,7 @@ var testTiming = timing{
 }
 
 // runWorker runs a worker against f, served on a Unix socket unless
-// cfg.Environ says where it is, with the phases of fakePhases, and returns
-// what Run returns.
+// cfg.Environ says where it is, and returns what Run returns.
 func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 	f.t.Helper()
 	if !slices.ContainsFunc(cfg.Environ, func(kv string) bool { return strings.HasPrefix(kv, workerapi.EnvCoordinator+"=") }) {
@@ -429,7 +427,7 @@ func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 	if cfg.Log == nil {
 		cfg.Log = testLogger(f.t)
 	}
-	return run(ctx, cfg, fakePhases(), testTiming, func() error { return nil })
+	return run(ctx, cfg, testTiming, func() error { return nil })
 }
 
 // testLogger returns a logger that writes to a test's log.
@@ -501,186 +499,6 @@ func codes(ds problems.Diagnostics) []string {
 		out = append(out, string(d.Code))
 	}
 	return out
-}
-
-// fakePhases are the phases the worker's tests run jobs with: Step readies
-// steps whose values hold no expressions, End gives what steps without an
-// id wrote with the job's outputs: over them, and the masker masks values
-// where they are whole.
-func fakePhases() phases {
-	return phases{step: fakeStep, end: fakeEnd, masked: fakeMasked, masker: func(values ...string) masker {
-		m := &testMasker{}
-		m.Add(values...)
-		return m
-	}}
-}
-
-func literal[T any](v plan.Value) T {
-	x, _ := v.Literal()
-	t, _ := x.(T)
-	return t
-}
-
-// fakeStep readies a step as the Step phase does, for one that holds no
-// expressions: its if: is success(), or always(), failure(), cancelled()
-// or false as written, and the step outlives its job's cancellation for
-// always() and cancelled(); a value of its env: that starts with secret: is a
-// value made from a secret, which it masks.
-func fakeStep(j *plan.ReadyJob, _ context.Context, i int, st plan.JobState) (*plan.ReadyStep, problems.Diagnostics, error) {
-	if i < 0 || i >= len(j.Steps) || len(st.Steps) != i {
-		return nil, nil, errors.New("fakeStep: called out of turn")
-	}
-	s := j.Steps[i]
-	failed := slices.ContainsFunc(st.Steps, func(r plan.StepResult) bool { return r.Outcome == plan.OutcomeFailure })
-	run, outlives := !failed && !st.Cancelled, false
-	switch literal[string](s.If) {
-	case "always()":
-		run, outlives = true, true
-	case "failure()":
-		run = failed
-	case "cancelled()":
-		run, outlives = st.Cancelled, true
-	case "false":
-		run = false
-	}
-	rs := &plan.ReadyStep{Index: i, ID: s.ID, Name: literal[string](s.Name), OutlivesCancel: outlives}
-	if !run {
-		rs.Skipped = true
-		return rs, nil, nil
-	}
-	rs.Run, rs.Uses, rs.Shell, rs.EarlyCancel = literal[string](s.Run), s.Uses, s.Shell, s.EarlyCancel
-	rs.Cleanup = literal[string](s.Cleanup)
-	rs.Env = map[string]string{}
-	for name, v := range j.Env {
-		rs.Env[name] = literal[string](v)
-	}
-	for name, v := range s.Env {
-		value := literal[string](v)
-		if secret, ok := strings.CutPrefix(value, "secret:"); ok {
-			value = secret
-			rs.Masked = append(rs.Masked, secret)
-		}
-		rs.Env[name] = value
-	}
-	rs.WorkingDirectory = j.WorkingDirectory
-	if wd := literal[string](s.WorkingDirectory); wd != "" {
-		rs.WorkingDirectory = wd
-	}
-	rs.TimeoutSeconds = literal[int64](s.Timeout)
-	rs.IgnoreErrors = literal[bool](s.IgnoreErrors)
-	if r := s.Retry; r != nil {
-		// Format 1's defaults.
-		rs.Retry = &plan.ReadyStepRetry{MaxRetries: 10, IntervalSeconds: 5, TimeoutSeconds: 30}
-		if !r.MaxRetries.IsZero() {
-			rs.Retry.MaxRetries = int(literal[int64](r.MaxRetries))
-		}
-		if !r.Interval.IsZero() {
-			rs.Retry.IntervalSeconds = literal[int64](r.Interval)
-		}
-		if !r.Timeout.IsZero() {
-			rs.Retry.TimeoutSeconds = literal[int64](r.Timeout)
-		}
-	}
-	if !s.SSH.IsZero() {
-		host, _ := s.SSH.Literal()
-		rs.SSH = &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(host)}
-	}
-	return rs, nil, nil
-}
-
-// fakeEnd gives a job's outputs: what its steps without an id wrote to
-// $OUTPUTS, as format 1 gives them, with its outputs: over them, each
-// either written out, or steps.<id>.<name> for a step's output; masked.
-func fakeEnd(j *plan.ReadyJob, _ context.Context, st plan.JobState) (map[string]string, problems.Diagnostics, error) {
-	if len(st.Steps) != len(j.Steps) {
-		return nil, nil, errors.New("fakeEnd: a result for each step is needed")
-	}
-	outputs := map[string]string{}
-	for k, r := range st.Steps {
-		if j.Steps[k].ID == "" {
-			maps.Copy(outputs, r.Outputs)
-		}
-	}
-	for name, v := range j.Outputs {
-		value := literal[string](v)
-		if ref, ok := strings.CutPrefix(value, "steps."); ok {
-			id, out, _ := strings.Cut(ref, ".")
-			value = ""
-			for k, s := range j.Steps {
-				if s.ID == id {
-					value = st.Steps[k].Outputs[out]
-				}
-			}
-		}
-		outputs[name] = value
-	}
-	m := &testMasker{}
-	m.Add(st.Masked...)
-	for name, v := range outputs {
-		outputs[name] = m.Mask(v)
-	}
-	return outputs, nil, nil
-}
-
-// fakeMasked returns the values of the variables a run's Secrets names.
-func fakeMasked(run plan.RunValues) []string {
-	var out []string
-	for _, path := range run.Secrets {
-		if name, ok := strings.CutPrefix(path, "vars."); ok {
-			out = append(out, run.Vars[name])
-		}
-	}
-	return out
-}
-
-// A testMasker masks values in text, and in a log a line at a time.
-type testMasker struct {
-	mu     sync.Mutex
-	values []string
-}
-
-func (m *testMasker) Add(values ...string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, v := range values {
-		if v != "" {
-			m.values = append(m.values, v)
-		}
-	}
-}
-
-func (m *testMasker) Mask(s string) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, v := range m.values {
-		s = strings.ReplaceAll(s, v, problems.Masked)
-	}
-	return s
-}
-
-func (m *testMasker) Writer(w io.Writer) io.WriteCloser { return &testMaskWriter{m: m, w: w} }
-
-type testMaskWriter struct {
-	m   *testMasker
-	w   io.Writer
-	buf []byte
-}
-
-func (w *testMaskWriter) Write(p []byte) (int, error) {
-	w.buf = append(w.buf, p...)
-	if i := bytes.LastIndexByte(w.buf, '\n'); i >= 0 {
-		if _, err := io.WriteString(w.w, w.m.Mask(string(w.buf[:i+1]))); err != nil {
-			return 0, err
-		}
-		w.buf = w.buf[i+1:]
-	}
-	return len(p), nil
-}
-
-func (w *testMaskWriter) Close() error {
-	_, err := io.WriteString(w.w, w.m.Mask(string(w.buf)))
-	w.buf = nil
-	return err
 }
 
 // keyHash returns the hash a worker checks a TLS server's key against.

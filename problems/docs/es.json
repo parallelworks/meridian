@@ -1011,6 +1011,21 @@
       "Mueve el paso a un trabajo que se ejecute en ese host, mediante el ssh: del trabajo o un grupo de ejecución."
     ]
   },
+  "step_off_job_host": {
+    "title": "Paso que se ejecuta fuera del host de su trabajo",
+    "why": "El ssh: de un trabajo del formato 1 ejecuta sus pasos en el host que indica, y el ssh: de un paso que es nulo, o que no da ningún remoteHost, ejecuta el paso donde se ejecutaría el trabajo sin su ssh:. Esta versión del worker de Meridian se ejecuta en el host del trabajo y solo ejecuta pasos ahí, así que el paso falla en lugar de ejecutarse en el host equivocado.",
+    "fix": [
+      "Mueve el paso a un trabajo que se ejecute donde debe ejecutarse el paso, como uno sin ssh:.",
+      "Quita el ssh: del paso para ejecutarlo en el host del trabajo."
+    ]
+  },
+  "ssh_host_empty": {
+    "title": "ssh: del paso sin host",
+    "why": "El ssh: de un paso del formato 1 ejecuta el paso en el host que indica su remoteHost. Uno vacío o nulo no indica ninguno, y el formato 1 ejecuta el paso donde se ejecutaría sin ssh:, con una nota en su registro, lo que a menudo es un error, como una entrada que se dejó vacía.",
+    "fix": [
+      "Da al ssh: un remoteHost, o quítalo para ejecutar el paso donde se ejecuta su trabajo."
+    ]
+  },
   "step_not_started": {
     "title": "Comando del paso no iniciado",
     "why": "El worker escribe el comando del paso en un script e inicia con él el shell del paso en el directorio de trabajo del paso, que crea si no existe. Eso falló, por el motivo indicado, así que el comando nunca se ejecutó.",

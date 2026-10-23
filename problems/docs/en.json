@@ -867,6 +867,19 @@
       "Move the step to a job that runs on that host, through the job's ssh: or an execution group."
     ]
   },
+  "step_off_job_host": {
+    "why": "A format 1 job's ssh: runs its steps on the host it names, and a step's ssh: that is null, or gives no remoteHost, runs the step where the job would run without its ssh:. This version of Meridian's worker runs on the job's host, and runs steps only there, so the step fails rather than run on the wrong host.",
+    "fix": [
+      "Move the step to a job that runs where the step should, such as one without an ssh:.",
+      "Remove the step's ssh: to run it on the job's host."
+    ]
+  },
+  "ssh_host_empty": {
+    "why": "A format 1 step's ssh: runs the step on the host its remoteHost names. One that is empty or null names none, and format 1 runs the step where it would run without an ssh:, with a note in its log, which is often a mistake, such as an input left empty.",
+    "fix": [
+      "Give the ssh: a remoteHost, or remove it to run the step where its job runs."
+    ]
+  },
   "step_not_started": {
     "why": "The worker writes the step's command to a script, and starts the step's shell with it in the step's working directory, which it makes if it doesn't exist. That failed, for the reason given, so the command never ran.",
     "fix": [

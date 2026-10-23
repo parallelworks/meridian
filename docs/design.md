@@ -1176,7 +1176,10 @@ not assumed idempotent.
   `clean-on-retry:` is true unless the workflow says otherwise, as in
   format 1, or an expression, which Step reads as format 1 does: true or
   false, text or a number that reads as one, and true for anything else
-  (`plan.ReadyStepRetry.CleanOnRetry`).
+  (`plan.ReadyStepRetry.CleanOnRetry`). As in format 1, it cleans only a
+  `uses:` step's directory before its next try, and never one that is the
+  parent run's directory or log directory, or holds either; a worker that
+  runs `uses:` steps forces it off for those.
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
   behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
@@ -1477,7 +1480,8 @@ waking up or `meridian run` restarting must not make them all look lost.
   process ID succeeds, until the processes the step left behind have ended
   or the attempt ends.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
-  fails. The coordinator tells the step's worker. The step ends cancelled,
+  fails, or a step of its own job did, as in format 1. The coordinator
+  tells the step's worker when another job fails. The step ends cancelled,
   which cancels the rest of its job, as in format 1: a later step runs only
   if it outlives a cancel, and the job ends cancelled unless a step of it
   failed (`plan.JobState.Cancelled`). It doesn't cut short the wait between
@@ -1498,10 +1502,11 @@ waking up or `meridian run` restarting must not make them all look lost.
   wrote as `""`. What it writes to `$OUTPUTS` is the job's, over what its
   steps wrote. A cleanup that fails fails the job, as a step does: the
   cleanups after it read `failure()` as true, and the job's `outputs:`
-  read an output that nothing wrote as `""`. A worker whose attempt ended
-  without it, because another superseded it or its lease lapsed, runs
-  none: another attempt may be running, and a cleanup could remove what it
-  is using.
+  read an output that nothing wrote as `""`. A cleanup that is skipped has
+  a finished event that says so, as a skipped step has, and as format 1
+  shows its copy of the step. A worker whose attempt ended without it,
+  because another superseded it or its lease lapsed, runs none: another
+  attempt may be running, and a cleanup could remove what it is using.
 
 ### Outputs
 
@@ -1773,7 +1778,12 @@ member's running workers reconnect to it.
   try's, as format 1's failover does: 8 known workflows read it in a retried
   step's `with:`. Its `if:` and `retry:` are those of its first try: a
   later try runs whatever its `if:` would give now, and carries over
-  whether it outlives a cancel and reads outputs as its first did.
+  whether it outlives a cancel and reads outputs as its first did. How
+  many more times a step may run, `PW_WORKFLOW_STEP_MAX_RETRIES`, is known
+  only once Step has read its `retry:`, so the worker evaluates the first
+  try of a step with one again, with it, as format 1 gives it from the
+  first. A try that can't start, as one whose evaluation fails, fails its
+  step, which isn't tried again.
 - **Outputs that nothing wrote.** As in format 1, a job's output or a
   step's that nothing wrote fails the expression that reads it
   (`output_not_written`) where a job or a step is about to run, and in a
@@ -1788,7 +1798,10 @@ member's running workers reconnect to it.
 - **A host of a step's own.** A format 1 `ssh:` on a job runs its steps on
   the host it names, and a step's runs it on its own: `ssh: null` runs the
   step where the job runs without its `ssh:`, and an empty or null
-  `remoteHost` runs it there too, with a note in its log, as format 1 does.
+  `remoteHost` runs it there too, with a note in its log, as format 1 does
+  (`ssh_host_empty`). A worker on the host a job's `ssh:` names fails such
+  a step (`step_off_job_host`) rather than run it on the wrong host, as it
+  fails one whose `ssh:` names a host of its own (`step_ssh_not_supported`).
   534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
 - **A step that outlives its job's cancelling.** A step whose `if:` can be
   true once its job is stopping, the word `always`, `always()`,
@@ -1848,7 +1861,10 @@ member's running workers reconnect to it.
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
 rather than run them on the host, and a step that `uses:` an action or a
-workflow, or runs on another host with `ssh:`, fails. Its events are kept
+workflow, or runs on another host with `ssh:`, fails, as does one whose
+`ssh:` is null, or gives no `remoteHost`, on a worker that a job's `ssh:`
+placed on a host. So a step's `clean-on-retry:`, which cleans a `uses:`
+step's directory, has nothing to clean yet. Its events are kept
 in memory while the coordinator is unreachable, since each is small but for
 a step's outputs, which are capped.
 
