@@ -59,13 +59,14 @@ const waitDelay = time.Second
 // a repository's whole fork network, so a commit that a reference names
 // may be one that only a fork has (docs/design.md, Security).
 //
-// git runs with no hooks, without fetching submodules, and checking the
-// objects it fetches. It never asks for a password, by a prompt or an
-// askpass program, and its ssh never asks a question when the user names
-// no ssh command of their own. It runs in a session of its own, with no
-// terminal, so that an ssh command of the user's that would ask for a
-// passphrase fails rather than waits. A cancelled context stops it and
-// every process it started.
+// git runs with no hooks, without fetching submodules, checking the
+// objects it fetches, and with no automatic maintenance, which would go
+// on writing into a copy after git returned. It never asks for a
+// password, by a prompt or an askpass program, and its ssh never asks a
+// question when the user names no ssh command of their own. It runs in a
+// session of its own, with no terminal, so that an ssh command of the
+// user's that would ask for a passphrase fails rather than waits. A
+// cancelled context stops it and every process it started.
 // Sources serializes what it does to one repository's copy, across
 // processes too where the system has file locks, and otherwise tries
 // again, a few times, a git command another process held a lock against.
@@ -456,9 +457,25 @@ func (s *Sources) run(ctx context.Context, repo, stdin string, args ...string) (
 	}
 }
 
+// noMaintenance keeps git from starting work that outlives it. A command
+// such as fetch ends by starting automatic maintenance, git maintenance
+// run --auto, or git gc --auto in an older git, which detaches and goes on
+// writing into the copy after git has returned: repacking it, and with
+// that rewriting its shallow file, while Sources runs its next command on
+// the copy, which then fails, or after Sources has unlocked it. Since Git
+// 2.54, maintenance by default repacks a copy as soon as it has two packs
+// to merge, and each fetch adds one. maintenance.auto keeps git from
+// starting maintenance, and gc.auto keeps an older git from finding any
+// to do; the two autoDetach keep whatever still runs in the foreground,
+// under Sources' lock.
+var noMaintenance = []string{
+	"-c", "maintenance.auto=false", "-c", "maintenance.autoDetach=false",
+	"-c", "gc.auto=0", "-c", "gc.autoDetach=false",
+}
+
 func (s *Sources) runOnce(ctx context.Context, repo, stdin string, args ...string) ([]byte, error) {
 	ssh := s.sshFor(ctx)
-	base := []string{"-c", "core.hooksPath=" + filepath.Join(s.dir, hooksDir)}
+	base := append([]string{"-c", "core.hooksPath=" + filepath.Join(s.dir, hooksDir)}, noMaintenance...)
 	if repo != "" {
 		base = append(base, "--git-dir="+repo)
 	}
