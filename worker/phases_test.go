@@ -199,7 +199,9 @@ func TestStepsSkipped(t *testing.T) {
 // remoteHost, runs, as format 1 runs it: where its job would run without
 // its ssh:, which is the worker's host, with a note in the log of one that
 // gives no remoteHost; and that one whose job's ssh: placed the worker on
-// a host of its own fails, rather than run on that host.
+// a host of its own fails, rather than run on that host, while one whose
+// ssh: says what the job's does runs there, and one that names another
+// host fails.
 func TestStepHosts(t *testing.T) {
 	t.Parallel()
 	steps := func() []plan.Step {
@@ -227,17 +229,24 @@ func TestStepHosts(t *testing.T) {
 	})
 	t.Run("another host", func(t *testing.T) {
 		t.Parallel()
-		j := newJob(steps()...)
-		j.Target = plan.Target{Inline: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "elsewhere"})}}
+		same := command("echo same")
+		same.SSH = plan.Literal(map[string]any{"port": int64(22), "remoteHost": "elsewhere"})
+		same.If = cond("always()")
+		other := command("echo other")
+		other.SSH = plan.Literal(map[string]any{"remoteHost": "another"})
+		other.If = cond("always()")
+		j := newJob(append(steps(), same, other)...)
+		j.Target = plan.Target{Inline: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "elsewhere", "port": 22.0})}}
 		f := newFakeCoordinator(t, j)
 		if err := f.runWorker(t.Context(), Config{}); err != nil {
 			t.Fatal(err)
 		}
-		checkEvents(t, f, "finished 0.0 failure -1", "finished 1.0 failure -1")
+		checkEvents(t, f, "finished 0.0 failure -1", "finished 1.0 failure -1", "started 2.0", "finished 2.0 success 0", "finished 3.0 failure -1")
 		checkEnd(t, f, plan.OutcomeFailure, "")
-		for step := range 2 {
-			if got := codes(f.finishedEvent(step, 0, false).Diagnostics); !slices.Equal(got, []string{"step_off_job_host"}) {
-				t.Errorf("step %d's diagnostics are %v", step, got)
+		checkLog(t, f, logKey{workerapi.LogStep, 2, 0}, "same\n")
+		for step, want := range []string{"step_off_job_host", "step_off_job_host", "", "step_ssh_not_supported"} {
+			if got := codes(f.finishedEvent(step, 0, false).Diagnostics); want != "" && !slices.Equal(got, []string{want}) {
+				t.Errorf("step %d's diagnostics are %v, want %s", step, got, want)
 			}
 		}
 	})

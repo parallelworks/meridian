@@ -1805,7 +1805,9 @@ member's running workers reconnect to it.
   `remoteHost` runs it there too, with a note in its log, as format 1 does
   (`ssh_host_empty`). A worker on the host a job's `ssh:` names fails such
   a step (`step_off_job_host`) rather than run it on the wrong host, as it
-  fails one whose `ssh:` names a host of its own (`step_ssh_not_supported`).
+  fails one whose `ssh:` names a host of its own (`step_ssh_not_supported`),
+  but for one whose `ssh:` says what its job's does, as a step that repeats
+  its job's `remoteHost` does, which runs where its job runs.
   534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
 - **A step that outlives its job's cancelling.** A step whose `if:` can be
   true once its job is stopping, the word `always`, `always()`,

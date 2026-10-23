@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"log/slog"
@@ -549,11 +551,12 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 // readied it: not one that uses: an action or a workflow, nor one with a
 // shell format 1 doesn't run, which it can't run yet, and where format 1
 // runs it: where its job runs, unless its ssh: names a host, which this
-// worker can't run a step on yet. A step whose ssh: is null, or gives no
-// remoteHost, runs where its job would run without its ssh:, which is
-// here, unless the job's own ssh: placed it on that host; one that gives
-// no remoteHost has a note in its log, as format 1 writes. It returns the
-// note, and the problem that refuses the step.
+// worker can't run a step on yet, but for one whose ssh: says what its
+// job's does, which placed the worker there. A step whose ssh: is null, or
+// gives no remoteHost, runs where its job would run without its ssh:,
+// which is here, unless the job's own ssh: placed it on that host; one
+// that gives no remoteHost has a note in its log, as format 1 writes. It
+// returns the note, and the problem that refuses the step.
 func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *problems.Diagnostic) {
 	diagnostic := func(k *problems.Kind, params problems.Params) *problems.Diagnostic {
 		d := a.at(k, path, params)
@@ -571,15 +574,28 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 		host, given := ssh["remoteHost"]
 		named = !given || host != nil && host != ""
 	}
+	job := a.job.Target.Inline
 	switch {
+	case named && job != nil && sameSSH(rs.SSH.SSH, job.SSH):
+		// A step whose ssh: says what its job's does runs where its job
+		// runs: here.
+		return nil, nil
 	case named:
 		return nil, diagnostic(problems.StepSSHNotSupported, nil)
-	case (rs.NoSSH || rs.SSH != nil) && a.job.Target.Inline != nil:
+	case (rs.NoSSH || rs.SSH != nil) && job != nil:
 		return nil, diagnostic(problems.StepOffJobHost, nil)
 	case rs.SSH != nil:
 		return diagnostic(problems.SSHHostEmpty, nil), nil
 	}
 	return nil, nil
+}
+
+// sameSSH reports whether two ssh: mappings, a step's and its job's, say
+// the same, as their JSON does.
+func sameSSH(a, b plan.Data) bool {
+	ja, errA := jsonv2.Marshal(a.Get(), jsonv2.Deterministic(true))
+	jb, errB := jsonv2.Marshal(b.Get(), jsonv2.Deterministic(true))
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }
 
 // runCommand runs script, a step's run: or cleanup: command, with the
