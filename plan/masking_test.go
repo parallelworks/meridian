@@ -1279,9 +1279,11 @@ jobs:
 // platform's secret variable (JobState.Secrets), is a secret's own text: an
 // output that holds it, however short, or a credential field of it, is a
 // secret and not derived, so that the jobs that need the job mask it
-// however short, and a problem with what reads it doesn't show it. Given
-// only to mask (JobState.Masked), it is what is made from a secret. What
-// JobEnv found without it isn't used for a state with it.
+// however short, and a problem with what reads it doesn't show it. JobEnv
+// gives it, and the credential fields it holds, in its Masked, for the
+// worker to mask in the job's logs. Given only to mask (JobState.Masked),
+// it is what is made from a secret. What JobEnv found without it isn't
+// used for a state with it.
 func TestStateSecrets(t *testing.T) {
 	p := compiled(t, `
 jobs:
@@ -1300,13 +1302,21 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	secrets := []string{"k3y!", `{"password":"hunt3r2"}`}
+	given, _, err := ready.Job.JobEnv(t.Context(), plan.JobState{Run: run, Secrets: secrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(slices.Clone(secrets), "hunt3r2"); !slices.Equal(given.Masked, want) {
+		t.Errorf("JobEnv masks %q, want %q", given.Masked, want)
+	}
 	steps := []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"key": "k3y!", "pw": "hunt3r2", "plain": "text"}}}
 	for _, tc := range []struct {
 		name            string
 		secrets, masked []string
 		secret, derived string
 	}{
-		{"secrets", []string{"k3y!", `{"password":"hunt3r2"}`}, nil, "[key pw]", "[]"},
+		{"secrets", secrets, nil, "[key pw]", "[]"},
 		{"masked", nil, []string{"k3y!", "hunt3r2"}, "[key pw]", "[key pw]"},
 	} {
 		state := plan.JobState{Run: run, Steps: steps, JobEnv: jobEnv, Secrets: tc.secrets, Masked: tc.masked}

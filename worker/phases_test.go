@@ -271,3 +271,25 @@ func TestCleanupAfterFailedIf(t *testing.T) {
 		t.Errorf("the skipped cleanup has the problems %v", got)
 	}
 }
+
+// TestPlatformSecretFields checks that a credential field of a platform's
+// secret variable that holds JSON, such as a password, is masked in the
+// job's logs and events, as the secret is, and that an output that holds
+// it is a secret of its own.
+func TestPlatformSecretFields(t *testing.T) {
+	t.Parallel()
+	step := command(`pw=$(echo "$PW_CREDS" | sed 's/.*"password":"\([^"]*\)".*/\1/'); echo "password is $pw"; echo "pw=$pw" >> $OUTPUTS`)
+	f := newFakeCoordinator(t, newJob(step))
+	f.claim.Env = map[string]workerapi.EnvVar{"PW_CREDS": {Value: `{"user":"svc","password":"hunt3r2"}`, Secret: true}}
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "password is ***\n")
+	if got := f.finishedEvent(0, 0, false).Outputs; got["pw"] != "***" {
+		t.Errorf("the step's event shows its outputs as %v", got)
+	}
+	end := checkEnd(t, f, plan.OutcomeSuccess, "")
+	if end.Outputs["pw"] != "hunt3r2" || !slices.Equal(end.SecretOutputs, []string{"pw"}) || len(end.DerivedOutputs) > 0 {
+		t.Errorf("the job's outputs are %v, secret %v and derived %v", end.Outputs, end.SecretOutputs, end.DerivedOutputs)
+	}
+}

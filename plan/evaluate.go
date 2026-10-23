@@ -65,12 +65,14 @@ type secretTexts struct {
 	mu    sync.Mutex
 	found bool
 	// own are the own texts, fields their credential fields, masked what a
-	// Masker is given of the run's secrets and the needs' outputs, and
-	// fromNeeds what of it the needs' outputs give (needsSecrets).
+	// Masker is given of the run's secrets and the needs' outputs,
+	// fromNeeds what of it the needs' outputs give (needsSecrets), and
+	// fromOther what other gives: its texts and their credential fields.
 	own       []string
 	fields    map[string]bool
 	masked    []string
 	fromNeeds []string
+	fromOther []string
 	// leak masks own and fields as they show but for their lines
 	// (newLeakMasker), built the first time it is needed.
 	leak *Masker
@@ -132,7 +134,9 @@ func (t *secretTexts) find() {
 	t.sum = secretsSum(t.run, t.other, t.needs)
 	runOwn, runDerived := t.run.secretStrings()
 	// The worker's own secrets are as the run's.
-	runOwn = slices.Concat(runOwn, slices.DeleteFunc(slices.Clone(t.other), func(s string) bool { return s == "" }))
+	other := slices.DeleteFunc(slices.Clone(t.other), func(s string) bool { return s == "" })
+	t.fromOther = slices.Concat(other, slices.Sorted(maps.Keys(credentialFields(other))))
+	runOwn = slices.Concat(runOwn, other)
 	needsOwn, needsDerived := needsSecrets(t.needs)
 	needsFields := credentialFields(needsOwn)
 	t.own = slices.Concat(runOwn, needsOwn)
@@ -162,6 +166,14 @@ func (t *secretTexts) allMasked() []string {
 func (t *secretTexts) needsMasked() []string {
 	t.find()
 	return t.fromNeeds
+}
+
+// otherMasked returns what a Masker is given of the secrets that don't
+// come from the run (JobState.Secrets): their texts, and the credential
+// fields they hold, however short.
+func (t *secretTexts) otherMasked() []string {
+	t.find()
+	return t.fromOther
 }
 
 // sameAs reports whether t was found from the secrets that run, other and

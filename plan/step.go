@@ -67,7 +67,8 @@ type JobState struct {
 	// own text, as they count the run's: masked however short, own to End,
 	// which names an output that holds one a secret and not derived, as the
 	// jobs that need the job then read it, and read for the credential
-	// fields it holds (credentialFields).
+	// fields it holds (credentialFields), which JobEnv gives in its Masked,
+	// for the worker to mask in the job's logs.
 	Secrets []string
 }
 
@@ -81,8 +82,9 @@ type JobEnv struct {
 	Private []string `json:"private,omitempty"`
 	Secrets []string `json:"secrets,omitempty"`
 	// Masked are the strings it made from a secret, as ReadyStep.Masked
-	// holds them, which the worker masks; each ReadyStep.Masked holds them
-	// too.
+	// holds them, and the texts of the secrets that don't come from the run
+	// (JobState.Secrets), with the credential fields they hold, which the
+	// worker masks; each ReadyStep.Masked holds them too.
 	Masked []string `json:"masked,omitempty"`
 	// own are the job's secrets' texts and what masks them, as JobEnv found
 	// and built them for the attempt, which Step, Cleanup and End share
@@ -699,6 +701,11 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		}
 	} else {
 		for _, s := range e.secrets.needsMasked() {
+			e.maskOwn(s)
+		}
+		// The worker masks what it was given whole; JobEnv gives it the
+		// credential fields of it too.
+		for _, s := range e.secrets.otherMasked() {
 			e.maskOwn(s)
 		}
 		c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)
