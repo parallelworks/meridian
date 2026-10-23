@@ -1,30 +1,36 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
 
 // A privateDir is the directory a worker keeps its own files in as it
 // runs: its spooled logs, and its steps' scripts and $OUTPUTS files. Only
-// its user can use it, and it is in a directory no other user can change,
-// where it can, so that no other user can take its name. The worker holds
-// it open, and makes every file in it through that, so a path that comes
-// to name something else, as when a step removes the directory and another
-// user makes one of the same name in a shared /tmp, is never used: once
-// the directory it holds is gone, the worker makes a new one, with a new
-// name.
+// its user can use it, and it is outside the run's directory, which a step
+// can remove, as format 1 keeps its own files, in a directory no other
+// user can change, where it can, so that no other user can take its name.
+// The worker holds it open, and makes every file in it through that, so a
+// path that comes to name something else, as when a step removes the
+// directory and another user makes one of the same name in a shared /tmp,
+// is never used: once the directory it holds is gone, the worker makes a
+// new one, with a new name, in the same parent if it can, or else in the
+// next it would have used.
 type privateDir struct {
-	// parent is where the worker makes it, and ownParent is set when it
-	// made parent too, to remove once it is empty.
-	parent    string
-	ownParent bool
+	// parents are where the worker can make it, in the order it tries
+	// them (privateParents), and at is the one it makes it in now.
+	parents []parentDir
+	at      int
+	log     *slog.Logger
 
 	mu   sync.Mutex
 	path string
@@ -35,6 +41,16 @@ type privateDir struct {
 	// made are the directories the worker made, held open, to remove when
 	// it is done.
 	made []madeDir
+}
+
+// A parentDir is a directory a worker can make its directory in.
+type parentDir struct {
+	path string
+	// create is set for one the worker makes, and makes again if it goes;
+	// memory for one in memory, as XDG_RUNTIME_DIR is, where it spools
+	// less (memorySpoolLimit); and shared for the system's temporary
+	// directory, which it uses as it is, with a warning.
+	create, memory, shared bool
 }
 
 type madeDir struct {
@@ -56,37 +72,55 @@ func (f madeFile) remove() {
 	_ = f.root.Remove(f.name)
 }
 
-// privateParent returns where a worker makes its directory, and whether it
-// makes that too: Dir, when the config names one; otherwise
-// XDG_RUNTIME_DIR, when environ sets it to a directory of the user's that
-// no one else can use; otherwise .meridian in the run's directory, made
-// private, when no other user can change the run's directory, where format
-// 1 keeps $OUTPUTS too; and otherwise the system's temporary directory,
-// with a warning, since another user could take the name of a directory
-// there that a step removes as it runs.
-func privateParent(dir string, environ []string, runDir string, log *slog.Logger) (string, bool) {
+// privateParents returns where a worker can make its directory, in the
+// order it tries them: dir, when the config names one; meridian/worker in
+// the user's cache directory, on disk, which it makes; XDG_RUNTIME_DIR,
+// which is in memory; and the system's temporary directory, where another
+// user could take the name of a directory that a step removes as it runs.
+// Each but the last must be a directory of the user's that no other user
+// can change, on a path no other user can change (safepath.Check), so that
+// none can make a directory in it, as the worker's would be named. None is in
+// the run's directory, which a step can remove, as format 1's cleanup:
+// rm -r ${PW_JOB_DIR} does, and which can't be removed while the worker
+// holds a file in it open on NFS, where an open file that is removed stays
+// as a .nfs file.
+func privateParents(dir string, environ []string) []parentDir {
+	var out []parentDir
 	if dir != "" {
-		return dir, false
+		out = append(out, parentDir{path: dir})
 	}
-	if xdg := lookupEnv(environ, "XDG_RUNTIME_DIR"); xdg != "" {
-		if _, err := checkPrivate(xdg); err == nil {
-			return xdg, false
+	if cache := userCacheDir(environ); cache != "" {
+		out = append(out, parentDir{path: filepath.Join(cache, "meridian", "worker"), create: true})
+	}
+	if xdg := lookupEnv(environ, "XDG_RUNTIME_DIR"); filepath.IsAbs(xdg) {
+		out = append(out, parentDir{path: xdg, memory: true})
+	}
+	return append(out, parentDir{path: os.TempDir(), shared: true})
+}
+
+// userCacheDir returns the user's cache directory, as os.UserCacheDir
+// finds it, from environ: on macOS ~/Library/Caches, and on the other Unix
+// systems $XDG_CACHE_HOME, when it is an absolute path, as the XDG
+// specification ignores a relative one, or ~/.cache; or "" without an
+// absolute home, and where the worker runs no steps.
+func userCacheDir(environ []string) string {
+	home := lookupEnv(environ, "HOME")
+	switch runtime.GOOS {
+	case "windows", "plan9", "js", "wasip1":
+		return ""
+	case "darwin", "ios":
+		if filepath.IsAbs(home) {
+			return filepath.Join(home, "Library", "Caches")
 		}
+		return ""
 	}
-	if runDir != "" {
-		info, err := os.Stat(runDir)
-		if os.IsNotExist(err) || err == nil && info.IsDir() && ownedByUser(info) && info.Mode().Perm()&0o022 == 0 {
-			parent := filepath.Join(runDir, ".meridian")
-			if err := os.MkdirAll(parent, 0o700); err == nil {
-				if _, err := checkPrivate(parent); err == nil {
-					return parent, true
-				}
-			}
-		}
+	if d := lookupEnv(environ, "XDG_CACHE_HOME"); filepath.IsAbs(d) {
+		return d
 	}
-	log.Warn("keeping the worker's files in the system's temporary directory, where another user could take the name of its directory once a step removes it: "+
-		"set XDG_RUNTIME_DIR, or make the run's directory one only you can change", "dir", os.TempDir())
-	return "", false
+	if filepath.IsAbs(home) {
+		return filepath.Join(home, ".cache")
+	}
+	return ""
 }
 
 // lookupEnv returns the value environ gives name, the last if it gives it
@@ -101,25 +135,89 @@ func lookupEnv(environ []string, name string) string {
 	return value
 }
 
-// makePrivateDir makes a private directory in parent, "" for os.TempDir(),
-// which it made if ownParent is set.
-func makePrivateDir(parent string, ownParent bool) (*privateDir, error) {
-	d := &privateDir{parent: parent, ownParent: ownParent}
+// ready makes p, if the worker makes it, only its user's to use, and
+// checks it: that it is a directory of the user's that no other user can
+// change, on a path no other user can change. The system's temporary
+// directory is used as it is.
+func (p parentDir) ready() error {
+	if p.shared {
+		return nil
+	}
+	if p.create {
+		// What isn't there yet is made in a directory no other user can
+		// change.
+		if err := safepath.Check(p.path, false); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(p.path, 0o700); err != nil {
+			return err
+		}
+	}
+	info, err := os.Lstat(p.path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || !ownedByUser(info) || info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("worker: %s isn't a directory of this user's that only it can change", p.path)
+	}
+	return safepath.Check(p.path, true)
+}
+
+// makePrivateDir makes a private directory in the first of parents it can
+// (privateParents), and logs why it couldn't in those before it, and that
+// it uses the system's temporary directory, if it does.
+func makePrivateDir(parents []parentDir, log *slog.Logger) (*privateDir, error) {
+	d := &privateDir{parents: parents, log: log}
 	if err := d.fresh(); err != nil {
-		where := parent
-		if where == "" {
-			where = os.TempDir()
+		where := os.TempDir()
+		if len(parents) > 0 {
+			where = parents[len(parents)-1].path
 		}
 		return nil, problems.DirectoryUnavailable.Problem(problems.Params{"path": where, "reason": err.Error()})
 	}
 	return d, nil
 }
 
-// fresh makes a new directory, whose name starts with a dot, so that a
-// step's rm -rf "$TMPDIR"/* passes it by, checks that it is private, and
-// holds it open. Its caller holds d.mu, or has d to itself.
+// inMemory reports whether the directory is in memory, as XDG_RUNTIME_DIR
+// is.
+func (d *privateDir) inMemory() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.at < len(d.parents) && d.parents[d.at].memory
+}
+
+// fresh makes a new directory, in the parent the worker uses now, which it
+// makes again if it made it, and checks again, or else in the next it can,
+// as it would have at first. Its caller holds d.mu, or has d to itself.
 func (d *privateDir) fresh() error {
-	path, err := os.MkdirTemp(d.parent, ".meridian-worker-")
+	var errs []error
+	for ; d.at < len(d.parents); d.at++ {
+		p := d.parents[d.at]
+		err := p.ready()
+		if err == nil {
+			err = d.makeIn(p.path)
+		}
+		if err == nil {
+			if p.shared {
+				d.log.Warn("keeping the worker's files in the system's temporary directory, where another user could take the name of its directory once a step removes it: "+
+					"set XDG_RUNTIME_DIR, or give the user a cache directory only they can change", "dir", p.path)
+			}
+			return nil
+		}
+		d.log.Warn("can't keep the worker's files in a directory", "dir", p.path, "error", err)
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		errs = append(errs, errors.New("worker: no directory to keep its files in"))
+	}
+	return errors.Join(errs...)
+}
+
+// makeIn makes a new directory in parent, whose name starts with a dot, so
+// that a step's rm -rf "$TMPDIR"/* passes it by, checks that it is
+// private, and holds it open. Its caller holds d.mu, or has d to itself.
+func (d *privateDir) makeIn(parent string) error {
+	path, err := os.MkdirTemp(parent, ".meridian-worker-")
 	if err != nil {
 		return err
 	}
@@ -204,7 +302,7 @@ func (d *privateDir) create(name string, flags int) (*os.File, madeFile, string,
 }
 
 // removeAll removes every directory the worker made that is still the
-// one it made, and its parent, if it made that and it is empty.
+// one it made.
 func (d *privateDir) removeAll() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -213,8 +311,5 @@ func (d *privateDir) removeAll() {
 		if info, err := os.Lstat(m.path); err == nil && os.SameFile(info, m.info) {
 			_ = os.RemoveAll(m.path)
 		}
-	}
-	if d.ownParent {
-		_ = os.Remove(d.parent)
 	}
 }

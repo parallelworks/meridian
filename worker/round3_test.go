@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -62,16 +63,19 @@ func TestGlobLeavesDir(t *testing.T) {
 }
 
 // TestPrivateParent checks where a worker makes its directory: in Dir, if
-// the config names one; else in XDG_RUNTIME_DIR, if it is private; else in
-// .meridian in the run's directory, if no other user can change that; and
-// else in the system's temporary directory, with a warning.
+// the config names one that no other user can change; else in
+// meridian/worker in the
+// user's cache directory, which it makes, if no other user can change the
+// way to it; else in XDG_RUNTIME_DIR, if no other user can change it,
+// where it spools less; and else in the system's temporary directory, with
+// a warning. It never makes it in the run's directory.
 func TestPrivateParent(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
 	mkdir := func(name string, mode os.FileMode) string {
 		t.Helper()
 		p := filepath.Join(base, name)
-		if err := os.Mkdir(p, 0o700); err != nil {
+		if err := os.MkdirAll(p, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(p, mode); err != nil {
@@ -79,31 +83,97 @@ func TestPrivateParent(t *testing.T) {
 		}
 		return p
 	}
-	xdg, open := mkdir("xdg", 0o700), mkdir("open", 0o755)
-	run, shared := mkdir("run", 0o750), mkdir("shared", 0o777)
-	missing := filepath.Join(base, "missing", "run")
+	config, xdg, open := mkdir("config", 0o755), mkdir("xdg", 0o700), mkdir("open", 0o775)
+	home, shared := mkdir("home", 0o700), mkdir("shared", 0o777)
+	cache := filepath.Join(home, ".cache", "meridian", "worker")
+	if runtime.GOOS == "darwin" {
+		cache = filepath.Join(home, "Library", "Caches", "meridian", "worker")
+	}
 	for _, tc := range []struct {
-		name, dir, xdg, run string
-		want                string
-		own, warns          bool
+		name, dir, home, xdg string
+		want                 string
+		memory, warns        bool
 	}{
-		{name: "config", dir: "/config", xdg: xdg, run: run, want: "/config"},
-		{name: "runtime", xdg: xdg, run: run, want: xdg},
-		{name: "run", xdg: open, run: run, want: filepath.Join(run, ".meridian"), own: true},
-		{name: "new run", run: missing, want: filepath.Join(missing, ".meridian"), own: true},
-		{name: "shared run", xdg: open, run: shared, want: "", warns: true},
+		{name: "config", dir: config, home: home, xdg: xdg, want: config},
+		{name: "cache", home: home, xdg: xdg, want: cache},
+		{name: "config not private", dir: open, home: home, want: cache, warns: true},
+		{name: "runtime", home: shared, xdg: xdg, want: xdg, memory: true, warns: true},
+		{name: "temporary", xdg: open, want: os.TempDir(), warns: true},
 	} {
 		var log bytes.Buffer
-		environ := []string{"XDG_RUNTIME_DIR=" + tc.xdg}
-		got, own := privateParent(tc.dir, environ, tc.run, slog.New(slog.NewTextHandler(&log, nil)))
-		if got != tc.want || own != tc.own || (log.Len() > 0) != tc.warns {
-			t.Errorf("%s: got %q (made %t, warned %q), want %q", tc.name, got, own, log.String(), tc.want)
+		environ := []string{"HOME=" + tc.home, "XDG_RUNTIME_DIR=" + tc.xdg, "XDG_CACHE_HOME="}
+		d, err := makePrivateDir(privateParents(tc.dir, environ), slog.New(slog.NewTextHandler(&log, nil)))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if own {
-			if _, err := checkPrivate(got); err != nil {
-				t.Errorf("%s: %v", tc.name, err)
-			}
+		path, _, _, err := d.current()
+		if err != nil || filepath.Dir(path) != tc.want || d.inMemory() != tc.memory || (log.Len() > 0) != tc.warns {
+			t.Errorf("%s: made %q (%v), in memory %t, warned %q; want it in %q", tc.name, path, err, d.inMemory(), log.String(), tc.want)
 		}
+		d.removeAll()
+	}
+	if _, err := checkPrivate(cache); err != nil {
+		t.Errorf("the cache's directory: %v", err)
+	}
+}
+
+// TestParentRemoved checks that, once a step has removed the parent of
+// the worker's directory, the worker makes it again, if it made it, or
+// else makes its directory in the next parent it would have used.
+func TestParentRemoved(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	cache := filepath.Join(base, "cache", "meridian", "worker")
+	given := filepath.Join(base, "given")
+	if err := os.Mkdir(given, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d, err := makePrivateDir(privateParents(given, []string{"XDG_CACHE_HOME=" + filepath.Join(base, "cache")}), testLogger(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.removeAll()
+	for _, want := range []string{cache, cache} {
+		path, _, _, err := d.current()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The first time, the given directory goes, and the worker moves
+		// on to its cache; the second, the cache's, which it makes again.
+		if err := os.RemoveAll(filepath.Dir(path)); err != nil {
+			t.Fatal(err)
+		}
+		again, _, _, err := d.current()
+		if err != nil || filepath.Dir(again) != want {
+			t.Errorf("after %s was removed, the worker uses %q (%v), want one in %s", filepath.Dir(path), again, err, want)
+		}
+	}
+}
+
+// TestCleanupRemovesRunDir checks that a cleanup: that removes the run's
+// directory, as rm -r ${PW_JOB_DIR} does in workflows we know of, leaves
+// the cleanups after it, and the worker's files, as they were: the
+// worker's directory is outside the run's.
+func TestCleanupRemovesRunDir(t *testing.T) {
+	t.Parallel()
+	first := command("true")
+	first.Cleanup = plan.Literal("echo cleaned first")
+	second := command("echo two=2 >> $OUTPUTS")
+	second.Cleanup = plan.Literal(`rm -r "$PW_JOB_DIR"`)
+	f := newFakeCoordinator(t, newJob(first, second))
+	home := t.TempDir()
+	if err := f.runWorker(t.Context(), Config{Environ: []string{"HOME=" + home}}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success 0",
+		"started 1.0", "finished 1.0 success 0",
+		"cleanup started 1.0", "cleanup finished 1.0 success 0",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	end := checkEnd(t, f, plan.OutcomeSuccess, "")
+	if end.Outputs["two"] != "2" {
+		t.Errorf("the job's outputs are %v", end.Outputs)
 	}
 }
 

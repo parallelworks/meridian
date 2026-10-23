@@ -12,7 +12,7 @@ import (
 // the test's.
 func newTestSpool(t *testing.T, limit int64) *spool {
 	t.Helper()
-	d, err := makePrivateDir(t.TempDir(), false)
+	d, err := makePrivateDir([]parentDir{{path: t.TempDir()}}, testLogger(t))
 	if err != nil {
 		t.Fatal(err)
 	}

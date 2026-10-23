@@ -52,7 +52,7 @@ func TestDirReplaced(t *testing.T) {
 func TestPrivateDir(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
-	d, err := makePrivateDir(parent, false)
+	d, err := makePrivateDir([]parentDir{{path: parent}}, testLogger(t))
 	if err != nil {
 		t.Fatal(err)
 	}

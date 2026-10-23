@@ -407,7 +407,8 @@ var testTiming = timing{
 }
 
 // runWorker runs a worker against f, served on a Unix socket unless
-// cfg.Environ says where it is, and returns what Run returns.
+// cfg.Environ says where it is, with its directory in a test's own unless
+// cfg.Environ gives it a home, and returns what Run returns.
 func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 	f.t.Helper()
 	if !slices.ContainsFunc(cfg.Environ, func(kv string) bool { return strings.HasPrefix(kv, workerapi.EnvCoordinator+"=") }) {
@@ -421,7 +422,9 @@ func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 	if cfg.Worker.Digest == "" {
 		cfg.Worker = workerapi.Worker{Version: "v0.0.0-test", Digest: "sha256:" + strings.Repeat("0", 64)}
 	}
-	if cfg.Dir == "" {
+	if cfg.Dir == "" && lookupEnv(cfg.Environ, "HOME") == "" {
+		// A test that gives the worker a home lets it choose its own
+		// directory, in that home's cache.
 		cfg.Dir = f.t.TempDir()
 	}
 	if cfg.Log == nil {

@@ -35,18 +35,22 @@ type Config struct {
 	Environ []string
 	// Dir is where the worker makes the directory it keeps its own files
 	// in as it runs, which only its user can use: its spooled logs, and
-	// its steps' scripts and $OUTPUTS files. "" is XDG_RUNTIME_DIR, if the
-	// environment sets it to a directory only the user can use; else
-	// .meridian in the run's directory, if no other user can change that;
-	// and else os.TempDir(), with a warning in the log, since another user
-	// could take the name of a directory there that is removed. Whatever
-	// removes the directory, the worker makes another, with another name,
-	// rather than trust what is at the old path. Run removes them before it
-	// returns.
+	// its steps' scripts and $OUTPUTS files. It must be a directory only
+	// the user can use, on a path no other user can change. When it is "",
+	// or not such a directory, or goes, the worker uses meridian/worker in
+	// the user's cache directory, which it makes, on disk; else
+	// XDG_RUNTIME_DIR, if the environment sets it to such a directory,
+	// which is in memory; and else os.TempDir(), with a warning in the
+	// log, since another user could take the name of a directory there
+	// that is removed. None is in the run's directory, which a step can
+	// remove. Whatever removes the directory, the worker makes another,
+	// with another name, rather than trust what is at the old path. Run
+	// removes them before it returns.
 	Dir string
-	// SpoolLimit is the most bytes of logs the worker keeps on disk that
-	// the coordinator hasn't stored, or 0 for DefaultSpoolLimit. Past it,
-	// a log loses what its step prints until the coordinator has stored
+	// SpoolLimit is the most bytes of logs the worker keeps that the
+	// coordinator hasn't stored, or 0 for DefaultSpoolLimit, or
+	// memorySpoolLimit in XDG_RUNTIME_DIR, which is in memory. Past it, a
+	// log loses what its step prints until the coordinator has stored
 	// more, and the step's event warns of it.
 	SpoolLimit int64
 	// Log is where the worker logs what it does, for whoever runs it, or
@@ -58,6 +62,10 @@ type Config struct {
 // DefaultSpoolLimit is how many bytes of logs a worker keeps on disk for
 // the coordinator by default.
 const DefaultSpoolLimit = 1 << 30
+
+// memorySpoolLimit is how many it keeps by default in XDG_RUNTIME_DIR, a
+// tmpfs, in memory, to which systemd gives a tenth of it.
+const memorySpoolLimit = 64 << 20
 
 // Run is meridian worker: it claims the attempt its environment names,
 // runs the job's steps on this host, as package plan's Step phase readies
@@ -109,12 +117,23 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 			return err
 		}
 	}
-	limit := cfg.SpoolLimit
-	if limit <= 0 {
-		limit = DefaultSpoolLimit
-	}
 	if ep.keptTokenFile != nil {
 		log.Warn("couldn't remove the bootstrap token's file, which is good for no more than the one claim", "error", ep.keptTokenFile)
+	}
+	// The worker's directory is made before it claims the attempt, so that
+	// a worker that can't make one never runs it.
+	files, err := makePrivateDir(privateParents(cfg.Dir, stepsEnv), log)
+	if err != nil {
+		return err
+	}
+	defer files.removeAll()
+	limit := cfg.SpoolLimit
+	switch {
+	case limit > 0:
+	case files.inMemory():
+		limit = memorySpoolLimit
+	default:
+		limit = DefaultSpoolLimit
 	}
 
 	c := newClient(ep, tm, log)
@@ -126,11 +145,6 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 	}
 	c.credential = credential
 	log.Info("claimed an attempt", "run", claim.RunID, "attempt", claim.AttemptID, "number", claim.Attempt)
-	files, err := makePrivateDir(privateParent(cfg.Dir, stepsEnv, claim.RunDir, log))
-	if err != nil {
-		return err
-	}
-	defer files.removeAll()
 	a := &attempt{
 		claim:   claim,
 		claimed: claimed,
