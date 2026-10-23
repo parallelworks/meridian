@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/parallelworks/foundation/problem"
@@ -428,20 +427,21 @@ func (f configFile) resources(group string, n *yaml.Node, r *backend.Resources) 
 			return err
 		}
 		invalid := f.problem(problems.MemberInvalid, v, problems.Params{"group": group, "key": key, "value": problems.Show(text)})
+		var ok bool
 		switch key {
 		case "cpu":
-			if r.MilliCPU, err = parseCPU(text); err != nil {
+			if r.MilliCPU, ok = parseCPU(text); !ok {
 				return invalid
 			}
 		case "memory":
-			if r.Memory, err = parseMemory(text); err != nil {
+			if r.Memory, ok = parseMemory(text); !ok {
 				return invalid
 			}
 		default:
 			if v.Tag != "!!int" {
 				return f.problem(problems.ConfigWrongType, v, problems.Params{"key": key, "want": "number"})
 			}
-			if r.GPU, err = strconv.Atoi(text); err != nil || r.GPU < 0 {
+			if r.GPU, ok = parseGPU(text); !ok {
 				return invalid
 			}
 		}

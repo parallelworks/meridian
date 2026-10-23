@@ -114,7 +114,7 @@ func edgePlan(t testing.TB) *plan.Plan {
 				{
 					ID: "w", Uses: "sub.yaml", Workflow: nested, Path: "/jobs/b/steps/1",
 					With:  mustValue(t, map[string]any{"$out": "${{ inputs.x }}", "list": []any{nil, true, 1.5, int64(2)}}),
-					Retry: &plan.StepRetry{CleanOnRetry: true, MaxRetries: plan.Literal(int64(2))},
+					Retry: &plan.StepRetry{CleanOnRetry: plan.Literal(true), MaxRetries: plan.Literal(int64(2))},
 				},
 			},
 			Outputs: map[string]plan.Value{},
@@ -539,6 +539,33 @@ func TestValueMarked(t *testing.T) {
 		got, marked, err := mustValue(t, raw).EvalMarked(scope)
 		if err != nil || marked != want {
 			t.Errorf("%s = %v, %v, marked %v; want marked %v", v, got, err, marked, want)
+		}
+	}
+}
+
+// A Value reports what its templates read of each of its scope's mark sets
+// apart, all of them together, and what one that failed read before it
+// failed.
+func TestValueRead(t *testing.T) {
+	scope := expr.Scope{
+		Contexts: map[string]any{"vars": map[string]any{"token": "t", "region": "r"}},
+		Marked:   expr.NewMarks([]string{"vars", "token"}),
+		Private:  expr.NewMarks([]string{"vars"}),
+	}
+	for v, want := range map[string]expr.Read{
+		`{"a": "${{ vars.region }}", "b": ["${{ vars.token * 2 }}"]}`: {Marked: true, Private: true},
+		`{"a": "${{ vars.region }}", "b": ["vars.token"]}`:            {Private: true},
+		`["${{ 1 }}", "text"]`:                          {},
+		`["${{ vars.token }}", "${{ fromJSON('x') }}"]`: {Marked: true, Private: true},
+		`["${{ fromJSON(vars.region) }}"]`:              {Private: true},
+	} {
+		var raw any
+		if err := json.Unmarshal([]byte(v), &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, read, err := mustValue(t, raw).EvalRead(scope)
+		if read != want {
+			t.Errorf("%s = %v, %v, read %+v; want %+v", v, got, err, read, want)
 		}
 	}
 }

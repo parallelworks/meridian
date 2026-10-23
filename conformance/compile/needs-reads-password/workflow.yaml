@@ -1,0 +1,25 @@
+on:
+  execute:
+    inputs:
+      pw:
+        type: password
+      creds:
+        type: list
+        template:
+          pass:
+            type: password
+jobs:
+  quick:
+    steps:
+      - run: echo quick
+  full:
+    steps:
+      - run: echo full
+  report:
+    needs: ${{ inputs.pw == 'quick' && 'quick' || 'full' }}
+    steps:
+      - run: echo report
+  audit:
+    needs: ${{ inputs.creds[0].pass == 'quick' && 'quick' || 'full' }}
+    steps:
+      - run: echo audit

@@ -1,0 +1,20 @@
+on:
+  execute:
+    inputs:
+      workers:
+        type: list
+        template:
+          name: {type: string}
+        default:
+          - {name: first}
+          - {name: second}
+jobs:
+  fractal_demo:
+    working-directory: ${{ env.PW_PARENT_JOB_DIR }}/fractal
+    steps:
+      - uses: workflow/mine
+        retry:
+          max-retries: 1
+        with:
+          name: ${{ inputs.workers get env.PW_WORKFLOW_STEP_CURRENT_RETRY get name }}
+          try: ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}

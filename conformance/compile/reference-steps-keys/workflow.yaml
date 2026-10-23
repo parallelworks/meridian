@@ -5,3 +5,4 @@ jobs:
         run: make
       - run: echo ${{ steps.compile.bogus }} ${{ steps.compile.outputs.bin }}
       - run: echo ${{ steps.compil.outputs.bin }}
+      - run: echo ${{ steps.compile }} ${{ steps.compile.outputs }} ${{ steps.nope.result }}

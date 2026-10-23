@@ -1,0 +1,39 @@
+on:
+  execute:
+    inputs:
+      pw:
+        type: password
+      copy:
+        type: string
+        hidden: true
+        default: ${{ inputs.pw }}
+      dsn:
+        type: string
+        default: postgres://app:${{ inputs.pw }}@db
+      choice:
+        type: dropdown
+        options:
+          - ${{ inputs.pw }}
+          - none
+      tags:
+        type: multi-dropdown
+        options:
+          - ${{ inputs.pw }}
+          - plain
+      creds:
+        type: list
+        template:
+          user:
+            type: string
+          pass:
+            type: password
+          hint:
+            type: string
+            default: ${{ inputs.creds.[index].pass }}
+      note:
+        type: string
+        default: ${{ inputs.pw }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

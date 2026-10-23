@@ -1,0 +1,77 @@
+description: >-
+  A matrix's keys other than include and exclude, in the order of their
+  names, give every combination of their values, the first key changing
+  slowest, as ACTIVATE orders them. Each value is the job's as it is, of any
+  type, and a value given twice gives two instances.
+source: ACTIVATE's matrix expansion, and Meridian
+cases:
+  - description: One key gives an instance for each of its values, in order.
+    strategy:
+      matrix:
+        worker_id: [1, 2, 3]
+    instances:
+      - {worker_id: 1}
+      - {worker_id: 2}
+      - {worker_id: 3}
+  - description: >-
+      Keys are in the order of their names, whatever their order in the
+      workflow, and the first changes slowest.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        arch: [x64, arm]
+    instances:
+      - {arch: x64, os: linux}
+      - {arch: x64, os: mac}
+      - {arch: arm, os: linux}
+      - {arch: arm, os: mac}
+  - description: Names are ordered by their bytes, so capitals come first.
+    strategy:
+      matrix:
+        b: [1, 2]
+        B: [x]
+        a: [true]
+    instances:
+      - {B: x, a: true, b: 1}
+      - {B: x, a: true, b: 2}
+  - description: >-
+      A value can be a list or a mapping, and a value given twice gives two
+      instances.
+    strategy:
+      matrix:
+        target:
+          - {host: a, port: 22}
+          - [1, 2]
+          - {host: a, port: 22}
+          - null
+    instances:
+      - {target: {host: a, port: 22}}
+      - {target: [1, 2]}
+      - {target: {host: a, port: 22}}
+      - {target: null}
+  - description: The values of a key can come from an expression that gives a list.
+    contexts:
+      inputs: {n: 3, hosts: [a, b]}
+    strategy:
+      matrix:
+        job_id: ${{ 1 range inputs.n + 1 }}
+        host: ${{ inputs.hosts }}
+    instances:
+      - {host: a, job_id: 1}
+      - {host: a, job_id: 2}
+      - {host: a, job_id: 3}
+      - {host: b, job_id: 1}
+      - {host: b, job_id: 2}
+      - {host: b, job_id: 3}
+  - description: The values of a key can read needs, where Ready expands the matrix.
+    contexts:
+      needs:
+        plan:
+          result: success
+          outputs: {cases: '["a", "b"]'}
+    strategy:
+      matrix:
+        case: ${{ fromJSON(needs.plan.outputs.cases) }}
+    instances:
+      - {case: a}
+      - {case: b}

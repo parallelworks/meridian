@@ -1,3 +1,9 @@
+on:
+  execute:
+    inputs:
+      clean:
+        type: boolean
+        default: false
 jobs:
   simulate:
     retry:
@@ -11,3 +17,14 @@ jobs:
           interval: 10s
           timeout: 1m
           clean-on-retry: true
+      - run: ./simulate
+        retry:
+          max-retries: 2
+          clean-on-retry: false
+      - run: ./simulate
+        retry:
+          max-retries: 2
+      - run: ./simulate
+        retry:
+          max-retries: 2
+          clean-on-retry: ${{ inputs.clean }}

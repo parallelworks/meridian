@@ -1,0 +1,20 @@
+env:
+  WORKFLOW: w
+jobs:
+  main:
+    runs-on:
+      execution-group: ${{ env.WORKFLOW }}-${{ env.PW_JOB_DIR }}
+    working-directory: ${{ env.PW_PARENT_JOB_DIR }}/${{ env.JOB }}
+    env:
+      JOB: ${{ env.WORKFLOW }}
+      OTHER: ${{ env.JOB }}
+      RETRY: ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}
+    steps:
+      - run: echo ${{ env.WORKFLOW }} ${{ env.JOB }} ${{ env.STEP }} ${{ env.OUTPUTS }} ${{ env.PW_API_KEY }}
+        env:
+          STEP: s
+      - run: echo ${{ env.STEP }} ${{ env.HOME }}
+    outputs:
+      job: ${{ env.JOB }}
+      file: ${{ env.OUTPUTS }}
+      dir: ${{ env.PW_JOB_DIR }}

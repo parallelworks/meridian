@@ -1,0 +1,21 @@
+description: >-
+  A step's cleanup: runs once all of the job's steps have, so it reads the
+  outputs of any of them, its own step's and later ones' among them. One
+  that reads a step the job doesn't have reads it as empty, and one that
+  reads another key of one than its outputs reads it as its own text, as
+  format 1 does; each is a warning.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: cleanup_undefined_step
+      path: /jobs/build/steps/1/cleanup
+      line: 9
+      column: 28
+      params: {job: build, id: compil, suggested: "true", suggestion: compile}
+    - severity: warning
+      code: cleanup_steps_unknown_key
+      path: /jobs/build/steps/1/cleanup
+      line: 9
+      column: 60
+      params: {id: compile, key: bogus}

@@ -1,8 +1,12 @@
 description: >-
-  needs.<job> has a needed job's outputs, its result and its steps, and
-  needs.<job>.steps.<id> names one of that job's steps. Anything else is an
-  error, and so is needs.<job> for a job the workflow doesn't have.
-source: Meridian
+  needs.<job> has a needed job's outputs, its result and its steps, which
+  format 1 reads as needs.<job>.result, needs.<job>.outputs.<name> and
+  needs.<job>.steps.<id>.outputs.<name>; needs.<job>.steps.<id> names one of
+  that job's steps, and needs.<job> a job the workflow has, or it is an
+  error. Any other reference to needs, such as another key, needs.<job> or
+  needs.<job>.outputs, whatever job it names, reads as its own text, as
+  format 1 reads a word it doesn't know, and is a warning.
+source: Meridian, and ACTIVATE's parser
 expect:
   diagnostics:
     - severity: error
@@ -11,7 +15,7 @@ expect:
       line: 10
       column: 23
       params: {job: build, id: nope}
-    - severity: error
+    - severity: warning
       code: needs_unknown_key
       path: /jobs/test/steps/2/run
       line: 11
@@ -23,3 +27,27 @@ expect:
       line: 12
       column: 23
       params: {job: buld, suggested: "true", suggestion: build}
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/4/run
+      line: 13
+      column: 23
+      params: {job: build, text: needs.build}
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/4/run
+      line: 13
+      column: 42
+      params: {job: build, text: needs.build.outputs}
+    - severity: warning
+      code: needs_read_whole
+      path: /jobs/test/steps/4/run
+      line: 13
+      column: 69
+      params: {job: build, text: needs.build.steps.compile.result}
+    - severity: warning
+      code: needs_unknown_key
+      path: /jobs/test/steps/4/run
+      line: 13
+      column: 109
+      params: {job: nope, key: bogus}

@@ -1,0 +1,35 @@
+description: >-
+  env.<name> reads "" where nothing defines the name: the workflow's env:,
+  the job's once the job's env: is evaluated, the step's in the step, and
+  format 1's variables, such as PW_JOB_DIR, from the job's env: and
+  working-directory: on, and those it defines for a step alone, such as
+  OUTPUTS and PW_WORKFLOW_STEP_CURRENT_RETRY, in its steps. A name nothing
+  defines is a warning.
+  PW_API_KEY, the platform's credential, isn't one an expression reads.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/runs-on/execution-group
+      params: {name: PW_JOB_DIR}
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/env/RETRY
+      params: {name: PW_WORKFLOW_STEP_CURRENT_RETRY}
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/steps/0/run
+      params: {name: PW_API_KEY}
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/outputs/file
+      params: {name: OUTPUTS}
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/steps/1/run
+      params: {name: STEP}
+    - severity: warning
+      code: undefined_env
+      path: /jobs/main/steps/1/run
+      params: {name: HOME}

@@ -6,6 +6,7 @@ import (
 	"iter"
 	"slices"
 
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/reach"
 )
@@ -82,6 +83,20 @@ func addAt(t *reach.Trie[*fieldSet], sets *map[string]*fieldSet, path []string, 
 	p.sets = append(p.sets, s)
 }
 
+// readPatterns returns the patterns (reach.Patterns) of the paths in the
+// inputs' values that exprs read, for the list rows at index.
+func readPatterns(exprs []*expr.Expr, index []int) [][]string {
+	var out [][]string
+	for _, e := range exprs {
+		for _, ref := range e.Refs() {
+			if ref.Context == "inputs" {
+				out = slices.AppendSeq(out, reach.Patterns(indexPath(ref.Path, index)))
+			}
+		}
+	}
+	return out
+}
+
 // leave notes that p is done, and so leaves each set it is in.
 func (p *pendingField) leave() {
 	for _, s := range p.sets {
@@ -107,14 +122,7 @@ func waitingIn(seq iter.Seq[*fieldSet]) iter.Seq[*pendingField] {
 
 // add adds f, which waits, after the others.
 func (q *pendingFields) add(f *field) {
-	p := &pendingField{f: f, pos: len(q.all), pass: q.pass}
-	for _, e := range f.reads {
-		for _, ref := range e.Refs() {
-			if ref.Context == "inputs" {
-				p.reads = slices.AppendSeq(p.reads, reach.Patterns(indexPath(ref.Path, f.index)))
-			}
-		}
-	}
+	p := &pendingField{f: f, pos: len(q.all), pass: q.pass, reads: readPatterns(f.reads, f.index)}
 	q.all = append(q.all, p)
 	// f waits for the fields it reads, and the fields that read f wait for
 	// it.

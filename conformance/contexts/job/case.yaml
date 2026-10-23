@@ -1,0 +1,19 @@
+description: >-
+  job is the job instance: its name, the instance's key, the attempt's
+  number, from 1, and the execution group and its member it was placed on.
+  It is known from the job's env: on, and a name it doesn't have reads as
+  null.
+source: Meridian
+jobs:
+  build:
+    index: 1
+    matrix: {os: mac}
+    attempt: 2
+    group: hpc
+    member: login-1
+    steps:
+      - {outcome: success}
+expect:
+  values:
+    /jobs/build/steps/0/run: build build#1 2 hpc login-1 build#1
+    /jobs/build/steps/1/run: true 3

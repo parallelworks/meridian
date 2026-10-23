@@ -424,9 +424,15 @@
     ]
   },
   "needs_unknown_key": {
-    "why": "Each job in needs has outputs, result and steps, and nothing else.",
+    "why": "Each job in needs has outputs, result and steps, and nothing else, so another key reads as the reference's own text, such as needs.build.status, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read one of outputs, result or steps."
+    ]
+  },
+  "needs_read_whole": {
+    "why": "Format 1 reads a job in needs by its result, needs.<job>.result, and its outputs and its steps' outputs one by one, by name, as needs.<job>.outputs.<name> and needs.<job>.steps.<id>.outputs.<name>, and any other reference to needs, such as needs.build or needs.build.outputs, as a word it doesn't know: as its own text.",
+    "fix": [
+      "Read each output by its name: needs.<job>.outputs.<name>."
     ]
   },
   "step_not_earlier": {
@@ -448,19 +454,37 @@
     ]
   },
   "steps_unknown_key": {
-    "why": "Each step in steps has outputs, and nothing else.",
+    "why": "Each step in steps has outputs, and nothing else, so another key reads as the reference's own text, such as steps.build.result, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read steps.<id>.outputs."
     ]
   },
   "output_steps_unknown_key": {
-    "why": "Each step in steps has outputs, and nothing else, so this job output is empty.",
+    "why": "Each step in steps has outputs, and nothing else, so this job output reads another key as the reference's own text, as format 1 reads a word it doesn't know.",
     "fix": [
       "Read steps.<id>.outputs."
     ]
   },
+  "cleanup_undefined_step": {
+    "why": "A step's cleanup: runs once all of the job's steps have, so it can read the outputs of any of them, its own step's and later ones' among them. It reads a step by an id none of the job's steps has, which is empty.",
+    "fix": [
+      "Correct the step's id, or give the step that id."
+    ]
+  },
+  "cleanup_steps_unknown_key": {
+    "why": "Each step in steps has outputs, and nothing else, so this cleanup: reads another key as the reference's own text, as format 1 reads a word it doesn't know.",
+    "fix": [
+      "Read steps.<id>.outputs."
+    ]
+  },
+  "steps_read_whole": {
+    "why": "Format 1 reads a step's outputs from steps one by one, by name, and any other reference to steps, such as steps.build or steps.build.outputs, as a word it doesn't know: as its own text.",
+    "fix": [
+      "Read each output by its name: steps.<id>.outputs.<name>."
+    ]
+  },
   "no_matrix": {
-    "why": "The job has no matrix, so a word that starts with matrix. is text.",
+    "why": "The job has no matrix, so matrix.<key> reads as null. ACTIVATE read it as its own text when no job of the workflow had a matrix, which made it depend on the workflow's other jobs.",
     "fix": [
       "Give the job a strategy: with a matrix:, or remove the reference."
     ]
@@ -523,6 +547,72 @@
     "why": "A run is kept as JSON, which nests at most 10,000 levels. A value counts the levels around it in the run, about as many as the workflow has around it. A mapping whose only key starts with $ counts as two levels, and an expression counts the levels of its parsed form, such as one for each operator, and one for each list or mapping it writes. The limit is Meridian's own, not part of the workflow format.",
     "fix": [
       "Nest the value less deeply."
+    ]
+  },
+  "runs_on_invalid": {
+    "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
+    "fix": [
+      "Make the expression give one of these, such as the value of an execution-groups or compute-target input."
+    ]
+  },
+  "resources_invalid": {
+    "why": "A job's resources: says what it needs from where it runs, and each value is read once its expressions are evaluated. cpu is a number of cores, such as 4 or 0.5, or a whole number of thousandths of a core followed by m, such as 500m. memory is a whole number of bytes, or a number followed by a unit: k, M, G, T, P or E for powers of 1000, or Ki, Mi, Gi, Ti, Pi or Ei for powers of 1024. gpu is a whole number. None can be negative.",
+    "fix": [
+      "Give the value in the form the message names."
+    ]
+  },
+  "duration_invalid": {
+    "why": "A timeout or an interval is a duration: a whole number of seconds, such as 300, or a whole number followed by s for seconds, m for minutes, h for hours or d for days, such as 10m. An expression in it gave something else.",
+    "fix": [
+      "Make the expression give a duration in that form."
+    ]
+  },
+  "count_invalid": {
+    "why": "How many times a job or a step may run again is a number. A number is taken, and so is text that reads as one, such as an output; a fraction is rounded down, and a negative number is 0. An expression in it gave something else.",
+    "fix": [
+      "Make the expression give a number."
+    ]
+  },
+  "matrix_not_list": {
+    "why": "Each key of a matrix other than include and exclude lists the values the job runs with, and include and exclude list entries. An expression gave something that isn't a list for one of them.",
+    "fix": [
+      "Make the expression give a list, such as a list input's value or a range of numbers."
+    ]
+  },
+  "matrix_entry_not_mapping": {
+    "why": "Each entry of a matrix's include and exclude is a mapping of matrix keys to values: an exclude entry removes the combinations that have all its values, and an include entry adds its values to the combinations it matches, or is a combination of its own.",
+    "fix": [
+      "Write each entry as a mapping."
+    ]
+  },
+  "matrix_empty": {
+    "why": "A matrix job runs once for each combination of its matrix's values. This matrix has none: a key lists no values, or exclude removes every combination, and include adds none.",
+    "fix": [
+      "Give each key at least one value, or remove the exclude entries that remove every combination."
+    ]
+  },
+  "matrix_too_large": {
+    "why": "Meridian runs a matrix of at most a limit of combinations, 256 unless whoever runs the workflow sets another. It also stops counting a matrix's combinations once it has looked at about 16 million of them and of the exclude entries it checks them against, so a matrix far larger than the limit before its exclude entries remove most of it is too large as well. The limits are Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Make the matrix smaller, or ask whoever runs the workflow for a higher limit."
+    ]
+  },
+  "output_not_written": {
+    "why": "Format 1 reads a job's output, needs.<job>.outputs.<name>, and a step's, steps.<id>.outputs.<name>, strictly where a job or a step is about to run, and in a job's outputs: once its steps succeeded: one that nothing wrote fails what reads it, rather than read as \"\", so that a command such as rm -rf with an empty path never runs. A step's cleanup:, a step or a job whose if: is the word always, and an if: itself, read it as \"\".",
+    "fix": [
+      "Write the output in the step or job that the expression reads, or read it with a default, such as needs.<job>.outputs.<name> || 'value', in a step whose if: is always."
+    ]
+  },
+  "working_directory_variable": {
+    "why": "A working directory is used as it is, and no shell expands the variables in it, so $HOME or ${PW_JOB_DIR} would be a directory of that name. Format 1 fails the step instead.",
+    "fix": [
+      "Read the value with an expression, such as env.PW_JOB_DIR, or write the path out."
+    ]
+  },
+  "undefined_env": {
+    "why": "env holds what the workflow's, the job's and the step's env: define, and the variables format 1 gives a step, such as PW_JOB_DIR and OUTPUTS. A name none of them defines reads as \"\", whatever the environment the step runs in holds, since an expression is evaluated before the step runs. A job's env:, working-directory: and outputs: read only the variables format 1 gives as the job starts, such as PW_JOB_DIR, and not those it gives a step alone, such as OUTPUTS and PW_WORKFLOW_STEP_CURRENT_RETRY.",
+    "fix": [
+      "Define the variable in an env:, or read it in the step's script, as $NAME."
     ]
   },
   "expression_empty": {

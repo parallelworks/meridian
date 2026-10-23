@@ -77,17 +77,23 @@ type jobInfo struct {
 	// needed holds the names of the jobs it needs.
 	needed map[string]bool
 	// stepIDs maps its steps' ids to their indexes, and step is the index
-	// of the step being checked, or the number of steps after them.
+	// of the step being checked, or the number of steps after them. steps
+	// is the number of steps, and cleanup is set while a step's cleanup: is
+	// checked, which runs once every step has, and reads each one's
+	// outputs.
 	stepIDs map[string]int
 	step    int
+	steps   int
+	cleanup bool
 	// matrix is set for a job with a strategy:, and matrixKeys holds its
 	// matrix's keys when the workflow writes them out, and matrixNames
 	// them sorted, once a reference reads a key it doesn't have.
 	matrix      bool
 	matrixKeys  map[string]bool
 	matrixNames *nameList
-	// earlier holds the ids of the steps before step earlierAt, once a
-	// reference there reads a step that isn't one.
+	// earlier holds the ids of the steps before step earlierAt, or all of
+	// them for a cleanup:, once a reference there reads a step that isn't
+	// one.
 	earlier   *nameList
 	earlierAt int
 }
@@ -293,6 +299,7 @@ func (c *compiler) job(info *jobInfo) plan.Job {
 	}
 	j.Env = c.values(at("env"), jobEnv, info)
 	steps := list(def["steps"])
+	info.steps = len(steps)
 	j.Steps = make([]plan.Step, len(steps))
 	for i := range steps {
 		info.step = i
@@ -319,14 +326,21 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 	s.SSH = c.value(at("ssh"), stepRuns, info)
 	s.Timeout = c.value(at("timeout"), stepRuns, info)
 	s.IgnoreErrors = c.value(at("ignore-errors"), stepRuns, info)
+	// A cleanup: runs once every step has, so it reads each one's outputs.
+	info.cleanup = true
 	s.Cleanup = c.value(at("cleanup"), stepRuns, info)
+	info.cleanup = false
 	if retry, ok := def["retry"].(map[string]any); ok {
 		s.Retry = &plan.StepRetry{
 			MaxRetries: c.value(at("retry", "max-retries"), stepRuns, info),
 			Interval:   c.value(at("retry", "interval"), stepRuns, info),
 			Timeout:    c.value(at("retry", "timeout"), stepRuns, info),
 		}
-		s.Retry.CleanOnRetry, _ = retry["clean-on-retry"].(bool)
+		// clean-on-retry is true unless the workflow says otherwise.
+		s.Retry.CleanOnRetry = plan.Literal(true)
+		if _, ok := retry["clean-on-retry"]; ok {
+			s.Retry.CleanOnRetry = c.value(at("retry", "clean-on-retry"), stepRuns, info)
+		}
 	}
 	return s
 }

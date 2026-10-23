@@ -181,32 +181,44 @@ func (v Value) Eval(scope expr.Scope) (any, error) {
 // expr.Template.EvalMarked does: then what the Value gives is made from it,
 // or decided by it.
 func (v Value) EvalMarked(scope expr.Scope) (out any, marked bool, err error) {
-	out, err = evalValue(v.v, scope.Budgeted(), &marked)
-	return out, marked, err
+	out, read, err := v.EvalRead(scope)
+	return out, read.Marked, err
 }
 
 // EvalRead evaluates the Value as Eval does, and reports what its templates
 // read of the values scope marks, as expr.Template.EvalRead does: whether
 // what it gives is to be masked, and whether it is private.
-//
-// It isn't built yet, and returns an error that says so.
 func (v Value) EvalRead(scope expr.Scope) (out any, read expr.Read, err error) {
-	return nil, expr.Read{}, errNotImplemented
+	return v.evalLeaves(scope, nil)
 }
 
-// evalValue evaluates the templates in v, and notes in marked whether one
-// read a marked value.
-func evalValue(v any, scope expr.Scope, marked *bool) (any, error) {
+// evalLeaves evaluates the Value as EvalRead does, and calls leaf, if it
+// isn't nil, with what each of its templates gives and read, and what each
+// expression in one gives and read (expr.Template.EvalParts), so that what
+// a template, or an expression in it, that read a secret gave can be told
+// from what the rest did.
+func (v Value) evalLeaves(scope expr.Scope, leaf func(out any, read expr.Read)) (out any, read expr.Read, err error) {
+	out, err = evalValue(v.v, scope.Budgeted(), &read, leaf)
+	return out, read, err
+}
+
+// evalValue evaluates the templates in v, notes in read what they read of
+// the values scope marks, and calls leaf, if it isn't nil, for each, and
+// for each expression of a template of text and expressions.
+func evalValue(v any, scope expr.Scope, read *expr.Read, leaf func(any, expr.Read)) (any, error) {
 	switch v := v.(type) {
 	case *expr.Template:
-		out, m, err := v.EvalMarked(scope)
-		*marked = *marked || m
+		out, r, err := v.EvalParts(scope, leaf)
+		*read = read.Or(r)
+		if _, alone := v.Expr(); err == nil && leaf != nil && !alone {
+			leaf(out, r)
+		}
 		return out, err
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
-			if out[i], err = evalValue(item, scope, marked); err != nil {
+			if out[i], err = evalValue(item, scope, read, leaf); err != nil {
 				return nil, err
 			}
 		}
@@ -215,7 +227,7 @@ func evalValue(v any, scope expr.Scope, marked *bool) (any, error) {
 		out := make(map[string]any, len(v))
 		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = evalValue(item, scope, marked); err != nil {
+			if out[k], err = evalValue(item, scope, read, leaf); err != nil {
 				return nil, err
 			}
 		}

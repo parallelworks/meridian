@@ -495,9 +495,16 @@
   },
   "needs_unknown_key": {
     "title": "Clave desconocida de needs",
-    "why": "Cada trabajo de needs tiene outputs, result y steps, y nada más.",
+    "why": "Cada trabajo de needs tiene outputs, result y steps, y nada más, así que otra clave se lee como el propio texto de la referencia, como needs.build.status, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee outputs, result o steps."
+    ]
+  },
+  "needs_read_whole": {
+    "title": "Trabajo necesario leído entero",
+    "why": "El formato 1 lee un trabajo de needs por su result, needs.<job>.result, y sus salidas y las de sus pasos una a una, por nombre, como needs.<job>.outputs.<name> y needs.<job>.steps.<id>.outputs.<name>, y cualquier otra referencia a needs, como needs.build o needs.build.outputs, como una palabra que no conoce: como su propio texto.",
+    "fix": [
+      "Lee cada salida por su nombre: needs.<job>.outputs.<name>."
     ]
   },
   "step_not_earlier": {
@@ -523,21 +530,42 @@
   },
   "steps_unknown_key": {
     "title": "Clave desconocida de un paso",
-    "why": "Cada paso de steps tiene outputs, y nada más.",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que otra clave se lee como el propio texto de la referencia, como steps.build.result, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee steps.<id>.outputs."
     ]
   },
   "output_steps_unknown_key": {
     "title": "La salida lee una clave desconocida de un paso",
-    "why": "Cada paso de steps tiene outputs, y nada más, así que esta salida del trabajo está vacía.",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que esta salida del trabajo lee otra clave como el propio texto de la referencia, igual que el formato 1 lee una palabra que no conoce.",
     "fix": [
       "Lee steps.<id>.outputs."
     ]
   },
+  "cleanup_undefined_step": {
+    "title": "Un cleanup: lee un paso que no existe",
+    "why": "El cleanup: de un paso se ejecuta cuando ya se han ejecutado todos los pasos del trabajo, así que puede leer las salidas de cualquiera de ellos, incluidos su propio paso y los posteriores. Este lee un paso con un id que no tiene ninguno de los pasos del trabajo, así que lo que lee está vacío.",
+    "fix": [
+      "Corrige el id del paso o dale ese id al paso."
+    ]
+  },
+  "cleanup_steps_unknown_key": {
+    "title": "Un cleanup: lee una clave desconocida de un paso",
+    "why": "Cada paso de steps tiene outputs, y nada más, así que este cleanup: lee otra clave como el propio texto de la referencia, igual que el formato 1 lee una palabra que no conoce.",
+    "fix": [
+      "Lee steps.<id>.outputs."
+    ]
+  },
+  "steps_read_whole": {
+    "title": "Paso leído entero",
+    "why": "El formato 1 lee las salidas de un paso de steps una a una, por nombre, y cualquier otra referencia a steps, como steps.build o steps.build.outputs, como una palabra que no conoce: como su propio texto.",
+    "fix": [
+      "Lee cada salida por su nombre: steps.<id>.outputs.<name>."
+    ]
+  },
   "no_matrix": {
     "title": "El trabajo no tiene matriz",
-    "why": "El trabajo no tiene matriz, así que una palabra que empieza por matrix. es texto.",
+    "why": "El trabajo no tiene matriz, así que matrix.<clave> se lee como null. ACTIVATE lo leía como su propio texto cuando ningún trabajo del flujo de trabajo tenía matriz, lo que lo hacía depender de los demás trabajos del flujo de trabajo.",
     "fix": [
       "Dale al trabajo un strategy: con un matrix:, o elimina la referencia."
     ]
@@ -610,6 +638,83 @@
     "why": "Una ejecución se guarda como JSON, que se anida como máximo 10 000 niveles. Un valor cuenta los niveles que lo rodean en la ejecución, más o menos tantos como los que lo rodean en el flujo de trabajo. Un mapa cuya única clave empieza por $ cuenta como dos niveles, y una expresión cuenta los niveles de su forma analizada, como uno por cada operador y uno por cada lista o mapa que escribe. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
     "fix": [
       "Anida menos el valor."
+    ]
+  },
+  "runs_on_invalid": {
+    "title": "runs-on no es un lugar donde ejecutar",
+    "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
+    "fix": [
+      "Haz que la expresión dé uno de ellos, como el valor de una entrada execution-groups o compute-target."
+    ]
+  },
+  "resources_invalid": {
+    "title": "Recurso que no es una cantidad",
+    "why": "El resources: de un trabajo dice qué necesita del lugar donde se ejecuta, y cada valor se lee una vez evaluadas sus expresiones. cpu es un número de núcleos, como 4 o 0.5, o un número entero de milésimas de núcleo seguido de m, como 500m. memory es un número entero de bytes, o un número seguido de una unidad: k, M, G, T, P o E para potencias de 1000, o Ki, Mi, Gi, Ti, Pi o Ei para potencias de 1024. gpu es un número entero. Ninguno puede ser negativo.",
+    "fix": [
+      "Da el valor en la forma que indica el mensaje."
+    ]
+  },
+  "duration_invalid": {
+    "title": "No es una duración",
+    "why": "Un timeout o un interval es una duración: un número entero de segundos, como 300, o un número entero seguido de s para segundos, m para minutos, h para horas o d para días, como 10m. Una expresión en él dio otra cosa.",
+    "fix": [
+      "Haz que la expresión dé una duración en esa forma."
+    ]
+  },
+  "count_invalid": {
+    "title": "No es un número de veces",
+    "why": "Cuántas veces puede volver a ejecutarse un trabajo o un paso es un número. Se acepta un número, y también un texto que se lee como uno, como una salida; una fracción se redondea hacia abajo, y un número negativo es 0. Una expresión en él dio otra cosa.",
+    "fix": [
+      "Haz que la expresión dé un número."
+    ]
+  },
+  "matrix_not_list": {
+    "title": "Valores de la matriz que no son una lista",
+    "why": "Cada clave de una matriz, salvo include y exclude, enumera los valores con los que se ejecuta el trabajo, e include y exclude enumeran entradas. Una expresión dio algo que no es una lista para una de ellas.",
+    "fix": [
+      "Haz que la expresión dé una lista, como el valor de una entrada de lista o un rango de números."
+    ]
+  },
+  "matrix_entry_not_mapping": {
+    "title": "Entrada de la matriz que no es un mapa",
+    "why": "Cada entrada de include y exclude de una matriz es un mapa de claves de la matriz a valores: una entrada de exclude quita las combinaciones que tienen todos sus valores, y una entrada de include añade sus valores a las combinaciones con las que coincide, o es una combinación propia.",
+    "fix": [
+      "Escribe cada entrada como un mapa."
+    ]
+  },
+  "matrix_empty": {
+    "title": "Matriz sin combinaciones",
+    "why": "Un trabajo con matriz se ejecuta una vez por cada combinación de los valores de su matriz. Esta matriz no tiene ninguna: una clave no enumera valores, o exclude quita todas las combinaciones, e include no añade ninguna.",
+    "fix": [
+      "Da al menos un valor a cada clave, o quita las entradas de exclude que quitan todas las combinaciones."
+    ]
+  },
+  "matrix_too_large": {
+    "title": "Matriz con demasiadas combinaciones",
+    "why": "Meridian ejecuta una matriz de como máximo un límite de combinaciones, 256 salvo que quien ejecuta el flujo de trabajo fije otro. También deja de contar las combinaciones de una matriz cuando ha revisado unos 16 millones de ellas y de las entradas de exclude con las que las compara, así que una matriz mucho más grande que el límite antes de que sus entradas de exclude quiten la mayor parte también es demasiado grande. Los límites son propios de Meridian y no forman parte del formato del flujo de trabajo.",
+    "fix": [
+      "Haz la matriz más pequeña, o pide a quien ejecuta el flujo de trabajo un límite más alto."
+    ]
+  },
+  "output_not_written": {
+    "title": "Salida que nada escribió",
+    "why": "El formato 1 lee una salida de un trabajo, needs.<job>.outputs.<name>, y la de un paso, steps.<id>.outputs.<name>, de forma estricta donde un trabajo o un paso está por ejecutarse, y en los outputs: de un trabajo cuando sus pasos tuvieron éxito: una que nada escribió hace fallar lo que la lee, en vez de leerse como \"\", para que un comando como rm -rf con una ruta vacía nunca se ejecute. El cleanup: de un paso, un paso o un trabajo cuyo if: es la palabra always, y un if: en sí, la leen como \"\".",
+    "fix": [
+      "Escribe la salida en el paso o el trabajo que lee la expresión, o léela con un valor por defecto, como needs.<job>.outputs.<name> || 'valor', en un paso cuyo if: es always."
+    ]
+  },
+  "working_directory_variable": {
+    "title": "Variable del shell en un directorio de trabajo",
+    "why": "Un directorio de trabajo se usa tal cual, y ningún shell expande las variables que contiene, así que $HOME o ${PW_JOB_DIR} serían un directorio con ese nombre. El formato 1 hace fallar el paso en su lugar.",
+    "fix": [
+      "Lee el valor con una expresión, como env.PW_JOB_DIR, o escribe la ruta completa."
+    ]
+  },
+  "undefined_env": {
+    "title": "Variable de env sin definir",
+    "why": "env contiene lo que definen los env: del flujo de trabajo, del trabajo y del paso, y las variables que el formato 1 da a un paso, como PW_JOB_DIR y OUTPUTS. Un nombre que ninguno define se lee como \"\", contenga lo que contenga el entorno en el que se ejecuta el paso, ya que una expresión se evalúa antes de que el paso se ejecute. El env:, el working-directory: y los outputs: de un trabajo leen solo las variables que el formato 1 da cuando el trabajo empieza, como PW_JOB_DIR, y no las que da solo a un paso, como OUTPUTS y PW_WORKFLOW_STEP_CURRENT_RETRY.",
+    "fix": [
+      "Define la variable en un env:, o léela en el script del paso, como $NAME."
     ]
   },
   "expression_empty": {

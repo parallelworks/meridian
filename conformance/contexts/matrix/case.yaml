@@ -1,0 +1,15 @@
+description: >-
+  matrix holds the instance's values, as the matrix gives them, from where
+  the instance is readied, as its runs-on: is evaluated, on. A matrix job's
+  if: can read it, and is evaluated for each instance.
+source: Meridian
+jobs:
+  build:
+    index: 0
+    matrix: {cfg: {cores: 4}, os: linux}
+    steps:
+      - {outcome: success}
+expect:
+  values:
+    /jobs/build/runs-on/execution-group: linux-pool
+    /jobs/build/steps/0/run: 'linux 4 {"cores":4}'

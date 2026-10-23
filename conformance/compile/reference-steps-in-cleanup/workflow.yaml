@@ -1,0 +1,9 @@
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: make
+        cleanup: rm -f ${{ steps.compile.outputs.bin }} ${{ steps.package.outputs.tarball }}
+      - id: package
+        run: make dist
+        cleanup: rm -f ${{ steps.compil.outputs.bin }} ${{ steps.compile.bogus }}

@@ -1,0 +1,11 @@
+on:
+  execute:
+    inputs:
+      name:
+        type: string
+        default: x
+jobs:
+  main:
+    steps:
+      - run: "[${{ org.MISSING }}] [${{ vars.MISSING }}] [${{ remote.MISSING }}] [${{ sessions.MISSING }}] [${{ env.MISSING }}]"
+      - run: "${{ org.MISSING == '' }} ${{ inputs.missing == null }} ${{ vars.REGION }} ${{ org.SITE }}"

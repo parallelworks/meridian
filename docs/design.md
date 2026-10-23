@@ -163,6 +163,87 @@ Behavior that workflows rely on is kept, even where it is surprising. Behavior
 no workflow could rely on, such as a crash or a silently wrong result, is
 fixed, and its case records the fix.
 
+### Bug fixes to format 1
+
+Each of these changes what format 1 means where it was plainly a bug, and
+ACTIVATE takes the same fix. Each counts the same workflows: the known
+workflows but Meridian's own copies of them, each file once by the hash of
+its content, 220 files.
+
+- **A matrix job's output** is the instance's with the highest index, not
+  the last to finish's. None of the 14 matrix jobs has `outputs:`, and
+  nothing reads a matrix job's outputs.
+- **An `if:` whose value is null is false**, as `docs/expressions.md` says
+  conditions go by truthiness, where format 1 ran the job or step. All 7
+  `if:`s that are a bare reference read a boolean input, and none of those
+  inputs is hidden or ignored, so none is null: each has a default but
+  sl_core's `push_to_gh`, which ACTIVATE fills with `false` when it is left
+  out, as Meridian does.
+- **A duration or a count that isn't one is a problem**, where format 1
+  ignored a timeout it couldn't read and fell back to a retry's defaults:
+  an expression's value for a job's or a step's `timeout:`, a retry's
+  `interval:` or `timeout:` (`duration_invalid`), or `max-retries:`
+  (`count_invalid`). A literal one is a schema error already. 11 workflows
+  take retry values from expressions, of inputs whose defaults read as one
+  and of outputs a step wrote, and none takes a timeout from one. In
+  detail: `+5m` is a duration, as in format 1;
+  null, `""` and `0` without a unit are the default, as format 1 reads a
+  value it has none of, so a retry waits 5 seconds and a step's timeout is
+  none; `0s` is 0, which for a job's or a step's timeout is none, where
+  format 1 timed out at once; a negative duration, such as `-5m`, which
+  format 1 timed out at once or ignored, is a problem; `max-retries:` text
+  must be a whole number, with space around it or not, so `3.5` is a
+  problem where format 1 retried 10 times, and ` 3` is 3; a number's
+  fraction is rounded down in `max-retries:` and a retry's `interval:` and
+  `timeout:`, as in format 1, so a retry's `0.5` is its default; and a
+  job's or a step's `timeout:` of a number with a fraction is a problem,
+  where format 1 ignored it.
+- **A matrix key whose values aren't a list, and an `include` or `exclude`
+  entry that isn't a mapping**, are problems (`matrix_not_list`,
+  `matrix_entry_not_mapping`), where format 1 dropped them silently. All
+  14 strategies give each key a list, written out, from a list input or
+  from `range`.
+- **A job's `outputs:` read `env`**: the workflow's `env:`, the job's, and
+  the variables the worker defines, where format 1 left an expression that
+  read it as its text. ACTIVATE takes the same fix by passing the job's
+  `env` to the parse of its outputs. None of the 7 jobs with `outputs:`
+  reads `env` in them.
+- **`matrix.<key>` in a job without a matrix is null**, where ACTIVATE gave
+  the text `matrix.<key>` when no job of the workflow had a `strategy:`,
+  and null when another job had one, so that what a job read depended on
+  the workflow's other jobs. The compiler warns of it (`no_matrix`).
+  ACTIVATE takes the same fix by always passing a matrix, empty for a job
+  without one, where the run is created. No known workflow reads `matrix`
+  in a job without a matrix.
+- **A value of an `env:` that reads itself, or values of one that read each
+  other, read what is under the `env:`**: for a job's, the workflow's
+  `env:`, and for a step's, the job's over that, where format 1 recursed
+  until it failed. Values that read others of the same `env:` are
+  evaluated in the order they read each other, as in format 1. None of the
+  123 `env:` blocks has a value that reads another of its own block.
+- **A step's `cleanup:` reads `steps.<its own id>` as its step wrote it,
+  and so do the cleanups after it and the job's `outputs:`, for a step
+  with an `id` and a `cleanup:`**, where ACTIVATE's copy of the step that
+  runs the cleanup kept the step's `id`, and so emptied its outputs before
+  the cleanup, the cleanups after it, which run in reverse order, and the
+  job's `outputs:` read them. ACTIVATE takes the same fix by leaving the
+  `id` out of the copy. None of the 155 `cleanup:`s is on a step with an
+  `id`, and none reads `steps`.
+- **`needs.<job>.steps.<id>.outputs.<name>` reads the step of `<job>`**, the
+  job it names, where ACTIVATE read the step with that `id` of the job the
+  expression is in, whatever job it named. All 37 known reads name their
+  own job, so they read the same step either way. ACTIVATE takes the same
+  fix by reading the job the reference names.
+- **The platform's credential is kept out of the `env` context**, a fix for
+  security: format 1 gives a step's process `PW_API_KEY`, and gave its
+  expressions it in `env` too, so a value an expression made from it could
+  reach a log, an output or the run's state. Meridian's `env` holds only
+  the variables format 1 defines but it (`plan.IsFormatVariable`), and the
+  worker gives the key only to the step's process. No known expression
+  reads `env.PW_API_KEY`. ACTIVATE takes the same fix by leaving it out of
+  the env map its parser reads, while keeping it in the step's process
+  environment.
+
 ## Phases
 
 A run is evaluated at five points, its phases. Each phase is one function of
@@ -176,7 +257,7 @@ phase's inputs and keep what it gives, so every implementation, whether
 | Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
 | Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
-| Step | A job starts on its worker, and each of its steps is about to run | `plan.ReadyJob.Step`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step |
+| Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
 | End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
 Each phase reads the contexts of the phases before it too.
@@ -202,8 +283,10 @@ Each phase reads the contexts of the phases before it too.
   they decide is kept: that a job is skipped, a matrix's instances, a job's
   outcome and outputs.
 
-Only Create is built. Start, matrix expansion, Ready, Step and End are
-designed here, and not built yet.
+Create, matrix expansion, Ready, Step and End are built, and so are the
+scope builder and the masker. Start is designed here, and not built yet,
+and nothing calls the phases after Create yet: the coordinator and the
+worker are designed here too.
 
 ### Contexts
 
@@ -215,8 +298,8 @@ What an expression can read is its contexts, each a mapping:
 | `org`, `vars` | Organization and user variables, by name, as strings. `var` is another name for `vars`. | Create, for the run's shape; Start, for everything else |
 | `remote` | Where a fetched workflow came from, as strings, such as `remote.repo` and `remote.branch`. | Create |
 | `sessions` | The workflow's `sessions:`, by name, as strings, as the session provider gives them. | Create |
-| `env` | The workflow's `env:`, then the job's over it, then the step's over that, as strings. Each reads the ones under it, and the workflow's reads none. | Start, the workflow's; Step, the job's and the step's |
-| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are its steps' so far. | Ready |
+| `env` | The workflow's `env:`, then the job's over it, then the step's over that, and on the worker the variables format 1 defines, such as `PW_JOB_DIR`, over all, as strings. Each reads the ones under it, and the values of its own that don't read `env`; the workflow's reads none. | Start, the workflow's; Step, the job's, the step's and the worker's |
+| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are those its steps without an `id` wrote so far. | Ready |
 | `matrix` | The job instance's matrix values. | Ready, once the matrix is expanded |
 | `job` | The job instance: `job.name`, the job's name; `job.key`, the instance's, as in `build#2`; `job.attempt`, from 1; and `job.group` and `job.member`, where it was placed. | Step |
 | `steps` | `steps.<id>.outputs.<name>`, for each step that ran before this one, as strings. | Step |
@@ -234,9 +317,25 @@ contexts those phases know ([Inputs](#inputs)).
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`), known from Ready on. A job's
 default `if:` is `success()`, and an `if:` that calls a status function
-replaces it. An `if:` whose value is the word `always` means `always()`: it
-is the older spelling, which the compiler warns about, and a later format
-can drop it.
+replaces it: one that doesn't is true only when `success()` is too. An
+`if:` whose value is the word `always` means `always()`: it is the older
+spelling, which the compiler warns about, and a later format can drop it.
+Otherwise an `if:` goes by its value's truthiness
+([The language](#the-language)).
+
+A job fails, for `failure()`, when a job it needs failed, or was skipped
+because a job it needs had failed in turn, and is cancelled, for
+`cancelled()`, when the run is being cancelled or a job it needs was
+cancelled, as in format 1. A job its own `if:` skipped counts as a success,
+so a job that needs an optional one still runs. So a failure reaches the
+jobs below it through those it skips: a job whose `if:` the jobs it needs
+made false, because one failed or was cancelled, is skipped with that
+reason, which the jobs that need it read as a failure. A step fails, for
+`failure()`, when a step before it failed, as its job counts it, and is
+cancelled when its job is being cancelled or a step before it was
+cancelled, as `early-cancel:` stops one: as in format 1, that cancels the
+rest of the job, whose later steps run only if they outlive a cancel, and
+the job ends cancelled unless a step of it failed.
 
 `needs.<job>.result` is a dependency's outcome: `success`, `failure`,
 `cancelled` or `skipped`. For a matrix job it is `failure` if any instance
@@ -292,10 +391,30 @@ its resolvers into a plan, in order:
    - In format 1, reading an input, matrix key or session that doesn't
      exist is a warning: ACTIVATE reads it as null or `""` and runs, and a
      workflow a step calls can read inputs its caller passes without
-     defining them. A step reading a step that doesn't exist or doesn't run
-     before it, or a step's key other than `outputs`, is an error, since
-     ACTIVATE fails the step; in a job's outputs, which read it as `""`, it
-     is a warning.
+     defining them. Format 1 reads `steps` only as
+     `steps.<id>.outputs.<name>`. A step reading one of a step that doesn't
+     exist or doesn't run before it is an error, since ACTIVATE fails the
+     step; in a job's outputs and a step's `cleanup:`, which read it as
+     `""`, it is a warning. Any other reference to `steps`, such as
+     `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
+     step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
+     and reads as its own text, as format 1 reads a word it doesn't know.
+     No known workflow has one: none of the 220 that
+     [Bug fixes to format 1](#bug-fixes-to-format-1) counts reads `steps`
+     but through `needs.<job>.steps`. So with `needs`, which format 1 reads
+     only as `needs.<job>.outputs.<name>` and
+     `needs.<job>.steps.<id>.outputs.<name>`, and Meridian as
+     `needs.<job>.result` too: any other reference to it, such as
+     `needs.build`, `needs.build.outputs`, `needs.build.steps.compile` or
+     `needs.build.status`, whatever job it names, is a warning
+     (`needs_read_whole`, `needs_unknown_key`), and reads as its own text.
+     The known workflows have 837 references to a job's outputs by name and
+     37 to its steps', and none of any other form. A plan holds an
+     expression's tree, not its text, so a reference read as its own text
+     is made again from its path: one written with dots is as written, and
+     a key in brackets is written `['key']`, or `[key]` when it had no
+     quotes, which can differ from how it was written, where ACTIVATE gives
+     the reference exactly as written.
    - Reading a variable that isn't a secret, or defining an input that takes
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is
@@ -393,20 +512,49 @@ ACTIVATE's launch form and its backend do together:
   of the rows, since which one depends on how many there are.
 - **Syntax.** Every expression in the input definitions must parse, in a
   default, an option, a label or anywhere else, whether or not the run
-  evaluates it. A syntax error is reported once, where it is.
-- **A form's text.** A form sends the text of an expression it can't
-  evaluate itself, such as a default that reads a secret. A submitted value
-  that is exactly the text of an input's default means the default. So does
-  a string in a submitted mapping or list that is the text of an expression
+  evaluates it, and in a key the format doesn't define, which is a warning
+  and is otherwise ignored, too: ACTIVATE evaluates every string there. A
+  syntax error is reported once, where it is.
+- **What a form sends.** A form evaluates each default it can and sends
+  what it gives, and sends the text of an expression it can't evaluate
+  itself, such as a default that reads a secret. A submitted value that is
+  exactly the text of an input's default means the default. So does a
+  string in a submitted mapping or list that is the text of an expression
   in the same place in its default, and a choice that is the text of one of
   its options' values, which means that option. Any other value holding
-  `${{ }}` is data.
+  `${{ }}` is data. A submitted value in the place of such an expression
+  that can read a variable or a password, or that one of the options can
+  have given, can be made from them, so it is read as one of them from the
+  start (Variables and Passwords, below). Once the values are filled in, it
+  means the expression if it is what the expression gives, the same JSON,
+  a number or a boolean the same as its text, as `8` and `"8"` are: the
+  plan holds the expression in its place. It means an option written in
+  the workflow if it is one. Anything else there can be what the form gave
+  before the person changed what it read, what it gave a row they moved,
+  what it evaluated otherwise than Meridian does, or what the person typed
+  over it, which the compiler can't tell apart, so the plan doesn't hold
+  it: it is kept by its path, but for the parts in it that are evaluated at
+  Start, and Start puts it in its place. Where the expression can read a
+  password or a secret variable, it is one of the run's secrets, which can
+  be made from one or not, and is masked as what is made from a secret is
+  rather than as a secret's own text; where it can read only variables
+  that aren't secrets, it is private, as their values are, and isn't
+  masked. A list's default rows count for any of its rows, since a person
+  can delete, add and move them. What can read a variable or a password,
+  and what a password or a secret variable, is found from the definitions
+  before anything is evaluated, following relative references to the
+  definitions they read. A default that reads its own input, which a form
+  doesn't fill in, gives what the compiler gives it.
 - **Lists.** A list's default is the rows it starts with. Each row, given or
   a default, is a group of the template's fields, which take their defaults
   as inputs do, in the same order as the rest; in a field's default,
   `[index]` is its row's index. A row's fields aren't checked against their
   types, but for a password field, which is checked as a `password`
-  input is, and their conditions aren't evaluated.
+  input is, and their conditions aren't evaluated. In a list or a repeated
+  step with a password among its rows' inputs, a row, or a group or list
+  of a row on the way to a password, that isn't the shape its inputs say
+  can hold a password where the compiler can't find it, so it is kept as a
+  secret, as it was given; the plan holds null in place of a row.
 - **Conditions.** `hidden`, `ignore` and `optional` are evaluated once the
   values are complete, and are true when they are true or the text `true`.
   One that reads what isn't known until the run starts, such as a secret,
@@ -414,10 +562,11 @@ ACTIVATE's launch form and its backend do together:
   until then because a part of it reads such a thing. An input whose value
   reads only variables and passwords, which the compiler knows, can be
   read.
-  An ignored input has no value, even one that was submitted. An input with
-  no value and no default is required unless it is optional, or hidden or in
-  a hidden group; a boolean with none is `false`. Every missing input is
-  reported, not only the first.
+  An ignored input has no value, even one that was submitted: a condition
+  evaluated once it is ignored reads it as null, a list with rows too. An
+  input with no value and no default is required unless it is optional, or
+  hidden or in a hidden group; a boolean with none is `false`. Every
+  missing input is reported, not only the first.
 - **Containers.** A group's values are under its name. A wizard step's
   inputs have their values beside the step's, unless `$meta.wizard.flatten`
   is `false`. A wizard step with `multi: true` repeats, as many times as the
@@ -432,11 +581,19 @@ ACTIVATE's launch form and its backend do together:
   is a number outside its `min` and `max`, or a choice that isn't one of a
   dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
-  name, and is kept, as ACTIVATE keeps it. A value that isn't JSON, such
+  name, and is kept, as ACTIVATE keeps it. One whose name is a password
+  field's, wherever the workflow defines it, as a repeated step's password
+  sent beside the step is, or is close to a password input's there, as a
+  misspelling is, is kept as a password: it is one of the run's secrets,
+  and not in the plan. So is a mapping or list whose name is close to an
+  input's with a password among its inputs, or that holds a key named as a
+  password field, as a flattened wizard step's inputs sent under the
+  step's name do. A value that isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a
-  list's rows is reported at the row's field.
+  list's rows is reported at the row's field, and so is one in what the
+  compiler knows of a value that waits for Start.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
@@ -448,8 +605,13 @@ ACTIVATE's launch form and its backend do together:
   whether it is required, and with the Inputs resolver for a platform type
   ([Starting a run](#starting-a-run)). An input's value stays whole, even if
   only part of it reads such a thing: a part of a mapping or list default, a
-  form's text, or a row's default, whose `[index]` is kept in the plan. The
-  secret variables it reads are among the run's secrets.
+  form's text, or a row's default, whose `[index]` is kept in the plan. So
+  what reads any part of it, a part the compiler has too, isn't known until
+  then either: a condition that reads it is an error, and a default that
+  reads it stays an expression, and so does one that reads that default. A
+  row's default that reads another field of its row reads it as it is, as
+  a part of the same value. The secret variables it reads are among the
+  run's secrets.
 - **What definitions read.** Input definitions are evaluated at Create and
   Start, so they read `inputs`, `org`, `vars`, `remote`, `sessions` and the
   workflow's `env`, and nothing later: reading `needs`, `steps`, `matrix`,
@@ -463,22 +625,30 @@ ACTIVATE's launch form and its backend do together:
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
   or `vars`, or a part of an input's value that reads one, stays an
   expression in the plan in the same way, its input's whole value, and is
-  evaluated at Start. The compiler evaluates it all the same, since what
-  decides the run's shape reads its value: the inputs' `hidden`, `ignore`
-  and `optional`, and the jobs' `needs`. It checks it against its input's
-  type too, but a problem with it doesn't show the value.
+  evaluated at Start, and so does a submitted value that is what such an
+  expression gives, as a form sends it; any other submitted value in its
+  place is private, or one of the run's secrets where the variable is one
+  (What a form sends). The compiler
+  evaluates it all the same, since what decides the run's shape reads its
+  value: the inputs' `hidden`, `ignore` and `optional`, and the jobs'
+  `needs`. It checks it against its input's type too, but a problem with
+  it doesn't show the value.
 - **Passwords.** A plan never holds a `password` input's value, wherever
   the input is: on its own, in a group or a wizard step, or a field of a
   list's or a repeated step's rows. The value is one of the run's secrets,
   which the plan names by its path in the values, such as
   `inputs.creds.0.pass` for the field `pass` of the list `creds`'s first
   row, and it is checked against its type, but a problem with it doesn't
-  show it. A value made from a password counts as the password, as one made
-  from a variable counts as the variable: a default that reads one stays an
-  expression in the plan, and is evaluated at Start. A list held for Start
-  holds its rows without their passwords' values, which Start puts in their
-  places. A list whose rows are evaluated at Start, with a password field in
-  them, is one of the run's secrets as a whole, since the plan can't say
+  show it. What decides the run's shape reads its value, as it reads a
+  variable's. A value made from a password counts as the password, as one
+  made from a variable counts as the variable: a default that reads one
+  stays an expression in the plan, and is evaluated at Start, and so does a
+  submitted value that is what such a default gives, as a form sends it;
+  any other submitted value in its place is one of the run's secrets. A
+  list held for Start holds its rows without their passwords' values, which
+  Start puts in their places. A list, a group or a wizard step with a
+  password among its inputs whose value, or one of whose rows, is evaluated
+  at Start is one of the run's secrets as a whole, since the plan can't say
   which of its values are passwords.
 
 ACTIVATE differs where its values can be incomplete, as they are from its
@@ -588,8 +758,16 @@ secrets the run reads, the run's for Start and each job's for its attempts:
 the secret variables an expression reads, each of a context's when it reads
 every variable of the context, as `vars.*` does; and passwords, by their
 paths in the inputs' values, `password` inputs and the password fields of
-lists' rows, and lists whose rows hold one and are evaluated at Start
-([Inputs](#inputs)). Their values are in the secret record.
+lists' rows, lists whose rows hold one and are evaluated at Start, and
+submitted values that can hold one, such as what a form made from one,
+which are kept as passwords are ([Inputs](#inputs)). Of those, it names the
+submitted values in the place of what is made from a secret apart, as
+derived, since they can be made from a secret or not: they are masked as
+what is made from a secret is, rather than as a secret's own text. Their
+values are in the secret record. It names, apart again, the submitted
+values that can hold a variable's value that isn't a secret, but no
+password, which are private, as that value is: the secret record holds
+them, and nothing masks them.
 
 Nor does the plan hold the value of an organization or user variable, secret
 or not, or a value made from one. People keep secrets in plain variables
@@ -622,7 +800,9 @@ release, the shape's decisions, or each job's secrets and variables.
 
 The secret record holds what a run needs that the plan can't: its
 passwords, from Create; the variables it read at Start, plain and secret;
-and what Start made from them.
+what Start made from them; and the job outputs made from a variable or a
+password but not from a secret, which jobs that need them read
+([Outputs](#outputs)).
 
 - **Encrypted.** The coordinator stores it beside the run, in the same
   database, encrypted with AES-256-GCM under a data key of its own, which
@@ -804,13 +984,16 @@ steps its group takes, each node it evaluates and each run of a lambda, and
 a group that passes the cap fails with `expressions_too_slow`. Today the cap
 is 10 seconds, whatever the caller's deadline.
 
-Values that come from secrets are masked wherever they appear in logs,
-including inside strings built from them. So are values made from them: an
+A secret's own text is masked wherever it appears in logs and outputs,
+however short, and so is the text of what an expression made from it,
+under the rules of [Variables and secrets](#variables-and-secrets): an
 evaluation can say whether it read a value its scope marks
-(`Template.EvalMarked`), and one that read a secret is marked whatever it
+(`Template.EvalRead`), and one that read a secret is marked whatever it
 made of it, whether `${{ vars.token }}`, `${{ vars.token * 2 }}` or a
 condition the secret decided. The mark is conservative: anything a template
-reads from a secret marks all of what it gives.
+reads from a secret marks all of what it gives, and each `${{ }}` in it
+that read one marks what that expression gave (`Template.EvalParts`). What
+is masked is text, so a boolean or a number a secret decided isn't.
 
 ## Interfaces
 
@@ -901,16 +1084,21 @@ combination whose matrix values it matches without changing one, or, when
 it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
 differs for an `include` entry that names no matrix key: it makes it a
 combination of its own, where GitHub Actions adds it to every combination.
-Which one format 1 keeps is decided by a scan of the known workflows, as a
-bug fix is ([The workflow format](#the-workflow-format)). Each instance's
-key is the job's name, `#` and its index from 0, as in `build#2`.
+Format 1 keeps ACTIVATE's for now. Whether to take GitHub Actions' as a bug
+fix ([The workflow format](#the-workflow-format)) is open: of the 220
+known workflows ([Bug fixes to format 1](#bug-fixes-to-format-1)), none
+has an `include` entry that names no matrix key, nor any `include` at all. An entry also matches the combinations earlier entries made, and
+two values match when they are equal, or a string and a number or a
+boolean whose text it is, as in ACTIVATE. Each instance's key is the job's
+name, `#` and its index from 0, as in `build#2`.
 
 - **Where.** The coordinator expands every matrix: at Start, one whose
   values are known by then, written out or read from inputs or variables,
   and at Ready, one that reads `needs`. The compiler expands none. It checks
   each with the same function where its values are known, and checks that
   the jobs and outputs a matrix reads exist; only the values wait. Today the
-  compiler keeps every `strategy:` in the plan, and nothing expands one.
+  compiler keeps every `strategy:` in the plan and checks none with
+  `plan.Expand`, and Ready is the only phase that expands one.
 - **A matrix job's `if:`** that doesn't read `matrix` is evaluated before
   the matrix is expanded, so a job it skips has no instances. One that
   reads `matrix` is evaluated for each instance: format 1 allows it, as
@@ -930,9 +1118,15 @@ key is the job's name, `#` and its index from 0, as in `build#2`.
   has the value of the one with the highest index, so it doesn't depend on
   which finished last, as it does in ACTIVATE and GitHub Actions. No
   workflow can rely on which instance finishes last, so this is made as a
-  bug fix ([The workflow format](#the-workflow-format)).
+  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). As format 1
+  reads each instance of a job its dependents need, the job fails for them
+  when an instance was skipped because its needs failed, whatever the rest
+  did, and is cancelled for them, for `cancelled()`, when an instance was
+  cancelled, though another failed.
 - **`needs: <job>:any`** waits for any one instance, and `needs.<job>` is
-  then that instance's outcome and outputs ([On hopper](#on-hopper)).
+  then the first instance to succeed, or to be skipped by its own `if:`, or
+  else, once every instance has ended, a failed one, as format 1 waits
+  ([On hopper](#on-hopper)).
 - **Size.** A matrix has at least one instance and at most 256 by default,
   a limit of Meridian's ([Compiling](#compiling)), not the format's. A
   matrix with no instance, or more than the limit, fails where it is
@@ -978,7 +1172,11 @@ not assumed idempotent.
   `worker-lost`, unless the job's `retry:` lists that reason
   ([Job retries](#job-retries)).
 - **A step's `retry:`** reruns that step on the same worker when it fails,
-  as in format 1. It can't help when the worker itself is lost.
+  as in format 1. It can't help when the worker itself is lost. Its
+  `clean-on-retry:` is true unless the workflow says otherwise, as in
+  format 1, or an expression, which Step reads as format 1 does: true or
+  false, text or a number that reads as one, and true for anything else
+  (`plan.ReadyStepRetry.CleanOnRetry`).
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
   behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
@@ -1060,10 +1258,13 @@ secret record ([Run data](#run-data)).
 - **Once at Start**, the coordinator reads every variable the plan lists, a
   context's whole when the plan names it alone, and keeps them in the
   secret record, so every expression of the run reads the same values.
-- **Each job gets its own.** The plan lists, for each job, the secrets and
-  variables its expressions read, directly or through an input made from
-  one, and an attempt receives only its own job's when it is claimed. A
-  read of each variable of a context, as `vars.*` is, lists all of them.
+- **Each job gets its own.** An attempt receives only the inputs,
+  variables and secrets its own job's expressions read, directly or
+  through an input made from one, when it is claimed, which `plan.Job.Reads`
+  finds from the expressions its worker evaluates: its `env:`, its steps
+  and its `outputs:`. A read of each variable of a context, as `vars.*` is,
+  gives all of them. Every attempt receives the workflow's `env:`, which
+  every step's environment holds.
 - **Declared variables.** Format 1's `needs.organizationVariables` lists
   the organization variables a workflow requires: as in ACTIVATE, a run
   fails when it is created if the Variables interface doesn't have one,
@@ -1082,9 +1283,93 @@ secret record ([Run data](#run-data)).
   variable that holds a secret should be a secret variable, and the
   compiler warns when a plain variable's name, such as `HF_TOKEN`, looks
   like a secret's.
+- **What is masked is text.** The masker is given strings: a secret's own
+  text, however short, unless it is empty, which is never masked; and the
+  text a template made from one, and that each `${{ }}` in it that read
+  one gave, so that a field of a structured secret, such as
+  `${{ fromJSON(vars.creds).token }}`, is masked wherever a command prints
+  it, and not only within the command. A secret in one value of a step's
+  `with:` masks only what that value's template gave. A string made from a
+  secret is masked when it is at least 8 bytes, or when it is a credential
+  field of a structured secret: a string, or a number's text, of at least
+  4 bytes, but `true`, `false` or `null`, that a secret's text, read as
+  JSON, holds as the value of a key a credential is kept under, or as an
+  item of a list that is, but not in a mapping under it, which has keys of
+  its own: `{"pin":1234}` holds `1234`, and `{"token":{"type":"bearer"}}`
+  nothing. Such a key is one whose words, split at `_`, `-`, `.`, digits
+  and changes of case, whatever their case, hold a credential word,
+  `password`, `passwd`, `pass`, `passphrase`, `passcode`, `pwd`, `pw`,
+  `secret`, `token`, `pin`, `credential` or `cred`, or the plurals
+  `passwords`, `tokens`, `credentials` or `creds`, whose value holds them
+  only as a list's items; or `key` or `keys` after a qualifier, `api`,
+  `private`, `secret`, `access`, `client`, `signing`, `encryption`,
+  `master`, `ssh`, `account` or `service`; or a word written without
+  breaks that is one of these after a head such as `api`, `access`,
+  `auth`, `client` or `db`. A key whose last word describes a credential
+  rather than holding one, `name`, `id`, `type`, `url`, `uri`, `endpoint`,
+  `path`, `file`, `alias`, `prefix`, `policy`, `length`, `version`,
+  `schema`, `region`, `arn`, `format`, `algorithm`, `expiry`, `ttl`,
+  `scope` or `provider`, or whose last word is `key` without a qualifier,
+  isn't one, and nor is `secrets`, which names a section in
+  docker-compose and GitHub Actions; but a mapping under `secrets`,
+  `credentials` or `creds` holds credentials as its own values, one level
+  down, as `{"secrets":{"github":"ghp_…"}}` does, where
+  `{"secrets":{"db":{"file":"./db.txt"}}}` and `{"secrets":"inherit"}`
+  hold none. So `password`, `api_key`,
+  `accessToken`, `password2`, `OAuth2Token`, `apikey` and `clientsecret`
+  are, and `key`, `sortKey`, `KeyName`, `keyFile`, `tokenUrl`,
+  `secret_name`, `token-key`, `keyboard`, `monkey` and `passport`
+  aren't. Each credential field of a secret's own text is masked however
+  it is made, so a password that a step's script takes out of a secret's
+  JSON, as `jq` does, is masked in its logs. What masks a job's secrets'
+  own texts is built once for each attempt (`plan.JobState.JobEnv`), as a
+  large secret's takes long to build, and found again for a state whose
+  secrets differ, as another run's or attempt's do. It is never
+  given another short one, such as a `yes` that a secret decided, or a
+  database's name or a region a structured secret holds, which common text
+  holds too, nor the text of a boolean, a number or null that one decided,
+  such as whether a token is set, which would mask every `yes` or `true`
+  in the job's logs. A job output made from a secret, of whatever type, is
+  private and a secret instead ([Outputs](#outputs)).
+- **What a run was given in a secret's place is masked as what is made
+  from one.** A value the run was given in the place of what is made from a
+  password or a secret variable, as one a person typed over such a
+  default is, is a secret the plan names as derived (`plan.Run.Derived`,
+  `plan.RunValues.Derived`): it can be made from a secret or not, so the
+  masker is given it as it is given what an expression makes from a
+  secret, from 8 bytes or as a credential field, and never as a secret's
+  own text, and it isn't a secret's text whose credential fields are
+  masked. What an expression makes from it is a secret, as what is made
+  from any secret is. A value the run was given in the place of what is
+  made from a variable that isn't a secret (`plan.Run.Private`,
+  `plan.RunValues.Private`) is private, as the variable's value is: the
+  phases read it as private, and nothing masks it.
+- **A secret is masked as it can be shown.** Its shown forms are masked
+  too: without the line breaks it ends with; as JSON escapes it in a
+  string, as Go's `encoding/json/v2` writes it, as `encoding/json` writes
+  it with `<`, `>` and `&` escaped, with U+2028 and U+2029 escaped, and
+  with every character outside ASCII escaped, as Python's `json.dumps`
+  writes it; and, in logs, each of its lines on its own, as a key printed
+  a line at a time shows, as GitHub Actions masks a secret of more than one
+  line line by line. A line is masked on its own only when it is at least
+  8 bytes, with a letter or a digit, and isn't `true`, `false` or `null`,
+  so that a JSON or YAML secret's `},` or `true` lines mask nothing else.
+- **What holds a secret.** A step's output holds a secret when it holds
+  what the job's logs mask, as it can show, but for a line of a secret,
+  which plain text can hold too: a secret's own text, or a string made
+  from one that is masked. A job's later steps read such an output as a
+  secret, and it, and an output made from it, keep their values, but are
+  private and secrets ([Outputs](#outputs)).
 - **What a script does with a value can't be followed.** A secret that a
   step's script transforms, such as by encoding it in base64, isn't known
-  to come from the secret, and isn't masked.
+  to come from the secret, and isn't masked, but for a credential field a
+  script takes out of a structured secret, which is masked whatever made
+  it.
+- **A job masks only its own secrets.** A job's worker masks the secrets
+  its attempt received, which are those its expressions read. A secret
+  another job wrote to the run directory, which the job's steps can read
+  too, isn't masked in its logs: giving every attempt every secret, so that
+  it could, would give each one more than it reads.
 - **Diagnostics never quote a variable's value.** Warnings and errors kept
   with a run show `***` in place of a value that came from a variable.
 - **Permissions.** Format 1's `permissions:` lists what the run's token for
@@ -1165,7 +1450,9 @@ waking up or `meridian run` restarting must not make them all look lost.
 - **Timeouts:** the worker enforces step and job timeouts. The coordinator
   enforces the run's timeout, and a job's as a backstop. As in format 1, a
   step's `timeout:`, and its `retry:`'s, bound each of its tries, and a try
-  past the step's own `timeout:` isn't tried again.
+  past the step's own `timeout:` isn't tried again. A job that runs past its
+  timeout isn't cancelled: the step it was running fails, so `failure()` is
+  true after it and `cancelled()` false, as in format 1.
 - **A step whose `if:` is cancel-aware**, one that calls `always()` or
   `cancelled()`, negates `success()` or `failure()`, or is the word
   `always`, outlives its job's cancellation and timeout, as in format 1: it
@@ -1180,8 +1467,6 @@ waking up or `meridian run` restarting must not make them all look lost.
   run all the same, as when the cancellation arrives as it is readied, ends
   cancelled, or failed after a timeout, without starting. Format 1 starts
   such a step and stops it at once, so no workflow can rely on its running.
-  As in format 1, a job past its timeout isn't cancelled: `cancelled()` is
-  false in its steps.
 - **A later cancellation that gives less time**, or the attempt ending
   without the worker, makes SIGKILL sooner. When an attempt ends without
   its worker, every process group the attempt started is stopped, those of
@@ -1192,29 +1477,39 @@ waking up or `meridian run` restarting must not make them all look lost.
   process ID succeeds, until the processes the step left behind have ended
   or the attempt ends.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
-  fails, or a step of its own job did. The coordinator tells the step's
-  worker. A step it stops is cancelled, and its job ends cancelled, as in
-  format 1. It doesn't cut short the wait between a step's tries; a
-  cancellation and the job's timeout do, and the step ends cancelled, or
-  failed after a timeout.
+  fails. The coordinator tells the step's worker. The step ends cancelled,
+  which cancels the rest of its job, as in format 1: a later step runs only
+  if it outlives a cancel, and the job ends cancelled unless a step of it
+  failed (`plan.JobState.Cancelled`). It doesn't cut short the wait between
+  a step's tries; a cancellation and the job's timeout do, and the step ends
+  cancelled, or failed after a timeout. A `uses:` step whose child run was
+  cancelled from within it while its job goes on counts as a success, as
+  format 1 goes on with the job after one, and cleans it up.
 - **A step's `cleanup:` command** runs at the end of its job if the step
-  ran, whatever the job's outcome, in reverse order. As in format 1, it runs
-  as a step of its own, with its step's shell, working directory,
-  environment and `ignore-errors:`, but no timeout or retry, and a
-  cancellation doesn't stop it; one that fails fails the job. A worker whose
-  attempt ended without it, because another superseded it or its lease
-  lapsed, runs none: another attempt may be running, and a cleanup could
-  remove what it is using.
+  ran, in reverse order, as a step of its own named `POST` and the step's
+  name, which outlives a cancel and has no timeout or retry of its own, as
+  format 1 runs a copy of the step. The step's `if:` is evaluated again,
+  with the job's status as it ends and without `success()`, so a step with
+  no `if:` is cleaned up whatever the job's outcome, and one whose `if:` is
+  false then isn't: 37 of the 155 `cleanup:`s of the known workflows are
+  on a step with an `if:`, and none of those calls a status function. It is
+  evaluated as it runs (`plan.ReadyJob.Cleanup`), with every step's
+  outputs, its own and later ones' among them, and reads one that nothing
+  wrote as `""`. What it writes to `$OUTPUTS` is the job's, over what its
+  steps wrote. A cleanup that fails fails the job, as a step does: the
+  cleanups after it read `failure()` as true, and the job's `outputs:`
+  read an output that nothing wrote as `""`. A worker whose attempt ended
+  without it, because another superseded it or its lease lapsed, runs
+  none: another attempt may be running, and a cleanup could remove what it
+  is using.
 
 ### Outputs
 
 A step writes outputs to the file named by `$OUTPUTS`, a line `name=value`
 each. As in format 1, a step with an `id` has a file of its own, whose
 outputs are its `steps.<id>.outputs`, and the steps without one share the
-job's, whose outputs are the job's, with its `outputs:` over them; each
-step's result holds what it wrote, and End puts the job's together. As in
-format 1, a file with a line of 64 KiB or longer is read as holding none,
-and the step's event warns of it. A symbolic link a step puts there is
+job's. A file with a line of 64 KiB or longer is read as holding none, and
+the step's event warns of it. A symbolic link a step puts there is
 followed, as format 1 follows it, but what is read must be a regular file,
 opened without waiting, so that a FIFO there fails the step rather than make
 the worker wait forever, as it makes format 1 wait, which is a bug; format 1
@@ -1222,13 +1517,46 @@ is to fail it too. A job's outputs are capped at 1 MB and a run's at 50 MB,
 a limit of Meridian's, which format 1 doesn't have: the worker reads no more
 than 1 MiB of a step's file, and a step whose file is larger fails, but for
 one without an `id` whose job's shared file was already larger, which can't
-add to it. Before the worker reports a job's outputs, it checks them against
-the values of the secrets its attempt received, and an output that holds one
-is reported with it masked, `***`, as logs are, and a warning that names the
-output; GitHub Actions leaves such an output out. When a job is claimed, it
-receives its dependencies' outcomes and outputs with it, rather than reading
-each one back. hopper keeps finalized jobs' outputs only in its history, so
-this, too, needs something hopper doesn't have yet.
+add to it. A job's outputs are format 1's: what its steps wrote, the later
+step's where two wrote the same name, what its cleanups wrote over that, and
+its `outputs:` over all. The worker reports what each step wrote as it wrote
+it, and End decides which outputs are private and which hold a secret; an
+event shows a step's outputs masked as its logs are.
+
+An output keeps its value, as format 1 passes it to the jobs that need the
+job, whatever it was made from: masking it would change what those jobs
+read. Instead:
+
+- **An output that holds a secret** is private and a secret: one made from
+  a secret, or that holds a secret's text as the job's logs mask it, but
+  for a line of one, and so is a step's output that holds a secret's text.
+  End names it, with no warning, since passing a token to the jobs that
+  need it is common and safe so; the coordinator keeps its value only in
+  the secret record, never in run state; and the
+  jobs that need the job read it as a secret, so what they make of it is
+  masked in their logs and problems, and an output they make of it holds a
+  secret too. Logs and problems mask the secret's text in it, as they do
+  everywhere. An output that holds a secret's own text, or a credential
+  field of one, however short, reaches the jobs that need the job as such:
+  they mask it however short, count it among the secrets' own texts, and
+  find an output of theirs that holds it, as a dependent's step that writes
+  a 4-digit PIN it was given does. One that holds only what was made from a
+  secret, such as its length, End names as derived (`EndResult.Derived`,
+  `JobResult.Derived`), and the jobs that need the job mask it as what is
+  made from a secret is. That End counts an output as holding a secret when
+  it holds a string made from one costs only privacy, never a changed
+  value. GitHub Actions leaves such an output out.
+- **An output made from an organization or user variable or a password**,
+  and not from a secret, isn't masked, since a plain variable isn't, but
+  is private: End names it, the coordinator keeps its value only in the
+  secret record, never in run state, and the jobs that need the job
+  receive it with their needs and read it as private, so what they make of
+  it is kept out of run state too.
+
+ When a job is claimed, it receives its dependencies'
+outcomes and outputs with it, rather than reading each one back. hopper
+keeps finalized jobs' outputs only in its history, so this, too, needs
+something hopper doesn't have yet.
 
 ## The coordinator
 
@@ -1420,6 +1748,56 @@ member's running workers reconnect to it.
   format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
   is the run's ID and `PW_PARENT_JOB_DIR` its directory.
 - **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.
+- **The env context on the worker.** As in format 1, `env` reads the
+  workflow's `env:`, the job's over it, the step's over that, and the
+  variables the worker defines over all, such as `PW_PARENT_JOB_DIR` and
+  `PW_WORKFLOW_STEP_CURRENT_RETRY` (`plan.JobState.Env`). A value of a job's
+  or a step's `env:` that reads others of it reads their values, evaluated
+  in the order they read each other, as in format 1; one that reads
+  itself, and values that read each other, read what is under the `env:`
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)). The job's `env:` is
+  evaluated once, as the job starts (`plan.ReadyJob.JobEnv`), and its steps
+  and outputs read what it gave (`plan.JobState.JobEnv`); it and the job's
+  `working-directory:` read only the variables format 1 defines then, not
+  `OUTPUTS` or the retry counters, so they are the same for each step. A credential, such as the platform's API
+  key that format 1 gives a step as `PW_API_KEY`, is in the step's
+  environment but never in the `env` context: the plan reads only the
+  variables format 1 defines (`plan.IsFormatVariable`), whatever the worker
+  passes, and none of the workflows we know of reads one in an expression.
+  A job's `working-directory:` is evaluated on the worker, where the run
+  directory is known: 24 jobs in 4 known workflows read
+  `env.PW_PARENT_JOB_DIR` in it. The compiler
+  warns about `env.<name>` that nothing defines where it is read.
+- **Each try is evaluated.** A step is evaluated again for each try of its
+  `retry:`, so that what reads `env.PW_WORKFLOW_STEP_CURRENT_RETRY` reads the
+  try's, as format 1's failover does: 8 known workflows read it in a retried
+  step's `with:`. Its `if:` and `retry:` are those of its first try: a
+  later try runs whatever its `if:` would give now, and carries over
+  whether it outlives a cancel and reads outputs as its first did.
+- **Outputs that nothing wrote.** As in format 1, a job's output or a
+  step's that nothing wrote fails the expression that reads it
+  (`output_not_written`) where a job or a step is about to run, and in a
+  job's `outputs:` once its steps succeeded, so that a command such as
+  `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path. An
+  `if:` reads one as `""`, and so do a step whose `if:` is the word
+  `always`, a job's own values and its strategy when its `if:` is, a
+  step's `cleanup:`, and a job's `outputs:` once a step of it failed or was
+  cancelled. A step with an `id` writes outputs of its own, which
+  `steps.<id>` reads; the job's outputs are those its steps without one
+  write, then those its cleanups write, with its `outputs:` over them.
+- **A host of a step's own.** A format 1 `ssh:` on a job runs its steps on
+  the host it names, and a step's runs it on its own: `ssh: null` runs the
+  step where the job runs without its `ssh:`, and an empty or null
+  `remoteHost` runs it there too, with a note in its log, as format 1 does.
+  534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
+- **A step that outlives its job's cancelling.** A step whose `if:` can be
+  true once its job is stopping, the word `always`, `always()`,
+  `cancelled()`, `!success()` or `!failure()`, runs even once the job is
+  being cancelled or has run past its timeout, and runs its course, as in
+  format 1 (`plan.ReadyStep.OutlivesCancel`).
+- **A working directory is used as it is.** One that keeps a shell
+  variable, such as `$HOME`, fails the step, as in format 1, since no shell
+  expands it.
 - **Containers.** On a member that runs containers, the worker runs on the
   host, outside the container. It creates the job's container, runs each
   step in it with the runtime's `exec`, and removes the container when the

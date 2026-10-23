@@ -1,0 +1,55 @@
+jobs:
+  a:
+    steps:
+      - run: exit 1
+  b:
+    needs: [a]
+    steps:
+      - run: echo b
+  c:
+    needs: [b]
+    steps:
+      - run: echo c
+  on-failure:
+    needs: [b]
+    if: failure()
+    steps:
+      - run: echo on-failure
+  anyway:
+    needs: [b]
+    if: always
+    steps:
+      - run: echo anyway
+  optional:
+    if: false
+    steps:
+      - run: echo optional
+  after-optional:
+    needs: [optional]
+    steps:
+      - run: echo after-optional
+      - run: echo failed
+        if: failure()
+      - run: echo always
+        if: always()
+      - run: echo after-failure
+        if: ${{ !cancelled() }}
+  plain:
+    needs: [a]
+    if: ${{ 'a' == 'a' }}
+    steps:
+      - run: echo plain
+  cancelled:
+    needs: [a]
+    if: cancelled()
+    steps:
+      - run: echo cancelled
+  after-matrix:
+    needs: [a]
+    if: cancelled()
+    steps:
+      - run: echo after-matrix
+  after-instance:
+    needs: [a]
+    steps:
+      - run: echo after-instance

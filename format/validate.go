@@ -119,6 +119,9 @@ func (p *parser) validate(s *formatSchema, value any) any {
 			p.unknownKey(problems.UnknownKey, u)
 			obj, _ := jsonptr.Lookup(value, u.object)
 			if obj, ok := obj.(map[string]any); ok {
+				if v, ok := obj[u.key]; ok {
+					p.dropped = append(p.dropped, droppedKey{slices.Concat(u.object, []string{u.key}), v})
+				}
 				delete(obj, u.key)
 			}
 		}

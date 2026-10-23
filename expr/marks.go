@@ -8,19 +8,21 @@ import (
 )
 
 // Marks are the paths of the values in a scope's contexts that are marked
-// (Scope.Marked), such as the secrets a runner masks. Each is a context's
-// name, vars rather than var, then the names that lead to the value from
-// it, a list's items by their indexes, as in [vars token]. A reference
-// reads a marked value however it spells the keys that lead to it, as a
-// slice or a * does a list's items. The zero Marks mark nothing.
+// (Scope.Marked and Scope.Private), such as the secrets a runner masks.
+// Each is a context's name, vars rather than var, then the names that lead
+// to the value from it, a list's items by their indexes, as in [vars
+// token]. A reference reads a marked value however it spells the keys that
+// lead to it, as a slice or a * does a list's items. The zero Marks mark
+// nothing.
 //
 // Marks are a value, as a slice is: a copy holds the paths it was copied
 // with and those added to it since, and none added to the Marks it was
-// copied from. So a scope holds the paths its Marked held when it was set,
-// and not those added to the Marks it was set from after. The paths are
-// kept where they never change, so that the evaluations that share a
-// budget (Scope.Budgeted), which index them, find each path their scope's
-// Marks hold, however Marks are copied, added to or assigned.
+// copied from. So a scope holds the paths its Marked and Private held when
+// they were set, and not those added to the Marks they were set from
+// after. The paths are kept where they never change, so that the
+// evaluations that share a budget (Scope.Budgeted), which index them, find
+// each path their scope's Marks hold, however Marks are copied, added to or
+// assigned.
 //
 // Marks aren't safe for concurrent use: Add mustn't run while another
 // goroutine reads the same Marks, or a copy of them, as an evaluation does.
@@ -88,11 +90,12 @@ func (m Marks) All() iter.Seq[[]string] {
 // defaults are, less than comparing.
 const scanChecks = 32
 
-// A markIndex is what a group knows of the paths its scope marks
-// (Scope.Marked): how many references it has checked against them, and
-// once it has checked scanChecks, the paths by their contexts, so that a
-// reference finds the marked values it reaches without comparing its path
-// with each. It holds the paths added to the Marks since it was made too.
+// A markIndex is what a group knows of the paths one of its scope's mark
+// sets marks (Scope.Marked or Scope.Private): how many references it has
+// checked against them, and once it has checked scanChecks, the paths by
+// their contexts, so that a reference finds the marked values it reaches
+// without comparing its path with each. It holds the paths added to the
+// Marks since it was made too.
 type markIndex struct {
 	// of is the store of the Marks it knows, and n how many of its paths
 	// they held when a reference was last checked.
@@ -130,16 +133,23 @@ func (x *markIndex) add(paths [][]string) {
 	}
 }
 
-// marks reports whether what a reference reads by following path in
-// context is marked, or holds a marked value, or is part of one: whether
-// path can reach one of the values the scope marks, however its keys are
-// written (reach.Patterns).
-func (e *evaluator) marks(context string, path []string) bool {
-	m := e.scope.Marked
-	if m.n == 0 {
-		return false
+// reads notes what a reference that follows path in context reads of the
+// values its scope marks, in each of Scope.Marked and Scope.Private.
+func (e *evaluator) reads(context string, path []string) {
+	b := e.scope.budget
+	if !b.read.Marked && e.scope.Marked.n > 0 && b.marks.reaches(e.scope.Marked, context, path) {
+		b.read.Marked = true
 	}
-	x := &e.scope.budget.marks
+	if !b.read.Private && e.scope.Private.n > 0 && b.private.reaches(e.scope.Private, context, path) {
+		b.read.Private = true
+	}
+}
+
+// reaches reports whether what a reference reads by following path in
+// context is marked by m, or holds a value m marks, or is part of one:
+// whether path can reach one of the values m marks, however its keys are
+// written (reach.Patterns). x is what the group knows of m.
+func (x *markIndex) reaches(m Marks, context string, path []string) bool {
 	x.update(m)
 	if x.contexts == nil {
 		if x.checks++; x.checks <= scanChecks {

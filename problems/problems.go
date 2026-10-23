@@ -207,6 +207,34 @@ func (w *shownWriter) Write(p []byte) (int, error) {
 // quotes one.
 const Masked = "***"
 
+// workflowParams are the params of the problems a value can have that show
+// the workflow, such as an input's or a job's name, or Meridian's own
+// limits, rather than the value.
+var workflowParams = map[string]bool{
+	"input": true, "job": true, "key": true, "name": true, "type": true, "what": true,
+	"options": true, "min": true, "max": true, "limit": true, "op": true,
+}
+
+// MaskValues returns params, those of a problem with a value that read a
+// variable or a password, or that holds a password, with what they show of
+// the value masked: each param but those that show the workflow, such as
+// key, is Masked, and there is no suggestion, which would be near the
+// value. A variable can hold a secret, and a password is one, so a
+// diagnostic never quotes one.
+func MaskValues(params Params) Params {
+	out := make(Params, len(params))
+	for name, v := range params {
+		if !workflowParams[name] {
+			v = Masked
+		}
+		out[name] = v
+	}
+	if _, ok := params["suggested"]; ok {
+		WithSuggestion(out, "", false)
+	}
+	return out
+}
+
 // shown is how Show encodes a value: as encoding/json always has, with
 // mappings in the order of their keys, a nil list or mapping as null, U+2028
 // and U+2029 escaped and invalid UTF-8 replaced, but without escaping <, >

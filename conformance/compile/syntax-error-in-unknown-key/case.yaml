@@ -1,0 +1,30 @@
+description: >-
+  Every expression in the input definitions must parse, in a key the format
+  doesn't define too: the key is a warning, and is otherwise ignored, but
+  ACTIVATE evaluates every string in the input definitions, and fails the
+  run for an expression that doesn't parse.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_key
+      path: /on/execute/inputs/$meta/note
+      line: 5
+      column: 9
+      params: {key: note}
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/$meta/note
+      line: 5
+      column: 15
+    - severity: warning
+      code: unknown_key
+      path: /on/execute/inputs/name/comment
+      line: 9
+      column: 9
+      params: {key: comment}
+    - severity: error
+      code: expression_ends_early
+      path: /on/execute/inputs/name/comment
+      line: 9
+      column: 18

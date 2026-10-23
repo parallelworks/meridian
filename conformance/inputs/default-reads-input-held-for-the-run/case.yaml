@@ -1,0 +1,25 @@
+description: >-
+  An input's value stays whole: a list with a row whose field's default
+  reads a secret is evaluated once the run is underway, all of it, so a
+  default that reads any part of it, a part the compiler has too, is
+  evaluated then, as a condition that reads it can't be evaluated before,
+  and so is a default that reads that default. A row's default that reads
+  another field of its row reads it as it is, as a part of the same value.
+source: Meridian
+contexts:
+  vars:
+    TOKEN: unused
+    REGION: west
+secret-variables: [TOKEN]
+inputs:
+  sites:
+    - {}
+expect:
+  deferred:
+    first: ${{ inputs.sites[0].region }}
+    label: ${{ inputs.first }}-label
+    sites:
+      - token: ${{ vars.TOKEN }}
+        region: east
+        zone: east-a
+    other: ${{ vars.REGION }}

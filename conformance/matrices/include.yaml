@@ -1,0 +1,109 @@
+description: >-
+  Each include entry, in order, adds its values to every combination it
+  matches, or else is a combination of its own. An entry matches a
+  combination when it names at least one of the matrix's keys, and has the
+  combination's value for each it names, as values match in exclude. So an
+  entry that names none of the matrix's keys is a combination of its own,
+  as in ACTIVATE: GitHub Actions adds it to every combination instead. An
+  entry matches the combinations earlier entries made too, and its values
+  replace those an earlier entry added.
+source: GitHub Actions' documentation, ACTIVATE's matrix expansion, and Meridian
+cases:
+  - description: >-
+      GitHub Actions' example, as format 1 expands it: the entry that
+      names only color, which names no matrix key, is a combination of its
+      own, where GitHub Actions adds it to the four. The entries with
+      banana match no combination, and each is one of its own: the second
+      doesn't match the first's, which has no animal.
+    strategy:
+      matrix:
+        fruit: [apple, pear]
+        animal: [cat, dog]
+        include:
+          - {color: green}
+          - {color: pink, animal: cat}
+          - {fruit: apple, shape: circle}
+          - {fruit: banana}
+          - {fruit: banana, animal: cat}
+    instances:
+      - {animal: cat, fruit: apple, color: pink, shape: circle}
+      - {animal: cat, fruit: pear, color: pink}
+      - {animal: dog, fruit: apple, shape: circle}
+      - {animal: dog, fruit: pear}
+      - {color: green}
+      - {fruit: banana}
+      - {animal: cat, fruit: banana}
+  - description: >-
+      An entry doesn't change a value of the matrix's keys: one with a value
+      a key doesn't have is a combination of its own.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        include:
+          - {os: bsd, arch: x64}
+    instances:
+      - {os: linux}
+      - {os: mac}
+      - {arch: x64, os: bsd}
+  - description: An entry's values replace those an earlier entry added.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        include:
+          - {os: linux, cc: gcc}
+          - {os: linux, cc: clang}
+    instances:
+      - {cc: clang, os: linux}
+      - {os: mac}
+  - description: An entry matches a combination an earlier entry made.
+    strategy:
+      matrix:
+        os: [linux]
+        include:
+          - {os: mac}
+          - {os: mac, arch: arm}
+    instances:
+      - {os: linux}
+      - {arch: arm, os: mac}
+  - description: >-
+      An entry that matches by text gives the combination its own values, a
+      string in place of a number.
+    strategy:
+      matrix:
+        n: [1, 2]
+        include:
+          - {n: "2", big: true}
+    instances:
+      - {n: 1}
+      - {big: true, n: "2"}
+  - description: A matrix of include entries alone has one instance for each.
+    strategy:
+      matrix:
+        include:
+          - {site: a, size: 1}
+          - {site: b}
+    instances:
+      - {site: a, size: 1}
+      - {site: b}
+  - description: Include and exclude can be null, which is none.
+    contexts:
+      inputs: {extra: null}
+    strategy:
+      matrix:
+        os: [linux]
+        include: ${{ inputs.extra }}
+        exclude: ${{ inputs.extra }}
+    instances:
+      - {os: linux}
+  - description: Include entries can come from an expression.
+    contexts:
+      inputs:
+        targets:
+          - {os: linux, image: ubuntu}
+    strategy:
+      matrix:
+        os: [linux, mac]
+        include: ${{ inputs.targets }}
+    instances:
+      - {image: ubuntu, os: linux}
+      - {os: mac}

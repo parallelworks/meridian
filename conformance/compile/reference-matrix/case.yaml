@@ -1,8 +1,9 @@
 description: >-
   matrix.<key> needs a job with a matrix that has the key, among its values or
   its include entries. Without one it is a warning: in a job with no matrix,
-  ACTIVATE reads matrix.os as the text "matrix.os", and a key the matrix
-  doesn't have as null.
+  matrix.os is null, as a bug fix to format 1 has it, where ACTIVATE read
+  it as the text "matrix.os" when no job of the workflow had a matrix; and
+  a key the matrix doesn't have is null.
 source: Meridian
 expect:
   diagnostics:
