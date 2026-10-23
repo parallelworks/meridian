@@ -983,6 +983,13 @@
       "Inicia workers de la misma versión de Meridian que el coordinador."
     ]
   },
+  "job_version_unsupported": {
+    "title": "Trabajo de una versión de plan que el worker no lee",
+    "why": "Un worker reclama un trabajo con la versión de plan más nueva que lee, y el coordinador le envía un trabajo de esa versión. Uno de otra versión significa que el coordinador no la respetó, como podría no hacerlo un coordinador de otra versión de Meridian. No se ejecutó ningún paso, así que el trabajo se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
   "run_dir_unusable": {
     "title": "Directorio de la ejecución que el worker no pudo usar",
     "why": "Cada ejecución tiene un directorio, PW_JOB_DIR, donde se ejecutan sus pasos por omisión. El worker lo crea si no existe y, si no puede, por el motivo indicado, el intento falla antes de que se ejecute ningún paso. El trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",

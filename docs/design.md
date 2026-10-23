@@ -1806,8 +1806,13 @@ member's running workers reconnect to it.
   (`ssh_host_empty`). A worker on the host a job's `ssh:` names fails such
   a step (`step_off_job_host`) rather than run it on the wrong host, as it
   fails one whose `ssh:` names a host of its own (`step_ssh_not_supported`),
-  but for one whose `ssh:` says what its job's does, as a step that repeats
-  its job's `remoteHost` does, which runs where its job runs.
+  but for one whose `ssh:` names the same host and login as its job's, as a
+  step that repeats its job's `remoteHost` does, which runs where its job
+  runs: the same `remoteHost`, `remoteUser`, `jumpNodeHost` and
+  `jumpNodeUser`, by which format 1 keys the connections it reuses, with
+  null and none as `""`, whatever else it says, such as its
+  `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
+  `host:port` as it is and reads `host` through the user's `ssh_config`.
   534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
 - **A step that outlives its job's cancelling.** A step whose `if:` can be
   true once its job is stopping, the word `always`, `always()`,
@@ -1836,31 +1841,30 @@ member's running workers reconnect to it.
   coordinator hasn't stored, and of what it has, less than the limit, and
   at most four times as much, or 16 KiB, but while the worker copies what
   is unsent to a new file, when it holds both.
-- **What the worker keeps** of its own, its spooled logs, its steps'
-  scripts and `$OUTPUTS` files, is in a directory only its user can use,
-  which it holds open and makes every file in through that, whose name
-  starts with a dot, so that `rm -rf "$TMPDIR"/*` passes it by. It is
-  outside the run's directory, as format 1 keeps its scripts and
-  `$OUTPUTS` outside `PW_JOB_DIR`, since a step can remove that, as
-  `cleanup: rm -r ${PW_JOB_DIR}` does in workflows we know of, and on NFS
-  a directory can't be removed while a file in it is held open. It is in a
-  directory no other user can change, on a path no other user can change
-  (as OpenSSH checks the way to a user's keys), so that no other user can
-  take its name once it is removed: `meridian/worker` in the user's cache
-  directory, on disk, which the worker makes; otherwise `XDG_RUNTIME_DIR`,
-  when it is set and no other user can change it, which is in memory, so
-  the worker spools at most 64 MiB there; and only otherwise the system's
+- **What the worker keeps** of its own, its spooled logs, its steps' scripts
+  and `$OUTPUTS` files, is in a directory only its user can use, which it
+  holds open and makes every file in through that, whose name starts with a
+  dot, so that `rm -rf "$TMPDIR"/*` passes it by. It is outside the run's
+  directory, as format 1 keeps its scripts and `$OUTPUTS` outside
+  `PW_JOB_DIR`, since a step can remove that, as `cleanup: rm -r
+  ${PW_JOB_DIR}` does in workflows we know of, and on NFS a directory can't
+  be removed while a file in it is held open. It is in a directory no other
+  user can change, on a path no other user can change (as OpenSSH checks the
+  way to a user's keys), so that no other user can take its name once it is
+  removed: `meridian/worker` in the user's cache directory, on disk, which
+  the worker makes; otherwise `XDG_RUNTIME_DIR`, when it is set and no other
+  user can change it, which is in memory, so the worker spools at most 64
+  MiB while its directory is there; and only otherwise the system's
   temporary directory, with a warning in the worker's log. Any process of
-  the user, the job's steps among them, or a cleaner of temporary files,
-  can still remove it. The worker then never trusts what is at its path
-  again: it makes a new directory, with a new name, which it checks is a
-  directory of its user's that no one else can use, in the same parent,
-  which it makes and checks again if it made it, or else in the next it
-  would have used; and a step whose `$OUTPUTS` went as it ran has its
-  event say so (`outputs_removed`), as what it wrote there after is lost.
-  A problem the worker has with its own files fails a step, never the
-  attempt, and one with the directory at first ends the worker before it
-  claims the attempt.
+  the user, the job's steps among them, or a cleaner of temporary files, can
+  still remove it. The worker then never trusts what is at its path again:
+  it makes a new directory, with a new name, which it checks is a directory
+  of its user's that no one else can use, in the same parent, which it makes
+  and checks again if it made it, or else in the next it would have used;
+  and a step whose `$OUTPUTS` went as it ran has its event say so
+  (`outputs_removed`), as what it wrote there after is lost. A problem the
+  worker has with its own files fails a step, never the attempt, and one
+  with the directory at first ends the worker before it claims the attempt.
 - **When it is stopped from outside**, as by its scheduler, it stops the
   job's steps, and sends what it has for a while once they have stopped,
   so that a step in its grace period keeps what it printed last: the

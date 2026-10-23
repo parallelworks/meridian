@@ -150,6 +150,41 @@ func TestParentRemoved(t *testing.T) {
 	}
 }
 
+// TestSpoolLimitFollowsParent checks that the spool's default limit is
+// that of the directory the worker keeps its files in now: once it has
+// moved from a parent on disk to XDG_RUNTIME_DIR, in memory, the smaller.
+func TestSpoolLimitFollowsParent(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	given, xdg := filepath.Join(base, "given"), filepath.Join(base, "xdg")
+	for _, dir := range []string{given, xdg} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := makePrivateDir(privateParents(given, []string{"XDG_RUNTIME_DIR=" + xdg}), testLogger(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.removeAll()
+	s := newSpool(d, 0)
+	if got := s.limit(); got != DefaultSpoolLimit {
+		t.Errorf("on disk, the limit is %d, want %d", got, DefaultSpoolLimit)
+	}
+	if err := os.RemoveAll(given); err != nil {
+		t.Fatal(err)
+	}
+	if path, _, _, err := d.current(); err != nil || filepath.Dir(path) != xdg {
+		t.Fatalf("the worker moved to %q (%v), want %s", path, err, xdg)
+	}
+	if got := s.limit(); got != memorySpoolLimit {
+		t.Errorf("in memory, the limit is %d, want %d", got, memorySpoolLimit)
+	}
+	if got := newSpool(d, 1000).limit(); got != 1000 {
+		t.Errorf("a limit given is %d, want 1000", got)
+	}
+}
+
 // TestCleanupRemovesRunDir checks that a cleanup: that removes the run's
 // directory, as rm -r ${PW_JOB_DIR} does in workflows we know of, leaves
 // the cleanups after it, and the worker's files, as they were: the

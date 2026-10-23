@@ -21,7 +21,8 @@ type logKey struct {
 }
 
 // A spool holds an attempt's logs, masked, on disk, until the coordinator
-// has stored them, and keeps at most limit bytes that it hasn't: past
+// has stored them, and keeps at most its limit of bytes that it hasn't
+// (limit): past
 // that, it drops what is written, and counts it, so a job cut off from the
 // coordinator keeps running. A log's bytes are kept in a file of its own,
 // which is removed as soon as it is made. The file is emptied whenever the
@@ -31,8 +32,10 @@ type logKey struct {
 // what is still to send, and less than the limit of what has been sent,
 // besides the unsent bytes again while they are copied.
 type spool struct {
-	dir   *privateDir
-	limit int64
+	dir *privateDir
+	// given is the limit Config.SpoolLimit gives, or 0 for the default of
+	// the directory the worker keeps its files in now (limit).
+	given int64
 
 	mu sync.Mutex
 	// pending is how many bytes the logs hold that the coordinator hasn't
@@ -46,7 +49,21 @@ type spool struct {
 }
 
 func newSpool(dir *privateDir, limit int64) *spool {
-	return &spool{dir: dir, limit: limit, changed: make(chan struct{})}
+	return &spool{dir: dir, given: limit, changed: make(chan struct{})}
+}
+
+// limit returns how many bytes the spool keeps that the coordinator hasn't
+// stored: the limit it was given, or else DefaultSpoolLimit on disk, and
+// memorySpoolLimit in XDG_RUNTIME_DIR, in memory, as the directory the
+// worker keeps its files in is now, which it can move to another parent.
+func (s *spool) limit() int64 {
+	switch {
+	case s.given > 0:
+		return s.given
+	case s.dir.inMemory():
+		return memorySpoolLimit
+	}
+	return DefaultSpoolLimit
 }
 
 // A logStream is one log of an attempt. Its writes never fail: what it
@@ -110,7 +127,7 @@ func (l *logStream) Write(p []byte) (int, error) {
 	if l.closed {
 		return 0, os.ErrClosed
 	}
-	keep := min(int64(len(p)), max(s.limit-s.pending, 0))
+	keep := min(int64(len(p)), max(s.limit()-s.pending, 0))
 	if keep > 0 {
 		if l.file == nil {
 			keep = 0
@@ -210,7 +227,7 @@ func (s *spool) stored(l *logStream, length int64, ended bool) bool {
 		if err := l.file.Truncate(0); err == nil {
 			l.base = l.length
 		}
-	case sent >= compactAt && (sent >= 4*unsent || sent >= s.limit):
+	case sent >= compactAt && (sent >= 4*unsent || sent >= s.limit()):
 		return true
 	}
 	return false

@@ -147,7 +147,8 @@
   "problems_not_listed": "Only the first {limit} problems with the code {code} are listed; {count, plural, one {# more isn't} other {# more aren't}}.",
 
   "container_not_supported": "The job's steps are to run in the container \"{image}\", with \"{runtime}\", and this worker can't run containers yet. It doesn't run them on the host instead, which would isolate them less.",
-  "job_unreadable": "The worker couldn't read the job it claimed: {reason}.",
+  "job_unreadable": "The worker couldn't read the job it claimed: it isn't a job as this version of Meridian encodes one.",
+  "job_version_unsupported": "The job the worker claimed is of plan version {version}, and this worker reads version {supported}.",
   "run_dir_unusable": "The worker couldn't use the run's directory \"{path}\": {reason}.",
   "env_name_invalid": "The platform gives the job's steps a variable named {name}, which no variable can be named: a name can't be empty, or hold = or NUL.",
   "uses_not_supported": "The step uses \"{uses}\", and this worker can't run a step that uses an action or a workflow yet.",

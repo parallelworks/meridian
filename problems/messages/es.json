@@ -141,7 +141,8 @@
   "problems_not_listed": "Solo se enumeran los primeros {limit} problemas con el código {code}; {count, plural, one {# más no se enumera} other {# más no se enumeran}}.",
 
   "container_not_supported": "Los pasos del trabajo deben ejecutarse en el contenedor “{image}”, con “{runtime}”, y este worker aún no puede ejecutar contenedores. Tampoco los ejecuta en el host, lo que los aislaría menos.",
-  "job_unreadable": "El worker no pudo leer el trabajo que reclamó: {reason}.",
+  "job_unreadable": "El worker no pudo leer el trabajo que reclamó: no es un trabajo como lo codifica esta versión de Meridian.",
+  "job_version_unsupported": "El trabajo que reclamó el worker es de la versión de plan {version}, y este worker lee la versión {supported}.",
   "run_dir_unusable": "El worker no pudo usar el directorio de la ejecución “{path}”: {reason}.",
   "env_name_invalid": "La plataforma da a los pasos del trabajo una variable llamada {name}, un nombre que ninguna variable puede tener: un nombre no puede estar vacío ni contener = o NUL.",
   "uses_not_supported": "El paso usa “{uses}”, y este worker aún no puede ejecutar un paso que usa una acción o un flujo de trabajo.",

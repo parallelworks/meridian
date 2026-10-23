@@ -625,8 +625,11 @@ func TestSpoolLimit(t *testing.T) {
 			finished.Store(true)
 		}
 	}
+	// Every log is held until the step has finished: what the coordinator
+	// stores of one, the setup log's too, frees room in the spool, and
+	// what the step printed after would be kept again.
 	f.fault = func(r *http.Request) fault {
-		if r.URL.Path == workerapi.PathLogs && r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) && !finished.Load() {
+		if r.URL.Path == workerapi.PathLogs && !finished.Load() {
 			return unavailable
 		}
 		return answer
@@ -737,11 +740,12 @@ func TestSetupFails(t *testing.T) {
 		{"container", func(c *workerapi.Claim) {
 			c.Container = &workerapi.Container{Runtime: "podman", Image: "ghcr.io/parallelworks/meridian-base@sha256:" + strings.Repeat("0", 64)}
 		}, "container_not_supported", []string{"image", "runtime"}},
+		// What the decoder says can quote the job, and a value made from a
+		// secret in it, which isn't known yet to mask.
 		{"unreadable job", func(c *workerapi.Claim) {
-			// What the decoder says can quote the job, and a value made from
-			// a secret in it, which isn't known yet to mask.
 			c.Job = []byte(`{"key":"build","steps":[],"path":"/jobs/build","s3cr3t-key":"vm"}`)
-		}, "job_unreadable", []string{"reason"}},
+		}, "job_unreadable", nil},
+		{"job's version", func(c *workerapi.Claim) { c.PlanVersion = plan.Version + 1 }, "job_version_unsupported", []string{"supported", "version"}},
 		{"run directory", func(c *workerapi.Claim) { c.RunDir = filepath.Join(file, "run") }, "run_dir_unusable", []string{"path", "reason"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

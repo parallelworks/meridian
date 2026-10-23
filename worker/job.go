@@ -1,10 +1,7 @@
 package worker
 
 import (
-	"bytes"
 	"context"
-	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"log/slog"
@@ -20,6 +17,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -239,7 +237,8 @@ func (a *attempt) setUp() *problem.Problem {
 
 	job, err := plan.DecodeReadyJob(a.claim.PlanVersion, a.claim.Job)
 	if err != nil {
-		return fail(problems.JobUnreadable, problems.Params{"reason": decodeFailure(err)})
+		k, params := decodeFailure(a.claim.PlanVersion, err)
+		return fail(k, params)
 	}
 	a.job = job
 	a.mask.Add(job.Masked...)
@@ -262,23 +261,16 @@ func (a *attempt) setUp() *problem.Problem {
 	return nil
 }
 
-// decodeFailure says why a job didn't decode, from err, DecodeReadyJob's,
-// without the decoder's own text, which can quote the job, and in it a
-// value made from a secret, before the worker knows what masks it
-// (ReadyJob.Masked): what kind of failure it is, or, for a version this
-// worker doesn't read, which holds only versions, the error.
-func decodeFailure(err error) string {
-	var syntactic *jsontext.SyntacticError
-	var semantic *jsonv2.SemanticError
-	switch {
-	case errors.Is(err, plan.ErrVersion):
-		return err.Error()
-	case errors.As(err, &syntactic):
-		return "it isn't valid JSON"
-	case errors.As(err, &semantic):
-		return "it isn't a ready job as this worker reads one"
+// decodeFailure says why a job of plan version version didn't decode,
+// from err, DecodeReadyJob's, as a kind of problem, without the decoder's
+// own text, which can quote the job, and in it a value made from a secret,
+// before the worker knows what masks it (ReadyJob.Masked). The job is
+// JSON, as the claim that holds it decoded.
+func decodeFailure(version int, err error) (*problems.Kind, problems.Params) {
+	if errors.Is(err, plan.ErrVersion) {
+		return problems.JobVersionUnsupported, problems.Params{"version": version, "supported": plan.Version}
 	}
-	return "it couldn't be decoded"
+	return problems.JobUnreadable, nil
 }
 
 // state returns what the worker knows of its job, for its phases: the
@@ -562,12 +554,13 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 // readied it: not one that uses: an action or a workflow, nor one with a
 // shell format 1 doesn't run, which it can't run yet, and where format 1
 // runs it: where its job runs, unless its ssh: names a host, which this
-// worker can't run a step on yet, but for one whose ssh: says what its
-// job's does, which placed the worker there. A step whose ssh: is null, or
-// gives no remoteHost, runs where its job would run without its ssh:,
-// which is here, unless the job's own ssh: placed it on that host; one
-// that gives no remoteHost has a note in its log, as format 1 writes. It
-// returns the note, and the problem that refuses the step.
+// worker can't run a step on yet, but for one whose ssh: names the host
+// and login its job's does, which placed the worker there (sameSSH). A
+// step whose ssh: is null, or gives no remoteHost, runs where its job
+// would run without its ssh:, which is here, unless the job's own ssh:
+// placed it on that host; one that gives no remoteHost has a note in its
+// log, as format 1 writes. It returns the note, and the problem that
+// refuses the step.
 func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *problems.Diagnostic) {
 	diagnostic := func(k *problems.Kind, params problems.Params) *problems.Diagnostic {
 		d := a.at(k, path, params)
@@ -588,8 +581,8 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 	job := a.job.Target.Inline
 	switch {
 	case named && job != nil && sameSSH(rs.SSH.SSH, job.SSH):
-		// A step whose ssh: says what its job's does runs where its job
-		// runs: here.
+		// A step whose ssh: names its job's host and login runs where its
+		// job runs: here.
 		return nil, nil
 	case named:
 		return nil, diagnostic(problems.StepSSHNotSupported, nil)
@@ -601,12 +594,26 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 	return nil, nil
 }
 
-// sameSSH reports whether two ssh: mappings, a step's and its job's, say
-// the same, as their JSON does.
+// sshKeys are the keys of a format 1 ssh: that say which host, and which
+// login on it, a step runs on, by which ACTIVATE keys the connections it
+// keeps, and reuses a job's for a step whose are the same. Its others, such
+// as disconnect-timeout, don't change where the step runs. remoteHost is
+// as written: ACTIVATE reads host:22 apart from host, as host:port is
+// where it connects, and host an alias its ssh_config can resolve.
+var sshKeys = []string{"remoteHost", "remoteUser", "jumpNodeHost", "jumpNodeUser"}
+
+// sameSSH reports whether two ssh: mappings, a step's and its job's, name
+// the same host and login (sshKeys), each as text, as ACTIVATE reads them,
+// in which null, and a key that isn't there, are "".
 func sameSSH(a, b plan.Data) bool {
-	ja, errA := jsonv2.Marshal(a.Get(), jsonv2.Deterministic(true))
-	jb, errB := jsonv2.Marshal(b.Get(), jsonv2.Deterministic(true))
-	return errA == nil && errB == nil && bytes.Equal(ja, jb)
+	am, _ := a.Get().(map[string]any)
+	bm, _ := b.Get().(map[string]any)
+	for _, k := range sshKeys {
+		if expr.Text(am[k]) != expr.Text(bm[k]) {
+			return false
+		}
+	}
+	return true
 }
 
 // runCommand runs script, a step's run: or cleanup: command, with the
@@ -644,7 +651,7 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 		diags = append(diags, a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()}))
 	}
 	if dropped := stream.droppedBytes(); dropped > 0 {
-		diags = append(diags, a.at(problems.LogNotKept, path, problems.Params{"size": dropped, "limit": a.spool.limit}))
+		diags = append(diags, a.at(problems.LogNotKept, path, problems.Params{"size": dropped, "limit": a.spool.limit()}))
 	}
 	return exit, cause, diags
 }

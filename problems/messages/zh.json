@@ -141,7 +141,8 @@
   "problems_not_listed": "代码为 {code} 的问题只列出前 {limit} 个，其余 {count} 个未列出。",
 
   "container_not_supported": "作业的步骤应使用“{runtime}”在容器“{image}”中运行，而此工作进程尚不能运行容器。它也不会改为在主机上运行这些步骤，因为那样隔离会更弱。",
-  "job_unreadable": "工作进程无法读取它领取的作业：{reason}",
+  "job_unreadable": "工作进程无法读取它领取的作业：它不是此版本 Meridian 所编码的作业。",
+  "job_version_unsupported": "工作进程领取的作业属于计划版本 {version}，而此工作进程读取的是版本 {supported}。",
   "run_dir_unusable": "工作进程无法使用运行目录“{path}”：{reason}",
   "env_name_invalid": "平台为作业的步骤提供了一个名为 {name} 的变量，但任何变量都不能使用这个名称：名称不能为空，也不能包含 = 或 NUL。",
   "uses_not_supported": "该步骤使用了“{uses}”，而此工作进程尚不能运行使用操作或工作流的步骤。",

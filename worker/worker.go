@@ -49,7 +49,8 @@ type Config struct {
 	Dir string
 	// SpoolLimit is the most bytes of logs the worker keeps that the
 	// coordinator hasn't stored, or 0 for DefaultSpoolLimit, or
-	// memorySpoolLimit in XDG_RUNTIME_DIR, which is in memory. Past it, a
+	// memorySpoolLimit while the worker's directory is in XDG_RUNTIME_DIR,
+	// which is in memory. Past it, a
 	// log loses what its step prints until the coordinator has stored
 	// more, and the step's event warns of it.
 	SpoolLimit int64
@@ -127,14 +128,6 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 		return err
 	}
 	defer files.removeAll()
-	limit := cfg.SpoolLimit
-	switch {
-	case limit > 0:
-	case files.inMemory():
-		limit = memorySpoolLimit
-	default:
-		limit = DefaultSpoolLimit
-	}
 
 	c := newClient(ep, tm, log)
 	defer c.close()
@@ -155,7 +148,7 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 		environ: stepsEnv,
 		worker:  worker,
 		events:  newEventQueue(),
-		spool:   newSpool(files, limit),
+		spool:   newSpool(files, cfg.SpoolLimit),
 	}
 	return a.run(ctx)
 }

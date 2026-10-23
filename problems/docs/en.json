@@ -843,6 +843,12 @@
       "Start workers of the same version of Meridian as the coordinator."
     ]
   },
+  "job_version_unsupported": {
+    "why": "A worker claims a job with the newest plan version it reads, and the coordinator sends it a job of that version. One of another version means the coordinator didn't honour that, as a coordinator of another version of Meridian might not. No step ran, so the job is placed again.",
+    "fix": [
+      "Start workers of the same version of Meridian as the coordinator."
+    ]
+  },
   "run_dir_unusable": {
     "why": "Each run has a directory, PW_JOB_DIR, where its steps run by default. The worker makes it if it doesn't exist, and if it can't, for the reason given, the attempt fails before any step runs. The job is placed again, on another member of its group if there is one.",
     "fix": [
