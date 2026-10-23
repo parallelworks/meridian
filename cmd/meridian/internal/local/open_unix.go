@@ -2,19 +2,7 @@
 
 package local
 
-import (
-	"io/fs"
-	"syscall"
-)
-
-// fileOwner returns the user ID of the owner of the file info describes.
-func fileOwner(info fs.FileInfo) (int, bool) {
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
-	}
-	return int(st.Uid), true
-}
+import "syscall"
 
 // openFlags are the flags a config file, a key file or a variable's file
 // is opened with besides O_RDONLY: O_NONBLOCK, so that opening a FIFO

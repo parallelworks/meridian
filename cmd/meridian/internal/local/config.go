@@ -19,6 +19,7 @@ import (
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -79,7 +80,7 @@ var (
 // variables too.
 func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
 	if _, err := os.Stat(dir); err == nil {
-		if err := checkSafePath(dir, true); err != nil {
+		if err := safepath.Check(dir, true); err != nil {
 			return nil, err
 		}
 	}

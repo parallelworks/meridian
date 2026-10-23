@@ -1,6 +1,6 @@
 //go:build !linux
 
-package local
+package safepath
 
 // unmappedOwner says whether uid, a file's owner, is one a user namespace
 // hides, which only Linux has.
