@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
@@ -238,7 +239,7 @@ func (a *attempt) setUp() *problem.Problem {
 
 	job, err := plan.DecodeReadyJob(a.claim.PlanVersion, a.claim.Job)
 	if err != nil {
-		return fail(problems.JobUnreadable, problems.Params{"reason": err.Error()})
+		return fail(problems.JobUnreadable, problems.Params{"reason": decodeFailure(err)})
 	}
 	a.job = job
 	a.mask.Add(job.Masked...)
@@ -259,6 +260,25 @@ func (a *attempt) setUp() *problem.Problem {
 	}
 	info("running the job's steps on the host", "dir", a.claim.RunDir)
 	return nil
+}
+
+// decodeFailure says why a job didn't decode, from err, DecodeReadyJob's,
+// without the decoder's own text, which can quote the job, and in it a
+// value made from a secret, before the worker knows what masks it
+// (ReadyJob.Masked): what kind of failure it is, or, for a version this
+// worker doesn't read, which holds only versions, the error.
+func decodeFailure(err error) string {
+	var syntactic *jsontext.SyntacticError
+	var semantic *jsonv2.SemanticError
+	switch {
+	case errors.Is(err, plan.ErrVersion):
+		return err.Error()
+	case errors.As(err, &syntactic):
+		return "it isn't valid JSON"
+	case errors.As(err, &semantic):
+		return "it isn't a ready job as this worker reads one"
+	}
+	return "it couldn't be decoded"
 }
 
 // state returns what the worker knows of its job, for its phases: the

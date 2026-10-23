@@ -738,7 +738,9 @@ func TestSetupFails(t *testing.T) {
 			c.Container = &workerapi.Container{Runtime: "podman", Image: "ghcr.io/parallelworks/meridian-base@sha256:" + strings.Repeat("0", 64)}
 		}, "container_not_supported", []string{"image", "runtime"}},
 		{"unreadable job", func(c *workerapi.Claim) {
-			c.Job = []byte(`{"key":"build","steps":[],"path":"/jobs/build","isolation":"vm"}`)
+			// What the decoder says can quote the job, and a value made from
+			// a secret in it, which isn't known yet to mask.
+			c.Job = []byte(`{"key":"build","steps":[],"path":"/jobs/build","s3cr3t-key":"vm"}`)
 		}, "job_unreadable", []string{"reason"}},
 		{"run directory", func(c *workerapi.Claim) { c.RunDir = filepath.Join(file, "run") }, "run_dir_unusable", []string{"path", "reason"}},
 	} {
@@ -757,6 +759,9 @@ func TestSetupFails(t *testing.T) {
 			}
 			if end.Problem.Type != "/problems/workflow/"+tc.code {
 				t.Errorf("the problem's type is %s", end.Problem.Type)
+			}
+			if shown := fmt.Sprint(end.Problem.Detail, end.Problem.Params); strings.Contains(shown, "s3cr3t") {
+				t.Errorf("the problem quotes the job: %s", shown)
 			}
 			if setup, ended := f.log(logKey{part: workerapi.LogSetup}); !ended || !strings.Contains(setup, "the job failed before its first step") {
 				t.Errorf("the setup log is %q (ended %t)", setup, ended)
