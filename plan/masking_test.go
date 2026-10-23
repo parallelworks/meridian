@@ -1274,3 +1274,57 @@ jobs:
 		t.Errorf("End %+v, %v", end, err)
 	}
 }
+
+// A secret's text that the worker knows of and the run doesn't hold, as a
+// platform's secret variable (JobState.Secrets), is a secret's own text: an
+// output that holds it, however short, or a credential field of it, is a
+// secret and not derived, so that the jobs that need the job mask it
+// however short, and a problem with what reads it doesn't show it. Given
+// only to mask (JobState.Masked), it is what is made from a secret. What
+// JobEnv found without it isn't used for a state with it.
+func TestStateSecrets(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - run: "true"
+    outputs:
+      shown: ${{ fromJSON(needs.main.outputs.key) }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobEnv, _, err := ready.Job.JobEnv(t.Context(), plan.JobState{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []plan.StepResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"key": "k3y!", "pw": "hunt3r2", "plain": "text"}}}
+	for _, tc := range []struct {
+		name            string
+		secrets, masked []string
+		secret, derived string
+	}{
+		{"secrets", []string{"k3y!", `{"password":"hunt3r2"}`}, nil, "[key pw]", "[]"},
+		{"masked", nil, []string{"k3y!", "hunt3r2"}, "[key pw]", "[key pw]"},
+	} {
+		state := plan.JobState{Run: run, Steps: steps, JobEnv: jobEnv, Secrets: tc.secrets, Masked: tc.masked}
+		end, diags, err := ready.Job.End(t.Context(), state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprint(end.Secrets); got != tc.secret {
+			t.Errorf("%s: the outputs that hold a secret are %s, want %s", tc.name, got, tc.secret)
+		}
+		if got := fmt.Sprint(end.Derived); got != tc.derived {
+			t.Errorf("%s: the derived outputs are %s, want %s", tc.name, got, tc.derived)
+		}
+		if len(diags) != 1 {
+			t.Fatalf("%s: %v", tc.name, diags)
+		}
+		if shown := fmt.Sprint(diags[0].Params, diags[0].Detail); strings.Contains(shown, "k3y") {
+			t.Errorf("%s: the secret shows in %s", tc.name, shown)
+		}
+	}
+}

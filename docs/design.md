@@ -1502,11 +1502,13 @@ waking up or `meridian run` restarting must not make them all look lost.
   wrote as `""`. What it writes to `$OUTPUTS` is the job's, over what its
   steps wrote. A cleanup that fails fails the job, as a step does: the
   cleanups after it read `failure()` as true, and the job's `outputs:`
-  read an output that nothing wrote as `""`. A cleanup that is skipped has
-  a finished event that says so, as a skipped step has, and as format 1
-  shows its copy of the step. A worker whose attempt ended without it,
-  because another superseded it or its lease lapsed, runs none: another
-  attempt may be running, and a cleanup could remove what it is using.
+  read an output that nothing wrote as `""`. A step whose `if:` fails to
+  evaluate didn't run, as format 1 counts it, and its cleanup is skipped;
+  the step fails its job. A cleanup that is skipped has a finished event
+  that says so, as a skipped step has, and as format 1 shows its copy of
+  the step. A worker whose attempt ended without it, because another
+  superseded it or its lease lapsed, runs none: another attempt may be
+  running, and a cleanup could remove what it is using.
 
 ### Outputs
 
@@ -1749,7 +1751,9 @@ member's running workers reconnect to it.
   such as `OUTPUTS`, `PW_JOB_DIR` and `PW_JOB_ID`. Variables that only a
   platform can fill, such as an API key, are set only when one supplies them,
   in the claim (`workerapi.Claim.Env`), which can mark one secret, to be
-  masked. They go over the environment the workflow gives the step, as in
+  masked however short, and which the phases count as a secret's own text,
+  as they count the run's (`plan.JobState.Secrets`): an output that holds
+  one is a secret to the jobs that need the job. They go over the environment the workflow gives the step, as in
   format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
   is the run's ID and `PW_PARENT_JOB_DIR` its directory.
 - **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.

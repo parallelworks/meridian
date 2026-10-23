@@ -61,6 +61,14 @@ type JobState struct {
 	// with them which of the job's outputs, and its steps', hold a secret,
 	// as the worker masks its logs with them.
 	Masked []string
+	// Secrets are the texts of secrets the worker knows of that don't come
+	// from the run, such as the secret variables a platform gives a job's
+	// steps, which no expression reads. The phases count each as a secret's
+	// own text, as they count the run's: masked however short, own to End,
+	// which names an output that holds one a secret and not derived, as the
+	// jobs that need the job then read it, and read for the credential
+	// fields it holds (credentialFields).
+	Secrets []string
 }
 
 // A JobEnv is the job's env: as the JobEnv phase evaluated it, as the job
@@ -666,7 +674,8 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
-	if given := state.JobEnv; given != nil && given.own != nil && given.own.sameAs(state.Run, state.Needs) {
+	e.secrets.other = state.Secrets
+	if given := state.JobEnv; given != nil && given.own != nil && given.own.sameAs(state.Run, state.Secrets, state.Needs) {
 		// The secrets' texts JobEnv found for this attempt, and what masks
 		// them, which it built once; not those of another run or attempt.
 		e.secrets = given.own

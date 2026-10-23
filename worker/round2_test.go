@@ -171,30 +171,34 @@ func TestStoppedKeepsLastWords(t *testing.T) {
 }
 
 // TestPlatformEnvSecret checks that a secret variable a platform gives is
-// masked wherever the worker shows it: logs, events and problems; and that
-// an output that holds it keeps its value, as format 1 passes it to the
-// jobs that need the job, and is named private and a secret.
+// masked wherever the worker shows it, however short: logs, events and
+// problems; and that an output that holds it keeps its value, as format 1
+// passes it to the jobs that need the job, and is named private and a
+// secret, which holds a secret's own text, not only what was made from one.
 func TestPlatformEnvSecret(t *testing.T) {
 	t.Parallel()
 	step := command(`echo "key=$PW_API_KEY"; echo "k=$PW_API_KEY" >> $OUTPUTS`)
 	step.WorkingDirectory = plan.Literal("/proc/sekr1t-api-key/x")
-	ok := command(`echo "key=$PW_API_KEY user=$PW_USER"; echo "k=$PW_API_KEY" >> $OUTPUTS`)
+	ok := command(`echo "key=$PW_API_KEY pin=$PW_PIN user=$PW_USER"; echo "k=$PW_API_KEY" >> $OUTPUTS; echo "pin=$PW_PIN" >> $OUTPUTS`)
 	ok.If = cond("always()")
 	f := newFakeCoordinator(t, newJob(step, ok))
-	f.claim.Env = map[string]workerapi.EnvVar{"PW_API_KEY": {Value: "sekr1t-api-key", Secret: true}, "PW_USER": {Value: "alice"}}
+	f.claim.Env = map[string]workerapi.EnvVar{
+		"PW_API_KEY": {Value: "sekr1t-api-key", Secret: true}, "PW_PIN": {Value: "4321", Secret: true}, "PW_USER": {Value: "alice"},
+	}
 	if err := f.runWorker(t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
-	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "key=*** user=alice\n")
+	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "key=*** pin=*** user=alice\n")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, e := range f.events {
-		if strings.Contains(fmt.Sprint(e.Outputs, e.Diagnostics), "sekr1t") {
+		if shown := fmt.Sprint(e.Outputs, e.Diagnostics); strings.Contains(shown, "sekr1t") || strings.Contains(shown, "4321") {
 			t.Errorf("an event quotes the secret: %v %v", e.Outputs, e.Diagnostics)
 		}
 	}
-	if f.end == nil || f.end.Outputs["k"] != "sekr1t-api-key" || !slices.Equal(f.end.SecretOutputs, []string{"k"}) || !slices.Equal(f.end.PrivateOutputs, []string{"k"}) {
-		t.Errorf("the job's end doesn't keep the output private and a secret: %+v", f.end)
+	if f.end == nil || f.end.Outputs["k"] != "sekr1t-api-key" || f.end.Outputs["pin"] != "4321" ||
+		!slices.Equal(f.end.SecretOutputs, []string{"k", "pin"}) || !slices.Equal(f.end.PrivateOutputs, []string{"k", "pin"}) || len(f.end.DerivedOutputs) > 0 {
+		t.Errorf("the job's end doesn't keep the outputs private and secrets of their own: %+v", f.end)
 	}
 }
 

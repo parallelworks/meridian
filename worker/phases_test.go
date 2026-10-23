@@ -2,6 +2,7 @@ package worker
 
 import (
 	"maps"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -240,4 +241,33 @@ func TestStepHosts(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestCleanupAfterFailedIf checks that, as in format 1, the cleanup of a
+// step whose if: failed to evaluate is skipped, since the step didn't run,
+// while the step fails its job; and that the cleanup of one whose run:
+// failed to evaluate, after its if: passed, runs.
+func TestCleanupAfterFailedIf(t *testing.T) {
+	t.Parallel()
+	badIf := command("echo never")
+	badIf.If = cond("fromJSON('{')")
+	badIf.Cleanup = plan.Literal("echo if >> $PW_JOB_DIR/cleaned")
+	badRun := plan.Step{Run: cond("fromJSON('{')"), If: cond("always()"), Cleanup: plan.Literal("echo run >> $PW_JOB_DIR/cleaned")}
+	f := newFakeCoordinator(t, newJob(badIf, badRun))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"finished 0.0 failure -1",
+		"finished 1.0 failure -1",
+		"cleanup started 1.0", "cleanup finished 1.0 success 0",
+		"cleanup finished 0.0 skipped -1",
+	)
+	checkEnd(t, f, plan.OutcomeFailure, "")
+	if cleaned, err := os.ReadFile(filepath.Join(f.claim.RunDir, "cleaned")); err != nil || string(cleaned) != "run\n" {
+		t.Errorf("the cleanups that ran wrote %q (%v), want run", cleaned, err)
+	}
+	if got := f.finishedEvent(0, 0, true).Diagnostics; len(got) > 0 {
+		t.Errorf("the skipped cleanup has the problems %v", got)
+	}
 }

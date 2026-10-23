@@ -33,12 +33,14 @@ type attempt struct {
 	claimed time.Time
 
 	// job is the job as the claim gives it, and jobEnv its env: as the
-	// JobEnv phase gave it, for the attempt. mask masks the job's logs,
-	// and masked are the values it masks.
-	job    *plan.ReadyJob
-	jobEnv *plan.JobEnv
-	mask   *plan.Masker
-	masked []string
+	// JobEnv phase gave it, for the attempt. mask masks the job's logs:
+	// masked, the values the run and the phases made, and secrets, the
+	// platform's secret variables (plan.JobState.Secrets).
+	job     *plan.ReadyJob
+	jobEnv  *plan.JobEnv
+	mask    *plan.Masker
+	masked  []string
+	secrets []string
 	// scripts counts the scripts written, to name each.
 	scripts int
 	// firstStarted is set once the coordinator has stored that a step is

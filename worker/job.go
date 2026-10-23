@@ -28,11 +28,14 @@ import (
 func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	a.mask = plan.NewMasker()
 	a.addMasked(a.claim.Run.Masked()...)
+	// The platform's secret variables are secrets of the job's, which the
+	// phases count as a secret's own text, as they count the run's.
 	for _, name := range slices.Sorted(maps.Keys(a.claim.Env)) {
 		if v := a.claim.Env[name]; v.Secret {
-			a.addMasked(v.Value)
+			a.secrets = append(a.secrets, v.Value)
 		}
 	}
+	a.mask.Add(a.secrets...)
 	problem := a.setUp()
 	if a.halted.fired() {
 		return nil
@@ -63,6 +66,8 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 
 	var (
 		results []plan.StepResult
+		// ifFailed is set for each step whose if: failed to evaluate.
+		ifFailed = make([]bool, len(a.job.Steps))
 		// cancelled is set once the job's steps have seen the coordinator
 		// cancel it: cancelled() is true for the steps after, as the
 		// Cancelled of their state.
@@ -94,6 +99,7 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 			return nil
 		}
 		results = append(results, end.result)
+		ifFailed[i] = end.ifFailed
 		if end.cause == stopCancelled {
 			cancelled = true
 		}
@@ -107,9 +113,16 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 
 	// As in format 1, the steps' cleanup: commands run once the job's steps
 	// have, in reverse order, each as a step of its own, whatever happened
-	// to the job: the Cleanup phase skips one whose step didn't run.
+	// to the job: the Cleanup phase skips one whose step was skipped, and
+	// the worker one whose step's if: failed to evaluate, which format 1
+	// counts as not having run either.
 	for i, s := range slices.Backward(a.job.Steps) {
 		if s.Cleanup.IsZero() {
+			continue
+		}
+		if ifFailed[i] {
+			a.finished(workerapi.Event{Step: i, Cleanup: true, Outcome: plan.OutcomeSkipped, ExitCode: -1})
+			results[i].CleanupOutcome = plan.OutcomeSkipped
 			continue
 		}
 		outcome, outputs := a.runCleanup(ctx, i, a.state(results, cancelled, nil))
@@ -261,14 +274,17 @@ func (a *attempt) state(results []plan.StepResult, cancelled bool, env map[strin
 		Env:       env,
 		JobEnv:    a.jobEnv,
 		Masked:    slices.Clip(a.masked),
+		Secrets:   a.secrets,
 	}
 }
 
-// A stepEnd is how a step that the worker readied ended: its result, and
-// why its last try was stopped, if it was.
+// A stepEnd is how a step that the worker readied ended: its result, why
+// its last try was stopped, if it was, and whether its if: failed to
+// evaluate.
 type stepEnd struct {
-	result plan.StepResult
-	cause  stopCause
+	result   plan.StepResult
+	cause    stopCause
+	ifFailed bool
 }
 
 // runStep readies the step at index i with the Step phase, in state, for
@@ -313,6 +329,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			a.log.Error("readying a step failed", "step", i, "try", try, "error", a.mask.Mask(err.Error()))
 			return fail()
 		case diags.HasErrors() || rs == nil:
+			end.ifFailed = try == 0 && a.ifFailed(i, diags)
 			return fail()
 		case rs.Skipped:
 			a.finished(workerapi.Event{Step: i, Outcome: plan.OutcomeSkipped, ExitCode: -1, Diagnostics: diags})
@@ -405,6 +422,15 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			return end
 		}
 	}
+}
+
+// ifFailed reports whether diags, Step's for the first try of the step at
+// index i, hold an error at its if:, which the Step phase reports where it
+// is: its if: failed to evaluate, so the step didn't run, as format 1
+// counts it, which marks a step run once its if: has passed.
+func (a *attempt) ifFailed(i int, diags problems.Diagnostics) bool {
+	at := a.job.Steps[i].Path + "/if"
+	return slices.ContainsFunc(diags.Errors(), func(d problems.Diagnostic) bool { return d.Path() == at })
 }
 
 // A stepTry is a try of a step with a retry:, from 0, and how many more
