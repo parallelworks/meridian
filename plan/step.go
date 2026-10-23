@@ -161,6 +161,11 @@ type ReadyStep struct {
 	// Skipped is set when the step's if: is false: the step doesn't run,
 	// its outcome is skipped, and nothing below is set.
 	Skipped bool `json:"skipped,omitzero"`
+	// IfFailed is set when the step's if: failed to evaluate, which fails
+	// the step, with Step's errors: the step didn't run, as format 1 counts
+	// it, which counts a step as run once its if: has passed, so its
+	// cleanup: is skipped. Nothing below is set.
+	IfFailed bool `json:"ifFailed,omitzero"`
 	// Run is the command a run: step runs.
 	Run string `json:"run,omitempty"`
 	// Uses names the built-in action or the workflow a uses: step runs, as
@@ -275,7 +280,9 @@ type ReadyStepRetry struct {
 // and state, byte for byte. Its diagnostics are the step's problems, such
 // as an expression that fails, at the step's path and with no file
 // position, and never show a value made from a variable or a password; an
-// error among them fails the step, and there is no step. What they show is
+// error among them fails the step, and there is no step, but for one whose
+// if: failed to evaluate, which Step gives with only its index, its id and
+// IfFailed set. What they show is
 // masked with state.Masked, and a value read from a step's output that
 // holds a secret, which the job's later steps read as it was written, is
 // masked whole. It returns an error when ctx is done before it finishes,
@@ -373,7 +380,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 		e = c.evaluation(PhaseStep, e)
 		var ok bool
 		if d, ok = e.condition(s.If, at(s.Path, "if")); !ok {
-			return nil, e.diags, nil
+			return &ReadyStep{Index: index, ID: s.ID, IfFailed: true}, e.diags, nil
 		}
 		if !d.run {
 			rs.ID, rs.Skipped = s.ID, true

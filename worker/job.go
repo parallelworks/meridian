@@ -331,7 +331,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			a.log.Error("readying a step failed", "step", i, "try", try, "error", a.mask.Mask(err.Error()))
 			return fail()
 		case diags.HasErrors() || rs == nil:
-			end.ifFailed = try == 0 && a.ifFailed(i, diags)
+			end.ifFailed = rs != nil && rs.IfFailed
 			return fail()
 		case rs.Skipped:
 			a.finished(workerapi.Event{Step: i, Outcome: plan.OutcomeSkipped, ExitCode: -1, Diagnostics: diags})
@@ -424,15 +424,6 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			return end
 		}
 	}
-}
-
-// ifFailed reports whether diags, Step's for the first try of the step at
-// index i, hold an error at its if:, which the Step phase reports where it
-// is: its if: failed to evaluate, so the step didn't run, as format 1
-// counts it, which marks a step run once its if: has passed.
-func (a *attempt) ifFailed(i int, diags problems.Diagnostics) bool {
-	at := a.job.Steps[i].Path + "/if"
-	return slices.ContainsFunc(diags.Errors(), func(d problems.Diagnostic) bool { return d.Path() == at })
 }
 
 // A stepTry is a try of a step with a retry:, from 0, and how many more
