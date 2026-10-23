@@ -1,0 +1,52 @@
+description: >-
+  A strategy's fail-fast is true unless it is false, and its max-parallel is
+  how many instances run at a time: the whole part of a number of 1 or
+  more, or else no limit, 0, as in ACTIVATE.
+source: ACTIVATE's matrix expansion, and Meridian
+cases:
+  - description: Without them, fail-fast is true, and there is no limit.
+    strategy:
+      matrix: {n: [1]}
+    instances: [{n: 1}]
+    fail-fast: true
+    max-parallel: 0
+  - strategy:
+      matrix: {n: [1]}
+      fail-fast: false
+      max-parallel: 2
+    instances: [{n: 1}]
+    fail-fast: false
+    max-parallel: 2
+  - description: They can come from expressions.
+    contexts:
+      inputs: {ff: false, parallel: 3}
+    strategy:
+      matrix: {n: [1]}
+      fail-fast: ${{ inputs.ff }}
+      max-parallel: ${{ inputs.parallel }}
+    instances: [{n: 1}]
+    fail-fast: false
+    max-parallel: 3
+  - description: >-
+      Only false makes fail-fast false: the text false doesn't. A number of
+      parallel instances is rounded down, and one under 1, or text, is no
+      limit.
+    contexts:
+      inputs: {ff: "false", parallel: "2"}
+    strategy:
+      matrix: {n: [1]}
+      fail-fast: ${{ inputs.ff }}
+      max-parallel: ${{ inputs.parallel }}
+    instances: [{n: 1}]
+    fail-fast: true
+    max-parallel: 0
+  - strategy:
+      matrix: {n: [1]}
+      max-parallel: ${{ 2.5 }}
+    instances: [{n: 1}]
+    max-parallel: 2
+  - strategy:
+      matrix: {n: [1]}
+      max-parallel: ${{ 0.5 }}
+    instances: [{n: 1}]
+    max-parallel: 0

@@ -1,0 +1,20 @@
+description: >-
+  A step is evaluated again for each try, as format 1's failover does: env
+  holds the variables the worker defines, such as
+  PW_WORKFLOW_STEP_CURRENT_RETRY, the try's, over the workflow's, the job's
+  and the step's. A job's working-directory: is evaluated where its steps
+  run, so it can read the run's directory.
+source: ACTIVATE's failover tutorial, and Meridian
+jobs:
+  fractal_demo:
+    try: 1
+    env:
+      PW_WORKFLOW_STEP_CURRENT_RETRY: "1"
+      PW_WORKFLOW_STEP_MAX_RETRIES: "1"
+      PW_PARENT_JOB_DIR: /runs/r1
+    steps:
+      - {outcome: failure}
+expect:
+  values:
+    /jobs/fractal_demo/steps/0/with: {name: second, try: "1"}
+    /jobs/fractal_demo/steps/0/working-directory: /runs/r1/fractal

@@ -1,0 +1,20 @@
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: make >> $OUTPUTS
+  probe:
+    if: false
+    steps:
+      - run: echo skipped
+  test:
+    needs: [build, probe]
+    runs-on:
+      execution-group: ${{ needs.build.outputs.group }}
+    steps:
+      - run: ${{ needs.build.result }} ${{ needs.probe.result }} ${{ needs.build.outputs.group }}
+      - run: ${{ needs.build.steps.compile.outputs.binary }}
+      - run: "[${{ needs.build.outputs.missing }}] [${{ needs.build.steps.compile.outputs.missing }}]"
+        if: always
+      - run: ${{ needs.build }} ${{ needs.build.outputs }} ${{ needs.build.steps.compile }}
+      - run: ${{ needs.probe }} ${{ needs.probe.status }}

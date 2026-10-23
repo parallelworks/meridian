@@ -100,6 +100,21 @@ type Scope struct {
 	// while what it made from a marked one is masked too. Eval and
 	// EvalMarked ignore it. The zero Marks mark nothing.
 	Private Marks
+	// Missing, if it isn't nil, is asked about each reference to a name
+	// that a context whose values are strings doesn't have, which otherwise
+	// reads as "": it returns the problem the reference is, which the
+	// evaluation fails with, or nil, for "". path is the reference's, in
+	// the context. A runner reads some names strictly with it, as format 1
+	// reads an output that no step wrote.
+	Missing func(context string, path []string) (*problems.Kind, problems.Params)
+	// Text, if it isn't nil, is asked about each reference before it is
+	// read: when it reports true, the reference reads as its own text, as
+	// format 1 reads a word it doesn't know, with its names joined by dots,
+	// as steps.build.result, and reads nothing of the context. path is the
+	// reference's, in the context. A runner gives it for a reference that
+	// format 1 doesn't read from its context, such as steps.build or a
+	// step's key other than outputs.
+	Text func(context string, path []string) bool
 
 	// budget counts what the templates that share it have done together,
 	// for Meridian's limits on a group. Nil means a template is a group of
@@ -125,29 +140,30 @@ type budget struct {
 	active int
 	// clock reads the time: now, or a test's clock.
 	clock func() time.Time
-	// marked is set once what is being evaluated reads a value its scope
-	// marks (Scope.Marked). An evaluation that another reads, such as an
-	// input's default, notes what it read on its own, and adds that to its
-	// reader's.
-	marked bool
-	// marks is what the group knows of the paths the scope marks.
-	marks markIndex
+	// read is what is being evaluated has read of the values its scope
+	// marks (Scope.Marked and Scope.Private). An evaluation that another
+	// reads, such as an input's default, notes what it read on its own, and
+	// adds that to its reader's.
+	read Read
+	// marks and private are what the group knows of the paths the scope's
+	// Marked and Private mark.
+	marks, private markIndex
 }
 
-// noting starts noting whether what is evaluated next reads a marked value,
-// and returns whether what was evaluated before it did, for done.
-func (b *budget) noting() (outer bool) {
-	outer, b.marked = b.marked, false
+// noting starts noting what is evaluated next reads of the marked values,
+// and returns what was evaluated before it read, for done.
+func (b *budget) noting() (outer Read) {
+	outer, b.read = b.read, Read{}
 	return outer
 }
 
-// done stops noting, and reports whether what was evaluated since noting
-// read a marked value. What it read was read by what is around it too,
-// which outer says had read one before.
-func (b *budget) done(outer bool) bool {
-	marked := b.marked
-	b.marked = outer || marked
-	return marked
+// done stops noting, and reports what was evaluated since noting read of
+// the marked values. What it read was read by what is around it too, which
+// outer says had read some before.
+func (b *budget) done(outer Read) Read {
+	read := b.read
+	b.read = outer.Or(read)
+	return read
 }
 
 // Budgeted returns scope with one budget for what templates do, which every
@@ -877,8 +893,11 @@ func (e *evaluator) ref(r *ref) (any, error) {
 	if err := e.pathWork(r.at, path); err != nil {
 		return nil, err
 	}
-	if e.scope.Marked.n > 0 && e.marks(r.context, path) {
-		e.scope.budget.marked = true
+	if e.scope.Text != nil && e.scope.Text(r.context, path) {
+		return r.text(), nil
+	}
+	if e.scope.Marked.n > 0 || e.scope.Private.n > 0 {
+		e.reads(r.context, path)
 	}
 	f := follower{e: e, at: r.at}
 	var v any
@@ -891,6 +910,11 @@ func (e *evaluator) ref(r *ref) (any, error) {
 			return nil, err
 		}
 		if !ok && contexts[r.context].strings {
+			if e.scope.Missing != nil {
+				if k, params := e.scope.Missing(r.context, path); k != nil {
+					return nil, e.errorAt(r.at, k, params)
+				}
+			}
 			return "", nil
 		}
 	}
@@ -899,6 +923,29 @@ func (e *evaluator) ref(r *ref) (any, error) {
 		return v, nil
 	}
 	return e.known(r.at, root, path, v)
+}
+
+// text returns the reference as format 1 reads one it doesn't know: its
+// context and its path, with names after dots, a quoted key in quotes in
+// brackets, and a bare key in brackets.
+func (n *ref) text() string {
+	var b strings.Builder
+	b.WriteString(n.context)
+	for _, s := range n.path {
+		switch s.kind {
+		case quoted:
+			b.WriteString("['" + s.name + "']")
+		case bareKey:
+			b.WriteString("[" + s.name + "]")
+		case index:
+			b.WriteString("[index]")
+		case wildcard:
+			b.WriteString(".*")
+		default:
+			b.WriteString("." + s.name)
+		}
+	}
+	return b.String()
 }
 
 // known returns v, which the reference at offset at read by following path

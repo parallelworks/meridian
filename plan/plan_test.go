@@ -543,6 +543,33 @@ func TestValueMarked(t *testing.T) {
 	}
 }
 
+// A Value reports what its templates read of each of its scope's mark sets
+// apart, all of them together, and what one that failed read before it
+// failed.
+func TestValueRead(t *testing.T) {
+	scope := expr.Scope{
+		Contexts: map[string]any{"vars": map[string]any{"token": "t", "region": "r"}},
+		Marked:   expr.NewMarks([]string{"vars", "token"}),
+		Private:  expr.NewMarks([]string{"vars"}),
+	}
+	for v, want := range map[string]expr.Read{
+		`{"a": "${{ vars.region }}", "b": ["${{ vars.token * 2 }}"]}`: {Marked: true, Private: true},
+		`{"a": "${{ vars.region }}", "b": ["vars.token"]}`:            {Private: true},
+		`["${{ 1 }}", "text"]`:                          {},
+		`["${{ vars.token }}", "${{ fromJSON('x') }}"]`: {Marked: true, Private: true},
+		`["${{ fromJSON(vars.region) }}"]`:              {Private: true},
+	} {
+		var raw any
+		if err := json.Unmarshal([]byte(v), &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, read, err := mustValue(t, raw).EvalRead(scope)
+		if read != want {
+			t.Errorf("%s = %v, %v, read %+v; want %+v", v, got, err, read, want)
+		}
+	}
+}
+
 // A Value's templates are one group. Each has the language's limits on
 // what it builds, 8 MiB, and the work it does, 32 MiB, and together they
 // share Meridian's budget for a group, 64 MiB and 256 MiB.

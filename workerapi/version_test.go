@@ -30,8 +30,9 @@ var since = map[string]int{
 
 	"RunValues.format": 1, "RunValues.inputs": 1, "RunValues.env": 1, "RunValues.org": 1,
 	"RunValues.vars": 1, "RunValues.remote": 1, "RunValues.sessions": 1,
-	"RunValues.private": 1, "RunValues.secrets": 1,
-	"JobResult.outcome": 1, "JobResult.outputs": 1, "JobResult.steps": 1,
+	"RunValues.private": 1, "RunValues.secrets": 1, "RunValues.derived": 1,
+	"JobResult.outcome": 1, "JobResult.outputs": 1, "JobResult.steps": 1, "JobResult.needsFailed": 1, "JobResult.private": 1, "JobResult.cancelled": 1,
+	"JobResult.secrets": 1, "JobResult.secretSteps": 1, "JobResult.derived": 1, "JobResult.derivedSteps": 1,
 
 	"Control.version": 1, "Control.cancel": 1, "Control.reason": 1, "Control.graceSeconds": 1,
 	"Control.anyJobFailed": 1,
@@ -45,7 +46,9 @@ var since = map[string]int{
 	"LogAck.length": 1, "LogAck.ended": 1,
 
 	"Complete.seq": 1, "Complete.outcome": 1, "Complete.reason": 1, "Complete.problem": 1,
-	"Complete.outputs": 1, "Complete.diagnostics": 1,
+	"Complete.outputs": 1, "Complete.privateOutputs": 1, "Complete.diagnostics": 1,
+	"Complete.secretOutputs": 1, "Complete.stepOutputs": 1, "Complete.secretStepOutputs": 1,
+	"Complete.derivedOutputs": 1, "Complete.derivedStepOutputs": 1,
 }
 
 // opaque are the types in bodies whose encoding isn't the API's to

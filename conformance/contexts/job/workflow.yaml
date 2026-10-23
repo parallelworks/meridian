@@ -1,0 +1,10 @@
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux, mac]
+    env:
+      KEY: ${{ job.key }}
+    steps:
+      - run: ${{ job.name }} ${{ job.key }} ${{ job.attempt }} ${{ job.group }} ${{ job.member }} ${{ env.KEY }}
+      - run: ${{ job.missing == null }} ${{ job.attempt + 1 }}

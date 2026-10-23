@@ -1,0 +1,12 @@
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux, mac]
+        cfg:
+          - {cores: 4}
+    runs-on:
+      execution-group: ${{ matrix.os }}-pool
+    if: ${{ matrix.os != 'mac' }}
+    steps:
+      - run: ${{ matrix.os }} ${{ matrix.cfg.cores }} ${{ matrix.cfg }}

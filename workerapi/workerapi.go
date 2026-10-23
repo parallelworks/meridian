@@ -303,7 +303,10 @@ type Control struct {
 	GraceSeconds int64       `json:"graceSeconds,omitzero"`
 	// AnyJobFailed says that another job of the run failed: the worker
 	// stops each step whose early-cancel: is any-job-failed, as Cancel
-	// stops a step.
+	// stops a step. The step ends cancelled, which cancels the rest of its
+	// job, as format 1 has it: a later step runs only if it outlives a
+	// cancel (plan.ReadyStep.OutlivesCancel), cancelled() is true, and the
+	// job ends cancelled unless a step of it failed.
 	AnyJobFailed bool `json:"anyJobFailed,omitzero"`
 }
 
@@ -323,14 +326,17 @@ type Event struct {
 	// Finished is set when the step finished, and unset when it started.
 	Finished bool `json:"finished,omitzero"`
 	// Step is the step's index in its job, from 0, and Try its retry: 0
-	// for its first run. Cleanup is set for the step's cleanup: command.
+	// for its first run. Cleanup is set for the step's cleanup: command,
+	// whose outputs are the job's (plan.StepResult.CleanupOutputs).
 	Step    int  `json:"step"`
 	Try     int  `json:"try,omitzero"`
 	Cleanup bool `json:"cleanup,omitzero"`
 	// Outcome, ExitCode, Outputs and Diagnostics are a finished event's:
 	// the step's outcome as its job counts it; its command's exit status,
 	// or -1 if it has none, as for a command a signal ended or a uses:
-	// step; what it wrote to $OUTPUTS, masked; and Step's problems with it.
+	// step; what it wrote to $OUTPUTS, masked as its logs are, for
+	// showing, with a secret's text in it masked and the rest as written
+	// (Complete.StepOutputs has them unmasked); and Step's problems with it.
 	Outcome     plan.Outcome         `json:"outcome,omitempty"`
 	ExitCode    int                  `json:"exitCode,omitzero"`
 	Outputs     map[string]string    `json:"outputs,omitempty"`
@@ -370,8 +376,27 @@ type Complete struct {
 	// Code is the reason placement compares, so a job two members fail for
 	// the same reason fails. It is nil otherwise.
 	Problem *problem.Problem `json:"problem,omitempty"`
-	// Outputs are the job's outputs, as End gave them.
-	Outputs map[string]string `json:"outputs,omitempty"`
+	// Outputs are the job's outputs, as End gave them, none of them
+	// masked, and PrivateOutputs names those that are private
+	// (plan.EndResult.Private), whose values the coordinator keeps only in
+	// the run's secret record, and SecretOutputs those of them that hold a
+	// secret (plan.EndResult.Secrets).
+	Outputs        map[string]string `json:"outputs,omitempty"`
+	PrivateOutputs []string          `json:"privateOutputs,omitempty"`
+	SecretOutputs  []string          `json:"secretOutputs,omitempty"`
+	// DerivedOutputs names those of SecretOutputs that hold only what was
+	// made from a secret (plan.EndResult.Derived), and
+	// DerivedStepOutputs those of SecretStepOutputs (plan.EndResult.DerivedSteps).
+	DerivedOutputs     []string            `json:"derivedOutputs,omitempty"`
+	DerivedStepOutputs map[string][]string `json:"derivedStepOutputs,omitempty"`
+	// StepOutputs are the outputs of the job's steps that have ids, by id,
+	// as they wrote them, none of them masked (plan.JobResult.Steps), and
+	// SecretStepOutputs names, by id, those that hold a secret
+	// (plan.EndResult.SecretSteps), whose values the coordinator keeps
+	// only in the run's secret record. An Event's outputs are masked for
+	// showing; these are what the jobs that need the job read.
+	StepOutputs       map[string]map[string]string `json:"stepOutputs,omitempty"`
+	SecretStepOutputs map[string][]string          `json:"secretStepOutputs,omitempty"`
 	// Diagnostics are End's problems with the job's outputs.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
 }

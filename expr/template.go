@@ -194,8 +194,27 @@ func (t *Template) IsText() bool {
 // but not the text around it. The limits are the template's own: a template
 // it reads, such as an input's default, has its own.
 func (t *Template) Eval(scope Scope) (any, error) {
+	return t.eval(scope, nil)
+}
+
+// eval evaluates the template, and calls part, if it isn't nil, with the
+// value of each of its expressions and what it read of the values scope
+// marks, which scope's budget notes.
+func (t *Template) eval(scope Scope, part func(v any, read Read)) (any, error) {
+	if part != nil {
+		scope = scope.Budgeted()
+	}
 	if len(t.parts) == 1 && t.parts[0].expr != nil {
+		var outer Read
+		if part != nil {
+			outer = scope.budget.noting()
+		}
 		v, err := t.parts[0].expr.Eval(scope)
+		if part != nil {
+			if read := scope.budget.done(outer); err == nil {
+				part(v, read)
+			}
+		}
 		return v, offsetError(err, t.parts[0].at)
 	}
 	if t.IsText() {
@@ -213,7 +232,16 @@ func (t *Template) Eval(scope Scope) (any, error) {
 			b.WriteString(p.text)
 			continue
 		}
+		var outer Read
+		if part != nil {
+			outer = ev.scope.budget.noting()
+		}
 		v, err := ev.eval(p.expr.root)
+		if part != nil {
+			if read := ev.scope.budget.done(outer); err == nil {
+				part(v, read)
+			}
+		}
 		if err != nil {
 			return nil, offsetError(err, p.at)
 		}
@@ -234,10 +262,8 @@ func (t *Template) Eval(scope Scope) (any, error) {
 // what it gives too. A failed evaluation is marked as well, so that what
 // reports the error can leave out the values it shows.
 func (t *Template) EvalMarked(scope Scope) (v any, marked bool, err error) {
-	scope = scope.Budgeted()
-	outer := scope.budget.noting()
-	v, err = t.Eval(scope)
-	return v, scope.budget.done(outer), err
+	v, read, err := t.EvalRead(scope)
+	return v, read.Marked, err
 }
 
 // offsetError moves an error's offset from its expression to the template.

@@ -1,0 +1,105 @@
+description: >-
+  A matrix that can't be expanded is a problem with the job's strategy, at
+  what is wrong: a key whose values aren't a list, an include or exclude
+  entry that isn't a mapping, a matrix with no combination, or one with more
+  than the limit whoever runs the workflow sets, which isn't part of the
+  format.
+source: Meridian
+cases:
+  - description: A key's values must be a list.
+    contexts:
+      inputs: {hosts: "a,b"}
+    strategy:
+      matrix:
+        host: ${{ inputs.hosts }}
+    error: matrix_not_list
+    path: /strategy/matrix/host
+  - description: Include and exclude must be lists.
+    contexts:
+      inputs: {extra: {os: linux}}
+    strategy:
+      matrix:
+        os: [linux]
+        include: ${{ inputs.extra }}
+    error: matrix_not_list
+    path: /strategy/matrix/include
+  - description: Each include and exclude entry must be a mapping.
+    contexts:
+      inputs: {skip: [linux]}
+    strategy:
+      matrix:
+        os: [linux, mac]
+        exclude: ${{ inputs.skip }}
+    error: matrix_entry_not_mapping
+    path: /strategy/matrix/exclude/0
+  - description: A key with no values gives no combination.
+    contexts:
+      inputs: {hosts: []}
+    strategy:
+      matrix:
+        host: ${{ inputs.hosts }}
+        os: [linux]
+    error: matrix_empty
+    path: /strategy/matrix
+  - description: Exclude entries that remove every combination leave none.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        exclude:
+          - {os: linux}
+          - {os: mac}
+    error: matrix_empty
+    path: /strategy/matrix
+  - description: A matrix with no key and no include entry has no combination.
+    strategy:
+      matrix: {}
+    error: matrix_empty
+    path: /strategy/matrix
+  - description: A matrix can have as many instances as the limit.
+    limit: 4
+    strategy:
+      matrix:
+        a: [1, 2]
+        b: [1, 2]
+    instances:
+      - {a: 1, b: 1}
+      - {a: 1, b: 2}
+      - {a: 2, b: 1}
+      - {a: 2, b: 2}
+  - description: A matrix can't have more instances than the limit.
+    limit: 3
+    strategy:
+      matrix:
+        a: [1, 2]
+        b: [1, 2]
+    error: matrix_too_large
+    path: /strategy/matrix
+  - description: Include entries that are combinations of their own count toward the limit.
+    limit: 2
+    strategy:
+      matrix:
+        a: [1, 2]
+        include:
+          - {a: 3}
+    error: matrix_too_large
+    path: /strategy/matrix
+  - description: Excluded combinations don't count toward the limit.
+    limit: 2
+    strategy:
+      matrix:
+        a: [1, 2, 3]
+        b: [1, 2]
+        exclude:
+          - {a: 1}
+          - {a: 2, b: 1}
+          - {a: 3, b: 2}
+    instances:
+      - {a: 2, b: 2}
+      - {a: 3, b: 1}
+  - description: The default limit is 256 instances.
+    strategy:
+      matrix:
+        a: ${{ 0 range 16 }}
+        b: ${{ 0 range 17 }}
+    error: matrix_too_large
+    path: /strategy/matrix

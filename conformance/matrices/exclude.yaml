@@ -1,0 +1,83 @@
+description: >-
+  Each exclude entry removes the combinations that have all of its values.
+  An entry with a key the matrix doesn't have removes nothing, and an entry
+  with no keys removes every combination. A value matches one that is equal
+  to it, or a string and a number or a boolean whose text it is, as in
+  ACTIVATE.
+source: ACTIVATE's matrix expansion, and Meridian
+cases:
+  - description: An entry of one key removes each combination with its value.
+    strategy:
+      matrix:
+        os: [linux, mac, windows]
+        arch: [x64, arm]
+        exclude:
+          - {os: windows}
+    instances:
+      - {arch: x64, os: linux}
+      - {arch: x64, os: mac}
+      - {arch: arm, os: linux}
+      - {arch: arm, os: mac}
+  - description: An entry of more than one key removes only the combinations with all its values.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        arch: [x64, arm]
+        exclude:
+          - {os: mac, arch: x64}
+    instances:
+      - {arch: x64, os: linux}
+      - {arch: arm, os: linux}
+      - {arch: arm, os: mac}
+  - description: An entry with a key the matrix doesn't have removes nothing.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        exclude:
+          - {os: mac, gpu: true}
+    instances:
+      - {os: linux}
+      - {os: mac}
+  - description: >-
+      A string matches a number or a boolean whose text it is, and the
+      other way round.
+    strategy:
+      matrix:
+        n: [1, 2, 3]
+        debug: [true, false]
+        exclude:
+          - {n: "1"}
+          - {n: 2, debug: "false"}
+    instances:
+      - {debug: true, n: 2}
+      - {debug: true, n: 3}
+      - {debug: false, n: 3}
+  - description: A list or a mapping matches one whose items match.
+    strategy:
+      matrix:
+        target:
+          - {host: a}
+          - {host: b}
+        exclude:
+          - {target: {host: b}}
+    instances:
+      - {target: {host: a}}
+  - description: Null matches only null.
+    strategy:
+      matrix:
+        v: [null, "", 0]
+        exclude:
+          - {v: null}
+    instances:
+      - {v: ""}
+      - {v: 0}
+  - description: An entry with no keys removes every combination.
+    strategy:
+      matrix:
+        os: [linux, mac]
+        exclude:
+          - {}
+        include:
+          - {os: bsd}
+    instances:
+      - {os: bsd}

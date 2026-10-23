@@ -12,8 +12,10 @@
 // contexts the expression can read. An expression that reads a context the
 // scope doesn't have yet returns an *UnknownError, so that it can be
 // evaluated later, when the context is known. A scope can mark values in
-// its contexts, such as secrets, and Template.EvalMarked says whether an
-// evaluation read one, so that what it gives can be masked too.
+// its contexts, in two sets: Marked, such as secrets, and Private, such as
+// variables. Template.EvalMarked says whether an evaluation read a value of
+// the first, so that what it gives can be masked too, and
+// Template.EvalRead whether it read one of each.
 //
 // Only expressions written in the workflow are evaluated. A value that an
 // expression reads, such as an input's value or a job's output, is never

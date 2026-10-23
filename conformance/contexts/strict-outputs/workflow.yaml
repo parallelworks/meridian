@@ -1,0 +1,31 @@
+jobs:
+  build:
+    steps:
+      - run: make >> $OUTPUTS
+  test:
+    needs: [build]
+    steps:
+      - run: rm -rf ${{ needs.build.outputs.dir }}/*
+      - run: echo [${{ needs.build.outputs.dir }}]
+        if: always
+      - run: echo checked
+        if: ${{ always() && needs.build.outputs.dir == '' }}
+  place:
+    needs: [build]
+    runs-on:
+      execution-group: ${{ needs.build.outputs.group }}
+    steps:
+      - run: hostname
+  lenient:
+    needs: [build]
+    if: always
+    runs-on:
+      execution-group: ${{ needs.build.outputs.group }}-pool
+    steps:
+      - run: echo [${{ needs.build.outputs.dir }}]
+  report:
+    steps:
+      - id: a
+        run: "true"
+    outputs:
+      dir: ${{ steps.a.outputs.dir }}

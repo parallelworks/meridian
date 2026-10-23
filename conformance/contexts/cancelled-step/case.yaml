@@ -1,0 +1,21 @@
+description: >-
+  A step that ended cancelled, as early-cancel: any-job-failed stops one
+  when another job fails, cancels the rest of its job, as format 1 has it:
+  cancelled() is true, a later step runs only if its if: holds once its job
+  is being cancelled, and the job's outputs read an output that no step
+  wrote as "", as they do once a step has failed.
+source: ACTIVATE's script submitter tutorial and executor, and Meridian
+jobs:
+  stream_output:
+    steps:
+      - {outcome: cancelled}
+      - {outcome: skipped}
+      - {outcome: success}
+      - {outcome: success}
+expect:
+  skipped:
+    - /jobs/stream_output/steps/1
+  values:
+    /jobs/stream_output/steps/2/run: echo collected true
+    /jobs/stream_output/steps/3/run: echo cancelled
+    /jobs/stream_output/outputs/lines: ""

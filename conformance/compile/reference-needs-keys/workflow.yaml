@@ -10,3 +10,4 @@ jobs:
       - run: echo ${{ needs.build.steps.nope.outputs.bin }}
       - run: echo ${{ needs.build.bogus }}
       - run: echo ${{ needs.buld.outputs.bin }}
+      - run: echo ${{ needs.build }} ${{ needs.build.outputs }} ${{ needs.build.steps.compile.result }} ${{ needs.nope.bogus }}

@@ -351,7 +351,7 @@
                   "uniqueItems": true
                 },
                 "max-retries": {
-                  "description": "How many times the job may run again. Defaults to 10.",
+                  "description": "How many times the job may run again. Defaults to 3.",
                   "anyOf": [
                     {
                       "type": "integer",
@@ -364,7 +364,7 @@
                   ]
                 },
                 "interval": {
-                  "description": "How long to wait before running the job again, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 5s.",
+                  "description": "How long to wait before running the job again the first time, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Each time after the first waits twice as long as the one before, up to an hour. Defaults to 1m.",
                   "type": "string",
                   "anyOf": [
                     {
