@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -525,6 +526,122 @@ func TestSourcesRunNoHooks(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Errorf("the hooks directory has %d entries, %v", len(entries), err)
 	}
+}
+
+// TestSourcesRunNoMaintenance checks that git starts no automatic
+// maintenance on a copy, which would go on writing into it after Resolve
+// returned, even when the user's configuration asks for it after every
+// fetch that leaves two packs: by the geometric strategy, Git 2.54's
+// default, and, for a git without it, by git gc --auto's limit on packs.
+func TestSourcesRunNoMaintenance(t *testing.T) {
+	origins, s := newOrigins(t)
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, []byte("[maintenance]\n\tstrategy = geometric\n[gc]\n\tautoPackLimit = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	o := newOrigin(t, origins, "github.com", "acme/flows")
+	first := o.commit(map[string]string{"workflow.yaml": "first\n"})
+	o.commit(map[string]string{"workflow.yaml": "second\n"})
+	repo := filepath.Join(s.dir, "github.com", "acme", "flows.git")
+	packs := func() []string {
+		t.Helper()
+		packs, err := filepath.Glob(filepath.Join(repo, "objects", "pack", "*.pack"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return packs
+	}
+	if _, err := s.Resolve(t.Context(), "github/acme/flows@"+first); err != nil {
+		t.Fatal(err)
+	}
+	// A fetch keeps the pack it receives, or none in a git that unpacks a
+	// small one.
+	kept := len(packs())
+	if _, err := s.Resolve(t.Context(), "github/acme/flows@main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing still runs on the copy, or writes into it.
+	before := treeState(t, repo)
+	for end := time.Now().Add(500 * time.Millisecond); time.Now().Before(end); {
+		if procs := gitProcesses(repo); len(procs) > 0 {
+			t.Fatalf("git still runs on the copy after Resolve returned: %q", procs)
+		}
+		if changed := changedPaths(before, treeState(t, repo)); len(changed) > 0 {
+			t.Fatalf("the copy changed after Resolve returned: %q", changed)
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // the test is that nothing happens for a while, so there is nothing to wait for
+	}
+	// Nor did maintenance run before Resolve returned: the copy keeps each
+	// pack its fetches made, which maintenance would have merged.
+	if got := packs(); len(got) != 2*kept {
+		t.Errorf("the copy has packs %q, want the %d its fetches made", got, 2*kept)
+	}
+	for _, name := range []string{"gc.pid", "gc.log", filepath.Join("objects", "maintenance.lock")} {
+		if _, err := os.Lstat(filepath.Join(repo, name)); err == nil {
+			t.Errorf("the copy has %s, which maintenance leaves", name)
+		}
+	}
+}
+
+// treeState returns each file and directory under dir, with its size and
+// the time it last changed.
+func treeState(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	state := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		state[path] = fmt.Sprint(info.Mode(), info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("reading %s, which changed meanwhile: %v", dir, err)
+	}
+	return state
+}
+
+// changedPaths returns the paths that before and after don't have alike.
+func changedPaths(before, after map[string]string) []string {
+	var changed []string
+	for path, state := range after {
+		if before[path] != state {
+			changed = append(changed, path)
+		}
+	}
+	for path := range before {
+		if _, ok := after[path]; !ok {
+			changed = append(changed, path)
+		}
+	}
+	slices.Sort(changed)
+	return changed
+}
+
+// gitProcesses returns the processes, by ID and command line, whose
+// environment names repo as git's GIT_DIR, as git does for every command
+// it starts, where /proc lists them: none elsewhere.
+func gitProcesses(repo string) []string {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var procs []string
+	for _, e := range entries {
+		env, err := os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
+		if err != nil || !slices.Contains(strings.Split(string(env), "\x00"), "GIT_DIR="+repo) {
+			continue
+		}
+		cmdline, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		procs = append(procs, e.Name()+": "+strings.Join(strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00"), " "))
+	}
+	return procs
 }
 
 func TestSourcesGitMissing(t *testing.T) {
