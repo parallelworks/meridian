@@ -1625,7 +1625,11 @@ secret record ([Run data](#run-data)).
   compiler warns when a plain variable's name, such as `HF_TOKEN`, looks
   like a secret's.
 - **What is masked is text.** The masker is given strings: a secret's own
-  text, however short, unless it is empty, which is never masked; and the
+  text, however short, unless it is empty, which is never masked, and that
+  of a secret that is a number or a boolean, as a password submitted as
+  one is, as an expression writes it, `8` or `true`, so that a password
+  `true` masks every `true` in the logs, as never showing a secret is the
+  rule; and the
   text a template made from one, and that each `${{ }}` in it that read
   one gave, so that a field of a structured secret, such as
   `${{ fromJSON(vars.creds).token }}`, is masked wherever a command prints

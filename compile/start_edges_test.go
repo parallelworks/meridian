@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -397,5 +398,45 @@ a: {type: number, default: '${{ inputs.pw }}'}
 x: {type: string, optional: true, ignore: '${{ toJSON(inputs.a) == ''"7"'' }}'}`)
 	if _, res, diags := started(t, src, map[string]any{"pw": "p", "a": "7"}, testVariables{}); res == nil {
 		t.Errorf("the run didn't start: %v", diags)
+	}
+}
+
+// A password submitted as a number or a boolean, which format 1 reads as it
+// was submitted, is masked as its text, as an expression writes it: in
+// what a step prints of it, and of toJSON(inputs), whatever its kind, a
+// row's password among them, and the plan never holds it.
+func TestPasswordOfEachKindMasked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+		want      string
+	}{
+		"a whole number":  {"pw: {type: password}", map[string]any{"pw": 98765432}, "98765432"},
+		"a boolean":       {"pw: {type: password}", map[string]any{"pw": true}, "true"},
+		"a fraction":      {"pw: {type: password}", map[string]any{"pw": 3.14159265}, "3.14159265"},
+		"a whole float":   {"pw: {type: password}", map[string]any{"pw": 86420.0}, "86420"},
+		"a row's number":  {"l: {type: list, template: {p: {type: password}}}", map[string]any{"l": []any{map[string]any{"p": 55667788}}}, "55667788"},
+		"text":            {"pw: {type: password}", map[string]any{"pw": "98765432"}, "98765432"},
+		"a group's value": {"g: {type: group, items: {pw: {type: password}}}", map[string]any{"g": map[string]any{"pw": 24681357}}, "24681357"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, res, diags := started(t, workflow(tc.defs), tc.submitted, testVariables{})
+			if res == nil {
+				t.Fatal(diags)
+			}
+			data, err := plan.Encode(c.Plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), tc.want) {
+				t.Errorf("the plan holds the password: %s", data)
+			}
+			masker := plan.NewMasker(res.Run.Masked()...)
+			for _, printed := range []string{expr.Text(res.Run.Inputs.Get()), "pw=" + tc.want} {
+				if got := masker.Mask(printed); strings.Contains(got, tc.want) {
+					t.Errorf("%q is masked as %q", printed, got)
+				}
+			}
+		})
 	}
 }
