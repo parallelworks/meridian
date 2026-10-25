@@ -3,10 +3,14 @@ package compile
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -84,6 +88,58 @@ func (c *compiler) checkInputNames(fields []*field) {
 	}
 }
 
+// checkDefaultRows warns about each key of fields' default rows, those of
+// each list among them and among its rows' inputs, that isn't one of its
+// rows' inputs, where the workflow writes it: once, as a run doesn't
+// report it when a form sends the default rows back (knownInputs.defaulted).
+// A row's inputs are those of every list and repeated step at its list's
+// path, as a run checks them, where inputs share a path, as a wizard
+// step's can. A list among a row's inputs is named by its path with
+// [index] for the row's, as input_looks_secret names one.
+func (c *compiler) checkDefaultRows(fields []*field) {
+	known := knownInputsOf(fields)
+	for _, f := range fields {
+		defs, loc := f.rowInputs()
+		if defs == nil {
+			continue
+		}
+		if rows, ok := f.def["default"].([]any); ok {
+			known := known[jsonptr.Format(f.path[:len(f.path)-1])].rowsOf(c.inputs, f.key)
+			for i, row := range rows {
+				if m, ok := row.(map[string]any); ok {
+					c.checkDefaultRow(f, m, appendPath(f.loc, "default", strconv.Itoa(i)), nil, known)
+				}
+			}
+		}
+		c.checkDefaultRows(c.inputs.collect(defs, loc, appendPath(f.path, "[index]"), nil))
+	}
+}
+
+// checkDefaultRow warns about each key of values, a default row of f's, or
+// a group's mapping in one, at loc in the workflow and at rel in the row,
+// that isn't one of the inputs known holds there.
+func (c *compiler) checkDefaultRow(f *field, values map[string]any, loc, rel []string, known map[string]*knownInputs) {
+	inputs := known[jsonptr.Format(rel)]
+	if inputs == nil {
+		inputs = &knownInputs{}
+	}
+	for key, v := range jsonvalue.Sorted(values) {
+		in, ok := inputs.byKey[key]
+		if !ok {
+			if inputs.names == nil {
+				inputs.names = slices.Sorted(maps.Keys(inputs.byKey))
+			}
+			s, ok := hint.Suggest(key, inputs.names)
+			params := problems.Params{"input": f.label(), "key": strings.Join(appendPath(rel, key), ".")}
+			c.reportAt(problems.DefaultRowUnknownInput, appendPath(loc, key), problems.WithSuggestion(params, strings.Join(appendPath(rel, s), "."), ok))
+			continue
+		}
+		if child, ok := v.(map[string]any); ok && in.container && !in.flatten {
+			c.checkDefaultRow(f, child, appendPath(loc, key), appendPath(rel, key), known)
+		}
+	}
+}
+
 // secretWords are the words that make a name look like a secret's, and
 // secretPairs the pairs of words in a row that do, as in api_key.
 var (
@@ -105,6 +161,56 @@ func looksSecret(name string) bool {
 		}
 	}
 	return false
+}
+
+// secretSpellings are the secretWords long enough that a word a letter
+// from one, as pasword is from password, is most likely it misspelled. A
+// shorter one's neighbours are common words, as taken and tokens are
+// token's.
+var secretSpellings = []string{"credential", "passphrase", "passwd", "password", "secret"}
+
+// namesSecret reports whether name, of a value submitted for an input the
+// workflow doesn't define, can be a secret's: whether it looks like one
+// (looksSecret), or one of its words is a letter from one of
+// secretSpellings (oneEdit), as a misspelling such as pasword is. It errs
+// toward a secret, as passed, a letter from passwd, is taken for one: a
+// value is kept as a secret, and still given to the run.
+func namesSecret(name string) bool {
+	if looksSecret(name) {
+		return true
+	}
+	for _, w := range nameWords(name) {
+		if slices.ContainsFunc(secretSpellings, func(s string) bool { return oneEdit(w, s) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// oneEdit reports whether a and b differ by one letter: one more, one
+// fewer, one changed, or two next to each other swapped.
+func oneEdit(a, b string) bool {
+	x, y := []rune(a), []rune(b)
+	if len(x) < len(y) {
+		x, y = y, x
+	}
+	if len(x)-len(y) > 1 {
+		return false
+	}
+	i := 0
+	for i < len(y) && x[i] == y[i] {
+		i++
+	}
+	if i == len(y) {
+		return len(x) == len(y)+1
+	}
+	if len(x) > len(y) {
+		return string(x[i+1:]) == string(y[i:])
+	}
+	if string(x[i+1:]) == string(y[i+1:]) {
+		return true
+	}
+	return i+1 < len(x) && x[i] == y[i+1] && x[i+1] == y[i] && string(x[i+2:]) == string(y[i+2:])
 }
 
 // nameWords splits a name into its words, in lower case. A word ends at

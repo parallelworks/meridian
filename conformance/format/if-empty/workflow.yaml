@@ -1,0 +1,6 @@
+jobs:
+  main:
+    if:
+    steps:
+      - run: echo a
+        if:

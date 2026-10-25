@@ -1,0 +1,13 @@
+description: >-
+  A job's cleanup:, a list of steps that ACTIVATE's ingress runs once the
+  job's steps have run, isn't in format 1's schema, so it is an unknown key,
+  and is ignored. Whether format 1 gains it is a decision for later
+  (docs/design.md, The workflow format).
+source: ACTIVATE's ingress, and Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_key
+      path: /jobs/main/cleanup
+      line: 5
+      column: 5

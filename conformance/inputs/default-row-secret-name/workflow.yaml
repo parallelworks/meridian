@@ -1,0 +1,15 @@
+on:
+  execute:
+    inputs:
+      models:
+        type: list
+        template:
+          name:
+            type: string
+        default:
+          - name: small
+            api_token: none
+jobs:
+  main:
+    steps:
+      - run: echo ok

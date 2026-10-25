@@ -52,6 +52,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 			Steps: []plan.Step{{
 				ID:               "greet",
 				Name:             mustValue(t, "greet on ${{ matrix.os }}"),
+				If:               plan.Literal(nil),
 				Run:              mustValue(t, "echo ${{ env.GREETING }} on ${{ matrix.os }}"),
 				WorkingDirectory: plan.Literal(nil),
 				With:             mustValue(t, map[string]any{"count": int64(2), "list": []any{"a", "${{ inputs.n }}"}}),
@@ -176,6 +177,11 @@ func TestEncodeDecode(t *testing.T) {
 	}
 	if wd := back.Jobs[0].Steps[0].WorkingDirectory; wd.IsZero() {
 		t.Error("working-directory: null was lost")
+	}
+	// An if: written empty is null, which is false, where one left out is
+	// success().
+	if cond := back.Jobs[0].Steps[0].If; cond.IsZero() {
+		t.Error("if: null was lost")
 	}
 	w := back.Warnings[0]
 	if w.Severity() != problems.Warning || w.Message() != `The key "x" isn't known here, so it's ignored.` || w.Position() != (problems.Position{Line: 3, Column: 9}) {

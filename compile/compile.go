@@ -255,6 +255,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 	}
 	c.checkDefinitions(slices.Clip(definitionsPath), lookup(w, definitionsPath))
 	c.checkInputNames(c.inputs.fields)
+	c.checkDefaultRows(c.inputs.fields)
 	c.checkInputDepths(r)
 	return r
 }
@@ -341,7 +342,8 @@ func (c *compiler) values(loc []string, ph phase, job *jobInfo) map[string]plan.
 
 // condition compiles an if:. Written without ${{ }}, it is an expression
 // when it has an operator, a dot, parentheses or brackets; a lone word,
-// such as always or true, stays a word.
+// such as always or true, stays a word. Written empty, it is null, which
+// the plan keeps, and which is false.
 func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {

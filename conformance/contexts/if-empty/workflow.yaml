@@ -1,0 +1,20 @@
+jobs:
+  empty:
+    if:
+    steps:
+      - run: echo empty
+  quoted:
+    if: ''
+    steps:
+      - run: echo quoted
+  main:
+    steps:
+      - run: echo a
+        if:
+        cleanup: echo cleaning a
+      - run: echo b
+        if: ''
+      - run: echo c
+        if: ${{ null }}
+      - run: echo d
+        cleanup: echo cleaning d

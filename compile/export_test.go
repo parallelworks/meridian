@@ -6,6 +6,9 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
+// NamesSecret is namesSecret, for TestSecretNames.
+var NamesSecret = namesSecret
+
 // FormValues returns what a launch form submits for a run, given the
 // values in submitted: every input's value, with each default and each
 // form's text it can evaluate evaluated, as ACTIVATE's form evaluates them,

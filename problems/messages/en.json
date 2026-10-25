@@ -55,6 +55,7 @@
   "input_not_text": "The input \"{input}\" takes text, not {value}.",
   "input_looks_secret": "The input \"{input}\" looks like it holds a secret, but it isn't a password input, so a value given for it is kept with the run, and isn't masked in logs. If it holds a secret, make it a password input.",
   "input_too_deep": "The value of the input \"{input}\" nests too deeply to be kept with the run, which can nest at most {max} levels.",
+  "default_row_unknown_input": "A default row of the list \"{input}\" has \"{key}\", which isn't one of its rows' inputs, so the row keeps it as it is.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
 
   "duplicate_step_id": "Steps {first} and {second} of the job \"{job}\" both have the id \"{id}\".",
   "needs_not_known": "A job's needs must be known when the run is created, but these read {name}, which isn't known until the run is underway.",
@@ -76,7 +77,7 @@
   "needs_read_whole": "Format 1 reads a needed job only by its result or an output by name, as needs.{job}.outputs.<name>, so {text} reads as its own text.",
   "step_not_earlier": "The step \"{id}\" doesn't run before this one, so its outputs aren't known here.",
   "undefined_step": "No earlier step of the job \"{job}\" has the id \"{id}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
-  "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
+  "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output fails the job when its steps succeed, and is empty when one fails or is cancelled.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this reads as its own text, steps.{id}.{key}.",
   "output_steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this output reads it as its own text, steps.{id}.{key}.",
   "cleanup_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so what this cleanup: reads of it is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",

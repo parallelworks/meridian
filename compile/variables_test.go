@@ -373,4 +373,44 @@ func TestSecretNames(t *testing.T) {
 	if !slices.Equal(warned, looks) {
 		t.Errorf("warned about %q, want %q", warned, looks)
 	}
+	// A value submitted for an input the workflow doesn't define is taken
+	// for a password by the same names, and by a word a letter from one of
+	// the longer words, as a misspelling is, but not from token, whose
+	// neighbours are common words.
+	misspelled := []string{"pasword", "passwrod", "old_passowrd", "pasphrase", "secrte", "credentail", "passed"}
+	for _, name := range slices.Concat(looks, misspelled) {
+		if !compile.NamesSecret(name) {
+			t.Errorf("%s isn't taken for a secret's name", name)
+		}
+	}
+	for _, name := range slices.Concat(doesnt, []string{"taken", "tokens", "maxTokens", "toke", "pass", "credit"}) {
+		if compile.NamesSecret(name) {
+			t.Errorf("%s is taken for a secret's name", name)
+		}
+	}
+}
+
+// A key of a list's default rows is checked against the inputs a row of
+// it has: those of every list at its path, where a list and a wizard
+// step's list share one, so a key the other's rows have isn't reported.
+// A list among a row's inputs is named by its path with [index] for the
+// row's, as input_looks_secret names a row's input.
+func TestDefaultRowKeys(t *testing.T) {
+	src := inputs(
+		"$meta: {wizard: {mode: wizard}}",
+		"l: {type: list, template: {a: {type: string, optional: true}}, default: [{a: x, b: y, c: z}]}",
+		"s: {type: step, title: S, options: {l: {type: list, template: {b: {type: string, optional: true}}}}}",
+		"m: {type: list, template: {n: {type: list, optional: true, template: {q: {type: string}}, default: [{q: x, z: y}]}}}",
+	)
+	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
+	var got []string
+	for _, d := range diags {
+		if d.Code == problems.DefaultRowUnknownInput.Code() {
+			got = append(got, fmt.Sprintf("%s %v %v", d.Path(), d.Params["input"], d.Params["key"]))
+		}
+	}
+	want := []string{"/on/execute/inputs/l/default/0/c l c", "/on/execute/inputs/m/template/n/default/0/z m.[index].n z"}
+	if !slices.Equal(got, want) {
+		t.Errorf("default rows' keys %q, want %q", got, want)
+	}
 }

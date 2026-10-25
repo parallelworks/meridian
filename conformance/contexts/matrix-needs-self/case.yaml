@@ -1,0 +1,30 @@
+description: >-
+  In a matrix instance's own steps and outputs, needs.<its job> is the
+  instance itself: its outputs are those the instance's own steps wrote,
+  whatever the other instances wrote, so the first step's if: reads PART
+  as "", which nothing of its own wrote yet, and the second step and the
+  outputs read the instance's PART. The jobs that need the matrix job read
+  the outputs of the instance with the highest index. Format 1 read the
+  outputs that the instances that had finished before it wrote, merged,
+  so that what an instance read depended on timing; reading its own is a
+  bug fix (docs/design.md, Bug fixes to format 1).
+source: ACTIVATE's executor, and Meridian
+jobs:
+  shard:
+    index: 0
+    matrix: {part: a}
+    steps:
+      - {outcome: success, outputs: {PART: a}}
+      - {outcome: success}
+  report:
+    needs:
+      shard: {result: success, outputs: {PART: b, part: b}}
+    steps:
+      - {outcome: success}
+expect:
+  values:
+    /jobs/shard/steps/0/run: echo PART=a >> $OUTPUTS
+    /jobs/shard/steps/1/run: echo a
+    /jobs/shard/outputs/part: a
+    /jobs/shard/outputs/PART: a
+    /jobs/report/steps/0/run: echo b

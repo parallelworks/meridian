@@ -1,0 +1,32 @@
+description: >-
+  A job's output that reads a step by an id none of its steps has, as a
+  step's name, which isn't its id, is a warning when the run is created.
+  Once the job's steps succeeded, its outputs: are read strictly, as format
+  1 reads them, so the output fails the job, as one that nothing wrote
+  does, though the step wrote the name to the job's outputs; once a step
+  failed, they are read leniently, and the output is "". Format 1 fails
+  activate-benchmark's run-benchmarks job so.
+source: ACTIVATE's executor, and activate-benchmark's workflow
+jobs:
+  done:
+    steps:
+      - {outcome: success, outputs: {RESULTS_FILE: results.json}}
+  broke:
+    steps:
+      - {outcome: failure}
+expect:
+  diagnostics:
+    - severity: warning
+      code: output_undefined_step
+      path: /jobs/done/outputs/results_file
+      params: {job: done, id: benchmark}
+    - severity: warning
+      code: output_undefined_step
+      path: /jobs/broke/outputs/results_file
+      params: {job: broke, id: benchmark}
+    - severity: error
+      code: output_not_written
+      path: /jobs/done/outputs/results_file
+      params: {of: step, owner: benchmark, name: RESULTS_FILE}
+  values:
+    /jobs/broke/outputs/results_file: ""

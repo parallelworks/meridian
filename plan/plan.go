@@ -137,7 +137,8 @@ type Job struct {
 	Strategy *Strategy `json:"strategy,omitzero"`
 	// Needs are the jobs this one waits for.
 	Needs []Need `json:"needs,omitempty"`
-	// If is the job's if:. Unset means success().
+	// If is the job's if:. Unset means success(), and null, as an if:
+	// written empty is, is false.
 	If Value `json:"if,omitzero"`
 	// RunsOn is the job's runs-on:, which picks where it runs.
 	RunsOn Value `json:"runsOn,omitzero"`
@@ -181,7 +182,8 @@ type JobRetry struct {
 type Step struct {
 	ID   string `json:"id,omitempty"`
 	Name Value  `json:"name,omitzero"`
-	// If is the step's if:. Unset means success().
+	// If is the step's if:. Unset means success(), and null, as an if:
+	// written empty is, is false.
 	If Value `json:"if,omitzero"`
 	// Run is the command the step runs.
 	Run Value `json:"run,omitzero"`

@@ -143,6 +143,22 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   is ignored. So is a repeated key, whose last value is used, and a second
   YAML document in a file. A name the schema doesn't allow, such as a job's,
   is still an error. A later format can make these warnings errors.
+- **A job's `cleanup:` list.** ACTIVATE's ingress reads one more key that
+  neither its schema nor Meridian's has: a job's `cleanup:`, a list of
+  steps that it appends to the job's, after the copies that run its
+  steps' `cleanup:`s, linked to the job rather than to a step (`.job`).
+  Like those copies, they run once the job's steps have, through its
+  cancellation and without a timeout, with each entry's own `cleanup:`
+  after them, run as such a copy. Unlike them, an entry is a whole step:
+  it keeps its `id`, its `uses:` and `with:`, which a copy drops, and its
+  `retry:`, which a copy ignores, and runs whether or not any of the
+  job's steps ran, where a copy runs only if its step did. Meridian warns
+  of it as an unknown key and ignores it, as it does every key the schema
+  doesn't define, so a workflow that has one runs without its cleanup.
+  None of the 221 known workflows
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)) has one. Whether
+  format 1 gains it as an addition, with ACTIVATE's meaning, or ACTIVATE
+  drops it, is a decision for later.
 
 ### Conformance
 
@@ -166,27 +182,47 @@ fixed, and its case records the fix.
 ### Bug fixes to format 1
 
 Each of these changes what format 1 means where it was plainly a bug, and
-ACTIVATE takes the same fix. Each counts the same workflows: the known
-workflows but Meridian's own copies of them, each file once by the hash of
-its content, 220 files.
+ACTIVATE takes the same fix. Each counts the same workflows, as every
+count of the known workflows in this document does: each YAML file of the
+known repositories that holds `jobs:` and parses to a mapping whose `jobs`
+is a mapping, but for Meridian's own copies of them and the files under
+`.git` and `.github`, counted once by the SHA-256 hash of its content: 221
+files.
 
 - **A matrix job's output** is the instance's with the highest index, not
   the last to finish's. None of the 14 matrix jobs has `outputs:`, and
   nothing reads a matrix job's outputs.
+- **A matrix instance's `needs.<its job>.outputs` are its own**: those the
+  instance's own steps wrote, as a job reads its own outputs, where
+  ACTIVATE read those of the instances of the job that had finished before
+  it, merged, so that what it read depended on timing. The jobs that need
+  the matrix job still read the instance's with the highest index.
+  ACTIVATE takes the same fix by reading the instance's own outputs, as it
+  reads its own steps. The 14 matrix jobs have 24 reads of `needs`, and
+  none names its own job: all 262 reads of a job's own outputs by name,
+  `needs.<its job>.outputs.<name>`, in 66 jobs of 48 workflows, are in
+  jobs without a matrix.
 - **An `if:` whose value is null is false**, as `docs/expressions.md` says
-  conditions go by truthiness, where format 1 ran the job or step. All 7
-  `if:`s that are a bare reference read a boolean input, and none of those
-  inputs is hidden or ignored, so none is null: each has a default but
-  sl_core's `push_to_gh`, which ACTIVATE fills with `false` when it is left
-  out, as Meridian does.
+  conditions go by truthiness, where format 1 ran the job or step. So is
+  an `if:` written empty, which is null: format 1 ran its job or step too,
+  and Meridian refused it as the wrong type. None of the 329 `if:`s is
+  written empty. All 7 that are a bare reference read a boolean input, and
+  none of those inputs is hidden or ignored, so none is null: each has a
+  default but sl_core's `push_to_gh`, which ACTIVATE fills with `false`
+  when it is left out, as Meridian does.
 - **A duration or a count that isn't one is a problem**, where format 1
   ignored a timeout it couldn't read and fell back to a retry's defaults:
   an expression's value for a job's or a step's `timeout:`, a retry's
   `interval:` or `timeout:` (`duration_invalid`), or `max-retries:`
-  (`count_invalid`). A literal one is a schema error already. 11 workflows
-  take retry values from expressions, of inputs whose defaults read as one
-  and of outputs a step wrote, and none takes a timeout from one. In
-  detail: `+5m` is a duration, as in format 1;
+  (`count_invalid`). A literal one is a schema error already. A step's
+  `timeout:` and `retry:` read `env` as its other values do, with the
+  variables the worker defines: its `timeout:` for each try, and its
+  `retry:` as its first try is evaluated, where format 1 left an
+  expression there that read `env` as its text, and so ignored it. 11
+  workflows take retry values from expressions, of inputs whose defaults
+  read as one and of outputs a step wrote, none takes a timeout from one,
+  and none of the 18 step retries reads `env`. In detail: `+5m` is a
+  duration, as in format 1;
   null, `""` and `0` without a unit are the default, as format 1 reads a
   value it has none of, so a retry waits 5 seconds and a step's timeout is
   none; `0s` is 0, which for a job's or a step's timeout is none, where
@@ -206,7 +242,7 @@ its content, 220 files.
 - **A job's `outputs:` read `env`**: the workflow's `env:`, the job's, and
   the variables the worker defines, where format 1 left an expression that
   read it as its text. ACTIVATE takes the same fix by passing the job's
-  `env` to the parse of its outputs. None of the 7 jobs with `outputs:`
+  `env` to the parse of its outputs. None of the 8 jobs with `outputs:`
   reads `env` in them.
 - **`matrix.<key>` in a job without a matrix is null**, where ACTIVATE gave
   the text `matrix.<key>` when no job of the workflow had a `strategy:`,
@@ -220,7 +256,7 @@ its content, 220 files.
   `env:`, and for a step's, the job's over that, where format 1 recursed
   until it failed. Values that read others of the same `env:` are
   evaluated in the order they read each other, as in format 1. None of the
-  123 `env:` blocks has a value that reads another of its own block.
+  124 `env:` blocks has a value that reads another of its own block.
 - **A step's `cleanup:` reads `steps.<its own id>` as its step wrote it,
   and so do the cleanups after it and the job's `outputs:`, for a step
   with an `id` and a `cleanup:`**, where ACTIVATE's copy of the step that
@@ -299,7 +335,7 @@ What an expression can read is its contexts, each a mapping:
 | `remote` | Where a fetched workflow came from, as strings, such as `remote.repo` and `remote.branch`. | Create |
 | `sessions` | The workflow's `sessions:`, by name, as strings, as the session provider gives them. | Create |
 | `env` | The workflow's `env:`, then the job's over it, then the step's over that, and on the worker the variables format 1 defines, such as `PW_JOB_DIR`, over all, as strings. Each reads the ones under it, and the values of its own that don't read `env`; the workflow's reads none. | Start, the workflow's; Step, the job's, the step's and the worker's |
-| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are those its steps without an `id` wrote so far. | Ready |
+| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, or a matrix job's instance, whose outputs are those its steps without an `id` wrote so far. | Ready |
 | `matrix` | The job instance's matrix values. | Ready, once the matrix is expanded |
 | `job` | The job instance: `job.name`, the job's name; `job.key`, the instance's, as in `build#2`; `job.attempt`, from 1; and `job.group` and `job.member`, where it was placed. | Step |
 | `steps` | `steps.<id>.outputs.<name>`, for each step that ran before this one, as strings. | Step |
@@ -321,7 +357,8 @@ replaces it: one that doesn't is true only when `success()` is too. An
 `if:` whose value is the word `always` means `always()`: it is the older
 spelling, which the compiler warns about, and a later format can drop it.
 Otherwise an `if:` goes by its value's truthiness
-([The language](#the-language)).
+([The language](#the-language)), so one written empty, which is null, is
+false.
 
 A job fails, for `failure()`, when a job it needs failed, or was skipped
 because a job it needs had failed in turn, and is cancelled, for
@@ -394,21 +431,27 @@ its resolvers into a plan, in order:
      defining them. Format 1 reads `steps` only as
      `steps.<id>.outputs.<name>`. A step reading one of a step that doesn't
      exist or doesn't run before it is an error, since ACTIVATE fails the
-     step; in a job's outputs and a step's `cleanup:`, which read it as
-     `""`, it is a warning. Any other reference to `steps`, such as
+     step. In a step's `cleanup:`, which reads it as `""`, it is a warning,
+     and in a job's `outputs:` too: they read it as `""` once a step of
+     the job failed or was cancelled, but once its steps succeeded, fail
+     the job, as ACTIVATE fails it (`output_not_written`). Any other
+     reference to `steps`, such as
      `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
      step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
      and reads as its own text, as format 1 reads a word it doesn't know.
-     No known workflow has one: none of the 220 that
-     [Bug fixes to format 1](#bug-fixes-to-format-1) counts reads `steps`
-     but through `needs.<job>.steps`. So with `needs`, which format 1 reads
-     only as `needs.<job>.outputs.<name>` and
+     No known workflow has one: of the 221 that
+     [Bug fixes to format 1](#bug-fixes-to-format-1) counts, one reads
+     `steps` other than through `needs.<job>.steps`, as
+     `steps.<id>.outputs.<name>` in a job's `outputs:`, of a step that
+     has no `id`, which is a warning (`output_undefined_step`), and fails
+     the job once its steps succeeded, in ACTIVATE as in Meridian. So with
+     `needs`, which format 1 reads only as `needs.<job>.outputs.<name>` and
      `needs.<job>.steps.<id>.outputs.<name>`, and Meridian as
      `needs.<job>.result` too: any other reference to it, such as
      `needs.build`, `needs.build.outputs`, `needs.build.steps.compile` or
      `needs.build.status`, whatever job it names, is a warning
      (`needs_read_whole`, `needs_unknown_key`), and reads as its own text.
-     The known workflows have 837 references to a job's outputs by name and
+     The known workflows have 839 references to a job's outputs by name and
      37 to its steps', and none of any other form. A plan holds an
      expression's tree, not its text, so a reference read as its own text
      is made again from its path: one written with dots is as written, and
@@ -585,10 +628,31 @@ ACTIVATE's launch form and its backend do together:
   field's, wherever the workflow defines it, as a repeated step's password
   sent beside the step is, or is close to a password input's there, as a
   misspelling is, is kept as a password: it is one of the run's secrets,
-  and not in the plan. So is a mapping or list whose name is close to an
-  input's with a password among its inputs, or that holds a key named as a
-  password field, as a flattened wizard step's inputs sent under the
-  step's name do. A value that isn't JSON, such
+  and not in the plan. So is one whose name can be a secret's, as one sent
+  for a password field that was renamed can: it looks like one, by the
+  words that make an input's name look like a secret's
+  ([Compiling](#compiling)), or one of its words is a letter from one of
+  the longer of them, `password`, `passwd`, `passphrase`, `secret` and
+  `credential`, as `pasword` is; not from `token`, whose neighbours, such
+  as `tokens` and `taken`, are common words. That errs toward a secret,
+  such as `passed`, which is kept as one, and still given to the run. So
+  is a mapping or list whose name is close to an input's with a
+  password among its inputs, or that holds a key named as a password field
+  or that can be a secret's, as a flattened wizard step's inputs sent
+  under the step's name do. A row of a list or a repeated step is checked the same
+  way, against the inputs its rows have, and a value there for one they
+  don't have is reported by its path, as `creds.0.pasword`, and kept as a
+  password by the same rules, by that path, as a password field of a row
+  is: among the secrets, and in neither the values nor, for a list held
+  for Start, its value that waits there. A key of a list's default rows,
+  written in the workflow, that isn't one of its rows' inputs is a warning
+  where it is written (`default_row_unknown_input`), once, and the row
+  keeps it; a launch form sends the default rows back, so a submitted
+  row's key that a default row has isn't reported again, and a value a
+  default row has at that key isn't taken for a password by its name, as
+  `api_token: none` written in the workflow isn't. A row's inputs are
+  those of every list at its list's path, where a list and a wizard step's
+  list share one. A value that isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a
@@ -1006,7 +1070,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command |
+| Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
 | Actions | Built-in actions | `parallelworks/checkout`, and those that need no platform |
 | Sessions | Interactive sessions a workflow serves | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
@@ -1085,7 +1149,7 @@ it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
 differs for an `include` entry that names no matrix key: it makes it a
 combination of its own, where GitHub Actions adds it to every combination.
 Format 1 keeps ACTIVATE's for now. Whether to take GitHub Actions' as a bug
-fix ([The workflow format](#the-workflow-format)) is open: of the 220
+fix ([The workflow format](#the-workflow-format)) is open: of the 221
 known workflows ([Bug fixes to format 1](#bug-fixes-to-format-1)), none
 has an `include` entry that names no matrix key, nor any `include` at all. An entry also matches the combinations earlier entries made, and
 two values match when they are equal, or a string and a number or a
@@ -1118,7 +1182,9 @@ name, `#` and its index from 0, as in `build#2`.
   has the value of the one with the highest index, so it doesn't depend on
   which finished last, as it does in ACTIVATE and GitHub Actions. No
   workflow can rely on which instance finishes last, so this is made as a
-  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). As format 1
+  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). In an
+  instance's own steps and outputs, `needs.<job>` is the instance, whose
+  outputs are those its own steps wrote, another such fix. As format 1
   reads each instance of a job its dependents need, the job fails for them
   when an instance was skipped because its needs failed, whatever the rest
   did, and is cancelled for them, for `cancelled()`, when an instance was
@@ -1792,7 +1858,10 @@ member's running workers reconnect to it.
   step's that nothing wrote fails the expression that reads it
   (`output_not_written`) where a job or a step is about to run, and in a
   job's `outputs:` once its steps succeeded, so that a command such as
-  `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path. An
+  `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path;
+  so does a step's output read by an `id` that none of the job's steps
+  has, as `steps.<id>.outputs.<name>` there or in
+  `needs.<job>.steps.<id>.outputs.<name>`. An
   `if:` reads one as `""`, and so do a step whose `if:` is the word
   `always`, a job's own values and its strategy when its `if:` is, a
   step's `cleanup:`, and a job's `outputs:` once a step of it failed or was
@@ -1813,7 +1882,8 @@ member's running workers reconnect to it.
   null and none as `""`, whatever else it says, such as its
   `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
   `host:port` as it is and reads `host` through the user's `ssh_config`.
-  534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
+  All 536 jobs' `ssh:` mappings in the known workflows read `remoteHost`
+  from an input, and 29 of the 37 steps' do.
 - **A step that outlives its job's cancelling.** A step whose `if:` can be
   true once its job is stopping, the word `always`, `always()`,
   `cancelled()`, `!success()` or `!failure()`, runs even once the job is
@@ -2105,6 +2175,14 @@ so, rather than assume that no one else can change them. So Meridian's own
 directories and config must be used outside such a namespace, or in one
 that maps root; a worker in a container, which uses none of them, isn't
 affected.
+
+The command's Sources, which reads the workflows that `uses:` names, runs
+the `git` command on `PATH`, with the user's own Git configuration and
+credentials. It needs Git 2.29 or later, the first whose `git fetch`
+takes `--no-write-fetch-head`, which Sources passes so that a fetch leaves
+no `FETCH_HEAD` in its copy of the repository; an older Git fails the
+fetch, and a missing one is `git_unavailable`. Nothing else the command
+does needs Git.
 
 Every problem the command reports is a kind, with its code, its params and
 its message in each language, as a workflow's are: its own, such as a

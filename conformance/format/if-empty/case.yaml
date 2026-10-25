@@ -1,0 +1,7 @@
+description: >-
+  A job's or a step's if: can be written empty, which is null, and false.
+source: Meridian
+expect:
+  values:
+    /jobs/main/if: null
+    /jobs/main/steps/0/if: null
