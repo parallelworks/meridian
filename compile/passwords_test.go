@@ -627,6 +627,24 @@ func TestUnknownRowPasswordsAreSecrets(t *testing.T) {
 	if strings.Contains(string(encoded), sentinel) {
 		t.Errorf("the plan holds a password: %s", encoded)
 	}
+
+	// A list whose rows' defaults read a password is held for the run's
+	// start, and the plan holds its rows as its deferred value: without the
+	// password field's values, nor those of the keys taken for one.
+	held := inputs("creds: {type: list, template: {user: {type: string}, password: {type: password, optional: true}, " +
+		"hint: {type: string, default: '${{ inputs.creds.[index].password }}'}}}")
+	submitted = map[string]any{"creds": []any{map[string]any{"user": "a", "pasword": sentinel}}}
+	in, _ = compile.ResolveInputs(load(t, held), submitted, compile.Options{})
+	if in.Secrets["creds.0.pasword"] != sentinel || in.Deferred["creds"].IsZero() {
+		t.Errorf("secrets %v, deferred %v", in.Secrets, in.Deferred)
+	}
+	p, _ = compile.Compile("workflow.yaml", []byte(held), submitted, compile.Options{})
+	if encoded, err = plan.Encode(p); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), sentinel) {
+		t.Errorf("the plan of a held list holds a password: %s", encoded)
+	}
 }
 
 // A submitted value is compared with its default once the values are

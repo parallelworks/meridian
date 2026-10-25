@@ -635,7 +635,8 @@ ACTIVATE's launch form and its backend do together:
   way, against the inputs its rows have, and a value there for one they
   don't have is reported by its path, as `creds.0.pasword`, and kept as a
   password by the same rules, by that path, as a password field of a row
-  is. A value that isn't JSON, such
+  is: among the secrets, and in neither the values nor, for a list held
+  for Start, its value that waits there. A value that isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a

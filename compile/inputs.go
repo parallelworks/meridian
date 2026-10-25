@@ -2100,6 +2100,13 @@ func (r *inputResolver) holdLater() {
 				clearPath(held, p.path[len(f.path):])
 			}
 		}
+		// Nor are values for inputs its rows or groups don't have that are
+		// taken for passwords, which the run's start puts in their places.
+		for _, at := range r.unknownSecrets {
+			if len(at) > len(f.path) && slices.Equal(at[:len(f.path)], f.path) {
+				deletePath(held, at[len(f.path):])
+			}
+		}
 		f.dflt = plan.Literal(held)
 		if slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
 			// A part of its value isn't known until the run starts, so
