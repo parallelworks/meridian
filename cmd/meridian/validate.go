@@ -23,6 +23,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -32,12 +33,14 @@ const maxInputsSize = 1 << 20
 // formats are what validate's -format takes.
 var formats = []string{"text", "json"}
 
-// runValidate compiles a workflow without running it, with the user's
-// variables and groups, and the input values given, and reports every
-// error and warning. With -start, it starts the run too, as far as it can
-// without running anything: it reads every variable the run reads, secret
-// ones too, evaluates what waits for the start and checks it, and reports
-// what would fail the run as it starts, but makes no session.
+// runValidate creates a run of a workflow without running it, with the
+// user's variables and groups, the workflows its steps' uses: name, and the
+// input values given, and reports every error and warning. There is no
+// session provider here, so a workflow with sessions can't run. With
+// -start, it starts the run too, as far as it can without running
+// anything: it reads every variable the run reads, secret ones too,
+// evaluates what waits for the start and checks it, and reports what would
+// fail the run as it starts.
 func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	var set []string
 	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name; it can be given again", func(s string) error {
@@ -69,11 +72,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	if err != nil {
 		return c.fail(err)
 	}
-	cfg, err := local.LoadConfig(dirs.Config, c.getenv)
-	if err != nil {
-		return c.fail(err)
-	}
-	contexts, err := cfg.Contexts(ctx)
+	cfg, err := local.LoadConfig(dirs.Config, c.lookupEnv)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -88,13 +87,13 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	diags := tooLarge
 	if diags == nil {
 		var created *compile.Created
-		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{Inputs: cfg, Contexts: contexts})
+		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
+			Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
+		})
 		if err != nil {
 			return c.fail(err)
 		}
 		if *start && created != nil {
-			// There is no session provider here, so a run with sessions
-			// can't start.
 			_, started, err := compile.Start(ctx, created.Plan, compile.StartInput{
 				Variables: cfg, Record: created.Record, Inputs: cfg,
 			})
@@ -117,6 +116,44 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		return exitInvalid
 	}
 	return exitOK
+}
+
+// cacheSources is the local Sources, whose copies of repositories are in
+// the cache directory, which it makes the first time it is asked for a
+// workflow, so that a workflow that names none makes none.
+type cacheSources struct {
+	dirs local.Dirs
+	// servers are the GitLab servers the user registered.
+	servers []string
+	sources *local.Sources
+}
+
+var _ compile.Sources = (*cacheSources)(nil)
+
+func (s *cacheSources) open() (*local.Sources, error) {
+	if s.sources == nil {
+		if err := s.dirs.EnsureCache(); err != nil {
+			return nil, err
+		}
+		s.sources = local.NewSources(s.dirs.Cache, s.servers)
+	}
+	return s.sources, nil
+}
+
+func (s *cacheSources) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
+	sources, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	return sources.Resolve(ctx, ref)
+}
+
+func (s *cacheSources) Read(ctx context.Context, source plan.Source) (*compile.Workflow, error) {
+	sources, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	return sources.Read(ctx, source)
 }
 
 // located returns diags, the run's problems as it starts, which have no

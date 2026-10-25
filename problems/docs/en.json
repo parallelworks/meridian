@@ -539,6 +539,30 @@
       "Change one of the values so that it doesn't read the others."
     ]
   },
+  "group_unknown": {
+    "why": "A job's runs-on: execution-group: names an execution group, which runs the job on one of its members. Where the workflow runs, the Groups interface has no group by that name: locally, there is none in groups.yaml, and it isn't the built-in local group.",
+    "fix": [
+      "Name a group that is there, or add the group where the workflow runs, such as to groups.yaml."
+    ]
+  },
+  "environment_unknown": {
+    "why": "A format 1 job's runs-on: environment: names a scheduler environment on a cluster, which only a platform knows. Where the workflow runs, the Groups interface has no such environment: locally there are none.",
+    "fix": [
+      "Run the workflow on the platform that has the environment, or run the job in an execution group instead (runs-on: execution-group:)."
+    ]
+  },
+  "source_not_found": {
+    "why": "A step's uses: names a workflow, which is resolved and pinned when the run is created. Where the workflow runs, the Sources interface has no workflow by that reference.",
+    "fix": [
+      "Check the reference: its repository, its revision, and the file its with: $yaml names."
+    ]
+  },
+  "source_not_known": {
+    "why": "The workflow a step's uses: names is resolved and pinned to its commit and its text's digest when the run is created, so that the run and its reruns run the same text. Its uses:, and its with: $yaml and $host, say where it is, so they must be written out, not read from what is known only later. ACTIVATE evaluates them with the run's inputs before it reads them; no known workflow has an expression in one.",
+    "fix": [
+      "Write the reference out in the step's uses:, and the file and the server in its with:."
+    ]
+  },
   "expression_failed": {
     "why": "An expression failed in a way Meridian doesn't describe. This is a problem in Meridian.",
     "fix": [
@@ -981,22 +1005,22 @@
     ]
   },
   "source_ref_invalid": {
-    "why": "Meridian reads a workflow that a step's uses: names from a Git repository on GitHub or GitLab: github/ or gitlab/, the repository's owner and name, the workflow's file in it, workflow.yaml unless it names another, and @ and a branch, tag or commit, the default branch unless it names one. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed.",
+    "why": "Meridian reads a workflow that a step's uses: names from a Git repository, as ACTIVATE does: github/ and the repository's owner and name, or gitlab/ and a project's path, its groups' names among it, and then @ and a branch, tag or commit, the default branch unless it names one. The workflow's file in the repository is the step's with: $yaml, workflow.yaml unless it names another, and with: $host names a GitLab server, only for gitlab/. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed, nor is a group's name that ends in .git or .lock.",
     "fix": [
-      "Write the reference as github/<owner>/<repository>/<path>@<revision>, or the same with gitlab/."
+      "Write the reference as github/<owner>/<repository>@<revision>, or gitlab/<group>/<project>@<revision>, with the workflow's file in with: $yaml."
     ]
   },
   "source_on_platform": {
     "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories.",
     "fix": [
       "Run the workflow on the platform that stores the workflow it uses.",
-      "Or name the workflow by its Git repository, as github/<owner>/<repository>/<path>@<revision>."
+      "Or name the workflow by its Git repository, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
     ]
   },
   "source_revision_not_found": {
     "why": "Meridian fetches the revision a uses: names with git, and git found no such repository, or no such branch, tag or commit in it. A private repository that git can't read with your credentials can look the same.",
     "fix": [
-      "Check the repository's owner and name, and the revision after @.",
+      "Check the repository's owner and name, and the revision after @. Git fetches a commit by its full SHA, of 40 or 64 characters, where ACTIVATE takes a short one too.",
       "Check that git can fetch the repository with your credentials, as with git ls-remote and the repository's URL."
     ]
   },
@@ -1466,6 +1490,32 @@
     "why": "A worker holds the attempt's credential in its memory, and keeps your other processes, a job's steps among them, from reading it there or tracing what it sends. It can on Linux, macOS and FreeBSD. Other systems, such as NetBSD and OpenBSD, give a process no way to keep the user's other processes from tracing it, so the worker refuses to run there, rather than run a job with less protection.",
     "fix": [
       "Run the job on a member whose hosts run Linux, macOS or FreeBSD."
+    ]
+  },
+  "source_server_unknown": {
+    "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names. Git reaches a server with the user's own configuration and credentials, so Meridian reaches only gitlab.com and the servers the user registered, rather than any a workflow names: locally, those that sources.yaml, in the config directory, lists under gitlab-servers.",
+    "fix": [
+      "If you trust the server, add it to gitlab-servers in sources.yaml, by its name, as git.example.com.",
+      "Otherwise, use a workflow from a server that is registered."
+    ]
+  },
+  "compute_target_unknown": {
+    "why": "A format 1 job's runs-on: can give a compute target, as a compute-target input's value does: a mode, login, worker or environment, and a target, which only a platform knows. Where the workflow runs, the Groups interface has no such compute target: locally there are none.",
+    "fix": [
+      "Run the workflow on the platform that has the compute target, or run the job in an execution group instead (runs-on: execution-group:)."
+    ]
+  },
+  "gitlab_server_invalid": {
+    "why": "sources.yaml's gitlab-servers lists the GitLab servers, besides gitlab.com, that a workflow's with: $host can name. Each is a server's DNS name, as a $host names it, with no port, as ACTIVATE reads a $host: Meridian adds the scheme and reaches the server at HTTPS's port, and a server has no user or path.",
+    "fix": [
+      "Write the server as git.example.com.",
+      "For a server at another port, register its name, and have Git reach it at its port with Git's url.<base>.insteadOf setting, as in: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
+    ]
+  },
+  "source_with_invalid": {
+    "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names, by its DNS name, with no port, as ACTIVATE reads it; and $yaml names the workflow's file in the repository by its path from the repository's root. A path that starts with a slash is from the root, as ACTIVATE fetches the file: every slash before it goes on GitHub, and one on GitLab. No name in the path can be empty, as ./ or a doubled slash makes one, nor . or .., nor hold a control character, so that the path names a file among the repository's own.",
+    "fix": [
+      "Write the server as git.example.com, and the file as flows/workflow.yaml."
     ]
   }
 }

@@ -947,3 +947,29 @@ func TestExprsReachEveryValue(t *testing.T) {
 		t.Errorf("Exprs reads\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// A reference reads as format 1 reads it, as ACTIVATE does: two that name
+// the same workflow are equal once they are normal.
+func TestSourceRefNormal(t *testing.T) {
+	for ref, want := range map[plan.SourceRef]plan.SourceRef{
+		{Uses: "github/o/r"}: {Uses: "github/o/r", Path: "workflow.yaml"},
+		{Uses: "github/o/r.git/@v1 ", Path: "w.yaml", Host: "x"}: {Uses: "github/o/r@v1", Path: "w.yaml"},
+		{Uses: "github/o/r/.git"}:                                {Uses: "github/o/r/", Path: "workflow.yaml"},
+		{Uses: "github/ o/r"}:                                    {Uses: "github/ o/r", Path: "workflow.yaml"},
+		{Uses: "github/o/r@a.git/"}:                              {Uses: "github/o/r@a.git/", Path: "workflow.yaml"},
+		{Uses: "gitlab/ g/s/p.git@v1\t"}:                         {Uses: "gitlab/g/s/p@v1", Path: "workflow.yaml", Host: "gitlab.com"},
+		{Uses: "gitlab/g/p", Host: " Git.Example.COM "}:          {Uses: "gitlab/g/p", Path: "workflow.yaml", Host: "git.example.com"},
+		{Uses: "gitlab/g/p", Host: " "}:                          {Uses: "gitlab/g/p", Path: "workflow.yaml", Host: "gitlab.com"},
+		{Uses: " github/o/r"}:                                    {Uses: " github/o/r"},
+		// A $yaml from the root, as ACTIVATE fetches the file.
+		{Uses: "github/o/r", Path: "//a/w.yaml"}: {Uses: "github/o/r", Path: "a/w.yaml"},
+		{Uses: "gitlab/g/p", Path: "//a/w.yaml"}: {Uses: "gitlab/g/p", Path: "/a/w.yaml", Host: "gitlab.com"},
+		{Uses: "github/o/r", Path: "/"}:          {Uses: "github/o/r", Path: ""},
+		{Uses: "workflow/w", Path: "x"}:          {Uses: "workflow/w", Path: "x"},
+		{Uses: "marketplace/m"}:                  {Uses: "marketplace/m"},
+	} {
+		if got := ref.Normal(); got != want {
+			t.Errorf("%+v.Normal() = %+v, want %+v", ref, got, want)
+		}
+	}
+}

@@ -34,17 +34,18 @@ func (e *evaluation) target(job *Job) Target {
 	if !ok {
 		return Target{}
 	}
-	t, ok := readTarget(v)
+	t, ok := ReadTarget(v)
 	if !ok {
 		e.reportInvalid(problems.RunsOnInvalid, pointer, "", v, read)
 	}
 	return t
 }
 
-// readTarget reads a runs-on:: an execution group's name, a mapping with
-// execution-group:, one with environment: and params:, or a compute
-// target. Null and "" are no target.
-func readTarget(v any) (Target, bool) {
+// ReadTarget reads a runs-on:, v, as Ready evaluates it: an execution
+// group's name, a mapping with execution-group:, one with environment: and
+// params:, or a compute target. Null and "" are no target. ok is false for
+// any other value, which Ready refuses (runs_on_invalid).
+func ReadTarget(v any) (t Target, ok bool) {
 	switch v := v.(type) {
 	case nil:
 		return Target{}, true

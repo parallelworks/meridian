@@ -28,6 +28,7 @@ import (
 const (
 	GroupsFile    = "groups.yaml"
 	VariablesFile = "variables.yaml"
+	SourcesFile   = "sources.yaml"
 )
 
 // maxConfigSize is the largest config file, or file holding a variable's
@@ -58,7 +59,8 @@ func localGroup() *backend.Group {
 type Config struct {
 	groups    map[string]*backend.Group
 	variables map[string]variable
-	getenv    func(string) string
+	servers   []string
+	lookupEnv func(string) (string, bool)
 }
 
 var (
@@ -67,20 +69,22 @@ var (
 	_ compile.InputResolver = (*Config)(nil)
 )
 
-// LoadConfig reads the groups file and the variables file in dir, either
-// of which can be missing, and checks them. getenv reads the environment
-// variables that hold variables' values, when they are read, and HOME, for
-// a path that starts with ~/.
+// LoadConfig reads the groups file, the variables file and the sources
+// file in dir, any of which can be missing, and checks them. lookupEnv
+// reads the environment variables that hold variables' values, when they
+// are read, and HOME, for a path that starts with ~/, and says whether
+// each is set, as os.LookupEnv does: one set to "" gives "".
 //
 // The directory, and every directory on the way to it, must belong to the
-// user or to root, and only they may change it. Neither file may be
+// user or to root, and only they may change it. None of the files may be
 // changeable by another user, who could otherwise send the user's jobs to
-// a host of their choosing, or give them values. The variables file must
-// be readable only by the user, since people keep secrets in plain
-// variables too. Neither is read through a symbolic link: the directory
-// can be one, and is checked through it (safepath.ReadFile).
-func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
-	c := &Config{getenv: getenv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
+// a host of their choosing, give them values, or have Sources reach a
+// server of their choosing with the user's credentials. The variables
+// file must be readable only by the user, since people keep secrets in
+// plain variables too. None is read through a symbolic link: the
+// directory can be one, and is checked through it (safepath.ReadFile).
+func LoadConfig(dir string, lookupEnv func(string) (string, bool)) (*Config, error) {
+	c := &Config{lookupEnv: lookupEnv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
 	// A directory that isn't there holds no config, and nothing on the
 	// way to it is read.
 	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
@@ -91,6 +95,9 @@ func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
 			return nil, err
 		}
 		if err := c.loadVariables(dir, filepath.Join(dir, VariablesFile)); err != nil {
+			return nil, err
+		}
+		if err := c.loadSources(filepath.Join(dir, SourcesFile)); err != nil {
 			return nil, err
 		}
 	}
@@ -423,6 +430,53 @@ func (f configFile) resources(group string, n *yaml.Node, r *backend.Resources) 
 	return nil
 }
 
+// sourcesKeys are the keys of the sources file.
+var sourcesKeys = []string{"gitlab-servers"}
+
+// loadSources reads the sources file at path: the GitLab servers, besides
+// gitlab.com, that a workflow's $host can name, each a host name and,
+// after a colon, a port.
+func (c *Config) loadSources(path string) error {
+	data, err := readConfig(path, safepath.Unchangeable)
+	if err != nil || data == nil {
+		return err
+	}
+	f := configFile{path}
+	root, err := f.parse(data)
+	if err != nil || root == nil {
+		return err
+	}
+	keys, err := f.pairs(root, sourcesKeys)
+	if err != nil {
+		return err
+	}
+	for _, kv := range keys {
+		key, list := kv.key.Value, kv.value
+		if list.Kind == yaml.ScalarNode && list.Tag == "!!null" {
+			continue
+		}
+		if list.Kind != yaml.SequenceNode {
+			return f.problem(problems.ConfigWrongType, list, problems.Params{"key": key, "want": "list"})
+		}
+		for _, n := range list.Content {
+			n = deref(n)
+			server, err := f.text(key, n)
+			if err != nil {
+				return err
+			}
+			if !validHost(server) {
+				return f.problem(problems.GitLabServerInvalid, n, problems.Params{"server": server})
+			}
+			c.servers = append(c.servers, strings.ToLower(server))
+		}
+	}
+	return nil
+}
+
+// GitLabServers returns the GitLab servers, besides gitlab.com, that the
+// sources file registers, which a workflow's $host can name (NewSources).
+func (c *Config) GitLabServers() []string { return slices.Clone(c.servers) }
+
 // GroupNames returns the names of the execution groups, in order.
 func (c *Config) GroupNames() []string { return slices.Sorted(maps.Keys(c.groups)) }
 
@@ -479,9 +533,9 @@ func (c *Config) ResolveInput(typ string, _ map[string]any, value any) (any, err
 // expandHome turns a path that starts with ~/ into one in the home
 // directory, and a relative one into one in dir. It reports false for a
 // path that starts with ~/ when HOME isn't an absolute path.
-func expandHome(path, dir string, getenv func(string) string) (string, bool) {
+func expandHome(path, dir string, lookupEnv func(string) (string, bool)) (string, bool) {
 	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		home := getenv("HOME")
+		home, _ := lookupEnv("HOME")
 		if !filepath.IsAbs(home) {
 			return "", false
 		}

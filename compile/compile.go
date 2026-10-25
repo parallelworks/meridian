@@ -21,10 +21,15 @@ import (
 
 // Compile loads a workflow file and compiles it, with the input values
 // submitted for a run, into a plan. It reports every problem it finds, and
-// returns no plan if any is an error. It is Create, for a caller that needs
-// only the plan, such as one that checks a workflow.
+// returns no plan if any is an error. It is Create without a context, for
+// a caller that needs only the plan, such as an editor that checks a
+// workflow as it is written: it reaches none of the resolvers that take a
+// context, Options.Variables, Groups, Sources and Sessions, as if they
+// weren't there, and so checks no execution group, uses: or sessions:,
+// and reads the variables, remote and sessions from Options.Contexts.
 func Compile(name string, data []byte, submitted map[string]any, opts Options) (*plan.Plan, problems.Diagnostics) {
-	created, diags := create(name, data, submitted, opts)
+	// Without a context, it reaches no resolver that could fail.
+	created, diags, _ := create(nil, name, data, submitted, opts)
 	if created == nil {
 		return nil, diags
 	}
@@ -72,25 +77,46 @@ type Record struct {
 // Create is the Create phase: it loads a workflow file and compiles it,
 // with the input values submitted for a run, into the run's plan, and
 // gives beside it what the run's secret record holds from the start. It
-// reports every problem it finds, and gives nothing if any is an error. It
-// returns an error, and nothing else, only when ctx is done before it
-// starts or once it has finished, with ctx.Err().
+// reads the variables the workflow reads through opts.Variables, checks
+// its sessions: with opts.Sessions, the execution groups and environments
+// its jobs' runs-on: name, written out, with opts.Groups, and resolves,
+// pins and loads the workflows its steps' uses: name with opts.Sources; a
+// workflow that needs one of them that isn't there fails
+// (resolver_missing). It reports every problem it finds, and gives nothing
+// if any is an error. It returns an error, and nothing else, when a
+// resolver couldn't answer, or ctx is done, with ctx.Err().
 func Create(ctx context.Context, name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	created, diags := create(name, data, submitted, opts)
+	created, diags, err := create(&resolving{ctx}, name, data, submitted, opts)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	return created, diags, nil
 }
 
-// create is Create, without a context.
-func create(name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics) {
+// resolving holds the context Create reaches the resolvers that take one
+// with.
+type resolving struct{ ctx context.Context }
+
+// create is Create, or with r nil, Compile, which reaches none of the
+// resolvers that take a context.
+func create(r *resolving, name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics, error) {
 	doc, diags := format.Load(name, data)
 	if diags.HasErrors() {
-		return nil, listed(diags) // Load sorts them.
+		return nil, listed(diags), nil // Load sorts them.
+	}
+	if r != nil {
+		var resolved problems.Diagnostics
+		var err error
+		if opts, resolved, err = withResolvers(r.ctx, doc, opts); err != nil {
+			return nil, nil, err
+		}
+		diags = append(diags, resolved...)
 	}
 	inputs := resolveInputs(doc, submitted, opts)
 	c := &compiler{doc: doc, opts: opts, inputs: inputs, secrets: map[string]bool{}}
@@ -101,11 +127,18 @@ func create(name string, data []byte, submitted map[string]any, opts Options) (*
 	if source.Location == "" {
 		source.Location = name
 	}
+	if source.Digest == "" {
+		source.Digest = textDigest(data)
+	}
 	if source.Revision == "" {
-		sum := sha256.Sum256(data)
-		source.Revision = "sha256:" + hex.EncodeToString(sum[:])
+		source.Revision = source.Digest
 	}
 	p := &plan.Plan{Version: plan.Version, Run: c.run(source), Jobs: c.jobs()}
+	if r != nil {
+		if err := c.checkResolved(r.ctx, p); err != nil {
+			return nil, nil, err
+		}
+	}
 	// The inputs' secrets, derived and private values are named by their
 	// paths in the inputs' values (plan.JoinPath), so inputs. and the name
 	// name one in the run.
@@ -141,7 +174,7 @@ func create(name string, data []byte, submitted map[string]any, opts Options) (*
 	c.diags.Sort()
 	c.diags = listed(slices.DeleteFunc(c.diags, repeatedVariable()))
 	if c.diags.HasErrors() {
-		return nil, c.diags
+		return nil, c.diags, nil
 	}
 	for _, d := range c.diags.Warnings() {
 		// A plan keeps each warning's code and params, so that each reader
@@ -168,7 +201,14 @@ func create(name string, data []byte, submitted map[string]any, opts Options) (*
 		}
 		created.Record.Ignored[name] = inputs.ignoredValues[name]
 	}
-	return created, c.diags
+	return created, c.diags, nil
+}
+
+// textDigest is "sha256:" and the SHA-256 digest of text, as a plan's
+// Source writes a workflow's.
+func textDigest(text []byte) string {
+	sum := sha256.Sum256(text)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // eachRead calls read with each reference of the expressions the run
@@ -592,7 +632,7 @@ func (c *compiler) condition(loc []string, ph plan.Phase, job *jobInfo) plan.Val
 	}
 	shift := 0
 	if cond, start, bare := bareCondition(s); bare {
-		if !strings.ContainsAny(cond, " \t.()!=<>&|?[") {
+		if loneWord(cond) {
 			// A lone word stays a word: always means always(), and any other
 			// is text, which is true.
 			if e, err := expr.Parse(cond); err == nil {
@@ -623,6 +663,11 @@ func bareCondition(s string) (cond string, start int, ok bool) {
 	}
 	return cond, len(s) - len(strings.TrimLeftFunc(s, unicode.IsSpace)), true
 }
+
+// loneWord reports whether cond, an if: written without ${{ }}, is a lone
+// word, such as always or true, rather than an expression: whether it has
+// no operator, dot, parentheses or brackets.
+func loneWord(cond string) bool { return !strings.ContainsAny(cond, " \t.()!=<>&|?[") }
 
 // check checks every string in raw, the value at loc in the workflow, and
 // returns raw with the expressions in each string parsed, as a plan Value

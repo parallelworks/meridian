@@ -8,7 +8,6 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/compile"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -85,7 +84,7 @@ func (c *Config) loadVariables(dir, path string) error {
 			if !variableNamePattern.MatchString(p.key.Value) {
 				return f.problem(problems.VariableNameInvalid, p.key, problems.Params{"context": context, "name": p.key.Value})
 			}
-			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.getenv)
+			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.lookupEnv)
 			if err != nil {
 				return err
 			}
@@ -97,7 +96,7 @@ func (c *Config) loadVariables(dir, path string) error {
 
 // variable reads the variable name, whose key and value n are, as the
 // variables file writes one.
-func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv func(string) string) (variable, error) {
+func (f configFile) variable(name string, key, n *yaml.Node, dir string, lookupEnv func(string) (string, bool)) (variable, error) {
 	v := variable{name: name}
 	at := func(k *problems.Kind, n *yaml.Node) error {
 		return f.problem(k, n, problems.Params{"variable": name})
@@ -134,7 +133,7 @@ func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv 
 		case "env":
 			v.env = text
 		default:
-			file, ok := expandHome(text, dir, getenv)
+			file, ok := expandHome(text, dir, lookupEnv)
 			if !ok {
 				return v, f.problem(problems.VariableFileHome, p.value, problems.Params{"variable": name, "file": text})
 			}
@@ -197,40 +196,14 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 	return out, nil
 }
 
-// Contexts returns the org and vars contexts as the compiler reads them
-// when a run is created, in compile.Options.Contexts: each plain
-// variable's value, and each secret as an expr.Unknown, since the compiler
-// reads no secret's value then. A plain variable whose value can't be read
-// is unknown too, so that only a run that reads it fails, when it starts.
-func (c *Config) Contexts(ctx context.Context) (map[string]any, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	org, user := map[string]any{}, map[string]any{}
-	out := map[string]any{contextOrg: org, contextVars: user}
-	for k, v := range c.variables {
-		context, name, _ := strings.Cut(k, ".")
-		m := org
-		if context == contextVars {
-			m = user
-		}
-		var value any = expr.Unknown{Name: context}
-		if !v.secret {
-			if s, err := c.resolve(v); err == nil {
-				value = s
-			}
-		}
-		m[name] = value
-	}
-	return out, nil
-}
-
 // resolve returns v's value: the file's, or the environment variable's or
 // the file's that it names.
 func (c *Config) resolve(v variable) (string, error) {
 	switch {
 	case v.env != "":
-		value, ok := lookupEnv(c.getenv, v.env)
+		// One set to "" gives "", as a platform's variable whose value is
+		// empty does.
+		value, ok := c.lookupEnv(v.env)
 		if !ok {
 			return "", problems.VariableEnvUnset.Problem(problems.Params{"variable": v.name, "env": v.env})
 		}
@@ -239,13 +212,6 @@ func (c *Config) resolve(v variable) (string, error) {
 		return readValueFile(v)
 	}
 	return v.value, nil
-}
-
-// lookupEnv reads the environment variable name with getenv, and says
-// whether it is set: an empty value counts as not set.
-func lookupEnv(getenv func(string) string, name string) (string, bool) {
-	v := getenv(name)
-	return v, v != ""
 }
 
 // readValueFile reads v's value from its file, without the newline, or the

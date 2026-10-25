@@ -74,15 +74,18 @@ type Groups interface {
 
 // Sources provides the workflows that a step's uses: names.
 type Sources interface {
-	// Resolve finds the workflow that ref, a uses: such as
-	// github/org/repo/path@main, names now, and pins it to the exact text
-	// it names: its Source's Revision is a commit, or the text's digest
-	// when no commit has it, and its Digest the text's digest. It returns
-	// ErrNotFound for a ref that names no workflow.
-	Resolve(ctx context.Context, ref string) (*Workflow, error)
-	// Read reads the workflow that Resolve pinned as source, so that a run
-	// and its reruns run the same text however its ref has moved since. It
-	// fails if the text it reads isn't the digest's.
+	// Resolve finds the workflow that ref names now: a uses: such as
+	// github/org/repo@main, with the file its with: $yaml names in the
+	// repository and the server its $host names, as format 1 writes them.
+	// It pins it to the exact text it names: its Source's Revision is a
+	// commit, or the text's digest when no commit has it, its Digest the
+	// text's digest, and its Ref ref. It returns ErrNotFound, or a problem
+	// that wraps it, for a ref that names no workflow.
+	Resolve(ctx context.Context, ref plan.SourceRef) (*Workflow, error)
+	// Read reads the workflow that Resolve pinned as source, by its Ref at
+	// its Revision, so that a run and its reruns run the same text however
+	// its ref has moved since. It fails if the text it reads isn't the
+	// digest's. It gives the Workflow's Remote as Resolve gave it.
 	Read(ctx context.Context, source plan.Source) (*Workflow, error)
 }
 

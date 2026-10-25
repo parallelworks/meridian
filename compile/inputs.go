@@ -100,6 +100,25 @@ type Options struct {
 	// Create apply, such as a matrix's instances, which the plan records
 	// (plan.Run.Limits). A zero field is the default.
 	Limits plan.Limits
+	// Variables reads the organization and user variables the workflow
+	// reads as Create reads them: each plain one's value, and which are
+	// secrets, whose values it doesn't read. When it is set, the variables
+	// are its, and not Contexts' org and vars, which are for a caller
+	// without one, such as an editor or a test.
+	Variables Variables
+	// Groups provides the execution groups and the environments a job's
+	// runs-on: names. Nil means there are none: a runs-on: that names one,
+	// written out, fails to create a run (resolver_missing).
+	Groups Groups
+	// Sources provides the workflows a step's uses: names, which Create
+	// pins. Nil means there are none: a uses: that names a workflow fails
+	// to create a run (resolver_missing).
+	Sources Sources
+	// Sessions checks the workflow's sessions: and gives the sessions
+	// context. Nil means there is no session provider: a workflow with
+	// sessions fails to create a run (resolver_missing), unless Contexts
+	// gives the sessions context, as a caller that knows it does.
+	Sessions Sessions
 }
 
 // definitionsPath is where a workflow defines its inputs.
