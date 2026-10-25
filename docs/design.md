@@ -146,12 +146,16 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
 - **A job's `cleanup:` list.** ACTIVATE's ingress reads one more key that
   neither its schema nor Meridian's has: a job's `cleanup:`, a list of
   steps that it appends to the job's, after the copies that run its
-  steps' `cleanup:`s, and runs as it runs those, linked to the job rather
-  than to a step (`.job`): once the job's steps have run, through its
+  steps' `cleanup:`s, linked to the job rather than to a step (`.job`).
+  Like those copies, they run once the job's steps have, through its
   cancellation and without a timeout, with each entry's own `cleanup:`
-  after them. Meridian warns of it as an unknown key and ignores it, as it
-  does every key the schema doesn't define, so a workflow that has one
-  runs without its cleanup. None of the 221 known workflows
+  after them, run as such a copy. Unlike them, an entry is a whole step:
+  it keeps its `id`, its `uses:` and `with:`, which a copy drops, and its
+  `retry:`, which a copy ignores, and runs whether or not any of the
+  job's steps ran, where a copy runs only if its step did. Meridian warns
+  of it as an unknown key and ignores it, as it does every key the schema
+  doesn't define, so a workflow that has one runs without its cleanup.
+  None of the 221 known workflows
   ([Bug fixes to format 1](#bug-fixes-to-format-1)) has one. Whether
   format 1 gains it as an addition, with ACTIVATE's meaning, or ACTIVATE
   drops it, is a decision for later.
