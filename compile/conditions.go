@@ -50,7 +50,6 @@ func (r *inputResolver) applyConditions() {
 		hidden, _ := r.condition(f, "hidden", inShaped)
 		f.hidden = hidden || g != nil && g.hidden
 		ignore, private := r.condition(f, "ignore", inShaped)
-		_, decision := r.decided[jsonptr.Format(appendPath(f.loc, "ignore"))]
 		f.shaped = inShaped || private
 		if f.ignored = ignore || g != nil && g.ignored; f.ignored {
 			// What expressions read of f changes, before its value is
@@ -59,7 +58,7 @@ func (r *inputResolver) applyConditions() {
 		}
 		// An ignore that is no decision Start makes again, as true written
 		// out is, the compiler applies.
-		f.ignoredLater = f.ignored && (!ignore || decision)
+		f.ignoredLater = f.ignored && (!ignore || f.ignoreDecides)
 		f.optional, _ = r.condition(f, "optional", inShaped)
 		switch {
 		case f.ignoredLater:
@@ -112,7 +111,7 @@ func (r *inputResolver) applyConditions() {
 	r.heldParts()
 	for _, f := range r.fields {
 		// A repeated step with no value has no rows.
-		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || f.repeats() || !r.missing(f) || r.shapeDecided(f) {
+		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || f.repeats() || !r.missing(f) || shapeDecided(f) {
 			continue
 		}
 		switch {
@@ -161,6 +160,14 @@ func (r *inputResolver) condition(f *field, key string, always bool) (decided, p
 			r.decisions = append(r.decisions, pointer)
 		}
 		r.decided[pointer] = decided
+		switch key {
+		case "hidden":
+			f.hiddenDecides = true
+		case "ignore":
+			f.ignoreDecides = true
+		case "optional":
+			f.optionalDecides = true
+		}
 	}
 	return decided, marked
 }
@@ -223,19 +230,15 @@ func (r *inputResolver) holdShaped(f *field) {
 	hold(f)
 }
 
-// shapeDecided reports whether whether f is required is for Start to
-// decide: whether its ignore, hidden or optional, or a group's around it's
-// ignore or hidden, read a variable or a password.
-func (r *inputResolver) shapeDecided(f *field) bool {
-	decided := func(g *field, key string) bool {
-		_, ok := r.decided[jsonptr.Format(appendPath(g.loc, key))]
-		return ok
-	}
-	if decided(f, "optional") {
+// shapeDecided reports whether Start decides whether f is required:
+// whether its ignore, hidden or optional, or a group's around it's ignore
+// or hidden, read a variable or a password.
+func shapeDecided(f *field) bool {
+	if f.optionalDecides {
 		return true
 	}
 	for g := f; g != nil; g = g.group {
-		if g.shaped || decided(g, "hidden") {
+		if g.shaped || g.hiddenDecides {
 			return true
 		}
 	}

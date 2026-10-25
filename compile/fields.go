@@ -41,6 +41,10 @@ type field struct {
 	// is ignored (applyConditions). ignoredLater is set for one ignored by
 	// such a decision, which only Start applies.
 	shaped, ignoredLater bool
+	// hiddenDecides, ignoreDecides and optionalDecides are set for each of
+	// its conditions that is a decision of the run's shape, which Start
+	// makes again (condition).
+	hiddenDecides, ignoreDecides, optionalDecides bool
 	// deferred is set for an input whose value is evaluated once the run is
 	// underway, because its default, or a part of its value, reads something
 	// the compiler doesn't know. variable is set for one whose value reads
