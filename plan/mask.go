@@ -47,12 +47,16 @@ type Masker struct {
 	// lines is set when it masks each line of a value of more than one on
 	// its own.
 	lines bool
-	// seen holds the texts it masks, and pending those it hasn't made into
-	// a matcher yet. levels find the rest: each made from the texts added
-	// since the one before it was made, merged with the levels after it
-	// while they are no smaller, so that there are only as many as the
-	// bits of how many texts there are, and each text is made into a
-	// matcher only as often as there are levels.
+	// given holds the values added since it last found the texts they show
+	// as (shownAs), which it finds once it masks or is extended, as a
+	// Masker that is added to often can mask seldom. seen holds the texts
+	// it masks, and pending those it hasn't made into a matcher yet. levels
+	// find the rest: each made from the texts added since the one before it
+	// was made, merged with the levels after it while they are no smaller,
+	// so that there are only as many as the bits of how many texts there
+	// are, and each text is made into a matcher only as often as there are
+	// levels.
+	given   []string
 	seen    map[string]bool
 	pending []string
 	levels  []*matcher
@@ -82,6 +86,29 @@ func newLeakMasker(values ...string) *Masker {
 func (m *Masker) Add(values ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.given = append(m.given, values...)
+}
+
+// add is Add, and returns the texts it added that m didn't mask before.
+func (m *Masker) add(values ...string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.findGiven()
+	start := len(m.pending)
+	m.addTexts(values)
+	return slices.Clip(m.pending[start:])
+}
+
+// findGiven finds the texts of the values added since it last did. The
+// caller holds m.mu.
+func (m *Masker) findGiven() {
+	m.addTexts(m.given)
+	m.given = nil
+}
+
+// addTexts adds the texts that values show as which m doesn't mask yet to
+// those it hasn't made into a matcher. The caller holds m.mu.
+func (m *Masker) addTexts(values []string) {
 	for _, v := range values {
 		for _, text := range shownAs(v, m.lines) {
 			if text == "" || m.seen[text] {
@@ -129,16 +156,27 @@ func maskedLine(line string) bool {
 	return len(line) >= minLine && strings.IndexFunc(line, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0
 }
 
+// jsReplacer and htmlReplacer escape what encoding/json escapes in a string
+// beyond what encoding/json/v2 does: U+2028 and U+2029, and <, > and &. A
+// Replacer is safe for concurrent use.
+var (
+	jsReplacer   = strings.NewReplacer("\u2028", `\u2028`, "\u2029", `\u2029`)
+	htmlReplacer = strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`)
+)
+
 // jsonForms returns v as the JSON of a string holds it, without its quotes,
 // in each of the escapings a Masker covers, each that differs from v once.
 func jsonForms(v string) []string {
+	if jsonPlain(v) {
+		return nil
+	}
 	quoted, err := jsontext.AppendQuote(nil, v)
 	if err != nil {
 		return nil
 	}
 	base := string(quoted[1 : len(quoted)-1])
-	js := strings.NewReplacer("\u2028", `\u2028`, "\u2029", `\u2029`).Replace(base)
-	html := strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`).Replace(js)
+	js := jsReplacer.Replace(base)
+	html := htmlReplacer.Replace(js)
 	var ascii strings.Builder
 	for _, r := range base {
 		switch {
@@ -160,6 +198,23 @@ func jsonForms(v string) []string {
 	return out
 }
 
+// jsonPlain reports whether each escaping jsonForms covers writes v as it
+// is: whether v is ASCII without a control character, a quote, a
+// backslash, <, > or &.
+func jsonPlain(v string) bool {
+	for i := range len(v) {
+		switch b := v[i]; b {
+		case '"', '\\', '<', '>', '&':
+			return false
+		default:
+			if b < ' ' || b >= utf8.RuneSelf {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // current returns what finds m's values: its levels, after it makes the
 // texts added since it last did into one, and merges the levels that are
 // no larger than the one after them.
@@ -173,6 +228,7 @@ func (m *Masker) current() finder {
 	if m.parent != nil && m.base == nil {
 		m.base = base
 	}
+	m.findGiven()
 	if len(m.pending) > 0 {
 		m.levels = append(m.levels, newMatcher(m.pending))
 		m.pending = nil
@@ -194,6 +250,7 @@ func (m *Masker) current() finder {
 func (m *Masker) extend(lines bool) *Masker {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.findGiven()
 	return &Masker{lines: lines, seen: maps.Clone(m.seen), parent: m}
 }
 
@@ -201,10 +258,7 @@ func (m *Masker) extend(lines bool) *Masker {
 // one of them appears, and where two or more overlap, all of the text they
 // cover, as one. Two values that are next to each other are masked one
 // after the other.
-func (m *Masker) Mask(s string) string {
-	spans, _ := m.current().find(s)
-	return masked(s, spans)
-}
+func (m *Masker) Mask(s string) string { return m.current().mask(s) }
 
 // masked returns s with the text of each of spans that starts in it
 // replaced with problems.Masked. Spans are in order, and one that starts in
@@ -232,6 +286,12 @@ type span struct{ start, end int }
 
 // A finder finds a Masker's values with each of its matchers.
 type finder []*matcher
+
+// mask returns s with each value the finder finds masked, as Mask does.
+func (f finder) mask(s string) string {
+	spans, _ := f.find(s)
+	return masked(s, spans)
+}
 
 // find returns where the finder's values appear in s, in order, with those
 // that overlap as one span, and how many bytes at the end of s could be the

@@ -19,9 +19,19 @@ func splitPath(name string) []string { return strings.Split(name, ".") }
 // names what it names in r: inputs, env, org, vars, remote and sessions.
 // It shares no list or mapping with r.
 func (r RunValues) tree() map[string]any {
+	t := r.view()
+	if v, ok := t["inputs"]; ok {
+		t["inputs"] = jsonvalue.Clone(v)
+	}
+	return t
+}
+
+// view returns r's values as tree does, but for the input values, which it
+// shares with r rather than copy, for what only reads them.
+func (r RunValues) view() map[string]any {
 	t := map[string]any{}
 	if !r.Inputs.IsZero() {
-		t["inputs"] = jsonvalue.Clone(r.Inputs.Get())
+		t["inputs"] = r.Inputs.Get()
 	}
 	for name, m := range r.stringContexts() {
 		if *m != nil {

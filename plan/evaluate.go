@@ -78,6 +78,9 @@ type secretTexts struct {
 	leak *Masker
 	// sum is what they were found from (secretsSum).
 	sum [sha256.Size]byte
+	// checks tell which of the job's steps' outputs hold a secret, for
+	// each phase that shares them.
+	checks outputChecks
 }
 
 // secretsSum returns a digest of what a job's secretTexts are found from:
