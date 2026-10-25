@@ -83,9 +83,8 @@ type StartResult struct {
 // read each other, and fills in the fields of the rows of each list it
 // evaluated a part of, as the compiler fills in a row's. It decides again
 // each input's condition that read a variable or a password
-// (plan.Run.Decisions); until then, it reads the inputs as the compiler's
-// evaluations read them, as they were given (plan.Run.Unconverted), and
-// from then on as they were converted. It then checks each input it
+// (plan.Run.Decisions), reading the inputs as they were given, as format 1
+// reads them, as the compiler's evaluations did. It then checks each input it
 // evaluated as Compile checks one; decides again each job's needs: that
 // read a variable or a password (plan.Job.NeedsExpr), reporting
 // run_shape_changed for a decision that differs from what the run's
@@ -150,9 +149,6 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	if err := st.evaluate(true); err != nil {
 		return nil, nil, err
 	}
-	// What the run reads from here on reads the inputs as they were
-	// converted, as the jobs' do.
-	st.convert()
 	st.checkInputs()
 	st.checkNeeds()
 	run := st.runValues()
@@ -219,10 +215,6 @@ type starter struct {
 	pending map[*field]int
 	emptied map[*field][]laterPart
 	above   map[*field]int
-	// converted holds the values of the inputs the compiler converted, as
-	// it converted them, by their paths, which Start reads as they were
-	// given until it has decided the run's shape (plan.Run.Unconverted).
-	converted map[string]any
 	// hiddenAt and optionalAt hold whether each input Start evaluated, and
 	// each group it is in, is hidden and optional, as checkDecisions
 	// decided them, in the inputs' order, as the compiler does; decisionAt
@@ -363,10 +355,9 @@ func (st *starter) readVariables() error {
 }
 
 // restore makes the input resolver over the plan's input definitions, with
-// the inputs' values the run has: the plan's, as they were given where the
-// compiler converted them, those it holds for Start, with each part that
-// Start evaluates unknown until it is, and each password and private value
-// at its path.
+// the inputs' values the run has: the plan's, those it holds for Start,
+// with each part that Start evaluates unknown until it is, and each
+// password and private value at its path.
 func (st *starter) restore() error {
 	p := st.p
 	defs, _ := p.Run.Definitions.Written().(map[string]any)
@@ -400,26 +391,6 @@ func (st *starter) restore() error {
 	values, _ := jsonvalue.Clone(p.Run.Inputs.Get()).(map[string]any)
 	if values == nil {
 		values = map[string]any{}
-	}
-	st.converted = map[string]any{}
-	for name, given := range jsonvalue.Sorted(p.Run.Unconverted) {
-		path := plan.SplitPath(name)
-		v, ok := values[path[0]]
-		for _, k := range path[1:] {
-			m, isMapping := v.(map[string]any)
-			if !isMapping {
-				ok = false
-				break
-			}
-			v, ok = m[k]
-		}
-		if !ok {
-			return fmt.Errorf("compile: the plan holds the input %s as it was given, but not as it was converted", name)
-		}
-		st.converted[name] = v
-		if err := setGrow(values, path, jsonvalue.Clone(given.Get())); err != nil {
-			return err
-		}
 	}
 	held := slices.Sorted(maps.Keys(p.Run.DeferredInputs))
 	var holders reach.Trie[*field]
@@ -1360,19 +1331,10 @@ func (st *starter) shapeDecided(f *field) bool {
 	return false
 }
 
-// convert puts the values of the inputs the compiler converted back as it
-// converted them, which Start read as they were given until it decided the
-// run's shape (plan.Run.Unconverted).
-func (st *starter) convert() {
-	for name, v := range jsonvalue.Sorted(st.converted) {
-		st.r.set(plan.SplitPath(name), jsonvalue.Clone(v))
-	}
-}
-
 // checkNeeds evaluates again each job's needs: that read a variable or a
 // password as the run was created (plan.Job.NeedsExpr), and reports
 // run_shape_changed where one names other jobs than the plan's. It reads
-// the inputs as they were converted, as the compiler's needs: read them.
+// the inputs as the compiler's needs: read them.
 func (st *starter) checkNeeds() {
 	r := st.r
 	scope := r.scope()

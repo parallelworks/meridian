@@ -252,5 +252,11 @@
   "source_server_unknown": "El servidor de GitLab “{server}” que nombra el with: $host del paso no es uno registrado aquí.",
   "compute_target_unknown": "Aquí no hay ningún destino de cómputo “{target}” en el modo {mode}.",
   "gitlab_server_invalid": "El servidor de GitLab “{server}” no es un nombre de host, sin puerto, como git.example.com.",
-  "source_with_invalid": "El with: {key} del paso no es {what, select, server {el nombre de un servidor de GitLab, un nombre DNS sin puerto, como git.example.com} other {la ruta de un archivo del repositorio, como flows/workflow.yaml, sin nombres vacíos, . ni .., ni caracteres de control}}."
+  "source_with_invalid": "El with: {key} del paso no es {what, select, server {el nombre de un servidor de GitLab, un nombre DNS sin puerto, como git.example.com} other {la ruta de un archivo del repositorio, como flows/workflow.yaml, sin nombres vacíos, . ni .., ni caracteres de control}}.",
+  "input_read_as_submitted": "La entrada “{input}”, de tipo {type}, se envió como {given, select, text {texto, así que se lee como texto} number {un número, así que se lee como un número} boolean {un booleano, así que se lee como un booleano} other {{given}}}.",
+  "input_flag_unsplit": "El -input número {position} no tiene =; escríbelo como ruta=valor.",
+  "input_flag_wrong_type": "-input {path}: la entrada “{input}” es de tipo {type}, que recibe {type, select, boolean {true o false} number {un número JSON, como 8, -2.5 o 1e3{reason, select, too_large {, y este es demasiado grande para uno} other {}}} header {ningún valor} other {otro valor}}.",
+  "input_flag_not_json": "-input {path}: la entrada “{input}” es de tipo {type}, que recibe {shape, select, array {un array} other {un objeto}} JSON, y esto {reason, select, empty {está vacío} extra {contiene más de un valor JSON} number {contiene un número demasiado grande para leerlo} other {no es JSON válido en el byte {offset}}}.",
+  "input_flag_wrong_shape": "-input {path}: la entrada “{input}” es de tipo {type}, que recibe {shape, select, array {un array} other {un objeto}} JSON, no {kind, select, string {una cadena} number {un número} boolean {un booleano} array {un array} object {un objeto} other {null}}.",
+  "input_flag_path_not_settable": "-input {path}: la entrada “{input}” {reason, select, flattened {es de tipo {type}, y sus entradas se definen por sus propios nombres} rows {contiene una lista de filas; defínela entera, como un array JSON} other {es de tipo {type}, que no contiene entradas, así que no tiene la entrada “{next}”}}."
 }

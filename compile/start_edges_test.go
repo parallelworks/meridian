@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // The rows of a list that a part Start evaluates gives, all of the list's
@@ -69,10 +71,11 @@ func TestDefaultRowAnExpressionGives(t *testing.T) {
 	}
 }
 
-// What Start evaluates reads the inputs as Create's evaluations read
-// them, before Create converted them to their types, as a form sends a
-// number's text; what the run reads after it is converted.
-func TestStartReadsInputsAsCreateDid(t *testing.T) {
+// Format 1 reads each input's value as it was submitted, as ACTIVATE does:
+// text given for a number or a boolean stays text, in what Create
+// evaluates, in what Start does and in the run's values, and the plan
+// warns of each (input_read_as_submitted), without its value.
+func TestInputsReadAsSubmitted(t *testing.T) {
 	src := workflow(`cpus: {type: number}
 flag: {type: boolean}
 label: {type: string, default: '${{ org.PREFIX }}-${{ inputs.cpus }}-${{ inputs.flag }}'}
@@ -92,14 +95,24 @@ jobs:
 	if res == nil {
 		t.Fatal(diags)
 	}
-	if want := `{"cpus":2.5,"flag":false,"label":"p-2.50-false"}`; canonical(t, res.Run.Inputs.Get()) != want {
+	if want := `{"cpus":"2.50","flag":"false","label":"p-2.50-false"}`; canonical(t, res.Run.Inputs.Get()) != want {
 		t.Errorf("inputs %s, want %s", canonical(t, res.Run.Inputs.Get()), want)
 	}
 	if got := res.Run.Env["CPUS"]; got != "2.50" {
 		t.Errorf("env.CPUS = %q, want the text it was given", got)
 	}
-	if got := canonical(t, c.Plan.Run.Unconverted); got != `{"cpus":"2.50","flag":"false"}` {
-		t.Errorf("unconverted %s", got)
+	var warned []string
+	for _, w := range c.Plan.Warnings {
+		if w.Code == problems.InputReadAsSubmitted.Code() {
+			warned = append(warned, fmt.Sprintf("%v %v %v", w.Params["input"], w.Params["type"], w.Params["given"]))
+			if strings.Contains(fmt.Sprint(w.Params), "2.50") {
+				t.Errorf("the warning shows the value: %v", w.Params)
+			}
+		}
+	}
+	slices.Sort(warned)
+	if want := []string{"cpus number text", "flag boolean text"}; !slices.Equal(warned, want) {
+		t.Errorf("warned of %v, want %v", warned, want)
 	}
 }
 
@@ -352,5 +365,37 @@ func TestStartStopsWhenCancelled(t *testing.T) {
 	in := compile.StartInput{Variables: cancellingVariables{vars, cancel}, Record: c.Record, Inputs: countingInputs{&asked}}
 	if res, _, err := compile.Start(ctx, c.Plan, in); !errors.Is(err, context.Canceled) || res != nil || asked != 0 {
 		t.Errorf("error %v, result %v, the Inputs resolver asked %d times", err, res, asked)
+	}
+}
+
+// A value typed over a default that reads a password, which the secret
+// record holds, is read as it was submitted, as a value the plan holds is:
+// a dropdown whose option reads it takes it the same either way.
+func TestStartReadsHeldValuesAsSubmitted(t *testing.T) {
+	var ds []any
+	for _, def := range []string{"'${{ inputs.pw }}'", "7"} {
+		src := workflow(`pw: {type: password}
+a: {type: number, default: ` + def + `}
+d: {type: dropdown, options: ['${{ inputs.a }}', none]}`)
+		submitted := map[string]any{"pw": "p", "a": "7", "d": "7"}
+		_, res, diags := started(t, src, submitted, testVariables{})
+		if res == nil {
+			t.Fatal(diags)
+		}
+		ds = append(ds, res.Run.Inputs.Get().(map[string]any)["d"])
+	}
+	if ds[0] != ds[1] {
+		t.Errorf("d is %#v when a's default reads a password, %#v when it doesn't", ds[0], ds[1])
+	}
+}
+
+// A condition decided again at Start reads a value the secret record holds
+// as it was submitted, as Create's did, so the run's shape doesn't change.
+func TestStartShapeUnchangedOverHeldValues(t *testing.T) {
+	src := workflow(`pw: {type: password}
+a: {type: number, default: '${{ inputs.pw }}'}
+x: {type: string, optional: true, ignore: '${{ toJSON(inputs.a) == ''"7"'' }}'}`)
+	if _, res, diags := started(t, src, map[string]any{"pw": "p", "a": "7"}, testVariables{}); res == nil {
+		t.Errorf("the run didn't start: %v", diags)
 	}
 }

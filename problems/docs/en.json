@@ -1517,5 +1517,42 @@
     "fix": [
       "Write the server as git.example.com, and the file as flows/workflow.yaml."
     ]
+  },
+  "input_read_as_submitted": {
+    "why": "Format 1 reads each input's value as it was submitted, as ACTIVATE does, and converts none: text submitted for a number or a boolean input stays text, and a number or a boolean submitted for a text input stays a number or a boolean. ACTIVATE's run form sends a number field's value as a JSON number and a checkbox's as a JSON boolean, so a value like this comes from a caller that wrote it as another JSON type. What reads the input reads the value as it is: the text \"false\" isn't empty, so an if: reads it as true.",
+    "fix": [
+      "Submit the value as its input's JSON type: 5, not \"5\", for a number, and false, not \"false\", for a boolean.",
+      "meridian validate -input converts a value by its input's type, as ACTIVATE's pw workflows run --input does."
+    ]
+  },
+  "input_flag_unsplit": {
+    "why": "-input sets one input, as path=value. Without an =, there is no path, and the problem doesn't repeat what was given, which can be a password.",
+    "fix": [
+      "Write it as path=value, as -input nodes=8."
+    ]
+  },
+  "input_flag_wrong_type": {
+    "why": "-input converts its value by the type of the input it sets, as ACTIVATE's pw workflows run --input does: a boolean input takes true or false, exactly; a number input a JSON number, so 007, 0x10, +1, .5 and 1. aren't one, nor is a number too large for 64 bits; and a header takes no value. The problem doesn't repeat the value, which can be a password.",
+    "fix": [
+      "Give the input a value of its type, as -input debug=false or -input nodes=8."
+    ]
+  },
+  "input_flag_not_json": {
+    "why": "A list, a multi-dropdown, a repeated wizard step, a group, a wizard step, a compute target, and a compute-clusters, compute-resources or bucket input with multi: true take a structure, which -input reads as JSON, as ACTIVATE's pw workflows run --input does. The problem says where the JSON goes wrong, by byte, and doesn't repeat the value, which can hold a password.",
+    "fix": [
+      "Write the value as JSON, quoted for the shell, as -input 'files=[\"a.txt\"]'."
+    ]
+  },
+  "input_flag_wrong_shape": {
+    "why": "-input reads a structure's value as JSON, which must be the shape its input takes, as ACTIVATE's pw workflows run --input reads it: an array for a list, a multi-dropdown, a repeated wizard step and a multi input, and an object for a group, a wizard step and a compute target.",
+    "fix": [
+      "Write the value as the JSON its input takes: an array, in square brackets, or an object, in braces."
+    ]
+  },
+  "input_flag_path_not_settable": {
+    "why": "A path is an input's name, or a group's name and its input's, as group.name, as ACTIVATE's pw workflows run --input reads one. A wizard step that flattens, as one does unless $meta.wizard.flatten is false, and a group with flatten: true put their inputs beside them, so those inputs are set by their own names; a list, or a repeated wizard step, is set whole, as JSON; and an input that holds no inputs has none to set.",
+    "fix": [
+      "Name the input by its own name, or set the list whole, as JSON."
+    ]
   }
 }

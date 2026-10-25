@@ -1766,5 +1766,48 @@
     "fix": [
       "把服务器写成 git.example.com，把文件写成 flows/workflow.yaml。"
     ]
+  },
+  "input_read_as_submitted": {
+    "title": "按提交时的原样读取的输入",
+    "why": "格式 1 与 ACTIVATE 一样，按提交时的原样读取每个输入的值，不做任何转换：为数字或布尔输入提交的文本仍是文本，为文本输入提交的数字或布尔值仍是数字或布尔值。ACTIVATE 的运行表单把数字字段的值作为 JSON 数字发送，把复选框的值作为 JSON 布尔值发送，所以这样的值来自以另一种 JSON 类型写入它的调用方。读取该输入的内容按值的原样读取：文本 \"false\" 不为空，所以 if: 把它读作真。",
+    "fix": [
+      "按输入的 JSON 类型提交值：数字用 5 而不是 \"5\"，布尔值用 false 而不是 \"false\"。",
+      "meridian validate 的 -input 与 ACTIVATE 的 pw workflows run --input 一样，按输入的类型转换值。"
+    ]
+  },
+  "input_flag_unsplit": {
+    "title": "没有 = 的 -input 选项",
+    "why": "-input 以 path=value 的形式设置一个输入。没有 = 就没有路径，而这个问题不会重复给出的内容，因为它可能是密码。",
+    "fix": [
+      "写成 path=value 的形式，例如 -input nodes=8。"
+    ]
+  },
+  "input_flag_wrong_type": {
+    "title": "与输入类型不符的 -input 值",
+    "why": "-input 与 ACTIVATE 的 pw workflows run --input 一样，按所设置输入的类型转换值：布尔输入只接受 true 或 false；数字输入接受 JSON 数字，所以 007、0x10、+1、.5 和 1. 都不是数字，超出 64 位的数字也不是；标题不接受值。这个问题不会重复该值，因为它可能是密码。",
+    "fix": [
+      "给输入一个符合其类型的值，例如 -input debug=false 或 -input nodes=8。"
+    ]
+  },
+  "input_flag_not_json": {
+    "title": "不是 JSON 的 -input 值",
+    "why": "列表、multi-dropdown、重复的向导步骤、组、向导步骤、计算目标，以及 multi: true 的 compute-clusters、compute-resources 或 bucket 输入接受结构，-input 与 ACTIVATE 的 pw workflows run --input 一样把它读作 JSON。这个问题按字节指出 JSON 出错的位置，不会重复该值，因为其中可能含有密码。",
+    "fix": [
+      "把值写成 JSON，并为 shell 加上引号，例如 -input 'files=[\"a.txt\"]'。"
+    ]
+  },
+  "input_flag_wrong_shape": {
+    "title": "形状不对的 -input 值",
+    "why": "-input 与 ACTIVATE 的 pw workflows run --input 一样，把结构的值读作 JSON，它必须是输入接受的形状：列表、multi-dropdown、重复的向导步骤和 multi 输入是数组，组、向导步骤和计算目标是对象。",
+    "fix": [
+      "把值写成输入接受的 JSON：用方括号括起的数组，或用花括号括起的对象。"
+    ]
+  },
+  "input_flag_path_not_settable": {
+    "title": "-input 不能设置的路径",
+    "why": "路径是输入的名称，或者像 group.name 那样是组的名称加上其输入的名称，这与 ACTIVATE 的 pw workflows run --input 的读法相同。会展平的向导步骤（除非 $meta.wizard.flatten 为 false，否则都会展平）和 flatten: true 的组会把输入放在自己旁边，所以这些输入按各自的名称设置；列表或重复的向导步骤以 JSON 整体设置；不含输入的输入没有可设置的内容。",
+    "fix": [
+      "用输入自己的名称指定它，或者以 JSON 整体设置列表。"
+    ]
   }
 }

@@ -252,5 +252,11 @@
   "source_server_unknown": "ステップの with: $host が指定する GitLab サーバー「{server}」は、ここで登録されていません。",
   "compute_target_unknown": "ここにはモード {mode} のコンピュートターゲット「{target}」がありません。",
   "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com のような、ポートを付けないホスト名ではありません。",
-  "source_with_invalid": "ステップの with: {key} は{what, select, server {GitLab サーバーの名前、つまり git.example.com のようなポートのない DNS 名ではありません} other {flows/workflow.yaml のようなリポジトリ内のファイルのパスではありません。空の名前、. や ..、制御文字は含められません}}。"
+  "source_with_invalid": "ステップの with: {key} は{what, select, server {GitLab サーバーの名前、つまり git.example.com のようなポートのない DNS 名ではありません} other {flows/workflow.yaml のようなリポジトリ内のファイルのパスではありません。空の名前、. や ..、制御文字は含められません}}。",
+  "input_read_as_submitted": "{type} 型の入力「{input}」は{given, select, text {テキストとして送信されたため、テキストとして読まれます} number {数値として送信されたため、数値として読まれます} boolean {ブール値として送信されたため、ブール値として読まれます} other {{given}}}。",
+  "input_flag_unsplit": "{position} 番目の -input に = がありません。path=value のように書いてください。",
+  "input_flag_wrong_type": "-input {path}: 入力「{input}」は {type} 型で、{type, select, boolean {true または false を取ります} number {8、-2.5、1e3 のような JSON の数値を取ります{reason, select, too_large {が、これは数値としては大きすぎます} other {}}} header {値を取りません} other {別の値を取ります}}。",
+  "input_flag_not_json": "-input {path}: 入力「{input}」は {type} 型で、JSON の{shape, select, array {配列} other {オブジェクト}}を取りますが、これは{reason, select, empty {空です} extra {JSON の値を 2 つ以上含みます} number {読み取れないほど大きな数値を含みます} other {{offset} バイト目で有効な JSON ではありません}}。",
+  "input_flag_wrong_shape": "-input {path}: 入力「{input}」は {type} 型で、JSON の{shape, select, array {配列} other {オブジェクト}}を取り、{kind, select, string {文字列} number {数値} boolean {ブール値} array {配列} object {オブジェクト} other {null}}は取りません。",
+  "input_flag_path_not_settable": "-input {path}: 入力「{input}」は{reason, select, flattened {{type} 型で、その入力はそれぞれの名前で設定します} rows {行のリストを持ちます。JSON の配列として全体を設定してください} other {{type} 型で、入力を持たないため、入力「{next}」はありません}}。"
 }

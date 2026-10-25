@@ -1,7 +1,9 @@
 description: >-
   A boolean given as the text true or false, in any case and with spaces
-  around it, is converted; any other value is an error.
-source: Meridian
+  around it, passes the boolean input's check and is read as the text, as
+  ACTIVATE reads every value as it was submitted, with a warning; any other
+  value is an error.
+source: Meridian, after ACTIVATE's reading of values as submitted
 inputs:
   a: "TRUE"
   b: "false"
@@ -9,11 +11,23 @@ inputs:
   d: " true "
 expect:
   diagnostics:
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/a
+      params: {input: a, type: boolean, given: text}
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/b
+      params: {input: b, type: boolean, given: text}
     - severity: error
       code: input_not_boolean
       path: /on/execute/inputs/c
       params: {input: c, value: '"yes"'}
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/d
+      params: {input: d, type: boolean, given: text}
   inputs:
-    a: true
-    b: false
-    d: true
+    a: "TRUE"
+    b: "false"
+    d: " true "

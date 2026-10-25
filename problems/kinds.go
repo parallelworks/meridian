@@ -101,8 +101,12 @@ var (
 	InputNotOptionList     = define(Error, "input_not_option_list", "Input takes a list of its options", "input", "value")
 	InputNotOption         = define(Error, "input_not_option", "Not one of an input's options", "input", "value", "options")
 	InputNotText           = define(Error, "input_not_text", "Input takes text", "input", "value")
-	InputLooksSecret       = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
-	InputTooDeep           = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
+	// InputReadAsSubmitted is a value submitted as another JSON type than
+	// its input's, which format 1 reads as it was submitted: given is
+	// text, number or boolean.
+	InputReadAsSubmitted = define(Warning, "input_read_as_submitted", "Input read as it was submitted", "input", "type", "given")
+	InputLooksSecret     = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
+	InputTooDeep         = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
 	// DefaultRowUnknownInput is a key of a list's default row, written in
 	// the workflow, that isn't one of its rows' inputs: input names the
 	// list, and key the key's path in the row, as in group.name.
@@ -390,22 +394,31 @@ var (
 // The meridian command's arguments, and what stops it. command is a
 // command's name, as validate, and flag an option's, without its dashes.
 var (
-	CommandMissing       = defineCommand("command_missing", "No command")
-	CommandUnknown       = defineCommand("command_unknown", "Unknown command", "command", "suggested", "suggestion")
-	CommandNotBuilt      = defineCommand("command_not_built", "Command not built yet", "command")
-	ArgumentsInvalid     = defineCommand("arguments_invalid", "Arguments a command doesn't take", "command")
-	FlagUnknown          = defineCommand("flag_unknown", "Unknown option", "command", "flag")
-	FlagNeedsValue       = defineCommand("flag_needs_value", "Option without its value", "command", "flag")
-	FlagValueInvalid     = defineCommand("flag_value_invalid", "Option's value not one it takes", "command", "flag", "value")
-	FlagSyntax           = defineCommand("flag_syntax", "Argument that isn't an option", "command", "argument")
-	InputPathInvalid     = defineCommand("input_path_invalid", "Input path that isn't names joined with dots", "path")
-	InputPathConflict    = defineCommand("input_path_conflict", "Input path through a value", "path")
-	InputsFileInvalid    = defineCommand("inputs_file_invalid", "File of inputs that isn't JSON", "reason")
-	InputsFileNotObject  = defineCommand("inputs_file_not_object", "File of inputs that isn't an object")
-	InputsFileExtra      = defineCommand("inputs_file_extra", "File of inputs with more than one value")
-	InputsNumberTooLarge = defineCommand("inputs_number_too_large", "Number too large", "number")
-	Interrupted          = defineCommand("interrupted", "Interrupted")
-	UnexpectedError      = defineCommand("unexpected_error", "Unexpected error", "reason")
+	CommandMissing    = defineCommand("command_missing", "No command")
+	CommandUnknown    = defineCommand("command_unknown", "Unknown command", "command", "suggested", "suggestion")
+	CommandNotBuilt   = defineCommand("command_not_built", "Command not built yet", "command")
+	ArgumentsInvalid  = defineCommand("arguments_invalid", "Arguments a command doesn't take", "command")
+	FlagUnknown       = defineCommand("flag_unknown", "Unknown option", "command", "flag")
+	FlagNeedsValue    = defineCommand("flag_needs_value", "Option without its value", "command", "flag")
+	FlagValueInvalid  = defineCommand("flag_value_invalid", "Option's value not one it takes", "command", "flag", "value")
+	FlagSyntax        = defineCommand("flag_syntax", "Argument that isn't an option", "command", "argument")
+	InputPathInvalid  = defineCommand("input_path_invalid", "Input path that isn't names joined with dots", "path")
+	InputPathConflict = defineCommand("input_path_conflict", "Input path through a value", "path")
+	// The -input options that validate can't convert by their inputs'
+	// types: position is an -input's place among them, from 1; reason,
+	// shape and kind say what is wrong, and next is the name a path goes
+	// on to.
+	InputFlagUnsplit         = defineCommand("input_flag_unsplit", "Input option without =", "position")
+	InputFlagWrongType       = defineCommand("input_flag_wrong_type", "Input option's value not of its input's type", "path", "input", "type", "reason")
+	InputFlagNotJSON         = defineCommand("input_flag_not_json", "Input option's value that isn't JSON", "path", "input", "type", "shape", "reason", "offset")
+	InputFlagWrongShape      = defineCommand("input_flag_wrong_shape", "Input option's value of the wrong shape", "path", "input", "type", "shape", "kind")
+	InputFlagPathNotSettable = defineCommand("input_flag_path_not_settable", "Input option's path not one it sets", "path", "input", "type", "reason", "next")
+	InputsFileInvalid        = defineCommand("inputs_file_invalid", "File of inputs that isn't JSON", "reason")
+	InputsFileNotObject      = defineCommand("inputs_file_not_object", "File of inputs that isn't an object")
+	InputsFileExtra          = defineCommand("inputs_file_extra", "File of inputs with more than one value")
+	InputsNumberTooLarge     = defineCommand("inputs_number_too_large", "Number too large", "number")
+	Interrupted              = defineCommand("interrupted", "Interrupted")
+	UnexpectedError          = defineCommand("unexpected_error", "Unexpected error", "reason")
 )
 
 // meridian worker's own problems, which end it: variable is an environment

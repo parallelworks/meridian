@@ -1766,5 +1766,48 @@
     "fix": [
       "서버는 git.example.com처럼, 파일은 flows/workflow.yaml처럼 쓰세요."
     ]
+  },
+  "input_read_as_submitted": {
+    "title": "제출된 그대로 읽히는 입력",
+    "why": "형식 1은 ACTIVATE와 마찬가지로 각 입력의 값을 제출된 그대로 읽으며, 아무것도 변환하지 않습니다. 숫자나 불리언 입력에 제출된 텍스트는 텍스트로 남고, 텍스트 입력에 제출된 숫자나 불리언은 숫자나 불리언으로 남습니다. ACTIVATE의 실행 양식은 숫자 필드의 값을 JSON 숫자로, 체크박스의 값을 JSON 불리언으로 보내므로, 이런 값은 다른 JSON 유형으로 쓴 호출자에게서 옵니다. 입력을 읽는 것은 값을 있는 그대로 읽습니다. 텍스트 \"false\"는 비어 있지 않으므로 if:는 이를 참으로 읽습니다.",
+    "fix": [
+      "값을 그 입력의 JSON 유형으로 제출하세요. 숫자라면 \"5\"가 아니라 5, 불리언이라면 \"false\"가 아니라 false입니다.",
+      "meridian validate의 -input은 ACTIVATE의 pw workflows run --input과 마찬가지로 입력의 유형에 따라 값을 변환합니다."
+    ]
+  },
+  "input_flag_unsplit": {
+    "title": "=가 없는 -input 옵션",
+    "why": "-input은 path=value 형태로 입력 하나를 설정합니다. =가 없으면 경로가 없으며, 이 문제는 주어진 내용을 되풀이하지 않습니다. 그것이 비밀번호일 수 있기 때문입니다.",
+    "fix": [
+      "-input nodes=8처럼 path=value 형태로 쓰세요."
+    ]
+  },
+  "input_flag_wrong_type": {
+    "title": "입력의 유형에 맞지 않는 -input 값",
+    "why": "-input은 ACTIVATE의 pw workflows run --input과 마찬가지로 설정하는 입력의 유형에 따라 값을 변환합니다. 불리언 입력은 정확히 true 또는 false를, 숫자 입력은 JSON 숫자를 받으므로 007, 0x10, +1, .5, 1.은 숫자가 아니며, 64비트에 담기지 않는 숫자도 마찬가지입니다. 헤더는 값을 받지 않습니다. 이 문제는 값을 되풀이하지 않습니다. 그것이 비밀번호일 수 있기 때문입니다.",
+    "fix": [
+      "-input debug=false나 -input nodes=8처럼 입력의 유형에 맞는 값을 주세요."
+    ]
+  },
+  "input_flag_not_json": {
+    "title": "JSON이 아닌 -input 값",
+    "why": "목록, multi-dropdown, 반복되는 마법사 단계, 그룹, 마법사 단계, 컴퓨트 대상, 그리고 multi: true인 compute-clusters, compute-resources, bucket 입력은 구조를 받으며, -input은 ACTIVATE의 pw workflows run --input과 마찬가지로 이를 JSON으로 읽습니다. 이 문제는 JSON이 잘못된 위치를 바이트로 알려 주며, 값은 되풀이하지 않습니다. 값에 비밀번호가 담겨 있을 수 있기 때문입니다.",
+    "fix": [
+      "-input 'files=[\"a.txt\"]'처럼 셸에 맞게 따옴표로 감싼 JSON으로 값을 쓰세요."
+    ]
+  },
+  "input_flag_wrong_shape": {
+    "title": "형태가 다른 -input 값",
+    "why": "-input은 ACTIVATE의 pw workflows run --input과 마찬가지로 구조의 값을 JSON으로 읽으며, 그 값은 입력이 받는 형태여야 합니다. 목록, multi-dropdown, 반복되는 마법사 단계, multi 입력은 배열이고, 그룹, 마법사 단계, 컴퓨트 대상은 객체입니다.",
+    "fix": [
+      "입력이 받는 JSON으로 값을 쓰세요. 대괄호로 감싼 배열이나 중괄호로 감싼 객체입니다."
+    ]
+  },
+  "input_flag_path_not_settable": {
+    "title": "설정할 수 없는 -input 경로",
+    "why": "경로는 ACTIVATE의 pw workflows run --input이 읽는 대로 입력의 이름, 또는 group.name처럼 그룹의 이름과 그 입력의 이름입니다. 평탄화되는 마법사 단계($meta.wizard.flatten이 false가 아니면 평탄화됩니다)와 flatten: true인 그룹은 입력을 옆에 두므로, 그 입력은 각자의 이름으로 설정합니다. 목록이나 반복되는 마법사 단계는 JSON으로 전체를 설정하며, 입력을 담지 않은 입력에는 설정할 것이 없습니다.",
+    "fix": [
+      "입력을 자신의 이름으로 지정하거나, 목록을 JSON으로 전체 설정하세요."
+    ]
   }
 }

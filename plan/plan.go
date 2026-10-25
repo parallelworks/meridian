@@ -45,14 +45,6 @@ type Run struct {
 	// Inputs are the run's input values, with defaults applied and ignored
 	// inputs left out: a mapping.
 	Inputs Data `json:"inputs,omitzero"`
-	// Unconverted are the values of the inputs Inputs holds that the
-	// compiler converted to their types, or a platform resolved, as the run
-	// was given them, by their input's path: the text "2.50" of a number,
-	// or a cluster's name. What the compiler evaluated of the inputs, their
-	// defaults and conditions, read them as they were given, before they
-	// were converted, and so does what Start evaluates, which then reads
-	// Inputs' (docs/design.md, Starting a run).
-	Unconverted map[string]Data `json:"unconverted,omitempty"`
 	// Definitions are the workflow's input definitions, on.execute.inputs,
 	// as the workflow writes them, with their expressions parsed, but for
 	// what Withheld names. Start evaluates what is left to it where the

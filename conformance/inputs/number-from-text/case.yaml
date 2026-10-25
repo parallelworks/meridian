@@ -1,10 +1,17 @@
 description: >-
-  A number given as text, even with spaces around it, is converted, and a
-  number input's default is its value.
-source: Meridian
+  A number given as text, even with spaces around it, is read as the text,
+  as ACTIVATE reads every value as it was submitted, with a warning; it
+  passes the number input's check, as it reads as a number. A number
+  input's default is its value.
+source: Meridian, after ACTIVATE's reading of values as submitted
 inputs:
   count: " 4 "
 expect:
+  diagnostics:
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/count
+      params: {input: count, type: number, given: text}
   inputs:
-    count: 4
+    count: " 4 "
     ratio: 0.5

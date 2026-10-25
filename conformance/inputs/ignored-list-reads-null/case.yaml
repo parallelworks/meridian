@@ -3,7 +3,7 @@ description: >-
   that is ignored, with rows submitted for it, is null to a condition that
   reads it once it is ignored, rather than its rows' fields without their
   values. Defaults are filled in before conditions are evaluated, so a
-  default reads its rows.
+  default reads its rows, and gives the number it does.
 source: Meridian
 inputs:
   extra:
@@ -11,5 +11,5 @@ inputs:
   warn: shown
 expect:
   inputs:
-    summary: "1"
+    summary: 1
     warn: shown

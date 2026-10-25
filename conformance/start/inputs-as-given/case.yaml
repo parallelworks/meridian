@@ -1,18 +1,22 @@
 description: >-
-  What the run evaluates as it starts reads the inputs as they were given,
-  as what was evaluated when the run was created read them, before they
-  were converted to their types: a default, a condition decided again and
-  the workflow's env: read the text 2.50 a form sent for a number. The run's
-  values hold the number.
-source: Meridian
+  The run reads the inputs as they were given, as ACTIVATE does: what is
+  evaluated when the run is created, a default, a condition decided again
+  and the workflow's env:, read the text 2.50 a form sent for a number, and
+  the run's values hold it, with a warning.
+source: Meridian, after ACTIVATE's reading of values as submitted
 contexts:
   org:
     PREFIX: p
 inputs:
   cpus: "2.50"
 expect:
+  diagnostics:
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/cpus
+      params: {input: cpus, type: number, given: text}
   inputs:
-    cpus: 2.5
+    cpus: "2.50"
     label: p-2.50
   env:
     CPUS: "2.50"
