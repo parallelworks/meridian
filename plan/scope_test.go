@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -103,6 +104,44 @@ func TestNewScopePhases(t *testing.T) {
 			if got := evalIn(t, tc.src, plan.NewScope(phase, c)); got != tc.want[i] {
 				t.Errorf("%s in %v (%d) = %q, want %q", tc.src, phase, phase, got, tc.want[i])
 			}
+		}
+	}
+}
+
+// The phases' one table: NewScope gives each phase the contexts and the
+// status functions that Knows and KnowsStatus say it knows, and no other,
+// so the compiler's checks of what an expression reads, which use them,
+// agree with what each phase reads. The phases keep the names the
+// problems' params have always given them.
+func TestPhaseKnows(t *testing.T) {
+	contexts := []string{"inputs", "org", "vars", "remote", "sessions", "env", "needs", "matrix", "job", "steps"}
+	for phase, want := range map[plan.Phase]struct {
+		name  string
+		knows []string
+	}{
+		plan.PhaseCreate:   {"run_created", contexts[:5]},
+		plan.PhaseStart:    {"run_created", contexts[:6]},
+		plan.PhaseStrategy: {"strategy", contexts[:7]},
+		plan.PhaseReady:    {"job_ready", contexts[:8]},
+		plan.PhaseJobEnv:   {"job_env", contexts[:9]},
+		plan.PhaseStep:     {"other", contexts},
+		plan.PhaseEnd:      {"other", contexts},
+	} {
+		if phase.String() != want.name {
+			t.Errorf("phase %d is %q, want %q", phase, phase, want.name)
+		}
+		scope := plan.NewScope(phase, plan.Contexts{})
+		for _, c := range append(contexts, "status", "var", "") {
+			_, has := scope.Contexts[c]
+			if knows := phase.Knows(c); knows != has || knows != slices.Contains(want.knows, c) {
+				t.Errorf("%v (%d) knows %s %v, its scope has it %v", phase, phase, c, knows, has)
+			}
+		}
+		if len(scope.Contexts) != len(want.knows) {
+			t.Errorf("%v (%d) has the contexts %v", phase, phase, slices.Sorted(maps.Keys(scope.Contexts)))
+		}
+		if knows, has := phase.KnowsStatus(), scope.Status != nil; knows != has || knows != (phase >= plan.PhaseStrategy) {
+			t.Errorf("%v (%d) knows the status functions %v, its scope has them %v", phase, phase, knows, has)
 		}
 	}
 }

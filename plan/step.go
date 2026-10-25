@@ -753,10 +753,10 @@ func (c *stepContexts) evaluation(phase Phase, e *evaluation) *evaluation {
 	c.Private, c.Secrets = slices.Clone(c.private), slices.Clone(c.secrets)
 	for name, read := range jsonvalue.Sorted(marks) {
 		if read.Private {
-			c.Private = append(c.Private, "env."+name)
+			c.Private = append(c.Private, JoinPath("env", name))
 		}
 		if read.Marked {
-			c.Secrets = append(c.Secrets, "env."+name)
+			c.Secrets = append(c.Secrets, JoinPath("env", name))
 		}
 	}
 	next := &evaluation{

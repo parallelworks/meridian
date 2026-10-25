@@ -2,7 +2,6 @@ package compile
 
 import (
 	"cmp"
-	"maps"
 	"slices"
 	"strconv"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
+	"github.com/parallelworks/meridian/plan"
 )
 
 // viewState is what the inputResolver keeps of what expressions read of
@@ -21,10 +21,12 @@ type viewState struct {
 	byPath *reach.Trie[*field]
 	// view is what expressions read of the values (evalValues): made when
 	// they are first read, and then changed where the values, or what is
-	// known of them, change (refresh). contexts are what evaluations read,
-	// the view among them.
-	view     map[string]any
-	contexts map[string]any
+	// known of them, change (refresh). created is what evaluations read,
+	// made with the view: the scope of what is known when the run is
+	// created, as plan.NewScope builds it (createContexts), whose inputs
+	// are the view.
+	view    map[string]any
+	created expr.Scope
 	// evaluators evaluate expressions with the values as they are, one for
 	// the rows at each index. They are made again once the values change.
 	evaluators map[string]*expr.Evaluator
@@ -63,18 +65,20 @@ func indexKey(index []int) string {
 }
 
 // scope returns the scope that what the compiler evaluates with the
-// inputs' values reads: the values as they are (evalValues), and the marks,
-// in the inputs' group, which shares one budget.
+// inputs' values reads: Create's (created), with the values as they are
+// (evalValues), and marking what reads a variable or a password (marks),
+// which is what the compiler asks of an evaluation (EvalMarked), in the
+// inputs' group, which shares one budget.
 func (r *inputResolver) scope() expr.Scope {
 	if r.view == nil {
 		r.view = r.evalValues()
-		r.contexts = compileTimeContexts(r.opts, r.view)
+		r.created = plan.NewScope(plan.PhaseCreate, createContexts(r.opts, r.view))
+		r.budget = r.created.Budgeted()
 	}
 	if r.checkView != nil {
 		r.checkView()
 	}
 	scope := r.budget
-	scope.Contexts = r.contexts
 	scope.Marked = r.marks
 	return scope
 }
@@ -245,12 +249,36 @@ func (r *inputResolver) evalValues() map[string]any {
 	return values
 }
 
-// compileTimeContexts returns the contexts known when the run is created:
-// inputs, and the caller's org, vars, remote and sessions. org, vars and
-// remote default to empty, which reads every name as "".
-func compileTimeContexts(opts Options, inputs any) map[string]any {
-	contexts := map[string]any{"org": map[string]any{}, "vars": map[string]any{}, "remote": map[string]any{}}
-	maps.Copy(contexts, opts.Contexts)
-	contexts["inputs"] = inputs
-	return contexts
+// createContexts returns what is known when the run is created, as
+// plan.NewScope reads it: the input values, inputs, and the caller's org,
+// vars, remote and sessions (Options.Contexts). A context the caller
+// doesn't give is empty, which reads every name as "", but for sessions,
+// which a session provider gives: without them, they aren't known yet. A
+// secret variable, whose value is an expr.Unknown, isn't known yet, and
+// nor is a context the caller gives as one.
+func createContexts(opts Options, inputs map[string]any) plan.Contexts {
+	c := plan.Contexts{Run: plan.RunValues{Inputs: plan.DataOf(inputs)}}
+	for name, values := range map[string]*map[string]string{
+		"org": &c.Run.Org, "vars": &c.Run.Vars, "remote": &c.Run.Remote, "sessions": &c.Run.Sessions,
+	} {
+		switch m := opts.Contexts[name].(type) {
+		case nil:
+			if name == "sessions" {
+				c.Unknown = append(c.Unknown, name)
+			}
+		case map[string]any:
+			*values = make(map[string]string, len(m))
+			for k, v := range m {
+				if _, unknown := v.(expr.Unknown); unknown {
+					c.Unknown = append(c.Unknown, plan.JoinPath(name, k))
+					continue
+				}
+				(*values)[k], _ = v.(string)
+			}
+		default:
+			c.Unknown = append(c.Unknown, name)
+		}
+	}
+	slices.Sort(c.Unknown)
+	return c
 }

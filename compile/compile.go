@@ -40,6 +40,9 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		source.Revision = "sha256:" + hex.EncodeToString(sum[:])
 	}
 	p := &plan.Plan{Version: plan.Version, Run: c.run(source), Jobs: c.jobs()}
+	// The inputs' secrets, derived and private values are named by their
+	// paths in the inputs' values (plan.JoinPath), so inputs. and the name
+	// name one in the run.
 	for k := range inputs.secrets {
 		c.secrets["inputs."+k] = true
 	}
@@ -229,7 +232,15 @@ func maskedIf(marked bool, err error) error {
 	return err
 }
 
-// run compiles what the plan holds about the run as a whole.
+// run compiles what the plan holds about the run as a whole. Its
+// expressions are checked with what Create knows (plan.PhaseCreate), so
+// they read no env: sessions: and links: are evaluated as the run is
+// created, and Start evaluates the workflow's env: and timeout:, but the
+// workflow's env: is what env holds, and format 1 never read env in the
+// workflow's timeout:, as ACTIVATE leaves an expression there that reads
+// it as its text, and so ignores the timeout. Input definitions, which
+// Start evaluates with the workflow's env (plan.PhaseStart), aren't
+// checked for what they read yet.
 func (c *compiler) run(source plan.Source) plan.Run {
 	w := c.doc.Value
 	r := plan.Run{
@@ -239,8 +250,8 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		Icon:      str(w["icon"]),
 		Thumbnail: str(w["thumbnail"]),
 		Inputs:    plan.DataOf(c.inputs.kept()),
-		Env:       c.values([]string{"env"}, runCreated, nil),
-		Timeout:   c.value([]string{"timeout"}, runCreated, nil),
+		Env:       c.values([]string{"env"}, plan.PhaseCreate, nil),
+		Timeout:   c.value([]string{"timeout"}, plan.PhaseCreate, nil),
 
 		DeferredInputs: c.inputs.deferred(),
 	}
@@ -251,7 +262,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		}
 	}
 	for _, key := range []string{"sessions", "links"} {
-		c.check([]string{key}, w[key], runCreated, nil)
+		c.check([]string{key}, w[key], plan.PhaseCreate, nil)
 	}
 	c.checkDefinitions(slices.Clip(definitionsPath), lookup(w, definitionsPath))
 	c.checkInputNames(c.inputs.fields)
@@ -313,7 +324,7 @@ func mapping(v any) map[string]any {
 
 // value checks the value at loc in the workflow and returns it as a plan
 // Value, or the zero Value if it isn't there or has errors.
-func (c *compiler) value(loc []string, ph phase, job *jobInfo) plan.Value {
+func (c *compiler) value(loc []string, ph plan.Phase, job *jobInfo) plan.Value {
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
 		return plan.Value{}
@@ -326,7 +337,7 @@ func (c *compiler) value(loc []string, ph phase, job *jobInfo) plan.Value {
 }
 
 // values compiles a mapping of values, such as an env:.
-func (c *compiler) values(loc []string, ph phase, job *jobInfo) map[string]plan.Value {
+func (c *compiler) values(loc []string, ph plan.Phase, job *jobInfo) map[string]plan.Value {
 	m := mapping(lookup(c.doc.Value, loc))
 	if len(m) == 0 {
 		return nil
@@ -344,7 +355,7 @@ func (c *compiler) values(loc []string, ph phase, job *jobInfo) map[string]plan.
 // when it has an operator, a dot, parentheses or brackets; a lone word,
 // such as always or true, stays a word. Written empty, it is null, which
 // the plan keeps, and which is false.
-func (c *compiler) condition(loc []string, ph phase, job *jobInfo) plan.Value {
+func (c *compiler) condition(loc []string, ph plan.Phase, job *jobInfo) plan.Value {
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
 	if !ok {
 		return plan.Value{}
@@ -393,7 +404,7 @@ func bareCondition(s string) (cond string, start int, ok bool) {
 // place, so that the walk of a deep value reuses one path: the caller's loc
 // must own the room after it, and nothing keeps loc once a string's check
 // is done.
-func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) (any, bool) {
+func (c *compiler) check(loc []string, raw any, ph plan.Phase, job *jobInfo) (any, bool) {
 	switch v := raw.(type) {
 	case string:
 		return c.checkString(loc, v, ph, job)
@@ -419,7 +430,7 @@ func (c *compiler) check(loc []string, raw any, ph phase, job *jobInfo) (any, bo
 
 // checkString checks the expressions in s, the string at loc, and returns s
 // parsed: a template, or s itself if it has no expressions.
-func (c *compiler) checkString(loc []string, s string, ph phase, job *jobInfo) (any, bool) {
+func (c *compiler) checkString(loc []string, s string, ph plan.Phase, job *jobInfo) (any, bool) {
 	t, ok := c.parse(loc, s, 0)
 	if t == nil {
 		return s, ok
@@ -435,7 +446,7 @@ func (c *compiler) checkString(loc []string, s string, ph phase, job *jobInfo) (
 // shift bytes after where s puts them, as a wrapped if:'s are, and returns s
 // parsed as checkString does. An if: that is one expression and nothing else
 // gets the checks of a condition.
-func (c *compiler) checkCondition(loc []string, s string, shift int, ph phase, job *jobInfo) (any, bool) {
+func (c *compiler) checkCondition(loc []string, s string, shift int, ph plan.Phase, job *jobInfo) (any, bool) {
 	t, ok := c.parse(loc, s, shift)
 	if t == nil {
 		return s, ok
@@ -473,7 +484,7 @@ func (c *compiler) parse(loc []string, s string, shift int) (*expr.Template, boo
 // checkExpr checks e, an expression whose source is at byte offset at in
 // the string in, and reports problems, its probable mistakes. It returns
 // false if e has an error.
-func (c *compiler) checkExpr(in *spot, at int, e *expr.Expr, found []expr.Problem, ph phase, job *jobInfo) bool {
+func (c *compiler) checkExpr(in *spot, at int, e *expr.Expr, found []expr.Problem, ph plan.Phase, job *jobInfo) bool {
 	for _, p := range found {
 		c.reportProblem(in, at+p.Offset, p, job)
 	}
@@ -482,8 +493,8 @@ func (c *compiler) checkExpr(in *spot, at int, e *expr.Expr, found []expr.Proble
 		c.reportIn(in, at, problems.RelativeOutsideDefinitions, nil)
 		ok = false
 	}
-	if used, _ := e.StatusChecks(); used && !ph.has("status") {
-		c.reportIn(in, at, problems.StatusNotKnown, problems.Params{"phase": ph.name()})
+	if used, _ := e.StatusChecks(); used && !ph.KnowsStatus() {
+		c.reportIn(in, at, problems.StatusNotKnown, problems.Params{"phase": ph.String()})
 		ok = false
 	}
 	for _, r := range e.Refs() {

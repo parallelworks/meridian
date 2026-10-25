@@ -30,7 +30,7 @@ func (c *compiler) variables(p *plan.Plan) []string {
 			case unnamed(r.Path):
 				read[r.Context] = true
 			case !c.isSecret(r.Context, r.Path[0]):
-				read[r.Context+"."+r.Path[0]] = true
+				read[plan.JoinPath(r.Context, r.Path[0])] = true
 			}
 		}
 	}

@@ -3,7 +3,6 @@ package compile
 import (
 	"errors"
 	"slices"
-	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
@@ -45,7 +44,11 @@ var platformTypes = map[string]bool{
 	"pbs-queues": true, "ai-model": true, "allocations": true,
 }
 
-// Inputs are a run's input values.
+// Inputs are a run's input values. Deferred, Secrets and Private name each
+// value by its path in the values, as plan.JoinPath names it: keys joined
+// with dots, a key's own . and ~ written ~1 and ~0, as in db~1pass for a
+// submitted value's key db.pass. The plan names the same value with
+// inputs. before it.
 type Inputs struct {
 	// Values are the input values, with defaults applied, and ignored inputs
 	// and passwords left out.
@@ -82,9 +85,12 @@ type Options struct {
 	// Nil means there is no platform.
 	Inputs InputResolver
 	// Contexts are what expressions read when the run is created, besides
-	// inputs: org, vars, remote and sessions. The value of a secret
-	// variable is an expr.Unknown, so that an expression that reads it is
-	// evaluated once the run is underway. The plan holds no organization
+	// inputs: org, vars, remote and sessions, each a mapping of strings by
+	// name, as plan.NewScope gives them. The value of a secret variable is
+	// an expr.Unknown, so that an expression that reads it is evaluated
+	// once the run is underway, and a whole context's value can be one too.
+	// A context that isn't given is empty, but for sessions, which aren't
+	// known without a session provider. The plan holds no organization
 	// or user variable's value, secret or not: the compiler reads them to
 	// decide the run's shape, such as which inputs are ignored and which
 	// jobs a job needs, and keeps what else reads them an expression.
@@ -115,7 +121,6 @@ func newInputResolver(doc *format.Document, submitted map[string]any, opts Optio
 		doc:          doc,
 		opts:         opts,
 		workflow:     &expr.Workflow{Root: doc.Value, Definitions: definitionsPath},
-		budget:       expr.Scope{}.Budgeted(),
 		values:       jsonvalue.CloneMap(submitted),
 		secrets:      map[string]any{},
 		private:      map[string]any{},
@@ -169,10 +174,11 @@ type inputResolver struct {
 	reporter
 	opts     Options
 	workflow *expr.Workflow
-	// budget holds the one budget that every evaluation of the inputs'
-	// expressions shares, and the jobs' needs: what decides the run's shape
-	// is one group, for Meridian's limits on what a group does. Each
-	// template has the language's limits as well.
+	// budget is Create's scope (viewState.created) with the one budget that
+	// every evaluation of the inputs' expressions shares, and the jobs'
+	// needs, made with the view: what decides the run's shape is one group,
+	// for Meridian's limits on what a group does. Each template has the
+	// language's limits as well.
 	budget expr.Scope
 	values map[string]any
 	secretState
@@ -207,7 +213,7 @@ func (r *inputResolver) deferred() map[string]plan.Value {
 			if out == nil {
 				out = map[string]plan.Value{}
 			}
-			out[strings.Join(f.path, ".")] = f.dflt
+			out[plan.JoinPath(f.path...)] = f.dflt
 		}
 	}
 	return out

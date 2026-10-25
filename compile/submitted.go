@@ -9,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -180,7 +181,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 			// A value that the default rows have at key, written in the
 			// workflow, is the workflow's, not a secret.
 			if r.namesPassword(key, v, inputs) && !inputs.isDefault(key, v) {
-				r.secrets[strings.Join(at, ".")] = v
+				r.secrets[plan.JoinPath(at...)] = v
 				r.unknownSecrets = append(r.unknownSecrets, at)
 				r.mark(at)
 			}

@@ -65,6 +65,35 @@ func (p Phase) String() string {
 	return "other"
 }
 
+// Knows reports whether an expression evaluated in p can read context, one
+// of the contexts' names (docs/design.md, Contexts), as NewScope gives it:
+// a phase knows the contexts of the phases before it too. inputs, org,
+// vars, remote and sessions are known from Create, env from Start, the
+// workflow's, needs from Strategy, matrix from Ready, job from JobEnv, and
+// steps from Step. Another name is known in no phase. The compiler reports
+// reading a context where it isn't known yet with it (context_not_known).
+func (p Phase) Knows(context string) bool {
+	switch context {
+	case "inputs", "org", "vars", "remote", "sessions":
+		return true
+	case "env":
+		return p >= PhaseStart
+	case "needs":
+		return p >= PhaseStrategy
+	case "matrix":
+		return p >= PhaseReady
+	case "job":
+		return p >= PhaseJobEnv
+	case "steps":
+		return p >= PhaseStep
+	}
+	return false
+}
+
+// KnowsStatus reports whether an expression evaluated in p can call the
+// status functions, as NewScope gives them: from Strategy on, with needs.
+func (p Phase) KnowsStatus() bool { return p >= PhaseStrategy }
+
 // RunValues are what the phases after Start read of the run as a whole:
 // the plan's, completed by Start (compile.StartResult). An attempt receives
 // the part its job reads when it is claimed (Job.Reads).
@@ -72,8 +101,9 @@ func (p Phase) String() string {
 // A value is named by its path: its context, then the keys that lead to it
 // from there, a list's items by their indexes, joined with dots, as
 // Run.Secrets names one: inputs.creds.0.pass, vars.token, env.TOKEN. A
-// context's name alone is all of it. The names of the format's inputs,
-// variables and env never hold a dot.
+// key's own . and ~ are written ~1 and ~0, as in inputs.db~1pass for a
+// submitted value's key db.pass (JoinPath, SplitPath). A context's name
+// alone is all of it.
 type RunValues struct {
 	// Format is the workflow's format, whose rules evaluation follows.
 	Format int `json:"format"`
@@ -202,7 +232,7 @@ func (r RunValues) secretStrings() (own, derived []string) {
 			if isDerived[name] != wantDerived {
 				continue
 			}
-			v, ok := jsonptr.Lookup(all, splitPath(name))
+			v, ok := jsonptr.Lookup(all, SplitPath(name))
 			if !ok {
 				continue
 			}
@@ -384,7 +414,10 @@ type Contexts struct {
 // needs.build, steps.build.outputs or steps.build.result, reads as its own
 // text, as format 1 reads it (ReadsAsText).
 //
-// The status functions are known from Strategy on, as Status says.
+// The status functions are known from Strategy on, as Status says. Which
+// phase knows each context, and the status functions, is Phase.Knows and
+// Phase.KnowsStatus, which the compiler's checks of what an expression
+// reads use too.
 //
 // It marks two sets of values, which an evaluation reports reading apart
 // (expr.Read): Scope.Marked, the secrets, which Run.Secrets and Secrets
@@ -398,7 +431,9 @@ type Contexts struct {
 // templates (expr.Scope.Budgeted). Its Resolver and Index are the caller's
 // to set, for input definitions. The compiler, the coordinator, the worker
 // and the WebAssembly package all build their scopes with NewScope, so a
-// context has one shape everywhere. The scope holds c's input values and
+// context has one shape everywhere; the compiler, as it fills in the
+// inputs, marks in Marked what reads a variable or a password, which is
+// what it asks of each evaluation. The scope holds c's input values and
 // matrix values as they are, which an evaluation never changes, and nothing
 // else of c.
 func NewScope(phase Phase, c Contexts) expr.Scope { return newScope(phase, c, nil) }
@@ -426,7 +461,7 @@ func newScope(phase Phase, c Contexts, shared *sharedContexts) expr.Scope {
 	// layered holds the env names a later layer than the workflow's gives,
 	// whose values Run's marks don't mark.
 	var layered map[string]bool
-	if phase >= PhaseStart {
+	if phase.Knows("env") {
 		env := stringsContext(r.Env)
 		var layers []map[string]string
 		if phase >= PhaseJobEnv {
@@ -452,7 +487,7 @@ func newScope(phase Phase, c Contexts, shared *sharedContexts) expr.Scope {
 	if c.StrictOutputs {
 		scope.Missing = strictOutputs(c.Needs, c.Steps)
 	}
-	if phase >= PhaseStrategy {
+	if phase.Knows("needs") {
 		if shared.needs == nil {
 			shared.needs = needsContext(c.Needs)
 		}
@@ -473,26 +508,28 @@ func newScope(phase Phase, c Contexts, shared *sharedContexts) expr.Scope {
 				}
 			}
 		}
+	}
+	if phase.KnowsStatus() {
 		status := c.Status
 		scope.Status = &status
 	}
-	if phase >= PhaseReady {
+	if phase.Knows("matrix") {
 		contexts["matrix"] = c.mapping("matrix", c.Matrix)
 	}
-	if phase >= PhaseJobEnv {
+	if phase.Knows("job") {
 		j := c.Job
 		contexts["job"] = map[string]any{
 			"name": j.Name, "key": j.Key, "attempt": int64(j.Attempt), "group": j.Group, "member": j.Member,
 		}
 	}
-	if phase >= PhaseStep {
+	if phase.Knows("steps") {
 		if shared.steps == nil {
 			shared.steps = stepsContext(c.Steps)
 		}
 		contexts["steps"] = shared.steps
 	}
 	for _, name := range c.Unknown {
-		path := splitPath(name)
+		path := SplitPath(name)
 		if _, ok := contexts[path[0]]; !ok {
 			continue
 		}
@@ -506,7 +543,7 @@ func newScope(phase Phase, c Contexts, shared *sharedContexts) expr.Scope {
 	// secret is set. Run's don't mark an env value a later layer gives.
 	mark := func(names []string, run, secret bool) {
 		for _, name := range names {
-			path := splitPath(name)
+			path := SplitPath(name)
 			if run && len(path) > 1 && path[0] == "env" && layered[path[1]] {
 				continue
 			}

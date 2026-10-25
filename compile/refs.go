@@ -127,9 +127,9 @@ func (n *inputNames) group(f *field) *groupNames {
 // define is a warning, as ACTIVATE reads it as null or "" and runs the
 // workflow, unless ACTIVATE fails the step or job that reads it. checkRef
 // returns false if the reference is an error.
-func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int) bool {
-	if !ph.has(r.Context) {
-		c.reportIn(in, at, problems.ContextNotKnown, problems.Params{"context": r.Context, "phase": ph.name()})
+func (c *compiler) checkRef(r expr.Ref, ph plan.Phase, job *jobInfo, in *spot, at int) bool {
+	if !ph.Knows(r.Context) {
+		c.reportIn(in, at, problems.ContextNotKnown, problems.Params{"context": r.Context, "phase": ph.String()})
 		return false
 	}
 	c.recordSecret(r)
@@ -145,7 +145,7 @@ func (c *compiler) checkRef(r expr.Ref, ph phase, job *jobInfo, in *spot, at int
 		f = c.checkNeedsRef(path, ph, job)
 	case "steps":
 		// A job's outputs read a step's missing output as "".
-		f = c.checkStepRef(path, job, ph == jobEnds)
+		f = c.checkStepRef(path, job, ph == plan.PhaseEnd)
 	case "matrix":
 		switch {
 		case job == nil || !job.matrix:
@@ -242,13 +242,13 @@ func (c *compiler) recordSecret(r expr.Ref) {
 	}
 	if !unnamed(r.Path) {
 		if c.isSecret(r.Context, r.Path[0]) {
-			c.secrets[r.Context+"."+r.Path[0]] = true
+			c.secrets[plan.JoinPath(r.Context, r.Path[0])] = true
 		}
 		return
 	}
 	for name := range mapping(c.opts.Contexts[r.Context]) {
 		if c.isSecret(r.Context, name) {
-			c.secrets[r.Context+"."+name] = true
+			c.secrets[plan.JoinPath(r.Context, name)] = true
 		}
 	}
 }
@@ -304,10 +304,10 @@ func (c *compiler) checkInputRef(path []string) finding {
 // warning, as format 1 reads it as its own text (plan.ReadsAsText). A
 // job's outputs are whatever its steps write, so their names aren't
 // checked.
-func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding {
+func (c *compiler) checkNeedsRef(path []string, ph plan.Phase, job *jobInfo) finding {
 	name := path[0]
 	needed, ok := c.jobInfos[name]
-	self := job != nil && name == job.name && ph >= stepRuns
+	self := job != nil && name == job.name && ph >= plan.PhaseStep
 	switch {
 	case job == nil:
 		return finding{problems.NeedsOutsideJob, nil}
@@ -339,18 +339,18 @@ func (c *compiler) checkNeedsRef(path []string, ph phase, job *jobInfo) finding 
 // step alone, such as OUTPUTS, which only its steps read
 // (plan.IsFormatVariable, plan.IsJobStartVariable); and in a step, one its
 // own env: does. Any other reads as "", which is a warning.
-func (c *compiler) checkEnvRef(name string, ph phase, job *jobInfo, in *spot) finding {
+func (c *compiler) checkEnvRef(name string, ph plan.Phase, job *jobInfo, in *spot) finding {
 	env := func(loc ...string) map[string]any { return mapping(lookup(c.doc.Value, loc)) }
 	defined := []map[string]any{env("env")}
 	if job != nil {
 		dir := slices.Equal(in.loc, appendPath(job.loc, "working-directory"))
-		if ph == stepRuns && plan.IsFormatVariable(name) || (ph >= jobEnv || dir) && plan.IsJobStartVariable(name) {
+		if ph == plan.PhaseStep && plan.IsFormatVariable(name) || (ph >= plan.PhaseJobEnv || dir) && plan.IsJobStartVariable(name) {
 			return finding{}
 		}
-		if ph >= jobEnv || dir {
+		if ph >= plan.PhaseJobEnv || dir {
 			defined = append(defined, env(appendPath(job.loc, "env")...))
 		}
-		if ph == stepRuns && job.step >= 0 {
+		if ph == plan.PhaseStep && job.step >= 0 {
 			defined = append(defined, env(appendPath(job.loc, "steps", strconv.Itoa(job.step), "env")...))
 		}
 	}

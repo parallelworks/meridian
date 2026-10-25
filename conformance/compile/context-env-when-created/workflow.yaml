@@ -1,0 +1,12 @@
+env:
+  A: build
+  B: ${{ env.A }}
+timeout: ${{ env.T }}
+jobs:
+  build:
+    steps:
+      - run: echo ${{ env.A }}
+  test:
+    needs: ${{ env.A }}
+    steps:
+      - run: echo ${{ env.B }}

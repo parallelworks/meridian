@@ -15,10 +15,11 @@ import (
 // compareState is what the inputResolver keeps of comparing what a form
 // sent with what made it (compare).
 type compareState struct {
-	// compareScope holds the budget that comparing what a form sent with
-	// what made it spends (compare): a group of its own, so that what it
-	// spends doesn't decide the run's shape. comparisons holds what each
-	// string compared gave, by its location and the row index it read.
+	// compareScope is Create's scope (viewState.created) with the budget
+	// that comparing what a form sent with what made it spends (compare): a
+	// group of its own, so that what it spends doesn't decide the run's
+	// shape. comparisons holds what each string compared gave, by its
+	// location and the row index it read.
 	compareScope *expr.Scope
 	comparisons  map[string]comparison
 	// compareSlow is set once a comparison runs out of the group's time,
@@ -125,13 +126,13 @@ func (r *inputResolver) evalCompare(loc []string, index []int) comparison {
 	if res, ok := r.comparisons[key]; ok {
 		return res
 	}
+	base := r.scope()
 	if r.compareScope == nil {
-		s := expr.Scope{}.Budgeted()
+		s := r.created.Budgeted()
 		r.compareScope = &s
 	}
-	base := r.scope()
 	scope := *r.compareScope
-	scope.Contexts, scope.Marked, scope.Index = base.Contexts, base.Marked, index
+	scope.Marked, scope.Index = base.Marked, index
 	v, err := r.workflow.Evaluator(scope).Eval(loc)
 	if be, ok := errors.AsType[*expr.BudgetError](err); ok && be.Kind == problems.ExpressionsTooSlow && !r.compareSlow {
 		r.compareSlow = true

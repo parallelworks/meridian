@@ -39,7 +39,7 @@ func (r *inputResolver) checkValues() {
 				continue
 			}
 			if f.secretWhole {
-				r.secretsLater[strings.Join(f.path, ".")] = true
+				r.secretsLater[plan.JoinPath(f.path...)] = true
 			}
 			if f.container || f.in != nil && f.typ != "password" {
 				continue // A row's other fields aren't checked.
@@ -49,7 +49,7 @@ func (r *inputResolver) checkValues() {
 				later, known = f.evaluatedLater()
 			}
 			if later && f.typ == "password" {
-				r.secretsLater[strings.Join(f.path, ".")] = true
+				r.secretsLater[plan.JoinPath(f.path...)] = true
 			}
 			switch {
 			case !later || known:
@@ -142,7 +142,7 @@ func (r *inputResolver) checkField(f *field, later bool) {
 		r.remove(f.path)
 		return
 	case f.typ == "password" && !later:
-		r.secrets[strings.Join(f.path, ".")] = out
+		r.secrets[plan.JoinPath(f.path...)] = out
 	}
 	r.set(f.path, out)
 }
