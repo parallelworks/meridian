@@ -954,12 +954,17 @@ func (a *attempt) at(k *problems.Kind, path string, params problems.Params) prob
 // meridian command's (dirProblems), as when the worker can make its
 // directory in none of its parents, is WorkerDirUnusable, which names the
 // first of them by its code and the directory its path param names, and
-// the worker's log has each. Anything else is StepNotStarted, with what
-// the operating system said, which is all else that reaches it.
+// the worker's log has each. Anything else is StepNotStarted: with what
+// the operating system said, which is all else that reaches it today, or,
+// for a problem of another kind, its code, so that no sentence of
+// Meridian's own is its reason.
 func (a *attempt) notStarted(err error, path string) problems.Diagnostic {
-	if p, ok := errors.AsType[*problem.Problem](err); ok && dirProblems[p.Code] {
-		dir, _ := p.Params["path"].(string)
-		return a.at(problems.WorkerDirUnusable, path, problems.Params{"path": dir, "code": string(p.Code)})
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		if dirProblems[p.Code] {
+			dir, _ := p.Params["path"].(string)
+			return a.at(problems.WorkerDirUnusable, path, problems.Params{"path": dir, "code": string(p.Code)})
+		}
+		return a.at(problems.StepNotStarted, path, problems.Params{"reason": string(p.Code)})
 	}
 	return a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()})
 }

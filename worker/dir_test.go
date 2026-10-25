@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -303,8 +304,13 @@ func TestPrivateDirProblems(t *testing.T) {
 		t.Errorf("a step that can't start for an error of the system's has %+v", diag)
 	}
 	// A problem that isn't the directory's, such as a file's, isn't taken
-	// for one.
-	if diag := a.notStarted(problems.FileNotRegular.Problem(problems.Params{"path": "/x"}), "/jobs/j/steps/0"); diag.Code != "step_not_started" {
+	// for one, and its code, not its English, is the reason.
+	if diag := a.notStarted(problems.FileNotRegular.Problem(problems.Params{"path": "/x"}), "/jobs/j/steps/0"); diag.Code != "step_not_started" || diag.Params["reason"] != "file_not_regular" {
 		t.Errorf("a step that can't start for a file's problem has %+v", diag)
+	}
+	// The directory's English never reaches a reason: the step that
+	// can't start for it names the problems' codes only.
+	if diag := a.notStarted(err, "/jobs/j/steps/0"); strings.Contains(fmt.Sprint(diag.Params), "Other users") {
+		t.Errorf("a step's params quote the directory's English: %v", diag.Params)
 	}
 }
