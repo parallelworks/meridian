@@ -1071,21 +1071,12 @@ func (r *inputResolver) checkJSON(values map[string]any) {
 }
 
 // checkUnknownInputs reports the submitted values for inputs the workflow
-// doesn't define: the first maxListed one by one, which suggest the name
-// each probably meant, and then how many more there are. The values are
-// kept.
+// doesn't define, and for the inputs of a list's or a repeated step's
+// rows that its rows don't have: the first maxListed one by one, which
+// suggest the name each probably meant, and then how many more there are.
+// The values are kept.
 func (r *inputResolver) checkUnknownInputs() {
-	known := map[string]*knownInputs{}
-	for _, f := range r.fields {
-		if !f.container || !f.flatten {
-			at := jsonptr.Format(f.path[:len(f.path)-1])
-			if known[at] == nil {
-				known[at] = &knownInputs{byKey: map[string]*field{}}
-			}
-			known[at].byKey[f.key] = f
-		}
-	}
-	r.checkUnknown(r.values, nil, known)
+	r.checkUnknown(r.values, nil, nil, knownInputsOf(r.fields), false)
 	if more := r.unknown - maxListed; more > 0 {
 		r.reportAt(problems.ProblemsNotListed, definitionsPath, problems.Params{
 			"code": string(problems.UnknownInput.Code()), "count": more, "limit": maxListed,
@@ -1093,30 +1084,101 @@ func (r *inputResolver) checkUnknownInputs() {
 	}
 }
 
+// knownInputsOf returns fields, inputs, by the paths of the mappings
+// their values are in.
+func knownInputsOf(fields []*field) map[string]*knownInputs {
+	known := map[string]*knownInputs{}
+	for _, f := range fields {
+		if !f.container || !f.flatten {
+			at := jsonptr.Format(f.path[:len(f.path)-1])
+			k := known[at]
+			if k == nil {
+				k = &knownInputs{byKey: map[string]*field{}}
+				known[at] = k
+			}
+			k.byKey[f.key] = f
+			if defs, _ := f.rowInputs(); defs != nil {
+				if k.rows == nil {
+					k.rows = map[string][]*field{}
+				}
+				k.rows[f.key] = append(k.rows[f.key], f)
+			}
+		}
+	}
+	return known
+}
+
 // knownInputs are the inputs whose values are in a mapping, by their keys,
 // and their names, sorted, and those of the password inputs and of the
 // inputs with a password among theirs, once a value there isn't one of
-// them.
+// them. rows holds, by their keys, the lists and repeated steps there, more
+// than one where inputs share a path, as a wizard step's can, and
+// rowInputs the inputs of their rows, by key, once a row is checked.
 type knownInputs struct {
 	byKey                     map[string]*field
+	rows                      map[string][]*field
+	rowInputs                 map[string]map[string]*knownInputs
 	names, passwords, holders []string
 }
 
+// rowsOf returns the inputs of the rows of the lists and repeated steps at
+// key, those of each one's rows, by the paths in a row of the mappings
+// their values are in.
+func (k *knownInputs) rowsOf(r *inputResolver, key string) map[string]*knownInputs {
+	if known, ok := k.rowInputs[key]; ok {
+		return known
+	}
+	var fields []*field
+	for _, f := range k.rows[key] {
+		defs, loc := f.rowInputs()
+		fields = append(fields, r.template(defs, loc).fields...)
+	}
+	known := knownInputsOf(fields)
+	if k.rowInputs == nil {
+		k.rowInputs = map[string]map[string]*knownInputs{}
+	}
+	k.rowInputs[key] = known
+	return known
+}
+
+// holdsOnly reports whether values holds only values of k's inputs that
+// hold no others' values for checkUnknown to check, as most rows do: no
+// group's or step's mapping, and no list's or repeated step's rows.
+func (k *knownInputs) holdsOnly(values map[string]any) bool {
+	if k == nil {
+		return len(values) == 0
+	}
+	for key, v := range values {
+		f, ok := k.byKey[key]
+		if !ok || v != nil && (f.container && !f.flatten || len(k.rows[key]) > 0) {
+			return false
+		}
+	}
+	return true
+}
+
 // checkUnknown reports submitted values for inputs the workflow doesn't
-// define, at path in the values, which known holds the inputs of by the
-// paths of the mappings they are in. A value that names a password
-// (namesPassword) is taken for one: it is kept among the secrets, and not
-// in the plan.
-func (r *inputResolver) checkUnknown(values map[string]any, path []string, known map[string]*knownInputs) {
-	inputs := known[jsonptr.Format(path)]
+// define, in values, which are at path in the values and, in a row of a
+// list or a repeated step, at rel in the row, or else at path; known holds
+// the inputs there, the workflow's or a row's, by the paths of the
+// mappings they are in. A value that names a password (namesPassword) is
+// taken for one: it is kept among the secrets, and not in the plan. A
+// group's value that isn't a mapping is an error, but in a row, where it
+// is taken as it was given, and kept as a secret if it can hold a
+// password (collectRows).
+func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, known map[string]*knownInputs, row bool) {
+	inputs := known[jsonptr.Format(rel)]
+	if inputs.holdsOnly(values) {
+		return
+	}
 	if inputs == nil {
 		inputs = &knownInputs{}
 	}
 	for key, v := range jsonvalue.Sorted(values) {
 		f, ok := inputs.byKey[key]
 		if !ok {
+			at := appendPath(path, key)
 			if r.namesPassword(key, v, inputs) {
-				at := appendPath(path, key)
 				r.secrets[strings.Join(at, ".")] = v
 				r.unknownSecrets = append(r.unknownSecrets, at)
 				r.mark(at)
@@ -1128,24 +1190,33 @@ func (r *inputResolver) checkUnknown(values map[string]any, path []string, known
 				inputs.names = slices.Sorted(maps.Keys(inputs.byKey))
 			}
 			s, ok := hint.Suggest(key, inputs.names)
-			params := problems.Params{"input": strings.Join(appendPath(path, key), ".")}
+			params := problems.Params{"input": strings.Join(at, ".")}
 			r.reportAt(problems.UnknownInput, definitionsPath, problems.WithSuggestion(params, strings.Join(appendPath(path, s), "."), ok))
 			continue
+		}
+		if rows, ok := v.([]any); ok && len(inputs.rows[key]) > 0 {
+			rowInputs := inputs.rowsOf(r, key)
+			for i, item := range rows {
+				if m, ok := item.(map[string]any); ok && !rowInputs[""].holdsOnly(m) {
+					r.checkUnknown(m, appendPath(path, key, strconv.Itoa(i)), nil, rowInputs, true)
+				}
+			}
 		}
 		if !f.container || f.flatten || v == nil {
 			continue
 		}
 		child, ok := v.(map[string]any)
-		if !ok {
+		switch {
+		case ok:
+			r.checkUnknown(child, appendPath(path, key), appendPath(rel, key), known, row)
+		case !row:
 			params := problems.Params{"input": f.label(), "value": problems.Show(v)}
 			if holdsPassword(f.def) {
 				params = mask(params)
 			}
 			r.reportAt(problems.InputGroupNotMapping, f.loc, params)
 			delete(values, key)
-			continue
 		}
-		r.checkUnknown(child, f.path, known)
 	}
 }
 

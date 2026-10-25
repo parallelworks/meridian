@@ -610,7 +610,11 @@ ACTIVATE's launch form and its backend do together:
   and not in the plan. So is a mapping or list whose name is close to an
   input's with a password among its inputs, or that holds a key named as a
   password field, as a flattened wizard step's inputs sent under the
-  step's name do. A value that isn't JSON, such
+  step's name do. A row of a list or a repeated step is checked the same
+  way, against the inputs its rows have, and a value there for one they
+  don't have is reported by its path, as `creds.0.pasword`, and kept as a
+  password by the same rules, by that path, as a password field of a row
+  is. A value that isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a
