@@ -3,6 +3,7 @@ package compile_test
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -105,8 +106,15 @@ func (w scaled) measure(t *testing.T, n int) (uint64, func()) {
 
 // fastest returns the shortest time of five that each of fs takes. It runs
 // them in turn, each once a round, so that a runner that slows down for a
-// while slows each of them alike.
+// while slows each of them alike. It times the work each does, without
+// the garbage collector, which collects before each run and not during
+// one: what collecting costs depends on what else the process holds, and
+// on how many cores it has to itself, and on a runner of two, busy, the
+// larger of two runs that grow as they should took nine times as long as
+// the smaller at four times its size. The allocation checks say how much
+// each allocates.
 func fastest(fs ...func()) []time.Duration {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	best := make([]time.Duration, len(fs))
 	for i := range 5 {
 		for j, f := range fs {
