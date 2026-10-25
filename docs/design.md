@@ -199,8 +199,9 @@ files.
   the matrix job still read the instance's with the highest index.
   ACTIVATE takes the same fix by reading the instance's own outputs, as it
   reads its own steps. The 14 matrix jobs have 24 reads of `needs`, and
-  none names its own job: all 262 reads of a job's own outputs are in jobs
-  without a matrix.
+  none names its own job: all 262 reads of a job's own outputs by name,
+  `needs.<its job>.outputs.<name>`, in 66 jobs of 48 workflows, are in
+  jobs without a matrix.
 - **An `if:` whose value is null is false**, as `docs/expressions.md` says
   conditions go by truthiness, where format 1 ran the job or step. So is
   an `if:` written empty, which is null: format 1 ran its job or step too,
