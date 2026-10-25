@@ -194,11 +194,12 @@ func maskedFrom(own, derived []string, fields map[string]bool) []string {
 // too, as a password in a row of a list held as derived is: the own texts
 // are found first.
 func (r RunValues) secretStrings() (own, derived []string) {
-	all := r.tree()
+	// It reads the values, and changes none.
+	all, isDerived := r.view(), setOf(r.Derived)
 	seen := map[string]bool{}
 	for _, wantDerived := range []bool{false, true} {
 		for _, name := range r.Secrets {
-			if slices.Contains(r.Derived, name) != wantDerived {
+			if isDerived[name] != wantDerived {
 				continue
 			}
 			v, ok := jsonptr.Lookup(all, splitPath(name))
@@ -242,17 +243,28 @@ func needsSecrets(needs map[string]JobResult) (own, derived []string) {
 			}
 		}
 		for _, r := range jsonvalue.Sorted(needs) {
+			derivedOutputs := setOf(r.Derived)
 			for _, name := range r.Secrets {
-				add(r.Outputs[name], slices.Contains(r.Derived, name))
+				add(r.Outputs[name], derivedOutputs[name])
 			}
-			for id, names := range jsonvalue.Sorted(r.SecretSteps) {
-				for _, name := range names {
-					add(r.Steps[id][name], slices.Contains(r.DerivedSteps[id], name))
+			for id, outputs := range jsonvalue.Sorted(r.SecretSteps) {
+				derivedSteps := setOf(r.DerivedSteps[id])
+				for _, name := range outputs {
+					add(r.Steps[id][name], derivedSteps[name])
 				}
 			}
 		}
 	}
 	return own, derived
+}
+
+// setOf returns the set of the strings list holds.
+func setOf(list []string) map[string]bool {
+	set := make(map[string]bool, len(list))
+	for _, s := range list {
+		set[s] = true
+	}
+	return set
 }
 
 // compactStrings returns ss without a string given before.
@@ -389,7 +401,22 @@ type Contexts struct {
 // context has one shape everywhere. The scope holds c's input values and
 // matrix values as they are, which an evaluation never changes, and nothing
 // else of c.
-func NewScope(phase Phase, c Contexts) expr.Scope {
+func NewScope(phase Phase, c Contexts) expr.Scope { return newScope(phase, c, nil) }
+
+// sharedContexts are the needs and steps contexts that newScope built of a
+// Contexts' Needs and Steps, which the scopes it builds after of the same
+// Needs and Steps share, as an evaluation never changes a context.
+type sharedContexts struct{ needs, steps map[string]any }
+
+// newScope is NewScope, which takes the needs and steps contexts from
+// shared, if it isn't nil, and builds them into it the first time: its
+// caller gives it the same shared for each scope of the same Needs and
+// Steps, and a new one when they change. A Contexts with Unknown values
+// has contexts of its own, as Unknown's values are set in them.
+func newScope(phase Phase, c Contexts, shared *sharedContexts) expr.Scope {
+	if shared == nil || len(c.Unknown) > 0 {
+		shared = &sharedContexts{}
+	}
 	r := c.Run
 	inputs := c.mapping("inputs", r.Inputs)
 	contexts := map[string]any{
@@ -426,7 +453,10 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 		scope.Missing = strictOutputs(c.Needs, c.Steps)
 	}
 	if phase >= PhaseStrategy {
-		contexts["needs"] = needsContext(c.Needs)
+		if shared.needs == nil {
+			shared.needs = needsContext(c.Needs)
+		}
+		contexts["needs"] = shared.needs
 		scope.Text = ReadsAsText
 		for name, r := range c.Needs {
 			for _, output := range r.Private {
@@ -456,11 +486,10 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 		}
 	}
 	if phase >= PhaseStep {
-		steps := make(map[string]any, len(c.Steps))
-		for id, outputs := range c.Steps {
-			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
+		if shared.steps == nil {
+			shared.steps = stepsContext(c.Steps)
 		}
-		contexts["steps"] = steps
+		contexts["steps"] = shared.steps
 	}
 	for _, name := range c.Unknown {
 		path := splitPath(name)
@@ -576,20 +605,32 @@ func stringsContext(m map[string]string) map[string]any {
 	return out
 }
 
+// stepsContext returns the steps context of the steps whose outputs steps
+// holds, by step id, as needs holds a job's steps too.
+func stepsContext(steps map[string]map[string]string) map[string]any {
+	out := make(map[string]any, len(steps))
+	for id, outputs := range steps {
+		out[id] = map[string]any{"outputs": stringsContext(outputs)}
+	}
+	return out
+}
+
 // needsContext returns the needs context of the jobs whose results needs
 // holds.
 func needsContext(needs map[string]JobResult) map[string]any {
 	out := make(map[string]any, len(needs))
 	for name, r := range needs {
-		steps := make(map[string]any, len(r.Steps))
-		for id, outputs := range r.Steps {
-			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
-		}
-		job := map[string]any{"outputs": stringsContext(r.Outputs), "steps": steps}
-		if r.Outcome != "" {
-			job["result"] = string(r.Outcome)
-		}
-		out[name] = job
+		out[name] = jobContext(r, stepsContext(r.Steps))
 	}
 	return out
+}
+
+// jobContext returns the context of a job in needs whose result r is, and
+// the context of whose steps' outputs steps is (stepsContext).
+func jobContext(r JobResult, steps map[string]any) map[string]any {
+	job := map[string]any{"outputs": stringsContext(r.Outputs), "steps": steps}
+	if r.Outcome != "" {
+		job["result"] = string(r.Outcome)
+	}
+	return job
 }
