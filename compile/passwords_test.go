@@ -647,6 +647,40 @@ func TestUnknownRowPasswordsAreSecrets(t *testing.T) {
 	}
 }
 
+// A submitted value for an input the workflow doesn't define is kept as a
+// secret when its name can be a secret's, as one sent for a password field
+// that was renamed can be: one that looks like one, as input_looks_secret
+// says, or has a word close to such a word, beside the inputs, in a group
+// and in a row. Another stays with the values.
+func TestUnknownSecretNamesAreSecrets(t *testing.T) {
+	src := inputs(
+		"pass: {type: password, optional: true}",
+		"g: {type: group, items: {pass: {type: password, optional: true}}}",
+		"l: {type: list, template: {pass: {type: password, optional: true}}}",
+	)
+	row := func() map[string]any {
+		return map[string]any{"password": sentinel, "pasword": sentinel, "apiKey": sentinel, "note": "plain"}
+	}
+	submitted := row()
+	submitted["g"] = row()
+	submitted["l"] = []any{row()}
+	in, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	if len(diags) != 12 {
+		t.Errorf("diagnostics %v, want 12 unknown inputs", diags)
+	}
+	for _, prefix := range []string{"", "g.", "l.0."} {
+		for _, key := range []string{"password", "pasword", "apiKey"} {
+			if in.Secrets[prefix+key] != sentinel {
+				t.Errorf("%s%s isn't among the secrets %v", prefix, key, in.Secrets)
+			}
+		}
+	}
+	if holdsSentinel(t, in.Values) || in.Values["note"] != "plain" || in.Values["g"].(map[string]any)["note"] != "plain" ||
+		in.Values["l"].([]any)[0].(map[string]any)["note"] != "plain" {
+		t.Errorf("values %v", in.Values)
+	}
+}
+
 // A submitted value is compared with its default once the values are
 // filled in, and what reads another input's part held for the run's start
 // is held too: so a condition can't read a value that is what its default,

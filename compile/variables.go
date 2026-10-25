@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -101,6 +102,26 @@ func looksSecret(name string) bool {
 	words := nameWords(name)
 	for i, w := range words {
 		if secretWords[w] || i > 0 && secretPairs[[2]string{words[i-1], w}] {
+			return true
+		}
+	}
+	return false
+}
+
+// secretWordList holds secretWords, sorted, for hint.Suggest.
+var secretWordList = slices.Sorted(maps.Keys(secretWords))
+
+// namesSecret reports whether name, of a value submitted for an input the
+// workflow doesn't define, can be a secret's: whether it looks like one
+// (looksSecret), or one of its words is close to one of secretWords, as a
+// misspelling such as pasword is. It errs toward a secret, which a value is
+// kept as, and still given to the run.
+func namesSecret(name string) bool {
+	if looksSecret(name) {
+		return true
+	}
+	for _, w := range nameWords(name) {
+		if _, ok := hint.Suggest(w, secretWordList); ok {
 			return true
 		}
 	}

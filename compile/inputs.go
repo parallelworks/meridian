@@ -1223,18 +1223,20 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 // namesPassword reports whether v, a value submitted for an input the
 // workflow doesn't define, named key, among the inputs, is a password's: if
 // key is a password field's name, wherever the workflow defines one, as a
-// repeated step's password sent beside the step is; or is close to the
-// name of a password input among them, as a misspelling is; or v is a
-// mapping or a list, and key is close to the name of one with a password
-// among its inputs, or v holds a key that is a password field's name, as
-// a flattened wizard step's inputs sent under its name do.
+// repeated step's password sent beside the step is; or can be a secret's
+// (namesSecret), as one sent for a password field that was renamed can;
+// or is close to the name of a password input among them, as a
+// misspelling is; or v is a mapping or a list, and key is close to the
+// name of one with a password among its inputs, or v holds a key that is a
+// password field's name or can be a secret's, as a flattened wizard step's
+// inputs sent under its name do.
 func (r *inputResolver) namesPassword(key string, v any, inputs *knownInputs) bool {
 	if r.passwordKeys == nil {
 		r.passwordKeys = map[string]bool{}
 		defs, _ := lookup(r.doc.Value, definitionsPath).(map[string]any)
 		passwordKeys(defs, r.passwordKeys)
 	}
-	if r.passwordKeys[key] || r.holdsPasswordKey(v) {
+	if r.passwordKeys[key] || namesSecret(key) || r.holdsPasswordKey(v) {
 		return true
 	}
 	if inputs.passwords == nil {
@@ -1260,12 +1262,13 @@ func (r *inputResolver) namesPassword(key string, v any, inputs *knownInputs) bo
 }
 
 // holdsPasswordKey reports whether v holds, at any depth, a key that is a
-// password field's name, wherever the workflow defines one.
+// password field's name, wherever the workflow defines one, or that can be
+// a secret's (namesSecret).
 func (r *inputResolver) holdsPasswordKey(v any) bool {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, item := range v {
-			if r.passwordKeys[k] || r.holdsPasswordKey(item) {
+			if r.passwordKeys[k] || namesSecret(k) || r.holdsPasswordKey(item) {
 				return true
 			}
 		}

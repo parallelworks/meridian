@@ -628,10 +628,16 @@ ACTIVATE's launch form and its backend do together:
   field's, wherever the workflow defines it, as a repeated step's password
   sent beside the step is, or is close to a password input's there, as a
   misspelling is, is kept as a password: it is one of the run's secrets,
-  and not in the plan. So is a mapping or list whose name is close to an
-  input's with a password among its inputs, or that holds a key named as a
-  password field, as a flattened wizard step's inputs sent under the
-  step's name do. A row of a list or a repeated step is checked the same
+  and not in the plan. So is one whose name can be a secret's, as one sent
+  for a password field that was renamed can: it looks like one, by the
+  words that make an input's name look like a secret's
+  ([Compiling](#compiling)), or one of its words is close to one of them,
+  as `pasword` is. That errs toward a
+  secret, such as `passed`, which is kept as one, and still given to the
+  run. So is a mapping or list whose name is close to an input's with a
+  password among its inputs, or that holds a key named as a password field
+  or that can be a secret's, as a flattened wizard step's inputs sent
+  under the step's name do. A row of a list or a repeated step is checked the same
   way, against the inputs its rows have, and a value there for one they
   don't have is reported by its path, as `creds.0.pasword`, and kept as a
   password by the same rules, by that path, as a password field of a row
