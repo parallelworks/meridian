@@ -96,7 +96,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 			// There is no session provider here, so a run with sessions
 			// can't start.
 			_, started, err := compile.Start(ctx, created.Plan, compile.StartInput{
-				Variables: cfg, Passwords: created.Passwords, Private: created.Private, Inputs: cfg,
+				Variables: cfg, Record: created.Record, Inputs: cfg,
 			})
 			if err != nil {
 				return c.fail(err)

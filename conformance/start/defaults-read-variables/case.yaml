@@ -22,4 +22,5 @@ expect:
     replicas: 3
     fixed: fixed
   run-secrets: [inputs.code, vars.TOKEN]
+  run-derived: [inputs.code]
   run-private: [inputs.endpoint, inputs.region, inputs.replicas]

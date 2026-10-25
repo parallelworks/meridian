@@ -17,3 +17,4 @@ expect:
       - {name: a, zone: us-east-a, gpus: 1}
       - {name: b, zone: us-east-b, gpus: 4}
   run-secrets: [inputs.hosts, inputs.hosts.0.zone, inputs.hosts.1.zone, vars.HOSTS]
+  run-derived: [inputs.hosts, inputs.hosts.0.zone, inputs.hosts.1.zone]

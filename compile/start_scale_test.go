@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/parallelworks/meridian/compile"
 )
@@ -56,26 +55,27 @@ var startScaledRuns = []startScaled{
 }
 
 // TestStartScales checks that starting each of startScaledRuns at four
-// times the size allocates about four times as much, not sixteen, and
-// takes less than ten times as long, the best of three runs each.
+// times the size allocates about four times as much, in bytes and in
+// allocations, not sixteen. It measures no time, which a machine under
+// load changes: BenchmarkStart times Start at each run's size.
 func TestStartScales(t *testing.T) {
 	for _, w := range startScaledRuns {
 		t.Run(w.name, func(t *testing.T) {
-			small, smallTime := w.measure(t, w.n)
-			large, largeTime := w.measure(t, 4*w.n)
-			if ratio := float64(large) / float64(small); ratio > 8 {
-				t.Errorf("at %d, Start allocates %d bytes, and at %d, %d: %.1f times as much", w.n, small, 4*w.n, large, ratio)
+			smallBytes, smallAllocs := w.measure(t, w.n)
+			largeBytes, largeAllocs := w.measure(t, 4*w.n)
+			if ratio := float64(largeBytes) / float64(smallBytes); ratio > 8 {
+				t.Errorf("at %d, Start allocates %d bytes, and at %d, %d: %.1f times as much", w.n, smallBytes, 4*w.n, largeBytes, ratio)
 			}
-			if ratio := float64(largeTime) / float64(smallTime); ratio > 10 {
-				t.Errorf("at %d, Start takes %v, and at %d, %v: %.1f times as long", w.n, smallTime, 4*w.n, largeTime, ratio)
+			if ratio := largeAllocs / smallAllocs; ratio > 8 {
+				t.Errorf("at %d, Start allocates %.0f times, and at %d, %.0f: %.1f times as often", w.n, smallAllocs, 4*w.n, largeAllocs, ratio)
 			}
 		})
 	}
 }
 
 // measure returns how many bytes starting the run at size n allocates, and
-// the shortest time of three that starting it takes.
-func (w startScaled) measure(t *testing.T, n int) (uint64, time.Duration) {
+// how many allocations it makes, on average.
+func (w startScaled) measure(t *testing.T, n int) (bytes uint64, allocs float64) {
 	t.Helper()
 	src, submitted, vars := w.workload(n)
 	c := createRun(t, src, submitted, vars)
@@ -88,16 +88,7 @@ func (w startScaled) measure(t *testing.T, n int) (uint64, time.Duration) {
 	runtime.ReadMemStats(&before)
 	start()
 	runtime.ReadMemStats(&after)
-	var best time.Duration
-	for i := range 3 {
-		runtime.GC()
-		began := time.Now()
-		start()
-		if took := time.Since(began); i == 0 || took < best {
-			best = took
-		}
-	}
-	return after.TotalAlloc - before.TotalAlloc, best
+	return after.TotalAlloc - before.TotalAlloc, testing.AllocsPerRun(2, start)
 }
 
 // BenchmarkStart starts each of startScaledRuns, at its smaller size.

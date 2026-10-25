@@ -206,16 +206,72 @@ type inputResolver struct {
 	// workflow defines, anywhere, once one is.
 	unknown      int
 	passwordKeys map[string]bool
-	// decisions are the conditions that read a variable or a password, and
-	// what each decided, which the plan keeps for Start; and unconverted
+	// decisions are the JSON Pointers of the conditions that read a
+	// variable or a password, in order, which the plan names for Start,
+	// and decided what each decided, which the secret record keeps;
+	// ignored the names of the inputs the conditions ignored, as in
+	// inputs.region, and ignoredValues their values, as they were given,
+	// for those that had one; and unconverted
 	// the values of the inputs whose values checking them converted, as
 	// they were before, by their paths' names, which what was evaluated
 	// before read.
-	decisions   []plan.Decision
-	unconverted map[string]any
+	decisions     []string
+	decided       map[string]bool
+	ignored       []string
+	ignoredValues map[string]any
+	unconverted   map[string]any
 	// start is set when the resolver completes a run's values as it
 	// starts (Start), and nil when it creates the run.
 	start *startState
+}
+
+// privateExprs returns the expressions of the definitions of the inputs
+// that hold a private value: one the run was given in the place of what
+// reads a variable that isn't a secret.
+func (r *inputResolver) privateExprs() []*expr.Expr {
+	var out []*expr.Expr
+	seen := map[*field]bool{}
+	for name := range jsonvalue.Sorted(r.private) {
+		path := plan.SplitPath(name)
+		for n := len(path); n > 0; n-- {
+			if f := r.fieldAt(path[:n]); f != nil {
+				if !seen[f] {
+					seen[f] = true
+					exprs, _ := r.workflow.Exprs(f.loc)
+					out = append(out, exprs...)
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
+// withheldParts returns where, in the workflow, the parts of the input
+// definitions are that can hold a password, which a plan doesn't hold:
+// the default of each input that holds a password, a password input's, a
+// password field's of a list's rows, and a list's or a repeated step's
+// whose rows have a password input, each once, in order.
+func (r *inputResolver) withheldParts() [][]string {
+	var out [][]string
+	seen := map[string]bool{}
+	var walk func(fields []*field)
+	walk = func(fields []*field) {
+		for _, f := range fields {
+			if _, ok := f.def["default"]; ok && holdsPassword(f.def) {
+				loc := appendPath(f.loc, "default")
+				if pointer := jsonptr.Format(loc); !seen[pointer] {
+					seen[pointer] = true
+					out = append(out, loc)
+				}
+			}
+			if defs, loc := f.rowInputs(); defs != nil {
+				walk(r.collect(defs, loc, appendPath(f.path, "[index]"), nil))
+			}
+		}
+	}
+	walk(r.fields)
+	return out
 }
 
 // deferred returns the defaults that are evaluated once the run is

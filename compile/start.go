@@ -27,18 +27,15 @@ type StartInput struct {
 	// Variables reads the variables the plan lists, plain and secret. Nil
 	// means there are none: a run that reads one can't start.
 	Variables Variables
-	// Passwords are the run's passwords, from its secret record, by their
-	// paths, as plan.Run.Secrets names them (plan.JoinPath):
-	// inputs.creds.0.pass for the field pass of the list creds's first row,
-	// as Created.Passwords gives them. Start puts each at the path
-	// plan.SplitPath reads from its name, an outer one before those in it.
-	Passwords map[string]any
-	// Private are the run's private values, from its secret record, by
-	// their paths, as plan.Run.Private names them, as Created.Private gives
-	// them: values the run was given that the plan doesn't hold, though
-	// they aren't secrets. Start puts each in the inputs' values at its
-	// path.
-	Private map[string]any
+	// Record is the run's secret record as Create gave it
+	// (Created.Record). Start puts each password and private value at the
+	// path plan.SplitPath reads from its name, as in inputs.creds.0.pass
+	// for the field pass of the list creds's first row, an outer one
+	// before those in it, and each part of the input definitions the plan
+	// withheld back in its place; and reads what each decision of the
+	// run's shape decided, and the ignored inputs' values, as it decides
+	// them again. A record that doesn't fit the plan is an error.
+	Record Record
 	// Inputs provides the input types that name a platform's resources, as
 	// Options.Inputs does when the run is created. Nil means there is no
 	// platform.
@@ -91,7 +88,8 @@ type StartResult struct {
 // from then on as they were converted. It then checks each input it
 // evaluated as Compile checks one; decides again each job's needs: that
 // read a variable or a password (plan.Job.NeedsExpr), reporting
-// run_shape_changed for a decision that differs from what p records;
+// run_shape_changed for a decision that differs from what the run's
+// secret record, or p for a job's needs, says Create decided;
 // evaluates the workflow's timeout:; and expands each matrix whose values
 // are known by then, with plan.Expand and p's Run.Limits. Only once all of
 // that has passed does it make the run's sessions, through in.Sessions,
@@ -207,6 +205,10 @@ type starter struct {
 	// it converted them, by their paths, which Start reads as they were
 	// given until it has decided the run's shape (plan.Run.Unconverted).
 	converted map[string]any
+	// hiddenAt and optionalAt hold whether each input Start evaluated, and
+	// each group it is in, is hidden and optional, as checkDecisions
+	// decided them, in the inputs' order, as the compiler does.
+	hiddenAt, optionalAt map[*field]bool
 	// diags are the problems Start found of its own, beside those the
 	// input resolver reports.
 	diags problems.Diagnostics
@@ -335,8 +337,24 @@ func (st *starter) readVariables() error {
 func (st *starter) restore() error {
 	p := st.p
 	defs, _ := p.Run.Definitions.Written().(map[string]any)
+	defs = orEmptyMap(defs)
+	// What the plan withheld of the definitions, which can hold a
+	// password, the secret record gives back.
+	withheld, err := recordFor(p.Run.Withheld, st.in.Record.Withheld, "part of the input definitions")
+	if err != nil {
+		return err
+	}
+	for _, pointer := range p.Run.Withheld {
+		loc, err := jsonptr.Split(pointer)
+		if err != nil || len(loc) <= len(definitionsPath) || !slices.Equal(loc[:len(definitionsPath)], definitionsPath) {
+			return fmt.Errorf("compile: the plan withholds %s, which isn't in the input definitions", pointer)
+		}
+		if err := setGrow(defs, loc[len(definitionsPath):], jsonvalue.Clone(withheld[pointer])); err != nil {
+			return err
+		}
+	}
 	doc := &format.Document{Format: p.Run.Format, Value: map[string]any{
-		"on": map[string]any{"execute": map[string]any{"inputs": orEmptyMap(defs)}},
+		"on": map[string]any{"execute": map[string]any{"inputs": defs}},
 	}}
 	r := newInputResolver(doc, nil, Options{Inputs: st.in.Inputs})
 	r.start = st.s
@@ -395,7 +413,7 @@ func (st *starter) restore() error {
 		values map[string]any
 		names  map[string]bool
 		what   string
-	}{{st.in.Passwords, secrets, "password"}, {st.in.Private, private, "private value"}} {
+	}{{st.in.Record.Passwords, secrets, "password"}, {st.in.Record.Private, private, "private value"}} {
 		for name, v := range from.values {
 			path := plan.SplitPath(name)
 			if len(path) < 2 || path[0] != "inputs" || !from.names[name] {
@@ -463,6 +481,20 @@ func (st *starter) restore() error {
 			st.deferred = append(st.deferred, f)
 		}
 	}
+	// What the run ignored has no value, as the compiler left it.
+	for name := range jsonvalue.Sorted(st.in.Record.Ignored) {
+		var f *field
+		if path := plan.SplitPath(name); len(path) > 1 && path[0] == "inputs" {
+			f = r.fieldAt(path[1:])
+		}
+		if f == nil {
+			return fmt.Errorf("compile: the secret record names an ignored input %s the definitions don't have", name)
+		}
+		if _, has := jsonptr.Lookup(values, f.path); has {
+			return fmt.Errorf("compile: the plan holds a value of the ignored input %s", name)
+		}
+		f.ignored = true
+	}
 	if len(st.deferred) != len(held) {
 		return errors.New("compile: the plan holds an input for Start without any of its parts")
 	}
@@ -477,6 +509,26 @@ func (st *starter) restore() error {
 		Remote: maps.Clone(p.Run.Remote), Sessions: maps.Clone(p.Run.SessionNames),
 	}
 	return nil
+}
+
+// recordFor returns what the secret record holds, given, for each of the
+// names the plan gives, by them, or an error if it holds another, or none
+// for one: a record that doesn't fit the plan.
+func recordFor[V any](names []string, given map[string]V, what string) (map[string]V, error) {
+	out := make(map[string]V, len(names))
+	for _, name := range names {
+		v, ok := given[name]
+		if !ok {
+			return nil, fmt.Errorf("compile: the secret record holds no %s %s", what, name)
+		}
+		out[name] = v
+	}
+	for name := range given {
+		if _, ok := out[name]; !ok {
+			return nil, fmt.Errorf("compile: the plan names no %s %s", what, name)
+		}
+	}
+	return out, nil
 }
 
 // fieldAt returns the first input whose value is at path, or nil.
@@ -794,39 +846,86 @@ func (st *starter) fillRows(f *field) {
 	}
 }
 
+// conditionKeys are an input's conditions, in the order the compiler
+// evaluates them (applyConditions).
+var conditionKeys = []string{"hidden", "ignore", "optional"}
+
 // checkDecisions decides again each input's condition that read a
 // variable or a password as the run was created (plan.Run.Decisions),
 // where the input definitions write it, and reports run_shape_changed
-// where one decides otherwise. It reads the inputs as the compiler's
-// conditions read them, as they were given. A decision of no input's
-// condition is a plan the compiler didn't make, an error.
+// where one decides otherwise than the secret record says it did. It goes
+// through the inputs in the order the compiler did, and reads them as the
+// compiler's conditions read them: as they were given, with each ignored
+// input's value, from the secret record (Record.Ignored), until it reaches
+// the input, which it then drops. On the way, it decides whether
+// each input Start evaluated, and each group it is in, is hidden and
+// optional, which checkInputs reads. A decision of no input's condition,
+// or a record that doesn't fit the plan, is an error.
 func (st *starter) checkDecisions() error {
-	r := st.r
+	r, p := st.r, st.p
+	decided, err := recordFor(p.Run.Decisions, st.in.Record.Decisions, "decision")
+	if err != nil {
+		return err
+	}
 	byLoc := make(map[string]*field, len(r.fields))
 	for _, f := range r.fields {
 		if _, ok := byLoc[jsonptr.Format(f.loc)]; !ok {
 			byLoc[jsonptr.Format(f.loc)] = f
 		}
 	}
-	for _, d := range st.p.Run.Decisions {
-		loc, err := jsonptr.Split(d.Path)
-		if err != nil || len(loc) <= len(definitionsPath) {
-			return fmt.Errorf("compile: the plan's decision %s is of no input's condition", d.Path)
+	for _, pointer := range p.Run.Decisions {
+		loc, err := jsonptr.Split(pointer)
+		if err != nil || len(loc) <= len(definitionsPath) || byLoc[jsonptr.Format(loc[:len(loc)-1])] == nil || !slices.Contains(conditionKeys, loc[len(loc)-1]) {
+			return fmt.Errorf("compile: the plan's decision %s is of no input's condition", pointer)
 		}
-		f, key := byLoc[jsonptr.Format(loc[:len(loc)-1])], loc[len(loc)-1]
-		if f == nil || key != "hidden" && key != "ignore" && key != "optional" {
-			return fmt.Errorf("compile: the plan's decision %s is of no input's condition", d.Path)
+	}
+	// Each ignored input that had a value has it until the conditions
+	// reach it (restore found them).
+	dropped := map[*field]bool{}
+	for name, v := range jsonvalue.Sorted(st.in.Record.Ignored) {
+		if v == nil {
+			continue
 		}
-		v := f.def[key]
-		if _, isString := v.(string); isString {
-			var read expr.Read
-			if v, read, err = r.evalRead(loc, f.index); err != nil {
-				st.reportEval(loc, err, read)
+		f := r.fieldAt(plan.SplitPath(name)[1:])
+		// What reads it reads it as private, as it can be made from a
+		// variable or a password.
+		f.ignored = false
+		r.set(f.path, jsonvalue.Clone(v))
+		r.mark(f.path)
+		dropped[f] = true
+	}
+	wanted := map[*field]bool{}
+	for _, f := range st.deferred {
+		for g := f; g != nil; g = g.group {
+			wanted[g] = true
+		}
+	}
+	st.hiddenAt, st.optionalAt = map[*field]bool{}, map[*field]bool{}
+	for _, f := range r.fields {
+		if f.group != nil && f.group.ignored {
+			f.ignored = true
+			continue
+		}
+		for _, key := range conditionKeys {
+			pointer := jsonptr.Format(appendPath(f.loc, key))
+			want, isDecision := decided[pointer]
+			if !isDecision && (!wanted[f] || key == "ignore") {
 				continue
 			}
+			got, ok := st.condition(f, key)
+			if ok && isDecision && got != want {
+				st.report(problems.RunShapeChanged, pointer, problems.Params{"key": key, "name": f.label()})
+			}
+			switch key {
+			case "hidden":
+				st.hiddenAt[f] = got
+			case "optional":
+				st.optionalAt[f] = got
+			}
 		}
-		if conditionValue(v) != d.Value {
-			st.report(problems.RunShapeChanged, d.Path, problems.Params{"key": key, "name": f.label()})
+		if dropped[f] {
+			f.ignored = true
+			r.drop(f)
 		}
 	}
 	return nil
@@ -928,7 +1027,7 @@ func (st *starter) checkInputs() {
 			continue
 		}
 		switch {
-		case st.condition(f, "optional") || st.hidden(f):
+		case st.optionalAt[f] || st.hidden(f):
 		case f.typ == "boolean":
 			r.set(f.path, false)
 		default:
@@ -942,10 +1041,11 @@ func (st *starter) checkInputs() {
 	}
 }
 
-// hidden reports whether f, or a group it is in, is hidden.
+// hidden reports whether f, or a group it is in, is hidden, as
+// checkDecisions decided it.
 func (st *starter) hidden(f *field) bool {
 	for g := f; g != nil; g = g.group {
-		if st.condition(g, "hidden") {
+		if st.hiddenAt[g] {
 			return true
 		}
 	}
@@ -953,12 +1053,11 @@ func (st *starter) hidden(f *field) bool {
 }
 
 // condition evaluates one of f's hidden, ignore and optional as the run
-// starts. What it read was read as the run was created, or it is a
-// decision that checkShape checks.
-func (st *starter) condition(f *field, key string) bool {
+// starts, and reports whether it could: one that fails is reported.
+func (st *starter) condition(f *field, key string) (decided, ok bool) {
 	v, ok := f.def[key]
 	if !ok {
-		return false
+		return false, true
 	}
 	if _, isString := v.(string); isString {
 		loc := appendPath(f.loc, key)
@@ -966,10 +1065,10 @@ func (st *starter) condition(f *field, key string) bool {
 		var err error
 		if v, read, err = st.r.evalRead(loc, f.index); err != nil {
 			st.reportEval(loc, err, read)
-			return false
+			return false, false
 		}
 	}
-	return conditionValue(v)
+	return conditionValue(v), true
 }
 
 // runValues returns the run's values as Start completed them, with what of
@@ -989,19 +1088,52 @@ func (st *starter) runValues() plan.RunValues {
 	}
 	maps.Copy(secrets, st.secretVariables)
 	maps.Copy(secrets, s.madeSecret)
-	run.Secrets = slices.Sorted(maps.Keys(secrets))
+	// What Start made from a secret is masked as what is made from one,
+	// not as a secret's own text: an env: value that says whether a secret
+	// is set, true, would mask every true. One that is a secret's own text
+	// is masked whole all the same, as the secret's.
+	derived := setOf(p.Run.Derived)
+	maps.Copy(derived, s.madeSecret)
 	private := map[string]bool{}
-	for _, name := range p.Run.Private {
-		private[name] = true
+	if st.becameSecret() {
+		// What the compiler made from a variable that is a secret now is
+		// masked from here on as what is made from one, with whatever else
+		// it made from a variable, as the plan doesn't say which.
+		for _, name := range p.Run.Private {
+			secrets[name], derived[name] = true, true
+		}
+	} else {
+		for _, name := range p.Run.Private {
+			private[name] = true
+		}
 	}
 	for name := range s.madePrivate {
 		if !secrets[name] {
 			private[name] = true
 		}
 	}
+	run.Secrets = slices.Sorted(maps.Keys(secrets))
 	run.Private = slices.Sorted(maps.Keys(private))
-	run.Derived = slices.Clone(p.Run.Derived)
+	run.Derived = slices.Sorted(maps.Keys(derived))
 	return run
+}
+
+// becameSecret reports whether a variable the plan names as one that isn't
+// a secret is one as the run starts.
+func (st *starter) becameSecret() bool {
+	wasSecret := setOf(st.p.Run.Secrets)
+	for _, name := range st.p.Run.Variables {
+		path := plan.SplitPath(name)
+		for secret := range st.secretVariables {
+			if wasSecret[secret] {
+				continue
+			}
+			if secret == name || len(path) == 1 && plan.SplitPath(secret)[0] == path[0] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // expand expands each matrix whose values are known as the run starts,

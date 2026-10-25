@@ -35,3 +35,4 @@ expect:
     - inputs.db~1password
     - inputs.pw
     - vars.HINT
+  run-derived: [inputs.creds.0.hint, inputs.creds.1.hint]

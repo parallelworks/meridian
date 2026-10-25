@@ -1,9 +1,11 @@
 package compile_test
 
 import (
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
@@ -89,12 +91,13 @@ jobs:
 		t.Errorf("deferred inputs %v", got)
 	}
 	// optional reads the region, which reads a variable; ignore: false is
-	// written out, and reads nothing.
-	if want := []plan.Decision{
-		{Path: "/on/execute/inputs/plain/optional", Value: false},
-		{Path: "/on/execute/inputs/region/hidden", Value: false},
-	}; !slices.EqualFunc(sortedDecisions(r.Decisions), want, func(a, b plan.Decision) bool { return a == b }) {
+	// written out, and reads nothing. The plan names them, and the secret
+	// record holds what they decided.
+	if want := []string{"/on/execute/inputs/plain/optional", "/on/execute/inputs/region/hidden"}; !slices.Equal(slices.Sorted(slices.Values(r.Decisions)), want) {
 		t.Errorf("decisions %v, want %v", r.Decisions, want)
+	}
+	if want := map[string]bool{"/on/execute/inputs/plain/optional": false, "/on/execute/inputs/region/hidden": false}; !maps.Equal(c.Record.Decisions, want) {
+		t.Errorf("decided %v, want %v", c.Record.Decisions, want)
 	}
 	for _, j := range c.Plan.Jobs {
 		if got, want := !j.NeedsExpr.IsZero(), j.Name == "b"; got != want {
@@ -116,16 +119,74 @@ jobs:
 	}
 }
 
-func sortedDecisions(ds []plan.Decision) []plan.Decision {
-	out := slices.Clone(ds)
-	slices.SortFunc(out, func(a, b plan.Decision) int {
-		if a.Path < b.Path {
-			return -1
+// A password input's default, a password field's of a list's rows and a
+// group's among them, and the default of a list whose rows have a password
+// input, can hold a password, which a plan never holds: the plan names
+// where each is, and the secret record holds it.
+func TestPlanWithholdsPasswordDefaults(t *testing.T) {
+	const sentinel = "chang3me-SENTINEL"
+	for defs, want := range map[string][]string{
+		"pw: {type: password, default: chang3me-SENTINEL}": {"/on/execute/inputs/pw/default"},
+		"l: {type: list, template: {p: {type: password, default: chang3me-SENTINEL}, u: {type: string}}, default: [{u: a}]}": {
+			"/on/execute/inputs/l/default", "/on/execute/inputs/l/template/p/default",
+		},
+		"l: {type: list, template: {p: {type: password}, u: {type: string}}, default: [{u: a, p: chang3me-SENTINEL}]}": {"/on/execute/inputs/l/default"},
+		"g: {type: group, items: {p: {type: password, default: chang3me-SENTINEL}, u: {type: string, default: kept}}}": {"/on/execute/inputs/g/items/p/default"},
+	} {
+		c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(inputs(defs)), nil, compile.Options{})
+		if err != nil || c == nil {
+			t.Fatalf("%s: %v, %v", defs, diags, err)
 		}
-		if a.Path > b.Path {
-			return 1
+		data, err := plan.Encode(c.Plan)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return 0
-	})
-	return out
+		if strings.Contains(string(data), sentinel) {
+			t.Errorf("%s: the plan holds the password's default: %s", defs, data)
+		}
+		if !slices.Equal(c.Plan.Run.Withheld, want) || !slices.Equal(slices.Sorted(maps.Keys(c.Record.Withheld)), want) {
+			t.Errorf("%s: withheld %v, record %v, want %v", defs, c.Plan.Run.Withheld, c.Record.Withheld, want)
+		}
+		if !strings.Contains(fmt.Sprint(c.Record.Withheld), sentinel) {
+			t.Errorf("%s: the record holds %v", defs, c.Record.Withheld)
+		}
+	}
+	// What can hold no password stays.
+	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(inputs("u: {type: string, default: kept}")), nil, compile.Options{})
+	if err != nil || c == nil || len(c.Plan.Run.Withheld) != 0 || c.Record.Withheld != nil {
+		t.Errorf("%v, %v: withheld %v", diags, err, c.Plan.Run.Withheld)
+	}
+}
+
+// What a condition of the run's shape that read a password decided can say
+// something of the password, a bit at a time, so the plan names the
+// condition and the secret record holds what it decided: the plans of two
+// runs whose passwords differ are the same.
+func TestPlanHoldsNoDecisionOfAPassword(t *testing.T) {
+	var defs strings.Builder
+	defs.WriteString("pw: {type: password}\n")
+	for i, c := range "abcdefghijklmnopqrstuvwxyz0123456789" {
+		fmt.Fprintf(&defs, "h%02d: {type: string, optional: true, hidden: '${{ contains(inputs.pw, ''%c'') }}'}\n", i, c)
+	}
+	src := workflow(strings.TrimSuffix(defs.String(), "\n"))
+	var encoded []string
+	var records []compile.Record
+	for _, pw := range []string{"hunter2", "zzzzzzz"} {
+		c := createRun(t, src, map[string]any{"pw": pw}, nil)
+		if len(c.Plan.Run.Decisions) != 36 {
+			t.Fatalf("decisions %v", c.Plan.Run.Decisions)
+		}
+		data, err := plan.Encode(c.Plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded = append(encoded, string(data))
+		records = append(records, c.Record)
+	}
+	if encoded[0] != encoded[1] {
+		t.Errorf("the plans differ:\n%s\n%s", encoded[0], encoded[1])
+	}
+	if maps.Equal(records[0].Decisions, records[1].Decisions) {
+		t.Errorf("the records' decisions are the same: %v", records[0].Decisions)
+	}
 }

@@ -986,11 +986,13 @@ jobs:
 	}
 	for what, tc := range map[string]struct{ got, want []string }{
 		"secrets": {p.Run.Secrets, []string{
-			"inputs.", "inputs.c.a~1b", "inputs.db~1password", "inputs.g.x~0y~1token", "inputs.l.0.pass", "inputs.l.0.кл~1password", "vars.my~1token",
+			"inputs.", "inputs.c.a~1b", "inputs.db~1password", "inputs.g.x~0y~1token", "inputs.l.0.pass", "inputs.l.0.кл~1password", "vars.SECRET", "vars.my~1token",
 		}},
-		"derived":   {p.Run.Derived, []string{"inputs.c.a~1b"}},
-		"private":   {p.Run.Private, []string{"inputs.c.c~0d"}},
-		"variables": {p.Run.Variables, []string{"org.a~1b"}},
+		"derived": {p.Run.Derived, []string{"inputs.c.a~1b"}},
+		"private": {p.Run.Private, []string{"inputs.c.c~0d"}},
+		// Start reads the variables of what a private value was given in the
+		// place of.
+		"variables": {p.Run.Variables, []string{"org.OWNER", "org.a~1b"}},
 	} {
 		if !slices.Equal(tc.got, tc.want) {
 			t.Errorf("%s %q, want %q", what, tc.got, tc.want)

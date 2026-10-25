@@ -116,13 +116,13 @@ func createRun(t testing.TB, src string, submitted map[string]any, vars testVari
 	return c
 }
 
-// startRun starts the run c, as a coordinator does: with the passwords and
-// the private values Create gave, the Variables interface vars, and in's
-// other resolvers, the platform a passThrough unless in gives one.
+// startRun starts the run c, as a coordinator does: with the secret record
+// Create gave, the Variables interface vars, and in's other resolvers, the
+// platform a passThrough unless in gives one.
 func startRun(t testing.TB, c *compile.Created, vars compile.Variables, in compile.StartInput) (*compile.StartResult, problems.Diagnostics) {
 	t.Helper()
 	in.Variables = vars
-	in.Passwords, in.Private = c.Passwords, c.Private
+	in.Record = c.Record
 	if in.Inputs == nil {
 		in.Inputs = passThrough{}
 	}
@@ -261,6 +261,7 @@ c: {type: string, default: '${{ vars["my.token"] }}'}`,
 			vars:      testVariables{"vars.my.token": {Value: "tok", Secret: true}},
 			inputs:    `{"c":"tok","db.password":"S1","g":{"pass":"S3","x~y.token":"S2"}}`,
 			secrets:   []string{"inputs.c", "inputs.db~1password", "inputs.g.pass", "inputs.g.x~0y~1token", "vars.my~1token"},
+			derived:   []string{"inputs.c"},
 		},
 		"nested lists": {
 			defs: `l:
@@ -310,6 +311,7 @@ c: {type: string, default: '${{ vars["my.token"] }}'}`,
 			vars:      testVariables{"vars.SITE": {Value: "east", Secret: true}},
 			inputs:    `{"hosts":[{"key":"K1","name":"a","site":"east"},{"key":"K2","name":"b","site":"east"}]}`,
 			secrets:   []string{"inputs.hosts.0.key", "inputs.hosts.0.site", "inputs.hosts.1.key", "inputs.hosts.1.site", "vars.SITE"},
+			derived:   []string{"inputs.hosts.0.site", "inputs.hosts.1.site"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -504,7 +506,7 @@ func TestStartVariablesResolver(t *testing.T) {
 		t.Errorf("without Variables: %v", diags)
 	}
 	down := errors.New("the store is down")
-	in := compile.StartInput{Variables: failingVariables{down}, Passwords: c.Passwords}
+	in := compile.StartInput{Variables: failingVariables{down}, Record: c.Record}
 	if _, _, err := compile.Start(t.Context(), c.Plan, in); !errors.Is(err, down) {
 		t.Errorf("error %v, want %v", err, down)
 	}
@@ -727,9 +729,9 @@ func TestStartCallerMistakes(t *testing.T) {
 	src := workflow(`pw: {type: password}`)
 	c := createRun(t, src, map[string]any{"pw": "x"}, nil)
 	for name, in := range map[string]compile.StartInput{
-		"a password the plan doesn't name": {Passwords: map[string]any{"inputs.other": "x"}},
-		"a private value it doesn't name":  {Private: map[string]any{"inputs.pw": "x"}},
-		"a name of no input":               {Passwords: map[string]any{"pw": "x"}},
+		"a password the plan doesn't name": {Record: compile.Record{Passwords: map[string]any{"inputs.other": "x"}}},
+		"a private value it doesn't name":  {Record: compile.Record{Private: map[string]any{"inputs.pw": "x"}}},
+		"a name of no input":               {Record: compile.Record{Passwords: map[string]any{"pw": "x"}}},
 	} {
 		if _, _, err := compile.Start(t.Context(), c.Plan, in); err == nil {
 			t.Errorf("%s: no error", name)
@@ -782,7 +784,7 @@ func TestPasswordsNeverInRunState(t *testing.T) {
 					continue
 				}
 				res, diags, err := compile.Start(t.Context(), created.Plan, compile.StartInput{
-					Variables: vars, Passwords: created.Passwords, Private: created.Private, Inputs: passThrough{},
+					Variables: vars, Record: created.Record, Inputs: passThrough{},
 				})
 				if err != nil {
 					t.Fatalf("%s: %v", c.Name, err)
@@ -847,7 +849,7 @@ func TestVariablesNeverInRunState(t *testing.T) {
 					continue
 				}
 				res, diags, err := compile.Start(t.Context(), created.Plan, compile.StartInput{
-					Variables: vars, Passwords: created.Passwords, Private: created.Private, Inputs: passThrough{},
+					Variables: vars, Record: created.Record, Inputs: passThrough{},
 				})
 				if err != nil {
 					t.Fatalf("%s: %v", c.Name, err)
@@ -884,5 +886,184 @@ func TestVariablesNeverInRunState(t *testing.T) {
 	t.Logf("started %d runs, %d with values made from a variable", startedRuns, made)
 	if startedRuns == 0 || made == 0 {
 		t.Fatalf("started %d runs, %d with values made from a variable", startedRuns, made)
+	}
+}
+
+// The parts of the input definitions the plan withholds, which can hold a
+// password, the secret record gives back to Start: the default rows of a
+// list whose rows have a password input, and the password field's default
+// that fills in the rows Start evaluates. A record without them doesn't fit
+// the plan.
+func TestStartRestoresWithheldDefinitions(t *testing.T) {
+	const sentinel = "chang3me-SENTINEL"
+	src := workflow(`hosts:
+  type: list
+  default: ${{ fromJSON(vars.HOSTS) }}
+  template: {name: {type: string}, key: {type: password, default: chang3me-SENTINEL}}`)
+	vars := testVariables{"vars.HOSTS": {Value: `[{"name":"a"},{"name":"b"}]`, Secret: true}}
+	c, res, diags := started(t, src, nil, vars)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	if got := canonical(t, res.Run.Inputs.Get()); got != `{"hosts":[{"key":"chang3me-SENTINEL","name":"a"},{"key":"chang3me-SENTINEL","name":"b"}]}` {
+		t.Errorf("inputs %s", got)
+	}
+	if !slices.Contains(res.Run.Masked(), sentinel) {
+		t.Errorf("masked %q", res.Run.Masked())
+	}
+	data, err := plan.Encode(c.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), sentinel) {
+		t.Errorf("the plan holds the password's default: %s", data)
+	}
+	without := c.Record
+	without.Withheld = nil
+	if _, _, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: vars, Record: without, Inputs: passThrough{}}); err == nil {
+		t.Error("no error without the withheld definitions")
+	}
+}
+
+// What Start makes from a secret is masked as what is made from one, not as
+// a secret's own text: an env: value that says a secret is set, true, or
+// yes, masks no true and no yes in the run's logs. A value Start made that
+// is a secret's own text is masked whole however short, as the secret's.
+func TestStartMadeFromSecretIsDerived(t *testing.T) {
+	src := workflow(`flag: {type: string, default: '${{ vars.TOKEN != '''' }}'}`, `env:
+  HAS_TOKEN: ${{ vars.TOKEN != '' }}
+  MODE: ${{ vars.TOKEN != '' && 'yes' || 'no' }}
+  TOKEN: ${{ vars.TOKEN }}
+jobs:
+  main:
+    steps:
+      - run: echo
+`)
+	vars := testVariables{"vars.TOKEN": {Value: "s3c", Secret: true}}
+	_, res, diags := started(t, src, nil, vars)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	masked := res.Run.Masked()
+	for _, s := range []string{"true", "yes"} {
+		if slices.Contains(masked, s) {
+			t.Errorf("masked %q: every %q in the run's logs is masked", masked, s)
+		}
+	}
+	if !slices.Contains(masked, "s3c") {
+		t.Errorf("masked %q, want the secret's own text", masked)
+	}
+	for _, name := range []string{"env.HAS_TOKEN", "env.MODE", "env.TOKEN", "inputs.flag"} {
+		if !slices.Contains(res.Run.Secrets, name) || !slices.Contains(res.Run.Derived, name) {
+			t.Errorf("%s: secrets %v, derived %v", name, res.Run.Secrets, res.Run.Derived)
+		}
+	}
+}
+
+// A variable that wasn't a secret as the run was created and is one as it
+// starts: what the run was given in the place of what is made from a
+// variable, which the plan names as private, is masked from then on as
+// what is made from a secret.
+func TestStartVariableThatBecameSecret(t *testing.T) {
+	src := workflow(`owner: {type: string, default: '${{ org.OWNER }}'}`)
+	submitted := map[string]any{"owner": "typed-owner"}
+	c := createRun(t, src, submitted, testVariables{"org.OWNER": {Value: "research"}})
+	for _, tc := range []struct {
+		secret                    bool
+		secrets, derived, private []string
+	}{
+		{false, nil, nil, []string{"inputs.owner"}},
+		{true, []string{"inputs.owner", "org.OWNER"}, []string{"inputs.owner"}, nil},
+	} {
+		res, diags := startRun(t, c, testVariables{"org.OWNER": {Value: "research", Secret: tc.secret}}, compile.StartInput{})
+		if res == nil {
+			t.Fatal(diags)
+		}
+		if !slices.Equal(res.Run.Secrets, tc.secrets) || !slices.Equal(res.Run.Derived, tc.derived) || !slices.Equal(res.Run.Private, tc.private) {
+			t.Errorf("secret %v: secrets %v, derived %v, private %v", tc.secret, res.Run.Secrets, res.Run.Derived, res.Run.Private)
+		}
+		if got := slices.Contains(res.Run.Masked(), "typed-owner"); got != tc.secret {
+			t.Errorf("secret %v: masked %q", tc.secret, res.Run.Masked())
+		}
+	}
+}
+
+// A condition Start decides again reads what it read as the run was
+// created: an input that another condition ignores, which the plan holds
+// no value of, reads its value until the conditions reach it, in the
+// inputs' order, from the secret record, and null after, as the compiler's
+// did. What else Start evaluates reads it as null, as the phases after it
+// do, not as its default.
+func TestStartConditionsReadIgnoredInputs(t *testing.T) {
+	// The inputs' order is their names'.
+	hidden := `%s: {type: string, optional: true, hidden: '${{ %s != '''' && inputs.%s == ''y'' }}'}`
+	ignore := `%s: {type: string, default: x, ignore: '${{ %s }}'}`
+	env := "env:\n  E: ${{ inputs.%s }}-${{ %s }}\n"
+	for name, tc := range map[string]struct {
+		defs []string
+		env  string
+		vars testVariables
+		pw   map[string]any
+		read bool
+	}{
+		"ignored by a variable, read before": {
+			[]string{fmt.Sprintf(hidden, "a", "org.Z", "z"), fmt.Sprintf(ignore, "z", "org.IGN == ''yes''")},
+			fmt.Sprintf(env, "z", "org.Z"),
+			testVariables{"org.IGN": {Value: "yes"}, "org.Z": {Value: "z"}},
+			map[string]any{"z": "y"},
+			true,
+		},
+		"ignored by a variable, read after": {
+			[]string{fmt.Sprintf(ignore, "a", "org.IGN == ''yes''"), fmt.Sprintf(hidden, "z", "org.Z", "a")},
+			fmt.Sprintf(env, "a", "org.Z"),
+			testVariables{"org.IGN": {Value: "yes"}, "org.Z": {Value: "z"}},
+			map[string]any{"a": "y"},
+			false,
+		},
+		"ignored by a password, read before": {
+			[]string{"pw: {type: password}", fmt.Sprintf(hidden, "a", "inputs.pw", "z"), fmt.Sprintf(ignore, "z", "inputs.pw == ''p''")},
+			fmt.Sprintf(env, "z", "inputs.pw"),
+			nil,
+			map[string]any{"pw": "p", "z": "y"},
+			true,
+		},
+		"ignored by a password, read after": {
+			[]string{"pw: {type: password}", fmt.Sprintf(ignore, "a", "inputs.pw == ''p''"), fmt.Sprintf(hidden, "z", "inputs.pw", "a")},
+			fmt.Sprintf(env, "a", "inputs.pw"),
+			nil,
+			map[string]any{"pw": "p", "a": "y"},
+			false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := createRun(t, workflow(strings.Join(tc.defs, "\n"), tc.env), tc.pw, tc.vars)
+			if len(c.Record.Ignored) != 1 || !slices.Contains(slices.Collect(maps.Values(c.Record.Ignored)), any("y")) {
+				t.Fatalf("ignored %v", c.Record.Ignored)
+			}
+			if got := slices.Collect(maps.Values(c.Record.Decisions)); len(got) != 2 || slices.Contains(got, !tc.read) != !tc.read || slices.Index(got, true) < 0 {
+				t.Fatalf("decided %v: the condition read the ignored input %v", c.Record.Decisions, tc.read)
+			}
+			res, diags := startRun(t, c, tc.vars, compile.StartInput{})
+			if res == nil || len(diags) != 0 {
+				t.Fatalf("Start: %v", diags)
+			}
+			if e := res.Run.Env["E"]; !strings.HasPrefix(e, "-") {
+				t.Errorf("env E %q reads the ignored input", e)
+			}
+			if len(res.Run.Inputs.Get().(map[string]any)) > 1 {
+				t.Errorf("inputs %v hold the ignored input", res.Run.Inputs.Get())
+			}
+			if !tc.read {
+				return
+			}
+			// Without the record's ignored inputs, the condition read
+			// before the input reads its default, and decides otherwise.
+			without := c.Record
+			without.Ignored = nil
+			if res, diags, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: tc.vars, Record: without, Inputs: passThrough{}}); err != nil || res != nil ||
+				!slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.RunShapeChanged.Code() }) {
+				t.Errorf("without the ignored inputs: %v, %v", diags, err)
+			}
+		})
 	}
 }

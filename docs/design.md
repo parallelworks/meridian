@@ -476,14 +476,18 @@ its resolvers into a plan, in order:
      row are `api key`, `private key` or `access key`, so `HF_TOKEN` and
      `apiKey` do and `tokenizer` doesn't. A variable is warned about once,
      where it is first read.
-7. **Emit** the plan, and beside it the run's passwords and its private
-   values, which the plan doesn't hold, named as the plan names them, for
-   the secret record (`compile.Created`). Beside the input values it knows,
-   the plan holds what Start needs to complete the rest as Create would
-   have: the input definitions, where each part of an input held for Start
-   is in them (`Run.DeferredParts`), and each decision of the run's shape
-   that read a variable or a password (`Run.Decisions` and a job's
-   `NeedsExpr`).
+7. **Emit** the plan, and beside it what the run's secret record holds
+   from its start, which the plan doesn't (`compile.Record`): the run's
+   passwords and its private values, named as the plan names them; the
+   parts of the input definitions that can hold a password; what each
+   decision of the run's shape that read a variable or a password decided;
+   and the inputs the run ignored, with their values. Beside the input
+   values it knows, the plan holds what Start needs to complete the rest as
+   Create would have: the input definitions, where each part of an input
+   held for Start is in them (`Run.DeferredParts`), where the parts it
+   withholds are (`Run.Withheld`), and where each decision of the run's
+   shape that read a variable or a password is (`Run.Decisions` and a
+   job's `NeedsExpr`).
 
 The compiler does no I/O of its own: files, networks and platforms are
 reached only through resolvers, which get the context the compiler is
@@ -759,7 +763,9 @@ the run waits for ([On hopper](#on-hopper)).
    Take the run's passwords and private values from its secret record, and
    put each in the inputs' values at the path its name leads to
    (`plan.SplitPath`), an outer one before those in it, in a list at its
-   index, where the plan holds null in its place.
+   index, where the plan holds null in its place; and put the parts of the
+   input definitions the plan withholds back in their places. A record
+   that doesn't hold what the plan names is an error.
 2. **Complete the inputs.** Evaluate the parts of the inputs the plan holds
    for Start where the input definitions write them (`Run.DeferredParts`),
    with the index of the list rows each is for, so relative references,
@@ -779,13 +785,17 @@ the run waits for ([On hopper](#on-hopper)).
    them reads nothing, where Create read the rest of the workflow.
 3. **Check the shape.** Evaluate again each decision of the run's shape
    that read a variable or a password: an input's `hidden`, `ignore` and
-   `optional`, where the definitions write it (`Run.Decisions`), reading
-   the inputs as given as Create's conditions did, and then, with the
-   inputs converted, a job's `needs` (`Job.NeedsExpr`), which names the
-   same jobs in whatever order. If one differs from what the plan records,
-   the run fails with `run_shape_changed`, rather than run with values from
-   two readings. It comes after the inputs, as a condition can read an
-   input whose value reads a variable, which Start has evaluated again.
+   `optional`, where the definitions write it (`Run.Decisions`), in the
+   inputs' order, reading the inputs as Create's conditions did: as given,
+   and an input the run ignored with its value, from the secret record,
+   until the conditions reach it; and then, with the inputs converted, a
+   job's `needs` (`Job.NeedsExpr`), which names the same jobs in whatever
+   order. If one differs from what Create decided, which the secret record
+   holds, the run fails with `run_shape_changed`, rather than run with
+   values from two readings. It comes after the inputs, as a condition can
+   read an input whose value reads a variable, which Start has evaluated
+   again. Everything else Start evaluates reads an ignored input as null,
+   as the jobs do.
 4. **Check the inputs** Start evaluated as Create checks one: its type,
    whether it is required, and a platform type with the Inputs resolver;
    and evaluate the workflow's `timeout:`.
@@ -802,10 +812,18 @@ the run waits for ([On hopper](#on-hopper)).
    evaluated there or as run state, by whether evaluating it read a
    variable or a password ([Phases](#phases)), and its diagnostics with the
    run, all in the transaction that ends its hopper job. What Start made
-   from a secret is a secret, and from a variable or a password private, by
-   its name (`RunValues.Secrets` and `Private`), beside what the plan names
-   so; the secret record holds what `RunValues.Split` gives it, and the
-   timeout and the matrices expanded when they are private.
+   from a secret is a secret, masked as what is made from one rather than
+   as a secret's own text (`RunValues.Derived`), so that an `env:` value
+   that says whether a secret is set, `true`, masks no `true` in the logs;
+   and from a variable or a password private, by its name
+   (`RunValues.Secrets` and `Private`), beside what the plan names so. A
+   variable that was plain as the run was created and is a secret as it
+   starts makes every private value the plan names masked from then on as
+   made from a secret, since the plan doesn't say which variable each was
+   given in the place of: Create lists, among the variables Start reads,
+   those that what a private value was given in the place of reads. The
+   secret record holds what `RunValues.Split` gives it, and the timeout and
+   the matrices expanded when they are private.
 
 Start's problems are the run's, at the JSON Pointer of what they are about,
 with no file position, as Ready's are. Given the same plan, passwords and
@@ -844,17 +862,21 @@ It holds:
 - **The run:** the workflow's source and revision, its format and metadata,
   the Meridian release that compiled it, the input values known when the
   run was created, the inputs left to Start, the workflow's `env`, the run's
-  timeout, `remote` and `sessions`, the decisions of its shape that read a
-  variable, and the secrets and variables Start reads. A revision names the
+  timeout, `remote` and `sessions`, where the decisions of its shape that
+  read a variable or a password are, and the secrets and variables Start
+  reads. A revision names the
   exact text that ran: a Git commit, or the SHA-256 digest of the text when
   no commit has it, as for a file with uncommitted changes or a workflow a
   platform stores.
 - **The input definitions**, `on.execute.inputs` as the workflow writes
   them, with their expressions parsed and no values, so that Start
   evaluates what was left to it as Create would have, where they write it.
-  They are the workflow's text, which holds no value the run was given: a
-  password written into a definition, as a literal default, is the
-  workflow's, as one written into a step's `run:` is.
+  They leave out what can hold a password, which the secret record holds
+  and the plan names by its JSON Pointer (`Run.Withheld`): each password
+  input's default, a password field's of a list's rows among them, and the
+  default of each list whose rows have a password input. A person who
+  keeps a password's default runs with it as the run's password, which the
+  plan never holds.
 - **Jobs**, one per job: dependencies (on all instances of a job, or `:any`
   of them), its `strategy:`, its `if:`, group, resources and `retry:`,
   steps, outputs, timeout and `env`, and the secrets and variables it reads.
@@ -916,20 +938,17 @@ each variable of a context, as `vars.*` is, names the context, `org` or
 
 What decides the run's shape still reads variables when the run is created:
 an input's `hidden`, `ignore` and `optional`, and a job's `needs`. The plan
-holds what they decided, which inputs the run has and which jobs each job
-waits for, and, for each one that read a variable or a password, where it
-is and what it decided, or the job's `needs:` expression; Start decides
-them again to check that nothing changed
-([Starting a run](#starting-a-run)). That can say something of a variable's
-value, such as that it names a job, which is accepted: the plan has to hold
-the run's shape.
-
-One edge of that check: a condition that reads both a variable and an
-input that a later condition ignores read the input's value when the run
-was created, before it was ignored, and as the run starts reads null, as
-the plan holds no value of an ignored input. If that changes what it
-decides, the run fails with `run_shape_changed` though nothing changed. No
-known workflow has such a condition.
+holds the run's shape, which inputs the run has and which jobs each job
+waits for, and, for each decision that read a variable or a password,
+where it is, or the job's `needs:` expression; Start decides them again to
+check that nothing changed ([Starting a run](#starting-a-run)). What each
+condition decided is in the secret record, not the plan: a workflow could
+otherwise spell a password out into the plan a bit at a time, one
+`hidden:` that tests a character of it for each. What an `ignore:` or a
+`needs:` decided shows all the same in the shape, which inputs have
+values and which jobs wait for which, as the plan has to hold the run's
+shape; which inputs the run ignored the plan doesn't name, as an ignored
+input with no value would otherwise say what its `ignore:` decided.
 
 A source's location names the workflow to whoever can see the run, so it
 says nothing of the machine the run was created on: a platform gives its
@@ -941,9 +960,12 @@ variables, which `plan.Job.Reads` finds from the job's expressions.
 
 ### The secret record
 
-The secret record holds what a run needs that the plan can't: its
-passwords and private values, from Create (`compile.Created`); the
-variables it read at Start, plain and secret; what Start made from them
+The secret record holds what a run needs that the plan can't: from
+Create (`compile.Record`), its passwords and private values, the parts of
+the input definitions that can hold a password, what each condition of
+its shape that read a variable or a password decided, and the inputs it
+ignored with their values, as given, for the conditions Start decides
+again; the variables it read at Start, plain and secret; what Start made from them
 (the record half of `RunValues.Split`, and the run's timeout and its
 matrices' instances when they are private); and the job outputs made from
 a variable or a password but not from a secret, which jobs that need them
@@ -1004,10 +1026,10 @@ Today a plan is version 1, and has no schema. Version 1 stays open until
 the first release: no release has yet stored a plan or sent one to a
 worker, so what the plan and the worker API's bodies gain before then,
 such as what Start needs, is part of version 1: the input definitions,
-where the parts held for Start are in them, the inputs' values as given
-where Create converted them, the shape's decisions, a job's `needs:`
-expression, `remote`, `sessions` and the names a session provider gave
-them, and the limits. The first release freezes it, with its schema, and
+where the parts held for Start are in them and where those withheld are,
+the inputs' values as given where Create converted them, where the
+shape's decisions are, a job's `needs:` expression, `remote`, `sessions`
+and the names a session provider gave them, and the limits. The first release freezes it, with its schema, and
 every change after that gets a version.
 
 ## Expressions

@@ -49,7 +49,8 @@ func samplePlan(t *testing.T) *plan.Plan {
 				{Name: "inputs.token", Location: "/on/execute/inputs/token/default"},
 				{Name: "inputs.rows.1.a", Location: "/on/execute/inputs/rows/template/a/default", Index: []int{1}},
 			},
-			Decisions:    []plan.Decision{{Path: "/on/execute/inputs/token/hidden"}, {Path: "/on/execute/inputs/x/ignore", Value: true}},
+			Withheld:     []string{"/on/execute/inputs/pw/default"},
+			Decisions:    []string{"/on/execute/inputs/token/hidden", "/on/execute/inputs/x/ignore"},
 			Remote:       map[string]string{"repo": "https://example.com/r", "branch": "main"},
 			Sessions:     mustValue(t, map[string]any{"desktop": map[string]any{"useTLS": false, "redirect": "${{ inputs.x }}"}}),
 			SessionNames: map[string]string{"desktop": "desktop-1"},
@@ -204,10 +205,10 @@ func TestEncodeDecode(t *testing.T) {
 	if strings.Contains(string(data), `"detail"`) {
 		t.Errorf("the plan holds the warning's text: %s", data)
 	}
-	// What Start reads survives: a decision of false among them, and the
-	// definitions as the workflow writes them.
-	if d := back.Run.Decisions; len(d) != 2 || d[0].Value || !d[1].Value || !strings.Contains(string(data), `"value":false`) {
-		t.Errorf("decisions %v", d)
+	// What Start reads survives, and the definitions as the workflow
+	// writes them.
+	if r := back.Run; len(r.Decisions) != 2 || len(r.Withheld) != 1 {
+		t.Errorf("decisions %v, withheld %v", r.Decisions, r.Withheld)
 	}
 	if got := back.Run.Definitions.Written(); !reflect.DeepEqual(got, map[string]any{
 		"token": map[string]any{"type": "string", "default": "${{ vars.TOKEN }}", "hidden": "${{ org.H }}"},

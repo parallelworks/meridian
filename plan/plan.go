@@ -53,13 +53,20 @@ type Run struct {
 	// Inputs' (docs/design.md, Starting a run).
 	Unconverted map[string]Data `json:"unconverted,omitempty"`
 	// Definitions are the workflow's input definitions, on.execute.inputs,
-	// as the workflow writes them, with their expressions parsed. Start
-	// evaluates what is left to it where the workflow writes it
-	// (DeferredParts, Decisions), as the compiler would have, so that
-	// relative references, reads of a definition and lists' templates read
-	// what they read as the run was created. They hold no value the run
-	// was given.
+	// as the workflow writes them, with their expressions parsed, but for
+	// what Withheld names. Start evaluates what is left to it where the
+	// workflow writes it (DeferredParts, Decisions), as the compiler would
+	// have, so that relative references, reads of a definition and lists'
+	// templates read what they read as the run was created. They hold no
+	// value the run was given.
 	Definitions Value `json:"definitions,omitzero"`
+	// Withheld are the JSON Pointers, in the workflow, of the parts of the
+	// input definitions that Definitions leaves out, as it can't hold a
+	// password: each password input's default, a field's of a list's rows
+	// among them, and the default of each list whose rows have a password
+	// input, whose rows can hold one. The run's secret record holds them,
+	// and Start puts them back.
+	Withheld []string `json:"withheld,omitempty"`
 	// DeferredInputs are the defaults of inputs that read what is known
 	// only once the run is underway, such as a secret variable, or what the
 	// plan never holds, an organization or user variable or a password
@@ -75,12 +82,16 @@ type Run struct {
 	// starts where the workflow writes it, in Definitions, and gives the
 	// value it names.
 	DeferredParts []DeferredPart `json:"deferredParts,omitempty"`
-	// Decisions are the inputs' hidden, ignore and optional that read an
-	// organization or user variable, or a password, as the run was
-	// created, and what each decided. Start decides each again
-	// (docs/design.md, Starting a run). A job's needs: that read one is
-	// its Job.NeedsExpr.
-	Decisions []Decision `json:"decisions,omitempty"`
+	// Decisions are the JSON Pointers, in the workflow, of the inputs'
+	// hidden, ignore and optional that read an organization or user
+	// variable, or a password, as the run was created, in order. Start
+	// decides each again, in the order the compiler did (docs/design.md,
+	// Starting a run). What each decided can say something of what it
+	// read, so the run's secret record holds it. What an ignore decided
+	// shows all the same in the inputs Inputs holds, as what a job's
+	// needs: decided shows in its Needs: the plan holds the run's shape. A
+	// job's needs: that read one is its Job.NeedsExpr.
+	Decisions []string `json:"decisions,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`
 	// Timeout is the run's timeout:.
@@ -152,19 +163,6 @@ type DeferredPart struct {
 	// rows, all of the value it gives: one that gives "" or null gives no
 	// value, as when the run is created.
 	Default bool `json:"default,omitzero"`
-}
-
-// A Decision is an input's hidden, ignore or optional that read an
-// organization or user variable, or a password, as the run was created,
-// and what it decided. What it decided can say something of what it read,
-// as that a variable is set, which a plan holds all the same: it holds the
-// run's shape.
-type Decision struct {
-	// Path is the JSON Pointer of the condition in the workflow, as in
-	// /on/execute/inputs/region/ignore. Definitions holds it.
-	Path string `json:"path"`
-	// Value is what it decided.
-	Value bool `json:"value"`
 }
 
 // Limits are Meridian's limits on a run's size, which whoever runs the

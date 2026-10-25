@@ -217,7 +217,7 @@ func TestStartConformance(t *testing.T) {
 			if created != nil {
 				var startDiags problems.Diagnostics
 				res, startDiags, err = compile.Start(ctx, created.Plan, compile.StartInput{
-					RunID: c.Name, Variables: startVariables(c), Passwords: created.Passwords, Private: created.Private, Inputs: opts.Inputs,
+					RunID: c.Name, Variables: startVariables(c), Record: created.Record, Inputs: opts.Inputs,
 				})
 				if err != nil {
 					t.Fatal(err)

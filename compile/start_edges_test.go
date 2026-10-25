@@ -138,10 +138,11 @@ a: {type: string, default: '${{ vars.A }}', hidden: '${{ vars.A == "" }}'}`)
 		},
 		"a password at a huge index": func(p *plan.Plan, in *compile.StartInput) {
 			p.Run.Secrets = append(p.Run.Secrets, "inputs.l.100000000000.pass")
-			in.Passwords = map[string]any{"inputs.l.100000000000.pass": "p"}
+			in.Record.Passwords = map[string]any{"inputs.l.100000000000.pass": "p"}
 		},
-		"a decision of no condition": func(p *plan.Plan, _ *compile.StartInput) {
-			p.Run.Decisions = append(p.Run.Decisions, plan.Decision{Path: "/jobs/main"})
+		"a decision of no condition": func(p *plan.Plan, in *compile.StartInput) {
+			p.Run.Decisions = append(p.Run.Decisions, "/jobs/main")
+			in.Record.Decisions = map[string]bool{"/jobs/main": true}
 		},
 		"a part outside the definitions": func(p *plan.Plan, _ *compile.StartInput) {
 			p.Run.DeferredParts[0].Location = "/jobs/main/steps/0/run"
@@ -149,7 +150,7 @@ a: {type: string, default: '${{ vars.A }}', hidden: '${{ vars.A == "" }}'}`)
 	} {
 		t.Run(name, func(t *testing.T) {
 			again := createRun(t, src, map[string]any{"l": []any{map[string]any{"pass": "p"}}}, vars)
-			in := compile.StartInput{Variables: vars, Passwords: c.Passwords, Inputs: passThrough{}}
+			in := compile.StartInput{Variables: vars, Record: compile.Record{Passwords: c.Record.Passwords}, Inputs: passThrough{}}
 			change(again.Plan, &in)
 			if res, diags, err := compile.Start(t.Context(), again.Plan, in); err == nil {
 				t.Errorf("no error: %v, %v", res, diags)
@@ -171,8 +172,8 @@ func TestStartRestoresPrivateAroundPasswords(t *testing.T) {
 	if res == nil {
 		t.Fatal(diags)
 	}
-	if _, ok := c.Private["inputs.creds"]; !ok {
-		t.Fatalf("private %v", c.Private)
+	if _, ok := c.Record.Private["inputs.creds"]; !ok {
+		t.Fatalf("private %v", c.Record.Private)
 	}
 	if got := canonical(t, res.Run.Inputs.Get()); got != `{"creds":[{"pass":"HUNTER2","user":"a"}]}` {
 		t.Errorf("inputs %s", got)

@@ -17,4 +17,5 @@ expect:
       - disks:
           - {label: data, size: 10}
   run-secrets: [inputs.hosts.0, vars.FIRST]
+  run-derived: [inputs.hosts.0]
   run-private: [inputs.racks.0.disks]
