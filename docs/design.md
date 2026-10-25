@@ -74,7 +74,9 @@ needs. Nothing in the packages knows which of the two it is running in.
 ## The workflow format
 
 The format is defined by a JSON Schema (2020-12) per format number, kept in
-this repository. Format 1 is the format Parallel Works ACTIVATE runs.
+this repository's `format/schema`. The schemas are under the MIT license
+rather than Meridian's AGPL, so that any tool can use them.
+Format 1 is the format Parallel Works ACTIVATE runs.
 
 - **Format numbers.** A workflow may set a top-level integer `format:`.
   Without it, a workflow is format 1. A new number is introduced only for a
