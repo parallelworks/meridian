@@ -1,0 +1,8 @@
+jobs:
+  main:
+    steps:
+      - run: echo hi
+    cleanup:
+      - name: tidy
+        run: rm -rf out
+        cleanup: echo bye

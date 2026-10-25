@@ -143,6 +143,18 @@ this repository. Format 1 is the format Parallel Works ACTIVATE runs.
   is ignored. So is a repeated key, whose last value is used, and a second
   YAML document in a file. A name the schema doesn't allow, such as a job's,
   is still an error. A later format can make these warnings errors.
+- **A job's `cleanup:` list.** ACTIVATE's ingress reads one more key that
+  neither its schema nor Meridian's has: a job's `cleanup:`, a list of
+  steps that it appends to the job's, after the copies that run its
+  steps' `cleanup:`s, and runs as it runs those, linked to the job rather
+  than to a step (`.job`): once the job's steps have run, through its
+  cancellation and without a timeout, with each entry's own `cleanup:`
+  after them. Meridian warns of it as an unknown key and ignores it, as it
+  does every key the schema doesn't define, so a workflow that has one
+  runs without its cleanup. None of the 221 known workflows
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)) has one. Whether
+  format 1 gains it as an addition, with ACTIVATE's meaning, or ACTIVATE
+  drops it, is a decision for later.
 
 ### Conformance
 
