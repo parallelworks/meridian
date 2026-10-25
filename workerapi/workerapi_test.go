@@ -2,6 +2,7 @@ package workerapi_test
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,27 @@ import (
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
+
+// TestCodesAreKinds checks that each of the API's codes is the code of its
+// kind, in problems.WorkerRegistry, and that ParamExpected is OutOfOrder's
+// param.
+func TestCodesAreKinds(t *testing.T) {
+	for code, kind := range map[problem.Code]*problems.Kind{
+		workerapi.Fenced:     problems.Fenced,
+		workerapi.OutOfOrder: problems.OutOfOrder,
+		workerapi.PlanTooNew: problems.PlanTooNew,
+	} {
+		if kind.Code() != code {
+			t.Errorf("%s is the code of the kind %s", code, kind.Code())
+		}
+		if typ, ok := problems.WorkerRegistry.Lookup(code); !ok || typ != kind.Type() {
+			t.Errorf("%s isn't the worker registry's kind", code)
+		}
+	}
+	if got := problems.OutOfOrder.Type().Params; !slices.Equal(got, []string{workerapi.ParamExpected}) {
+		t.Errorf("out_of_order's params are %v, want [%s]", got, workerapi.ParamExpected)
+	}
+}
 
 // TestBodiesRoundTrip checks that each body reads back as the API wrote
 // it, and writes again to the same bytes: numbers in a run's values that a

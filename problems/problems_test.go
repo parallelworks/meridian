@@ -115,8 +115,21 @@ func TestEveryKindIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The worker API's kinds are the coordinator's to report, as it
+	// refuses a worker's request, and no coordinator reports them yet:
+	// workerapi names them by their codes, which its TestCodesAreKinds
+	// checks. Once something reports one, it comes off this list.
+	awaitingCoordinator := map[string]bool{"Fenced": true, "OutOfOrder": true, "PlanTooNew": true}
+	for name := range awaitingCoordinator {
+		if _, ok := defined[name]; !ok {
+			t.Errorf("awaitingCoordinator names %s, which kinds.go doesn't define", name)
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(defined)) {
-		if !defined[name] {
+		switch {
+		case awaitingCoordinator[name] && defined[name]:
+			t.Errorf("something reports problems.%s now: take it off awaitingCoordinator", name)
+		case !awaitingCoordinator[name] && !defined[name]:
 			t.Errorf("nothing reports problems.%s", name)
 		}
 	}
