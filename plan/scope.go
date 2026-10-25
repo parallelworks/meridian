@@ -142,6 +142,13 @@ type RunValues struct {
 	// so they are masked as what is made from a secret is, a string of at
 	// least 8 bytes or a credential field of a structured secret, and not
 	// as a secret's own text, which is masked however short (Masked).
+	//
+	// So, as for a JobResult and an EndResult, what is private is what
+	// Private or Secrets names, with org and vars, and a secret what Secrets
+	// names. Unlike theirs, Private here doesn't name what Secrets alone
+	// does: a secret variable, or a password, is private whole, as org and
+	// vars are, and Private names what was made from one. Split keeps the
+	// lot in the secret record.
 	Derived []string `json:"derived,omitempty"`
 }
 

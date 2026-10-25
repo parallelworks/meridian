@@ -338,7 +338,7 @@ func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 	err := a.client.complete(ctx, end)
 	if enc, ok := errors.AsType[*encodeError](err); ok {
 		a.log.Error("the attempt's end couldn't be encoded", "error", a.mask.Mask(enc.Error()))
-		*end = workerapi.Complete{Seq: end.Seq, Outcome: end.Outcome, Reason: end.Reason, Problem: end.Problem}
+		*end = workerapi.Complete{Seq: end.Seq, Result: plan.JobResult{Outcome: end.Result.Outcome}, Reason: end.Reason, Problem: end.Problem}
 		a.failEnd(end)
 		err = a.client.complete(ctx, end)
 		if _, ok := errors.AsType[*encodeError](err); ok && end.Problem != nil {
@@ -355,7 +355,7 @@ func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 	if err != nil {
 		return err
 	}
-	a.log.Info("the attempt ended", "outcome", end.Outcome, "reason", end.Reason)
+	a.log.Info("the attempt ended", "outcome", end.Result.Outcome, "reason", end.Reason)
 	return nil
 }
 
@@ -378,8 +378,8 @@ func (a *attempt) reportNotEncoded(e workerapi.Event, err error) workerapi.Event
 // encode, unless the job was cancelled or failed already, and says so in
 // its problems.
 func (a *attempt) failEnd(end *workerapi.Complete) {
-	if end.Outcome == plan.OutcomeSuccess || end.Outcome == plan.OutcomeSkipped {
-		end.Outcome = plan.OutcomeFailure
+	if end.Result.Outcome == plan.OutcomeSuccess || end.Result.Outcome == plan.OutcomeSkipped {
+		end.Result.Outcome = plan.OutcomeFailure
 	}
 	path := ""
 	if a.job != nil {

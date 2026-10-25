@@ -1091,8 +1091,10 @@ as given where Create converted them, where the shape's decisions are, a
 job's `needs:` expression, `remote`, `sessions` and the names a session
 provider gave them, the limits, the digest of the run's own text, and the
 pinned workflow a step's `uses:` names, with the reference it was resolved
-by. The first release freezes it, with its schema, and every change after
-that gets a version.
+by; and in the worker API, a job's result as End gives it
+(`workerapi.Complete.Result`, a `plan.JobResult`), in place of the lists
+of outputs the end had. The first release freezes it, with its schema, and
+every change after that gets a version.
 
 ## Expressions
 
@@ -2030,7 +2032,9 @@ that embeds Meridian serve the same API.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
   ([Workflows a step calls](#workflows-a-step-calls)).
-- **Complete:** the outcome and the job's outputs.
+- **Complete:** the job's result, as End gave it: its outcome, its outputs
+  and its steps', and which of them are private or hold a secret
+  (`plan.JobResult`).
 
 Every write is idempotent and carries a sequence number, so a worker
 retrying after a dropped connection can't apply a report twice. A write

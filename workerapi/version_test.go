@@ -47,10 +47,8 @@ var since = map[string]int{
 
 	"LogAck.length": 1, "LogAck.ended": 1,
 
-	"Complete.seq": 1, "Complete.outcome": 1, "Complete.reason": 1, "Complete.problem": 1,
-	"Complete.outputs": 1, "Complete.privateOutputs": 1, "Complete.diagnostics": 1,
-	"Complete.secretOutputs": 1, "Complete.stepOutputs": 1, "Complete.secretStepOutputs": 1,
-	"Complete.derivedOutputs": 1, "Complete.derivedStepOutputs": 1,
+	"Complete.seq": 1, "Complete.result": 1, "Complete.reason": 1, "Complete.problem": 1,
+	"Complete.diagnostics": 1,
 }
 
 // opaque are the types in bodies whose encoding isn't the API's to

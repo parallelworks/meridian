@@ -55,7 +55,16 @@ const (
 )
 
 // A JobResult is how a job ended, as the jobs that need it read it: its
-// outcome, which needs.<job>.result reads, and its outputs.
+// outcome, which needs.<job>.result reads, and its outputs. A worker
+// reports its job's, as End gave it (EndResult.Result), and the coordinator
+// keeps it: what Private and Secrets name only in the run's secret record.
+//
+// What is private is what Private or Secrets names, and a secret what
+// Secrets names, of which Derived names those only made from one, as for
+// RunValues: so Derived is within Secrets. Here Private also names each
+// output Secrets does, and SecretSteps' outputs are private, where
+// RunValues' Private leaves out what Secrets alone names, as a secret
+// variable, since org, vars and the passwords are private whole.
 type JobResult struct {
 	Outcome Outcome `json:"outcome"`
 	// Outputs are the job's outputs, by name, as End gave them: as they

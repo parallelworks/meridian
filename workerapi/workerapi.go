@@ -21,6 +21,12 @@
 // for a run whose version has it, so each reads the other's bodies
 // strictly and never meets a member it doesn't know.
 //
+// Version 1 stays open until Meridian's first release, as the plan's does
+// (docs/design.md, Plans across versions): no release has yet sent a body,
+// so what the bodies gain or change before then, such as Complete.Result
+// in place of the seven lists of outputs Complete had, is version 1's. The
+// first release freezes them, and every change after that is a version.
+//
 // As it claims, a worker says the newest version it reads
 // (ClaimRequest.PlanVersion), and the coordinator refuses one that doesn't
 // read the run's, with PlanTooNew, before it sends anything of the run. A
@@ -381,7 +387,8 @@ type Event struct {
 	// or -1 if it has none, as for a command a signal ended or a uses:
 	// step; what it wrote to $OUTPUTS, masked as its logs are, for
 	// showing, with a secret's text in it masked and the rest as written
-	// (Complete.StepOutputs has them unmasked); and Step's problems with it.
+	// (Complete.Result.Steps has them unmasked); and Step's problems with
+	// it.
 	Outcome     plan.Outcome         `json:"outcome,omitempty"`
 	ExitCode    int                  `json:"exitCode,omitzero"`
 	Outputs     map[string]string    `json:"outputs,omitempty"`
@@ -410,10 +417,17 @@ type Complete struct {
 	// Seq is the sequence number of the attempt's last event, or 0 for
 	// none.
 	Seq int64 `json:"seq"`
-	// Outcome is the job's outcome, and Reason why it ended other than as
-	// its steps did, such as timeout, or "".
-	Outcome plan.Outcome `json:"outcome"`
-	Reason  plan.Reason  `json:"reason,omitempty"`
+	// Result is how the job ended: its outcome, and its outputs and its
+	// steps', none of them masked, with which of them are private or hold
+	// a secret, as End gave them (plan.EndResult.Result). The coordinator
+	// keeps it as the job's result, which the jobs that need the job read,
+	// and what its Private and Secrets name only in the run's secret
+	// record. NeedsFailed and Cancelled are the coordinator's, and the
+	// worker leaves them unset.
+	Result plan.JobResult `json:"result"`
+	// Reason is why the job ended other than as its steps did, such as
+	// timeout, or "".
+	Reason plan.Reason `json:"reason,omitempty"`
 	// Problem is what failed before the first step started, with the
 	// outcome failure and the reason setup-failed: an image that couldn't
 	// be pulled, or a container runtime that is missing. None of the
@@ -421,27 +435,6 @@ type Complete struct {
 	// Code is the reason placement compares, so a job two members fail for
 	// the same reason fails. It is nil otherwise.
 	Problem *problem.Problem `json:"problem,omitempty"`
-	// Outputs are the job's outputs, as End gave them, none of them
-	// masked, and PrivateOutputs names those that are private
-	// (plan.EndResult.Private), whose values the coordinator keeps only in
-	// the run's secret record, and SecretOutputs those of them that hold a
-	// secret (plan.EndResult.Secrets).
-	Outputs        map[string]string `json:"outputs,omitempty"`
-	PrivateOutputs []string          `json:"privateOutputs,omitempty"`
-	SecretOutputs  []string          `json:"secretOutputs,omitempty"`
-	// DerivedOutputs names those of SecretOutputs that hold only what was
-	// made from a secret (plan.EndResult.Derived), and
-	// DerivedStepOutputs those of SecretStepOutputs (plan.EndResult.DerivedSteps).
-	DerivedOutputs     []string            `json:"derivedOutputs,omitempty"`
-	DerivedStepOutputs map[string][]string `json:"derivedStepOutputs,omitempty"`
-	// StepOutputs are the outputs of the job's steps that have ids, by id,
-	// as they wrote them, none of them masked (plan.JobResult.Steps), and
-	// SecretStepOutputs names, by id, those that hold a secret
-	// (plan.EndResult.SecretSteps), whose values the coordinator keeps
-	// only in the run's secret record. An Event's outputs are masked for
-	// showing; these are what the jobs that need the job read.
-	StepOutputs       map[string]map[string]string `json:"stepOutputs,omitempty"`
-	SecretStepOutputs map[string][]string          `json:"secretStepOutputs,omitempty"`
 	// Diagnostics are the problems with the job's env:, from its JobEnv
 	// phase, and End's with its outputs, and the worker's own with a
 	// report it couldn't encode. A job whose env: fails has no steps that

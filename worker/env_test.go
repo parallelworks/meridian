@@ -266,8 +266,8 @@ func TestPlatformEnvSecret(t *testing.T) {
 			t.Errorf("an event quotes the secret: %v %v", e.Outputs, e.Diagnostics)
 		}
 	}
-	if f.end == nil || f.end.Outputs["k"] != "sekr1t-api-key" || f.end.Outputs["pin"] != "4321" ||
-		!slices.Equal(f.end.SecretOutputs, []string{"k", "pin"}) || !slices.Equal(f.end.PrivateOutputs, []string{"k", "pin"}) || len(f.end.DerivedOutputs) > 0 {
+	if f.end == nil || f.end.Result.Outputs["k"] != "sekr1t-api-key" || f.end.Result.Outputs["pin"] != "4321" ||
+		!slices.Equal(f.end.Result.Secrets, []string{"k", "pin"}) || !slices.Equal(f.end.Result.Private, []string{"k", "pin"}) || len(f.end.Result.Derived) > 0 {
 		t.Errorf("the job's end doesn't keep the outputs private and secrets of their own: %+v", f.end)
 	}
 }

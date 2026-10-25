@@ -483,17 +483,28 @@ const (
 	defaultStepTryTimeout = 30
 )
 
-// EndResult is what End gives of a job: its outputs, and which of them,
-// and of its steps' outputs, are private, or hold a secret.
+// EndResult is what End gives of a job: its outputs, and its steps', and
+// which of them are private, or hold a secret. Result makes the job's
+// JobResult of it, which the worker reports, and the jobs that need the
+// job read; each of its fields is the JobResult's of the same name.
+//
+// What is private is what Private or Secrets names, and a secret what
+// Secrets names, of which Derived names those only made from one: the
+// same rule as RunValues' and JobResult's. Here, as in a JobResult,
+// Private also names each output Secrets does, and SecretSteps' outputs
+// are private, as no list names them otherwise.
 type EndResult struct {
 	// Outputs are the job's outputs, by name, as format 1 has them: what
 	// its steps without an id wrote, the later step's where two wrote the
 	// same name, what its cleanups wrote over that, and its outputs: over
 	// all, as they were made, none of them masked, as format 1 passes them
 	// to the jobs that need the job. A step with an id writes outputs of
-	// its own, which the worker gives as its steps wrote them
-	// (JobResult.Steps).
+	// its own, which Steps holds.
 	Outputs map[string]string
+	// Steps are the outputs of the job's steps that have ids and wrote
+	// some, by id, as the steps wrote them, none of them masked:
+	// needs.<job>.steps.<id>.outputs.<name>.
+	Steps map[string]map[string]string
 	// Private names the outputs that are private: made from an
 	// organization or user variable, a password or a secret, or holding a
 	// secret. The coordinator keeps their values only in the run's secret
@@ -516,6 +527,19 @@ type EndResult struct {
 	// those of them that hold only what was made from one, as Derived does.
 	SecretSteps  map[string][]string
 	DerivedSteps map[string][]string
+}
+
+// Result returns the job's result, with the outcome its steps gave it, as
+// the worker reports it (workerapi.Complete.Result): each field of r as it
+// is, in the JobResult's field of the same name. NeedsFailed and Cancelled
+// are the coordinator's, from Ready and Combine, and stay unset.
+func (r *EndResult) Result(outcome Outcome) JobResult {
+	return JobResult{
+		Outcome: outcome,
+		Outputs: r.Outputs, Steps: r.Steps,
+		Private: r.Private, Secrets: r.Secrets, Derived: r.Derived,
+		SecretSteps: r.SecretSteps, DerivedSteps: r.DerivedSteps,
+	}
 }
 
 // End is the End phase: it gives the job's outputs, on its worker, once the
@@ -590,6 +614,14 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	for name := range jsonvalue.Sorted(out.Outputs) {
 		if private[name] || secret[name] {
 			out.Private = append(out.Private, name)
+		}
+	}
+	for i, r := range state.Steps {
+		if id := j.Steps[i].ID; id != "" && len(r.Outputs) > 0 {
+			if out.Steps == nil {
+				out.Steps = map[string]map[string]string{}
+			}
+			out.Steps[id] = maps.Clone(r.Outputs)
 		}
 	}
 	for i := range j.Steps {
