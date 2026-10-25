@@ -38,7 +38,9 @@ var scaledWorkloads = []scaled{
 	{name: "a value nested deep in a matrix", n: 500, workload: deepValue, stageOnly: true},
 	{name: "a form's values for rows whose defaults read their passwords", n: 1000, workload: formRows, timed: true},
 	{name: "defaults that read rows of a list held for the run's start", n: 300, workload: heldRowReads, timed: true},
-	{name: "submitted rows whose template's default reads the whole list", n: 1000, workload: crossRows, timed: true},
+	// At 1000 rows, this one compiles in a few milliseconds, too few to time
+	// it well.
+	{name: "submitted rows whose template's default reads the whole list", n: 4000, workload: crossRows, timed: true},
 	{name: "submitted rows whose template's default reads the whole list, with passwords", n: 1000, workload: crossPasswordRows, timed: true},
 	{name: "submitted rows whose template's default gives the whole list's JSON and a password", n: 1000, workload: wholeListRows, timed: true},
 	{name: "values for unknown inputs taken for passwords, beside a form's rows", n: 1000, workload: unknownPasswordsAndRows, timed: true},
@@ -48,20 +50,27 @@ var scaledWorkloads = []scaled{
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
 // times the size allocates about four times as much, not sixteen, and for
-// one that is timed, takes less than ten times as long, the best of three
-// runs each.
+// one that is timed, takes no more than eight times as long, the best of
+// five runs each: the geometric mean of four, as compiling grows with the
+// size, and sixteen, as it grows with the size's square, so that a runner
+// that is slow for a while doesn't fail a workload that grows as it
+// should, nor pass one that grows with the square.
 func TestCompileScales(t *testing.T) {
 	for _, w := range scaledWorkloads {
 		t.Run(w.name, func(t *testing.T) {
-			small, smallTime := w.measure(t, w.n)
-			large, largeTime := w.measure(t, 4*w.n)
+			small, compileSmall := w.measure(t, w.n)
+			large, compileLarge := w.measure(t, 4*w.n)
 			if ratio := float64(large) / float64(small); ratio > 8 {
 				t.Errorf("at %d, compiling allocates %d bytes, and at %d, %d: %.1f times as much",
 					w.n, small, 4*w.n, large, ratio)
 			}
-			if ratio := float64(largeTime) / float64(smallTime); w.timed && ratio > 10 {
+			if !w.timed {
+				return
+			}
+			times := fastest(compileSmall, compileLarge)
+			if ratio := float64(times[1]) / float64(times[0]); ratio > 8 {
 				t.Errorf("at %d, compiling takes %v, and at %d, %v: %.1f times as long",
-					w.n, smallTime, 4*w.n, largeTime, ratio)
+					w.n, times[0], 4*w.n, times[1], ratio)
 			}
 		})
 	}
@@ -69,8 +78,8 @@ func TestCompileScales(t *testing.T) {
 
 // measure returns how many bytes compiling the workload at size n
 // allocates, beyond loading it for one that counts the compile stage only,
-// and if it is timed, the shortest time of three that compiling it takes.
-func (w scaled) measure(t *testing.T, n int) (uint64, time.Duration) {
+// and a function that compiles it.
+func (w scaled) measure(t *testing.T, n int) (uint64, func()) {
 	t.Helper()
 	data, submitted := w.workload(n)
 	if _, diags := format.Load("workflow.yaml", data); diags.HasErrors() {
@@ -88,16 +97,25 @@ func (w scaled) measure(t *testing.T, n int) (uint64, time.Duration) {
 	if w.stageOnly {
 		bytes -= allocated(func() { _, _ = format.Load("workflow.yaml", data) })
 	}
-	var best time.Duration
-	for i := 0; w.timed && i < 3; i++ {
-		runtime.GC()
-		start := time.Now()
-		compileIt()
-		if took := time.Since(start); i == 0 || took < best {
-			best = took
+	return bytes, compileIt
+}
+
+// fastest returns the shortest time of five that each of fs takes. It runs
+// them in turn, each once a round, so that a runner that slows down for a
+// while slows each of them alike.
+func fastest(fs ...func()) []time.Duration {
+	best := make([]time.Duration, len(fs))
+	for i := range 5 {
+		for j, f := range fs {
+			runtime.GC()
+			start := time.Now()
+			f()
+			if took := time.Since(start); i == 0 || took < best[j] {
+				best[j] = took
+			}
 		}
 	}
-	return bytes, best
+	return best
 }
 
 // withInputs returns a workflow with inputs, each a line of their
