@@ -88,6 +88,10 @@
   "resolver_missing": "El “{key}” del flujo de trabajo necesita la interfaz {interface}, que no se proporciona donde se ejecuta.",
   "run_shape_changed": "El {key} de “{name}” decidió otra cosa al empezar la ejecución que al crearla, porque cambió una variable o una contraseña que lee. Una ejecución no se ejecuta con valores de dos lecturas: créala de nuevo.",
   "values_read_each_other": "Los valores {names} se leen entre sí, así que ninguno se puede evaluar al empezar la ejecución.",
+  "group_unknown": "Aquí no hay ningún grupo de ejecución “{group}”.",
+  "environment_unknown": "Aquí no hay ningún entorno “{name}” en el clúster “{cluster}”.",
+  "source_not_found": "Aquí no hay ningún flujo de trabajo “{ref}”.",
+  "source_not_known": "El {key} del paso lee algo que no se conoce cuando se crea la ejecución, pero el flujo de trabajo que nombra su uses: se fija entonces.",
   "expression_failed": "La expresión falló: {reason}.",
   "word_not_reference": "La palabra {word} es el texto {text}, porque {head} no es un contexto. Ponla entre comillas si lo que quieres es texto.",
   "hyphenated_name": "La expresión {written}-{word} resta el texto {text} de {written}, lo que da NaN. Para leer {name}, escribe {fix}.{defines, select, input { El flujo de trabajo tiene una entrada “{defined}”.} job { El flujo de trabajo tiene un trabajo “{defined}”.} step { El trabajo “{job}” tiene un paso con el id “{defined}”.} matrix { La matriz del trabajo “{job}” tiene una clave “{defined}”.} session { El flujo de trabajo tiene una sesión “{defined}”.} other {}}",
@@ -244,5 +248,8 @@
   "attempt_superseded": "El coordinador ya no acepta informes de este intento: otro intento del trabajo lo sustituyó, o terminó sin este worker.",
   "attempt_lease_lapsed": "Meridian detuvo el trabajo, que puede ejecutarse de nuevo, porque no pudo renovar la concesión del intento antes de que caducara.",
   "worker_harden_failed": "El worker no puede mantener tus otros procesos fuera de su memoria, así que no reclamará el intento: {reason}.",
-  "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria."
+  "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria.",
+  "source_server_unknown": "El servidor de GitLab “{server}” que nombra el with: $host del paso no es uno registrado aquí.",
+  "compute_target_unknown": "Aquí no hay ningún destino de cómputo “{target}” en el modo {mode}.",
+  "gitlab_server_invalid": "El servidor de GitLab “{server}” no es un nombre de host con un puerto opcional, como git.example.com o git.example.com:8443."
 }

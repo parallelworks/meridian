@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -354,11 +355,93 @@ jobs:
 		t.Errorf("meridian validate --start without the secret = %+v", r)
 	}
 	sessions := writeFile(t, "s.yaml", "sessions:\n  desktop:\n    useTLS: false\njobs:\n  main:\n    steps:\n      - run: echo\n")
-	if r := runCLI(t, env, "", "validate", sessions); r.code != exitOK {
+	// Creating the run refuses it already, without --start too.
+	if r := runCLI(t, env, "", "validate", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "(resolver_missing)") {
 		t.Errorf("meridian validate with sessions = %+v", r)
 	}
 	if r := runCLI(t, env, "", "validate", "--start", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "s.yaml:1:1: error:") || !strings.Contains(r.stdout, "(resolver_missing)") {
 		t.Errorf("meridian validate --start with sessions = %+v", r)
+	}
+}
+
+// TestValidateChecksConfig checks that validate creates the run as it would
+// run: with the execution groups in the config, the local group among
+// them, and the workflows uses: names, which it fetches and pins.
+func TestValidateChecksConfig(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	// The workflow uses: names is in a repository here, which Git reaches
+	// for github.com's.
+	origins := t.TempDir()
+	repo := filepath.Join(origins, "acme", "flows.git")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	// And for a GitLab server's that sources.yaml registers, and one's
+	// that it doesn't, which Git is never asked for.
+	gitConfig := writeFile(t, "gitconfig", "[url \"file://"+filepath.ToSlash(origins)+"/\"]\n\tinsteadOf = https://github.com/\n\tinsteadOf = https://git.example.com/\n\tinsteadOf = https://other.example.com/\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	git("init", "--quiet", "--initial-branch=main")
+	if err := os.MkdirAll(filepath.Join(repo, "flows"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "flows", "run.yaml"), []byte("jobs:\n  x:\n    steps:\n      - run: echo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "--quiet", "-m", "flows")
+
+	env := emptyEnv(t)
+	env[local.EnvCacheDir] = filepath.Join(t.TempDir(), "cache")
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, local.GroupsFile), []byte("gpu:\n  members:\n    - {name: box, backend: ssh}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, local.SourcesFile), []byte("gitlab-servers: [git.example.com]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		group, uses, host string
+		code              int
+		want              string
+	}{
+		{"gpu", "github/acme/flows@main", "", exitOK, ""},
+		{"local", "github/acme/flows@main", "", exitOK, ""},
+		{"cpu", "github/acme/flows@main", "", exitInvalid, "w.yaml:3:32: error: There is no execution group \"cpu\" here. (group_unknown)"},
+		{"gpu", "github/acme/none@main", "", exitInvalid, "(source_revision_not_found)"},
+		{"gpu", "github/acme/flows@gone", "", exitInvalid, "(source_revision_not_found)"},
+		{"gpu", "gitlab/acme/flows@main", "git.example.com", exitOK, ""},
+		{"gpu", "gitlab/acme/flows@main", "other.example.com", exitInvalid, "(source_server_unknown)"},
+	} {
+		with := "$yaml: flows/run.yaml"
+		if tc.host != "" {
+			with += ", $host: " + tc.host
+		}
+		workflow := writeFile(t, "w.yaml", fmt.Sprintf(`jobs:
+  main:
+    runs-on: {execution-group: %s}
+    steps:
+      - uses: %s
+        with: {%s}
+`, tc.group, tc.uses, with))
+		r := runCLI(t, env, "", "validate", workflow)
+		if r.code != tc.code || !strings.Contains(r.stdout, tc.want) || r.stderr != "" {
+			t.Errorf("meridian validate with %s, %s and %q = %+v, want exit status %d and %s", tc.group, tc.uses, tc.host, r, tc.code, tc.want)
+		}
 	}
 }
 

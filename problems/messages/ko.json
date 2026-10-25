@@ -88,6 +88,10 @@
   "resolver_missing": "워크플로의 ‘{key}’에는 {interface} 인터페이스가 필요하지만, 실행되는 곳에서는 제공되지 않습니다.",
   "run_shape_changed": "‘{name}’의 {key}이(가) 실행을 만들 때와 시작할 때 다르게 결정되었습니다. 참조하는 변수나 비밀번호가 바뀌었기 때문입니다. 실행은 두 번 읽은 값으로 실행하지 않으므로, 실행을 다시 만드세요.",
   "values_read_each_other": "{names} 값이 서로를 참조하므로, 실행을 시작할 때 어느 것도 평가할 수 없습니다.",
+  "group_unknown": "여기에는 실행 그룹 ‘{group}’이(가) 없습니다.",
+  "environment_unknown": "여기에는 클러스터 ‘{cluster}’의 환경 ‘{name}’이(가) 없습니다.",
+  "source_not_found": "여기에는 워크플로 ‘{ref}’이(가) 없습니다.",
+  "source_not_known": "단계의 {key}은(는) 실행을 만들 때 알 수 없는 것을 참조하지만, uses:가 지정하는 워크플로는 그때 고정됩니다.",
   "expression_failed": "표현식을 평가하지 못했습니다: {reason}",
   "word_not_reference": "{head} 부분이 컨텍스트가 아니므로 {word} 단어는 텍스트 {text} 값입니다. 텍스트를 의도했다면 따옴표로 묶으세요.",
   "hyphenated_name": "{written}-{word} 표현식은 {written} 값에서 텍스트 {text} 값을 빼므로 NaN이 됩니다. {name} 값을 읽으려면 {fix} 형태로 쓰세요.{defines, select, input { 워크플로에 ‘{defined}’ 입력이 있습니다.} job { 워크플로에 ‘{defined}’ 작업이 있습니다.} step { ‘{job}’ 작업에 id가 ‘{defined}’인 단계가 있습니다.} matrix { ‘{job}’ 작업의 매트릭스에 ‘{defined}’ 키가 있습니다.} session { 워크플로에 ‘{defined}’ 세션이 있습니다.} other {}}",
@@ -244,5 +248,8 @@
   "attempt_superseded": "코디네이터가 더 이상 이 시도의 보고를 받지 않습니다. 작업의 다른 시도가 이 시도를 대체했거나, 시도가 이 워커 없이 끝났습니다.",
   "attempt_lease_lapsed": "Meridian이 작업을 중지했습니다(작업은 다시 실행될 수 있습니다). 시도의 리스가 만료되기 전에 갱신할 수 없었기 때문입니다.",
   "worker_harden_failed": "워커가 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없어, 시도를 요청하지 않습니다: {reason}",
-  "worker_system_unsupported": "워커는 {os}에서 실행되지 않습니다. 그곳에서는 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없기 때문입니다."
+  "worker_system_unsupported": "워커는 {os}에서 실행되지 않습니다. 그곳에서는 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없기 때문입니다.",
+  "source_server_unknown": "단계의 with: $host가 지정한 GitLab 서버 ‘{server}’은(는) 여기에 등록되어 있지 않습니다.",
+  "compute_target_unknown": "여기에는 모드 {mode}의 컴퓨팅 대상 ‘{target}’이(가) 없습니다.",
+  "gitlab_server_invalid": "GitLab 서버 ‘{server}’은(는) git.example.com이나 git.example.com:8443처럼 포트를 선택적으로 붙인 호스트 이름이 아닙니다."
 }

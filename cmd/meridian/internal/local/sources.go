@@ -41,14 +41,21 @@ const waitDelay = time.Second
 
 // Sources reads the workflows that a step's uses: names, from Git
 // repositories, by running the git command, which reaches them with the
-// user's own Git configuration and credentials. A reference is
+// user's own Git configuration and credentials. A reference's uses: is
 //
 //	github/<owner>/<repository>[/<path>][@<revision>]
 //	gitlab/<namespace>/<project>[/<path>][@<revision>]
 //
 // for a repository on github.com or gitlab.com, where path is the
 // workflow's file in it, workflow.yaml by default, and revision a branch,
-// a tag or a commit, the remote's default branch by default.
+// a tag or a commit, the remote's default branch by default. As format 1
+// writes it, the step's with: $yaml can name the file instead, and then
+// every name after github/ or gitlab/ and before the revision is the
+// repository's, which on GitLab can be in a subgroup, as
+// gitlab/<group>/<subgroup>/<project>; and $host can name the GitLab
+// server that holds it, gitlab.com by default, which must be one the user
+// registered (NewSources): otherwise a workflow could have git, with the
+// user's configuration and credentials, reach a server of its choosing.
 //
 // Resolve pins the reference to the commit its revision names now and to
 // the SHA-256 digest of the file's text there, and Read reads it again by
@@ -91,6 +98,9 @@ type Sources struct {
 	git string
 	// remote returns the URL of the repository repo on host.
 	remote func(host, repo string) string
+	// servers are the GitLab servers, besides gitlab.com, that a
+	// reference's $host can name.
+	servers map[string]bool
 
 	mu    sync.Mutex
 	repos map[string]chan struct{}
@@ -107,21 +117,29 @@ var _ compile.Sources = (*Sources)(nil)
 
 // NewSources returns the Sources whose copies of repositories are in dir,
 // the cache directory, which must be readable only by its user, as
-// Dirs.EnsureCache makes it.
-func NewSources(dir string) *Sources {
-	return &Sources{
-		dir:    filepath.Join(dir, SourcesDir),
-		git:    "git",
-		remote: func(host, repo string) string { return "https://" + host + "/" + repo + ".git" },
-		repos:  map[string]chan struct{}{},
+// Dirs.EnsureCache makes it, and which reaches the GitLab servers, besides
+// gitlab.com, that servers names, as Config.GitLabServers gives them, and
+// no others.
+func NewSources(dir string, servers []string) *Sources {
+	s := &Sources{
+		dir:     filepath.Join(dir, SourcesDir),
+		git:     "git",
+		remote:  func(host, repo string) string { return "https://" + host + "/" + repo + ".git" },
+		servers: map[string]bool{},
+		repos:   map[string]chan struct{}{},
 	}
+	for _, server := range servers {
+		s.servers[strings.ToLower(server)] = true
+	}
+	return s
 }
 
 // A sourceRef is a reference to a workflow in a Git repository.
 type sourceRef struct {
 	// kind is github or gitlab, and host its server.
 	kind, host string
-	// repo is the repository, as owner/name.
+	// repo is the repository, as owner/name, or a GitLab project's path,
+	// as group/subgroup/project.
 	repo string
 	// path is the workflow's file in the repository.
 	path string
@@ -139,6 +157,8 @@ var (
 	refNamePattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 	revPattern     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`)
 	commitPattern  = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	// hostPattern is a server's DNS name, and its port, if any.
+	hostPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::[0-9]{1,5})?$`)
 )
 
 // defaultPath is the workflow's file in a repository when a reference
@@ -154,32 +174,60 @@ func notFound(k *problems.Kind, params problems.Params) error {
 // parseRef reads a reference. One that isn't a Git repository's, such as
 // one to a workflow a platform stores, or that isn't well formed, names no
 // workflow here.
-func parseRef(ref string) (sourceRef, error) {
-	if slices.ContainsFunc(platformRefs, func(p string) bool { return strings.HasPrefix(ref, p) }) {
-		return sourceRef{}, notFound(problems.SourceOnPlatform, problems.Params{"ref": ref})
+func parseRef(ref plan.SourceRef) (sourceRef, error) {
+	uses := ref.Uses
+	if slices.ContainsFunc(platformRefs, func(p string) bool { return strings.HasPrefix(uses, p) }) {
+		return sourceRef{}, notFound(problems.SourceOnPlatform, problems.Params{"ref": uses})
 	}
 	invalid := func() (sourceRef, error) {
-		return sourceRef{}, notFound(problems.SourceRefInvalid, problems.Params{"ref": ref})
+		return sourceRef{}, notFound(problems.SourceRefInvalid, problems.Params{"ref": uses})
 	}
-	name, rev, hasRev := strings.CutLast(ref, "@")
+	name, rev, hasRev := strings.CutLast(uses, "@")
 	parts := strings.Split(name, "/")
 	host, ok := hosts[parts[0]]
 	if !ok || len(parts) < 3 {
 		return invalid()
 	}
-	r := sourceRef{kind: parts[0], host: host, repo: parts[1] + "/" + parts[2], path: defaultPath, rev: rev}
-	for _, p := range parts[1:3] {
+	// With $yaml, the names after the kind are the repository's: on
+	// GitHub its owner's and its own, and on GitLab a project's in its
+	// groups. Without it, the two after the kind are, and the rest the
+	// workflow's file.
+	repo := parts[1:3]
+	if ref.Path != "" {
+		if len(parts) > 3 && parts[0] == "github" {
+			return invalid()
+		}
+		repo = parts[1:]
+	}
+	for i, p := range repo {
 		if !refNamePattern.MatchString(p) || p == "." || p == ".." {
 			return invalid()
 		}
+		// Each name but the last is a directory of the cache (open), as a
+		// GitLab group's is, beside the copies of repositories, which end
+		// in .git, and their lock files, in .git.lock: one that ends so
+		// could be another repository's copy, or where its lock goes.
+		lower := strings.ToLower(p)
+		if i < len(repo)-1 && (strings.HasSuffix(lower, ".git") || strings.HasSuffix(lower, ".lock")) {
+			return invalid()
+		}
 	}
-	if len(parts) > 3 {
-		for _, p := range parts[3:] {
+	r := sourceRef{kind: parts[0], host: host, repo: strings.Join(repo, "/"), path: defaultPath, rev: rev}
+	if path := pathParts(ref.Path, parts[len(repo)+1:]); path != nil {
+		for _, p := range path {
 			if p == "" || p == "." || p == ".." || strings.ContainsFunc(p, func(c rune) bool { return c < ' ' || c == 0x7f }) {
 				return invalid()
 			}
 		}
-		r.path = strings.Join(parts[3:], "/")
+		r.path = strings.Join(path, "/")
+	}
+	if ref.Host != "" {
+		// Only GitLab's server is named apart: a project can be on one of
+		// a platform's own.
+		if r.kind != "gitlab" || !hostPattern.MatchString(ref.Host) {
+			return invalid()
+		}
+		r.host = strings.ToLower(ref.Host)
 	}
 	if hasRev && (!revPattern.MatchString(rev) || strings.Contains(rev, "..") || strings.Contains(rev, "//") ||
 		strings.HasSuffix(rev, "/") || strings.HasSuffix(rev, ".") || strings.HasSuffix(rev, ".lock")) {
@@ -188,10 +236,41 @@ func parseRef(ref string) (sourceRef, error) {
 	return r, nil
 }
 
-// location is the reference as a plan's Source names it: each of its
-// parts, with its path and its revision as written, if any.
+// parse reads a reference, as parseRef does, and refuses one on a GitLab
+// server the user didn't register.
+func (s *Sources) parse(ref plan.SourceRef) (sourceRef, error) {
+	r, err := parseRef(ref)
+	if err != nil {
+		return sourceRef{}, err
+	}
+	if r.host != hosts[r.kind] && !s.servers[r.host] {
+		return sourceRef{}, notFound(problems.SourceServerUnknown, problems.Params{"server": r.host})
+	}
+	return r, nil
+}
+
+// pathParts returns the parts of the workflow's file in a repository:
+// path's, which $yaml gives, or else rest, those of the uses: after the
+// repository's, or nil for the default.
+func pathParts(path string, rest []string) []string {
+	if path != "" {
+		return strings.Split(path, "/")
+	}
+	if len(rest) > 0 {
+		return rest
+	}
+	return nil
+}
+
+// location is the reference as a plan's Source names it to whoever can
+// see the run: each of its parts, with its path and its revision as
+// written, if any, and its server in place of github or gitlab when it
+// isn't the one they stand for.
 func (r sourceRef) location() string {
 	loc := r.kind + "/" + r.repo + "/" + r.path
+	if r.host != hosts[r.kind] {
+		loc = r.host + "/" + r.repo + "/" + r.path
+	}
 	if r.rev != "" {
 		loc += "@" + r.rev
 	}
@@ -214,8 +293,8 @@ func (r sourceRef) remoteContext() map[string]string {
 
 // Resolve finds the workflow ref names now, and pins it to its commit and
 // its text's digest.
-func (s *Sources) Resolve(ctx context.Context, ref string) (*compile.Workflow, error) {
-	r, err := parseRef(ref)
+func (s *Sources) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
+	r, err := s.parse(ref)
 	if err != nil {
 		return nil, err
 	}
@@ -237,21 +316,21 @@ func (s *Sources) Resolve(ctx context.Context, ref string) (*compile.Workflow, e
 		return nil, err
 	}
 	return &compile.Workflow{
-		Source: plan.Source{Location: r.location(), Revision: commit, Digest: digest(text)},
+		Source: plan.Source{Location: r.location(), Revision: commit, Digest: digest(text), Ref: ref},
 		Text:   text,
 		Remote: r.remoteContext(),
 	}, nil
 }
 
-// Read reads the workflow that Resolve pinned as source, by its commit,
-// and checks its text against its digest.
+// Read reads the workflow that Resolve pinned as source, by its Ref at its
+// commit, and checks its text against its digest.
 func (s *Sources) Read(ctx context.Context, source plan.Source) (*compile.Workflow, error) {
-	r, err := parseRef(source.Location)
+	if source.Ref.Uses == "" || !commitPattern.MatchString(source.Revision) || source.Digest == "" {
+		return nil, problems.SourceNotPinned.Problem(problems.Params{"location": source.Location, "revision": source.Revision})
+	}
+	r, err := s.parse(source.Ref)
 	if err != nil {
 		return nil, err
-	}
-	if !commitPattern.MatchString(source.Revision) || source.Digest == "" {
-		return nil, problems.SourceNotPinned.Problem(problems.Params{"location": source.Location, "revision": source.Revision})
 	}
 	repo, unlock, err := s.open(ctx, r)
 	if err != nil {
@@ -291,7 +370,9 @@ const hooksDir = ".hooks"
 func (s *Sources) open(ctx context.Context, r sourceRef) (repo string, unlock func(), err error) {
 	// parseRef has checked that each name is one, and not . or ..
 	owner, name, _ := strings.Cut(r.repo, "/")
-	repo = filepath.Join(s.dir, r.host, owner, name+".git")
+	// A server's port is after a colon, which no host name holds, and
+	// which a path on Windows can't.
+	repo = filepath.Join(s.dir, strings.ReplaceAll(r.host, ":", "_"), owner, name+".git")
 	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		return "", nil, err
 	}

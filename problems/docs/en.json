@@ -539,6 +539,30 @@
       "Change one of the values so that it doesn't read the others."
     ]
   },
+  "group_unknown": {
+    "why": "A job's runs-on: execution-group: names an execution group, which runs the job on one of its members. Where the workflow runs, the Groups interface has no group by that name: locally, there is none in groups.yaml, and it isn't the built-in local group.",
+    "fix": [
+      "Name a group that is there, or add the group where the workflow runs, such as to groups.yaml."
+    ]
+  },
+  "environment_unknown": {
+    "why": "A format 1 job's runs-on: environment: names a scheduler environment on a cluster, which only a platform knows. Where the workflow runs, the Groups interface has no such environment: locally there are none.",
+    "fix": [
+      "Run the workflow on the platform that has the environment, or run the job in an execution group instead (runs-on: execution-group:)."
+    ]
+  },
+  "source_not_found": {
+    "why": "A step's uses: names a workflow, which is resolved and pinned when the run is created. Where the workflow runs, the Sources interface has no workflow by that reference.",
+    "fix": [
+      "Check the reference: its repository, its revision, and the file its with: $yaml names."
+    ]
+  },
+  "source_not_known": {
+    "why": "The workflow a step's uses: names is resolved and pinned to its commit and its text's digest when the run is created, so that the run and its reruns run the same text. Its with: $yaml and $host say where it is, so they must be written out, not read from what is known only later.",
+    "fix": [
+      "Write the file and the server out in the step's with:."
+    ]
+  },
   "expression_failed": {
     "why": "An expression failed in a way Meridian doesn't describe. This is a problem in Meridian.",
     "fix": [
@@ -981,7 +1005,7 @@
     ]
   },
   "source_ref_invalid": {
-    "why": "Meridian reads a workflow that a step's uses: names from a Git repository on GitHub or GitLab: github/ or gitlab/, the repository's owner and name, the workflow's file in it, workflow.yaml unless it names another, and @ and a branch, tag or commit, the default branch unless it names one. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed.",
+    "why": "Meridian reads a workflow that a step's uses: names from a Git repository on GitHub or GitLab: github/ or gitlab/, the repository's owner and name, the workflow's file in it, workflow.yaml unless it names another, and @ and a branch, tag or commit, the default branch unless it names one. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed. A step's with: $yaml can name the file instead, and then every name after github/ or gitlab/ and before the revision is the repository's, which on GitLab can be in subgroups, none of whose names ends in .git or .lock; with: $host names a GitLab server, and only for gitlab/.",
     "fix": [
       "Write the reference as github/<owner>/<repository>/<path>@<revision>, or the same with gitlab/."
     ]
@@ -1466,6 +1490,25 @@
     "why": "A worker holds the attempt's credential in its memory, and keeps your other processes, a job's steps among them, from reading it there or tracing what it sends. It can on Linux, macOS and FreeBSD. Other systems, such as NetBSD and OpenBSD, give a process no way to keep the user's other processes from tracing it, so the worker refuses to run there, rather than run a job with less protection.",
     "fix": [
       "Run the job on a member whose hosts run Linux, macOS or FreeBSD."
+    ]
+  },
+  "source_server_unknown": {
+    "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names. Git reaches a server with the user's own configuration and credentials, so Meridian reaches only gitlab.com and the servers the user registered, rather than any a workflow names: locally, those that sources.yaml, in the config directory, lists under gitlab-servers.",
+    "fix": [
+      "If you trust the server, add it to gitlab-servers in sources.yaml, as git.example.com, or git.example.com:8443 with its port.",
+      "Otherwise, use a workflow from a server that is registered."
+    ]
+  },
+  "compute_target_unknown": {
+    "why": "A format 1 job's runs-on: can give a compute target, as a compute-target input's value does: a mode, login, worker or environment, and a target, which only a platform knows. Where the workflow runs, the Groups interface has no such compute target: locally there are none.",
+    "fix": [
+      "Run the workflow on the platform that has the compute target, or run the job in an execution group instead (runs-on: execution-group:)."
+    ]
+  },
+  "gitlab_server_invalid": {
+    "why": "sources.yaml's gitlab-servers lists the GitLab servers, besides gitlab.com, that a workflow's with: $host can name. Each is a server's DNS name and, after a colon, its port, if it isn't HTTPS's: Meridian adds the scheme, and a server has no user or path.",
+    "fix": [
+      "Write the server as git.example.com, or as git.example.com:8443 for another port."
     ]
   }
 }

@@ -628,6 +628,34 @@
       "Cambia uno de los valores para que no lea los demás."
     ]
   },
+  "group_unknown": {
+    "title": "No existe ese grupo de ejecución",
+    "why": "El runs-on: execution-group: de un trabajo nombra un grupo de ejecución, que ejecuta el trabajo en uno de sus miembros. Donde se ejecuta el flujo de trabajo, la interfaz Groups no tiene ningún grupo con ese nombre: localmente, no hay ninguno en groups.yaml, y no es el grupo integrado local.",
+    "fix": [
+      "Nombra un grupo que exista, o añade el grupo donde se ejecuta el flujo de trabajo, por ejemplo en groups.yaml."
+    ]
+  },
+  "environment_unknown": {
+    "title": "No existe ese entorno",
+    "why": "El runs-on: environment: de un trabajo de formato 1 nombra un entorno de planificador en un clúster, que solo conoce una plataforma. Donde se ejecuta el flujo de trabajo, la interfaz Groups no tiene ese entorno: localmente no hay ninguno.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que tiene el entorno, o ejecuta el trabajo en un grupo de ejecución (runs-on: execution-group:)."
+    ]
+  },
+  "source_not_found": {
+    "title": "No existe ese flujo de trabajo",
+    "why": "El uses: de un paso nombra un flujo de trabajo, que se resuelve y se fija al crear la ejecución. Donde se ejecuta el flujo de trabajo, la interfaz Sources no tiene ningún flujo de trabajo con esa referencia.",
+    "fix": [
+      "Revisa la referencia: su repositorio, su revisión y el archivo que nombra su with: $yaml."
+    ]
+  },
+  "source_not_known": {
+    "title": "Lugar del flujo de trabajo no conocido al crear la ejecución",
+    "why": "El flujo de trabajo que nombra el uses: de un paso se resuelve y se fija a su commit y al resumen de su texto al crear la ejecución, para que la ejecución y sus reejecuciones ejecuten el mismo texto. Su with: $yaml y $host dicen dónde está, así que deben estar escritos tal cual, no leídos de algo que solo se conoce después.",
+    "fix": [
+      "Escribe el archivo y el servidor tal cual en el with: del paso."
+    ]
+  },
   "expression_failed": {
     "title": "La expresión falló",
     "why": "Una expresión falló de una forma que Meridian no describe. Es un problema de Meridian.",
@@ -1144,7 +1172,7 @@
   },
   "source_ref_invalid": {
     "title": "No es una referencia a un flujo de trabajo en Git",
-    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git en GitHub o GitLab: github/ o gitlab/, el propietario y el nombre del repositorio, el archivo del flujo de trabajo dentro de él, workflow.yaml si no nombra otro, y @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -.",
+    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git en GitHub o GitLab: github/ o gitlab/, el propietario y el nombre del repositorio, el archivo del flujo de trabajo dentro de él, workflow.yaml si no nombra otro, y @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -. El with: $yaml de un paso puede nombrar el archivo en su lugar, y entonces cada nombre tras github/ o gitlab/ y antes de la revisión es del repositorio, que en GitLab puede estar en subgrupos, cuyos nombres no terminan en .git ni en .lock; with: $host nombra un servidor de GitLab, y solo con gitlab/.",
     "fix": [
       "Escribe la referencia como github/<propietario>/<repositorio>/<ruta>@<revisión>, o igual con gitlab/."
     ]
@@ -1707,6 +1735,28 @@
     "why": "Un worker guarda en su memoria la credencial del intento, e impide que tus otros procesos, entre ellos los pasos de un trabajo, la lean allí o rastreen lo que envía. Puede hacerlo en Linux, macOS y FreeBSD. Otros sistemas, como NetBSD y OpenBSD, no dan a un proceso ninguna forma de impedir que los otros procesos del usuario lo rastreen, así que el worker se niega a ejecutarse en ellos, en lugar de ejecutar un trabajo con menos protección.",
     "fix": [
       "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS o FreeBSD."
+    ]
+  },
+  "source_server_unknown": {
+    "title": "Servidor de GitLab no registrado",
+    "why": "El with: $host de un paso nombra el servidor de GitLab que contiene el flujo de trabajo que nombra su uses:. Git llega a un servidor con la configuración y las credenciales del propio usuario, así que Meridian solo llega a gitlab.com y a los servidores que el usuario registró, y no a cualquiera que nombre un flujo de trabajo: localmente, los que sources.yaml, en el directorio de configuración, enumera en gitlab-servers.",
+    "fix": [
+      "Si confías en el servidor, añádelo a gitlab-servers en sources.yaml, como git.example.com, o git.example.com:8443 con su puerto.",
+      "Si no, usa un flujo de trabajo de un servidor registrado."
+    ]
+  },
+  "compute_target_unknown": {
+    "title": "No existe ese destino de cómputo",
+    "why": "El runs-on: de un trabajo de formato 1 puede dar un destino de cómputo, como lo da el valor de una entrada compute-target: un modo, login, worker o environment, y un destino, que solo conoce una plataforma. Donde se ejecuta el flujo de trabajo, la interfaz Groups no tiene ese destino de cómputo: localmente no hay ninguno.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que tiene el destino de cómputo, o ejecuta el trabajo en un grupo de ejecución (runs-on: execution-group:)."
+    ]
+  },
+  "gitlab_server_invalid": {
+    "title": "Servidor de GitLab no válido",
+    "why": "gitlab-servers en sources.yaml enumera los servidores de GitLab, además de gitlab.com, que puede nombrar el with: $host de un flujo de trabajo. Cada uno es el nombre DNS de un servidor y, tras dos puntos, su puerto, si no es el de HTTPS: Meridian añade el esquema, y un servidor no tiene usuario ni ruta.",
+    "fix": [
+      "Escribe el servidor como git.example.com, o como git.example.com:8443 para otro puerto."
     ]
   }
 }

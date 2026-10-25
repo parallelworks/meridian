@@ -88,6 +88,10 @@
   "resolver_missing": "ワークフローの「{key}」には {interface} インターフェースが必要ですが、実行される環境では提供されていません。",
   "run_shape_changed": "「{name}」の {key} が、実行の作成時と開始時とで異なる結果になりました。参照している変数またはパスワードが変わったためです。実行は 2 回の読み取りの値を混ぜて動かさないため、実行を作成し直してください。",
   "values_read_each_other": "値 {names} が互いを参照しているため、実行の開始時にどれも評価できません。",
+  "group_unknown": "ここには実行グループ「{group}」がありません。",
+  "environment_unknown": "ここにはクラスター「{cluster}」の環境「{name}」がありません。",
+  "source_not_found": "ここにはワークフロー「{ref}」がありません。",
+  "source_not_known": "ステップの {key} は実行の作成時にはわからないものを参照していますが、uses: が指定するワークフローはそのときに固定されます。",
   "expression_failed": "式の評価に失敗しました: {reason}",
   "word_not_reference": "{head} はコンテキストではないため、単語 {word} はテキスト {text} になります。テキストのつもりであれば、引用符で囲んでください。",
   "hyphenated_name": "式 {written}-{word} は {written} からテキスト {text} を引くため、NaN になります。{name} を読み取るには、{fix} と書いてください。{defines, select, input {ワークフローには入力「{defined}」があります。} job {ワークフローにはジョブ「{defined}」があります。} step {ジョブ「{job}」には id が「{defined}」のステップがあります。} matrix {ジョブ「{job}」のマトリックスにはキー「{defined}」があります。} session {ワークフローにはセッション「{defined}」があります。} other {}}",
@@ -244,5 +248,8 @@
   "attempt_superseded": "コーディネーターはこの試行からの報告をもう受け付けません。ジョブの別の試行がこの試行に取って代わったか、試行がこのワーカーなしで終了しました。",
   "attempt_lease_lapsed": "Meridian はジョブを停止しました（ジョブはもう一度実行されることがあります）。試行のリースが失効する前に更新できなかったためです。",
   "worker_harden_failed": "ワーカーはあなたの他のプロセスを自分のメモリから締め出せないため、試行を要求しません: {reason}",
-  "worker_system_unsupported": "ワーカーは {os} では動作しません。そこではあなたの他のプロセスを自分のメモリから締め出せないためです。"
+  "worker_system_unsupported": "ワーカーは {os} では動作しません。そこではあなたの他のプロセスを自分のメモリから締め出せないためです。",
+  "source_server_unknown": "ステップの with: $host が指定する GitLab サーバー「{server}」は、ここで登録されていません。",
+  "compute_target_unknown": "ここにはモード {mode} のコンピュートターゲット「{target}」がありません。",
+  "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com や git.example.com:8443 のような、ポートを任意で付けたホスト名ではありません。"
 }

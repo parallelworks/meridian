@@ -628,6 +628,34 @@
       "修改其中一个值，使其不引用其他值。"
     ]
   },
+  "group_unknown": {
+    "title": "没有该执行组",
+    "why": "作业的 runs-on: execution-group: 指定一个执行组，作业会在该组的某个成员上运行。在工作流运行的环境中，Groups 接口没有该名称的组：在本地，groups.yaml 中没有，它也不是内置的 local 组。",
+    "fix": [
+      "指定一个存在的组，或者在工作流运行的环境中添加该组，例如添加到 groups.yaml。"
+    ]
+  },
+  "environment_unknown": {
+    "title": "没有该环境",
+    "why": "格式 1 作业的 runs-on: environment: 指定集群上的一个调度器环境，只有平台才知道它。在工作流运行的环境中，Groups 接口没有这样的环境：本地没有任何环境。",
+    "fix": [
+      "在拥有该环境的平台上运行工作流，或者改为在执行组中运行该作业（runs-on: execution-group:）。"
+    ]
+  },
+  "source_not_found": {
+    "title": "没有该工作流",
+    "why": "步骤的 uses: 指定一个工作流，它会在创建运行时被解析并固定。在工作流运行的环境中，Sources 接口没有该引用对应的工作流。",
+    "fix": [
+      "检查该引用：其仓库、修订版本，以及 with: 的 $yaml 指定的文件。"
+    ]
+  },
+  "source_not_known": {
+    "title": "创建运行时还不知道工作流的位置",
+    "why": "步骤的 uses: 指定的工作流会在创建运行时被解析，并固定到其提交和文本摘要，使运行及其重新运行执行相同的文本。其 with: 的 $yaml 和 $host 说明它在哪里，因此必须直接写出，而不能引用之后才知道的内容。",
+    "fix": [
+      "在步骤的 with: 中直接写出文件和服务器。"
+    ]
+  },
   "expression_failed": {
     "title": "表达式求值失败",
     "why": "表达式以 Meridian 未描述的方式求值失败。这是 Meridian 的问题。",
@@ -1144,7 +1172,7 @@
   },
   "source_ref_invalid": {
     "title": "不是对 Git 中工作流的引用",
-    "why": "Meridian 从 GitHub 或 GitLab 上的 Git 仓库读取步骤的 uses: 所指定的工作流：github/ 或 gitlab/，仓库的所有者和名称，仓库中的工作流文件（未指定时为 workflow.yaml），以及 @ 和分支、标签或提交（未指定时为默认分支）。不允许可能被理解为其他内容的部分，例如路径中的 .. 或以 - 开头的修订。",
+    "why": "Meridian 从 GitHub 或 GitLab 上的 Git 仓库读取步骤的 uses: 所指定的工作流：github/ 或 gitlab/，仓库的所有者和名称，仓库中的工作流文件（未指定时为 workflow.yaml），以及 @ 和分支、标签或提交（未指定时为默认分支）。不允许可能被理解为其他内容的部分，例如路径中的 .. 或以 - 开头的修订。步骤的 with: $yaml 也可以改为指定文件，此时 github/ 或 gitlab/ 之后、修订之前的每个名称都属于仓库；在 GitLab 上，仓库可以位于子组中，子组名称不能以 .git 或 .lock 结尾。with: $host 指定 GitLab 服务器，且只用于 gitlab/。",
     "fix": [
       "将引用写为 github/<所有者>/<仓库>/<路径>@<修订>，或以 gitlab/ 开头的相同形式。"
     ]
@@ -1707,6 +1735,28 @@
     "why": "工作进程在内存中保存尝试的凭据，并阻止你的其他进程（包括作业的步骤）从内存中读取它，或跟踪它发送的内容。它在 Linux、macOS 和 FreeBSD 上能做到这一点。其他系统（例如 NetBSD 和 OpenBSD）没有给进程任何阻止该用户的其他进程跟踪它的方法，因此工作进程会拒绝在那里运行，而不是以较弱的保护运行作业。",
     "fix": [
       "在其主机运行 Linux、macOS 或 FreeBSD 的成员上运行该作业。"
+    ]
+  },
+  "source_server_unknown": {
+    "title": "GitLab 服务器未注册",
+    "why": "步骤的 with: $host 指定存放其 uses: 所指工作流的 GitLab 服务器。Git 使用用户自己的配置和凭据访问服务器，因此 Meridian 只访问 gitlab.com 和用户注册的服务器，而不是工作流指定的任意服务器：在本地，就是配置目录中 sources.yaml 的 gitlab-servers 所列的服务器。",
+    "fix": [
+      "如果你信任该服务器，把它添加到 sources.yaml 的 gitlab-servers 中，例如 git.example.com，或带端口的 git.example.com:8443。",
+      "否则，请使用已注册服务器上的工作流。"
+    ]
+  },
+  "compute_target_unknown": {
+    "title": "没有该计算目标",
+    "why": "格式 1 作业的 runs-on: 可以像 compute-target 输入的值那样给出一个计算目标：一个模式（login、worker 或 environment）和一个目标，只有平台才知道它。在工作流运行的环境中，Groups 接口没有这样的计算目标：本地没有任何计算目标。",
+    "fix": [
+      "在拥有该计算目标的平台上运行工作流，或者改为在执行组中运行该作业（runs-on: execution-group:）。"
+    ]
+  },
+  "gitlab_server_invalid": {
+    "title": "无效的 GitLab 服务器",
+    "why": "sources.yaml 的 gitlab-servers 列出工作流的 with: $host 可以指定的、gitlab.com 之外的 GitLab 服务器。每一项都是服务器的 DNS 名称，如果端口不是 HTTPS 的端口，则在冒号后加上端口：协议由 Meridian 添加，服务器没有用户或路径。",
+    "fix": [
+      "将服务器写为 git.example.com，其他端口则写为 git.example.com:8443。"
     ]
   }
 }

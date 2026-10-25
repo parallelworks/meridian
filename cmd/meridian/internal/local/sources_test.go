@@ -48,9 +48,13 @@ func newOrigins(t *testing.T) (string, *Sources) {
 	return origins, sourcesFrom(t, origins)
 }
 
+// testServers are the GitLab servers the tests' Sources reach, besides
+// gitlab.com.
+var testServers = []string{"git.example.com:8443"}
+
 func sourcesFrom(t *testing.T, origins string) *Sources {
 	t.Helper()
-	s := NewSources(t.TempDir())
+	s := NewSources(t.TempDir(), testServers)
 	s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
 	return s
 }
@@ -109,27 +113,109 @@ func TestSourcesResolve(t *testing.T) {
 	dev := o.commit(map[string]string{"sub/flow.yaml": "dev\n"})
 	o.git("switch", "--quiet", "main")
 
+	// A project in a subgroup, on a GitLab server of a platform's own.
+	g := newOrigin(t, origins, "git.example.com:8443", "team/infra/flows")
+	onGitLab := g.commit(map[string]string{"flows/run.yaml": "gitlab\n"})
+
 	for _, tc := range []struct {
-		ref      string
+		ref      plan.SourceRef
 		location string
 		commit   string
 		text     string
 		remote   map[string]string
 	}{
-		{"github/acme/flows@main", "github/acme/flows/workflow.yaml@main", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "main"}},
-		{"github/acme/flows", "github/acme/flows/workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows"}},
-		{"github/acme/flows@v1", "github/acme/flows/workflow.yaml@v1", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "v1"}},
-		{"github/acme/flows@" + first, "github/acme/flows/workflow.yaml@" + first, first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": first}},
-		{"github/acme/flows/sub/flow.yaml@dev", "github/acme/flows/sub/flow.yaml@dev", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
+		{plan.SourceRef{Uses: "github/acme/flows@main"}, "github/acme/flows/workflow.yaml@main", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "main"}},
+		{plan.SourceRef{Uses: "github/acme/flows"}, "github/acme/flows/workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows"}},
+		{plan.SourceRef{Uses: "github/acme/flows@v1"}, "github/acme/flows/workflow.yaml@v1", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "v1"}},
+		{plan.SourceRef{Uses: "github/acme/flows@" + first}, "github/acme/flows/workflow.yaml@" + first, first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": first}},
+		{plan.SourceRef{Uses: "github/acme/flows/sub/flow.yaml@dev"}, "github/acme/flows/sub/flow.yaml@dev", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
+		// Format 1 names the file with $yaml.
+		{plan.SourceRef{Uses: "github/acme/flows@dev", Path: "sub/flow.yaml"}, "github/acme/flows/sub/flow.yaml@dev", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
+		{plan.SourceRef{Uses: "gitlab/team/infra/flows@main", Path: "flows/run.yaml", Host: "git.example.com:8443"}, "git.example.com:8443/team/infra/flows/flows/run.yaml@main", onGitLab, "gitlab\n", map[string]string{"repo": "https://git.example.com:8443/team/infra/flows", "branch": "main"}},
 	} {
 		w, err := s.Resolve(t.Context(), tc.ref)
 		if err != nil {
-			t.Fatalf("Resolve(%s): %v", tc.ref, err)
+			t.Fatalf("Resolve(%+v): %v", tc.ref, err)
 		}
-		want := plan.Source{Location: tc.location, Revision: tc.commit, Digest: digest([]byte(tc.text))}
+		want := plan.Source{Location: tc.location, Revision: tc.commit, Digest: digest([]byte(tc.text)), Ref: tc.ref}
 		if w.Source != want || string(w.Text) != tc.text || !reflect.DeepEqual(w.Remote, tc.remote) {
-			t.Errorf("Resolve(%s) = %+v, %q, %v, want %+v, %q, %v", tc.ref, w.Source, w.Text, w.Remote, want, tc.text, tc.remote)
+			t.Errorf("Resolve(%+v) = %+v, %q, %v, want %+v, %q, %v", tc.ref, w.Source, w.Text, w.Remote, want, tc.text, tc.remote)
 		}
+		// It reads again by its pin, from its Ref, with the same remote.
+		again, err := s.Read(t.Context(), w.Source)
+		if err != nil || string(again.Text) != tc.text || !reflect.DeepEqual(again.Remote, tc.remote) {
+			t.Errorf("Read(%+v) = %v, %v", w.Source, again, err)
+		}
+	}
+}
+
+// TestSourcesGroupIsNoCopy checks that a reference whose group's name is
+// where another repository's copy, or its lock file, is in the cache
+// leaves that repository readable, before its copy is made and after.
+func TestSourcesGroupIsNoCopy(t *testing.T) {
+	origins, s := newOrigins(t)
+	newOrigin(t, origins, "gitlab.com", "g/sub").commit(map[string]string{"workflow.yaml": "real\n"})
+	resolve := func() {
+		t.Helper()
+		w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/sub@main"})
+		if err != nil || string(w.Text) != "real\n" {
+			t.Fatalf("Resolve of gitlab/g/sub: %v, %v", w, err)
+		}
+	}
+	refs := []plan.SourceRef{
+		{Uses: "gitlab/g/sub.git/p@main", Path: "w.yaml"},
+		{Uses: "gitlab/g/sub.git.lock/p@main", Path: "w.yaml"},
+		{Uses: "gitlab/g/sub.git/refs/heads/x@main", Path: "w.yaml"},
+	}
+	for _, ref := range refs {
+		if _, err := s.Resolve(t.Context(), ref); !errors.Is(err, compile.ErrNotFound) {
+			t.Errorf("Resolve(%+v): %v, want ErrNotFound", ref, err)
+		}
+	}
+	resolve()
+	for _, ref := range refs {
+		_, _ = s.Resolve(t.Context(), ref)
+	}
+	resolve()
+	if _, err := os.Stat(filepath.Join(s.dir, "gitlab.com", "g", "sub.git", "refs", "heads", "x.git")); err == nil {
+		t.Error("a reference made a repository in g/sub's copy")
+	}
+}
+
+// TestSourcesServers checks that a reference's $host reaches only a GitLab
+// server the user registered, or gitlab.com, whatever its case, and that
+// a pin is read again only from one.
+func TestSourcesServers(t *testing.T) {
+	origins, s := newOrigins(t)
+	newOrigin(t, origins, "git.example.com:8443", "g/p").commit(map[string]string{"w.yaml": "registered\n"})
+	newOrigin(t, origins, "gitlab.com", "g/p").commit(map[string]string{"w.yaml": "gitlab\n"})
+	newOrigin(t, origins, "other.example.com", "g/p").commit(map[string]string{"w.yaml": "other\n"})
+	for host, text := range map[string]string{"Git.Example.com:8443": "registered\n", "gitlab.com": "gitlab\n", "GitLab.com": "gitlab\n"} {
+		w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host})
+		if err != nil || string(w.Text) != text {
+			t.Errorf("Resolve on %s: %v, %v", host, w, err)
+		}
+	}
+	for _, host := range []string{"other.example.com", "git.example.com", "git.example.com:443"} {
+		ref := plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host}
+		_, err := s.Resolve(t.Context(), ref)
+		if !errors.Is(err, compile.ErrNotFound) {
+			t.Errorf("Resolve on %s: %v, want ErrNotFound", host, err)
+			continue
+		}
+		if p := wantProblem(t, err, problems.SourceServerUnknown); p.Params["server"] != host {
+			t.Errorf("the problem names %v", p.Params["server"])
+		}
+	}
+	// A pin made on a server is read again only while it is registered.
+	w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git.example.com:8443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unregistered := sourcesFrom(t, origins)
+	unregistered.servers = map[string]bool{}
+	if _, err := unregistered.Read(t.Context(), w.Source); !errors.Is(err, compile.ErrNotFound) {
+		t.Errorf("Read of a pin on a server no longer registered: %v", err)
 	}
 }
 
@@ -140,7 +226,7 @@ func TestSourcesReadByPin(t *testing.T) {
 	origins, s := newOrigins(t)
 	o := newOrigin(t, origins, "github.com", "acme/flows")
 	o.commit(map[string]string{"workflow.yaml": "pinned\n"})
-	pinned, err := s.Resolve(t.Context(), "github/acme/flows@main")
+	pinned, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +241,7 @@ func TestSourcesReadByPin(t *testing.T) {
 			t.Errorf("Read from %s = %+v, %q, %v", name, w.Source, w.Text, w.Remote)
 		}
 	}
-	again, err := s.Resolve(t.Context(), "github/acme/flows@main")
+	again, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +263,7 @@ func TestSourcesReadRefuses(t *testing.T) {
 	origins, s := newOrigins(t)
 	o := newOrigin(t, origins, "github.com", "acme/flows")
 	o.commit(map[string]string{"workflow.yaml": "text\n"})
-	w, err := s.Resolve(t.Context(), "github/acme/flows@main")
+	w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +300,7 @@ func TestSourcesNotFound(t *testing.T) {
 		"workflow/stored":                     problems.SourceOnPlatform,
 		"github/acme":                         problems.SourceRefInvalid,
 	} {
-		_, err := s.Resolve(t.Context(), ref)
+		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: ref})
 		if !errors.Is(err, compile.ErrNotFound) {
 			t.Errorf("Resolve(%s): %v, want ErrNotFound", ref, err)
 			continue
@@ -224,15 +310,48 @@ func TestSourcesNotFound(t *testing.T) {
 }
 
 func TestParseRef(t *testing.T) {
-	for ref, want := range map[string]sourceRef{
-		"github/acme/flows":                  {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
-		"github/acme/flows@v1.2":             {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1.2"},
-		"gitlab/acme/flows/a/b.yaml@release": {kind: "gitlab", host: "gitlab.com", repo: "acme/flows", path: "a/b.yaml", rev: "release"},
-		"github/a.b/c_d-e/x y.yaml@f/g":      {kind: "github", host: "github.com", repo: "a.b/c_d-e", path: "x y.yaml", rev: "f/g"},
+	for ref, want := range map[plan.SourceRef]sourceRef{
+		{Uses: "github/acme/flows"}:                  {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
+		{Uses: "github/acme/flows@v1.2"}:             {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1.2"},
+		{Uses: "gitlab/acme/flows/a/b.yaml@release"}: {kind: "gitlab", host: "gitlab.com", repo: "acme/flows", path: "a/b.yaml", rev: "release"},
+		{Uses: "github/a.b/c_d-e/x y.yaml@f/g"}:      {kind: "github", host: "github.com", repo: "a.b/c_d-e", path: "x y.yaml", rev: "f/g"},
+		// $yaml names the file, and then a GitLab project can be in a
+		// subgroup; $host names its server.
+		{Uses: "github/acme/flows@main", Path: "a/b.yaml"}:                          {kind: "github", host: "github.com", repo: "acme/flows", path: "a/b.yaml", rev: "main"},
+		{Uses: "gitlab/g/sub/p@main", Path: "w.yaml"}:                               {kind: "gitlab", host: "gitlab.com", repo: "g/sub/p", path: "w.yaml", rev: "main"},
+		{Uses: "gitlab/g/p", Path: "w.yaml", Host: "gitlab.example.com"}:            {kind: "gitlab", host: "gitlab.example.com", repo: "g/p", path: "w.yaml"},
+		{Uses: "gitlab/g/p/w.yaml", Host: "git-1.example.com:8443"}:                 {kind: "gitlab", host: "git-1.example.com:8443", repo: "g/p", path: "w.yaml"},
+		{Uses: "gitlab/g/sub/p@v1", Path: "dir/w.yaml", Host: "gitlab.example.com"}: {kind: "gitlab", host: "gitlab.example.com", repo: "g/sub/p", path: "dir/w.yaml", rev: "v1"},
 	} {
 		got, err := parseRef(ref)
 		if err != nil || got != want {
-			t.Errorf("parseRef(%s) = %+v, %v, want %+v", ref, got, err, want)
+			t.Errorf("parseRef(%+v) = %+v, %v, want %+v", ref, got, err, want)
+		}
+	}
+	// $yaml and $host are checked as the rest of a reference is, and
+	// GitHub's server isn't named apart.
+	for _, ref := range []plan.SourceRef{
+		{Uses: "github/acme/flows/sub@main", Path: "w.yaml"},
+		{Uses: "github/acme/flows", Path: "../w.yaml"},
+		{Uses: "github/acme/flows", Path: "/w.yaml"},
+		{Uses: "github/acme/flows", Path: "a//w.yaml"},
+		{Uses: "github/acme/flows", Path: "w.yaml\n"},
+		{Uses: "github/acme/flows", Host: "github.example.com"},
+		{Uses: "gitlab/g/p", Host: "-x.example.com"},
+		{Uses: "gitlab/g/p", Host: "a.example.com/evil"},
+		{Uses: "gitlab/g/p", Host: "user@a.example.com"},
+		{Uses: "gitlab/g/p", Host: "a..example.com"},
+		{Uses: "gitlab/g/../p", Path: "w.yaml"},
+		// A group's name is a directory of the cache, beside the copies of
+		// repositories and their lock files, and ends as neither does.
+		{Uses: "gitlab/g/sub.git/p@main", Path: "w.yaml"},
+		{Uses: "gitlab/g/sub.git.lock/p@main", Path: "w.yaml"},
+		{Uses: "gitlab/g/Sub.GIT/p@main", Path: "w.yaml"},
+		{Uses: "gitlab/g/sub.git/refs/heads/x@main", Path: "w.yaml"},
+		{Uses: "github/acme.git/flows"},
+	} {
+		if r, err := parseRef(ref); !errors.Is(err, compile.ErrNotFound) {
+			t.Errorf("parseRef(%+v) = %+v, %v, want ErrNotFound", ref, r, err)
 		}
 	}
 	// Nothing in a reference reaches git as an option, or names another
@@ -260,7 +379,7 @@ func TestParseRef(t *testing.T) {
 		"github/acme",
 		"",
 	} {
-		if r, err := parseRef(ref); !errors.Is(err, compile.ErrNotFound) {
+		if r, err := parseRef(plan.SourceRef{Uses: ref}); !errors.Is(err, compile.ErrNotFound) {
 			t.Errorf("parseRef(%q) = %+v, %v, want ErrNotFound", ref, r, err)
 		}
 	}
@@ -371,7 +490,7 @@ func TestSourcesAccessDenied(t *testing.T) {
 	}))
 	defer server.Close()
 	s.remote = func(_, repo string) string { return server.URL + "/" + repo + ".git" }
-	_, err := s.Resolve(t.Context(), "github/acme/private@main")
+	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/private@main"})
 	p := wantProblem(t, err, problems.SourceAccessDenied)
 	if p.Params["location"] != "github/acme/private/workflow.yaml@main" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
 		t.Errorf("the problem's params are %v", p.Params)
@@ -424,7 +543,7 @@ func TestSourcesHungRemote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	start := time.Now()
-	_, err := s.Resolve(ctx, "github/acme/flows@main")
+	_, err := s.Resolve(ctx, plan.SourceRef{Uses: "github/acme/flows@main"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Resolve from a hung remote: %v, want the deadline's error", err)
 	}
@@ -448,12 +567,12 @@ func TestSourcesHungRemoteBlocksNoOther(t *testing.T) {
 	hungCtx, stop := context.WithCancel(t.Context())
 	hung := make(chan error, 1)
 	go func() {
-		_, err := s.Resolve(hungCtx, "github/acme/flows@main")
+		_, err := s.Resolve(hungCtx, plan.SourceRef{Uses: "github/acme/flows@main"})
 		hung <- err
 	}()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	if _, err := s.Resolve(ctx, "github/good/flows@main"); err != nil {
+	if _, err := s.Resolve(ctx, plan.SourceRef{Uses: "github/good/flows@main"}); err != nil {
 		t.Errorf("Resolve of another repository while one hangs: %v", err)
 	}
 	stop()
@@ -478,10 +597,10 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
-			s := NewSources(cache)
+			s := NewSources(cache, nil)
 			s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
 			var w *compile.Workflow
-			w, errs[i] = s.Resolve(t.Context(), fmt.Sprintf("github/acme/flows@t%d", i))
+			w, errs[i] = s.Resolve(t.Context(), plan.SourceRef{Uses: fmt.Sprintf("github/acme/flows@t%d", i)})
 			if errs[i] == nil && len(w.Text) != i+1 {
 				errs[i] = fmt.Errorf("t%d has %d bytes", i, len(w.Text))
 			}
@@ -493,9 +612,9 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 			t.Errorf("Resolve %d: %v", i, err)
 		}
 	}
-	s := NewSources(cache)
+	s := NewSources(cache, nil)
 	s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
-	if _, err := s.Resolve(t.Context(), "github/acme/flows@main"); err != nil {
+	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {
 		t.Errorf("Resolve after them: %v", err)
 	}
 }
@@ -505,7 +624,7 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 func TestSourcesRunNoHooks(t *testing.T) {
 	origins, s := newOrigins(t)
 	newOrigin(t, origins, "github.com", "acme/flows").commit(map[string]string{"workflow.yaml": "text\n"})
-	if _, err := s.Resolve(t.Context(), "github/acme/flows@main"); err != nil {
+	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {
 		t.Fatal(err)
 	}
 	ran := filepath.Join(t.TempDir(), "ran")
@@ -516,7 +635,7 @@ func TestSourcesRunNoHooks(t *testing.T) {
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o700); err != nil { //nolint:gosec // a hook that must not run
 		t.Fatal(err)
 	}
-	if _, err := s.Resolve(t.Context(), "github/acme/flows@main"); err != nil {
+	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(ran); err == nil {
@@ -552,13 +671,13 @@ func TestSourcesRunNoMaintenance(t *testing.T) {
 		}
 		return packs
 	}
-	if _, err := s.Resolve(t.Context(), "github/acme/flows@"+first); err != nil {
+	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@" + first}); err != nil {
 		t.Fatal(err)
 	}
 	// A fetch keeps the pack it receives, or none in a git that unpacks a
 	// small one.
 	kept := len(packs())
-	if _, err := s.Resolve(t.Context(), "github/acme/flows@main"); err != nil {
+	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -648,7 +767,7 @@ func TestSourcesGitMissing(t *testing.T) {
 	origins, s := newOrigins(t)
 	newOrigin(t, origins, "github.com", "acme/flows").commit(map[string]string{"workflow.yaml": "text\n"})
 	s.git = filepath.Join(t.TempDir(), "no-git")
-	_, err := s.Resolve(t.Context(), "github/acme/flows@main")
+	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"})
 	wantProblem(t, err, problems.GitUnavailable)
 }
 
@@ -657,7 +776,7 @@ func TestSourcesCancelled(t *testing.T) {
 	newOrigin(t, origins, "github.com", "acme/flows").commit(map[string]string{"workflow.yaml": "text\n"})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := s.Resolve(ctx, "github/acme/flows@main"); !errors.Is(err, context.Canceled) {
+	if _, err := s.Resolve(ctx, plan.SourceRef{Uses: "github/acme/flows@main"}); !errors.Is(err, context.Canceled) {
 		t.Errorf("Resolve with a cancelled context: %v", err)
 	}
 }
@@ -665,7 +784,7 @@ func TestSourcesCancelled(t *testing.T) {
 func TestSourcesCacheIsPrivate(t *testing.T) {
 	origins, s := newOrigins(t)
 	newOrigin(t, origins, "github.com", "acme/flows").commit(map[string]string{"workflow.yaml": "text\n"})
-	if _, err := s.Resolve(t.Context(), "github/acme/flows@main"); err != nil {
+	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{s.dir, filepath.Join(s.dir, "github.com"), filepath.Join(s.dir, "github.com", "acme")} {

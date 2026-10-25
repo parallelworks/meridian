@@ -126,8 +126,11 @@ var (
 	SourceTooLarge         = define(Error, "source_too_large", "Workflow file in a repository too large", "location", "commit", "limit")
 	SourceChanged          = define(Error, "source_changed", "Workflow isn't the text it was pinned to", "location", "commit", "digest", "pinned")
 	SourceNotPinned        = define(Error, "source_not_pinned", "Workflow not pinned", "location", "revision")
-	SourceAccessDenied     = define(Error, "source_access_denied", "Access to a repository denied", "location", "reason")
-	SourceObjectsInvalid   = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
+	// SourceServerUnknown is a GitLab server, as a step's with: $host
+	// names it, that the user didn't register.
+	SourceServerUnknown  = define(Error, "source_server_unknown", "GitLab server not registered", "server")
+	SourceAccessDenied   = define(Error, "source_access_denied", "Access to a repository denied", "location", "reason")
+	SourceObjectsInvalid = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
 )
 
 // A workflow's jobs.
@@ -192,6 +195,24 @@ var (
 	// each other: names are their names, as inputs.region and env.REGION,
 	// as QuoteAll writes them.
 	ValuesReadEachOther = define(Error, "values_read_each_other", "Values read each other as the run starts", "names")
+	// GroupUnknown is an execution group a job's runs-on: names that the
+	// Groups resolver doesn't have: group is its name.
+	GroupUnknown = define(Error, "group_unknown", "No such execution group", "group")
+	// EnvironmentUnknown is an environment a format 1 runs-on: names that
+	// the Groups resolver doesn't have: cluster and name are the
+	// environment's.
+	EnvironmentUnknown = define(Error, "environment_unknown", "No such environment", "cluster", "name")
+	// ComputeTargetUnknown is a compute target a format 1 runs-on: writes
+	// out that the Groups resolver doesn't have: mode and target are its
+	// mode and targetId.
+	ComputeTargetUnknown = define(Error, "compute_target_unknown", "No such compute target", "mode", "target")
+	// SourceNotFound is a workflow a step's uses: names that the Sources
+	// resolver doesn't have, without saying why: ref is the uses:.
+	SourceNotFound = define(Error, "source_not_found", "No such workflow", "ref")
+	// SourceNotKnown is a step's with: $yaml or $host, key, that isn't
+	// written out, though the workflow its uses: names is pinned as the
+	// run is created.
+	SourceNotKnown = define(Error, "source_not_known", "Workflow's place not known when the run is created", "key")
 )
 
 // Running a workflow: what the phases after Start evaluate, and the
@@ -325,11 +346,12 @@ var (
 	FileOverLimit  = defineCommand("file_over_limit", "File larger than Meridian reads", "path", "limit")
 )
 
-// The meridian command's config, groups.yaml and variables.yaml, whose
-// problems say where they are with ParamFile and ParamLine. want is
-// mapping, list, number, boolean or text; keys are the keys allowed, as
-// QuoteAll writes them; and variable is a variable's name as the plan
-// writes it, as org.region.
+// The meridian command's config, groups.yaml, variables.yaml and
+// sources.yaml, whose problems say where they are with ParamFile and
+// ParamLine. want is mapping, list, number, boolean or text; keys are the
+// keys allowed, as QuoteAll writes them; variable is a variable's name as
+// the plan writes it, as org.region; and server a GitLab server's host
+// name and port.
 var (
 	ConfigYAMLSyntax       = defineCommand("config_yaml_syntax", "Config file isn't valid YAML", "reason")
 	ConfigExtraDocument    = defineCommand("config_extra_document", "Config file with more than one YAML document")
@@ -337,6 +359,7 @@ var (
 	ConfigKeyUnknown       = defineCommand("config_key_unknown", "Unknown key in a config file", "key", "keys")
 	ConfigKeyRepeated      = defineCommand("config_key_repeated", "Key given twice in a config file", "key", "first_line")
 	ConfigWrongType        = defineCommand("config_wrong_type", "Config value of the wrong type", "key", "want")
+	GitLabServerInvalid    = defineCommand("gitlab_server_invalid", "Invalid GitLab server", "server")
 	GroupNameInvalid       = defineCommand("group_name_invalid", "Invalid group name", "group")
 	GroupEmpty             = defineCommand("group_empty", "Group without members", "group")
 	MemberInvalid          = defineCommand("member_invalid", "Invalid member", "group", "key", "value")

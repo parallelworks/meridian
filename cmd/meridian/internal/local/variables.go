@@ -8,7 +8,6 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/compile"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -193,34 +192,6 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 			}
 			out[k] = got
 		}
-	}
-	return out, nil
-}
-
-// Contexts returns the org and vars contexts as the compiler reads them
-// when a run is created, in compile.Options.Contexts: each plain
-// variable's value, and each secret as an expr.Unknown, since the compiler
-// reads no secret's value then. A plain variable whose value can't be read
-// is unknown too, so that only a run that reads it fails, when it starts.
-func (c *Config) Contexts(ctx context.Context) (map[string]any, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	org, user := map[string]any{}, map[string]any{}
-	out := map[string]any{contextOrg: org, contextVars: user}
-	for k, v := range c.variables {
-		context, name, _ := strings.Cut(k, ".")
-		m := org
-		if context == contextVars {
-			m = user
-		}
-		var value any = expr.Unknown{Name: context}
-		if !v.secret {
-			if s, err := c.resolve(v); err == nil {
-				value = s
-			}
-		}
-		m[name] = value
 	}
 	return out, nil
 }

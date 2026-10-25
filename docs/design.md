@@ -135,11 +135,13 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   can't read files outside it. The compiler doesn't check that yet.
 - **Strictness.** A workflow that needs something the environment can't
   provide fails to compile: an input type that names platform resources, a
-  `uses:` that names a workflow with no Sources resolver, sessions without a
-  session provider. The error names the key and what would provide it
-  (`resolver_missing`). There is no flag to run the workflow anyway. The
-  compiler doesn't yet refuse the last two; Start refuses sessions without
-  a session provider.
+  `uses:` that names a workflow with no Sources resolver, an execution
+  group, an environment or a compute target a job's `runs-on:` writes
+  out with no Groups resolver, sessions without a session provider. The
+  error names the key and what would provide it (`resolver_missing`).
+  There is no flag to run the workflow anyway. `compile.Compile`, which an editor checks a
+  workflow as it is written with, reaches no resolver that takes a
+  context, and checks none of the last three.
 - **What ACTIVATE ignores.** ACTIVATE has never checked workflows against
   the schema, so workflows that run there can have keys the schema doesn't
   define, which ACTIVATE ignores. In format 1, such a key is a warning, and
@@ -497,8 +499,10 @@ given, so cancellation, deadlines and traces reach them. It is
 deterministic, so the same workflow, inputs and resolver answers give a
 byte-identical plan. That is also what lets it build to WebAssembly
 unchanged (see [Editors and web UIs](#editors-and-web-uis)). `Create`
-takes a context; `Compile`, which gives the plan alone, doesn't, and nor
-does the Inputs resolver, the one Create reaches today.
+takes a context, which it reaches Variables, Groups, Sources and Sessions
+with; `Compile`, which gives the plan alone, doesn't, and reaches none of
+them, as if they weren't there. The Inputs resolver takes no context
+today.
 
 Errors and warnings are reported together rather than one at a time.
 Warnings, such as a deprecated key, don't stop a run, and are kept with it,
@@ -1085,8 +1089,10 @@ Start needs, is part of version 1: the input definitions, where the parts
 held for Start are in them and where those withheld are, the inputs' values
 as given where Create converted them, where the shape's decisions are, a
 job's `needs:` expression, `remote`, `sessions` and the names a session
-provider gave them, and the limits. The first release freezes it, with its
-schema, and every change after that gets a version.
+provider gave them, the limits, the digest of the run's own text, and the
+pinned workflow a step's `uses:` names, with the reference it was resolved
+by. The first release freezes it, with its schema, and every change after
+that gets a version.
 
 ## Expressions
 
@@ -1253,11 +1259,26 @@ error saying which interface was missing.
 Resolvers get the caller's context, so cancellation, deadlines and traces
 reach them. They report what is wrong as a problem, a kind and its params
 ([Compiling](#compiling)), rather than as text, so that a platform's reason
-reaches each reader in their own language. Today the Inputs resolver
-takes no context and returns a Go error, and Create uses none of the
-others: it is given variables as mappings, in `Options.Contexts`. Start
-reads the variables through Variables, and makes sessions through
-Sessions.
+reaches each reader in their own language. Create reads the variables
+through Variables, checks sessions with Sessions, the execution groups and
+environments a job's `runs-on:` writes out with Groups, and pins the
+workflows `uses:` names with Sources; Start reads the variables again and
+makes the sessions. A caller without a Variables or a Sessions resolver,
+such as an editor or a test, can give the variables and the sessions
+context as mappings, in `Options.Contexts`, as it gives `remote`. Today
+the Inputs resolver takes no context and returns a Go error.
+
+A uses: names a workflow by what format 1 writes (`plan.SourceRef`): the
+`uses:` itself, as `github/<owner>/<repository>@<revision>` or
+`gitlab/<namespace>/<project>`, and in the step's `with:`, `$yaml`, the
+workflow's file in the repository, and `$host`, the GitLab server that
+holds it. A pinned workflow keeps its reference beside its commit and
+digest (`Source.Ref`), so Sources reads it again by it, and gives the
+`remote` context a child run reads, `remote.branch` among it, from it.
+Git reaches a server with the credentials of whoever runs it, so a
+Sources reaches only the GitLab servers registered where the workflow
+runs, as the schema's "registered GitLab server" says, and never one
+that only a workflow names (`source_server_unknown`).
 
 ## Durable execution
 
@@ -1379,7 +1400,15 @@ of the step's run, with its own plan, secret record and jobs.
   of its text, and loads and validates it, and the workflows it calls in
   turn, with cycle detection and a depth limit. The plan holds every pinned
   reference, not a compiled workflow, so the run and its reruns run the same
-  code throughout, even where a reference names a branch.
+  code throughout, even where a reference names a branch. Its `with:`
+  `$yaml` and `$host`, which say where the workflow is, must be written
+  out (`source_not_known`). Today the compiler pins and loads the workflows
+  a run's own steps name (`Step.Source`), each reference once, but not the
+  workflows they call in turn: a child run's Create pins its own, as it is
+  created. Pinning them all at once needs the plan to hold its
+  descendants' pins, by the pinned workflow and the step that names each,
+  for each child run's Create to read rather than resolve; with it come
+  the cycle detection and the depth limit (`Options.Limits`).
 - **Compiled when the step runs.** The worker evaluates the step's `with:`,
   and the coordinator creates the child run from the pinned workflow with
   those values, through Create and Start, linked to the step. The step ends
@@ -1389,8 +1418,9 @@ of the step's run, with its own plan, secret record and jobs.
   a password is kept out of the child's plan, in its secret record, as a
   password is.
 - **Without a Sources resolver**, a `uses:` that names a workflow fails to
-  compile ([The workflow format](#the-workflow-format)). Today the compiler
-  keeps it in the plan as it is written, without resolving it.
+  compile (`resolver_missing`, [The workflow format](#the-workflow-format)).
+  A `uses:` names a workflow when it starts with `github/`, `gitlab/`,
+  `marketplace/` or `workflow/`; any other names a built-in action.
 
 ### Failures and retries
 
@@ -1494,7 +1524,10 @@ secret record ([Run data](#run-data)).
 - **At Create**, the compiler reads only the plain variables read by what
   it evaluates: what decides the run's shape, and the values of inputs that
   read one, which it checks against their types. It reads no secret
-  variable's value; what reads one waits for Start.
+  variable's value; what reads one waits for Start. It asks the Variables
+  interface for the variables the workflow's expressions read, by name, or
+  a context's whole for one that reads every variable of it, and a plain
+  one whose value can't be read fails the run then.
 - **Once at Start**, the coordinator reads every variable the plan lists, a
   context's whole when the plan names it alone, and keeps them in the
   secret record, so every expression of the run reads the same values. A
@@ -2331,12 +2364,12 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian serve` | Runs a coordinator that keeps running. |
 | `meridian worker`, `meridian relay` | Started by backends, not by people. |
 
-Execution groups and variables live in Meridian's config directory, and
-`--group` picks a group. A built-in `local` group needs no config: one
-member, this machine, which names host isolation explicitly, and which a
-group of the same name in the config replaces. Groups are never read from
-the repository a workflow comes from, so cloning a workflow can't send its
-jobs to your SSH hosts.
+Execution groups, variables and the GitLab servers a workflow can name
+live in Meridian's config directory, and `--group` picks a group. A
+built-in `local` group needs no config: one member, this machine, which
+names host isolation explicitly, and which a group of the same name in
+the config replaces. Groups are never read from the repository a workflow
+comes from, so cloning a workflow can't send its jobs to your SSH hosts.
 
 - **`groups.yaml`** holds each group by name, with its members in order:
   each one's backend, its settings, its isolation, the resources it offers
@@ -2346,16 +2379,20 @@ jobs to your SSH hosts.
   value, and any variable can instead name an environment variable or a
   file that holds it. A secret one is marked `secret: true`, and always
   names where its value is, which is read only as a run starts.
+- **`sources.yaml`** holds `gitlab-servers`, the GitLab servers besides
+  gitlab.com that a step's `with: $host` can name, each a host name and,
+  after a colon, a port, as `git.example.com:8443`. Git reaches them with
+  the user's credentials, so a workflow can't name a server of its own.
 
-Meridian refuses either file if another user can change it, and the
+Meridian refuses any of these files if another user can change it, and the
 variables file if another user can read it, since people keep secrets in
 plain variables too. A file that holds a variable's value must be the
 user's, and only they may change it, or read it when it holds a secret's,
 and the directories on the way to it are checked as Meridian's own are.
 Meridian reads none of these files, nor its key, through a symbolic link at
 the file's own path, so that what it reads is the file the path names: a
-directory on the way to one, the config directory among them, can be a
-link, and is checked through it.
+directory on the way to one, the config directory among them, can be a link,
+and is checked through it.
 
 The database, the key that wraps secret records, and logs live in
 Meridian's state directory, which only its user can read. SQLite can't lock
@@ -2404,12 +2441,15 @@ config file another user can change, are in the problems package's
 an API sends them ([Compiling](#compiling)): a workflow with errors is an
 RFC 9457 validation problem, with its warnings beside them. It exits 0
 for a workflow without errors, 1 for one with, and 2 when it couldn't
-compile it. With `--start`, it starts the run too, as far as it can
-without running anything: it reads every variable the run reads, secret
-ones too, evaluates what waits for the start, checks it and the run's
-shape, and expands the matrices known then, and reports what would fail
-the run as it starts, where the workflow writes it. It makes no session:
-there is no session provider here, so a run with sessions can't start.
+compile it. It creates the run as `meridian run` would, with the user's
+variables and groups, and pins the workflows `uses:` names through the
+command's Sources, so it reports an execution group that isn't in the
+config, a workflow that isn't there or doesn't load, and sessions, which
+nothing provides here. With `--start`, it starts the run too, as far as
+it can without running anything: it reads every variable the run reads,
+secret ones too, evaluates what waits for the start, checks it and the
+run's shape, and expands the matrices known then, and reports what would
+fail the run as it starts, where the workflow writes it.
 
 ## Editors and web UIs
 

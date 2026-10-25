@@ -198,8 +198,8 @@ type Limits struct {
 
 // A Source is where a workflow came from, and the exact text that ran.
 type Source struct {
-	// Location names the workflow: a file, a repository and a path in it,
-	// or a workflow a platform stores.
+	// Location names the workflow to whoever can see the run: a file, a
+	// repository and a path in it, or a workflow a platform stores.
 	Location string `json:"location"`
 	// Revision is a Git commit, or "sha256:" and the SHA-256 digest of the
 	// text when no commit has it.
@@ -207,9 +207,28 @@ type Source struct {
 	// Digest is "sha256:" and the SHA-256 digest of the text, which a
 	// workflow that a step's uses: names is pinned to beside its commit,
 	// so that reading it again by its pin gives the same text or fails.
-	// The compiler doesn't set it yet, for the run's own source or any
-	// other; when it first does, the plan's version rises.
 	Digest string `json:"digest,omitempty"`
+	// Ref is what named the workflow, for one a step's uses: names: the
+	// Sources resolver reads it again by Ref, at Revision, and gives the
+	// remote context a child run of it reads, as remote.branch, from it.
+	// It is empty for the run's own workflow.
+	Ref SourceRef `json:"ref,omitzero"`
+}
+
+// A SourceRef is what a step's uses: names a workflow by, as format 1
+// writes it: the uses: itself, and, in the step's with:, the workflow's
+// file in the repository it names and the server that holds it.
+type SourceRef struct {
+	// Uses is the step's uses: as it is written, such as
+	// github/<owner>/<repository>@<revision>, gitlab/<namespace>/<project>,
+	// workflow/<name> or marketplace/<name>.
+	Uses string `json:"uses"`
+	// Path is the workflow's file in the repository, the step's with:
+	// $yaml, or "" for the one Uses names, or the default.
+	Path string `json:"path,omitempty"`
+	// Host is the Git server that holds the repository, the step's with:
+	// $host, or "" for the one Uses names, such as gitlab.com.
+	Host string `json:"host,omitempty"`
 }
 
 // A Job is one of the workflow's jobs. A matrix job is one Job, whose
@@ -285,10 +304,14 @@ type Step struct {
 	Run Value `json:"run,omitzero"`
 	// Uses names a built-in action, or the workflow the step runs.
 	Uses string `json:"uses,omitempty"`
-	// Workflow is unused: the compiler never sets it. It gives way to the
-	// pinned reference of the workflow a step's uses: names, a Source with
-	// its Digest, from which the step's child run is compiled when the
-	// step runs.
+	// Source is the workflow the step's uses: names, pinned as the run was
+	// created, by its commit and its text's digest: the step's child run is
+	// created from it, through the Sources resolver's Read, when the step
+	// runs, so the run and its reruns run the same text. It is nil for a
+	// built-in action.
+	Source *Source `json:"source,omitzero"`
+	// Workflow is unused: the compiler never sets it, as Source holds the
+	// workflow's pinned reference. It goes with the plan's next version.
 	Workflow         *Plan            `json:"workflow,omitzero"`
 	With             Value            `json:"with,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`

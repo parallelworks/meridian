@@ -98,7 +98,13 @@ func (v *countingVariables) Read(ctx context.Context, names []string, secrets bo
 // plan as a coordinator stores it and reads it back.
 func createRun(t testing.TB, src string, submitted map[string]any, vars testVariables) *compile.Created {
 	t.Helper()
-	opts := compile.Options{Inputs: passThrough{}, Contexts: vars.contexts()}
+	return createWith(t, src, submitted, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts()})
+}
+
+// createWith creates a run of src with submitted and opts, as createRun
+// does.
+func createWith(t testing.TB, src string, submitted map[string]any, opts compile.Options) *compile.Created {
+	t.Helper()
 	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), submitted, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -615,12 +621,15 @@ func (rejecting) ResolveInput(string, map[string]any, any) (any, error) {
 func TestStartSessions(t *testing.T) {
 	src := workflow(`n: {type: number, default: '${{ vars.N }}'}`, "sessions:\n  desktop:\n    useTLS: false\n    redirect: ${{ inputs.n == 2 }}\n")
 	vars := testVariables{"vars.N": {Value: "2"}}
-	c := createRun(t, src, nil, vars)
+	s := &testSessions{}
+	c := createWith(t, src, nil, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts(), Sessions: s})
+	if !maps.Equal(c.Plan.Run.SessionNames, map[string]string{"desktop": "desktop-checked"}) {
+		t.Errorf("the session provider's names %v", c.Plan.Run.SessionNames)
+	}
 	res, diags := startRun(t, c, vars, compile.StartInput{})
 	if res != nil || len(diags.Errors()) != 1 || diags.Errors()[0].Code != problems.ResolverMissing.Code() || diags.Errors()[0].Path() != "/sessions" {
 		t.Errorf("without a session provider: %v", diags)
 	}
-	s := &testSessions{}
 	if res, diags := startRun(t, c, vars, compile.StartInput{RunID: "r1", Sessions: s}); res == nil {
 		t.Fatal(diags)
 	}
@@ -637,13 +646,24 @@ func TestStartSessions(t *testing.T) {
 	}
 }
 
+// testSessions is a session provider: it names each session as its key
+// and -checked, and records each run it makes the sessions of, unless it
+// gives checkErr or err.
 type testSessions struct {
-	made []string
-	err  error
+	made     []string
+	err      error
+	checkErr error
 }
 
-func (s *testSessions) Check(context.Context, map[string]any) (map[string]string, error) {
-	return nil, nil
+func (s *testSessions) Check(_ context.Context, sessions map[string]any) (map[string]string, error) {
+	if s.checkErr != nil {
+		return nil, s.checkErr
+	}
+	names := map[string]string{}
+	for name := range sessions {
+		names[name] = name + "-checked"
+	}
+	return names, nil
 }
 
 func (s *testSessions) Make(_ context.Context, runID string, sessions map[string]any, _ map[string]string) error {
@@ -771,7 +791,7 @@ func TestPasswordsNeverInRunState(t *testing.T) {
 				continue
 			}
 			defs, _ := jsonptr.Lookup(doc.Value, []string{"on", "execute", "inputs"})
-			opts := compile.Options{Contexts: contexts(c), Inputs: passThrough{}}
+			opts := compile.Options{Contexts: contexts(c), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
 			submitted := jsonvalue.CloneMap(c.Inputs)
 			if !withPassword(defs, submitted, sentinel) {
 				continue
@@ -786,7 +806,7 @@ func TestPasswordsNeverInRunState(t *testing.T) {
 					continue
 				}
 				res, diags, err := compile.Start(t.Context(), created.Plan, compile.StartInput{
-					Variables: vars, Record: created.Record, Inputs: passThrough{},
+					Variables: vars, Record: created.Record, Inputs: passThrough{}, Sessions: &testSessions{},
 				})
 				if err != nil {
 					t.Fatalf("%s: %v", c.Name, err)
@@ -841,7 +861,7 @@ func TestVariablesNeverInRunState(t *testing.T) {
 			if diags.HasErrors() {
 				continue
 			}
-			opts := compile.Options{Contexts: vars.contexts(), Inputs: passThrough{}}
+			opts := compile.Options{Contexts: vars.contexts(), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
 			for _, submitted := range append([]map[string]any{c.Inputs}, formShapes(compile.FormValues(doc, c.Inputs, opts))...) {
 				created, _, err := compile.Create(t.Context(), "workflow.yaml", data, submitted, opts)
 				if err != nil {
@@ -851,7 +871,7 @@ func TestVariablesNeverInRunState(t *testing.T) {
 					continue
 				}
 				res, diags, err := compile.Start(t.Context(), created.Plan, compile.StartInput{
-					Variables: vars, Record: created.Record, Inputs: passThrough{},
+					Variables: vars, Record: created.Record, Inputs: passThrough{}, Sessions: &testSessions{},
 				})
 				if err != nil {
 					t.Fatalf("%s: %v", c.Name, err)

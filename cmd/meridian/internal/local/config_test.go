@@ -149,6 +149,43 @@ func TestGroupsFileRefuses(t *testing.T) {
 	}
 }
 
+func TestSourcesFile(t *testing.T) {
+	c := load(t, map[string]string{SourcesFile: "gitlab-servers:\n  - git.example.com\n  - Git.Example.org:8443\n"}, nil)
+	if got, want := c.GitLabServers(), []string{"git.example.com", "git.example.org:8443"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("GitLabServers = %q, want %q", got, want)
+	}
+	for text, want := range map[string][]string{"": nil, "gitlab-servers:\n": nil, "gitlab-servers: []\n": nil} {
+		if got := load(t, map[string]string{SourcesFile: text}, nil).GitLabServers(); len(got) != len(want) {
+			t.Errorf("%q: GitLabServers = %q", text, got)
+		}
+	}
+	for name, tc := range map[string]struct {
+		text string
+		kind *problems.Kind
+		line int
+	}{
+		"unknown key":     {"github-servers: [a.example.com]\n", problems.ConfigKeyUnknown, 1},
+		"not a list":      {"gitlab-servers: a.example.com\n", problems.ConfigWrongType, 1},
+		"not text":        {"gitlab-servers:\n  - {host: a}\n", problems.ConfigWrongType, 2},
+		"a URL":           {"gitlab-servers:\n  - https://a.example.com\n", problems.GitLabServerInvalid, 2},
+		"with userinfo":   {"gitlab-servers:\n  - me@a.example.com\n", problems.GitLabServerInvalid, 2},
+		"with a path":     {"gitlab-servers:\n  - a.example.com/x\n", problems.GitLabServerInvalid, 2},
+		"an option":       {"gitlab-servers:\n  - -a.example.com\n", problems.GitLabServerInvalid, 2},
+		"repeated key":    {"gitlab-servers: []\ngitlab-servers: []\n", problems.ConfigKeyRepeated, 2},
+		"not a mapping":   {"- a.example.com\n", problems.ConfigNotMapping, 1},
+		"an empty server": {"gitlab-servers:\n  - ''\n", problems.GitLabServerInvalid, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := configDir(t, map[string]string{SourcesFile: tc.text})
+			_, err := LoadConfig(dir, env(nil))
+			p := wantProblem(t, err, tc.kind)
+			if line, _ := p.Params[problems.ParamLine].(int); line != tc.line || p.Params[problems.ParamFile] != filepath.Join(dir, SourcesFile) {
+				t.Errorf("the problem is at %v:%d, want line %d", p.Params[problems.ParamFile], line, tc.line)
+			}
+		})
+	}
+}
+
 func TestConfigFilesOthersCanChange(t *testing.T) {
 	for _, tc := range []struct {
 		file string
@@ -161,6 +198,8 @@ func TestConfigFilesOthersCanChange(t *testing.T) {
 		{VariablesFile, 0o600, nil},
 		{VariablesFile, 0o640, problems.FileNotPrivate},
 		{VariablesFile, 0o604, problems.FileNotPrivate},
+		{SourcesFile, 0o644, nil},
+		{SourcesFile, 0o664, problems.FileChangeable},
 	} {
 		dir := configDir(t, map[string]string{tc.file: "{}\n"})
 		path := filepath.Join(dir, tc.file)

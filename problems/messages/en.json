@@ -91,6 +91,10 @@
   "resolver_missing": "The workflow's \"{key}\" needs the {interface} interface, which isn't provided where it runs.",
   "run_shape_changed": "The {key} of \"{name}\" decided otherwise as the run started than when it was created, since a variable or a password it reads changed. A run doesn't run with values from two readings: create it again.",
   "values_read_each_other": "The values {names} read each other, so none of them can be evaluated as the run starts.",
+  "group_unknown": "There is no execution group \"{group}\" here.",
+  "environment_unknown": "There is no environment \"{name}\" on the cluster \"{cluster}\" here.",
+  "source_not_found": "There is no workflow \"{ref}\" here.",
+  "source_not_known": "The step's {key} reads what isn't known when the run is created, but the workflow its uses: names is pinned then.",
   "expression_failed": "The expression failed: {reason}.",
   "word_not_reference": "The word {word} is the text {text}, because {head} isn't a context. Quote it if text is what you mean.",
   "hyphenated_name": "The expression {written}-{word} subtracts the text {text} from {written}, which is NaN. To read {name}, write {fix}.{defines, select, input { The workflow has an input \"{defined}\".} job { The workflow has a job \"{defined}\".} step { The job \"{job}\" has a step with the id \"{defined}\".} matrix { The matrix of the job \"{job}\" has a key \"{defined}\".} session { The workflow has a session \"{defined}\".} other {}}",
@@ -250,5 +254,8 @@
   "attempt_superseded": "The coordinator no longer takes reports from this attempt: another attempt of the job superseded it, or it ended without this worker.",
   "attempt_lease_lapsed": "Meridian stopped the job, which may run again, because it couldn't renew the attempt's lease before the lease would lapse.",
   "worker_harden_failed": "The worker can't keep your other processes out of its memory, so it won't claim the attempt: {reason}.",
-  "worker_system_unsupported": "The worker doesn't run on {os}, where it can't keep your other processes out of its memory."
+  "worker_system_unsupported": "The worker doesn't run on {os}, where it can't keep your other processes out of its memory.",
+  "source_server_unknown": "The GitLab server \"{server}\" that the step's with: $host names isn't one registered here.",
+  "compute_target_unknown": "There is no compute target \"{target}\" in the mode {mode} here.",
+  "gitlab_server_invalid": "The GitLab server \"{server}\" isn't a host name with an optional port, such as git.example.com or git.example.com:8443."
 }
