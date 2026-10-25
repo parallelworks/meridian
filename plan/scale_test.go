@@ -3,6 +3,7 @@ package plan_test
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -116,9 +117,15 @@ func (s scaledJob) allocated(t *testing.T) uint64 {
 
 // fastest returns the shortest time of five that running each of jobs
 // takes. It runs them in turn, each once a round, so a runner that slows
-// down for a while slows each of them alike.
+// down for a while slows each of them alike, and without the garbage
+// collector, which collects before each run and not during one: what
+// collecting costs depends on what else the process holds and how many
+// cores it has to itself, which on a busy runner of two makes a job that
+// grows as it should look as if it grew faster. The allocation checks say
+// how much each allocates.
 func fastest(t *testing.T, jobs ...scaledJob) []time.Duration {
 	t.Helper()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	best := make([]time.Duration, len(jobs))
 	for i := range 5 {
 		for j, s := range jobs {
