@@ -18,18 +18,20 @@ var ErrNotFound = errors.New("compile: not found")
 // workflowProblem returns the kind and a copy of the params of err, an
 // error from a resolver, when it is, or wraps, a problem of one of the
 // problems package's kinds of error, foundation's shared rules among them,
-// but not the command's: what is wrong with what the resolver was asked,
-// which a run reports as it is, so that each reader sees it in their own
-// language. ok is false for any other error, a warning's kind among them,
-// which would let what is wrong through, or the command's own.
+// but not the command's or the worker API's: what is wrong with what the
+// resolver was asked, which a run reports as it is, so that each reader
+// sees it in their own language. ok is false for any other error, a
+// warning's kind among them, which would let what is wrong through, or the
+// command's or the worker API's own.
 func workflowProblem(err error) (k *problems.Kind, params problems.Params, ok bool) {
 	p, isProblem := errors.AsType[*problem.Problem](err)
 	if !isProblem {
 		return nil, nil, false
 	}
 	_, command := problems.CommandRegistry.Lookup(p.Code)
+	_, worker := problems.WorkerRegistry.Lookup(p.Code)
 	k, ok = problems.Lookup(p.Code)
-	if !ok || command || k.Severity() != problems.Error {
+	if !ok || command || worker || k.Severity() != problems.Error {
 		return nil, nil, false
 	}
 	return k, maps.Clone(p.Params), true

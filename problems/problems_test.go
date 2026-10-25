@@ -27,7 +27,7 @@ import (
 var languages = []string{"en", "es", "ja", "ko", "zh"}
 
 func TestCatalog(t *testing.T) {
-	problemtest.CheckGoCatalog(t, Catalog, Registry, CommandRegistry)
+	problemtest.CheckGoCatalog(t, Catalog, Registry, CommandRegistry, WorkerRegistry)
 	if got := Catalog.Languages(); !slices.Equal(got, languages) {
 		t.Errorf("the catalog is in %v, want %v", got, languages)
 	}
@@ -46,7 +46,7 @@ func TestCatalog(t *testing.T) {
 		}
 		// The localizer falls back to English for a code a language
 		// lacks, so a missing translation renders without an error.
-		for _, typ := range slices.Concat(Registry.Types(), CommandRegistry.Types()) {
+		for _, typ := range slices.Concat(Registry.Types(), CommandRegistry.Types(), WorkerRegistry.Types()) {
 			if _, ok := msgs[typ.Code]; !ok {
 				t.Errorf("%s catalog has no message for %s", lang, typ.Code)
 			}
@@ -143,7 +143,8 @@ func TestDocs(t *testing.T) {
 		for _, k := range Kinds() {
 			_, workflow := Registry.Lookup(k.Code())
 			_, command := CommandRegistry.Lookup(k.Code())
-			if !workflow && !command {
+			_, worker := WorkerRegistry.Lookup(k.Code())
+			if !workflow && !command && !worker {
 				continue // foundation documents its rules
 			}
 			d, ok := docs[k.Code()]

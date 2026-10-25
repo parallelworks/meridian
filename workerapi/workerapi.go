@@ -189,29 +189,28 @@ const (
 	EnvBootstrapTokenFile = "MERIDIAN_BOOTSTRAP_TOKEN_FILE"
 )
 
-// The codes of the API's own problems. The coordinator defines each as a
-// kind of package problems, in a registry of its own named worker, so
-// that its type URI is /problems/worker/<code>, with its messages and its
-// page, when it first reports one.
-const (
+// The codes of the API's own problems: each is a kind of package problems,
+// in its registry named worker (problems.WorkerRegistry), whose type URI
+// is /problems/worker/<code>, with its messages and its page.
+var (
 	// Fenced (409 Conflict) is a request from an attempt that another
 	// attempt of its job has superseded, or a report that isn't a repeat
 	// after the attempt completed. The worker stops its job's steps as a
 	// cancellation does, and exits.
-	Fenced problem.Code = "fenced"
+	Fenced = problems.Fenced.Code()
 	// OutOfOrder (409 Conflict) is events that skip a sequence number, a
 	// log upload that starts past the end of the log or comes after its
 	// end, or a Complete before the coordinator has every event up to its
 	// Seq. Its param ParamExpected is the sequence number or the byte
 	// offset the coordinator expects next, which the worker sends from
 	// again.
-	OutOfOrder problem.Code = "out_of_order"
+	OutOfOrder = problems.OutOfOrder.Code()
 	// PlanTooNew (409 Conflict) is a claim from a worker that doesn't read
 	// the version of the run's plan (ClaimRequest.PlanVersion). The
 	// coordinator refuses it before it sends anything of the run, and the
 	// worker exits; the attempt failed before its first step, and is
 	// placed again.
-	PlanTooNew problem.Code = "plan_too_new"
+	PlanTooNew = problems.PlanTooNew.Code()
 )
 
 // ParamExpected is the param of an OutOfOrder problem.
