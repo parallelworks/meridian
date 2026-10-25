@@ -45,6 +45,14 @@ type Run struct {
 	// Inputs are the run's input values, with defaults applied and ignored
 	// inputs left out: a mapping.
 	Inputs Data `json:"inputs,omitzero"`
+	// Unresolved are the values of the inputs of a platform's types that
+	// Inputs holds as the Inputs resolver gave them, where it gave another
+	// value than the one submitted, as they were submitted, by their
+	// input's path: a cluster's name, for its details. What the compiler
+	// evaluated before it checked the inputs read them as submitted, and so
+	// does what Start evaluates, which then reads Inputs' (docs/design.md,
+	// Starting a run).
+	Unresolved map[string]Data `json:"unresolved,omitempty"`
 	// Definitions are the workflow's input definitions, on.execute.inputs,
 	// as the workflow writes them, with their expressions parsed, but for
 	// what Withheld names. Start evaluates what is left to it where the

@@ -149,6 +149,9 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	if err := st.evaluate(true); err != nil {
 		return nil, nil, err
 	}
+	// What the run reads from here on reads the inputs of a platform's
+	// types as the Inputs resolver gave them, as the jobs' do.
+	st.resolve()
 	st.checkInputs()
 	st.checkNeeds()
 	run := st.runValues()
@@ -213,8 +216,13 @@ type starter struct {
 	// didn't have, which holding it made.
 	failed  map[*field]bool
 	pending map[*field]int
-	emptied map[*field][]laterPart
-	above   map[*field]int
+	// resolved holds the values of the inputs of a platform's types that
+	// the Inputs resolver changed, as it gave them, by their paths, which
+	// Start reads as they were submitted until it has decided the run's
+	// shape (plan.Run.Unresolved).
+	resolved map[string]any
+	emptied  map[*field][]laterPart
+	above    map[*field]int
 	// hiddenAt and optionalAt hold whether each input Start evaluated, and
 	// each group it is in, is hidden and optional, as checkDecisions
 	// decided them, in the inputs' order, as the compiler does; decisionAt
@@ -391,6 +399,18 @@ func (st *starter) restore() error {
 	values, _ := jsonvalue.Clone(p.Run.Inputs.Get()).(map[string]any)
 	if values == nil {
 		values = map[string]any{}
+	}
+	st.resolved = map[string]any{}
+	for name, given := range jsonvalue.Sorted(p.Run.Unresolved) {
+		path := plan.SplitPath(name)
+		v, ok := jsonptr.Lookup(values, path)
+		if !ok {
+			return fmt.Errorf("compile: the plan holds the input %s as it was submitted, but not as it was resolved", name)
+		}
+		st.resolved[name] = v
+		if err := setGrow(values, path, jsonvalue.Clone(given.Get())); err != nil {
+			return err
+		}
 	}
 	held := slices.Sorted(maps.Keys(p.Run.DeferredInputs))
 	var holders reach.Trie[*field]
@@ -1329,6 +1349,15 @@ func (st *starter) shapeDecided(f *field) bool {
 		}
 	}
 	return false
+}
+
+// resolve puts the values of the inputs of a platform's types that the
+// Inputs resolver changed back as it gave them, which Start read as they
+// were submitted until it had decided the run's shape (plan.Run.Unresolved).
+func (st *starter) resolve() {
+	for name, v := range jsonvalue.Sorted(st.resolved) {
+		st.r.set(plan.SplitPath(name), jsonvalue.Clone(v))
+	}
 }
 
 // checkNeeds evaluates again each job's needs: that read a variable or a

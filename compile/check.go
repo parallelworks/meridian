@@ -177,6 +177,13 @@ func (r *inputResolver) checkField(f *field, later bool) {
 		return
 	case f.typ == "password" && !later:
 		r.secrets[plan.JoinPath(f.path...)] = out
+	case !later && f.in == nil && platformTypes[f.typ] && !reflect.DeepEqual(v, out):
+		// What was evaluated before read the value as it was submitted,
+		// and so does what Start evaluates (plan.Run.Unresolved).
+		if r.unresolved == nil {
+			r.unresolved = map[string]any{}
+		}
+		r.unresolved[plan.JoinPath(f.path...)] = jsonvalue.Clone(v)
 	}
 	if given := readAs(f, v); given != "" && r.submittedAs(f.path, v) {
 		typ := f.typ

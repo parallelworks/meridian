@@ -665,9 +665,14 @@ ACTIVATE's launch form and its backend do together:
   JSON type it was given, never the value, and changes nothing else. A
   later format can refuse such a value. An input of a platform's type is
   what the Inputs resolver gives for it, as a cluster's details for its
-  name; what Create evaluates before it checks the value, and Start too,
-  reads it as submitted, and what reads it after, the jobs among them, as
-  the resolver gave it. The local resolver gives back what it is given.
+  name; what Create evaluates before it checks the value reads it as
+  submitted, and so does what Start evaluates, from the plan, which holds
+  the value as submitted beside it where the resolver changed it
+  (`Run.Unresolved`), until it has decided the run's shape; what reads it
+  after, the jobs among them, reads it as the resolver gave it. A value
+  the secret record holds, as one typed over a default that reads a
+  password, Start reads as the resolver gave it. The local resolver gives
+  back what it is given.
   Anything else that doesn't fit the input's type is an error,
   as is a number outside its `min` and `max`, or a choice that isn't one of
   a dropdown's options when they are written in the workflow. A value for an
@@ -808,8 +813,9 @@ the run waits for ([On hopper](#on-hopper)).
    Create fills in a row's, so a list, a row or a list in a row that a part
    gives is filled in as Create filled it in before the plan held the part's
    expression in its place. What Start evaluates reads the inputs as
-   Create's evaluations read them: as they were submitted
-   ([Inputs](#inputs)); each list's rows with a field that has no value as
+   Create's evaluations read them: as they were submitted, one of a
+   platform's type the resolver changed among them, until it has decided
+   the run's shape (`Run.Unresolved`, [Inputs](#inputs)); each list's rows with a field that has no value as
    null; and what a default reads of the
    value it gives as Create's evaluation did, none, or the form's text for
    it. What reads a definition, as a relative reference does, is evaluated
@@ -1094,7 +1100,8 @@ Today a plan is version 1, and has no schema. Version 1 stays open until the
 first release: no release has yet stored a plan or sent one to a worker, so
 what the plan and the worker API's bodies gain before then, such as what
 Start needs, is part of version 1: the input definitions, where the parts
-held for Start are in them and where those withheld are, where the shape's
+held for Start are in them and where those withheld are, the values a
+platform's resolver changed as they were submitted, where the shape's
 decisions are, a job's `needs:` expression, `remote`, `sessions` and the
 names a session provider gave them, the limits, the digest of the run's own
 text, and the pinned workflow a step's `uses:` names, with the reference it

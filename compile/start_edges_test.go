@@ -401,6 +401,59 @@ x: {type: string, optional: true, ignore: '${{ toJSON(inputs.a) == ''"7"'' }}'}`
 	}
 }
 
+// clusterInputs resolves a compute-clusters input's name to the cluster's
+// details, as a platform's Inputs resolver does.
+type clusterInputs struct{}
+
+func (clusterInputs) ResolveInput(typ string, _ map[string]any, v any) (any, error) {
+	if s, ok := v.(string); ok && typ == "compute-clusters" {
+		return map[string]any{"name": s, "id": "id-" + s}, nil
+	}
+	return v, nil
+}
+
+// What is evaluated before the inputs are checked reads an input of a
+// platform's type as it was submitted, at Create as at Start, where the
+// Inputs resolver gave another value for it (plan.Run.Unresolved), and
+// what reads it after, the run's values among them, as the resolver gave
+// it: a condition decided again doesn't change the run's shape, and a
+// default reads the same whether it reads a secret too.
+func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
+	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "v"}}
+	for name, tc := range map[string]struct {
+		defs, rest string
+		want       string
+	}{
+		"a default that reads a secret":  {"c: {type: compute-clusters}\nd: {type: string, default: '${{ toJSON(inputs.c) }}-${{ vars.S }}'}", "", `"c1"-SECRET`},
+		"a default that reads no secret": {"c: {type: compute-clusters}\nd: {type: string, default: '${{ toJSON(inputs.c) }}'}", "", `"c1"`},
+		"a hidden a variable decides":    {"c: {type: compute-clusters}\nd: {type: string, hidden: '${{ inputs.c == \"c1\" && vars.V != \"\" }}', default: dd}", "", "dd"},
+		"an ignore a variable decides":   {"c: {type: compute-clusters}\nd: {type: string, optional: true, ignore: '${{ inputs.c == \"c1\" && vars.V != \"\" }}', default: dd}", "", ""},
+		"the env":                        {"c: {type: compute-clusters}", "env:\n  E: ${{ toJSON(inputs.c) }}-${{ vars.S }}\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := workflow(tc.defs, tc.rest)
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), map[string]any{"c": "c1"}, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
+			if err != nil || c == nil {
+				t.Fatal(diags, err)
+			}
+			res, sd := startRun(t, c, vars, compile.StartInput{Inputs: clusterInputs{}})
+			if res == nil {
+				t.Fatal(sd)
+			}
+			inputs := res.Run.Inputs.Get().(map[string]any)
+			if got := canonical(t, inputs["c"]); got != `{"id":"id-c1","name":"c1"}` {
+				t.Errorf("c = %s, want the cluster's details", got)
+			}
+			if got, _ := inputs["d"].(string); got != tc.want {
+				t.Errorf("d = %q, want %q", got, tc.want)
+			}
+			if e, ok := res.Run.Env["E"]; ok && e != `"c1"-SECRET` {
+				t.Errorf("env.E = %q, want what reads the name", e)
+			}
+		})
+	}
+}
+
 // A password submitted as a number or a boolean, which format 1 reads as it
 // was submitted, is masked as its text, as an expression writes it: in
 // what a step prints of it, and of toJSON(inputs), whatever its kind, a

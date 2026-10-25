@@ -474,6 +474,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		Icon:        str(w["icon"]),
 		Thumbnail:   str(w["thumbnail"]),
 		Inputs:      plan.DataOf(kept),
+		Unresolved:  c.inputs.unresolvedData(kept),
 		Definitions: c.definitions(),
 		Env:         c.values([]string{"env"}, plan.PhaseCreate, nil),
 		Timeout:     c.value([]string{"timeout"}, plan.PhaseCreate, nil),

@@ -248,6 +248,10 @@ type inputResolver struct {
 	decided       map[string]bool
 	ignored       []string
 	ignoredValues map[string]any
+	// unresolved holds the values of the inputs of a platform's types that
+	// the Inputs resolver changed, as they were submitted, by their paths'
+	// names, which what was evaluated before read (plan.Run.Unresolved).
+	unresolved map[string]any
 	// ignoredLater holds the inputs that an ignore which read a variable
 	// or a password ignored, whose values the plan holds for Start to drop
 	// (applyConditions), and shapeView the inputs' values without them, as
@@ -330,6 +334,23 @@ func (r *inputResolver) deferredFields() []*field {
 		if (f.deferred || f.variable) && !f.ignored && !f.dflt.IsZero() {
 			out = append(out, f)
 		}
+	}
+	return out
+}
+
+// unresolvedData returns the values of the inputs the plan keeps, kept,
+// that the Inputs resolver changed, as they were submitted
+// (plan.Run.Unresolved): none the plan doesn't keep, as a private one.
+func (r *inputResolver) unresolvedData(kept map[string]any) map[string]plan.Data {
+	var out map[string]plan.Data
+	for name, v := range r.unresolved {
+		if _, ok := jsonptr.Lookup(kept, plan.SplitPath(name)); !ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]plan.Data{}
+		}
+		out[name] = plan.DataOf(v)
 	}
 	return out
 }
