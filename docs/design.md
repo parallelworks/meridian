@@ -988,17 +988,17 @@ variables, which `plan.Job.Reads` finds from the job's expressions.
 
 ### The secret record
 
-The secret record holds what a run needs that the plan can't: from
-Create (`compile.Record`), its passwords and private values, the parts of
-the input definitions that can hold a password, what each condition of
-its shape that read a variable or a password decided, and the inputs it
-ignored with their values, as given, for the conditions Start decides
-again; the variables it read at Start, plain and secret; what Start made from them
-(the record half of `RunValues.Split`, and the run's timeout and its
-matrices' instances when they are private); and the job outputs made from
-a variable or a password but not from a secret, which jobs that need them
-read ([Outputs](#outputs)). Create and Start give what goes in it; the
-coordinator encrypts and stores it.
+The secret record holds what a run needs that the plan can't: from Create
+(`compile.Record`), its passwords and private values, the parts of the input
+definitions that can hold a password, what each condition of its shape that
+read a variable or a password decided, and the inputs it ignored with their
+values, as given, for the conditions Start decides again; the variables it
+read at Start, plain and secret; what Start made from them (the record half
+of `RunValues.Split`, and the run's timeout and its matrices' instances when
+they are private); and the job outputs made from a variable or a password
+but not from a secret, which jobs that need them read ([Outputs](#outputs)).
+Create and Start give what goes in it; the coordinator encrypts and stores
+it.
 
 - **Encrypted.** The coordinator stores it beside the run, in the same
   database, encrypted with AES-256-GCM under a data key of its own, which
@@ -1050,15 +1050,15 @@ sees one version.
   records.
 - **The release.** The plan records the Meridian release that compiled it.
 
-Today a plan is version 1, and has no schema. Version 1 stays open until
-the first release: no release has yet stored a plan or sent one to a
-worker, so what the plan and the worker API's bodies gain before then,
-such as what Start needs, is part of version 1: the input definitions,
-where the parts held for Start are in them and where those withheld are,
-the inputs' values as given where Create converted them, where the
-shape's decisions are, a job's `needs:` expression, `remote`, `sessions`
-and the names a session provider gave them, and the limits. The first release freezes it, with its schema, and
-every change after that gets a version.
+Today a plan is version 1, and has no schema. Version 1 stays open until the
+first release: no release has yet stored a plan or sent one to a worker, so
+what the plan and the worker API's bodies gain before then, such as what
+Start needs, is part of version 1: the input definitions, where the parts
+held for Start are in them and where those withheld are, the inputs' values
+as given where Create converted them, where the shape's decisions are, a
+job's `needs:` expression, `remote`, `sessions` and the names a session
+provider gave them, and the limits. The first release freezes it, with its
+schema, and every change after that gets a version.
 
 ## Expressions
 
