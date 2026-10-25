@@ -160,23 +160,109 @@ func TestSelfFencing(t *testing.T) {
 	}
 }
 
+// stopAt returns a Config whose worker is stopped, as stop does, as the
+// step at index step, or its cleanup, if cleanup is set, has ended, and
+// goes on once the stop has halted it.
+func stopAt(step int, cleanup bool, stop func(a *attempt)) Config {
+	return Config{stepEnded: func(a *attempt, i int, c bool) {
+		if i == step && c == cleanup {
+			stop(a)
+			<-a.halted.c
+		}
+	}}
+}
+
 // TestStoppedAfterJob checks that a worker whose context ends once its
-// job's steps have ended, as at a scheduler's time limit, still sends the
-// attempt's end.
+// job's steps, and their cleanups, have ended, as at a scheduler's time
+// limit, still evaluates the job's outputs and sends the attempt's end:
+// here the instant after the last ended, before the worker looks at what
+// stopped it.
 func TestStoppedAfterJob(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("echo done")))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	f.onEvent = func(e workerapi.Event) {
-		if e.Finished {
-			cancel()
-		}
+	for _, tc := range []struct {
+		name    string
+		job     *plan.ReadyJob
+		cleanup bool
+		events  []string
+	}{
+		{
+			"after the last step", newJob(command("echo done=1 >> $OUTPUTS")), false,
+			[]string{"started 0.0", "finished 0.0 success 0"},
+		},
+		{
+			"after the last cleanup", newJob(withCleanup(command("echo done=1 >> $OUTPUTS"), "true")), true,
+			[]string{"started 0.0", "finished 0.0 success 0", "cleanup started 0.0", "cleanup finished 0.0 success 0"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeCoordinator(t, tc.job)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if err := f.runWorker(ctx, stopAt(0, tc.cleanup, func(*attempt) { cancel() })); err != nil {
+				t.Fatal(err)
+			}
+			checkEvents(t, f, tc.events...)
+			if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Outputs["done"] != "1" {
+				t.Errorf("the job's outputs are %v", end.Outputs)
+			}
+		})
 	}
-	if err := f.runWorker(ctx, Config{}); err != nil {
-		t.Fatal(err)
+}
+
+// TestStoppedBeforeJobEnded checks that a worker whose context ends after
+// a step, but before the job's next step or a cleanup has run, sends no
+// end, and runs nothing more: the job hasn't ended, and the coordinator
+// decides how the attempt did.
+func TestStoppedBeforeJobEnded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		job    *plan.ReadyJob
+		events []string
+	}{
+		{"before the next step", newJob(command("true"), command("true")), []string{"started 0.0", "finished 0.0 success 0"}},
+		{"before a cleanup", newJob(withCleanup(command("true"), "true")), []string{"started 0.0", "finished 0.0 success 0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeCoordinator(t, tc.job)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if err := f.runWorker(ctx, stopAt(0, false, func(*attempt) { cancel() })); !errors.Is(err, context.Canceled) {
+				t.Fatalf("got %v", err)
+			}
+			checkEvents(t, f, tc.events...)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.end != nil {
+				t.Error("a worker stopped before its job ended completed its attempt")
+			}
+		})
 	}
-	checkEnd(t, f, plan.OutcomeSuccess, "")
+}
+
+// TestFencedAfterJob checks that an attempt that ends without the worker
+// once its job's steps have ended, as when another attempt supersedes it,
+// sends no end, as before.
+func TestFencedAfterJob(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command("true")))
+	err := f.runWorker(t.Context(), stopAt(0, false, func(a *attempt) { a.halt(errFenced) }))
+	if !errors.Is(err, errFenced) {
+		t.Fatalf("got %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.end != nil {
+		t.Error("a superseded attempt completed")
+	}
+}
+
+// withCleanup returns s with the cleanup: command cleanup.
+func withCleanup(s plan.Step, cleanup string) plan.Step {
+	s.Cleanup = plan.Literal(cleanup)
+	return s
 }
 
 // TestStopped checks that a worker whose context ends while its job runs

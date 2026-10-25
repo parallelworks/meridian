@@ -78,7 +78,16 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		stopped bool
 		why     stopCause
 	)
+	// A job halted before a step's turn, or a cleanup's, hasn't ended, and
+	// neither has one halted as a step, or a cleanup, ran, which it cut
+	// short. One halted once the last has ended, and been reported, has:
+	// stopped from outside, as by its scheduler's time limit, it still
+	// evaluates its outputs and sends its end, in the flush period; ended
+	// without the worker (lost), it doesn't.
 	for i := range a.job.Steps {
+		if a.halted.fired() {
+			return nil
+		}
 		if a.cancelled.fired() {
 			cancelled = true
 		}
@@ -96,7 +105,10 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		// stops one, makes cancelled() true for those after it, as the
 		// Step phase reads from their results.
 		end := a.runStep(ctx, i, a.state(results, cancelled, nil), stopped, why)
-		if a.halted.fired() {
+		if a.stepEnded != nil {
+			a.stepEnded(a, i, false)
+		}
+		if end.cut {
 			return nil
 		}
 		results = append(results, end.result)
@@ -121,13 +133,19 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		if s.Cleanup.IsZero() {
 			continue
 		}
+		if a.halted.fired() {
+			return nil
+		}
 		if ifFailed[i] {
 			a.finished(workerapi.Event{Step: i, Cleanup: true, Outcome: plan.OutcomeSkipped, ExitCode: -1})
 			results[i].CleanupOutcome = plan.OutcomeSkipped
 			continue
 		}
 		outcome, outputs := a.runCleanup(ctx, i, a.state(results, cancelled, nil))
-		if a.halted.fired() {
+		if a.stepEnded != nil {
+			a.stepEnded(a, i, true)
+		}
+		if outcome == "" {
 			return nil
 		}
 		results[i].CleanupOutcome, results[i].CleanupOutputs = outcome, outputs
@@ -294,18 +312,20 @@ func (a *attempt) state(results []plan.StepResult, cancelled bool, env map[strin
 
 // A stepEnd is how a step that the worker readied ended: its result, why
 // its last try was stopped, if it was, and whether its if: failed to
-// evaluate.
+// evaluate; or that the job was halted before it ended, cut short, when
+// how it ended isn't known, and nothing reports it.
 type stepEnd struct {
 	result   plan.StepResult
 	cause    stopCause
 	ifFailed bool
+	cut      bool
 }
 
 // runStep readies the step at index i with the Step phase, in state, for
 // each of its tries, as format 1 evaluates a step again for each, runs it,
 // with format 1's retry:, and reports its events. The job is stopping, if
-// stopped is set, for why. It returns how the step ended: if the job was
-// halted, how isn't known.
+// stopped is set, for why. It returns how the step ended, or, if the job
+// was halted before it did, that it was cut short.
 func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopped bool, why stopCause) stepEnd {
 	path := a.job.Steps[i].Path
 	out := a.outputsFor(i, a.job.Steps[i].ID)
@@ -328,6 +348,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		}
 		rs, vars, diags, err := a.readyTry(ctx, i, state, try, first, out.path)
 		if a.halted.fired() {
+			end.cut = true
 			return end
 		}
 		// A try that can't start fails its step, which isn't tried again:
@@ -403,6 +424,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 
 		exit, cause, tryDiags := a.runCommand(logKey{workerapi.LogStep, i, try}, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
 		if a.halted.fired() {
+			end.cut = true
 			return end
 		}
 		// What a try wrote is its step's, however it ended, as in format 1.
@@ -474,6 +496,7 @@ func (a *attempt) readyTry(ctx context.Context, i int, state plan.JobState, try 
 // outputs its earlier tries wrote.
 func (a *attempt) notRun(i, try int, end stepEnd, cause stopCause, diags problems.Diagnostics) stepEnd {
 	if cause == stopHalted {
+		end.cut = true
 		return end
 	}
 	outcome := plan.OutcomeCancelled
