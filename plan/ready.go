@@ -398,7 +398,8 @@ func granted(all map[string]any, path []string) []string {
 }
 
 // workerValues returns the values of the job that its worker evaluates:
-// its env: and working-directory:, each of its steps' and its outputs:.
+// its env: and working-directory:, each of its steps' and its outputs:,
+// every Value a ReadyJob holds (TestWorkerValues).
 func (j *Job) workerValues() []Value {
 	var out []Value
 	out = slices.AppendSeq(out, maps.Values(j.Env))
@@ -407,7 +408,7 @@ func (j *Job) workerValues() []Value {
 		out = append(out, s.Name, s.If, s.Run, s.With, s.WorkingDirectory, s.SSH, s.Timeout, s.IgnoreErrors, s.Cleanup)
 		out = slices.AppendSeq(out, maps.Values(s.Env))
 		if r := s.Retry; r != nil {
-			out = append(out, r.MaxRetries, r.Interval, r.Timeout)
+			out = append(out, r.MaxRetries, r.Interval, r.Timeout, r.CleanOnRetry)
 		}
 	}
 	return slices.AppendSeq(out, maps.Values(j.Outputs))

@@ -284,6 +284,20 @@ func TestSplitJoin(t *testing.T) {
 	}
 }
 
+// PrivatePaths gives each of a run's values that is private: org and vars,
+// and what Private and Secrets name, a password among them, which Private
+// alone doesn't name, once, without a path under another.
+func TestPrivatePaths(t *testing.T) {
+	r := plan.RunValues{
+		Private: []string{"inputs.region", "env.TOKEN", "inputs.db~1host"},
+		Secrets: []string{"vars.token", "inputs.creds.0.pass", "env.TOKEN", "inputs.creds"},
+	}
+	want := "[[env TOKEN] [inputs creds] [inputs db.host] [inputs region] [org] [vars]]"
+	if got := fmt.Sprint(r.PrivatePaths()); got != want {
+		t.Errorf("private paths %s, want %s", got, want)
+	}
+}
+
 // Masked gives the strings of each secret, a string as it is and each string
 // in a list or a mapping, once, and no empty text: never the text of a
 // boolean, a number or null, which would mask that word everywhere.
