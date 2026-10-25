@@ -19,10 +19,12 @@ type StartInput struct {
 	// means there are none: a run that reads one can't start.
 	Variables Variables
 	// Passwords are the run's passwords, from its secret record, by their
-	// paths, as plan.Run.Secrets names them: inputs.creds.0.pass for the
-	// field pass of the list creds's first row. (Inputs.Secrets gives them
-	// by their paths in the inputs' values, creds.0.pass: whoever keeps
-	// them in the secret record names them as the plan does.)
+	// paths, as plan.Run.Secrets names them (plan.JoinPath):
+	// inputs.creds.0.pass for the field pass of the list creds's first row.
+	// (Inputs.Secrets gives them by their paths in the inputs' values,
+	// creds.0.pass: whoever keeps them in the secret record names them as
+	// the plan does.) Start puts each at the path plan.SplitPath reads from
+	// its name.
 	Passwords map[string]any
 	// Private are the run's private values, from its secret record, by
 	// their paths, as plan.Run.Private names them: values the run was given

@@ -305,7 +305,9 @@ Each phase reads the contexts of the phases before it too.
 - **One scope.** One function, `plan.NewScope`, builds the contexts an
   expression reads in each phase, and the compiler, coordinator, worker and
   WebAssembly package all use it, so a context has one shape everywhere
-  ([Contexts](#contexts)).
+  ([Contexts](#contexts)). One table, `plan.Phase.Knows`, says which
+  contexts each phase knows: `NewScope` builds a phase's contexts by it,
+  and the compiler checks what an expression reads with it.
 - **What each gives.** Create gives the plan, the run's passwords and its
   diagnostics ([Compiling](#compiling)). Start gives the run's completed
   values, or fails the run ([Starting a run](#starting-a-run)). Ready gives
@@ -348,7 +350,11 @@ Reading a context in a phase before it is known is an error when the run is
 created, such as `steps` in a job's `if:`, or `needs` in the workflow's
 `env:`. A job's `strategy:` is what is expanded, so it can't read `matrix`.
 Input definitions are evaluated at Create and Start, so they read only the
-contexts those phases know ([Inputs](#inputs)).
+contexts those phases know ([Inputs](#inputs)). The workflow's `env:` and
+`timeout:`, which Start evaluates, read only what Create knows, and so no
+`env`: the workflow's `env:` is what `env` holds, and format 1 never read
+`env` in the workflow's `timeout:`, where ACTIVATE leaves an expression
+that reads it as its text, and so ignores the timeout.
 
 The status functions are `success()`, `failure()`, `always()` and
 `cancelled()` (also spelled `canceled()`), known from Ready on. A job's
@@ -833,6 +839,15 @@ values that can hold a variable's value that isn't a secret, but no
 password, which are private, as that value is: the secret record holds
 them, and nothing masks them.
 
+A value is named by its path: its context, then the keys that lead to it
+from there, a list's items by their indexes, joined with dots, as in
+`inputs.creds.0.pass` and `vars.token` (`plan.JoinPath`). A key's own `.`
+and `~` are written `~1` and `~0`, as JSON Pointer writes `/` and `~`, so
+that a key with a dot, which a submitted value's can have, names its value
+too: the key `db.password` of the inputs is `inputs.db~1password`. Start
+puts each password in the inputs' values at the path its name gives
+(`plan.SplitPath`), and the masker finds each secret by it.
+
 Nor does the plan hold the value of an organization or user variable, secret
 or not, or a value made from one. People keep secrets in plain variables
 too, and a plan is kept with every run's record, where whoever can see the
@@ -918,7 +933,11 @@ sees one version.
   records.
 - **The release.** The plan records the Meridian release that compiled it.
 
-Today a plan is version 1, and has no schema.
+Today a plan is version 1, and has no schema. Version 1 stays open until
+the first release: no release has yet stored a plan or sent one to a
+worker, so what the plan and the worker API's bodies gain before then,
+such as what Start needs, is part of version 1. The first release freezes
+it, with its schema, and every change after that gets a version.
 
 ## Expressions
 

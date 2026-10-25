@@ -82,7 +82,8 @@ expect:
 ```
 
 - `expect.inputs` are the run's input values, and `expect.secrets` are the
-  values of password inputs, by their path, such as `creds.0.pass`, and of
+  values of password inputs, by their path, such as `creds.0.pass`, with a
+  key's own `.` and `~` written `~1` and `~0`, as the plan names them, and of
   the other values kept as secrets, as one a form can have made from a
   password is. `expect.private` are the values kept out of the plan, as a
   variable's value is, that aren't secrets.

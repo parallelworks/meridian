@@ -29,7 +29,10 @@ type Plan struct {
 	Warnings []problems.Diagnostic `json:"warnings,omitempty"`
 }
 
-// Run is what the plan holds about the run as a whole.
+// Run is what the plan holds about the run as a whole. DeferredInputs,
+// Secrets, Derived, Private and Variables name values by their paths, as
+// JoinPath writes them: keys joined with dots, a key's own . and ~
+// written ~1 and ~0.
 type Run struct {
 	Source Source `json:"source"`
 	// Format is the workflow's format.

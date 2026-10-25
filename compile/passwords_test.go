@@ -3,6 +3,7 @@ package compile_test
 import (
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -946,5 +947,75 @@ func TestDerivedValuesMaskPasswords(t *testing.T) {
 				t.Errorf("a short derived value is masked: %q", masked)
 			}
 		})
+	}
+}
+
+// Each value the plan names but doesn't hold, a secret, a derived or a
+// private value, has a name that leads back to it (plan.SplitPath),
+// whatever its keys hold, as a submitted value's can: a key with a dot, as
+// db.password, with a ~, empty, or outside ASCII, beside the inputs, in a
+// group, in a row, or in the place of a default's mapping; and so does a
+// variable a workflow reads in brackets by a name with a dot.
+func TestNamesLeadToTheirValues(t *testing.T) {
+	src := `on:
+  execute:
+    inputs:
+      g: {type: group, items: {pass: {type: password, optional: true}}}
+      l: {type: list, template: {pass: {type: password, optional: true}}}
+      c: {type: compute-clusters, default: {a.b: '${{ vars.SECRET }}', c~d: '${{ org.OWNER }}'}}
+jobs:
+  main:
+    steps:
+      - run: echo ${{ vars['my.token'] }} ${{ org['a.b'] }}
+`
+	submitted := map[string]any{
+		"db.password": sentinel,
+		"g":           map[string]any{"x~y.token": sentinel},
+		"l":           []any{map[string]any{"pass": sentinel, "кл.password": sentinel}},
+		"":            map[string]any{"password": sentinel},
+		"c":           map[string]any{"a.b": "typed-over-a-secret", "c~d": "typed-over-a-variable"},
+	}
+	opts := compile.Options{Inputs: passThrough{}, Contexts: map[string]any{
+		"org":  map[string]any{"OWNER": "research", "a.b": "plain"},
+		"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}, "my.token": expr.Unknown{Name: "vars"}},
+	}}
+	in, _ := compile.ResolveInputs(load(t, src), submitted, opts)
+	p, diags := compile.Compile("workflow.yaml", []byte(src), submitted, opts)
+	if p == nil {
+		t.Fatal(diags)
+	}
+	for what, tc := range map[string]struct{ got, want []string }{
+		"secrets": {p.Run.Secrets, []string{
+			"inputs.", "inputs.c.a~1b", "inputs.db~1password", "inputs.g.x~0y~1token", "inputs.l.0.pass", "inputs.l.0.кл~1password", "vars.my~1token",
+		}},
+		"derived":   {p.Run.Derived, []string{"inputs.c.a~1b"}},
+		"private":   {p.Run.Private, []string{"inputs.c.c~0d"}},
+		"variables": {p.Run.Variables, []string{"org.a~1b"}},
+	} {
+		if !slices.Equal(tc.got, tc.want) {
+			t.Errorf("%s %q, want %q", what, tc.got, tc.want)
+		}
+	}
+	// Each name of an input's value leads to it in what was submitted, and
+	// to what ResolveInputs gives by the name in the inputs' values.
+	held := map[string]any{}
+	maps.Copy(held, in.Secrets)
+	maps.Copy(held, in.Private)
+	for _, name := range slices.Concat(p.Run.Secrets, p.Run.Private) {
+		path := plan.SplitPath(name)
+		if path[0] != "inputs" {
+			continue
+		}
+		v, ok := jsonptr.Lookup(submitted, path[1:])
+		if !ok || v == nil {
+			t.Errorf("%s leads to nothing", name)
+			continue
+		}
+		if got := held[strings.TrimPrefix(name, "inputs.")]; fmt.Sprint(got) != fmt.Sprint(v) {
+			t.Errorf("%s is %v, and leads to %v", name, got, v)
+		}
+	}
+	if holdsSentinel(t, in.Values) || holdsSentinel(t, p.Run.Inputs.Get()) {
+		t.Errorf("values %v, plan %v", in.Values, p.Run.Inputs.Get())
 	}
 }

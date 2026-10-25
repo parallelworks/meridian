@@ -1,0 +1,24 @@
+description: >-
+  What the compiler checks of the run as a whole reads no env, which the
+  run's start makes of the workflow's env:. A value of the workflow's env:
+  that reads env is an error, since that env: is what env holds; so is the
+  workflow's timeout: that reads it, as format 1 never read env there
+  (ACTIVATE leaves such an expression as its text, and ignores the
+  timeout); and so is a job's needs: that reads it, which decides the run's
+  shape when it is created. An input's default that reads env waits for
+  the run's start instead (inputs/default-known-later).
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: context_not_known
+      path: /env/B
+      params: {context: env, phase: run_created}
+    - severity: error
+      code: context_not_known
+      path: /timeout
+      params: {context: env, phase: run_created}
+    - severity: error
+      code: context_not_known
+      path: /jobs/test/needs
+      params: {context: env, phase: run_created}

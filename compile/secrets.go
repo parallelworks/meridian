@@ -3,12 +3,12 @@ package compile
 import (
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
+	"github.com/parallelworks/meridian/plan"
 )
 
 // secretState is what the inputResolver keeps of the values the plan
@@ -153,7 +153,7 @@ func (r *inputResolver) keepHeld() {
 		if !ok || v == nil {
 			continue
 		}
-		key := strings.Join(p.path, ".")
+		key := plan.JoinPath(p.path...)
 		switch p.kind {
 		case heldPrivate:
 			r.private[key] = v
