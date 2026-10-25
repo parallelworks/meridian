@@ -1651,7 +1651,9 @@ secret record ([Run data](#run-data)).
   of a secret that is a number or a boolean, as a password submitted as
   one is, as an expression writes it, `8` or `true`, so that a password
   `true` masks every `true` in the logs, as never showing a secret is the
-  rule; and the
+  rule, and as a step's output that holds a secret's text holds a secret
+  ([Outputs](#outputs)), any output with `true` in it is then kept as one,
+  and the jobs that need it mask `true` too; and the
   text a template made from one, and that each `${{ }}` in it that read
   one gave, so that a field of a structured secret, such as
   `${{ fromJSON(vars.creds).token }}`, is masked wherever a command prints
