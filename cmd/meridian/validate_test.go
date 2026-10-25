@@ -323,9 +323,11 @@ func TestSetInputs(t *testing.T) {
 		{sets: []string{"files=[] []"}, code: "input_flag_not_json"},
 		{sets: []string{"files={}"}, code: "input_flag_wrong_shape"},
 		{sets: []string{"res=[]"}, code: "input_flag_wrong_shape"},
+		// A key given twice has its last value, as ACTIVATE's reads it.
+		{sets: []string{`res={"count":1,"count":2}`}, want: map[string]any{"res": map[string]any{"count": int64(2)}}},
 		{sets: []string{"head=x"}, code: "input_flag_wrong_type"},
-		// Paths: a group's inputs by the group's name, a flattened group's
-		// and a wizard step's by their own, a list set whole.
+		// Paths: a group's inputs by the group's name, a flattened wizard
+		// step's by their own, a list set whole.
 		{sets: []string{"res.count=2", "s=5"}, want: map[string]any{"res": map[string]any{"count": int64(2)}, "s": int64(5)}},
 		{sets: []string{"wizard.s=1"}, code: "input_flag_path_not_settable"},
 		{sets: []string{"files.path=a"}, code: "input_flag_path_not_settable"},

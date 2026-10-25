@@ -1805,7 +1805,7 @@
   },
   "input_flag_path_not_settable": {
     "title": "Ruta de -input que no define",
-    "why": "Una ruta es el nombre de una entrada, o el de un grupo y el de su entrada, como grupo.nombre, como la lee pw workflows run --input de ACTIVATE. Un paso de asistente que se aplana, como lo hace salvo que $meta.wizard.flatten sea false, y un grupo con flatten: true ponen sus entradas a su lado, así que esas entradas se definen por sus propios nombres; una lista, o un paso de asistente repetido, se define entera, como JSON; y una entrada que no contiene entradas no tiene ninguna que definir.",
+    "why": "Una ruta es el nombre de una entrada, o el de un grupo y el de su entrada, como grupo.nombre, como la lee pw workflows run --input de ACTIVATE. Un paso de asistente que se aplana, como lo hace salvo que $meta.wizard.flatten sea false, pone sus entradas a su lado, así que se definen por sus propios nombres; una lista, o un paso de asistente repetido, se define entera, como JSON; y una entrada que no contiene entradas no tiene ninguna que definir.",
     "fix": [
       "Nombra la entrada por su propio nombre, o define la lista entera, como JSON."
     ]

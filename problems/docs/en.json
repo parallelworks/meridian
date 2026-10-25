@@ -1550,7 +1550,7 @@
     ]
   },
   "input_flag_path_not_settable": {
-    "why": "A path is an input's name, or a group's name and its input's, as group.name, as ACTIVATE's pw workflows run --input reads one. A wizard step that flattens, as one does unless $meta.wizard.flatten is false, and a group with flatten: true put their inputs beside them, so those inputs are set by their own names; a list, or a repeated wizard step, is set whole, as JSON; and an input that holds no inputs has none to set.",
+    "why": "A path is an input's name, or a group's name and its input's, as group.name, as ACTIVATE's pw workflows run --input reads one. A wizard step that flattens, as one does unless $meta.wizard.flatten is false, puts its inputs beside it, so they are set by their own names; a list, or a repeated wizard step, is set whole, as JSON; and an input that holds no inputs has none to set.",
     "fix": [
       "Name the input by its own name, or set the list whole, as JSON."
     ]
