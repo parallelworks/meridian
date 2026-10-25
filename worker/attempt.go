@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -320,7 +322,9 @@ func (a *attempt) reap() {
 
 // deliver sends end, the attempt's end, once the coordinator has stored
 // every event and log, until ctx is done. An end the worker can't encode it
-// sends without its outputs and its problems, as a failure (failEnd).
+// sends without its outputs and its problems, as a failure (failEnd), and
+// then, if it still can't, with only the code of the problem that failed
+// the job before its first step, which placement compares, and its title.
 func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 	end.Seq = a.events.lastSeq()
 	if a.events.wait(end.Seq, ctx.Done()) != nil || a.spool.wait(ctx.Done()) != nil {
@@ -335,6 +339,11 @@ func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 		*end = workerapi.Complete{Seq: end.Seq, Outcome: end.Outcome, Reason: end.Reason, Problem: end.Problem}
 		a.failEnd(end)
 		err = a.client.complete(ctx, end)
+		if _, ok := errors.AsType[*encodeError](err); ok && end.Problem != nil {
+			p := end.Problem
+			end.Problem = &problem.Problem{Type: p.Type, Title: p.Title, Status: p.Status, Detail: p.Title, Code: p.Code}
+			err = a.client.complete(ctx, end)
+		}
 	}
 	if err != nil {
 		return err

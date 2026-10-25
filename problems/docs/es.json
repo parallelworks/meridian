@@ -1099,7 +1099,7 @@
   },
   "report_not_encoded": {
     "title": "Informe que el worker no pudo codificar",
-    "why": "El worker informa al coordinador de los eventos de cada paso, y del final del trabajo, en JSON. No pudo codificar uno de ellos, por ejemplo uno con texto que no es UTF-8, lo que es un error del worker: reemplaza esos bytes en las salidas de un paso. En lugar de detener el intento, que el coordinador tomaría por un worker perdido, envió el informe sin sus salidas ni sus problemas e hizo fallar el trabajo, para que ningún trabajo que lo necesite lea salidas que faltan. El registro del worker dice qué no pudo codificar.",
+    "why": "El worker informa al coordinador de los eventos de cada paso, y del final del trabajo, en JSON. No pudo codificar uno de ellos, por ejemplo uno con texto que no es UTF-8, lo que es un error del worker: reemplaza esos bytes en las salidas de un paso. En lugar de detener el intento, que el coordinador tomaría por un worker perdido, envió el informe sin sus salidas ni sus problemas e hizo fallar el trabajo, salvo que se hubiera cancelado, para que ningún trabajo que lo necesite lea salidas que faltan. El registro del worker dice qué no pudo codificar.",
     "fix": [
       "Informa del error, con el registro del worker."
     ]

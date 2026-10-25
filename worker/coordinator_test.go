@@ -411,6 +411,27 @@ func claimedClient(t *testing.T, f *fakeCoordinator) *client {
 	return c
 }
 
+// sendingAttempt returns an attempt of job, as a worker that has claimed it
+// from f has it, the context it sends in, and start, which starts sending
+// its events, so that a test can queue some first. The worker stopping, as
+// for events it couldn't send, fails the test.
+func sendingAttempt(t *testing.T, f *fakeCoordinator, job *plan.ReadyJob) (*attempt, context.Context, func()) {
+	t.Helper()
+	c := claimedClient(t, f)
+	a := &attempt{client: c, log: testLogger(t), events: newEventQueue(), spool: newSpool(nil, 0), job: job, mask: plan.NewMasker()}
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		wg.Wait()
+	})
+	stop := func(err error) {
+		t.Errorf("the worker stopped: %v", err)
+		cancel()
+	}
+	return a, ctx, func() { wg.Go(func() { a.events.send(ctx, c, stop, a.reportNotEncoded) }) }
+}
+
 // testTiming is the worker's timing, shortened for tests.
 var testTiming = timing{
 	grace:      2 * time.Second,

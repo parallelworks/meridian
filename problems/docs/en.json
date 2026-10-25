@@ -942,7 +942,7 @@
     ]
   },
   "report_not_encoded": {
-    "why": "The worker reports each step's events, and the job's end, to the coordinator as JSON. It couldn't encode one of them, as one holding text that isn't UTF-8, which is a bug in the worker: it replaces such bytes in a step's outputs. Rather than stop the attempt, which the coordinator would take for a lost worker, it sent the report without its outputs and problems, and failed the job, so that no job that needs it reads outputs that are missing. The worker's log says what it couldn't encode.",
+    "why": "The worker reports each step's events, and the job's end, to the coordinator as JSON. It couldn't encode one of them, as one holding text that isn't UTF-8, which is a bug in the worker: it replaces such bytes in a step's outputs. Rather than stop the attempt, which the coordinator would take for a lost worker, it sent the report without its outputs and problems, and failed the job, unless it was cancelled, so that no job that needs it reads outputs that are missing. The worker's log says what it couldn't encode.",
     "fix": [
       "Report the bug, with the worker's log."
     ]

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -971,19 +972,8 @@ func TestReportNotEncoded(t *testing.T) {
 			t.Parallel()
 			job := newJob(command("true"))
 			f := newFakeCoordinator(t, job)
-			c := claimedClient(t, f)
-			a := &attempt{client: c, log: testLogger(t), events: newEventQueue(), spool: newSpool(nil, 0), job: job, mask: plan.NewMasker()}
-			ctx, cancel := context.WithCancel(t.Context())
-			var wg sync.WaitGroup
-			defer wg.Wait()
-			defer cancel()
-			wg.Go(func() {
-				stop := func(err error) {
-					t.Errorf("the worker stopped: %v", err)
-					cancel()
-				}
-				a.events.send(ctx, c, stop, a.reportNotEncoded)
-			})
+			a, ctx, start := sendingAttempt(t, f, job)
+			start()
 			a.events.add(workerapi.Event{Time: now(), Step: 0})
 			a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 0, Outcome: plan.OutcomeSuccess, Outputs: tc.event})
 			end := &workerapi.Complete{Outcome: plan.OutcomeSuccess, Outputs: tc.end, StepOutputs: map[string]map[string]string{"s": tc.end}}
@@ -1012,6 +1002,67 @@ func TestReportNotEncoded(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReportNotEncodedBatch checks that of a batch of events, only the one
+// the worker can't encode is cut, and the rest keep their outputs, in
+// order; that an end it can't encode loses its outputs and the lists that
+// name them together; and that a cancelled job stays cancelled.
+func TestReportNotEncodedBatch(t *testing.T) {
+	t.Parallel()
+	job := newJob(command("true"), command("true"))
+	f := newFakeCoordinator(t, job)
+	a, ctx, start := sendingAttempt(t, f, job)
+	// Every event is queued before the sender starts, so they go in one
+	// batch.
+	a.events.add(workerapi.Event{Time: now(), Step: 0})
+	a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 0, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"bad": "\xff"}})
+	a.events.add(workerapi.Event{Time: now(), Step: 1})
+	a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 1, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"good": "ok"}})
+	start()
+	end := &workerapi.Complete{
+		Outcome: plan.OutcomeCancelled, Reason: plan.ReasonCancelled,
+		Outputs: map[string]string{"x": "\xff", "s": "secret"}, PrivateOutputs: []string{"s"}, SecretOutputs: []string{"s"},
+	}
+	if err := a.deliver(ctx, end); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
+	if e := f.finishedEvent(0, 0, false); e.Outputs != nil || !slices.Equal(codes(e.Diagnostics), []string{"report_not_encoded"}) {
+		t.Errorf("the event the worker couldn't encode has the outputs %q and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
+	}
+	if e := f.finishedEvent(1, 0, false); !reflect.DeepEqual(e.Outputs, map[string]string{"good": "ok"}) || len(e.Diagnostics) != 0 {
+		t.Errorf("the event after it has the outputs %q and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
+	}
+	got := checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
+	if got.Outputs != nil || got.PrivateOutputs != nil || got.SecretOutputs != nil {
+		t.Errorf("the end has the outputs %q, private %v and secret %v", got.Outputs, got.PrivateOutputs, got.SecretOutputs)
+	}
+	if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) {
+		t.Errorf("the end has the diagnostics %v", codes(got.Diagnostics))
+	}
+}
+
+// TestReportNotEncodedProblem checks that an end whose problem the worker
+// can't encode, as one with a param that is NaN, is sent with the problem's
+// code alone, which placement compares, and its title.
+func TestReportNotEncodedProblem(t *testing.T) {
+	t.Parallel()
+	job := newJob(command("true"))
+	f := newFakeCoordinator(t, job)
+	a, ctx, start := sendingAttempt(t, f, job)
+	start()
+	p := problems.RunDirUnusable.Problem(problems.Params{"path": "/run", "reason": math.NaN()})
+	if err := a.deliver(ctx, &workerapi.Complete{Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
+		t.Fatal(err)
+	}
+	got := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+	if got.Problem == nil || got.Problem.Code != problems.RunDirUnusable.Code() || got.Problem.Params != nil || got.Problem.Title != p.Title {
+		t.Errorf("the end's problem is %+v", got.Problem)
+	}
+	if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) {
+		t.Errorf("the end has the diagnostics %v", codes(got.Diagnostics))
 	}
 }
 

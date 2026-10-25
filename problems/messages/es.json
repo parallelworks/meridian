@@ -158,7 +158,7 @@
   "outputs_not_file": "El paso puso en $OUTPUTS algo que no es un archivo regular, como un FIFO, o un enlace a uno, así que no se pueden leer sus salidas.",
   "outputs_removed": "El directorio del worker, que contiene $OUTPUTS, se eliminó mientras se ejecutaba el paso, así que se pierde lo que el paso escribió en $OUTPUTS después.",
   "log_not_kept": "El worker no guardó {size} bytes del registro del paso: guarda como máximo {limit} bytes de registros que el coordinador no ha almacenado, mientras no puede comunicarse con él, y ninguno cuando su disco está lleno.",
-  "report_not_encoded": "El worker no pudo codificar su informe para el coordinador, así que lo envió sin las salidas ni los problemas que contenía, y el trabajo falla.",
+  "report_not_encoded": "El worker no pudo codificar su informe para el coordinador, así que lo envió sin las salidas ni los problemas que contenía, y el trabajo falla, salvo que se haya cancelado.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",
