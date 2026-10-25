@@ -150,7 +150,15 @@ func (r *inputResolver) readsPrivate(f *field) bool {
 // but isn't among those the plan keeps (kept).
 func (r *inputResolver) checkField(f *field, later bool) {
 	v, ok := jsonptr.Lookup(r.values, f.path)
-	if !ok || v == nil {
+	if !ok {
+		return
+	}
+	if v == nil {
+		// A password's null is a value, as any input's is, which the
+		// secret record holds, as the plan holds another input's.
+		if f.typ == "password" && !later {
+			r.secrets[plan.JoinPath(f.path...)] = nil
+		}
 		return
 	}
 	password := holdsPassword(f.def)

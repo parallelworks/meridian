@@ -1043,16 +1043,16 @@ variables, which `plan.Job.Reads` finds from the job's expressions.
 ### The secret record
 
 The secret record holds what a run needs that the plan can't: from Create
-(`compile.Record`), its passwords and private values, the parts of the input
-definitions that can hold a password, what each condition of its shape that
-read a variable or a password decided, and the inputs it ignored with their
-values, as given, for the conditions Start decides again; the variables it
-read at Start, plain and secret; what Start made from them (the record half
-of `RunValues.Split`, and the run's timeout and its matrices' instances when
-they are private); and the job outputs made from a variable or a password
-but not from a secret, which jobs that need them read ([Outputs](#outputs)).
-Create and Start give what goes in it; the coordinator encrypts and stores
-it.
+(`compile.Record`), its passwords and private values, a null given for one
+among them, the parts of the input definitions that can hold a password,
+what each condition of its shape that read a variable or a password decided,
+and the inputs it ignored with their values, as given, for the conditions
+Start decides again; the variables it read at Start, plain and secret; what
+Start made from them (the record half of `RunValues.Split`, and the run's
+timeout and its matrices' instances when they are private); and the job
+outputs made from a variable or a password but not from a secret, which jobs
+that need them read ([Outputs](#outputs)). Create and Start give what goes
+in it; the coordinator encrypts and stores it.
 
 - **Encrypted.** The coordinator stores it beside the run, in the same
   database, encrypted with AES-256-GCM under a data key of its own, which

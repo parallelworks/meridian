@@ -493,3 +493,41 @@ func TestPasswordOfEachKindMasked(t *testing.T) {
 		})
 	}
 }
+
+// A null submitted for an input is its value, which the run keeps where
+// the plan doesn't hold it, as the secret record does for a password and
+// for an input whose ignore a variable or a password decides: the run
+// starts with the null, as it does with a value the plan holds, and a
+// required input given null isn't missing at Start.
+func TestStartKeepsHeldNulls(t *testing.T) {
+	vars := testVariables{"vars.V": {Value: "v"}}
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+		want      string
+	}{
+		"a password": {"pw: {type: password}", map[string]any{"pw": nil}, `{"pw":null}`},
+		"an ignore a variable decides": {"a: {type: string, ignore: '${{ vars.V == \"x\" }}'}",
+			map[string]any{"a": nil}, `{"a":null}`},
+		"an ignore a password decides": {"pw: {type: password}\na: {type: string, ignore: '${{ inputs.pw == \"x\" }}'}",
+			map[string]any{"pw": "y", "a": nil}, `{"a":null,"pw":"y"}`},
+		"a group's": {"g: {type: group, items: {pw: {type: password}, a: {type: string, ignore: '${{ vars.V == \"x\" }}'}}}",
+			map[string]any{"g": map[string]any{"pw": nil, "a": nil}}, `{"g":{"a":null,"pw":null}}`},
+		"a group's whose ignore a variable decides": {"g: {type: group, ignore: '${{ vars.V == \"x\" }}', items: {a: {type: string}}}",
+			map[string]any{"g": map[string]any{"a": nil}}, `{"g":{"a":null}}`},
+		"a row's password": {"l: {type: list, template: {p: {type: password, optional: true}}}",
+			map[string]any{"l": []any{map[string]any{"p": nil}}}, `{"l":[{"p":null}]}`},
+		"a row's whose ignore a variable decides": {"l: {type: list, template: {u: {type: string, optional: true, ignore: '${{ vars.V == \"x\" }}'}}}",
+			map[string]any{"l": []any{map[string]any{"u": nil}}}, `{"l":[{"u":null}]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, res, diags := started(t, workflow(tc.defs), tc.submitted, vars)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			if got := canonical(t, res.Run.Inputs.Get()); got != tc.want {
+				t.Errorf("the run's inputs are %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
