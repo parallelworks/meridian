@@ -122,6 +122,32 @@ func TestDiagnostics(t *testing.T) {
 	}
 }
 
+// A value of the wrong type is told the types it can have in one order,
+// whether the schema gives them in one type keyword, as it does a job's
+// if:, or as forms, as it does a job's needs:, a list or an expression,
+// and the workflow's description:, text or a file.
+func TestWrongTypeOrder(t *testing.T) {
+	for _, c := range []struct{ workflow, path, want string }{
+		{
+			"jobs:\n  main:\n    if: [1]\n    steps: [{run: echo}]\n", "/jobs/main/if",
+			"Must be empty, true or false or a string, not a list.",
+		},
+		{
+			"jobs:\n  main:\n    needs: 5\n    steps: [{run: echo}]\n", "/jobs/main/needs",
+			"Must be a string or a list, not a number.",
+		},
+		{
+			"description: 5\njobs:\n  main:\n    steps: [{run: echo}]\n", "/description",
+			"Must be a string or a mapping, not a number.",
+		},
+	} {
+		_, diags := format.Load("workflow.yaml", []byte(c.workflow))
+		if len(diags) != 1 || diags[0].Code != problems.WrongType.Code() || diags[0].Path() != c.path || diags[0].Message() != c.want {
+			t.Errorf("%s: diagnostics = %v, want %q at %s", c.path, diags, c.want, c.path)
+		}
+	}
+}
+
 // FuzzLoad checks that Load never panics; that it returns a document
 // exactly when it reports no errors, and the same document and diagnostics
 // each time; that each diagnostic is of a kind Meridian has, at a JSON

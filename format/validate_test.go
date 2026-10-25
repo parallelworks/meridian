@@ -3,11 +3,13 @@ package format
 import (
 	"hash/fnv"
 	"math/rand/v2"
+	"strconv"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/conformance"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -78,4 +80,65 @@ func change(rng *rand.Rand, v any, replacements []any) any {
 		return c
 	}
 	return r
+}
+
+// The schema spells each of its shared values once, in $defs, and every
+// key that takes one refers to it: a ${{ }} expression, whose pattern
+// message.go tells apart by its text, and a duration. A schema that has a
+// pattern has its own type, as a form of an anyOf or oneOf has, so that a
+// tool that reads it alone, as generators of types read each form, sees a
+// string rather than any value. An if's schemas, which only test a value,
+// are the exception.
+func TestSchemaSpellsValuesOnce(t *testing.T) {
+	doc := schemas[1]().doc
+	defs, _ := doc.(map[string]any)["$defs"].(map[string]any)
+	shared := map[string]string{}
+	for _, name := range []string{"expression", "duration"} {
+		def, _ := defs[name].(map[string]any)
+		p, ok := def["pattern"].(string)
+		if !ok {
+			t.Fatalf("$defs/%s has no pattern", name)
+		}
+		shared[p] = jsonptr.Append("/$defs", name)
+	}
+	if shared[expression] != "/$defs/expression" {
+		t.Errorf("$defs/expression's pattern isn't message.go's, %q", expression)
+	}
+	// walk checks the schema s, at at, and the schemas in it; test says
+	// that it is in an if.
+	var walk func(s any, at string, test bool)
+	walk = func(s any, at string, test bool) {
+		schema, ok := s.(map[string]any)
+		if !ok {
+			return
+		}
+		if p, ok := schema["pattern"].(string); ok {
+			if shared[p] != "" && shared[p] != at {
+				t.Errorf("%s spells out the pattern of %s, which it can refer to", at, shared[p])
+			}
+			if _, typed := schema["type"]; !typed && !test {
+				t.Errorf("%s has a pattern and no type", at)
+			}
+		}
+		for k, v := range schema {
+			at := jsonptr.Append(at, k)
+			switch k {
+			case "properties", "patternProperties", "dependentSchemas", "$defs":
+				named, _ := v.(map[string]any)
+				for name, s := range named {
+					walk(s, jsonptr.Append(at, name), test)
+				}
+			case "allOf", "anyOf", "oneOf", "prefixItems":
+				list, _ := v.([]any)
+				for i, s := range list {
+					walk(s, jsonptr.Append(at, strconv.Itoa(i)), test)
+				}
+			case "if":
+				walk(v, at, true)
+			case "then", "else", "not", "items", "contains", "additionalProperties", "propertyNames", "unevaluatedItems", "unevaluatedProperties":
+				walk(v, at, test)
+			}
+		}
+	}
+	walk(doc, "", false)
 }

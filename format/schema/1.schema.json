@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-License-Identifier: MIT",
   "type": "object",
   "properties": {
     "format": {
@@ -73,14 +74,12 @@
                   "description": "If null, the user will be prompted to name the session before workflow execution. If default is defined, the passed default will be used."
                 },
                 "redirect": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, the user will be redirected to this session once the workflow is executed. Only one session is allowed to have this set to true."
+                  "description": "If true, the user will be redirected to this session once the workflow is executed. Only one session is allowed to have this set to true.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "useTLS": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, will use HTTPS to connect to the session. This should only be enabled if the app requires it."
+                  "description": "If true, will use HTTPS to connect to the session. This should only be enabled if the app requires it.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "type": {
                   "type": "string",
@@ -88,19 +87,16 @@
                   "enum": ["tunnel", "link"]
                 },
                 "useCustomDomain": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, will use a custom domain to connect to the session. This should only be enabled if the app requires it."
+                  "description": "If true, will use a custom domain to connect to the session. This should only be enabled if the app requires it.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "openAI": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, will mark the session as providing an OpenAI API, and connect it to the built-in chat interface."
+                  "description": "If true, will mark the session as providing an OpenAI API, and connect it to the built-in chat interface.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "detach": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, the session will persist when the workflow run reaches a terminal status (completed, error, canceled). It will only be removed if the user manually deletes the session. Default: false."
+                  "description": "If true, the session will persist when the workflow run reaches a terminal status (completed, error, canceled). It will only be removed if the user manually deletes the session. Default: false.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "additionalProperties": false
@@ -124,14 +120,12 @@
                   "description": "Name of the endpoint session the workflow registers, resolved once it comes online."
                 },
                 "redirect": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, the user is redirected to this link once the workflow runs. Only one session or link may set it."
+                  "description": "If true, the user is redirected to this link once the workflow runs. Only one session or link may set it.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "detach": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, the session this link names outlives the run instead of being removed with it."
+                  "description": "If true, the session this link names outlives the run instead of being removed with it.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "required": ["endpoint"],
@@ -145,14 +139,12 @@
                   "description": "An http:// or https:// address to link to directly. A value with no scheme is read as https."
                 },
                 "redirect": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, the user is redirected to this link once the workflow runs. Only one session or link may set it."
+                  "description": "If true, the user is redirected to this link once the workflow runs. Only one session or link may set it.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "detach": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, a session this link addresses outlives the run instead of being removed with it."
+                  "description": "If true, a session this link addresses outlives the run instead of being removed with it.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "required": ["url"],
@@ -189,25 +181,32 @@
         },
         "userVariables": {
           "description": "User variables this workflow needs access to. Can be an object where each key is a variable name mapping to {hint: string}, or a simple array of variable name strings.",
-          "type": ["object", "array", "string"],
-          "pattern": "^\\${{.*}}$",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9_-]+$"
-          },
-          "patternProperties": {
-            "^[a-zA-Z0-9_-]+$": {
+          "anyOf": [
+            {
               "type": "object",
-              "properties": {
-                "hint": {
-                  "type": "string",
-                  "description": "A message explaining why the workflow needs access to this variable"
+              "patternProperties": {
+                "^[a-zA-Z0-9_-]+$": {
+                  "type": "object",
+                  "properties": {
+                    "hint": {
+                      "type": "string",
+                      "description": "A message explaining why the workflow needs access to this variable"
+                    }
+                  },
+                  "additionalProperties": false
                 }
               },
               "additionalProperties": false
-            }
-          },
-          "additionalProperties": false
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]+$"
+              }
+            },
+            { "$ref": "#/$defs/expression" }
+          ]
         }
       }
     },
@@ -243,10 +242,6 @@
             "runs-on": {
               "description": "Where this job runs: an environment named by cluster and name, an execution group, or the value of a `compute-target` input (`${{ inputs.target }}`). An environment runs the job as a scheduler job without the user workspace. Mutually exclusive with `ssh`.",
               "oneOf": [
-                {
-                  "type": "string",
-                  "pattern": "^\\${{.*}}$"
-                },
                 {
                   "title": "RunsOnEnvironment",
                   "type": "object",
@@ -314,7 +309,8 @@
                   },
                   "required": ["mode"],
                   "additionalProperties": false
-                }
+                },
+                { "$ref": "#/$defs/expression" }
               ]
             },
             "resources": {
@@ -352,28 +348,11 @@
                 },
                 "max-retries": {
                   "description": "How many times the job may run again. Defaults to 3.",
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    {
-                      "type": "string",
-                      "pattern": "^\\${{.*}}$"
-                    }
-                  ]
+                  "anyOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/expression" }]
                 },
                 "interval": {
                   "description": "How long to wait before running the job again the first time, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Each time after the first waits twice as long as the one before, up to an hour. Defaults to 1m.",
-                  "type": "string",
-                  "anyOf": [
-                    {
-                      "pattern": "^\\${{.*}}$"
-                    },
-                    {
-                      "pattern": "^(\\d+)(d|h|m|s)?$"
-                    }
-                  ]
+                  "anyOf": [{ "$ref": "#/$defs/duration" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "required": ["reasons"],
@@ -411,10 +390,7 @@
               "description": "Step outputs to be published such that other jobs can access them. For example, `published_name: ${{ needs.build.steps.step_id.outputs.output_name }}`",
               "type": "object",
               "patternProperties": {
-                "^[a-zA-Z0-9_-]+$": {
-                  "type": "string",
-                  "pattern": "^\\${{.*}}$"
-                }
+                "^[a-zA-Z0-9_-]+$": { "$ref": "#/$defs/expression" }
               },
               "additionalProperties": false
             },
@@ -449,18 +425,22 @@
                         "description": "Update a session with connection information"
                       },
                       {
+                        "type": "string",
                         "pattern": "^marketplace/",
                         "description": "Use a workflow from the marketplace"
                       },
                       {
+                        "type": "string",
                         "pattern": "^workflow/",
                         "description": "Use one of your workflows"
                       },
                       {
+                        "type": "string",
                         "pattern": "^github/",
                         "description": "Use a workflow from a GitHub repository"
                       },
                       {
+                        "type": "string",
                         "pattern": "^gitlab/",
                         "description": "Use a workflow from a GitLab project, e.g. gitlab/group/project@main with $host naming the server"
                       }
@@ -533,8 +513,7 @@
                   },
                   "ignore-errors": {
                     "description": "If true, non-zero exit codes will not be counted as failures (default: false)",
-                    "type": ["string", "boolean"],
-                    "pattern": "^\\${{.*}}$"
+                    "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                   },
                   "cleanup": {
                     "description": "a cleanup command to be run after execution, e.g. `rm -rf /tmp/myapp`",
@@ -549,51 +528,19 @@
                     "properties": {
                       "max-retries": {
                         "description": "The number of retries before giving up. Defaults to 0 without a retry object, and 10 with a retry object but no max-retries field.",
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "pattern": "^\\${{.*}}$"
-                          },
-                          {
-                            "type": "number"
-                          }
-                        ]
+                        "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
                       },
                       "interval": {
                         "description": "The amount of time to wait between retries, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 5s.",
-                        "type": "string",
-                        "anyOf": [
-                          {
-                            "pattern": "^\\${{.*}}$"
-                          },
-                          {
-                            "pattern": "^(\\d+)(d|h|m|s)?$"
-                          }
-                        ]
+                        "anyOf": [{ "$ref": "#/$defs/duration" }, { "$ref": "#/$defs/expression" }]
                       },
                       "timeout": {
                         "description": "The amount of time to wait before giving up on an attempt, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). Defaults to 30s.",
-                        "type": "string",
-                        "anyOf": [
-                          {
-                            "pattern": "^\\${{.*}}$"
-                          },
-                          {
-                            "pattern": "^(\\d+)(d|h|m|s)?$"
-                          }
-                        ]
+                        "anyOf": [{ "$ref": "#/$defs/duration" }, { "$ref": "#/$defs/expression" }]
                       },
                       "clean-on-retry": {
                         "description": "Whether to delete the step's working directory before each retry so it starts clean. Defaults to true; forced off when working-directory is the parent job directory or an ancestor of it, to avoid destroying the parent run.",
-                        "anyOf": [
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "string",
-                            "pattern": "^\\${{.*}}$"
-                          }
-                        ]
+                        "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                       }
                     },
                     "additionalProperties": false
@@ -759,16 +706,7 @@
                             },
                             "scheduler-type": {
                               "description": "Scheduler type (slurm or pbs). Defaults to slurm.",
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "enum": ["slurm", "pbs"]
-                                },
-                                {
-                                  "type": "string",
-                                  "pattern": "^\\${{.*}}$"
-                                }
-                              ]
+                              "anyOf": [{ "type": "string", "enum": ["slurm", "pbs"] }, { "$ref": "#/$defs/expression" }]
                             }
                           },
                           "additionalProperties": false
@@ -872,16 +810,7 @@
                           "properties": {
                             "scheduler-type": {
                               "description": "Scheduler type",
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "enum": ["slurm", "pbs"]
-                                },
-                                {
-                                  "type": "string",
-                                  "pattern": "^\\${{.*}}$"
-                                }
-                              ]
+                              "anyOf": [{ "type": "string", "enum": ["slurm", "pbs"] }, { "$ref": "#/$defs/expression" }]
                             },
                             "scheduler-flags": {
                               "description": "Flags to pass to sbatch/qsub",
@@ -945,11 +874,7 @@
             },
             "needs": {
               "description": "A list of jobs that must complete before this job can start. If a job fails, all jobs that depend on it will not run. For matrix jobs, append ':any' to wait for any instance instead of all (e.g. 'build:any').",
-              "type": ["array", "string"],
-              "pattern": "^\\${{.*}}$",
-              "items": {
-                "type": "string"
-              }
+              "anyOf": [{ "type": "array", "items": { "type": "string" } }, { "$ref": "#/$defs/expression" }]
             },
             "timeout": {
               "$ref": "#/$defs/timeout"
@@ -963,45 +888,25 @@
                   "type": "object",
                   "properties": {
                     "include": {
-                      "type": ["array", "string"],
-                      "pattern": "^\\${{.*}}$",
-                      "items": {
-                        "type": "object"
-                      },
-                      "description": "Additional matrix combinations to include or augment. Entries matching existing combinations on all regular keys merge extra keys; non-matching entries are added as new combinations."
+                      "description": "Additional matrix combinations to include or augment. Entries matching existing combinations on all regular keys merge extra keys; non-matching entries are added as new combinations.",
+                      "anyOf": [{ "type": "array", "items": { "type": "object" } }, { "$ref": "#/$defs/expression" }]
                     },
                     "exclude": {
-                      "type": ["array", "string"],
-                      "pattern": "^\\${{.*}}$",
-                      "items": {
-                        "type": "object"
-                      },
-                      "description": "Matrix combinations to exclude. Any combination matching all fields in an exclude entry is removed."
+                      "description": "Matrix combinations to exclude. Any combination matching all fields in an exclude entry is removed.",
+                      "anyOf": [{ "type": "array", "items": { "type": "object" } }, { "$ref": "#/$defs/expression" }]
                     }
                   },
                   "additionalProperties": {
-                    "type": ["array", "string"],
-                    "pattern": "^\\${{.*}}$",
-                    "items": {}
+                    "anyOf": [{ "type": "array" }, { "$ref": "#/$defs/expression" }]
                   }
                 },
                 "fail-fast": {
-                  "type": ["boolean", "string"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true (default), cancel in-progress matrix jobs when any one fails."
+                  "description": "If true (default), cancel in-progress matrix jobs when any one fails.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "max-parallel": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 1
-                    },
-                    {
-                      "type": "string",
-                      "pattern": "^\\${{.*}}$"
-                    }
-                  ],
-                  "description": "Maximum number of matrix jobs that can run simultaneously."
+                  "description": "Maximum number of matrix jobs that can run simultaneously.",
+                  "anyOf": [{ "type": "integer", "minimum": 1 }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "required": ["matrix"],
@@ -1055,6 +960,16 @@
   "required": ["jobs"],
   "additionalProperties": false,
   "$defs": {
+    "expression": {
+      "description": "A ${{ }} expression in place of the value: text on one line that starts with ${{ and ends with }}. The key takes the expression's value when it is evaluated.",
+      "type": "string",
+      "pattern": "^\\${{.*}}$"
+    },
+    "duration": {
+      "description": "A length of time: whole seconds (300), or a whole number with a unit, d, h, m or s (2h, 10m, 200s).",
+      "type": "string",
+      "pattern": "^(\\d+)(d|h|m|s)?$"
+    },
     "workflowFile": {
       "description": "A path to a file, relative to the workflow file. It may not leave the workflow's directory.",
       "type": "string",
@@ -1327,19 +1242,16 @@
                   "type": "object",
                   "properties": {
                     "showSteps": {
-                      "type": ["boolean", "string"],
-                      "pattern": "^\\${{.*}}$",
-                      "description": "Show step indicator (default: true)"
+                      "description": "Show step indicator (default: true)",
+                      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                     },
                     "allowJump": {
-                      "type": ["boolean", "string"],
-                      "pattern": "^\\${{.*}}$",
-                      "description": "Allow jumping to visited steps (default: false)"
+                      "description": "Allow jumping to visited steps (default: false)",
+                      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                     },
                     "hideStepNumbers": {
-                      "type": ["boolean", "string"],
-                      "pattern": "^\\${{.*}}$",
-                      "description": "Hide step numbers in indicator (default: false)"
+                      "description": "Hide step numbers in indicator (default: false)",
+                      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                     }
                   },
                   "additionalProperties": false
@@ -1814,8 +1726,7 @@
                   "const": "number"
                 },
                 "default": {
-                  "type": ["string", "number"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -1849,8 +1760,7 @@
                 },
                 "slider": {
                   "description": "Whether we have a numerical slider or not for the field (default: false). When true, min, max, and step are required.",
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "additionalProperties": false,
@@ -1879,15 +1789,7 @@
                   "const": "boolean"
                 },
                 "default": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "pattern": "^\\${{.*}}$"
-                    },
-                    {
-                      "type": "boolean"
-                    }
-                  ]
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -1926,9 +1828,8 @@
                   "type": ["string", "number", "boolean"]
                 },
                 "prefillDefault": {
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$",
-                  "description": "If true, this field's default value will be prefilled in the form. If false, the default value will not be prefilled."
+                  "description": "If true, this field's default value will be prefilled in the form. If false, the default value will not be prefilled.",
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -2014,16 +1915,14 @@
                 },
                 "autoselect": {
                   "description": "Whether a dropdown field is auto selected (default: false)",
-                  "type": ["string", "object", "boolean"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": ["boolean", "object"] }, { "$ref": "#/$defs/expression" }]
                 },
                 "placeholder": {
                   "$ref": "#/$defs/placeholder"
                 },
                 "options": {
                   "description": "The options of a selection based field",
-                  "type": ["array", "string"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "array" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "additionalProperties": false,
@@ -2063,19 +1962,22 @@
                 },
                 "options": {
                   "description": "The options of a dropdown",
-                  "type": ["object", "string"],
-                  "pattern": "^\\${{.*}}$",
-                  "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                      "type": ["object", "string"]
-                    }
-                  }
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                          "type": ["object", "string"]
+                        }
+                      }
+                    },
+                    { "$ref": "#/$defs/expression" }
+                  ]
                 },
                 "option-key": {
                   "description": "An expression with which to select a set of options (i.e. options[option-key] is the desired set of options)",
-                  "type": "string",
-                  "pattern": "^\\${{.*}}$"
+                  "$ref": "#/$defs/expression"
                 }
               },
               "additionalProperties": false,
@@ -2179,10 +2081,6 @@
                 "default": {
                   "anyOf": [
                     {
-                      "type": "string",
-                      "pattern": "^\\${{.*}}$"
-                    },
-                    {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -2193,7 +2091,8 @@
                           "value": {}
                         }
                       }
-                    }
+                    },
+                    { "$ref": "#/$defs/expression" }
                   ]
                 },
                 "label": {
@@ -2219,8 +2118,7 @@
                 },
                 "options": {
                   "description": "The options of a multi dropdown",
-                  "type": ["array", "string"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "array" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "additionalProperties": false,
@@ -2261,23 +2159,19 @@
                 },
                 "template": {
                   "description": "Format of items in list",
-                  "type": ["string", "object"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "object" }, { "$ref": "#/$defs/expression" }]
                 },
                 "items-collapsible": {
                   "description": "Whether items are collapsible",
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "min": {
                   "description": "Minimum number of items the list must contain",
-                  "type": ["string", "number"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
                 },
                 "max": {
                   "description": "Maximum number of items the list may contain",
-                  "type": ["string", "number"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "additionalProperties": false,
@@ -2348,8 +2242,7 @@
                 },
                 "collapsed": {
                   "description": "Whether a group is collapsed or not (default: false)",
-                  "type": ["boolean", "string"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "items": {
                   "$ref": "#/$defs/inputs"
@@ -2440,20 +2333,17 @@
                 },
                 "include-workspace": {
                   "description": "Include user workspace in options (default: false)",
-                  "type": ["boolean", "string"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "include-unprovisioned": {
                   "description": "Include unprovisioned clusters in options (default: false)",
-                  "type": ["boolean", "string"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
                 "csp": {
                   "$ref": "#/$defs/csp"
                 },
                 "provider": {
-                  "type": ["array", "string"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "array" }, { "$ref": "#/$defs/expression" }]
                 },
                 "multi": {
                   "type": "boolean",
@@ -2690,8 +2580,7 @@
                 },
                 "size": {
                   "description": "The size of a header",
-                  "type": ["string", "number"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
                 },
                 "text": {
                   "description": "The text content of a header",
@@ -2699,8 +2588,7 @@
                 },
                 "bold": {
                   "description": "Whether a header is bold (default: false)",
-                  "type": ["string", "boolean"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 }
               },
               "additionalProperties": false,
@@ -2715,8 +2603,7 @@
                   "const": "organization-groups"
                 },
                 "default": {
-                  "type": ["string", "object"],
-                  "pattern": "^\\${{.*}}$"
+                  "anyOf": [{ "type": "object" }, { "$ref": "#/$defs/expression" }]
                 },
                 "label": {
                   "$ref": "#/$defs/label"
@@ -2864,8 +2751,7 @@
                 },
                 "partition": {
                   "description": "The partitions to be used for slurm qos",
-                  "type": "string",
-                  "pattern": "^\\${{.*}}$"
+                  "$ref": "#/$defs/expression"
                 }
               },
               "additionalProperties": false,
@@ -3080,15 +2966,7 @@
     },
     "csp": {
       "description": "Cloud Service Provider",
-      "type": "string",
-      "oneOf": [
-        {
-          "enum": ["aws", "azure", "google", "openstack"]
-        },
-        {
-          "pattern": "^\\${{.*}}$"
-        }
-      ]
+      "oneOf": [{ "type": "string", "enum": ["aws", "azure", "google", "openstack"] }, { "$ref": "#/$defs/expression" }]
     },
     "tooltip": {
       "description": "A string that pops up when user hovers over field",
@@ -3100,23 +2978,19 @@
     },
     "optional": {
       "description": "Whether the field is optional or not (default: false)",
-      "type": ["string", "boolean"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
     },
     "ignore": {
       "description": "Whether the value of the field is not stored on submission (default: false)",
-      "type": ["string", "boolean"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
     },
     "hidden": {
       "description": "Whether the field will be hidden in the inputs form (default: false)",
-      "type": ["string", "boolean"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
     },
     "disabled": {
       "description": "Whether the field will be disabled/locked in the inputs form (default: false)",
-      "type": ["string", "boolean"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
     },
     "label": {
       "description": "The field's label",
@@ -3124,23 +2998,19 @@
     },
     "min": {
       "description": "The minimum value of the field",
-      "type": ["string", "number"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
     },
     "max": {
       "description": "The maximum value of the field",
-      "type": ["string", "number"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
     },
     "step": {
       "description": "The step value of the field",
-      "type": ["string", "number"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/expression" }]
     },
     "resource": {
       "description": "The resource from which we get options for slurm accounts, paritions, or qos",
-      "type": "string",
-      "pattern": "^\\${{.*}}$"
+      "$ref": "#/$defs/expression"
     },
     "account": {
       "description": "The account to be used for slurm paritions or qos",
@@ -3148,15 +3018,7 @@
     },
     "timeout": {
       "description": "Maximum amount of time allowed, as bare seconds (300) or a suffixed duration (200s, 10m, 2h). After the timeout passes, the running command will automatically be killed and will fail.",
-      "type": "string",
-      "anyOf": [
-        {
-          "pattern": "^\\${{.*}}$"
-        },
-        {
-          "pattern": "^(\\d+)(d|h|m|s)?$"
-        }
-      ]
+      "anyOf": [{ "$ref": "#/$defs/duration" }, { "$ref": "#/$defs/expression" }]
     },
     "placeholder": {
       "type": "string",
@@ -3164,8 +3026,7 @@
     },
     "autoselect": {
       "description": "Whether this field will auto select the first option on the list (default: false)",
-      "type": ["string", "object", "boolean"],
-      "pattern": "^\\${{.*}}$"
+      "anyOf": [{ "type": ["boolean", "object"] }, { "$ref": "#/$defs/expression" }]
     }
   }
 }
