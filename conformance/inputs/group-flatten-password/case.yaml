@@ -1,0 +1,23 @@
+description: >-
+  A password in a group that flattens is beside the group's value, under its
+  own name, and kept among the run's secrets, as ACTIVATE finds it to redact.
+  A value given at the group's own key that holds a password field's name,
+  as the group's inputs sent under its name do, is taken for a password too.
+source: ACTIVATE's redaction of passwords
+inputs:
+  user: admin
+  pass: HUNTER2SECRET
+  db:
+    pass: HUNTER2SECRET2
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/db
+      params: {input: db}
+  inputs:
+    user: admin
+  secrets:
+    pass: HUNTER2SECRET
+    db:
+      pass: HUNTER2SECRET2

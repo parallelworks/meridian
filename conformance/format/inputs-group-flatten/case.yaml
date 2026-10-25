@@ -1,0 +1,4 @@
+description: >-
+  A group's flatten: true or false loads. ACTIVATE runs a group with
+  flatten: true, though its schema refuses the key, so format 1 defines it.
+source: ACTIVATE's filling of defaults

@@ -1,0 +1,8 @@
+description: >-
+  A group that flattens in a wizard step has its inputs' values beside its
+  own, in the step's value when $meta.wizard.flatten is false.
+source: ACTIVATE's filling of defaults
+expect:
+  inputs:
+    first:
+      a: av

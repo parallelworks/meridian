@@ -2244,6 +2244,10 @@
                   "description": "Whether a group is collapsed or not (default: false)",
                   "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expression" }]
                 },
+                "flatten": {
+                  "description": "Whether the group's inputs have their values beside the group's, under their own names, rather than under the group's name (default: false). No other input whose value is there may have the name of one of them. Written out, not an expression.",
+                  "type": "boolean"
+                },
                 "items": {
                   "$ref": "#/$defs/inputs"
                 }

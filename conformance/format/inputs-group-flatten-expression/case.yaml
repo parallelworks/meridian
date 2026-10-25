@@ -1,0 +1,15 @@
+description: >-
+  A group's flatten is true or false, written out, not an expression.
+  ACTIVATE reads an expression there in some places as evaluated and in
+  others as text that isn't true, and its form as true, so where a group's
+  inputs' values are would depend on which reads it; format 1 refuses it.
+  No known workflow writes one.
+source: Meridian, after ACTIVATE's filling of defaults and its form
+expect:
+  diagnostics:
+    - severity: error
+      code: wrong_type
+      path: /on/execute/inputs/db/flatten
+      line: 6
+      column: 18
+      params: {got: string, type1: boolean}

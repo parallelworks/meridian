@@ -405,6 +405,12 @@
       "Correct the input's name, or add it to the group."
     ]
   },
+  "flattened_input_ref": {
+    "why": "A group with flatten: true, and a wizard step unless $meta.wizard.flatten is false, has its inputs' values beside its own, under their own names, as ACTIVATE runs it. So inputs.<group>.<name> doesn't read the input's value, as it doesn't in ACTIVATE.",
+    "fix": [
+      "Read the input by its own name, as inputs.<name>."
+    ]
+  },
   "needs_outside_job": {
     "why": "The context needs reads the jobs a job waits for, so it is known only in a job.",
     "fix": [
@@ -1574,6 +1580,18 @@
       "meridian validate -input converts a value by its input's type, as ACTIVATE's pw workflows run --input does."
     ]
   },
+  "flattened_group_value": {
+    "why": "A group with flatten: true has its inputs' values beside its own, under their own names, as ACTIVATE runs it, so a value given under the group's name isn't its inputs'. It is kept as it was given, as ACTIVATE keeps it, and what reads inputs.<group> reads it; if the group is ignored, it is dropped with the group's inputs.",
+    "fix": [
+      "Give the group's inputs their values by their own names, beside the group's, or remove the value."
+    ]
+  },
+  "flattened_name_taken": {
+    "why": "A group with flatten: true has its inputs' values beside its own, under their own names, so each of them needs a name that no other input whose value is there has, the group's own among them. ACTIVATE fills such a value from both definitions, in the order the file writes them, which the workflow's meaning shouldn't depend on, so Meridian refuses it, where ACTIVATE runs it.",
+    "fix": [
+      "Rename one of the inputs, or remove the group's flatten: true."
+    ]
+  },
   "input_flag_unsplit": {
     "why": "-input sets one input, as path=value. Without an =, there is no path, and the problem doesn't repeat what was given, which can be a password.",
     "fix": [
@@ -1599,7 +1617,7 @@
     ]
   },
   "input_flag_path_not_settable": {
-    "why": "A path is an input's name, or a group's name and its input's, as group.name, as ACTIVATE's pw workflows run --input reads one. A wizard step that flattens, as one does unless $meta.wizard.flatten is false, puts its inputs beside it, so they are set by their own names; a list, or a repeated wizard step, is set whole, as JSON; and an input that holds no inputs has none to set.",
+    "why": "A path is an input's name, or a group's name and its input's, as group.name, as ACTIVATE's pw workflows run --input reads one. A wizard step that flattens, as one does unless $meta.wizard.flatten is false, and a group with flatten: true put their inputs beside them, so those inputs are set by their own names; a list, or a repeated wizard step, is set whole, as JSON; and an input that holds no inputs has none to set.",
     "fix": [
       "Name the input by its own name, or set the list whole, as JSON."
     ]

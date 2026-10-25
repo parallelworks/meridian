@@ -1,0 +1,22 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          conn:
+            type: group
+            flatten: true
+            items:
+              port:
+                type: number
+                default: 22
+              user:
+                type: string
+                default: root
+jobs:
+  main:
+    steps:
+      - run: echo ok

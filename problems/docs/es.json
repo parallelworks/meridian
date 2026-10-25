@@ -472,6 +472,13 @@
       "Corrige el nombre de la entrada o añádela al grupo."
     ]
   },
+  "flattened_input_ref": {
+    "title": "Entrada leída a través de un contenedor que se aplana",
+    "why": "Un grupo con flatten: true, y un paso de asistente salvo que $meta.wizard.flatten sea false, tiene los valores de sus entradas junto al suyo, bajo sus propios nombres, como lo ejecuta ACTIVATE. Así que inputs.<grupo>.<nombre> no lee el valor de la entrada, como tampoco lo lee en ACTIVATE.",
+    "fix": [
+      "Lee la entrada por su propio nombre, como inputs.<nombre>."
+    ]
+  },
   "needs_outside_job": {
     "title": "needs fuera de un trabajo",
     "why": "El contexto needs lee los trabajos a los que espera un trabajo, así que solo se conoce dentro de un trabajo.",
@@ -1832,6 +1839,20 @@
       "meridian validate -input convierte un valor según el tipo de su entrada, como pw workflows run --input de ACTIVATE."
     ]
   },
+  "flattened_group_value": {
+    "title": "Valor para un grupo que se aplana",
+    "why": "Un grupo con flatten: true tiene los valores de sus entradas junto al suyo, bajo sus propios nombres, como lo ejecuta ACTIVATE, así que un valor dado con el nombre del grupo no es de sus entradas. Se conserva tal como se dio, como lo conserva ACTIVATE, y lo que lee inputs.<grupo> lo lee; si el grupo se ignora, se descarta con las entradas del grupo.",
+    "fix": [
+      "Da a las entradas del grupo sus valores por sus propios nombres, junto al del grupo, o elimina el valor."
+    ]
+  },
+  "flattened_name_taken": {
+    "title": "Dos entradas con un solo valor",
+    "why": "Un grupo con flatten: true tiene los valores de sus entradas junto al suyo, bajo sus propios nombres, así que cada una necesita un nombre que no tenga ninguna otra entrada cuyo valor esté allí, incluido el propio grupo. ACTIVATE llena ese valor con ambas definiciones, en el orden en que las escribe el archivo, del que no debería depender el significado del flujo de trabajo, así que Meridian lo rechaza, donde ACTIVATE lo ejecuta.",
+    "fix": [
+      "Cambia el nombre de una de las entradas o quita el flatten: true del grupo."
+    ]
+  },
   "input_flag_unsplit": {
     "title": "Opción -input sin =",
     "why": "-input define una entrada, como ruta=valor. Sin =, no hay ruta, y el problema no repite lo que se dio, que puede ser una contraseña.",
@@ -1862,7 +1883,7 @@
   },
   "input_flag_path_not_settable": {
     "title": "Ruta de -input que no define",
-    "why": "Una ruta es el nombre de una entrada, o el de un grupo y el de su entrada, como grupo.nombre, como la lee pw workflows run --input de ACTIVATE. Un paso de asistente que se aplana, como lo hace salvo que $meta.wizard.flatten sea false, pone sus entradas a su lado, así que se definen por sus propios nombres; una lista, o un paso de asistente repetido, se define entera, como JSON; y una entrada que no contiene entradas no tiene ninguna que definir.",
+    "why": "Una ruta es el nombre de una entrada, o el de un grupo y el de su entrada, como grupo.nombre, como la lee pw workflows run --input de ACTIVATE. Un paso de asistente que se aplana, como lo hace salvo que $meta.wizard.flatten sea false, y un grupo con flatten: true ponen sus entradas a su lado, así que esas entradas se definen por sus propios nombres; una lista, o un paso de asistente repetido, se define entera, como JSON; y una entrada que no contiene entradas no tiene ninguna que definir.",
     "fix": [
       "Nombra la entrada por su propio nombre, o define la lista entera, como JSON."
     ]

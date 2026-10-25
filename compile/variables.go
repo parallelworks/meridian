@@ -138,7 +138,8 @@ func (c *compiler) checkDefaultRows(fields []*field) {
 
 // checkDefaultRow warns about each key of values, a default row of f's, or
 // a group's mapping in one, at loc in the workflow and at rel in the row,
-// that isn't one of the inputs known holds there.
+// that isn't one of the inputs known holds there, or is the key of a group
+// there whose inputs' values are beside it.
 func (c *compiler) checkDefaultRow(f *field, values map[string]any, loc, rel []string, known map[string]*knownInputs) {
 	inputs := known[jsonptr.Format(rel)]
 	if inputs == nil {
@@ -146,6 +147,10 @@ func (c *compiler) checkDefaultRow(f *field, values map[string]any, loc, rel []s
 	}
 	for key, v := range jsonvalue.Sorted(values) {
 		in, ok := inputs.byKey[key]
+		if _, flat := inputs.flattened[key]; !ok && flat {
+			c.reportAt(problems.FlattenedGroupValue, appendPath(loc, key), problems.Params{"input": strings.Join(appendPath(rel, key), ".")})
+			continue
+		}
 		if !ok {
 			if inputs.names == nil {
 				inputs.names = slices.Sorted(maps.Keys(inputs.byKey))

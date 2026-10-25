@@ -1,0 +1,13 @@
+on:
+  execute:
+    inputs:
+      db:
+        type: group
+        flatten: ${{ inputs.split == 'yes' }}
+        items:
+          host:
+            type: string
+jobs:
+  main:
+    steps:
+      - run: echo ok

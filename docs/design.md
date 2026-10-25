@@ -127,7 +127,29 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     ([Contexts](#contexts));
   - `map()` and `filter()`, with their lambdas
     ([The language](#the-language));
-  - a job's `retry:`, which can rerun a job whose worker was lost.
+  - a job's `retry:`, which can rerun a job whose worker was lost;
+  - a group's `flatten: true`, which puts its inputs' values beside its own
+    ([Inputs](#inputs)), as ACTIVATE runs it, though ACTIVATE's schema
+    doesn't allow the key: Meridian's format dropped it, with a warning, as
+    a key the schema doesn't define, and none of the 221 known workflows
+    has it.
+- **Stricter than ACTIVATE.** Where ACTIVATE runs a workflow whose meaning
+  would depend on something it shouldn't, Meridian refuses it rather than
+  guess. Each such place comes with its addition, and no known workflow
+  has one:
+  - a group's `flatten` is `true` or `false` written out. An expression
+    there is a schema error: ACTIVATE reads it as evaluated where it fills
+    the defaults, as text that isn't `true` where it resolves resources,
+    redacts passwords and fills rows, and its form as `true`, so where the
+    group's inputs' values are would depend on which reads it;
+  - two inputs whose values have one key, where a group with
+    `flatten: true` puts one beside the other, the group's own key among
+    them, are an error (`flattened_name_taken`). ACTIVATE fills such a
+    value from both definitions in the order the file writes them, and an
+    ignored group drops the other's value with its own, which a workflow's
+    meaning shouldn't depend on. Wizard steps whose inputs share a key are
+    run as they were. None of the 221 known workflows has a group with
+    `flatten`, so none has either.
 - **Metadata.** A workflow can carry `name`, `description`, `icon` and
   `thumbnail`. `description` is a string or `{file: <path>}`; `icon` and
   `thumbnail` are paths. Paths are relative to the workflow file and may not
@@ -646,7 +668,16 @@ ACTIVATE's launch form and its backend do together:
   null is a value, so an input given null isn't required, and a boolean
   given null stays null. Every missing input is reported, not only the
   first.
-- **Containers.** A group's values are under its name. A wizard step's
+- **Containers.** A group's values are under its name, unless it has
+  `flatten: true`: then its inputs' values are beside the group's, under
+  their own names, as ACTIVATE runs it, in a list's row, a wizard step or
+  another group as well, and the group has none of its own. A value given
+  at its key is kept, as ACTIVATE keeps it, with a warning
+  (`flattened_group_value`), and none of its inputs reads it; ignoring the
+  group drops its inputs' values and that one, and hiding it hides its
+  inputs, as for any group. `inputs.<group>.<input>` doesn't read such an
+  input, which the compiler warns of in a job (`flattened_input_ref`), as
+  it does for a flattened wizard step's. A wizard step's
   inputs have their values beside the step's, unless `$meta.wizard.flatten`
   is `false`. A wizard step with `multi: true` repeats, as many times as the
   person running the workflow adds it: its value is a list under its name,
@@ -2564,9 +2595,10 @@ no option's value is that text and an option is a number or a boolean the
 text reads as, when it takes that option's value, among the list an
 `option-key` picks by the values sent, or every list; and a header is an
 error. A path is an input's name, or a group's and its input's, as
-`group.name`; a flattened wizard step's inputs are set by their own names,
-and naming the step is an error, as a path through a list's rows is: a
-list is set whole. A problem with an `-input` names its path, never its
+`group.name`; the inputs of a group with `flatten: true` and of a
+flattened wizard step are set by their own names, and naming the group or
+the step is an error, as a path through a list's rows is: a list is set
+whole. A problem with an `-input` names its path, never its
 value, which can be a password.
 
 ## Editors and web UIs

@@ -142,7 +142,7 @@ func (r *inputResolver) shapeScope() expr.Scope {
 		r.values = jsonvalue.CloneMap(values)
 		for _, f := range r.ignoredLater {
 			f.ignored = true
-			if !f.container || !f.flatten {
+			if f.ownsKey() {
 				deletePath(r.values, f.path)
 			}
 		}
@@ -215,29 +215,31 @@ type heldValue struct {
 // dropKept drops f's value, as drop does, and appends to restore what it
 // dropped, to put back once the conditions have read it as dropped.
 func (r *inputResolver) dropKept(f *field, restore []heldValue) []heldValue {
-	if !f.container || !f.flatten {
+	if f.ownsKey() {
 		if v, ok := jsonptr.Lookup(r.values, f.path); ok {
 			restore = append(restore, heldValue{f.path, jsonvalue.Clone(v)})
 		}
 		r.remove(f.path)
-		return restore
 	}
-	for _, c := range f.children {
-		restore = r.dropKept(c, restore)
+	if f.container && f.flatten {
+		for _, c := range f.children {
+			restore = r.dropKept(c, restore)
+		}
 	}
 	return restore
 }
 
-// markFields marks f's value, as mark does, or those of the inputs a
-// wizard step whose inputs' values are beside its own holds.
+// markFields marks f's value, as mark does, and those of the inputs a
+// container whose inputs' values are beside its own holds.
 func (r *inputResolver) markFields(f *field) {
+	if f.ownsKey() {
+		r.mark(f.path)
+	}
 	if f.container && f.flatten {
 		for _, c := range f.children {
 			r.markFields(c)
 		}
-		return
 	}
-	r.mark(f.path)
 }
 
 // holdShaped keeps the value of f, an input whose ignore read a variable
@@ -253,13 +255,14 @@ func (r *inputResolver) holdShaped(f *field) {
 	}
 	var hold func(f *field)
 	hold = func(f *field) {
+		if f.ownsKey() {
+			r.holdPath(f.holder(), f.path, kind)
+		}
 		if f.container && f.flatten {
 			for _, c := range f.children {
 				hold(c)
 			}
-			return
 		}
-		r.holdPath(f.holder(), f.path, kind)
 	}
 	hold(f)
 }
@@ -303,7 +306,7 @@ func (r *inputResolver) noteIgnored(f *field) {
 // As the run is created, it keeps each value it removes, as it was given,
 // for the conditions Start decides again (ignoredValues).
 func (r *inputResolver) drop(f *field) {
-	if !f.container || !f.flatten {
+	if f.ownsKey() {
 		if v, ok := jsonptr.Lookup(r.values, f.path); ok && r.start == nil {
 			if r.ignoredValues == nil {
 				r.ignoredValues = map[string]any{}
@@ -311,9 +314,10 @@ func (r *inputResolver) drop(f *field) {
 			r.ignoredValues[plan.JoinPath(slices.Concat([]string{"inputs"}, f.path)...)] = jsonvalue.Clone(v)
 		}
 		r.remove(f.path)
-		return
 	}
-	for _, c := range f.children {
-		r.drop(c)
+	if f.container && f.flatten {
+		for _, c := range f.children {
+			r.drop(c)
+		}
 	}
 }

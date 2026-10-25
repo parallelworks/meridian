@@ -1,0 +1,19 @@
+description: >-
+  A value given at the key of a group that flattens isn't its inputs': they
+  take theirs by their own names. It is kept, as ACTIVATE keeps it, with a
+  warning, and what reads inputs.g reads it.
+source: ACTIVATE's filling of defaults
+inputs:
+  g:
+    a: x
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/g
+      params: {input: g}
+  inputs:
+    g:
+      a: x
+    a: d
+    r: x

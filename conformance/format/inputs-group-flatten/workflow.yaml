@@ -1,0 +1,19 @@
+on:
+  execute:
+    inputs:
+      db:
+        type: group
+        flatten: true
+        items:
+          host:
+            type: string
+      creds:
+        type: group
+        flatten: false
+        items:
+          user:
+            type: string
+jobs:
+  main:
+    steps:
+      - run: echo ok

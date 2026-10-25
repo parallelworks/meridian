@@ -31,8 +31,9 @@ func (r *inputResolver) checkJSON(values map[string]any) {
 // checkUnknownInputs reports the submitted values for inputs the workflow
 // doesn't define, and for the inputs of a list's or a repeated step's
 // rows that its rows don't have: the first maxListed one by one, which
-// suggest the name each probably meant, and then how many more there are.
-// The values are kept.
+// suggest the name each probably meant, and then how many more there are;
+// and each value at the key of a group whose inputs' values are beside its
+// own, which none of them reads. The values are kept.
 func (r *inputResolver) checkUnknownInputs() {
 	r.checkUnknown(r.values, nil, nil, knownInputsOf(r.fields), false)
 	if more := r.unknown - maxListed; more > 0 {
@@ -47,20 +48,27 @@ func (r *inputResolver) checkUnknownInputs() {
 func knownInputsOf(fields []*field) map[string]*knownInputs {
 	known := map[string]*knownInputs{}
 	for _, f := range fields {
-		if !f.container || !f.flatten {
-			at := jsonptr.Format(f.path[:len(f.path)-1])
-			k := known[at]
-			if k == nil {
-				k = &knownInputs{byKey: map[string]*field{}}
-				known[at] = k
-			}
-			k.byKey[f.key] = f
-			if defs, _ := f.rowInputs(); defs != nil {
-				if k.rows == nil {
-					k.rows = map[string][]*field{}
+		at := jsonptr.Format(f.path[:len(f.path)-1])
+		k := known[at]
+		if k == nil {
+			k = &knownInputs{byKey: map[string]*field{}}
+			known[at] = k
+		}
+		if f.container && f.flatten {
+			if f.ownsKey() {
+				if k.flattened == nil {
+					k.flattened = map[string]*field{}
 				}
-				k.rows[f.key] = append(k.rows[f.key], f)
+				k.flattened[f.key] = f
 			}
+			continue
+		}
+		k.byKey[f.key] = f
+		if defs, _ := f.rowInputs(); defs != nil {
+			if k.rows == nil {
+				k.rows = map[string][]*field{}
+			}
+			k.rows[f.key] = append(k.rows[f.key], f)
 		}
 	}
 	return known
@@ -74,9 +82,11 @@ func knownInputsOf(fields []*field) map[string]*knownInputs {
 // rowInputs the inputs of their rows, by key, once a row is checked. In a
 // row, defaulted holds the keys there that aren't inputs' but that the
 // default rows written in the workflow have, which a form sends back, with
-// the values the default rows have at each.
+// the values the default rows have at each. flattened holds, by their keys,
+// the groups there whose inputs' values are beside their own, a value
+// given at whose key is no input's.
 type knownInputs struct {
-	byKey                     map[string]*field
+	byKey, flattened          map[string]*field
 	rows                      map[string][]*field
 	rowInputs                 map[string]map[string]*knownInputs
 	defaulted                 map[string][]any
@@ -193,6 +203,12 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 				// The workflow's default rows have it, which a form sends
 				// back, and compiling reports it there, once
 				// (checkDefaultRows).
+				continue
+			}
+			if g := inputs.flattened[key]; g != nil {
+				// Kept, as ACTIVATE keeps it, though none of the group's
+				// inputs reads it.
+				r.reportAt(problems.FlattenedGroupValue, g.loc, problems.Params{"input": strings.Join(at, ".")})
 				continue
 			}
 			if r.unknown++; r.unknown > maxListed {

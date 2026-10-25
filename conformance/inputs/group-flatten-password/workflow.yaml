@@ -1,0 +1,15 @@
+on:
+  execute:
+    inputs:
+      db:
+        type: group
+        flatten: true
+        items:
+          user:
+            type: string
+          pass:
+            type: password
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -105,8 +105,17 @@ var (
 	// its input's, which format 1 reads as it was submitted: given is
 	// text, number or boolean.
 	InputReadAsSubmitted = define(Warning, "input_read_as_submitted", "Input read as it was submitted", "input", "type", "given")
-	InputLooksSecret     = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
-	InputTooDeep         = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
+	// FlattenedGroupValue is a value given at the key of a group with
+	// flatten true, whose inputs' values are beside it: input is the
+	// value's path.
+	FlattenedGroupValue = define(Warning, "flattened_group_value", "Value for a group that flattens", "input")
+	// FlattenedNameTaken is two input definitions whose values have one key,
+	// where a group with flatten true puts one beside the other: input is
+	// the key, and first and second the definitions' names, as in
+	// group.name.
+	FlattenedNameTaken = define(Error, "flattened_name_taken", "Two inputs with one value", "input", "first", "second")
+	InputLooksSecret   = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
+	InputTooDeep       = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
 	// DefaultRowUnknownInput is a key of a list's default row, written in
 	// the workflow, that isn't one of its rows' inputs: input names the
 	// list, and key the key's path in the row, as in group.name.
@@ -154,6 +163,7 @@ var (
 	RelativeOutsideDefinitions = define(Error, "relative_outside_definitions", "Relative reference outside input definitions")
 	UndefinedInput             = define(Warning, "undefined_input", "No such input", "name", "suggested", "suggestion")
 	UndefinedNestedInput       = define(Warning, "undefined_nested_input", "No such input in a group", "group", "name", "suggested", "suggestion")
+	FlattenedInputRef          = define(Warning, "flattened_input_ref", "Input read through a container that flattens", "group", "name", "input")
 	NeedsOutsideJob            = define(Error, "needs_outside_job", "needs outside a job")
 	UndefinedJob               = define(Error, "undefined_job", "No such job", "job", "suggested", "suggestion")
 	JobNotNeeded               = define(Error, "job_not_needed", "Job not needed", "job", "needed")

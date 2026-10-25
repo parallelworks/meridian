@@ -1,0 +1,21 @@
+description: >-
+  Two inputs whose values have one key, where a group that flattens puts one
+  beside the other, are an error, its own key among them, and in a list's
+  rows too. ACTIVATE fills such a value from both definitions in the order
+  the file writes them, which the workflow's meaning shouldn't depend on.
+  No known workflow has one.
+source: Meridian, after ACTIVATE's filling of defaults
+expect:
+  diagnostics:
+    - severity: error
+      code: flattened_name_taken
+      path: /on/execute/inputs/g/items/a
+      params: {input: a, first: a, second: g.a}
+    - severity: error
+      code: flattened_name_taken
+      path: /on/execute/inputs/g/items/g
+      params: {input: g, first: g, second: g.g}
+    - severity: error
+      code: flattened_name_taken
+      path: /on/execute/inputs/hosts/template/port
+      params: {input: port, first: hosts.conn.port, second: hosts.port}
