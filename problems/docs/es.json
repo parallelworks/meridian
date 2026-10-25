@@ -1068,6 +1068,14 @@
       "Escribe los valores grandes en un archivo del directorio de la ejecución y da su ruta como salida."
     ]
   },
+  "outputs_not_utf8": {
+    "title": "Salidas que no son UTF-8",
+    "why": "Las salidas de un paso llegan al coordinador, y a los trabajos que necesitan el trabajo, como JSON, que solo contiene texto UTF-8, igual que el formato 1 las almacena. Por eso, como en el formato 1, el worker reemplaza cada byte del nombre o del valor de una salida que no es UTF-8 por U+FFFD, el carácter de reemplazo, y los trabajos que necesitan el trabajo leen eso en su lugar. El texto en otra codificación, como Latin-1, tiene esos bytes, y también los datos binarios. El registro del paso conserva lo que imprimió tal como lo imprimió.",
+    "fix": [
+      "Convierte el texto a UTF-8 antes de escribirlo en $OUTPUTS, como hace iconv -t UTF-8.",
+      "Escribe los datos binarios en base64, o en un archivo del directorio de la ejecución, y da su ruta como salida."
+    ]
+  },
   "outputs_not_file": {
     "title": "$OUTPUTS no es un archivo",
     "why": "El worker lee las salidas de un paso del archivo que indica $OUTPUTS, o de lo que indica un enlace simbólico allí, como hace el formato 1. Solo lee un archivo regular, abierto sin esperar, para que un FIFO ahí no lo haga esperar para siempre; el paso puso otra cosa ahí, así que no se pueden leer sus salidas, y falla. El formato 1 espera para siempre en su lugar, lo cual es un error. El worker vuelve a poner un archivo ahí para los pasos siguientes.",

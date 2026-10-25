@@ -916,6 +916,13 @@
       "Write large values to a file in the run's directory, and give its path as the output."
     ]
   },
+  "outputs_not_utf8": {
+    "why": "A step's outputs reach the coordinator, and the jobs that need the job, as JSON, as format 1 stores them, and JSON holds only UTF-8 text. So, as format 1 does, the worker replaces each byte of an output's name or value that isn't UTF-8 with U+FFFD, the replacement character, and the jobs that need the job read that in its place. Text in another encoding, such as Latin-1, has such bytes, and so has binary data. The step's log keeps what it printed as it printed it.",
+    "fix": [
+      "Convert text to UTF-8 before writing it to $OUTPUTS, as iconv -t UTF-8 does.",
+      "Write binary data as base64, or to a file in the run's directory, and give its path as the output."
+    ]
+  },
   "outputs_not_file": {
     "why": "The worker reads a step's outputs from the file $OUTPUTS names, or from what a symbolic link there names, as format 1 does. It reads only a regular file, opened without waiting, so that a FIFO there can't make it wait forever; the step put something else there, so its outputs can't be read, and it fails. Format 1 waits forever instead, which is a bug. The worker puts a file there again for the steps after it.",
     "fix": [

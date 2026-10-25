@@ -261,6 +261,7 @@ var (
 	StepTimedOut          = define(Error, "step_timed_out", "Step ran past its timeout", "limit")
 	OutputsTooLarge       = define(Error, "outputs_too_large", "Step's outputs too large", "size", "limit")
 	OutputsLineTooLong    = define(Warning, "outputs_line_too_long", "Line of $OUTPUTS too long", "limit")
+	OutputsNotUTF8        = define(Warning, "outputs_not_utf8", "Outputs that aren't UTF-8", "name", "count")
 	OutputsNotFile        = define(Error, "outputs_not_file", "$OUTPUTS isn't a file")
 	OutputsRemoved        = define(Warning, "outputs_removed", "$OUTPUTS removed as the step ran")
 	LogNotKept            = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")

@@ -833,6 +833,97 @@ func TestOutputsLineTooLong(t *testing.T) {
 	}
 }
 
+// TestOutputsNotUTF8 checks that bytes that aren't UTF-8 in $OUTPUTS, in a
+// name or a value, are each replaced with U+FFFD, as format 1 stores
+// outputs, and that the step's event warns of it, rather than end the
+// attempt, which the API's JSON can't report: the job goes on, its cleanups
+// run, and it reports its end. Its logs keep the bytes its steps printed,
+// as they are.
+func TestOutputsNotUTF8(t *testing.T) {
+	t.Parallel()
+	step := plan.Step{ID: "s", Run: plan.Literal(`printf 'out \377\376\n'; printf 'err \303(\n' >&2
+printf 'bin=a\377b\376\376c\nna\351me=ok\nplain=1\n' >> "$OUTPUTS"`)}
+	step.Cleanup = plan.Literal(`printf 'cleaning \377\n'; printf 'clean=\377\n' >> "$OUTPUTS"`)
+	j := newJob(step, command(`printf 'before=\377\n' >> "$OUTPUTS"`), command(`printf 'shared=x\342\202\n' >> "$OUTPUTS"`))
+	j.Outputs = map[string]plan.Value{"bin": cond("steps.s.outputs.bin")}
+	f := newFakeCoordinator(t, j)
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success 0",
+		"started 1.0", "finished 1.0 success 0",
+		"started 2.0", "finished 2.0 success 0",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	bin := "a\uFFFDb\uFFFD\uFFFDc"
+	for _, tc := range []struct {
+		step    int
+		cleanup bool
+		outputs map[string]string
+		name    string
+		count   int
+	}{
+		{0, false, map[string]string{"bin": bin, "na\uFFFDme": "ok", "plain": "1"}, "bin", 2},
+		{1, false, map[string]string{"before": "\uFFFD"}, "before", 1},
+		// What an earlier step wrote to the job's file isn't this one's.
+		{2, false, map[string]string{"shared": "x\uFFFD\uFFFD"}, "shared", 1},
+		{0, true, map[string]string{"clean": "\uFFFD"}, "clean", 1},
+	} {
+		e := f.finishedEvent(tc.step, 0, tc.cleanup)
+		if !reflect.DeepEqual(e.Outputs, tc.outputs) {
+			t.Errorf("step %d (cleanup %t) shows its outputs as %q, want %q", tc.step, tc.cleanup, e.Outputs, tc.outputs)
+		}
+		if got := codes(e.Diagnostics); !slices.Equal(got, []string{"outputs_not_utf8"}) {
+			t.Errorf("step %d (cleanup %t) has the diagnostics %v", tc.step, tc.cleanup, got)
+			continue
+		}
+		if d := e.Diagnostics[0]; d.Params["name"] != tc.name || d.Params["count"] != float64(tc.count) {
+			t.Errorf("step %d (cleanup %t) warns of %v", tc.step, tc.cleanup, d.Params)
+		}
+	}
+	end := checkEnd(t, f, plan.OutcomeSuccess, "")
+	if want := map[string]string{"before": "\uFFFD", "shared": "x\uFFFD\uFFFD", "clean": "\uFFFD", "bin": bin}; !reflect.DeepEqual(end.Outputs, want) {
+		t.Errorf("the job's outputs are %q, want %q", end.Outputs, want)
+	}
+	if want := map[string]map[string]string{"s": {"bin": bin, "na\uFFFDme": "ok", "plain": "1"}}; !reflect.DeepEqual(end.StepOutputs, want) {
+		t.Errorf("the job's step outputs are %q, want %q", end.StepOutputs, want)
+	}
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "out \xff\xfe\nerr \xc3(\n")
+	checkLog(t, f, logKey{workerapi.LogCleanup, 0, 0}, "cleaning \xff\n")
+}
+
+// TestProblemsNotUTF8 checks that a problem the worker makes from an
+// error's text, which quotes a path as the system gives it, reaches the
+// coordinator with each byte of it that isn't UTF-8 replaced with U+FFFD,
+// as foundation's problems encode themselves with encoding/json, rather
+// than end the attempt: here the path of the worker's directory, in a
+// directory whose name isn't UTF-8, as one in a Latin-1 home is.
+func TestProblemsNotUTF8(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "caf\xe9")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	step := command("true")
+	step.WorkingDirectory = cond("env.OUTPUTS")
+	next := command("true")
+	next.If = cond("always()")
+	f := newFakeCoordinator(t, newJob(step, next))
+	if err := f.runWorker(t.Context(), Config{Dir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "finished 0.0 failure -1", "started 1.0", "finished 1.0 success 0")
+	checkEnd(t, f, plan.OutcomeFailure, "")
+	ds := f.finishedEvent(0, 0, false).Diagnostics
+	if len(ds) != 1 || ds[0].Code != problems.StepNotStarted.Code() {
+		t.Fatalf("step 0's diagnostics are %v", codes(ds))
+	}
+	if reason, _ := ds[0].Params["reason"].(string); !strings.Contains(reason, "/caf\uFFFD/") || !strings.Contains(ds[0].Detail, `/caf\xe9/`) {
+		t.Errorf("the problem's reason is %q, and its message %q", reason, ds[0].Detail)
+	}
+}
+
 // TestPlanTooNew checks that a worker that doesn't read the run's plan
 // version exits without running anything.
 func TestPlanTooNew(t *testing.T) {

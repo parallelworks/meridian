@@ -1516,7 +1516,11 @@ A step writes outputs to the file named by `$OUTPUTS`, a line `name=value`
 each. As in format 1, a step with an `id` has a file of its own, whose
 outputs are its `steps.<id>.outputs`, and the steps without one share the
 job's. A file with a line of 64 KiB or longer is read as holding none, and
-the step's event warns of it. A symbolic link a step puts there is
+the step's event warns of it. Each byte of a name or a value that isn't
+UTF-8 is replaced with U+FFFD, as format 1 stores outputs, with
+`encoding/json`, which replaces it so, and the step's event warns of it:
+JSON, as the worker API's is, holds only UTF-8. A step's log keeps the bytes
+it printed as they are. A symbolic link a step puts there is
 followed, as format 1 follows it, but what is read must be a regular file,
 opened without waiting, so that a FIFO there fails the step rather than make
 the worker wait forever, as it makes format 1 wait, which is a bug; format 1

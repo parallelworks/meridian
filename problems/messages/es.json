@@ -154,6 +154,7 @@
   "step_timed_out": "El paso siguió ejecutándose después de su tiempo límite de {limit, plural, one {# segundo} other {# segundos}} y se detuvo.",
   "outputs_too_large": "El paso escribió {size} bytes en $OUTPUTS, más que el límite de {limit}.",
   "outputs_line_too_long": "Una línea de $OUTPUTS tiene {limit} bytes o más, así que, como en el formato 1, no se lee ninguna de las salidas del archivo.",
+  "outputs_not_utf8": "El paso escribió en $OUTPUTS bytes que no son UTF-8, en {count, plural, =1 {la salida “{name}”} other {# salidas, entre ellas “{name}”}}: como en el formato 1, el worker reemplazó cada uno de ellos por U+FFFD.",
   "outputs_not_file": "El paso puso en $OUTPUTS algo que no es un archivo regular, como un FIFO, o un enlace a uno, así que no se pueden leer sus salidas.",
   "outputs_removed": "El directorio del worker, que contiene $OUTPUTS, se eliminó mientras se ejecutaba el paso, así que se pierde lo que el paso escribió en $OUTPUTS después.",
   "log_not_kept": "El worker no guardó {size} bytes del registro del paso: guarda como máximo {limit} bytes de registros que el coordinador no ha almacenado, mientras no puede comunicarse con él, y ninguno cuando su disco está lleno.",

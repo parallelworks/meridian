@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxOutputs is the most bytes of $OUTPUTS the worker reads: a job's
@@ -34,37 +35,41 @@ var (
 // its first = and the value after it, each with the white space around it
 // trimmed, and the two characters \n, \t and \r in a value made a newline,
 // a tab and a carriage return; a name written again has its last value.
+// Each byte of a name or a value that isn't UTF-8 is replaced with U+FFFD,
+// as format 1 stores its outputs, with encoding/json, which replaces it so:
+// JSON, as the worker API's is, holds only UTF-8. It returns the names of
+// the outputs it replaced a byte in too, as notUTF8.
 // It reads the file name in the worker's directory d, or what a symbolic
 // link there names, as format 1 follows it: the step's user can read it
 // anyway. It returns the file's size too, and errOutputsTooLarge, without
 // reading it, for one larger than maxOutputs. As format 1, it reads nothing
 // of a file with a line longer than maxOutputsLine, and returns
 // errOutputsLineTooLong.
-func readOutputs(d *privateDir, name string) (map[string]string, int64, error) {
+func readOutputs(d *privateDir, name string) (outputs map[string]string, notUTF8 map[string]bool, size int64, err error) {
 	f, err := openOutputs(d, name)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, 0, errOutputsNotFile
+		return nil, nil, 0, errOutputsNotFile
 	}
 	if info.Size() > maxOutputs {
-		return nil, info.Size(), errOutputsTooLarge
+		return nil, nil, info.Size(), errOutputsTooLarge
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxOutputs+1))
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if len(data) > maxOutputs {
-		return nil, int64(len(data)), errOutputsTooLarge
+		return nil, nil, int64(len(data)), errOutputsTooLarge
 	}
-	outputs, err := parseOutputs(string(data))
-	return outputs, int64(len(data)), err
+	outputs, notUTF8, err = parseOutputs(string(data))
+	return outputs, notUTF8, int64(len(data)), err
 }
 
 // openOutputs opens $OUTPUTS without waiting for a FIFO's writer: the
@@ -93,21 +98,52 @@ func openOutputs(d *privateDir, name string) (*os.File, error) {
 
 var unescapeOutput = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")
 
-func parseOutputs(text string) (map[string]string, error) {
-	outputs := map[string]string{}
+// parseOutputs reads text, what a step wrote to $OUTPUTS, as readOutputs
+// says, and returns the outputs, and the names of those it replaced a byte
+// that isn't UTF-8 in. Two names that differ only in such bytes are one
+// once they are replaced, as a name written again.
+func parseOutputs(text string) (outputs map[string]string, notUTF8 map[string]bool, err error) {
+	outputs = map[string]string{}
 	for line := range strings.Lines(text) {
 		line = strings.TrimSuffix(line, "\n")
 		if len(line) > maxOutputsLine {
-			return nil, errOutputsLineTooLong
+			return nil, nil, errOutputsLineTooLong
 		}
 		line = strings.TrimSuffix(line, "\r")
 		name, value, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
-		outputs[strings.TrimSpace(name)] = unescapeOutput.Replace(strings.TrimSpace(value))
+		name, nameReplaced := validUTF8(strings.TrimSpace(name))
+		value, valueReplaced := validUTF8(unescapeOutput.Replace(strings.TrimSpace(value)))
+		outputs[name] = value
+		if nameReplaced || valueReplaced {
+			if notUTF8 == nil {
+				notUTF8 = map[string]bool{}
+			}
+			notUTF8[name] = true
+		} else {
+			delete(notUTF8, name)
+		}
 	}
-	return outputs, nil
+	return outputs, notUTF8, nil
+}
+
+// validUTF8 returns s with each byte of it that isn't UTF-8 replaced with
+// U+FFFD, as encoding/json writes s, and reports whether it replaced one.
+// strings.ToValidUTF8 would replace a run of such bytes with one U+FFFD,
+// which format 1 doesn't.
+func validUTF8(s string) (string, bool) {
+	if utf8.ValidString(s) {
+		return s, false
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	// Ranging over a string gives U+FFFD for each byte that isn't UTF-8.
+	for _, r := range s {
+		b.WriteRune(r)
+	}
+	return b.String(), true
 }
 
 // written returns what of after isn't in before: the outputs a step that

@@ -732,7 +732,7 @@ func (a *attempt) outputsFor(i int, id string) outputsFile {
 	}
 	f.path, f.gen, f.err = a.makeOutputs(f.name, f.own)
 	if f.err == nil && !f.own {
-		f.before, _, f.beforeErr = readOutputs(a.files, f.name)
+		f.before, _, _, f.beforeErr = readOutputs(a.files, f.name)
 	}
 	return f
 }
@@ -746,7 +746,7 @@ func (a *attempt) outputsWritten(f outputsFile, path string) (map[string]string,
 	if !a.files.still(f.gen) {
 		diags = append(diags, a.at(problems.OutputsRemoved, path, nil))
 	}
-	got, size, err := readOutputs(a.files, f.name)
+	got, notUTF8, size, err := readOutputs(a.files, f.name)
 	switch {
 	case errors.Is(err, errOutputsNotFile):
 		diags = append(diags, a.at(problems.OutputsNotFile, path, nil))
@@ -760,11 +760,30 @@ func (a *attempt) outputsWritten(f outputsFile, path string) (map[string]string,
 		return map[string]string{}, append(diags, a.at(problems.OutputsLineTooLong, path, problems.Params{"limit": maxOutputsLine + 1}))
 	case err != nil:
 	case f.own:
-		return got, diags
+		return got, append(diags, a.outputsNotUTF8(got, notUTF8, path)...)
 	default:
-		return written(f.before, got), diags
+		got = written(f.before, got)
+		return got, append(diags, a.outputsNotUTF8(got, notUTF8, path)...)
 	}
 	return nil, diags
+}
+
+// outputsNotUTF8 returns a warning, at path, of those of a step's outputs
+// that notUTF8 names, in which the worker replaced bytes that aren't UTF-8
+// (readOutputs), or none. Format 1 replaces them as silently as it stores
+// its outputs, but the jobs that need the job read what the step didn't
+// write.
+func (a *attempt) outputsNotUTF8(outputs map[string]string, notUTF8 map[string]bool, path string) problems.Diagnostics {
+	var names []string
+	for name := range outputs {
+		if notUTF8[name] {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return problems.Diagnostics{a.at(problems.OutputsNotUTF8, path, problems.Params{"name": slices.Min(names), "count": len(names)})}
 }
 
 // shellOK reports whether a step's shell: is one format 1 runs, bash or
