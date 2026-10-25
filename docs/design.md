@@ -642,7 +642,12 @@ ACTIVATE's launch form and its backend do together:
   don't have is reported by its path, as `creds.0.pasword`, and kept as a
   password by the same rules, by that path, as a password field of a row
   is: among the secrets, and in neither the values nor, for a list held
-  for Start, its value that waits there. A value that isn't JSON, such
+  for Start, its value that waits there. A key of a list's default rows,
+  written in the workflow, that isn't one of its rows' inputs is a warning
+  where it is written (`default_row_unknown_input`), once, and the row
+  keeps it; a launch form sends the default rows back, so a submitted
+  row's key that a default row has isn't reported again. A value that
+  isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a

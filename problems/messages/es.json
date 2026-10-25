@@ -53,6 +53,7 @@
   "input_not_text": "La entrada “{input}” recibe texto, no {value}.",
   "input_looks_secret": "La entrada “{input}” parece contener un secreto, pero no es una entrada de contraseña, así que el valor que se le dé se guarda con la ejecución y no se enmascara en los registros. Si contiene un secreto, conviértela en una entrada de contraseña.",
   "input_too_deep": "El valor de la entrada “{input}” se anida demasiado para guardarse con la ejecución, que puede anidarse como máximo {max} niveles.",
+  "default_row_unknown_input": "Una fila predeterminada de la lista “{input}” tiene “{key}”, que no es una de las entradas de sus filas, así que la fila lo conserva tal cual.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "duplicate_step_id": "Los pasos {first} y {second} del trabajo “{job}” tienen el mismo id, “{id}”.",
   "needs_not_known": "El needs de un trabajo debe conocerse cuando se crea la ejecución, pero este lee {name}, que no se conoce hasta que la ejecución está en marcha.",
   "needs_item_not_name": "Cada elemento de needs debe ser el nombre de un trabajo, no {value}.",

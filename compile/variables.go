@@ -3,11 +3,14 @@ package compile
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -81,6 +84,53 @@ func (c *compiler) checkInputNames(fields []*field) {
 		}
 		if defs, loc := f.rowInputs(); defs != nil {
 			c.checkInputNames(c.inputs.collect(defs, loc, appendPath(f.path, "[index]"), nil))
+		}
+	}
+}
+
+// checkDefaultRows warns about each key of fields' default rows, those of
+// each list among them and among its rows' inputs, that isn't one of its
+// rows' inputs, where the workflow writes it: once, as a run doesn't
+// report it when a form sends the default rows back (knownInputs.defaulted).
+func (c *compiler) checkDefaultRows(fields []*field) {
+	for _, f := range fields {
+		defs, loc := f.rowInputs()
+		if defs == nil {
+			continue
+		}
+		if rows, ok := f.def["default"].([]any); ok {
+			known := knownInputsOf(c.inputs.template(defs, loc).fields)
+			for i, row := range rows {
+				if m, ok := row.(map[string]any); ok {
+					c.checkDefaultRow(f, m, appendPath(f.loc, "default", strconv.Itoa(i)), nil, known)
+				}
+			}
+		}
+		c.checkDefaultRows(c.inputs.collect(defs, loc, appendPath(f.path, "[index]"), nil))
+	}
+}
+
+// checkDefaultRow warns about each key of values, a default row of f's, or
+// a group's mapping in one, at loc in the workflow and at rel in the row,
+// that isn't one of the inputs known holds there.
+func (c *compiler) checkDefaultRow(f *field, values map[string]any, loc, rel []string, known map[string]*knownInputs) {
+	inputs := known[jsonptr.Format(rel)]
+	if inputs == nil {
+		inputs = &knownInputs{}
+	}
+	for key, v := range jsonvalue.Sorted(values) {
+		in, ok := inputs.byKey[key]
+		if !ok {
+			if inputs.names == nil {
+				inputs.names = slices.Sorted(maps.Keys(inputs.byKey))
+			}
+			s, ok := hint.Suggest(key, inputs.names)
+			params := problems.Params{"input": f.label(), "key": strings.Join(appendPath(rel, key), ".")}
+			c.reportAt(problems.DefaultRowUnknownInput, appendPath(loc, key), problems.WithSuggestion(params, strings.Join(appendPath(rel, s), "."), ok))
+			continue
+		}
+		if child, ok := v.(map[string]any); ok && in.container && !in.flatten {
+			c.checkDefaultRow(f, child, appendPath(loc, key), appendPath(rel, key), known)
 		}
 	}
 }

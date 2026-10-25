@@ -1113,17 +1113,21 @@ func knownInputsOf(fields []*field) map[string]*knownInputs {
 // inputs with a password among theirs, once a value there isn't one of
 // them. rows holds, by their keys, the lists and repeated steps there, more
 // than one where inputs share a path, as a wizard step's can, and
-// rowInputs the inputs of their rows, by key, once a row is checked.
+// rowInputs the inputs of their rows, by key, once a row is checked. In a
+// row, defaulted holds the keys there that aren't inputs' but that the
+// default rows written in the workflow have, which a form sends back.
 type knownInputs struct {
 	byKey                     map[string]*field
 	rows                      map[string][]*field
 	rowInputs                 map[string]map[string]*knownInputs
+	defaulted                 map[string]bool
 	names, passwords, holders []string
 }
 
 // rowsOf returns the inputs of the rows of the lists and repeated steps at
 // key, those of each one's rows, by the paths in a row of the mappings
-// their values are in.
+// their values are in, with the keys that aren't inputs' that their
+// default rows have.
 func (k *knownInputs) rowsOf(r *inputResolver, key string) map[string]*knownInputs {
 	if known, ok := k.rowInputs[key]; ok {
 		return known
@@ -1134,11 +1138,45 @@ func (k *knownInputs) rowsOf(r *inputResolver, key string) map[string]*knownInpu
 		fields = append(fields, r.template(defs, loc).fields...)
 	}
 	known := knownInputsOf(fields)
+	for _, f := range k.rows[key] {
+		rows, _ := f.def["default"].([]any)
+		for _, row := range rows {
+			addDefaulted(known, row, nil)
+		}
+	}
 	if k.rowInputs == nil {
 		k.rowInputs = map[string]map[string]*knownInputs{}
 	}
 	k.rowInputs[key] = known
 	return known
+}
+
+// addDefaulted adds to known, the inputs of rows by the paths in a row of
+// the mappings their values are in, the keys of v, a default row or a
+// group's mapping in one at rel, that aren't inputs' there, and those in
+// its groups' mappings (knownInputs.defaulted).
+func addDefaulted(known map[string]*knownInputs, v any, rel []string) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	at := jsonptr.Format(rel)
+	k := known[at]
+	if k == nil {
+		k = &knownInputs{byKey: map[string]*field{}}
+		known[at] = k
+	}
+	for key, item := range m {
+		switch f, ok := k.byKey[key]; {
+		case !ok:
+			if k.defaulted == nil {
+				k.defaulted = map[string]bool{}
+			}
+			k.defaulted[key] = true
+		case f.container && !f.flatten:
+			addDefaulted(known, item, appendPath(rel, key))
+		}
+	}
 }
 
 // holdsOnly reports whether values holds only values of k's inputs that
@@ -1182,6 +1220,12 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 				r.secrets[strings.Join(at, ".")] = v
 				r.unknownSecrets = append(r.unknownSecrets, at)
 				r.mark(at)
+			}
+			if inputs.defaulted[key] {
+				// The workflow's default rows have it, which a form sends
+				// back, and compiling reports it there, once
+				// (checkDefaultRows).
+				continue
 			}
 			if r.unknown++; r.unknown > maxListed {
 				continue

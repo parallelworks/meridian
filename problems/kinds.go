@@ -103,6 +103,10 @@ var (
 	InputNotText           = define(Error, "input_not_text", "Input takes text", "input", "value")
 	InputLooksSecret       = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
 	InputTooDeep           = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
+	// DefaultRowUnknownInput is a key of a list's default row, written in
+	// the workflow, that isn't one of its rows' inputs: input names the
+	// list, and key the key's path in the row, as in group.name.
+	DefaultRowUnknownInput = define(Warning, "default_row_unknown_input", "Default row with a key its rows don't have", "input", "key", "suggested", "suggestion")
 	// ExecutionGroupUnknown is what the meridian command's Inputs gives
 	// for an execution-groups input that names none of the user's groups:
 	// value is the input's value, as Show writes it, and groups the groups

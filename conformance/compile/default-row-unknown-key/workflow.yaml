@@ -1,0 +1,24 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          ssh:
+            type: group
+            items:
+              port:
+                type: number
+                default: 22
+        default:
+          - name: cpu-1
+            note: fast
+            ssh: {port: 2222, ports: 2223}
+          - name: gpu-1
+            names: gpu
+jobs:
+  main:
+    steps:
+      - run: echo ok

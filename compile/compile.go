@@ -255,6 +255,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 	}
 	c.checkDefinitions(slices.Clip(definitionsPath), lookup(w, definitionsPath))
 	c.checkInputNames(c.inputs.fields)
+	c.checkDefaultRows(c.inputs.fields)
 	c.checkInputDepths(r)
 	return r
 }

@@ -327,6 +327,12 @@
       "Give the input a value, or a default, that nests less deeply."
     ]
   },
+  "default_row_unknown_input": {
+    "why": "A list's default rows, written in the workflow, have a key that isn't one of the inputs of the list's rows, its template's. The row keeps the value, which what reads the row can read, but it is often a misspelling, or a field the template no longer has. A launch form sends the default rows back, so the key isn't reported again as an unknown input of each run.",
+    "fix": [
+      "Correct the key, add an input of that name to the list's template, or remove the key from the default rows."
+    ]
+  },
   "duplicate_step_id": {
     "why": "A step's id names it for the steps after it, so two steps of a job can't share one.",
     "fix": [

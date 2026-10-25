@@ -381,6 +381,13 @@
       "Da a la entrada un valor, o un valor predeterminado, que se anide menos."
     ]
   },
+  "default_row_unknown_input": {
+    "title": "Fila predeterminada con una clave que sus filas no tienen",
+    "why": "Las filas predeterminadas de una lista, escritas en el flujo de trabajo, tienen una clave que no es una de las entradas de las filas de la lista, las de su plantilla. La fila conserva el valor, que puede leer lo que lee la fila, pero a menudo es una errata, o un campo que la plantilla ya no tiene. Un formulario de lanzamiento devuelve las filas predeterminadas, así que la clave no se vuelve a informar como una entrada desconocida de cada ejecución.",
+    "fix": [
+      "Corrige la clave, añade a la plantilla de la lista una entrada con ese nombre o quita la clave de las filas predeterminadas."
+    ]
+  },
   "duplicate_step_id": {
     "title": "Dos pasos con el mismo id",
     "why": "El id de un paso lo nombra para los pasos que vienen después, así que dos pasos de un trabajo no pueden compartirlo.",

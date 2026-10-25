@@ -53,6 +53,7 @@
   "input_not_text": "入力「{input}」には、{value} ではなくテキストを指定してください。",
   "input_looks_secret": "入力「{input}」はシークレットを保持しているように見えますが、パスワード入力ではないため、指定された値は実行とともに保存され、ログでもマスクされません。シークレットを保持している場合は、パスワード入力にしてください。",
   "input_too_deep": "入力「{input}」の値は入れ子が深すぎるため、実行とともに保存できません。実行の入れ子は最大 {max} 段階です。",
+  "default_row_unknown_input": "リスト「{input}」のデフォルトの行に、行の入力にない「{key}」があるため、行はそれをそのまま保持します。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "duplicate_step_id": "ジョブ「{job}」のステップ {first} とステップ {second} が、同じ id「{id}」を持っています。",
   "needs_not_known": "ジョブの needs は実行の作成時にわかっている必要がありますが、これは実行が始まるまでわからない {name} を参照しています。",
   "needs_item_not_name": "needs の各項目は、{value} ではなくジョブ名にしてください。",
