@@ -6,9 +6,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"maps"
 	"math"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -73,30 +75,45 @@ func TestEveryKindIsReported(t *testing.T) {
 	if len(defined) != len(Kinds()) {
 		t.Fatalf("kinds.go names %d kinds, and Kinds() returns %d", len(defined), len(Kinds()))
 	}
-	for _, dir := range []string{"../format", "../compile", "../expr", "../plan", "../worker", "../cmd/meridian", "../cmd/meridian/internal/local", "../internal/safepath"} {
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	// Every package of the module but this one, tests aside, whatever
+	// system its files build for: a directory with a go.mod of its own is
+	// another module, and one whose name starts with a dot, or testdata,
+	// holds no package of it.
+	err = filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
-		for _, file := range files {
-			if strings.HasSuffix(file, "_test.go") {
-				continue
+		if d.IsDir() {
+			name := d.Name()
+			if path != ".." && (strings.HasPrefix(name, ".") || name == "testdata" || name == "problems" && filepath.Dir(path) == "..") {
+				return filepath.SkipDir
 			}
-			f, err := parser.ParseFile(fset, file, nil, 0)
-			if err != nil {
-				t.Fatal(err)
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); path != ".." && err == nil {
+				return filepath.SkipDir
 			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok {
-					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "problems" {
-						if _, ok := defined[sel.Sel.Name]; ok {
-							defined[sel.Sel.Name] = true
-						}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "problems" {
+					if _, ok := defined[sel.Sel.Name]; ok {
+						defined[sel.Sel.Name] = true
 					}
 				}
-				return true
-			})
-		}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, name := range slices.Sorted(maps.Keys(defined)) {
 		if !defined[name] {

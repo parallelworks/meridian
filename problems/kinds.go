@@ -307,6 +307,8 @@ var (
 	StepOffJobHost        = define(Error, "step_off_job_host", "Step to run off its job's host")
 	SSHHostEmpty          = define(Warning, "ssh_host_empty", "Step's ssh: names no host")
 	StepNotStarted        = define(Error, "step_not_started", "Step's command not started", "reason")
+	EvaluationFailed      = define(Error, "evaluation_failed", "Step or job the worker couldn't evaluate")
+	WorkerDirUnusable     = define(Error, "worker_dir_unusable", "No directory of the worker's own for a step's files", "path", "code")
 	ShellNotSupported     = define(Error, "shell_not_supported", "Shell format 1 doesn't run", "shell")
 	StepTimedOut          = define(Error, "step_timed_out", "Step ran past its timeout", "limit")
 	OutputsTooLarge       = define(Error, "outputs_too_large", "Step's outputs too large", "size", "limit")
@@ -336,6 +338,7 @@ var (
 	FilesystemUnknown         = defineCommand("filesystem_unknown", "Filesystem can't be told", "path", "reason")
 	OwnerUnmapped             = defineCommand("owner_unmapped", "Owner hidden by a user namespace", "path", "dir")
 	OwnerUnknown              = defineCommand("owner_unknown", "Owner can't be told", "path")
+	DirectoryReplaced         = defineCommand("directory_replaced", "Directory replaced as it was made", "path")
 	PathLinksTooMany          = defineCommand("path_links_too_many", "Path through too many symbolic links", "path", "max")
 	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
@@ -413,13 +416,18 @@ var (
 // meridian worker's own problems, which end it: variable is an environment
 // variable's name, address the coordinator's, uid a user's number, os the
 // operating system's name, as Go's GOOS has it, and reason what the
-// operating system said.
+// operating system said, or the coordinator's answer's decoder or status;
+// path is a socket's, or a worker API request's; data is events or log,
+// and from the first event's number or byte of what the coordinator lost.
 var (
 	WorkerEnvironmentMissing    = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
 	WorkerEnvironmentInvalid    = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
 	CoordinatorPeerRefused      = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
 	CoordinatorPeerUnknown      = defineCommand("coordinator_peer_unknown", "Coordinator socket's user can't be told", "path", "reason")
 	CoordinatorKeyMismatch      = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
+	CoordinatorAnswerInvalid    = defineCommand("coordinator_answer_invalid", "Coordinator's answer the worker can't read", "path", "reason")
+	CoordinatorLostData         = defineCommand("coordinator_lost_data", "Coordinator lost what it had stored", "data", "from")
+	CoordinatorStoredUnsent     = defineCommand("coordinator_stored_unsent", "Coordinator stored events the worker didn't send", "seq", "last")
 	BootstrapTokenRefused       = defineCommand("bootstrap_token_refused", "Bootstrap token refused")
 	BootstrapTokenInEnvironment = defineCommand("bootstrap_token_in_environment", "Bootstrap token in an environment others can read")
 	RunPlanTooNew               = defineCommand("run_plan_too_new", "Run's plan newer than the worker reads", "version")

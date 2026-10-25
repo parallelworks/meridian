@@ -2,18 +2,94 @@ package worker
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
 )
+
+// TestDirReplaced checks that once a step removes the worker's directory
+// and puts something else at its path, here a link to a directory another
+// user could have made, the worker uses none of it: it makes a new
+// directory, with a new name.
+func TestDirReplaced(t *testing.T) {
+	t.Parallel()
+	other := t.TempDir()
+	f := newFakeCoordinator(t, newJob(
+		command(`d="$(dirname "$OUTPUTS")"; rm -rf "$d"; ln -s "$OTHER" "$d"; echo "$OUTPUTS"`),
+		command(`ls -A "$OTHER"; echo "$OUTPUTS"; echo a=1 >> "$OUTPUTS"`),
+	))
+	if err := f.runWorker(t.Context(), Config{Environ: []string{"OTHER=" + other}}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
+	before, _ := f.log(logKey{workerapi.LogStep, 0, 0})
+	after, _ := f.log(logKey{workerapi.LogStep, 1, 0})
+	if entries, _ := os.ReadDir(other); len(entries) != 0 || strings.Count(after, "\n") != 1 {
+		t.Errorf("the worker wrote %d files in the directory the link names: %q", len(entries), after)
+	}
+	if filepath.Dir(after) == filepath.Dir(before) {
+		t.Errorf("the second step's $OUTPUTS is in the old directory: %q, then %q", before, after)
+	}
+	if got := f.finishedEvent(1, 0, false).Outputs; got["a"] != "1" {
+		t.Errorf("the second step's outputs are %v", got)
+	}
+}
+
+// TestPrivateDir checks that a directory the worker makes is its user's,
+// and only its user can use it, and that it refuses one that isn't.
+func TestPrivateDir(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	d, err := makePrivateDir([]parentDir{{path: parent}}, testLogger(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.removeAll()
+	path, _, _, err := d.current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkPrivate(path); err != nil {
+		t.Error(err)
+	}
+	open := filepath.Join(parent, "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o750); err != nil { //nolint:gosec // a directory others can use, which the worker refuses
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "link")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{open, link} {
+		if _, err := checkPrivate(p); err == nil {
+			t.Errorf("%s passed as private", p)
+		}
+	}
+	// Removed, and made again elsewhere.
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	again, _, _, err := d.current()
+	if err != nil || again == path {
+		t.Errorf("after its directory was removed and made again, the worker uses %q (%v)", again, err)
+	}
+}
 
 // TestOutputsRemoved checks that a step whose $OUTPUTS goes as it runs,
 // with the directory it is in, has its event say so, and that the worker
@@ -185,82 +261,44 @@ func TestSpoolLimitFollowsParent(t *testing.T) {
 	}
 }
 
-// TestCleanupRemovesRunDir checks that a cleanup: that removes the run's
-// directory, as rm -r ${PW_JOB_DIR} does in workflows we know of, leaves
-// the cleanups after it, and the worker's files, as they were: the
-// worker's directory is outside the run's.
-func TestCleanupRemovesRunDir(t *testing.T) {
+// TestPrivateDirProblems checks that a worker that can make its directory
+// in none of its parents says why for each, as a problem, the first for
+// the parent it would have used first, and the same again once it has
+// none left to try; and that a step that can't start for one of them has
+// that problem on its event, at the step.
+func TestPrivateDirProblems(t *testing.T) {
 	t.Parallel()
-	first := command("true")
-	first.Cleanup = plan.Literal("echo cleaned first")
-	second := command("echo two=2 >> $OUTPUTS")
-	second.Cleanup = plan.Literal(`rm -r "$PW_JOB_DIR"`)
-	f := newFakeCoordinator(t, newJob(first, second))
-	home := t.TempDir()
-	if err := f.runWorker(t.Context(), Config{Environ: []string{"HOME=" + home}}); err != nil {
+	base := t.TempDir()
+	open, file := filepath.Join(base, "open"), filepath.Join(base, "file")
+	if err := os.Mkdir(open, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	checkEvents(t, f,
-		"started 0.0", "finished 0.0 success 0",
-		"started 1.0", "finished 1.0 success 0",
-		"cleanup started 1.0", "cleanup finished 1.0 success 0",
-		"cleanup started 0.0", "cleanup finished 0.0 success 0",
-	)
-	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if end.Outputs["two"] != "2" {
-		t.Errorf("the job's outputs are %v", end.Outputs)
+	if err := os.Chmod(open, 0o775); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+		t.Fatal(err)
 	}
-}
-
-// TestProblemsMaskedEscaped checks that a problem the worker makes is
-// masked before its message is made, so that a secret with a character
-// the message escapes, such as a tab, isn't quoted escaped.
-func TestProblemsMaskedEscaped(t *testing.T) {
-	t.Parallel()
-	file := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f := newFakeCoordinator(t, newJob(command("true")))
-	f.claim.Run = plan.RunValues{Format: 1, Vars: map[string]string{"token": "hun\tter2"}, Secrets: []string{"vars.token"}}
-	f.claim.RunDir = filepath.Join(file, "hun\tter2")
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
-		t.Fatal(err)
-	}
-	end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
-	if end.Problem == nil || strings.Contains(end.Problem.Detail, "ter2") {
-		t.Errorf("the problem quotes the secret: %+v", end.Problem)
-	}
-	if setup, _ := f.log(logKey{part: workerapi.LogSetup}); strings.Contains(setup, "ter2") {
-		t.Errorf("the setup log quotes the secret: %q", setup)
-	}
-}
-
-// TestNoZombiesLeft checks that once Run returns, the worker has reaped
-// every step's process group leader it held, though a step left a process
-// in its group. It doesn't run in parallel, as other tests' workers hold
-// leaders of their own.
-func TestNoZombiesLeft(t *testing.T) {
-	f := newFakeCoordinator(t, newJob(command(`nohup sleep 1 >/dev/null 2>&1 </dev/null &`), command("sleep 1.5")))
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
-		t.Fatal(err)
-	}
-	me := strconv.Itoa(os.Getpid())
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		t.Skip("no /proc")
-	}
-	for _, e := range entries {
-		data, err := os.ReadFile("/proc/" + e.Name() + "/stat")
-		if err != nil {
-			continue
+	d := &privateDir{parents: []parentDir{{path: open}, {path: file, shared: true}}, log: testLogger(t)}
+	err := d.fresh()
+	var codes []string
+	for _, e := range err.(interface{ Unwrap() []error }).Unwrap() { //nolint:errorlint // the problems fresh joins, each in turn
+		if p, ok := errors.AsType[*problem.Problem](e); ok {
+			codes = append(codes, string(p.Code))
 		}
-		_, after, ok := bytes.Cut(data, []byte(") "))
-		if !ok {
-			continue
-		}
-		if fields := strings.Fields(string(after)); len(fields) > 1 && fields[0] == "Z" && fields[1] == me {
-			t.Errorf("a zombie child, %s, is left", e.Name())
-		}
+	}
+	if want := []string{"directory_not_private", "directory_unavailable"}; !slices.Equal(codes, want) {
+		t.Errorf("the problems are %v, want %v", codes, want)
+	}
+	if again := d.fresh(); !errors.Is(again, err) {
+		t.Errorf("with no parent left, fresh says %v", again)
+	}
+	a := &attempt{mask: plan.NewMasker()}
+	if diag := a.notStarted(err, "/jobs/j/steps/0"); diag.Code != "worker_dir_unusable" || diag.Path() != "/jobs/j/steps/0" ||
+		diag.Params["code"] != "directory_not_private" || diag.Params["path"] != open {
+		t.Errorf("a step that can't start for it has %+v", diag)
+	}
+	if diag := a.notStarted(os.ErrPermission, "/jobs/j/steps/0"); diag.Code != "step_not_started" || diag.Params["reason"] != os.ErrPermission.Error() {
+		t.Errorf("a step that can't start for an error of the system's has %+v", diag)
 	}
 }

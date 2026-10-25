@@ -2,7 +2,6 @@ package worker
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -41,6 +40,9 @@ type privateDir struct {
 	// made are the directories the worker made, held open, to remove when
 	// it is done.
 	made []madeDir
+	// exhausted is why the worker couldn't make a directory in any of its
+	// parents, once it has tried the last.
+	exhausted error
 }
 
 // A parentDir is a directory a worker can make its directory in.
@@ -150,16 +152,15 @@ func (p parentDir) ready() error {
 }
 
 // makePrivateDir makes a private directory in the first of parents it can
-// (privateParents), and logs why it couldn't in those before it, and that
-// it uses the system's temporary directory, if it does.
+// (privateParents), which are never none, and logs why it couldn't in
+// those before it, and that it uses the system's temporary directory, if
+// it does. If it can't in any, it returns why for each, joined, each a
+// problem: the first, for the parent it would have used first, is the one
+// the meridian command shows, and its log has each.
 func makePrivateDir(parents []parentDir, log *slog.Logger) (*privateDir, error) {
 	d := &privateDir{parents: parents, log: log}
 	if err := d.fresh(); err != nil {
-		where := os.TempDir()
-		if len(parents) > 0 {
-			where = parents[len(parents)-1].path
-		}
-		return nil, problems.DirectoryUnavailable.Problem(problems.Params{"path": where, "reason": err.Error()})
+		return nil, err
 	}
 	return d, nil
 }
@@ -174,7 +175,9 @@ func (d *privateDir) inMemory() bool {
 
 // fresh makes a new directory, in the parent the worker uses now, which it
 // makes again if it made it, and checks again, or else in the next it can,
-// as it would have at first. Its caller holds d.mu, or has d to itself.
+// as it would have at first. When it can't in any, it returns why for each,
+// joined, each a problem, and the same once it has none left to try. Its
+// caller holds d.mu, or has d to itself.
 func (d *privateDir) fresh() error {
 	var errs []error
 	for ; d.at < len(d.parents); d.at++ {
@@ -193,10 +196,10 @@ func (d *privateDir) fresh() error {
 		d.log.Warn("can't keep the worker's files in a directory", "dir", p.path, "error", err)
 		errs = append(errs, err)
 	}
-	if len(errs) == 0 {
-		errs = append(errs, errors.New("worker: no directory to keep its files in"))
+	if len(errs) > 0 {
+		d.exhausted = errors.Join(errs...)
 	}
-	return errors.Join(errs...)
+	return d.exhausted
 }
 
 // makeIn makes a new directory in parent, whose name starts with a dot, so
@@ -205,7 +208,7 @@ func (d *privateDir) fresh() error {
 func (d *privateDir) makeIn(parent string) error {
 	path, err := os.MkdirTemp(parent, ".meridian-worker-")
 	if err != nil {
-		return err
+		return dirUnavailable(parent, err)
 	}
 	info, err := checkPrivate(path)
 	if err != nil {
@@ -215,11 +218,17 @@ func (d *privateDir) makeIn(parent string) error {
 	root, err := os.OpenRoot(path)
 	if err != nil {
 		_ = os.Remove(path)
-		return err
+		return dirUnavailable(path, err)
 	}
-	if held, err := root.Stat("."); err != nil || !os.SameFile(info, held) {
+	held, err := root.Stat(".")
+	if err != nil {
 		root.Close()
-		return fmt.Errorf("worker: its directory %s changed as it was made", path)
+		return dirUnavailable(path, err)
+	}
+	if !os.SameFile(info, held) {
+		// Something else is at its path already: the worker leaves it.
+		root.Close()
+		return problems.DirectoryReplaced.Problem(problems.Params{"path": path})
 	}
 	d.path, d.root = path, root
 	d.gen++
@@ -233,12 +242,19 @@ func (d *privateDir) makeIn(parent string) error {
 func checkPrivate(path string) (os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, dirUnavailable(path, err)
 	}
 	if err := safepath.CheckDirInfo(path, info, safepath.Private); err != nil {
 		return nil, err
 	}
 	return info, nil
+}
+
+// dirUnavailable is the problem of a directory at path that the worker
+// couldn't make, open or read, for the reason err, the operating system's,
+// gives.
+func dirUnavailable(path string, err error) error {
+	return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
 }
 
 // current returns the directory's path, the directory, held open, and its

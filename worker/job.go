@@ -58,8 +58,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	}
 	if err != nil {
 		a.log.Error("evaluating the job's env: failed", "error", a.mask.Mask(err.Error()))
+		jobDiags = append(jobDiags, a.at(problems.EvaluationFailed, a.job.Path, nil))
 	}
-	if err != nil || jobDiags.HasErrors() {
+	if jobDiags.HasErrors() {
 		return &workerapi.Complete{Outcome: plan.OutcomeFailure, Diagnostics: a.maskDiagnostics(jobDiags)}
 	}
 	a.jobEnv = jobEnv
@@ -182,8 +183,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	}
 	if err != nil {
 		a.log.Error("evaluating the job's outputs failed", "error", a.mask.Mask(err.Error()))
+		diags = append(diags, a.at(problems.EvaluationFailed, a.job.Path, nil))
 	}
-	if (err != nil || diags.HasErrors()) && end.Outcome != plan.OutcomeCancelled {
+	if diags.HasErrors() && end.Outcome != plan.OutcomeCancelled {
 		end.Outcome = plan.OutcomeFailure
 	}
 	end.Diagnostics = a.maskDiagnostics(append(jobDiags, diags...))
@@ -362,7 +364,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		case err != nil:
 			// Not the workflow's fault, but the step can't run.
 			a.log.Error("readying a step failed", "step", i, "try", try, "error", a.mask.Mask(err.Error()))
-			return fail()
+			return fail(a.at(problems.EvaluationFailed, path, nil))
 		case diags.HasErrors() || rs == nil:
 			end.ifFailed = rs != nil && rs.IfFailed
 			return fail()
@@ -386,11 +388,11 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			return fail(*refused)
 		}
 		if out.err != nil {
-			return fail(a.at(problems.StepNotStarted, path, problems.Params{"reason": out.err.Error()}))
+			return fail(a.notStarted(out.err, path))
 		}
 		dir := a.workingDirectory(rs)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fail(a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()}))
+			return fail(a.notStarted(err, path))
 		}
 		if note != nil {
 			diags = append(diags, *note)
@@ -536,7 +538,7 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 	switch {
 	case err != nil:
 		a.log.Error("readying a cleanup failed", "step", i, "error", a.mask.Mask(err.Error()))
-		return fail()
+		return fail(a.at(problems.EvaluationFailed, path, nil))
 	case diags.HasErrors() || rs == nil:
 		return fail()
 	case rs.Skipped:
@@ -549,11 +551,11 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 		return fail(*refused)
 	}
 	if out.err != nil {
-		return fail(a.at(problems.StepNotStarted, path, problems.Params{"reason": out.err.Error()}))
+		return fail(a.notStarted(out.err, path))
 	}
 	dir := a.workingDirectory(rs)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fail(a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()}))
+		return fail(a.notStarted(err, path))
 	}
 	if note != nil {
 		diags = append(diags, *note)
@@ -671,7 +673,7 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 	stream.Close()
 	a.liveGroups()
 	if err != nil {
-		diags = append(diags, a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()}))
+		diags = append(diags, a.notStarted(err, path))
 	}
 	if dropped := stream.droppedBytes(); dropped > 0 {
 		diags = append(diags, a.at(problems.LogNotKept, path, problems.Params{"size": dropped, "limit": a.spool.limit()}))
@@ -945,6 +947,21 @@ func (a *attempt) maskDiagnostics(ds problems.Diagnostics) problems.Diagnostics 
 // that its message can't quote a secret, escaped or not.
 func (a *attempt) at(k *problems.Kind, path string, params problems.Params) problems.Diagnostic {
 	return k.At("", problems.Position{}, path, a.maskParams(params))
+}
+
+// notStarted returns why a step, or a cleanup, at path couldn't start, as
+// err says. The only problems it can hold are the worker's own directory's,
+// which are the meridian command's, as when the worker can make its
+// directory in none of its parents: that is WorkerDirUnusable, which names
+// the first of them by its code and the directory its path param names,
+// and the worker's log has each. Anything else is StepNotStarted, with
+// what the operating system said.
+func (a *attempt) notStarted(err error, path string) problems.Diagnostic {
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		dir, _ := p.Params["path"].(string)
+		return a.at(problems.WorkerDirUnusable, path, problems.Params{"path": dir, "code": string(p.Code)})
+	}
+	return a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()})
 }
 
 // maskProblem returns p with what it says masked.

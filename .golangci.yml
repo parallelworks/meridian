@@ -28,6 +28,8 @@ linters:
           msg: "Use t.Setenv, which restores the previous value when the test ends."
         - pattern: '^time\.Sleep$'
           msg: "Wait for the thing itself, not for a delay that is long enough on a laptop and too short on a loaded runner. If the delay is the test, keep it with //nolint:forbidigo and say why."
+        - pattern: '^(fmt\.Errorf|errors\.New)$'
+          msg: "In worker/, a failure a user can meet is a problem of a kind in problems/kinds.go, not Go text. Mark a sentinel the worker turns into a kind, or an invariant no user can meet, with //nolint:forbidigo and say why."
     gosec:
       excludes:
         - G104 # covered by errcheck
@@ -71,6 +73,14 @@ linters:
       # waiting for the condition are the better tools.
       - path-except: _test\.go
         text: 'os\.Setenv|time\.Sleep'
+        linters: [forbidigo]
+      # fmt.Errorf and errors.New are banned only in the worker, whose
+      # errors reach the people who run jobs, and not in its tests.
+      - path-except: '^worker/'
+        text: 'fmt\.Errorf|errors\.New'
+        linters: [forbidigo]
+      - path: _test\.go
+        text: 'fmt\.Errorf|errors\.New'
         linters: [forbidigo]
 
 issues:

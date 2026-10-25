@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"maps"
 	"os/exec"
@@ -174,7 +173,7 @@ func (a *attempt) run(ctx context.Context) error {
 	if !stopped {
 		return a.haltErr
 	}
-	return fmt.Errorf("worker: stopped before the attempt ended: %w", ctx.Err())
+	return ctx.Err()
 }
 
 // halt stops the job at once, as stopJob does, and stops sending: the
@@ -347,6 +346,11 @@ func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 			end.Problem = &problem.Problem{Type: p.Type, Title: p.Title, Status: p.Status, Detail: p.Title, Code: p.Code}
 			err = a.client.complete(ctx, end)
 		}
+	}
+	if order, ok := errors.AsType[*outOfOrderError](err); ok {
+		// The coordinator said it had stored every event up to end.Seq
+		// before the worker sent it, so it has lost some since.
+		return problems.CoordinatorLostData.Problem(problems.Params{"data": "events", "from": order.expected})
 	}
 	if err != nil {
 		return err

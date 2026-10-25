@@ -948,6 +948,18 @@
       "Check that the step's shell is on the host, and that its working directory can be made there."
     ]
   },
+  "evaluation_failed": {
+    "why": "The worker evaluates a job's env: as the job starts, each step as it is about to run, and the job's outputs once its steps have run. One of these failed with an error of Meridian's own, not a problem with the workflow, so the step, or the job, failed.",
+    "fix": [
+      "Report the bug, with the worker's log, which records the error."
+    ]
+  },
+  "worker_dir_unusable": {
+    "why": "A worker keeps a step's script and $OUTPUTS in a directory of its own, which only you can use, and makes another if a step removes it: in the same place, or else in the next it would have used, of meridian/worker in your cache directory, XDG_RUNTIME_DIR and the system's temporary directory. It could make one in none of them, so the step didn't start. The code is the problem with the first of them, and its page says why.",
+    "fix": [
+      "Fix what the code's page says, for the directory the message names, or set XDG_RUNTIME_DIR to a directory only you can change."
+    ]
+  },
   "shell_not_supported": {
     "why": "Format 1 runs a step's command with bash or sh only, as its shell: says, so the step fails without running. The workflow's schema allows no other shell, so this happens only for a plan made without checking it.",
     "fix": [
@@ -1078,29 +1090,29 @@
     ]
   },
   "directory_unavailable": {
-    "why": "Meridian creates its state and cache directories when it first needs them, and the operating system refused or failed.",
+    "why": "Meridian creates its state and cache directories when it first needs them, and a worker the directory it keeps its own files in, and the operating system refused or failed.",
     "fix": [
       "Fix what the reason names, such as a parent directory you can't write to.",
-      "Or choose another directory with MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+      "Or choose another directory with MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR, or, for a worker, set XDG_RUNTIME_DIR to one only you can change."
     ]
   },
   "not_a_directory": {
-    "why": "Meridian keeps its config, state and cache in directories, and something else is at the path it would use for one.",
+    "why": "Meridian keeps its config, state and cache in directories, and a worker its own files, and something else is at the path it would use for one.",
     "fix": [
-      "Move what is at the path, or choose another directory with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+      "Move what is at the path, or choose another directory with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR, or, for a worker, set XDG_RUNTIME_DIR to one only you can change."
     ]
   },
   "directory_not_owned": {
-    "why": "Meridian's directories hold your config, the key that wraps your runs' secrets, your logs and copies of private repositories. A directory another user owns is one they can change.",
+    "why": "Meridian's directories hold your config, the key that wraps your runs' secrets, your logs and copies of private repositories, and a worker's its steps' scripts and outputs. A directory another user owns is one they can change.",
     "fix": [
-      "Choose a directory of your own with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+      "Choose a directory of your own with MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR, or, for a worker, set XDG_RUNTIME_DIR to one only you can change."
     ]
   },
   "directory_not_private": {
-    "why": "Meridian's state directory holds the key that wraps your runs' secrets, and its cache directory copies of repositories that may be private, so only you may read them. Meridian doesn't tighten a directory that was open, since what was in it may have been read already.",
+    "why": "Meridian's state directory holds the key that wraps your runs' secrets, its cache directory copies of repositories that may be private, and a worker's directory its steps' scripts, which can hold secrets, so only you may read them; and no one else may change a directory a worker makes its own in. Meridian doesn't tighten a directory that was open, since what was in it may have been read already.",
     "fix": [
       "Run chmod 700 on the directory, once you're sure nothing in it was read or changed.",
-      "Or choose a new directory with MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR."
+      "Or choose a new directory with MERIDIAN_STATE_DIR or MERIDIAN_CACHE_DIR, or, for a worker, set XDG_RUNTIME_DIR to one only you can change."
     ]
   },
   "path_unsafe": {
@@ -1415,6 +1427,12 @@
       "Run Meridian on a Unix system, such as Linux or macOS."
     ]
   },
+  "directory_replaced": {
+    "why": "A worker keeps its own files in a directory it makes, which only you can use, and holds it open, so that it never uses a path that has come to name something else. Something replaced this one between the worker making it and opening it: a process of yours, such as a job's step, or root's.",
+    "fix": [
+      "Find what removes or replaces directories whose names start with .meridian-worker- in the directory that holds this one, and stop it."
+    ]
+  },
   "path_links_too_many": {
     "why": "Meridian follows the symbolic links on the way to its directories, as the kernel does, and stops after as many as the kernel would, which is most likely a link that leads back to itself.",
     "fix": [
@@ -1461,6 +1479,24 @@
     "why": "A worker reaches a coordinator over TLS by its key: the backend gives it the SHA-256 hash of the coordinator's public key, and the worker talks only to a server that holds that key, whatever its certificate says. This server holds another.",
     "fix": [
       "Check that MERIDIAN_COORDINATOR names the coordinator, or its relay, and that the coordinator's replicas share one key."
+    ]
+  },
+  "coordinator_answer_invalid": {
+    "why": "A worker reads the coordinator's answers strictly, as the worker API's version defines them, and the coordinator refuses a request with a problem that has a code. This answer was neither, so the worker stopped, rather than guess what the coordinator meant. A worker and a coordinator of different releases of Meridian, or a server that isn't the coordinator, answer so.",
+    "fix": [
+      "Start workers of the same release of Meridian as the coordinator, and check that the worker reaches the coordinator, not another server."
+    ]
+  },
+  "coordinator_lost_data": {
+    "why": "A worker keeps what it reports only until the coordinator says it has stored it. This coordinator then asked for it again, from earlier, as one that lost what it had stored would, such as one whose database was restored from a backup. The worker stops the job, rather than leave a hole in what the run records.",
+    "fix": [
+      "Find out why the coordinator lost what it had stored. The job runs again if its retry: lists worker-lost."
+    ]
+  },
+  "coordinator_stored_unsent": {
+    "why": "A worker numbers the events it reports, and the coordinator answers with the number of the last it has stored. One past those the worker sent means that the coordinator holds events this worker never sent, as one that mixed two attempts up would, so the worker stops, rather than go on reporting to it.",
+    "fix": [
+      "Report the bug, with the coordinator's and the worker's logs."
     ]
   },
   "bootstrap_token_refused": {

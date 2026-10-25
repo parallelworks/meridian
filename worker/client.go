@@ -139,14 +139,15 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 func pinned(address string, hash []byte) func(tls.ConnectionState) error {
 	return func(cs tls.ConnectionState) error {
 		if cs.Version != tls.VersionTLS13 {
-			return errors.New("worker: the coordinator's connection isn't TLS 1.3")
+			return errors.New("worker: the coordinator's connection isn't TLS 1.3") //nolint:forbidigo // can't happen: the TLS config's MinVersion refuses an older one first
 		}
+		// A server that shows no certificate doesn't show the coordinator's
+		// key. The worker never talks to it, and doesn't try again.
 		if len(cs.PeerCertificates) == 0 {
-			return errors.New("worker: the coordinator sent no certificate")
+			return problems.CoordinatorKeyMismatch.Problem(problems.Params{"address": address})
 		}
 		got := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
 		if subtle.ConstantTimeCompare(got[:], hash) != 1 {
-			// The worker never talks to it, and doesn't try again.
 			return problems.CoordinatorKeyMismatch.Problem(problems.Params{"address": address})
 		}
 		return nil
@@ -185,8 +186,9 @@ type call struct {
 // do makes a call, and decodes its answer into out, if out isn't nil. It
 // tries again, with backoff, when the request fails without an answer or
 // with a status that asks it to, until ctx is done, and otherwise returns
-// errUnauthorized, errFenced, errPlanTooNew, an *outOfOrderError, or an
-// error that says what the coordinator refused.
+// errUnauthorized, errFenced, errPlanTooNew, an *outOfOrderError, the
+// problem the coordinator refused it with, as the coordinator sent it, or
+// problems.CoordinatorAnswerInvalid for an answer the worker can't read.
 func (c *client) do(ctx context.Context, cl call, out any) error {
 	for try := 0; ; try++ {
 		err := c.send(ctx, cl, out)
@@ -259,7 +261,7 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 			return nil
 		}
 		if err := workerapi.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("worker: reading the coordinator's answer to %s: %w", cl.path, err)
+			return answerInvalid(cl.path, err.Error())
 		}
 		return nil
 	case status == http.StatusServiceUnavailable:
@@ -268,15 +270,17 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		// included.
 		resp.Body.Close()
 		c.transport.CloseIdleConnections()
-		return &temporaryError{fmt.Errorf("worker: %s: %s", cl.path, resp.Status)}
+		return tryAgain(cl.path, resp.Status)
 	case status == http.StatusTooManyRequests || status >= 500:
-		return &temporaryError{fmt.Errorf("worker: %s: %s", cl.path, resp.Status)}
+		return tryAgain(cl.path, resp.Status)
 	case status == http.StatusUnauthorized:
 		return errUnauthorized
 	}
 	var p problem.Problem
-	if jsonv2.Unmarshal(data, &p) != nil {
-		p = problem.Problem{Status: resp.StatusCode}
+	if jsonv2.Unmarshal(data, &p) != nil || p.Type == "" && p.Code == "" {
+		// An answer that isn't a problem: its status is all the
+		// coordinator said.
+		return answerInvalid(cl.path, resp.Status)
 	}
 	switch p.Code {
 	case workerapi.Fenced:
@@ -288,7 +292,25 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 			return &outOfOrderError{expected}
 		}
 	}
-	return fmt.Errorf("worker: the coordinator refused %s: %s (%s): %s", cl.path, resp.Status, p.Key(), p.Detail)
+	// The coordinator's refusal is a problem, with its code and params,
+	// which the worker returns as the coordinator sent it: an about:blank
+	// one with the code its status implies, and its text with its control
+	// characters escaped, as a message escapes a param's.
+	p.Code = p.Key()
+	p.Title, p.Detail = problems.EscapeControl(p.Title), problems.EscapeControl(p.Detail)
+	return &p
+}
+
+// answerInvalid is the problem of an answer to the request at path that
+// the worker can't read, for the reason its decoder, or its status, gives.
+func answerInvalid(path, reason string) error {
+	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "reason": reason})
+}
+
+// tryAgain is a request to path that the coordinator answered with status,
+// which asks the worker to try it again.
+func tryAgain(path, status string) error {
+	return &temporaryError{fmt.Errorf("worker: %s: %s", path, status)} //nolint:forbidigo // a request the worker tries again, which only its log shows
 }
 
 // problemOf returns the problem of kind k that err is, or wraps, or nil.

@@ -1304,8 +1304,9 @@ func TestEventsLost(t *testing.T) {
 		return answer
 	}
 	start := time.Now()
-	if err := f.runWorker(t.Context(), Config{}); err == nil || !strings.Contains(err.Error(), "lost") {
-		t.Fatalf("got %v", err)
+	err := f.runWorker(t.Context(), Config{})
+	if p := problemOf(err, problems.CoordinatorLostData); p == nil || p.Params["data"] != "events" {
+		t.Fatalf("got %v, want the events lost", err)
 	}
 	if elapsed := time.Since(start); elapsed > 15*time.Second {
 		t.Errorf("the worker took %v to stop", elapsed)
@@ -1330,5 +1331,56 @@ func TestRedirectRefused(t *testing.T) {
 	}
 	if n := claims.Load(); n != 1 {
 		t.Errorf("the worker made %d claims", n)
+	}
+}
+
+// TestCleanupRemovesRunDir checks that a cleanup: that removes the run's
+// directory, as rm -r ${PW_JOB_DIR} does in workflows we know of, leaves
+// the cleanups after it, and the worker's files, as they were: the
+// worker's directory is outside the run's.
+func TestCleanupRemovesRunDir(t *testing.T) {
+	t.Parallel()
+	first := command("true")
+	first.Cleanup = plan.Literal("echo cleaned first")
+	second := command("echo two=2 >> $OUTPUTS")
+	second.Cleanup = plan.Literal(`rm -r "$PW_JOB_DIR"`)
+	f := newFakeCoordinator(t, newJob(first, second))
+	home := t.TempDir()
+	if err := f.runWorker(t.Context(), Config{Environ: []string{"HOME=" + home}}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success 0",
+		"started 1.0", "finished 1.0 success 0",
+		"cleanup started 1.0", "cleanup finished 1.0 success 0",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	end := checkEnd(t, f, plan.OutcomeSuccess, "")
+	if end.Outputs["two"] != "2" {
+		t.Errorf("the job's outputs are %v", end.Outputs)
+	}
+}
+
+// TestProblemsMaskedEscaped checks that a problem the worker makes is
+// masked before its message is made, so that a secret with a character
+// the message escapes, such as a tab, isn't quoted escaped.
+func TestProblemsMaskedEscaped(t *testing.T) {
+	t.Parallel()
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeCoordinator(t, newJob(command("true")))
+	f.claim.Run = plan.RunValues{Format: 1, Vars: map[string]string{"token": "hun\tter2"}, Secrets: []string{"vars.token"}}
+	f.claim.RunDir = filepath.Join(file, "hun\tter2")
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+	if end.Problem == nil || strings.Contains(end.Problem.Detail, "ter2") {
+		t.Errorf("the problem quotes the secret: %+v", end.Problem)
+	}
+	if setup, _ := f.log(logKey{part: workerapi.LogSetup}); strings.Contains(setup, "ter2") {
+		t.Errorf("the setup log quotes the secret: %q", setup)
 	}
 }

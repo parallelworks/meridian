@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 
@@ -212,6 +213,8 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 	case ep.socket() && key != "":
 		// A Unix socket needs no key: one set means the backend meant TLS.
 		return ep, nil, invalid(workerapi.EnvKeySHA256)
+	case !ep.socket() && !hostPort(ep.address):
+		return ep, nil, invalid(workerapi.EnvCoordinator)
 	case !ep.socket():
 		hexKey, ok := strings.CutPrefix(key, "sha256:")
 		hash, err := hex.DecodeString(hexKey)
@@ -244,6 +247,13 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 // maxTokenFile is the most bytes the worker reads of a bootstrap token's
 // file.
 const maxTokenFile = 4096
+
+// hostPort reports whether address is a host and port, or a host, that a
+// URL can hold as it is, as the coordinator's address over TLS must be.
+func hostPort(address string) bool {
+	u, err := url.Parse("https://" + address)
+	return err == nil && u.Host == address && u.Path == "" && u.RawQuery == "" && u.Fragment == ""
+}
 
 // readTokenFile reads a bootstrap token from a file of the worker's user
 // that only the user can read, not through a symbolic link, on a path no

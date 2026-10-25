@@ -3,9 +3,9 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -132,7 +132,7 @@ func (q *eventQueue) isStored(seq int64) (bool, <-chan struct{}) {
 
 // errStopped is what a wait returns when what it waited for can no longer
 // happen: the worker is stopping.
-var errStopped = errors.New("worker: stopped")
+var errStopped = errors.New("worker: stopped") //nolint:forbidigo // never a user's: the worker stops only once it has halted, with why
 
 // wait waits until the coordinator has stored every event up to seq, or
 // stop is closed.
@@ -186,7 +186,7 @@ func (q *eventQueue) send(ctx context.Context, c *client, stop func(error), notE
 		case errors.As(err, &order):
 			// The coordinator has lost events it said it had stored,
 			// which the worker no longer has.
-			stop(fmt.Errorf("worker: the coordinator has lost the events from %d, which the worker no longer has", order.expected))
+			stop(problems.CoordinatorLostData.Problem(problems.Params{"data": "events", "from": order.expected}))
 			return
 		default:
 			if ctx.Err() == nil {
@@ -195,7 +195,7 @@ func (q *eventQueue) send(ctx context.Context, c *client, stop func(error), notE
 			return
 		}
 		if last := events[len(events)-1].Seq; ack.Seq > last {
-			stop(fmt.Errorf("worker: the coordinator says it stored the events up to %d, past the last the worker sent, %d", ack.Seq, last))
+			stop(problems.CoordinatorStoredUnsent.Problem(problems.Params{"seq": ack.Seq, "last": last}))
 			return
 		}
 		if ack.Seq < events[0].Seq {

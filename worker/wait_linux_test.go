@@ -3,7 +3,11 @@
 package worker
 
 import (
+	"bytes"
+	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -41,6 +45,35 @@ func TestWaitExitHolds(t *testing.T) {
 		}
 		if err := syscall.Kill(pid, 0); err == nil {
 			t.Errorf("%q: the process is still there once reaped", tc.script)
+		}
+	}
+}
+
+// TestNoZombiesLeft checks that once Run returns, the worker has reaped
+// every step's process group leader it held, though a step left a process
+// in its group. It doesn't run in parallel, as other tests' workers hold
+// leaders of their own.
+func TestNoZombiesLeft(t *testing.T) {
+	f := newFakeCoordinator(t, newJob(command(`nohup sleep 1 >/dev/null 2>&1 </dev/null &`), command("sleep 1.5")))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	me := strconv.Itoa(os.Getpid())
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Skip("no /proc")
+	}
+	for _, e := range entries {
+		data, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		_, after, ok := bytes.Cut(data, []byte(") "))
+		if !ok {
+			continue
+		}
+		if fields := strings.Fields(string(after)); len(fields) > 1 && fields[0] == "Z" && fields[1] == me {
+			t.Errorf("a zombie child, %s, is left", e.Name())
 		}
 	}
 }

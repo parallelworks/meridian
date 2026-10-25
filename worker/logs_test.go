@@ -1,10 +1,15 @@
 package worker
 
 import (
+	"fmt"
 	"io"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -133,4 +138,41 @@ func TestSpoolLoseRace(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+// TestCompactionLostLog checks that a log stays whole, at the right
+// offsets, when its file is compacted as its step prints, and the
+// coordinator, some way off, loses what it had stored.
+func TestCompactionLostLog(t *testing.T) {
+	t.Parallel()
+	pad := strings.Repeat("x", 200)
+	f := newFakeCoordinator(t, newJob(command(`for i in $(seq 1 400); do echo "line $i `+pad+`"; sleep 0.003; done`)))
+	var uploads atomic.Int32
+	f.fault = func(r *http.Request) fault {
+		if r.URL.Path == workerapi.PathLogs && r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+			time.Sleep(10 * time.Millisecond) //nolint:forbidigo // a coordinator some way off, so that the step prints faster than it stores
+			if uploads.Add(1) == 30 {
+				return forget
+			}
+		}
+		return answer
+	}
+	err := f.runWorker(t.Context(), Config{})
+	if err != nil {
+		// Lost bytes from before the file was compacted can't be sent
+		// again: the attempt ends, rather than send a log with a hole.
+		if p := problemOf(err, problems.CoordinatorLostData); p == nil || p.Params["data"] != "log" {
+			t.Fatal(err)
+		}
+		return
+	}
+	got, _ := f.log(logKey{workerapi.LogStep, 0, 0})
+	for i, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+		if want := fmt.Sprintf("line %d %s", i+1, pad); line != want {
+			t.Fatalf("line %d of the log is %.20q…", i+1, line)
+		}
+	}
+	if n := strings.Count(got, "\n"); n != 400 {
+		t.Errorf("the log has %d lines, want 400", n)
+	}
 }

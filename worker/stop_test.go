@@ -1,3 +1,5 @@
+//go:build unix
+
 package worker
 
 import (
@@ -297,5 +299,82 @@ func TestControlBacksOff(t *testing.T) {
 	defer f.mu.Unlock()
 	if n := f.requests[workerapi.PathControl]; n > 100 {
 		t.Errorf("the worker polled %d times in a second", n)
+	}
+}
+
+// TestHeartbeatStalls checks that one heartbeat that the coordinator never
+// answers, as a connection that is half open would hold it, doesn't stop a
+// job that fences itself: the worker gives up on it in time to send
+// another. It also heartbeats more often than the coordinator asks, when
+// that wouldn't leave it time to try.
+func TestHeartbeatStalls(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command("sleep 4")))
+	f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = true, 5, 2
+	var n atomic.Int32
+	f.fault = func(r *http.Request) fault {
+		if r.URL.Path == workerapi.PathHeartbeat && n.Add(1) == 1 {
+			return hang
+		}
+		return answer
+	}
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatalf("one stalled heartbeat stopped the job: %v", err)
+	}
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+}
+
+// TestFenceKeepsSending checks that a job that fences itself goes on
+// sending what it has until its lease lapses: its log reaches a
+// coordinator that comes back between the job stopping and the lease
+// lapsing.
+func TestFenceKeepsSending(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command("echo hello; sleep 30")))
+	f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = true, 3, 1
+	var cutOff atomic.Int64
+	f.onEvent = func(e workerapi.Event) { cutOff.CompareAndSwap(0, time.Now().UnixNano()) }
+	f.fault = func(r *http.Request) fault {
+		c := cutOff.Load()
+		if c == 0 {
+			return answer
+		}
+		since := time.Since(time.Unix(0, c))
+		switch {
+		case r.URL.Path == workerapi.PathHeartbeat:
+			return unavailable
+		case r.URL.Path == workerapi.PathLogs && since < 2200*time.Millisecond:
+			// Back after the job has stopped, at 1.8 s, and before the
+			// lease lapses, at 3 s.
+			return unavailable
+		}
+		return answer
+	}
+	if err := f.runWorker(t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
+		t.Fatalf("got %v, want %v", err, errLeaseLapsed)
+	}
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "hello\n")
+}
+
+// TestStoppedKeepsLastWords checks that a worker stopped from outside
+// sends what a step prints in its grace period: the flush period starts
+// once the steps have stopped.
+func TestStoppedKeepsLastWords(t *testing.T) {
+	t.Parallel()
+	f := newFakeCoordinator(t, newJob(command(`trap 'sleep 1.5; echo last words; exit 0' TERM; echo started; while :; do sleep 0.1; done`)))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var once sync.Once
+	f.fault = func(r *http.Request) fault {
+		if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+			once.Do(cancel)
+		}
+		return answer
+	}
+	if err := f.runWorker(ctx, Config{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if log, ended := f.log(logKey{workerapi.LogStep, 0, 0}); !ended || !strings.HasPrefix(log, "started\n") || !strings.HasSuffix(log, "last words\n") {
+		t.Errorf("the log is %q (ended %t), without what the step printed last", log, ended)
 	}
 }
