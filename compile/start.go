@@ -459,6 +459,15 @@ func (st *starter) restore() error {
 		if err := setGrow(values, g.path, jsonvalue.Clone(g.v)); err != nil {
 			return err
 		}
+		// A part of an input the Inputs resolver changed is in what it
+		// gave too, which neither the plan nor Unresolved holds.
+		for name, v := range jsonvalue.Sorted(st.resolved) {
+			if at := plan.SplitPath(name); len(g.path) > len(at) && isPrefix(at, g.path) {
+				if st.resolved[name], err = grow(v, g.path[len(at):], jsonvalue.Clone(g.v)); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	r.values = values

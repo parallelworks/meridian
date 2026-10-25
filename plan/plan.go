@@ -51,7 +51,8 @@ type Run struct {
 	// input's path: a cluster's name, for its details. What the compiler
 	// evaluated before it checked the inputs read them as submitted, and so
 	// does what Start evaluates, which then reads Inputs' (docs/design.md,
-	// Starting a run).
+	// Starting a run). A part of one that Inputs leaves out, as private or a
+	// secret, it leaves out too.
 	Unresolved map[string]Data `json:"unresolved,omitempty"`
 	// Definitions are the workflow's input definitions, on.execute.inputs,
 	// as the workflow writes them, with their expressions parsed, but for
