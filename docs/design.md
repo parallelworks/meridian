@@ -570,7 +570,12 @@ definitions, under `on.execute.inputs`, and fills in what is missing, as
 ACTIVATE's launch form and its backend do together:
 
 - **Defaults.** An input with no value, or with `""` when `""` isn't one of
-  its options, takes its default. A default of `""` gives no value. A
+  its options, takes its default. A null submitted for an input, or an
+  input in a group, is its value, as ACTIVATE keeps it: it takes no
+  default, and what reads it reads null; only a key not submitted, or
+  `""`, takes one. A group submitted as null takes its inputs' defaults, and
+  in a list's row null is no value, as ACTIVATE fills in a row's. A default
+  of `""` gives no value. A
   default that is an expression is evaluated with the other inputs' values,
   defaults included, in whatever order they need; defaults that read each
   other are an error. A default reads what its paths can reach, however
@@ -637,8 +642,10 @@ ACTIVATE's launch form and its backend do together:
   An ignored input has no value, even one that was submitted: a condition
   evaluated once it is ignored reads it as null, a list with rows too. An
   input with no value and no default is required unless it is optional, or
-  hidden or in a hidden group; a boolean with none is `false`. Every
-  missing input is reported, not only the first.
+  hidden or in a hidden group; a boolean with none is `false`. A submitted
+  null is a value, so an input given null isn't required, and a boolean
+  given null stays null. Every missing input is reported, not only the
+  first.
 - **Containers.** A group's values are under its name. A wizard step's
   inputs have their values beside the step's, unless `$meta.wizard.flatten`
   is `false`. A wizard step with `multi: true` repeats, as many times as the
@@ -650,7 +657,8 @@ ACTIVATE's launch form and its backend do together:
 - **Types.** Format 1 reads every input value as it was submitted, as
   ACTIVATE does, and converts none: its defaults, conditions, `env:` and
   steps read a number sent as text as that text, so `"8" + 1` is `"81"`,
-  and the text `"true"` isn't `true`, nor is `"false"` false. ACTIVATE's
+  and the text `"true"` isn't `true`, nor is `"false"` false; and a
+  submitted null stays null, as Defaults says. ACTIVATE's
   run form sends a number field's value as a JSON number and a checkbox's
   as a JSON boolean, and a JSON caller writes the types itself; a client
   that has only text converts by the field's type, as `meridian

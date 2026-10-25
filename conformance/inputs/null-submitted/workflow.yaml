@@ -1,0 +1,35 @@
+on:
+  execute:
+    inputs:
+      b:
+        type: boolean
+      n:
+        type: number
+        default: 5
+      s:
+        type: string
+      e:
+        type: number
+        default: 7
+      t:
+        type: string
+        default: x
+      reads:
+        type: string
+        default: ${{ inputs.n === null }}
+      g:
+        type: group
+        items:
+          a:
+            type: string
+            default: ga
+      l:
+        type: list
+        template:
+          f:
+            type: string
+            default: d
+jobs:
+  main:
+    steps:
+      - run: echo ok
