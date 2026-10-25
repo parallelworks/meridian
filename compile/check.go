@@ -31,7 +31,7 @@ func (r *inputResolver) checkValues() {
 	// passwords holds the password fields of each input's rows, once an
 	// input is checked with checkKnown.
 	var passwords map[*field][]*field
-	for _, fields := range [][]*field{r.fields, r.rows} {
+	for _, fields := range [][]*field{r.fields, r.liveRows()} {
 		for _, f := range fields {
 			if f.header || f.holder().ignored {
 				continue

@@ -109,35 +109,79 @@ func (r *inputResolver) compare(f *field) {
 // rows at index, reads the inputs' value at path: itself, or through a
 // value an evaluation made from it, as a default that reads another input
 // whose default reads it does.
+//
+// It looks from both ends, a step at a time: from what loc reads, through
+// the evaluations that gave it, and from the value, through the
+// evaluations that read it, either of which finds the answer alone. Each
+// step is taken on the side with less to follow, the value's first when
+// the two have as much, as most often nothing has read it. So a comparison costs
+// what the smaller side reaches, not what loc reads through, which can be
+// each row of a long list, or each default of a long chain, for each of
+// many values compared.
 func (r *inputResolver) readsPart(loc []string, index []int, path []string) bool {
 	exprs, err := r.workflow.Exprs(loc)
 	if err != nil {
 		return false
 	}
-	patterns := readPatterns(exprs, index)
-	if slices.ContainsFunc(patterns, func(p []string) bool { return reach.Reaches(p, path) }) {
+	reads := readPatterns(exprs, index)
+	readsPath := func(patterns [][]string, path []string) bool {
+		return slices.ContainsFunc(patterns, func(p []string) bool { return reach.Reaches(p, path) })
+	}
+	if readsPath(reads, path) {
 		return true
 	}
 	for _, e := range r.evaluations[r.gaveTo:] {
 		r.gave.Add(slices.Concat(e.f.path, e.path), e)
 	}
 	r.gaveTo = len(r.evaluations)
-	seen := map[*evaluation]bool{}
-	for len(patterns) > 0 {
-		p := patterns[len(patterns)-1]
-		patterns = patterns[:len(patterns)-1]
-		if reach.Reaches(p, path) {
-			return true
-		}
-		for e := range r.gave.Reached(p) {
-			if seen[e] {
-				continue
+	// fromLoc holds the evaluations that gave what loc reads, and those
+	// that gave what they read, and so on, and fromPart those that read the
+	// value, and those that read what they gave, and so on; next and
+	// before are the patterns and the paths each side follows next. When
+	// the two have as much to follow, the sides take turns.
+	fromLoc, fromPart := map[*evaluation]bool{}, map[*evaluation]bool{}
+	next, before := reads, [][]string{path}
+	forward := true
+	for len(next) > 0 && len(before) > 0 {
+		forward = len(next) < len(before) || len(next) == len(before) && !forward
+		if !forward {
+			var paths [][]string
+			for _, q := range before {
+				for e := range r.evaluated.Reaching(q) {
+					if fromPart[e] {
+						continue
+					}
+					fromPart[e] = true
+					at := slices.Concat(e.f.path, e.path)
+					if fromLoc[e] || readsPath(reads, at) {
+						return true
+					}
+					paths = append(paths, at)
+				}
 			}
-			seen[e] = true
-			if exprs, err := r.workflow.Exprs(e.loc); err == nil {
-				patterns = append(patterns, readPatterns(exprs, e.f.index)...)
+			before = paths
+			continue
+		}
+		var patterns [][]string
+		for _, p := range next {
+			for e := range r.gave.Reached(p) {
+				if fromLoc[e] {
+					continue
+				}
+				fromLoc[e] = true
+				if fromPart[e] {
+					return true
+				}
+				if exprs, err := r.workflow.Exprs(e.loc); err == nil {
+					read := readPatterns(exprs, e.f.index)
+					if readsPath(read, path) {
+						return true
+					}
+					patterns = append(patterns, read...)
+				}
 			}
 		}
+		next = patterns
 	}
 	return false
 }

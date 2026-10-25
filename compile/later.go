@@ -160,7 +160,7 @@ func (r *inputResolver) holdLater() {
 	// wizard steps with password fields among their inputs, by their paths.
 	passwords := map[*field][]*field{}
 	holders := map[string]*field{}
-	for _, fields := range [][]*field{r.fields, r.rows} {
+	for _, fields := range [][]*field{r.fields, r.liveRows()} {
 		for _, f := range fields {
 			if f.typ == "password" && f.in != nil {
 				passwords[f.in] = append(passwords[f.in], f)

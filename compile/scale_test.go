@@ -46,6 +46,9 @@ var scaledWorkloads = []scaled{
 	{name: "values for unknown inputs taken for passwords, beside a form's rows", n: 1000, workload: unknownPasswordsAndRows, timed: true},
 	{name: "submitted defaults that each read the next, the last a password", n: 250, workload: chainedPasswordDefaults, timed: true},
 	{name: "submitted defaults that each read the one before by a relative reference", n: 250, workload: relativeDefaults, timed: true},
+	{name: "submitted rows whose default reads another list's rows, each evaluated", n: 1000, workload: rowsReadingRows, timed: true},
+	{name: "submitted defaults that each read the one before, each what its default gives", n: 250, workload: givenChain(false), timed: true},
+	{name: "submitted defaults that each read the next, each what its default gives", n: 250, workload: givenChain(true), timed: true},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
@@ -323,6 +326,44 @@ func relativeDefaults(n int) ([]byte, map[string]any) {
 		submitted[fmt.Sprintf("a%d", i)] = "x"
 	}
 	return withInputs(lines, ""), submitted
+}
+
+// rowsReadingRows is n submitted rows of a list whose template's field has
+// a default that reads a password and another list of n rows, each row's
+// field evaluated from a default, and each with what the default gives:
+// comparing each with the default goes through what the other list's rows
+// read only if something read the row.
+func rowsReadingRows(n int) ([]byte, map[string]any) {
+	l := rows(n, func() map[string]any { return map[string]any{"u": "x", "h": "yes"} })
+	return withInputs([]string{
+		"pw: {type: password}",
+		"x: {type: string, default: y}",
+		"m: {type: list, template: {v: {type: string, optional: true, default: '${{ inputs.x }}x'}}}",
+		"l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ inputs.pw != '''' && length(inputs.m) > 0 && ''yes'' || ''no'' }}'}}}",
+	}, ""), map[string]any{"pw": "s", "m": rows(n, emptyRow), "l": l}
+}
+
+// givenChain returns n inputs whose defaults each read the one before, the
+// first a password, or with next each the one after, the last a password,
+// each given what its default gives: each comparison goes through what one
+// side of the chain reads only if nothing on the other reads it.
+func givenChain(next bool) func(n int) ([]byte, map[string]any) {
+	return func(n int) ([]byte, map[string]any) {
+		lines := []string{"pw: {type: password}"}
+		submitted := map[string]any{"pw": "s"}
+		for i := range n {
+			read := fmt.Sprintf("a%d", i-1)
+			switch {
+			case next && i == n-1, !next && i == 0:
+				read = "pw"
+			case next:
+				read = fmt.Sprintf("a%d", i+1)
+			}
+			lines = append(lines, fmt.Sprintf("a%d: {type: string, default: '${{ inputs.%s }}'}", i, read))
+			submitted[fmt.Sprintf("a%d", i)] = "s"
+		}
+		return withInputs(lines, ""), submitted
+	}
 }
 
 // deepValue is a matrix whose include holds a mapping nested n deep.

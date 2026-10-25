@@ -200,8 +200,12 @@ type inputResolver struct {
 	gaveTo      int
 	fields      []*field
 	// rows are the fields of lists' rows: each field of a list's template,
-	// once for each row.
-	rows []*field
+	// once for each row, and some that are gone (liveRows); goneRows counts
+	// those, and rowsOf holds the others by the inputs they are in, once
+	// Start first collects an input's rows again (dropRows).
+	rows     []*field
+	goneRows int
+	rowsOf   map[*field][]*field
 	// templates holds the fields of each list's template, and each repeated
 	// step's inputs, collected once with their paths in a row, by where they
 	// are in the workflow.

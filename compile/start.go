@@ -692,6 +692,18 @@ func (st *starter) pendingNodes() []startNode {
 	return out
 }
 
+// A nodeGroup is the nodes that a pattern reaches, such as a list's parts,
+// or all the env: values, which each node that reads them all waits for
+// as one: a node waits once for each group it reads, not once for each of
+// the group's nodes, so that each of a list's rows reading another list
+// adds a wait for each row, not one for each row of each list. left is how
+// many of the nodes aren't evaluated yet. A reader that is one of them
+// waits for the others (selfReaders): it is ready once it is the one left.
+type nodeGroup struct {
+	members, readers, selfReaders []int
+	left                          int
+}
+
 // evaluateInOrder evaluates nodes in the order they read each other, as
 // their expressions say, and then once each of those left, as one that
 // reads what waits through a definition is; and reports whether it
@@ -699,15 +711,33 @@ func (st *starter) pendingNodes() []startNode {
 func (st *starter) evaluateInOrder(nodes []startNode) bool {
 	var at reach.Trie[int]
 	envAt := map[string]int{}
+	paths := make([][]string, len(nodes))
 	for i, n := range nodes {
 		if n.f != nil {
-			at.Add(slices.Concat(n.f.path, n.f.later[n.i].path), i)
+			paths[i] = slices.Concat(n.f.path, n.f.later[n.i].path)
+			at.Add(paths[i], i)
 		} else {
 			envAt[n.env] = i
 		}
 	}
 	waits := make([]int, len(nodes))
 	readers := make([][]int, len(nodes))
+	groupAt := map[string]*nodeGroup{}
+	inGroups := make([][]*nodeGroup, len(nodes))
+	// group returns the group of the nodes members makes, under key, made
+	// once.
+	group := func(key string, members func() []int) *nodeGroup {
+		g, ok := groupAt[key]
+		if !ok {
+			g = &nodeGroup{members: members()}
+			g.left = len(g.members)
+			for _, j := range g.members {
+				inGroups[j] = append(inGroups[j], g)
+			}
+			groupAt[key] = g
+		}
+		return g
+	}
 	for i, n := range nodes {
 		exprs, index := st.nodeExprs(n)
 		seen := map[int]bool{i: true}
@@ -718,19 +748,36 @@ func (st *starter) evaluateInOrder(nodes []startNode) bool {
 				waits[i]++
 			}
 		}
-		for _, pattern := range readPatterns(exprs, index) {
-			for j := range at.Reached(pattern) {
-				read(j)
+		seenGroup := map[*nodeGroup]bool{}
+		readAll := func(g *nodeGroup, self bool) {
+			switch {
+			case len(g.members) == 1:
+				read(g.members[0])
+			case seenGroup[g] || len(g.members) == 0:
+			case self:
+				seenGroup[g] = true
+				g.selfReaders = append(g.selfReaders, i)
+				waits[i]++
+			default:
+				seenGroup[g] = true
+				g.readers = append(g.readers, i)
+				waits[i]++
 			}
+		}
+		for _, pattern := range readPatterns(exprs, index) {
+			g := group("inputs"+jsonptr.Format(pattern), func() []int {
+				members := slices.Collect(at.Reached(pattern))
+				slices.Sort(members)
+				return slices.Compact(members)
+			})
+			readAll(g, n.f != nil && reach.Reaches(pattern, paths[i]))
 		}
 		for _, e := range exprs {
 			for _, ref := range e.Refs() {
 				switch {
 				case ref.Context != "env":
 				case unnamed(ref.Path):
-					for _, j := range jsonvalue.Sorted(envAt) {
-						read(j)
-					}
+					readAll(group("env", func() []int { return slices.Sorted(maps.Values(envAt)) }), n.f == nil)
 				default:
 					if j, ok := envAt[ref.Path[0]]; ok {
 						read(j)
@@ -746,6 +793,11 @@ func (st *starter) evaluateInOrder(nodes []startNode) bool {
 		}
 	}
 	done := make([]bool, len(nodes))
+	release := func(j int) {
+		if waits[j]--; waits[j] == 0 {
+			heap.Push(&ready, j)
+		}
+	}
 	progress := false
 	for ready.Len() > 0 {
 		if st.ctx.Err() != nil {
@@ -757,8 +809,21 @@ func (st *starter) evaluateInOrder(nodes []startNode) bool {
 		}
 		done[i], progress = true, true
 		for _, j := range readers[i] {
-			if waits[j]--; waits[j] == 0 {
-				heap.Push(&ready, j)
+			release(j)
+		}
+		for _, g := range inGroups[i] {
+			switch g.left--; g.left {
+			case 0:
+				for _, j := range g.readers {
+					release(j)
+				}
+			case 1:
+				if len(g.selfReaders) > 0 {
+					last := g.members[slices.IndexFunc(g.members, func(j int) bool { return !done[j] })]
+					if slices.Contains(g.selfReaders, last) {
+						release(last)
+					}
+				}
 			}
 		}
 	}
@@ -798,7 +863,8 @@ func (r *inputResolver) throughDefinitions(exprs []*expr.Expr, loc []string) []*
 		exprs []*expr.Expr
 		loc   []string
 	}
-	out := exprs
+	// A copy once, as exprs are the workflow's.
+	out := slices.Clip(exprs)
 	seen := map[string]bool{jsonptr.Format(loc): true}
 	queue := []at{{exprs, loc}}
 	for len(queue) > 0 {
@@ -820,7 +886,7 @@ func (r *inputResolver) throughDefinitions(exprs []*expr.Expr, loc []string) []*
 						seen[k] = true
 						found, err := r.workflow.Exprs(target[:n])
 						if err == nil && len(found) > 0 {
-							out = append(slices.Clip(out), found...)
+							out = append(out, found...)
 							queue = append(queue, at{found, target[:n]})
 						}
 					}
@@ -1009,7 +1075,7 @@ func (st *starter) fillRows(f *field) {
 	if defs, _ := f.rowInputs(); defs == nil {
 		return
 	}
-	r.rows = slices.DeleteFunc(r.rows, func(c *field) bool { return c.in == f })
+	r.dropRows(f)
 	f.rows = nil
 	var pending pendingFields
 	var start func(fields []*field)
@@ -1297,7 +1363,7 @@ func (st *starter) checkInputs() {
 			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
 		}
 	}
-	for _, c := range r.rows {
+	for _, c := range r.liveRows() {
 		if c.typ == "password" && evaluated[c.in] {
 			r.checkField(c, false)
 		}

@@ -254,7 +254,7 @@ func (f *field) markUnknown(values map[string]any, path []string) {
 // would make it (refresh).
 func (r *inputResolver) evalValues() map[string]any {
 	values := jsonvalue.CloneMap(r.values)
-	for _, fields := range [][]*field{r.fields, r.rows} {
+	for _, fields := range [][]*field{r.fields, r.liveRows()} {
 		for _, f := range fields {
 			v, ok := f.filledWith()
 			if !ok {

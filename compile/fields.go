@@ -74,6 +74,9 @@ type field struct {
 	// seq is the field's place among the inputs' fields and then the rows'
 	// fields, the order evalValues fills in their values.
 	seq int
+	// gone is set for a field of a row that Start collects again
+	// (dropRows), which the inputResolver's rows hold until it drops them.
+	gone bool
 	// options is what checking the value reads of the field's options,
 	// once it is read, which the fields of a list's rows share with its
 	// template's.
