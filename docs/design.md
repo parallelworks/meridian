@@ -166,9 +166,12 @@ fixed, and its case records the fix.
 ### Bug fixes to format 1
 
 Each of these changes what format 1 means where it was plainly a bug, and
-ACTIVATE takes the same fix. Each counts the same workflows: the known
-workflows but Meridian's own copies of them, each file once by the hash of
-its content, 220 files.
+ACTIVATE takes the same fix. Each counts the same workflows, as every
+count of the known workflows in this document does: each YAML file of the
+known repositories that holds `jobs:` and parses to a mapping whose `jobs`
+is a mapping, but for Meridian's own copies of them and the files under
+`.git` and `.github`, counted once by the SHA-256 hash of its content: 221
+files.
 
 - **A matrix job's output** is the instance's with the highest index, not
   the last to finish's. None of the 14 matrix jobs has `outputs:`, and
@@ -208,7 +211,7 @@ its content, 220 files.
 - **A job's `outputs:` read `env`**: the workflow's `env:`, the job's, and
   the variables the worker defines, where format 1 left an expression that
   read it as its text. ACTIVATE takes the same fix by passing the job's
-  `env` to the parse of its outputs. None of the 7 jobs with `outputs:`
+  `env` to the parse of its outputs. None of the 8 jobs with `outputs:`
   reads `env` in them.
 - **`matrix.<key>` in a job without a matrix is null**, where ACTIVATE gave
   the text `matrix.<key>` when no job of the workflow had a `strategy:`,
@@ -222,7 +225,7 @@ its content, 220 files.
   `env:`, and for a step's, the job's over that, where format 1 recursed
   until it failed. Values that read others of the same `env:` are
   evaluated in the order they read each other, as in format 1. None of the
-  123 `env:` blocks has a value that reads another of its own block.
+  124 `env:` blocks has a value that reads another of its own block.
 - **A step's `cleanup:` reads `steps.<its own id>` as its step wrote it,
   and so do the cleanups after it and the job's `outputs:`, for a step
   with an `id` and a `cleanup:`**, where ACTIVATE's copy of the step that
@@ -402,16 +405,18 @@ its resolvers into a plan, in order:
      `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
      step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
      and reads as its own text, as format 1 reads a word it doesn't know.
-     No known workflow has one: none of the 220 that
-     [Bug fixes to format 1](#bug-fixes-to-format-1) counts reads `steps`
-     but through `needs.<job>.steps`. So with `needs`, which format 1 reads
-     only as `needs.<job>.outputs.<name>` and
+     No known workflow has one: of the 221 that
+     [Bug fixes to format 1](#bug-fixes-to-format-1) counts, one reads
+     `steps` other than through `needs.<job>.steps`, as
+     `steps.<id>.outputs.<name>` in a job's `outputs:`, of a step that
+     has no `id`, which is a warning (`output_undefined_step`). So with
+     `needs`, which format 1 reads only as `needs.<job>.outputs.<name>` and
      `needs.<job>.steps.<id>.outputs.<name>`, and Meridian as
      `needs.<job>.result` too: any other reference to it, such as
      `needs.build`, `needs.build.outputs`, `needs.build.steps.compile` or
      `needs.build.status`, whatever job it names, is a warning
      (`needs_read_whole`, `needs_unknown_key`), and reads as its own text.
-     The known workflows have 837 references to a job's outputs by name and
+     The known workflows have 839 references to a job's outputs by name and
      37 to its steps', and none of any other form. A plan holds an
      expression's tree, not its text, so a reference read as its own text
      is made again from its path: one written with dots is as written, and
@@ -1088,7 +1093,7 @@ it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
 differs for an `include` entry that names no matrix key: it makes it a
 combination of its own, where GitHub Actions adds it to every combination.
 Format 1 keeps ACTIVATE's for now. Whether to take GitHub Actions' as a bug
-fix ([The workflow format](#the-workflow-format)) is open: of the 220
+fix ([The workflow format](#the-workflow-format)) is open: of the 221
 known workflows ([Bug fixes to format 1](#bug-fixes-to-format-1)), none
 has an `include` entry that names no matrix key, nor any `include` at all. An entry also matches the combinations earlier entries made, and
 two values match when they are equal, or a string and a number or a
@@ -1816,7 +1821,8 @@ member's running workers reconnect to it.
   null and none as `""`, whatever else it says, such as its
   `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
   `host:port` as it is and reads `host` through the user's `ssh_config`.
-  534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
+  All 536 jobs' `ssh:` mappings in the known workflows read `remoteHost`
+  from an input, and 29 of the 37 steps' do.
 - **A step that outlives its job's cancelling.** A step whose `if:` can be
   true once its job is stopping, the word `always`, `always()`,
   `cancelled()`, `!success()` or `!failure()`, runs even once the job is
