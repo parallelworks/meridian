@@ -2,6 +2,7 @@ package compile
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 
@@ -14,29 +15,104 @@ import (
 
 // applyConditions evaluates each input's hidden, ignore and optional, drops
 // the values of ignored inputs, and reports required inputs with no value.
+//
+// What a condition that read a variable or a password decided mustn't show
+// in the plan, which can be shown to whoever can see the run. So an input
+// whose ignore read one, and each input in a group whose did (shaped), has
+// its value held, whatever the ignore decided: once the conditions have
+// read it as dropped, it is put back, kept out of the plan, in the secret
+// record (holdShaped), and Start drops it if the ignore decides so again.
+// The conditions of the inputs in such a group are each a decision of the
+// run's shape, whatever they read, and evaluated even if the group is
+// ignored, so the plan names the same ones either way. Whether an input
+// whose ignore, hidden or optional read one, or a group's around it did,
+// is required, Start decides (shapeDecided).
 func (r *inputResolver) applyConditions() {
+	var shaped, ignored []*field
+	var restore []heldValue
 	for _, f := range r.fields {
-		if f.group != nil && f.group.ignored {
+		g := f.group
+		if g != nil && g.ignored && !g.ignoredLater {
 			f.ignored = true
 			r.noteIgnored(f)
 			r.refresh(f.path)
 			continue
 		}
-		f.hidden = r.condition(f, "hidden") || f.group != nil && f.group.hidden
-		if f.ignored = r.condition(f, "ignore"); f.ignored {
+		inShaped := g != nil && g.shaped
+		if g != nil && g.ignored {
+			// The group's ignore read a variable or a password: what
+			// expressions read of f is that it is ignored, as Start reads
+			// it once it drops the group, while its conditions are
+			// decided all the same.
+			f.ignored = true
+			r.refresh(f.path)
+		}
+		hidden, _ := r.condition(f, "hidden", inShaped)
+		f.hidden = hidden || g != nil && g.hidden
+		ignore, private := r.condition(f, "ignore", inShaped)
+		_, decision := r.decided[jsonptr.Format(appendPath(f.loc, "ignore"))]
+		f.shaped = inShaped || private
+		if f.ignored = ignore || g != nil && g.ignored; f.ignored {
 			// What expressions read of f changes, before its value is
 			// dropped.
 			r.refresh(f.path)
 		}
-		f.optional = r.condition(f, "optional")
-		if f.ignored {
+		// An ignore that is no decision Start makes again, as true written
+		// out is, the compiler applies.
+		f.ignoredLater = f.ignored && (!ignore || decision)
+		f.optional, _ = r.condition(f, "optional", inShaped)
+		switch {
+		case f.ignoredLater:
+			restore = r.dropKept(f, restore)
+		case f.ignored:
 			r.noteIgnored(f)
+			r.drop(f)
+			ignored = append(ignored, f)
+		}
+		if private && !inShaped {
+			shaped = append(shaped, f)
+			// What reads f from here on reads what a variable or a
+			// password decided, as a later condition that reads it does,
+			// which is then a decision too.
+			r.markFields(f)
+		}
+	}
+	later := false
+	for _, f := range r.fields {
+		if f.ignoredLater {
+			f.ignored, later = false, true
+		}
+	}
+	if later {
+		// The values go back, and what expressions read of the values is
+		// made again, at once, in the map the evaluators' scope holds.
+		for _, v := range restore {
+			setIn(r.values, v.path, v.v)
+		}
+		r.evaluators = nil
+		if r.view != nil {
+			fresh := r.evalValues()
+			clear(r.view)
+			maps.Copy(r.view, fresh)
+			if r.checkView != nil {
+				r.checkView()
+			}
+		}
+	}
+	// What is put back can hold an input the compiler ignored, which stays
+	// dropped.
+	for _, f := range ignored {
+		if _, ok := jsonptr.Lookup(r.values, f.path); ok {
 			r.drop(f)
 		}
 	}
+	for _, f := range shaped {
+		r.holdShaped(f)
+	}
+	r.heldParts()
 	for _, f := range r.fields {
 		// A repeated step with no value has no rows.
-		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || f.repeats() || !r.missing(f) {
+		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || f.repeats() || !r.missing(f) || r.shapeDecided(f) {
 			continue
 		}
 		switch {
@@ -50,13 +126,15 @@ func (r *inputResolver) applyConditions() {
 }
 
 // condition evaluates one of f's hidden, ignore and optional, which is true
-// if it is true or the text "true". One that read a variable or a password
-// is a decision of the run's shape that Start makes again, which the plan
-// names, and the secret record keeps (decisions).
-func (r *inputResolver) condition(f *field, key string) bool {
+// if it is true or the text "true", and reports whether it read a variable
+// or a password. One that did, or one that is an expression in a group
+// whose ignore did (always), is a decision of the run's shape that Start
+// makes again, which the plan names, and the secret record keeps
+// (decisions).
+func (r *inputResolver) condition(f *field, key string, always bool) (decided, private bool) {
 	raw, ok := f.def[key]
 	if !ok {
-		return false
+		return false, false
 	}
 	v := raw
 	marked := false
@@ -70,11 +148,11 @@ func (r *inputResolver) condition(f *field, key string) bool {
 			} else {
 				r.reportError(loc, 0, maskedIf(marked, err))
 			}
-			return false
+			return false, marked
 		}
 	}
-	decided := conditionValue(v)
-	if marked {
+	decided = conditionValue(v)
+	if _, isString := raw.(string); marked || always && isString {
 		pointer := jsonptr.Format(loc)
 		if r.decided == nil {
 			r.decided = map[string]bool{}
@@ -84,7 +162,84 @@ func (r *inputResolver) condition(f *field, key string) bool {
 		}
 		r.decided[pointer] = decided
 	}
-	return decided
+	return decided, marked
+}
+
+// A heldValue is a value the inputs' values had at path.
+type heldValue struct {
+	path []string
+	v    any
+}
+
+// dropKept drops f's value, as drop does, and appends to restore what it
+// dropped, to put back once the conditions have read it as dropped.
+func (r *inputResolver) dropKept(f *field, restore []heldValue) []heldValue {
+	if !f.container || !f.flatten {
+		if v, ok := jsonptr.Lookup(r.values, f.path); ok {
+			restore = append(restore, heldValue{f.path, jsonvalue.Clone(v)})
+		}
+		r.remove(f.path)
+		return restore
+	}
+	for _, c := range f.children {
+		restore = r.dropKept(c, restore)
+	}
+	return restore
+}
+
+// markFields marks f's value, as mark does, or those of the inputs a
+// wizard step whose inputs' values are beside its own holds.
+func (r *inputResolver) markFields(f *field) {
+	if f.container && f.flatten {
+		for _, c := range f.children {
+			r.markFields(c)
+		}
+		return
+	}
+	r.mark(f.path)
+}
+
+// holdShaped keeps the value of f, an input whose ignore read a variable
+// or a password, out of the plan, whatever the ignore decided: as derived,
+// as a secret's would be, if the ignore read an input, which can be a
+// password, and as private if it read only variables.
+func (r *inputResolver) holdShaped(f *field) {
+	kind := heldPrivate
+	if exprs, err := r.workflow.Exprs(appendPath(f.loc, "ignore")); err == nil && slices.ContainsFunc(exprs, func(e *expr.Expr) bool {
+		return slices.ContainsFunc(e.Refs(), func(ref expr.Ref) bool { return ref.Context == "inputs" })
+	}) {
+		kind = heldDerived
+	}
+	var hold func(f *field)
+	hold = func(f *field) {
+		if f.container && f.flatten {
+			for _, c := range f.children {
+				hold(c)
+			}
+			return
+		}
+		r.holdPath(f.holder(), f.path, kind)
+	}
+	hold(f)
+}
+
+// shapeDecided reports whether whether f is required is for Start to
+// decide: whether its ignore, hidden or optional, or a group's around it's
+// ignore or hidden, read a variable or a password.
+func (r *inputResolver) shapeDecided(f *field) bool {
+	decided := func(g *field, key string) bool {
+		_, ok := r.decided[jsonptr.Format(appendPath(g.loc, key))]
+		return ok
+	}
+	if decided(f, "optional") {
+		return true
+	}
+	for g := f; g != nil; g = g.group {
+		if g.shaped || decided(g, "hidden") {
+			return true
+		}
+	}
+	return false
 }
 
 // conditionValue is what a condition whose value is v decides: true if v

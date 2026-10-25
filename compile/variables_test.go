@@ -183,6 +183,33 @@ func TestDiagnosticsHideValuesOverPrivateDefaults(t *testing.T) {
 	}
 }
 
+// So does a problem with the shape of such a value: a group given as text
+// whose items' defaults read a variable or a password, and a value that
+// isn't JSON.
+func TestDiagnosticsHideShapesOverPrivateDefaults(t *testing.T) {
+	const typed = "TYPED-1234"
+	opts := compile.Options{Contexts: map[string]any{"org": map[string]any{"X": "v"}}}
+	for name, tc := range map[string]struct {
+		defs   []string
+		masked bool
+	}{
+		"an item's default reads a variable": {[]string{"g: {type: group, items: {x: {type: string, default: '${{ org.X }}'}}}"}, true},
+		"an item's default reads a password": {[]string{"pw: {type: password, optional: true}", "g: {type: group, items: {x: {type: string, default: '${{ inputs.pw }}'}}}"}, true},
+		"an item's default reads neither":    {[]string{"g: {type: group, items: {x: {type: string, default: plain}}}"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), map[string]any{"g": `{"x":"` + typed + `"}`}, opts)
+			i := slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputGroupNotMapping.Code() })
+			if i < 0 {
+				t.Fatalf("diagnostics %v, want %s", diags, problems.InputGroupNotMapping.Code())
+			}
+			if shown := strings.Contains(fmt.Sprint(diags[i].Params), typed); shown == tc.masked {
+				t.Errorf("%s: shown %v, want masked %v", diags[i], shown, tc.masked)
+			}
+		})
+	}
+}
+
 // inputs returns a workflow with the input definitions defs, each a line of
 // YAML, and a job.
 func inputs(defs ...string) string {
@@ -233,8 +260,10 @@ jobs:
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	if len(inputs.Values) != 0 || len(inputs.Secrets) != 0 {
-		t.Errorf("values %v and secrets %v, want none", inputs.Values, inputs.Secrets)
+	// skipped's ignore read after, which reads a variable, so its value is
+	// held, out of the plan, whatever the ignore decided.
+	if len(inputs.Values) != 0 || len(inputs.Secrets) != 1 || inputs.Secrets["skipped"] != "x" {
+		t.Errorf("values %v and secrets %v, want skipped's alone", inputs.Values, inputs.Secrets)
 	}
 	if got := slices.Sorted(maps.Keys(inputs.Deferred)); !slices.Equal(got, []string{"after", "key", "n"}) {
 		t.Errorf("deferred %v, want after, key and n", got)

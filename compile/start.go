@@ -136,10 +136,18 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	if err := st.restore(); err != nil {
 		return nil, nil, err
 	}
-	if err := st.evaluate(); err != nil {
+	// An env: value that reads an input whose ignore Start decides again
+	// waits for it, as the compiler evaluates the workflow's env: once it
+	// has dropped the inputs it ignores.
+	st.holdEnv = true
+	if err := st.evaluate(false); err != nil {
 		return nil, nil, err
 	}
 	if err := st.checkDecisions(); err != nil {
+		return nil, nil, err
+	}
+	st.holdEnv = false
+	if err := st.evaluate(true); err != nil {
 		return nil, nil, err
 	}
 	// What the run reads from here on reads the inputs as they were
@@ -217,8 +225,15 @@ type starter struct {
 	converted map[string]any
 	// hiddenAt and optionalAt hold whether each input Start evaluated, and
 	// each group it is in, is hidden and optional, as checkDecisions
-	// decided them, in the inputs' order, as the compiler does.
+	// decided them, in the inputs' order, as the compiler does; decisionAt
+	// holds the JSON Pointers of the decisions the plan names.
 	hiddenAt, optionalAt map[*field]bool
+	decisionAt           map[string]bool
+	// holdEnv is set while Start evaluates what it does before it decides
+	// the run's shape again, when an env: value that reads one of shaped,
+	// the inputs whose ignore it decides again, waits (readsShaped).
+	holdEnv bool
+	shaped  *reach.Trie[struct{}]
 	// diags are the problems Start found of its own, beside those the
 	// input resolver reports.
 	diags problems.Diagnostics
@@ -627,10 +642,10 @@ type startNode struct {
 // one is evaluated once nothing its expressions read waits any longer,
 // what they read through a definition, as a relative reference does,
 // among it (nodeExprs). One that reads what waits in a way the order can't
-// see is evaluated again once what it read is, in another round. What is
-// left once a round evaluates nothing reads itself, or each other. It
-// returns ctx's error once ctx is done.
-func (st *starter) evaluate() error {
+// see is evaluated again once what it read is, in another round. Once
+// final, what is left once a round evaluates nothing reads itself, or each
+// other. It returns ctx's error once ctx is done.
+func (st *starter) evaluate(final bool) error {
 	for {
 		nodes := st.pendingNodes()
 		if len(nodes) == 0 || !st.evaluateInOrder(nodes) {
@@ -639,6 +654,9 @@ func (st *starter) evaluate() error {
 	}
 	if err := st.ctx.Err(); err != nil {
 		return err
+	}
+	if !final {
+		return nil
 	}
 	var left []string
 	for _, n := range st.pendingNodes() {
@@ -938,6 +956,9 @@ func (st *starter) removeEmpty(f *field) {
 // did, or failed: not if it read what isn't evaluated yet.
 func (st *starter) evalEnv(k string) bool {
 	r := st.r
+	if st.holdEnv && st.readsShaped(k) {
+		return false
+	}
 	out, read, err := st.p.Run.Env[k].EvalRead(r.scope())
 	switch {
 	case waits(err):
@@ -1064,10 +1085,15 @@ func (st *starter) checkDecisions() error {
 		r.mark(f.path)
 		dropped[f] = true
 	}
+	// Whether an input Start evaluated, or one whose being required a
+	// decision Start makes again says, is hidden and optional, checkInputs
+	// reads.
 	wanted := map[*field]bool{}
-	for _, f := range st.deferred {
-		for g := f; g != nil; g = g.group {
-			wanted[g] = true
+	for _, f := range r.fields {
+		if slices.Contains(st.deferred, f) || st.shapeDecided(f) {
+			for g := f; g != nil; g = g.group {
+				wanted[g] = true
+			}
 		}
 	}
 	st.hiddenAt, st.optionalAt = map[*field]bool{}, map[*field]bool{}
@@ -1076,6 +1102,7 @@ func (st *starter) checkDecisions() error {
 			f.ignored = true
 			continue
 		}
+		ignore := false
 		for _, key := range conditionKeys {
 			pointer := jsonptr.Format(appendPath(f.loc, key))
 			want, isDecision := decided[pointer]
@@ -1089,16 +1116,67 @@ func (st *starter) checkDecisions() error {
 			switch key {
 			case "hidden":
 				st.hiddenAt[f] = got
+			case "ignore":
+				// The plan holds an input whose ignore read a variable
+				// or a password whatever it decided, and Start drops it.
+				ignore = isDecision && got
 			case "optional":
 				st.optionalAt[f] = got
 			}
 		}
-		if dropped[f] {
+		if dropped[f] || ignore {
 			f.ignored = true
 			r.drop(f)
 		}
 	}
 	return nil
+}
+
+// readsShaped reports whether the workflow's env: value k reads an input
+// whose ignore, or a group's around it, is a decision Start makes again.
+func (st *starter) readsShaped(k string) bool {
+	if st.shaped == nil {
+		st.shaped = &reach.Trie[struct{}]{}
+		if st.decisionAt == nil {
+			st.decisionAt = setOf(st.p.Run.Decisions)
+		}
+		for _, f := range st.r.fields {
+			for g := f; g != nil; g = g.group {
+				if st.decisionAt[jsonptr.Format(appendPath(g.loc, "ignore"))] {
+					st.shaped.Add(f.path, struct{}{})
+					break
+				}
+			}
+		}
+	}
+	for _, p := range readPatterns(st.p.Run.Env[k].Exprs(), nil) {
+		for range st.shaped.Reached(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// shapeDecided reports whether whether f is required is for Start to
+// decide, as the compiler left it: whether f's optional, or its or a group
+// around it's ignore or hidden, is a decision of the run's shape the plan
+// names (inputResolver.shapeDecided).
+func (st *starter) shapeDecided(f *field) bool {
+	if st.decisionAt == nil {
+		st.decisionAt = setOf(st.p.Run.Decisions)
+	}
+	decided := func(g *field, key string) bool {
+		return st.decisionAt[jsonptr.Format(appendPath(g.loc, key))]
+	}
+	if decided(f, "optional") {
+		return true
+	}
+	for g := f; g != nil; g = g.group {
+		if decided(g, "ignore") || decided(g, "hidden") {
+			return true
+		}
+	}
+	return false
 }
 
 // convert puts the values of the inputs the compiler converted back as it
@@ -1205,6 +1283,20 @@ func (st *starter) checkInputs() {
 		}
 	}
 	evaluated := setOfFields(st.deferred)
+	// And each the compiler left to Start, as what decides whether it is
+	// required read a variable or a password.
+	for _, f := range r.fields {
+		if evaluated[f] || f.ignored || !st.shapeDecided(f) || f.container || f.header || f.hasDefault || f.repeats() || !r.missing(f) {
+			continue
+		}
+		switch {
+		case st.optionalAt[f] || st.hidden(f):
+		case f.typ == "boolean":
+			r.set(f.path, false)
+		default:
+			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
+		}
+	}
 	for _, c := range r.rows {
 		if c.typ == "password" && evaluated[c.in] {
 			r.checkField(c, false)

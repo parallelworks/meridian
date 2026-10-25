@@ -1,6 +1,7 @@
 package compile_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // The plan holds what Start needs to complete the run's values as Create
@@ -190,5 +192,107 @@ func TestPlanHoldsNoDecisionOfAPassword(t *testing.T) {
 	}
 	if maps.Equal(records[0].Decisions, records[1].Decisions) {
 		t.Errorf("the records' decisions are the same: %v", records[0].Decisions)
+	}
+}
+
+// A plan is the same, byte for byte, whatever a password or a variable that
+// isn't a secret is, in each shape what decides the run's shape or what is
+// held can take: an ignore, a group's ignore, an optional, a wizard step's
+// input, a list's or a nested list's passwords, a default typed over, a
+// value read from an input a password ignored, the default rows the plan
+// withholds, and a number a password hides. The secret record round-trips
+// through JSON, and Start gives the same with it, as it decides what the
+// plan leaves to it: a run whose optional input a password made required
+// fails to start without it.
+func TestPlansDontSayWhatSecretsAre(t *testing.T) {
+	given := func(key string) func(string) map[string]any {
+		return func(s string) map[string]any { return map[string]any{key: s} }
+	}
+	for _, tc := range []struct {
+		name      string
+		defs      string
+		submitted func(secret string) map[string]any
+		vars      func(secret string) testVariables
+		required  string
+	}{
+		{"an ignore with a default", "pw: {type: password}\nc: {type: string, default: kept, ignore: '${{ inputs.pw == ''hunter2'' }}'}", given("pw"), nil, ""},
+		{"an optional with no value", "pw: {type: password}\nc: {type: string, optional: '${{ inputs.pw == ''hunter2'' }}'}", given("pw"), nil, "zzz"},
+		{"an ignore with no value", "pw: {type: password}\nc: {type: string, ignore: '${{ inputs.pw == ''hunter2'' }}'}", given("pw"), nil, "zzz"},
+		{"a group's ignore", "pw: {type: password}\ng: {type: group, ignore: '${{ inputs.pw == ''hunter2'' }}', items: {x: {type: string, default: v}, y: {type: string, optional: true, hidden: '${{ inputs.g.x == ''v'' }}'}}}", given("pw"), nil, ""},
+		{
+			"a list with password rows", "l: {type: list, template: {p: {type: password}, u: {type: string}}, default: [{u: a, p: d}]}",
+			func(s string) map[string]any { return map[string]any{"l": []any{map[string]any{"u": "a", "p": s}}} }, nil, "",
+		},
+		{
+			"a nested list with passwords", "l: {type: list, template: {inner: {type: list, template: {p: {type: password}}}, u: {type: string}}}",
+			func(s string) map[string]any {
+				return map[string]any{"l": []any{map[string]any{"u": "a", "inner": []any{map[string]any{"p": s}}}}}
+			}, nil, "",
+		},
+		{
+			"a default that reads a password, typed over", "pw: {type: password}\nd: {type: string, default: 'u:${{ inputs.pw }}'}",
+			func(s string) map[string]any { return map[string]any{"pw": s, "d": "typed-" + s} }, nil, "",
+		},
+		{
+			"a wizard step's input", "s: {type: step, title: S, options: {sp: {type: password}, sx: {type: string, default: kept, ignore: '${{ inputs.s.sp == ''hunter2'' }}'}, sd: {type: string, default: 'd${{ inputs.s.sp }}'}}}",
+			given("sp"), nil, "",
+		},
+		{"a value read from an input a password ignored", "pw: {type: password}\nc: {type: string, default: kept, ignore: '${{ inputs.pw == ''hunter2'' }}'}\nd: {type: string, default: '${{ inputs.c }}-x'}", given("pw"), nil, ""},
+		{"default rows withheld", "l: {type: list, template: {p: {type: password}, u: {type: string}}, default: [{u: a, p: hunter2}]}", nil, nil, ""},
+		{
+			"an ignore that reads a variable", "c: {type: string, default: kept, ignore: '${{ org.FLAG == ''on'' }}'}", nil,
+			func(s string) testVariables {
+				if s == "hunter2" {
+					return testVariables{"org.FLAG": {Value: "on"}}
+				}
+				return testVariables{"org.FLAG": {Value: "off"}}
+			}, "",
+		},
+		{
+			"a default from a variable", "c: {type: string, default: '${{ org.FLAG }}'}", nil,
+			func(s string) testVariables { return testVariables{"org.FLAG": {Value: s}} }, "",
+		},
+		{"a number a password hides", "pw: {type: password}\nn: {type: number, default: 5, max: 10, hidden: '${{ length(inputs.pw) > 5 }}'}", given("pw"), nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var plans []string
+			for _, secret := range []string{"hunter2", "zzz"} {
+				var submitted map[string]any
+				if tc.submitted != nil {
+					submitted = tc.submitted(secret)
+				}
+				var vars testVariables
+				if tc.vars != nil {
+					vars = tc.vars(secret)
+				}
+				created := createRun(t, workflow(tc.defs), submitted, vars)
+				data, err := plan.Encode(created.Plan)
+				if err != nil {
+					t.Fatal(err)
+				}
+				plans = append(plans, string(data))
+				record, err := json.Marshal(created.Record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				back := *created
+				back.Record = compile.Record{}
+				if err := json.Unmarshal(record, &back.Record); err != nil {
+					t.Fatal(err)
+				}
+				res, diags := startRun(t, created, vars, compile.StartInput{RunID: "run"})
+				again, diags2 := startRun(t, &back, vars, compile.StartInput{RunID: "run"})
+				if fmt.Sprint(diags) != fmt.Sprint(diags2) || (res == nil) != (again == nil) || res != nil && canonical(t, res.Run) != canonical(t, again.Run) {
+					t.Errorf("%s: Start differs with the record through JSON: %v, %v", secret, diags, diags2)
+				}
+				required := slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputRequired.Code() })
+				if required != (secret == tc.required) {
+					t.Errorf("%s: Start %v", secret, diags)
+				}
+			}
+			if plans[0] != plans[1] {
+				t.Errorf("the plans differ:\n%s\n%s", plans[0], plans[1])
+			}
+		})
 	}
 }

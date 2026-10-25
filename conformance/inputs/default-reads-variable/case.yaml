@@ -5,7 +5,9 @@ description: >-
   does a default with a part that reads one, such as a field of a mapping or
   of a list's row, and a default that reads an input whose value does. What
   decides which inputs the run has, an input's hidden, ignore and optional,
-  reads their values: extra is ignored, and note is optional.
+  reads their values: extra is ignored, and note is optional. As extra's
+  ignore read a variable, the plan doesn't say what it decided: extra's value
+  is private, out of the plan, whatever it decided, and Start drops it.
 source: Meridian
 contexts:
   org:
@@ -26,3 +28,5 @@ expect:
     hosts:
       - name: a
         zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+  private:
+    extra: given

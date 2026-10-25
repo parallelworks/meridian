@@ -18,7 +18,11 @@ import (
 func (r *inputResolver) checkJSON(values map[string]any) {
 	for key, v := range jsonvalue.Sorted(values) {
 		if what, bad, _ := notJSON(v); what != "" {
-			r.reportAt(problems.InputNotJSON, definitionsPath, problems.Params{"input": key, "what": what, "value": bad})
+			params := problems.Params{"input": key, "what": what, "value": bad}
+			if f := r.fieldAt([]string{key}); f != nil && (holdsPassword(f.def) || r.readsPrivate(f)) {
+				params = mask(params)
+			}
+			r.reportAt(problems.InputNotJSON, definitionsPath, params)
 			delete(values, key)
 		}
 	}
@@ -219,7 +223,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 			r.checkUnknown(child, appendPath(path, key), appendPath(rel, key), known, row)
 		case !row:
 			params := problems.Params{"input": f.label(), "value": problems.Show(v)}
-			if holdsPassword(f.def) {
+			if holdsPassword(f.def) || r.readsPrivate(f) {
 				params = mask(params)
 			}
 			r.reportAt(problems.InputGroupNotMapping, f.loc, params)

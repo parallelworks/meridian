@@ -35,6 +35,12 @@ type field struct {
 	hidden     bool
 	ignored    bool
 	optional   bool
+	// shaped is set for an input whose ignore read a variable or a
+	// password, or one in a group whose did: the plan holds it the same
+	// whatever that decided, out of its values, and Start drops it if it
+	// is ignored (applyConditions). ignoredLater is set for one ignored by
+	// such a decision, which only Start applies.
+	shaped, ignoredLater bool
 	// deferred is set for an input whose value is evaluated once the run is
 	// underway, because its default, or a part of its value, reads something
 	// the compiler doesn't know. variable is set for one whose value reads

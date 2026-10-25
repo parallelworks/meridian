@@ -87,10 +87,15 @@ type Run struct {
 	// variable, or a password, as the run was created, in order. Start
 	// decides each again, in the order the compiler did (docs/design.md,
 	// Starting a run). What each decided can say something of what it
-	// read, so the run's secret record holds it. What an ignore decided
-	// shows all the same in the inputs Inputs holds, as what a job's
-	// needs: decided shows in its Needs: the plan holds the run's shape. A
-	// job's needs: that read one is its Job.NeedsExpr.
+	// read, so the run's secret record holds it, and the plan holds the
+	// inputs the same whatever it was: an input whose ignore is one, or
+	// one in a group whose is, the plan holds out of Inputs, as a private
+	// value or a derived one, and Start drops it if it is ignored; the
+	// conditions in such a group are each one, whatever they read; and
+	// whether an input one of them decides about is required, Start
+	// decides. What a job's needs: decided shows in its Needs, as the plan
+	// holds the jobs' graph. A job's needs: that read one is its
+	// Job.NeedsExpr.
 	Decisions []string `json:"decisions,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`

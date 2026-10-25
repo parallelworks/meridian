@@ -803,30 +803,36 @@ the run waits for ([On hopper](#on-hopper)).
    what was there, null, a form's text, or nothing, and no mapping the plan
    held only to hold it. A relative reference reads the input definitions;
    one that climbs out of them reads nothing, where Create read the rest of
-   the workflow, which no known workflow does: all of theirs read an input
-   beside them. One difference stays: Create fills in the inputs in the
-   order their own expressions read each other, which doesn't see what a
-   relative reference reads, so a default that reads, through a relative
-   reference, an input that Create fills in later reads it before it is
-   filled in, where Start reads it after.
-3. **Check the shape.** Evaluate again each decision of the run's shape
-   that read a variable or a password: an input's `hidden`, `ignore` and
+   the workflow, which no known workflow does: each of theirs reads a key of
+   the input it is in, as `.hidden` does, or, with `..`, of an input beside
+   it. One difference stays: Create fills in the inputs in the order their
+   own expressions read each other, which doesn't see what a relative
+   reference reads, so a default that reads, through a relative reference,
+   an input that Create fills in later reads it before it is filled in,
+   where Start reads it after.
+3. **Check the shape.** Evaluate again each decision of the run's shape that
+   read a variable or a password: an input's `hidden`, `ignore` and
    `optional`, where the definitions write it (`Run.Decisions`), in the
    inputs' order, reading the inputs as Create's conditions did: as given,
    and an input the run ignored with its value, from the secret record,
-   until the conditions reach it; and then, with the inputs converted, a
+   until the conditions reach it, and drops each input whose `ignore:` is
+   one of them if it decides so; and then, with the inputs converted, a
    job's `needs` (`Job.NeedsExpr`), which names the same jobs in whatever
    order. If one differs from what Create decided, which the secret record
    holds, the run fails with `run_shape_changed`, rather than run with
    values from two readings. It comes after the inputs, as a condition can
    read an input whose value reads a variable, which Start has evaluated
-   again. Everything else Start evaluates reads an ignored input as null,
-   as the jobs do.
+   again. Everything else Start evaluates reads an ignored input as null, as
+   the jobs do: a workflow's `env:` value that reads an input whose
+   `ignore:` Start decides again is evaluated once it has. Whether an input
+   such a decision decides about is required, Start checks then.
 4. **Check the inputs** Start evaluated as Create checks one: its type,
-   whether it is required, and a platform type with the Inputs resolver;
-   and evaluate the workflow's `timeout:`. ACTIVATE gives the text of a
-   workflow's `timeout:` or a `strategy:` that reads `env` or `vars`, where
-   Meridian evaluates it; no known workflow has one.
+   whether it is required, and a platform type with the Inputs resolver; and
+   evaluate the workflow's `timeout:`. ACTIVATE leaves as text a workflow's
+   `timeout:` or a `strategy:` that reads `env`, and evaluates a `strategy:`
+   without the user's variables, so that `vars.X` reads `""` there, where
+   Meridian evaluates both with them; a `timeout:` reads `vars` in
+   ACTIVATE's final pass as Meridian's does. No known workflow has either.
 5. **Expand** each matrix whose values are known by now, written out or
    read from inputs or variables ([Matrices](#matrices)), so a matrix that
    can't be expanded fails the run before any job runs.
@@ -972,11 +978,26 @@ where it is, or the job's `needs:` expression; Start decides them again to
 check that nothing changed ([Starting a run](#starting-a-run)). What each
 condition decided is in the secret record, not the plan: a workflow could
 otherwise spell a password out into the plan a bit at a time, one
-`hidden:` that tests a character of it for each. What an `ignore:` or a
-`needs:` decided shows all the same in the shape, which inputs have
-values and which jobs wait for which, as the plan has to hold the run's
-shape; which inputs the run ignored the plan doesn't name, as an ignored
-input with no value would otherwise say what its `ignore:` decided.
+`hidden:` that tests a character of it for each. Nor does what such an
+`ignore:` decided show in which inputs have values: the plan holds an
+input whose `ignore:` read a variable or a password, and each input in a
+group whose did, out of its values, as private, or as derived when the
+`ignore:` read an input, whatever it decided, and Start drops it if the
+`ignore:` decides so again. The conditions in such a group are each a
+decision, whatever they read, so the plan names the same ones either way;
+a later condition that reads such an input reads what a variable or a
+password decided, and is one too; and whether an input such a decision
+decides about is required, Start decides, so creating the run doesn't
+fail for one value and not another. Which inputs the run ignored the plan
+doesn't name. What a `needs:` decided shows in the jobs' graph, which the
+plan has to hold.
+
+One bit about a variable that isn't a secret still shows: a value given in
+the place of a default that reads one is held as private when it isn't
+what the default gives, and the plan holds the default's expression for
+Start when it is, so the plan says whether the variable's value is what
+was typed. Hiding it would mean holding both and deciding at Start, which
+is left for later.
 
 A source's location names the workflow to whoever can see the run, so it
 says nothing of the machine the run was created on: a platform gives its

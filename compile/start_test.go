@@ -991,22 +991,26 @@ func TestStartVariableThatBecameSecret(t *testing.T) {
 }
 
 // A condition Start decides again reads what it read as the run was
-// created: an input that another condition ignores, which the plan holds
-// no value of, reads its value until the conditions reach it, in the
-// inputs' order, from the secret record, and null after, as the compiler's
-// did. What else Start evaluates reads it as null, as the phases after it
-// do, not as its default.
+// created: an input another condition ignores reads its value until the
+// conditions reach it, in the inputs' order, and null after, as the
+// compiler's did. One whose ignore read a variable or a password the plan
+// holds whatever it decided, out of its values, in the secret record, and
+// Start drops it when it decides so again; one the compiler ignored, as
+// its ignore read neither, the record holds as ignored, for the conditions
+// that read it. What else Start evaluates reads it as null, as the phases
+// after it do, not as its default.
 func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 	// The inputs' order is their names'.
 	hidden := `%s: {type: string, optional: true, hidden: '${{ %s != '''' && inputs.%s == ''y'' }}'}`
 	ignore := `%s: {type: string, default: x, ignore: '${{ %s }}'}`
 	env := "env:\n  E: ${{ inputs.%s }}-${{ %s }}\n"
 	for name, tc := range map[string]struct {
-		defs []string
-		env  string
-		vars testVariables
-		pw   map[string]any
-		read bool
+		defs   []string
+		env    string
+		vars   testVariables
+		given  map[string]any
+		read   bool
+		record func(compile.Record) map[string]any
 	}{
 		"ignored by a variable, read before": {
 			[]string{fmt.Sprintf(hidden, "a", "org.Z", "z"), fmt.Sprintf(ignore, "z", "org.IGN == ''yes''")},
@@ -1014,6 +1018,7 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			testVariables{"org.IGN": {Value: "yes"}, "org.Z": {Value: "z"}},
 			map[string]any{"z": "y"},
 			true,
+			func(r compile.Record) map[string]any { return r.Private },
 		},
 		"ignored by a variable, read after": {
 			[]string{fmt.Sprintf(ignore, "a", "org.IGN == ''yes''"), fmt.Sprintf(hidden, "z", "org.Z", "a")},
@@ -1021,6 +1026,7 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			testVariables{"org.IGN": {Value: "yes"}, "org.Z": {Value: "z"}},
 			map[string]any{"a": "y"},
 			false,
+			func(r compile.Record) map[string]any { return r.Private },
 		},
 		"ignored by a password, read before": {
 			[]string{"pw: {type: password}", fmt.Sprintf(hidden, "a", "inputs.pw", "z"), fmt.Sprintf(ignore, "z", "inputs.pw == ''p''")},
@@ -1028,6 +1034,7 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			nil,
 			map[string]any{"pw": "p", "z": "y"},
 			true,
+			func(r compile.Record) map[string]any { return r.Passwords },
 		},
 		"ignored by a password, read after": {
 			[]string{"pw: {type: password}", fmt.Sprintf(ignore, "a", "inputs.pw == ''p''"), fmt.Sprintf(hidden, "z", "inputs.pw", "a")},
@@ -1035,15 +1042,25 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			nil,
 			map[string]any{"pw": "p", "a": "y"},
 			false,
+			func(r compile.Record) map[string]any { return r.Passwords },
+		},
+		"ignored by an input, read before": {
+			[]string{"f: {type: string}", fmt.Sprintf(hidden, "a", "org.Z", "z"), fmt.Sprintf(ignore, "z", "inputs.f == ''off''")},
+			fmt.Sprintf(env, "z", "org.Z"),
+			testVariables{"org.Z": {Value: "z"}},
+			map[string]any{"f": "off", "z": "y"},
+			true,
+			func(r compile.Record) map[string]any { return r.Ignored },
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := createRun(t, workflow(strings.Join(tc.defs, "\n"), tc.env), tc.pw, tc.vars)
-			if len(c.Record.Ignored) != 1 || !slices.Contains(slices.Collect(maps.Values(c.Record.Ignored)), any("y")) {
-				t.Fatalf("ignored %v", c.Record.Ignored)
+			c := createRun(t, workflow(strings.Join(tc.defs, "\n"), tc.env), tc.given, tc.vars)
+			held := tc.record(c.Record)
+			if !slices.Contains(slices.Collect(maps.Values(held)), any("y")) {
+				t.Fatalf("the record holds %+v", c.Record)
 			}
-			if got := slices.Collect(maps.Values(c.Record.Decisions)); len(got) != 2 || slices.Contains(got, !tc.read) != !tc.read || slices.Index(got, true) < 0 {
-				t.Fatalf("decided %v: the condition read the ignored input %v", c.Record.Decisions, tc.read)
+			if _, ok := c.Plan.Run.Inputs.Get().(map[string]any)["z"]; ok {
+				t.Errorf("the plan holds the input: %v", c.Plan.Run.Inputs.Get())
 			}
 			res, diags := startRun(t, c, tc.vars, compile.StartInput{})
 			if res == nil || len(diags) != 0 {
@@ -1052,19 +1069,25 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			if e := res.Run.Env["E"]; !strings.HasPrefix(e, "-") {
 				t.Errorf("env E %q reads the ignored input", e)
 			}
-			if len(res.Run.Inputs.Get().(map[string]any)) > 1 {
-				t.Errorf("inputs %v hold the ignored input", res.Run.Inputs.Get())
+			v := res.Run.Inputs.Get().(map[string]any)
+			for _, k := range []string{"a", "z"} {
+				if v[k] == "y" {
+					t.Errorf("inputs %v hold the ignored input", v)
+				}
 			}
 			if !tc.read {
 				return
 			}
-			// Without the record's ignored inputs, the condition read
-			// before the input reads its default, and decides otherwise.
+			// Without the ignored input's value in the record, the run
+			// doesn't start as it was created.
 			without := c.Record
-			without.Ignored = nil
-			if res, diags, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: tc.vars, Record: without, Inputs: passThrough{}}); err != nil || res != nil ||
-				!slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.RunShapeChanged.Code() }) {
-				t.Errorf("without the ignored inputs: %v, %v", diags, err)
+			without.Ignored, without.Private, without.Passwords = nil, nil, nil
+			if !strings.Contains(name, "password") {
+				without.Passwords = c.Record.Passwords
+			}
+			res, diags, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: tc.vars, Record: without, Inputs: passThrough{}})
+			if res != nil && !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.RunShapeChanged.Code() }) {
+				t.Errorf("without the ignored input: %v, %v, %v", res != nil, diags, err)
 			}
 		})
 	}
