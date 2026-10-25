@@ -513,6 +513,32 @@
       "If the variable holds a secret, make it a secret variable."
     ]
   },
+  "variable_not_text": {
+    "why": "A variable's value is text. Whoever runs the workflow gave the compiler a value for this variable that is something else, such as a number or a list, which no expression reads as the variable, so the run reads it as \"\", as it reads a variable that isn't set. As the run starts, Meridian reads each variable again, as text.",
+    "fix": [
+      "Give the variable its value as text, such as \"8\" rather than 8, or a list as its JSON."
+    ]
+  },
+  "resolver_missing": {
+    "why": "Some of a workflow's keys need what only the place it runs can provide, through one of Meridian's interfaces: sessions: need a session provider (Sessions), a uses: that names a workflow needs a way to fetch it (Sources), and runs-on: execution-group: needs execution groups (Groups). Meridian doesn't run a workflow without what it needs, rather than run part of it.",
+    "fix": [
+      "Run the workflow where the interface is provided, such as on a platform that serves sessions.",
+      "Remove the key from the workflow if it doesn't need it."
+    ]
+  },
+  "run_shape_changed": {
+    "why": "What decides a run's shape, which inputs it has and which jobs each job waits for, can read organization and user variables and passwords. The compiler reads them when the run is created, and the plan holds what they decided. As the run starts, Meridian reads them again and decides again, and this decision came out otherwise: a variable or a password changed in between, as one can before a rerun. Rather than run with values from two readings, the run doesn't start.",
+    "fix": [
+      "Create the run again, so that it is created and started with the same values.",
+      "If the variable changes often, make the decision read something that doesn't."
+    ]
+  },
+  "values_read_each_other": {
+    "why": "As a run starts, Meridian evaluates the workflow's env: and the inputs whose values it left to the start, in the order they read each other. An input's default can read env, and an env: value an input, but these values read each other, so none of them can be evaluated first.",
+    "fix": [
+      "Change one of the values so that it doesn't read the others."
+    ]
+  },
   "expression_failed": {
     "why": "An expression failed in a way Meridian doesn't describe. This is a problem in Meridian.",
     "fix": [

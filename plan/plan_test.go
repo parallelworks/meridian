@@ -41,14 +41,28 @@ func samplePlan(t *testing.T) *plan.Plan {
 			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
 			Env:            map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
 			Variables:      []string{"org.REGION", "vars"},
+			Definitions: mustValue(t, map[string]any{
+				"token": map[string]any{"type": "string", "default": "${{ vars.TOKEN }}", "hidden": "${{ org.H }}"},
+				"$meta": map[string]any{"$wizard": "x"},
+			}),
+			DeferredParts: []plan.DeferredPart{
+				{Name: "inputs.token", Location: "/on/execute/inputs/token/default"},
+				{Name: "inputs.rows.1.a", Location: "/on/execute/inputs/rows/template/a/default", Index: []int{1}},
+			},
+			Decisions:    []plan.Decision{{Path: "/on/execute/inputs/token/hidden"}, {Path: "/on/execute/inputs/x/ignore", Value: true}},
+			Remote:       map[string]string{"repo": "https://example.com/r", "branch": "main"},
+			Sessions:     mustValue(t, map[string]any{"desktop": map[string]any{"useTLS": false, "redirect": "${{ inputs.x }}"}}),
+			SessionNames: map[string]string{"desktop": "desktop-1"},
+			Limits:       plan.Limits{MaxInstances: 10},
 		},
 		Jobs: []plan.Job{{
-			Key:     "build#1",
-			Name:    "build",
-			Matrix:  plan.DataOf(map[string]any{"os": "linux"}),
-			Needs:   []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
-			If:      mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
-			Timeout: mustValue(t, "1h"),
+			Key:       "build#1",
+			Name:      "build",
+			Matrix:    plan.DataOf(map[string]any{"os": "linux"}),
+			Needs:     []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
+			NeedsExpr: mustValue(t, "${{ fromJSON(vars.NEEDS) }}"),
+			If:        mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
+			Timeout:   mustValue(t, "1h"),
 			Steps: []plan.Step{{
 				ID:               "greet",
 				Name:             mustValue(t, "greet on ${{ matrix.os }}"),
@@ -189,6 +203,69 @@ func TestEncodeDecode(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"detail"`) {
 		t.Errorf("the plan holds the warning's text: %s", data)
+	}
+	// What Start reads survives: a decision of false among them, and the
+	// definitions as the workflow writes them.
+	if d := back.Run.Decisions; len(d) != 2 || d[0].Value || !d[1].Value || !strings.Contains(string(data), `"value":false`) {
+		t.Errorf("decisions %v", d)
+	}
+	if got := back.Run.Definitions.Written(); !reflect.DeepEqual(got, map[string]any{
+		"token": map[string]any{"type": "string", "default": "${{ vars.TOKEN }}", "hidden": "${{ org.H }}"},
+		"$meta": map[string]any{"$wizard": "x"},
+	}) {
+		t.Errorf("definitions %v", got)
+	}
+}
+
+// A Value as the workflow writes it holds each template as its text, and
+// the rest as it is; it is a copy.
+func TestValueWritten(t *testing.T) {
+	v := mustValue(t, map[string]any{"a": "x ${{ inputs.a }} y", "b": []any{"${{ 1 }}", nil, 2.5}, "$c": "c"})
+	got := v.Written().(map[string]any)
+	want := map[string]any{"a": "x ${{ inputs.a }} y", "b": []any{"${{ 1 }}", nil, 2.5}, "$c": "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Written() = %v, want %v", got, want)
+	}
+	got["b"].([]any)[0] = "changed"
+	if again := v.Written().(map[string]any); again["b"].([]any)[0] != "${{ 1 }}" {
+		t.Error("Written shares the Value's lists")
+	}
+	if (plan.Value{}).Written() != nil {
+		t.Error("an unset Value isn't nothing")
+	}
+}
+
+// The workflow's timeout:, as Start evaluates it, is read as a job's is,
+// and a problem with one made from a variable doesn't show it.
+func TestRunTimeout(t *testing.T) {
+	scope := plan.NewScope(plan.PhaseStart, plan.Contexts{Run: plan.RunValues{
+		Org: map[string]string{"T": "soon", "U": "2h"}, Inputs: plan.DataOf(map[string]any{"m": int64(5)}),
+	}})
+	for _, tc := range []struct {
+		v       plan.Value
+		seconds int64
+		private bool
+		problem string
+	}{
+		{plan.Value{}, 0, false, ""},
+		{plan.Literal("10m"), 600, false, ""},
+		{mustValue(t, "${{ inputs.m * 60 }}"), 300, false, ""},
+		{mustValue(t, "${{ org.U }}"), 7200, true, ""},
+		{mustValue(t, "${{ org.T }}"), 0, true, "duration_invalid"},
+		{plan.Literal(1.5), 0, false, "duration_invalid"},
+	} {
+		seconds, read, diags := plan.RunTimeout(tc.v, scope)
+		if seconds != tc.seconds || read.Private != tc.private || len(diags) != min(len(tc.problem), 1) {
+			t.Errorf("%v: %d, %v, %v", tc.v.Written(), seconds, read, diags)
+			continue
+		}
+		if tc.problem == "" {
+			continue
+		}
+		d := diags[0]
+		if string(d.Code) != tc.problem || d.Path() != "/timeout" || tc.private && d.Params["value"] != problems.Masked {
+			t.Errorf("%v: %s at %s, %v", tc.v.Written(), d.Code, d.Path(), d.Params)
+		}
 	}
 }
 

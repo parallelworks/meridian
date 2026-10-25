@@ -40,6 +40,14 @@ type viewState struct {
 // each string of a list or mapping. marked is set if it read a variable,
 // or a value that did.
 func (r *inputResolver) evalAt(loc []string, index []int) (v any, marked bool, err error) {
+	v, read, err := r.evalRead(loc, index)
+	return v, read.Private, err
+}
+
+// evalRead evaluates what is at loc as evalAt does, and gives what it read:
+// a variable or a password, or a value made from one, as Private; and as
+// the run starts, a secret, or a value made from one, as Marked too.
+func (r *inputResolver) evalRead(loc []string, index []int) (any, expr.Read, error) {
 	key := indexKey(index)
 	ev, ok := r.evaluators[key]
 	if !ok {
@@ -51,7 +59,11 @@ func (r *inputResolver) evalAt(loc []string, index []int) (v any, marked bool, e
 		}
 		r.evaluators[key] = ev
 	}
-	return ev.EvalMarked(loc)
+	if r.start != nil {
+		return ev.EvalRead(loc)
+	}
+	v, marked, err := ev.EvalMarked(loc)
+	return v, expr.Read{Private: marked}, err
 }
 
 // indexKey returns the key of the evaluator for the list rows at index.
@@ -68,17 +80,27 @@ func indexKey(index []int) string {
 // inputs' values reads: Create's (created), with the values as they are
 // (evalValues), and marking what reads a variable or a password (marks),
 // which is what the compiler asks of an evaluation (EvalMarked), in the
-// inputs' group, which shares one budget.
+// inputs' group, which shares one budget. As the run starts, it is
+// Start's, which marks what reads a variable or a password as private,
+// and what reads a secret as Marked too (startState).
 func (r *inputResolver) scope() expr.Scope {
 	if r.view == nil {
 		r.view = r.evalValues()
-		r.created = plan.NewScope(plan.PhaseCreate, createContexts(r.opts, r.view))
+		if r.start != nil {
+			r.created = plan.NewScope(plan.PhaseStart, r.start.contexts(r.view))
+		} else {
+			r.created = plan.NewScope(plan.PhaseCreate, createContexts(r.opts, r.view))
+		}
 		r.budget = r.created.Budgeted()
 	}
 	if r.checkView != nil {
 		r.checkView()
 	}
 	scope := r.budget
+	if r.start != nil {
+		scope.Marked, scope.Private = r.start.secrets, r.marks
+		return scope
+	}
 	scope.Marked = r.marks
 	return scope
 }

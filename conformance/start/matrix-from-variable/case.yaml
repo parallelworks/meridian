@@ -1,0 +1,16 @@
+description: >-
+  A matrix whose values are known as the run starts, written out or read
+  from inputs or variables, is expanded then. One that reads needs is
+  expanded once the jobs it needs have finished.
+source: Meridian
+contexts:
+  vars:
+    SITES: '["a", "b"]'
+expect:
+  inputs: {}
+  matrices:
+    main:
+      - {site: a, size: 1}
+      - {site: a, size: 2}
+      - {site: b, size: 1}
+      - {site: b, size: 2}

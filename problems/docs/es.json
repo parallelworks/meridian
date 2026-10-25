@@ -598,6 +598,36 @@
       "Si la variable contiene un secreto, conviértela en una variable secreta."
     ]
   },
+  "variable_not_text": {
+    "title": "Variable que no es texto",
+    "why": "El valor de una variable es texto. Quien ejecuta el flujo de trabajo le dio al compilador para esta variable un valor de otro tipo, como un número o una lista, que ninguna expresión lee como la variable, así que la ejecución lo lee como \"\", igual que lee una variable que no está definida. Al empezar la ejecución, Meridian vuelve a leer cada variable, como texto.",
+    "fix": [
+      "Da a la variable su valor como texto, por ejemplo \"8\" en lugar de 8, o una lista como su JSON."
+    ]
+  },
+  "resolver_missing": {
+    "title": "Falta una interfaz",
+    "why": "Algunas claves de un flujo de trabajo necesitan algo que solo puede proporcionar el lugar donde se ejecuta, a través de una de las interfaces de Meridian: sessions: necesita un proveedor de sesiones (Sessions), un uses: que nombra un flujo de trabajo necesita una forma de obtenerlo (Sources), y runs-on: execution-group: necesita grupos de ejecución (Groups). Meridian no ejecuta un flujo de trabajo sin lo que necesita, en lugar de ejecutar solo una parte.",
+    "fix": [
+      "Ejecuta el flujo de trabajo donde se proporcione la interfaz, como en una plataforma que sirva sesiones.",
+      "Quita la clave del flujo de trabajo si no la necesita."
+    ]
+  },
+  "run_shape_changed": {
+    "title": "La forma de la ejecución cambió al empezar",
+    "why": "Lo que decide la forma de una ejecución, qué entradas tiene y a qué trabajos espera cada trabajo, puede leer variables de la organización y del usuario y contraseñas. El compilador las lee al crear la ejecución, y el plan guarda lo que decidieron. Al empezar la ejecución, Meridian las vuelve a leer y decide de nuevo, y esta decisión salió distinta: una variable o una contraseña cambió entretanto, como puede ocurrir antes de volver a ejecutar. En lugar de ejecutarse con valores de dos lecturas, la ejecución no empieza.",
+    "fix": [
+      "Crea la ejecución de nuevo, para que se cree y empiece con los mismos valores.",
+      "Si la variable cambia a menudo, haz que la decisión lea algo que no cambie."
+    ]
+  },
+  "values_read_each_other": {
+    "title": "Valores que se leen entre sí al empezar la ejecución",
+    "why": "Al empezar una ejecución, Meridian evalúa el env: del flujo de trabajo y las entradas cuyos valores dejó para el inicio, en el orden en que se leen entre sí. El valor predeterminado de una entrada puede leer env, y un valor de env: una entrada, pero estos valores se leen entre sí, así que no se puede evaluar ninguno primero.",
+    "fix": [
+      "Cambia uno de los valores para que no lea los demás."
+    ]
+  },
   "expression_failed": {
     "title": "La expresión falló",
     "why": "Una expresión falló de una forma que Meridian no describe. Es un problema de Meridian.",

@@ -3,6 +3,7 @@ package compile_test
 import (
 	"encoding/json/v2"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // passThrough is a platform that takes every value it's given as it is.
@@ -190,11 +192,114 @@ func TestCompileConformance(t *testing.T) {
 	}
 }
 
+func TestStartConformance(t *testing.T) {
+	cases, err := conformance.Cases("start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		t.Run(strings.TrimPrefix(c.Name, "start/"), func(t *testing.T) {
+			t.Parallel()
+			data, err := c.Workflow()
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := compile.Options{Contexts: contexts(c)}
+			if !c.NoPlatform {
+				opts.Inputs = passThrough{}
+			}
+			ctx := t.Context()
+			created, diags, err := compile.Create(ctx, "workflow.yaml", data, c.Inputs, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var res *compile.StartResult
+			if created != nil {
+				var startDiags problems.Diagnostics
+				res, startDiags, err = compile.Start(ctx, created.Plan, compile.StartInput{
+					RunID: c.Name, Variables: startVariables(c), Passwords: created.Passwords, Private: created.Private, Inputs: opts.Inputs,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				diags = append(diags, startDiags...)
+			}
+			conformancetest.CheckDiagnostics(t, c.Expect.Diagnostics, diags)
+			if res == nil {
+				// A run that doesn't start has no values to check.
+				return
+			}
+			check := func(what string, got, want any) {
+				t.Helper()
+				if g, w := conformancetest.Canonical(t, got), conformancetest.Canonical(t, want); g != w {
+					t.Errorf("%s = %s, want %s", what, g, w)
+				}
+			}
+			e := c.Expect
+			check("inputs", res.Run.Inputs.Get(), orEmpty(e.Inputs))
+			check("env", orEmptyStrings(res.Run.Env), orEmptyStrings(e.Env))
+			if e.Timeout != nil {
+				check("timeout", res.TimeoutSeconds, *e.Timeout)
+			}
+			check("run-secrets", orNone(res.Run.Secrets), orNone(e.RunSecrets))
+			check("run-private", orNone(res.Run.Private), orNone(e.RunPrivate))
+			check("run-derived", orNone(res.Run.Derived), orNone(e.RunDerived))
+			matrices := map[string][]any{}
+			for job, x := range res.Expansions {
+				for _, i := range x.Instances {
+					matrices[job] = append(matrices[job], i.Matrix.Get())
+				}
+			}
+			check("matrices", matrices, orEmptyMatrices(e.Matrices))
+		})
+	}
+}
+
+// startVariables gives the variables of a case in the start area as the
+// run reads them as it starts: its contexts', with those its start-contexts
+// replace, each secret one secret.
+func startVariables(c conformance.Case) compile.Variables {
+	out := testVariables{}
+	for _, context := range []string{"org", "vars"} {
+		vars, _ := c.Contexts[context].(map[string]any)
+		if v, ok := c.StartContexts[context].(map[string]any); ok {
+			vars = v
+		}
+		for name, v := range vars {
+			if s, ok := v.(string); ok {
+				out[context+"."+name] = compile.Variable{Value: s, Secret: context == "vars" && slices.Contains(c.SecretVariables, name)}
+			}
+		}
+	}
+	return out
+}
+
+func orEmptyStrings(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
+}
+
+func orNone(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func orEmptyMatrices(m map[string][]map[string]any) map[string][]map[string]any {
+	if m == nil {
+		return map[string][]map[string]any{}
+	}
+	return m
+}
+
 // Every plan the compiler returns, which it does only without errors,
-// encodes: compiling each compile and inputs case, with its values, gives
-// a plan that can be stored with the run, or errors and none.
+// encodes: compiling each compile, inputs and start case, with its values,
+// gives a plan that can be stored with the run, or errors and none.
 func TestConformancePlansEncode(t *testing.T) {
-	for _, area := range []string{"compile", "inputs"} {
+	for _, area := range []string{"compile", "inputs", "start"} {
 		cases, err := conformance.Cases(area)
 		if err != nil {
 			t.Fatal(err)

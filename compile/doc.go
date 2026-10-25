@@ -1,6 +1,7 @@
 // Package compile turns a workflow and its inputs into a plan, and
 // completes a run's values as it starts: the Create and Start phases,
-// Compile and Start.
+// Create and Start. Compile is Create for a caller that needs only the
+// plan, such as one that checks a workflow.
 //
 // The compiler does no I/O of its own: what it needs from a platform, such
 // as the details of a cluster an input names, it asks for through resolver

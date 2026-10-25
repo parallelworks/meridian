@@ -152,9 +152,10 @@ func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv 
 	return v, nil
 }
 
-// Read returns the variables that names name, by their names as the plan
-// writes them, org.<name> or vars.<name>, with org or vars alone for every
-// variable of that context. A variable the file doesn't have is left out.
+// Read returns the variables that names name, by their names as the
+// Variables interface writes them, org.<name> or vars.<name>, with org or
+// vars alone for every variable of that context. A variable the file
+// doesn't have is left out, as one whose name the file can't have is.
 // A secret's value is read from where the file says only when secrets is
 // true; otherwise it is left out. A value that can't be read is a problem
 // that says why; a name that is neither org's nor vars' is the caller's

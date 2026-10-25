@@ -1,0 +1,11 @@
+on:
+  execute:
+    inputs:
+      debug:
+        type: boolean
+        default: false
+        ignore: ${{ org.ENV == 'prod' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

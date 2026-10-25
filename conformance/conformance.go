@@ -1,8 +1,8 @@
 // Package conformance holds the workflow format's conformance suite: cases
 // that pin what workflows mean, for any implementation of the format to run.
 //
-// In the format, inputs, compile and contexts areas, each case is a
-// directory, such as format/yaml-alias, with a workflow.yaml and a
+// In the format, inputs, compile, start and contexts areas, each case is
+// a directory, such as format/yaml-alias, with a workflow.yaml and a
 // case.yaml that says what the workflow must produce. A case's directory
 // can hold other files the workflow refers to. In the expressions area,
 // each file holds cases that pin what expressions evaluate to, and in the
@@ -24,7 +24,7 @@ import (
 
 // FS holds the cases.
 //
-//go:embed format expressions inputs compile matrices contexts
+//go:embed format expressions inputs compile start matrices contexts
 var FS embed.FS
 
 // A Case is one conformance case.
@@ -46,6 +46,10 @@ type Case struct {
 	// SecretVariables names the user variables in vars that are secret,
 	// whose values the compiler doesn't have.
 	SecretVariables []string `yaml:"secret-variables,omitempty"`
+	// StartContexts are the variables as the run reads them as it starts,
+	// in the start area, when they differ from Contexts', as a rerun's can:
+	// each context it gives replaces Contexts'.
+	StartContexts map[string]any `yaml:"start-contexts,omitempty"`
 	// NoPlatform says there is no platform to provide the input types that
 	// name a platform's resources. Otherwise a platform takes every value
 	// given for one as it is.
@@ -67,9 +71,10 @@ type Expect struct {
 	// the run starts give at the JSON Pointers of what they evaluate.
 	Values map[string]any `yaml:"values,omitempty"`
 	// Inputs are the run's input values, in the inputs area, without those
-	// in Deferred. A run with errors doesn't start, so in a case with
-	// errors, Inputs, Deferred and Secrets hold only the values the case
-	// checks, and the run can have others.
+	// in Deferred, and in the start area all of them, complete, as the run
+	// starts. A run with errors doesn't start, so in a case with errors,
+	// Inputs, Deferred and Secrets hold only the values the case checks,
+	// and the run can have others.
 	Inputs map[string]any `yaml:"inputs,omitempty"`
 	// Deferred are the values that stay expressions until the run is
 	// underway, such as a default that reads a secret variable, by their
@@ -86,6 +91,21 @@ type Expect struct {
 	// Plan holds values the compiled plan must have, by JSON Pointer into
 	// its JSON encoding, in the compile area.
 	Plan map[string]any `yaml:"plan,omitempty"`
+	// Env is the workflow's env: as the run evaluates it as it starts, and
+	// Timeout its timeout:, in seconds, in the start area. Timeout is
+	// checked when it is set.
+	Env     map[string]string `yaml:"env,omitempty"`
+	Timeout *int64            `yaml:"timeout,omitempty"`
+	// RunSecrets, RunPrivate and RunDerived name what of the run's values
+	// is a secret or made from one, private, and given in the place of
+	// what is made from a secret, in the start area, by name, as in
+	// inputs.creds.0.pass and vars.TOKEN.
+	RunSecrets []string `yaml:"run-secrets,omitempty"`
+	RunPrivate []string `yaml:"run-private,omitempty"`
+	RunDerived []string `yaml:"run-derived,omitempty"`
+	// Matrices are the matrix values of each instance of each matrix the
+	// run expands as it starts, by job name, in the start area.
+	Matrices map[string][]map[string]any `yaml:"matrices,omitempty"`
 	// Skipped are the JSON Pointers of the jobs and steps whose if: is
 	// false, in the contexts area, and of the cleanup: of each step that
 	// didn't run, or whose if: is false as the job ends. Every other job,

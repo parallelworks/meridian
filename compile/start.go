@@ -1,15 +1,24 @@
 package compile
 
 import (
+	"cmp"
+	"container/heap"
 	"context"
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
 
+	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
-
-// errNotImplemented is what Start returns until it is built.
-var errNotImplemented = errors.New("compile: not implemented")
 
 // StartInput is what Start reads besides the plan.
 type StartInput struct {
@@ -20,17 +29,15 @@ type StartInput struct {
 	Variables Variables
 	// Passwords are the run's passwords, from its secret record, by their
 	// paths, as plan.Run.Secrets names them (plan.JoinPath):
-	// inputs.creds.0.pass for the field pass of the list creds's first row.
-	// (Inputs.Secrets gives them by their paths in the inputs' values,
-	// creds.0.pass: whoever keeps them in the secret record names them as
-	// the plan does.) Start puts each at the path plan.SplitPath reads from
-	// its name.
+	// inputs.creds.0.pass for the field pass of the list creds's first row,
+	// as Created.Passwords gives them. Start puts each at the path
+	// plan.SplitPath reads from its name, an outer one before those in it.
 	Passwords map[string]any
 	// Private are the run's private values, from its secret record, by
-	// their paths, as plan.Run.Private names them: values the run was given
-	// that the plan doesn't hold, though they aren't secrets
-	// (Inputs.Private). Start puts each in the inputs' values at its path,
-	// and names it among the private values it gives (plan.RunValues).
+	// their paths, as plan.Run.Private names them, as Created.Private gives
+	// them: values the run was given that the plan doesn't hold, though
+	// they aren't secrets. Start puts each in the inputs' values at its
+	// path.
 	Private map[string]any
 	// Inputs provides the input types that name a platform's resources, as
 	// Options.Inputs does when the run is created. Nil means there is no
@@ -42,13 +49,18 @@ type StartInput struct {
 }
 
 // StartResult is what Start gives: the run's values, complete.
+//
+// What goes in the run's secret record of it is what is private: the
+// record half of Run.Split, and the timeout and the expansions when they
+// are private. The rest is run state.
 type StartResult struct {
 	// Run is what the phases after Start read of the run, whole: the plan's
-	// input values with Start's evaluated and each password at its path,
-	// the workflow's env:, every variable Start read, plain and secret, and
-	// in Run.Private and Run.Secrets what of it is private, and secret. The
-	// coordinator keeps the private part only in the run's secret record,
-	// and the rest as run state too (plan.RunValues.Split).
+	// input values with Start's evaluated and each password and private
+	// value at its path, the workflow's env:, every variable Start read,
+	// plain and secret, and in Run.Private and Run.Secrets what of it is
+	// private, and secret. The coordinator keeps the private part only in
+	// the run's secret record, and the rest as run state too
+	// (plan.RunValues.Split).
 	Run plan.RunValues
 	// TimeoutSeconds is the run's timeout:, in seconds, or 0 for none.
 	// TimeoutPrivate is set when evaluating it read a variable or a
@@ -57,35 +69,1089 @@ type StartResult struct {
 	TimeoutPrivate bool
 	// Expansions are the matrices Start expanded, those whose values are
 	// known once the run starts, by job name. A job with a strategy: that
-	// isn't here reads needs, and Ready expands it.
+	// isn't here reads needs, and Ready expands it. An expansion whose
+	// instances are private (plan.Instance.Private) the coordinator keeps
+	// in the secret record.
 	Expansions map[string]*plan.Expansion
 }
 
 // Start is the Start phase: it completes what p leaves to the run's start,
 // as docs/design.md describes under Starting a run. It reads the variables
-// p lists, through in.Variables, once for the run; decides again each
-// decision of the run's shape that read a variable, and reports
-// run_shape_changed if one differs from what p records; evaluates the
-// inputs p holds for Start, the workflow's env: and timeout:, and checks
-// each input's value as Compile does; expands each matrix whose values are
-// known by then, with plan.Expand and p's Run.Limits. Only once all of that
-// has passed does it make the run's sessions, through in.Sessions, so a
-// run that fails to start makes none. A rerun calls Start again, with the
-// same plan, and reads every variable again.
+// p lists, through in.Variables, once for the run, secret ones included,
+// and puts the run's passwords and private values in their places in the
+// inputs' values. It evaluates the parts of the inputs p holds for Start
+// (plan.Run.DeferredParts) where the input definitions write them, as the
+// compiler evaluates them, with the variables, the passwords and the
+// workflow's env:, which it evaluates too, each once, in the order they
+// read each other, and fills in the fields of the rows of each list it
+// evaluated a part of, as the compiler fills in a row's. It decides again
+// each input's condition that read a variable or a password
+// (plan.Run.Decisions); until then, it reads the inputs as the compiler's
+// evaluations read them, as they were given (plan.Run.Unconverted), and
+// from then on as they were converted. It then checks each input it
+// evaluated as Compile checks one; decides again each job's needs: that
+// read a variable or a password (plan.Job.NeedsExpr), reporting
+// run_shape_changed for a decision that differs from what p records;
+// evaluates the workflow's timeout:; and expands each matrix whose values
+// are known by then, with plan.Expand and p's Run.Limits. Only once all of
+// that has passed does it make the run's sessions, through in.Sessions,
+// so a run that fails to start makes none. A rerun calls Start again, with
+// the same plan, and reads every variable again.
+//
+// A relative reference in what it evaluates reads the input definitions,
+// which the plan holds; one that climbs out of them reads nothing, where
+// the compiler read the rest of the workflow.
+//
+// What it made from a variable or a password is private, and what it made
+// from a secret is a secret too, by its name, in the values it gives
+// (plan.RunValues.Private and Secrets), beside what p names so: the
+// variables it read, the passwords, and the values the run was given in
+// the place of what is made from one, which p names as derived
+// (plan.Run.Derived). A variable the Variables interface gives as a secret
+// is one, and so is one p names as a secret though the interface no
+// longer does.
 //
 // The coordinator runs Start as the run's first job, and stores what it
 // gives in the transaction that ends that job. Given the same plan, input
 // and resolver answers, it gives the same result, byte for byte, so a
 // coordinator that dies during Start leaves another to start it again.
 //
-// Its diagnostics are the run's problems, which never show a value made
-// from a variable or a password; an error among them fails the run, and
-// then there is no result. It returns an error, and no result, when it
-// couldn't finish for a reason that isn't the run's: a resolver that
-// couldn't answer, or ctx done, with ctx.Err(). The coordinator starts the
-// run again then.
-//
-// It isn't built yet, and returns an error that says so.
+// Its diagnostics are the run's problems, with no file position, which
+// never show a value made from a variable or a password; an error among
+// them fails the run, and then there is no result. It returns an error,
+// and no result, when it couldn't finish for a reason that isn't the
+// run's: a resolver that couldn't answer, a plan that isn't one the
+// compiler made, input that doesn't fit it, such as a password p doesn't
+// name, or ctx done, with ctx.Err(). The coordinator starts the run again
+// then.
 func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, problems.Diagnostics, error) {
-	return nil, nil, errNotImplemented
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if p == nil || p.Version != plan.Version {
+		return nil, nil, errors.New("compile: Start needs a plan of this release's version")
+	}
+	st := &starter{ctx: ctx, p: p, in: in, failed: map[*field]bool{}}
+	if err := st.readVariables(); err != nil {
+		return nil, nil, err
+	}
+	if err := st.restore(); err != nil {
+		return nil, nil, err
+	}
+	st.evaluate()
+	if err := st.checkDecisions(); err != nil {
+		return nil, nil, err
+	}
+	// What the run reads from here on reads the inputs as they were
+	// converted, as the jobs' do.
+	st.convert()
+	st.checkInputs()
+	st.checkNeeds()
+	run := st.runValues()
+	res := &StartResult{Run: run}
+	// The timeout and the matrices read the run's values, complete, as the
+	// phases after Start read them.
+	scope := plan.NewScope(plan.PhaseStart, plan.Contexts{Run: run})
+	var read expr.Read
+	var timeoutDiags problems.Diagnostics
+	res.TimeoutSeconds, read, timeoutDiags = plan.RunTimeout(p.Run.Timeout, scope)
+	res.TimeoutPrivate = read.Private
+	st.r.diags = append(st.r.diags, timeoutDiags...)
+	if err := st.expand(res, scope); err != nil {
+		return nil, nil, err
+	}
+	sessions := st.sessions()
+	if sessions != nil && st.in.Sessions == nil {
+		st.report(problems.ResolverMissing, "/sessions", problems.Params{"key": "sessions", "interface": "Sessions"})
+	}
+	diags := st.diagnostics()
+	if diags.HasErrors() {
+		return nil, diags, nil
+	}
+	if sessions != nil {
+		if err := st.in.Sessions.Make(ctx, st.in.RunID, sessions, maps.Clone(p.Run.SessionNames)); err != nil {
+			if err := st.resolverError(err, "/sessions"); err != nil {
+				return nil, nil, err
+			}
+			return nil, st.diagnostics(), nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return res, diags, nil
+}
+
+// A starter is a run as Start completes its values.
+type starter struct {
+	ctx context.Context
+	p   *plan.Plan
+	in  StartInput
+	// r is the input resolver, over the plan's input definitions, which
+	// evaluates what the plan holds for Start, and s what it keeps of the
+	// start (r.start).
+	r *inputResolver
+	s *startState
+	// deferred are the inputs whose values the plan holds for Start, in
+	// order.
+	deferred []*field
+	// secretVariables names the variables that are secrets: those the
+	// Variables interface gives as secrets, and those the plan names so.
+	secretVariables map[string]bool
+	// envKeys are the workflow's env: names, in order.
+	envKeys []string
+	// failed holds the inputs a part of whose value failed to evaluate,
+	// which aren't checked then.
+	failed map[*field]bool
+	// converted holds the values of the inputs the compiler converted, as
+	// it converted them, by their paths, which Start reads as they were
+	// given until it has decided the run's shape (plan.Run.Unconverted).
+	converted map[string]any
+	// diags are the problems Start found of its own, beside those the
+	// input resolver reports.
+	diags problems.Diagnostics
+}
+
+// startState is what the input resolver keeps as it completes the run's
+// values as the run starts (Start). The resolver marks, in its marks, what
+// reads a variable or a password, which is private (expr.Scope.Private),
+// and secrets marks what is a secret or was made from one, which is
+// masked too (expr.Scope.Marked).
+type startState struct {
+	// run holds what Start's evaluations read besides the inputs: the
+	// variables it read, the workflow's env as far as it is evaluated,
+	// remote and sessions.
+	run plan.RunValues
+	// pendingEnv holds the names of the env values that aren't evaluated
+	// yet, which read as not known yet.
+	pendingEnv map[string]bool
+	secrets    expr.Marks
+	// madeSecret and madePrivate name the values Start made from a secret,
+	// and from a variable or a password but no secret.
+	madeSecret, madePrivate map[string]bool
+}
+
+// contexts returns what Start's evaluations read: the inputs' values,
+// view, with what is evaluated as the run starts unknown until it is, and
+// the rest as s holds it, with an env value not evaluated yet unknown.
+func (s *startState) contexts(view map[string]any) plan.Contexts {
+	run := s.run
+	run.Inputs = plan.DataOf(view)
+	return plan.Contexts{Run: run, Unknown: slices.Sorted(maps.Keys(s.pendingEnv))}
+}
+
+// made notes what the evaluation that gave the value at path in the
+// inputs' values read: what read a variable or a password is private, and
+// what read a secret a secret, and what reads it, in turn, reads one.
+func (s *startState) made(r *inputResolver, path []string, read expr.Read) {
+	if !read.Private && !read.Marked {
+		return
+	}
+	full := slices.Concat([]string{"inputs"}, path)
+	name := plan.JoinPath(full...)
+	r.mark(path)
+	if read.Marked {
+		s.secrets.Add(full)
+		s.madeSecret[name] = true
+		return
+	}
+	s.madePrivate[name] = true
+}
+
+// readVariables reads the variables the plan lists, once, secret ones
+// included, as the run's org and vars.
+func (st *starter) readVariables() error {
+	p := st.p
+	st.secretVariables = map[string]bool{}
+	st.s = &startState{madeSecret: map[string]bool{}, madePrivate: map[string]bool{}}
+	whole, one := map[string]bool{}, map[string]bool{}
+	var first string
+	for _, names := range [][]string{p.Run.Variables, p.Run.Secrets} {
+		for _, name := range names {
+			path := plan.SplitPath(name)
+			if path[0] != "org" && path[0] != "vars" {
+				continue
+			}
+			if first == "" {
+				first = name
+			}
+			if len(path) == 1 {
+				whole[path[0]] = true
+				continue
+			}
+			// The interface reads a variable's name as it is, after its
+			// context and a dot: a name can hold dots of its own.
+			one[path[0]+"."+path[1]] = true
+		}
+	}
+	for _, name := range p.Run.Secrets {
+		if path := plan.SplitPath(name); len(path) == 2 && (path[0] == "org" || path[0] == "vars") {
+			st.secretVariables[name] = true
+		}
+	}
+	asked := slices.Sorted(maps.Keys(whole))
+	for name := range one {
+		if context, _, _ := strings.Cut(name, "."); !whole[context] {
+			asked = append(asked, name)
+		}
+	}
+	slices.Sort(asked)
+	if len(asked) == 0 {
+		return nil
+	}
+	if st.in.Variables == nil {
+		st.report(problems.ResolverMissing, "", problems.Params{"key": first, "interface": "Variables"})
+		return nil
+	}
+	got, err := st.in.Variables.Read(st.ctx, asked, true)
+	if err != nil {
+		return st.resolverError(err, "")
+	}
+	for key, v := range jsonvalue.Sorted(got) {
+		context, name, ok := strings.Cut(key, ".")
+		if !ok || !whole[context] && !one[key] {
+			continue // It wasn't asked for.
+		}
+		values := &st.s.run.Org
+		if context == "vars" {
+			values = &st.s.run.Vars
+		}
+		if *values == nil {
+			*values = map[string]string{}
+		}
+		(*values)[name] = v.Value
+		if v.Secret {
+			st.secretVariables[plan.JoinPath(context, name)] = true
+		}
+	}
+	return nil
+}
+
+// restore makes the input resolver over the plan's input definitions, with
+// the inputs' values the run has: the plan's, as they were given where the
+// compiler converted them, those it holds for Start, with each part that
+// Start evaluates unknown until it is, and each password and private value
+// at its path.
+func (st *starter) restore() error {
+	p := st.p
+	defs, _ := p.Run.Definitions.Written().(map[string]any)
+	doc := &format.Document{Format: p.Run.Format, Value: map[string]any{
+		"on": map[string]any{"execute": map[string]any{"inputs": orEmptyMap(defs)}},
+	}}
+	r := newInputResolver(doc, nil, Options{Inputs: st.in.Inputs})
+	r.start = st.s
+	st.r = r
+	r.fields = r.collect(defs, definitionsPath, nil, nil)
+	for i, f := range r.fields {
+		f.seq = i
+	}
+
+	values, _ := jsonvalue.Clone(p.Run.Inputs.Get()).(map[string]any)
+	if values == nil {
+		values = map[string]any{}
+	}
+	st.converted = map[string]any{}
+	for name, given := range jsonvalue.Sorted(p.Run.Unconverted) {
+		path := plan.SplitPath(name)
+		v, ok := values[path[0]]
+		for _, k := range path[1:] {
+			m, isMapping := v.(map[string]any)
+			if !isMapping {
+				ok = false
+				break
+			}
+			v, ok = m[k]
+		}
+		if !ok {
+			return fmt.Errorf("compile: the plan holds the input %s as it was given, but not as it was converted", name)
+		}
+		st.converted[name] = v
+		if err := setGrow(values, path, jsonvalue.Clone(given.Get())); err != nil {
+			return err
+		}
+	}
+	held := slices.Sorted(maps.Keys(p.Run.DeferredInputs))
+	var holders reach.Trie[*field]
+	for _, name := range held {
+		f := r.fieldAt(plan.SplitPath(name))
+		if f == nil {
+			return fmt.Errorf("compile: the plan holds the input %s for Start, which its definitions don't have", name)
+		}
+		holders.Add(f.path, f)
+		if err := setGrow(values, f.path, p.Run.DeferredInputs[name].Written()); err != nil {
+			return err
+		}
+	}
+	// What the run was given goes in its place, an outer one before those
+	// in it, as a password in a list held as derived, or as private.
+	secrets, private := setOf(p.Run.Secrets), setOf(p.Run.Private)
+	type given struct {
+		name string
+		path []string
+		v    any
+	}
+	var gave []given
+	for _, from := range []struct {
+		values map[string]any
+		names  map[string]bool
+		what   string
+	}{{st.in.Passwords, secrets, "password"}, {st.in.Private, private, "private value"}} {
+		for name, v := range from.values {
+			path := plan.SplitPath(name)
+			if len(path) < 2 || path[0] != "inputs" || !from.names[name] {
+				return fmt.Errorf("compile: the plan names no %s %s", from.what, name)
+			}
+			gave = append(gave, given{name, path[1:], v})
+		}
+	}
+	slices.SortFunc(gave, func(a, b given) int {
+		return cmp.Or(cmp.Compare(len(a.path), len(b.path)), slices.Compare(a.path, b.path), cmp.Compare(a.name, b.name))
+	})
+	for _, g := range gave {
+		if err := setGrow(values, g.path, jsonvalue.Clone(g.v)); err != nil {
+			return err
+		}
+	}
+	r.values = values
+
+	// What is private and what is a secret are marked by the names the
+	// plan gives them, and the variables by their contexts.
+	for name := range st.secretVariables {
+		st.s.secrets.Add(plan.SplitPath(name))
+	}
+	for _, f := range r.fields {
+		if f.typ == "password" {
+			r.mark(f.path)
+			st.s.secrets.Add(slices.Concat([]string{"inputs"}, f.path))
+		}
+	}
+	for _, names := range [][]string{p.Run.Secrets, p.Run.Private} {
+		for _, name := range names {
+			if path := plan.SplitPath(name); path[0] == "inputs" && len(path) > 1 {
+				r.mark(path[1:])
+				if secrets[name] {
+					st.s.secrets.Add(path)
+				}
+			}
+		}
+	}
+
+	// Each part held for Start is a part of its input's value that Start
+	// evaluates, which is unknown until it does. The input is the one held
+	// whose path leads to the part's, by the trie of their paths.
+	parted := map[*field]bool{}
+	for _, part := range p.Run.DeferredParts {
+		path := plan.SplitPath(part.Name)
+		loc, err := jsonptr.Split(part.Location)
+		if err != nil || len(path) < 2 || path[0] != "inputs" || len(loc) <= len(definitionsPath) || !slices.Equal(loc[:len(definitionsPath)], definitionsPath) {
+			return fmt.Errorf("compile: the plan's part %s, at %s, isn't one the compiler holds for Start", part.Name, part.Location)
+		}
+		var f *field
+		for g := range holders.Reached(path[1:]) {
+			if isPrefix(g.path, path[1:]) && (f == nil || len(g.path) > len(f.path) || len(g.path) == len(f.path) && g.seq < f.seq) {
+				f = g
+			}
+		}
+		if f == nil {
+			return fmt.Errorf("compile: the plan's part %s is in no input it holds for Start", part.Name)
+		}
+		f.addLater(laterPart{path: path[1+len(f.path):], loc: loc, index: slices.Clone(part.Index), dflt: part.Default})
+		parted[f] = true
+	}
+	for _, f := range r.fields {
+		if parted[f] {
+			st.deferred = append(st.deferred, f)
+		}
+	}
+	if len(st.deferred) != len(held) {
+		return errors.New("compile: the plan holds an input for Start without any of its parts")
+	}
+
+	st.envKeys = slices.Sorted(maps.Keys(p.Run.Env))
+	st.s.pendingEnv = map[string]bool{}
+	for _, k := range st.envKeys {
+		st.s.pendingEnv[plan.JoinPath("env", k)] = true
+	}
+	st.s.run = plan.RunValues{
+		Format: p.Run.Format, Org: st.s.run.Org, Vars: st.s.run.Vars, Env: map[string]string{},
+		Remote: maps.Clone(p.Run.Remote), Sessions: maps.Clone(p.Run.SessionNames),
+	}
+	return nil
+}
+
+// fieldAt returns the first input whose value is at path, or nil.
+func (r *inputResolver) fieldAt(path []string) *field {
+	var out *field
+	for f := range r.fieldsAt().Reached(path) {
+		if slices.Equal(f.path, path) && (out == nil || f.seq < out.seq) {
+			out = f
+		}
+	}
+	return out
+}
+
+// isPrefix reports whether path is prefix or is under it.
+func isPrefix(prefix, path []string) bool {
+	return len(prefix) <= len(path) && slices.Equal(prefix, path[:len(prefix)])
+}
+
+// setOf returns the set of the strings list holds.
+func setOf(list []string) map[string]bool {
+	set := make(map[string]bool, len(list))
+	for _, s := range list {
+		set[s] = true
+	}
+	return set
+}
+
+// A startNode is what Start evaluates of what the plan left to it: the
+// i'th part of f's value, or the workflow's env: value env.
+type startNode struct {
+	f   *field
+	i   int
+	env string
+}
+
+// evaluate evaluates what the plan holds for Start, the parts of the
+// inputs' values and the workflow's env:, each once, in the order they
+// read each other, as the compiler fills in the inputs (pendingFields):
+// one is evaluated once nothing its expressions read waits any longer. One
+// that reads what waits through a definition, as a relative reference
+// does, which the order can't see, is evaluated again once what it read
+// is, in another round. What is left once a round evaluates nothing reads
+// itself, or each other.
+func (st *starter) evaluate() {
+	for {
+		nodes := st.pendingNodes()
+		if len(nodes) == 0 || !st.evaluateInOrder(nodes) {
+			break
+		}
+	}
+	var left []string
+	for _, n := range st.pendingNodes() {
+		if n.f == nil {
+			left = append(left, plan.JoinPath("env", n.env))
+			continue
+		}
+		left = append(left, plan.JoinPath(slices.Concat([]string{"inputs"}, n.f.path, n.f.later[n.i].path)...))
+	}
+	if len(left) > 0 {
+		st.report(problems.ValuesReadEachOther, "", problems.Params{"names": problems.QuoteAll(left)})
+	}
+}
+
+// pendingNodes returns what Start has yet to evaluate, in order: the
+// parts of each input, in the order of the inputs and of their parts, and
+// then the env: values, in the order of their names.
+func (st *starter) pendingNodes() []startNode {
+	var out []startNode
+	for _, f := range st.deferred {
+		for i, p := range f.later {
+			if !p.variable {
+				out = append(out, startNode{f: f, i: i})
+			}
+		}
+	}
+	for _, k := range st.envKeys {
+		if st.s.pendingEnv[plan.JoinPath("env", k)] {
+			out = append(out, startNode{env: k})
+		}
+	}
+	return out
+}
+
+// evaluateInOrder evaluates nodes in the order they read each other, as
+// their expressions say, and then once each of those left, as one that
+// reads what waits through a definition is; and reports whether it
+// evaluated any.
+func (st *starter) evaluateInOrder(nodes []startNode) bool {
+	var at reach.Trie[int]
+	envAt := map[string]int{}
+	for i, n := range nodes {
+		if n.f != nil {
+			at.Add(slices.Concat(n.f.path, n.f.later[n.i].path), i)
+		} else {
+			envAt[n.env] = i
+		}
+	}
+	waits := make([]int, len(nodes))
+	readers := make([][]int, len(nodes))
+	for i, n := range nodes {
+		exprs, index := st.nodeExprs(n)
+		seen := map[int]bool{i: true}
+		read := func(j int) {
+			if !seen[j] {
+				seen[j] = true
+				readers[j] = append(readers[j], i)
+				waits[i]++
+			}
+		}
+		for _, pattern := range readPatterns(exprs, index) {
+			for j := range at.Reached(pattern) {
+				read(j)
+			}
+		}
+		for _, e := range exprs {
+			for _, ref := range e.Refs() {
+				switch {
+				case ref.Context != "env":
+				case unnamed(ref.Path):
+					for _, j := range jsonvalue.Sorted(envAt) {
+						read(j)
+					}
+				default:
+					if j, ok := envAt[ref.Path[0]]; ok {
+						read(j)
+					}
+				}
+			}
+		}
+	}
+	var ready intHeap
+	for i := range nodes {
+		if waits[i] == 0 {
+			heap.Push(&ready, i)
+		}
+	}
+	done := make([]bool, len(nodes))
+	progress := false
+	for ready.Len() > 0 {
+		i := heap.Pop(&ready).(int)
+		if !st.evalNode(nodes[i]) {
+			continue
+		}
+		done[i], progress = true, true
+		for _, j := range readers[i] {
+			if waits[j]--; waits[j] == 0 {
+				heap.Push(&ready, j)
+			}
+		}
+	}
+	for i, n := range nodes {
+		if !done[i] && st.evalNode(n) {
+			progress = true
+		}
+	}
+	return progress
+}
+
+// nodeExprs returns the expressions n evaluates, and the list rows they
+// are for.
+func (st *starter) nodeExprs(n startNode) ([]*expr.Expr, []int) {
+	if n.f == nil {
+		return st.p.Run.Env[n.env].Exprs(), nil
+	}
+	p := n.f.later[n.i]
+	exprs, err := st.r.workflow.Exprs(p.loc)
+	if err != nil {
+		return nil, nil
+	}
+	return exprs, p.index
+}
+
+// evalNode evaluates n, if it is still to be, and reports whether it did,
+// or failed: not if it read what isn't evaluated yet.
+func (st *starter) evalNode(n startNode) bool {
+	if n.f == nil {
+		return st.s.pendingEnv[plan.JoinPath("env", n.env)] && st.evalEnv(n.env)
+	}
+	return !n.f.later[n.i].variable && st.evalPart(n.f, n.i)
+}
+
+// intHeap is a heap of ints, the least first.
+type intHeap []int
+
+func (h intHeap) Len() int           { return len(h) }
+func (h intHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h intHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *intHeap) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *intHeap) Pop() any {
+	old := *h
+	x := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return x
+}
+
+// waits reports whether err is an evaluation that read what Start hasn't
+// evaluated yet: an input's value, or a part of one, or an env value.
+func waits(err error) bool {
+	u, ok := errors.AsType[*expr.UnknownError](err)
+	return ok && (u.Name == "inputs" || u.Name == "env")
+}
+
+// evalPart evaluates the i'th part of f's value held for Start, where the
+// workflow writes it, and reports whether it did, or failed: not if it
+// read what isn't evaluated yet.
+func (st *starter) evalPart(f *field, i int) bool {
+	r := st.r
+	p := f.later[i]
+	v, read, err := r.evalRead(p.loc, p.index)
+	switch {
+	case waits(err):
+		return false
+	case err != nil:
+		st.reportEval(p.loc, err, read)
+		f.later[i].variable = true
+		st.failed[f] = true
+		return true
+	}
+	path := slices.Concat(f.path, p.path)
+	f.later[i].variable = true
+	if p.dflt && (v == nil || v == "") {
+		// A default of "" or null gives no value, as when the run is
+		// created (setDefault).
+		r.remove(path)
+	} else {
+		// A copy, as the value can be part of what the evaluation read.
+		r.set(path, jsonvalue.Clone(v))
+	}
+	st.s.made(r, path, read)
+	if !slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
+		st.fillRows(f)
+	}
+	return true
+}
+
+// evalEnv evaluates the workflow's env: value k, and reports whether it
+// did, or failed: not if it read what isn't evaluated yet.
+func (st *starter) evalEnv(k string) bool {
+	r := st.r
+	out, read, err := st.p.Run.Env[k].EvalRead(r.scope())
+	switch {
+	case waits(err):
+		return false
+	case err != nil:
+		st.reportEval([]string{"env", k}, err, read)
+	}
+	name := plan.JoinPath("env", k)
+	text := ""
+	if err == nil {
+		text = expr.Text(out)
+	}
+	st.s.run.Env[k] = text
+	delete(st.s.pendingEnv, name)
+	if r.view != nil {
+		// The scope's contexts are the evaluators', which read the value
+		// from here on.
+		env, _ := r.budget.Contexts["env"].(map[string]any)
+		if env != nil {
+			env[k] = text
+		}
+	}
+	if read.Private {
+		r.marks.Add([]string{"env", k})
+		if read.Marked {
+			st.s.secrets.Add([]string{"env", k})
+			st.s.madeSecret[name] = true
+		} else {
+			st.s.madePrivate[name] = true
+		}
+	}
+	r.evaluators = nil
+	return true
+}
+
+// fillRows fills in the values of the fields of f's rows, and of the rows
+// of the lists in them, once Start has evaluated every part of f's value
+// it holds: each row's fields take their defaults, as they do when the
+// run is created (fillDefaults), so a row, or a list in a row, that a part
+// gives has its fields filled in, as Create filled them in before the plan
+// held the part's expression in their place. The rows are collected again
+// from f's value as it is, so that a field that has a value keeps it. A
+// default that reads what Start hasn't evaluated yet is a part of f's
+// value that it evaluates once it has, after which it fills in f's rows
+// again.
+func (st *starter) fillRows(f *field) {
+	r := st.r
+	if defs, _ := f.rowInputs(); defs == nil {
+		return
+	}
+	r.rows = slices.DeleteFunc(r.rows, func(c *field) bool { return c.in == f })
+	f.rows = nil
+	var pending pendingFields
+	var start func(fields []*field)
+	start = func(fields []*field) {
+		for _, c := range fields {
+			if r.prepare(c) {
+				pending.add(c)
+			} else {
+				start(r.collectRows(c))
+			}
+		}
+	}
+	start(r.collectRows(f))
+	for p := pending.next(); p != nil; p = pending.next() {
+		r.evalPending(p.f)
+		start(r.collectRows(p.f))
+		pending.filled(p)
+	}
+	if left := pending.waiting(); len(left) > 0 {
+		names := make([]string, len(left))
+		for i, c := range left {
+			names[i] = strings.Join(c.path, ".")
+		}
+		r.reportAt(problems.DefaultsReadEachOther, left[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
+	}
+}
+
+// checkDecisions decides again each input's condition that read a
+// variable or a password as the run was created (plan.Run.Decisions),
+// where the input definitions write it, and reports run_shape_changed
+// where one decides otherwise. It reads the inputs as the compiler's
+// conditions read them, as they were given. A decision of no input's
+// condition is a plan the compiler didn't make, an error.
+func (st *starter) checkDecisions() error {
+	r := st.r
+	byLoc := make(map[string]*field, len(r.fields))
+	for _, f := range r.fields {
+		if _, ok := byLoc[jsonptr.Format(f.loc)]; !ok {
+			byLoc[jsonptr.Format(f.loc)] = f
+		}
+	}
+	for _, d := range st.p.Run.Decisions {
+		loc, err := jsonptr.Split(d.Path)
+		if err != nil || len(loc) <= len(definitionsPath) {
+			return fmt.Errorf("compile: the plan's decision %s is of no input's condition", d.Path)
+		}
+		f, key := byLoc[jsonptr.Format(loc[:len(loc)-1])], loc[len(loc)-1]
+		if f == nil || key != "hidden" && key != "ignore" && key != "optional" {
+			return fmt.Errorf("compile: the plan's decision %s is of no input's condition", d.Path)
+		}
+		v := f.def[key]
+		if _, isString := v.(string); isString {
+			var read expr.Read
+			if v, read, err = r.evalRead(loc, f.index); err != nil {
+				st.reportEval(loc, err, read)
+				continue
+			}
+		}
+		if conditionValue(v) != d.Value {
+			st.report(problems.RunShapeChanged, d.Path, problems.Params{"key": key, "name": f.label()})
+		}
+	}
+	return nil
+}
+
+// convert puts the values of the inputs the compiler converted back as it
+// converted them, which Start read as they were given until it decided the
+// run's shape (plan.Run.Unconverted).
+func (st *starter) convert() {
+	for name, v := range jsonvalue.Sorted(st.converted) {
+		st.r.set(plan.SplitPath(name), jsonvalue.Clone(v))
+	}
+}
+
+// checkNeeds evaluates again each job's needs: that read a variable or a
+// password as the run was created (plan.Job.NeedsExpr), and reports
+// run_shape_changed where one names other jobs than the plan's. It reads
+// the inputs as they were converted, as the compiler's needs: read them.
+func (st *starter) checkNeeds() {
+	r := st.r
+	scope := r.scope()
+	jobs := map[string]bool{}
+	for _, j := range st.p.Jobs {
+		jobs[j.Name] = true
+	}
+	for _, j := range st.p.Jobs {
+		if j.NeedsExpr.IsZero() {
+			continue
+		}
+		pointer := jsonptr.Append(j.Path, "needs")
+		v, read, err := j.NeedsExpr.EvalRead(scope)
+		if err != nil {
+			loc, _ := jsonptr.Split(pointer)
+			st.reportEval(loc, err, read)
+			continue
+		}
+		if !sameNeeds(v, j, jobs) {
+			st.report(problems.RunShapeChanged, pointer, problems.Params{"key": "needs", "name": j.Name})
+		}
+	}
+}
+
+// sameNeeds reports whether v, what a job's needs: gives, is what j needs:
+// the same jobs, each on all its instances or any one, as the compiler
+// reads them (resolveNeeds), in any order. jobs holds the names of the
+// run's jobs.
+func sameNeeds(v any, j plan.Job, jobs map[string]bool) bool {
+	var names []any
+	switch v := v.(type) {
+	case string:
+		names = []any{v}
+	case []any:
+		names = v
+	default:
+		return false
+	}
+	got := map[string]bool{}
+	for _, item := range names {
+		s, ok := item.(string)
+		if !ok {
+			return false
+		}
+		job, anyInstance := strings.CutSuffix(s, ":any")
+		if job == j.Name || !jobs[job] {
+			return false
+		}
+		if _, seen := got[job]; !seen {
+			got[job] = anyInstance
+		}
+	}
+	if len(got) != len(j.Needs) {
+		return false
+	}
+	for _, n := range j.Needs {
+		if anyInstance, ok := got[n.Job]; !ok || anyInstance != n.Any {
+			return false
+		}
+	}
+	return true
+}
+
+// checkInputs checks each input Start evaluated as the compiler checks
+// one: its type, whether it is required, and a platform type with the
+// Inputs resolver; and each password field of the rows Start filled in.
+func (st *starter) checkInputs() {
+	r := st.r
+	for _, f := range st.deferred {
+		if st.failed[f] {
+			continue
+		}
+		if !r.missing(f) {
+			r.checkField(f, false)
+			continue
+		}
+		// An input with no value and no default is required unless it is
+		// optional, or hidden or in a hidden group; a boolean with none is
+		// false.
+		if f.container || f.header || f.hasDefault || f.repeats() {
+			continue
+		}
+		switch {
+		case st.condition(f, "optional") || st.hidden(f):
+		case f.typ == "boolean":
+			r.set(f.path, false)
+		default:
+			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
+		}
+	}
+	for _, c := range r.rows {
+		if c.typ == "password" {
+			r.checkField(c, false)
+		}
+	}
+}
+
+// hidden reports whether f, or a group it is in, is hidden.
+func (st *starter) hidden(f *field) bool {
+	for g := f; g != nil; g = g.group {
+		if st.condition(g, "hidden") {
+			return true
+		}
+	}
+	return false
+}
+
+// condition evaluates one of f's hidden, ignore and optional as the run
+// starts. What it read was read as the run was created, or it is a
+// decision that checkShape checks.
+func (st *starter) condition(f *field, key string) bool {
+	v, ok := f.def[key]
+	if !ok {
+		return false
+	}
+	if _, isString := v.(string); isString {
+		loc := appendPath(f.loc, key)
+		var read expr.Read
+		var err error
+		if v, read, err = st.r.evalRead(loc, f.index); err != nil {
+			st.reportEval(loc, err, read)
+			return false
+		}
+	}
+	return conditionValue(v)
+}
+
+// runValues returns the run's values as Start completed them, with what of
+// them is private, a secret and derived, by name.
+func (st *starter) runValues() plan.RunValues {
+	p, s := st.p, st.s
+	run := s.run
+	run.Format = p.Run.Format
+	run.Env = maps.Clone(s.run.Env)
+	if len(run.Env) == 0 {
+		run.Env = nil
+	}
+	run.Inputs = plan.DataOf(st.r.values)
+	secrets := map[string]bool{}
+	for _, name := range p.Run.Secrets {
+		secrets[name] = true
+	}
+	maps.Copy(secrets, st.secretVariables)
+	maps.Copy(secrets, s.madeSecret)
+	run.Secrets = slices.Sorted(maps.Keys(secrets))
+	private := map[string]bool{}
+	for _, name := range p.Run.Private {
+		private[name] = true
+	}
+	for name := range s.madePrivate {
+		if !secrets[name] {
+			private[name] = true
+		}
+	}
+	run.Private = slices.Sorted(maps.Keys(private))
+	run.Derived = slices.Clone(p.Run.Derived)
+	return run
+}
+
+// expand expands each matrix whose values are known as the run starts,
+// with plan.Expand, as Ready expands one that reads needs, into res.
+func (st *starter) expand(res *StartResult, scope expr.Scope) error {
+	for i := range st.p.Jobs {
+		j := &st.p.Jobs[i]
+		if j.Strategy == nil {
+			continue
+		}
+		x, err := plan.Expand(st.ctx, j, scope, st.p.Run.Limits)
+		switch {
+		case err == nil:
+			if res.Expansions == nil {
+				res.Expansions = map[string]*plan.Expansion{}
+			}
+			res.Expansions[j.Name] = x
+		case st.ctx.Err() != nil:
+			return st.ctx.Err()
+		case expr.IsUnknown(err):
+			// It reads needs, and Ready expands it.
+		default:
+			if xe, ok := errors.AsType[*plan.ExpandError](err); ok {
+				st.report(xe.Kind, xe.Path, xe.Params)
+				continue
+			}
+			// Expand shows no value made from a private one.
+			loc, _ := jsonptr.Split(jsonptr.Append(j.Path, "strategy"))
+			st.reportEval(loc, err, expr.Read{})
+		}
+	}
+	return nil
+}
+
+// sessions returns the workflow's sessions:, as it writes them, for the
+// session provider, or nil if it has none.
+func (st *starter) sessions() map[string]any {
+	m, _ := st.p.Run.Sessions.Written().(map[string]any)
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+// reportEval reports err, an error evaluating what is at loc in the
+// workflow, which read what read says: with the values it shows masked if
+// it read a variable or a password. Reading a context that isn't known as
+// the run starts, as an input's definition that reads needs does, is
+// context_not_known.
+func (st *starter) reportEval(loc []string, err error, read expr.Read) {
+	if u, ok := errors.AsType[*expr.UnknownError](err); ok {
+		pointer := jsonptr.Format(loc)
+		if u.Name == "status" {
+			st.report(problems.StatusNotKnown, pointer, problems.Params{"phase": plan.PhaseStart.String()})
+			return
+		}
+		st.report(problems.ContextNotKnown, pointer, problems.Params{"context": u.Name, "phase": plan.PhaseStart.String()})
+		return
+	}
+	st.r.reportError(loc, 0, maskedIf(read.Private, err))
+}
+
+// report reports a problem of kind k at pointer, a JSON Pointer in the
+// workflow, with params: the run's, so with no file position.
+func (st *starter) report(k *problems.Kind, pointer string, params problems.Params) {
+	st.diags = append(st.diags, k.At("", problems.Position{}, pointer, params))
+}
+
+// resolverError reports err, an error from a resolver Start asked about
+// what is at pointer: a problem of one of the kinds of error a workflow
+// can have is the run's, which it reports, and it returns nil; any other
+// error, the resolver couldn't answer, which it returns.
+func (st *starter) resolverError(err error, pointer string) error {
+	if ctxErr := st.ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if k, params, ok := workflowProblem(err); ok {
+		st.report(k, pointer, params)
+		return nil
+	}
+	return err
+}
+
+// diagnostics returns Start's diagnostics, in order, each once, and the
+// first of each kind (listed).
+func (st *starter) diagnostics() problems.Diagnostics {
+	diags := slices.Clone(st.diags)
+	if st.r != nil {
+		diags = append(diags, st.r.diags...)
+	}
+	diags.Sort()
+	return listed(diags)
+}
+
+// setGrow sets the value at path in m, making the mappings on the way to
+// it that aren't there, and a list's item at its index if it is the item
+// after the list's last, as when the list is held whole and its items
+// given apart. A list holds null in place of each item a plan doesn't
+// hold, so any other index isn't one the plan names, an error.
+func setGrow(m map[string]any, path []string, v any) error {
+	_, err := grow(m, path, v)
+	return err
+}
+
+// grow returns c with v at path in it: c itself, changed, when it is a
+// mapping, or a list that has room for the item, which only a list's last
+// item, after the rest, doesn't. It changes nothing on the way to an
+// error.
+func grow(c any, path []string, v any) (any, error) {
+	if len(path) == 0 {
+		return v, nil
+	}
+	key := path[0]
+	m, isMap := c.(map[string]any)
+	if l, isList := c.([]any); isList || !isMap && isListIndex(key) {
+		n, err := strconv.Atoi(key)
+		if err != nil || n < 0 || n > len(l) || strconv.Itoa(n) != key {
+			return nil, fmt.Errorf("compile: the plan names an item %s of a list of %d", key, len(l))
+		}
+		if n == len(l) {
+			l = append(l, nil)
+		}
+		item, err := grow(l[n], path[1:], v)
+		if err != nil {
+			return nil, err
+		}
+		l[n] = item
+		return l, nil
+	}
+	if !isMap {
+		m = map[string]any{}
+	}
+	item, err := grow(m[key], path[1:], v)
+	if err != nil {
+		return nil, err
+	}
+	m[key] = item
+	return m, nil
+}
+
+// isListIndex reports whether key is a list's index as a path writes it: 0,
+// or digits that don't start with 0.
+func isListIndex(key string) bool {
+	n, err := strconv.Atoi(key)
+	return err == nil && n >= 0 && strconv.Itoa(n) == key
+}
+
+func orEmptyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
 }

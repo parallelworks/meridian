@@ -85,7 +85,7 @@ func (r *inputResolver) compare(f *field) {
 				if loc := c.locs[i]; r.reads(loc, false) {
 					raw := lookup(r.doc.Value, loc)
 					r.noteEvaluation(f, path, loc, raw)
-					r.deferPart(f, path, raw, true)
+					r.deferPart(f, path, loc, raw, true)
 				}
 			case c.option && f.findOptions().literal(part):
 			case f.typ == "password" && len(path) == 0:
@@ -331,7 +331,10 @@ func rowTexts(rows []any, value any, loc []string) ([]text, []candidate) {
 				continue
 			}
 			path := slices.Concat([]string{strconv.Itoa(i)}, p.at)
-			if i < len(rows) && v == lookup(rows[i], p.at) {
+			// A form's text is a string; a row that a default row's
+			// expression gives, all of it, is a mapping, which == can't
+			// compare.
+			if s, isText := v.(string); isText && i < len(rows) && s == lookup(rows[i], p.at) {
 				texts = append(texts, text{path, slices.Concat(loc, path)})
 				continue
 			}

@@ -1,0 +1,15 @@
+description: >-
+  A value evaluated as the run starts is checked as one is when the run is
+  created, against its input's type, and a problem with one made from a
+  variable doesn't show it.
+source: Meridian
+contexts:
+  vars:
+    REPLICAS: many
+secret-variables: [REPLICAS]
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_number
+      path: /on/execute/inputs/replicas
+      params: {input: replicas, value: "***"}

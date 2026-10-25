@@ -203,37 +203,49 @@ func (e *evaluation) jobRetry(r *JobRetry, pointer string) *ReadyJobRetry {
 // format 1 reads one it has none of. A job's or a step's timeout: has none
 // by default, so 0s is none too, where format 1 times out at once.
 func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
-	return e.durationOf(v, pointer, key, def, false)
+	seconds, _ := e.durationOf(v, pointer, key, def, false)
+	return seconds
+}
+
+// RunTimeout evaluates the workflow's timeout:, v, in scope, as Start
+// does: in seconds, or 0 for none, read as a job's timeout: is
+// (Job.Ready), with what evaluating it read, and its problems, at
+// /timeout, which show no value made from a private one.
+func RunTimeout(v Value, scope expr.Scope) (int64, expr.Read, problems.Diagnostics) {
+	e := &evaluation{phase: PhaseStart, scope: scope}
+	seconds, read := e.durationOf(v, "/timeout", "timeout", 0, false)
+	return seconds, read, e.diags
 }
 
 // retryDuration evaluates a step's retry: interval: or timeout:, v, as
 // duration does, but for a number with a fraction, which it rounds down,
 // as format 1 does: one under a second is def.
 func (e *evaluation) retryDuration(v Value, pointer, key string, def int64) int64 {
-	return e.durationOf(v, pointer, key, def, true)
+	seconds, _ := e.durationOf(v, pointer, key, def, true)
+	return seconds
 }
 
 // durationOf is duration, which rounds a number with a fraction down when
-// round is set.
-func (e *evaluation) durationOf(v Value, pointer, key string, def int64, round bool) int64 {
+// round is set, and gives what evaluating v read too.
+func (e *evaluation) durationOf(v Value, pointer, key string, def int64, round bool) (int64, expr.Read) {
 	if v.IsZero() {
-		return def
+		return def, expr.Read{}
 	}
 	out, read, ok := e.value(v, pointer)
 	if !ok {
-		return 0
+		return 0, read
 	}
 	if f, ok := out.(float64); ok && round && f >= 0 && f < 1<<63 {
 		out = math.Trunc(f)
 	}
 	if out == nil || out == "" || bareZero(out) {
-		return def
+		return def, read
 	}
 	seconds, ok := ParseDuration(out)
 	if !ok {
 		e.reportInvalid(problems.DurationInvalid, pointer, key, out, read)
 	}
-	return seconds
+	return seconds, read
 }
 
 // cleanOnRetry evaluates a step's retry: clean-on-retry:, v, at pointer:

@@ -1,0 +1,10 @@
+on:
+  execute:
+    inputs:
+      size:
+        type: string
+        default: ${{ vars.SIZE }}
+jobs:
+  main:
+    steps:
+      - run: echo ${{ org.COUNT }} ${{ org.NAME }}

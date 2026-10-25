@@ -1,0 +1,19 @@
+description: >-
+  A list whose rows a default that reads a secret gives is evaluated, all
+  of it, as the run starts, and its rows are known only then: each row's
+  fields take their defaults, as a row's do when the run is created, one
+  that reads its own row among them. Each is a secret, as it reads the
+  rows, which are.
+source: Meridian
+contexts:
+  org:
+    REGION: us-east
+  vars:
+    HOSTS: '[{"name": "a"}, {"name": "b", "gpus": 4}]'
+secret-variables: [HOSTS]
+expect:
+  inputs:
+    hosts:
+      - {name: a, zone: us-east-a, gpus: 1}
+      - {name: b, zone: us-east-b, gpus: 4}
+  run-secrets: [inputs.hosts, inputs.hosts.0.zone, inputs.hosts.1.zone, vars.HOSTS]

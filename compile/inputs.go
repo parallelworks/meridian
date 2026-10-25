@@ -6,6 +6,7 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
@@ -95,6 +96,10 @@ type Options struct {
 	// decide the run's shape, such as which inputs are ignored and which
 	// jobs a job needs, and keeps what else reads them an expression.
 	Contexts map[string]any
+	// Limits are Meridian's limits on the run's size that the phases after
+	// Create apply, such as a matrix's instances, which the plan records
+	// (plan.Run.Limits). A zero field is the default.
+	Limits plan.Limits
 }
 
 // definitionsPath is where a workflow defines its inputs.
@@ -201,19 +206,78 @@ type inputResolver struct {
 	// workflow defines, anywhere, once one is.
 	unknown      int
 	passwordKeys map[string]bool
+	// decisions are the conditions that read a variable or a password, and
+	// what each decided, which the plan keeps for Start; and unconverted
+	// the values of the inputs whose values checking them converted, as
+	// they were before, by their paths' names, which what was evaluated
+	// before read.
+	decisions   []plan.Decision
+	unconverted map[string]any
+	// start is set when the resolver completes a run's values as it
+	// starts (Start), and nil when it creates the run.
+	start *startState
 }
 
 // deferred returns the defaults that are evaluated once the run is
 // underway, by their inputs' paths.
 func (r *inputResolver) deferred() map[string]plan.Value {
 	var out map[string]plan.Value
+	for _, f := range r.deferredFields() {
+		if out == nil {
+			out = map[string]plan.Value{}
+		}
+		out[plan.JoinPath(f.path...)] = f.dflt
+	}
+	return out
+}
+
+// deferredFields returns the inputs whose values are evaluated once the run
+// is underway, in order. One whose value can't be held, as it isn't JSON,
+// has none.
+func (r *inputResolver) deferredFields() []*field {
+	var out []*field
 	for _, f := range r.fields {
-		// One whose value can't be held, as it isn't JSON, has none.
 		if (f.deferred || f.variable) && !f.ignored && !f.dflt.IsZero() {
-			if out == nil {
-				out = map[string]plan.Value{}
-			}
-			out[plan.JoinPath(f.path...)] = f.dflt
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// unconvertedData returns the values of the inputs the plan keeps, kept,
+// that checking them converted, as they were given (plan.Run.Unconverted):
+// none the plan doesn't keep, as a private one.
+func (r *inputResolver) unconvertedData(kept map[string]any) map[string]plan.Data {
+	var out map[string]plan.Data
+	for name, v := range r.unconverted {
+		if _, ok := jsonptr.Lookup(kept, plan.SplitPath(name)); !ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]plan.Data{}
+		}
+		out[name] = plan.DataOf(v)
+	}
+	return out
+}
+
+// deferredParts returns where the parts of the deferred values that hold
+// expressions are in the workflow, in order: each input's, in the order
+// they were held, or the one that is all of its value.
+func (r *inputResolver) deferredParts() []plan.DeferredPart {
+	var out []plan.DeferredPart
+	for _, f := range r.deferredFields() {
+		parts := f.later
+		if i := slices.IndexFunc(parts, func(p laterPart) bool { return len(p.path) == 0 }); i >= 0 {
+			parts = parts[i : i+1]
+		}
+		for _, p := range parts {
+			out = append(out, plan.DeferredPart{
+				Name:     plan.JoinPath(slices.Concat([]string{"inputs"}, f.path, p.path)...),
+				Location: jsonptr.Format(p.loc),
+				Index:    slices.Clone(p.index),
+				Default:  p.dflt,
+			})
 		}
 	}
 	return out

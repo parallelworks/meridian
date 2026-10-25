@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -44,26 +46,39 @@ func (r *inputResolver) applyConditions() {
 }
 
 // condition evaluates one of f's hidden, ignore and optional, which is true
-// if it is true or the text "true".
+// if it is true or the text "true". One that read a variable or a password
+// is a decision of the run's shape that Start makes again, which the plan
+// keeps (decisions).
 func (r *inputResolver) condition(f *field, key string) bool {
 	raw, ok := f.def[key]
 	if !ok {
 		return false
 	}
 	v := raw
+	marked := false
+	loc := appendPath(f.loc, key)
 	if _, isString := raw.(string); isString {
 		var err error
-		var marked bool
-		if v, marked, err = r.evalAt(appendPath(f.loc, key), f.index); err != nil {
+		if v, marked, err = r.evalAt(loc, f.index); err != nil {
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
-				r.reportAt(problems.InputConditionNotKnown, appendPath(f.loc, key),
+				r.reportAt(problems.InputConditionNotKnown, loc,
 					problems.Params{"key": key, "input": f.label(), "name": u.Name})
 			} else {
-				r.reportError(appendPath(f.loc, key), 0, maskedIf(marked, err))
+				r.reportError(loc, 0, maskedIf(marked, err))
 			}
 			return false
 		}
 	}
+	decided := conditionValue(v)
+	if marked {
+		r.decisions = append(r.decisions, plan.Decision{Path: jsonptr.Format(loc), Value: decided})
+	}
+	return decided
+}
+
+// conditionValue is what a condition whose value is v decides: true if v
+// is true or the text "true".
+func conditionValue(v any) bool {
 	switch v := v.(type) {
 	case bool:
 		return v

@@ -1,0 +1,13 @@
+description: >-
+  A run with sessions can't start where nothing provides them: it fails,
+  naming the key and the interface that would.
+source: Meridian
+contexts:
+  sessions:
+    desktop: desktop-1
+expect:
+  diagnostics:
+    - severity: error
+      code: resolver_missing
+      path: /sessions
+      params: {key: sessions, interface: Sessions}

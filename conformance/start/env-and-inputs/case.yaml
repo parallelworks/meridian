@@ -1,0 +1,22 @@
+description: >-
+  As the run starts, the workflow's env: and the inputs the plan holds for
+  the start are evaluated in the order they read each other: a default can
+  read env, and an env: value an input, whichever is held. The workflow's
+  timeout: is evaluated then too. An env: value made from a variable is
+  private, as an input's is.
+source: Meridian
+contexts:
+  vars:
+    PREFIX: p
+expect:
+  inputs:
+    size: 2
+    dir: /data/2/runs
+    label: p-2x
+  env:
+    BASE: /data/2
+    SUFFIX: 2x
+    OUT: /data/2/runs/out
+    LABEL: p-2x
+  timeout: 120
+  run-private: [env.LABEL, inputs.label]

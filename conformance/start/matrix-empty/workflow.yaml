@@ -1,0 +1,7 @@
+jobs:
+  main:
+    strategy:
+      matrix:
+        site: ${{ fromJSON(vars.SITES) }}
+    steps:
+      - run: echo ${{ matrix.site }}

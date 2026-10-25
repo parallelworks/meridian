@@ -1,0 +1,20 @@
+description: >-
+  A row of a list that an expression gives, and a list in a row, take their
+  fields' defaults as the run starts, as they would have had their values
+  been known when it was created.
+source: Meridian
+contexts:
+  org:
+    DISKS: '[{"label": "data"}]'
+  vars:
+    FIRST: '{"name": "a"}'
+secret-variables: [FIRST]
+expect:
+  inputs:
+    hosts:
+      - {name: a, site: east}
+    racks:
+      - disks:
+          - {label: data, size: 10}
+  run-secrets: [inputs.hosts.0, vars.FIRST]
+  run-private: [inputs.racks.0.disks]

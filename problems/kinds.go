@@ -172,6 +172,28 @@ var (
 	ValueTooDeep               = define(Error, "value_too_deep", "Value nests too deeply", "max")
 )
 
+// Creating and starting a run: what the caller gives the compiler, and
+// what Start decides again.
+var (
+	// VariableNotText is a variable the run reads that the compiler was
+	// given a value for that isn't text: context is org or vars, and name
+	// the variable's name.
+	VariableNotText = define(Warning, "variable_not_text", "Variable that isn't text", "context", "name")
+	// ResolverMissing is a key of the workflow that needs one of the
+	// interfaces whoever runs the workflow provides, which isn't there:
+	// key is the key, as sessions, and interface the interface's name, as
+	// Sessions (docs/design.md, Interfaces).
+	ResolverMissing = define(Error, "resolver_missing", "Interface missing", "key", "interface")
+	// RunShapeChanged is a decision of the run's shape that Start made
+	// otherwise than Create did: key is hidden, ignore or optional, and
+	// name the input's name, or key is needs, and name the job's.
+	RunShapeChanged = define(Error, "run_shape_changed", "Run's shape changed as it started", "key", "name")
+	// ValuesReadEachOther is values that Start evaluates and that read
+	// each other: names are their names, as inputs.region and env.REGION,
+	// as QuoteAll writes them.
+	ValuesReadEachOther = define(Error, "values_read_each_other", "Values read each other as the run starts", "names")
+)
+
 // Running a workflow: what the phases after Start evaluate, and the
 // matrices they expand.
 var (

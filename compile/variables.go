@@ -15,26 +15,47 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// variables returns the variables that aren't secrets which the expressions
-// the plan holds read, as org.<name> and vars.<name>, in order. A read of
-// every variable of a context, as org.* is, or of one an [index] chooses,
-// is the context's name alone.
-func (c *compiler) variables(p *plan.Plan) []string {
-	read := map[string]bool{}
-	for _, e := range p.Exprs() {
-		for _, r := range e.Refs() {
-			if r.Context != "org" && r.Context != "vars" {
+// noteVariable notes in read the variable that isn't a secret that r, a
+// reference of an expression the run evaluates (eachRead), reads, as
+// org.<name> and vars.<name>. A read of every variable of a context, as
+// org.* is, or of one an [index] chooses, is the context's name alone.
+func (c *compiler) noteVariable(read map[string]bool, r expr.Ref) {
+	switch {
+	case r.Context != "org" && r.Context != "vars":
+	case unnamed(r.Path):
+		read[r.Context] = true
+	case !c.isSecret(r.Context, r.Path[0]):
+		read[plan.JoinPath(r.Context, r.Path[0])] = true
+	}
+}
+
+// checkVariableValues warns about each variable the run reads that the
+// caller's contexts give a value that isn't text (Options.Contexts): a
+// variable's value is text, which the Variables interface gives as the run
+// starts, so the run reads one that isn't as "", as Create does.
+func (c *compiler) checkVariableValues(p *plan.Plan) {
+	seen := map[string]bool{}
+	for _, name := range p.Run.Variables {
+		path := plan.SplitPath(name)
+		values := mapping(c.opts.Contexts[path[0]])
+		names := path[1:]
+		if len(names) == 0 {
+			names = slices.Sorted(maps.Keys(values))
+		}
+		for _, n := range names {
+			k := plan.JoinPath(path[0], n)
+			v, ok := values[n]
+			if !ok || seen[k] {
 				continue
 			}
-			switch {
-			case unnamed(r.Path):
-				read[r.Context] = true
-			case !c.isSecret(r.Context, r.Path[0]):
-				read[plan.JoinPath(r.Context, r.Path[0])] = true
+			seen[k] = true
+			switch v.(type) {
+			case string, expr.Unknown:
+				continue
 			}
+			c.reportPointer(problems.VariableNotText, problems.Position{}, "", problems.Params{"context": path[0], "name": n})
 		}
 	}
-	return slices.Sorted(maps.Keys(read))
 }
 
 // checkVariableName warns about r, a reference at byte offset at in the

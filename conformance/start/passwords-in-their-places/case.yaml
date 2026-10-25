@@ -1,0 +1,37 @@
+description: >-
+  Each of the run's passwords is put in its place in the inputs' values as
+  the run starts, by its name: a password input's, a password field's in a
+  list's row, which the plan holds the row without, and a value for an
+  input the workflow doesn't define that is kept as a password is, whose
+  name holds a dot, written ~1 in the name.
+source: Meridian
+contexts:
+  vars:
+    HINT: h
+secret-variables: [HINT]
+inputs:
+  pw: HUNTER2SECRET
+  creds:
+    - {user: a, pass: HUNTER3SECRET}
+    - {user: b, pass: HUNTER4SECRET}
+  db.password: HUNTER5SECRET
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: db.password}
+  inputs:
+    pw: HUNTER2SECRET
+    creds:
+      - {user: a, pass: HUNTER3SECRET, hint: h}
+      - {user: b, pass: HUNTER4SECRET, hint: h}
+    db.password: HUNTER5SECRET
+  run-secrets:
+    - inputs.creds.0.hint
+    - inputs.creds.0.pass
+    - inputs.creds.1.hint
+    - inputs.creds.1.pass
+    - inputs.db~1password
+    - inputs.pw
+    - vars.HINT

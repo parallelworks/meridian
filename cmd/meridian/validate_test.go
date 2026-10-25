@@ -313,6 +313,55 @@ func TestValidateRefuses(t *testing.T) {
 
 // TestValidateGroups checks that an execution-groups input chooses among
 // the config's groups.
+// TestValidateStart checks that validate with -start starts the run too,
+// with the user's variables, secret ones included, and reports what would
+// fail it as it starts, where the workflow writes it, without a variable's
+// value; and that a run with sessions can't start here, where nothing
+// provides them.
+func TestValidateStart(t *testing.T) {
+	env := emptyEnv(t)
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, local.VariablesFile), []byte("vars:\n  N: {secret: true, env: SECRET_N}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env["SECRET_N"] = "many"
+	workflow := writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      n: {type: number, default: '${{ vars.N }}'}
+jobs:
+  main:
+    steps:
+      - run: echo
+`)
+	if r := runCLI(t, env, "", "validate", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate = %+v", r)
+	}
+	r := runCLI(t, env, "", "validate", "--start", workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "w.yaml:4:7: error:") || !strings.Contains(r.stdout, "(input_not_number)") ||
+		!strings.Contains(r.stdout, "***") || strings.Contains(r.stdout, "many") || r.stderr != "" {
+		t.Errorf("meridian validate --start = %+v", r)
+	}
+	env["SECRET_N"] = "3"
+	if r := runCLI(t, env, "", "validate", "--start", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate --start with a number = %+v", r)
+	}
+	delete(env, "SECRET_N")
+	if r := runCLI(t, env, "", "validate", "--start", workflow); r.code != exitError || !strings.Contains(r.stderr, "variable_env_unset") {
+		t.Errorf("meridian validate --start without the secret = %+v", r)
+	}
+	sessions := writeFile(t, "s.yaml", "sessions:\n  desktop:\n    useTLS: false\njobs:\n  main:\n    steps:\n      - run: echo\n")
+	if r := runCLI(t, env, "", "validate", sessions); r.code != exitOK {
+		t.Errorf("meridian validate with sessions = %+v", r)
+	}
+	if r := runCLI(t, env, "", "validate", "--start", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "s.yaml:1:1: error:") || !strings.Contains(r.stdout, "(resolver_missing)") {
+		t.Errorf("meridian validate --start with sessions = %+v", r)
+	}
+}
+
 func TestValidateGroups(t *testing.T) {
 	env := emptyEnv(t)
 	config := env[local.EnvConfigDir]

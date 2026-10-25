@@ -1,0 +1,11 @@
+description: >-
+  A default and an env: value that read each other can't be evaluated as
+  the run starts, as two defaults that read each other can't when it is
+  created.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: error
+      code: values_read_each_other
+      path: ""
+      params: {names: '"inputs.dir", "env.OUT"'}

@@ -1,0 +1,19 @@
+on:
+  execute:
+    inputs:
+      hosts:
+        type: list
+        template:
+          name:
+            type: string
+          zone:
+            type: string
+            default: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+          gpus:
+            type: number
+            default: 1
+        default: ${{ fromJSON(vars.HOSTS) }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

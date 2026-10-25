@@ -2,12 +2,10 @@ package compile
 
 import (
 	"errors"
-	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
@@ -143,6 +141,13 @@ func (r *inputResolver) checkField(f *field, later bool) {
 		return
 	case f.typ == "password" && !later:
 		r.secrets[plan.JoinPath(f.path...)] = out
+	case !later && f.in == nil && !reflect.DeepEqual(v, out):
+		// What was evaluated before read the value as it was given, and so
+		// does what Start evaluates (plan.Run.Unconverted).
+		if r.unconverted == nil {
+			r.unconverted = map[string]any{}
+		}
+		r.unconverted[plan.JoinPath(f.path...)] = jsonvalue.Clone(v)
 	}
 	r.set(f.path, out)
 }
@@ -172,11 +177,8 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 			// that each reader sees it in their own language. Any other error,
 			// a warning's kind among them, which would let the value through,
 			// or the command's own, is the platform's reason, as it gives it.
-			if p, ok := errors.AsType[*problem.Problem](err); ok {
-				_, command := problems.CommandRegistry.Lookup(p.Code)
-				if k, ok := problems.Lookup(p.Code); ok && !command && k.Severity() == problems.Error {
-					return wrong(k, maps.Clone(p.Params))
-				}
+			if k, params, ok := workflowProblem(err); ok {
+				return wrong(k, params)
 			}
 			return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
 		}
