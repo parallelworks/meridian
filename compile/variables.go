@@ -92,14 +92,19 @@ func (c *compiler) checkInputNames(fields []*field) {
 // each list among them and among its rows' inputs, that isn't one of its
 // rows' inputs, where the workflow writes it: once, as a run doesn't
 // report it when a form sends the default rows back (knownInputs.defaulted).
+// A row's inputs are those of every list and repeated step at its list's
+// path, as a run checks them, where inputs share a path, as a wizard
+// step's can. A list among a row's inputs is named by its path with
+// [index] for the row's, as input_looks_secret names one.
 func (c *compiler) checkDefaultRows(fields []*field) {
+	known := knownInputsOf(fields)
 	for _, f := range fields {
 		defs, loc := f.rowInputs()
 		if defs == nil {
 			continue
 		}
 		if rows, ok := f.def["default"].([]any); ok {
-			known := knownInputsOf(c.inputs.template(defs, loc).fields)
+			known := known[jsonptr.Format(f.path[:len(f.path)-1])].rowsOf(c.inputs, f.key)
 			for i, row := range rows {
 				if m, ok := row.(map[string]any); ok {
 					c.checkDefaultRow(f, m, appendPath(f.loc, "default", strconv.Itoa(i)), nil, known)
@@ -158,24 +163,54 @@ func looksSecret(name string) bool {
 	return false
 }
 
-// secretWordList holds secretWords, sorted, for hint.Suggest.
-var secretWordList = slices.Sorted(maps.Keys(secretWords))
+// secretSpellings are the secretWords long enough that a word a letter
+// from one, as pasword is from password, is most likely it misspelled. A
+// shorter one's neighbours are common words, as taken and tokens are
+// token's.
+var secretSpellings = []string{"credential", "passphrase", "passwd", "password", "secret"}
 
 // namesSecret reports whether name, of a value submitted for an input the
 // workflow doesn't define, can be a secret's: whether it looks like one
-// (looksSecret), or one of its words is close to one of secretWords, as a
-// misspelling such as pasword is. It errs toward a secret, which a value is
-// kept as, and still given to the run.
+// (looksSecret), or one of its words is a letter from one of
+// secretSpellings (oneEdit), as a misspelling such as pasword is. It errs
+// toward a secret, as passed, a letter from passwd, is taken for one: a
+// value is kept as a secret, and still given to the run.
 func namesSecret(name string) bool {
 	if looksSecret(name) {
 		return true
 	}
 	for _, w := range nameWords(name) {
-		if _, ok := hint.Suggest(w, secretWordList); ok {
+		if slices.ContainsFunc(secretSpellings, func(s string) bool { return oneEdit(w, s) }) {
 			return true
 		}
 	}
 	return false
+}
+
+// oneEdit reports whether a and b differ by one letter: one more, one
+// fewer, one changed, or two next to each other swapped.
+func oneEdit(a, b string) bool {
+	x, y := []rune(a), []rune(b)
+	if len(x) < len(y) {
+		x, y = y, x
+	}
+	if len(x)-len(y) > 1 {
+		return false
+	}
+	i := 0
+	for i < len(y) && x[i] == y[i] {
+		i++
+	}
+	if i == len(y) {
+		return len(x) == len(y)+1
+	}
+	if len(x) > len(y) {
+		return string(x[i+1:]) == string(y[i:])
+	}
+	if string(x[i+1:]) == string(y[i+1:]) {
+		return true
+	}
+	return i+1 < len(x) && x[i] == y[i+1] && x[i+1] == y[i] && string(x[i+2:]) == string(y[i+2:])
 }
 
 // nameWords splits a name into its words, in lower case. A word ends at

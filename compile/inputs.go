@@ -1115,13 +1115,21 @@ func knownInputsOf(fields []*field) map[string]*knownInputs {
 // than one where inputs share a path, as a wizard step's can, and
 // rowInputs the inputs of their rows, by key, once a row is checked. In a
 // row, defaulted holds the keys there that aren't inputs' but that the
-// default rows written in the workflow have, which a form sends back.
+// default rows written in the workflow have, which a form sends back, with
+// the values the default rows have at each.
 type knownInputs struct {
 	byKey                     map[string]*field
 	rows                      map[string][]*field
 	rowInputs                 map[string]map[string]*knownInputs
-	defaulted                 map[string]bool
+	defaulted                 map[string][]any
 	names, passwords, holders []string
+}
+
+// isDefault reports whether v, a value submitted for key, which isn't an
+// input's, is one that the default rows have at key, written in the
+// workflow, as a form sends it back.
+func (k *knownInputs) isDefault(key string, v any) bool {
+	return slices.ContainsFunc(k.defaulted[key], func(d any) bool { return sameValue(v, d) })
 }
 
 // rowsOf returns the inputs of the rows of the lists and repeated steps at
@@ -1170,9 +1178,9 @@ func addDefaulted(known map[string]*knownInputs, v any, rel []string) {
 		switch f, ok := k.byKey[key]; {
 		case !ok:
 			if k.defaulted == nil {
-				k.defaulted = map[string]bool{}
+				k.defaulted = map[string][]any{}
 			}
-			k.defaulted[key] = true
+			k.defaulted[key] = append(k.defaulted[key], item)
 		case f.container && !f.flatten:
 			addDefaulted(known, item, appendPath(rel, key))
 		}
@@ -1216,12 +1224,14 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 		f, ok := inputs.byKey[key]
 		if !ok {
 			at := appendPath(path, key)
-			if r.namesPassword(key, v, inputs) {
+			// A value that the default rows have at key, written in the
+			// workflow, is the workflow's, not a secret.
+			if r.namesPassword(key, v, inputs) && !inputs.isDefault(key, v) {
 				r.secrets[strings.Join(at, ".")] = v
 				r.unknownSecrets = append(r.unknownSecrets, at)
 				r.mark(at)
 			}
-			if inputs.defaulted[key] {
+			if _, ok := inputs.defaulted[key]; ok {
 				// The workflow's default rows have it, which a form sends
 				// back, and compiling reports it there, once
 				// (checkDefaultRows).

@@ -1,0 +1,22 @@
+description: >-
+  A key of a list's default rows that the template lacks is the workflow's,
+  which a launch form sends back with the rows. In a submitted row it isn't
+  reported as an unknown input, whichever row it is in, and its value isn't
+  taken for a password by its name when it is a value the default rows have
+  at that key, written in the workflow, as small's none is; any other value
+  is, as one typed over it can be a secret.
+source: Meridian
+inputs:
+  models:
+    - name: small
+      api_token: none
+    - name: large
+      api_token: HUNTER2SECRET
+expect:
+  inputs:
+    models:
+      - name: small
+        api_token: none
+      - name: large
+  secrets:
+    models.1.api_token: HUNTER2SECRET

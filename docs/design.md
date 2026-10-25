@@ -631,10 +631,12 @@ ACTIVATE's launch form and its backend do together:
   and not in the plan. So is one whose name can be a secret's, as one sent
   for a password field that was renamed can: it looks like one, by the
   words that make an input's name look like a secret's
-  ([Compiling](#compiling)), or one of its words is close to one of them,
-  as `pasword` is. That errs toward a
-  secret, such as `passed`, which is kept as one, and still given to the
-  run. So is a mapping or list whose name is close to an input's with a
+  ([Compiling](#compiling)), or one of its words is a letter from one of
+  the longer of them, `password`, `passwd`, `passphrase`, `secret` and
+  `credential`, as `pasword` is; not from `token`, whose neighbours, such
+  as `tokens` and `taken`, are common words. That errs toward a secret,
+  such as `passed`, which is kept as one, and still given to the run. So
+  is a mapping or list whose name is close to an input's with a
   password among its inputs, or that holds a key named as a password field
   or that can be a secret's, as a flattened wizard step's inputs sent
   under the step's name do. A row of a list or a repeated step is checked the same
@@ -646,8 +648,11 @@ ACTIVATE's launch form and its backend do together:
   written in the workflow, that isn't one of its rows' inputs is a warning
   where it is written (`default_row_unknown_input`), once, and the row
   keeps it; a launch form sends the default rows back, so a submitted
-  row's key that a default row has isn't reported again. A value that
-  isn't JSON, such
+  row's key that a default row has isn't reported again, and a value a
+  default row has at that key isn't taken for a password by its name, as
+  `api_token: none` written in the workflow isn't. A row's inputs are
+  those of every list at its list's path, where a list and a wizard step's
+  list share one. A value that isn't JSON, such
   as NaN or text that isn't UTF-8, is an error, whether it was submitted or
   a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
   can't encode such a run's values, and fails it as it starts. One in a
