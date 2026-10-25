@@ -330,7 +330,7 @@ jobs:
       - run: echo ok
 `)
 	submitted := map[string]any{"group": map[string]any{"n": "3"}}
-	if _, diags := compile.ResolveInputs(doc, submitted, compile.Options{}); len(diags) != 0 {
+	if _, diags := compile.ResolveInputs(doc, submitted, compile.Options{}); diags.HasErrors() {
 		t.Fatal(diags)
 	}
 	if got := submitted["group"].(map[string]any); got["n"] != "3" || len(got) != 1 {
@@ -442,7 +442,7 @@ jobs:
 	if !slices.Equal(got, want) {
 		t.Errorf("diagnostics\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if _, err := json.Marshal(inputs.Values); err != nil || !reflect.DeepEqual(inputs.Values, map[string]any{"fine": "0.5"}) {
+	if _, err := json.Marshal(inputs.Values); err != nil || !reflect.DeepEqual(inputs.Values, map[string]any{"fine": 0.5}) {
 		t.Errorf("values = %v (%v), want fine's alone", inputs.Values, err)
 	}
 }

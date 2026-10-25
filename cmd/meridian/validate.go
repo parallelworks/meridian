@@ -15,7 +15,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -43,11 +42,11 @@ var formats = []string{"text", "json"}
 // fail the run as it starts.
 func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	var set []string
-	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name; it can be given again", func(s string) error {
+	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name, converted by its input's type: true or false for a boolean, a JSON number for a number, JSON for a list, a group or another structure, and the text as it is for text; it can be given again", func(s string) error {
 		set = append(set, s)
 		return nil
 	})
-	inputsFile := fs.String("inputs", "", "reads input values from the JSON `file`, an object of them by name; -input sets values over them")
+	inputsFile := fs.String("inputs", "", "reads input values from the JSON `file`, an object of them by name, as it writes them; -input sets values over them")
 	out := fs.String("format", "text", "writes errors and warnings as `text`, one a line as compilers write them, or as json, an RFC 9457 validation problem")
 	start := fs.Bool("start", false, "starts the run too, without running it: reads every variable it reads, secret ones too, and checks what waits for the run's start")
 	positional, err := parseFlags(fs, args)
@@ -62,10 +61,9 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	}
 	// From here, the command's own problems are JSON too.
 	c.json = *out == "json"
-	for _, s := range set {
-		if !strings.Contains(s, "=") {
-			return c.failf(problems.FlagValueInvalid, problems.Params{"command": "validate", "flag": "input", "value": s})
-		}
+	sets, err := parseInputSets(set)
+	if err != nil {
+		return c.fail(err)
 	}
 
 	dirs, err := local.Locate(c.getenv)
@@ -76,7 +74,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	if err != nil {
 		return c.fail(err)
 	}
-	submitted, err := submittedInputs(ctx, c, *inputsFile, set)
+	submitted, err := submittedInputs(ctx, c, *inputsFile)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -86,6 +84,11 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	}
 	diags := tooLarge
 	if diags == nil {
+		// Each -input is converted by the type the workflow gives its
+		// input, as the workflow is read to compile it.
+		if err := setInputs(submitted, inputDefinitions(name, data), sets); err != nil {
+			return c.fail(err)
+		}
 		var created *compile.Created
 		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
 			Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
@@ -260,23 +263,26 @@ func isProblem(err error) bool {
 	return ok
 }
 
-// submittedInputs returns the input values of the JSON file, if any, with
-// each path=value of set over them.
-func submittedInputs(ctx context.Context, c *cli, file string, set []string) (map[string]any, error) {
-	values := map[string]any{}
-	if file != "" {
-		var err error
-		if values, err = readInputsFile(ctx, c, file); err != nil {
-			return nil, err
-		}
+// submittedInputs returns the input values of the JSON file, if any, as it
+// writes them: format 1 reads each value as it was submitted.
+func submittedInputs(ctx context.Context, c *cli, file string) (map[string]any, error) {
+	if file == "" {
+		return map[string]any{}, nil
 	}
-	for _, s := range set {
-		path, value, _ := strings.Cut(s, "=")
-		if err := setPath(values, path, value); err != nil {
-			return nil, err
-		}
+	return readInputsFile(ctx, c, file)
+}
+
+// inputDefinitions returns the input definitions of the workflow data
+// holds, as the compiler reads them, or none if it doesn't load.
+func inputDefinitions(name string, data []byte) map[string]any {
+	doc, _ := format.Load(name, data)
+	if doc == nil {
+		return nil
 	}
-	return values, nil
+	on, _ := doc.Value["on"].(map[string]any)
+	execute, _ := on["execute"].(map[string]any)
+	defs, _ := execute["inputs"].(map[string]any)
+	return defs
 }
 
 // readInputsFile reads a JSON object of input values. A number is an
@@ -325,32 +331,6 @@ func jsonNumber(s string) (any, error) {
 		return nil, problems.InputsNumberTooLarge.Problem(problems.Params{"number": s})
 	}
 	return f, nil
-}
-
-// setPath sets the value at path, names joined with dots, in values, to
-// value, making a mapping for each name before the last that has none.
-func setPath(values map[string]any, path, value string) error {
-	names := strings.Split(path, ".")
-	for i, name := range names {
-		if name == "" {
-			return problems.InputPathInvalid.Problem(problems.Params{"path": path})
-		}
-		if i == len(names)-1 {
-			values[name] = value
-			return nil
-		}
-		next, ok := values[name]
-		if !ok {
-			m := map[string]any{}
-			values[name] = m
-			values = m
-			continue
-		}
-		if values, ok = next.(map[string]any); !ok {
-			return problems.InputPathConflict.Problem(problems.Params{"path": strings.Join(names[:i+1], ".")})
-		}
-	}
-	return nil
 }
 
 // writeText writes the diagnostics one a line, as compilers write them:

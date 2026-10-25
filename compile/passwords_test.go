@@ -954,7 +954,7 @@ func TestDerivedValuesMaskPasswords(t *testing.T) {
 // private value, has a name that leads back to it (plan.SplitPath),
 // whatever its keys hold, as a submitted value's can: a key with a dot, as
 // db.password, with a ~, empty, or outside ASCII, beside the inputs, in a
-// group, in a row, or in the place of a default's mapping; and so does a
+// group, in a row, or in the place of a default row's key; and so does a
 // variable a workflow reads in brackets by a name with a dot.
 func TestNamesLeadToTheirValues(t *testing.T) {
 	src := `on:
@@ -962,7 +962,7 @@ func TestNamesLeadToTheirValues(t *testing.T) {
     inputs:
       g: {type: group, items: {pass: {type: password, optional: true}}}
       l: {type: list, template: {pass: {type: password, optional: true}}}
-      c: {type: compute-clusters, default: {a.b: '${{ vars.SECRET }}', c~d: '${{ org.OWNER }}'}}
+      c: {type: list, default: [{a.b: '${{ vars.SECRET }}', c~d: '${{ org.OWNER }}'}], template: {a.b: {type: string}, c~d: {type: string}}}
 jobs:
   main:
     steps:
@@ -973,7 +973,7 @@ jobs:
 		"g":           map[string]any{"x~y.token": sentinel},
 		"l":           []any{map[string]any{"pass": sentinel, "кл.password": sentinel}},
 		"":            map[string]any{"password": sentinel},
-		"c":           map[string]any{"a.b": "typed-over-a-secret", "c~d": "typed-over-a-variable"},
+		"c":           []any{map[string]any{"a.b": "typed-over-a-secret", "c~d": "typed-over-a-variable"}},
 	}
 	opts := compile.Options{Inputs: passThrough{}, Contexts: map[string]any{
 		"org":  map[string]any{"OWNER": "research", "a.b": "plain"},
@@ -986,10 +986,10 @@ jobs:
 	}
 	for what, tc := range map[string]struct{ got, want []string }{
 		"secrets": {p.Run.Secrets, []string{
-			"inputs.", "inputs.c.a~1b", "inputs.db~1password", "inputs.g.x~0y~1token", "inputs.l.0.pass", "inputs.l.0.кл~1password", "vars.SECRET", "vars.my~1token",
+			"inputs.", "inputs.c.0.a~1b", "inputs.db~1password", "inputs.g.x~0y~1token", "inputs.l.0.pass", "inputs.l.0.кл~1password", "vars.SECRET", "vars.my~1token",
 		}},
-		"derived": {p.Run.Derived, []string{"inputs.c.a~1b"}},
-		"private": {p.Run.Private, []string{"inputs.c.c~0d"}},
+		"derived": {p.Run.Derived, []string{"inputs.c.0.a~1b"}},
+		"private": {p.Run.Private, []string{"inputs.c.0.c~0d"}},
 		// Start reads the variables of what a private value was given in the
 		// place of.
 		"variables": {p.Run.Variables, []string{"org.OWNER", "org.a~1b"}},

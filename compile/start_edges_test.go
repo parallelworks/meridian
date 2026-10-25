@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // The rows of a list that a part Start evaluates gives, all of the list's
@@ -69,10 +73,11 @@ func TestDefaultRowAnExpressionGives(t *testing.T) {
 	}
 }
 
-// What Start evaluates reads the inputs as Create's evaluations read
-// them, before Create converted them to their types, as a form sends a
-// number's text; what the run reads after it is converted.
-func TestStartReadsInputsAsCreateDid(t *testing.T) {
+// Format 1 reads each input's value as it was submitted, as ACTIVATE does:
+// text given for a number or a boolean stays text, in what Create
+// evaluates, in what Start does and in the run's values, and the plan
+// warns of each (input_read_as_submitted), without its value.
+func TestInputsReadAsSubmitted(t *testing.T) {
 	src := workflow(`cpus: {type: number}
 flag: {type: boolean}
 label: {type: string, default: '${{ org.PREFIX }}-${{ inputs.cpus }}-${{ inputs.flag }}'}
@@ -92,14 +97,24 @@ jobs:
 	if res == nil {
 		t.Fatal(diags)
 	}
-	if want := `{"cpus":2.5,"flag":false,"label":"p-2.50-false"}`; canonical(t, res.Run.Inputs.Get()) != want {
+	if want := `{"cpus":"2.50","flag":"false","label":"p-2.50-false"}`; canonical(t, res.Run.Inputs.Get()) != want {
 		t.Errorf("inputs %s, want %s", canonical(t, res.Run.Inputs.Get()), want)
 	}
 	if got := res.Run.Env["CPUS"]; got != "2.50" {
 		t.Errorf("env.CPUS = %q, want the text it was given", got)
 	}
-	if got := canonical(t, c.Plan.Run.Unconverted); got != `{"cpus":"2.50","flag":"false"}` {
-		t.Errorf("unconverted %s", got)
+	var warned []string
+	for _, w := range c.Plan.Warnings {
+		if w.Code == problems.InputReadAsSubmitted.Code() {
+			warned = append(warned, fmt.Sprintf("%v %v %v", w.Params["input"], w.Params["type"], w.Params["given"]))
+			if strings.Contains(fmt.Sprint(w.Params), "2.50") {
+				t.Errorf("the warning shows the value: %v", w.Params)
+			}
+		}
+	}
+	slices.Sort(warned)
+	if want := []string{"cpus number text", "flag boolean text"}; !slices.Equal(warned, want) {
+		t.Errorf("warned of %v, want %v", warned, want)
 	}
 }
 
@@ -352,5 +367,300 @@ func TestStartStopsWhenCancelled(t *testing.T) {
 	in := compile.StartInput{Variables: cancellingVariables{vars, cancel}, Record: c.Record, Inputs: countingInputs{&asked}}
 	if res, _, err := compile.Start(ctx, c.Plan, in); !errors.Is(err, context.Canceled) || res != nil || asked != 0 {
 		t.Errorf("error %v, result %v, the Inputs resolver asked %d times", err, res, asked)
+	}
+}
+
+// A value typed over a default that reads a password, which the secret
+// record holds, is read as it was submitted, as a value the plan holds is:
+// a dropdown whose option reads it takes it the same either way.
+func TestStartReadsHeldValuesAsSubmitted(t *testing.T) {
+	var ds []any
+	for _, def := range []string{"'${{ inputs.pw }}'", "7"} {
+		src := workflow(`pw: {type: password}
+a: {type: number, default: ` + def + `}
+d: {type: dropdown, options: ['${{ inputs.a }}', none]}`)
+		submitted := map[string]any{"pw": "p", "a": "7", "d": "7"}
+		_, res, diags := started(t, src, submitted, testVariables{})
+		if res == nil {
+			t.Fatal(diags)
+		}
+		ds = append(ds, res.Run.Inputs.Get().(map[string]any)["d"])
+	}
+	if ds[0] != ds[1] {
+		t.Errorf("d is %#v when a's default reads a password, %#v when it doesn't", ds[0], ds[1])
+	}
+}
+
+// A condition decided again at Start reads a value the secret record holds
+// as it was submitted, as Create's did, so the run's shape doesn't change.
+func TestStartShapeUnchangedOverHeldValues(t *testing.T) {
+	src := workflow(`pw: {type: password}
+a: {type: number, default: '${{ inputs.pw }}'}
+x: {type: string, optional: true, ignore: '${{ toJSON(inputs.a) == ''"7"'' }}'}`)
+	if _, res, diags := started(t, src, map[string]any{"pw": "p", "a": "7"}, testVariables{}); res == nil {
+		t.Errorf("the run didn't start: %v", diags)
+	}
+}
+
+// clusterInputs resolves a compute-clusters input's name to the cluster's
+// details, as a platform's Inputs resolver does.
+type clusterInputs struct{}
+
+func (clusterInputs) ResolveInput(typ string, _ map[string]any, v any) (any, error) {
+	if s, ok := v.(string); ok && typ == "compute-clusters" {
+		return map[string]any{"name": s, "id": "id-" + s}, nil
+	}
+	return v, nil
+}
+
+// What is evaluated before the inputs are checked reads an input of a
+// platform's type as it was submitted, at Create as at Start, where the
+// Inputs resolver gave another value for it (plan.Run.Unresolved), and
+// what reads it after, the run's values among them, as the resolver gave
+// it: a condition decided again doesn't change the run's shape, and a
+// default reads the same whether it reads a secret too.
+func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
+	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "v"}}
+	for name, tc := range map[string]struct {
+		defs, rest string
+		want       string
+	}{
+		"a default that reads a secret":  {"c: {type: compute-clusters}\nd: {type: string, default: '${{ toJSON(inputs.c) }}-${{ vars.S }}'}", "", `"c1"-SECRET`},
+		"a default that reads no secret": {"c: {type: compute-clusters}\nd: {type: string, default: '${{ toJSON(inputs.c) }}'}", "", `"c1"`},
+		"a hidden a variable decides":    {"c: {type: compute-clusters}\nd: {type: string, hidden: '${{ inputs.c == \"c1\" && vars.V != \"\" }}', default: dd}", "", "dd"},
+		"an ignore a variable decides":   {"c: {type: compute-clusters}\nd: {type: string, optional: true, ignore: '${{ inputs.c == \"c1\" && vars.V != \"\" }}', default: dd}", "", ""},
+		"the env":                        {"c: {type: compute-clusters}", "env:\n  E: ${{ toJSON(inputs.c) }}-${{ vars.S }}\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := workflow(tc.defs, tc.rest)
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), map[string]any{"c": "c1"}, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
+			if err != nil || c == nil {
+				t.Fatal(diags, err)
+			}
+			res, sd := startRun(t, c, vars, compile.StartInput{Inputs: clusterInputs{}})
+			if res == nil {
+				t.Fatal(sd)
+			}
+			inputs := res.Run.Inputs.Get().(map[string]any)
+			if got := canonical(t, inputs["c"]); got != `{"id":"id-c1","name":"c1"}` {
+				t.Errorf("c = %s, want the cluster's details", got)
+			}
+			if got, _ := inputs["d"].(string); got != tc.want {
+				t.Errorf("d = %q, want %q", got, tc.want)
+			}
+			if e, ok := res.Run.Env["E"]; ok && e != `"c1"-SECRET` {
+				t.Errorf("env.E = %q, want what reads the name", e)
+			}
+		})
+	}
+}
+
+// detailInputs gives a platform input's mapping with an id, and an id
+// made from each of its parts, as a platform's Inputs resolver gives a
+// resource's details for what names it.
+type detailInputs struct{}
+
+func (detailInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v, nil
+	}
+	out := map[string]any{"id": "rid"}
+	maps.Copy(out, m)
+	for k, x := range m {
+		out[k+"_id"] = fmt.Sprint("id-", x)
+	}
+	return out, nil
+}
+
+// A part of a platform input's value typed over a part of its default that
+// reads a variable is private, or a secret if the variable is one; and as
+// what the Inputs resolver gives can't be split by the parts that made it,
+// as an id made from the part, the whole value is: neither the plan's
+// Inputs nor what it holds of the value as it was submitted
+// (plan.Run.Unresolved) has any of it, and Start reads it as the resolver
+// gave it.
+func TestUnresolvedHoldsNoPrivatePart(t *testing.T) {
+	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "plain"}}
+	for _, typ := range []string{
+		"kubernetes-clusters", "storage", "bucket", "organization-groups",
+		"region, csp: aws", "slurm-partitions, resource: '${{ inputs.c }}'", "kubernetes-namespaces, clusterName: c",
+	} {
+		for _, variable := range []string{"vars.V", "vars.S"} {
+			t.Run(typ+" "+variable, func(t *testing.T) {
+				src := workflow("k: {type: " + typ + ", optional: true, default: {name: k1, token: '${{ " + variable + " }}'}}")
+				submitted := map[string]any{"k": map[string]any{"name": "k1", "token": "TYPED"}}
+				c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), submitted, compile.Options{Inputs: detailInputs{}, Contexts: vars.contexts()})
+				if err != nil || c == nil {
+					t.Fatal(diags, err)
+				}
+				data, err := plan.Encode(c.Plan)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(data), "TYPED") || strings.Contains(string(data), "rid") {
+					t.Errorf("the plan holds the value, or what the resolver made of it: %s", data)
+				}
+				names := c.Plan.Run.Private
+				if variable == "vars.S" {
+					names = c.Plan.Run.Secrets
+				}
+				if !slices.Contains(names, "inputs.k") {
+					t.Errorf("the plan names %v as private and %v as secrets, want inputs.k among the %s", c.Plan.Run.Private, c.Plan.Run.Secrets, variable)
+				}
+				res, sd := startRun(t, c, vars, compile.StartInput{Inputs: detailInputs{}})
+				if res == nil {
+					t.Fatal(sd)
+				}
+				want := `{"k":{"id":"rid","name":"k1","name_id":"id-k1","token":"TYPED","token_id":"id-TYPED"}}`
+				if got := canonical(t, res.Run.Inputs.Get()); got != want {
+					t.Errorf("the run's inputs are %s, want %s", got, want)
+				}
+			})
+		}
+	}
+}
+
+// A password submitted as a number or a boolean, which format 1 reads as it
+// was submitted, is masked as its text, as an expression writes it: in
+// what a step prints of it, and of toJSON(inputs), whatever its kind, a
+// row's password among them, and the plan never holds it.
+func TestPasswordOfEachKindMasked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+		want      string
+	}{
+		"a whole number":  {"pw: {type: password}", map[string]any{"pw": 98765432}, "98765432"},
+		"a boolean":       {"pw: {type: password}", map[string]any{"pw": true}, "true"},
+		"a fraction":      {"pw: {type: password}", map[string]any{"pw": 3.14159265}, "3.14159265"},
+		"a whole float":   {"pw: {type: password}", map[string]any{"pw": 86420.0}, "86420"},
+		"a row's number":  {"l: {type: list, template: {p: {type: password}}}", map[string]any{"l": []any{map[string]any{"p": 55667788}}}, "55667788"},
+		"text":            {"pw: {type: password}", map[string]any{"pw": "98765432"}, "98765432"},
+		"a group's value": {"g: {type: group, items: {pw: {type: password}}}", map[string]any{"g": map[string]any{"pw": 24681357}}, "24681357"},
+		// Read as a float64, as ACTIVATE reads it, every rendering of it
+		// is the same number.
+		"a whole number past 2^53": {"pw: {type: password}", map[string]any{"pw": int64(9007199254740993)}, "9007199254740992"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, res, diags := started(t, workflow(tc.defs), tc.submitted, testVariables{})
+			if res == nil {
+				t.Fatal(diags)
+			}
+			data, err := plan.Encode(c.Plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), tc.want) {
+				t.Errorf("the plan holds the password: %s", data)
+			}
+			masker := plan.NewMasker(res.Run.Masked()...)
+			for _, printed := range []string{expr.Text(res.Run.Inputs.Get()), "pw=" + tc.want} {
+				if got := masker.Mask(printed); strings.Contains(got, tc.want) {
+					t.Errorf("%q is masked as %q", printed, got)
+				}
+			}
+		})
+	}
+}
+
+// firstStep starts a run of src, readies its job main and returns its first
+// step's command, and the command masked as a worker masks it.
+func firstStep(t *testing.T, src string, submitted map[string]any) (raw, masked string) {
+	t.Helper()
+	c, res, diags := started(t, src, submitted, testVariables{})
+	if res == nil {
+		t.Fatal(diags)
+	}
+	j := &c.Plan.Jobs[slices.IndexFunc(c.Plan.Jobs, func(j plan.Job) bool { return j.Name == "main" })]
+	ready, _, err := j.Ready(t.Context(), plan.ReadyInput{Run: res.Run})
+	if err != nil || ready.Job == nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: res.Run, Masked: res.Run.Masked()}
+	env, d, err := ready.Job.JobEnv(t.Context(), state)
+	if err != nil || d.HasErrors() {
+		t.Fatal(d, err)
+	}
+	state.JobEnv = env
+	state.Masked = append(slices.Clone(state.Masked), env.Masked...)
+	s, d, err := ready.Job.Step(t.Context(), 0, state)
+	if err != nil || d.HasErrors() {
+		t.Fatal(d, err)
+	}
+	return s.Run, plan.NewMasker(slices.Concat(state.Masked, s.Masked)...).Mask(s.Run)
+}
+
+// A submitted whole number past 2^53 is read as ACTIVATE reads a JSON
+// number, as the float64 nearest it, everywhere: so a password's every
+// rendering, the value a round trip through JSON gives among them, is the
+// same text, which the run masks.
+func TestWholeNumberPast2To53ReadAsFloat(t *testing.T) {
+	src := workflow("pw: {type: password}\nn: {type: number}",
+		"jobs:\n  main:\n    steps:\n      - run: echo ${{ inputs.pw }} ${{ fromJSON(toJSON(inputs.pw)) }} ${{ toJSON(inputs) }} n=${{ inputs.n }}\n")
+	raw, masked := firstStep(t, src, map[string]any{"pw": int64(9007199254740995), "n": int64(9007199254740993)})
+	if !strings.Contains(raw, "n=9007199254740992") || strings.Contains(raw, "9007199254740993") {
+		t.Errorf("n reads otherwise than 9007199254740992: %s", raw)
+	}
+	for _, text := range []string{"9007199254740995", "9007199254740996"} {
+		if strings.Contains(masked, text) {
+			t.Errorf("the password shows as %s: %s", text, masked)
+		}
+	}
+}
+
+// A null submitted for an input is its value, which the run keeps where
+// the plan doesn't hold it, as the secret record does for a password and
+// for an input whose ignore a variable or a password decides: the run
+// starts with the null, as it does with a value the plan holds, and a
+// required input given null isn't missing at Start.
+func TestStartKeepsHeldNulls(t *testing.T) {
+	vars := testVariables{"vars.V": {Value: "v"}}
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+		want      string
+	}{
+		"a password": {"pw: {type: password}", map[string]any{"pw": nil}, `{"pw":null}`},
+		"an ignore a variable decides": {
+			"a: {type: string, ignore: '${{ vars.V == \"x\" }}'}",
+			map[string]any{"a": nil},
+			`{"a":null}`,
+		},
+		"an ignore a password decides": {
+			"pw: {type: password}\na: {type: string, ignore: '${{ inputs.pw == \"x\" }}'}",
+			map[string]any{"pw": "y", "a": nil},
+			`{"a":null,"pw":"y"}`,
+		},
+		"a group's": {
+			"g: {type: group, items: {pw: {type: password}, a: {type: string, ignore: '${{ vars.V == \"x\" }}'}}}",
+			map[string]any{"g": map[string]any{"pw": nil, "a": nil}},
+			`{"g":{"a":null,"pw":null}}`,
+		},
+		"a group's whose ignore a variable decides": {
+			"g: {type: group, ignore: '${{ vars.V == \"x\" }}', items: {a: {type: string}}}",
+			map[string]any{"g": map[string]any{"a": nil}},
+			`{"g":{"a":null}}`,
+		},
+		"a row's password": {
+			"l: {type: list, template: {p: {type: password, optional: true}}}",
+			map[string]any{"l": []any{map[string]any{"p": nil}}},
+			`{"l":[{"p":null}]}`,
+		},
+		"a row's whose ignore a variable decides": {
+			"l: {type: list, template: {u: {type: string, optional: true, ignore: '${{ vars.V == \"x\" }}'}}}",
+			map[string]any{"l": []any{map[string]any{"u": nil}}},
+			`{"l":[{"u":null}]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, res, diags := started(t, workflow(tc.defs), tc.submitted, vars)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			if got := canonical(t, res.Run.Inputs.Get()); got != tc.want {
+				t.Errorf("the run's inputs are %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

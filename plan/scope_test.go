@@ -284,18 +284,21 @@ func TestSplitJoin(t *testing.T) {
 	}
 }
 
-// Masked gives the strings of each secret, a string as it is and each string
-// in a list or a mapping, once, and no empty text: never the text of a
-// boolean, a number or null, which would mask that word everywhere.
+// Masked gives the text of each secret's scalars, a string as it is and a
+// number or a boolean as an expression writes it, in a list or a mapping
+// too, once, and no empty text, nor null's: format 1 reads a password as it
+// was submitted, so it can be a number or a boolean, which is masked all
+// the same, even where that masks the word true everywhere.
 func TestRunValuesMasked(t *testing.T) {
 	r := plan.RunValues{
 		Inputs: plan.DataOf(map[string]any{
 			"creds": []any{map[string]any{"pass": "p", "n": int64(7)}}, "pin": int64(1234), "empty": "", "pw": nil, "flag": true,
+			"pi": 3.14159265, "whole": 8.0,
 		}),
 		Vars:    map[string]string{"token": "s3cret", "again": "s3cret"},
-		Secrets: []string{"vars.token", "inputs.creds", "inputs.pin", "vars.again", "inputs.empty", "inputs.missing", "inputs.pw", "inputs.flag"},
+		Secrets: []string{"vars.token", "inputs.creds", "inputs.pin", "vars.again", "inputs.empty", "inputs.missing", "inputs.pw", "inputs.flag", "inputs.pi", "inputs.whole"},
 	}
-	want := []string{"s3cret", "p"}
+	want := []string{"s3cret", "7", "p", "1234", "true", "3.14159265", "8"}
 	if got := r.Masked(); !slices.Equal(got, want) {
 		t.Errorf("Masked() = %q, want %q", got, want)
 	}

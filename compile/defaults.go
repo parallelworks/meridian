@@ -292,11 +292,17 @@ func (r *inputResolver) liveRows() []*field {
 
 // missing reports whether f has no value: none at all, "" when "" isn't one
 // of its options, or the text of its default when that is an expression,
-// which a form sends when it can't evaluate the default itself.
+// which a form sends when it can't evaluate the default itself. A null
+// submitted for an input, or an input in a group, is its value, as
+// ACTIVATE keeps it: it takes no default, nor is it required; in a list's
+// row, null is no value, as ACTIVATE fills in a row's.
 func (r *inputResolver) missing(f *field) bool {
 	v, ok := jsonptr.Lookup(r.values, f.path)
-	if !ok || v == nil {
+	if !ok {
 		return true
+	}
+	if v == nil {
+		return f.in != nil
 	}
 	if s, isString := v.(string); isString && s != "" && s == f.def["default"] && strings.Contains(s, "${{") {
 		return true

@@ -1,10 +1,22 @@
-description: A string input given a number or a boolean gets its text.
-source: Meridian
+description: >-
+  A string input given a number or a boolean keeps it, as ACTIVATE reads
+  every value as it was submitted, with a warning, and so does one whose
+  default is a number.
+source: Meridian, after ACTIVATE's reading of values as submitted
 inputs:
   port: 22
   flag: true
 expect:
+  diagnostics:
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/flag
+      params: {input: flag, type: string, given: boolean}
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/port
+      params: {input: port, type: string, given: number}
   inputs:
-    port: "22"
-    name: "8080"
-    flag: "true"
+    port: 22
+    name: 8080
+    flag: true

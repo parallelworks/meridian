@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -209,7 +210,10 @@ func TestValidateInputs(t *testing.T) {
 		{args: []string{"--input", "cluster.size=5"}, code: exitInvalid, want: "input_above_max"},
 		// -input sets values over the file's.
 		{args: []string{"--inputs", inputs, "--input", "cluster.size=8"}, code: exitInvalid, want: "input_above_max"},
-		{args: []string{"--inputs", inputs, "--input", "count=many"}, code: exitInvalid, want: "input_not_number"},
+		// The file's values are read as it writes them, text for a number
+		// among them, which passes the check and is read as text.
+		{args: []string{"--inputs", writeFile(t, "text.json", `{"count": "many"}`)}, code: exitInvalid, want: "input_not_number"},
+		{args: []string{"--inputs", writeFile(t, "three.json", `{"cluster": {"size": 2, "name": "a"}, "count": "3"}`)}, code: exitOK, want: "input_read_as_submitted"},
 		{args: []string{"--input", "cluster.size=3", "--input", "cluster.name=a", "--input", "count=1"}, code: exitOK},
 	} {
 		r := runCLI(t, emptyEnv(t), "", append(append([]string{"validate"}, tc.args...), workflow)...)
@@ -224,7 +228,9 @@ func TestValidateInputsRefuses(t *testing.T) {
 	for name, args := range map[string][]string{
 		"no =":           {"--input", "count"},
 		"empty name":     {"--input", "cluster..size=1"},
-		"value then key": {"--input", "count=1", "--input", "count.size=2"},
+		"value then key": {"--input", "u=1", "--input", "u.size=2"},
+		"not a number":   {"--input", "count=many"},
+		"through a leaf": {"--input", "count.size=2"},
 		"missing file":   {"--inputs", filepath.Join(t.TempDir(), "none.json")},
 		"list":           {"--inputs", writeFile(t, "list.json", `[1]`)},
 		"two values":     {"--inputs", writeFile(t, "two.json", `{} {}`)},
@@ -239,24 +245,121 @@ func TestValidateInputsRefuses(t *testing.T) {
 	}
 }
 
-func TestSetPath(t *testing.T) {
-	values := map[string]any{"a": map[string]any{"x": "1"}}
-	for _, s := range []string{"a.y=2", "b.c.d=3", "e=4", "e=5"} {
-		path, value, _ := strings.Cut(s, "=")
-		if err := setPath(values, path, value); err != nil {
-			t.Fatalf("setPath(%s): %v", s, err)
+// typedInputs are inputs of each kind -input converts by.
+const typedInputs = `on:
+  execute:
+    inputs:
+      debug: {type: boolean}
+      nodes: {type: number}
+      cores: {type: dropdown, options: [2, 4]}
+      choice: {type: dropdown, options: [true, "no"]}
+      grouped: {type: dropdown, options: [{category: a, options: [{label: x, value: 8}]}]}
+      region: {type: string}
+      name: {type: string}
+      pass: {type: password}
+      files: {type: list, template: {path: {type: string}}}
+      md: {type: multi-dropdown, options: [a, b]}
+      res: {type: group, items: {count: {type: number}}}
+      head: {type: header, text: H}
+      wizard: {type: step, title: W, options: {s: {type: number}}}
+      rep: {type: step, title: R, multi: true, options: {r: {type: string}}}
+      ct: {type: compute-target}
+      cc: {type: compute-clusters, multi: true}
+jobs:
+  main:
+    steps:
+      - run: echo
+`
+
+// TestSetInputs checks that each -input is converted by its input's type,
+// as ACTIVATE's pw workflows run --input converts one, and that what it
+// refuses names the path, never the value.
+func TestSetInputs(t *testing.T) {
+	defs := inputDefinitions("w.yaml", []byte(typedInputs))
+	if defs == nil {
+		t.Fatal("the workflow doesn't load")
+	}
+	// A dropdown whose options an option-key picks, which the schema has
+	// no form for, as ACTIVATE's run form reads one.
+	defs["keyed"] = map[string]any{"type": "dropdown", "option-key": "${{ inputs.region }}", "options": map[string]any{
+		"us": []any{int64(1), int64(2)}, "eu": []any{"3"},
+	}}
+	for _, tc := range []struct {
+		sets []string
+		want map[string]any
+		code string
+	}{
+		{sets: []string{"debug=true", "nodes=8", "name=true", "pass=42"}, want: map[string]any{"debug": true, "nodes": int64(8), "name": "true", "pass": "42"}},
+		{sets: []string{"debug=false", "nodes=-2.5"}, want: map[string]any{"debug": false, "nodes": -2.5}},
+		{sets: []string{"nodes=1e3"}, want: map[string]any{"nodes": 1000.0}},
+		{sets: []string{"debug=True"}, code: "input_flag_wrong_type"},
+		{sets: []string{"debug=1"}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=007"}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=0x10"}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=+1"}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=.5"}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=1."}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=NaN"}, code: "input_flag_wrong_type"},
+		{sets: []string{"nodes=1e400"}, code: "input_flag_wrong_type"},
+		// A dropdown's text, unless an option is the number or the boolean
+		// it reads as, grouped options among them.
+		{sets: []string{"cores=4", "choice=true", "grouped=8"}, want: map[string]any{"cores": int64(4), "choice": true, "grouped": int64(8)}},
+		{sets: []string{"cores=3", "choice=no", "grouped=08"}, want: map[string]any{"cores": "3", "choice": "no", "grouped": "08"}},
+		// An option-key picks the list by the value sent, before or after,
+		// and every list when none is.
+		{sets: []string{"keyed=3", "region=eu"}, want: map[string]any{"keyed": "3", "region": "eu"}},
+		{sets: []string{"region=us", "keyed=1"}, want: map[string]any{"keyed": int64(1), "region": "us"}},
+		{sets: []string{"keyed=1"}, want: map[string]any{"keyed": int64(1)}},
+		// A later -input that sets it wins, and reads the list the key's
+		// value picks then.
+		{sets: []string{"keyed=1", "region=eu", "keyed=2"}, want: map[string]any{"keyed": "2", "region": "eu"}},
+		// Structures are JSON of their shape.
+		{sets: []string{`files=[{"path":"a.txt"}]`, `md=["a"]`, `res={"count":1}`, `ct={"id":"c"}`, `cc=["c"]`, `rep=[{"r":"x"}]`}, want: map[string]any{
+			"files": []any{map[string]any{"path": "a.txt"}}, "md": []any{"a"}, "res": map[string]any{"count": int64(1)},
+			"ct": map[string]any{"id": "c"}, "cc": []any{"c"}, "rep": []any{map[string]any{"r": "x"}},
+		}},
+		{sets: []string{"files=a.txt"}, code: "input_flag_not_json"},
+		{sets: []string{"files="}, code: "input_flag_not_json"},
+		{sets: []string{"files=[] []"}, code: "input_flag_not_json"},
+		{sets: []string{"files={}"}, code: "input_flag_wrong_shape"},
+		{sets: []string{"res=[]"}, code: "input_flag_wrong_shape"},
+		// A key given twice has its last value, as ACTIVATE's reads it.
+		{sets: []string{`res={"count":1,"count":2}`}, want: map[string]any{"res": map[string]any{"count": int64(2)}}},
+		{sets: []string{"head=x"}, code: "input_flag_wrong_type"},
+		// Paths: a group's inputs by the group's name, a flattened wizard
+		// step's by their own, a list set whole.
+		{sets: []string{"res.count=2", "s=5"}, want: map[string]any{"res": map[string]any{"count": int64(2)}, "s": int64(5)}},
+		{sets: []string{"wizard.s=1"}, code: "input_flag_path_not_settable"},
+		{sets: []string{"files.path=a"}, code: "input_flag_path_not_settable"},
+		{sets: []string{"rep.r=a"}, code: "input_flag_path_not_settable"},
+		{sets: []string{"name.x=1"}, code: "input_flag_path_not_settable"},
+		{sets: []string{"u=5", "v.w=6"}, want: map[string]any{"u": "5", "v": map[string]any{"w": "6"}}},
+		{sets: []string{"u=1", "u.v=2"}, code: "input_path_conflict"},
+		{sets: []string{"debug"}, code: "input_flag_unsplit"},
+		{sets: []string{"a..b=1"}, code: "input_path_invalid"},
+	} {
+		values := map[string]any{}
+		sets, err := parseInputSets(tc.sets)
+		if err == nil {
+			err = setInputs(values, defs, sets)
 		}
-	}
-	want := map[string]any{
-		"a": map[string]any{"x": "1", "y": "2"},
-		"b": map[string]any{"c": map[string]any{"d": "3"}},
-		"e": "5",
-	}
-	if !reflect.DeepEqual(values, want) {
-		t.Errorf("values = %v, want %v", values, want)
-	}
-	if err := setPath(values, "e.f", "6"); err == nil {
-		t.Error("setPath made a group of a value")
+		if tc.code != "" {
+			p, ok := errors.AsType[*problem.Problem](err)
+			if !ok || string(p.Code) != tc.code {
+				t.Errorf("%q: %v, want %s", tc.sets, err, tc.code)
+				continue
+			}
+			// The problem names the path, never the value.
+			for _, s := range tc.sets {
+				if _, value, ok := strings.Cut(s, "="); ok && len(value) > 2 && strings.Contains(fmt.Sprint(p.Params), value) {
+					t.Errorf("%q: the problem shows the value: %v", tc.sets, p.Params)
+				}
+			}
+			continue
+		}
+		if err != nil || !reflect.DeepEqual(values, tc.want) {
+			t.Errorf("%q: %v, %v, want %v", tc.sets, values, err, tc.want)
+		}
 	}
 }
 
@@ -533,7 +636,10 @@ func TestValidateProblems(t *testing.T) {
 		{[]string{"validate", "--inputs", writeFile(t, "two.json", "{} {}"), workflow}, "(inputs_file_extra)"},
 		{[]string{"validate", "--inputs", writeFile(t, "huge.json", `{"count": 1e999}`), workflow}, "(inputs_number_too_large)"},
 		{[]string{"validate", "--input", "cluster..size=1", workflow}, "(input_path_invalid)"},
-		{[]string{"validate", "--input", "count=1", "--input", "count.size=2", workflow}, "(input_path_conflict)"},
+		{[]string{"validate", "--input", "u=1", "--input", "u.size=2", workflow}, "(input_path_conflict)"},
+		{[]string{"validate", "--input", "count.size=2", workflow}, "(input_flag_path_not_settable)"},
+		{[]string{"validate", "--input", "count=many", workflow}, "(input_flag_wrong_type)"},
+		{[]string{"validate", "--input", "count", workflow}, "(input_flag_unsplit)"},
 	} {
 		r := runCLI(t, emptyEnv(t), "", tc.args...)
 		if r.code != exitError || !strings.Contains(r.stderr, tc.want) {

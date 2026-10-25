@@ -20,6 +20,37 @@ func appendPath(path []string, keys ...string) []string {
 	return slices.Concat(path, keys)
 }
 
+// maxExact is 2^53: a float64 holds each whole number up to it, and no
+// further.
+const maxExact = 1 << 53
+
+// floatNumbers returns v, a submitted value, with each whole number in it
+// that a float64 doesn't hold exactly read as the float64 nearest it, as
+// ACTIVATE reads a submitted JSON number, as a float64: 9007199254740993 is
+// 9007199254740992, wherever it is read. It changes v's mappings and lists
+// in place.
+func floatNumbers(v any) any {
+	switch v := v.(type) {
+	case int:
+		if n := int64(v); n > maxExact || n < -maxExact {
+			return float64(v)
+		}
+	case int64:
+		if v > maxExact || v < -maxExact {
+			return float64(v)
+		}
+	case []any:
+		for i, item := range v {
+			v[i] = floatNumbers(item)
+		}
+	case map[string]any:
+		for k, item := range v {
+			v[k] = floatNumbers(item)
+		}
+	}
+	return v
+}
+
 // lookup returns the value at path in v, or nil.
 func lookup(v any, path []string) any {
 	v, _ = jsonptr.Lookup(v, path)

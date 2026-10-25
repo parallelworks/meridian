@@ -570,7 +570,12 @@ definitions, under `on.execute.inputs`, and fills in what is missing, as
 ACTIVATE's launch form and its backend do together:
 
 - **Defaults.** An input with no value, or with `""` when `""` isn't one of
-  its options, takes its default. A default of `""` gives no value. A
+  its options, takes its default. A null submitted for an input, or an
+  input in a group, is its value, as ACTIVATE keeps it: it takes no
+  default, and what reads it reads null; only a key not submitted, or
+  `""`, takes one. A group submitted as null takes its inputs' defaults, and
+  in a list's row null is no value, as ACTIVATE fills in a row's. A default
+  of `""` gives no value. A
   default that is an expression is evaluated with the other inputs' values,
   defaults included, in whatever order they need; defaults that read each
   other are an error. A default reads what its paths can reach, however
@@ -637,8 +642,10 @@ ACTIVATE's launch form and its backend do together:
   An ignored input has no value, even one that was submitted: a condition
   evaluated once it is ignored reads it as null, a list with rows too. An
   input with no value and no default is required unless it is optional, or
-  hidden or in a hidden group; a boolean with none is `false`. Every
-  missing input is reported, not only the first.
+  hidden or in a hidden group; a boolean with none is `false`. A submitted
+  null is a value, so an input given null isn't required, and a boolean
+  given null stays null. Every missing input is reported, not only the
+  first.
 - **Containers.** A group's values are under its name. A wizard step's
   inputs have their values beside the step's, unless `$meta.wizard.flatten`
   is `false`. A wizard step with `multi: true` repeats, as many times as the
@@ -647,17 +654,41 @@ ACTIVATE's launch form and its backend do together:
   each row is a group of the step's inputs, as a list's row is of its
   template's fields. A repeated step given no value has none. A header has
   no value.
-- **Types.** A number or a boolean given as text, such as `"5"` or `"true"`,
-  is converted, and a text input given a number or a boolean gets its text.
-  ACTIVATE converts no value it is given: its defaults, conditions, `env:`
-  and steps all read a value as it was submitted, so a number sent as text
-  is that text, `"8" + 1` is `"81"`, and `"true"` isn't `true`. Meridian's
-  conversion is a difference from ACTIVATE that the next change removes:
-  format 1 reads every input value as it was submitted, and `meridian`'s
-  `--input` gives a number or a boolean input a number or a boolean, as
-  ACTIVATE's form does. Until then, Meridian's own evaluations at Create and
-  Start read a value as it was given (`Run.Unconverted`), and the jobs read
-  it converted. Anything else that doesn't fit the input's type is an error,
+- **Types.** Format 1 reads every input value as it was submitted, as
+  ACTIVATE does, and converts none: its defaults, conditions, `env:` and
+  steps read a number sent as text as that text, so `"8" + 1` is `"81"`,
+  and the text `"true"` isn't `true`, nor is `"false"` false; a
+  submitted null stays null, as Defaults says; and a submitted number is
+  read as ACTIVATE reads a JSON number, as a 64-bit float, so a whole
+  number past 2^53 is the float nearest it: 9007199254740993 is
+  9007199254740992 wherever it is read. ACTIVATE's
+  run form sends a number field's value as a JSON number and a checkbox's
+  as a JSON boolean, and a JSON caller writes the types itself; a client
+  that has only text converts by the field's type, as `meridian
+  validate`'s `-input` does ([The `meridian` command](#the-meridian-command)).
+  The checks take what they took when Meridian converted: text that reads
+  as a number passes a number input's type and its `min` and `max`, and the
+  text true or false, in any case and with space around it, a boolean's,
+  each read for the check and kept as it was submitted. A value submitted
+  as another JSON type than its input's, text for a number or a boolean,
+  or a number or a boolean for a text input, is a warning
+  (`input_read_as_submitted`), which names the input, its type and the
+  JSON type it was given, never the value, and changes nothing else. A
+  later format can refuse such a value. An input of a platform's type is
+  what the Inputs resolver gives for it, as a cluster's details for its
+  name; what Create evaluates before it checks the value reads it as
+  submitted, and so does what Start evaluates, from the plan, which holds
+  the value as submitted beside it where the resolver changed it
+  (`Run.Unresolved`), until it has decided the run's shape; what reads it
+  after, the jobs among them, reads it as the resolver gave it. A value
+  the secret record holds, as one typed over a default that reads a
+  password, Start reads as the resolver gave it. What the resolver gives
+  can't be split by the parts of the value that made it, so a value of
+  which a part isn't the plan's, as a part typed over a part of a default
+  that reads a variable, is held whole: private, or a secret if a part read
+  one, in neither the plan's values nor `Run.Unresolved`. The local
+  resolver gives back what it is given.
+  Anything else that doesn't fit the input's type is an error,
   as is a number outside its `min` and `max`, or a choice that isn't one of
   a dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
@@ -797,12 +828,10 @@ the run waits for ([On hopper](#on-hopper)).
    Create fills in a row's, so a list, a row or a list in a row that a part
    gives is filled in as Create filled it in before the plan held the part's
    expression in its place. What Start evaluates reads the inputs as
-   Create's evaluations read them: before Create converted them to their
-   types, so a number a form sent as the text `2.50` is that text to a
-   default that reads it, and to the workflow's `env:` (`Run.Unconverted`),
-   but for a value the secret record holds, which it reads converted until
-   format 1 reads values as submitted ([Inputs](#inputs)); each list's rows
-   with a field that has no value as null; and what a default reads of the
+   Create's evaluations read them: as they were submitted, one of a
+   platform's type the resolver changed among them, until it has decided
+   the run's shape (`Run.Unresolved`, [Inputs](#inputs)); each list's rows with a field that has no value as
+   null; and what a default reads of the
    value it gives as Create's evaluation did, none, or the form's text for
    it. What reads a definition, as a relative reference does, is evaluated
    after what the definition reads. A default that gives no value leaves
@@ -822,8 +851,8 @@ the run waits for ([On hopper](#on-hopper)).
    inputs' order, reading the inputs as Create's conditions did: as given,
    and an input the run ignored with its value, from the secret record,
    until the conditions reach it, and drops each input whose `ignore:` is
-   one of them if it decides so; and then, with the inputs converted, a
-   job's `needs` (`Job.NeedsExpr`), which names the same jobs in whatever
+   one of them if it decides so; and then a job's `needs`
+   (`Job.NeedsExpr`), which names the same jobs in whatever
    order. If one differs from what Create decided, which the secret record
    holds, the run fails with `run_shape_changed`, rather than run with
    values from two readings. It comes after the inputs, as a condition can
@@ -1021,16 +1050,16 @@ variables, which `plan.Job.Reads` finds from the job's expressions.
 ### The secret record
 
 The secret record holds what a run needs that the plan can't: from Create
-(`compile.Record`), its passwords and private values, the parts of the input
-definitions that can hold a password, what each condition of its shape that
-read a variable or a password decided, and the inputs it ignored with their
-values, as given, for the conditions Start decides again; the variables it
-read at Start, plain and secret; what Start made from them (the record half
-of `RunValues.Split`, and the run's timeout and its matrices' instances when
-they are private); and the job outputs made from a variable or a password
-but not from a secret, which jobs that need them read ([Outputs](#outputs)).
-Create and Start give what goes in it; the coordinator encrypts and stores
-it.
+(`compile.Record`), its passwords and private values, a null given for one
+among them, the parts of the input definitions that can hold a password,
+what each condition of its shape that read a variable or a password decided,
+and the inputs it ignored with their values, as given, for the conditions
+Start decides again; the variables it read at Start, plain and secret; what
+Start made from them (the record half of `RunValues.Split`, and the run's
+timeout and its matrices' instances when they are private); and the job
+outputs made from a variable or a password but not from a secret, which jobs
+that need them read ([Outputs](#outputs)). Create and Start give what goes
+in it; the coordinator encrypts and stores it.
 
 - **Encrypted.** The coordinator stores it beside the run, in the same
   database, encrypted with AES-256-GCM under a data key of its own, which
@@ -1086,13 +1115,13 @@ Today a plan is version 1, and has no schema. Version 1 stays open until the
 first release: no release has yet stored a plan or sent one to a worker, so
 what the plan and the worker API's bodies gain before then, such as what
 Start needs, is part of version 1: the input definitions, where the parts
-held for Start are in them and where those withheld are, the inputs' values
-as given where Create converted them, where the shape's decisions are, a
-job's `needs:` expression, `remote`, `sessions` and the names a session
-provider gave them, the limits, the digest of the run's own text, and the
-pinned workflow a step's `uses:` names, with the reference it was resolved
-by. The first release freezes it, with its schema, and every change after
-that gets a version.
+held for Start are in them and where those withheld are, the values a
+platform's resolver changed as they were submitted, where the shape's
+decisions are, a job's `needs:` expression, `remote`, `sessions` and the
+names a session provider gave them, the limits, the digest of the run's own
+text, and the pinned workflow a step's `uses:` names, with the reference it
+was resolved by. The first release freezes it, with its schema, and every
+change after that gets a version.
 
 ## Expressions
 
@@ -1618,7 +1647,13 @@ secret record ([Run data](#run-data)).
   compiler warns when a plain variable's name, such as `HF_TOKEN`, looks
   like a secret's.
 - **What is masked is text.** The masker is given strings: a secret's own
-  text, however short, unless it is empty, which is never masked; and the
+  text, however short, unless it is empty, which is never masked, and that
+  of a secret that is a number or a boolean, as a password submitted as
+  one is, as an expression writes it, `8` or `true`, so that a password
+  `true` masks every `true` in the logs, as never showing a secret is the
+  rule, and as a step's output that holds a secret's text holds a secret
+  ([Outputs](#outputs)), any output with `true` in it is then kept as one,
+  and the jobs that need it mask `true` too; and the
   text a template made from one, and that each `${{ }}` in it that read
   one gave, so that a field of a structured secret, such as
   `${{ fromJSON(vars.creds).token }}`, is masked wherever a command prints
@@ -2514,6 +2549,25 @@ it can without running anything: it reads every variable the run reads,
 secret ones too, evaluates what waits for the start, checks it and the
 run's shape, and expands the matrices known then, and reports what would
 fail the run as it starts, where the workflow writes it.
+
+`meridian validate` takes the run's input values as `--inputs`, a JSON
+file, whose values it sends as the file writes them, and as `--input
+path=value`, which sets one input over them, converted by its input's
+type by the rules of ACTIVATE's `pw workflows run --input`: a boolean
+takes `true` or `false`, exactly; a number a JSON number, so `007`,
+`0x10`, `+1`, `.5` and `1.` are errors, and so is one too large for 64
+bits; a list, a multi-dropdown, a repeated wizard step, a group, a wizard
+step, a compute target and a `multi` compute-clusters, compute-resources
+or bucket input JSON of their shape; every text type, and an input the
+workflow doesn't define, the text as it is; a dropdown the text, unless
+no option's value is that text and an option is a number or a boolean the
+text reads as, when it takes that option's value, among the list an
+`option-key` picks by the values sent, or every list; and a header is an
+error. A path is an input's name, or a group's and its input's, as
+`group.name`; a flattened wizard step's inputs are set by their own names,
+and naming the step is an error, as a path through a list's rows is: a
+list is set whole. A problem with an `-input` names its path, never its
+value, which can be a password.
 
 ## Editors and web UIs
 

@@ -67,6 +67,19 @@ type candidate struct {
 // each row index it reads.
 func (r *inputResolver) compare(f *field) {
 	value := lookup(r.values, f.path)
+	// What the Inputs resolver gives for an input of a platform's type can't
+	// be split by the parts that made it, so a part of one held keeps all of
+	// it out of the plan, masked if a part read a secret.
+	resolved := f.in == nil && platformTypes[f.typ]
+	whole, wholeKind := false, heldPrivate
+	hold := func(path []string, kind holding) {
+		if resolved && len(path) > 0 {
+			whole = true
+			wholeKind = min(wholeKind, kind)
+			return
+		}
+		r.holdPath(f.holder(), slices.Concat(f.path, path), kind)
+	}
 	for _, c := range f.candidates {
 		var gave []comparison
 		for _, path := range r.parts(f, c) {
@@ -97,11 +110,14 @@ func (r *inputResolver) compare(f *field) {
 			case f.typ == "password" && len(path) == 0:
 				// A password is a secret, whatever made it.
 			case slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, true) }):
-				r.holdPath(f.holder(), slices.Concat(f.path, path), heldDerived)
+				hold(path, heldDerived)
 			default:
-				r.holdPath(f.holder(), slices.Concat(f.path, path), heldPrivate)
+				hold(path, heldPrivate)
 			}
 		}
+	}
+	if whole {
+		r.holdPath(f, f.path, wholeKind)
 	}
 }
 

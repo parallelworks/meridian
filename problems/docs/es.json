@@ -1823,5 +1823,48 @@
     "fix": [
       "Escribe el servidor como git.example.com, y el archivo como flows/workflow.yaml."
     ]
+  },
+  "input_read_as_submitted": {
+    "title": "Entrada leída tal como se envió",
+    "why": "El formato 1 lee el valor de cada entrada tal como se envió, como ACTIVATE, y no convierte ninguno: el texto enviado para una entrada numérica o booleana sigue siendo texto, y un número o un booleano enviado para una entrada de texto sigue siendo un número o un booleano. El formulario de ejecución de ACTIVATE envía el valor de un campo numérico como un número JSON y el de una casilla como un booleano JSON, así que un valor como este viene de quien lo escribió como otro tipo JSON. Lo que lee la entrada lee el valor tal como es: el texto \"false\" no está vacío, así que un if: lo lee como verdadero.",
+    "fix": [
+      "Envía el valor con el tipo JSON de su entrada: 5, no \"5\", para un número, y false, no \"false\", para un booleano.",
+      "meridian validate -input convierte un valor según el tipo de su entrada, como pw workflows run --input de ACTIVATE."
+    ]
+  },
+  "input_flag_unsplit": {
+    "title": "Opción -input sin =",
+    "why": "-input define una entrada, como ruta=valor. Sin =, no hay ruta, y el problema no repite lo que se dio, que puede ser una contraseña.",
+    "fix": [
+      "Escríbelo como ruta=valor, como -input nodes=8."
+    ]
+  },
+  "input_flag_wrong_type": {
+    "title": "Valor de -input que no es del tipo de su entrada",
+    "why": "-input convierte su valor según el tipo de la entrada que define, como pw workflows run --input de ACTIVATE: una entrada booleana recibe true o false, exactamente; una entrada numérica, un número JSON, así que 007, 0x10, +1, .5 y 1. no lo son, ni un número demasiado grande para 64 bits; y un encabezado no recibe ningún valor. El problema no repite el valor, que puede ser una contraseña.",
+    "fix": [
+      "Da a la entrada un valor de su tipo, como -input debug=false o -input nodes=8."
+    ]
+  },
+  "input_flag_not_json": {
+    "title": "Valor de -input que no es JSON",
+    "why": "Una lista, un multi-dropdown, un paso de asistente repetido, un grupo, un paso de asistente, un destino de cómputo, y una entrada compute-clusters, compute-resources o bucket con multi: true reciben una estructura, que -input lee como JSON, como pw workflows run --input de ACTIVATE. El problema dice dónde falla el JSON, por byte, y no repite el valor, que puede contener una contraseña.",
+    "fix": [
+      "Escribe el valor como JSON, entre comillas para el shell, como -input 'files=[\"a.txt\"]'."
+    ]
+  },
+  "input_flag_wrong_shape": {
+    "title": "Valor de -input con la forma equivocada",
+    "why": "-input lee como JSON el valor de una estructura, que debe tener la forma que recibe su entrada, como lo lee pw workflows run --input de ACTIVATE: un array para una lista, un multi-dropdown, un paso de asistente repetido y una entrada multi, y un objeto para un grupo, un paso de asistente y un destino de cómputo.",
+    "fix": [
+      "Escribe el valor como el JSON que recibe su entrada: un array, entre corchetes, o un objeto, entre llaves."
+    ]
+  },
+  "input_flag_path_not_settable": {
+    "title": "Ruta de -input que no define",
+    "why": "Una ruta es el nombre de una entrada, o el de un grupo y el de su entrada, como grupo.nombre, como la lee pw workflows run --input de ACTIVATE. Un paso de asistente que se aplana, como lo hace salvo que $meta.wizard.flatten sea false, pone sus entradas a su lado, así que se definen por sus propios nombres; una lista, o un paso de asistente repetido, se define entera, como JSON; y una entrada que no contiene entradas no tiene ninguna que definir.",
+    "fix": [
+      "Nombra la entrada por su propio nombre, o define la lista entera, como JSON."
+    ]
   }
 }

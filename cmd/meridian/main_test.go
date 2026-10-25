@@ -174,7 +174,7 @@ func TestUsageProblems(t *testing.T) {
 		{[]string{"validate", "--lang", "ja", "w.yaml"}, "flag_unknown"},
 		{[]string{"validate", "w.yaml", "--format"}, "flag_needs_value"},
 		{[]string{"validate", "--format", "xml", "w.yaml"}, "flag_value_invalid"},
-		{[]string{"validate", "--input", "count", "w.yaml"}, "flag_value_invalid"},
+		{[]string{"validate", "--input", "count", "w.yaml"}, "input_flag_unsplit"},
 		{[]string{"validate", "---format=json", "w.yaml"}, "flag_syntax"},
 	} {
 		r := runCLI(t, nil, "", tc.args...)
