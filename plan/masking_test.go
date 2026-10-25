@@ -391,6 +391,61 @@ func TestReadsByPath(t *testing.T) {
 	}
 }
 
+// A job reads the outputs of the jobs it needs that its expressions name,
+// and their steps', and no more: not a secret output beside one it reads.
+// Each job keeps its outcome, and a reference with a * reads all it can
+// name.
+func TestReadsNeeds(t *testing.T) {
+	needs := map[string]plan.JobResult{
+		"a": {
+			Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1", "y": "2", "tok": "s3cret", "len": "6"},
+			Private: []string{"len", "tok"}, Secrets: []string{"len", "tok"}, Derived: []string{"len"},
+			Steps:       map[string]map[string]string{"s": {"p": "3", "q": "s3cret"}, "t": {"p": "4"}},
+			SecretSteps: map[string][]string{"s": {"q"}},
+		},
+		"b": {Outcome: plan.OutcomeFailure, Outputs: map[string]string{"z": "5", "x": "6"}, NeedsFailed: true, Cancelled: true},
+	}
+	show := func(r plan.JobResult) string {
+		return fmt.Sprintf("%v %v %v %v %v %v %v %v %v %v",
+			r.Outcome, r.NeedsFailed, r.Cancelled, r.Outputs, r.Private, r.Secrets, r.Derived, r.Steps, r.SecretSteps, r.DerivedSteps)
+	}
+	const noneA, noneB = "success false false map[] [] [] [] map[] map[] map[]", "failure true true map[] [] [] [] map[] map[] map[]"
+	for src, want := range map[string][2]string{
+		"${{ needs.a.outputs.x }}": {"success false false map[x:1] [] [] [] map[] map[] map[]", noneB},
+		"${{ needs.a.outputs.tok }} ${{ needs.a.outputs['len'] }}": {
+			"success false false map[len:6 tok:s3cret] [len tok] [len tok] [len] map[] map[] map[]", noneB,
+		},
+		"${{ needs.a.steps.s.outputs.q }}": {"success false false map[] [] [] [] map[s:map[q:s3cret]] map[s:[q]] map[]", noneB},
+		// Read as their own text, these read nothing of a.
+		"${{ needs.a.result }} ${{ needs.a }} ${{ needs.a.outputs }} ${{ needs.a.steps.s }} ${{ needs.a.*.x }} ${{ needs }}": {noneA, noneB},
+		"${{ needs.a.outputs.* }}": {
+			"success false false map[len:6 tok:s3cret x:1 y:2] [len tok] [len tok] [len] map[] map[] map[]", noneB,
+		},
+		"${{ needs.*.outputs.x }} ${{ needs.*.outputs.z }}": {
+			"success false false map[x:1] [] [] [] map[] map[] map[]", "failure true true map[x:6 z:5] [] [] [] map[] map[] map[]",
+		},
+		"${{ needs.a.steps.*.outputs.p }} ${{ needs.a.outputs.y.length }}": {
+			"success false false map[y:2] [] [] [] map[s:map[p:3] t:map[p:4]] map[] map[]", noneB,
+		},
+	} {
+		v := mustValue(t, src)
+		j := &plan.Job{Name: "main", Steps: []plan.Step{{Run: v}}}
+		got := j.ReadsNeeds(needs)
+		if g := [2]string{show(got["a"]), show(got["b"])}; g != want {
+			t.Errorf("%s reads\n%s\n%s\nwant\n%s\n%s", src, g[0], g[1], want[0], want[1])
+		}
+		// What the job reads gives what all the needs' results do.
+		all, _ := v.Eval(plan.NewScope(plan.PhaseStep, plan.Contexts{Needs: needs}))
+		part, _ := v.Eval(plan.NewScope(plan.PhaseStep, plan.Contexts{Needs: got}))
+		if fmt.Sprint(all) != fmt.Sprint(part) {
+			t.Errorf("%s is %v with the needs' results, %v with what it reads", src, all, part)
+		}
+	}
+	if got := (&plan.Job{Name: "main"}).ReadsNeeds(nil); got != nil {
+		t.Errorf("no needs give %v", got)
+	}
+}
+
 // A short string made from a secret, such as an answer it decided, masks
 // nothing, unless a secret's own text holds it: a secret's own text, and
 // its shown forms, are masked whatever their length, so a plain output that

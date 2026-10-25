@@ -24,8 +24,9 @@
 // Version 1 stays open until Meridian's first release, as the plan's does
 // (docs/design.md, Plans across versions): no release has yet sent a body,
 // so what the bodies gain or change before then, such as Complete.Result
-// in place of the seven lists of outputs Complete had, is version 1's. The
-// first release freezes them, and every change after that is a version.
+// in place of the seven fields of outputs Complete had, is version 1's.
+// The first release freezes them, and every change after that is a
+// version.
 //
 // As it claims, a worker says the newest version it reads
 // (ClaimRequest.PlanVersion), and the coordinator refuses one that doesn't
@@ -286,7 +287,10 @@ type Claim struct {
 	// inputs' values, variables and secrets among them. The worker masks
 	// what Run.Secrets names (plan.RunValues.Masked).
 	Run plan.RunValues `json:"run"`
-	// Needs are the results of the jobs this one needs, by job name.
+	// Needs are the results of the jobs this one needs, by job name, as
+	// plan.Job.ReadsNeeds cuts them: each one's outcome, and only the
+	// outputs, and steps' outputs, that the job's expressions read, with
+	// which of those are private, or secrets, which the worker masks.
 	Needs map[string]plan.JobResult `json:"needs,omitempty"`
 	// RunDir is the run's directory on the worker's host (PW_JOB_DIR),
 	// where steps run by default.
