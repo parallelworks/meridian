@@ -115,6 +115,13 @@ func (r *inputResolver) readsPart(loc []string, index []int, path []string) bool
 		return false
 	}
 	patterns := readPatterns(exprs, index)
+	if slices.ContainsFunc(patterns, func(p []string) bool { return reach.Reaches(p, path) }) {
+		return true
+	}
+	for _, e := range r.evaluations[r.gaveTo:] {
+		r.gave.Add(slices.Concat(e.f.path, e.path), e)
+	}
+	r.gaveTo = len(r.evaluations)
 	seen := map[*evaluation]bool{}
 	for len(patterns) > 0 {
 		p := patterns[len(patterns)-1]

@@ -185,7 +185,7 @@ func (r *inputResolver) noteEvaluation(f *field, path, loc []string, raw any) {
 	for _, p := range readPatterns(exprs, f.index) {
 		r.evaluated.Add(p, e)
 	}
-	r.gave.Add(slices.Concat(f.path, path), e)
+	r.evaluations = append(r.evaluations, e)
 }
 
 // setDefault sets f's value to its default, unless the default is "", which
