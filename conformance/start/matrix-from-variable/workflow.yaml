@@ -1,0 +1,15 @@
+jobs:
+  main:
+    strategy:
+      matrix:
+        site: ${{ fromJSON(vars.SITES) }}
+        size: [1, 2]
+    steps:
+      - run: echo ${{ matrix.site }}
+  after:
+    needs: [main]
+    strategy:
+      matrix:
+        part: ${{ fromJSON(needs.main.outputs.parts) }}
+    steps:
+      - run: echo ${{ matrix.part }}

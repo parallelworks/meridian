@@ -327,6 +327,12 @@
       "Give the input a value, or a default, that nests less deeply."
     ]
   },
+  "default_row_unknown_input": {
+    "why": "A list's default rows, written in the workflow, have a key that isn't one of the inputs of the list's rows, its template's. The row keeps the value, which what reads the row can read, but it is often a misspelling, or a field the template no longer has. A launch form sends the default rows back, so the key isn't reported again as an unknown input of each run.",
+    "fix": [
+      "Correct the key, add an input of that name to the list's template, or remove the key from the default rows."
+    ]
+  },
   "duplicate_step_id": {
     "why": "A step's id names it for the steps after it, so two steps of a job can't share one.",
     "fix": [
@@ -448,7 +454,7 @@
     ]
   },
   "output_undefined_step": {
-    "why": "A job's output reads a step by an id none of its steps has, so the output is empty.",
+    "why": "A job's output reads a step by an id none of its steps has. Once the job's steps succeeded, format 1 reads its outputs strictly, so the output fails the job, as one that nothing wrote does (output_not_written); once a step failed or was cancelled, the output is empty.",
     "fix": [
       "Correct the step's id, or give the step that id."
     ]
@@ -505,6 +511,56 @@
     "why": "An expression reads an organization or user variable whose name, such as HF_TOKEN, suggests it holds a secret, but it isn't a secret variable. A variable's value is masked in the run's logs only if it is a secret, so a secret in a plain variable shows wherever a step writes it. A name looks like a secret's when one of its words, split at _, -, . and changes of case, is a word such as token, password or secret.",
     "fix": [
       "If the variable holds a secret, make it a secret variable."
+    ]
+  },
+  "variable_not_text": {
+    "why": "A variable's value is text. Whoever runs the workflow gave the compiler a value for this variable that is something else, such as a number or a list, which no expression reads as the variable, so the run reads it as \"\", as it reads a variable that isn't set. As the run starts, Meridian reads each variable again, as text.",
+    "fix": [
+      "Give the variable its value as text, such as \"8\" rather than 8, or a list as its JSON."
+    ]
+  },
+  "resolver_missing": {
+    "why": "Some of a workflow's keys need what only the place it runs can provide, through one of Meridian's interfaces: sessions: need a session provider (Sessions), a uses: that names a workflow needs a way to fetch it (Sources), and runs-on: execution-group: needs execution groups (Groups). Meridian doesn't run a workflow without what it needs, rather than run part of it.",
+    "fix": [
+      "Run the workflow where the interface is provided, such as on a platform that serves sessions.",
+      "Remove the key from the workflow if it doesn't need it."
+    ]
+  },
+  "run_shape_changed": {
+    "why": "What decides a run's shape, which inputs it has and which jobs each job waits for, can read organization and user variables and passwords. The compiler reads them when the run is created, and the plan holds what they decided. As the run starts, Meridian reads them again and decides again, and this decision came out otherwise: a variable or a password changed in between, as one can before a rerun. Rather than run with values from two readings, the run doesn't start.",
+    "fix": [
+      "Create the run again, so that it is created and started with the same values.",
+      "If the variable changes often, make the decision read something that doesn't."
+    ]
+  },
+  "values_read_each_other": {
+    "why": "As a run starts, Meridian evaluates the workflow's env: and the inputs whose values it left to the start, in the order they read each other. An input's default can read env, and an env: value an input, but these values read each other, so none of them can be evaluated first.",
+    "fix": [
+      "Change one of the values so that it doesn't read the others."
+    ]
+  },
+  "group_unknown": {
+    "why": "A job's runs-on: execution-group: names an execution group, which runs the job on one of its members. Where the workflow runs, the Groups interface has no group by that name: locally, there is none in groups.yaml, and it isn't the built-in local group.",
+    "fix": [
+      "Name a group that is there, or add the group where the workflow runs, such as to groups.yaml."
+    ]
+  },
+  "environment_unknown": {
+    "why": "A format 1 job's runs-on: environment: names a scheduler environment on a cluster, which only a platform knows. Where the workflow runs, the Groups interface has no such environment: locally there are none.",
+    "fix": [
+      "Run the workflow on the platform that has the environment, or run the job in an execution group instead (runs-on: execution-group:)."
+    ]
+  },
+  "source_not_found": {
+    "why": "A step's uses: names a workflow, which is resolved and pinned when the run is created. Where the workflow runs, the Sources interface has no workflow by that reference.",
+    "fix": [
+      "Check the reference: its repository, its revision, and the file its with: $yaml names."
+    ]
+  },
+  "source_not_known": {
+    "why": "The workflow a step's uses: names is resolved and pinned to its commit and its text's digest when the run is created, so that the run and its reruns run the same text. Its uses:, and its with: $yaml and $host, say where it is, so they must be written out, not read from what is known only later. ACTIVATE evaluates them with the run's inputs before it reads them; no known workflow has an expression in one.",
+    "fix": [
+      "Write the reference out in the step's uses:, and the file and the server in its with:."
     ]
   },
   "expression_failed": {
@@ -962,22 +1018,22 @@
     ]
   },
   "source_ref_invalid": {
-    "why": "Meridian reads a workflow that a step's uses: names from a Git repository on GitHub or GitLab: github/ or gitlab/, the repository's owner and name, the workflow's file in it, workflow.yaml unless it names another, and @ and a branch, tag or commit, the default branch unless it names one. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed.",
+    "why": "Meridian reads a workflow that a step's uses: names from a Git repository, as ACTIVATE does: github/ and the repository's owner and name, or gitlab/ and a project's path, its groups' names among it, and then @ and a branch, tag or commit, the default branch unless it names one. The workflow's file in the repository is the step's with: $yaml, workflow.yaml unless it names another, and with: $host names a GitLab server, only for gitlab/. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed, nor is a group's name that ends in .git or .lock.",
     "fix": [
-      "Write the reference as github/<owner>/<repository>/<path>@<revision>, or the same with gitlab/."
+      "Write the reference as github/<owner>/<repository>@<revision>, or gitlab/<group>/<project>@<revision>, with the workflow's file in with: $yaml."
     ]
   },
   "source_on_platform": {
     "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories.",
     "fix": [
       "Run the workflow on the platform that stores the workflow it uses.",
-      "Or name the workflow by its Git repository, as github/<owner>/<repository>/<path>@<revision>."
+      "Or name the workflow by its Git repository, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
     ]
   },
   "source_revision_not_found": {
     "why": "Meridian fetches the revision a uses: names with git, and git found no such repository, or no such branch, tag or commit in it. A private repository that git can't read with your credentials can look the same.",
     "fix": [
-      "Check the repository's owner and name, and the revision after @.",
+      "Check the repository's owner and name, and the revision after @. Git fetches a commit by its full SHA, of 40 or 64 characters, where ACTIVATE takes a short one too.",
       "Check that git can fetch the repository with your credentials, as with git ls-remote and the repository's URL."
     ]
   },
@@ -1073,9 +1129,9 @@
     ]
   },
   "file_not_regular": {
-    "why": "Meridian reads its config, its key and variables' values only from regular files, so that reading one can't wait forever on a pipe or read from a device.",
+    "why": "Meridian reads its config, its key, variables' values and a worker's bootstrap token only from regular files, so that reading one can't wait forever on a pipe or read from a device, and never through a symbolic link at the file's own path, so that what it reads is the file the path names: a directory on the way to it can be a link.",
     "fix": [
-      "Name a regular file instead."
+      "Put the file itself at its path, rather than a link to it: the directory that holds it can be a link instead."
     ]
   },
   "file_not_owned": {
@@ -1097,7 +1153,7 @@
     ]
   },
   "file_over_limit": {
-    "why": "Meridian reads its config files, a variable's file and a file of inputs whole, so it limits their size.",
+    "why": "Meridian reads its config files, a variable's file, a file of inputs and a worker's bootstrap token's file whole, so it limits their size.",
     "fix": [
       "Check that the path names the file you meant, and make the file smaller."
     ]
@@ -1353,6 +1409,12 @@
       "Run Meridian outside the user namespace, or in one that maps root."
     ]
   },
+  "owner_unknown": {
+    "why": "Meridian checks that its own directories and files, and every directory on the way to them, belong to you or to root, as OpenSSH checks the way to a user's keys. This operating system doesn't say who owns a file, so Meridian refuses the path rather than assume that no other user can change it.",
+    "fix": [
+      "Run Meridian on a Unix system, such as Linux or macOS."
+    ]
+  },
   "path_links_too_many": {
     "why": "Meridian follows the symbolic links on the way to its directories, as the kernel does, and stops after as many as the kernel would, which is most likely a link that leads back to itself.",
     "fix": [
@@ -1384,9 +1446,15 @@
     ]
   },
   "coordinator_peer_refused": {
-    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's. On Linux it asks the operating system who serves the socket, and another user does: one who could have put a socket at that path to take the token.",
+    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's. It asks the operating system who serves the socket, and another user does: one who could have put a socket at that path to take the token.",
     "fix": [
       "Start the worker with the socket of a coordinator you run, in a directory only you can change."
+    ]
+  },
+  "coordinator_peer_unknown": {
+    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's, and asks the operating system who serves the socket before it sends anything. The operating system didn't say.",
+    "fix": [
+      "Fix what the reason names, and let the backend start the worker again."
     ]
   },
   "coordinator_key_mismatch": {
@@ -1399,6 +1467,12 @@
     "why": "A bootstrap token claims one attempt, once: the coordinator refuses it once the attempt is claimed, by this worker with another credential, or by another, or once its placement is withdrawn. The worker exits, and runs nothing.",
     "fix": [
       "Nothing to fix if the attempt was cancelled; otherwise, let the backend start a worker with the attempt's own token."
+    ]
+  },
+  "bootstrap_token_in_environment": {
+    "why": "A bootstrap token claims its attempt once, for whoever presents it first. On macOS, any process of a user can read the arguments and environment of any other of theirs, as ps -E does, whatever the worker does to protect itself, so another process, such as a step of another job, could read the token there and claim the attempt. The worker takes a token from a file instead, which it removes as soon as it has read it.",
+    "fix": [
+      "Give the token in a file only you can read, whose path MERIDIAN_BOOTSTRAP_TOKEN_FILE names, rather than in MERIDIAN_BOOTSTRAP_TOKEN."
     ]
   },
   "run_plan_too_new": {
@@ -1417,6 +1491,44 @@
     "why": "A job whose retry: lists worker-lost can run again while this attempt may still run, cut off, so its worker stops it before its lease lapses: once it hasn't renewed the lease for six tenths of it, it stops every process the attempt started, and by nine tenths has killed them. The coordinator could not be reached for that long. Its new attempt resumes the job, as its retry: asks.",
     "fix": [
       "Check the connection between the host the job ran on and the coordinator, and that the job's lease is long enough to ride out the outages you expect."
+    ]
+  },
+  "worker_harden_failed": {
+    "why": "A worker holds the attempt's credential in its memory, so before it claims the attempt it keeps your other processes, a job's steps among them, from reading its memory or attaching to it as a debugger does: on Linux it makes itself not dumpable, on macOS it refuses debuggers (PT_DENY_ATTACH) and sets the size of its core file to 0, and on FreeBSD it turns off tracing of itself (procctl). The operating system refused or failed.",
+    "fix": [
+      "Fix what the reason names, such as a security policy that forbids the call, and let the backend start the worker again."
+    ]
+  },
+  "worker_system_unsupported": {
+    "why": "A worker holds the attempt's credential in its memory, and keeps your other processes, a job's steps among them, from reading it there or tracing what it sends. It can on Linux, macOS and FreeBSD. Other systems, such as NetBSD and OpenBSD, give a process no way to keep the user's other processes from tracing it, so the worker refuses to run there, rather than run a job with less protection.",
+    "fix": [
+      "Run the job on a member whose hosts run Linux, macOS or FreeBSD."
+    ]
+  },
+  "source_server_unknown": {
+    "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names. Git reaches a server with the user's own configuration and credentials, so Meridian reaches only gitlab.com and the servers the user registered, rather than any a workflow names: locally, those that sources.yaml, in the config directory, lists under gitlab-servers.",
+    "fix": [
+      "If you trust the server, add it to gitlab-servers in sources.yaml, by its name, as git.example.com.",
+      "Otherwise, use a workflow from a server that is registered."
+    ]
+  },
+  "compute_target_unknown": {
+    "why": "A format 1 job's runs-on: can give a compute target, as a compute-target input's value does: a mode, login, worker or environment, and a target, which only a platform knows. Where the workflow runs, the Groups interface has no such compute target: locally there are none.",
+    "fix": [
+      "Run the workflow on the platform that has the compute target, or run the job in an execution group instead (runs-on: execution-group:)."
+    ]
+  },
+  "gitlab_server_invalid": {
+    "why": "sources.yaml's gitlab-servers lists the GitLab servers, besides gitlab.com, that a workflow's with: $host can name. Each is a server's DNS name, as a $host names it, with no port, as ACTIVATE reads a $host: Meridian adds the scheme and reaches the server at HTTPS's port, and a server has no user or path.",
+    "fix": [
+      "Write the server as git.example.com.",
+      "For a server at another port, register its name, and have Git reach it at its port with Git's url.<base>.insteadOf setting, as in: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
+    ]
+  },
+  "source_with_invalid": {
+    "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names, by its DNS name, with no port, as ACTIVATE reads it; and $yaml names the workflow's file in the repository by its path from the repository's root. A path that starts with a slash is from the root, as ACTIVATE fetches the file: every slash before it goes on GitHub, and one on GitLab. No name in the path can be empty, as ./ or a doubled slash makes one, nor . or .., nor hold a control character, so that the path names a file among the repository's own.",
+    "fix": [
+      "Write the server as git.example.com, and the file as flows/workflow.yaml."
     ]
   }
 }

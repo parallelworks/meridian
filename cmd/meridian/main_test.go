@@ -19,10 +19,10 @@ func runCLI(t *testing.T, vars map[string]string, stdin string, args ...string) 
 	t.Helper()
 	var stdout, stderr strings.Builder
 	c := &cli{
-		stdin:  strings.NewReader(stdin),
-		stdout: &stdout,
-		stderr: &stderr,
-		getenv: func(name string) string { return vars[name] },
+		stdin:     strings.NewReader(stdin),
+		stdout:    &stdout,
+		stderr:    &stderr,
+		lookupEnv: func(name string) (string, bool) { v, ok := vars[name]; return v, ok },
 	}
 	code := run(t.Context(), c, args)
 	return result{stdout.String(), stderr.String(), code}

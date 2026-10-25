@@ -46,6 +46,9 @@ type attempt struct {
 	secrets []string
 	// scripts counts the scripts written, to name each.
 	scripts int
+	// stepEnded, if it is set, is called as each step, or cleanup, has
+	// ended (Config.stepEnded).
+	stepEnded func(a *attempt, step int, cleanup bool)
 	// firstStarted is set once the coordinator has stored that a step is
 	// starting.
 	firstStarted bool

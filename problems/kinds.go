@@ -103,6 +103,10 @@ var (
 	InputNotText           = define(Error, "input_not_text", "Input takes text", "input", "value")
 	InputLooksSecret       = define(Warning, "input_looks_secret", "Input that looks like it holds a secret", "input")
 	InputTooDeep           = define(Error, "input_too_deep", "Input's value nests too deeply", "input", "max")
+	// DefaultRowUnknownInput is a key of a list's default row, written in
+	// the workflow, that isn't one of its rows' inputs: input names the
+	// list, and key the key's path in the row, as in group.name.
+	DefaultRowUnknownInput = define(Warning, "default_row_unknown_input", "Default row with a key its rows don't have", "input", "key", "suggested", "suggestion")
 	// ExecutionGroupUnknown is what the meridian command's Inputs gives
 	// for an execution-groups input that names none of the user's groups:
 	// value is the input's value, as Show writes it, and groups the groups
@@ -115,15 +119,21 @@ var (
 // location a workflow's place, as a plan's Source names it; commit, digest
 // and pinned as Git and the plan write them; and reason what git said.
 var (
-	SourceRefInvalid       = define(Error, "source_ref_invalid", "Not a reference to a workflow in Git", "ref")
+	SourceRefInvalid = define(Error, "source_ref_invalid", "Not a reference to a workflow in Git", "ref")
+	// SourceWithInvalid is a step's with: $yaml or $host, key, that isn't a
+	// file's path or a server's name: what is server or file.
+	SourceWithInvalid      = define(Error, "source_with_invalid", "Workflow's server or file not one a uses: can name", "key", "what")
 	SourceOnPlatform       = define(Error, "source_on_platform", "Workflow a platform stores", "ref")
 	SourceRevisionNotFound = define(Error, "source_revision_not_found", "No such repository or revision", "repo", "revision", "reason")
 	SourceFileNotFound     = define(Error, "source_file_not_found", "No such workflow file in the repository", "repo", "path", "commit")
 	SourceTooLarge         = define(Error, "source_too_large", "Workflow file in a repository too large", "location", "commit", "limit")
 	SourceChanged          = define(Error, "source_changed", "Workflow isn't the text it was pinned to", "location", "commit", "digest", "pinned")
 	SourceNotPinned        = define(Error, "source_not_pinned", "Workflow not pinned", "location", "revision")
-	SourceAccessDenied     = define(Error, "source_access_denied", "Access to a repository denied", "location", "reason")
-	SourceObjectsInvalid   = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
+	// SourceServerUnknown is a GitLab server, as a step's with: $host
+	// names it, that the user didn't register.
+	SourceServerUnknown  = define(Error, "source_server_unknown", "GitLab server not registered", "server")
+	SourceAccessDenied   = define(Error, "source_access_denied", "Access to a repository denied", "location", "reason")
+	SourceObjectsInvalid = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
 )
 
 // A workflow's jobs.
@@ -166,6 +176,46 @@ var (
 	OlderAlways                = define(Warning, "older_always", "Older spelling of always()")
 	ReplacedKeyword            = define(Warning, "replaced_keyword", "Replaced if: keyword", "word", "text", "replacement")
 	ValueTooDeep               = define(Error, "value_too_deep", "Value nests too deeply", "max")
+)
+
+// Creating and starting a run: what the caller gives the compiler, and
+// what Start decides again.
+var (
+	// VariableNotText is a variable the run reads that the compiler was
+	// given a value for that isn't text: context is org or vars, and name
+	// the variable's name.
+	VariableNotText = define(Warning, "variable_not_text", "Variable that isn't text", "context", "name")
+	// ResolverMissing is a key of the workflow that needs one of the
+	// interfaces whoever runs the workflow provides, which isn't there:
+	// key is the key, as sessions, and interface the interface's name, as
+	// Sessions (docs/design.md, Interfaces).
+	ResolverMissing = define(Error, "resolver_missing", "Interface missing", "key", "interface")
+	// RunShapeChanged is a decision of the run's shape that Start made
+	// otherwise than Create did: key is hidden, ignore or optional, and
+	// name the input's name, or key is needs, and name the job's.
+	RunShapeChanged = define(Error, "run_shape_changed", "Run's shape changed as it started", "key", "name")
+	// ValuesReadEachOther is values that Start evaluates and that read
+	// each other: names are their names, as inputs.region and env.REGION,
+	// as QuoteAll writes them.
+	ValuesReadEachOther = define(Error, "values_read_each_other", "Values read each other as the run starts", "names")
+	// GroupUnknown is an execution group a job's runs-on: names that the
+	// Groups resolver doesn't have: group is its name.
+	GroupUnknown = define(Error, "group_unknown", "No such execution group", "group")
+	// EnvironmentUnknown is an environment a format 1 runs-on: names that
+	// the Groups resolver doesn't have: cluster and name are the
+	// environment's.
+	EnvironmentUnknown = define(Error, "environment_unknown", "No such environment", "cluster", "name")
+	// ComputeTargetUnknown is a compute target a format 1 runs-on: writes
+	// out that the Groups resolver doesn't have: mode and target are its
+	// mode and targetId.
+	ComputeTargetUnknown = define(Error, "compute_target_unknown", "No such compute target", "mode", "target")
+	// SourceNotFound is a workflow a step's uses: names that the Sources
+	// resolver doesn't have, without saying why: ref is the uses:.
+	SourceNotFound = define(Error, "source_not_found", "No such workflow", "ref")
+	// SourceNotKnown is a step's with: $yaml or $host, key, that isn't
+	// written out, though the workflow its uses: names is pinned as the
+	// run is created.
+	SourceNotKnown = define(Error, "source_not_known", "Workflow's place not known when the run is created", "key")
 )
 
 // Running a workflow: what the phases after Start evaluate, and the
@@ -285,6 +335,7 @@ var (
 	NetworkFilesystem         = defineCommand("network_filesystem", "Database on a network filesystem", "path", "type")
 	FilesystemUnknown         = defineCommand("filesystem_unknown", "Filesystem can't be told", "path", "reason")
 	OwnerUnmapped             = defineCommand("owner_unmapped", "Owner hidden by a user namespace", "path", "dir")
+	OwnerUnknown              = defineCommand("owner_unknown", "Owner can't be told", "path")
 	PathLinksTooMany          = defineCommand("path_links_too_many", "Path through too many symbolic links", "path", "max")
 	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
@@ -300,11 +351,12 @@ var (
 	FileOverLimit  = defineCommand("file_over_limit", "File larger than Meridian reads", "path", "limit")
 )
 
-// The meridian command's config, groups.yaml and variables.yaml, whose
-// problems say where they are with ParamFile and ParamLine. want is
-// mapping, list, number, boolean or text; keys are the keys allowed, as
-// QuoteAll writes them; and variable is a variable's name as the plan
-// writes it, as org.region.
+// The meridian command's config, groups.yaml, variables.yaml and
+// sources.yaml, whose problems say where they are with ParamFile and
+// ParamLine. want is mapping, list, number, boolean or text; keys are the
+// keys allowed, as QuoteAll writes them; variable is a variable's name as
+// the plan writes it, as org.region; and server a GitLab server's host
+// name and port.
 var (
 	ConfigYAMLSyntax       = defineCommand("config_yaml_syntax", "Config file isn't valid YAML", "reason")
 	ConfigExtraDocument    = defineCommand("config_extra_document", "Config file with more than one YAML document")
@@ -312,6 +364,7 @@ var (
 	ConfigKeyUnknown       = defineCommand("config_key_unknown", "Unknown key in a config file", "key", "keys")
 	ConfigKeyRepeated      = defineCommand("config_key_repeated", "Key given twice in a config file", "key", "first_line")
 	ConfigWrongType        = defineCommand("config_wrong_type", "Config value of the wrong type", "key", "want")
+	GitLabServerInvalid    = defineCommand("gitlab_server_invalid", "Invalid GitLab server", "server")
 	GroupNameInvalid       = defineCommand("group_name_invalid", "Invalid group name", "group")
 	GroupEmpty             = defineCommand("group_empty", "Group without members", "group")
 	MemberInvalid          = defineCommand("member_invalid", "Invalid member", "group", "key", "value")
@@ -358,14 +411,20 @@ var (
 )
 
 // meridian worker's own problems, which end it: variable is an environment
-// variable's name, address the coordinator's, and uid a user's number.
+// variable's name, address the coordinator's, uid a user's number, os the
+// operating system's name, as Go's GOOS has it, and reason what the
+// operating system said.
 var (
-	WorkerEnvironmentMissing = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
-	WorkerEnvironmentInvalid = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
-	CoordinatorPeerRefused   = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
-	CoordinatorKeyMismatch   = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
-	BootstrapTokenRefused    = defineCommand("bootstrap_token_refused", "Bootstrap token refused")
-	RunPlanTooNew            = defineCommand("run_plan_too_new", "Run's plan newer than the worker reads", "version")
-	AttemptSuperseded        = defineCommand("attempt_superseded", "Attempt ended without the worker")
-	AttemptLeaseLapsed       = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
+	WorkerEnvironmentMissing    = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
+	WorkerEnvironmentInvalid    = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
+	CoordinatorPeerRefused      = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
+	CoordinatorPeerUnknown      = defineCommand("coordinator_peer_unknown", "Coordinator socket's user can't be told", "path", "reason")
+	CoordinatorKeyMismatch      = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
+	BootstrapTokenRefused       = defineCommand("bootstrap_token_refused", "Bootstrap token refused")
+	BootstrapTokenInEnvironment = defineCommand("bootstrap_token_in_environment", "Bootstrap token in an environment others can read")
+	RunPlanTooNew               = defineCommand("run_plan_too_new", "Run's plan newer than the worker reads", "version")
+	AttemptSuperseded           = defineCommand("attempt_superseded", "Attempt ended without the worker")
+	AttemptLeaseLapsed          = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
+	WorkerHardenFailed          = defineCommand("worker_harden_failed", "Worker's memory can't be protected", "reason")
+	WorkerSystemUnsupported     = defineCommand("worker_system_unsupported", "System where the worker can't protect its memory", "os")
 )

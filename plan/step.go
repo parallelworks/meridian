@@ -88,7 +88,8 @@ type JobEnv struct {
 	Masked []string `json:"masked,omitempty"`
 	// own are the job's secrets' texts and what masks them, as JobEnv found
 	// and built them for the attempt, which Step, Cleanup and End share
-	// rather than find and build again, when their state's secrets are the
+	// rather than find and build again, with what they find of the job's
+	// steps' outputs (outputChecks), when their state's secrets are the
 	// same (secretsSum).
 	own *secretTexts
 }
@@ -352,7 +353,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state, e)
+	c.addSelf(j, state, e, false)
 	e = c.evaluation(PhaseStep, e)
 	jobDir := e.directory(j.WorkingDirectory, at(j.Path, "working-directory"))
 	// The step reads all of the worker's variables, and its if: reads an
@@ -548,7 +549,7 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 	if e.diags.HasErrors() {
 		return nil, e.diags, nil
 	}
-	c.addSelf(j, state, e)
+	c.addSelf(j, state, e, len(j.Outputs) > 0)
 	// The job's outputs: read an output that nothing wrote strictly once
 	// its steps succeeded, as format 1 does.
 	c.StrictOutputs = !c.Status.Failed && !c.Status.Cancelled
@@ -571,7 +572,7 @@ func (j *ReadyJob) End(ctx context.Context, state JobState) (*EndResult, problem
 		}
 		out.Outputs[name] = text
 		private[name] = read.Private
-		secret[name] = text != "" && (read.Marked || c.leak.Mask(text) != text)
+		secret[name] = text != "" && (read.Marked || c.leak.mask(text) != text)
 	}
 	// What holds a secret's own text, or a credential field of one, the
 	// jobs that need the job mask however short; the rest only as what is
@@ -623,15 +624,18 @@ type stepContexts struct {
 	// leaks are the paths of the job's steps' outputs that hold a secret,
 	// as they were written, which every evaluation marks as a secret, so
 	// that a problem with what reads one doesn't show it: secretSteps, by
-	// step id, and secretOutputs, of the job's own, by name. leak tells
-	// them, and tells End the outputs: that hold one.
+	// step id, and secretOutputs, of the job's own, by name. leak is what
+	// tells them, which End is given, to tell the outputs: that hold one.
 	leaks         [][]string
 	secretSteps   map[string][]string
 	secretOutputs map[string]bool
-	leak          *Masker
+	leak          finder
 	// stepVariables are the worker's variables a step reads: those of
 	// JobState.Env that format 1 defines.
 	stepVariables map[string]string
+	// shared are the needs and steps contexts of Needs and Steps, which
+	// each evaluation's scope shares until they change (addSelf).
+	shared sharedContexts
 }
 
 // JobEnv is the JobEnv phase: it evaluates the job's env:, on the job's
@@ -749,14 +753,15 @@ func (c *stepContexts) evaluation(phase Phase, e *evaluation) *evaluation {
 	c.Private, c.Secrets = slices.Clone(c.private), slices.Clone(c.secrets)
 	for name, read := range jsonvalue.Sorted(marks) {
 		if read.Private {
-			c.Private = append(c.Private, "env."+name)
+			c.Private = append(c.Private, JoinPath("env", name))
 		}
 		if read.Marked {
-			c.Secrets = append(c.Secrets, "env."+name)
+			c.Secrets = append(c.Secrets, JoinPath("env", name))
 		}
 	}
-	next := newEvaluation(phase, c.Contexts)
-	next.diags, next.masked, next.seen, next.masker, next.secrets = e.diags, e.masked, e.seen, e.masker, e.secrets
+	next := &evaluation{
+		phase: phase, scope: newScope(phase, c.Contexts, &c.shared), diags: e.diags, masked: e.masked, seen: e.seen, masker: e.masker, secrets: e.secrets,
+	}
 	for _, path := range c.leaks {
 		next.scope.Marked.Add(path)
 		next.scope.Private.Add(path)
@@ -913,49 +918,61 @@ func (e *evaluation) env(env map[string]Value, pointer string) (map[string]strin
 // secret: the job's secrets and the outputs of the jobs it needs that hold
 // one (secretTexts), what the worker masks (state.Masked), and what the
 // evaluation, e, made from one so far, as each can show, but for its
-// lines, which plain text can hold too. Each output is checked once.
-func (c *stepContexts) addSelf(j *ReadyJob, state JobState, e *evaluation) {
+// lines, which plain text can hold too, and, for End, if end is set, gives
+// c what tells them (leak). The phases of an attempt share what they find
+// of each output (outputChecks), so that one reads an output again only
+// for what was added to mask since another read it.
+func (c *stepContexts) addSelf(j *ReadyJob, state JobState, e *evaluation, end bool) {
 	needs := maps.Clone(state.Needs)
 	if needs == nil {
 		needs = map[string]JobResult{}
 	}
-	leak := e.secrets.leakMasker().extend(false)
-	leak.Add(e.secrets.allMasked()...)
-	leak.Add(state.Masked...)
-	leak.Add(e.masked...)
+	checks := &e.secrets.checks
+	checks.mu.Lock()
+	defer checks.mu.Unlock()
+	// What the evaluation made from a secret is the same for each phase of
+	// an attempt, and the worker adds to what it masks.
+	checks.use(e.secrets, slices.Concat(e.masked, state.Masked))
 	self := JobResult{Outputs: map[string]string{}}
 	selfLeaks := map[string]bool{}
 	steps := map[string]map[string]string{}
+	stepsCtx := map[string]any{}
 	for i, r := range state.Steps {
 		id := j.Steps[i].ID
 		if id != "" {
-			outputs := maps.Clone(r.Outputs)
+			// The phases only read what the step wrote.
+			outputs := r.Outputs
 			if outputs == nil {
 				outputs = map[string]string{}
 			}
-			steps[id] = outputs
+			steps[id], stepsCtx[id] = outputs, checks.stepContext(i, r.Outputs)
 		}
-		for name, v := range jsonvalue.Sorted(r.Outputs) {
-			leaked := leak.Mask(v) != v
+		var leaked []string
+		for name, v := range r.Outputs {
+			holds := checks.leaked(outputKey{step: i, name: name}, v)
 			switch {
 			case id == "":
 				// A step with an id writes outputs of its own, and only one
 				// without one writes the job's.
-				self.Outputs[name], selfLeaks[name] = v, leaked
-			case leaked:
-				c.leaks = append(c.leaks, []string{"steps", id, "outputs", name}, []string{"needs", j.Name, "steps", id, "outputs", name})
-				if c.secretSteps == nil {
-					c.secretSteps = map[string][]string{}
-				}
-				c.secretSteps[id] = append(c.secretSteps[id], name)
+				self.Outputs[name], selfLeaks[name] = v, holds
+			case holds:
+				leaked = append(leaked, name)
 			}
+		}
+		slices.Sort(leaked)
+		for _, name := range leaked {
+			c.leaks = append(c.leaks, []string{"steps", id, "outputs", name}, []string{"needs", j.Name, "steps", id, "outputs", name})
+			if c.secretSteps == nil {
+				c.secretSteps = map[string][]string{}
+			}
+			c.secretSteps[id] = append(c.secretSteps[id], name)
 		}
 	}
 	// The cleanups ran in the reverse order of their steps, and write the
 	// job's outputs, whatever their step's id.
-	for _, r := range slices.Backward(state.Steps) {
-		for name, v := range jsonvalue.Sorted(r.CleanupOutputs) {
-			self.Outputs[name], selfLeaks[name] = v, leak.Mask(v) != v
+	for i, r := range slices.Backward(state.Steps) {
+		for name, v := range r.CleanupOutputs {
+			self.Outputs[name], selfLeaks[name] = v, checks.leaked(outputKey{step: i, cleanup: true, name: name}, v)
 		}
 	}
 	c.secretOutputs = map[string]bool{}
@@ -965,8 +982,15 @@ func (c *stepContexts) addSelf(j *ReadyJob, state JobState, e *evaluation) {
 			c.secretOutputs[name] = true
 		}
 	}
-	c.leak = leak
+	if end {
+		c.leak = checks.finder()
+	}
 	self.Steps = steps
 	needs[j.Name] = self
 	c.Needs, c.Steps = needs, steps
+	// Each scope of the phase reads the job's steps' outputs, in steps and
+	// in needs alike.
+	needsCtx := needsContext(state.Needs)
+	needsCtx[j.Name] = jobContext(self, stepsCtx)
+	c.shared = sharedContexts{needs: needsCtx, steps: stepsCtx}
 }

@@ -8,20 +8,65 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
-// Values named by their paths, as RunValues and Contexts name them: a
-// context, then the keys that lead to the value from there, a list's items
-// by their indexes, joined with dots.
+// Values named by their paths, as Run and RunValues name the secrets, and
+// Contexts what is unknown or private: a context, then the keys that lead
+// to the value from there, a list's items by their indexes, joined with
+// dots (JoinPath). A key can hold a dot, as a submitted value's can, so a
+// key's own . and ~ are written ~1 and ~0, as JSON Pointer writes / and ~,
+// and every name leads back to its value (SplitPath).
 
-// splitPath returns the keys of a value's path, its context's name first.
-func splitPath(name string) []string { return strings.Split(name, ".") }
+// JoinPath returns the name of the value at path: its keys, each with its
+// own . and ~ written ~1 and ~0, joined with dots, as in
+// inputs.creds.0.pass, or inputs.db~1pass for the key db.pass of the
+// inputs. Keys that hold neither are joined as they are.
+func JoinPath(path ...string) string {
+	if !slices.ContainsFunc(path, func(k string) bool { return strings.ContainsAny(k, ".~") }) {
+		return strings.Join(path, ".")
+	}
+	keys := make([]string, len(path))
+	for i, k := range path {
+		keys[i] = keyEscaper.Replace(k)
+	}
+	return strings.Join(keys, ".")
+}
+
+// SplitPath returns the keys of the path that name names, as JoinPath
+// writes it, its context's name first: each dot ends a key, and in a key
+// ~1 is . and ~0 is ~. A ~ that is followed by neither is itself.
+func SplitPath(name string) []string {
+	keys := strings.Split(name, ".")
+	if strings.Contains(name, "~") {
+		for i, k := range keys {
+			keys[i] = keyUnescaper.Replace(k)
+		}
+	}
+	return keys
+}
+
+// keyEscaper and keyUnescaper write a key's own . and ~ in a name, and
+// read them back.
+var (
+	keyEscaper   = strings.NewReplacer("~", "~0", ".", "~1")
+	keyUnescaper = strings.NewReplacer("~1", ".", "~0", "~")
+)
 
 // tree returns r's values as one mapping, by context, in which each path
 // names what it names in r: inputs, env, org, vars, remote and sessions.
 // It shares no list or mapping with r.
 func (r RunValues) tree() map[string]any {
+	t := r.view()
+	if v, ok := t["inputs"]; ok {
+		t["inputs"] = jsonvalue.Clone(v)
+	}
+	return t
+}
+
+// view returns r's values as tree does, but for the input values, which it
+// shares with r rather than copy, for what only reads them.
+func (r RunValues) view() map[string]any {
 	t := map[string]any{}
 	if !r.Inputs.IsZero() {
-		t["inputs"] = jsonvalue.Clone(r.Inputs.Get())
+		t["inputs"] = r.Inputs.Get()
 	}
 	for name, m := range r.stringContexts() {
 		if *m != nil {
@@ -58,7 +103,7 @@ func (r RunValues) privatePaths() [][]string {
 	paths := [][]string{{"org"}, {"vars"}}
 	for _, names := range [][]string{r.Secrets, r.Private} {
 		for _, name := range names {
-			paths = append(paths, splitPath(name))
+			paths = append(paths, SplitPath(name))
 		}
 	}
 	return outermost(paths)

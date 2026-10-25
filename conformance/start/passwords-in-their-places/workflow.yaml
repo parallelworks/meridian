@@ -1,0 +1,19 @@
+on:
+  execute:
+    inputs:
+      pw:
+        type: password
+      creds:
+        type: list
+        template:
+          user:
+            type: string
+          pass:
+            type: password
+          hint:
+            type: string
+            default: ${{ vars.HINT }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -237,7 +237,7 @@ func (j *Job) Reads(run RunValues) RunValues {
 	kept := func(names []string) []string {
 		var out []string
 		for _, name := range names {
-			path := splitPath(name)
+			path := SplitPath(name)
 			if path[0] != "inputs" && path[0] != "org" && path[0] != "vars" ||
 				slices.ContainsFunc(grants, func(g []string) bool { return isPrefix(g, path) || isPrefix(path, g) }) {
 				out = append(out, name)

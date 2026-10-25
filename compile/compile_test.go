@@ -63,7 +63,7 @@ func TestCompileIsDeterministic(t *testing.T) {
 func TestSource(t *testing.T) {
 	p, _ := compile.Compile("workflow.yaml", []byte(sample), nil, compile.Options{})
 	sum := sha256.Sum256([]byte(sample))
-	if want := "sha256:" + hex.EncodeToString(sum[:]); p.Run.Source != (plan.Source{Location: "workflow.yaml", Revision: want}) {
+	if want := "sha256:" + hex.EncodeToString(sum[:]); p.Run.Source != (plan.Source{Location: "workflow.yaml", Revision: want, Digest: want}) {
 		t.Errorf("source = %+v, want the file and the SHA-256 of its text", p.Run.Source)
 	}
 	p, _ = compile.Compile("workflow.yaml", []byte(sample), nil, compile.Options{

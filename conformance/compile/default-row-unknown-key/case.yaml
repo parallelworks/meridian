@@ -1,0 +1,43 @@
+description: >-
+  A key of a list's default rows that isn't one of its rows' inputs, or of
+  a group's mapping in one that isn't one of the group's, is a warning where
+  the workflow writes it, once, and the row keeps it. A launch form sends
+  the default rows back, so a submitted row's key that a default row has,
+  whichever row it is in, isn't reported again as an unknown input; one
+  that no default row has is.
+source: Meridian
+inputs:
+  hosts:
+    - name: cpu-1
+      note: fast
+      ssh: {port: 2222, ports: 2223}
+    - name: gpu-1
+      names: gpu
+    - name: tpu-1
+      note: slow
+      label: spare
+expect:
+  diagnostics:
+    - severity: warning
+      code: default_row_unknown_input
+      path: /on/execute/inputs/hosts/default/0/note
+      line: 17
+      params: {input: hosts, key: note, suggested: "false"}
+    - severity: warning
+      code: default_row_unknown_input
+      path: /on/execute/inputs/hosts/default/0/ssh/ports
+      line: 18
+      params: {input: hosts, key: ssh.ports, suggested: "true", suggestion: ssh.port}
+    - severity: warning
+      code: default_row_unknown_input
+      path: /on/execute/inputs/hosts/default/1/names
+      line: 20
+      params: {input: hosts, key: names, suggested: "true", suggestion: name}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: hosts.2.label, suggested: "false"}
+  plan:
+    /run/inputs/hosts/0/note: fast
+    /run/inputs/hosts/0/ssh: {port: 2222, ports: 2223}
+    /run/inputs/hosts/2/label: spare

@@ -300,30 +300,4 @@ func TestPeerRefused(t *testing.T) {
 	if f.claimed {
 		t.Error("the claim reached the coordinator")
 	}
-	if !peerAllowed(os.Getuid()) || !peerAllowed(0) || peerAllowed(os.Getuid()+1) && os.Getuid()+1 != 0 {
-		t.Error("peerAllowed allows other users, or not this one or root")
-	}
-}
-
-// TestSocketDir checks that, where the system doesn't say who serves a
-// Unix socket, the worker uses one only in a directory of its user's that
-// no one else can write to.
-func TestSocketDir(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	for _, tc := range []struct {
-		mode os.FileMode
-		ok   bool
-	}{{0o700, true}, {0o755, true}, {0o775, false}, {0o777, false}} {
-		sub := filepath.Join(dir, tc.mode.String())
-		if err := os.Mkdir(sub, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(sub, tc.mode); err != nil {
-			t.Fatal(err)
-		}
-		if err := checkSocketDir(filepath.Join(sub, "c.sock")); (err == nil) != tc.ok {
-			t.Errorf("a socket in a directory of mode %v: %v", tc.mode, err)
-		}
-	}
 }

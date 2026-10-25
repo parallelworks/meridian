@@ -41,17 +41,34 @@ func samplePlan(t *testing.T) *plan.Plan {
 			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
 			Env:            map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
 			Variables:      []string{"org.REGION", "vars"},
+			Definitions: mustValue(t, map[string]any{
+				"token": map[string]any{"type": "string", "default": "${{ vars.TOKEN }}", "hidden": "${{ org.H }}"},
+				"$meta": map[string]any{"$wizard": "x"},
+			}),
+			DeferredParts: []plan.DeferredPart{
+				{Name: "inputs.token", Location: "/on/execute/inputs/token/default"},
+				{Name: "inputs.rows.1.a", Location: "/on/execute/inputs/rows/template/a/default", Index: []int{1}},
+				{Name: "inputs.rows.0.g.b", Location: "/on/execute/inputs/rows/template/g/items/b/default", Index: []int{0}, Default: true, Text: true, Null: true, Containers: 1},
+			},
+			Withheld:     []string{"/on/execute/inputs/pw/default"},
+			Decisions:    []string{"/on/execute/inputs/token/hidden", "/on/execute/inputs/x/ignore"},
+			Remote:       map[string]string{"repo": "https://example.com/r", "branch": "main"},
+			Sessions:     mustValue(t, map[string]any{"desktop": map[string]any{"useTLS": false, "redirect": "${{ inputs.x }}"}}),
+			SessionNames: map[string]string{"desktop": "desktop-1"},
+			Limits:       plan.Limits{MaxInstances: 10},
 		},
 		Jobs: []plan.Job{{
-			Key:     "build#1",
-			Name:    "build",
-			Matrix:  plan.DataOf(map[string]any{"os": "linux"}),
-			Needs:   []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
-			If:      mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
-			Timeout: mustValue(t, "1h"),
+			Key:       "build#1",
+			Name:      "build",
+			Matrix:    plan.DataOf(map[string]any{"os": "linux"}),
+			Needs:     []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
+			NeedsExpr: mustValue(t, "${{ fromJSON(vars.NEEDS) }}"),
+			If:        mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
+			Timeout:   mustValue(t, "1h"),
 			Steps: []plan.Step{{
 				ID:               "greet",
 				Name:             mustValue(t, "greet on ${{ matrix.os }}"),
+				If:               plan.Literal(nil),
 				Run:              mustValue(t, "echo ${{ env.GREETING }} on ${{ matrix.os }}"),
 				WorkingDirectory: plan.Literal(nil),
 				With:             mustValue(t, map[string]any{"count": int64(2), "list": []any{"a", "${{ inputs.n }}"}}),
@@ -177,12 +194,80 @@ func TestEncodeDecode(t *testing.T) {
 	if wd := back.Jobs[0].Steps[0].WorkingDirectory; wd.IsZero() {
 		t.Error("working-directory: null was lost")
 	}
+	// An if: written empty is null, which is false, where one left out is
+	// success().
+	if cond := back.Jobs[0].Steps[0].If; cond.IsZero() {
+		t.Error("if: null was lost")
+	}
 	w := back.Warnings[0]
 	if w.Severity() != problems.Warning || w.Message() != `The key "x" isn't known here, so it's ignored.` || w.Position() != (problems.Position{Line: 3, Column: 9}) {
 		t.Errorf("the warning didn't survive: %s", data)
 	}
 	if strings.Contains(string(data), `"detail"`) {
 		t.Errorf("the plan holds the warning's text: %s", data)
+	}
+	// What Start reads survives, and the definitions as the workflow
+	// writes them.
+	if r := back.Run; len(r.Decisions) != 2 || len(r.Withheld) != 1 {
+		t.Errorf("decisions %v, withheld %v", r.Decisions, r.Withheld)
+	}
+	if got := back.Run.Definitions.Written(); !reflect.DeepEqual(got, map[string]any{
+		"token": map[string]any{"type": "string", "default": "${{ vars.TOKEN }}", "hidden": "${{ org.H }}"},
+		"$meta": map[string]any{"$wizard": "x"},
+	}) {
+		t.Errorf("definitions %v", got)
+	}
+}
+
+// A Value as the workflow writes it holds each template as its text, and
+// the rest as it is; it is a copy.
+func TestValueWritten(t *testing.T) {
+	v := mustValue(t, map[string]any{"a": "x ${{ inputs.a }} y", "b": []any{"${{ 1 }}", nil, 2.5}, "$c": "c"})
+	got := v.Written().(map[string]any)
+	want := map[string]any{"a": "x ${{ inputs.a }} y", "b": []any{"${{ 1 }}", nil, 2.5}, "$c": "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Written() = %v, want %v", got, want)
+	}
+	got["b"].([]any)[0] = "changed"
+	if again := v.Written().(map[string]any); again["b"].([]any)[0] != "${{ 1 }}" {
+		t.Error("Written shares the Value's lists")
+	}
+	if (plan.Value{}).Written() != nil {
+		t.Error("an unset Value isn't nothing")
+	}
+}
+
+// The workflow's timeout:, as Start evaluates it, is read as a job's is,
+// and a problem with one made from a variable doesn't show it.
+func TestRunTimeout(t *testing.T) {
+	scope := plan.NewScope(plan.PhaseStart, plan.Contexts{Run: plan.RunValues{
+		Org: map[string]string{"T": "soon", "U": "2h"}, Inputs: plan.DataOf(map[string]any{"m": int64(5)}),
+	}})
+	for _, tc := range []struct {
+		v       plan.Value
+		seconds int64
+		private bool
+		problem string
+	}{
+		{plan.Value{}, 0, false, ""},
+		{plan.Literal("10m"), 600, false, ""},
+		{mustValue(t, "${{ inputs.m * 60 }}"), 300, false, ""},
+		{mustValue(t, "${{ org.U }}"), 7200, true, ""},
+		{mustValue(t, "${{ org.T }}"), 0, true, "duration_invalid"},
+		{plan.Literal(1.5), 0, false, "duration_invalid"},
+	} {
+		seconds, read, diags := plan.RunTimeout(tc.v, scope)
+		if seconds != tc.seconds || read.Private != tc.private || len(diags) != min(len(tc.problem), 1) {
+			t.Errorf("%v: %d, %v, %v", tc.v.Written(), seconds, read, diags)
+			continue
+		}
+		if tc.problem == "" {
+			continue
+		}
+		d := diags[0]
+		if string(d.Code) != tc.problem || d.Path() != "/timeout" || tc.private && d.Params["value"] != problems.Masked {
+			t.Errorf("%v: %s at %s, %v", tc.v.Written(), d.Code, d.Path(), d.Params)
+		}
 	}
 }
 
@@ -860,5 +945,31 @@ func TestExprsReachEveryValue(t *testing.T) {
 	slices.Sort(want)
 	if len(want) < 25 || !slices.Equal(got, want) {
 		t.Errorf("Exprs reads\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A reference reads as format 1 reads it, as ACTIVATE does: two that name
+// the same workflow are equal once they are normal.
+func TestSourceRefNormal(t *testing.T) {
+	for ref, want := range map[plan.SourceRef]plan.SourceRef{
+		{Uses: "github/o/r"}: {Uses: "github/o/r", Path: "workflow.yaml"},
+		{Uses: "github/o/r.git/@v1 ", Path: "w.yaml", Host: "x"}: {Uses: "github/o/r@v1", Path: "w.yaml"},
+		{Uses: "github/o/r/.git"}:                                {Uses: "github/o/r/", Path: "workflow.yaml"},
+		{Uses: "github/ o/r"}:                                    {Uses: "github/ o/r", Path: "workflow.yaml"},
+		{Uses: "github/o/r@a.git/"}:                              {Uses: "github/o/r@a.git/", Path: "workflow.yaml"},
+		{Uses: "gitlab/ g/s/p.git@v1\t"}:                         {Uses: "gitlab/g/s/p@v1", Path: "workflow.yaml", Host: "gitlab.com"},
+		{Uses: "gitlab/g/p", Host: " Git.Example.COM "}:          {Uses: "gitlab/g/p", Path: "workflow.yaml", Host: "git.example.com"},
+		{Uses: "gitlab/g/p", Host: " "}:                          {Uses: "gitlab/g/p", Path: "workflow.yaml", Host: "gitlab.com"},
+		{Uses: " github/o/r"}:                                    {Uses: " github/o/r"},
+		// A $yaml from the root, as ACTIVATE fetches the file.
+		{Uses: "github/o/r", Path: "//a/w.yaml"}: {Uses: "github/o/r", Path: "a/w.yaml"},
+		{Uses: "gitlab/g/p", Path: "//a/w.yaml"}: {Uses: "gitlab/g/p", Path: "/a/w.yaml", Host: "gitlab.com"},
+		{Uses: "github/o/r", Path: "/"}:          {Uses: "github/o/r", Path: ""},
+		{Uses: "workflow/w", Path: "x"}:          {Uses: "workflow/w", Path: "x"},
+		{Uses: "marketplace/m"}:                  {Uses: "marketplace/m"},
+	} {
+		if got := ref.Normal(); got != want {
+			t.Errorf("%+v.Normal() = %+v, want %+v", ref, got, want)
+		}
 	}
 }

@@ -130,5 +130,9 @@ SingularityCE, which HPC sites often provide.
 
 ## License
 
-[AGPL-3.0](LICENSE). Contributions require a contributor license agreement;
-see [CONTRIBUTING.md](CONTRIBUTING.md).
+[AGPL-3.0](LICENSE), except the JSON Schemas that define the workflow format,
+in [`format/schema`](format/schema), which are [MIT](format/schema/LICENSE) so
+that editors and other tools can use them, and the public workflows copied
+into [`conformance`](conformance/README.md#sources), which keep their own
+licenses. Contributions require a contributor license agreement; see
+[CONTRIBUTING.md](CONTRIBUTING.md).

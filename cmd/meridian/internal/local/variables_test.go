@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -35,7 +34,7 @@ func variablesConfig(t *testing.T, vars map[string]string) *Config {
 	}
 	all := map[string]string{"HOME": home}
 	maps.Copy(all, vars)
-	c, err := LoadConfig(dir, env(all))
+	c, err := LoadConfig(dir, lookup(all))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,10 +113,24 @@ func TestReadSecretsLazily(t *testing.T) {
 	}
 }
 
+// TestReadPlainFromMissingEnv checks that reading a plain variable whose
+// value can't be read is a problem that says why, so that a run that reads
+// it fails as it is created.
 func TestReadPlainFromMissingEnv(t *testing.T) {
 	c := variablesConfig(t, nil)
-	if _, err := c.Read(t.Context(), []string{"vars.build"}, false); err == nil {
-		t.Error("Read of a plain variable whose environment variable isn't set succeeded")
+	_, err := c.Read(t.Context(), []string{"vars.build"}, false)
+	if p := wantProblem(t, err, problems.VariableEnvUnset); p.Params["env"] != "BUILD" || p.Params["variable"] != "vars.build" {
+		t.Errorf("the problem's params are %v", p.Params)
+	}
+}
+
+// TestReadEmptyEnv checks that a variable whose environment variable is set
+// to "" reads "", as a platform's variable whose value is empty does.
+func TestReadEmptyEnv(t *testing.T) {
+	c := variablesConfig(t, map[string]string{"BUILD": ""})
+	got, err := c.Read(t.Context(), []string{"vars.build"}, false)
+	if v, ok := got["vars.build"]; err != nil || !ok || v.Value != "" {
+		t.Errorf("Read = %v, %v", got, err)
 	}
 }
 
@@ -127,34 +140,6 @@ func TestReadRefusesOtherNames(t *testing.T) {
 		if _, err := c.Read(t.Context(), []string{name}, false); err == nil {
 			t.Errorf("Read(%q) succeeded", name)
 		}
-	}
-}
-
-func TestContexts(t *testing.T) {
-	c := variablesConfig(t, map[string]string{"BUILD": "7"})
-	got, err := c.Contexts(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]any{
-		"org": map[string]any{
-			"region": "us-east-1", "port": "8080",
-			"hf_token": expr.Unknown{Name: "org"}, "key": expr.Unknown{Name: "org"},
-		},
-		"vars": map[string]any{"build": "7", "plain": "text", "home_file": "from home"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Contexts = %v, want %v", got, want)
-	}
-}
-
-func TestContextsWithoutFile(t *testing.T) {
-	got, err := load(t, nil, nil).Contexts(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := map[string]any{"org": map[string]any{}, "vars": map[string]any{}}; !reflect.DeepEqual(got, want) {
-		t.Errorf("Contexts = %v, want %v", got, want)
 	}
 }
 
@@ -181,7 +166,7 @@ func TestVariablesFileRefuses(t *testing.T) {
 		"two documents":      {"vars: {}\n---\norg: {}\n", problems.ConfigExtraDocument},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: tc.text}), env(map[string]string{"HOME": "home"}))
+			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: tc.text}), lookup(map[string]string{"HOME": "home"}))
 			wantProblem(t, err, tc.kind)
 		})
 	}
@@ -210,7 +195,7 @@ func TestVariableFileModes(t *testing.T) {
 		if err := os.Chmod(filepath.Join(dir, "v.txt"), tc.mode); err != nil {
 			t.Fatal(err)
 		}
-		c, err := LoadConfig(dir, env(nil))
+		c, err := LoadConfig(dir, lookup(nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,24 +207,6 @@ func TestVariableFileModes(t *testing.T) {
 			continue
 		}
 		wantProblem(t, err, tc.kind)
-	}
-}
-
-// TestContextsUnreadable checks that a plain variable whose value can't be
-// read is unknown when a run is created, so that only a run that reads it
-// fails, as it starts.
-func TestContextsUnreadable(t *testing.T) {
-	c := variablesConfig(t, nil)
-	got, err := c.Contexts(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v := got["vars"].(map[string]any)["build"]; v != (expr.Unknown{Name: "vars"}) {
-		t.Errorf("vars.build, whose environment variable isn't set, is %v", v)
-	}
-	_, err = c.Read(t.Context(), []string{"vars.build"}, false)
-	if p := wantProblem(t, err, problems.VariableEnvUnset); p.Params["env"] != "BUILD" || p.Params["variable"] != "vars.build" {
-		t.Errorf("the problem's params are %v", p.Params)
 	}
 }
 
@@ -258,7 +225,7 @@ func TestVariableFileDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := configDir(t, map[string]string{VariablesFile: "org:\n  v: {secret: true, file: " + filepath.Join(shared, "v.txt") + "}\n"})
-	c, err := LoadConfig(dir, env(nil))
+	c, err := LoadConfig(dir, lookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

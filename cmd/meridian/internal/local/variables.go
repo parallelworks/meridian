@@ -3,13 +3,11 @@ package local
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/compile"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -57,7 +55,7 @@ type variable struct {
 func (c *Config) loadVariables(dir, path string) error {
 	// Variables can hold secrets, as people keep them in plain variables
 	// too, so only the user may read the file.
-	data, err := readConfig(path, func(info fs.FileInfo) error { return checkPrivateInfo(path, info) })
+	data, err := readConfig(path, safepath.Private)
 	if err != nil || data == nil {
 		return err
 	}
@@ -86,7 +84,7 @@ func (c *Config) loadVariables(dir, path string) error {
 			if !variableNamePattern.MatchString(p.key.Value) {
 				return f.problem(problems.VariableNameInvalid, p.key, problems.Params{"context": context, "name": p.key.Value})
 			}
-			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.getenv)
+			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.lookupEnv)
 			if err != nil {
 				return err
 			}
@@ -98,7 +96,7 @@ func (c *Config) loadVariables(dir, path string) error {
 
 // variable reads the variable name, whose key and value n are, as the
 // variables file writes one.
-func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv func(string) string) (variable, error) {
+func (f configFile) variable(name string, key, n *yaml.Node, dir string, lookupEnv func(string) (string, bool)) (variable, error) {
 	v := variable{name: name}
 	at := func(k *problems.Kind, n *yaml.Node) error {
 		return f.problem(k, n, problems.Params{"variable": name})
@@ -135,7 +133,7 @@ func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv 
 		case "env":
 			v.env = text
 		default:
-			file, ok := expandHome(text, dir, getenv)
+			file, ok := expandHome(text, dir, lookupEnv)
 			if !ok {
 				return v, f.problem(problems.VariableFileHome, p.value, problems.Params{"variable": name, "file": text})
 			}
@@ -152,9 +150,10 @@ func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv 
 	return v, nil
 }
 
-// Read returns the variables that names name, by their names as the plan
-// writes them, org.<name> or vars.<name>, with org or vars alone for every
-// variable of that context. A variable the file doesn't have is left out.
+// Read returns the variables that names name, by their names as the
+// Variables interface writes them, org.<name> or vars.<name>, with org or
+// vars alone for every variable of that context. A variable the file
+// doesn't have is left out, as one whose name the file can't have is.
 // A secret's value is read from where the file says only when secrets is
 // true; otherwise it is left out. A value that can't be read is a problem
 // that says why; a name that is neither org's nor vars' is the caller's
@@ -197,40 +196,14 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 	return out, nil
 }
 
-// Contexts returns the org and vars contexts as the compiler reads them
-// when a run is created, in compile.Options.Contexts: each plain
-// variable's value, and each secret as an expr.Unknown, since the compiler
-// reads no secret's value then. A plain variable whose value can't be read
-// is unknown too, so that only a run that reads it fails, when it starts.
-func (c *Config) Contexts(ctx context.Context) (map[string]any, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	org, user := map[string]any{}, map[string]any{}
-	out := map[string]any{contextOrg: org, contextVars: user}
-	for k, v := range c.variables {
-		context, name, _ := strings.Cut(k, ".")
-		m := org
-		if context == contextVars {
-			m = user
-		}
-		var value any = expr.Unknown{Name: context}
-		if !v.secret {
-			if s, err := c.resolve(v); err == nil {
-				value = s
-			}
-		}
-		m[name] = value
-	}
-	return out, nil
-}
-
 // resolve returns v's value: the file's, or the environment variable's or
 // the file's that it names.
 func (c *Config) resolve(v variable) (string, error) {
 	switch {
 	case v.env != "":
-		value, ok := lookupEnv(c.getenv, v.env)
+		// One set to "" gives "", as a platform's variable whose value is
+		// empty does.
+		value, ok := c.lookupEnv(v.env)
 		if !ok {
 			return "", problems.VariableEnvUnset.Problem(problems.Params{"variable": v.name, "env": v.env})
 		}
@@ -241,39 +214,24 @@ func (c *Config) resolve(v variable) (string, error) {
 	return v.value, nil
 }
 
-// lookupEnv reads the environment variable name with getenv, and says
-// whether it is set: an empty value counts as not set.
-func lookupEnv(getenv func(string) string, name string) (string, bool) {
-	v := getenv(name)
-	return v, v != ""
-}
-
 // readValueFile reads v's value from its file, without the newline, or the
 // carriage return and newline, at its end. Every directory on the way to
-// the file must be safe, as safepath.Check says, so that no one else can
-// swap the file for another, or for a link to one of the user's own. The
-// file must belong to the user, and no other user may change it, nor read
-// it when it holds a secret, as the file opened says.
+// the file must be safe, so that no one else can swap the file for
+// another, or for a link to one of the user's own, and the file is read
+// only if it isn't a symbolic link itself, belongs to the user, and no
+// other user may change it, nor read it when it holds a secret
+// (safepath.ReadFile).
 func readValueFile(v variable) (string, error) {
-	if err := safepath.Check(v.file, false); err != nil {
-		return "", err
+	access := safepath.Unchangeable
+	if v.secret {
+		access = safepath.Private
 	}
-	f, err := openRegular(v.file, func(info fs.FileInfo) error {
-		if v.secret {
-			return checkPrivateInfo(v.file, info)
-		}
-		return checkUnchangeable(v.file, info)
-	})
+	data, err := safepath.ReadFile(v.file, access, maxConfigSize)
 	if err != nil {
 		if isProblem(err) {
 			return "", err
 		}
 		return "", problems.VariableFileUnreadable.Problem(problems.Params{"variable": v.name, "file": v.file, "reason": err.Error()})
-	}
-	defer f.Close()
-	data, err := readLimited(f, v.file, maxConfigSize)
-	if err != nil {
-		return "", err
 	}
 	s := strings.TrimSuffix(string(data), "\n")
 	return strings.TrimSuffix(s, "\r"), nil

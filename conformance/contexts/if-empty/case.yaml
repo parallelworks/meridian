@@ -1,0 +1,26 @@
+description: >-
+  An if: written empty is false, as an if: whose value is null is, so the
+  job or step it is on is skipped, and so is a skipped step's cleanup:. So
+  is an if: written as '', whose value is the empty string. Format 1 ran a
+  job or step whose if: is null, and Meridian refused one written empty as
+  the wrong type; both are a bug fix (docs/design.md, Bug fixes to format
+  1).
+source: ACTIVATE's executor, and Meridian
+jobs:
+  main:
+    steps:
+      - {outcome: skipped}
+      - {outcome: skipped}
+      - {outcome: skipped}
+      - {outcome: success}
+expect:
+  skipped:
+    - /jobs/empty
+    - /jobs/quoted
+    - /jobs/main/steps/0
+    - /jobs/main/steps/0/cleanup
+    - /jobs/main/steps/1
+    - /jobs/main/steps/2
+  values:
+    /jobs/main/steps/3/run: echo d
+    /jobs/main/steps/3/cleanup: echo cleaning d

@@ -20,7 +20,7 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: check
-check: tidy-check lint vulncheck cgo-check test test-race test-386 bench build wasm ## Run all checks, tests and builds
+check: tidy-check lint vulncheck cgo-check vet-cross test test-race test-386 bench build wasm ## Run all checks, tests and builds
 
 .PHONY: tidy-check
 tidy-check: ## Verify both Go modules are tidy
@@ -39,11 +39,26 @@ fmt: ## Format Go code
 vulncheck: ## Check dependencies and the standard library for known vulnerabilities
 	$(GOTOOL) govulncheck ./...
 
+# The systems besides Linux that the meridian command and its worker build
+# for, with code of their own, which CI can't run: vet-cross compiles it,
+# tests included, and cgo-check checks it.
+CROSS_OS := darwin freebsd openbsd netbsd
+# 32-bit FreeBSD passes procctl's 64-bit argument differently on each
+# architecture, so each is vetted.
+CROSS_TARGETS := darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/386 freebsd/arm openbsd/amd64 netbsd/amd64
+
 .PHONY: cgo-check
 cgo-check: ## Verify that no package or dependency uses cgo
-	@for os in linux darwin; do \
+	@for os in linux $(CROSS_OS); do \
 		pkgs=$$(GOOS=$$os CGO_ENABLED=1 go list -deps -test -f '{{if and .CgoFiles (not .Standard)}}{{.ImportPath}}{{end}}' ./...) || exit 1; \
 		if [ -n "$$pkgs" ]; then echo "cgo is not allowed, but these packages use it on $$os:"; echo "$$pkgs"; exit 1; fi; \
+	done
+
+.PHONY: vet-cross
+vet-cross: ## Compile and vet the code for macOS and the BSDs, tests included
+	@for target in $(CROSS_TARGETS); do \
+		echo "GOOS=$${target%/*} GOARCH=$${target#*/} go vet ./..."; \
+		GOOS=$${target%/*} GOARCH=$${target#*/} go vet ./... || exit 1; \
 	done
 
 .PHONY: test

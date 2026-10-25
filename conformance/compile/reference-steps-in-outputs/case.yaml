@@ -1,8 +1,10 @@
 description: >-
   A job's outputs read its steps' outputs once its steps have run. An output
-  that reads a step the job doesn't have is empty, and a warning, and one
-  that reads another key of one than its outputs reads it as its own text,
-  as format 1 does, and is a warning.
+  that reads a step the job doesn't have is a warning: it fails the job
+  once its steps succeeded, as format 1 reads outputs strictly then, and is
+  empty once one failed (contexts/outputs-undefined-step). One that reads
+  another key of one than its outputs reads it as its own text, as format 1
+  does, and is a warning.
 source: Meridian
 expect:
   diagnostics:

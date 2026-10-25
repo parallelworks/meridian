@@ -1,6 +1,7 @@
 package format
 
 import (
+	"cmp"
 	"math/big"
 	"slices"
 	"strconv"
@@ -15,8 +16,8 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// expression is the pattern the schema gives a value that must be a ${{ }}
-// expression.
+// expression is the pattern of the schema's $defs/expression, a ${{ }}
+// expression, which every key that can be one refers to.
 const expression = `^\${{.*}}$`
 
 var printer = message.NewPrinter(language.English)
@@ -134,7 +135,7 @@ func (s *formatSchema) describeForms(e *jsonschema.ValidationError) finding {
 	switch {
 	case len(types) > 0 && len(missing) == 0 && len(values) == 0:
 		name, _ := got.(string)
-		return mustBeType(slices.Compact(slices.Sorted(slices.Values(types))), name)
+		return mustBeType(types, name)
 	case len(missing) > 0 && len(types) == 0 && len(values) == 0:
 		return finding{problems.MissingAnyKey, problems.Params{"keys": problems.QuoteAll(slices.Compact(missing))}}
 	case len(values) > 0 && len(types) == 0 && len(missing) == 0:
@@ -198,10 +199,22 @@ func (s *formatSchema) describeNot(e *jsonschema.ValidationError) finding {
 	return finding{problems.FormNotAllowed, nil}
 }
 
+// typeOrder is the order a message names JSON Schema's types in. It is the
+// order the validator names a type keyword's types in, whatever order the
+// schema lists them in, so that a message says the same whether the schema
+// gives a value's types in one type keyword or in forms of an anyOf or a
+// oneOf.
+var typeOrder = []string{"null", "boolean", "number", "integer", "string", "array", "object"}
+
 // mustBeType says that a value must have one of the JSON Schema types want,
-// and isn't got, if got isn't "". The message names up to three types; a
-// value that could have more matches no form it can name.
+// and isn't got, if got isn't "". The message names up to three types, in
+// typeOrder; a value that could have more matches no form it can name.
 func mustBeType(want []string, got string) finding {
+	want = slices.Clone(want)
+	slices.SortFunc(want, func(a, b string) int {
+		return cmp.Compare(slices.Index(typeOrder, a), slices.Index(typeOrder, b))
+	})
+	want = slices.Compact(want)
 	if len(want) == 0 || len(want) > 3 {
 		return finding{problems.NoForm, nil}
 	}

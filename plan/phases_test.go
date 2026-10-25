@@ -1096,6 +1096,53 @@ jobs:
 	}
 }
 
+// A step's timeout: and retry: read env as its other values do, the
+// workflow's env:, the job's, the step's and the worker's variables: its
+// timeout: for each try, and its retry: as its first try is evaluated.
+// Format 1 left an expression there that read env as its text, and
+// ignored it; reading it is a bug fix.
+func TestStepDurationsReadEnv(t *testing.T) {
+	p := compiled(t, `
+env:
+  TRIES: "4"
+jobs:
+  main:
+    env:
+      WAIT: 2m
+    steps:
+      - run: "true"
+        env:
+          EACH: 90s
+        timeout: ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY == '0' && '1m' || '5m' }}
+        retry:
+          max-retries: ${{ env.TRIES }}
+          interval: ${{ env.WAIT }}
+          timeout: ${{ env.EACH }}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first *plan.ReadyStep
+	for try, want := range []string{
+		"timeout 60, retry &{MaxRetries:4 IntervalSeconds:120 TimeoutSeconds:90 CleanOnRetry:true}",
+		"timeout 300, retry <nil>",
+	} {
+		state := plan.JobState{Run: run, Try: try, FirstTry: first, Env: map[string]string{
+			"PW_WORKFLOW_STEP_CURRENT_RETRY": strconv.Itoa(try), "PW_WORKFLOW_STEP_MAX_RETRIES": "4",
+		}}
+		s, diags, err := ready.Job.Step(t.Context(), 0, state)
+		if err != nil || len(diags) > 0 {
+			t.Fatal(diags, err)
+		}
+		if got := fmt.Sprintf("timeout %d, retry %+v", s.TimeoutSeconds, s.Retry); got != want {
+			t.Errorf("try %d: %s, want %s", try, got, want)
+		}
+		first = s
+	}
+}
+
 func codeList(ds problems.Diagnostics) []string {
 	var out []string
 	for _, d := range ds {

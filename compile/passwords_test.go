@@ -3,6 +3,7 @@ package compile_test
 import (
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -575,6 +576,112 @@ func TestUnknownPasswordsAreRead(t *testing.T) {
 	}
 }
 
+// A value in a row for an input the rows don't have is taken for a
+// password as one beside the inputs is: by the name of a password field
+// anywhere in the workflow, at any depth of a mapping or a list, or close
+// to one among the row's inputs. So it is kept among the secrets, by its
+// path, in the rows of a list in a row too, and neither the values nor the
+// plan hold it; what isn't taken for one stays in its row.
+func TestUnknownRowPasswordsAreSecrets(t *testing.T) {
+	src := inputs(
+		"top: {type: password, optional: true}",
+		"l: {type: list, template: {name: {type: string}, passwd: {type: password, optional: true}, "+
+			"inner: {type: list, optional: true, template: {token: {type: password, optional: true}}}}}",
+		"hosts: {type: step, title: Host, multi: true, options: {host: {type: string}}}",
+	)
+	submitted := map[string]any{
+		"l": []any{
+			map[string]any{"name": "a", "paswd": sentinel, "note": "plain", "deep": []any{map[string]any{"x": map[string]any{"top": sentinel}}}},
+			map[string]any{"name": "b", "inner": []any{map[string]any{"tokens": sentinel}, map[string]any{"token": sentinel, "extra": map[string]any{"passwd": sentinel}}}},
+		},
+		"hosts": []any{map[string]any{"host": "h", "top": sentinel}},
+	}
+	in, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	var listed []string
+	for _, d := range diags {
+		if d.Code != problems.UnknownInput.Code() {
+			t.Errorf("unexpected %s", d)
+			continue
+		}
+		listed = append(listed, d.Params["input"].(string))
+	}
+	slices.Sort(listed)
+	if want := []string{"hosts.0.top", "l.0.deep", "l.0.note", "l.0.paswd", "l.1.inner.0.tokens", "l.1.inner.1.extra"}; !slices.Equal(listed, want) {
+		t.Errorf("unknown inputs %q, want %q", listed, want)
+	}
+	for _, path := range []string{"hosts.0.top", "l.0.deep", "l.0.paswd", "l.1.inner.0.tokens", "l.1.inner.1.extra", "l.1.inner.1.token"} {
+		if !holdsSentinel(t, in.Secrets[path]) {
+			t.Errorf("the secrets %v don't hold %s", in.Secrets, path)
+		}
+	}
+	if holdsSentinel(t, in.Values) || in.Secrets["l.0.note"] != nil {
+		t.Errorf("values %v, secrets %v", in.Values, in.Secrets)
+	}
+	if note := in.Values["l"].([]any)[0].(map[string]any)["note"]; note != "plain" {
+		t.Errorf("l.0.note is %v, want it kept", note)
+	}
+	p, _ := compile.Compile("workflow.yaml", []byte(src), submitted, compile.Options{})
+	encoded, err := plan.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), sentinel) {
+		t.Errorf("the plan holds a password: %s", encoded)
+	}
+
+	// A list whose rows' defaults read a password is held for the run's
+	// start, and the plan holds its rows as its deferred value: without the
+	// password field's values, nor those of the keys taken for one.
+	held := inputs("creds: {type: list, template: {user: {type: string}, password: {type: password, optional: true}, " +
+		"hint: {type: string, default: '${{ inputs.creds.[index].password }}'}}}")
+	submitted = map[string]any{"creds": []any{map[string]any{"user": "a", "pasword": sentinel}}}
+	in, _ = compile.ResolveInputs(load(t, held), submitted, compile.Options{})
+	if in.Secrets["creds.0.pasword"] != sentinel || in.Deferred["creds"].IsZero() {
+		t.Errorf("secrets %v, deferred %v", in.Secrets, in.Deferred)
+	}
+	p, _ = compile.Compile("workflow.yaml", []byte(held), submitted, compile.Options{})
+	if encoded, err = plan.Encode(p); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), sentinel) {
+		t.Errorf("the plan of a held list holds a password: %s", encoded)
+	}
+}
+
+// A submitted value for an input the workflow doesn't define is kept as a
+// secret when its name can be a secret's, as one sent for a password field
+// that was renamed can be: one that looks like one, as input_looks_secret
+// says, or has a word close to such a word, beside the inputs, in a group
+// and in a row. Another stays with the values.
+func TestUnknownSecretNamesAreSecrets(t *testing.T) {
+	src := inputs(
+		"pass: {type: password, optional: true}",
+		"g: {type: group, items: {pass: {type: password, optional: true}}}",
+		"l: {type: list, template: {pass: {type: password, optional: true}}}",
+	)
+	row := func() map[string]any {
+		return map[string]any{"password": sentinel, "pasword": sentinel, "apiKey": sentinel, "note": "plain"}
+	}
+	submitted := row()
+	submitted["g"] = row()
+	submitted["l"] = []any{row()}
+	in, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	if len(diags) != 12 {
+		t.Errorf("diagnostics %v, want 12 unknown inputs", diags)
+	}
+	for _, prefix := range []string{"", "g.", "l.0."} {
+		for _, key := range []string{"password", "pasword", "apiKey"} {
+			if in.Secrets[prefix+key] != sentinel {
+				t.Errorf("%s%s isn't among the secrets %v", prefix, key, in.Secrets)
+			}
+		}
+	}
+	if holdsSentinel(t, in.Values) || in.Values["note"] != "plain" || in.Values["g"].(map[string]any)["note"] != "plain" ||
+		in.Values["l"].([]any)[0].(map[string]any)["note"] != "plain" {
+		t.Errorf("values %v", in.Values)
+	}
+}
+
 // A submitted value is compared with its default once the values are
 // filled in, and what reads another input's part held for the run's start
 // is held too: so a condition can't read a value that is what its default,
@@ -840,5 +947,77 @@ func TestDerivedValuesMaskPasswords(t *testing.T) {
 				t.Errorf("a short derived value is masked: %q", masked)
 			}
 		})
+	}
+}
+
+// Each value the plan names but doesn't hold, a secret, a derived or a
+// private value, has a name that leads back to it (plan.SplitPath),
+// whatever its keys hold, as a submitted value's can: a key with a dot, as
+// db.password, with a ~, empty, or outside ASCII, beside the inputs, in a
+// group, in a row, or in the place of a default's mapping; and so does a
+// variable a workflow reads in brackets by a name with a dot.
+func TestNamesLeadToTheirValues(t *testing.T) {
+	src := `on:
+  execute:
+    inputs:
+      g: {type: group, items: {pass: {type: password, optional: true}}}
+      l: {type: list, template: {pass: {type: password, optional: true}}}
+      c: {type: compute-clusters, default: {a.b: '${{ vars.SECRET }}', c~d: '${{ org.OWNER }}'}}
+jobs:
+  main:
+    steps:
+      - run: echo ${{ vars['my.token'] }} ${{ org['a.b'] }}
+`
+	submitted := map[string]any{
+		"db.password": sentinel,
+		"g":           map[string]any{"x~y.token": sentinel},
+		"l":           []any{map[string]any{"pass": sentinel, "кл.password": sentinel}},
+		"":            map[string]any{"password": sentinel},
+		"c":           map[string]any{"a.b": "typed-over-a-secret", "c~d": "typed-over-a-variable"},
+	}
+	opts := compile.Options{Inputs: passThrough{}, Contexts: map[string]any{
+		"org":  map[string]any{"OWNER": "research", "a.b": "plain"},
+		"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}, "my.token": expr.Unknown{Name: "vars"}},
+	}}
+	in, _ := compile.ResolveInputs(load(t, src), submitted, opts)
+	p, diags := compile.Compile("workflow.yaml", []byte(src), submitted, opts)
+	if p == nil {
+		t.Fatal(diags)
+	}
+	for what, tc := range map[string]struct{ got, want []string }{
+		"secrets": {p.Run.Secrets, []string{
+			"inputs.", "inputs.c.a~1b", "inputs.db~1password", "inputs.g.x~0y~1token", "inputs.l.0.pass", "inputs.l.0.кл~1password", "vars.SECRET", "vars.my~1token",
+		}},
+		"derived": {p.Run.Derived, []string{"inputs.c.a~1b"}},
+		"private": {p.Run.Private, []string{"inputs.c.c~0d"}},
+		// Start reads the variables of what a private value was given in the
+		// place of.
+		"variables": {p.Run.Variables, []string{"org.OWNER", "org.a~1b"}},
+	} {
+		if !slices.Equal(tc.got, tc.want) {
+			t.Errorf("%s %q, want %q", what, tc.got, tc.want)
+		}
+	}
+	// Each name of an input's value leads to it in what was submitted, and
+	// to what ResolveInputs gives by the name in the inputs' values.
+	held := map[string]any{}
+	maps.Copy(held, in.Secrets)
+	maps.Copy(held, in.Private)
+	for _, name := range slices.Concat(p.Run.Secrets, p.Run.Private) {
+		path := plan.SplitPath(name)
+		if path[0] != "inputs" {
+			continue
+		}
+		v, ok := jsonptr.Lookup(submitted, path[1:])
+		if !ok || v == nil {
+			t.Errorf("%s leads to nothing", name)
+			continue
+		}
+		if got := held[strings.TrimPrefix(name, "inputs.")]; fmt.Sprint(got) != fmt.Sprint(v) {
+			t.Errorf("%s is %v, and leads to %v", name, got, v)
+		}
+	}
+	if holdsSentinel(t, in.Values) || holdsSentinel(t, p.Run.Inputs.Get()) {
+		t.Errorf("values %v, plan %v", in.Values, p.Run.Inputs.Get())
 	}
 }

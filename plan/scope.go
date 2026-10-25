@@ -65,6 +65,35 @@ func (p Phase) String() string {
 	return "other"
 }
 
+// Knows reports whether an expression evaluated in p can read context, one
+// of the contexts' names (docs/design.md, Contexts), as NewScope gives it:
+// a phase knows the contexts of the phases before it too. inputs, org,
+// vars, remote and sessions are known from Create, env from Start, the
+// workflow's, needs from Strategy, matrix from Ready, job from JobEnv, and
+// steps from Step. Another name is known in no phase. The compiler reports
+// reading a context where it isn't known yet with it (context_not_known).
+func (p Phase) Knows(context string) bool {
+	switch context {
+	case "inputs", "org", "vars", "remote", "sessions":
+		return true
+	case "env":
+		return p >= PhaseStart
+	case "needs":
+		return p >= PhaseStrategy
+	case "matrix":
+		return p >= PhaseReady
+	case "job":
+		return p >= PhaseJobEnv
+	case "steps":
+		return p >= PhaseStep
+	}
+	return false
+}
+
+// KnowsStatus reports whether an expression evaluated in p can call the
+// status functions, as NewScope gives them: from Strategy on, with needs.
+func (p Phase) KnowsStatus() bool { return p >= PhaseStrategy }
+
 // RunValues are what the phases after Start read of the run as a whole:
 // the plan's, completed by Start (compile.StartResult). An attempt receives
 // the part its job reads when it is claimed (Job.Reads).
@@ -72,8 +101,9 @@ func (p Phase) String() string {
 // A value is named by its path: its context, then the keys that lead to it
 // from there, a list's items by their indexes, joined with dots, as
 // Run.Secrets names one: inputs.creds.0.pass, vars.token, env.TOKEN. A
-// context's name alone is all of it. The names of the format's inputs,
-// variables and env never hold a dot.
+// key's own . and ~ are written ~1 and ~0, as in inputs.db~1pass for a
+// submitted value's key db.pass (JoinPath, SplitPath). A context's name
+// alone is all of it.
 type RunValues struct {
 	// Format is the workflow's format, whose rules evaluation follows.
 	Format int `json:"format"`
@@ -194,14 +224,15 @@ func maskedFrom(own, derived []string, fields map[string]bool) []string {
 // too, as a password in a row of a list held as derived is: the own texts
 // are found first.
 func (r RunValues) secretStrings() (own, derived []string) {
-	all := r.tree()
+	// It reads the values, and changes none.
+	all, isDerived := r.view(), setOf(r.Derived)
 	seen := map[string]bool{}
 	for _, wantDerived := range []bool{false, true} {
 		for _, name := range r.Secrets {
-			if slices.Contains(r.Derived, name) != wantDerived {
+			if isDerived[name] != wantDerived {
 				continue
 			}
-			v, ok := jsonptr.Lookup(all, splitPath(name))
+			v, ok := jsonptr.Lookup(all, SplitPath(name))
 			if !ok {
 				continue
 			}
@@ -242,17 +273,28 @@ func needsSecrets(needs map[string]JobResult) (own, derived []string) {
 			}
 		}
 		for _, r := range jsonvalue.Sorted(needs) {
+			derivedOutputs := setOf(r.Derived)
 			for _, name := range r.Secrets {
-				add(r.Outputs[name], slices.Contains(r.Derived, name))
+				add(r.Outputs[name], derivedOutputs[name])
 			}
-			for id, names := range jsonvalue.Sorted(r.SecretSteps) {
-				for _, name := range names {
-					add(r.Steps[id][name], slices.Contains(r.DerivedSteps[id], name))
+			for id, outputs := range jsonvalue.Sorted(r.SecretSteps) {
+				derivedSteps := setOf(r.DerivedSteps[id])
+				for _, name := range outputs {
+					add(r.Steps[id][name], derivedSteps[name])
 				}
 			}
 		}
 	}
 	return own, derived
+}
+
+// setOf returns the set of the strings list holds.
+func setOf(list []string) map[string]bool {
+	set := make(map[string]bool, len(list))
+	for _, s := range list {
+		set[s] = true
+	}
+	return set
 }
 
 // compactStrings returns ss without a string given before.
@@ -372,7 +414,10 @@ type Contexts struct {
 // needs.build, steps.build.outputs or steps.build.result, reads as its own
 // text, as format 1 reads it (ReadsAsText).
 //
-// The status functions are known from Strategy on, as Status says.
+// The status functions are known from Strategy on, as Status says. Which
+// phase knows each context, and the status functions, is Phase.Knows and
+// Phase.KnowsStatus, which the compiler's checks of what an expression
+// reads use too.
 //
 // It marks two sets of values, which an evaluation reports reading apart
 // (expr.Read): Scope.Marked, the secrets, which Run.Secrets and Secrets
@@ -386,10 +431,27 @@ type Contexts struct {
 // templates (expr.Scope.Budgeted). Its Resolver and Index are the caller's
 // to set, for input definitions. The compiler, the coordinator, the worker
 // and the WebAssembly package all build their scopes with NewScope, so a
-// context has one shape everywhere. The scope holds c's input values and
+// context has one shape everywhere; the compiler, as it fills in the
+// inputs, marks in Marked what reads a variable or a password, which is
+// what it asks of each evaluation. The scope holds c's input values and
 // matrix values as they are, which an evaluation never changes, and nothing
 // else of c.
-func NewScope(phase Phase, c Contexts) expr.Scope {
+func NewScope(phase Phase, c Contexts) expr.Scope { return newScope(phase, c, nil) }
+
+// sharedContexts are the needs and steps contexts that newScope built of a
+// Contexts' Needs and Steps, which the scopes it builds after of the same
+// Needs and Steps share, as an evaluation never changes a context.
+type sharedContexts struct{ needs, steps map[string]any }
+
+// newScope is NewScope, which takes the needs and steps contexts from
+// shared, if it isn't nil, and builds them into it the first time: its
+// caller gives it the same shared for each scope of the same Needs and
+// Steps, and a new one when they change. A Contexts with Unknown values
+// has contexts of its own, as Unknown's values are set in them.
+func newScope(phase Phase, c Contexts, shared *sharedContexts) expr.Scope {
+	if shared == nil || len(c.Unknown) > 0 {
+		shared = &sharedContexts{}
+	}
 	r := c.Run
 	inputs := c.mapping("inputs", r.Inputs)
 	contexts := map[string]any{
@@ -399,7 +461,7 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	// layered holds the env names a later layer than the workflow's gives,
 	// whose values Run's marks don't mark.
 	var layered map[string]bool
-	if phase >= PhaseStart {
+	if phase.Knows("env") {
 		env := stringsContext(r.Env)
 		var layers []map[string]string
 		if phase >= PhaseJobEnv {
@@ -425,8 +487,11 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	if c.StrictOutputs {
 		scope.Missing = strictOutputs(c.Needs, c.Steps)
 	}
-	if phase >= PhaseStrategy {
-		contexts["needs"] = needsContext(c.Needs)
+	if phase.Knows("needs") {
+		if shared.needs == nil {
+			shared.needs = needsContext(c.Needs)
+		}
+		contexts["needs"] = shared.needs
 		scope.Text = ReadsAsText
 		for name, r := range c.Needs {
 			for _, output := range r.Private {
@@ -443,27 +508,28 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 				}
 			}
 		}
+	}
+	if phase.KnowsStatus() {
 		status := c.Status
 		scope.Status = &status
 	}
-	if phase >= PhaseReady {
+	if phase.Knows("matrix") {
 		contexts["matrix"] = c.mapping("matrix", c.Matrix)
 	}
-	if phase >= PhaseJobEnv {
+	if phase.Knows("job") {
 		j := c.Job
 		contexts["job"] = map[string]any{
 			"name": j.Name, "key": j.Key, "attempt": int64(j.Attempt), "group": j.Group, "member": j.Member,
 		}
 	}
-	if phase >= PhaseStep {
-		steps := make(map[string]any, len(c.Steps))
-		for id, outputs := range c.Steps {
-			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
+	if phase.Knows("steps") {
+		if shared.steps == nil {
+			shared.steps = stepsContext(c.Steps)
 		}
-		contexts["steps"] = steps
+		contexts["steps"] = shared.steps
 	}
 	for _, name := range c.Unknown {
-		path := splitPath(name)
+		path := SplitPath(name)
 		if _, ok := contexts[path[0]]; !ok {
 			continue
 		}
@@ -477,7 +543,7 @@ func NewScope(phase Phase, c Contexts) expr.Scope {
 	// secret is set. Run's don't mark an env value a later layer gives.
 	mark := func(names []string, run, secret bool) {
 		for _, name := range names {
-			path := splitPath(name)
+			path := SplitPath(name)
 			if run && len(path) > 1 && path[0] == "env" && layered[path[1]] {
 				continue
 			}
@@ -535,8 +601,10 @@ func (c *Contexts) mapping(context string, d Data) map[string]any {
 
 // strictOutputs returns what reads the outputs of needs and steps strictly
 // (Contexts.StrictOutputs): an output a job or a step has no value for is
-// output_not_written. A name past an output's, which reads the JSON it
-// holds, and a job or a step the contexts don't have, read as "".
+// output_not_written, and so is one of a step by an id that none of the
+// job's steps that have run has, as format 1 fails what reads it. A name
+// past an output's, which reads the JSON it holds, and a job the contexts
+// don't have, read as "".
 func strictOutputs(needs map[string]JobResult, steps map[string]map[string]string) func(string, []string) (*problems.Kind, problems.Params) {
 	missing := func(outputs map[string]string, of, owner, name string) (*problems.Kind, problems.Params) {
 		if _, ok := outputs[name]; ok {
@@ -547,9 +615,7 @@ func strictOutputs(needs map[string]JobResult, steps map[string]map[string]strin
 	return func(context string, path []string) (*problems.Kind, problems.Params) {
 		switch {
 		case context == "steps" && len(path) >= 3 && path[1] == "outputs":
-			if outputs, ok := steps[path[0]]; ok {
-				return missing(outputs, "step", path[0], path[2])
-			}
+			return missing(steps[path[0]], "step", path[0], path[2])
 		case context != "needs" || len(path) < 3:
 		case path[1] == "outputs":
 			if r, ok := needs[path[0]]; ok {
@@ -557,10 +623,7 @@ func strictOutputs(needs map[string]JobResult, steps map[string]map[string]strin
 			}
 		case path[1] == "steps" && len(path) >= 5 && path[3] == "outputs":
 			if r, ok := needs[path[0]]; ok {
-				if outputs, ok := r.Steps[path[2]]; ok {
-					return missing(outputs, "step", path[2], path[4])
-				}
-				return problems.OutputNotWritten, problems.Params{"of": "step", "owner": path[2], "name": path[4]}
+				return missing(r.Steps[path[2]], "step", path[2], path[4])
 			}
 		}
 		return nil, nil
@@ -576,20 +639,32 @@ func stringsContext(m map[string]string) map[string]any {
 	return out
 }
 
+// stepsContext returns the steps context of the steps whose outputs steps
+// holds, by step id, as needs holds a job's steps too.
+func stepsContext(steps map[string]map[string]string) map[string]any {
+	out := make(map[string]any, len(steps))
+	for id, outputs := range steps {
+		out[id] = map[string]any{"outputs": stringsContext(outputs)}
+	}
+	return out
+}
+
 // needsContext returns the needs context of the jobs whose results needs
 // holds.
 func needsContext(needs map[string]JobResult) map[string]any {
 	out := make(map[string]any, len(needs))
 	for name, r := range needs {
-		steps := make(map[string]any, len(r.Steps))
-		for id, outputs := range r.Steps {
-			steps[id] = map[string]any{"outputs": stringsContext(outputs)}
-		}
-		job := map[string]any{"outputs": stringsContext(r.Outputs), "steps": steps}
-		if r.Outcome != "" {
-			job["result"] = string(r.Outcome)
-		}
-		out[name] = job
+		out[name] = jobContext(r, stepsContext(r.Steps))
 	}
 	return out
+}
+
+// jobContext returns the context of a job in needs whose result r is, and
+// the context of whose steps' outputs steps is (stepsContext).
+func jobContext(r JobResult, steps map[string]any) map[string]any {
+	job := map[string]any{"outputs": stringsContext(r.Outputs), "steps": steps}
+	if r.Outcome != "" {
+		job["result"] = string(r.Outcome)
+	}
+	return job
 }

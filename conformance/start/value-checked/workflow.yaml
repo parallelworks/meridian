@@ -1,0 +1,10 @@
+on:
+  execute:
+    inputs:
+      replicas:
+        type: number
+        default: ${{ vars.REPLICAS }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

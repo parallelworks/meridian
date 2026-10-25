@@ -13,67 +13,21 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// A phase is when a value is evaluated, which decides what it can read.
-type phase int
-
-const (
-	// runCreated is when the run is created: the workflow's env, timeout,
-	// sessions and links, and a job's needs.
-	runCreated phase = iota
-	// needsDone is when a job's dependencies have finished, before its
-	// matrix is expanded: its strategy:.
-	needsDone
-	// jobReady is when a job, or a matrix instance of it, is ready to run:
-	// its if:, runs-on:, resources:, retry:, timeout:, ssh: and
-	// working-directory:.
-	jobReady
-	// jobEnv is when a job's env: is set, before its steps run.
-	jobEnv
-	// stepRuns is when a step is about to run.
-	stepRuns
-	// jobEnds is when a job ends, for its outputs.
-	jobEnds
-)
-
-// has reports whether an expression evaluated in the phase can read a
-// context, or "status" for the status functions.
-func (p phase) has(context string) bool {
-	switch context {
-	case "inputs", "org", "vars", "remote", "sessions":
-		return true
-	case "needs", "status", "env":
-		return p >= needsDone
-	case "matrix":
-		return p >= jobReady
-	case "job":
-		return p >= jobEnv
-	case "steps":
-		return p >= stepRuns
-	}
-	return false
-}
-
-// name is the phase's name in a message's params: what says when a value
-// in the phase is evaluated.
-func (p phase) name() string {
-	switch p {
-	case runCreated:
-		return "run_created"
-	case needsDone:
-		return "strategy"
-	case jobReady:
-		return "job_ready"
-	case jobEnv:
-		return "job_env"
-	}
-	return "other"
-}
+// The compiler checks each expression in the phase that evaluates it
+// (plan.Phase), which decides what it can read (plan.Phase.Knows): a job's
+// needs: in Create, its strategy: in Strategy, its if:, runs-on:,
+// resources:, retry:, timeout:, ssh: and working-directory: in Ready, its
+// env: in JobEnv, its steps in Step, and its outputs: in End. What it
+// checks of the run as a whole is in run.
 
 // jobInfo is what the checks of a job's expressions need to know about it.
 type jobInfo struct {
 	name  string
 	loc   []string
 	needs []plan.Need
+	// needsExpr is the job's needs:, when it is an expression that read a
+	// variable or a password, which Start evaluates again.
+	needsExpr plan.Value
 	// needed holds the names of the jobs it needs.
 	needed map[string]bool
 	// stepIDs maps its steps' ids to their indexes, and step is the index
@@ -165,7 +119,8 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 // expression of what is known when the run is created that gives either. A
 // name followed by :any waits for any one instance of a matrix job. The
 // expression can read a variable, since the plan holds only the jobs it
-// names, but a problem with what it gives doesn't show it.
+// names, but a problem with what it gives doesn't show it, and the plan
+// keeps it for Start to evaluate again.
 func (c *compiler) resolveNeeds(info *jobInfo) {
 	loc := appendPath(info.loc, "needs")
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
@@ -180,14 +135,14 @@ func (c *compiler) resolveNeeds(info *jobInfo) {
 		c.reportAt(k, loc, params)
 	}
 	if s, isString := raw.(string); isString {
-		parsed, checked := c.checkString(loc, s, runCreated, info)
+		parsed, checked := c.checkString(loc, s, plan.PhaseCreate, info)
 		if !checked {
 			return
 		}
 		if t, isTemplate := parsed.(*expr.Template); isTemplate {
 			// What decides the run's shape is one group with the inputs'
 			// defaults and conditions, which shares their budget.
-			v, marked, err := t.EvalMarked(c.inputs.scope())
+			v, marked, err := t.EvalMarked(c.inputs.shapeScope())
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				c.reportAt(problems.NeedsNotKnown, loc, problems.Params{"name": u.Name})
 				return
@@ -197,6 +152,9 @@ func (c *compiler) resolveNeeds(info *jobInfo) {
 				return
 			}
 			raw, fromVariable = v, marked
+			if marked {
+				info.needsExpr = c.planned(loc, parsed)
+			}
 		}
 	}
 	var list []string
@@ -273,31 +231,31 @@ func (c *compiler) checkCycles(infos map[string]*jobInfo, names []string) {
 func (c *compiler) job(info *jobInfo) plan.Job {
 	at := func(keys ...string) []string { return appendPath(info.loc, keys...) }
 	def := mapping(lookup(c.doc.Value, info.loc))
-	j := plan.Job{Key: info.name, Name: info.name, Needs: info.needs, Path: jsonptr.Format(info.loc)}
+	j := plan.Job{Key: info.name, Name: info.name, Needs: info.needs, NeedsExpr: info.needsExpr, Path: jsonptr.Format(info.loc)}
 	info.step = -1
 	if _, ok := def["strategy"]; ok {
 		j.Strategy = &plan.Strategy{
-			Matrix:      c.value(at("strategy", "matrix"), needsDone, info),
-			FailFast:    c.value(at("strategy", "fail-fast"), needsDone, info),
-			MaxParallel: c.value(at("strategy", "max-parallel"), needsDone, info),
+			Matrix:      c.value(at("strategy", "matrix"), plan.PhaseStrategy, info),
+			FailFast:    c.value(at("strategy", "fail-fast"), plan.PhaseStrategy, info),
+			MaxParallel: c.value(at("strategy", "max-parallel"), plan.PhaseStrategy, info),
 		}
 	}
-	j.If = c.condition(at("if"), jobReady, info)
-	j.RunsOn = c.value(at("runs-on"), jobReady, info)
-	j.Resources = c.value(at("resources"), jobReady, info)
-	j.SSH = c.value(at("ssh"), jobReady, info)
-	j.Timeout = c.value(at("timeout"), jobReady, info)
-	j.WorkingDirectory = c.value(at("working-directory"), jobReady, info)
+	j.If = c.condition(at("if"), plan.PhaseReady, info)
+	j.RunsOn = c.value(at("runs-on"), plan.PhaseReady, info)
+	j.Resources = c.value(at("resources"), plan.PhaseReady, info)
+	j.SSH = c.value(at("ssh"), plan.PhaseReady, info)
+	j.Timeout = c.value(at("timeout"), plan.PhaseReady, info)
+	j.WorkingDirectory = c.value(at("working-directory"), plan.PhaseReady, info)
 	if retry, ok := def["retry"].(map[string]any); ok {
 		j.Retry = &plan.JobRetry{
-			MaxRetries: c.value(at("retry", "max-retries"), jobReady, info),
-			Interval:   c.value(at("retry", "interval"), jobReady, info),
+			MaxRetries: c.value(at("retry", "max-retries"), plan.PhaseReady, info),
+			Interval:   c.value(at("retry", "interval"), plan.PhaseReady, info),
 		}
 		for _, r := range list(retry["reasons"]) {
 			j.Retry.Reasons = append(j.Retry.Reasons, str(r))
 		}
 	}
-	j.Env = c.values(at("env"), jobEnv, info)
+	j.Env = c.values(at("env"), plan.PhaseJobEnv, info)
 	steps := list(def["steps"])
 	info.steps = len(steps)
 	j.Steps = make([]plan.Step, len(steps))
@@ -306,7 +264,7 @@ func (c *compiler) job(info *jobInfo) plan.Job {
 		j.Steps[i] = c.step(info, at("steps", strconv.Itoa(i)))
 	}
 	info.step = len(steps)
-	j.Outputs = c.values(at("outputs"), jobEnds, info)
+	j.Outputs = c.values(at("outputs"), plan.PhaseEnd, info)
 	return j
 }
 
@@ -317,29 +275,29 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 		ID: str(def["id"]), Uses: str(def["uses"]), Shell: str(def["shell"]),
 		EarlyCancel: str(def["early-cancel"]), Path: jsonptr.Format(loc),
 	}
-	s.Name = c.value(at("name"), stepRuns, info)
-	s.If = c.condition(at("if"), stepRuns, info)
-	s.Run = c.value(at("run"), stepRuns, info)
-	s.With = c.value(at("with"), stepRuns, info)
-	s.Env = c.values(at("env"), stepRuns, info)
-	s.WorkingDirectory = c.value(at("working-directory"), stepRuns, info)
-	s.SSH = c.value(at("ssh"), stepRuns, info)
-	s.Timeout = c.value(at("timeout"), stepRuns, info)
-	s.IgnoreErrors = c.value(at("ignore-errors"), stepRuns, info)
+	s.Name = c.value(at("name"), plan.PhaseStep, info)
+	s.If = c.condition(at("if"), plan.PhaseStep, info)
+	s.Run = c.value(at("run"), plan.PhaseStep, info)
+	s.With = c.value(at("with"), plan.PhaseStep, info)
+	s.Env = c.values(at("env"), plan.PhaseStep, info)
+	s.WorkingDirectory = c.value(at("working-directory"), plan.PhaseStep, info)
+	s.SSH = c.value(at("ssh"), plan.PhaseStep, info)
+	s.Timeout = c.value(at("timeout"), plan.PhaseStep, info)
+	s.IgnoreErrors = c.value(at("ignore-errors"), plan.PhaseStep, info)
 	// A cleanup: runs once every step has, so it reads each one's outputs.
 	info.cleanup = true
-	s.Cleanup = c.value(at("cleanup"), stepRuns, info)
+	s.Cleanup = c.value(at("cleanup"), plan.PhaseStep, info)
 	info.cleanup = false
 	if retry, ok := def["retry"].(map[string]any); ok {
 		s.Retry = &plan.StepRetry{
-			MaxRetries: c.value(at("retry", "max-retries"), stepRuns, info),
-			Interval:   c.value(at("retry", "interval"), stepRuns, info),
-			Timeout:    c.value(at("retry", "timeout"), stepRuns, info),
+			MaxRetries: c.value(at("retry", "max-retries"), plan.PhaseStep, info),
+			Interval:   c.value(at("retry", "interval"), plan.PhaseStep, info),
+			Timeout:    c.value(at("retry", "timeout"), plan.PhaseStep, info),
 		}
 		// clean-on-retry is true unless the workflow says otherwise.
 		s.Retry.CleanOnRetry = plan.Literal(true)
 		if _, ok := retry["clean-on-retry"]; ok {
-			s.Retry.CleanOnRetry = c.value(at("retry", "clean-on-retry"), stepRuns, info)
+			s.Retry.CleanOnRetry = c.value(at("retry", "clean-on-retry"), plan.PhaseStep, info)
 		}
 	}
 	return s

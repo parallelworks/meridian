@@ -75,13 +75,16 @@ func TestValueTooDeep(t *testing.T) {
 			submitted: func(depth int) map[string]any { return map[string]any{"l": nestedList(depth)} },
 			max:       plan.MaxDepth - 3, kind: problems.InputTooDeep, pointer: "/on/execute/inputs",
 		},
-		// The plan, its run, its deferred inputs, and s: a template, its
-		// parts, an expression, ||, a call, its arguments and a literal.
+		// The plan, its run, its input definitions, s and its default: a
+		// template, its parts, an expression, ||, a call, its arguments and
+		// a literal. The plan holds the default for Start in its deferred
+		// inputs too, a level less deep, where it would fail a level deeper
+		// (input_too_deep).
 		"an input's default evaluated as the run starts": {
 			workflow: func(depth int) string {
 				return "on:\n  execute:\n    inputs:\n      s: {type: string, default: '${{ vars.s || contains(" + flow(depth, "[", "1", "]") + ", 1) }}'}\njobs:\n  a:\n    steps:\n      - run: echo\n"
 			},
-			max: plan.MaxDepth - 10, kind: problems.InputTooDeep, pointer: "/on/execute/inputs",
+			max: plan.MaxDepth - 11, kind: problems.ValueTooDeep, pointer: "/on/execute/inputs",
 		},
 	} {
 		compileAt := func(depth int) (*plan.Plan, problems.Diagnostics) {

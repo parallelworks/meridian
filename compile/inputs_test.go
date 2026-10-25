@@ -692,6 +692,59 @@ jobs:
 	}
 }
 
+// The values in rows for inputs the rows don't have are listed with those
+// beside the inputs, the first 100 of them, and counted after that; each
+// is kept. Where a list and a wizard step's list share a path, a row has
+// the inputs of both's rows, so neither's is reported.
+func TestUnknownRowInputsListed(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      l:
+        type: list
+        template:
+          a: {type: string, optional: true}
+      s:
+        type: step
+        title: Step
+        options:
+          l:
+            type: list
+            template:
+              b: {type: string, optional: true}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	rows := []any{}
+	for i := range 150 {
+		rows = append(rows, map[string]any{"a": "x", "b": "y", "c": i})
+	}
+	inputs, diags := compile.ResolveInputs(doc, map[string]any{"l": rows}, compile.Options{})
+	var listed []string
+	var more problems.Diagnostics
+	for _, d := range diags {
+		switch d.Code {
+		case problems.UnknownInput.Code():
+			listed = append(listed, d.Params["input"].(string))
+		case problems.ProblemsNotListed.Code():
+			more = append(more, d)
+		default:
+			t.Errorf("unexpected %s", d)
+		}
+	}
+	if len(listed) != 100 || !slices.Contains(listed, "l.0.c") || slices.Contains(listed, "l.0.a") || slices.Contains(listed, "l.0.b") {
+		t.Errorf("listed %d: %v", len(listed), listed)
+	}
+	if len(more) != 1 || more[0].Params["code"] != "unknown_input" || more[0].Params["count"] != 50 {
+		t.Errorf("the rest: %v, want one that counts 50", more)
+	}
+	if got := inputs.Values["l"].([]any); len(got) != 150 || got[149].(map[string]any)["c"] != 149 {
+		t.Errorf("the rows are %v", got)
+	}
+}
+
 // A condition that reads an input whose value isn't known until the run
 // starts, because a part of it reads a secret, isn't known when the run is
 // created either, any part of the input, whichever default was evaluated

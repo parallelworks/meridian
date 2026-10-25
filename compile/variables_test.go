@@ -154,6 +154,62 @@ func TestDiagnosticsHideVariablesAtSharedPaths(t *testing.T) {
 	}
 }
 
+// A value given in the place of what reads a variable or a password can be
+// what it would have made, as a list given as text whose rows' defaults
+// read one can, so a problem with it doesn't show it. One in the place of
+// what reads neither is shown.
+func TestDiagnosticsHideValuesOverPrivateDefaults(t *testing.T) {
+	const typed = "TYPED-1234"
+	opts := compile.Options{Contexts: map[string]any{"org": map[string]any{"X": "v"}}}
+	for name, tc := range map[string]struct {
+		defs   []string
+		masked bool
+	}{
+		"a row's default reads a variable":         {[]string{"l: {type: list, template: {x: {type: string, default: '${{ org.X }}'}}}"}, true},
+		"a row's default reads a password":         {[]string{"pw: {type: password, optional: true}", "l: {type: list, template: {x: {type: string, default: '${{ inputs.pw }}'}}}"}, true},
+		"a row's default reads a variable's input": {[]string{"v: {type: string, default: '${{ org.X }}'}", "l: {type: list, template: {x: {type: string, default: '${{ inputs.v }}'}}}"}, true},
+		"a row's default reads neither":            {[]string{"l: {type: list, template: {x: {type: string, default: plain}}}"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), map[string]any{"l": `[{"x":"` + typed + `"}]`}, opts)
+			i := slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputNotList.Code() })
+			if i < 0 {
+				t.Fatalf("diagnostics %v, want %s", diags, problems.InputNotList.Code())
+			}
+			if shown := strings.Contains(fmt.Sprint(diags[i].Params), typed); shown == tc.masked {
+				t.Errorf("%s: shown %v, want masked %v", diags[i], shown, tc.masked)
+			}
+		})
+	}
+}
+
+// So does a problem with the shape of such a value: a group given as text
+// whose items' defaults read a variable or a password, and a value that
+// isn't JSON.
+func TestDiagnosticsHideShapesOverPrivateDefaults(t *testing.T) {
+	const typed = "TYPED-1234"
+	opts := compile.Options{Contexts: map[string]any{"org": map[string]any{"X": "v"}}}
+	for name, tc := range map[string]struct {
+		defs   []string
+		masked bool
+	}{
+		"an item's default reads a variable": {[]string{"g: {type: group, items: {x: {type: string, default: '${{ org.X }}'}}}"}, true},
+		"an item's default reads a password": {[]string{"pw: {type: password, optional: true}", "g: {type: group, items: {x: {type: string, default: '${{ inputs.pw }}'}}}"}, true},
+		"an item's default reads neither":    {[]string{"g: {type: group, items: {x: {type: string, default: plain}}}"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, diags := compile.Compile("workflow.yaml", []byte(inputs(tc.defs...)), map[string]any{"g": `{"x":"` + typed + `"}`}, opts)
+			i := slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputGroupNotMapping.Code() })
+			if i < 0 {
+				t.Fatalf("diagnostics %v, want %s", diags, problems.InputGroupNotMapping.Code())
+			}
+			if shown := strings.Contains(fmt.Sprint(diags[i].Params), typed); shown == tc.masked {
+				t.Errorf("%s: shown %v, want masked %v", diags[i], shown, tc.masked)
+			}
+		})
+	}
+}
+
 // inputs returns a workflow with the input definitions defs, each a line of
 // YAML, and a job.
 func inputs(defs ...string) string {
@@ -204,8 +260,10 @@ jobs:
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	if len(inputs.Values) != 0 || len(inputs.Secrets) != 0 {
-		t.Errorf("values %v and secrets %v, want none", inputs.Values, inputs.Secrets)
+	// skipped's ignore read after, which reads a variable, so its value is
+	// held, out of the plan, whatever the ignore decided.
+	if len(inputs.Values) != 0 || len(inputs.Secrets) != 1 || inputs.Secrets["skipped"] != "x" {
+		t.Errorf("values %v and secrets %v, want skipped's alone", inputs.Values, inputs.Secrets)
 	}
 	if got := slices.Sorted(maps.Keys(inputs.Deferred)); !slices.Equal(got, []string{"after", "key", "n"}) {
 		t.Errorf("deferred %v, want after, key and n", got)
@@ -372,5 +430,45 @@ func TestSecretNames(t *testing.T) {
 	}
 	if !slices.Equal(warned, looks) {
 		t.Errorf("warned about %q, want %q", warned, looks)
+	}
+	// A value submitted for an input the workflow doesn't define is taken
+	// for a password by the same names, and by a word a letter from one of
+	// the longer words, as a misspelling is, but not from token, whose
+	// neighbours are common words.
+	misspelled := []string{"pasword", "passwrod", "old_passowrd", "pasphrase", "secrte", "credentail", "passed"}
+	for _, name := range slices.Concat(looks, misspelled) {
+		if !compile.NamesSecret(name) {
+			t.Errorf("%s isn't taken for a secret's name", name)
+		}
+	}
+	for _, name := range slices.Concat(doesnt, []string{"taken", "tokens", "maxTokens", "toke", "pass", "credit"}) {
+		if compile.NamesSecret(name) {
+			t.Errorf("%s is taken for a secret's name", name)
+		}
+	}
+}
+
+// A key of a list's default rows is checked against the inputs a row of
+// it has: those of every list at its path, where a list and a wizard
+// step's list share one, so a key the other's rows have isn't reported.
+// A list among a row's inputs is named by its path with [index] for the
+// row's, as input_looks_secret names a row's input.
+func TestDefaultRowKeys(t *testing.T) {
+	src := inputs(
+		"$meta: {wizard: {mode: wizard}}",
+		"l: {type: list, template: {a: {type: string, optional: true}}, default: [{a: x, b: y, c: z}]}",
+		"s: {type: step, title: S, options: {l: {type: list, template: {b: {type: string, optional: true}}}}}",
+		"m: {type: list, template: {n: {type: list, optional: true, template: {q: {type: string}}, default: [{q: x, z: y}]}}}",
+	)
+	_, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{})
+	var got []string
+	for _, d := range diags {
+		if d.Code == problems.DefaultRowUnknownInput.Code() {
+			got = append(got, fmt.Sprintf("%s %v %v", d.Path(), d.Params["input"], d.Params["key"]))
+		}
+	}
+	want := []string{"/on/execute/inputs/l/default/0/c l c", "/on/execute/inputs/m/template/n/default/0/z m.[index].n z"}
+	if !slices.Equal(got, want) {
+		t.Errorf("default rows' keys %q, want %q", got, want)
 	}
 }

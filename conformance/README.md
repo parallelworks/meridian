@@ -8,6 +8,7 @@ These cases pin what workflows mean, in areas:
 | `expressions` | What `${{ }}` expressions evaluate to |
 | `inputs` | A run's input values: defaults, conditions, types and what's required |
 | `compile` | The plan a workflow compiles to, and the problems with its jobs and expressions |
+| `start` | A run's values as it starts: what the plan left to the start, the workflow's `env:` and `timeout:`, the matrices expanded then, and the run's shape decided again |
 | `matrices` | How a job's `strategy:` expands into its instances |
 | `contexts` | What each context holds in each phase after the run starts, and what a job's and a step's values evaluate to |
 
@@ -82,7 +83,8 @@ expect:
 ```
 
 - `expect.inputs` are the run's input values, and `expect.secrets` are the
-  values of password inputs, by their path, such as `creds.0.pass`, and of
+  values of password inputs, by their path, such as `creds.0.pass`, with a
+  key's own `.` and `~` written `~1` and `~0`, as the plan names them, and of
   the other values kept as secrets, as one a form can have made from a
   password is. `expect.private` are the values kept out of the plan, as a
   variable's value is, that aren't secrets.
@@ -119,6 +121,52 @@ expect:
 
 Diagnostics list every error and warning the workflow compiles with, its
 loading's included. A case with errors has no plan.
+
+## Start
+
+Each case is a directory like an inputs case, whose run is created with
+its `inputs` and `contexts` and then started, as a coordinator starts it:
+with the passwords and the private values creating it kept, and the
+variables read again, secret ones too.
+
+```yaml
+description: >-
+  An input's condition that read a variable as the run was created is
+  decided again as it starts.
+source: Meridian
+contexts:
+  org: {ENV: prod}
+start-contexts:
+  org: {ENV: dev}
+expect:
+  diagnostics:
+    - severity: error
+      code: run_shape_changed
+      path: /on/execute/inputs/debug/ignore
+      params: {key: ignore, name: debug}
+```
+
+- `contexts` are what the run reads when it is created, as an inputs
+  case's are, and the variables it reads as it starts, those
+  `secret-variables` names with the values `contexts` gives them.
+  `start-contexts` replaces each context it gives as the run starts, as a
+  variable can change before a rerun.
+- `expect.diagnostics` are those of creating the run and starting it
+  together. A run with errors doesn't start, and has no values to check.
+- `expect.inputs` are the run's input values, complete: those the plan
+  holds, what the start evaluated, and each password and private value in
+  its place. `expect.env` is the workflow's `env:`, evaluated, and
+  `expect.timeout` its `timeout:`, in seconds, checked when it is set.
+- `expect.run-secrets`, `expect.run-private` and `expect.run-derived` name
+  what of the run's values is a secret or made from one, is private, and
+  was given in the place of what is made from a secret, as the phases after
+  the start read them, by name, as in `inputs.creds.0.pass` and
+  `vars.TOKEN`.
+- `expect.matrices` are the matrix values of each instance of each matrix
+  expanded as the run starts, by job name. A matrix that reads `needs`
+  isn't among them: it is expanded once the jobs it needs have finished.
+- A case without errors has exactly the values its `expect` lists, and
+  none where it lists none.
 
 ## Matrices
 

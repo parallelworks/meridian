@@ -6,13 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
-	"syscall"
 
+	"github.com/parallelworks/foundation/problem"
+
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -35,8 +36,9 @@ type Config struct {
 	Environ []string
 	// Dir is where the worker makes the directory it keeps its own files
 	// in as it runs, which only its user can use: its spooled logs, and
-	// its steps' scripts and $OUTPUTS files. It must be a directory only
-	// the user can use, on a path no other user can change. When it is "",
+	// its steps' scripts and $OUTPUTS files. It must be a directory of the
+	// user's that no other user can change, on a path no other user can
+	// change, or a symbolic link to one. When it is "",
 	// or not such a directory, or goes, the worker uses meridian/worker in
 	// the user's cache directory, which it makes, on disk; else
 	// XDG_RUNTIME_DIR, if the environment sets it to such a directory,
@@ -58,6 +60,10 @@ type Config struct {
 	// nil for nowhere. What it logs as it sets its job up goes to the job's
 	// setup log too.
 	Log *slog.Logger
+
+	// stepEnded, if it is set, is called as each step, or cleanup, has
+	// ended, with the attempt: a test's seam.
+	stepEnded func(a *attempt, step int, cleanup bool)
 }
 
 // DefaultSpoolLimit is how many bytes of logs a worker keeps on disk for
@@ -86,26 +92,29 @@ const memorySpoolLimit = 64 << 20
 //
 // A job whose steps are to run in a container fails before its first step,
 // with a problem that says so: this worker runs steps only on the host, and
-// never runs a job with less isolation than it asks for. On Linux, Run
-// makes the process not dumpable, so that the user's other processes, the
-// job's steps among them, can't read the attempt's credential from its
-// memory.
+// never runs a job with less isolation than it asks for. Before it claims
+// the attempt, Run keeps the user's other processes, the job's steps among
+// them, from reading the attempt's credential from its memory, as the
+// system allows (on Linux, it makes the process not dumpable), and refuses
+// to run on a system where it can't; and it sends a token over a Unix
+// socket only once the system has said that its own user, or root, serves
+// it.
 func Run(ctx context.Context, cfg Config) error {
 	return run(ctx, cfg, defaultTiming, harden)
 }
 
 // run is Run, with the timing it uses, and protect, which hardens the
-// process once its environment says what to claim.
+// process before it reads the bootstrap token.
 func run(ctx context.Context, cfg Config, tm timing, protect func() error) error {
+	if err := protect(); err != nil {
+		return err
+	}
 	environ := cfg.Environ
 	if environ == nil {
 		environ = os.Environ()
 	}
-	ep, stepsEnv, err := readEnv(environ)
+	ep, stepsEnv, err := readEnv(environ, environReadable)
 	if err != nil {
-		return err
-	}
-	if err := protect(); err != nil {
 		return err
 	}
 	log := cfg.Log
@@ -149,6 +158,8 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 		worker:  worker,
 		events:  newEventQueue(),
 		spool:   newSpool(files, cfg.SpoolLimit),
+
+		stepEnded: cfg.stepEnded,
 	}
 	return a.run(ctx)
 }
@@ -172,8 +183,10 @@ func (e endpoint) socket() bool { return strings.HasPrefix(e.address, "/") }
 // readEnv reads how to reach the coordinator, and the bootstrap token, from
 // environ, and returns the rest of it, which the job's steps get. It reads
 // the token from the file EnvBootstrapTokenFile names, if it does, and
-// removes the file; it refuses one that other users can read.
-func readEnv(environ []string) (endpoint, []string, error) {
+// removes the file; it refuses one that other users can read. Where the
+// user's other processes can read the worker's environment, as readable
+// says (environReadable), it refuses a token in EnvBootstrapToken.
+func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 	vars := map[string]string{}
 	var rest []string
 	for _, kv := range environ {
@@ -211,6 +224,8 @@ func readEnv(environ []string) (endpoint, []string, error) {
 	switch {
 	case token != "" && file != "":
 		return ep, nil, invalid(workerapi.EnvBootstrapTokenFile)
+	case token != "" && readable:
+		return ep, nil, problems.BootstrapTokenInEnvironment.Problem(nil)
 	case file != "":
 		var err error
 		if token, err = readTokenFile(file); err != nil {
@@ -226,34 +241,20 @@ func readEnv(environ []string) (endpoint, []string, error) {
 	return ep, rest, nil
 }
 
+// maxTokenFile is the most bytes the worker reads of a bootstrap token's
+// file.
+const maxTokenFile = 4096
+
 // readTokenFile reads a bootstrap token from a file of the worker's user
-// that only the user can read, not through a symbolic link.
+// that only the user can read, not through a symbolic link, on a path no
+// other user can change (safepath.ReadFile).
 func readTokenFile(path string) (string, error) {
-	unreadable := func(err error) (string, error) {
-		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
-			return "", problems.FileNotRegular.Problem(problems.Params{"path": path})
+	data, err := safepath.ReadFile(path, safepath.Private, maxTokenFile)
+	if err != nil {
+		if _, ok := errors.AsType[*problem.Problem](err); ok {
+			return "", err
 		}
 		return "", problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNonBlock, 0) //nolint:gosec // the file the backend put the token in
-	if err != nil {
-		return unreadable(err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	switch {
-	case err != nil:
-		return unreadable(err)
-	case !info.Mode().IsRegular():
-		return "", problems.FileNotRegular.Problem(problems.Params{"path": path})
-	case !ownedByUser(info):
-		return "", problems.FileNotOwned.Problem(problems.Params{"path": path})
-	case info.Mode().Perm()&0o077 != 0:
-		return "", problems.FileNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", info.Mode().Perm())})
-	}
-	data, err := io.ReadAll(io.LimitReader(f, 4096))
-	if err != nil {
-		return unreadable(err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }

@@ -1,0 +1,63 @@
+description: >-
+  A value in a row of a list or a repeated step for an input its rows don't
+  have, or in a group of a row for one the group doesn't have, is a warning
+  that names it by its path and suggests the nearest name there, and is
+  kept, as a value for an input the workflow doesn't define is. One taken
+  for a password by the same rules is kept among the run's secrets, by its
+  path, and not with the run's values: one close to the name of a password
+  field of the rows, as a misspelling is, and a mapping that holds a key
+  named as a password field.
+source: Meridian
+inputs:
+  creds:
+    - user: a
+      users: a
+      password: HUNTER2SECRET
+      pasword: HUNTER2SECRET
+      ssh: {port: 2222, prot: 2223}
+    - user: b
+      password: HUNTER2SECRET
+      extra:
+        password: HUNTER2SECRET
+  workers:
+    - host: h
+      key: HUNTER2SECRET
+      keys: HUNTER2SECRET
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: creds.0.pasword, suggested: "true", suggestion: creds.0.password}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: creds.0.ssh.prot}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: creds.0.users, suggested: "true", suggestion: creds.0.user}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: creds.1.extra, suggested: "false"}
+    - severity: warning
+      code: unknown_input
+      path: /on/execute/inputs
+      params: {input: workers.0.keys, suggested: "true", suggestion: workers.0.key}
+  inputs:
+    creds:
+      - user: a
+        users: a
+        ssh: {port: 2222, prot: 2223}
+      - user: b
+        ssh: {port: 22}
+    workers:
+      - host: h
+  secrets:
+    creds.0.password: HUNTER2SECRET
+    creds.0.pasword: HUNTER2SECRET
+    creds.1.password: HUNTER2SECRET
+    creds.1.extra: {password: HUNTER2SECRET}
+    workers.0.key: HUNTER2SECRET
+    workers.0.keys: HUNTER2SECRET

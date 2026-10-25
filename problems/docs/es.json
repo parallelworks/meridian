@@ -381,6 +381,13 @@
       "Da a la entrada un valor, o un valor predeterminado, que se anide menos."
     ]
   },
+  "default_row_unknown_input": {
+    "title": "Fila predeterminada con una clave que sus filas no tienen",
+    "why": "Las filas predeterminadas de una lista, escritas en el flujo de trabajo, tienen una clave que no es una de las entradas de las filas de la lista, las de su plantilla. La fila conserva el valor, que puede leer lo que lee la fila, pero a menudo es una errata, o un campo que la plantilla ya no tiene. Un formulario de lanzamiento devuelve las filas predeterminadas, así que la clave no se vuelve a informar como una entrada desconocida de cada ejecución.",
+    "fix": [
+      "Corrige la clave, añade a la plantilla de la lista una entrada con ese nombre o quita la clave de las filas predeterminadas."
+    ]
+  },
   "duplicate_step_id": {
     "title": "Dos pasos con el mismo id",
     "why": "El id de un paso lo nombra para los pasos que vienen después, así que dos pasos de un trabajo no pueden compartirlo.",
@@ -523,7 +530,7 @@
   },
   "output_undefined_step": {
     "title": "La salida lee un paso que no existe",
-    "why": "Una salida de un trabajo lee un paso con un id que no tiene ninguno de sus pasos, así que la salida está vacía.",
+    "why": "Una salida de un trabajo lee un paso con un id que no tiene ninguno de sus pasos. Cuando los pasos del trabajo tuvieron éxito, el formato 1 lee sus salidas de forma estricta, así que la salida hace fallar el trabajo, como una que nada escribió (output_not_written); cuando un paso falló o se canceló, la salida está vacía.",
     "fix": [
       "Corrige el id del paso o dale ese id al paso."
     ]
@@ -589,6 +596,64 @@
     "why": "Una expresión lee una variable de la organización o del usuario cuyo nombre, como HF_TOKEN, sugiere que contiene un secreto, pero no es una variable secreta. El valor de una variable solo se enmascara en los registros de la ejecución si es secreta, así que un secreto guardado en una variable normal se ve allí donde un paso lo escriba. Un nombre parece el de un secreto cuando una de sus palabras, separadas por _, -, . y los cambios de mayúsculas a minúsculas, es una palabra como token, password o secret.",
     "fix": [
       "Si la variable contiene un secreto, conviértela en una variable secreta."
+    ]
+  },
+  "variable_not_text": {
+    "title": "Variable que no es texto",
+    "why": "El valor de una variable es texto. Quien ejecuta el flujo de trabajo le dio al compilador para esta variable un valor de otro tipo, como un número o una lista, que ninguna expresión lee como la variable, así que la ejecución lo lee como \"\", igual que lee una variable que no está definida. Al empezar la ejecución, Meridian vuelve a leer cada variable, como texto.",
+    "fix": [
+      "Da a la variable su valor como texto, por ejemplo \"8\" en lugar de 8, o una lista como su JSON."
+    ]
+  },
+  "resolver_missing": {
+    "title": "Falta una interfaz",
+    "why": "Algunas claves de un flujo de trabajo necesitan algo que solo puede proporcionar el lugar donde se ejecuta, a través de una de las interfaces de Meridian: sessions: necesita un proveedor de sesiones (Sessions), un uses: que nombra un flujo de trabajo necesita una forma de obtenerlo (Sources), y runs-on: execution-group: necesita grupos de ejecución (Groups). Meridian no ejecuta un flujo de trabajo sin lo que necesita, en lugar de ejecutar solo una parte.",
+    "fix": [
+      "Ejecuta el flujo de trabajo donde se proporcione la interfaz, como en una plataforma que sirva sesiones.",
+      "Quita la clave del flujo de trabajo si no la necesita."
+    ]
+  },
+  "run_shape_changed": {
+    "title": "La forma de la ejecución cambió al empezar",
+    "why": "Lo que decide la forma de una ejecución, qué entradas tiene y a qué trabajos espera cada trabajo, puede leer variables de la organización y del usuario y contraseñas. El compilador las lee al crear la ejecución, y el plan guarda lo que decidieron. Al empezar la ejecución, Meridian las vuelve a leer y decide de nuevo, y esta decisión salió distinta: una variable o una contraseña cambió entretanto, como puede ocurrir antes de volver a ejecutar. En lugar de ejecutarse con valores de dos lecturas, la ejecución no empieza.",
+    "fix": [
+      "Crea la ejecución de nuevo, para que se cree y empiece con los mismos valores.",
+      "Si la variable cambia a menudo, haz que la decisión lea algo que no cambie."
+    ]
+  },
+  "values_read_each_other": {
+    "title": "Valores que se leen entre sí al empezar la ejecución",
+    "why": "Al empezar una ejecución, Meridian evalúa el env: del flujo de trabajo y las entradas cuyos valores dejó para el inicio, en el orden en que se leen entre sí. El valor predeterminado de una entrada puede leer env, y un valor de env: una entrada, pero estos valores se leen entre sí, así que no se puede evaluar ninguno primero.",
+    "fix": [
+      "Cambia uno de los valores para que no lea los demás."
+    ]
+  },
+  "group_unknown": {
+    "title": "No existe ese grupo de ejecución",
+    "why": "El runs-on: execution-group: de un trabajo nombra un grupo de ejecución, que ejecuta el trabajo en uno de sus miembros. Donde se ejecuta el flujo de trabajo, la interfaz Groups no tiene ningún grupo con ese nombre: localmente, no hay ninguno en groups.yaml, y no es el grupo integrado local.",
+    "fix": [
+      "Nombra un grupo que exista, o añade el grupo donde se ejecuta el flujo de trabajo, por ejemplo en groups.yaml."
+    ]
+  },
+  "environment_unknown": {
+    "title": "No existe ese entorno",
+    "why": "El runs-on: environment: de un trabajo de formato 1 nombra un entorno de planificador en un clúster, que solo conoce una plataforma. Donde se ejecuta el flujo de trabajo, la interfaz Groups no tiene ese entorno: localmente no hay ninguno.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que tiene el entorno, o ejecuta el trabajo en un grupo de ejecución (runs-on: execution-group:)."
+    ]
+  },
+  "source_not_found": {
+    "title": "No existe ese flujo de trabajo",
+    "why": "El uses: de un paso nombra un flujo de trabajo, que se resuelve y se fija al crear la ejecución. Donde se ejecuta el flujo de trabajo, la interfaz Sources no tiene ningún flujo de trabajo con esa referencia.",
+    "fix": [
+      "Revisa la referencia: su repositorio, su revisión y el archivo que nombra su with: $yaml."
+    ]
+  },
+  "source_not_known": {
+    "title": "Lugar del flujo de trabajo no conocido al crear la ejecución",
+    "why": "El flujo de trabajo que nombra el uses: de un paso se resuelve y se fija a su commit y al resumen de su texto al crear la ejecución, para que la ejecución y sus reejecuciones ejecuten el mismo texto. Su uses:, y su with: $yaml y $host, dicen dónde está, así que deben estar escritos tal cual, no leídos de algo que solo se conoce después. ACTIVATE los evalúa con las entradas de la ejecución antes de leerlos; ningún flujo de trabajo conocido tiene una expresión en uno de ellos.",
+    "fix": [
+      "Escribe la referencia tal cual en el uses: del paso, y el archivo y el servidor en su with:."
     ]
   },
   "expression_failed": {
@@ -1122,9 +1187,9 @@
   },
   "source_ref_invalid": {
     "title": "No es una referencia a un flujo de trabajo en Git",
-    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git en GitHub o GitLab: github/ o gitlab/, el propietario y el nombre del repositorio, el archivo del flujo de trabajo dentro de él, workflow.yaml si no nombra otro, y @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -.",
+    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git, como ACTIVATE: github/ y el propietario y el nombre del repositorio, o gitlab/ y la ruta de un proyecto, con los nombres de sus grupos, y luego @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. El archivo del flujo de trabajo en el repositorio es el with: $yaml del paso, workflow.yaml si no nombra otro, y with: $host nombra un servidor de GitLab, solo con gitlab/. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -, ni el nombre de un grupo que termina en .git o .lock.",
     "fix": [
-      "Escribe la referencia como github/<propietario>/<repositorio>/<ruta>@<revisión>, o igual con gitlab/."
+      "Escribe la referencia como github/<propietario>/<repositorio>@<revisión>, o gitlab/<grupo>/<proyecto>@<revisión>, con el archivo del flujo de trabajo en with: $yaml."
     ]
   },
   "source_on_platform": {
@@ -1132,14 +1197,14 @@
     "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git.",
     "fix": [
       "Ejecuta el flujo de trabajo en la plataforma que guarda el flujo de trabajo que usa.",
-      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>/<ruta>@<revisión>."
+      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
     ]
   },
   "source_revision_not_found": {
     "title": "No existe el repositorio o la revisión",
     "why": "Meridian obtiene con git la revisión que nombra un uses:, y git no encontró tal repositorio, o tal rama, etiqueta o confirmación en él. Un repositorio privado que git no puede leer con tus credenciales puede parecer lo mismo.",
     "fix": [
-      "Comprueba el propietario y el nombre del repositorio, y la revisión después de @.",
+      "Comprueba el propietario y el nombre del repositorio, y la revisión después de @. Git obtiene una confirmación por su SHA completo, de 40 o 64 caracteres, donde ACTIVATE también acepta uno corto.",
       "Comprueba que git puede obtener el repositorio con tus credenciales, como con git ls-remote y la URL del repositorio."
     ]
   },
@@ -1250,9 +1315,9 @@
   },
   "file_not_regular": {
     "title": "No es un archivo normal",
-    "why": "Meridian lee su configuración, su clave y los valores de las variables solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo.",
+    "why": "Meridian lee su configuración, su clave, los valores de las variables y el token de arranque de un worker solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo, y nunca a través de un enlace simbólico en la ruta del propio archivo, para que lo que lee sea el archivo que nombra la ruta: un directorio en el camino hacia él sí puede ser un enlace.",
     "fix": [
-      "Nombra un archivo normal en su lugar."
+      "Pon el propio archivo en su ruta, en lugar de un enlace a él: el directorio que lo contiene sí puede ser un enlace."
     ]
   },
   "file_not_owned": {
@@ -1278,7 +1343,7 @@
   },
   "file_over_limit": {
     "title": "Archivo más grande de lo que lee Meridian",
-    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable y un archivo de entradas, así que limita su tamaño.",
+    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable, un archivo de entradas y el archivo del token de arranque de un worker, así que limita su tamaño.",
     "fix": [
       "Comprueba que la ruta nombra el archivo que querías, y haz el archivo más pequeño."
     ]
@@ -1575,6 +1640,13 @@
       "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root."
     ]
   },
+  "owner_unknown": {
+    "title": "Propietario que no se puede saber",
+    "why": "Meridian comprueba que sus propios directorios y archivos, y cada directorio en el camino hacia ellos, son tuyos o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. Este sistema operativo no dice quién es el propietario de un archivo, así que Meridian rechaza la ruta en lugar de suponer que ningún otro usuario puede cambiarla.",
+    "fix": [
+      "Ejecuta Meridian en un sistema Unix, como Linux o macOS."
+    ]
+  },
   "path_links_too_many": {
     "title": "Ruta con demasiados enlaces simbólicos",
     "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
@@ -1612,9 +1684,16 @@
   },
   "coordinator_peer_refused": {
     "title": "Socket del coordinador servido por otro usuario",
-    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. En Linux pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. Pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
     "fix": [
       "Inicia el worker con el socket de un coordinador que ejecutes tú, en un directorio que solo tú puedas cambiar."
+    ]
+  },
+  "coordinator_peer_unknown": {
+    "title": "Usuario del socket del coordinador que no se puede saber",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root, y pregunta al sistema operativo quién sirve el socket antes de enviar nada. El sistema operativo no lo dijo.",
+    "fix": [
+      "Corrige lo que indica el motivo, y deja que el backend vuelva a iniciar el worker."
     ]
   },
   "coordinator_key_mismatch": {
@@ -1629,6 +1708,13 @@
     "why": "Un token de arranque reclama un intento, una vez: el coordinador lo rechaza una vez reclamado el intento, por este worker con otra credencial o por otro, o una vez retirada su colocación. El worker termina y no ejecuta nada.",
     "fix": [
       "No hay nada que corregir si se canceló el intento; si no, deja que el backend inicie un worker con el token propio del intento."
+    ]
+  },
+  "bootstrap_token_in_environment": {
+    "title": "Token de arranque en un entorno que otros pueden leer",
+    "why": "Un token de arranque reclama su intento una vez, para quien lo presente primero. En macOS, cualquier proceso de un usuario puede leer los argumentos y el entorno de cualquier otro suyo, como hace ps -E, haga lo que haga el worker para protegerse, así que otro proceso, como un paso de otro trabajo, podría leer allí el token y reclamar el intento. En su lugar, el worker toma el token de un archivo, que elimina en cuanto lo ha leído.",
+    "fix": [
+      "Da el token en un archivo que solo tú puedas leer, cuya ruta indique MERIDIAN_BOOTSTRAP_TOKEN_FILE, en lugar de en MERIDIAN_BOOTSTRAP_TOKEN."
     ]
   },
   "run_plan_too_new": {
@@ -1650,6 +1736,50 @@
     "why": "Un trabajo cuyo retry: incluye worker-lost puede volver a ejecutarse mientras este intento quizá siga ejecutándose, aislado, así que su worker lo detiene antes de que caduque su concesión: cuando no la ha renovado durante seis décimas de ella, detiene todos los procesos que inició el intento, y a las nueve décimas ya los ha matado. No se pudo comunicar con el coordinador durante ese tiempo. Su nuevo intento reanuda el trabajo, como pide su retry:.",
     "fix": [
       "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y que la concesión del trabajo es lo bastante larga para los cortes que esperas."
+    ]
+  },
+  "worker_harden_failed": {
+    "title": "No se puede proteger la memoria del worker",
+    "why": "Un worker guarda la credencial del intento en su memoria, así que antes de reclamar el intento impide que tus otros procesos, entre ellos los pasos de un trabajo, lean su memoria o se le adjunten como hace un depurador: en Linux se hace no volcable, en macOS rechaza los depuradores (PT_DENY_ATTACH) y pone a 0 el tamaño de su archivo core, y en FreeBSD desactiva el rastreo de sí mismo (procctl). El sistema operativo lo rechazó o falló.",
+    "fix": [
+      "Corrige lo que indica el motivo, como una política de seguridad que prohíbe la llamada, y deja que el backend vuelva a iniciar el worker."
+    ]
+  },
+  "worker_system_unsupported": {
+    "title": "Sistema en el que el worker no puede proteger su memoria",
+    "why": "Un worker guarda en su memoria la credencial del intento, e impide que tus otros procesos, entre ellos los pasos de un trabajo, la lean allí o rastreen lo que envía. Puede hacerlo en Linux, macOS y FreeBSD. Otros sistemas, como NetBSD y OpenBSD, no dan a un proceso ninguna forma de impedir que los otros procesos del usuario lo rastreen, así que el worker se niega a ejecutarse en ellos, en lugar de ejecutar un trabajo con menos protección.",
+    "fix": [
+      "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS o FreeBSD."
+    ]
+  },
+  "source_server_unknown": {
+    "title": "Servidor de GitLab no registrado",
+    "why": "El with: $host de un paso nombra el servidor de GitLab que contiene el flujo de trabajo que nombra su uses:. Git llega a un servidor con la configuración y las credenciales del propio usuario, así que Meridian solo llega a gitlab.com y a los servidores que el usuario registró, y no a cualquiera que nombre un flujo de trabajo: localmente, los que sources.yaml, en el directorio de configuración, enumera en gitlab-servers.",
+    "fix": [
+      "Si confías en el servidor, añádelo a gitlab-servers en sources.yaml, por su nombre, como git.example.com.",
+      "Si no, usa un flujo de trabajo de un servidor registrado."
+    ]
+  },
+  "compute_target_unknown": {
+    "title": "No existe ese destino de cómputo",
+    "why": "El runs-on: de un trabajo de formato 1 puede dar un destino de cómputo, como lo da el valor de una entrada compute-target: un modo, login, worker o environment, y un destino, que solo conoce una plataforma. Donde se ejecuta el flujo de trabajo, la interfaz Groups no tiene ese destino de cómputo: localmente no hay ninguno.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que tiene el destino de cómputo, o ejecuta el trabajo en un grupo de ejecución (runs-on: execution-group:)."
+    ]
+  },
+  "gitlab_server_invalid": {
+    "title": "Servidor de GitLab no válido",
+    "why": "gitlab-servers en sources.yaml enumera los servidores de GitLab, además de gitlab.com, que puede nombrar el with: $host de un flujo de trabajo. Cada uno es el nombre DNS de un servidor, como lo nombra un $host, sin puerto, como ACTIVATE lee un $host: Meridian añade el esquema y llega al servidor por el puerto de HTTPS, y un servidor no tiene usuario ni ruta.",
+    "fix": [
+      "Escribe el servidor como git.example.com.",
+      "Para un servidor en otro puerto, registra su nombre y haz que Git llegue a él por su puerto con el ajuste url.<base>.insteadOf de Git, como en: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
+    ]
+  },
+  "source_with_invalid": {
+    "title": "Servidor o archivo del flujo de trabajo que un uses: no puede nombrar",
+    "why": "El with: $host de un paso nombra el servidor de GitLab que contiene el flujo de trabajo que nombra su uses:, por su nombre DNS, sin puerto, como lo lee ACTIVATE; y $yaml nombra el archivo del flujo de trabajo en el repositorio por su ruta desde la raíz del repositorio. Una ruta que empieza con una barra es desde la raíz, como ACTIVATE obtiene el archivo: se quitan todas las barras iniciales en GitHub, y una en GitLab. Ningún nombre de la ruta puede estar vacío, como lo dejan ./ o una barra doble, ni ser . o .., ni contener un carácter de control, para que la ruta nombre un archivo del propio repositorio.",
+    "fix": [
+      "Escribe el servidor como git.example.com, y el archivo como flows/workflow.yaml."
     ]
   }
 }

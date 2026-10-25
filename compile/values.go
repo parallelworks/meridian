@@ -208,3 +208,61 @@ func parseFor(v any, index []int) (any, error) {
 	}
 	return v, nil
 }
+
+// parsed returns v, a workflow's JSON values, with each string that holds
+// an expression parsed as a template, as the workflow's evaluator parses
+// it, once. ok is false if one doesn't parse.
+func (r *inputResolver) parsed(v any) (any, bool) {
+	switch v := v.(type) {
+	case string:
+		if !strings.Contains(v, "${{") {
+			return v, true
+		}
+		t, err := r.workflow.Template(v)
+		if err != nil {
+			return nil, false
+		}
+		if t.IsText() {
+			return v, true
+		}
+		return t, true
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			var ok bool
+			if out[i], ok = r.parsed(item); !ok {
+				return nil, false
+			}
+		}
+		return out, true
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			var ok bool
+			if out[k], ok = r.parsed(item); !ok {
+				return nil, false
+			}
+		}
+		return out, true
+	}
+	return v, true
+}
+
+// isIndex reports whether a key in a path is a list's index.
+func isIndex(key string) bool {
+	_, err := strconv.Atoi(key)
+	return err == nil
+}
+
+// indexPath returns path with each [index] in it the index it reads.
+func indexPath(path []string, index []int) []string {
+	out := slices.Clone(path)
+	k := 0
+	for i, name := range out {
+		if name == "[index]" && k < len(index) {
+			out[i] = strconv.Itoa(index[k])
+			k++
+		}
+	}
+	return out
+}

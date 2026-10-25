@@ -3,6 +3,7 @@ package compile_test
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -38,30 +39,42 @@ var scaledWorkloads = []scaled{
 	{name: "a value nested deep in a matrix", n: 500, workload: deepValue, stageOnly: true},
 	{name: "a form's values for rows whose defaults read their passwords", n: 1000, workload: formRows, timed: true},
 	{name: "defaults that read rows of a list held for the run's start", n: 300, workload: heldRowReads, timed: true},
-	{name: "submitted rows whose template's default reads the whole list", n: 1000, workload: crossRows, timed: true},
+	// At 1000 rows, this one compiles in a few milliseconds, too few to time
+	// it well.
+	{name: "submitted rows whose template's default reads the whole list", n: 4000, workload: crossRows, timed: true},
 	{name: "submitted rows whose template's default reads the whole list, with passwords", n: 1000, workload: crossPasswordRows, timed: true},
 	{name: "submitted rows whose template's default gives the whole list's JSON and a password", n: 1000, workload: wholeListRows, timed: true},
 	{name: "values for unknown inputs taken for passwords, beside a form's rows", n: 1000, workload: unknownPasswordsAndRows, timed: true},
 	{name: "submitted defaults that each read the next, the last a password", n: 250, workload: chainedPasswordDefaults, timed: true},
 	{name: "submitted defaults that each read the one before by a relative reference", n: 250, workload: relativeDefaults, timed: true},
+	{name: "submitted rows whose default reads another list's rows, each evaluated", n: 1000, workload: rowsReadingRows, timed: true},
+	{name: "submitted defaults that each read the one before, each what its default gives", n: 250, workload: givenChain(false), timed: true},
+	{name: "submitted defaults that each read the next, each what its default gives", n: 250, workload: givenChain(true), timed: true},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
 // times the size allocates about four times as much, not sixteen, and for
-// one that is timed, takes less than ten times as long, the best of three
-// runs each.
+// one that is timed, takes no more than eight times as long, the best of
+// five runs each: the geometric mean of four, as compiling grows with the
+// size, and sixteen, as it grows with the size's square, so that a runner
+// that is slow for a while doesn't fail a workload that grows as it
+// should, nor pass one that grows with the square.
 func TestCompileScales(t *testing.T) {
 	for _, w := range scaledWorkloads {
 		t.Run(w.name, func(t *testing.T) {
-			small, smallTime := w.measure(t, w.n)
-			large, largeTime := w.measure(t, 4*w.n)
+			small, compileSmall := w.measure(t, w.n)
+			large, compileLarge := w.measure(t, 4*w.n)
 			if ratio := float64(large) / float64(small); ratio > 8 {
 				t.Errorf("at %d, compiling allocates %d bytes, and at %d, %d: %.1f times as much",
 					w.n, small, 4*w.n, large, ratio)
 			}
-			if ratio := float64(largeTime) / float64(smallTime); w.timed && ratio > 10 {
+			if !w.timed {
+				return
+			}
+			times := fastest(compileSmall, compileLarge)
+			if ratio := float64(times[1]) / float64(times[0]); ratio > 8 {
 				t.Errorf("at %d, compiling takes %v, and at %d, %v: %.1f times as long",
-					w.n, smallTime, 4*w.n, largeTime, ratio)
+					w.n, times[0], 4*w.n, times[1], ratio)
 			}
 		})
 	}
@@ -69,8 +82,8 @@ func TestCompileScales(t *testing.T) {
 
 // measure returns how many bytes compiling the workload at size n
 // allocates, beyond loading it for one that counts the compile stage only,
-// and if it is timed, the shortest time of three that compiling it takes.
-func (w scaled) measure(t *testing.T, n int) (uint64, time.Duration) {
+// and a function that compiles it.
+func (w scaled) measure(t *testing.T, n int) (uint64, func()) {
 	t.Helper()
 	data, submitted := w.workload(n)
 	if _, diags := format.Load("workflow.yaml", data); diags.HasErrors() {
@@ -88,16 +101,32 @@ func (w scaled) measure(t *testing.T, n int) (uint64, time.Duration) {
 	if w.stageOnly {
 		bytes -= allocated(func() { _, _ = format.Load("workflow.yaml", data) })
 	}
-	var best time.Duration
-	for i := 0; w.timed && i < 3; i++ {
-		runtime.GC()
-		start := time.Now()
-		compileIt()
-		if took := time.Since(start); i == 0 || took < best {
-			best = took
+	return bytes, compileIt
+}
+
+// fastest returns the shortest time of five that each of fs takes. It runs
+// them in turn, each once a round, so that a runner that slows down for a
+// while slows each of them alike. It times the work each does, without
+// the garbage collector, which collects before each run and not during
+// one: what collecting costs depends on what else the process holds, and
+// on how many cores it has to itself, and on a runner of two, busy, the
+// larger of two runs that grow as they should took nine times as long as
+// the smaller at four times its size. The allocation checks say how much
+// each allocates.
+func fastest(fs ...func()) []time.Duration {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	best := make([]time.Duration, len(fs))
+	for i := range 5 {
+		for j, f := range fs {
+			runtime.GC()
+			start := time.Now()
+			f()
+			if took := time.Since(start); i == 0 || took < best[j] {
+				best[j] = took
+			}
 		}
 	}
-	return bytes, best
+	return best
 }
 
 // withInputs returns a workflow with inputs, each a line of their
@@ -305,6 +334,44 @@ func relativeDefaults(n int) ([]byte, map[string]any) {
 		submitted[fmt.Sprintf("a%d", i)] = "x"
 	}
 	return withInputs(lines, ""), submitted
+}
+
+// rowsReadingRows is n submitted rows of a list whose template's field has
+// a default that reads a password and another list of n rows, each row's
+// field evaluated from a default, and each with what the default gives:
+// comparing each with the default goes through what the other list's rows
+// read only if something read the row.
+func rowsReadingRows(n int) ([]byte, map[string]any) {
+	l := rows(n, func() map[string]any { return map[string]any{"u": "x", "h": "yes"} })
+	return withInputs([]string{
+		"pw: {type: password}",
+		"x: {type: string, default: y}",
+		"m: {type: list, template: {v: {type: string, optional: true, default: '${{ inputs.x }}x'}}}",
+		"l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ inputs.pw != '''' && length(inputs.m) > 0 && ''yes'' || ''no'' }}'}}}",
+	}, ""), map[string]any{"pw": "s", "m": rows(n, emptyRow), "l": l}
+}
+
+// givenChain returns n inputs whose defaults each read the one before, the
+// first a password, or with next each the one after, the last a password,
+// each given what its default gives: each comparison goes through what one
+// side of the chain reads only if nothing on the other reads it.
+func givenChain(next bool) func(n int) ([]byte, map[string]any) {
+	return func(n int) ([]byte, map[string]any) {
+		lines := []string{"pw: {type: password}"}
+		submitted := map[string]any{"pw": "s"}
+		for i := range n {
+			read := fmt.Sprintf("a%d", i-1)
+			switch {
+			case next && i == n-1, !next && i == 0:
+				read = "pw"
+			case next:
+				read = fmt.Sprintf("a%d", i+1)
+			}
+			lines = append(lines, fmt.Sprintf("a%d: {type: string, default: '${{ inputs.%s }}'}", i, read))
+			submitted[fmt.Sprintf("a%d", i)] = "s"
+		}
+		return withInputs(lines, ""), submitted
+	}
 }
 
 // deepValue is a matrix whose include holds a mapping nested n deep.

@@ -1,0 +1,17 @@
+description: >-
+  A job's needs: that names the same jobs as it starts as when the run was
+  created, each on all of its instances or any one, is the same shape,
+  whatever order it names them in and however often.
+source: Meridian
+contexts:
+  org:
+    AFTER: '["a", "b:any"]'
+start-contexts:
+  org:
+    AFTER: '["b:any", "a", "a"]'
+expect:
+  inputs: {}
+  matrices:
+    b:
+      - {n: 1}
+      - {n: 2}

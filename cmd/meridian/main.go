@@ -48,7 +48,7 @@ func main() {
 	// The first interrupt cancels ctx, which stops what the command waits
 	// on; a second, which is no longer caught, stops the process at once.
 	context.AfterFunc(ctx, stop)
-	code := run(ctx, &cli{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, getenv: os.Getenv}, os.Args[1:])
+	code := run(ctx, &cli{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, lookupEnv: os.LookupEnv}, os.Args[1:])
 	stop()
 	os.Exit(code)
 }
@@ -58,10 +58,18 @@ func main() {
 type cli struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
-	getenv         func(string) string
+	// lookupEnv reads an environment variable, and says whether it is
+	// set, as os.LookupEnv does.
+	lookupEnv func(string) (string, bool)
 	// json says to write problems as RFC 9457 problem details, one a line,
 	// as validate --format json does.
 	json bool
+}
+
+// getenv reads an environment variable, or "" if it isn't set.
+func (c *cli) getenv(name string) string {
+	v, _ := c.lookupEnv(name)
+	return v
 }
 
 // fail writes the problem err is, or wraps, as compilers write an error,
