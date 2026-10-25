@@ -6,13 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
-	"syscall"
 
+	"github.com/parallelworks/foundation/problem"
+
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -35,8 +36,9 @@ type Config struct {
 	Environ []string
 	// Dir is where the worker makes the directory it keeps its own files
 	// in as it runs, which only its user can use: its spooled logs, and
-	// its steps' scripts and $OUTPUTS files. It must be a directory only
-	// the user can use, on a path no other user can change. When it is "",
+	// its steps' scripts and $OUTPUTS files. It must be a directory of the
+	// user's that no other user can change, on a path no other user can
+	// change, or a symbolic link to one. When it is "",
 	// or not such a directory, or goes, the worker uses meridian/worker in
 	// the user's cache directory, which it makes, on disk; else
 	// XDG_RUNTIME_DIR, if the environment sets it to such a directory,
@@ -86,10 +88,13 @@ const memorySpoolLimit = 64 << 20
 //
 // A job whose steps are to run in a container fails before its first step,
 // with a problem that says so: this worker runs steps only on the host, and
-// never runs a job with less isolation than it asks for. On Linux, Run
-// makes the process not dumpable, so that the user's other processes, the
-// job's steps among them, can't read the attempt's credential from its
-// memory.
+// never runs a job with less isolation than it asks for. Before it claims
+// the attempt, Run keeps the user's other processes, the job's steps among
+// them, from reading the attempt's credential from its memory, as the
+// system allows (on Linux, it makes the process not dumpable), and refuses
+// to run on a system where it can't; and it sends a token over a Unix
+// socket only once the system has said that its own user, or root, serves
+// it.
 func Run(ctx context.Context, cfg Config) error {
 	return run(ctx, cfg, defaultTiming, harden)
 }
@@ -226,34 +231,20 @@ func readEnv(environ []string) (endpoint, []string, error) {
 	return ep, rest, nil
 }
 
+// maxTokenFile is the most bytes the worker reads of a bootstrap token's
+// file.
+const maxTokenFile = 4096
+
 // readTokenFile reads a bootstrap token from a file of the worker's user
-// that only the user can read, not through a symbolic link.
+// that only the user can read, not through a symbolic link, on a path no
+// other user can change (safepath.ReadFile).
 func readTokenFile(path string) (string, error) {
-	unreadable := func(err error) (string, error) {
-		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
-			return "", problems.FileNotRegular.Problem(problems.Params{"path": path})
+	data, err := safepath.ReadFile(path, safepath.Private, maxTokenFile)
+	if err != nil {
+		if _, ok := errors.AsType[*problem.Problem](err); ok {
+			return "", err
 		}
 		return "", problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNonBlock, 0) //nolint:gosec // the file the backend put the token in
-	if err != nil {
-		return unreadable(err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	switch {
-	case err != nil:
-		return unreadable(err)
-	case !info.Mode().IsRegular():
-		return "", problems.FileNotRegular.Problem(problems.Params{"path": path})
-	case !ownedByUser(info):
-		return "", problems.FileNotOwned.Problem(problems.Params{"path": path})
-	case info.Mode().Perm()&0o077 != 0:
-		return "", problems.FileNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", info.Mode().Perm())})
-	}
-	data, err := io.ReadAll(io.LimitReader(f, 4096))
-	if err != nil {
-		return unreadable(err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }

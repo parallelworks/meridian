@@ -137,30 +137,16 @@ func lookupEnv(environ []string, name string) string {
 
 // ready makes p, if the worker makes it, only its user's to use, and
 // checks it: that it is a directory of the user's that no other user can
-// change, on a path no other user can change. The system's temporary
-// directory is used as it is.
+// change, on a path no other user can change (safepath.EnsureDir and
+// CheckDir). The system's temporary directory is used as it is.
 func (p parentDir) ready() error {
-	if p.shared {
+	switch {
+	case p.shared:
 		return nil
+	case p.create:
+		return safepath.EnsureDir(p.path, safepath.Unchangeable)
 	}
-	if p.create {
-		// What isn't there yet is made in a directory no other user can
-		// change.
-		if err := safepath.Check(p.path, false); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(p.path, 0o700); err != nil {
-			return err
-		}
-	}
-	info, err := os.Lstat(p.path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || !ownedByUser(info) || info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("worker: %s isn't a directory of this user's that only it can change", p.path)
-	}
-	return safepath.Check(p.path, true)
+	return safepath.CheckDir(p.path, safepath.Unchangeable)
 }
 
 // makePrivateDir makes a private directory in the first of parents it can
@@ -242,14 +228,15 @@ func (d *privateDir) makeIn(parent string) error {
 }
 
 // checkPrivate checks that path names a directory, not a link to one,
-// that belongs to the worker's user, and that no one else can use.
+// that belongs to the worker's user, and that no one else can use
+// (safepath.CheckDirInfo).
 func checkPrivate(path string) (os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() || !ownedByUser(info) || info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("worker: %s isn't a directory of this user's that only it can use", path)
+	if err := safepath.CheckDirInfo(path, info, safepath.Private); err != nil {
+		return nil, err
 	}
 	return info, nil
 }

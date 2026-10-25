@@ -1066,9 +1066,9 @@
     ]
   },
   "file_not_regular": {
-    "why": "Meridian reads its config, its key and variables' values only from regular files, so that reading one can't wait forever on a pipe or read from a device.",
+    "why": "Meridian reads its config, its key, variables' values and a worker's bootstrap token only from regular files, so that reading one can't wait forever on a pipe or read from a device, and never through a symbolic link at the file's own path, so that what it reads is the file the path names: a directory on the way to it can be a link.",
     "fix": [
-      "Name a regular file instead."
+      "Name the regular file itself, rather than a link to it."
     ]
   },
   "file_not_owned": {
@@ -1090,7 +1090,7 @@
     ]
   },
   "file_over_limit": {
-    "why": "Meridian reads its config files, a variable's file and a file of inputs whole, so it limits their size.",
+    "why": "Meridian reads its config files, a variable's file, a file of inputs and a worker's bootstrap token's file whole, so it limits their size.",
     "fix": [
       "Check that the path names the file you meant, and make the file smaller."
     ]
@@ -1346,6 +1346,12 @@
       "Run Meridian outside the user namespace, or in one that maps root."
     ]
   },
+  "owner_unknown": {
+    "why": "Meridian checks that its own directories and files, and every directory on the way to them, belong to you or to root, as OpenSSH checks the way to a user's keys. This operating system doesn't say who owns a file, so Meridian refuses the path rather than assume that no other user can change it.",
+    "fix": [
+      "Run Meridian on a Unix system, such as Linux or macOS."
+    ]
+  },
   "path_links_too_many": {
     "why": "Meridian follows the symbolic links on the way to its directories, as the kernel does, and stops after as many as the kernel would, which is most likely a link that leads back to itself.",
     "fix": [
@@ -1377,9 +1383,15 @@
     ]
   },
   "coordinator_peer_refused": {
-    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's. On Linux it asks the operating system who serves the socket, and another user does: one who could have put a socket at that path to take the token.",
+    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's. It asks the operating system who serves the socket, and another user does: one who could have put a socket at that path to take the token.",
     "fix": [
       "Start the worker with the socket of a coordinator you run, in a directory only you can change."
+    ]
+  },
+  "coordinator_peer_unknown": {
+    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's, and asks the operating system who serves the socket before it sends anything. The operating system didn't say.",
+    "fix": [
+      "Fix what the reason names, and let the backend start the worker again."
     ]
   },
   "coordinator_key_mismatch": {
@@ -1410,6 +1422,24 @@
     "why": "A job whose retry: lists worker-lost can run again while this attempt may still run, cut off, so its worker stops it before its lease lapses: once it hasn't renewed the lease for six tenths of it, it stops every process the attempt started, and by nine tenths has killed them. The coordinator could not be reached for that long. Its new attempt resumes the job, as its retry: asks.",
     "fix": [
       "Check the connection between the host the job ran on and the coordinator, and that the job's lease is long enough to ride out the outages you expect."
+    ]
+  },
+  "worker_harden_failed": {
+    "why": "A worker holds the attempt's credential in its memory, so before it claims the attempt it keeps your other processes, a job's steps among them, from reading its memory or attaching to it as a debugger does: on Linux it makes itself not dumpable, on macOS it refuses debuggers (PT_DENY_ATTACH), on FreeBSD it turns off tracing of itself (procctl), and on OpenBSD it checks kern.global_ptrace. The operating system refused or failed.",
+    "fix": [
+      "Fix what the reason names, such as a security policy that forbids the call, and let the backend start the worker again."
+    ]
+  },
+  "worker_system_unsupported": {
+    "why": "A worker holds the attempt's credential, which it keeps your other processes from reading out of its memory, and sends only to a coordinator of your own, or root's, which it asks the operating system about. It can do both on Linux, macOS, FreeBSD and OpenBSD. Elsewhere it refuses to run, rather than run a job with less protection.",
+    "fix": [
+      "Run the job on a member whose hosts run Linux, macOS, FreeBSD or OpenBSD."
+    ]
+  },
+  "global_ptrace_enabled": {
+    "why": "A worker holds the attempt's credential in its memory. OpenBSD has no /proc, and lets a process trace only its own descendants unless kern.global_ptrace is 1, but gives a process no way to refuse tracing itself, so a worker refuses to run while it is set.",
+    "fix": [
+      "Set kern.global_ptrace to 0 on the host, as OpenBSD has it by default, or run the job on a member whose hosts keep it at 0."
     ]
   }
 }

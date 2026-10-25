@@ -77,68 +77,41 @@ var (
 // changeable by another user, who could otherwise send the user's jobs to
 // a host of their choosing, or give them values. The variables file must
 // be readable only by the user, since people keep secrets in plain
-// variables too.
+// variables too. Neither is read through a symbolic link: the directory
+// can be one, and is checked through it (safepath.ReadFile).
 func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
-	if _, err := os.Stat(dir); err == nil {
+	c := &Config{getenv: getenv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
+	// A directory that isn't there holds no config, and nothing on the
+	// way to it is read.
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
 		if err := safepath.Check(dir, true); err != nil {
 			return nil, err
 		}
-	}
-	c := &Config{getenv: getenv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
-	if err := c.loadGroups(filepath.Join(dir, GroupsFile)); err != nil {
-		return nil, err
+		if err := c.loadGroups(filepath.Join(dir, GroupsFile)); err != nil {
+			return nil, err
+		}
+		if err := c.loadVariables(dir, filepath.Join(dir, VariablesFile)); err != nil {
+			return nil, err
+		}
 	}
 	if _, ok := c.groups[LocalGroup]; !ok {
 		c.groups[LocalGroup] = localGroup()
 	}
-	if err := c.loadVariables(dir, filepath.Join(dir, VariablesFile)); err != nil {
-		return nil, err
-	}
 	return c, nil
 }
 
-// openRegular opens the file at path, without waiting on a FIFO, and
-// checks the file it opened with check, which has it whole or not at all.
-func openRegular(path string, check func(fs.FileInfo) error) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|openFlags, 0) //nolint:gosec // a file the user's config names, which check checks
-	if err != nil {
-		return nil, err
-	}
-	info, err := f.Stat()
-	if err == nil {
-		err = check(info)
-	}
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	return f, nil
-}
-
-// readLimited reads f whole, if it is at most limit bytes.
-func readLimited(f *os.File, path string, limit int) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
-	if err != nil {
-		return nil, problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
-	}
-	if len(data) > limit {
-		return nil, problems.FileOverLimit.Problem(problems.Params{"path": path, "limit": limit})
-	}
-	return data, nil
-}
-
-// readConfig reads the config file at path, after check checks the file it
-// opened, or returns nil when there is none.
-func readConfig(path string, check func(fs.FileInfo) error) ([]byte, error) {
-	f, err := openRegular(path, check)
+// readConfig reads the config file at path, which other users may use no
+// more than access allows (safepath.ReadFile), or returns nil when there
+// is none.
+func readConfig(path string, access safepath.Access) ([]byte, error) {
+	data, err := safepath.ReadFile(path, access, maxConfigSize)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, nil
 	case err != nil:
 		return nil, unreadable(path, err)
 	}
-	defer f.Close()
-	return readLimited(f, path, maxConfigSize)
+	return data, nil
 }
 
 // unreadable returns err, from opening the file at path, as a problem:
@@ -275,7 +248,7 @@ var (
 // loadGroups reads the groups file at path: each group by its name, with
 // its members in order.
 func (c *Config) loadGroups(path string) error {
-	data, err := readConfig(path, func(info fs.FileInfo) error { return checkUnchangeable(path, info) })
+	data, err := readConfig(path, safepath.Unchangeable)
 	if err != nil || data == nil {
 		return err
 	}

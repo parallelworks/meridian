@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -132,11 +133,17 @@ func (k *Keys) cipher(create bool) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// readKeyFile reads the key in the key file in root, which must belong to
-// the user and be readable only by them. A key file that isn't there is
-// fs.ErrNotExist.
+// readKeyFile reads the key in the key file in root, which must be a
+// regular file, not a symbolic link, that belongs to the user and that
+// only they can read (safepath.CheckFileInfo). A key file that isn't there
+// is fs.ErrNotExist.
 func readKeyFile(root *os.Root) ([]byte, error) {
 	path := filepath.Join(root.Name(), KeyFile)
+	// A root follows a link that stays in it, which only the user can put
+	// in the state directory; a key file is never read through one.
+	if info, err := root.Lstat(KeyFile); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		return nil, problems.FileNotRegular.Problem(problems.Params{"path": path})
+	}
 	f, err := root.OpenFile(KeyFile, os.O_RDONLY|openFlags, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, err
@@ -149,7 +156,7 @@ func readKeyFile(root *os.Root) ([]byte, error) {
 	if err != nil {
 		return nil, unreadable(path, err)
 	}
-	if err := checkPrivateInfo(path, info); err != nil {
+	if err := safepath.CheckFileInfo(path, info, safepath.Private); err != nil {
 		return nil, err
 	}
 	key, err := io.ReadAll(io.LimitReader(f, keySize+1))

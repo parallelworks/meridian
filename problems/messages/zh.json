@@ -224,6 +224,7 @@
   "source_access_denied": "Git 被拒绝访问 {location}：{reason}",
   "source_objects_invalid": "Git 拒绝了为 {location} 获取的内容，因为其格式不正确：{reason}",
   "owner_unmapped": "Meridian 无法检查 {path}：通往它的路径上的 {dir} 的所有者被用户命名空间隐藏，因此 Meridian 无法确认其他用户不能更改它。",
+  "owner_unknown": "Meridian 无法判断 {path} 的所有者，因此无法确认其他用户不能更改它。",
   "path_links_too_many": "路径 {path} 经过了超过 {max} 个符号链接。",
   "mount_not_found": "Meridian 在 /proc/self/mountinfo 中找不到包含 {path} 的挂载。",
   "member_settings_not_json": "组“{group}”的一个成员的 settings 中包含 JSON 无法容纳的值，例如 .nan 或 .inf。",
@@ -231,9 +232,13 @@
   "worker_environment_missing": "启动 meridian worker 的环境没有设置 {variable}，它应由启动 meridian worker 的后端设置。",
   "worker_environment_invalid": "启动 meridian worker 的环境以它无法使用的方式设置了 {variable}。",
   "coordinator_peer_refused": "Meridian 不会把尝试的令牌发送到协调器的套接字 {path}：提供它的是用户 {uid}，而不是你或 root。",
+  "coordinator_peer_unknown": "Meridian 无法判断是哪个用户提供了协调器的套接字 {path}，因此不会把尝试的令牌发送给它：{reason}",
   "coordinator_key_mismatch": "{address} 上的服务器不持有协调器的密钥（其哈希由 MERIDIAN_COORDINATOR_KEY_SHA256 给出），因此 meridian worker 不会与它通信。",
   "bootstrap_token_refused": "协调器拒绝了启动 meridian worker 时使用的引导令牌：该令牌对应的尝试已被领取，或其放置已被撤回。",
   "run_plan_too_new": "该运行的计划比此 meridian 能读取的（计划版本 {version}）更新，因此该尝试会被重新放置到能读取它的工作进程上。",
   "attempt_superseded": "协调器不再接受此尝试的报告：该作业的另一个尝试取代了它，或者它在没有此工作进程的情况下结束了。",
-  "attempt_lease_lapsed": "Meridian 停止了该作业（它可能会再次运行），因为它无法在尝试的租约失效之前续订租约。"
+  "attempt_lease_lapsed": "Meridian 停止了该作业（它可能会再次运行），因为它无法在尝试的租约失效之前续订租约。",
+  "worker_harden_failed": "工作进程无法阻止你的其他进程访问它的内存，因此不会领取该尝试：{reason}",
+  "worker_system_unsupported": "工作进程不在 {os} 上运行：在那里它既无法阻止你的其他进程访问它的内存，也无法询问是哪个用户提供了协调器的套接字。",
+  "global_ptrace_enabled": "在设置了 kern.global_ptrace 期间，工作进程不会运行：该设置让你的其他进程可以附加到它并读取它的内存。"
 }

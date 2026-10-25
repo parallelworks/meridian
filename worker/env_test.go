@@ -66,7 +66,8 @@ func TestReadEnv(t *testing.T) {
 
 // TestTokenFile checks that a worker reads its bootstrap token from a file
 // only its user can read, and removes it, and refuses one others can read,
-// or a symbolic link.
+// a symbolic link, one too large, and one in a directory others can
+// change.
 func TestTokenFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -100,6 +101,29 @@ func TestTokenFile(t *testing.T) {
 	}
 	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + link}); problemOf(err, problems.FileNotRegular) == nil {
 		t.Errorf("read a token through a symbolic link: %v", err)
+	}
+	// Nor from a file larger than a token's, which it doesn't cut short.
+	large := filepath.Join(dir, "large")
+	if err := os.WriteFile(large, []byte(strings.Repeat("t", maxTokenFile+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + large}); problemOf(err, problems.FileOverLimit) == nil {
+		t.Errorf("read a token from a file of %d bytes: %v", maxTokenFile+1, err)
+	}
+	// Nor from a directory another user could change, who could swap the
+	// file for another.
+	open := filepath.Join(dir, "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(open, "token"), []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o777); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+		t.Fatal(err)
+	}
+	if _, _, err := readEnv([]string{"MERIDIAN_COORDINATOR=/c.sock", workerapi.EnvBootstrapTokenFile + "=" + filepath.Join(open, "token")}); problemOf(err, problems.PathUnsafe) == nil {
+		t.Errorf("read a token from a directory others can change: %v", err)
 	}
 }
 

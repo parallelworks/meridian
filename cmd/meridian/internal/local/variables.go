@@ -3,7 +3,6 @@ package local
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -57,7 +56,7 @@ type variable struct {
 func (c *Config) loadVariables(dir, path string) error {
 	// Variables can hold secrets, as people keep them in plain variables
 	// too, so only the user may read the file.
-	data, err := readConfig(path, func(info fs.FileInfo) error { return checkPrivateInfo(path, info) })
+	data, err := readConfig(path, safepath.Private)
 	if err != nil || data == nil {
 		return err
 	}
@@ -250,30 +249,22 @@ func lookupEnv(getenv func(string) string, name string) (string, bool) {
 
 // readValueFile reads v's value from its file, without the newline, or the
 // carriage return and newline, at its end. Every directory on the way to
-// the file must be safe, as safepath.Check says, so that no one else can
-// swap the file for another, or for a link to one of the user's own. The
-// file must belong to the user, and no other user may change it, nor read
-// it when it holds a secret, as the file opened says.
+// the file must be safe, so that no one else can swap the file for
+// another, or for a link to one of the user's own, and the file is read
+// only if it isn't a symbolic link itself, belongs to the user, and no
+// other user may change it, nor read it when it holds a secret
+// (safepath.ReadFile).
 func readValueFile(v variable) (string, error) {
-	if err := safepath.Check(v.file, false); err != nil {
-		return "", err
+	access := safepath.Unchangeable
+	if v.secret {
+		access = safepath.Private
 	}
-	f, err := openRegular(v.file, func(info fs.FileInfo) error {
-		if v.secret {
-			return checkPrivateInfo(v.file, info)
-		}
-		return checkUnchangeable(v.file, info)
-	})
+	data, err := safepath.ReadFile(v.file, access, maxConfigSize)
 	if err != nil {
 		if isProblem(err) {
 			return "", err
 		}
 		return "", problems.VariableFileUnreadable.Problem(problems.Params{"variable": v.name, "file": v.file, "reason": err.Error()})
-	}
-	defer f.Close()
-	data, err := readLimited(f, v.file, maxConfigSize)
-	if err != nil {
-		return "", err
 	}
 	s := strings.TrimSuffix(string(data), "\n")
 	return strings.TrimSuffix(s, "\r"), nil

@@ -224,6 +224,7 @@
   "source_access_denied": "Se denegó a Git el acceso a {location}: {reason}.",
   "source_objects_invalid": "Git rechazó lo que obtuvo para {location}, que no está bien formado: {reason}.",
   "owner_unmapped": "Meridian no puede comprobar {path}: un espacio de nombres de usuario oculta el propietario de {dir}, en el camino hacia él, así que Meridian no puede saber si otro usuario puede cambiarlo.",
+  "owner_unknown": "Meridian no puede saber quién es el propietario de {path}, así que no puede saber si otro usuario puede cambiarlo.",
   "path_links_too_many": "La ruta {path} pasa por más de {max} enlaces simbólicos.",
   "mount_not_found": "Meridian no encuentra en /proc/self/mountinfo el montaje que contiene {path}.",
   "member_settings_not_json": "Un miembro del grupo “{group}” tiene una configuración que JSON no puede contener, como .nan o .inf.",
@@ -231,9 +232,13 @@
   "worker_environment_missing": "El entorno con el que se inició meridian worker no define {variable}, que define el backend que lo inicia.",
   "worker_environment_invalid": "El entorno con el que se inició meridian worker define {variable} de una forma que no puede usar.",
   "coordinator_peer_refused": "Meridian no enviará el token del intento al socket del coordinador {path}: lo sirve el usuario {uid}, no tú ni root.",
+  "coordinator_peer_unknown": "Meridian no puede saber qué usuario sirve el socket del coordinador {path}, así que no le enviará el token del intento: {reason}.",
   "coordinator_key_mismatch": "El servidor en {address} no tiene la clave del coordinador, cuyo hash da MERIDIAN_COORDINATOR_KEY_SHA256, así que meridian worker no se comunicará con él.",
   "bootstrap_token_refused": "El coordinador rechazó el token de arranque con el que se inició meridian worker: el intento para el que es ya se reclamó, o se retiró su colocación.",
   "run_plan_too_new": "El plan de la ejecución es más nuevo de lo que lee este meridian, que es la versión {version} del plan, así que el intento se coloca de nuevo, en un worker que lo lea.",
   "attempt_superseded": "El coordinador ya no acepta informes de este intento: otro intento del trabajo lo sustituyó, o terminó sin este worker.",
-  "attempt_lease_lapsed": "Meridian detuvo el trabajo, que puede ejecutarse de nuevo, porque no pudo renovar la concesión del intento antes de que caducara."
+  "attempt_lease_lapsed": "Meridian detuvo el trabajo, que puede ejecutarse de nuevo, porque no pudo renovar la concesión del intento antes de que caducara.",
+  "worker_harden_failed": "El worker no puede mantener tus otros procesos fuera de su memoria, así que no reclamará el intento: {reason}.",
+  "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria ni preguntar qué usuario sirve el socket del coordinador.",
+  "global_ptrace_enabled": "El worker no se ejecutará mientras kern.global_ptrace esté activado, lo que permite que tus otros procesos se le adjunten y lean su memoria."
 }

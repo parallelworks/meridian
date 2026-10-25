@@ -39,6 +39,10 @@ jobs:
         run: make vulncheck
       - name: Check that nothing uses cgo
         run: make cgo-check
+      # CI runs only Linux, so the code for macOS and the BSDs is compiled
+      # and vetted, tests included, without running.
+      - name: Vet the code for macOS and the BSDs
+        run: make vet-cross
 
   # Audits the workflows themselves: unpinned actions, script injection,
   # over-broad tokens, leaked credentials. Any finding fails the job.

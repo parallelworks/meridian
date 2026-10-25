@@ -1242,9 +1242,9 @@
   },
   "file_not_regular": {
     "title": "No es un archivo normal",
-    "why": "Meridian lee su configuración, su clave y los valores de las variables solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo.",
+    "why": "Meridian lee su configuración, su clave, los valores de las variables y el token de arranque de un worker solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo, y nunca a través de un enlace simbólico en la ruta del propio archivo, para que lo que lee sea el archivo que nombra la ruta: un directorio en el camino hacia él sí puede ser un enlace.",
     "fix": [
-      "Nombra un archivo normal en su lugar."
+      "Nombra el propio archivo normal, en lugar de un enlace a él."
     ]
   },
   "file_not_owned": {
@@ -1270,7 +1270,7 @@
   },
   "file_over_limit": {
     "title": "Archivo más grande de lo que lee Meridian",
-    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable y un archivo de entradas, así que limita su tamaño.",
+    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable, un archivo de entradas y el archivo del token de arranque de un worker, así que limita su tamaño.",
     "fix": [
       "Comprueba que la ruta nombra el archivo que querías, y haz el archivo más pequeño."
     ]
@@ -1567,6 +1567,13 @@
       "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root."
     ]
   },
+  "owner_unknown": {
+    "title": "Propietario que no se puede saber",
+    "why": "Meridian comprueba que sus propios directorios y archivos, y cada directorio en el camino hacia ellos, son tuyos o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. Este sistema operativo no dice quién es el propietario de un archivo, así que Meridian rechaza la ruta en lugar de suponer que ningún otro usuario puede cambiarla.",
+    "fix": [
+      "Ejecuta Meridian en un sistema Unix, como Linux o macOS."
+    ]
+  },
   "path_links_too_many": {
     "title": "Ruta con demasiados enlaces simbólicos",
     "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
@@ -1604,9 +1611,16 @@
   },
   "coordinator_peer_refused": {
     "title": "Socket del coordinador servido por otro usuario",
-    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. En Linux pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. Pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
     "fix": [
       "Inicia el worker con el socket de un coordinador que ejecutes tú, en un directorio que solo tú puedas cambiar."
+    ]
+  },
+  "coordinator_peer_unknown": {
+    "title": "Usuario del socket del coordinador que no se puede saber",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root, y pregunta al sistema operativo quién sirve el socket antes de enviar nada. El sistema operativo no lo dijo.",
+    "fix": [
+      "Corrige lo que indica el motivo, y deja que el backend vuelva a iniciar el worker."
     ]
   },
   "coordinator_key_mismatch": {
@@ -1642,6 +1656,27 @@
     "why": "Un trabajo cuyo retry: incluye worker-lost puede volver a ejecutarse mientras este intento quizá siga ejecutándose, aislado, así que su worker lo detiene antes de que caduque su concesión: cuando no la ha renovado durante seis décimas de ella, detiene todos los procesos que inició el intento, y a las nueve décimas ya los ha matado. No se pudo comunicar con el coordinador durante ese tiempo. Su nuevo intento reanuda el trabajo, como pide su retry:.",
     "fix": [
       "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y que la concesión del trabajo es lo bastante larga para los cortes que esperas."
+    ]
+  },
+  "worker_harden_failed": {
+    "title": "No se puede proteger la memoria del worker",
+    "why": "Un worker guarda la credencial del intento en su memoria, así que antes de reclamar el intento impide que tus otros procesos, entre ellos los pasos de un trabajo, lean su memoria o se le adjunten como hace un depurador: en Linux se hace no volcable, en macOS rechaza los depuradores (PT_DENY_ATTACH), en FreeBSD desactiva el rastreo de sí mismo (procctl), y en OpenBSD comprueba kern.global_ptrace. El sistema operativo lo rechazó o falló.",
+    "fix": [
+      "Corrige lo que indica el motivo, como una política de seguridad que prohíbe la llamada, y deja que el backend vuelva a iniciar el worker."
+    ]
+  },
+  "worker_system_unsupported": {
+    "title": "Sistema en el que el worker no puede proteger su memoria",
+    "why": "Un worker guarda la credencial del intento, que impide que tus otros procesos lean de su memoria, y la envía solo a un coordinador tuyo, o de root, sobre el que pregunta al sistema operativo. Puede hacer ambas cosas en Linux, macOS, FreeBSD y OpenBSD. En otros sistemas se niega a ejecutarse, en lugar de ejecutar un trabajo con menos protección.",
+    "fix": [
+      "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS, FreeBSD u OpenBSD."
+    ]
+  },
+  "global_ptrace_enabled": {
+    "title": "Rastreo sin restricciones (kern.global_ptrace)",
+    "why": "Un worker guarda la credencial del intento en su memoria. OpenBSD no tiene /proc, y solo deja que un proceso rastree a sus propios descendientes, salvo que kern.global_ptrace valga 1, pero no da a un proceso ninguna forma de negarse a que lo rastreen, así que un worker se niega a ejecutarse mientras esté activado.",
+    "fix": [
+      "Pon kern.global_ptrace a 0 en el host, como lo tiene OpenBSD de forma predeterminada, o ejecuta el trabajo en un miembro cuyos hosts lo mantengan en 0."
     ]
   }
 }

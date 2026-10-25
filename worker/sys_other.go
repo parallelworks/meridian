@@ -3,17 +3,19 @@
 package worker
 
 import (
-	"errors"
 	"io"
 	"net"
-	"os"
 	"os/exec"
+	"runtime"
 	"syscall"
+
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A worker runs only on a Unix host, where it can stop a step and
-// everything it started as one process group, and check who it talks to.
-var errNotUnix = errors.New("worker: a worker runs only on a Unix host")
+// everything it started as one process group, check who it talks to, and
+// keep the user's other processes out of its memory.
+var errNotUnix error = problems.WorkerSystemUnsupported.Problem(problems.Params{"os": runtime.GOOS})
 
 func runProcess(*exec.Cmd, io.Writer, <-chan stopRequest, func(int)) (int, stopCause, error) {
 	return -1, noStop, errNotUnix
@@ -28,8 +30,6 @@ const holdsLeaders = false
 func checkPeer(*net.UnixConn, string) error { return errNotUnix }
 
 func harden() error { return errNotUnix }
-
-func ownedByUser(os.FileInfo) bool { return false }
 
 const (
 	openNoFollow = 0
