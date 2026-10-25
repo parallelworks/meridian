@@ -104,50 +104,65 @@ func (s scaledJob) runIt(t testing.TB) {
 	}
 }
 
-// measure returns how many bytes running the job allocates, and the
-// shortest time of five that it takes.
-func (s scaledJob) measure(t *testing.T) (uint64, time.Duration) {
+// allocated returns how many bytes running the job allocates.
+func (s scaledJob) allocated(t *testing.T) uint64 {
 	t.Helper()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	s.runIt(t)
 	runtime.ReadMemStats(&after)
-	var best time.Duration
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// fastest returns the shortest time of five that running each of jobs
+// takes. It runs them in turn, each once a round, so a runner that slows
+// down for a while slows each of them alike.
+func fastest(t *testing.T, jobs ...scaledJob) []time.Duration {
+	t.Helper()
+	best := make([]time.Duration, len(jobs))
 	for i := range 5 {
-		runtime.GC()
-		start := time.Now()
-		s.runIt(t)
-		if took := time.Since(start); i == 0 || took < best {
-			best = took
+		for j, s := range jobs {
+			runtime.GC()
+			start := time.Now()
+			s.runIt(t)
+			if took := time.Since(start); i == 0 || took < best[j] {
+				best[j] = took
+			}
 		}
 	}
-	return after.TotalAlloc - before.TotalAlloc, best
+	return best
 }
 
 // TestJobScales checks that running a job's phases costs as much more as
 // the job has more steps, and no more as its run has more input rows that
 // its steps don't read: at 20 times the steps, the job allocates no more
-// than 40 times as much, and takes no more than 50 times as long, the best
-// of five runs each, and at 100 times the rows, no more than twice as much
-// and three times as long. A step that read each output of the steps
-// before it again, or copied the run's inputs, made a job cost as the
-// square of its steps, or as its steps times its rows.
+// than 40 times as much, twice its linear growth, and at 100 times the
+// rows, no more than twice as much. A step that read each output of the
+// steps before it again, or copied the run's inputs, made a job cost as
+// the square of its steps, or as its steps times its rows. The time each
+// takes, the best of five runs, may grow no more than 90 times for 20
+// times the steps, and 3 times for 100 times the rows. A job's time grows
+// a little faster than its steps, as each step does a little for each
+// step before it: 30 to 50 times, on a loaded runner, for 20 times the
+// steps, which is why 50 was too tight. Its time doesn't grow with rows.
 func TestJobScales(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string
 		smallSteps, largeSteps int
 		smallRows, largeRows   int
 		// allocated and took are how many times as much the larger job can
-		// allocate, and how many times as long it can take, as the smaller:
-		// twice its linear growth, and more for time, which is noisier.
+		// allocate, and how many times as long it can take, as the smaller.
 		allocated, took float64
 	}{
-		{name: "steps", smallSteps: 10, largeSteps: 200, smallRows: 10, largeRows: 10, allocated: 40, took: 50},
+		{name: "steps", smallSteps: 10, largeSteps: 200, smallRows: 10, largeRows: 10, allocated: 40, took: 90},
 		{name: "rows", smallSteps: 10, largeSteps: 10, smallRows: 100, largeRows: 10000, allocated: 2, took: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			small, smallTime := newScaledJob(t, tc.smallSteps, tc.smallRows).measure(t)
-			large, largeTime := newScaledJob(t, tc.largeSteps, tc.largeRows).measure(t)
+			smallJob := newScaledJob(t, tc.smallSteps, tc.smallRows)
+			largeJob := newScaledJob(t, tc.largeSteps, tc.largeRows)
+			small, large := smallJob.allocated(t), largeJob.allocated(t)
+			times := fastest(t, smallJob, largeJob)
+			smallTime, largeTime := times[0], times[1]
 			if ratio := float64(large) / float64(small); ratio > tc.allocated {
 				t.Errorf("%d steps and %d rows allocate %d bytes, and %d steps and %d rows %d: %.1f times as much",
 					tc.smallSteps, tc.smallRows, small, tc.largeSteps, tc.largeRows, large, ratio)
