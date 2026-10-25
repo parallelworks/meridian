@@ -287,6 +287,7 @@ var (
 	NetworkFilesystem         = defineCommand("network_filesystem", "Database on a network filesystem", "path", "type")
 	FilesystemUnknown         = defineCommand("filesystem_unknown", "Filesystem can't be told", "path", "reason")
 	OwnerUnmapped             = defineCommand("owner_unmapped", "Owner hidden by a user namespace", "path", "dir")
+	OwnerUnknown              = defineCommand("owner_unknown", "Owner can't be told", "path")
 	PathLinksTooMany          = defineCommand("path_links_too_many", "Path through too many symbolic links", "path", "max")
 	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
@@ -360,14 +361,20 @@ var (
 )
 
 // meridian worker's own problems, which end it: variable is an environment
-// variable's name, address the coordinator's, and uid a user's number.
+// variable's name, address the coordinator's, uid a user's number, os the
+// operating system's name, as Go's GOOS has it, and reason what the
+// operating system said.
 var (
-	WorkerEnvironmentMissing = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
-	WorkerEnvironmentInvalid = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
-	CoordinatorPeerRefused   = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
-	CoordinatorKeyMismatch   = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
-	BootstrapTokenRefused    = defineCommand("bootstrap_token_refused", "Bootstrap token refused")
-	RunPlanTooNew            = defineCommand("run_plan_too_new", "Run's plan newer than the worker reads", "version")
-	AttemptSuperseded        = defineCommand("attempt_superseded", "Attempt ended without the worker")
-	AttemptLeaseLapsed       = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
+	WorkerEnvironmentMissing    = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
+	WorkerEnvironmentInvalid    = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
+	CoordinatorPeerRefused      = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
+	CoordinatorPeerUnknown      = defineCommand("coordinator_peer_unknown", "Coordinator socket's user can't be told", "path", "reason")
+	CoordinatorKeyMismatch      = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
+	BootstrapTokenRefused       = defineCommand("bootstrap_token_refused", "Bootstrap token refused")
+	BootstrapTokenInEnvironment = defineCommand("bootstrap_token_in_environment", "Bootstrap token in an environment others can read")
+	RunPlanTooNew               = defineCommand("run_plan_too_new", "Run's plan newer than the worker reads", "version")
+	AttemptSuperseded           = defineCommand("attempt_superseded", "Attempt ended without the worker")
+	AttemptLeaseLapsed          = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
+	WorkerHardenFailed          = defineCommand("worker_harden_failed", "Worker's memory can't be protected", "reason")
+	WorkerSystemUnsupported     = defineCommand("worker_system_unsupported", "System where the worker can't protect its memory", "os")
 )

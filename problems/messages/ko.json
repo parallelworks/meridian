@@ -224,6 +224,7 @@
   "source_access_denied": "Git이 {location}에 대한 접근을 거부당했습니다: {reason}",
   "source_objects_invalid": "Git이 {location}을(를) 위해 가져온 것을 형식이 잘못되어 거부했습니다: {reason}",
   "owner_unmapped": "Meridian이 {path}을(를) 확인할 수 없습니다. 그 경로 중간의 {dir}의 소유자가 사용자 네임스페이스에 가려져 있어, 다른 사용자가 바꿀 수 없는지 알 수 없습니다.",
+  "owner_unknown": "Meridian이 {path}의 소유자를 알 수 없어, 다른 사용자가 바꿀 수 없는지 알 수 없습니다.",
   "path_links_too_many": "{path} 경로는 {max}개가 넘는 심볼릭 링크를 지납니다.",
   "mount_not_found": "Meridian이 /proc/self/mountinfo에서 {path}을(를) 담은 마운트를 찾을 수 없습니다.",
   "member_settings_not_json": "‘{group}’ 그룹의 구성원 settings에 .nan이나 .inf처럼 JSON으로 담을 수 없는 값이 있습니다.",
@@ -231,9 +232,13 @@
   "worker_environment_missing": "meridian worker가 시작된 환경에 {variable}이(가) 설정되어 있지 않습니다. 이는 meridian worker를 시작하는 백엔드가 설정합니다.",
   "worker_environment_invalid": "meridian worker가 시작된 환경에 {variable}이(가) meridian worker가 쓸 수 없는 방식으로 설정되어 있습니다.",
   "coordinator_peer_refused": "Meridian은 시도의 토큰을 코디네이터 소켓 {path}에 보내지 않습니다. 이 소켓은 사용자 {uid}이(가) 제공하며, 당신이나 root가 아닙니다.",
+  "coordinator_peer_unknown": "Meridian이 코디네이터 소켓 {path}을(를) 어떤 사용자가 제공하는지 알 수 없어, 시도의 토큰을 보내지 않습니다: {reason}",
   "coordinator_key_mismatch": "{address}의 서버는 코디네이터의 키(해시는 MERIDIAN_COORDINATOR_KEY_SHA256이 제공)를 가지고 있지 않으므로, meridian worker는 그 서버와 통신하지 않습니다.",
   "bootstrap_token_refused": "코디네이터가 meridian worker가 시작될 때 받은 부트스트랩 토큰을 거부했습니다. 토큰의 대상인 시도가 이미 요청되었거나 그 배치가 철회되었습니다.",
+  "bootstrap_token_in_environment": "이 시스템에서는 당신의 다른 프로세스가 워커의 환경을 읽을 수 있으므로, 워커는 부트스트랩 토큰을 MERIDIAN_BOOTSTRAP_TOKEN에서 받지 않습니다. MERIDIAN_BOOTSTRAP_TOKEN_FILE이 가리키는 파일로 주세요.",
   "run_plan_too_new": "실행의 계획이 이 meridian이 읽을 수 있는 것(계획 버전 {version})보다 새로우므로, 시도는 그것을 읽을 수 있는 워커에 다시 배치됩니다.",
   "attempt_superseded": "코디네이터가 더 이상 이 시도의 보고를 받지 않습니다. 작업의 다른 시도가 이 시도를 대체했거나, 시도가 이 워커 없이 끝났습니다.",
-  "attempt_lease_lapsed": "Meridian이 작업을 중지했습니다(작업은 다시 실행될 수 있습니다). 시도의 리스가 만료되기 전에 갱신할 수 없었기 때문입니다."
+  "attempt_lease_lapsed": "Meridian이 작업을 중지했습니다(작업은 다시 실행될 수 있습니다). 시도의 리스가 만료되기 전에 갱신할 수 없었기 때문입니다.",
+  "worker_harden_failed": "워커가 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없어, 시도를 요청하지 않습니다: {reason}",
+  "worker_system_unsupported": "워커는 {os}에서 실행되지 않습니다. 그곳에서는 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없기 때문입니다."
 }

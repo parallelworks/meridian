@@ -1,8 +1,15 @@
 // Package safepath checks the directories on the way to a path that holds
 // a user's files, as OpenSSH's safe_path checks those on the way to a
-// user's keys: the meridian command checks its config, state and cache
-// directories with it, and the worker the directory it keeps its own files
-// in.
+// user's keys (Check), and the directories and files at the end of it:
+// that each is the user's, and that other users can read or change it no
+// more than it allows (CheckDir, EnsureDir and ReadFile). The
+// meridian command checks its config, state and cache directories, and the
+// files in them, with it, and the worker its bootstrap token's file and
+// the directories it keeps its own files in.
+//
+// What can't be told is refused: where the system doesn't say who owns a
+// file, every check fails, as problems.OwnerUnknown, and where a user
+// namespace hides an owner, as problems.OwnerUnmapped.
 package safepath
 
 import (
@@ -45,8 +52,8 @@ const maxLinks = 40
 // itself, as a directory that holds the user's files. A part of the path
 // that isn't there yet is one Meridian will create, and the directory it
 // is created in must be safe. What is wrong is a *problem.Problem: of the
-// kind problems.PathUnsafe, OwnerUnmapped, PathLinksTooMany or
-// DirectoryUnavailable.
+// kind problems.PathUnsafe, OwnerUnmapped, OwnerUnknown, PathLinksTooMany
+// or DirectoryUnavailable.
 func Check(path string, leaf bool) error {
 	return checker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink, unmapped: Unmapped}.check(path, leaf)
 }
@@ -139,14 +146,16 @@ func (pc checker) holds(path, dir string, dirInfo fs.FileInfo, entry string, inf
 	}
 	owner, ok := Owner(dirInfo)
 	if !ok {
-		return nil // nothing here says who owns a file
+		return ownerUnknown(dir)
 	}
 	if owner != 0 && owner != pc.uid {
 		return unsafe(dir, owner)
 	}
 	entryOwner := pc.uid
 	if info != nil {
-		entryOwner, _ = Owner(info)
+		if entryOwner, ok = Owner(info); !ok {
+			return ownerUnknown(entry)
+		}
 	}
 	entryOurs := entryOwner == 0 || entryOwner == pc.uid
 	if dirInfo.Mode().Perm()&0o022 != 0 {

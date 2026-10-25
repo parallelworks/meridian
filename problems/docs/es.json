@@ -1242,9 +1242,9 @@
   },
   "file_not_regular": {
     "title": "No es un archivo normal",
-    "why": "Meridian lee su configuración, su clave y los valores de las variables solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo.",
+    "why": "Meridian lee su configuración, su clave, los valores de las variables y el token de arranque de un worker solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo, y nunca a través de un enlace simbólico en la ruta del propio archivo, para que lo que lee sea el archivo que nombra la ruta: un directorio en el camino hacia él sí puede ser un enlace.",
     "fix": [
-      "Nombra un archivo normal en su lugar."
+      "Pon el propio archivo en su ruta, en lugar de un enlace a él: el directorio que lo contiene sí puede ser un enlace."
     ]
   },
   "file_not_owned": {
@@ -1270,7 +1270,7 @@
   },
   "file_over_limit": {
     "title": "Archivo más grande de lo que lee Meridian",
-    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable y un archivo de entradas, así que limita su tamaño.",
+    "why": "Meridian lee enteros sus archivos de configuración, el archivo de una variable, un archivo de entradas y el archivo del token de arranque de un worker, así que limita su tamaño.",
     "fix": [
       "Comprueba que la ruta nombra el archivo que querías, y haz el archivo más pequeño."
     ]
@@ -1567,6 +1567,13 @@
       "Ejecuta Meridian fuera del espacio de nombres de usuario, o en uno que asocie root."
     ]
   },
+  "owner_unknown": {
+    "title": "Propietario que no se puede saber",
+    "why": "Meridian comprueba que sus propios directorios y archivos, y cada directorio en el camino hacia ellos, son tuyos o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. Este sistema operativo no dice quién es el propietario de un archivo, así que Meridian rechaza la ruta en lugar de suponer que ningún otro usuario puede cambiarla.",
+    "fix": [
+      "Ejecuta Meridian en un sistema Unix, como Linux o macOS."
+    ]
+  },
   "path_links_too_many": {
     "title": "Ruta con demasiados enlaces simbólicos",
     "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
@@ -1604,9 +1611,16 @@
   },
   "coordinator_peer_refused": {
     "title": "Socket del coordinador servido por otro usuario",
-    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. En Linux pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. Pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
     "fix": [
       "Inicia el worker con el socket de un coordinador que ejecutes tú, en un directorio que solo tú puedas cambiar."
+    ]
+  },
+  "coordinator_peer_unknown": {
+    "title": "Usuario del socket del coordinador que no se puede saber",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root, y pregunta al sistema operativo quién sirve el socket antes de enviar nada. El sistema operativo no lo dijo.",
+    "fix": [
+      "Corrige lo que indica el motivo, y deja que el backend vuelva a iniciar el worker."
     ]
   },
   "coordinator_key_mismatch": {
@@ -1621,6 +1635,13 @@
     "why": "Un token de arranque reclama un intento, una vez: el coordinador lo rechaza una vez reclamado el intento, por este worker con otra credencial o por otro, o una vez retirada su colocación. El worker termina y no ejecuta nada.",
     "fix": [
       "No hay nada que corregir si se canceló el intento; si no, deja que el backend inicie un worker con el token propio del intento."
+    ]
+  },
+  "bootstrap_token_in_environment": {
+    "title": "Token de arranque en un entorno que otros pueden leer",
+    "why": "Un token de arranque reclama su intento una vez, para quien lo presente primero. En macOS, cualquier proceso de un usuario puede leer los argumentos y el entorno de cualquier otro suyo, como hace ps -E, haga lo que haga el worker para protegerse, así que otro proceso, como un paso de otro trabajo, podría leer allí el token y reclamar el intento. En su lugar, el worker toma el token de un archivo, que elimina en cuanto lo ha leído.",
+    "fix": [
+      "Da el token en un archivo que solo tú puedas leer, cuya ruta indique MERIDIAN_BOOTSTRAP_TOKEN_FILE, en lugar de en MERIDIAN_BOOTSTRAP_TOKEN."
     ]
   },
   "run_plan_too_new": {
@@ -1642,6 +1663,20 @@
     "why": "Un trabajo cuyo retry: incluye worker-lost puede volver a ejecutarse mientras este intento quizá siga ejecutándose, aislado, así que su worker lo detiene antes de que caduque su concesión: cuando no la ha renovado durante seis décimas de ella, detiene todos los procesos que inició el intento, y a las nueve décimas ya los ha matado. No se pudo comunicar con el coordinador durante ese tiempo. Su nuevo intento reanuda el trabajo, como pide su retry:.",
     "fix": [
       "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y que la concesión del trabajo es lo bastante larga para los cortes que esperas."
+    ]
+  },
+  "worker_harden_failed": {
+    "title": "No se puede proteger la memoria del worker",
+    "why": "Un worker guarda la credencial del intento en su memoria, así que antes de reclamar el intento impide que tus otros procesos, entre ellos los pasos de un trabajo, lean su memoria o se le adjunten como hace un depurador: en Linux se hace no volcable, en macOS rechaza los depuradores (PT_DENY_ATTACH) y pone a 0 el tamaño de su archivo core, y en FreeBSD desactiva el rastreo de sí mismo (procctl). El sistema operativo lo rechazó o falló.",
+    "fix": [
+      "Corrige lo que indica el motivo, como una política de seguridad que prohíbe la llamada, y deja que el backend vuelva a iniciar el worker."
+    ]
+  },
+  "worker_system_unsupported": {
+    "title": "Sistema en el que el worker no puede proteger su memoria",
+    "why": "Un worker guarda en su memoria la credencial del intento, e impide que tus otros procesos, entre ellos los pasos de un trabajo, la lean allí o rastreen lo que envía. Puede hacerlo en Linux, macOS y FreeBSD. Otros sistemas, como NetBSD y OpenBSD, no dan a un proceso ninguna forma de impedir que los otros procesos del usuario lo rastreen, así que el worker se niega a ejecutarse en ellos, en lugar de ejecutar un trabajo con menos protección.",
+    "fix": [
+      "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS o FreeBSD."
     ]
   }
 }

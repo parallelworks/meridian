@@ -31,7 +31,6 @@ package local
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -118,15 +117,17 @@ func dir(getenv func(string) string, env, xdg, home, xdgDefault, darwin string) 
 // it, is safe. A state directory that another user can read or change is
 // refused, with the command that fixes it, rather than tightened: it holds
 // the key that wraps runs' secrets, and what was in it may have been read.
+// It can be a symbolic link to a directory on a local disk, whose way is
+// checked too (safepath.EnsureDir).
 func (d Dirs) EnsureState() error {
-	return ensurePrivateDir(d.State)
+	return safepath.EnsureDir(d.State, safepath.Private)
 }
 
 // EnsureCache creates the cache directory if it isn't there, readable only
 // by its user, and checks it as EnsureState checks the state directory: it
 // can hold copies of private repositories.
 func (d Dirs) EnsureCache() error {
-	return ensurePrivateDir(d.Cache)
+	return safepath.EnsureDir(d.Cache, safepath.Private)
 }
 
 // CheckConfig checks the config directory, if it is there: that it, and
@@ -171,86 +172,3 @@ var detectNetworkFS = networkFS
 // errNoMount is what networkFS returns for a path on a filesystem whose
 // type only the mount table says, which has no mount for it.
 var errNoMount = errors.New("local: no mount holds the path")
-
-// ensurePrivateDir creates the directory path if it isn't there, readable
-// only by its user, and checks that it is, and that every directory on the
-// way to it is safe, before it creates anything and after.
-func ensurePrivateDir(path string) error {
-	if err := safepath.Check(path, false); err != nil {
-		return err
-	}
-	// The XDG specification asks for 0700 for the directories it creates,
-	// the parents included.
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
-	}
-	if err := safepath.Check(path, false); err != nil {
-		return err
-	}
-	return checkPrivateDir(path)
-}
-
-// checkPrivateDir checks that path is a directory that belongs to the user
-// and that no other user can read or change. It follows a symbolic link,
-// so that a state directory can be a link to one on a local disk.
-func checkPrivateDir(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
-	}
-	switch {
-	case !info.IsDir():
-		return problems.NotADirectory.Problem(problems.Params{"path": path})
-	case !ownedByUser(info):
-		return problems.DirectoryNotOwned.Problem(problems.Params{"path": path})
-	case info.Mode().Perm()&0o077 != 0:
-		return problems.DirectoryNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", info.Mode().Perm())})
-	}
-	return nil
-}
-
-// checkPrivateInfo checks that the file info describes, at path, is a
-// regular file that belongs to the user and that no other user can read
-// or change.
-func checkPrivateInfo(path string, info fs.FileInfo) error {
-	if err := checkOwnFile(path, info); err != nil {
-		return err
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return problems.FileNotPrivate.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", perm)})
-	}
-	return nil
-}
-
-// checkUnchangeable checks that the file info describes, at path, is a
-// regular file that belongs to the user and that no other user can
-// change: one who could would decide where the user's jobs run, or what
-// they read.
-func checkUnchangeable(path string, info fs.FileInfo) error {
-	if err := checkOwnFile(path, info); err != nil {
-		return err
-	}
-	if perm := info.Mode().Perm(); perm&0o022 != 0 {
-		return problems.FileChangeable.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", perm)})
-	}
-	return nil
-}
-
-// checkOwnFile checks that the file info describes, at path, is a regular
-// file that belongs to the user.
-func checkOwnFile(path string, info fs.FileInfo) error {
-	if !info.Mode().IsRegular() {
-		return problems.FileNotRegular.Problem(problems.Params{"path": path})
-	}
-	if !ownedByUser(info) {
-		return problems.FileNotOwned.Problem(problems.Params{"path": path})
-	}
-	return nil
-}
-
-// ownedByUser says whether the file info describes belongs to the user,
-// which only Unix systems say: elsewhere it is true.
-func ownedByUser(info fs.FileInfo) bool {
-	uid, ok := safepath.Owner(info)
-	return !ok || uid == os.Getuid()
-}

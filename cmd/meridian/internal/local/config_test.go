@@ -192,6 +192,25 @@ func TestConfigDirOthersCanChange(t *testing.T) {
 	wantProblem(t, err, problems.PathUnsafe)
 }
 
+// TestConfigFileLink checks that a config file isn't read through a
+// symbolic link at its path, while the config directory can be a link.
+func TestConfigFileLink(t *testing.T) {
+	target := configDir(t, map[string]string{GroupsFile: "{}\n"})
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(target, GroupsFile), filepath.Join(dir, GroupsFile)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(dir, env(nil))
+	wantProblem(t, err, problems.FileNotRegular)
+	link := filepath.Join(t.TempDir(), "config")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(link, env(nil)); err != nil {
+		t.Errorf("a config directory that is a link: %v", err)
+	}
+}
+
 func TestConfigFIFO(t *testing.T) {
 	dir := t.TempDir()
 	if err := mkfifo(filepath.Join(dir, GroupsFile)); err != nil {
