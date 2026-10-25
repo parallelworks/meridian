@@ -1741,7 +1741,7 @@
     "title": "등록되지 않은 GitLab 서버",
     "why": "단계의 with: $host는 그 uses:가 지정하는 워크플로를 보관하는 GitLab 서버를 지정합니다. Git은 사용자 자신의 설정과 자격 증명으로 서버에 접속하므로, Meridian은 워크플로가 지정하는 아무 서버가 아니라 gitlab.com과 사용자가 등록한 서버에만 접속합니다. 로컬에서는 설정 디렉터리의 sources.yaml에서 gitlab-servers에 나열한 서버입니다.",
     "fix": [
-      "서버를 신뢰한다면 git.example.com이나, 포트를 붙인 git.example.com:8443처럼 sources.yaml의 gitlab-servers에 추가하세요.",
+      "서버를 신뢰한다면 git.example.com처럼 그 이름으로 sources.yaml의 gitlab-servers에 추가하세요.",
       "그렇지 않다면 등록된 서버의 워크플로를 사용하세요."
     ]
   },
@@ -1754,9 +1754,10 @@
   },
   "gitlab_server_invalid": {
     "title": "잘못된 GitLab 서버",
-    "why": "sources.yaml의 gitlab-servers에는 워크플로의 with: $host가 지정할 수 있는, gitlab.com 외의 GitLab 서버를 나열합니다. 각각은 서버의 DNS 이름이며, HTTPS의 포트가 아니면 콜론 뒤에 그 포트를 붙입니다. 스킴은 Meridian이 붙이고, 서버에는 사용자나 경로가 없습니다.",
+    "why": "sources.yaml의 gitlab-servers에는 워크플로의 with: $host가 지정할 수 있는, gitlab.com 외의 GitLab 서버를 나열합니다. 각각은 $host가 지정하는 대로 쓴 서버의 DNS 이름이며, ACTIVATE가 $host를 읽는 대로 포트를 붙이지 않습니다. 스킴은 Meridian이 붙이고 HTTPS의 포트로 서버에 접속하며, 서버에는 사용자나 경로가 없습니다.",
     "fix": [
-      "서버를 git.example.com처럼, 다른 포트라면 git.example.com:8443처럼 쓰세요."
+      "서버를 git.example.com처럼 쓰세요.",
+      "다른 포트의 서버는 그 이름을 등록하고, Git의 url.<base>.insteadOf 설정으로 Git이 그 포트로 접속하게 하세요. 예: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
     ]
   }
 }

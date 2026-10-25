@@ -1741,7 +1741,7 @@
     "title": "登録されていない GitLab サーバー",
     "why": "ステップの with: $host は、その uses: が指定するワークフローを保持する GitLab サーバーを指定します。Git はユーザー自身の設定と認証情報でサーバーに接続するため、Meridian はワークフローが指定する任意のサーバーではなく、gitlab.com とユーザーが登録したサーバーにのみ接続します。ローカルでは、設定ディレクトリの sources.yaml の gitlab-servers に記載されたサーバーです。",
     "fix": [
-      "サーバーを信頼できる場合は、git.example.com や、ポート付きの git.example.com:8443 のように、sources.yaml の gitlab-servers に追加してください。",
+      "サーバーを信頼できる場合は、git.example.com のようにその名前で、sources.yaml の gitlab-servers に追加してください。",
       "そうでない場合は、登録済みのサーバーにあるワークフローを使ってください。"
     ]
   },
@@ -1754,9 +1754,10 @@
   },
   "gitlab_server_invalid": {
     "title": "無効な GitLab サーバー",
-    "why": "sources.yaml の gitlab-servers には、ワークフローの with: $host が指定できる、gitlab.com 以外の GitLab サーバーを記載します。それぞれはサーバーの DNS 名と、HTTPS のポートでない場合はコロンの後にそのポートです。スキームは Meridian が付け、サーバーにユーザーやパスはありません。",
+    "why": "sources.yaml の gitlab-servers には、ワークフローの with: $host が指定できる、gitlab.com 以外の GitLab サーバーを記載します。それぞれは、$host が指定するとおりのサーバーの DNS 名で、ACTIVATE が $host を読むとおりポートを付けません。スキームは Meridian が付けて HTTPS のポートでサーバーに接続し、サーバーにユーザーやパスはありません。",
     "fix": [
-      "サーバーを git.example.com、別のポートなら git.example.com:8443 のように書いてください。"
+      "サーバーを git.example.com のように書いてください。",
+      "別のポートのサーバーは、その名前を登録し、Git の url.<base>.insteadOf 設定でそのポートに接続させてください。例: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
     ]
   }
 }

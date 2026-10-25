@@ -464,7 +464,7 @@ func (c *Config) loadSources(path string) error {
 			if err != nil {
 				return err
 			}
-			if !hostPattern.MatchString(server) {
+			if !validHost(server) {
 				return f.problem(problems.GitLabServerInvalid, n, problems.Params{"server": server})
 			}
 			c.servers = append(c.servers, strings.ToLower(server))

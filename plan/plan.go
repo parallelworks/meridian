@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
@@ -229,6 +230,47 @@ type SourceRef struct {
 	// Host is the Git server that holds the repository, the step's with:
 	// $host, or "" for the one Uses names, such as gitlab.com.
 	Host string `json:"host,omitempty"`
+}
+
+// DefaultSourcePath is the workflow's file in a repository that a uses:
+// names when its $yaml names none.
+const DefaultSourcePath = "workflow.yaml"
+
+// Normal returns r as format 1 reads it, as ACTIVATE does, so that two
+// references that name the same workflow are equal. For a Git repository's,
+// one whose uses: starts with github/ or gitlab/: its uses: without the
+// space after it, or, on GitLab, after gitlab/ too, and without one slash
+// and then .git after the repository's name, which is before the first @;
+// its Path, DefaultSourcePath if it is ""; and its Host in lower case
+// without the space around it, gitlab.com if that leaves none, for a
+// GitLab project's, and none for a GitHub repository's, whose server a
+// $host doesn't name. Any other is r. Normal doesn't check what it reads:
+// one it reads that isn't well formed names no workflow.
+func (r SourceRef) Normal() SourceRef {
+	var rest string
+	out := SourceRef{Path: r.Path}
+	switch {
+	case strings.HasPrefix(r.Uses, "github/"):
+		out.Uses = "github/"
+		rest = strings.TrimPrefix(strings.TrimSpace(r.Uses), "github/")
+	case strings.HasPrefix(r.Uses, "gitlab/"):
+		out.Uses = "gitlab/"
+		rest = strings.TrimSpace(strings.TrimPrefix(r.Uses, "gitlab/"))
+		if out.Host = strings.ToLower(strings.TrimSpace(r.Host)); out.Host == "" {
+			out.Host = "gitlab.com"
+		}
+	default:
+		return r
+	}
+	if out.Path == "" {
+		out.Path = DefaultSourcePath
+	}
+	name, rev, hasRev := strings.Cut(rest, "@")
+	out.Uses += strings.TrimSuffix(strings.TrimSuffix(name, "/"), ".git")
+	if hasRev {
+		out.Uses += "@" + rev
+	}
+	return out
 }
 
 // A Job is one of the workflow's jobs. A matrix job is one Job, whose

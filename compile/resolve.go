@@ -259,7 +259,9 @@ var workflowUses = []string{"github/", "gitlab/", "marketplace/", "workflow/"}
 // pinSource resolves the workflow step's uses: names, if it names one,
 // through Sources, pins it in the step, and loads and validates its text,
 // whose errors are the run's. A workflow pinned already, as another step's,
-// is pinned again from pinned.
+// by a reference that reads the same (plan.SourceRef.Normal), is pinned
+// again from pinned, so that a run reads one workflow at one commit
+// however its steps write its name.
 func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.SourceRef]*plan.Source) error {
 	if !slices.ContainsFunc(workflowUses, func(prefix string) bool { return strings.HasPrefix(s.Uses, prefix) }) {
 		return nil
@@ -280,7 +282,12 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 			continue
 		}
 		text, isText := raw.(string)
-		if !isText || strings.Contains(text, "${{") {
+		if !isText {
+			// ACTIVATE reads one that isn't text as if it weren't there,
+			// where the schema refuses it.
+			continue
+		}
+		if strings.Contains(text, "${{") {
 			// The workflow is pinned as the run is created, so where it is
 			// must be known then.
 			c.reportAt(problems.SourceNotKnown, appendPath(loc, "with", key), problems.Params{"key": key})
@@ -293,14 +300,16 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 		c.reportAt(problems.ResolverMissing, usesLoc, problems.Params{"key": "uses", "interface": "Sources"})
 		return nil
 	}
-	if source, ok := pinned[ref]; ok {
+	key := ref.Normal()
+	if source, ok := pinned[key]; ok {
 		if source != nil {
 			copied := *source
+			copied.Ref = ref
 			s.Source = &copied
 		}
 		return nil
 	}
-	pinned[ref] = nil
+	pinned[key] = nil
 	w, err := c.opts.Sources.Resolve(ctx, ref)
 	if err != nil {
 		return c.resolverError(ctx, err, usesLoc, problems.SourceNotFound, problems.Params{"ref": s.Uses})
@@ -325,7 +334,7 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 		// As the run's own workflow's, when nothing else names its text.
 		source.Revision = source.Digest
 	}
-	pinned[ref] = &source
+	pinned[key] = &source
 	copied := source
 	s.Source = &copied
 	// The workflow is loaded and validated now, so that a run whose step

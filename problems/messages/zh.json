@@ -251,5 +251,5 @@
   "worker_system_unsupported": "工作进程不在 {os} 上运行：在那里它无法阻止你的其他进程访问它的内存。",
   "source_server_unknown": "该步骤的 with: $host 指定的 GitLab 服务器“{server}”在这里未注册。",
   "compute_target_unknown": "这里没有模式为 {mode} 的计算目标“{target}”。",
-  "gitlab_server_invalid": "GitLab 服务器“{server}”不是带可选端口的主机名，例如 git.example.com 或 git.example.com:8443。"
+  "gitlab_server_invalid": "GitLab 服务器“{server}”不是不带端口的主机名，例如 git.example.com。"
 }

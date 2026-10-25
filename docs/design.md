@@ -1275,14 +1275,35 @@ repository's name, or `gitlab/<group>/<project>@<revision>`, where every
 name after `gitlab/` is the project's path, its subgroups among it; and in
 the step's `with:`, `$yaml`, the workflow's file in the repository,
 `workflow.yaml` unless it names another, and `$host`, the GitLab server
-that holds it. A pinned workflow keeps its reference beside
-its commit and digest (`Source.Ref`), so Sources reads it again by it, and
-gives the `remote` context a child run reads, `remote.branch` among it,
-from it. Git reaches a server with the credentials of whoever runs it, so
-a Sources reaches only the GitLab servers registered where the workflow
-runs, as the schema's "registered GitLab server" says, and never one that
-only a workflow names (`source_server_unknown`). ACTIVATE requires
-gitlab.com to be registered too; `meridian` always reaches gitlab.com.
+that holds it, `gitlab.com` unless it names another. As ACTIVATE reads
+them (`SourceRef.Normal`), space after a `uses:`, and on GitLab after
+`gitlab/` and around `$host`, goes; the revision is what follows the
+first `@`, and isn't empty; one slash and then `.git` after the
+repository's name go; a GitHub owner's name has letters, digits and
+hyphens, a repository's, group's or project's dots and underscores too,
+and a revision slashes too, and no `..`; a `$host` is a DNS name of one
+label or more, with no port, in any case; and a GitHub repository's
+`$host`, or a `$yaml` or `$host` that isn't text, is read as if it weren't
+there, which the schema refuses, as ACTIVATE's does. Besides what ACTIVATE
+refuses, the local Sources refuses a name, a revision or a server that
+starts with a hyphen, which git could take for an option; a revision git
+refuses as a branch's or a tag's name, one with a name in it that is
+empty, starts with a dot or ends in `.lock`, or that ends with a dot,
+which ACTIVATE takes and then finds on no server; a group's name that
+ends in `.git` or `.lock`, which would be where another repository's copy
+or its lock is in the cache; and a `$yaml` with an empty name, `.` or `..`
+in it, or a control character. Two steps whose references read the same
+are pinned once, to one commit, however they write it. A pinned workflow
+keeps its reference beside its commit and digest (`Source.Ref`), so
+Sources reads it again by it, and gives the `remote` context a child run
+reads, `remote.branch` among it, from it, and its `Location` names its
+server, its repository, its revision after an `@` and, after a colon, its
+file, as `gitlab.com/group/project@main:workflow.yaml`. Git reaches a
+server with the credentials of whoever runs it, so a Sources reaches only
+the GitLab servers registered where the workflow runs, as the schema's
+"registered GitLab server" says, and never one that only a workflow names
+(`source_server_unknown`). ACTIVATE requires gitlab.com to be registered
+too; `meridian` always reaches gitlab.com.
 
 ## Durable execution
 
@@ -2391,9 +2412,11 @@ comes from, so cloning a workflow can't send its jobs to your SSH hosts.
   `secret: true`, and always names where its value is, which is read only
   as a run starts.
 - **`sources.yaml`** holds `gitlab-servers`, the GitLab servers besides
-  gitlab.com that a step's `with: $host` can name, each a host name and,
-  after a colon, a port, as `git.example.com:8443`. Git reaches them with
-  the user's credentials, so a workflow can't name a server of its own.
+  gitlab.com that a step's `with: $host` can name, each a host name with
+  no port, as a `$host` names it: `git.example.com`. Git reaches them with
+  the user's credentials, so a workflow can't name a server of its own,
+  and at HTTPS's port, or at another that Git's own `url.<base>.insteadOf`
+  rewrites the server's address to.
 
 Meridian refuses any of these files if another user can change it, and the
 variables file if another user can read it, since people keep secrets in

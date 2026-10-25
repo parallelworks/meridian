@@ -334,8 +334,8 @@ jobs:
 
 // Create resolves each workflow a step's uses: names, with the file and the
 // server its with: $yaml and $host name, pins it in the step, once for
-// each reference, and loads it, whose errors are the run's. A built-in
-// action names none.
+// each reference, however it is written (plan.SourceRef.Normal), and loads
+// it, whose errors are the run's. A built-in action names none.
 func TestCreatePinsWorkflows(t *testing.T) {
 	src := `jobs:
   a:
@@ -348,6 +348,10 @@ func TestCreatePinsWorkflows(t *testing.T) {
         with: {$yaml: w.yaml, $host: git.example.com}
       - uses: parallelworks/checkout
         with: {repo: https://example.com/r.git, branch: main}
+      - uses: github/acme/flows.git/@main
+        with: {$yaml: sub/flow.yaml}
+      - uses: gitlab/ team/flows.git
+        with: {$yaml: w.yaml, $host: ' Git.Example.com'}
 `
 	s := &testSources{texts: map[string]string{
 		"github/acme/flows@main": "jobs:\n  x:\n    steps:\n      - run: echo\n",
@@ -361,7 +365,11 @@ func TestCreatePinsWorkflows(t *testing.T) {
 		t.Errorf("asked %+v, want %+v", s.asked, want)
 	}
 	steps := c.Plan.Jobs[0].Steps
-	for i, want := range []*plan.SourceRef{&s.asked[0], &s.asked[0], &s.asked[1], nil} {
+	for i, want := range []*plan.SourceRef{
+		&s.asked[0], &s.asked[0], &s.asked[1], nil,
+		{Uses: "github/acme/flows.git/@main", Path: "sub/flow.yaml"},
+		{Uses: "gitlab/ team/flows.git", Path: "w.yaml", Host: " Git.Example.com"},
+	} {
 		got := steps[i].Source
 		if (got == nil) != (want == nil) || got != nil && (got.Ref != *want || got.Digest == "" || got.Revision == "") {
 			t.Errorf("step %d's source %+v, want ref %+v", i, got, want)
@@ -369,6 +377,12 @@ func TestCreatePinsWorkflows(t *testing.T) {
 	}
 	if steps[0].Source == steps[1].Source {
 		t.Error("two steps share a source")
+	}
+	// A step that names a workflow another names otherwise has its pin.
+	for i, j := range map[int]int{4: 0, 5: 2} {
+		if got, want := *steps[i].Source, *steps[j].Source; got.Location != want.Location || got.Revision != want.Revision || got.Digest != want.Digest {
+			t.Errorf("step %d's source %+v, want step %d's, %+v", i, got, j, want)
+		}
 	}
 
 	for name, tc := range map[string]struct {
@@ -429,8 +443,17 @@ func TestCreatePinsWorkflows(t *testing.T) {
 	if _, _, err := compile.Create(t.Context(), "workflow.yaml", uses, nil, compile.Options{Sources: pinnedSources{nil}}); err == nil {
 		t.Error("a resolver that gave nothing")
 	}
-	// An empty $yaml means workflow.yaml, as ACTIVATE reads it; the schema
-	// refuses one that isn't text.
+	// An empty $yaml means workflow.yaml, as ACTIVATE reads it. ACTIVATE
+	// reads one that isn't text as if it weren't there, where the schema
+	// refuses it, as ACTIVATE's does.
+	for _, yaml := range []string{"3", "[a]"} {
+		s := &testSources{texts: map[string]string{"github/acme/flows@main": text}}
+		src := "jobs:\n  a:\n    steps:\n      - uses: github/acme/flows@main\n        with: {$yaml: " + yaml + "}\n"
+		_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: s})
+		if errs := diags.Errors(); err != nil || len(errs) != 1 || errs[0].Code != problems.WrongType.Code() {
+			t.Errorf("$yaml %s: %v, %v", yaml, diags, err)
+		}
+	}
 	for _, yaml := range []string{"''", `""`} {
 		s := &testSources{texts: map[string]string{"github/acme/flows@main": text}}
 		src := "jobs:\n  a:\n    steps:\n      - uses: github/acme/flows@main\n        with: {$yaml: " + yaml + "}\n"

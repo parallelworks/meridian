@@ -1495,7 +1495,7 @@
   "source_server_unknown": {
     "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names. Git reaches a server with the user's own configuration and credentials, so Meridian reaches only gitlab.com and the servers the user registered, rather than any a workflow names: locally, those that sources.yaml, in the config directory, lists under gitlab-servers.",
     "fix": [
-      "If you trust the server, add it to gitlab-servers in sources.yaml, as git.example.com, or git.example.com:8443 with its port.",
+      "If you trust the server, add it to gitlab-servers in sources.yaml, by its name, as git.example.com.",
       "Otherwise, use a workflow from a server that is registered."
     ]
   },
@@ -1506,9 +1506,10 @@
     ]
   },
   "gitlab_server_invalid": {
-    "why": "sources.yaml's gitlab-servers lists the GitLab servers, besides gitlab.com, that a workflow's with: $host can name. Each is a server's DNS name and, after a colon, its port, if it isn't HTTPS's: Meridian adds the scheme, and a server has no user or path.",
+    "why": "sources.yaml's gitlab-servers lists the GitLab servers, besides gitlab.com, that a workflow's with: $host can name. Each is a server's DNS name, as a $host names it, with no port, as ACTIVATE reads a $host: Meridian adds the scheme and reaches the server at HTTPS's port, and a server has no user or path.",
     "fix": [
-      "Write the server as git.example.com, or as git.example.com:8443 for another port."
+      "Write the server as git.example.com.",
+      "For a server at another port, register its name, and have Git reach it at its port with Git's url.<base>.insteadOf setting, as in: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
     ]
   }
 }

@@ -50,7 +50,7 @@ func newOrigins(t *testing.T) (string, *Sources) {
 
 // testServers are the GitLab servers the tests' Sources reach, besides
 // gitlab.com.
-var testServers = []string{"git.example.com:8443"}
+var testServers = []string{"git.example.com"}
 
 func sourcesFrom(t *testing.T, origins string) *Sources {
 	t.Helper()
@@ -114,7 +114,7 @@ func TestSourcesResolve(t *testing.T) {
 	o.git("switch", "--quiet", "main")
 
 	// A project in a subgroup, on a GitLab server of a platform's own.
-	g := newOrigin(t, origins, "git.example.com:8443", "team/infra/flows")
+	g := newOrigin(t, origins, "git.example.com", "team/infra/flows")
 	onGitLab := g.commit(map[string]string{"flows/run.yaml": "gitlab\n"})
 
 	for _, tc := range []struct {
@@ -124,13 +124,18 @@ func TestSourcesResolve(t *testing.T) {
 		text     string
 		remote   map[string]string
 	}{
-		{plan.SourceRef{Uses: "github/acme/flows@main"}, "github/acme/flows/workflow.yaml@main", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "main"}},
-		{plan.SourceRef{Uses: "github/acme/flows"}, "github/acme/flows/workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows"}},
-		{plan.SourceRef{Uses: "github/acme/flows@v1"}, "github/acme/flows/workflow.yaml@v1", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "v1"}},
-		{plan.SourceRef{Uses: "github/acme/flows@" + first}, "github/acme/flows/workflow.yaml@" + first, first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": first}},
+		{plan.SourceRef{Uses: "github/acme/flows@main"}, "github.com/acme/flows@main:workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "main"}},
+		{plan.SourceRef{Uses: "github/acme/flows"}, "github.com/acme/flows:workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows"}},
+		{plan.SourceRef{Uses: "github/acme/flows@v1"}, "github.com/acme/flows@v1:workflow.yaml", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "v1"}},
+		{plan.SourceRef{Uses: "github/acme/flows@" + first}, "github.com/acme/flows@" + first + ":workflow.yaml", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": first}},
 		// Format 1 names the file with $yaml.
-		{plan.SourceRef{Uses: "github/acme/flows@dev", Path: "sub/flow.yaml"}, "github/acme/flows/sub/flow.yaml@dev", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
-		{plan.SourceRef{Uses: "gitlab/team/infra/flows@main", Path: "flows/run.yaml", Host: "git.example.com:8443"}, "git.example.com:8443/team/infra/flows/flows/run.yaml@main", onGitLab, "gitlab\n", map[string]string{"repo": "https://git.example.com:8443/team/infra/flows", "branch": "main"}},
+		{plan.SourceRef{Uses: "github/acme/flows@dev", Path: "sub/flow.yaml"}, "github.com/acme/flows@dev:sub/flow.yaml", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
+		// As ACTIVATE reads them: with .git or a slash after the name, and
+		// space after it.
+		{plan.SourceRef{Uses: "github/acme/flows.git@main "}, "github.com/acme/flows@main:workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "main"}},
+		{plan.SourceRef{Uses: "github/acme/flows/"}, "github.com/acme/flows:workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows"}},
+		{plan.SourceRef{Uses: "gitlab/team/infra/flows@main", Path: "flows/run.yaml", Host: "git.example.com"}, "git.example.com/team/infra/flows@main:flows/run.yaml", onGitLab, "gitlab\n", map[string]string{"repo": "https://git.example.com/team/infra/flows", "branch": "main"}},
+		{plan.SourceRef{Uses: "gitlab/ team/infra/flows.git/@main", Path: "flows/run.yaml", Host: " Git.Example.com "}, "git.example.com/team/infra/flows@main:flows/run.yaml", onGitLab, "gitlab\n", map[string]string{"repo": "https://git.example.com/team/infra/flows", "branch": "main"}},
 	} {
 		w, err := s.Resolve(t.Context(), tc.ref)
 		if err != nil {
@@ -183,19 +188,24 @@ func TestSourcesGroupIsNoCopy(t *testing.T) {
 
 // TestSourcesServers checks that a reference's $host reaches only a GitLab
 // server the user registered, or gitlab.com, whatever its case, and that
-// a pin is read again only from one.
+// a pin is read again only from one. A $host has no port, as ACTIVATE
+// reads it, and a GitHub repository's names none.
 func TestSourcesServers(t *testing.T) {
 	origins, s := newOrigins(t)
-	newOrigin(t, origins, "git.example.com:8443", "g/p").commit(map[string]string{"w.yaml": "registered\n"})
+	newOrigin(t, origins, "git.example.com", "g/p").commit(map[string]string{"w.yaml": "registered\n"})
 	newOrigin(t, origins, "gitlab.com", "g/p").commit(map[string]string{"w.yaml": "gitlab\n"})
 	newOrigin(t, origins, "other.example.com", "g/p").commit(map[string]string{"w.yaml": "other\n"})
-	for host, text := range map[string]string{"Git.Example.com:8443": "registered\n", "gitlab.com": "gitlab\n", "GitLab.com": "gitlab\n"} {
+	newOrigin(t, origins, "github.com", "g/p").commit(map[string]string{"w.yaml": "github\n"})
+	for host, text := range map[string]string{"Git.Example.com": "registered\n", "gitlab.com": "gitlab\n", "GitLab.com": "gitlab\n", "": "gitlab\n", " ": "gitlab\n"} {
 		w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host})
 		if err != nil || string(w.Text) != text {
-			t.Errorf("Resolve on %s: %v, %v", host, w, err)
+			t.Errorf("Resolve on %q: %v, %v", host, w, err)
 		}
 	}
-	for _, host := range []string{"other.example.com", "git.example.com", "git.example.com:443"} {
+	if w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/g/p", Path: "w.yaml", Host: "other.example.com"}); err != nil || string(w.Text) != "github\n" {
+		t.Errorf("Resolve on GitHub, with a $host: %v, %v", w, err)
+	}
+	for _, host := range []string{"other.example.com", "git.example.org"} {
 		ref := plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host}
 		_, err := s.Resolve(t.Context(), ref)
 		if !errors.Is(err, compile.ErrNotFound) {
@@ -206,8 +216,12 @@ func TestSourcesServers(t *testing.T) {
 			t.Errorf("the problem names %v", p.Params["server"])
 		}
 	}
+	for _, host := range []string{"git.example.com:443", "git.example.com:8443"} {
+		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host})
+		wantProblem(t, err, problems.SourceRefInvalid)
+	}
 	// A pin made on a server is read again only while it is registered.
-	w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git.example.com:8443"})
+	w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +330,22 @@ func TestParseRef(t *testing.T) {
 		{Uses: "github/acme/flows"}:                           {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
 		{Uses: "github/acme/flows@v1.2"}:                      {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1.2"},
 		{Uses: "gitlab/acme/flows@release", Path: "a/b.yaml"}: {kind: "gitlab", host: "gitlab.com", repo: "acme/flows", path: "a/b.yaml", rev: "release"},
-		{Uses: "github/a.b/c_d-e@f/g", Path: "x y.yaml"}:      {kind: "github", host: "github.com", repo: "a.b/c_d-e", path: "x y.yaml", rev: "f/g"},
+		{Uses: "github/a-b/c_d-e.f@g/h", Path: "x y.yaml"}:    {kind: "github", host: "github.com", repo: "a-b/c_d-e.f", path: "x y.yaml", rev: "g/h"},
+		// A repository's name can start with a dot, as .github does.
+		{Uses: "github/acme/.github"}:   {kind: "github", host: "github.com", repo: "acme/.github", path: "workflow.yaml"},
+		{Uses: "gitlab/g_1/.p@a/b.c"}:   {kind: "gitlab", host: "gitlab.com", repo: "g_1/.p", path: "workflow.yaml", rev: "a/b.c"},
+		{Uses: "gitlab/g/p", Host: "x"}: {kind: "gitlab", host: "x", repo: "g/p", path: "workflow.yaml"},
+		// As ACTIVATE reads it: one slash, and then .git, after the name,
+		// and space after the uses:, and on GitLab, after gitlab/ and
+		// around $host, go; $host names no GitHub server, and an empty
+		// $yaml means workflow.yaml.
+		{Uses: "github/acme/flows.git"}:                       {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
+		{Uses: "github/acme/flows/@v1"}:                       {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1"},
+		{Uses: "github/acme/flows.git/"}:                      {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
+		{Uses: "github/acme/flows@v1 \t"}:                     {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1"},
+		{Uses: "github/acme/flows", Host: "x.example.com"}:    {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
+		{Uses: "gitlab/ g/p.git@v1 ", Host: " X.Example.COM"}: {kind: "gitlab", host: "x.example.com", repo: "g/p", path: "workflow.yaml", rev: "v1"},
+		{Uses: "gitlab/g/p.git.git"}:                          {kind: "gitlab", host: "gitlab.com", repo: "g/p.git", path: "workflow.yaml"},
 		// Every name after gitlab/ is the project's path, with or without
 		// $yaml.
 		{Uses: "gitlab/g/sub/p@main"}: {kind: "gitlab", host: "gitlab.com", repo: "g/sub/p", path: "workflow.yaml", rev: "main"},
@@ -325,7 +354,7 @@ func TestParseRef(t *testing.T) {
 		{Uses: "github/acme/flows@main", Path: "a/b.yaml"}:                          {kind: "github", host: "github.com", repo: "acme/flows", path: "a/b.yaml", rev: "main"},
 		{Uses: "gitlab/g/sub/p@main", Path: "w.yaml"}:                               {kind: "gitlab", host: "gitlab.com", repo: "g/sub/p", path: "w.yaml", rev: "main"},
 		{Uses: "gitlab/g/p", Path: "w.yaml", Host: "gitlab.example.com"}:            {kind: "gitlab", host: "gitlab.example.com", repo: "g/p", path: "w.yaml"},
-		{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git-1.example.com:8443"}:        {kind: "gitlab", host: "git-1.example.com:8443", repo: "g/p", path: "w.yaml"},
+		{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git_1.example-.com"}:            {kind: "gitlab", host: "git_1.example-.com", repo: "g/p", path: "w.yaml"},
 		{Uses: "gitlab/g/sub/p@v1", Path: "dir/w.yaml", Host: "gitlab.example.com"}: {kind: "gitlab", host: "gitlab.example.com", repo: "g/sub/p", path: "dir/w.yaml", rev: "v1"},
 	} {
 		got, err := parseRef(ref)
@@ -333,20 +362,38 @@ func TestParseRef(t *testing.T) {
 			t.Errorf("parseRef(%+v) = %+v, %v, want %+v", ref, got, err, want)
 		}
 	}
-	// $yaml and $host are checked as the rest of a reference is, and
-	// GitHub's server isn't named apart.
+	// $yaml and $host are checked as the rest of a reference is.
 	for _, ref := range []plan.SourceRef{
 		{Uses: "github/acme/flows/sub@main", Path: "w.yaml"},
 		{Uses: "github/acme/flows", Path: "../w.yaml"},
 		{Uses: "github/acme/flows", Path: "/w.yaml"},
 		{Uses: "github/acme/flows", Path: "a//w.yaml"},
 		{Uses: "github/acme/flows", Path: "w.yaml\n"},
-		{Uses: "github/acme/flows", Host: "github.example.com"},
 		{Uses: "gitlab/g/p", Host: "-x.example.com"},
 		{Uses: "gitlab/g/p", Host: "a.example.com/evil"},
 		{Uses: "gitlab/g/p", Host: "user@a.example.com"},
 		{Uses: "gitlab/g/p", Host: "a..example.com"},
+		{Uses: "gitlab/g/p", Host: "a.example.com."},
+		{Uses: "gitlab/g/p", Host: "a.example.com:8443"},
 		{Uses: "gitlab/g/../p", Path: "w.yaml"},
+		// As ACTIVATE reads them: a GitHub owner's name has no dot or
+		// underscore, a GitLab project is in a group, a name has nothing
+		// but letters, digits, dots, underscores and hyphens, a revision
+		// slashes too, and nothing follows an @ but the revision.
+		{Uses: "github/a.b/c"},
+		{Uses: "github/a_b/c"},
+		{Uses: "gitlab/p"},
+		{Uses: "gitlab/p.git"},
+		{Uses: "gitlab/g/p//"},
+		{Uses: "gitlab/g/p q"},
+		{Uses: "github/ acme/flows"},
+		{Uses: "github/acme/flows @main"},
+		{Uses: "github/acme/flows@a@b"},
+		{Uses: "github/acme/flows@a b"},
+		{Uses: "github/acme/fl+ows"},
+		{Uses: "github/acme/flows@"},
+		{Uses: "gitlab/g/p@"},
+		{Uses: " github/acme/flows"},
 		// A group's name is a directory of the cache, beside the copies of
 		// repositories and their lock files, and ends as neither does.
 		{Uses: "gitlab/g/sub.git/p@main", Path: "w.yaml"},
@@ -377,6 +424,15 @@ func TestParseRef(t *testing.T) {
 		"github/acme/flows@+main",
 		"github/acme/flows@main.lock",
 		"github/acme/flows@main/",
+		// What git refuses as a branch's or a tag's name, which ACTIVATE
+		// takes, to find no such revision.
+		"github/acme/flows@a/.b",
+		"github/acme/flows@x/./y",
+		"github/acme/flows@a.lock/b",
+		"github/acme/flows@.a",
+		"github/acme/flows@a//b",
+		"github/acme/flows@/a",
+		"github/acme/flows@a.",
 		"github/acme/flows@@{1}",
 		"github/acme/flows@x^{tree}",
 		"github/acme/flows@",
@@ -497,7 +553,7 @@ func TestSourcesAccessDenied(t *testing.T) {
 	s.remote = func(_, repo string) string { return server.URL + "/" + repo + ".git" }
 	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/private@main"})
 	p := wantProblem(t, err, problems.SourceAccessDenied)
-	if p.Params["location"] != "github/acme/private/workflow.yaml@main" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
+	if p.Params["location"] != "github.com/acme/private@main:workflow.yaml" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 	if errors.Is(err, compile.ErrNotFound) {
@@ -843,7 +899,7 @@ func TestGitMessageRedactsUserinfo(t *testing.T) {
 			t.Errorf("Error() = %q holds the credential", e.Error())
 		}
 	}
-	p := problems.SourceAccessDenied.Problem(problems.Params{"location": "github/a/b/workflow.yaml@main", "reason": (&gitError{stderr: "fatal: unable to access 'https://x:SECRET123@github.com/a/b.git/': The requested URL returned error: 401"}).message()})
+	p := problems.SourceAccessDenied.Problem(problems.Params{"location": "github.com/a/b@main:workflow.yaml", "reason": (&gitError{stderr: "fatal: unable to access 'https://x:SECRET123@github.com/a/b.git/': The requested URL returned error: 401"}).message()})
 	if strings.Contains(p.Detail, "SECRET123") || strings.Contains(fmt.Sprint(p.Params), "SECRET123") {
 		t.Errorf("the problem holds the credential: %v", p)
 	}

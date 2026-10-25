@@ -251,5 +251,5 @@
   "worker_system_unsupported": "워커는 {os}에서 실행되지 않습니다. 그곳에서는 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없기 때문입니다.",
   "source_server_unknown": "단계의 with: $host가 지정한 GitLab 서버 ‘{server}’은(는) 여기에 등록되어 있지 않습니다.",
   "compute_target_unknown": "여기에는 모드 {mode}의 컴퓨팅 대상 ‘{target}’이(가) 없습니다.",
-  "gitlab_server_invalid": "GitLab 서버 ‘{server}’은(는) git.example.com이나 git.example.com:8443처럼 포트를 선택적으로 붙인 호스트 이름이 아닙니다."
+  "gitlab_server_invalid": "GitLab 서버 ‘{server}’은(는) git.example.com처럼 포트를 붙이지 않은 호스트 이름이 아닙니다."
 }

@@ -150,8 +150,8 @@ func TestGroupsFileRefuses(t *testing.T) {
 }
 
 func TestSourcesFile(t *testing.T) {
-	c := load(t, map[string]string{SourcesFile: "gitlab-servers:\n  - git.example.com\n  - Git.Example.org:8443\n"}, nil)
-	if got, want := c.GitLabServers(), []string{"git.example.com", "git.example.org:8443"}; !reflect.DeepEqual(got, want) {
+	c := load(t, map[string]string{SourcesFile: "gitlab-servers:\n  - git.example.com\n  - Git.Example.org\n  - git_1\n"}, nil)
+	if got, want := c.GitLabServers(), []string{"git.example.com", "git.example.org", "git_1"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("GitLabServers = %q, want %q", got, want)
 	}
 	for text, want := range map[string][]string{"": nil, "gitlab-servers:\n": nil, "gitlab-servers: []\n": nil} {
@@ -164,13 +164,15 @@ func TestSourcesFile(t *testing.T) {
 		kind *problems.Kind
 		line int
 	}{
-		"unknown key":     {"github-servers: [a.example.com]\n", problems.ConfigKeyUnknown, 1},
-		"not a list":      {"gitlab-servers: a.example.com\n", problems.ConfigWrongType, 1},
-		"not text":        {"gitlab-servers:\n  - {host: a}\n", problems.ConfigWrongType, 2},
-		"a URL":           {"gitlab-servers:\n  - https://a.example.com\n", problems.GitLabServerInvalid, 2},
-		"with userinfo":   {"gitlab-servers:\n  - me@a.example.com\n", problems.GitLabServerInvalid, 2},
-		"with a path":     {"gitlab-servers:\n  - a.example.com/x\n", problems.GitLabServerInvalid, 2},
-		"an option":       {"gitlab-servers:\n  - -a.example.com\n", problems.GitLabServerInvalid, 2},
+		"unknown key":   {"github-servers: [a.example.com]\n", problems.ConfigKeyUnknown, 1},
+		"not a list":    {"gitlab-servers: a.example.com\n", problems.ConfigWrongType, 1},
+		"not text":      {"gitlab-servers:\n  - {host: a}\n", problems.ConfigWrongType, 2},
+		"a URL":         {"gitlab-servers:\n  - https://a.example.com\n", problems.GitLabServerInvalid, 2},
+		"with userinfo": {"gitlab-servers:\n  - me@a.example.com\n", problems.GitLabServerInvalid, 2},
+		"with a path":   {"gitlab-servers:\n  - a.example.com/x\n", problems.GitLabServerInvalid, 2},
+		"an option":     {"gitlab-servers:\n  - -a.example.com\n", problems.GitLabServerInvalid, 2},
+		// As a $host names a server, which ACTIVATE reads without one.
+		"with a port":     {"gitlab-servers:\n  - a.example.com:8443\n", problems.GitLabServerInvalid, 2},
 		"repeated key":    {"gitlab-servers: []\ngitlab-servers: []\n", problems.ConfigKeyRepeated, 2},
 		"not a mapping":   {"- a.example.com\n", problems.ConfigNotMapping, 1},
 		"an empty server": {"gitlab-servers:\n  - ''\n", problems.GitLabServerInvalid, 2},

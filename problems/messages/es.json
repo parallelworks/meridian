@@ -251,5 +251,5 @@
   "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria.",
   "source_server_unknown": "El servidor de GitLab “{server}” que nombra el with: $host del paso no es uno registrado aquí.",
   "compute_target_unknown": "Aquí no hay ningún destino de cómputo “{target}” en el modo {mode}.",
-  "gitlab_server_invalid": "El servidor de GitLab “{server}” no es un nombre de host con un puerto opcional, como git.example.com o git.example.com:8443."
+  "gitlab_server_invalid": "El servidor de GitLab “{server}” no es un nombre de host, sin puerto, como git.example.com."
 }

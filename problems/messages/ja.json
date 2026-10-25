@@ -251,5 +251,5 @@
   "worker_system_unsupported": "ワーカーは {os} では動作しません。そこではあなたの他のプロセスを自分のメモリから締め出せないためです。",
   "source_server_unknown": "ステップの with: $host が指定する GitLab サーバー「{server}」は、ここで登録されていません。",
   "compute_target_unknown": "ここにはモード {mode} のコンピュートターゲット「{target}」がありません。",
-  "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com や git.example.com:8443 のような、ポートを任意で付けたホスト名ではありません。"
+  "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com のような、ポートを付けないホスト名ではありません。"
 }

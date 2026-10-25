@@ -1741,7 +1741,7 @@
     "title": "GitLab 服务器未注册",
     "why": "步骤的 with: $host 指定存放其 uses: 所指工作流的 GitLab 服务器。Git 使用用户自己的配置和凭据访问服务器，因此 Meridian 只访问 gitlab.com 和用户注册的服务器，而不是工作流指定的任意服务器：在本地，就是配置目录中 sources.yaml 的 gitlab-servers 所列的服务器。",
     "fix": [
-      "如果你信任该服务器，把它添加到 sources.yaml 的 gitlab-servers 中，例如 git.example.com，或带端口的 git.example.com:8443。",
+      "如果你信任该服务器，按名称把它添加到 sources.yaml 的 gitlab-servers 中，例如 git.example.com。",
       "否则，请使用已注册服务器上的工作流。"
     ]
   },
@@ -1754,9 +1754,10 @@
   },
   "gitlab_server_invalid": {
     "title": "无效的 GitLab 服务器",
-    "why": "sources.yaml 的 gitlab-servers 列出工作流的 with: $host 可以指定的、gitlab.com 之外的 GitLab 服务器。每一项都是服务器的 DNS 名称，如果端口不是 HTTPS 的端口，则在冒号后加上端口：协议由 Meridian 添加，服务器没有用户或路径。",
+    "why": "sources.yaml 的 gitlab-servers 列出工作流的 with: $host 可以指定的、gitlab.com 之外的 GitLab 服务器。每一项都是服务器的 DNS 名称，写法与 $host 相同，不带端口，ACTIVATE 也这样读取 $host：协议由 Meridian 添加，并通过 HTTPS 的端口访问服务器，服务器没有用户或路径。",
     "fix": [
-      "将服务器写为 git.example.com，其他端口则写为 git.example.com:8443。"
+      "将服务器写为 git.example.com。",
+      "对于其他端口上的服务器，请注册它的名称，并用 Git 的 url.<base>.insteadOf 设置让 Git 通过该端口访问它，例如：git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
     ]
   }
 }

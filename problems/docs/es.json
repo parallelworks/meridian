@@ -1741,7 +1741,7 @@
     "title": "Servidor de GitLab no registrado",
     "why": "El with: $host de un paso nombra el servidor de GitLab que contiene el flujo de trabajo que nombra su uses:. Git llega a un servidor con la configuración y las credenciales del propio usuario, así que Meridian solo llega a gitlab.com y a los servidores que el usuario registró, y no a cualquiera que nombre un flujo de trabajo: localmente, los que sources.yaml, en el directorio de configuración, enumera en gitlab-servers.",
     "fix": [
-      "Si confías en el servidor, añádelo a gitlab-servers en sources.yaml, como git.example.com, o git.example.com:8443 con su puerto.",
+      "Si confías en el servidor, añádelo a gitlab-servers en sources.yaml, por su nombre, como git.example.com.",
       "Si no, usa un flujo de trabajo de un servidor registrado."
     ]
   },
@@ -1754,9 +1754,10 @@
   },
   "gitlab_server_invalid": {
     "title": "Servidor de GitLab no válido",
-    "why": "gitlab-servers en sources.yaml enumera los servidores de GitLab, además de gitlab.com, que puede nombrar el with: $host de un flujo de trabajo. Cada uno es el nombre DNS de un servidor y, tras dos puntos, su puerto, si no es el de HTTPS: Meridian añade el esquema, y un servidor no tiene usuario ni ruta.",
+    "why": "gitlab-servers en sources.yaml enumera los servidores de GitLab, además de gitlab.com, que puede nombrar el with: $host de un flujo de trabajo. Cada uno es el nombre DNS de un servidor, como lo nombra un $host, sin puerto, como ACTIVATE lee un $host: Meridian añade el esquema y llega al servidor por el puerto de HTTPS, y un servidor no tiene usuario ni ruta.",
     "fix": [
-      "Escribe el servidor como git.example.com, o como git.example.com:8443 para otro puerto."
+      "Escribe el servidor como git.example.com.",
+      "Para un servidor en otro puerto, registra su nombre y haz que Git llegue a él por su puerto con el ajuste url.<base>.insteadOf de Git, como en: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
     ]
   }
 }
