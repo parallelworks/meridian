@@ -253,7 +253,7 @@
   "coordinator_peer_refused": "Meridian won't send the attempt's token to the coordinator's socket {path}: user {uid} serves it, not you or root.",
   "coordinator_peer_unknown": "Meridian can't tell which user serves the coordinator's socket {path}, so it won't send the attempt's token to it: {reason}.",
   "coordinator_key_mismatch": "The server at {address} doesn't hold the coordinator's key, whose hash MERIDIAN_COORDINATOR_KEY_SHA256 gives, so meridian worker won't talk to it.",
-  "coordinator_answer_invalid": "The coordinator's answer to {path} isn't one the worker can read: {reason}.",
+  "coordinator_answer_invalid": "The coordinator's answer to {path}, with status {status}, isn't one the worker can read{has_at, select, true {: its value at {at} isn't what the worker API defines there} other {}}.",
   "coordinator_lost_data": "The coordinator lost {data, select, events {the attempt's events from number {from}} other {a step's log from byte {from}}}, which it had stored and the worker no longer has, so the attempt can't be reported whole.",
   "coordinator_stored_unsent": "The coordinator says it stored the attempt's events up to number {seq}, past the last the worker sent, {last}.",
   "bootstrap_token_refused": "The coordinator refused the bootstrap token meridian worker was started with: the attempt it is for was claimed already, or its placement withdrawn.",

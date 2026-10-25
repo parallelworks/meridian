@@ -247,7 +247,7 @@
   "coordinator_peer_refused": "Meridian 不会把尝试的令牌发送到协调器的套接字 {path}：提供它的是用户 {uid}，而不是你或 root。",
   "coordinator_peer_unknown": "Meridian 无法判断是哪个用户提供了协调器的套接字 {path}，因此不会把尝试的令牌发送给它：{reason}",
   "coordinator_key_mismatch": "{address} 上的服务器不持有协调器的密钥（其哈希由 MERIDIAN_COORDINATOR_KEY_SHA256 给出），因此 meridian worker 不会与它通信。",
-  "coordinator_answer_invalid": "协调器对 {path} 的应答不是工作进程能够读取的：{reason}",
+  "coordinator_answer_invalid": "协调器对 {path} 的应答（状态 {status}）不是工作进程能够读取的。{has_at, select, true {其在 {at} 处的值不是工作进程 API 在该处定义的内容。} other {}}",
   "coordinator_lost_data": "协调器丢失了它已存储的{data, select, events {尝试的事件（从编号 {from} 起）} other {某个步骤的日志（从字节 {from} 起）}}，而工作进程已不再保有这些内容，因此无法完整报告该尝试。",
   "coordinator_stored_unsent": "协调器称它已存储尝试的事件直到编号 {seq}，但工作进程发送的最后一个事件是 {last}。",
   "bootstrap_token_refused": "协调器拒绝了启动 meridian worker 时使用的引导令牌：该令牌对应的尝试已被领取，或其放置已被撤回。",

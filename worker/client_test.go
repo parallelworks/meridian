@@ -42,6 +42,26 @@ func TestPeerRefused(t *testing.T) {
 	}
 }
 
+// TestRefusalPrintsEscaped checks that what the meridian command prints of
+// a coordinator's refusal holds no control character the coordinator sent:
+// not in its code, nor in a param, however deep.
+func TestRefusalPrintsEscaped(t *testing.T) {
+	t.Parallel()
+	for _, flt := range []fault{refuseHostile, refuseNested, refuseBlank} {
+		f := newFakeCoordinator(t, newJob(command("true")))
+		f.fault = func(*http.Request) fault { return flt }
+		err := f.runWorker(t.Context(), Config{})
+		p, ok := errors.AsType[*problem.Problem](err)
+		if !ok {
+			t.Fatalf("got %v", err)
+		}
+		// As cli.fail prints it.
+		if line := (problems.Diagnostic{Type: p.Type, Code: p.Code, Detail: p.Detail, Params: p.Params}).String(); strings.ContainsAny(line, "\x1b\x07\n") {
+			t.Errorf("the command prints %q", line)
+		}
+	}
+}
+
 // TestCoordinatorAnswers checks that what the coordinator answers that the
 // worker can't go on from ends it with a problem: the coordinator's own
 // refusal, as it sent it, but with its text's control characters escaped,
@@ -64,10 +84,19 @@ func TestCoordinatorAnswers(t *testing.T) {
 			return p.Code == problem.CodeForStatus(http.StatusNotFound) && p.Detail == `no such\x1b[2J attempt`
 		}},
 		{name: "a 400 without a problem", fault: badRequest, path: workerapi.PathClaim, kind: problems.CoordinatorAnswerInvalid, check: func(p *problem.Problem) bool {
-			return p.Params["path"] == workerapi.PathClaim && p.Params["reason"] == "400 Bad Request"
+			return p.Params["path"] == workerapi.PathClaim && p.Params["status"] == http.StatusBadRequest && p.Params["has_at"] == "false"
 		}},
 		{name: "a claim that isn't JSON", fault: garble, path: workerapi.PathClaim, kind: problems.CoordinatorAnswerInvalid, check: func(p *problem.Problem) bool {
-			return p.Params["path"] == workerapi.PathClaim && p.Params["reason"] != ""
+			return p.Params["path"] == workerapi.PathClaim && p.Params["status"] == http.StatusOK
+		}},
+		{name: "a claim with a value of the wrong type", fault: wrongClaim, path: workerapi.PathClaim, kind: problems.CoordinatorAnswerInvalid, check: func(p *problem.Problem) bool {
+			return p.Params["has_at"] == "true" && p.Params["at"] == "/runID" && !strings.Contains(p.Detail, "plan:")
+		}},
+		{name: "a refusal whose code isn't one", fault: refuseHostile, path: workerapi.PathClaim, kind: problems.CoordinatorAnswerInvalid, check: func(p *problem.Problem) bool {
+			return p.Params["at"] == "/code" && p.Params["status"] == http.StatusUnprocessableEntity
+		}},
+		{name: "a refusal larger than one", fault: refuseLarge, path: workerapi.PathClaim, kind: problems.CoordinatorAnswerInvalid, check: func(p *problem.Problem) bool {
+			return p.Params["status"] == http.StatusUnprocessableEntity
 		}},
 		{name: "events refused", fault: refuse, path: workerapi.PathEvents, check: func(p *problem.Problem) bool {
 			return p.Code == refusal && p.Params["path"] == workerapi.PathEvents

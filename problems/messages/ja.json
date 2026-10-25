@@ -247,7 +247,7 @@
   "coordinator_peer_refused": "Meridian は試行のトークンをコーディネーターのソケット {path} に送りません。このソケットを提供しているのはユーザー {uid} で、あなたでも root でもありません。",
   "coordinator_peer_unknown": "Meridian はコーディネーターのソケット {path} を提供しているユーザーを判別できないため、試行のトークンを送りません: {reason}",
   "coordinator_key_mismatch": "{address} のサーバーはコーディネーターの鍵（ハッシュは MERIDIAN_COORDINATOR_KEY_SHA256 が示すもの）を持っていないため、meridian worker はそのサーバーと通信しません。",
-  "coordinator_answer_invalid": "{path} へのコーディネーターの応答は、ワーカーが読み取れるものではありません: {reason}",
+  "coordinator_answer_invalid": "{path} へのコーディネーターの応答（ステータス {status}）は、ワーカーが読み取れるものではありません。{has_at, select, true {{at} の値が、ワーカー API がそこに定めるものではありません。} other {}}",
   "coordinator_lost_data": "コーディネーターは保存していた{data, select, events {試行のイベント（番号 {from} 以降）} other {ステップのログ（バイト {from} 以降）}}を失いました。ワーカーはそれをもう持っていないため、試行をすべて報告することはできません。",
   "coordinator_stored_unsent": "コーディネーターは試行のイベントを番号 {seq} まで保存したと言っていますが、ワーカーが送った最後のイベントは {last} です。",
   "bootstrap_token_refused": "コーディネーターは meridian worker が起動されたときのブートストラップトークンを拒否しました。トークンの対象の試行はすでに要求されたか、その配置が取り消されています。",

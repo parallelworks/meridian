@@ -581,6 +581,30 @@ func TestControlCharactersEscaped(t *testing.T) {
 	}
 }
 
+// TestDiagnosticStringEscapes checks that a diagnostic of a problem from
+// elsewhere, as a coordinator's that the worker passes on, prints no
+// control character: not its code, which is its message when it has
+// neither a detail nor a kind this version knows, nor a param, however
+// deep in a list or a mapping, keys too.
+func TestDiagnosticStringEscapes(t *testing.T) {
+	for name, d := range map[string]Diagnostic{
+		"a code with an escape sequence": {Code: "refused\x1b]0;owned\x07\nmeridian: error: fake (x"},
+		"a detail with one":              {Code: "refused", Detail: "fine\nmeridian: error: fake"},
+		"a list param":                   {Code: InputRequired.Code(), Params: Params{"input": []any{"\x1b[2Jcleared"}}},
+		"a list of texts":                {Code: InputRequired.Code(), Params: Params{"input": []string{"\x1b[2J"}}},
+		"a mapping param":                {Code: InputRequired.Code(), Params: Params{"input": map[string]any{"k": []any{"\x1b[31m"}}}},
+		"a mapping's key":                {Code: InputRequired.Code(), Params: Params{"input": map[string]any{"\x1b[31m": 1}}},
+	} {
+		if s := d.String(); strings.ContainsAny(s, "\x1b\x07\n") {
+			t.Errorf("%s: prints %q", name, s)
+		}
+	}
+	nested := []any{"a\x1bb"}
+	if got, _ := escapedValue(nested); got.([]any)[0] != `a\x1bb` || nested[0] != "a\x1bb" {
+		t.Errorf("escapedValue gives %q, and leaves %q", got, nested)
+	}
+}
+
 func TestKindProblem(t *testing.T) {
 	p := MemberInvalid.Problem(Params{"group": "gpu", "key": "cpu", "value": "lots", ParamFile: "groups.yaml", ParamLine: 4})
 	if p.Code != "member_invalid" || p.Type != "/problems/command/member_invalid" || p.Status != 422 {

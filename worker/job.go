@@ -950,18 +950,32 @@ func (a *attempt) at(k *problems.Kind, path string, params problems.Params) prob
 }
 
 // notStarted returns why a step, or a cleanup, at path couldn't start, as
-// err says. The only problems it can hold are the worker's own directory's,
-// which are the meridian command's, as when the worker can make its
-// directory in none of its parents: that is WorkerDirUnusable, which names
-// the first of them by its code and the directory its path param names,
-// and the worker's log has each. Anything else is StepNotStarted, with
-// what the operating system said.
+// err says. A problem of the worker's own directory's, which are the
+// meridian command's (dirProblems), as when the worker can make its
+// directory in none of its parents, is WorkerDirUnusable, which names the
+// first of them by its code and the directory its path param names, and
+// the worker's log has each. Anything else is StepNotStarted, with what
+// the operating system said, which is all else that reaches it.
 func (a *attempt) notStarted(err error, path string) problems.Diagnostic {
-	if p, ok := errors.AsType[*problem.Problem](err); ok {
+	if p, ok := errors.AsType[*problem.Problem](err); ok && dirProblems[p.Code] {
 		dir, _ := p.Params["path"].(string)
 		return a.at(problems.WorkerDirUnusable, path, problems.Params{"path": dir, "code": string(p.Code)})
 	}
 	return a.at(problems.StepNotStarted, path, problems.Params{"reason": err.Error()})
+}
+
+// dirProblems are the codes of the problems the worker's own directory can
+// have: safepath's, and its own.
+var dirProblems = map[problem.Code]bool{
+	problems.DirectoryUnavailable.Code(): true,
+	problems.NotADirectory.Code():        true,
+	problems.DirectoryNotOwned.Code():    true,
+	problems.DirectoryNotPrivate.Code():  true,
+	problems.DirectoryReplaced.Code():    true,
+	problems.PathUnsafe.Code():           true,
+	problems.PathLinksTooMany.Code():     true,
+	problems.OwnerUnmapped.Code():        true,
+	problems.OwnerUnknown.Code():         true,
 }
 
 // maskProblem returns p with what it says masked.

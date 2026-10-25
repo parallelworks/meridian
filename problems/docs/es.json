@@ -1726,7 +1726,7 @@
   },
   "coordinator_answer_invalid": {
     "title": "Respuesta del coordinador que el worker no puede leer",
-    "why": "Un worker lee las respuestas del coordinador de forma estricta, como las define la versión de la API de workers, y el coordinador rechaza una solicitud con un problema que tiene un código. Esta respuesta no era ninguna de las dos cosas, así que el worker se detuvo, en lugar de adivinar qué quería decir el coordinador. Responden así un worker y un coordinador de versiones distintas de Meridian, o un servidor que no es el coordinador.",
+    "why": "Un worker lee las respuestas del coordinador de forma estricta, como las define la versión de la API de workers, y el coordinador rechaza una solicitud con un problema que tiene un código. Esta respuesta no era ninguna de las dos cosas, o era más grande de lo que puede ser un rechazo, así que el worker se detuvo, en lugar de adivinar qué quería decir el coordinador. Responden así un worker y un coordinador de versiones distintas de Meridian, o un servidor que no es el coordinador.",
     "fix": [
       "Inicia workers de la misma versión de Meridian que el coordinador, y comprueba que el worker llega al coordinador y no a otro servidor."
     ]

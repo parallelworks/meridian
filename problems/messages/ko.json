@@ -247,7 +247,7 @@
   "coordinator_peer_refused": "Meridian은 시도의 토큰을 코디네이터 소켓 {path}에 보내지 않습니다. 이 소켓은 사용자 {uid}이(가) 제공하며, 당신이나 root가 아닙니다.",
   "coordinator_peer_unknown": "Meridian이 코디네이터 소켓 {path}을(를) 어떤 사용자가 제공하는지 알 수 없어, 시도의 토큰을 보내지 않습니다: {reason}",
   "coordinator_key_mismatch": "{address}의 서버는 코디네이터의 키(해시는 MERIDIAN_COORDINATOR_KEY_SHA256이 제공)를 가지고 있지 않으므로, meridian worker는 그 서버와 통신하지 않습니다.",
-  "coordinator_answer_invalid": "{path}에 대한 코디네이터의 응답은 워커가 읽을 수 있는 것이 아닙니다: {reason}",
+  "coordinator_answer_invalid": "{path}에 대한 코디네이터의 응답(상태 {status})은 워커가 읽을 수 있는 것이 아닙니다.{has_at, select, true { {at}의 값이 워커 API가 그곳에 정한 것이 아닙니다.} other {}}",
   "coordinator_lost_data": "코디네이터가 저장해 두었던 {data, select, events {시도의 이벤트(번호 {from}부터)} other {단계의 로그(바이트 {from}부터)}}을(를) 잃었습니다. 워커에게는 그것이 더 이상 없으므로 시도를 온전히 보고할 수 없습니다.",
   "coordinator_stored_unsent": "코디네이터는 시도의 이벤트를 번호 {seq}까지 저장했다고 하지만, 워커가 보낸 마지막 이벤트는 {last}입니다.",
   "bootstrap_token_refused": "코디네이터가 meridian worker가 시작될 때 받은 부트스트랩 토큰을 거부했습니다. 토큰의 대상인 시도가 이미 요청되었거나 그 배치가 철회되었습니다.",

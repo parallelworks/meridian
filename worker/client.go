@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -203,6 +204,10 @@ func (c *client) do(ctx context.Context, cl call, out any) error {
 	}
 }
 
+// maxRefusal is the most bytes of an answer the client reads that isn't a
+// success: a problem, which the meridian command can print.
+const maxRefusal = 16 << 10
+
 // maxAnswer is the most bytes of an answer the client reads: a claim, with
 // the job's part of the run, is the largest.
 const maxAnswer = 256 << 20
@@ -248,20 +253,28 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		return &temporaryError{err}
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
+	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	limit := int64(maxRefusal)
+	if success {
+		limit = maxAnswer
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return &temporaryError{err}
 	}
+	if int64(len(data)) > limit {
+		return answerInvalid(cl.path, resp.StatusCode, nil)
+	}
 	switch status := resp.StatusCode; {
-	case status >= 200 && status < 300:
+	case success:
 		if out == nil {
 			return nil
 		}
 		if err := workerapi.Unmarshal(data, out); err != nil {
-			return answerInvalid(cl.path, err.Error())
+			return answerInvalid(cl.path, status, err)
 		}
 		return nil
 	case status == http.StatusServiceUnavailable:
@@ -270,9 +283,9 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		// included.
 		resp.Body.Close()
 		c.transport.CloseIdleConnections()
-		return tryAgain(cl.path, resp.Status)
+		return tryAgain(cl.path, status)
 	case status == http.StatusTooManyRequests || status >= 500:
-		return tryAgain(cl.path, resp.Status)
+		return tryAgain(cl.path, status)
 	case status == http.StatusUnauthorized:
 		return errUnauthorized
 	}
@@ -280,7 +293,10 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 	if jsonv2.Unmarshal(data, &p) != nil || p.Type == "" && p.Code == "" {
 		// An answer that isn't a problem: its status is all the
 		// coordinator said.
-		return answerInvalid(cl.path, resp.Status)
+		return answerInvalid(cl.path, resp.StatusCode, nil)
+	}
+	if p.Code != "" && !isCode(string(p.Code)) {
+		return answerInvalidAt(cl.path, resp.StatusCode, "/code")
 	}
 	switch p.Code {
 	case workerapi.Fenced:
@@ -293,24 +309,60 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		}
 	}
 	// The coordinator's refusal is a problem, with its code and params,
-	// which the worker returns as the coordinator sent it: an about:blank
-	// one with the code its status implies, and its text with its control
-	// characters escaped, as a message escapes a param's.
+	// which the worker returns as it is: an about:blank one with the code
+	// its status implies, and its text with its control characters
+	// escaped, as a message escapes its params', however deep.
 	p.Code = p.Key()
 	p.Title, p.Detail = problems.EscapeControl(p.Title), problems.EscapeControl(p.Detail)
 	return &p
 }
 
-// answerInvalid is the problem of an answer to the request at path that
-// the worker can't read, for the reason its decoder, or its status, gives.
-func answerInvalid(path, reason string) error {
-	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "reason": reason})
+// isCode reports whether code is one a problem can have, as Meridian's and
+// foundation's are: a lowercase letter, then lowercase letters, digits and
+// underscores.
+func isCode(code string) bool {
+	for i, r := range code {
+		letter := r >= 'a' && r <= 'z'
+		more := r >= '0' && r <= '9' || r == '_'
+		if !letter && (i == 0 || !more) {
+			return false
+		}
+	}
+	return code != ""
+}
+
+// answerInvalid is the problem of an answer, with status, to the request at
+// path that the worker can't read: where in it the decoder stopped, if err,
+// its error, says.
+func answerInvalid(path string, status int, err error) error {
+	if at, ok := decodedAt(err); ok {
+		return answerInvalidAt(path, status, at)
+	}
+	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "status": status, "has_at": false, "at": ""})
+}
+
+// answerInvalidAt is answerInvalid's problem, at the value the JSON Pointer
+// at names.
+func answerInvalidAt(path string, status int, at string) error {
+	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "status": status, "has_at": true, "at": at})
+}
+
+// decodedAt returns the JSON Pointer of the value at which a decoder's
+// error, err, stopped, if it names one other than the whole.
+func decodedAt(err error) (string, bool) {
+	var at string
+	if e, ok := errors.AsType[*jsonv2.SemanticError](err); ok {
+		at = string(e.JSONPointer)
+	} else if e, ok := errors.AsType[*jsontext.SyntacticError](err); ok {
+		at = string(e.JSONPointer)
+	}
+	return at, at != ""
 }
 
 // tryAgain is a request to path that the coordinator answered with status,
 // which asks the worker to try it again.
-func tryAgain(path, status string) error {
-	return &temporaryError{fmt.Errorf("worker: %s: %s", path, status)} //nolint:forbidigo // a request the worker tries again, which only its log shows
+func tryAgain(path string, status int) error {
+	return &temporaryError{fmt.Errorf("worker: %s: status %d", path, status)} //nolint:forbidigo // a request the worker tries again, which only its log shows
 }
 
 // problemOf returns the problem of kind k that err is, or wraps, or nil.

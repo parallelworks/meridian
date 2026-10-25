@@ -364,24 +364,74 @@ func (k *Kind) Problem(params Params) *problem.Problem {
 	return p
 }
 
-// displayed returns params with each text's control characters escaped, for
-// a message to show: params itself when none has any.
+// displayed returns params with each text's control characters escaped,
+// however deep in a list or a mapping, keys too, for a message to show:
+// params itself when none has any.
 func displayed(params Params) Params {
 	var out Params
 	for name, v := range params {
-		s, ok := v.(string)
-		if !ok || !needsEscape(s) {
+		e, changed := escapedValue(v)
+		if !changed {
 			continue
 		}
 		if out == nil {
 			out = maps.Clone(params)
 		}
-		out[name] = EscapeControl(s)
+		out[name] = e
 	}
 	if out == nil {
 		return params
 	}
 	return out
+}
+
+// escapedValue returns v with each text in it escaped (EscapeControl),
+// however deep in lists and mappings, the mappings' keys too, and whether
+// that changed it; v itself when it didn't.
+func escapedValue(v any) (any, bool) {
+	switch v := v.(type) {
+	case string:
+		if !needsEscape(v) {
+			return v, false
+		}
+		return EscapeControl(v), true
+	case []string:
+		if !slices.ContainsFunc(v, needsEscape) {
+			return v, false
+		}
+		out := make([]string, len(v))
+		for i, s := range v {
+			out[i] = EscapeControl(s)
+		}
+		return out, true
+	case []any:
+		var out []any
+		for i, e := range v {
+			if x, changed := escapedValue(e); changed {
+				if out == nil {
+					out = slices.Clone(v)
+				}
+				out[i] = x
+			}
+		}
+		if out == nil {
+			return v, false
+		}
+		return out, true
+	case map[string]any:
+		changed := false
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			x, c := escapedValue(e)
+			changed = changed || c || needsEscape(k)
+			out[EscapeControl(k)] = x
+		}
+		if !changed {
+			return v, false
+		}
+		return out, true
+	}
+	return v, false
 }
 
 // escaped says whether EscapeControl escapes r: a control character, C0,
@@ -572,7 +622,9 @@ func (d Diagnostic) String() string {
 	if b.Len() > 0 {
 		b.WriteString(" ")
 	}
-	fmt.Fprintf(&b, "%s: %s (%s)", d.Severity(), d.Message(), d.Code)
+	// Its message and code can come from elsewhere, as a coordinator's
+	// problem the worker passes on, so each is escaped as a param is.
+	fmt.Fprintf(&b, "%s: %s (%s)", d.Severity(), EscapeControl(d.Message()), EscapeControl(string(d.Code)))
 	return b.String()
 }
 

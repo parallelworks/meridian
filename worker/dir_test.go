@@ -14,6 +14,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -300,5 +301,10 @@ func TestPrivateDirProblems(t *testing.T) {
 	}
 	if diag := a.notStarted(os.ErrPermission, "/jobs/j/steps/0"); diag.Code != "step_not_started" || diag.Params["reason"] != os.ErrPermission.Error() {
 		t.Errorf("a step that can't start for an error of the system's has %+v", diag)
+	}
+	// A problem that isn't the directory's, such as a file's, isn't taken
+	// for one.
+	if diag := a.notStarted(problems.FileNotRegular.Problem(problems.Params{"path": "/x"}), "/jobs/j/steps/0"); diag.Code != "step_not_started" {
+		t.Errorf("a step that can't start for a file's problem has %+v", diag)
 	}
 }

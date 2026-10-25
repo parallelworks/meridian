@@ -62,6 +62,14 @@ const (
 	refuse
 	refuseBlank
 	badRequest
+	// refuseHostile answers with a problem whose code isn't one, and
+	// refuseNested with one of a known kind whose param holds an escape
+	// sequence in a list; refuseLarge with one larger than a refusal is.
+	refuseHostile
+	refuseNested
+	refuseLarge
+	// wrongClaim answers a claim with one whose run's ID is a number.
+	wrongClaim
 	garble
 	// ackAhead answers events with an acknowledgement of events past
 	// those the worker sent.
@@ -172,6 +180,18 @@ func (f *fakeCoordinator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", problem.MediaType)
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(problem.Problem{Type: problem.Blank, Status: http.StatusNotFound, Detail: "no such\x1b[2J attempt"})
+		return
+	case refuseHostile:
+		writeProblem(w, http.StatusUnprocessableEntity, "refused\x1b]0;owned\x07\nmeridian: error: all is well (ok", nil)
+		return
+	case refuseNested:
+		writeProblem(w, http.StatusUnprocessableEntity, problems.InputRequired.Code(), map[string]any{"input": []any{"\x1b[2J"}})
+		return
+	case refuseLarge:
+		writeProblem(w, http.StatusUnprocessableEntity, refusal, map[string]any{"path": strings.Repeat("x", maxRefusal)})
+		return
+	case wrongClaim:
+		writeJSON(w, map[string]any{"runID": 1})
 		return
 	case badRequest:
 		w.WriteHeader(http.StatusBadRequest)

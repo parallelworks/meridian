@@ -416,16 +416,17 @@ var (
 // meridian worker's own problems, which end it: variable is an environment
 // variable's name, address the coordinator's, uid a user's number, os the
 // operating system's name, as Go's GOOS has it, and reason what the
-// operating system said, or the coordinator's answer's decoder or status;
-// path is a socket's, or a worker API request's; data is events or log,
-// and from the first event's number or byte of what the coordinator lost.
+// operating system said; path is a socket's, or a worker API request's;
+// status an HTTP status's number; at a JSON Pointer into an answer, which
+// has_at says it has; data is events or log, and from the first event's
+// number or byte of what the coordinator lost.
 var (
 	WorkerEnvironmentMissing    = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
 	WorkerEnvironmentInvalid    = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
 	CoordinatorPeerRefused      = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
 	CoordinatorPeerUnknown      = defineCommand("coordinator_peer_unknown", "Coordinator socket's user can't be told", "path", "reason")
 	CoordinatorKeyMismatch      = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
-	CoordinatorAnswerInvalid    = defineCommand("coordinator_answer_invalid", "Coordinator's answer the worker can't read", "path", "reason")
+	CoordinatorAnswerInvalid    = defineCommand("coordinator_answer_invalid", "Coordinator's answer the worker can't read", "path", "status", "has_at", "at")
 	CoordinatorLostData         = defineCommand("coordinator_lost_data", "Coordinator lost what it had stored", "data", "from")
 	CoordinatorStoredUnsent     = defineCommand("coordinator_stored_unsent", "Coordinator stored events the worker didn't send", "seq", "last")
 	BootstrapTokenRefused       = defineCommand("bootstrap_token_refused", "Bootstrap token refused")

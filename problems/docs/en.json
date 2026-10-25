@@ -1482,7 +1482,7 @@
     ]
   },
   "coordinator_answer_invalid": {
-    "why": "A worker reads the coordinator's answers strictly, as the worker API's version defines them, and the coordinator refuses a request with a problem that has a code. This answer was neither, so the worker stopped, rather than guess what the coordinator meant. A worker and a coordinator of different releases of Meridian, or a server that isn't the coordinator, answer so.",
+    "why": "A worker reads the coordinator's answers strictly, as the worker API's version defines them, and the coordinator refuses a request with a problem that has a code. This answer was neither, or was larger than a refusal can be, so the worker stopped, rather than guess what the coordinator meant. A worker and a coordinator of different releases of Meridian, or a server that isn't the coordinator, answer so.",
     "fix": [
       "Start workers of the same release of Meridian as the coordinator, and check that the worker reaches the coordinator, not another server."
     ]
