@@ -523,7 +523,7 @@
   },
   "output_undefined_step": {
     "title": "La salida lee un paso que no existe",
-    "why": "Una salida de un trabajo lee un paso con un id que no tiene ninguno de sus pasos, así que la salida está vacía.",
+    "why": "Una salida de un trabajo lee un paso con un id que no tiene ninguno de sus pasos. Cuando los pasos del trabajo tuvieron éxito, el formato 1 lee sus salidas de forma estricta, así que la salida hace fallar el trabajo, como una que nada escribió (output_not_written); cuando un paso falló o se canceló, la salida está vacía.",
     "fix": [
       "Corrige el id del paso o dale ese id al paso."
     ]

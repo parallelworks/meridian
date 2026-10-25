@@ -448,7 +448,7 @@
     ]
   },
   "output_undefined_step": {
-    "why": "A job's output reads a step by an id none of its steps has, so the output is empty.",
+    "why": "A job's output reads a step by an id none of its steps has. Once the job's steps succeeded, format 1 reads its outputs strictly, so the output fails the job, as one that nothing wrote does (output_not_written); once a step failed or was cancelled, the output is empty.",
     "fix": [
       "Correct the step's id, or give the step that id."
     ]

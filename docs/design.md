@@ -426,8 +426,11 @@ its resolvers into a plan, in order:
      defining them. Format 1 reads `steps` only as
      `steps.<id>.outputs.<name>`. A step reading one of a step that doesn't
      exist or doesn't run before it is an error, since ACTIVATE fails the
-     step; in a job's outputs and a step's `cleanup:`, which read it as
-     `""`, it is a warning. Any other reference to `steps`, such as
+     step. In a step's `cleanup:`, which reads it as `""`, it is a warning,
+     and in a job's `outputs:` too: they read it as `""` once a step of
+     the job failed or was cancelled, but once its steps succeeded, fail
+     the job, as ACTIVATE fails it (`output_not_written`). Any other
+     reference to `steps`, such as
      `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
      step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
      and reads as its own text, as format 1 reads a word it doesn't know.
@@ -435,7 +438,8 @@ its resolvers into a plan, in order:
      [Bug fixes to format 1](#bug-fixes-to-format-1) counts, one reads
      `steps` other than through `needs.<job>.steps`, as
      `steps.<id>.outputs.<name>` in a job's `outputs:`, of a step that
-     has no `id`, which is a warning (`output_undefined_step`). So with
+     has no `id`, which is a warning (`output_undefined_step`), and fails
+     the job once its steps succeeded, in ACTIVATE as in Meridian. So with
      `needs`, which format 1 reads only as `needs.<job>.outputs.<name>` and
      `needs.<job>.steps.<id>.outputs.<name>`, and Meridian as
      `needs.<job>.result` too: any other reference to it, such as
@@ -1832,7 +1836,10 @@ member's running workers reconnect to it.
   step's that nothing wrote fails the expression that reads it
   (`output_not_written`) where a job or a step is about to run, and in a
   job's `outputs:` once its steps succeeded, so that a command such as
-  `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path. An
+  `rm -rf ${{ needs.prep.outputs.dir }}/*` never runs with an empty path;
+  so does a step's output read by an `id` that none of the job's steps
+  has, as `steps.<id>.outputs.<name>` there or in
+  `needs.<job>.steps.<id>.outputs.<name>`. An
   `if:` reads one as `""`, and so do a step whose `if:` is the word
   `always`, a job's own values and its strategy when its `if:` is, a
   step's `cleanup:`, and a job's `outputs:` once a step of it failed or was

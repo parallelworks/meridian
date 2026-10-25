@@ -1,0 +1,13 @@
+jobs:
+  done:
+    steps:
+      - name: benchmark
+        run: echo RESULTS_FILE=results.json >> $OUTPUTS
+    outputs:
+      results_file: ${{ steps.benchmark.outputs.RESULTS_FILE }}
+  broke:
+    steps:
+      - name: benchmark
+        run: exit 1
+    outputs:
+      results_file: ${{ steps.benchmark.outputs.RESULTS_FILE }}

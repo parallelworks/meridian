@@ -76,7 +76,7 @@
   "needs_read_whole": "Format 1 reads a needed job only by its result or an output by name, as needs.{job}.outputs.<name>, so {text} reads as its own text.",
   "step_not_earlier": "The step \"{id}\" doesn't run before this one, so its outputs aren't known here.",
   "undefined_step": "No earlier step of the job \"{job}\" has the id \"{id}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
-  "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
+  "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output fails the job when its steps succeed, and is empty when one fails or is cancelled.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this reads as its own text, steps.{id}.{key}.",
   "output_steps_unknown_key": "There's no key \"{key}\" in steps.{id}, which has outputs, so this output reads it as its own text, steps.{id}.{key}.",
   "cleanup_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so what this cleanup: reads of it is empty.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",

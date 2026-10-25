@@ -535,8 +535,10 @@ func (c *Contexts) mapping(context string, d Data) map[string]any {
 
 // strictOutputs returns what reads the outputs of needs and steps strictly
 // (Contexts.StrictOutputs): an output a job or a step has no value for is
-// output_not_written. A name past an output's, which reads the JSON it
-// holds, and a job or a step the contexts don't have, read as "".
+// output_not_written, and so is one of a step by an id that none of the
+// job's steps that have run has, as format 1 fails what reads it. A name
+// past an output's, which reads the JSON it holds, and a job the contexts
+// don't have, read as "".
 func strictOutputs(needs map[string]JobResult, steps map[string]map[string]string) func(string, []string) (*problems.Kind, problems.Params) {
 	missing := func(outputs map[string]string, of, owner, name string) (*problems.Kind, problems.Params) {
 		if _, ok := outputs[name]; ok {
@@ -547,9 +549,7 @@ func strictOutputs(needs map[string]JobResult, steps map[string]map[string]strin
 	return func(context string, path []string) (*problems.Kind, problems.Params) {
 		switch {
 		case context == "steps" && len(path) >= 3 && path[1] == "outputs":
-			if outputs, ok := steps[path[0]]; ok {
-				return missing(outputs, "step", path[0], path[2])
-			}
+			return missing(steps[path[0]], "step", path[0], path[2])
 		case context != "needs" || len(path) < 3:
 		case path[1] == "outputs":
 			if r, ok := needs[path[0]]; ok {
@@ -557,10 +557,7 @@ func strictOutputs(needs map[string]JobResult, steps map[string]map[string]strin
 			}
 		case path[1] == "steps" && len(path) >= 5 && path[3] == "outputs":
 			if r, ok := needs[path[0]]; ok {
-				if outputs, ok := r.Steps[path[2]]; ok {
-					return missing(outputs, "step", path[2], path[4])
-				}
-				return problems.OutputNotWritten, problems.Params{"of": "step", "owner": path[2], "name": path[4]}
+				return missing(r.Steps[path[2]], "step", path[2], path[4])
 			}
 		}
 		return nil, nil

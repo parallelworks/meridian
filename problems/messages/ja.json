@@ -73,7 +73,7 @@
   "needs_read_whole": "形式 1 は必要なジョブを result か、needs.{job}.outputs.<name> のように名前で指定した出力でしか読み取らないため、{text} はそれ自体のテキストとして読み取られます。",
   "step_not_earlier": "ステップ「{id}」はこのステップより前に実行されないため、その出力はここではわかりません。",
   "undefined_step": "ジョブ「{job}」のこれより前のステップに、id が「{id}」のものはありません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
-  "output_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この出力は空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
+  "output_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この出力は、ステップがすべて成功するとジョブを失敗させ、いずれかが失敗またはキャンセルされると空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs なので、これはそれ自体のテキスト steps.{id}.{key} として読み取られます。",
   "output_steps_unknown_key": "steps.{id} にキー「{key}」はありません。steps.{id} にあるのは outputs なので、この出力はそれをそれ自体のテキスト steps.{id}.{key} として読み取ります。",
   "cleanup_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この cleanup: がそこから読み取る値は空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
