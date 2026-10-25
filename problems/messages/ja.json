@@ -235,6 +235,7 @@
   "coordinator_peer_unknown": "Meridian はコーディネーターのソケット {path} を提供しているユーザーを判別できないため、試行のトークンを送りません: {reason}",
   "coordinator_key_mismatch": "{address} のサーバーはコーディネーターの鍵（ハッシュは MERIDIAN_COORDINATOR_KEY_SHA256 が示すもの）を持っていないため、meridian worker はそのサーバーと通信しません。",
   "bootstrap_token_refused": "コーディネーターは meridian worker が起動されたときのブートストラップトークンを拒否しました。トークンの対象の試行はすでに要求されたか、その配置が取り消されています。",
+  "bootstrap_token_in_environment": "このシステムでは、あなたの他のプロセスがワーカーの環境を読み取れるため、ワーカーはブートストラップトークンを MERIDIAN_BOOTSTRAP_TOKEN から受け取りません。MERIDIAN_BOOTSTRAP_TOKEN_FILE が指すファイルで渡してください。",
   "run_plan_too_new": "実行の計画は、この meridian が読み取れるもの（計画バージョン {version}）より新しいため、試行はそれを読み取れるワーカーにもう一度配置されます。",
   "attempt_superseded": "コーディネーターはこの試行からの報告をもう受け付けません。ジョブの別の試行がこの試行に取って代わったか、試行がこのワーカーなしで終了しました。",
   "attempt_lease_lapsed": "Meridian はジョブを停止しました（ジョブはもう一度実行されることがあります）。試行のリースが失効する前に更新できなかったためです。",

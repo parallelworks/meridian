@@ -1637,6 +1637,13 @@
       "No hay nada que corregir si se canceló el intento; si no, deja que el backend inicie un worker con el token propio del intento."
     ]
   },
+  "bootstrap_token_in_environment": {
+    "title": "Token de arranque en un entorno que otros pueden leer",
+    "why": "Un token de arranque reclama su intento una vez, para quien lo presente primero. En macOS, cualquier proceso de un usuario puede leer los argumentos y el entorno de cualquier otro suyo, como hace ps -E, haga lo que haga el worker para protegerse, así que otro proceso, como un paso de otro trabajo, podría leer allí el token y reclamar el intento. En su lugar, el worker toma el token de un archivo, que elimina en cuanto lo ha leído.",
+    "fix": [
+      "Da el token en un archivo que solo tú puedas leer, cuya ruta indique MERIDIAN_BOOTSTRAP_TOKEN_FILE, en lugar de en MERIDIAN_BOOTSTRAP_TOKEN."
+    ]
+  },
   "run_plan_too_new": {
     "title": "Plan de la ejecución más nuevo de lo que lee el worker",
     "why": "El plan de una ejecución tiene versión, y un worker solo ejecuta un plan de una versión que lee, para no ejecutar nunca un trabajo sin una parte que no entiende. El coordinador rechazó la reclamación antes de enviar nada de la ejecución. No se ejecutó ningún paso, así que el intento se coloca de nuevo.",

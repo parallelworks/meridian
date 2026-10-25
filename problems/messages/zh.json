@@ -235,6 +235,7 @@
   "coordinator_peer_unknown": "Meridian 无法判断是哪个用户提供了协调器的套接字 {path}，因此不会把尝试的令牌发送给它：{reason}",
   "coordinator_key_mismatch": "{address} 上的服务器不持有协调器的密钥（其哈希由 MERIDIAN_COORDINATOR_KEY_SHA256 给出），因此 meridian worker 不会与它通信。",
   "bootstrap_token_refused": "协调器拒绝了启动 meridian worker 时使用的引导令牌：该令牌对应的尝试已被领取，或其放置已被撤回。",
+  "bootstrap_token_in_environment": "在此系统上，你的其他进程可以读取工作进程的环境，因此它不会从 MERIDIAN_BOOTSTRAP_TOKEN 获取引导令牌：请通过 MERIDIAN_BOOTSTRAP_TOKEN_FILE 所指的文件提供它。",
   "run_plan_too_new": "该运行的计划比此 meridian 能读取的（计划版本 {version}）更新，因此该尝试会被重新放置到能读取它的工作进程上。",
   "attempt_superseded": "协调器不再接受此尝试的报告：该作业的另一个尝试取代了它，或者它在没有此工作进程的情况下结束了。",
   "attempt_lease_lapsed": "Meridian 停止了该作业（它可能会再次运行），因为它无法在尝试的租约失效之前续订租约。",

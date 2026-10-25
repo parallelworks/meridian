@@ -1745,7 +1745,14 @@ with three things:
   scheduler's queue holds the job, and stored only as a hash. It travels in
   the job's environment or in a file only the user can read, on a path no
   other user can change, never on a command line, where other users could
-  see it in `ps`.
+  see it in `ps`. On macOS it travels only in a file, which the worker
+  removes as soon as it has read it: any process of the user can read the
+  environment of any other of theirs there, as `ps -E` does
+  (`bootstrap_token_in_environment`). Wherever it travels, the user's own
+  processes can read it until it is claimed, from the file until the
+  worker removes it, or, on Linux and FreeBSD, from the environment until
+  the worker has hardened itself, the first thing it does; it is good for
+  one claim, which the worker makes at once.
 
 The coordinator looks for the attempt's placement before it makes the
 token, and makes one only for a placement that doesn't exist yet. When the
@@ -1964,15 +1971,19 @@ member's running workers reconnect to it.
   user's, or root's: `SO_PEERCRED` says on Linux, and `LOCAL_PEERCRED` on
   macOS and FreeBSD. Over TLS, it checks the coordinator's key. It follows
   no redirect.
-- **It keeps its credential out of reach.** Before it claims the attempt,
-  it keeps the user's other processes, the job's steps among them, from
-  reading its memory, or tracing what it sends: on Linux it makes itself
-  not dumpable; on FreeBSD it turns tracing of itself off (`procctl`),
-  core dumps included; and on macOS it refuses debuggers
-  (`PT_DENY_ATTACH`), where reading another process's memory any other
-  way takes root or a debugger the user has authorised, and sets the size
-  of its core file to 0, as macOS's default is, which the job's steps
-  start with too, and can raise. On any other system the worker doesn't
+- **It keeps its credential out of reach.** First of all, before it reads
+  its bootstrap token, it keeps the user's other processes, the job's steps
+  among them, from reading its memory, or tracing what it sends: on Linux
+  it makes itself not dumpable, which also keeps them from reading its
+  environment in `/proc`; on FreeBSD it turns tracing of itself off
+  (`procctl`), core dumps and its environment included; and on macOS it
+  refuses debuggers (`PT_DENY_ATTACH`), where reading another process's
+  memory any other way takes root or a debugger the user has authorised,
+  and sets the size of its core file to 0, as macOS's default is, which
+  the job's steps start with too, and can raise. macOS still shows the
+  worker's environment to the user's other processes, so the worker there
+  takes no token from it. Its credential, which it makes, is never in its
+  environment or arguments. On any other system the worker doesn't
   run (`worker_system_unsupported`), rather than run a job with less:
   NetBSD and OpenBSD say who serves a socket, but give a process no way to
   keep the user's other processes from tracing it, and OpenBSD's `ktrace`

@@ -414,8 +414,13 @@ func (f *fakeCoordinator) runWorker(ctx context.Context, cfg Config) error {
 	if !slices.ContainsFunc(cfg.Environ, func(kv string) bool { return strings.HasPrefix(kv, workerapi.EnvCoordinator+"=") }) {
 		cfg.Environ = append(cfg.Environ, workerapi.EnvCoordinator+"="+f.serve())
 	}
+	// The token in a file, which the worker takes on every system.
+	tokenFile := filepath.Join(f.t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte(f.token), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
 	cfg.Environ = append(cfg.Environ,
-		workerapi.EnvBootstrapToken+"="+f.token,
+		workerapi.EnvBootstrapTokenFile+"="+tokenFile,
 		"PATH="+os.Getenv("PATH"),
 		"FROM_WORKER=inherited",
 	)

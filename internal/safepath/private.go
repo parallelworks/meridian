@@ -146,11 +146,19 @@ func EnsureDir(path string, access Access) error {
 // absolute and clean; any other error is what the operating system said,
 // as fs.ErrNotExist for a file that isn't there.
 func ReadFile(path string, access Access, limit int) ([]byte, error) {
+	open := path
 	path, err := checked(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|openFlags, 0) //nolint:gosec // a path whose way Check checked, to a file CheckFileInfo checks
+	// A path that ends in a slash names a directory, which the kernel
+	// says a file isn't, though the clean path Check reads drops it.
+	if open != "" && os.IsPathSeparator(open[len(open)-1]) && path != string(filepath.Separator) {
+		open = path + string(filepath.Separator)
+	} else {
+		open = path
+	}
+	f, err := os.OpenFile(open, os.O_RDONLY|openFlags, 0) //nolint:gosec // a path whose way Check checked, to a file CheckFileInfo checks
 	if err != nil {
 		// Systems say a link where O_NOFOLLOW stopped in different ways:
 		// ELOOP, EMLINK on FreeBSD, EFTYPE on NetBSD.

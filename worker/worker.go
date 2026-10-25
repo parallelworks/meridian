@@ -100,17 +100,17 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 // run is Run, with the timing it uses, and protect, which hardens the
-// process once its environment says what to claim.
+// process before it reads the bootstrap token.
 func run(ctx context.Context, cfg Config, tm timing, protect func() error) error {
+	if err := protect(); err != nil {
+		return err
+	}
 	environ := cfg.Environ
 	if environ == nil {
 		environ = os.Environ()
 	}
-	ep, stepsEnv, err := readEnv(environ)
+	ep, stepsEnv, err := readEnv(environ, environReadable)
 	if err != nil {
-		return err
-	}
-	if err := protect(); err != nil {
 		return err
 	}
 	log := cfg.Log
@@ -177,8 +177,10 @@ func (e endpoint) socket() bool { return strings.HasPrefix(e.address, "/") }
 // readEnv reads how to reach the coordinator, and the bootstrap token, from
 // environ, and returns the rest of it, which the job's steps get. It reads
 // the token from the file EnvBootstrapTokenFile names, if it does, and
-// removes the file; it refuses one that other users can read.
-func readEnv(environ []string) (endpoint, []string, error) {
+// removes the file; it refuses one that other users can read. Where the
+// user's other processes can read the worker's environment, as readable
+// says (environReadable), it refuses a token in EnvBootstrapToken.
+func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 	vars := map[string]string{}
 	var rest []string
 	for _, kv := range environ {
@@ -216,6 +218,8 @@ func readEnv(environ []string) (endpoint, []string, error) {
 	switch {
 	case token != "" && file != "":
 		return ep, nil, invalid(workerapi.EnvBootstrapTokenFile)
+	case token != "" && readable:
+		return ep, nil, problems.BootstrapTokenInEnvironment.Problem(nil)
 	case file != "":
 		var err error
 		if token, err = readTokenFile(file); err != nil {

@@ -241,6 +241,7 @@
   "coordinator_peer_unknown": "Meridian can't tell which user serves the coordinator's socket {path}, so it won't send the attempt's token to it: {reason}.",
   "coordinator_key_mismatch": "The server at {address} doesn't hold the coordinator's key, whose hash MERIDIAN_COORDINATOR_KEY_SHA256 gives, so meridian worker won't talk to it.",
   "bootstrap_token_refused": "The coordinator refused the bootstrap token meridian worker was started with: the attempt it is for was claimed already, or its placement withdrawn.",
+  "bootstrap_token_in_environment": "Other processes of yours can read the worker's environment on this system, so it won't take its bootstrap token from MERIDIAN_BOOTSTRAP_TOKEN: give it in a file, which MERIDIAN_BOOTSTRAP_TOKEN_FILE names.",
   "run_plan_too_new": "The run's plan is newer than this meridian reads, which is plan version {version}, so the attempt is placed again, on a worker that reads it.",
   "attempt_superseded": "The coordinator no longer takes reports from this attempt: another attempt of the job superseded it, or it ended without this worker.",
   "attempt_lease_lapsed": "Meridian stopped the job, which may run again, because it couldn't renew the attempt's lease before the lease would lapse.",

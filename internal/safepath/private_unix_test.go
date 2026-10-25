@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -207,4 +208,50 @@ func TestReadFileDotDot(t *testing.T) {
 	if err != nil || string(data) != "checked" {
 		t.Errorf("got %q, %v", data, err)
 	}
+}
+
+// TestReadFileAdversarial checks what links of the user's own can't make
+// ReadFile and CheckDir accept: a file through a link to a directory
+// others can change, a loop of links, a directory that is a link to one
+// root owns, a trailing slash on a file, which the kernel says isn't a
+// directory, and, where the system lets one be made, a hard link to a file
+// of root's.
+func TestReadFileAdversarial(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	open := filepath.Join(dir, "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(open, "g"), []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o777); err != nil { //nolint:gosec // a directory others can change, which ReadFile refuses
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"toopen": open, "loop1": filepath.Join(dir, "loop2"), "loop2": filepath.Join(dir, "loop1"), "toroot": "/"} {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(path string, access Access) error {
+		_, err := ReadFile(path, access, 10)
+		return err
+	}
+	wantProblem(t, read(filepath.Join(dir, "toopen", "g"), Private), problems.PathUnsafe)
+	wantProblem(t, read(filepath.Join(dir, "loop1", "x"), Private), problems.PathLinksTooMany)
+	wantProblem(t, CheckDir(filepath.Join(dir, "toroot"), Unchangeable), problems.DirectoryNotOwned)
+	if err := read(f+"/", Private); !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("a file through a trailing slash: %v", err)
+	}
+	hard := filepath.Join(dir, "hard")
+	if err := os.Link("/etc/hosts", hard); err != nil {
+		t.Logf("no hard link to a file of root's: %v", err)
+		return
+	}
+	wantProblem(t, read(hard, Unchangeable), problems.FileNotOwned)
 }
