@@ -69,6 +69,31 @@ func (q *eventQueue) batch() ([]workerapi.Event, <-chan struct{}) {
 	return q.pending[:n:n], q.changed
 }
 
+// encodable puts what notEncoded makes of each of events that doesn't
+// encode in its place, and reports whether there was one, and each that
+// notEncoded made encodes.
+func (q *eventQueue) encodable(events []workerapi.Event, notEncoded func(workerapi.Event, error) workerapi.Event) bool {
+	replaced := false
+	for _, e := range events {
+		_, err := workerapi.Marshal(&e)
+		if err == nil {
+			continue
+		}
+		r := notEncoded(e, err)
+		r.Seq = e.Seq
+		if _, err := workerapi.Marshal(&r); err != nil {
+			return false
+		}
+		q.mu.Lock()
+		if k := r.Seq - q.stored - 1; k >= 0 && k < int64(len(q.pending)) {
+			q.pending[k] = r
+		}
+		q.mu.Unlock()
+		replaced = true
+	}
+	return replaced
+}
+
 // stored records that the coordinator has stored every event up to seq.
 func (q *eventQueue) storedUpTo(seq int64) {
 	q.mu.Lock()
@@ -126,8 +151,9 @@ func (q *eventQueue) wait(seq int64, stop <-chan struct{}) error {
 }
 
 // send sends the queue's events as they come, until ctx is done or the
-// coordinator refuses them, which it reports to stop.
-func (q *eventQueue) send(ctx context.Context, c *client, stop func(error)) {
+// coordinator refuses them, which it reports to stop. An event the worker
+// can't encode, as err says, it sends as notEncoded makes it.
+func (q *eventQueue) send(ctx context.Context, c *client, stop func(error), notEncoded func(e workerapi.Event, err error) workerapi.Event) {
 	stalls := 0
 	for {
 		events, changed := q.batch()
@@ -140,9 +166,21 @@ func (q *eventQueue) send(ctx context.Context, c *client, stop func(error)) {
 			}
 		}
 		ack, err := c.events(ctx, events)
-		var order *outOfOrderError
+		var (
+			order *outOfOrderError
+			enc   *encodeError
+		)
 		switch {
 		case err == nil:
+		case errors.As(err, &enc):
+			// The worker's own bug, not the attempt's end: stopping would
+			// leave the coordinator a lost worker. What doesn't encode is
+			// sent as what does.
+			if !q.encodable(events, notEncoded) {
+				stop(err)
+				return
+			}
+			continue
 		case errors.As(err, &order) && order.expected > q.storedSeq():
 			ack.Seq = order.expected - 1
 		case errors.As(err, &order):

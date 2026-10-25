@@ -961,7 +961,7 @@
     ]
   },
   "outputs_too_large": {
-    "why": "A job's outputs are kept with its run and given to the jobs that need it, so Meridian limits each file of outputs that a step writes, the file $OUTPUTS names, to 1 MiB. The limit is Meridian's own, not part of the workflow format.",
+    "why": "A job's outputs are kept with its run and given to the jobs that need it, so Meridian limits each file of outputs that a step writes, the file $OUTPUTS names, to 1 MiB, counting each byte that isn't UTF-8 as the 3 bytes of the U+FFFD that replaces it. The limit is Meridian's own, not part of the workflow format.",
     "fix": [
       "Write large results to a file in the run's directory, and give its path as the output."
     ]
@@ -970,6 +970,13 @@
     "why": "Format 1 reads $OUTPUTS a line at a time, and reads none of a file with a line of 64 KiB or longer. Meridian reads it the same way, so that a workflow means what it did. The steps without an id share their job's file, so a long line there also hides what the steps after it write.",
     "fix": [
       "Write large values to a file in the run's directory, and give its path as the output."
+    ]
+  },
+  "outputs_not_utf8": {
+    "why": "A step's outputs reach the coordinator, and the jobs that need the job, as JSON, as format 1 stores them, and JSON holds only UTF-8 text. So, as format 1 does, the worker replaces each byte of an output's name or value that isn't UTF-8 with U+FFFD, the replacement character, and the jobs that need the job read that in its place. Text in another encoding, such as Latin-1, has such bytes, and so has binary data. The step's log keeps what it printed as it printed it.",
+    "fix": [
+      "Convert text to UTF-8 before writing it to $OUTPUTS, as iconv -t UTF-8 does.",
+      "Write binary data as base64, or to a file in the run's directory, and give its path as the output."
     ]
   },
   "outputs_not_file": {
@@ -988,6 +995,12 @@
     "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, or once the disk is full, it doesn't keep what the steps print, so the log is missing that much of it.",
     "fix": [
       "Check the connection between the host the job ran on and the coordinator, and the space on the disk that holds the worker's directory, as TMPDIR does by default."
+    ]
+  },
+  "report_not_encoded": {
+    "why": "The worker reports each step's events, and the job's end, to the coordinator as JSON. It couldn't encode one of them, as one holding text that isn't UTF-8, which is a bug in the worker: it replaces such bytes in a step's outputs. Rather than stop the attempt, which the coordinator would take for a lost worker, it sent the report without its outputs and problems, and failed the job, unless it was cancelled, so that no job that needs it reads outputs that are missing. The worker's log says what it couldn't encode.",
+    "fix": [
+      "Report the bug, with the worker's log."
     ]
   },
   "workflow_too_large": {

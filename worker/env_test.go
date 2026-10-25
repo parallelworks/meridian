@@ -3,6 +3,7 @@ package worker
 import (
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -147,10 +148,10 @@ func TestCredential(t *testing.T) {
 // TestParseOutputs checks that $OUTPUTS is read as format 1 reads it.
 func TestParseOutputs(t *testing.T) {
 	t.Parallel()
-	got, err := parseOutputs(" a = 1 \nb=x=y\nno equals\nc=line\\nnext\\ttab\r\na=2\n=empty\nlast=no newline")
+	got, notUTF8, err := parseOutputs(" a = 1 \nb=x=y\nno equals\nc=line\\nnext\\ttab\r\na=2\n=empty\nlast=no newline")
 	want := map[string]string{"a": "2", "b": "x=y", "c": "line\nnext\ttab", "": "empty", "last": "no newline"}
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Errorf("got %q, %v, want %q", got, err, want)
+	if err != nil || notUTF8 != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, %v and %v, want %q", got, notUTF8, err, want)
 	}
 	// A file with a line too long for bufio.Scanner, with which format 1
 	// reads it, isn't read, as in format 1.
@@ -159,7 +160,7 @@ func TestParseOutputs(t *testing.T) {
 			scanner := bufio.NewScanner(strings.NewReader(text))
 			for scanner.Scan() {
 			}
-			got, err := parseOutputs(text)
+			got, _, err := parseOutputs(text)
 			if (err == nil) != (scanner.Err() == nil) || err == nil && len(got["b"]) < n {
 				t.Errorf("a file of %d bytes: got %d outputs and %v; bufio.Scanner: %v", len(text), len(got), err, scanner.Err())
 			}
@@ -167,6 +168,50 @@ func TestParseOutputs(t *testing.T) {
 	}
 	if got := written(map[string]string{"a": "1", "b": "2"}, map[string]string{"a": "1", "b": "3", "c": "4"}); !reflect.DeepEqual(got, map[string]string{"b": "3", "c": "4"}) {
 		t.Errorf("written: got %v", got)
+	}
+}
+
+// TestParseOutputsNotUTF8 checks that each byte of $OUTPUTS that isn't
+// UTF-8, in a name or a value, is replaced with U+FFFD, as encoding/json,
+// with which format 1 stores outputs, replaces it, and that the outputs it
+// was replaced in are named, as the last line that sets each left it. A
+// line's length is its bytes as written, as format 1's bufio.Scanner
+// counts them.
+func TestParseOutputsNotUTF8(t *testing.T) {
+	t.Parallel()
+	got, notUTF8, err := parseOutputs("a\xff = 1\nb= x\xe2\x82y \xa0\nc=ok\nd=\xff\nd=fixed\ne=fixed\ne=\xed\xa0\x80\nf=\xef\xbf\xbd\nb\xfe=two\n")
+	want := map[string]string{
+		"a\uFFFD": "1", "b": "x\uFFFD\uFFFDy \uFFFD", "c": "ok", "d": "fixed", "e": "\uFFFD\uFFFD\uFFFD", "f": "\uFFFD", "b\uFFFD": "two",
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q and %v, want %q", got, err, want)
+	}
+	if want := map[string]bool{"a\uFFFD": true, "b": true, "e": true, "b\uFFFD": true}; !reflect.DeepEqual(notUTF8, want) {
+		t.Errorf("the outputs not UTF-8 are %v, want %v", notUTF8, want)
+	}
+	// Two names that differ only in bytes that aren't UTF-8 are one.
+	if got, _, _ := parseOutputs("n\xff=1\nn\xfe=2\n"); !reflect.DeepEqual(got, map[string]string{"n\uFFFD": "2"}) {
+		t.Errorf("got %q", got)
+	}
+	for _, s := range []string{"", "ok", "\uFFFD", "\xff\xfe", "x\xe2\x82y", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xc0\xaf", "é\xe9"} {
+		data, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored string
+		if err := json.Unmarshal(data, &stored); err != nil {
+			t.Fatal(err)
+		}
+		if got, replaced := validUTF8(s); got != stored || replaced != (s != stored) {
+			t.Errorf("validUTF8(%q) = %q, %t; encoding/json stores %q", s, got, replaced, stored)
+		}
+		if n := validLen(s); n != len(stored) {
+			t.Errorf("validLen(%q) = %d, want %d", s, n, len(stored))
+		}
+	}
+	line := "v=" + strings.Repeat("\xff", maxOutputsLine-2)
+	if got, _, err := parseOutputs(line); err != nil || got["v"] != strings.Repeat("\uFFFD", maxOutputsLine-2) {
+		t.Errorf("a line of %d bytes not UTF-8: got %d bytes and %v", len(line), len(got["v"]), err)
 	}
 }
 

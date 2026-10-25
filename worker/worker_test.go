@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -830,6 +831,238 @@ func TestOutputsLineTooLong(t *testing.T) {
 	}
 	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); len(end.Outputs) != 0 {
 		t.Errorf("the job's outputs are %v", end.Outputs)
+	}
+}
+
+// TestOutputsNotUTF8 checks that bytes that aren't UTF-8 in $OUTPUTS, in a
+// name or a value, are each replaced with U+FFFD, as format 1 stores
+// outputs, and that the step's event warns of it, rather than end the
+// attempt, which the API's JSON can't report: the job goes on, its cleanups
+// run, and it reports its end. Its logs keep the bytes its steps printed,
+// as they are.
+func TestOutputsNotUTF8(t *testing.T) {
+	t.Parallel()
+	step := plan.Step{ID: "s", Run: plan.Literal(`printf 'out \377\376\n'; printf 'err \303(\n' >&2
+printf 'bin=a\377b\376\376c\nna\351me=ok\nplain=1\n' >> "$OUTPUTS"`)}
+	step.Cleanup = plan.Literal(`printf 'cleaning \377\n'; printf 'clean=\377\n' >> "$OUTPUTS"`)
+	j := newJob(step, command(`printf 'before=\377\n' >> "$OUTPUTS"`), command(`printf 'shared=x\342\202\n' >> "$OUTPUTS"`))
+	j.Outputs = map[string]plan.Value{"bin": cond("steps.s.outputs.bin")}
+	f := newFakeCoordinator(t, j)
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success 0",
+		"started 1.0", "finished 1.0 success 0",
+		"started 2.0", "finished 2.0 success 0",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	bin := "a\uFFFDb\uFFFD\uFFFDc"
+	for _, tc := range []struct {
+		step    int
+		cleanup bool
+		outputs map[string]string
+		name    string
+		count   int
+	}{
+		{0, false, map[string]string{"bin": bin, "na\uFFFDme": "ok", "plain": "1"}, "bin", 2},
+		{1, false, map[string]string{"before": "\uFFFD"}, "before", 1},
+		// What an earlier step wrote to the job's file isn't this one's.
+		{2, false, map[string]string{"shared": "x\uFFFD\uFFFD"}, "shared", 1},
+		{0, true, map[string]string{"clean": "\uFFFD"}, "clean", 1},
+	} {
+		e := f.finishedEvent(tc.step, 0, tc.cleanup)
+		if !reflect.DeepEqual(e.Outputs, tc.outputs) {
+			t.Errorf("step %d (cleanup %t) shows its outputs as %q, want %q", tc.step, tc.cleanup, e.Outputs, tc.outputs)
+		}
+		if got := codes(e.Diagnostics); !slices.Equal(got, []string{"outputs_not_utf8"}) {
+			t.Errorf("step %d (cleanup %t) has the diagnostics %v", tc.step, tc.cleanup, got)
+			continue
+		}
+		if d := e.Diagnostics[0]; d.Params["name"] != tc.name || d.Params["count"] != float64(tc.count) {
+			t.Errorf("step %d (cleanup %t) warns of %v", tc.step, tc.cleanup, d.Params)
+		}
+	}
+	end := checkEnd(t, f, plan.OutcomeSuccess, "")
+	if want := map[string]string{"before": "\uFFFD", "shared": "x\uFFFD\uFFFD", "clean": "\uFFFD", "bin": bin}; !reflect.DeepEqual(end.Outputs, want) {
+		t.Errorf("the job's outputs are %q, want %q", end.Outputs, want)
+	}
+	if want := map[string]map[string]string{"s": {"bin": bin, "na\uFFFDme": "ok", "plain": "1"}}; !reflect.DeepEqual(end.StepOutputs, want) {
+		t.Errorf("the job's step outputs are %q, want %q", end.StepOutputs, want)
+	}
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "out \xff\xfe\nerr \xc3(\n")
+	checkLog(t, f, logKey{workerapi.LogCleanup, 0, 0}, "cleaning \xff\n")
+}
+
+// TestProblemsNotUTF8 checks that a problem the worker makes from an
+// error's text, which quotes a path as the system gives it, reaches the
+// coordinator with each byte of it that isn't UTF-8 replaced with U+FFFD,
+// as foundation's problems encode themselves with encoding/json, rather
+// than end the attempt: here the path of the worker's directory, in a
+// directory whose name isn't UTF-8, as one in a Latin-1 home is.
+func TestProblemsNotUTF8(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "caf\xe9")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	step := command("true")
+	step.WorkingDirectory = cond("env.OUTPUTS")
+	next := command("true")
+	next.If = cond("always()")
+	f := newFakeCoordinator(t, newJob(step, next))
+	if err := f.runWorker(t.Context(), Config{Dir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "finished 0.0 failure -1", "started 1.0", "finished 1.0 success 0")
+	checkEnd(t, f, plan.OutcomeFailure, "")
+	ds := f.finishedEvent(0, 0, false).Diagnostics
+	if len(ds) != 1 || ds[0].Code != problems.StepNotStarted.Code() {
+		t.Fatalf("step 0's diagnostics are %v", codes(ds))
+	}
+	if reason, _ := ds[0].Params["reason"].(string); !strings.Contains(reason, "/caf\uFFFD/") || !strings.Contains(ds[0].Detail, `/caf\xe9/`) {
+		t.Errorf("the problem's reason is %q, and its message %q", reason, ds[0].Detail)
+	}
+}
+
+// TestOutputsTooLargeNotUTF8 checks that the limit on a step's $OUTPUTS
+// counts its outputs as they are kept, each byte that isn't UTF-8 as the 3
+// of the U+FFFD that replaces it, though the file itself is within it, so
+// that what the worker reports keeps to the limit.
+func TestOutputsTooLargeNotUTF8(t *testing.T) {
+	t.Parallel()
+	// Lines of 60,004 bytes, each 180,004 once its bytes are replaced.
+	lines := func(n int) plan.Value {
+		return plan.Literal(`for i in $(seq ` + strconv.Itoa(n) + `); do printf 'v%d=' "$i"; head -c 60000 /dev/zero | LC_ALL=C tr '\0' '\377'; echo; done >> "$OUTPUTS"`)
+	}
+	over := plan.Step{ID: "over", Run: lines(6)}
+	under := plan.Step{ID: "under", Run: lines(5), If: cond("always()")}
+	f := newFakeCoordinator(t, newJob(over, under))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 failure 0", "started 1.0", "finished 1.0 success 0")
+	e := f.finishedEvent(0, 0, false)
+	if len(e.Outputs) != 0 || !slices.Equal(codes(e.Diagnostics), []string{"outputs_too_large"}) || e.Diagnostics[0].Params["size"] != float64(6*180004) {
+		t.Errorf("step 0 has %d outputs, and the diagnostics %v", len(e.Outputs), e.Diagnostics)
+	}
+	if e := f.finishedEvent(1, 0, false); len(e.Outputs) != 5 || !slices.Equal(codes(e.Diagnostics), []string{"outputs_not_utf8"}) {
+		t.Errorf("step 1 has %d outputs, and the diagnostics %v", len(e.Outputs), codes(e.Diagnostics))
+	}
+	checkEnd(t, f, plan.OutcomeFailure, "")
+}
+
+// TestReportNotEncoded checks that a report the worker can't encode, its
+// own bug, fails the job, rather than stop the attempt as if it had ended
+// without the worker: an event is sent without its outputs and problems,
+// with one that says so, and the attempt's end as a failure, without what
+// it couldn't encode, if it couldn't encode that.
+func TestReportNotEncoded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// event and end are the outputs of the step's finished event and
+		// of the attempt's end.
+		event, end map[string]string
+	}{
+		{"event", map[string]string{"a": "\xff"}, map[string]string{"a": "ok"}},
+		{"end", map[string]string{"a": "ok"}, map[string]string{"a": "\xff"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			job := newJob(command("true"))
+			f := newFakeCoordinator(t, job)
+			a, ctx, start := sendingAttempt(t, f, job)
+			start()
+			a.events.add(workerapi.Event{Time: now(), Step: 0})
+			a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 0, Outcome: plan.OutcomeSuccess, Outputs: tc.event})
+			end := &workerapi.Complete{Outcome: plan.OutcomeSuccess, Outputs: tc.end, StepOutputs: map[string]map[string]string{"s": tc.end}}
+			if err := a.deliver(ctx, end); err != nil {
+				t.Fatal(err)
+			}
+			checkEvents(t, f, "started 0.0", "finished 0.0 success 0")
+			e := f.finishedEvent(0, 0, false)
+			got := checkEnd(t, f, plan.OutcomeFailure, "")
+			if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) || got.Diagnostics[0].Pointer != "#/jobs/build" {
+				t.Errorf("the end has the diagnostics %v", got.Diagnostics)
+			}
+			if tc.name == "event" {
+				if e.Outputs != nil || !slices.Equal(codes(e.Diagnostics), []string{"report_not_encoded"}) || e.Diagnostics[0].Pointer != "#/jobs/build/steps/0" {
+					t.Errorf("the event has the outputs %q and the diagnostics %v", e.Outputs, e.Diagnostics)
+				}
+				if !reflect.DeepEqual(got.Outputs, tc.end) || !reflect.DeepEqual(got.StepOutputs, end.StepOutputs) {
+					t.Errorf("the end has the outputs %q and %q", got.Outputs, got.StepOutputs)
+				}
+			} else {
+				if !reflect.DeepEqual(e.Outputs, tc.event) || len(e.Diagnostics) != 0 {
+					t.Errorf("the event has the outputs %q and the diagnostics %v", e.Outputs, e.Diagnostics)
+				}
+				if got.Outputs != nil || got.StepOutputs != nil {
+					t.Errorf("the end has the outputs %q and %q", got.Outputs, got.StepOutputs)
+				}
+			}
+		})
+	}
+}
+
+// TestReportNotEncodedBatch checks that of a batch of events, only the one
+// the worker can't encode is cut, and the rest keep their outputs, in
+// order; that an end it can't encode loses its outputs and the lists that
+// name them together; and that a cancelled job stays cancelled.
+func TestReportNotEncodedBatch(t *testing.T) {
+	t.Parallel()
+	job := newJob(command("true"), command("true"))
+	f := newFakeCoordinator(t, job)
+	a, ctx, start := sendingAttempt(t, f, job)
+	// Every event is queued before the sender starts, so they go in one
+	// batch.
+	a.events.add(workerapi.Event{Time: now(), Step: 0})
+	a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 0, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"bad": "\xff"}})
+	a.events.add(workerapi.Event{Time: now(), Step: 1})
+	a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 1, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"good": "ok"}})
+	start()
+	end := &workerapi.Complete{
+		Outcome: plan.OutcomeCancelled, Reason: plan.ReasonCancelled,
+		Outputs: map[string]string{"x": "\xff", "s": "secret"}, PrivateOutputs: []string{"s"}, SecretOutputs: []string{"s"},
+	}
+	if err := a.deliver(ctx, end); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
+	if e := f.finishedEvent(0, 0, false); e.Outputs != nil || !slices.Equal(codes(e.Diagnostics), []string{"report_not_encoded"}) {
+		t.Errorf("the event the worker couldn't encode has the outputs %q and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
+	}
+	if e := f.finishedEvent(1, 0, false); !reflect.DeepEqual(e.Outputs, map[string]string{"good": "ok"}) || len(e.Diagnostics) != 0 {
+		t.Errorf("the event after it has the outputs %q and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
+	}
+	got := checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
+	if got.Outputs != nil || got.PrivateOutputs != nil || got.SecretOutputs != nil {
+		t.Errorf("the end has the outputs %q, private %v and secret %v", got.Outputs, got.PrivateOutputs, got.SecretOutputs)
+	}
+	if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) {
+		t.Errorf("the end has the diagnostics %v", codes(got.Diagnostics))
+	}
+}
+
+// TestReportNotEncodedProblem checks that an end whose problem the worker
+// can't encode, as one with a param that is NaN, is sent with the problem's
+// code alone, which placement compares, and its title.
+func TestReportNotEncodedProblem(t *testing.T) {
+	t.Parallel()
+	job := newJob(command("true"))
+	f := newFakeCoordinator(t, job)
+	a, ctx, start := sendingAttempt(t, f, job)
+	start()
+	p := problems.RunDirUnusable.Problem(problems.Params{"path": "/run", "reason": math.NaN()})
+	if err := a.deliver(ctx, &workerapi.Complete{Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
+		t.Fatal(err)
+	}
+	got := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+	if got.Problem == nil || got.Problem.Code != problems.RunDirUnusable.Code() || got.Problem.Params != nil || got.Problem.Title != p.Title {
+		t.Errorf("the end's problem is %+v", got.Problem)
+	}
+	if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) {
+		t.Errorf("the end has the diagnostics %v", codes(got.Diagnostics))
 	}
 }
 

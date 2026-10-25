@@ -1121,7 +1121,7 @@
   },
   "outputs_too_large": {
     "title": "Salidas del paso demasiado grandes",
-    "why": "Las salidas de un trabajo se guardan con su ejecución y se dan a los trabajos que lo necesitan, así que Meridian limita a 1 MiB cada archivo de salidas que escribe un paso, el archivo que indica $OUTPUTS. El límite es de Meridian, no del formato de flujo de trabajo.",
+    "why": "Las salidas de un trabajo se guardan con su ejecución y se dan a los trabajos que lo necesitan, así que Meridian limita a 1 MiB cada archivo de salidas que escribe un paso, el archivo que indica $OUTPUTS, y cuenta cada byte que no es UTF-8 como los 3 bytes del U+FFFD que lo reemplaza. El límite es de Meridian, no del formato de flujo de trabajo.",
     "fix": [
       "Escribe los resultados grandes en un archivo del directorio de la ejecución y da su ruta como salida."
     ]
@@ -1131,6 +1131,14 @@
     "why": "El formato 1 lee $OUTPUTS línea a línea, y no lee nada de un archivo con una línea de 64 KiB o más. Meridian lo lee igual, para que un flujo de trabajo signifique lo mismo que antes. Los pasos sin id comparten el archivo de su trabajo, así que una línea larga en él oculta también lo que escriben los pasos posteriores.",
     "fix": [
       "Escribe los valores grandes en un archivo del directorio de la ejecución y da su ruta como salida."
+    ]
+  },
+  "outputs_not_utf8": {
+    "title": "Salidas que no son UTF-8",
+    "why": "Las salidas de un paso llegan al coordinador, y a los trabajos que necesitan el trabajo, como JSON, que solo contiene texto UTF-8, igual que el formato 1 las almacena. Por eso, como en el formato 1, el worker reemplaza cada byte del nombre o del valor de una salida que no es UTF-8 por U+FFFD, el carácter de reemplazo, y los trabajos que necesitan el trabajo leen eso en su lugar. El texto en otra codificación, como Latin-1, tiene esos bytes, y también los datos binarios. El registro del paso conserva lo que imprimió tal como lo imprimió.",
+    "fix": [
+      "Convierte el texto a UTF-8 antes de escribirlo en $OUTPUTS, como hace iconv -t UTF-8.",
+      "Escribe los datos binarios en base64, o en un archivo del directorio de la ejecución, y da su ruta como salida."
     ]
   },
   "outputs_not_file": {
@@ -1152,6 +1160,13 @@
     "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, o cuando el disco está lleno, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
     "fix": [
       "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y el espacio del disco que contiene el directorio del worker, que por omisión está en TMPDIR."
+    ]
+  },
+  "report_not_encoded": {
+    "title": "Informe que el worker no pudo codificar",
+    "why": "El worker informa al coordinador de los eventos de cada paso, y del final del trabajo, en JSON. No pudo codificar uno de ellos, por ejemplo uno con texto que no es UTF-8, lo que es un error del worker: reemplaza esos bytes en las salidas de un paso. En lugar de detener el intento, que el coordinador tomaría por un worker perdido, envió el informe sin sus salidas ni sus problemas e hizo fallar el trabajo, salvo que se hubiera cancelado, para que ningún trabajo que lo necesite lea salidas que faltan. El registro del worker dice qué no pudo codificar.",
+    "fix": [
+      "Informa del error, con el registro del worker."
     ]
   },
   "workflow_too_large": {

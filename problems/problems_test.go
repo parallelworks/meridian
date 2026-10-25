@@ -287,6 +287,16 @@ func TestMessages(t *testing.T) {
 			`There's no input "rundir". Did you mean "run_dir"?`,
 		},
 		{FileTooLarge, Params{"size": 102401, "limit": 102400}, "The file is 102,401 bytes, more than the limit of 102,400."},
+		{
+			OutputsNotUTF8,
+			Params{"name": "bin", "count": 1},
+			`The step wrote bytes that aren't UTF-8 to $OUTPUTS, in the output "bin": as format 1 does, the worker replaced each of them with U+FFFD.`,
+		},
+		{
+			OutputsNotUTF8,
+			Params{"name": "bin", "count": 3},
+			`The step wrote bytes that aren't UTF-8 to $OUTPUTS, in 3 outputs, among them "bin": as format 1 does, the worker replaced each of them with U+FFFD.`,
+		},
 	} {
 		if got := tc.kind.Message(tc.params); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.kind.Code(), got, tc.want)
