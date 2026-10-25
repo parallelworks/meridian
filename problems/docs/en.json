@@ -1068,7 +1068,7 @@
   "file_not_regular": {
     "why": "Meridian reads its config, its key, variables' values and a worker's bootstrap token only from regular files, so that reading one can't wait forever on a pipe or read from a device, and never through a symbolic link at the file's own path, so that what it reads is the file the path names: a directory on the way to it can be a link.",
     "fix": [
-      "Name the regular file itself, rather than a link to it."
+      "Put the file itself at its path, rather than a link to it: the directory that holds it can be a link instead."
     ]
   },
   "file_not_owned": {
@@ -1425,21 +1425,15 @@
     ]
   },
   "worker_harden_failed": {
-    "why": "A worker holds the attempt's credential in its memory, so before it claims the attempt it keeps your other processes, a job's steps among them, from reading its memory or attaching to it as a debugger does: on Linux it makes itself not dumpable, on macOS it refuses debuggers (PT_DENY_ATTACH), on FreeBSD it turns off tracing of itself (procctl), and on OpenBSD it checks kern.global_ptrace. The operating system refused or failed.",
+    "why": "A worker holds the attempt's credential in its memory, so before it claims the attempt it keeps your other processes, a job's steps among them, from reading its memory or attaching to it as a debugger does: on Linux it makes itself not dumpable, on macOS it refuses debuggers (PT_DENY_ATTACH) and sets the size of its core file to 0, and on FreeBSD it turns off tracing of itself (procctl). The operating system refused or failed.",
     "fix": [
       "Fix what the reason names, such as a security policy that forbids the call, and let the backend start the worker again."
     ]
   },
   "worker_system_unsupported": {
-    "why": "A worker holds the attempt's credential, which it keeps your other processes from reading out of its memory, and sends only to a coordinator of your own, or root's, which it asks the operating system about. It can do both on Linux, macOS, FreeBSD and OpenBSD. Elsewhere it refuses to run, rather than run a job with less protection.",
+    "why": "A worker holds the attempt's credential in its memory, and keeps your other processes, a job's steps among them, from reading it there or tracing what it sends. It can on Linux, macOS and FreeBSD. Other systems, such as NetBSD and OpenBSD, give a process no way to keep the user's other processes from tracing it, so the worker refuses to run there, rather than run a job with less protection.",
     "fix": [
-      "Run the job on a member whose hosts run Linux, macOS, FreeBSD or OpenBSD."
-    ]
-  },
-  "global_ptrace_enabled": {
-    "why": "A worker holds the attempt's credential in its memory. OpenBSD has no /proc, and lets a process trace only its own descendants unless kern.global_ptrace is 1, but gives a process no way to refuse tracing itself, so a worker refuses to run while it is set.",
-    "fix": [
-      "Set kern.global_ptrace to 0 on the host, as OpenBSD has it by default, or run the job on a member whose hosts keep it at 0."
+      "Run the job on a member whose hosts run Linux, macOS or FreeBSD."
     ]
   }
 }

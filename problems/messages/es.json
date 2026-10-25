@@ -239,6 +239,5 @@
   "attempt_superseded": "El coordinador ya no acepta informes de este intento: otro intento del trabajo lo sustituyó, o terminó sin este worker.",
   "attempt_lease_lapsed": "Meridian detuvo el trabajo, que puede ejecutarse de nuevo, porque no pudo renovar la concesión del intento antes de que caducara.",
   "worker_harden_failed": "El worker no puede mantener tus otros procesos fuera de su memoria, así que no reclamará el intento: {reason}.",
-  "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria ni preguntar qué usuario sirve el socket del coordinador.",
-  "global_ptrace_enabled": "El worker no se ejecutará mientras kern.global_ptrace esté activado, lo que permite que tus otros procesos se le adjunten y lean su memoria."
+  "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria."
 }

@@ -239,6 +239,5 @@
   "attempt_superseded": "协调器不再接受此尝试的报告：该作业的另一个尝试取代了它，或者它在没有此工作进程的情况下结束了。",
   "attempt_lease_lapsed": "Meridian 停止了该作业（它可能会再次运行），因为它无法在尝试的租约失效之前续订租约。",
   "worker_harden_failed": "工作进程无法阻止你的其他进程访问它的内存，因此不会领取该尝试：{reason}",
-  "worker_system_unsupported": "工作进程不在 {os} 上运行：在那里它既无法阻止你的其他进程访问它的内存，也无法询问是哪个用户提供了协调器的套接字。",
-  "global_ptrace_enabled": "在设置了 kern.global_ptrace 期间，工作进程不会运行：该设置让你的其他进程可以附加到它并读取它的内存。"
+  "worker_system_unsupported": "工作进程不在 {os} 上运行：在那里它无法阻止你的其他进程访问它的内存。"
 }

@@ -1,4 +1,4 @@
-//go:build unix && !linux && !darwin && !freebsd && !openbsd
+//go:build unix && !linux && !darwin && !freebsd
 
 package worker
 

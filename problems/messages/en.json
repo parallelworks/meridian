@@ -245,6 +245,5 @@
   "attempt_superseded": "The coordinator no longer takes reports from this attempt: another attempt of the job superseded it, or it ended without this worker.",
   "attempt_lease_lapsed": "Meridian stopped the job, which may run again, because it couldn't renew the attempt's lease before the lease would lapse.",
   "worker_harden_failed": "The worker can't keep your other processes out of its memory, so it won't claim the attempt: {reason}.",
-  "worker_system_unsupported": "The worker doesn't run on {os}, where it can't keep your other processes out of its memory or ask which user serves the coordinator's socket.",
-  "global_ptrace_enabled": "The worker won't run while kern.global_ptrace is set, which lets your other processes attach to it and read its memory."
+  "worker_system_unsupported": "The worker doesn't run on {os}, where it can't keep your other processes out of its memory."
 }

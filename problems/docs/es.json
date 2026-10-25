@@ -1244,7 +1244,7 @@
     "title": "No es un archivo normal",
     "why": "Meridian lee su configuración, su clave, los valores de las variables y el token de arranque de un worker solo de archivos normales, para que leer uno no pueda quedarse esperando para siempre en una tubería ni leer de un dispositivo, y nunca a través de un enlace simbólico en la ruta del propio archivo, para que lo que lee sea el archivo que nombra la ruta: un directorio en el camino hacia él sí puede ser un enlace.",
     "fix": [
-      "Nombra el propio archivo normal, en lugar de un enlace a él."
+      "Pon el propio archivo en su ruta, en lugar de un enlace a él: el directorio que lo contiene sí puede ser un enlace."
     ]
   },
   "file_not_owned": {
@@ -1660,23 +1660,16 @@
   },
   "worker_harden_failed": {
     "title": "No se puede proteger la memoria del worker",
-    "why": "Un worker guarda la credencial del intento en su memoria, así que antes de reclamar el intento impide que tus otros procesos, entre ellos los pasos de un trabajo, lean su memoria o se le adjunten como hace un depurador: en Linux se hace no volcable, en macOS rechaza los depuradores (PT_DENY_ATTACH), en FreeBSD desactiva el rastreo de sí mismo (procctl), y en OpenBSD comprueba kern.global_ptrace. El sistema operativo lo rechazó o falló.",
+    "why": "Un worker guarda la credencial del intento en su memoria, así que antes de reclamar el intento impide que tus otros procesos, entre ellos los pasos de un trabajo, lean su memoria o se le adjunten como hace un depurador: en Linux se hace no volcable, en macOS rechaza los depuradores (PT_DENY_ATTACH) y pone a 0 el tamaño de su archivo core, y en FreeBSD desactiva el rastreo de sí mismo (procctl). El sistema operativo lo rechazó o falló.",
     "fix": [
       "Corrige lo que indica el motivo, como una política de seguridad que prohíbe la llamada, y deja que el backend vuelva a iniciar el worker."
     ]
   },
   "worker_system_unsupported": {
     "title": "Sistema en el que el worker no puede proteger su memoria",
-    "why": "Un worker guarda la credencial del intento, que impide que tus otros procesos lean de su memoria, y la envía solo a un coordinador tuyo, o de root, sobre el que pregunta al sistema operativo. Puede hacer ambas cosas en Linux, macOS, FreeBSD y OpenBSD. En otros sistemas se niega a ejecutarse, en lugar de ejecutar un trabajo con menos protección.",
+    "why": "Un worker guarda en su memoria la credencial del intento, e impide que tus otros procesos, entre ellos los pasos de un trabajo, la lean allí o rastreen lo que envía. Puede hacerlo en Linux, macOS y FreeBSD. Otros sistemas, como NetBSD y OpenBSD, no dan a un proceso ninguna forma de impedir que los otros procesos del usuario lo rastreen, así que el worker se niega a ejecutarse en ellos, en lugar de ejecutar un trabajo con menos protección.",
     "fix": [
-      "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS, FreeBSD u OpenBSD."
-    ]
-  },
-  "global_ptrace_enabled": {
-    "title": "Rastreo sin restricciones (kern.global_ptrace)",
-    "why": "Un worker guarda la credencial del intento en su memoria. OpenBSD no tiene /proc, y solo deja que un proceso rastree a sus propios descendientes, salvo que kern.global_ptrace valga 1, pero no da a un proceso ninguna forma de negarse a que lo rastreen, así que un worker se niega a ejecutarse mientras esté activado.",
-    "fix": [
-      "Pon kern.global_ptrace a 0 en el host, como lo tiene OpenBSD de forma predeterminada, o ejecuta el trabajo en un miembro cuyos hosts lo mantengan en 0."
+      "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS o FreeBSD."
     ]
   }
 }

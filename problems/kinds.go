@@ -376,5 +376,4 @@ var (
 	AttemptLeaseLapsed       = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
 	WorkerHardenFailed       = defineCommand("worker_harden_failed", "Worker's memory can't be protected", "reason")
 	WorkerSystemUnsupported  = defineCommand("worker_system_unsupported", "System where the worker can't protect its memory", "os")
-	GlobalPtraceEnabled      = defineCommand("global_ptrace_enabled", "Unrestricted tracing (kern.global_ptrace)")
 )

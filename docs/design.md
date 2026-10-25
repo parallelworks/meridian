@@ -1961,23 +1961,23 @@ member's running workers reconnect to it.
   attempt's end too, if the steps had ended.
 - **It talks only to its coordinator.** Over a Unix socket, it asks the
   system which user serves the socket, and sends a token only to its own
-  user's, or root's: `SO_PEERCRED` says on Linux and OpenBSD, and
-  `LOCAL_PEERCRED` on macOS and FreeBSD. Over TLS, it checks the
-  coordinator's key. It follows no redirect.
+  user's, or root's: `SO_PEERCRED` says on Linux, and `LOCAL_PEERCRED` on
+  macOS and FreeBSD. Over TLS, it checks the coordinator's key. It follows
+  no redirect.
 - **It keeps its credential out of reach.** Before it claims the attempt,
   it keeps the user's other processes, the job's steps among them, from
-  reading its memory: on Linux it makes itself not dumpable; on macOS it
-  refuses debuggers (`PT_DENY_ATTACH`), where reading another process's
-  memory any other way takes root or a debugger the user has authorised;
-  and on FreeBSD it turns tracing of itself off (`procctl`). OpenBSD gives
-  a process no such switch, but has no `/proc`, and lets a process trace
-  only its own descendants unless `kern.global_ptrace` is set, so there
-  the worker refuses to run while it is (`global_ptrace_enabled`). On
-  macOS and OpenBSD, which can't refuse a core dump to it, it dumps none,
-  as no Go program does unless `GOTRACEBACK=crash` asks for one. On any
-  other system, such as NetBSD, which says who serves a socket but has no
-  such protection, the worker doesn't run (`worker_system_unsupported`),
-  rather than run a job with less.
+  reading its memory, or tracing what it sends: on Linux it makes itself
+  not dumpable; on FreeBSD it turns tracing of itself off (`procctl`),
+  core dumps included; and on macOS it refuses debuggers
+  (`PT_DENY_ATTACH`), where reading another process's memory any other
+  way takes root or a debugger the user has authorised, and sets the size
+  of its core file to 0, as macOS's default is, which the job's steps
+  start with too, and can raise. On any other system the worker doesn't
+  run (`worker_system_unsupported`), rather than run a job with less:
+  NetBSD and OpenBSD say who serves a socket, but give a process no way to
+  keep the user's other processes from tracing it, and OpenBSD's `ktrace`
+  records what a process it traces writes, whatever `kern.global_ptrace`
+  says.
 
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,

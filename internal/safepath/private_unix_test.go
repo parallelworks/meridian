@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/parallelworks/foundation/problem"
-
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -56,20 +54,22 @@ func TestCheckInfo(t *testing.T) {
 		{name: "link", info: file(fs.ModeSymlink|0o777, me), access: Private, kind: problems.FileNotRegular},
 		{name: "file without an owner", info: ownerless{0o600}, access: Private, kind: problems.OwnerUnknown},
 	} {
-		check := CheckFileInfo
-		if tc.dir {
-			check = CheckDirInfo
-		}
-		err := check("/p", tc.info, tc.access)
-		if tc.kind == nil {
-			if err != nil {
-				t.Errorf("%s: %v", tc.name, err)
+		t.Run(tc.name, func(t *testing.T) {
+			check := CheckFileInfo
+			if tc.dir {
+				check = CheckDirInfo
 			}
-			continue
-		}
-		if p := problemOf(err, tc.kind); p == nil || p.Params["path"] != "/p" {
-			t.Errorf("%s: got %v, want %s", tc.name, err, tc.kind.Code())
-		}
+			err := check("/p", tc.info, tc.access)
+			if tc.kind == nil {
+				if err != nil {
+					t.Error(err)
+				}
+				return
+			}
+			if params := wantProblem(t, err, tc.kind); params["path"] != "/p" {
+				t.Errorf("the problem's params are %v", params)
+			}
+		})
 	}
 }
 
@@ -183,10 +183,28 @@ func TestReadFile(t *testing.T) {
 	}
 }
 
-// problemOf returns the problem of kind k that err is, or nil.
-func problemOf(err error, k *problems.Kind) *problem.Problem {
-	if p, ok := errors.AsType[*problem.Problem](err); ok && p.Code == k.Code() {
-		return p
+// TestReadFileDotDot checks that a .. after a symbolic link in a path
+// names what Check checked, the directory before the link, not the
+// parent of the link's target, where the kernel would take it, which
+// Check never saw.
+func TestReadFileDotDot(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	deep := filepath.Join(base, "other", "deep")
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	return nil
+	if err := os.WriteFile(filepath.Join(base, "f"), []byte("checked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "other", "f"), []byte("unchecked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(deep, filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := ReadFile(filepath.Join(base, "link")+"/../f", Private, 20)
+	if err != nil || string(data) != "checked" {
+		t.Errorf("got %q, %v", data, err)
+	}
 }
