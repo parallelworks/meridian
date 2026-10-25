@@ -145,6 +145,25 @@
   "expressions_too_slow": "The expressions evaluated together here took more than {limit, plural, one {# second} other {# seconds}} between them.",
 
   "problems_not_listed": "Only the first {limit} problems with the code {code} are listed; {count, plural, one {# more isn't} other {# more aren't}}.",
+
+  "container_not_supported": "The job's steps are to run in the container \"{image}\", with \"{runtime}\", and this worker can't run containers yet. It doesn't run them on the host instead, which would isolate them less.",
+  "job_unreadable": "The worker couldn't read the job it claimed: it isn't a job as this version of Meridian encodes one.",
+  "job_version_unsupported": "The job the worker claimed is of plan version {version}, and this worker reads version {supported}.",
+  "run_dir_unusable": "The worker couldn't use the run's directory \"{path}\": {reason}.",
+  "env_name_invalid": "The platform gives the job's steps a variable named {name}, which no variable can be named: a name can't be empty, or hold = or NUL.",
+  "uses_not_supported": "The step uses \"{uses}\", and this worker can't run a step that uses an action or a workflow yet.",
+  "step_ssh_not_supported": "The step's ssh: names another host to run it on, and this worker can't run a step on another host yet.",
+  "step_off_job_host": "The step's ssh: is null or gives no remoteHost, so format 1 runs it where its job would run without its ssh:, and this worker, on the host the job's ssh: names, can't run it there yet.",
+  "ssh_host_empty": "The step's ssh: gives no remoteHost, so the step runs where its job runs, as format 1 runs it.",
+  "step_not_started": "The step's command couldn't be started: {reason}.",
+  "shell_not_supported": "The step's shell is \"{shell}\", and format 1 runs a step's command only with bash or sh.",
+  "step_timed_out": "The step ran past its timeout of {limit, plural, one {# second} other {# seconds}}, and was stopped.",
+  "outputs_too_large": "The step wrote {size} bytes to $OUTPUTS, more than the limit of {limit}.",
+  "outputs_line_too_long": "A line in $OUTPUTS is {limit} bytes or longer, so, as format 1 does, none of the outputs in the file are read.",
+  "outputs_not_file": "The step put something other than a regular file at $OUTPUTS, such as a FIFO, or a link to one, so its outputs can't be read.",
+  "outputs_removed": "The worker's directory, which holds $OUTPUTS, was removed while the step ran, so what the step wrote to $OUTPUTS after that is lost.",
+  "log_not_kept": "The worker didn't keep {size} bytes of the step's log: it keeps at most {limit} bytes of logs that the coordinator hasn't stored, while it can't reach it, and none once its disk is full.",
+
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",
   "source_ref_invalid": "The uses: \"{ref}\" isn't a reference to a workflow in a Git repository, such as github/owner/repository/path@revision.",
@@ -212,5 +231,14 @@
   "owner_unmapped": "Meridian can't check {path}: the owner of {dir}, on the way to it, is hidden by a user namespace, so Meridian can't tell that no other user can change it.",
   "path_links_too_many": "The path {path} goes through more than {max} symbolic links.",
   "mount_not_found": "Meridian can't find the mount that holds {path} in /proc/self/mountinfo.",
-  "member_settings_not_json": "A member of the group \"{group}\" has settings that JSON can't hold, such as .nan or .inf."
+  "member_settings_not_json": "A member of the group \"{group}\" has settings that JSON can't hold, such as .nan or .inf.",
+
+  "worker_environment_missing": "The environment meridian worker was started with doesn't set {variable}, which the backend that starts it sets.",
+  "worker_environment_invalid": "The environment meridian worker was started with sets {variable} in a way it can't use.",
+  "coordinator_peer_refused": "Meridian won't send the attempt's token to the coordinator's socket {path}: user {uid} serves it, not you or root.",
+  "coordinator_key_mismatch": "The server at {address} doesn't hold the coordinator's key, whose hash MERIDIAN_COORDINATOR_KEY_SHA256 gives, so meridian worker won't talk to it.",
+  "bootstrap_token_refused": "The coordinator refused the bootstrap token meridian worker was started with: the attempt it is for was claimed already, or its placement withdrawn.",
+  "run_plan_too_new": "The run's plan is newer than this meridian reads, which is plan version {version}, so the attempt is placed again, on a worker that reads it.",
+  "attempt_superseded": "The coordinator no longer takes reports from this attempt: another attempt of the job superseded it, or it ended without this worker.",
+  "attempt_lease_lapsed": "Meridian stopped the job, which may run again, because it couldn't renew the attempt's lease before the lease would lapse."
 }

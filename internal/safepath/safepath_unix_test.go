@@ -1,13 +1,16 @@
 //go:build unix
 
-package local
+package safepath
 
 import (
+	"errors"
 	"io/fs"
 	"maps"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/problems"
 )
@@ -42,8 +45,8 @@ type fakeFS struct {
 	namespace bool
 }
 
-func (f fakeFS) checker() pathChecker {
-	return pathChecker{
+func (f fakeFS) checker() checker {
+	return checker{
 		uid: user,
 		lstat: func(p string) (fs.FileInfo, error) {
 			if info, ok := f.infos[p]; ok {
@@ -147,9 +150,9 @@ func TestPathChecker(t *testing.T) {
 				}
 				return
 			}
-			p := wantProblem(t, err, problems.PathUnsafe)
-			if p.Params["dir"] != tc.unsafe || p.Params["path"] != tc.path {
-				t.Errorf("check(%s) names %v, want %s", tc.path, p.Params, tc.unsafe)
+			params := wantProblem(t, err, problems.PathUnsafe)
+			if params["dir"] != tc.unsafe || params["path"] != tc.path {
+				t.Errorf("check(%s) names %v, want %s", tc.path, params, tc.unsafe)
 			}
 		})
 	}
@@ -171,9 +174,23 @@ func TestPathCheckerUnmapped(t *testing.T) {
 	infos["/"] = fakeDir(0o755, nobody)
 	infos["/home"] = fakeDir(0o755, nobody)
 	err := fakeFS{infos, nil, true}.checker().check("/home/u/.local/state/meridian", false)
-	if p := wantProblem(t, err, problems.OwnerUnmapped); p.Params["dir"] != "/" {
-		t.Errorf("the problem's params are %v", p.Params)
+	if params := wantProblem(t, err, problems.OwnerUnmapped); params["dir"] != "/" {
+		t.Errorf("the problem's params are %v", params)
 	}
 	err = fakeFS{infos, nil, false}.checker().check("/home/u/.local/state/meridian", false)
 	wantProblem(t, err, problems.PathUnsafe)
+}
+
+// wantProblem fails the test unless err is a problem of kind k, and
+// returns its params.
+func wantProblem(t *testing.T, err error, k *problems.Kind) map[string]any {
+	t.Helper()
+	p, ok := errors.AsType[*problem.Problem](err)
+	if !ok {
+		t.Fatalf("err = %v, want a problem of kind %s", err, k.Code())
+	}
+	if p.Code != k.Code() {
+		t.Fatalf("err is %s (%v), want %s", p.Code, p, k.Code())
+	}
+	return p.Params
 }

@@ -139,6 +139,25 @@
   "expressions_too_much_work": "此处一起求值的表达式合计工作量超过 {limit} MiB。",
   "expressions_too_slow": "此处一起求值的表达式合计耗时超过 {limit} 秒。",
   "problems_not_listed": "代码为 {code} 的问题只列出前 {limit} 个，其余 {count} 个未列出。",
+
+  "container_not_supported": "作业的步骤应使用“{runtime}”在容器“{image}”中运行，而此工作进程尚不能运行容器。它也不会改为在主机上运行这些步骤，因为那样隔离会更弱。",
+  "job_unreadable": "工作进程无法读取它领取的作业：它不是此版本 Meridian 所编码的作业。",
+  "job_version_unsupported": "工作进程领取的作业属于计划版本 {version}，而此工作进程读取的是版本 {supported}。",
+  "run_dir_unusable": "工作进程无法使用运行目录“{path}”：{reason}",
+  "env_name_invalid": "平台为作业的步骤提供了一个名为 {name} 的变量，但任何变量都不能使用这个名称：名称不能为空，也不能包含 = 或 NUL。",
+  "uses_not_supported": "该步骤使用了“{uses}”，而此工作进程尚不能运行使用操作或工作流的步骤。",
+  "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而此工作进程尚不能在另一台主机上运行步骤。",
+  "step_off_job_host": "该步骤的 ssh: 为 null 或没有给出 remoteHost，因此格式 1 会在其作业没有 ssh: 时运行的地方运行它，而此工作进程位于作业的 ssh: 指定的主机上，尚不能在那里运行它。",
+  "ssh_host_empty": "该步骤的 ssh: 没有给出 remoteHost，因此该步骤在其作业运行的地方运行，与格式 1 相同。",
+  "step_not_started": "无法启动该步骤的命令：{reason}",
+  "shell_not_supported": "该步骤的 shell 为“{shell}”，而格式 1 只用 bash 或 sh 运行步骤的命令。",
+  "step_timed_out": "该步骤的运行超过了 {limit} 秒的超时时间，已被停止。",
+  "outputs_too_large": "该步骤向 $OUTPUTS 写入了 {size} 字节，超过了 {limit} 字节的上限。",
+  "outputs_line_too_long": "$OUTPUTS 中有一行达到或超过 {limit} 字节，因此与格式 1 一样，该文件中的输出都不会被读取。",
+  "outputs_not_file": "该步骤在 $OUTPUTS 处放置了普通文件以外的东西（例如 FIFO 或指向它的链接），因此无法读取它的输出。",
+  "outputs_removed": "包含 $OUTPUTS 的工作进程目录在步骤运行期间被删除，因此步骤此后写入 $OUTPUTS 的内容会丢失。",
+  "log_not_kept": "工作进程未保留该步骤日志中的 {size} 字节：在无法连接到协调器时，它最多只保留 {limit} 字节协调器尚未存储的日志，而在磁盘已满时则一点也不保留。",
+
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
   "source_ref_invalid": "uses:“{ref}”不是对 Git 仓库中工作流的引用，例如 github/owner/repository/path@revision。",
@@ -206,5 +225,14 @@
   "owner_unmapped": "Meridian 无法检查 {path}：通往它的路径上的 {dir} 的所有者被用户命名空间隐藏，因此 Meridian 无法确认其他用户不能更改它。",
   "path_links_too_many": "路径 {path} 经过了超过 {max} 个符号链接。",
   "mount_not_found": "Meridian 在 /proc/self/mountinfo 中找不到包含 {path} 的挂载。",
-  "member_settings_not_json": "组“{group}”的一个成员的 settings 中包含 JSON 无法容纳的值，例如 .nan 或 .inf。"
+  "member_settings_not_json": "组“{group}”的一个成员的 settings 中包含 JSON 无法容纳的值，例如 .nan 或 .inf。",
+
+  "worker_environment_missing": "启动 meridian worker 的环境没有设置 {variable}，它应由启动 meridian worker 的后端设置。",
+  "worker_environment_invalid": "启动 meridian worker 的环境以它无法使用的方式设置了 {variable}。",
+  "coordinator_peer_refused": "Meridian 不会把尝试的令牌发送到协调器的套接字 {path}：提供它的是用户 {uid}，而不是你或 root。",
+  "coordinator_key_mismatch": "{address} 上的服务器不持有协调器的密钥（其哈希由 MERIDIAN_COORDINATOR_KEY_SHA256 给出），因此 meridian worker 不会与它通信。",
+  "bootstrap_token_refused": "协调器拒绝了启动 meridian worker 时使用的引导令牌：该令牌对应的尝试已被领取，或其放置已被撤回。",
+  "run_plan_too_new": "该运行的计划比此 meridian 能读取的（计划版本 {version}）更新，因此该尝试会被重新放置到能读取它的工作进程上。",
+  "attempt_superseded": "协调器不再接受此尝试的报告：该作业的另一个尝试取代了它，或者它在没有此工作进程的情况下结束了。",
+  "attempt_lease_lapsed": "Meridian 停止了该作业（它可能会再次运行），因为它无法在尝试的租约失效之前续订租约。"
 }

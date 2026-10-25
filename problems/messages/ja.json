@@ -139,6 +139,25 @@
   "expressions_too_much_work": "ここでまとめて評価される式の処理量が、合計で {limit} MiB を超えています。",
   "expressions_too_slow": "ここでまとめて評価される式の評価に、合計で {limit} 秒を超える時間がかかりました。",
   "problems_not_listed": "コード {code} の問題は最初の {limit} 件だけを挙げています。残りの {count} 件は挙げていません。",
+
+  "container_not_supported": "ジョブのステップはコンテナ「{image}」で「{runtime}」を使って実行されることになっていますが、このワーカーはまだコンテナを実行できません。分離が弱くなるため、代わりにホストで実行することもしません。",
+  "job_unreadable": "ワーカーは要求したジョブを読み取れませんでした。このバージョンの Meridian がエンコードする形式のジョブではありません。",
+  "job_version_unsupported": "ワーカーが要求したジョブは計画バージョン {version} ですが、このワーカーが読み取るのはバージョン {supported} です。",
+  "run_dir_unusable": "ワーカーは実行のディレクトリ「{path}」を使用できませんでした: {reason}",
+  "env_name_invalid": "プラットフォームがジョブのステップに {name} という名前の変数を渡していますが、変数にこの名前は付けられません。名前は空にできず、= や NUL を含めることもできません。",
+  "uses_not_supported": "ステップは「{uses}」を使用していますが、このワーカーはアクションやワークフローを使用するステップをまだ実行できません。",
+  "step_ssh_not_supported": "ステップの ssh: が実行先として別のホストを指定していますが、このワーカーはまだ別のホストでステップを実行できません。",
+  "step_off_job_host": "ステップの ssh: が null であるか remoteHost を指定していないため、形式 1 はジョブが ssh: なしで実行される場所でステップを実行しますが、ジョブの ssh: が指定するホスト上にあるこのワーカーは、まだそこでステップを実行できません。",
+  "ssh_host_empty": "ステップの ssh: が remoteHost を指定していないため、形式 1 と同じく、ステップはそのジョブが実行される場所で実行されます。",
+  "step_not_started": "ステップのコマンドを開始できませんでした: {reason}",
+  "shell_not_supported": "ステップのシェルは「{shell}」ですが、形式 1 はステップのコマンドを bash か sh でしか実行しません。",
+  "step_timed_out": "ステップは {limit} 秒のタイムアウトを過ぎても実行されていたため、停止されました。",
+  "outputs_too_large": "ステップは $OUTPUTS に {size} バイトを書き込み、上限の {limit} バイトを超えています。",
+  "outputs_line_too_long": "$OUTPUTS の行が {limit} バイト以上あるため、形式 1 と同じく、このファイルの出力は 1 つも読み取られません。",
+  "outputs_not_file": "ステップが $OUTPUTS に通常のファイル以外のもの（FIFO や、それへのリンクなど）を置いたため、その出力を読み取れません。",
+  "outputs_removed": "$OUTPUTS を含むワーカーのディレクトリがステップの実行中に削除されたため、その後にステップが $OUTPUTS に書き込んだものは失われます。",
+  "log_not_kept": "ワーカーはステップのログのうち {size} バイトを保持しませんでした。コーディネーターに接続できない間、コーディネーターが保存していないログは最大 {limit} バイトまでしか保持せず、ディスクがいっぱいになると何も保持しません。",
+
   "workflow_too_large": "ワークフローが {limit} バイトを超えており、サイズの上限を超えています。",
   "execution_group_unknown": "入力「{input}」が指定している実行グループ {value} は、グループ {groups} のいずれでもありません。",
   "source_ref_invalid": "uses:「{ref}」は、github/owner/repository/path@revision のような Git リポジトリ内のワークフローへの参照ではありません。",
@@ -206,5 +225,14 @@
   "owner_unmapped": "Meridian は {path} を確認できません。そこへ至る途中の {dir} の所有者がユーザー名前空間によって隠されているため、他のユーザーが変更できないことを確かめられません。",
   "path_links_too_many": "パス {path} は {max} 個を超えるシンボリックリンクを経由します。",
   "mount_not_found": "Meridian は /proc/self/mountinfo に {path} を含むマウントを見つけられません。",
-  "member_settings_not_json": "グループ「{group}」のメンバーの settings に、.nan や .inf など JSON で表せない値があります。"
+  "member_settings_not_json": "グループ「{group}」のメンバーの settings に、.nan や .inf など JSON で表せない値があります。",
+
+  "worker_environment_missing": "meridian worker が起動されたときの環境に {variable} が設定されていません。これは meridian worker を起動するバックエンドが設定するものです。",
+  "worker_environment_invalid": "meridian worker が起動されたときの環境では、{variable} が meridian worker の使えない形で設定されています。",
+  "coordinator_peer_refused": "Meridian は試行のトークンをコーディネーターのソケット {path} に送りません。このソケットを提供しているのはユーザー {uid} で、あなたでも root でもありません。",
+  "coordinator_key_mismatch": "{address} のサーバーはコーディネーターの鍵（ハッシュは MERIDIAN_COORDINATOR_KEY_SHA256 が示すもの）を持っていないため、meridian worker はそのサーバーと通信しません。",
+  "bootstrap_token_refused": "コーディネーターは meridian worker が起動されたときのブートストラップトークンを拒否しました。トークンの対象の試行はすでに要求されたか、その配置が取り消されています。",
+  "run_plan_too_new": "実行の計画は、この meridian が読み取れるもの（計画バージョン {version}）より新しいため、試行はそれを読み取れるワーカーにもう一度配置されます。",
+  "attempt_superseded": "コーディネーターはこの試行からの報告をもう受け付けません。ジョブの別の試行がこの試行に取って代わったか、試行がこのワーカーなしで終了しました。",
+  "attempt_lease_lapsed": "Meridian はジョブを停止しました（ジョブはもう一度実行されることがあります）。試行のリースが失効する前に更新できなかったためです。"
 }

@@ -243,6 +243,29 @@ var (
 	ProblemsNotListed = define(Warning, "problems_not_listed", "More problems of one kind", "code", "count", "limit")
 )
 
+// Running a job on a worker. A step's are diagnostics of its finished
+// event, at the step's path; the setup's are the problem with which an
+// attempt that failed before its first step ends, and is placed again.
+var (
+	ContainerNotSupported = define(Error, "container_not_supported", "Container the worker can't run yet", "runtime", "image")
+	JobUnreadable         = define(Error, "job_unreadable", "Job the worker couldn't read")
+	JobVersionUnsupported = define(Error, "job_version_unsupported", "Job of a plan version the worker doesn't read", "version", "supported")
+	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
+	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
+	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
+	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
+	StepOffJobHost        = define(Error, "step_off_job_host", "Step to run off its job's host")
+	SSHHostEmpty          = define(Warning, "ssh_host_empty", "Step's ssh: names no host")
+	StepNotStarted        = define(Error, "step_not_started", "Step's command not started", "reason")
+	ShellNotSupported     = define(Error, "shell_not_supported", "Shell format 1 doesn't run", "shell")
+	StepTimedOut          = define(Error, "step_timed_out", "Step ran past its timeout", "limit")
+	OutputsTooLarge       = define(Error, "outputs_too_large", "Step's outputs too large", "size", "limit")
+	OutputsLineTooLong    = define(Warning, "outputs_line_too_long", "Line of $OUTPUTS too long", "limit")
+	OutputsNotFile        = define(Error, "outputs_not_file", "$OUTPUTS isn't a file")
+	OutputsRemoved        = define(Warning, "outputs_removed", "$OUTPUTS removed as the step ran")
+	LogNotKept            = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")
+)
+
 // The meridian command's own problems, in CommandRegistry. A path, an
 // environment variable's name or value, or what the operating system said,
 // reason, is a param as it is.
@@ -330,4 +353,17 @@ var (
 	InputsNumberTooLarge = defineCommand("inputs_number_too_large", "Number too large", "number")
 	Interrupted          = defineCommand("interrupted", "Interrupted")
 	UnexpectedError      = defineCommand("unexpected_error", "Unexpected error", "reason")
+)
+
+// meridian worker's own problems, which end it: variable is an environment
+// variable's name, address the coordinator's, and uid a user's number.
+var (
+	WorkerEnvironmentMissing = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
+	WorkerEnvironmentInvalid = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
+	CoordinatorPeerRefused   = defineCommand("coordinator_peer_refused", "Coordinator's socket served by another user", "path", "uid")
+	CoordinatorKeyMismatch   = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
+	BootstrapTokenRefused    = defineCommand("bootstrap_token_refused", "Bootstrap token refused")
+	RunPlanTooNew            = defineCommand("run_plan_too_new", "Run's plan newer than the worker reads", "version")
+	AttemptSuperseded        = defineCommand("attempt_superseded", "Attempt ended without the worker")
+	AttemptLeaseLapsed       = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
 )

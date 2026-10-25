@@ -1,4 +1,9 @@
-package local
+// Package safepath checks the directories on the way to a path that holds
+// a user's files, as OpenSSH's safe_path checks those on the way to a
+// user's keys: the meridian command checks its config, state and cache
+// directories with it, and the worker the directory it keeps its own files
+// in.
+package safepath
 
 import (
 	"errors"
@@ -10,7 +15,7 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// A pathChecker checks the directories on the way to a path, as OpenSSH's
+// A checker checks the directories on the way to a path, as OpenSSH's
 // safe_path checks those on the way to a user's keys: each must belong to
 // the user or to root, and no other user may change it, unless it has the
 // sticky bit, as /tmp does, which stops them removing what isn't theirs,
@@ -25,7 +30,7 @@ import (
 // as owned by the kernel's overflow ID. Meridian can't tell who owns such
 // a directory, so it refuses it, as problems.OwnerUnmapped, rather than
 // assume no one else can change it.
-type pathChecker struct {
+type checker struct {
 	uid      int
 	lstat    func(string) (fs.FileInfo, error)
 	readlink func(string) (string, error)
@@ -36,17 +41,19 @@ type pathChecker struct {
 // limit is.
 const maxLinks = 40
 
-// checkSafePath checks the directories on the way to path, and with leaf,
-// path itself, as a directory that holds the user's files. A part of the
-// path that isn't there yet is one Meridian will create, and the
-// directory it is created in must be safe.
-func checkSafePath(path string, leaf bool) error {
-	return pathChecker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink, unmapped: unmappedOwner}.check(path, leaf)
+// Check checks the directories on the way to path, and with leaf, path
+// itself, as a directory that holds the user's files. A part of the path
+// that isn't there yet is one Meridian will create, and the directory it
+// is created in must be safe. What is wrong is a *problem.Problem: of the
+// kind problems.PathUnsafe, OwnerUnmapped, PathLinksTooMany or
+// DirectoryUnavailable.
+func Check(path string, leaf bool) error {
+	return checker{uid: os.Getuid(), lstat: os.Lstat, readlink: os.Readlink, unmapped: Unmapped}.check(path, leaf)
 }
 
 // check walks path from the root, following symbolic links as the kernel
 // does, and checks each directory against what it takes from it next.
-func (pc pathChecker) check(path string, leaf bool) error {
+func (pc checker) check(path string, leaf bool) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
@@ -121,7 +128,7 @@ func split(path string) []string {
 // changing entry, which info describes, or which Meridian will create as
 // the user's when info is nil. path is what is being checked, for the
 // problem.
-func (pc pathChecker) holds(path, dir string, dirInfo fs.FileInfo, entry string, info fs.FileInfo) error {
+func (pc checker) holds(path, dir string, dirInfo fs.FileInfo, entry string, info fs.FileInfo) error {
 	// unsafe says that d, whose owner is owner, is unsafe, or that its owner
 	// is one the user namespace hides.
 	unsafe := func(d string, owner int) error {
@@ -130,7 +137,7 @@ func (pc pathChecker) holds(path, dir string, dirInfo fs.FileInfo, entry string,
 		}
 		return problems.PathUnsafe.Problem(problems.Params{"path": path, "dir": d})
 	}
-	owner, ok := fileOwner(dirInfo)
+	owner, ok := Owner(dirInfo)
 	if !ok {
 		return nil // nothing here says who owns a file
 	}
@@ -139,7 +146,7 @@ func (pc pathChecker) holds(path, dir string, dirInfo fs.FileInfo, entry string,
 	}
 	entryOwner := pc.uid
 	if info != nil {
-		entryOwner, _ = fileOwner(info)
+		entryOwner, _ = Owner(info)
 	}
 	entryOurs := entryOwner == 0 || entryOwner == pc.uid
 	if dirInfo.Mode().Perm()&0o022 != 0 {

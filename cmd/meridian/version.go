@@ -24,24 +24,7 @@ func runVersion(_ context.Context, c *cli, fs *flag.FlagSet, args []string) int 
 	if len(positional) > 0 {
 		return c.failf(problems.ArgumentsInvalid, problems.Params{"command": "version"})
 	}
-	version, commit := "(devel)", ""
-	if info, ok := debug.ReadBuildInfo(); ok {
-		if info.Main.Version != "" {
-			version = info.Main.Version
-		}
-		modified := false
-		for _, s := range info.Settings {
-			switch s.Key {
-			case "vcs.revision":
-				commit = s.Value
-			case "vcs.modified":
-				modified = s.Value == "true"
-			}
-		}
-		if commit != "" && modified {
-			commit += " (modified)"
-		}
-	}
+	version, commit := buildVersion()
 	fips := "not in FIPS 140-3 mode"
 	switch {
 	case fips140.Enforced():
@@ -59,4 +42,30 @@ func runVersion(_ context.Context, c *cli, fs *flag.FlagSet, args []string) int 
 	fmt.Fprintf(tw, "  plan version:\t%d\n", plan.Version)
 	tw.Flush()
 	return exitOK
+}
+
+// buildVersion returns Meridian's version, its module's, and the commit it
+// was built from, if the build says.
+func buildVersion() (version, commit string) {
+	version = "(devel)"
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version, ""
+	}
+	if info.Main.Version != "" {
+		version = info.Main.Version
+	}
+	modified := false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			commit = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if commit != "" && modified {
+		commit += " (modified)"
+	}
+	return version, commit
 }

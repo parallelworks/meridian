@@ -252,14 +252,29 @@ type Claim struct {
 	Group   string `json:"group,omitempty"`
 	Member  string `json:"member,omitempty"`
 	// LeaseSeconds is how long the lease lasts after a heartbeat, and
-	// HeartbeatSeconds how often the worker sends one.
+	// HeartbeatSeconds how often the worker sends one. For a job that
+	// fences itself, the worker sends them often enough to try three
+	// times before it would start stopping the job (SelfFencing), more
+	// often than HeartbeatSeconds if need be, saying so in its log, and
+	// gives up on one that hasn't been answered in a third of the time
+	// then left, to send another: a coordinator gives such a job a
+	// HeartbeatSeconds of a fifth of LeaseSeconds at most.
 	LeaseSeconds     int64 `json:"leaseSeconds"`
 	HeartbeatSeconds int64 `json:"heartbeatSeconds"`
 	// SelfFencing is set for a job whose retry: lists worker-lost, which
 	// can have a new attempt while this one may still run: the worker
-	// stops the job once it hasn't renewed its lease for LeaseSeconds,
-	// counted on its monotonic clock from when it sent the last heartbeat
-	// that succeeded.
+	// stops the job before its lease lapses. Counted from when it sent the
+	// last heartbeat that succeeded, or the claim, on whichever of its
+	// monotonic and wall clocks has gone further: once six tenths of
+	// LeaseSeconds have passed without a renewal, it may start stopping
+	// the job, sending every process group the attempt started SIGTERM,
+	// so that a step has at most two tenths of the lease to handle it;
+	// and by nine tenths it has sent them all SIGKILL, and stopped waiting
+	// for them. It stops renewing the lease then, and sends what it has
+	// until the lease lapses. A process that left its group, as with
+	// setsid, isn't the worker's to stop. The coordinator starts a new
+	// attempt only once LeaseSeconds have passed since the last renewal,
+	// and a margin, by the store's clock.
 	SelfFencing bool `json:"selfFencing,omitzero"`
 	// Run is the part of the run that the job reads (plan.Job.Reads): its
 	// inputs' values, variables and secrets among them. The worker masks
@@ -270,12 +285,32 @@ type Claim struct {
 	// RunDir is the run's directory on the worker's host (PW_JOB_DIR),
 	// where steps run by default.
 	RunDir string `json:"runDir"`
+	// Env are the variables a platform gives the job's steps, by name,
+	// such as format 1's PW_JOB_NUMBER, PW_USER and PW_PLATFORM_HOST: the
+	// worker sets them over the environment the workflow gives each step,
+	// as format 1 sets its own, and its own over them, OUTPUTS, PW_JOB_DIR
+	// and the retry counters among them. A value whose Secret is set, such
+	// as PW_API_KEY's, the worker masks as it masks the run's secrets, and
+	// never logs.
+	Env map[string]EnvVar `json:"env,omitempty"`
+	// Retry is how many earlier attempts of the job started a step: what
+	// the job's retry: has used, which a step reads as
+	// PW_WORKFLOW_JOB_CURRENT_RETRY. An attempt that failed before its
+	// first step isn't counted.
+	Retry int `json:"retry,omitzero"`
 	// Container is the container the job's steps run in, or nil for steps
 	// that run on the host.
 	Container *Container `json:"container,omitempty"`
 	// TraceParent is the W3C traceparent of the attempt's span, which the
 	// worker continues, or "".
 	TraceParent string `json:"traceParent,omitempty"`
+}
+
+// An EnvVar is a variable a platform gives a job's steps (Claim.Env).
+type EnvVar struct {
+	Value string `json:"value"`
+	// Secret is set for a value the worker masks, and never logs.
+	Secret bool `json:"secret,omitzero"`
 }
 
 // A Container is the container a job's steps run in. The worker runs on
@@ -295,9 +330,19 @@ type Control struct {
 	// Version grows each time the coordinator asks something more.
 	Version int64 `json:"version"`
 	// Cancel asks the worker to stop its job: to send each running step
-	// SIGTERM, then SIGKILL after GraceSeconds, run the cleanup commands,
-	// and complete the attempt as cancelled. Reason says why: cancelled,
-	// timeout for the run's, or fail-fast.
+	// SIGTERM, then SIGKILL after GraceSeconds, or its own grace period
+	// for 0, run the cleanup commands, and complete the attempt. Reason
+	// says why: cancelled, timeout for the run's, or fail-fast. A later
+	// Cancel that gives less time makes SIGKILL sooner; one that gives
+	// more doesn't make it later.
+	//
+	// As in format 1, a step whose if: is cancel-aware, as always() is
+	// (plan.ReadyStep.OutlivesCancel), still runs after a cancellation,
+	// and to its end, so a job can end otherwise than cancelled, as
+	// success when such steps were the last to run and none of its steps
+	// was cancelled. The run's outcome comes from the coordinator's own
+	// record that it cancelled the run, as format 1's comes from its
+	// record of an external cancellation, not from its jobs'.
 	Cancel       bool        `json:"cancel,omitzero"`
 	Reason       plan.Reason `json:"reason,omitempty"`
 	GraceSeconds int64       `json:"graceSeconds,omitzero"`
@@ -397,6 +442,8 @@ type Complete struct {
 	// showing; these are what the jobs that need the job read.
 	StepOutputs       map[string]map[string]string `json:"stepOutputs,omitempty"`
 	SecretStepOutputs map[string][]string          `json:"secretStepOutputs,omitempty"`
-	// Diagnostics are End's problems with the job's outputs.
+	// Diagnostics are the problems with the job's env:, from its JobEnv
+	// phase, and End's with its outputs. A job whose env: fails has no
+	// steps that ran.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
 }

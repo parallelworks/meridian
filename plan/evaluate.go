@@ -49,26 +49,30 @@ func (e *evaluation) next(phase Phase, c Contexts) *evaluation {
 }
 
 // secretTexts are the secrets' own texts a phase knows of, the run's
-// (RunValues.Masked) and those of the outputs of the jobs it needs that
-// hold one (JobResult.Secrets), what they hold that mask notes though it
-// is short, the fields of a structured secret that a credential is kept in
-// (credentialFields), and what a Masker is given of them, found the first
-// time they are needed. A job's are the same for each phase of an attempt,
-// so JobEnv keeps them for its steps and End (JobEnv.own), which find
-// them, and build what masks them, once.
+// (RunValues.Masked), those the worker knows of that don't come from the
+// run, other (JobState.Secrets), and those of the outputs of the jobs it
+// needs that hold one (JobResult.Secrets), what they hold that mask notes
+// though it is short, the fields of a structured secret that a credential
+// is kept in (credentialFields), and what a Masker is given of them, found
+// the first time they are needed. A job's are the same for each phase of
+// an attempt, so JobEnv keeps them for its steps and End (JobEnv.own),
+// which find them, and build what masks them, once.
 type secretTexts struct {
 	run   RunValues
+	other []string
 	needs map[string]JobResult
 	// mu guards what follows, as an attempt's phases can share them.
 	mu    sync.Mutex
 	found bool
 	// own are the own texts, fields their credential fields, masked what a
-	// Masker is given of the run's secrets and the needs' outputs, and
-	// fromNeeds what of it the needs' outputs give (needsSecrets).
+	// Masker is given of the run's secrets and the needs' outputs,
+	// fromNeeds what of it the needs' outputs give (needsSecrets), and
+	// fromOther what other gives: its texts and their credential fields.
 	own       []string
 	fields    map[string]bool
 	masked    []string
 	fromNeeds []string
+	fromOther []string
 	// leak masks own and fields as they show but for their lines
 	// (newLeakMasker), built the first time it is needed.
 	leak *Masker
@@ -78,11 +82,12 @@ type secretTexts struct {
 
 // secretsSum returns a digest of what a job's secretTexts are found from:
 // the names of the run's secrets, which of them are derived, and their
-// values' strings, and the names of the outputs, and steps' outputs, of
-// the jobs in needs that hold a secret, which of them are derived, and
-// their values. JobEnv's are used for a Step, Cleanup or End only when
-// theirs is the same, as for another run or attempt it isn't.
-func secretsSum(run RunValues, needs map[string]JobResult) [sha256.Size]byte {
+// values' strings; the texts of secrets that don't come from the run,
+// other; and the names of the outputs, and steps' outputs, of the jobs in
+// needs that hold a secret, which of them are derived, and their values.
+// JobEnv's are used for a Step, Cleanup or End only when theirs is the
+// same, as for another run or attempt it isn't.
+func secretsSum(run RunValues, other []string, needs map[string]JobResult) [sha256.Size]byte {
 	h := sha256.New()
 	write := func(parts ...string) {
 		for _, p := range parts {
@@ -98,6 +103,7 @@ func secretsSum(run RunValues, needs map[string]JobResult) [sha256.Size]byte {
 	own, derived := run.secretStrings()
 	write(own...)
 	write(derived...)
+	write(other...)
 	for name, r := range jsonvalue.Sorted(needs) {
 		write(name)
 		write(r.Secrets...)
@@ -125,8 +131,12 @@ func (t *secretTexts) find() {
 		return
 	}
 	t.found = true
-	t.sum = secretsSum(t.run, t.needs)
+	t.sum = secretsSum(t.run, t.other, t.needs)
 	runOwn, runDerived := t.run.secretStrings()
+	// The worker's own secrets are as the run's.
+	other := slices.DeleteFunc(slices.Clone(t.other), func(s string) bool { return s == "" })
+	t.fromOther = slices.Concat(other, slices.Sorted(maps.Keys(credentialFields(other))))
+	runOwn = slices.Concat(runOwn, other)
 	needsOwn, needsDerived := needsSecrets(t.needs)
 	needsFields := credentialFields(needsOwn)
 	t.own = slices.Concat(runOwn, needsOwn)
@@ -158,11 +168,19 @@ func (t *secretTexts) needsMasked() []string {
 	return t.fromNeeds
 }
 
-// sameAs reports whether t was found from the secrets that run and needs
-// hold (secretsSum).
-func (t *secretTexts) sameAs(run RunValues, needs map[string]JobResult) bool {
+// otherMasked returns what a Masker is given of the secrets that don't
+// come from the run (JobState.Secrets): their texts, and the credential
+// fields they hold, however short.
+func (t *secretTexts) otherMasked() []string {
 	t.find()
-	return t.sum == secretsSum(run, needs)
+	return t.fromOther
+}
+
+// sameAs reports whether t was found from the secrets that run, other and
+// needs hold (secretsSum).
+func (t *secretTexts) sameAs(run RunValues, other []string, needs map[string]JobResult) bool {
+	t.find()
+	return t.sum == secretsSum(run, other, needs)
 }
 
 // field reports whether s is one of the secrets' credential fields.

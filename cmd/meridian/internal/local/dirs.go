@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -135,7 +136,7 @@ func (d Dirs) CheckConfig() error {
 	if _, err := os.Stat(d.Config); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	return checkSafePath(d.Config, true)
+	return safepath.Check(d.Config, true)
 }
 
 // DatabaseFile is the name of the database in the state directory.
@@ -175,7 +176,7 @@ var errNoMount = errors.New("local: no mount holds the path")
 // only by its user, and checks that it is, and that every directory on the
 // way to it is safe, before it creates anything and after.
 func ensurePrivateDir(path string) error {
-	if err := checkSafePath(path, false); err != nil {
+	if err := safepath.Check(path, false); err != nil {
 		return err
 	}
 	// The XDG specification asks for 0700 for the directories it creates,
@@ -183,7 +184,7 @@ func ensurePrivateDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return problems.DirectoryUnavailable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
-	if err := checkSafePath(path, false); err != nil {
+	if err := safepath.Check(path, false); err != nil {
 		return err
 	}
 	return checkPrivateDir(path)
@@ -250,6 +251,6 @@ func checkOwnFile(path string, info fs.FileInfo) error {
 // ownedByUser says whether the file info describes belongs to the user,
 // which only Unix systems say: elsewhere it is true.
 func ownedByUser(info fs.FileInfo) bool {
-	uid, ok := fileOwner(info)
+	uid, ok := safepath.Owner(info)
 	return !ok || uid == os.Getuid()
 }

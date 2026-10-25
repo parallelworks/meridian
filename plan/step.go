@@ -61,6 +61,15 @@ type JobState struct {
 	// with them which of the job's outputs, and its steps', hold a secret,
 	// as the worker masks its logs with them.
 	Masked []string
+	// Secrets are the texts of secrets the worker knows of that don't come
+	// from the run, such as the secret variables a platform gives a job's
+	// steps, which no expression reads. The phases count each as a secret's
+	// own text, as they count the run's: masked however short, own to End,
+	// which names an output that holds one a secret and not derived, as the
+	// jobs that need the job then read it, and read for the credential
+	// fields it holds (credentialFields), which JobEnv gives in its Masked,
+	// for the worker to mask in the job's logs.
+	Secrets []string
 }
 
 // A JobEnv is the job's env: as the JobEnv phase evaluated it, as the job
@@ -73,8 +82,9 @@ type JobEnv struct {
 	Private []string `json:"private,omitempty"`
 	Secrets []string `json:"secrets,omitempty"`
 	// Masked are the strings it made from a secret, as ReadyStep.Masked
-	// holds them, which the worker masks; each ReadyStep.Masked holds them
-	// too.
+	// holds them, and the texts of the secrets that don't come from the run
+	// (JobState.Secrets), with the credential fields they hold, which the
+	// worker masks; each ReadyStep.Masked holds them too.
 	Masked []string `json:"masked,omitempty"`
 	// own are the job's secrets' texts and what masks them, as JobEnv found
 	// and built them for the attempt, which Step, Cleanup and End share
@@ -151,6 +161,11 @@ type ReadyStep struct {
 	// Skipped is set when the step's if: is false: the step doesn't run,
 	// its outcome is skipped, and nothing below is set.
 	Skipped bool `json:"skipped,omitzero"`
+	// IfFailed is set when the step's if: failed to evaluate, which fails
+	// the step, with Step's errors: the step didn't run, as format 1 counts
+	// it, which counts a step as run once its if: has passed, so its
+	// cleanup: is skipped. Nothing below is set.
+	IfFailed bool `json:"ifFailed,omitzero"`
 	// Run is the command a run: step runs.
 	Run string `json:"run,omitempty"`
 	// Uses names the built-in action or the workflow a uses: step runs, as
@@ -265,7 +280,9 @@ type ReadyStepRetry struct {
 // and state, byte for byte. Its diagnostics are the step's problems, such
 // as an expression that fails, at the step's path and with no file
 // position, and never show a value made from a variable or a password; an
-// error among them fails the step, and there is no step. What they show is
+// error among them fails the step, and there is no step, but for one whose
+// if: failed to evaluate, which Step gives with only its index, its id and
+// IfFailed set. What they show is
 // masked with state.Masked, and a value read from a step's output that
 // holds a secret, which the job's later steps read as it was written, is
 // masked whole. It returns an error when ctx is done before it finishes,
@@ -363,7 +380,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 		e = c.evaluation(PhaseStep, e)
 		var ok bool
 		if d, ok = e.condition(s.If, at(s.Path, "if")); !ok {
-			return nil, e.diags, nil
+			return &ReadyStep{Index: index, ID: s.ID, IfFailed: true}, e.diags, nil
 		}
 		if !d.run {
 			rs.ID, rs.Skipped = s.ID, true
@@ -666,7 +683,8 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		private: j.Private, secrets: j.Secrets, stepVariables: variables(state.Env, IsFormatVariable),
 	}
 	e := newEvaluation(PhaseJobEnv, c.Contexts)
-	if given := state.JobEnv; given != nil && given.own != nil && given.own.sameAs(state.Run, state.Needs) {
+	e.secrets.other = state.Secrets
+	if given := state.JobEnv; given != nil && given.own != nil && given.own.sameAs(state.Run, state.Secrets, state.Needs) {
 		// The secrets' texts JobEnv found for this attempt, and what masks
 		// them, which it built once; not those of another run or attempt.
 		e.secrets = given.own
@@ -690,6 +708,11 @@ func (j *ReadyJob) jobEnv(state JobState) (*stepContexts, *evaluation) {
 		}
 	} else {
 		for _, s := range e.secrets.needsMasked() {
+			e.maskOwn(s)
+		}
+		// The worker masks what it was given whole; JobEnv gives it the
+		// credential fields of it too.
+		for _, s := range e.secrets.otherMasked() {
 			e.maskOwn(s)
 		}
 		c.JobEnv, c.jobMarks, e = c.layered(PhaseJobEnv, j.Env, at(j.Path, "env"), e)

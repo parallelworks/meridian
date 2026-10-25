@@ -1176,7 +1176,10 @@ not assumed idempotent.
   `clean-on-retry:` is true unless the workflow says otherwise, as in
   format 1, or an expression, which Step reads as format 1 does: true or
   false, text or a number that reads as one, and true for anything else
-  (`plan.ReadyStepRetry.CleanOnRetry`).
+  (`plan.ReadyStepRetry.CleanOnRetry`). As in format 1, it cleans only a
+  `uses:` step's directory before its next try, and never one that is the
+  parent run's directory or log directory, or holds either; a worker that
+  runs `uses:` steps forces it off for those.
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
   behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
@@ -1399,9 +1402,24 @@ while the first may still be running, cut off. So its workers fence
 themselves too, as a Kubernetes controller that can't renew its leader
 lease stops leading:
 
-- **The worker stops the job** when it hasn't renewed its lease for a lease
-  period, counted on its monotonic clock from when it sent the last
-  heartbeat that succeeded. It stops the job's steps as a cancellation does.
+- **The worker stops the job before its lease lapses**, so that every
+  process the attempt started is dead by then. Counted from when it sent
+  the last heartbeat that succeeded, on whichever of its monotonic and wall
+  clocks has gone further, since the monotonic clock stops while a host is
+  suspended: from six tenths of a lease period without a renewal it may
+  start stopping them, with SIGTERM, and by nine tenths it has sent every
+  process group the attempt started SIGKILL, and stopped waiting for them,
+  as `workerapi.Claim.SelfFencing` says. It shortens the grace period of a
+  cancellation in progress to do so. A process that left its group, as
+  with `setsid`, isn't its to stop. It then stops renewing the lease, and
+  sends what it has until the lease lapses. It reads the wall clock at
+  least every second, so once a host that was suspended past the lease
+  resumes, a step can run for up to about a second more.
+- **Its heartbeats** come often enough to try three times before it would
+  start stopping the job, more often than the coordinator asks if need
+  be, and it gives up on one that hasn't been answered in a third of the
+  time then left, to send another, so that one heartbeat held by a
+  connection that is half open doesn't stop the job.
 - **The coordinator waits** until the lease has lapsed for that period and a
   margin, by the store's clock, before it starts a new attempt. Neither
   side reads the other's clock; each only measures the period.
@@ -1428,16 +1446,47 @@ waking up or `meridian run` restarting must not make them all look lost.
 - **Cancelling a run is stored first.** Jobs that haven't been placed are
   cancelled in the store; workers are told to stop and send each running
   step SIGTERM, then SIGKILL after a grace period; placements in progress
-  are withdrawn (`scancel`, `qdel`, deleting the pod).
+  are withdrawn (`scancel`, `qdel`, deleting the pod). The run's outcome
+  comes from that record, as format 1's comes from its record of an
+  external cancellation, since a job whose last steps were cancel-aware
+  can end otherwise than cancelled (below).
 - **Timeouts:** the worker enforces step and job timeouts. The coordinator
-  enforces the run's timeout, and a job's as a backstop. A job that runs
-  past its timeout isn't cancelled: the step it was running fails, so
-  `failure()` is true after it and `cancelled()` false, as in format 1.
+  enforces the run's timeout, and a job's as a backstop. As in format 1, a
+  step's `timeout:`, and its `retry:`'s, bound each of its tries, and a try
+  past the step's own `timeout:` isn't tried again. A job that runs past its
+  timeout isn't cancelled: the step it was running fails, so `failure()` is
+  true after it and `cancelled()` false, as in format 1.
+- **A step whose `if:` is cancel-aware**, one that calls `always()` or
+  `cancelled()`, negates `success()` or `failure()`, or is the word
+  `always`, outlives its job's cancellation and timeout, as in format 1: it
+  runs once they have happened, and they don't stop it once it runs, nor
+  does its own `timeout:`, though its `retry:`'s timeout, its
+  `early-cancel:` and the attempt ending without the worker do. Step marks
+  it (`plan.ReadyStep.OutlivesCancel`). Format 1 dropping such a step's own
+  `timeout:` is a candidate for a later fix.
+- **Once a job is stopping**, cancelled or past its timeout, its other
+  steps that haven't started don't run. A step whose `if:` isn't
+  cancel-aware is skipped then, as `success()` is false; one that comes to
+  run all the same, as when the cancellation arrives as it is readied, ends
+  cancelled, or failed after a timeout, without starting. Format 1 starts
+  such a step and stops it at once, so no workflow can rely on its running.
+- **A later cancellation that gives less time**, or the attempt ending
+  without the worker, makes SIGKILL sooner. When an attempt ends without
+  its worker, every process group the attempt started is stopped, those of
+  steps that have ended and left processes behind among them. So that no
+  other group can be given such a group's number, the worker keeps the
+  group's leader, the step's shell, unreaped, on Linux, while the group
+  has a process left: `ps` shows it as defunct, and `kill -0` on its
+  process ID succeeds, until the processes the step left behind have ended
+  or the attempt ends.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
-  fails. The coordinator tells the step's worker. The step ends cancelled,
+  fails, or a step of its own job did, as in format 1. The coordinator
+  tells the step's worker when another job fails. The step ends cancelled,
   which cancels the rest of its job, as in format 1: a later step runs only
   if it outlives a cancel, and the job ends cancelled unless a step of it
-  failed (`plan.JobState.Cancelled`). A `uses:` step whose child run was
+  failed (`plan.JobState.Cancelled`). It doesn't cut short the wait between
+  a step's tries; a cancellation and the job's timeout do, and the step ends
+  cancelled, or failed after a timeout. A `uses:` step whose child run was
   cancelled from within it while its job goes on counts as a success, as
   format 1 goes on with the job after one, and cleans it up.
 - **A step's `cleanup:` command** runs at the end of its job if the step
@@ -1453,17 +1502,33 @@ waking up or `meridian run` restarting must not make them all look lost.
   wrote as `""`. What it writes to `$OUTPUTS` is the job's, over what its
   steps wrote. A cleanup that fails fails the job, as a step does: the
   cleanups after it read `failure()` as true, and the job's `outputs:`
-  read an output that nothing wrote as `""`.
+  read an output that nothing wrote as `""`. A step whose `if:` fails to
+  evaluate didn't run, as format 1 counts it, and its cleanup is skipped;
+  the step fails its job. A cleanup that is skipped has a finished event
+  that says so, as a skipped step has, and as format 1 shows its copy of
+  the step. A worker whose attempt ended without it, because another
+  superseded it or its lease lapsed, runs none: another attempt may be
+  running, and a cleanup could remove what it is using.
 
 ### Outputs
 
-A step writes outputs to the file named by `$OUTPUTS`. A job's outputs are
-capped at 1 MB and a run's at 50 MB. A job's outputs are format 1's: what
-its steps wrote, the later step's where two wrote the same name, what its
-cleanups wrote over that, and its `outputs:` over all. The worker reports
-what each step wrote as it wrote it, and End decides which outputs are
-private and which hold a secret; an event shows a step's outputs masked
-as its logs are.
+A step writes outputs to the file named by `$OUTPUTS`, a line `name=value`
+each. As in format 1, a step with an `id` has a file of its own, whose
+outputs are its `steps.<id>.outputs`, and the steps without one share the
+job's. A file with a line of 64 KiB or longer is read as holding none, and
+the step's event warns of it. A symbolic link a step puts there is
+followed, as format 1 follows it, but what is read must be a regular file,
+opened without waiting, so that a FIFO there fails the step rather than make
+the worker wait forever, as it makes format 1 wait, which is a bug; format 1
+is to fail it too. A job's outputs are capped at 1 MB and a run's at 50 MB,
+a limit of Meridian's, which format 1 doesn't have: the worker reads no more
+than 1 MiB of a step's file, and a step whose file is larger fails, but for
+one without an `id` whose job's shared file was already larger, which can't
+add to it. A job's outputs are format 1's: what its steps wrote, the later
+step's where two wrote the same name, what its cleanups wrote over that, and
+its `outputs:` over all. The worker reports what each step wrote as it wrote
+it, and End decides which outputs are private and which hold a secret; an
+event shows a step's outputs masked as its logs are.
 
 An output keeps its value, as format 1 passes it to the jobs that need the
 job, whatever it was made from: masking it would change what those jobs
@@ -1684,7 +1749,14 @@ member's running workers reconnect to it.
   doesn't copy files between them.
 - **The environment.** Steps get the environment variables format 1 defines,
   such as `OUTPUTS`, `PW_JOB_DIR` and `PW_JOB_ID`. Variables that only a
-  platform can fill, such as an API key, are set only when one supplies them.
+  platform can fill, such as an API key, are set only when one supplies them,
+  in the claim (`workerapi.Claim.Env`), which can mark one secret, to be
+  masked however short, and which the phases count as a secret's own text,
+  as they count the run's (`plan.JobState.Secrets`): an output that holds
+  one is a secret to the jobs that need the job. They go over the environment the workflow gives the step, as in
+  format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
+  is the run's ID and `PW_PARENT_JOB_DIR` its directory.
+- **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.
 - **The env context on the worker.** As in format 1, `env` reads the
   workflow's `env:`, the job's over it, the step's over that, and the
   variables the worker defines over all, such as `PW_PARENT_JOB_DIR` and
@@ -1710,7 +1782,12 @@ member's running workers reconnect to it.
   try's, as format 1's failover does: 8 known workflows read it in a retried
   step's `with:`. Its `if:` and `retry:` are those of its first try: a
   later try runs whatever its `if:` would give now, and carries over
-  whether it outlives a cancel and reads outputs as its first did.
+  whether it outlives a cancel and reads outputs as its first did. How
+  many more times a step may run, `PW_WORKFLOW_STEP_MAX_RETRIES`, is known
+  only once Step has read its `retry:`, so the worker evaluates the first
+  try of a step with one again, with it, as format 1 gives it from the
+  first. A try that can't start, as one whose evaluation fails, fails its
+  step, which isn't tried again.
 - **Outputs that nothing wrote.** As in format 1, a job's output or a
   step's that nothing wrote fails the expression that reads it
   (`output_not_written`) where a job or a step is about to run, and in a
@@ -1725,7 +1802,17 @@ member's running workers reconnect to it.
 - **A host of a step's own.** A format 1 `ssh:` on a job runs its steps on
   the host it names, and a step's runs it on its own: `ssh: null` runs the
   step where the job runs without its `ssh:`, and an empty or null
-  `remoteHost` runs it there too, with a note in its log, as format 1 does.
+  `remoteHost` runs it there too, with a note in its log, as format 1 does
+  (`ssh_host_empty`). A worker on the host a job's `ssh:` names fails such
+  a step (`step_off_job_host`) rather than run it on the wrong host, as it
+  fails one whose `ssh:` names a host of its own (`step_ssh_not_supported`),
+  but for one whose `ssh:` names the same host and login as its job's, as a
+  step that repeats its job's `remoteHost` does, which runs where its job
+  runs: the same `remoteHost`, `remoteUser`, `jumpNodeHost` and
+  `jumpNodeUser`, by which format 1 keys the connections it reuses, with
+  null and none as `""`, whatever else it says, such as its
+  `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
+  `host:port` as it is and reads `host` through the user's `ssh_config`.
   534 `ssh:` mappings in the known workflows read `remoteHost` from an input.
 - **A step that outlives its job's cancelling.** A step whose `if:` can be
   true once its job is stopping, the word `always`, `always()`,
@@ -1739,12 +1826,66 @@ member's running workers reconnect to it.
   host, outside the container. It creates the job's container, runs each
   step in it with the runtime's `exec`, and removes the container when the
   job ends.
+- **A step ends when its output closes**, as in format 1, not when its
+  shell exits: what it starts in the background and leaves writing to its
+  output is still the step's. It runs in a process group of its own, which
+  is what SIGTERM and SIGKILL stop.
 - **Logs** are masked on the worker, before they leave the host, and so are
   outputs ([Outputs](#outputs)).
 - **While the coordinator is unreachable**, a worker keeps running its steps,
   spools logs and events to disk up to a limit, and delivers them in order
   when it reconnects, unless its job fences itself
-  ([Leases and fencing](#leases-and-fencing)).
+  ([Leases and fencing](#leases-and-fencing)). Past the limit, or once the
+  disk is full, a log keeps nothing more until there is room, and the
+  step's event says how much it lost. A log's file holds what the
+  coordinator hasn't stored, and of what it has, less than the limit, and
+  at most four times as much, or 16 KiB, but while the worker copies what
+  is unsent to a new file, when it holds both.
+- **What the worker keeps** of its own, its spooled logs, its steps' scripts
+  and `$OUTPUTS` files, is in a directory only its user can use, which it
+  holds open and makes every file in through that, whose name starts with a
+  dot, so that `rm -rf "$TMPDIR"/*` passes it by. It is outside the run's
+  directory, as format 1 keeps its scripts and `$OUTPUTS` outside
+  `PW_JOB_DIR`, since a step can remove that, as `cleanup: rm -r
+  ${PW_JOB_DIR}` does in workflows we know of, and on NFS a directory can't
+  be removed while a file in it is held open. It is in a directory no other
+  user can change, on a path no other user can change (as OpenSSH checks the
+  way to a user's keys), so that no other user can take its name once it is
+  removed: `meridian/worker` in the user's cache directory, on disk, which
+  the worker makes; otherwise `XDG_RUNTIME_DIR`, when it is set and no other
+  user can change it, which is in memory, so the worker spools at most 64
+  MiB while its directory is there; and only otherwise the system's
+  temporary directory, with a warning in the worker's log. Any process of
+  the user, the job's steps among them, or a cleaner of temporary files, can
+  still remove it. The worker then never trusts what is at its path again:
+  it makes a new directory, with a new name, which it checks is a directory
+  of its user's that no one else can use, in the same parent, which it makes
+  and checks again if it made it, or else in the next it would have used;
+  and a step whose `$OUTPUTS` went as it ran has its event say so
+  (`outputs_removed`), as what it wrote there after is lost. A problem the
+  worker has with its own files fails a step, never the attempt, and one
+  with the directory at first ends the worker before it claims the attempt.
+- **When it is stopped from outside**, as by its scheduler, it stops the
+  job's steps, and sends what it has for a while once they have stopped,
+  so that a step in its grace period keeps what it printed last: the
+  attempt's end too, if the steps had ended.
+- **It talks only to its coordinator.** Over a Unix socket, it checks that
+  the process at the other end runs as its user, or as root, before it
+  sends a token, where the system says (`SO_PEERCRED` on Linux), and
+  elsewhere that the socket's directory is its user's and no one else can
+  write to it; over TLS, the coordinator's key. It follows no redirect. On
+  Linux it makes itself not dumpable, so that the user's other processes
+  can't read its credential from its memory.
+
+Today the worker runs steps only on the host. A job whose steps are to run
+in a container fails before its first step, with a problem that says so,
+rather than run them on the host, and a step that `uses:` an action or a
+workflow, or runs on another host with `ssh:`, fails, as does one whose
+`ssh:` is null, or gives no `remoteHost`, on a worker that a job's `ssh:`
+placed on a host. So a step's `clean-on-retry:`, which cleans a `uses:`
+step's directory, has nothing to clean yet. Its events are kept
+in memory while the coordinator is unreachable, since each is small but for
+a step's outputs, which are capped.
 
 ## Backends and isolation
 

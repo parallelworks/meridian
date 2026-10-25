@@ -73,7 +73,7 @@ func TestEveryKindIsReported(t *testing.T) {
 	if len(defined) != len(Kinds()) {
 		t.Fatalf("kinds.go names %d kinds, and Kinds() returns %d", len(defined), len(Kinds()))
 	}
-	for _, dir := range []string{"../format", "../compile", "../expr", "../plan", "../cmd/meridian", "../cmd/meridian/internal/local"} {
+	for _, dir := range []string{"../format", "../compile", "../expr", "../plan", "../worker", "../cmd/meridian", "../cmd/meridian/internal/local", "../internal/safepath"} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)

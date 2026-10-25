@@ -10,6 +10,7 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -249,12 +250,12 @@ func lookupEnv(getenv func(string) string, name string) (string, bool) {
 
 // readValueFile reads v's value from its file, without the newline, or the
 // carriage return and newline, at its end. Every directory on the way to
-// the file must be safe, as checkSafePath says, so that no one else can
+// the file must be safe, as safepath.Check says, so that no one else can
 // swap the file for another, or for a link to one of the user's own. The
 // file must belong to the user, and no other user may change it, nor read
 // it when it holds a secret, as the file opened says.
 func readValueFile(v variable) (string, error) {
-	if err := checkSafePath(v.file, false); err != nil {
+	if err := safepath.Check(v.file, false); err != nil {
 		return "", err
 	}
 	f, err := openRegular(v.file, func(info fs.FileInfo) error {

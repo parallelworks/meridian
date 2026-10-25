@@ -1464,3 +1464,35 @@ jobs:
 		t.Errorf("a plan without clean-on-retry: %+v, %v", s, err)
 	}
 }
+
+// A step whose if: fails to evaluate fails, and Step says so
+// (ReadyStep.IfFailed), so that the worker skips its cleanup:, as format 1
+// counts such a step as not having run; one whose run: fails doesn't.
+func TestStepIfFailed(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - id: a
+        if: ${{ fromJSON('{') }}
+        run: echo never
+        cleanup: echo never
+      - if: ${{ always() }}
+        run: echo ${{ fromJSON('{') }}
+        cleanup: echo cleaned
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, diags, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run})
+	if err != nil || !diags.HasErrors() || s == nil || !s.IfFailed || s.ID != "a" || s.Run != "" {
+		t.Errorf("a step whose if: fails: %+v, %v, %v", s, diags, err)
+	}
+	state := plan.JobState{Run: run, Steps: []plan.StepResult{{Outcome: plan.OutcomeFailure}}}
+	s, diags, err = ready.Job.Step(t.Context(), 1, state)
+	if err != nil || !diags.HasErrors() || s != nil {
+		t.Errorf("a step whose run: fails: %+v, %v, %v", s, diags, err)
+	}
+}

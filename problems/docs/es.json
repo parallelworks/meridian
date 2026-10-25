@@ -969,6 +969,126 @@
       "Corrige los problemas enumerados y vuelve a comprobar el flujo de trabajo para ver los demás."
     ]
   },
+  "container_not_supported": {
+    "title": "Contenedor que el worker aún no puede ejecutar",
+    "why": "Los pasos de un trabajo se ejecutan en un contenedor cuando el miembro en el que se colocó aísla los trabajos en uno, como hacen por omisión los miembros local y ssh. Esta versión del worker de Meridian solo ejecuta pasos en el host. Meridian nunca ejecuta un trabajo con un aislamiento más débil que el que pide su miembro, así que el intento falla antes de que se ejecute ningún paso, y el trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Indica el aislamiento en el host en la configuración de los miembros donde se ejecuta el trabajo, si lo que quieres es ejecutar sus pasos en el host."
+    ]
+  },
+  "job_unreadable": {
+    "title": "Trabajo que el worker no pudo leer",
+    "why": "Un worker lee el trabajo que reclama con el mismo rigor con que se lee un plan, y rechaza uno con una parte que no conoce, en lugar de ejecutar el trabajo sin ella. Esto ocurre cuando el worker y el coordinador son de versiones de Meridian que codifican un trabajo de forma distinta. No se ejecutó ningún paso, así que el trabajo se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "job_version_unsupported": {
+    "title": "Trabajo de una versión de plan que el worker no lee",
+    "why": "Un worker reclama un trabajo con la versión de plan más nueva que lee, y el coordinador le envía un trabajo de esa versión. Uno de otra versión significa que el coordinador no la respetó, como podría no hacerlo un coordinador de otra versión de Meridian. No se ejecutó ningún paso, así que el trabajo se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "run_dir_unusable": {
+    "title": "Directorio de la ejecución que el worker no pudo usar",
+    "why": "Cada ejecución tiene un directorio, PW_JOB_DIR, donde se ejecutan sus pasos por omisión. El worker lo crea si no existe y, si no puede, por el motivo indicado, el intento falla antes de que se ejecute ningún paso. El trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
+    ]
+  },
+  "env_name_invalid": {
+    "title": "Variable de la plataforma con un nombre que ninguna variable puede tener",
+    "why": "Una plataforma da a los pasos de un trabajo variables propias, como PW_USER, en la reclamación del intento. El worker pone cada una en el entorno de un paso, donde un nombre no puede estar vacío ni contener = o NUL, así que rechaza el intento antes de que se ejecute ningún paso, en lugar de ejecutar los pasos sin la variable. El trabajo se coloca de nuevo, en otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Infórmalo a quien gestione la plataforma: la plataforma dio la variable."
+    ]
+  },
+  "uses_not_supported": {
+    "title": "Paso con uses: que el worker aún no puede ejecutar",
+    "why": "Un paso que usa con uses: una acción, como parallelworks/checkout, o un flujo de trabajo, la ejecuta en lugar de un comando. Esta versión del worker de Meridian solo ejecuta pasos con run:, así que el paso falla.",
+    "fix": [
+      "Haz el trabajo del paso con un comando run: en su lugar."
+    ]
+  },
+  "step_ssh_not_supported": {
+    "title": "Paso en otro host",
+    "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Esta versión del worker de Meridian solo ejecuta pasos en el host donde se ejecuta, así que el paso falla en lugar de ejecutarse en el host equivocado.",
+    "fix": [
+      "Mueve el paso a un trabajo que se ejecute en ese host, mediante el ssh: del trabajo o un grupo de ejecución."
+    ]
+  },
+  "step_off_job_host": {
+    "title": "Paso que se ejecuta fuera del host de su trabajo",
+    "why": "El ssh: de un trabajo del formato 1 ejecuta sus pasos en el host que indica, y el ssh: de un paso que es nulo, o que no da ningún remoteHost, ejecuta el paso donde se ejecutaría el trabajo sin su ssh:. Esta versión del worker de Meridian se ejecuta en el host del trabajo y solo ejecuta pasos ahí, así que el paso falla en lugar de ejecutarse en el host equivocado.",
+    "fix": [
+      "Mueve el paso a un trabajo que se ejecute donde debe ejecutarse el paso, como uno sin ssh:.",
+      "Quita el ssh: del paso para ejecutarlo en el host del trabajo."
+    ]
+  },
+  "ssh_host_empty": {
+    "title": "ssh: del paso sin host",
+    "why": "El ssh: de un paso del formato 1 ejecuta el paso en el host que indica su remoteHost. Uno vacío o nulo no indica ninguno, y el formato 1 ejecuta el paso donde se ejecutaría sin ssh:, con una nota en su registro, lo que a menudo es un error, como una entrada que se dejó vacía.",
+    "fix": [
+      "Da al ssh: un remoteHost, o quítalo para ejecutar el paso donde se ejecuta su trabajo."
+    ]
+  },
+  "step_not_started": {
+    "title": "Comando del paso no iniciado",
+    "why": "El worker escribe el comando del paso en un script e inicia con él el shell del paso en el directorio de trabajo del paso, que crea si no existe. Eso falló, por el motivo indicado, así que el comando nunca se ejecutó.",
+    "fix": [
+      "Comprueba que el shell del paso está en el host y que su directorio de trabajo se puede crear allí."
+    ]
+  },
+  "shell_not_supported": {
+    "title": "Shell que el formato 1 no ejecuta",
+    "why": "El formato 1 solo ejecuta el comando de un paso con bash o sh, según indica su shell:, así que el paso falla sin ejecutarse. El esquema del flujo de trabajo no permite otro shell, así que esto solo ocurre con un plan hecho sin comprobarlo.",
+    "fix": [
+      "Ejecuta el paso con bash o sh, por nombre o por ruta, como en shell: bash -l {0}."
+    ]
+  },
+  "step_timed_out": {
+    "title": "El paso superó su tiempo límite",
+    "why": "El timeout: de un paso, y el timeout de su retry: para cada intento, limitan cuánto tiempo se ejecuta. A un paso que supera uno de ellos, el worker le envía SIGTERM y, después, SIGKILL si no ha terminado tras un periodo de gracia. Un paso que superó su propio timeout: no se vuelve a intentar; un intento que superó el timeout de su retry: sí, mientras al paso le queden reintentos.",
+    "fix": [
+      "Aumenta el tiempo límite, o haz que el paso termine antes."
+    ]
+  },
+  "outputs_too_large": {
+    "title": "Salidas del paso demasiado grandes",
+    "why": "Las salidas de un trabajo se guardan con su ejecución y se dan a los trabajos que lo necesitan, así que Meridian limita a 1 MiB cada archivo de salidas que escribe un paso, el archivo que indica $OUTPUTS. El límite es de Meridian, no del formato de flujo de trabajo.",
+    "fix": [
+      "Escribe los resultados grandes en un archivo del directorio de la ejecución y da su ruta como salida."
+    ]
+  },
+  "outputs_line_too_long": {
+    "title": "Línea de $OUTPUTS demasiado larga",
+    "why": "El formato 1 lee $OUTPUTS línea a línea, y no lee nada de un archivo con una línea de 64 KiB o más. Meridian lo lee igual, para que un flujo de trabajo signifique lo mismo que antes. Los pasos sin id comparten el archivo de su trabajo, así que una línea larga en él oculta también lo que escriben los pasos posteriores.",
+    "fix": [
+      "Escribe los valores grandes en un archivo del directorio de la ejecución y da su ruta como salida."
+    ]
+  },
+  "outputs_not_file": {
+    "title": "$OUTPUTS no es un archivo",
+    "why": "El worker lee las salidas de un paso del archivo que indica $OUTPUTS, o de lo que indica un enlace simbólico allí, como hace el formato 1. Solo lee un archivo regular, abierto sin esperar, para que un FIFO ahí no lo haga esperar para siempre; el paso puso otra cosa ahí, así que no se pueden leer sus salidas, y falla. El formato 1 espera para siempre en su lugar, lo cual es un error. El worker vuelve a poner un archivo ahí para los pasos siguientes.",
+    "fix": [
+      "Escribe las salidas en $OUTPUTS con >>, o haz de él un enlace a un archivo regular."
+    ]
+  },
+  "outputs_removed": {
+    "title": "$OUTPUTS se eliminó mientras se ejecutaba el paso",
+    "why": "El worker guarda $OUTPUTS en un directorio propio, que ningún otro usuario puede cambiar, y lo lee cuando termina el paso. Algo eliminó ese directorio mientras se ejecutaba el paso: el propio paso u otro de tus procesos, como un limpiador de archivos temporales. El worker no confía en lo que haya en su ruta después de eso, así que no lee lo que el paso escribió ahí.",
+    "fix": [
+      "No elimines el directorio en el que está $OUTPUTS, ni lo que lo contiene."
+    ]
+  },
+  "log_not_kept": {
+    "title": "Registro no guardado completo",
+    "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, o cuando el disco está lleno, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
+    "fix": [
+      "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y el espacio del disco que contiene el directorio del worker, que por omisión está en TMPDIR."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",
@@ -1459,6 +1579,62 @@
     "why": "La configuración de un miembro se da al controlador de su backend como JSON, que no tiene números que no sean números ni infinitos.",
     "fix": [
       "Escribe el número de la configuración del miembro como uno finito, o como texto entre comillas."
+    ]
+  },
+  "worker_environment_missing": {
+    "title": "Worker iniciado sin lo que reclama",
+    "why": "Un backend inicia meridian worker con la dirección del coordinador en MERIDIAN_COORDINATOR, y el token de arranque del intento en MERIDIAN_BOOTSTRAP_TOKEN, o en un archivo que indica MERIDIAN_BOOTSTRAP_TOKEN_FILE, nunca en su línea de comandos. Sin ellos, el worker no puede reclamar un intento.",
+    "fix": [
+      "Deja que un backend inicie meridian worker: las personas no lo ejecutan."
+    ]
+  },
+  "worker_environment_invalid": {
+    "title": "Worker iniciado con lo que no puede usar",
+    "why": "MERIDIAN_COORDINATOR_KEY_SHA256 debe ser sha256: y 64 dígitos hexadecimales cuando se llega al coordinador por TLS, y no estar definida cuando es un socket Unix; y solo puede definirse una de MERIDIAN_BOOTSTRAP_TOKEN y MERIDIAN_BOOTSTRAP_TOKEN_FILE.",
+    "fix": [
+      "Deja que un backend inicie meridian worker, que las define como debe."
+    ]
+  },
+  "coordinator_peer_refused": {
+    "title": "Socket del coordinador servido por otro usuario",
+    "why": "Un worker envía su token de arranque, y después la credencial del intento, solo a un coordinador de su propio usuario, o de root. En Linux pregunta al sistema operativo quién sirve el socket, y lo sirve otro usuario: uno que podría haber puesto un socket en esa ruta para quedarse con el token.",
+    "fix": [
+      "Inicia el worker con el socket de un coordinador que ejecutes tú, en un directorio que solo tú puedas cambiar."
+    ]
+  },
+  "coordinator_key_mismatch": {
+    "title": "Servidor sin la clave del coordinador",
+    "why": "Un worker llega a un coordinador por TLS mediante su clave: el backend le da el hash SHA-256 de la clave pública del coordinador, y el worker solo se comunica con un servidor que tenga esa clave, diga lo que diga su certificado. Este servidor tiene otra.",
+    "fix": [
+      "Comprueba que MERIDIAN_COORDINATOR indica el coordinador, o su relay, y que las réplicas del coordinador comparten una clave."
+    ]
+  },
+  "bootstrap_token_refused": {
+    "title": "Token de arranque rechazado",
+    "why": "Un token de arranque reclama un intento, una vez: el coordinador lo rechaza una vez reclamado el intento, por este worker con otra credencial o por otro, o una vez retirada su colocación. El worker termina y no ejecuta nada.",
+    "fix": [
+      "No hay nada que corregir si se canceló el intento; si no, deja que el backend inicie un worker con el token propio del intento."
+    ]
+  },
+  "run_plan_too_new": {
+    "title": "Plan de la ejecución más nuevo de lo que lee el worker",
+    "why": "El plan de una ejecución tiene versión, y un worker solo ejecuta un plan de una versión que lee, para no ejecutar nunca un trabajo sin una parte que no entiende. El coordinador rechazó la reclamación antes de enviar nada de la ejecución. No se ejecutó ningún paso, así que el intento se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "attempt_superseded": {
+    "title": "Intento terminado sin el worker",
+    "why": "Cada informe que envía un worker lleva la credencial del intento, y el coordinador solo lo guarda mientras el intento tiene el trabajo. Otro intento del trabajo sustituyó a este, o el intento terminó sin este worker, como cuando caducó su concesión. El worker detiene los pasos del trabajo, sin sus comandos cleanup:, de los que otro intento podría depender, y termina.",
+    "fix": [
+      "No hay nada que corregir: el coordinador decide cómo terminó el intento y si el trabajo vuelve a ejecutarse."
+    ]
+  },
+  "attempt_lease_lapsed": {
+    "title": "La concesión del intento iba a caducar",
+    "why": "Un trabajo cuyo retry: incluye worker-lost puede volver a ejecutarse mientras este intento quizá siga ejecutándose, aislado, así que su worker lo detiene antes de que caduque su concesión: cuando no la ha renovado durante seis décimas de ella, detiene todos los procesos que inició el intento, y a las nueve décimas ya los ha matado. No se pudo comunicar con el coordinador durante ese tiempo. Su nuevo intento reanuda el trabajo, como pide su retry:.",
+    "fix": [
+      "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y que la concesión del trabajo es lo bastante larga para los cortes que esperas."
     ]
   }
 }

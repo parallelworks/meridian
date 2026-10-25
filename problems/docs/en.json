@@ -831,6 +831,109 @@
       "Fix the problems that are listed, and check the workflow again to see the rest."
     ]
   },
+  "container_not_supported": {
+    "why": "A job's steps run in a container when the member it was placed on isolates jobs in one, as local and ssh members do by default. This version of Meridian's worker runs steps only on the host. Meridian never runs a job with weaker isolation than its member asks for, so the attempt fails before any step runs, and the job is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Name host isolation in the settings of the members the job runs on, if running its steps on the host is what you want."
+    ]
+  },
+  "job_unreadable": {
+    "why": "A worker reads the job it claims as strictly as a plan is read, and refuses one with a part it doesn't know, rather than run the job without it. This happens when the worker and the coordinator are from versions of Meridian that encode a job differently. No step ran, so the job is placed again.",
+    "fix": [
+      "Start workers of the same version of Meridian as the coordinator."
+    ]
+  },
+  "job_version_unsupported": {
+    "why": "A worker claims a job with the newest plan version it reads, and the coordinator sends it a job of that version. One of another version means the coordinator didn't honour that, as a coordinator of another version of Meridian might not. No step ran, so the job is placed again.",
+    "fix": [
+      "Start workers of the same version of Meridian as the coordinator."
+    ]
+  },
+  "run_dir_unusable": {
+    "why": "Each run has a directory, PW_JOB_DIR, where its steps run by default. The worker makes it if it doesn't exist, and if it can't, for the reason given, the attempt fails before any step runs. The job is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
+    ]
+  },
+  "env_name_invalid": {
+    "why": "A platform gives a job's steps variables of its own, such as PW_USER, in the attempt's claim. The worker sets each in a step's environment, where a name can't be empty or hold = or NUL, so it refuses the attempt before any step runs, rather than run the steps without the variable. The job is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Report it to whoever runs the platform: the platform gave the variable."
+    ]
+  },
+  "uses_not_supported": {
+    "why": "A step that uses: an action, such as parallelworks/checkout, or a workflow runs it rather than a command. This version of Meridian's worker runs only steps with run:, so the step fails.",
+    "fix": [
+      "Do the step's work with a run: command instead."
+    ]
+  },
+  "step_ssh_not_supported": {
+    "why": "A format 1 step's ssh: runs the step on another host over SSH. This version of Meridian's worker runs steps only on the host it runs on, so the step fails rather than run on the wrong host.",
+    "fix": [
+      "Move the step to a job that runs on that host, through the job's ssh: or an execution group."
+    ]
+  },
+  "step_off_job_host": {
+    "why": "A format 1 job's ssh: runs its steps on the host it names, and a step's ssh: that is null, or gives no remoteHost, runs the step where the job would run without its ssh:. This version of Meridian's worker runs on the job's host, and runs steps only there, so the step fails rather than run on the wrong host.",
+    "fix": [
+      "Move the step to a job that runs where the step should, such as one without an ssh:.",
+      "Remove the step's ssh: to run it on the job's host."
+    ]
+  },
+  "ssh_host_empty": {
+    "why": "A format 1 step's ssh: runs the step on the host its remoteHost names. One that is empty or null names none, and format 1 runs the step where it would run without an ssh:, with a note in its log, which is often a mistake, such as an input left empty.",
+    "fix": [
+      "Give the ssh: a remoteHost, or remove it to run the step where its job runs."
+    ]
+  },
+  "step_not_started": {
+    "why": "The worker writes the step's command to a script, and starts the step's shell with it in the step's working directory, which it makes if it doesn't exist. That failed, for the reason given, so the command never ran.",
+    "fix": [
+      "Check that the step's shell is on the host, and that its working directory can be made there."
+    ]
+  },
+  "shell_not_supported": {
+    "why": "Format 1 runs a step's command with bash or sh only, as its shell: says, so the step fails without running. The workflow's schema allows no other shell, so this happens only for a plan made without checking it.",
+    "fix": [
+      "Run the step with bash or sh, by name or path, as in shell: bash -l {0}."
+    ]
+  },
+  "step_timed_out": {
+    "why": "A step's timeout:, and its retry:'s timeout for each try, limit how long it runs. The worker sends a step that runs past one SIGTERM, then SIGKILL if it hasn't ended after a grace period. A step that ran past its own timeout: isn't tried again; a try past its retry:'s timeout is, while the step has retries left.",
+    "fix": [
+      "Raise the timeout, or make the step finish sooner."
+    ]
+  },
+  "outputs_too_large": {
+    "why": "A job's outputs are kept with its run and given to the jobs that need it, so Meridian limits each file of outputs that a step writes, the file $OUTPUTS names, to 1 MiB. The limit is Meridian's own, not part of the workflow format.",
+    "fix": [
+      "Write large results to a file in the run's directory, and give its path as the output."
+    ]
+  },
+  "outputs_line_too_long": {
+    "why": "Format 1 reads $OUTPUTS a line at a time, and reads none of a file with a line of 64 KiB or longer. Meridian reads it the same way, so that a workflow means what it did. The steps without an id share their job's file, so a long line there also hides what the steps after it write.",
+    "fix": [
+      "Write large values to a file in the run's directory, and give its path as the output."
+    ]
+  },
+  "outputs_not_file": {
+    "why": "The worker reads a step's outputs from the file $OUTPUTS names, or from what a symbolic link there names, as format 1 does. It reads only a regular file, opened without waiting, so that a FIFO there can't make it wait forever; the step put something else there, so its outputs can't be read, and it fails. Format 1 waits forever instead, which is a bug. The worker puts a file there again for the steps after it.",
+    "fix": [
+      "Write outputs to $OUTPUTS with >>, or make it a link to a regular file."
+    ]
+  },
+  "outputs_removed": {
+    "why": "The worker keeps $OUTPUTS in a directory of its own, which no other user can change, and reads it once the step ends. Something removed that directory while the step ran: the step itself, or another of your processes, such as a cleaner of temporary files. The worker doesn't trust what is at its path after that, so it doesn't read what the step wrote there.",
+    "fix": [
+      "Don't remove the directory $OUTPUTS is in, or what holds it."
+    ]
+  },
+  "log_not_kept": {
+    "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, or once the disk is full, it doesn't keep what the steps print, so the log is missing that much of it.",
+    "fix": [
+      "Check the connection between the host the job ran on and the coordinator, and the space on the disk that holds the worker's directory, as TMPDIR does by default."
+    ]
+  },
   "workflow_too_large": {
     "why": "A workflow file is read whole, so there is a limit on its size. This one came from a stream, such as standard input, which Meridian stopped reading once it passed the limit.",
     "fix": [
@@ -1253,6 +1356,54 @@
     "why": "A member's settings are given to its backend's driver as JSON, which has no not-a-number or infinite numbers.",
     "fix": [
       "Write the number in the member's settings as a finite one, or as text in quotes."
+    ]
+  },
+  "worker_environment_missing": {
+    "why": "A backend starts meridian worker with the coordinator's address in MERIDIAN_COORDINATOR, and the attempt's bootstrap token in MERIDIAN_BOOTSTRAP_TOKEN, or in a file MERIDIAN_BOOTSTRAP_TOKEN_FILE names, never on its command line. Without them, the worker can't claim an attempt.",
+    "fix": [
+      "Let a backend start meridian worker: people don't run it."
+    ]
+  },
+  "worker_environment_invalid": {
+    "why": "MERIDIAN_COORDINATOR_KEY_SHA256 must be sha256: and 64 hex digits when the coordinator is reached over TLS, and unset when it is a Unix socket; and only one of MERIDIAN_BOOTSTRAP_TOKEN and MERIDIAN_BOOTSTRAP_TOKEN_FILE may be set.",
+    "fix": [
+      "Let a backend start meridian worker, which sets them as it should."
+    ]
+  },
+  "coordinator_peer_refused": {
+    "why": "A worker sends its bootstrap token, and then the attempt's credential, only to a coordinator of its own user's, or root's. On Linux it asks the operating system who serves the socket, and another user does: one who could have put a socket at that path to take the token.",
+    "fix": [
+      "Start the worker with the socket of a coordinator you run, in a directory only you can change."
+    ]
+  },
+  "coordinator_key_mismatch": {
+    "why": "A worker reaches a coordinator over TLS by its key: the backend gives it the SHA-256 hash of the coordinator's public key, and the worker talks only to a server that holds that key, whatever its certificate says. This server holds another.",
+    "fix": [
+      "Check that MERIDIAN_COORDINATOR names the coordinator, or its relay, and that the coordinator's replicas share one key."
+    ]
+  },
+  "bootstrap_token_refused": {
+    "why": "A bootstrap token claims one attempt, once: the coordinator refuses it once the attempt is claimed, by this worker with another credential, or by another, or once its placement is withdrawn. The worker exits, and runs nothing.",
+    "fix": [
+      "Nothing to fix if the attempt was cancelled; otherwise, let the backend start a worker with the attempt's own token."
+    ]
+  },
+  "run_plan_too_new": {
+    "why": "A run's plan is versioned, and a worker runs only a plan of a version it reads, so that it never runs a job without a part of it it doesn't understand. The coordinator refused the claim before it sent anything of the run. No step ran, so the attempt is placed again.",
+    "fix": [
+      "Start workers of the same release of Meridian as the coordinator."
+    ]
+  },
+  "attempt_superseded": {
+    "why": "Every report a worker sends carries the attempt's credential, and the coordinator stores it only while the attempt holds the job. Another attempt of the job superseded this one, or the attempt ended without this worker, as when its lease lapsed. The worker stops the job's steps, without their cleanup: commands, which another attempt could be relying on, and exits.",
+    "fix": [
+      "Nothing to fix: the coordinator decides how the attempt ended, and whether the job runs again."
+    ]
+  },
+  "attempt_lease_lapsed": {
+    "why": "A job whose retry: lists worker-lost can run again while this attempt may still run, cut off, so its worker stops it before its lease lapses: once it hasn't renewed the lease for six tenths of it, it stops every process the attempt started, and by nine tenths has killed them. The coordinator could not be reached for that long. Its new attempt resumes the job, as its retry: asks.",
+    "fix": [
+      "Check the connection between the host the job ran on and the coordinator, and that the job's lease is long enough to ride out the outages you expect."
     ]
   }
 }
