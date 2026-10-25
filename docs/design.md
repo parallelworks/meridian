@@ -176,6 +176,15 @@ files.
 - **A matrix job's output** is the instance's with the highest index, not
   the last to finish's. None of the 14 matrix jobs has `outputs:`, and
   nothing reads a matrix job's outputs.
+- **A matrix instance's `needs.<its job>.outputs` are its own**: those the
+  instance's own steps wrote, as a job reads its own outputs, where
+  ACTIVATE read those of the instances of the job that had finished before
+  it, merged, so that what it read depended on timing. The jobs that need
+  the matrix job still read the instance's with the highest index.
+  ACTIVATE takes the same fix by reading the instance's own outputs, as it
+  reads its own steps. The 14 matrix jobs have 24 reads of `needs`, and
+  none names its own job: all 262 reads of a job's own outputs are in jobs
+  without a matrix.
 - **An `if:` whose value is null is false**, as `docs/expressions.md` says
   conditions go by truthiness, where format 1 ran the job or step. So is
   an `if:` written empty, which is null: format 1 ran its job or step too,
@@ -304,7 +313,7 @@ What an expression can read is its contexts, each a mapping:
 | `remote` | Where a fetched workflow came from, as strings, such as `remote.repo` and `remote.branch`. | Create |
 | `sessions` | The workflow's `sessions:`, by name, as strings, as the session provider gives them. | Create |
 | `env` | The workflow's `env:`, then the job's over it, then the step's over that, and on the worker the variables format 1 defines, such as `PW_JOB_DIR`, over all, as strings. Each reads the ones under it, and the values of its own that don't read `env`; the workflow's reads none. | Start, the workflow's; Step, the job's, the step's and the worker's |
-| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, whose outputs are those its steps without an `id` wrote so far. | Ready |
+| `needs` | For each job this one needs: `needs.<job>.result`, its outcome; `needs.<job>.outputs.<name>`; and `needs.<job>.steps.<id>.outputs.<name>`, as strings. In the job's own steps and outputs, the job itself, or a matrix job's instance, whose outputs are those its steps without an `id` wrote so far. | Ready |
 | `matrix` | The job instance's matrix values. | Ready, once the matrix is expanded |
 | `job` | The job instance: `job.name`, the job's name; `job.key`, the instance's, as in `build#2`; `job.attempt`, from 1; and `job.group` and `job.member`, where it was placed. | Step |
 | `steps` | `steps.<id>.outputs.<name>`, for each step that ran before this one, as strings. | Step |
@@ -1126,7 +1135,9 @@ name, `#` and its index from 0, as in `build#2`.
   has the value of the one with the highest index, so it doesn't depend on
   which finished last, as it does in ACTIVATE and GitHub Actions. No
   workflow can rely on which instance finishes last, so this is made as a
-  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). As format 1
+  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). In an
+  instance's own steps and outputs, `needs.<job>` is the instance, whose
+  outputs are those its own steps wrote, another such fix. As format 1
   reads each instance of a job its dependents need, the job fails for them
   when an instance was skipped because its needs failed, whatever the rest
   did, and is cancelled for them, for `cancelled()`, when an instance was

@@ -1,0 +1,15 @@
+jobs:
+  shard:
+    strategy:
+      matrix:
+        part: [a, b]
+    steps:
+      - if: ${{ needs.shard.outputs.PART == '' }}
+        run: echo PART=${{ matrix.part }} >> $OUTPUTS
+      - run: echo ${{ needs.shard.outputs.PART }}
+    outputs:
+      part: ${{ needs.shard.outputs.PART }}
+  report:
+    needs: [shard]
+    steps:
+      - run: echo ${{ needs.shard.outputs.PART }}
