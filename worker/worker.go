@@ -58,6 +58,10 @@ type Config struct {
 	// nil for nowhere. What it logs as it sets its job up goes to the job's
 	// setup log too.
 	Log *slog.Logger
+
+	// stepEnded, if it is set, is called as each step, or cleanup, has
+	// ended, with the attempt: a test's seam.
+	stepEnded func(a *attempt, step int, cleanup bool)
 }
 
 // DefaultSpoolLimit is how many bytes of logs a worker keeps on disk for
@@ -149,6 +153,8 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 		worker:  worker,
 		events:  newEventQueue(),
 		spool:   newSpool(files, cfg.SpoolLimit),
+
+		stepEnded: cfg.stepEnded,
 	}
 	return a.run(ctx)
 }
