@@ -230,6 +230,12 @@ type inputResolver struct {
 	ignored       []string
 	ignoredValues map[string]any
 	unconverted   map[string]any
+	// ignoredLater holds the inputs that an ignore which read a variable
+	// or a password ignored, whose values the plan holds for Start to drop
+	// (applyConditions), and shapeView the inputs' values without them, as
+	// the jobs' needs: read them (shapeScope).
+	ignoredLater []*field
+	shapeView    map[string]any
 	// start is set when the resolver completes a run's values as it
 	// starts (Start), and nil when it creates the run.
 	start *startState

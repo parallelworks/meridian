@@ -80,6 +80,7 @@ func (r *inputResolver) applyConditions() {
 	for _, f := range r.fields {
 		if f.ignoredLater {
 			f.ignored, later = false, true
+			r.ignoredLater = append(r.ignoredLater, f)
 		}
 	}
 	if later {
@@ -122,6 +123,39 @@ func (r *inputResolver) applyConditions() {
 			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
 		}
 	}
+}
+
+// shapeScope returns the scope that decides the jobs' needs:, as scope
+// does, but with each input an ignore that read a variable or a password
+// ignored read as ignored, as Start reads it once it has decided so again,
+// rather than with the value the plan holds for it. The jobs a job waits
+// for are the run's shape, which the plan shows, as it shows what a needs:
+// that read a password itself decided; so Create and Start decide them
+// alike, and the input's value stays out of the plan.
+func (r *inputResolver) shapeScope() expr.Scope {
+	scope := r.scope()
+	if len(r.ignoredLater) == 0 {
+		return scope
+	}
+	if r.shapeView == nil {
+		values := r.values
+		r.values = jsonvalue.CloneMap(values)
+		for _, f := range r.ignoredLater {
+			f.ignored = true
+			if !f.container || !f.flatten {
+				deletePath(r.values, f.path)
+			}
+		}
+		r.shapeView = r.evalValues()
+		for _, f := range r.ignoredLater {
+			f.ignored = false
+		}
+		r.values = values
+	}
+	contexts := maps.Clone(scope.Contexts)
+	contexts["inputs"] = r.shapeView
+	scope.Contexts = contexts
+	return scope
 }
 
 // condition evaluates one of f's hidden, ignore and optional, which is true

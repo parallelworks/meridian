@@ -142,7 +142,7 @@ func (c *compiler) resolveNeeds(info *jobInfo) {
 		if t, isTemplate := parsed.(*expr.Template); isTemplate {
 			// What decides the run's shape is one group with the inputs'
 			// defaults and conditions, which shares their budget.
-			v, marked, err := t.EvalMarked(c.inputs.scope())
+			v, marked, err := t.EvalMarked(c.inputs.shapeScope())
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				c.reportAt(problems.NeedsNotKnown, loc, problems.Params{"name": u.Name})
 				return

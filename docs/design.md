@@ -973,24 +973,29 @@ each variable of a context, as `vars.*` is, names the context, `org` or
 What decides the run's shape still reads variables when the run is created:
 an input's `hidden`, `ignore` and `optional`, and a job's `needs`. The plan
 holds the run's shape, which inputs the run has and which jobs each job
-waits for, and, for each decision that read a variable or a password,
-where it is, or the job's `needs:` expression; Start decides them again to
-check that nothing changed ([Starting a run](#starting-a-run)). What each
+waits for, and, for each decision that read a variable or a password, where
+it is, or the job's `needs:` expression; Start decides them again to check
+that nothing changed ([Starting a run](#starting-a-run)). What each
 condition decided is in the secret record, not the plan: a workflow could
-otherwise spell a password out into the plan a bit at a time, one
-`hidden:` that tests a character of it for each. Nor does what such an
-`ignore:` decided show in which inputs have values: the plan holds an
-input whose `ignore:` read a variable or a password, and each input in a
-group whose did, out of its values, as private, or as derived when the
-`ignore:` read an input, whatever it decided, and Start drops it if the
-`ignore:` decides so again. The conditions in such a group are each a
-decision, whatever they read, so the plan names the same ones either way;
-a later condition that reads such an input reads what a variable or a
-password decided, and is one too; and whether an input such a decision
-decides about is required, Start decides, so creating the run doesn't
-fail for one value and not another. Which inputs the run ignored the plan
-doesn't name. What a `needs:` decided shows in the jobs' graph, which the
-plan has to hold.
+otherwise spell a password out into the plan a bit at a time, one `hidden:`
+that tests a character of it for each. Nor does what such an `ignore:`
+decided show in which inputs have values: the plan holds an input whose
+`ignore:` read a variable or a password, and each input in a group whose
+did, out of its values, as private, or as derived when the `ignore:` read an
+input, whatever it decided, and Start drops it if the `ignore:` decides so
+again. The conditions in such a group are each a decision, whatever they
+read, so the plan names the same ones either way; a later condition that
+reads such an input reads what a variable or a password decided, and is one
+too; and whether an input such a decision decides about is required, Start
+decides, so creating the run doesn't fail for one value and not another.
+Which inputs the run ignored the plan doesn't name. What a `needs:` decided
+shows in the jobs' graph, which the plan has to hold: a `needs:` that reads
+an input such an `ignore:` ignored reads it as ignored, both as the run is
+created and as it starts, so the graph says what the `ignore:` decided
+there, as it says what a `needs:` that read a password itself decided, while
+the input's value stays out of the plan. So does a matrix that reads such an
+input, which Start expands, in the number of its instances, which are run
+state, while their values are private.
 
 One bit about a variable that isn't a secret still shows: a value given in
 the place of a default that reads one is held as private when it isn't

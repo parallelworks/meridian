@@ -94,7 +94,8 @@ type Run struct {
 	// conditions in such a group are each one, whatever they read; and
 	// whether an input one of them decides about is required, Start
 	// decides. What a job's needs: decided shows in its Needs, as the plan
-	// holds the jobs' graph. A job's needs: that read one is its
+	// holds the jobs' graph, read with each input an ignore that is one
+	// ignored as ignored. A job's needs: that read one is its
 	// Job.NeedsExpr.
 	Decisions []string `json:"decisions,omitempty"`
 	// Env is the workflow's env:.

@@ -1092,3 +1092,70 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 		})
 	}
 }
+
+// A job's needs: and its matrix that read an input which an ignore that
+// read a password or a variable ignored read it as ignored, at Create as at
+// Start, so that the run starts either way: the jobs the run waits for and
+// its matrix's instances are its shape, which the plan and the run show,
+// as they show what a needs: that read a password itself decided. The
+// input's value stays out of the plan, and the instances' values are
+// private.
+func TestShapeReadsIgnoredInputsAsDecided(t *testing.T) {
+	jobs := map[string]string{
+		"needs":  "jobs:\n  a:\n    steps:\n      - run: echo\n  main:\n    needs: '${{ inputs.c == ''kept'' && fromJSON(''[\"a\"]'') || fromJSON(''[]'') }}'\n    steps:\n      - run: echo\n",
+		"matrix": "jobs:\n  main:\n    strategy:\n      matrix:\n        x: '${{ inputs.c == ''kept'' && fromJSON(''[1,2]'') || fromJSON(''[1]'') }}'\n    steps:\n      - run: echo ${{ matrix.x }}\n",
+	}
+	ignores := map[string]string{
+		"a password": "pw: {type: password}\nc: {type: string, default: kept, ignore: '${{ inputs.pw == ''hunter2'' }}'}",
+		"a variable": "c: {type: string, default: kept, ignore: '${{ org.FLAG == ''on'' }}'}",
+	}
+	for what, defs := range ignores {
+		for shape, rest := range jobs {
+			t.Run(what+" "+shape, func(t *testing.T) {
+				var plans []string
+				for _, ignored := range []bool{true, false} {
+					submitted := map[string]any{"pw": "zzz"}
+					vars := testVariables{"org.FLAG": {Value: "off"}}
+					if ignored {
+						submitted["pw"] = "hunter2"
+						vars["org.FLAG"] = compile.Variable{Value: "on"}
+					}
+					if what == "a variable" {
+						submitted = nil
+					}
+					c := createRun(t, workflow(defs, rest), submitted, vars)
+					res, diags := startRun(t, c, vars, compile.StartInput{})
+					if res == nil {
+						t.Fatalf("ignored %v: %v", ignored, diags)
+					}
+					main := &c.Plan.Jobs[slices.IndexFunc(c.Plan.Jobs, func(j plan.Job) bool { return j.Name == "main" })]
+					switch shape {
+					case "needs":
+						if want := !ignored; (len(main.Needs) == 1) != want || main.NeedsExpr.IsZero() {
+							t.Errorf("ignored %v: main needs %v, expression held %v", ignored, main.Needs, !main.NeedsExpr.IsZero())
+						}
+						// The jobs it waits for are all that differs.
+						main.Needs = nil
+					case "matrix":
+						x := res.Expansions["main"]
+						want := 2
+						if ignored {
+							want = 1
+						}
+						if x == nil || len(x.Instances) != want || slices.ContainsFunc(x.Instances, func(in plan.Instance) bool { return !in.Private }) {
+							t.Errorf("ignored %v: expansion %+v, want %d private instances", ignored, x, want)
+						}
+					}
+					data, err := plan.Encode(c.Plan)
+					if err != nil {
+						t.Fatal(err)
+					}
+					plans = append(plans, string(data))
+				}
+				if plans[0] != plans[1] {
+					t.Errorf("the plans differ but for the jobs main waits for:\n%s\n%s", plans[0], plans[1])
+				}
+			})
+		}
+	}
+}
