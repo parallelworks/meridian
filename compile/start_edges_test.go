@@ -455,8 +455,9 @@ func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
 	}
 }
 
-// detailInputs gives a platform input's mapping with an id, as a platform's
-// Inputs resolver gives a resource's details for what names it.
+// detailInputs gives a platform input's mapping with an id, and an id
+// made from each of its parts, as a platform's Inputs resolver gives a
+// resource's details for what names it.
 type detailInputs struct{}
 
 func (detailInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
@@ -466,17 +467,25 @@ func (detailInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error)
 	}
 	out := map[string]any{"id": "rid"}
 	maps.Copy(out, m)
+	for k, x := range m {
+		out[k+"_id"] = fmt.Sprint("id-", x)
+	}
 	return out, nil
 }
 
 // A part of a platform input's value typed over a part of its default that
-// reads a variable is private, or a secret if the variable is one, though
-// the Inputs resolver changed the value: neither the plan's Inputs nor what
-// it holds of the value as it was submitted (plan.Run.Unresolved) holds the
-// part, and Start puts it back in both.
+// reads a variable is private, or a secret if the variable is one; and as
+// what the Inputs resolver gives can't be split by the parts that made it,
+// as an id made from the part, the whole value is: neither the plan's
+// Inputs nor what it holds of the value as it was submitted
+// (plan.Run.Unresolved) has any of it, and Start reads it as the resolver
+// gave it.
 func TestUnresolvedHoldsNoPrivatePart(t *testing.T) {
 	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "plain"}}
-	for _, typ := range []string{"kubernetes-clusters", "storage", "bucket", "organization-groups"} {
+	for _, typ := range []string{
+		"kubernetes-clusters", "storage", "bucket", "organization-groups",
+		"region, csp: aws", "slurm-partitions, resource: '${{ inputs.c }}'", "kubernetes-namespaces, clusterName: c",
+	} {
 		for _, variable := range []string{"vars.V", "vars.S"} {
 			t.Run(typ+" "+variable, func(t *testing.T) {
 				src := workflow("k: {type: " + typ + ", optional: true, default: {name: k1, token: '${{ " + variable + " }}'}}")
@@ -489,25 +498,23 @@ func TestUnresolvedHoldsNoPrivatePart(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(string(data), "TYPED") {
-					t.Errorf("the plan holds the part typed over the variable: %s", data)
-				}
-				if len(c.Plan.Run.Unresolved) != 1 {
-					t.Errorf("Unresolved = %v, want the value as it was submitted", c.Plan.Run.Unresolved)
+				if strings.Contains(string(data), "TYPED") || strings.Contains(string(data), "rid") {
+					t.Errorf("the plan holds the value, or what the resolver made of it: %s", data)
 				}
 				names := c.Plan.Run.Private
 				if variable == "vars.S" {
 					names = c.Plan.Run.Secrets
 				}
-				if !slices.Contains(names, "inputs.k.token") {
-					t.Errorf("the plan names %v as private and %v as secrets, want inputs.k.token among the %s", c.Plan.Run.Private, c.Plan.Run.Secrets, variable)
+				if !slices.Contains(names, "inputs.k") {
+					t.Errorf("the plan names %v as private and %v as secrets, want inputs.k among the %s", c.Plan.Run.Private, c.Plan.Run.Secrets, variable)
 				}
 				res, sd := startRun(t, c, vars, compile.StartInput{Inputs: detailInputs{}})
 				if res == nil {
 					t.Fatal(sd)
 				}
-				if got := canonical(t, res.Run.Inputs.Get()); got != `{"k":{"id":"rid","name":"k1","token":"TYPED"}}` {
-					t.Errorf("the run's inputs are %s, want the resolved value with the part", got)
+				want := `{"k":{"id":"rid","name":"k1","name_id":"id-k1","token":"TYPED","token_id":"id-TYPED"}}`
+				if got := canonical(t, res.Run.Inputs.Get()); got != want {
+					t.Errorf("the run's inputs are %s, want %s", got, want)
 				}
 			})
 		}

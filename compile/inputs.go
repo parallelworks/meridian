@@ -345,22 +345,12 @@ func (r *inputResolver) deferredFields() []*field {
 
 // unresolvedData returns the values of the inputs the plan keeps, kept,
 // that the Inputs resolver changed, as they were submitted
-// (plan.Run.Unresolved): none the plan doesn't keep, as a private one, and
-// of each, none of the parts it doesn't, as one typed over a part of a
-// default that reads a variable, which the secret record holds, and Start
-// puts back in both.
+// (plan.Run.Unresolved): none the plan doesn't keep, as a private one.
 func (r *inputResolver) unresolvedData(kept map[string]any) map[string]plan.Data {
 	var out map[string]plan.Data
 	for name, v := range r.unresolved {
-		path := plan.SplitPath(name)
-		if _, ok := jsonptr.Lookup(kept, path); !ok {
+		if _, ok := jsonptr.Lookup(kept, plan.SplitPath(name)); !ok {
 			continue
-		}
-		v = jsonvalue.Clone(v)
-		for _, p := range r.held {
-			if len(p.path) > len(path) && isPrefix(path, p.path) {
-				clearPath(v, p.path[len(path):])
-			}
 		}
 		if out == nil {
 			out = map[string]plan.Data{}

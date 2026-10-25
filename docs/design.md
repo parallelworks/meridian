@@ -682,10 +682,12 @@ ACTIVATE's launch form and its backend do together:
   (`Run.Unresolved`), until it has decided the run's shape; what reads it
   after, the jobs among them, reads it as the resolver gave it. A value
   the secret record holds, as one typed over a default that reads a
-  password, Start reads as the resolver gave it; a part of one, as a part
-  typed over a part of a default that reads a variable, the plan holds in
-  neither, and Start puts it back in both. The local resolver gives back
-  what it is given.
+  password, Start reads as the resolver gave it. What the resolver gives
+  can't be split by the parts of the value that made it, so a value of
+  which a part isn't the plan's, as a part typed over a part of a default
+  that reads a variable, is held whole: private, or a secret if a part read
+  one, in neither the plan's values nor `Run.Unresolved`. The local
+  resolver gives back what it is given.
   Anything else that doesn't fit the input's type is an error,
   as is a number outside its `min` and `max`, or a choice that isn't one of
   a dropdown's options when they are written in the workflow. A value for an
