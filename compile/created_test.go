@@ -82,7 +82,9 @@ jobs:
 		"inputs.config":       {Name: "inputs.config", Location: "/on/execute/inputs/config/default", Default: true},
 		"inputs.hosts.0.zone": {Name: "inputs.hosts.0.zone", Location: "/on/execute/inputs/hosts/template/zone/default", Index: []int{0}, Default: true},
 		"inputs.hosts.1.zone": {Name: "inputs.hosts.1.zone", Location: "/on/execute/inputs/hosts/template/zone/default", Index: []int{1}, Default: true},
-		"inputs.choice":       {Name: "inputs.choice", Location: "/on/execute/inputs/choice/options/0"},
+		// The form sent the option's text, which what it reads of the
+		// value reads.
+		"inputs.choice": {Name: "inputs.choice", Location: "/on/execute/inputs/choice/options/0", Text: true},
 	}
 	if !reflect.DeepEqual(parts, want) {
 		t.Errorf("parts %v, want %v", parts, want)

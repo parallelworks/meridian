@@ -44,6 +44,12 @@ type field struct {
 	// starts in its place. dflt holds what is evaluated then.
 	deferred, variable bool
 	dflt               plan.Value
+	// nullBefore is set for one whose value was null when its default was
+	// evaluated, as a list's default row can make it, and textBefore for
+	// one whose value was its default's text, as a form sends it, which a
+	// default that gives nothing leaves, and what the default reads of
+	// the value reads.
+	nullBefore, textBefore bool
 	// secretWhole is set for a list, a group or a wizard step with a
 	// password among its inputs, whose value, or one of whose rows, is
 	// evaluated as the run starts: the plan can't say which of its values

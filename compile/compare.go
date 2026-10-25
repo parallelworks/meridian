@@ -9,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -80,6 +81,11 @@ func (r *inputResolver) compare(f *field) {
 			}
 			part := lookup(value, path)
 			i := slices.IndexFunc(gave, func(res comparison) bool { return res.ok && sameValue(part, res.v) })
+			if i >= 0 && r.readsPart(c.locs[i], f.index, slices.Concat(f.path, path)) {
+				// What reads the part gives it, whatever it is, so it isn't
+				// what made it.
+				i = -1
+			}
 			switch {
 			case i >= 0:
 				if loc := c.locs[i]; r.reads(loc, false) {
@@ -97,6 +103,36 @@ func (r *inputResolver) compare(f *field) {
 			}
 		}
 	}
+}
+
+// readsPart reports whether what is at loc in the workflow, for the list
+// rows at index, reads the inputs' value at path: itself, or through a
+// value an evaluation made from it, as a default that reads another input
+// whose default reads it does.
+func (r *inputResolver) readsPart(loc []string, index []int, path []string) bool {
+	exprs, err := r.workflow.Exprs(loc)
+	if err != nil {
+		return false
+	}
+	patterns := readPatterns(exprs, index)
+	seen := map[*evaluation]bool{}
+	for len(patterns) > 0 {
+		p := patterns[len(patterns)-1]
+		patterns = patterns[:len(patterns)-1]
+		if reach.Reaches(p, path) {
+			return true
+		}
+		for e := range r.gave.Reached(p) {
+			if seen[e] {
+				continue
+			}
+			seen[e] = true
+			if exprs, err := r.workflow.Exprs(e.loc); err == nil {
+				patterns = append(patterns, readPatterns(exprs, e.f.index)...)
+			}
+		}
+	}
+	return false
 }
 
 // A comparison is what a string in the workflow gave, if it gave one,

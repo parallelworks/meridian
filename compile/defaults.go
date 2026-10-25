@@ -126,6 +126,9 @@ func (r *inputResolver) prepare(f *field) bool {
 func (r *inputResolver) evalPending(f *field) {
 	if f.texts == nil {
 		loc := appendPath(f.loc, "default")
+		before, ok := jsonptr.Lookup(r.values, f.path)
+		f.nullBefore = ok && before == nil
+		f.textBefore = ok && before != nil && before == f.def["default"]
 		switch v, read, err := r.evalRead(loc, f.index); {
 		case expr.IsUnknown(err):
 			r.deferPart(f, nil, loc, f.def["default"], false)
@@ -182,6 +185,7 @@ func (r *inputResolver) noteEvaluation(f *field, path, loc []string, raw any) {
 	for _, p := range readPatterns(exprs, f.index) {
 		r.evaluated.Add(p, e)
 	}
+	r.gave.Add(slices.Concat(f.path, path), e)
 }
 
 // setDefault sets f's value to its default, unless the default is "", which

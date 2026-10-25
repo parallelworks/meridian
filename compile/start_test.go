@@ -732,6 +732,8 @@ func TestStartCallerMistakes(t *testing.T) {
 		"a password the plan doesn't name": {Record: compile.Record{Passwords: map[string]any{"inputs.other": "x"}}},
 		"a private value it doesn't name":  {Record: compile.Record{Private: map[string]any{"inputs.pw": "x"}}},
 		"a name of no input":               {Record: compile.Record{Passwords: map[string]any{"pw": "x"}}},
+		// The plan names the password, which Start doesn't evaluate.
+		"no password the plan names": {},
 	} {
 		if _, _, err := compile.Start(t.Context(), c.Plan, in); err == nil {
 			t.Errorf("%s: no error", name)

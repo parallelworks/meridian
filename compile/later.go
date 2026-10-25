@@ -27,6 +27,12 @@ type laterPart struct {
 	loc      []string
 	index    []int
 	dflt     bool
+	// containers is how many of the mappings on the way to a default the
+	// input's value didn't have (plan.DeferredPart.Containers); null is
+	// set for one whose value was null before it (Null), and text for a
+	// form's text for the expression (Text).
+	containers int
+	null, text bool
 }
 
 // evaluatedLater reports whether f's value is evaluated as the run starts,
@@ -130,7 +136,8 @@ func (r *inputResolver) deferPart(f *field, path, loc []string, raw any, variabl
 	// means the default (missing).
 	n := len(f.loc)
 	dflt := len(path) == 0 && len(loc) == n+1 && loc[n] == "default" && slices.Equal(loc[:n], f.loc)
-	in.addLater(laterPart{path: at, v: v, variable: variable, loc: loc, index: f.index, dflt: dflt})
+	text := dflt && f.textBefore || slices.ContainsFunc(f.texts, func(t text) bool { return slices.Equal(t.path, path) })
+	in.addLater(laterPart{path: at, v: v, variable: variable, loc: loc, index: f.index, dflt: dflt, null: dflt && f.nullBefore, text: text})
 	if variable {
 		r.mark(slices.Concat(f.path, path))
 	}
@@ -167,11 +174,20 @@ func (r *inputResolver) holdLater() {
 		if f.later == nil {
 			continue
 		}
-		held := jsonvalue.Clone(lookup(r.values, f.path))
+		value := lookup(r.values, f.path)
+		held := jsonvalue.Clone(value)
 		for _, c := range passwords[f] {
 			deletePath(held, c.path[len(f.path):])
 		}
-		for _, p := range f.later {
+		for i, p := range f.later {
+			// Holding a default can make the mappings on the way to it,
+			// which the value didn't have.
+			for n := len(p.path) - 1; p.dflt && n > 0; n-- {
+				if _, ok := jsonptr.Lookup(value, p.path[:n]); ok {
+					break
+				}
+				f.later[i].containers++
+			}
 			// A part that is the value of a list, a group or a step with a
 			// password among its inputs, or one of a list's rows, holds
 			// passwords the plan can't name.

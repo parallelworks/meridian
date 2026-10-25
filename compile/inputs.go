@@ -192,7 +192,9 @@ type inputResolver struct {
 	// evaluated holds the parts of the values that evaluations gave, by the
 	// patterns (reach.Patterns) of the paths of the values they read.
 	evaluated reach.Trie[*evaluation]
-	fields    []*field
+	// gave holds the same evaluations by the paths of the parts they gave.
+	gave   reach.Trie[*evaluation]
+	fields []*field
 	// rows are the fields of lists' rows: each field of a list's template,
 	// once for each row.
 	rows []*field
@@ -329,10 +331,13 @@ func (r *inputResolver) deferredParts() []plan.DeferredPart {
 		}
 		for _, p := range parts {
 			out = append(out, plan.DeferredPart{
-				Name:     plan.JoinPath(slices.Concat([]string{"inputs"}, f.path, p.path)...),
-				Location: jsonptr.Format(p.loc),
-				Index:    slices.Clone(p.index),
-				Default:  p.dflt,
+				Name:       plan.JoinPath(slices.Concat([]string{"inputs"}, f.path, p.path)...),
+				Location:   jsonptr.Format(p.loc),
+				Index:      slices.Clone(p.index),
+				Default:    p.dflt,
+				Text:       p.text,
+				Null:       p.null,
+				Containers: p.containers,
 			})
 		}
 	}

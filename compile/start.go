@@ -129,14 +129,16 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	if p == nil || p.Version != plan.Version {
 		return nil, nil, errors.New("compile: Start needs a plan of this release's version")
 	}
-	st := &starter{ctx: ctx, p: p, in: in, failed: map[*field]bool{}}
+	st := &starter{ctx: ctx, p: p, in: in, failed: map[*field]bool{}, pending: map[*field]int{}, emptied: map[*field][]laterPart{}, above: map[*field]int{}}
 	if err := st.readVariables(); err != nil {
 		return nil, nil, err
 	}
 	if err := st.restore(); err != nil {
 		return nil, nil, err
 	}
-	st.evaluate()
+	if err := st.evaluate(); err != nil {
+		return nil, nil, err
+	}
 	if err := st.checkDecisions(); err != nil {
 		return nil, nil, err
 	}
@@ -199,8 +201,16 @@ type starter struct {
 	// envKeys are the workflow's env: names, in order.
 	envKeys []string
 	// failed holds the inputs a part of whose value failed to evaluate,
-	// which aren't checked then.
-	failed map[*field]bool
+	// which aren't checked then; pending, how many parts of each input's
+	// value Start has yet to evaluate; emptied, the defaults among them
+	// that gave no value, whose containers Start removes once the input's
+	// parts are evaluated, if they are empty; and above, how many of the
+	// mappings on the way to each input held for Start the plan's values
+	// didn't have, which holding it made.
+	failed  map[*field]bool
+	pending map[*field]int
+	emptied map[*field][]laterPart
+	above   map[*field]int
 	// converted holds the values of the inputs the compiler converted, as
 	// it converted them, by their paths, which Start reads as they were
 	// given until it has decided the run's shape (plan.Run.Unconverted).
@@ -396,6 +406,12 @@ func (st *starter) restore() error {
 			return fmt.Errorf("compile: the plan holds the input %s for Start, which its definitions don't have", name)
 		}
 		holders.Add(f.path, f)
+		for n := len(f.path) - 1; n > 0; n-- {
+			if _, ok := jsonptr.Lookup(values, f.path[:n]); ok {
+				break
+			}
+			st.above[f]++
+		}
 		if err := setGrow(values, f.path, p.Run.DeferredInputs[name].Written()); err != nil {
 			return err
 		}
@@ -430,6 +446,7 @@ func (st *starter) restore() error {
 			return err
 		}
 	}
+
 	r.values = values
 
 	// What is private and what is a secret are marked by the names the
@@ -473,8 +490,9 @@ func (st *starter) restore() error {
 		if f == nil {
 			return fmt.Errorf("compile: the plan's part %s is in no input it holds for Start", part.Name)
 		}
-		f.addLater(laterPart{path: path[1+len(f.path):], loc: loc, index: slices.Clone(part.Index), dflt: part.Default})
+		f.addLater(laterPart{path: path[1+len(f.path):], loc: loc, index: slices.Clone(part.Index), dflt: part.Default, text: part.Text, null: part.Null, containers: part.Containers})
 		parted[f] = true
+		st.pending[f]++
 	}
 	for _, f := range r.fields {
 		if parted[f] {
@@ -498,6 +516,36 @@ func (st *starter) restore() error {
 	if len(st.deferred) != len(held) {
 		return errors.New("compile: the plan holds an input for Start without any of its parts")
 	}
+	// Every value the plan names that Start doesn't evaluate is in the
+	// secret record.
+	for _, from := range []struct {
+		names  []string
+		values map[string]any
+	}{{p.Run.Secrets, st.in.Record.Passwords}, {p.Run.Private, st.in.Record.Private}} {
+		for _, name := range from.names {
+			path := plan.SplitPath(name)
+			if _, ok := from.values[name]; ok || path[0] != "inputs" {
+				continue
+			}
+			if !slices.ContainsFunc(held, func(h string) bool {
+				at := plan.SplitPath(h)
+				return isPrefix(at, path[1:]) || isPrefix(path[1:], at)
+			}) {
+				return fmt.Errorf("compile: the secret record holds no value of %s, which the plan names", name)
+			}
+		}
+	}
+	// The rows of each list are known as they were to the compiler, which
+	// read a row's field that has no value as null (evalValues): those of a
+	// list Start evaluates a part of it collects again once it has
+	// (fillRows).
+	var collect func(fields []*field)
+	collect = func(fields []*field) {
+		for _, f := range fields {
+			collect(r.collectRows(f))
+		}
+	}
+	collect(r.fields)
 
 	st.envKeys = slices.Sorted(maps.Keys(p.Run.Env))
 	st.s.pendingEnv = map[string]bool{}
@@ -547,6 +595,15 @@ func isPrefix(prefix, path []string) bool {
 	return len(prefix) <= len(path) && slices.Equal(prefix, path[:len(prefix)])
 }
 
+// setOfFields returns the set of fields.
+func setOfFields(fields []*field) map[*field]bool {
+	set := make(map[*field]bool, len(fields))
+	for _, f := range fields {
+		set[f] = true
+	}
+	return set
+}
+
 // setOf returns the set of the strings list holds.
 func setOf(list []string) map[string]bool {
 	set := make(map[string]bool, len(list))
@@ -567,17 +624,21 @@ type startNode struct {
 // evaluate evaluates what the plan holds for Start, the parts of the
 // inputs' values and the workflow's env:, each once, in the order they
 // read each other, as the compiler fills in the inputs (pendingFields):
-// one is evaluated once nothing its expressions read waits any longer. One
-// that reads what waits through a definition, as a relative reference
-// does, which the order can't see, is evaluated again once what it read
-// is, in another round. What is left once a round evaluates nothing reads
-// itself, or each other.
-func (st *starter) evaluate() {
+// one is evaluated once nothing its expressions read waits any longer,
+// what they read through a definition, as a relative reference does,
+// among it (nodeExprs). One that reads what waits in a way the order can't
+// see is evaluated again once what it read is, in another round. What is
+// left once a round evaluates nothing reads itself, or each other. It
+// returns ctx's error once ctx is done.
+func (st *starter) evaluate() error {
 	for {
 		nodes := st.pendingNodes()
 		if len(nodes) == 0 || !st.evaluateInOrder(nodes) {
 			break
 		}
+	}
+	if err := st.ctx.Err(); err != nil {
+		return err
 	}
 	var left []string
 	for _, n := range st.pendingNodes() {
@@ -590,6 +651,7 @@ func (st *starter) evaluate() {
 	if len(left) > 0 {
 		st.report(problems.ValuesReadEachOther, "", problems.Params{"names": problems.QuoteAll(left)})
 	}
+	return nil
 }
 
 // pendingNodes returns what Start has yet to evaluate, in order: the
@@ -668,6 +730,9 @@ func (st *starter) evaluateInOrder(nodes []startNode) bool {
 	done := make([]bool, len(nodes))
 	progress := false
 	for ready.Len() > 0 {
+		if st.ctx.Err() != nil {
+			return false
+		}
 		i := heap.Pop(&ready).(int)
 		if !st.evalNode(nodes[i]) {
 			continue
@@ -680,6 +745,9 @@ func (st *starter) evaluateInOrder(nodes []startNode) bool {
 		}
 	}
 	for i, n := range nodes {
+		if st.ctx.Err() != nil {
+			return false
+		}
 		if !done[i] && st.evalNode(n) {
 			progress = true
 		}
@@ -687,7 +755,8 @@ func (st *starter) evaluateInOrder(nodes []startNode) bool {
 	return progress
 }
 
-// nodeExprs returns the expressions n evaluates, and the list rows they
+// nodeExprs returns the expressions n evaluates, and those of what they
+// read through a definition (throughDefinitions), and the list rows they
 // are for.
 func (st *starter) nodeExprs(n startNode) ([]*expr.Expr, []int) {
 	if n.f == nil {
@@ -698,7 +767,51 @@ func (st *starter) nodeExprs(n startNode) ([]*expr.Expr, []int) {
 	if err != nil {
 		return nil, nil
 	}
-	return exprs, p.index
+	return st.r.throughDefinitions(exprs, p.loc), p.index
+}
+
+// throughDefinitions returns exprs, the expressions at loc in the
+// workflow, with those of what their relative references read, and of
+// what those read in turn: what evaluating them reads through a
+// definition, as ..region.default reads what the default of region does.
+// One that reads into a mapping is taken as at the mapping.
+func (r *inputResolver) throughDefinitions(exprs []*expr.Expr, loc []string) []*expr.Expr {
+	type at struct {
+		exprs []*expr.Expr
+		loc   []string
+	}
+	out := exprs
+	seen := map[string]bool{jsonptr.Format(loc): true}
+	queue := []at{{exprs, loc}}
+	for len(queue) > 0 {
+		q := queue[0]
+		queue = queue[1:]
+		for _, e := range q.exprs {
+			for _, rel := range e.Relatives() {
+				if rel.Up > len(q.loc) {
+					continue
+				}
+				base := len(q.loc) - rel.Up
+				target := slices.Concat(q.loc[:base], rel.Path)
+				// What it reads is at the target, or in a string on the way.
+				for n := len(target); n > base; n-- {
+					if _, ok := jsonptr.Lookup(r.doc.Value, target[:n]); !ok {
+						continue
+					}
+					if k := jsonptr.Format(target[:n]); !seen[k] {
+						seen[k] = true
+						found, err := r.workflow.Exprs(target[:n])
+						if err == nil && len(found) > 0 {
+							out = append(slices.Clip(out), found...)
+							queue = append(queue, at{found, target[:n]})
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // evalNode evaluates n, if it is still to be, and reports whether it did,
@@ -737,31 +850,88 @@ func waits(err error) bool {
 func (st *starter) evalPart(f *field, i int) bool {
 	r := st.r
 	p := f.later[i]
+	path := slices.Concat(f.path, p.path)
+	// What reads the value it gives reads it as the compiler's evaluation
+	// did, rather than as what isn't known yet: a form's text as it is, and
+	// what was missing as null.
+	r.scope()
+	self := false
+	if v, ok := jsonptr.Lookup(r.view, path); ok {
+		if _, unknown := v.(expr.Unknown); unknown {
+			var was any
+			if p.text {
+				was = lookup(r.doc.Value, p.loc)
+			}
+			setIn(r.view, path, was)
+			r.evaluators, self = nil, true
+		}
+	}
 	v, read, err := r.evalRead(p.loc, p.index)
 	switch {
 	case waits(err):
+		if self {
+			r.refresh(path)
+		}
 		return false
 	case err != nil:
+		if self {
+			r.refresh(path)
+		}
 		st.reportEval(p.loc, err, read)
 		f.later[i].variable = true
 		st.failed[f] = true
+		st.pending[f]--
 		return true
 	}
-	path := slices.Concat(f.path, p.path)
 	f.later[i].variable = true
-	if p.dflt && (v == nil || v == "") {
+	switch {
+	case p.dflt && (v == nil || v == "") && (p.null || p.text):
 		// A default of "" or null gives no value, as when the run is
-		// created (setDefault).
+		// created (setDefault), and leaves the value as it was: null, or
+		// the form's text.
+		var was any
+		if p.text {
+			was = lookup(r.doc.Value, p.loc)
+		}
+		r.set(path, was)
+	case p.dflt && (v == nil || v == ""):
 		r.remove(path)
-	} else {
+		if p.containers > 0 || len(p.path) == 0 && st.above[f] > 0 {
+			st.emptied[f] = append(st.emptied[f], f.later[i])
+		}
+	default:
 		// A copy, as the value can be part of what the evaluation read.
 		r.set(path, jsonvalue.Clone(v))
 	}
 	st.s.made(r, path, read)
-	if !slices.ContainsFunc(f.later, func(p laterPart) bool { return !p.variable }) {
+	if st.pending[f]--; st.pending[f] == 0 {
+		st.removeEmpty(f)
 		st.fillRows(f)
 	}
 	return true
+}
+
+// removeEmpty removes the mappings on the way to each default of f's value
+// that gave no value, which the plan held only to hold it, that are empty
+// now (plan.DeferredPart.Containers), as the compiler never made them; and
+// for one that is all of f's value, those on the way to f that holding f
+// made.
+func (st *starter) removeEmpty(f *field) {
+	for _, p := range st.emptied[f] {
+		path := slices.Concat(f.path, p.path)
+		levels := p.containers
+		if len(p.path) == 0 {
+			levels = st.above[f]
+		}
+		for n := 1; n <= levels; n++ {
+			at := path[:len(path)-n]
+			if m, ok := lookup(st.r.values, at).(map[string]any); !ok || len(m) > 0 {
+				break
+			}
+			st.r.remove(at)
+		}
+	}
+	delete(st.emptied, f)
 }
 
 // evalEnv evaluates the workflow's env: value k, and reports whether it
@@ -1034,8 +1204,9 @@ func (st *starter) checkInputs() {
 			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
 		}
 	}
+	evaluated := setOfFields(st.deferred)
 	for _, c := range r.rows {
-		if c.typ == "password" {
+		if c.typ == "password" && evaluated[c.in] {
 			r.checkField(c, false)
 		}
 	}

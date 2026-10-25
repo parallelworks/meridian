@@ -163,6 +163,22 @@ type DeferredPart struct {
 	// rows, all of the value it gives: one that gives "" or null gives no
 	// value, as when the run is created.
 	Default bool `json:"default,omitzero"`
+	// Text is set for a form's text for the expression, which the run was
+	// given in its place: what the expression reads of the value it gives
+	// reads the text, as when the run was created, where what a default
+	// reads of the value it gives reads none.
+	Text bool `json:"text,omitzero"`
+	// Null is set for a default whose input's value was null before it,
+	// as a list's default row can make a field's: one that gives no value
+	// leaves it null, as when the run was created, where another leaves
+	// none.
+	Null bool `json:"null,omitzero"`
+	// Containers is how many of the mappings on the way to a default, from
+	// the innermost, the run's values didn't have, as a group of a row
+	// whose fields had no values, which DeferredInputs holds only to hold
+	// it: one left empty once the defaults in it give no value isn't
+	// there, as it wasn't when the run was created.
+	Containers int `json:"containers,omitzero"`
 }
 
 // Limits are Meridian's limits on a run's size, which whoever runs the

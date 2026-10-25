@@ -1,6 +1,8 @@
 package compile_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -181,5 +183,174 @@ func TestStartRestoresPrivateAroundPasswords(t *testing.T) {
 	_, state := res.Run.Split()
 	if strings.Contains(canonical(t, state), "HUNTER2") {
 		t.Errorf("the run state holds the password: %s", canonical(t, state))
+	}
+}
+
+// What Start evaluates reads a list's rows as Create's evaluations read
+// them, a row's field that has no value as null, so an expression gives
+// the same whether Create evaluates it, as it reads nothing held, or Start
+// does, as it reads a secret too; a row's default held for Start reads
+// them so too; and a condition that reads such a value decides as it did.
+func TestStartReadsRowsAsCreateDid(t *testing.T) {
+	submitted := map[string]any{"l": []any{map[string]any{"u": "a", "p": "x"}, map[string]any{"u": "b"}}}
+	vars := testVariables{"vars.S": {Value: "", Secret: true}, "vars.V": {Value: ""}}
+	src := workflow(`l: {type: list, template: {u: {type: string}, p: {type: string, optional: true}, h: {type: string, optional: true, default: '${{ join(inputs.l.*.p, ",") }}'}, hs: {type: string, optional: true, default: '${{ join(inputs.l.*.p, ",") }}${{ vars.S }}'}}}
+c: {type: string, default: '${{ join(inputs.l.*.p, ",") }}'}
+cs: {type: string, default: '${{ join(inputs.l.*.p, ",") }}${{ vars.S }}'}
+j: {type: string, default: '${{ toJSON(inputs.l) }}'}
+js: {type: string, default: '${{ toJSON(inputs.l) }}${{ vars.S }}'}`)
+	_, res, diags := started(t, src, submitted, vars)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	v := res.Run.Inputs.Get().(map[string]any)
+	if v["c"] != "x," || v["cs"] != v["c"] || v["js"] != v["j"] {
+		t.Errorf("Create gave %q and %q, Start %q and %q", v["c"], v["j"], v["cs"], v["js"])
+	}
+	for _, row := range v["l"].([]any) {
+		if r := row.(map[string]any); r["h"] != "x," || r["hs"] != r["h"] {
+			t.Errorf("row %v", r)
+		}
+	}
+	src = workflow(`l: {type: list, template: {u: {type: string}, p: {type: string, optional: true}}}
+c: {type: string, hidden: true, default: '${{ join(inputs.l.*.p, ",") }}${{ vars.V }}'}
+x: {type: string, optional: true, ignore: '${{ inputs.c == "x," }}'}`)
+	if _, res, diags := started(t, src, submitted, vars); res == nil {
+		t.Errorf("the run didn't start: %v", diags)
+	}
+}
+
+// A default that reads the value it gives reads it as Create read it, with
+// none, rather than waiting for itself, whether what else it reads is a
+// secret or not; and a form's text for it reads the text, as Create did.
+func TestStartSelfReadingDefault(t *testing.T) {
+	src := workflow(`a: {type: string, default: '${{ inputs.a }}-${{ vars.S }}'}`)
+	for _, secret := range []bool{true, false} {
+		_, res, diags := started(t, src, nil, testVariables{"vars.S": {Value: "s", Secret: secret}})
+		if res == nil || res.Run.Inputs.Get().(map[string]any)["a"] != "-s" {
+			t.Errorf("secret %v: %v, %v", secret, res, diags)
+		}
+	}
+	src = workflow(`pw: {type: password, optional: true}
+l: {type: list, template: {u: {type: string}, h: {type: string, optional: true, default: '${{ toJSON(inputs.l[index]) }}${{ inputs.pw }}'}}}`)
+	text := "${{ toJSON(inputs.l[index]) }}${{ inputs.pw }}"
+	_, res, diags := started(t, src, map[string]any{"pw": "p", "l": []any{map[string]any{"u": "a", "h": text}}}, nil)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	h, _ := res.Run.Inputs.Get().(map[string]any)["l"].([]any)[0].(map[string]any)["h"].(string)
+	if !strings.Contains(h, `"h": "${{ toJSON`) {
+		t.Errorf("h is %q, which doesn't read the form's text", h)
+	}
+}
+
+// A submitted value that a default which reads it gives back, as one that
+// reads another input whose default reads the first does, isn't what the
+// default made, whatever it gives: it is kept, and the run starts with it,
+// rather than with two defaults that wait for each other.
+func TestStartKeepsWhatADefaultReadsOfItself(t *testing.T) {
+	src := workflow(`pw: {type: password, optional: true}
+a: {type: number, optional: true, default: '${{ inputs.k }}'}
+k: {type: string, hidden: true, default: '${{ inputs.pw == ''zz'' && ''y'' || inputs.a }}'}`)
+	_, res, diags := started(t, src, map[string]any{"pw": "p", "a": "7"}, nil)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	if v := res.Run.Inputs.Get().(map[string]any); fmt.Sprint(v["a"]) != "7" || v["k"] != "7" {
+		t.Errorf("inputs %v", v)
+	}
+}
+
+// A default that gives no value leaves what was there, as when the run was
+// created: null a list's default row gave, and no mapping that the plan
+// held only to hold it, a row's group or a wizard step.
+func TestStartLeavesWhatADefaultDoesnt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+		want      string
+	}{
+		"null from a default row": {
+			defs: `pw: {type: password, optional: true}
+l: {type: list, optional: true, default: [{u: plain, h: '${{ inputs.pw }}'}], template: {u: {type: string, optional: true}, p: {type: password, optional: true}, h: {type: string, optional: true, default: '${{ inputs.l.[index].p }}'}}}`,
+			want: `{"l":[{"h":null,"u":"plain"}]}`,
+		},
+		"a row's group": {
+			defs:      `l: {type: list, template: {u: {type: string}, grp: {type: group, items: {gq: {type: password, optional: true}, gh: {type: string, optional: true, default: '${{ inputs.l[index].grp.gq }}'}}}}}`,
+			submitted: map[string]any{"l": []any{map[string]any{"u": "a"}}},
+			want:      `{"l":[{"u":"a"}]}`,
+		},
+		"a wizard step": {
+			defs: `s: {type: step, title: S, options: {sp: {type: password, optional: true}, sx: {type: string, optional: true, default: '${{ inputs.s.sp }}'}}}`,
+			want: `{}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, res, diags := started(t, workflow(tc.defs), tc.submitted, nil)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			if got := canonical(t, res.Run.Inputs.Get()); got != tc.want {
+				t.Errorf("inputs %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// Parts that read each other only through a definition, a relative
+// reference to a default that reads the next part, are evaluated in the
+// order they read each other, each once, so each reading a large input
+// spends no more of the run's budget than Create did.
+func TestStartRelativeChain(t *testing.T) {
+	const n = 100
+	var b strings.Builder
+	b.WriteString("big: {type: string, optional: true}\n")
+	for i := range n {
+		fmt.Fprintf(&b, "x%04d: {type: string, default: '${{ length(toJSON(inputs.big)) }}${{ ..h%04d.default }}${{ vars.S }}'}\n", i, i)
+		if i < n-1 {
+			fmt.Fprintf(&b, "h%04d: {type: string, optional: true, hidden: true, default: '${{ inputs.x%04d }}'}\n", i, i+1)
+		}
+	}
+	fmt.Fprintf(&b, "h%04d: {type: string, optional: true, hidden: true, default: '${{ vars.S }}'}", n-1)
+	vars := testVariables{"vars.S": {Value: "s", Secret: true}}
+	_, res, diags := started(t, workflow(b.String()), map[string]any{"big": strings.Repeat("x", 20000)}, vars)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	if x := res.Run.Inputs.Get().(map[string]any)["x0000"].(string); !strings.HasPrefix(x, "20002") || !strings.HasSuffix(x, "s") {
+		t.Errorf("x0000 is %.40q", x)
+	}
+}
+
+// cancellingVariables cancels its context once it has read the variables,
+// and countingInputs counts what the Inputs resolver is asked.
+type cancellingVariables struct {
+	testVariables
+	cancel context.CancelFunc
+}
+
+func (v cancellingVariables) Read(ctx context.Context, names []string, secrets bool) (map[string]compile.Variable, error) {
+	defer v.cancel()
+	return v.testVariables.Read(ctx, names, secrets)
+}
+
+type countingInputs struct{ asked *int }
+
+func (c countingInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+	*c.asked++
+	return v, nil
+}
+
+// Start stops evaluating once its context is done, and returns the
+// context's error: it asks nothing more of a resolver.
+func TestStartStopsWhenCancelled(t *testing.T) {
+	src := workflow(`c: {type: compute-clusters, default: '${{ vars.S }}'}`)
+	vars := testVariables{"vars.S": {Value: "s", Secret: true}}
+	c := createRun(t, src, nil, vars)
+	ctx, cancel := context.WithCancel(t.Context())
+	asked := 0
+	in := compile.StartInput{Variables: cancellingVariables{vars, cancel}, Record: c.Record, Inputs: countingInputs{&asked}}
+	if res, _, err := compile.Start(ctx, c.Plan, in); !errors.Is(err, context.Canceled) || res != nil || asked != 0 {
+		t.Errorf("error %v, result %v, the Inputs resolver asked %d times", err, res, asked)
 	}
 }

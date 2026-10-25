@@ -44,6 +44,23 @@ var startScaledRuns = []startScaled{
 		fmt.Fprintf(&defs, "i%05d: {type: string, default: '${{ vars.X }}'}\n", n-1)
 		return workflow(defs.String()), nil, testVariables{"vars.X": {Value: "x", Secret: true}}
 	}},
+	{name: "rows each of whose three fields reads a secret variable", n: 1000, workload: func(n int) (string, map[string]any, testVariables) {
+		return workflow(`rows: {type: list, template: {name: {type: string}, a: {type: string, default: '${{ vars.S }}-a'}, b: {type: string, default: '${{ vars.S }}-b'}, c: {type: string, default: '${{ vars.S }}-c'}}}`),
+			map[string]any{"rows": rows(n, func() map[string]any { return map[string]any{"name": "a"} })},
+			testVariables{"vars.S": {Value: "s", Secret: true}}
+	}},
+	{name: "defaults that each read the next through a definition", n: 100, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs strings.Builder
+		for i := range n {
+			fmt.Fprintf(&defs, "x%05d: {type: string, default: '${{ ..h%05d.default }}${{ vars.S }}'}\n", i, i)
+			next := fmt.Sprintf("${{ inputs.x%05d }}", i+1)
+			if i == n-1 {
+				next = "${{ vars.S }}"
+			}
+			fmt.Fprintf(&defs, "h%05d: {type: string, optional: true, hidden: true, default: '%s'}\n", i, next)
+		}
+		return workflow(defs.String()), nil, testVariables{"vars.S": {Value: "s", Secret: true}}
+	}},
 	{name: "env values that read an input held for Start", n: 250, workload: func(n int) (string, map[string]any, testVariables) {
 		var env strings.Builder
 		env.WriteString("env:\n")

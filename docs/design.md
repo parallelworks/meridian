@@ -606,7 +606,11 @@ ACTIVATE's launch form and its backend do together:
   and what a password or a secret variable, is found from the definitions
   before anything is evaluated, following relative references to the
   definitions they read. A default that reads its own input, which a form
-  doesn't fill in, gives what the compiler gives it.
+  doesn't fill in, gives what the compiler gives it. A submitted value that
+  an expression which reads it gives back, as a default that reads its own
+  input does, or one that reads another input whose default reads the
+  first, isn't what made it, however the two compare: it is kept as what a
+  person typed over the expression is.
 - **Lists.** A list's default is the rows it starts with. Each row, given or
   a default, is a group of the template's fields, which take their defaults
   as inputs do, in the same order as the rest; in a field's default,
@@ -637,45 +641,52 @@ ACTIVATE's launch form and its backend do together:
   each row is a group of the step's inputs, as a list's row is of its
   template's fields. A repeated step given no value has none. A header has
   no value.
-- **Types.** A number or a boolean given as text, such as `"5"` or
-  `"true"`, is converted, and a text input given a number or a boolean gets
-  its text. Anything else that doesn't fit the input's type is an error, as
-  is a number outside its `min` and `max`, or a choice that isn't one of a
-  dropdown's options when they are written in the workflow. A value for an
+- **Types.** A number or a boolean given as text, such as `"5"` or `"true"`,
+  is converted, and a text input given a number or a boolean gets its text.
+  ACTIVATE converts no value it is given: its defaults, conditions, `env:`
+  and steps all read a value as it was submitted, so a number sent as text
+  is that text, `"8" + 1` is `"81"`, and `"true"` isn't `true`. Meridian's
+  conversion is a difference from ACTIVATE that the next change removes:
+  format 1 reads every input value as it was submitted, and `meridian`'s
+  `--input` gives a number or a boolean input a number or a boolean, as
+  ACTIVATE's form does. Until then, Meridian's own evaluations at Create and
+  Start read a value as it was given (`Run.Unconverted`), and the jobs read
+  it converted. Anything else that doesn't fit the input's type is an error,
+  as is a number outside its `min` and `max`, or a choice that isn't one of
+  a dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
   name, and is kept, as ACTIVATE keeps it. One whose name is a password
   field's, wherever the workflow defines it, as a repeated step's password
   sent beside the step is, or is close to a password input's there, as a
-  misspelling is, is kept as a password: it is one of the run's secrets,
-  and not in the plan. So is one whose name can be a secret's, as one sent
-  for a password field that was renamed can: it looks like one, by the
-  words that make an input's name look like a secret's
-  ([Compiling](#compiling)), or one of its words is a letter from one of
-  the longer of them, `password`, `passwd`, `passphrase`, `secret` and
-  `credential`, as `pasword` is; not from `token`, whose neighbours, such
-  as `tokens` and `taken`, are common words. That errs toward a secret,
-  such as `passed`, which is kept as one, and still given to the run. So
-  is a mapping or list whose name is close to an input's with a
-  password among its inputs, or that holds a key named as a password field
-  or that can be a secret's, as a flattened wizard step's inputs sent
-  under the step's name do. A row of a list or a repeated step is checked the same
-  way, against the inputs its rows have, and a value there for one they
-  don't have is reported by its path, as `creds.0.pasword`, and kept as a
-  password by the same rules, by that path, as a password field of a row
-  is: among the secrets, and in neither the values nor, for a list held
-  for Start, its value that waits there. A key of a list's default rows,
-  written in the workflow, that isn't one of its rows' inputs is a warning
-  where it is written (`default_row_unknown_input`), once, and the row
-  keeps it; a launch form sends the default rows back, so a submitted
-  row's key that a default row has isn't reported again, and a value a
-  default row has at that key isn't taken for a password by its name, as
-  `api_token: none` written in the workflow isn't. A row's inputs are
-  those of every list at its list's path, where a list and a wizard step's
-  list share one. A value that isn't JSON, such
-  as NaN or text that isn't UTF-8, is an error, whether it was submitted or
-  a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
-  can't encode such a run's values, and fails it as it starts. One in a
-  list's rows is reported at the row's field, and so is one in what the
+  misspelling is, is kept as a password: it is one of the run's secrets, and
+  not in the plan. So is one whose name can be a secret's, as one sent for a
+  password field that was renamed can: it looks like one, by the words that
+  make an input's name look like a secret's ([Compiling](#compiling)), or
+  one of its words is a letter from one of the longer of them, `password`,
+  `passwd`, `passphrase`, `secret` and `credential`, as `pasword` is; not
+  from `token`, whose neighbours, such as `tokens` and `taken`, are common
+  words. That errs toward a secret, such as `passed`, which is kept as one,
+  and still given to the run. So is a mapping or list whose name is close to
+  an input's with a password among its inputs, or that holds a key named as
+  a password field or that can be a secret's, as a flattened wizard step's
+  inputs sent under the step's name do. A row of a list or a repeated step
+  is checked the same way, against the inputs its rows have, and a value
+  there for one they don't have is reported by its path, as
+  `creds.0.pasword`, and kept as a password by the same rules, by that path,
+  as a password field of a row is: among the secrets, and in neither the
+  values nor, for a list held for Start, its value that waits there. A key
+  of a list's default rows, written in the workflow, that isn't one of its
+  rows' inputs is a warning where it is written
+  (`default_row_unknown_input`), once, and the row keeps it; a launch form
+  sends the default rows back, so a submitted row's key that a default row
+  has isn't reported again, and a value a default row has at that key isn't
+  taken for a password by its name, as `api_token: none` written in the
+  workflow isn't. A row's inputs are those of every list at its list's path,
+  where a list and a wizard step's list share one. A value that isn't JSON,
+  such as NaN or text that isn't UTF-8, is an error, whether it was
+  submitted or a default gave it, as `0/0` gives NaN and `1/0` an infinity:
+  ACTIVATE can't encode such a run's values, and fails it as it starts. One
+  in a list's rows is reported at the row's field, and so is one in what the
   compiler knows of a value that waits for Start.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
@@ -704,8 +715,10 @@ ACTIVATE's launch form and its backend do together:
   that read each other are an error (`values_read_each_other`), as two
   defaults that do are. A default reads the workflow's `env:` alone, not
   the variables the worker defines for a job, such as `PW_PARENT_JOB_DIR`,
-  which it reads as `""`. Today the compiler accepts a later context in a
-  definition, and holds its input for Start, which reports it
+  which it reads as `""`, where ACTIVATE evaluates an input expression
+  that reads `env` where it is read, with the env there. No known workflow
+  reads `env` in an input expression. Today the compiler accepts a later
+  context in a definition, and holds its input for Start, which reports it
   (`context_not_known`).
 - **Variables.** A plan never holds an organization or user variable's
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
@@ -769,20 +782,33 @@ the run waits for ([On hopper](#on-hopper)).
 2. **Complete the inputs.** Evaluate the parts of the inputs the plan holds
    for Start where the input definitions write them (`Run.DeferredParts`),
    with the index of the list rows each is for, so relative references,
-   reads of a definition and lists' templates work as they do at Create;
-   and the workflow's `env:`. Each is evaluated once, in the order they
-   read each other, as Create fills in the inputs: one once nothing its
+   reads of a definition and lists' templates work as they do at Create; and
+   the workflow's `env:`. Each is evaluated once, in the order they read
+   each other, as Create fills in the inputs: one once nothing its
    expressions read waits any longer, and what is left reads itself
    (`values_read_each_other`). Once every part of a list is evaluated, its
    rows' fields, and those of the lists in its rows, take their defaults as
    Create fills in a row's, so a list, a row or a list in a row that a part
-   gives is filled in as Create filled it in before the plan held the
-   part's expression in its place. What Start evaluates reads the inputs
-   as Create's evaluations read them, before Create converted them to their
-   types: a number a form sent as the text `2.50` is that text to a default
-   that reads it, and to the workflow's `env:` (`Run.Unconverted`). A
-   relative reference reads the input definitions; one that climbs out of
-   them reads nothing, where Create read the rest of the workflow.
+   gives is filled in as Create filled it in before the plan held the part's
+   expression in its place. What Start evaluates reads the inputs as
+   Create's evaluations read them: before Create converted them to their
+   types, so a number a form sent as the text `2.50` is that text to a
+   default that reads it, and to the workflow's `env:` (`Run.Unconverted`),
+   but for a value the secret record holds, which it reads converted until
+   format 1 reads values as submitted ([Inputs](#inputs)); each list's rows
+   with a field that has no value as null; and what a default reads of the
+   value it gives as Create's evaluation did, none, or the form's text for
+   it. What reads a definition, as a relative reference does, is evaluated
+   after what the definition reads. A default that gives no value leaves
+   what was there, null, a form's text, or nothing, and no mapping the plan
+   held only to hold it. A relative reference reads the input definitions;
+   one that climbs out of them reads nothing, where Create read the rest of
+   the workflow, which no known workflow does: all of theirs read an input
+   beside them. One difference stays: Create fills in the inputs in the
+   order their own expressions read each other, which doesn't see what a
+   relative reference reads, so a default that reads, through a relative
+   reference, an input that Create fills in later reads it before it is
+   filled in, where Start reads it after.
 3. **Check the shape.** Evaluate again each decision of the run's shape
    that read a variable or a password: an input's `hidden`, `ignore` and
    `optional`, where the definitions write it (`Run.Decisions`), in the
@@ -798,7 +824,9 @@ the run waits for ([On hopper](#on-hopper)).
    as the jobs do.
 4. **Check the inputs** Start evaluated as Create checks one: its type,
    whether it is required, and a platform type with the Inputs resolver;
-   and evaluate the workflow's `timeout:`.
+   and evaluate the workflow's `timeout:`. ACTIVATE gives the text of a
+   workflow's `timeout:` or a `strategy:` that reads `env` or `vars`, where
+   Meridian evaluates it; no known workflow has one.
 5. **Expand** each matrix whose values are known by now, written out or
    read from inputs or variables ([Matrices](#matrices)), so a matrix that
    can't be expanded fails the run before any job runs.
@@ -2366,15 +2394,6 @@ Larger features that aren't designed yet are proposed in
 - **Files between members.** A job on another member doesn't see the run
   directory's files. Staging them, or declaring which files a job needs,
   would let jobs of one run use members without a shared filesystem.
-- **A default that reads a variable the worker defines.** ACTIVATE
-  evaluates an input's default that reads `env` in its executor, with the
-  env it gives a job, so `${{ env.PW_PARENT_JOB_DIR }}` reads the run's
-  directory there. Meridian evaluates it at Start, which knows only the
-  workflow's `env:`, so it reads `""` (`inputs/default-known-later`).
-  Whether a known workflow relies on it is to be counted; if one does, the
-  choices are to evaluate such an input for each job, on its worker, as
-  Step evaluates a job's `env:`, or to give Start the variables a run's
-  directory decides, which the coordinator knows before any job is placed.
 - **What hopper adds.** Per-job leases with fencing and a grace period after
   a coordinator restart, an any-of edge, dependencies' outputs at claim, and
   a SQLite driver.

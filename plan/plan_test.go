@@ -48,6 +48,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 			DeferredParts: []plan.DeferredPart{
 				{Name: "inputs.token", Location: "/on/execute/inputs/token/default"},
 				{Name: "inputs.rows.1.a", Location: "/on/execute/inputs/rows/template/a/default", Index: []int{1}},
+				{Name: "inputs.rows.0.g.b", Location: "/on/execute/inputs/rows/template/g/items/b/default", Index: []int{0}, Default: true, Text: true, Null: true, Containers: 1},
 			},
 			Withheld:     []string{"/on/execute/inputs/pw/default"},
 			Decisions:    []string{"/on/execute/inputs/token/hidden", "/on/execute/inputs/x/ignore"},
