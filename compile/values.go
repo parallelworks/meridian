@@ -208,3 +208,22 @@ func parseFor(v any, index []int) (any, error) {
 	}
 	return v, nil
 }
+
+// isIndex reports whether a key in a path is a list's index.
+func isIndex(key string) bool {
+	_, err := strconv.Atoi(key)
+	return err == nil
+}
+
+// indexPath returns path with each [index] in it the index it reads.
+func indexPath(path []string, index []int) []string {
+	out := slices.Clone(path)
+	k := 0
+	for i, name := range out {
+		if name == "[index]" && k < len(index) {
+			out[i] = strconv.Itoa(index[k])
+			k++
+		}
+	}
+	return out
+}
