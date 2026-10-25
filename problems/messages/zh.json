@@ -169,7 +169,7 @@
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
-  "source_ref_invalid": "uses:“{ref}”不是对 Git 仓库中工作流的引用，例如 github/owner/repository/path@revision。",
+  "source_ref_invalid": "uses:“{ref}”不是对 Git 仓库中工作流的引用，例如 github/owner/repository@revision。",
   "source_on_platform": "uses:“{ref}”指定的是平台存储的工作流，只有该平台才能读取。",
   "source_revision_not_found": "Git 未找到仓库 {repo} 的修订“{revision}”：{reason}",
   "source_file_not_found": "仓库 {repo} 在提交 {commit} 中没有文件“{path}”。",

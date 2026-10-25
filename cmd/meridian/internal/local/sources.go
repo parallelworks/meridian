@@ -41,19 +41,17 @@ const waitDelay = time.Second
 
 // Sources reads the workflows that a step's uses: names, from Git
 // repositories, by running the git command, which reaches them with the
-// user's own Git configuration and credentials. A reference's uses: is
+// user's own Git configuration and credentials. A reference's uses: is, as
+// ACTIVATE reads it,
 //
-//	github/<owner>/<repository>[/<path>][@<revision>]
-//	gitlab/<namespace>/<project>[/<path>][@<revision>]
+//	github/<owner>/<repository>[@<revision>]
+//	gitlab/<group>[/<subgroup>...]/<project>[@<revision>]
 //
-// for a repository on github.com or gitlab.com, where path is the
-// workflow's file in it, workflow.yaml by default, and revision a branch,
-// a tag or a commit, the remote's default branch by default. As format 1
-// writes it, the step's with: $yaml can name the file instead, and then
-// every name after github/ or gitlab/ and before the revision is the
-// repository's, which on GitLab can be in a subgroup, as
-// gitlab/<group>/<subgroup>/<project>; and $host can name the GitLab
-// server that holds it, gitlab.com by default, which must be one the user
+// for a repository on github.com, or a project on gitlab.com, in its
+// groups, where revision is a branch, a tag or a commit, the remote's
+// default branch by default. The workflow's file in it is the step's with:
+// $yaml, workflow.yaml by default; and $host can name the GitLab server
+// that holds it, gitlab.com by default, which must be one the user
 // registered (NewSources): otherwise a workflow could have git, with the
 // user's configuration and credentials, reach a server of its choosing.
 //
@@ -188,16 +186,12 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	if !ok || len(parts) < 3 {
 		return invalid()
 	}
-	// With $yaml, the names after the kind are the repository's: on
-	// GitHub its owner's and its own, and on GitLab a project's in its
-	// groups. Without it, the two after the kind are, and the rest the
-	// workflow's file.
-	repo := parts[1:3]
-	if ref.Path != "" {
-		if len(parts) > 3 && parts[0] == "github" {
-			return invalid()
-		}
-		repo = parts[1:]
+	// The names after the kind are the repository's: on GitHub its owner's
+	// and its own, and nothing after them, and on GitLab a project's in its
+	// groups. The workflow's file is $yaml's.
+	repo := parts[1:]
+	if parts[0] == "github" && len(parts) > 3 {
+		return invalid()
 	}
 	for i, p := range repo {
 		if !refNamePattern.MatchString(p) || p == "." || p == ".." {
@@ -213,7 +207,8 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 		}
 	}
 	r := sourceRef{kind: parts[0], host: host, repo: strings.Join(repo, "/"), path: defaultPath, rev: rev}
-	if path := pathParts(ref.Path, parts[len(repo)+1:]); path != nil {
+	if ref.Path != "" {
+		path := strings.Split(ref.Path, "/")
 		for _, p := range path {
 			if p == "" || p == "." || p == ".." || strings.ContainsFunc(p, func(c rune) bool { return c < ' ' || c == 0x7f }) {
 				return invalid()
@@ -247,19 +242,6 @@ func (s *Sources) parse(ref plan.SourceRef) (sourceRef, error) {
 		return sourceRef{}, notFound(problems.SourceServerUnknown, problems.Params{"server": r.host})
 	}
 	return r, nil
-}
-
-// pathParts returns the parts of the workflow's file in a repository:
-// path's, which $yaml gives, or else rest, those of the uses: after the
-// repository's, or nil for the default.
-func pathParts(path string, rest []string) []string {
-	if path != "" {
-		return strings.Split(path, "/")
-	}
-	if len(rest) > 0 {
-		return rest
-	}
-	return nil
 }
 
 // location is the reference as a plan's Source names it to whoever can

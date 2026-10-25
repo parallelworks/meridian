@@ -72,7 +72,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	if err != nil {
 		return c.fail(err)
 	}
-	cfg, err := local.LoadConfig(dirs.Config, c.getenv)
+	cfg, err := local.LoadConfig(dirs.Config, c.lookupEnv)
 	if err != nil {
 		return c.fail(err)
 	}

@@ -175,7 +175,7 @@
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",
-  "source_ref_invalid": "The uses: \"{ref}\" isn't a reference to a workflow in a Git repository, such as github/owner/repository/path@revision.",
+  "source_ref_invalid": "The uses: \"{ref}\" isn't a reference to a workflow in a Git repository, such as github/owner/repository@revision.",
   "source_on_platform": "The uses: \"{ref}\" names a workflow a platform stores, which only that platform can read.",
   "source_revision_not_found": "Git found no revision \"{revision}\" of the repository {repo}: {reason}.",
   "source_file_not_found": "The repository {repo} has no file \"{path}\" at commit {commit}.",

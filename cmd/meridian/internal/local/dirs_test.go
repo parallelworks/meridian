@@ -14,6 +14,14 @@ func env(vars map[string]string) func(string) string {
 	return func(name string) string { return vars[name] }
 }
 
+// lookup reads vars as os.LookupEnv reads the environment.
+func lookup(vars map[string]string) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		v, ok := vars[name]
+		return v, ok
+	}
+}
+
 func TestLocate(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		d, err := Locate(env(map[string]string{"HOME": "/Users/u", "XDG_STATE_HOME": "/x"}))

@@ -493,7 +493,7 @@ func TestValidateInterrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var stdout, stderr strings.Builder
 	env := emptyEnv(t)
-	c := &cli{stdin: stdin, stdout: &stdout, stderr: &stderr, getenv: func(name string) string { return env[name] }}
+	c := &cli{stdin: stdin, stdout: &stdout, stderr: &stderr, lookupEnv: func(name string) (string, bool) { v, ok := env[name]; return v, ok }}
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, c, []string{"validate", "-"}) }()
 	cancel()
@@ -569,7 +569,7 @@ func TestValidateStdinRegularFile(t *testing.T) {
 	defer f.Close()
 	env := emptyEnv(t)
 	var stdout, stderr strings.Builder
-	c := &cli{stdin: f, stdout: &stdout, stderr: &stderr, getenv: func(name string) string { return env[name] }}
+	c := &cli{stdin: f, stdout: &stdout, stderr: &stderr, lookupEnv: func(name string) (string, bool) { v, ok := env[name]; return v, ok }}
 	code := run(t.Context(), c, []string{"validate", "-"})
 	_, diags := compile.Compile("<stdin>", []byte(text), nil, compile.Options{})
 	if want := diags.Error() + "\n"; code != exitInvalid || stdout.String() != want {

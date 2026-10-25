@@ -1172,9 +1172,9 @@
   },
   "source_ref_invalid": {
     "title": "不是对 Git 中工作流的引用",
-    "why": "Meridian 从 GitHub 或 GitLab 上的 Git 仓库读取步骤的 uses: 所指定的工作流：github/ 或 gitlab/，仓库的所有者和名称，仓库中的工作流文件（未指定时为 workflow.yaml），以及 @ 和分支、标签或提交（未指定时为默认分支）。不允许可能被理解为其他内容的部分，例如路径中的 .. 或以 - 开头的修订。步骤的 with: $yaml 也可以改为指定文件，此时 github/ 或 gitlab/ 之后、修订之前的每个名称都属于仓库；在 GitLab 上，仓库可以位于子组中，子组名称不能以 .git 或 .lock 结尾。with: $host 指定 GitLab 服务器，且只用于 gitlab/。",
+    "why": "Meridian 像 ACTIVATE 一样，从 Git 仓库读取步骤的 uses: 所指定的工作流：github/ 加上仓库的所有者和名称，或 gitlab/ 加上包含其组名的项目路径，然后是 @ 和分支、标签或提交（未指定时为默认分支）。仓库中的工作流文件是步骤的 with: $yaml（未指定时为 workflow.yaml），with: $host 指定 GitLab 服务器，且只用于 gitlab/。不允许可能被理解为其他内容的部分，例如路径中的 .. 或以 - 开头的修订，也不允许以 .git 或 .lock 结尾的组名。",
     "fix": [
-      "将引用写为 github/<所有者>/<仓库>/<路径>@<修订>，或以 gitlab/ 开头的相同形式。"
+      "将引用写为 github/<所有者>/<仓库>@<修订> 或 gitlab/<组>/<项目>@<修订>，并在 with: $yaml 中指定工作流文件。"
     ]
   },
   "source_on_platform": {
@@ -1182,7 +1182,7 @@
     "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流。",
     "fix": [
       "在存储所用工作流的平台上运行该工作流。",
-      "或者通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>/<路径>@<修订>。"
+      "或者通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
     ]
   },
   "source_revision_not_found": {

@@ -128,7 +128,6 @@ func TestSourcesResolve(t *testing.T) {
 		{plan.SourceRef{Uses: "github/acme/flows"}, "github/acme/flows/workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows"}},
 		{plan.SourceRef{Uses: "github/acme/flows@v1"}, "github/acme/flows/workflow.yaml@v1", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "v1"}},
 		{plan.SourceRef{Uses: "github/acme/flows@" + first}, "github/acme/flows/workflow.yaml@" + first, first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": first}},
-		{plan.SourceRef{Uses: "github/acme/flows/sub/flow.yaml@dev"}, "github/acme/flows/sub/flow.yaml@dev", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
 		// Format 1 names the file with $yaml.
 		{plan.SourceRef{Uses: "github/acme/flows@dev", Path: "sub/flow.yaml"}, "github/acme/flows/sub/flow.yaml@dev", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
 		{plan.SourceRef{Uses: "gitlab/team/infra/flows@main", Path: "flows/run.yaml", Host: "git.example.com:8443"}, "git.example.com:8443/team/infra/flows/flows/run.yaml@main", onGitLab, "gitlab\n", map[string]string{"repo": "https://git.example.com:8443/team/infra/flows", "branch": "main"}},
@@ -290,17 +289,20 @@ func TestSourcesNotFound(t *testing.T) {
 	origins, s := newOrigins(t)
 	o := newOrigin(t, origins, "github.com", "acme/flows")
 	o.commit(map[string]string{"workflow.yaml": "text\n", "sub/flow.yaml": "sub\n"})
-	for ref, kind := range map[string]*problems.Kind{
-		"github/acme/flows@missing":           problems.SourceRevisionNotFound,
-		"github/acme/flows/missing.yaml@main": problems.SourceFileNotFound,
-		"github/acme/flows/sub@main":          problems.SourceFileNotFound,
-		"github/acme/none@main":               problems.SourceRevisionNotFound,
-		"gitlab/acme/flows@main":              problems.SourceRevisionNotFound,
-		"marketplace/checkout":                problems.SourceOnPlatform,
-		"workflow/stored":                     problems.SourceOnPlatform,
-		"github/acme":                         problems.SourceRefInvalid,
+	for ref, kind := range map[plan.SourceRef]*problems.Kind{
+		{Uses: "github/acme/flows@missing"}:                    problems.SourceRevisionNotFound,
+		{Uses: "github/acme/flows@main", Path: "missing.yaml"}: problems.SourceFileNotFound,
+		{Uses: "github/acme/flows@main", Path: "sub"}:          problems.SourceFileNotFound,
+		{Uses: "github/acme/none@main"}:                        problems.SourceRevisionNotFound,
+		{Uses: "gitlab/acme/flows@main"}:                       problems.SourceRevisionNotFound,
+		{Uses: "marketplace/checkout"}:                         problems.SourceOnPlatform,
+		{Uses: "workflow/stored"}:                              problems.SourceOnPlatform,
+		{Uses: "github/acme"}:                                  problems.SourceRefInvalid,
+		// As ACTIVATE reads it, nothing follows a GitHub repository's name:
+		// the file is $yaml's.
+		{Uses: "github/acme/flows/sub/flow.yaml@main"}: problems.SourceRefInvalid,
 	} {
-		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: ref})
+		_, err := s.Resolve(t.Context(), ref)
 		if !errors.Is(err, compile.ErrNotFound) {
 			t.Errorf("Resolve(%s): %v, want ErrNotFound", ref, err)
 			continue
@@ -311,16 +313,19 @@ func TestSourcesNotFound(t *testing.T) {
 
 func TestParseRef(t *testing.T) {
 	for ref, want := range map[plan.SourceRef]sourceRef{
-		{Uses: "github/acme/flows"}:                  {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
-		{Uses: "github/acme/flows@v1.2"}:             {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1.2"},
-		{Uses: "gitlab/acme/flows/a/b.yaml@release"}: {kind: "gitlab", host: "gitlab.com", repo: "acme/flows", path: "a/b.yaml", rev: "release"},
-		{Uses: "github/a.b/c_d-e/x y.yaml@f/g"}:      {kind: "github", host: "github.com", repo: "a.b/c_d-e", path: "x y.yaml", rev: "f/g"},
+		{Uses: "github/acme/flows"}:                           {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
+		{Uses: "github/acme/flows@v1.2"}:                      {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml", rev: "v1.2"},
+		{Uses: "gitlab/acme/flows@release", Path: "a/b.yaml"}: {kind: "gitlab", host: "gitlab.com", repo: "acme/flows", path: "a/b.yaml", rev: "release"},
+		{Uses: "github/a.b/c_d-e@f/g", Path: "x y.yaml"}:      {kind: "github", host: "github.com", repo: "a.b/c_d-e", path: "x y.yaml", rev: "f/g"},
+		// Every name after gitlab/ is the project's path, with or without
+		// $yaml.
+		{Uses: "gitlab/g/sub/p@main"}: {kind: "gitlab", host: "gitlab.com", repo: "g/sub/p", path: "workflow.yaml", rev: "main"},
 		// $yaml names the file, and then a GitLab project can be in a
 		// subgroup; $host names its server.
 		{Uses: "github/acme/flows@main", Path: "a/b.yaml"}:                          {kind: "github", host: "github.com", repo: "acme/flows", path: "a/b.yaml", rev: "main"},
 		{Uses: "gitlab/g/sub/p@main", Path: "w.yaml"}:                               {kind: "gitlab", host: "gitlab.com", repo: "g/sub/p", path: "w.yaml", rev: "main"},
 		{Uses: "gitlab/g/p", Path: "w.yaml", Host: "gitlab.example.com"}:            {kind: "gitlab", host: "gitlab.example.com", repo: "g/p", path: "w.yaml"},
-		{Uses: "gitlab/g/p/w.yaml", Host: "git-1.example.com:8443"}:                 {kind: "gitlab", host: "git-1.example.com:8443", repo: "g/p", path: "w.yaml"},
+		{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git-1.example.com:8443"}:        {kind: "gitlab", host: "git-1.example.com:8443", repo: "g/p", path: "w.yaml"},
 		{Uses: "gitlab/g/sub/p@v1", Path: "dir/w.yaml", Host: "gitlab.example.com"}: {kind: "gitlab", host: "gitlab.example.com", repo: "g/sub/p", path: "dir/w.yaml", rev: "v1"},
 	} {
 		got, err := parseRef(ref)

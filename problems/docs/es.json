@@ -1172,9 +1172,9 @@
   },
   "source_ref_invalid": {
     "title": "No es una referencia a un flujo de trabajo en Git",
-    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git en GitHub o GitLab: github/ o gitlab/, el propietario y el nombre del repositorio, el archivo del flujo de trabajo dentro de él, workflow.yaml si no nombra otro, y @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -. El with: $yaml de un paso puede nombrar el archivo en su lugar, y entonces cada nombre tras github/ o gitlab/ y antes de la revisión es del repositorio, que en GitLab puede estar en subgrupos, cuyos nombres no terminan en .git ni en .lock; with: $host nombra un servidor de GitLab, y solo con gitlab/.",
+    "why": "Meridian lee el flujo de trabajo que nombra el uses: de un paso desde un repositorio Git, como ACTIVATE: github/ y el propietario y el nombre del repositorio, o gitlab/ y la ruta de un proyecto, con los nombres de sus grupos, y luego @ con una rama, etiqueta o confirmación, la rama predeterminada si no nombra ninguna. El archivo del flujo de trabajo en el repositorio es el with: $yaml del paso, workflow.yaml si no nombra otro, y with: $host nombra un servidor de GitLab, solo con gitlab/. No se permite una parte que podría leerse como otra cosa, como .. en una ruta o una revisión que empieza por -, ni el nombre de un grupo que termina en .git o .lock.",
     "fix": [
-      "Escribe la referencia como github/<propietario>/<repositorio>/<ruta>@<revisión>, o igual con gitlab/."
+      "Escribe la referencia como github/<propietario>/<repositorio>@<revisión>, o gitlab/<grupo>/<proyecto>@<revisión>, con el archivo del flujo de trabajo en with: $yaml."
     ]
   },
   "source_on_platform": {
@@ -1182,7 +1182,7 @@
     "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git.",
     "fix": [
       "Ejecuta el flujo de trabajo en la plataforma que guarda el flujo de trabajo que usa.",
-      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>/<ruta>@<revisión>."
+      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
     ]
   },
   "source_revision_not_found": {

@@ -1268,17 +1268,21 @@ such as an editor or a test, can give the variables and the sessions
 context as mappings, in `Options.Contexts`, as it gives `remote`. Today
 the Inputs resolver takes no context and returns a Go error.
 
-A uses: names a workflow by what format 1 writes (`plan.SourceRef`): the
-`uses:` itself, as `github/<owner>/<repository>@<revision>` or
-`gitlab/<namespace>/<project>`, and in the step's `with:`, `$yaml`, the
-workflow's file in the repository, and `$host`, the GitLab server that
-holds it. A pinned workflow keeps its reference beside its commit and
-digest (`Source.Ref`), so Sources reads it again by it, and gives the
-`remote` context a child run reads, `remote.branch` among it, from it.
-Git reaches a server with the credentials of whoever runs it, so a
-Sources reaches only the GitLab servers registered where the workflow
-runs, as the schema's "registered GitLab server" says, and never one
-that only a workflow names (`source_server_unknown`).
+A uses: names a workflow by what format 1 writes (`plan.SourceRef`), as
+ACTIVATE reads it: the `uses:` itself, as
+`github/<owner>/<repository>@<revision>`, with nothing after the
+repository's name, or `gitlab/<group>/<project>@<revision>`, where every
+name after `gitlab/` is the project's path, its subgroups among it; and in
+the step's `with:`, `$yaml`, the workflow's file in the repository,
+`workflow.yaml` unless it names another, and `$host`, the GitLab server
+that holds it. A pinned workflow keeps its reference beside
+its commit and digest (`Source.Ref`), so Sources reads it again by it, and
+gives the `remote` context a child run reads, `remote.branch` among it,
+from it. Git reaches a server with the credentials of whoever runs it, so
+a Sources reaches only the GitLab servers registered where the workflow
+runs, as the schema's "registered GitLab server" says, and never one that
+only a workflow names (`source_server_unknown`). ACTIVATE requires
+gitlab.com to be registered too; `meridian` always reaches gitlab.com.
 
 ## Durable execution
 
@@ -1393,7 +1397,11 @@ name, `#` and its index from 0, as in `build#2`.
 ### Workflows a step calls
 
 A step whose `uses:` names a workflow runs it as a run of its own, a child
-of the step's run, with its own plan, secret record and jobs.
+of the step's run, with its own plan, secret record and jobs. A `uses:` names
+a workflow when it starts with `github/`, `gitlab/`, `marketplace/` or
+`workflow/`. ACTIVATE also runs a repository's URL as a workflow, and
+refuses any other prefix, where Meridian's schema refuses a URL and takes
+any other `uses:` for a built-in action; no known workflow has either.
 
 - **Pinned when the run is created.** The compiler resolves the workflow
   through the Sources interface, pins it to a commit and the SHA-256 digest
@@ -1401,14 +1409,15 @@ of the step's run, with its own plan, secret record and jobs.
   turn, with cycle detection and a depth limit. The plan holds every pinned
   reference, not a compiled workflow, so the run and its reruns run the same
   code throughout, even where a reference names a branch. Its `with:`
-  `$yaml` and `$host`, which say where the workflow is, must be written
-  out (`source_not_known`). Today the compiler pins and loads the workflows
-  a run's own steps name (`Step.Source`), each reference once, but not the
-  workflows they call in turn: a child run's Create pins its own, as it is
-  created. Pinning them all at once needs the plan to hold its
-  descendants' pins, by the pinned workflow and the step that names each,
-  for each child run's Create to read rather than resolve; with it come
-  the cycle detection and the depth limit (`Options.Limits`).
+  `$yaml` and `$host`, which say where the workflow is, must be written out
+  (`source_not_known`); an empty `$yaml` means `workflow.yaml`. Today the
+  compiler pins and loads the workflows a run's own steps name
+  (`Step.Source`), each reference once, but not the workflows they call in
+  turn: a child run's Create pins its own, as it is created. Pinning them
+  all at once needs the plan to hold its descendants' pins, by the pinned
+  workflow and the step that names each, for each child run's Create to read
+  rather than resolve; with it come the cycle detection and the depth limit
+  (`Options.Limits`).
 - **Compiled when the step runs.** The worker evaluates the step's `with:`,
   and the coordinator creates the child run from the pinned workflow with
   those values, through Create and Start, linked to the step. The step ends
@@ -2377,8 +2386,10 @@ comes from, so cloning a workflow can't send its jobs to your SSH hosts.
   default timeout.
 - **`variables.yaml`** holds `org` and `vars`. A plain variable is its
   value, and any variable can instead name an environment variable or a
-  file that holds it. A secret one is marked `secret: true`, and always
-  names where its value is, which is read only as a run starts.
+  file that holds it; an environment variable set to `""` gives `""`, as
+  a platform's variable whose value is empty does. A secret one is marked
+  `secret: true`, and always names where its value is, which is read only
+  as a run starts.
 - **`sources.yaml`** holds `gitlab-servers`, the GitLab servers besides
   gitlab.com that a step's `with: $host` can name, each a host name and,
   after a colon, a port, as `git.example.com:8443`. Git reaches them with

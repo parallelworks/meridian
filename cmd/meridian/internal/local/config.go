@@ -60,7 +60,7 @@ type Config struct {
 	groups    map[string]*backend.Group
 	variables map[string]variable
 	servers   []string
-	getenv    func(string) string
+	lookupEnv func(string) (string, bool)
 }
 
 var (
@@ -70,9 +70,10 @@ var (
 )
 
 // LoadConfig reads the groups file, the variables file and the sources
-// file in dir, any of which can be missing, and checks them. getenv reads
-// the environment variables that hold variables' values, when they are
-// read, and HOME, for a path that starts with ~/.
+// file in dir, any of which can be missing, and checks them. lookupEnv
+// reads the environment variables that hold variables' values, when they
+// are read, and HOME, for a path that starts with ~/, and says whether
+// each is set, as os.LookupEnv does: one set to "" gives "".
 //
 // The directory, and every directory on the way to it, must belong to the
 // user or to root, and only they may change it. None of the files may be
@@ -82,8 +83,8 @@ var (
 // file must be readable only by the user, since people keep secrets in
 // plain variables too. None is read through a symbolic link: the
 // directory can be one, and is checked through it (safepath.ReadFile).
-func LoadConfig(dir string, getenv func(string) string) (*Config, error) {
-	c := &Config{getenv: getenv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
+func LoadConfig(dir string, lookupEnv func(string) (string, bool)) (*Config, error) {
+	c := &Config{lookupEnv: lookupEnv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
 	// A directory that isn't there holds no config, and nothing on the
 	// way to it is read.
 	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
@@ -532,9 +533,9 @@ func (c *Config) ResolveInput(typ string, _ map[string]any, value any) (any, err
 // expandHome turns a path that starts with ~/ into one in the home
 // directory, and a relative one into one in dir. It reports false for a
 // path that starts with ~/ when HOME isn't an absolute path.
-func expandHome(path, dir string, getenv func(string) string) (string, bool) {
+func expandHome(path, dir string, lookupEnv func(string) (string, bool)) (string, bool) {
 	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		home := getenv("HOME")
+		home, _ := lookupEnv("HOME")
 		if !filepath.IsAbs(home) {
 			return "", false
 		}

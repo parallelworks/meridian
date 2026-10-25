@@ -30,7 +30,7 @@ func configDir(t *testing.T, files map[string]string) string {
 
 func load(t *testing.T, files map[string]string, vars map[string]string) *Config {
 	t.Helper()
-	c, err := LoadConfig(configDir(t, files), env(vars))
+	c, err := LoadConfig(configDir(t, files), lookup(vars))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestGroupsFileRefuses(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := configDir(t, map[string]string{GroupsFile: tc.text})
-			_, err := LoadConfig(dir, env(nil))
+			_, err := LoadConfig(dir, lookup(nil))
 			p := wantProblem(t, err, tc.kind)
 			if p.Params[problems.ParamFile] != filepath.Join(dir, GroupsFile) {
 				t.Errorf("the problem's file is %v", p.Params[problems.ParamFile])
@@ -177,7 +177,7 @@ func TestSourcesFile(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := configDir(t, map[string]string{SourcesFile: tc.text})
-			_, err := LoadConfig(dir, env(nil))
+			_, err := LoadConfig(dir, lookup(nil))
 			p := wantProblem(t, err, tc.kind)
 			if line, _ := p.Params[problems.ParamLine].(int); line != tc.line || p.Params[problems.ParamFile] != filepath.Join(dir, SourcesFile) {
 				t.Errorf("the problem is at %v:%d, want line %d", p.Params[problems.ParamFile], line, tc.line)
@@ -206,7 +206,7 @@ func TestConfigFilesOthersCanChange(t *testing.T) {
 		if err := os.Chmod(path, tc.mode); err != nil {
 			t.Fatal(err)
 		}
-		_, err := LoadConfig(dir, env(nil))
+		_, err := LoadConfig(dir, lookup(nil))
 		if tc.kind == nil {
 			if err != nil {
 				t.Errorf("LoadConfig with %s at %04o: %v", tc.file, tc.mode, err)
@@ -227,25 +227,28 @@ func TestConfigDirOthersCanChange(t *testing.T) {
 	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	_, err := LoadConfig(dir, env(nil))
+	_, err := LoadConfig(dir, lookup(nil))
 	wantProblem(t, err, problems.PathUnsafe)
 }
 
 // TestConfigFileLink checks that a config file isn't read through a
 // symbolic link at its path, while the config directory can be a link.
 func TestConfigFileLink(t *testing.T) {
-	target := configDir(t, map[string]string{GroupsFile: "{}\n"})
-	dir := t.TempDir()
-	if err := os.Symlink(filepath.Join(target, GroupsFile), filepath.Join(dir, GroupsFile)); err != nil {
-		t.Fatal(err)
+	var target string
+	for _, name := range []string{GroupsFile, SourcesFile} {
+		target = configDir(t, map[string]string{name: "{}\n"})
+		dir := t.TempDir()
+		if err := os.Symlink(filepath.Join(target, name), filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(dir, lookup(nil))
+		wantProblem(t, err, problems.FileNotRegular)
 	}
-	_, err := LoadConfig(dir, env(nil))
-	wantProblem(t, err, problems.FileNotRegular)
 	link := filepath.Join(t.TempDir(), "config")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadConfig(link, env(nil)); err != nil {
+	if _, err := LoadConfig(link, lookup(nil)); err != nil {
 		t.Errorf("a config directory that is a link: %v", err)
 	}
 }
@@ -255,7 +258,7 @@ func TestConfigFIFO(t *testing.T) {
 	if err := mkfifo(filepath.Join(dir, GroupsFile)); err != nil {
 		t.Skipf("can't make a FIFO: %v", err)
 	}
-	_, err := LoadConfig(dir, env(nil))
+	_, err := LoadConfig(dir, lookup(nil))
 	wantProblem(t, err, problems.FileNotRegular)
 }
 

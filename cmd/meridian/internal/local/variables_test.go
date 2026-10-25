@@ -34,7 +34,7 @@ func variablesConfig(t *testing.T, vars map[string]string) *Config {
 	}
 	all := map[string]string{"HOME": home}
 	maps.Copy(all, vars)
-	c, err := LoadConfig(dir, env(all))
+	c, err := LoadConfig(dir, lookup(all))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +124,16 @@ func TestReadPlainFromMissingEnv(t *testing.T) {
 	}
 }
 
+// TestReadEmptyEnv checks that a variable whose environment variable is set
+// to "" reads "", as a platform's variable whose value is empty does.
+func TestReadEmptyEnv(t *testing.T) {
+	c := variablesConfig(t, map[string]string{"BUILD": ""})
+	got, err := c.Read(t.Context(), []string{"vars.build"}, false)
+	if v, ok := got["vars.build"]; err != nil || !ok || v.Value != "" {
+		t.Errorf("Read = %v, %v", got, err)
+	}
+}
+
 func TestReadRefusesOtherNames(t *testing.T) {
 	c := variablesConfig(t, nil)
 	for _, name := range []string{"env.HOME", "inputs.x", "", "orgs"} {
@@ -156,7 +166,7 @@ func TestVariablesFileRefuses(t *testing.T) {
 		"two documents":      {"vars: {}\n---\norg: {}\n", problems.ConfigExtraDocument},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: tc.text}), env(map[string]string{"HOME": "home"}))
+			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: tc.text}), lookup(map[string]string{"HOME": "home"}))
 			wantProblem(t, err, tc.kind)
 		})
 	}
@@ -185,7 +195,7 @@ func TestVariableFileModes(t *testing.T) {
 		if err := os.Chmod(filepath.Join(dir, "v.txt"), tc.mode); err != nil {
 			t.Fatal(err)
 		}
-		c, err := LoadConfig(dir, env(nil))
+		c, err := LoadConfig(dir, lookup(nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -215,7 +225,7 @@ func TestVariableFileDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := configDir(t, map[string]string{VariablesFile: "org:\n  v: {secret: true, file: " + filepath.Join(shared, "v.txt") + "}\n"})
-	c, err := LoadConfig(dir, env(nil))
+	c, err := LoadConfig(dir, lookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

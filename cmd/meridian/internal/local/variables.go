@@ -84,7 +84,7 @@ func (c *Config) loadVariables(dir, path string) error {
 			if !variableNamePattern.MatchString(p.key.Value) {
 				return f.problem(problems.VariableNameInvalid, p.key, problems.Params{"context": context, "name": p.key.Value})
 			}
-			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.getenv)
+			v, err := f.variable(context+"."+p.key.Value, p.key, p.value, dir, c.lookupEnv)
 			if err != nil {
 				return err
 			}
@@ -96,7 +96,7 @@ func (c *Config) loadVariables(dir, path string) error {
 
 // variable reads the variable name, whose key and value n are, as the
 // variables file writes one.
-func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv func(string) string) (variable, error) {
+func (f configFile) variable(name string, key, n *yaml.Node, dir string, lookupEnv func(string) (string, bool)) (variable, error) {
 	v := variable{name: name}
 	at := func(k *problems.Kind, n *yaml.Node) error {
 		return f.problem(k, n, problems.Params{"variable": name})
@@ -133,7 +133,7 @@ func (f configFile) variable(name string, key, n *yaml.Node, dir string, getenv 
 		case "env":
 			v.env = text
 		default:
-			file, ok := expandHome(text, dir, getenv)
+			file, ok := expandHome(text, dir, lookupEnv)
 			if !ok {
 				return v, f.problem(problems.VariableFileHome, p.value, problems.Params{"variable": name, "file": text})
 			}
@@ -201,7 +201,9 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 func (c *Config) resolve(v variable) (string, error) {
 	switch {
 	case v.env != "":
-		value, ok := lookupEnv(c.getenv, v.env)
+		// One set to "" gives "", as a platform's variable whose value is
+		// empty does.
+		value, ok := c.lookupEnv(v.env)
 		if !ok {
 			return "", problems.VariableEnvUnset.Problem(problems.Params{"variable": v.name, "env": v.env})
 		}
@@ -210,13 +212,6 @@ func (c *Config) resolve(v variable) (string, error) {
 		return readValueFile(v)
 	}
 	return v.value, nil
-}
-
-// lookupEnv reads the environment variable name with getenv, and says
-// whether it is set: an empty value counts as not set.
-func lookupEnv(getenv func(string) string, name string) (string, bool) {
-	v := getenv(name)
-	return v, v != ""
 }
 
 // readValueFile reads v's value from its file, without the newline, or the

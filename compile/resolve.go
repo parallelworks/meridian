@@ -286,6 +286,7 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 			c.reportAt(problems.SourceNotKnown, appendPath(loc, "with", key), problems.Params{"key": key})
 			return nil
 		}
+		// An empty $yaml means workflow.yaml, as ACTIVATE reads it.
 		*to = text
 	}
 	if c.opts.Sources == nil {

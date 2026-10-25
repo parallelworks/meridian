@@ -169,7 +169,7 @@
 
   "workflow_too_large": "ワークフローが {limit} バイトを超えており、サイズの上限を超えています。",
   "execution_group_unknown": "入力「{input}」が指定している実行グループ {value} は、グループ {groups} のいずれでもありません。",
-  "source_ref_invalid": "uses:「{ref}」は、github/owner/repository/path@revision のような Git リポジトリ内のワークフローへの参照ではありません。",
+  "source_ref_invalid": "uses:「{ref}」は、github/owner/repository@revision のような Git リポジトリ内のワークフローへの参照ではありません。",
   "source_on_platform": "uses:「{ref}」はプラットフォームが保存するワークフローを指定しており、そのプラットフォームしか読み込めません。",
   "source_revision_not_found": "Git はリポジトリ {repo} のリビジョン「{revision}」を見つけられませんでした: {reason}",
   "source_file_not_found": "リポジトリ {repo} のコミット {commit} にファイル「{path}」はありません。",

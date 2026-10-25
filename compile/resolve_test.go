@@ -429,6 +429,16 @@ func TestCreatePinsWorkflows(t *testing.T) {
 	if _, _, err := compile.Create(t.Context(), "workflow.yaml", uses, nil, compile.Options{Sources: pinnedSources{nil}}); err == nil {
 		t.Error("a resolver that gave nothing")
 	}
+	// An empty $yaml means workflow.yaml, as ACTIVATE reads it; the schema
+	// refuses one that isn't text.
+	for _, yaml := range []string{"''", `""`} {
+		s := &testSources{texts: map[string]string{"github/acme/flows@main": text}}
+		src := "jobs:\n  a:\n    steps:\n      - uses: github/acme/flows@main\n        with: {$yaml: " + yaml + "}\n"
+		c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: s})
+		if err != nil || c == nil || !slices.Equal(s.asked, []plan.SourceRef{{Uses: "github/acme/flows@main"}}) {
+			t.Errorf("$yaml %s: asked %v, %v, %v", yaml, s.asked, diags, err)
+		}
+	}
 }
 
 // pinnedSources gives source, with a workflow of one job, for every

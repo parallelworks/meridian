@@ -1005,16 +1005,16 @@
     ]
   },
   "source_ref_invalid": {
-    "why": "Meridian reads a workflow that a step's uses: names from a Git repository on GitHub or GitLab: github/ or gitlab/, the repository's owner and name, the workflow's file in it, workflow.yaml unless it names another, and @ and a branch, tag or commit, the default branch unless it names one. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed. A step's with: $yaml can name the file instead, and then every name after github/ or gitlab/ and before the revision is the repository's, which on GitLab can be in subgroups, none of whose names ends in .git or .lock; with: $host names a GitLab server, and only for gitlab/.",
+    "why": "Meridian reads a workflow that a step's uses: names from a Git repository, as ACTIVATE does: github/ and the repository's owner and name, or gitlab/ and a project's path, its groups' names among it, and then @ and a branch, tag or commit, the default branch unless it names one. The workflow's file in the repository is the step's with: $yaml, workflow.yaml unless it names another, and with: $host names a GitLab server, only for gitlab/. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed, nor is a group's name that ends in .git or .lock.",
     "fix": [
-      "Write the reference as github/<owner>/<repository>/<path>@<revision>, or the same with gitlab/."
+      "Write the reference as github/<owner>/<repository>@<revision>, or gitlab/<group>/<project>@<revision>, with the workflow's file in with: $yaml."
     ]
   },
   "source_on_platform": {
     "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories.",
     "fix": [
       "Run the workflow on the platform that stores the workflow it uses.",
-      "Or name the workflow by its Git repository, as github/<owner>/<repository>/<path>@<revision>."
+      "Or name the workflow by its Git repository, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
     ]
   },
   "source_revision_not_found": {
