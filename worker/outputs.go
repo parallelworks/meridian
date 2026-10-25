@@ -11,7 +11,9 @@ import (
 )
 
 // maxOutputs is the most bytes of $OUTPUTS the worker reads: a job's
-// outputs are capped at 1 MiB (docs/design.md, Outputs).
+// outputs are capped at 1 MiB (docs/design.md, Outputs). They are counted
+// as they are kept, each byte that isn't UTF-8 as the 3 of the U+FFFD
+// that replaces it, so that what the worker reports keeps to the cap.
 const maxOutputs = 1 << 20
 
 // maxOutputsLine is how long a line of $OUTPUTS can be, newline aside, for
@@ -41,10 +43,11 @@ var (
 // the outputs it replaced a byte in too, as notUTF8.
 // It reads the file name in the worker's directory d, or what a symbolic
 // link there names, as format 1 follows it: the step's user can read it
-// anyway. It returns the file's size too, and errOutputsTooLarge, without
-// reading it, for one larger than maxOutputs. As format 1, it reads nothing
-// of a file with a line longer than maxOutputsLine, and returns
-// errOutputsLineTooLong.
+// anyway. It returns the file's size too, as its bytes are kept
+// (validLen), and errOutputsTooLarge for one larger than maxOutputs, which
+// it doesn't read if the file's own size is. As format 1, it reads nothing
+// of a file with a line longer than maxOutputsLine, as written, and
+// returns errOutputsLineTooLong.
 func readOutputs(d *privateDir, name string) (outputs map[string]string, notUTF8 map[string]bool, size int64, err error) {
 	f, err := openOutputs(d, name)
 	if err != nil {
@@ -65,11 +68,12 @@ func readOutputs(d *privateDir, name string) (outputs map[string]string, notUTF8
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if len(data) > maxOutputs {
-		return nil, nil, int64(len(data)), errOutputsTooLarge
+	text := string(data)
+	if size = int64(validLen(text)); size > maxOutputs {
+		return nil, nil, size, errOutputsTooLarge
 	}
-	outputs, notUTF8, err = parseOutputs(string(data))
-	return outputs, notUTF8, int64(len(data)), err
+	outputs, notUTF8, err = parseOutputs(text)
+	return outputs, notUTF8, size, err
 }
 
 // openOutputs opens $OUTPUTS without waiting for a FIFO's writer: the
@@ -144,6 +148,19 @@ func validUTF8(s string) (string, bool) {
 		b.WriteRune(r)
 	}
 	return b.String(), true
+}
+
+// validLen returns how many bytes s is once validUTF8 has replaced its bytes
+// that aren't UTF-8: 3 for each of them, U+FFFD's.
+func validLen(s string) int {
+	if utf8.ValidString(s) {
+		return len(s)
+	}
+	n := 0
+	for _, r := range s {
+		n += utf8.RuneLen(r)
+	}
+	return n
 }
 
 // written returns what of after isn't in before: the outputs a step that

@@ -770,7 +770,8 @@ func (a *attempt) outputsWritten(f outputsFile, path string) (map[string]string,
 
 // outputsNotUTF8 returns a warning, at path, of those of a step's outputs
 // that notUTF8 names, in which the worker replaced bytes that aren't UTF-8
-// (readOutputs), or none. Format 1 replaces them as silently as it stores
+// (readOutputs), or none: it counts them, and names the first of them as
+// their names sort. Format 1 replaces them as silently as it stores
 // its outputs, but the jobs that need the job read what the step didn't
 // write.
 func (a *attempt) outputsNotUTF8(outputs map[string]string, notUTF8 map[string]bool, path string) problems.Diagnostics {

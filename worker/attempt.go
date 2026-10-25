@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +47,9 @@ type attempt struct {
 	// firstStarted is set once the coordinator has stored that a step is
 	// starting.
 	firstStarted bool
+	// cutReports is set once the worker has sent an event without what it
+	// couldn't encode (reportNotEncoded), which fails the job.
+	cutReports atomic.Bool
 
 	// stopMu guards what stops the job, and stopChanged, closed and
 	// replaced whenever that changes.
@@ -135,7 +139,7 @@ func (a *attempt) run(ctx context.Context) error {
 		}()
 	})()
 
-	wg.Go(func() { a.events.send(send, a.client, a.halt) })
+	wg.Go(func() { a.events.send(send, a.client, a.halt, a.reportNotEncoded) })
 	wg.Go(func() { a.spool.send(send, a.client, a.halt) })
 	wg.Go(func() { a.heartbeat(beat) })
 	wg.Go(func() { a.control(send) })
@@ -315,17 +319,57 @@ func (a *attempt) reap() {
 }
 
 // deliver sends end, the attempt's end, once the coordinator has stored
-// every event and log, until ctx is done.
+// every event and log, until ctx is done. An end the worker can't encode it
+// sends without its outputs and its problems, as a failure (failEnd).
 func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 	end.Seq = a.events.lastSeq()
 	if a.events.wait(end.Seq, ctx.Done()) != nil || a.spool.wait(ctx.Done()) != nil {
 		return errStopped
 	}
-	if err := a.client.complete(ctx, end); err != nil {
+	if a.cutReports.Load() {
+		a.failEnd(end)
+	}
+	err := a.client.complete(ctx, end)
+	if enc, ok := errors.AsType[*encodeError](err); ok {
+		a.log.Error("the attempt's end couldn't be encoded", "error", a.mask.Mask(enc.Error()))
+		*end = workerapi.Complete{Seq: end.Seq, Outcome: end.Outcome, Reason: end.Reason, Problem: end.Problem}
+		a.failEnd(end)
+		err = a.client.complete(ctx, end)
+	}
+	if err != nil {
 		return err
 	}
 	a.log.Info("the attempt ended", "outcome", end.Outcome, "reason", end.Reason)
 	return nil
+}
+
+// reportNotEncoded returns e, an event the worker couldn't encode, as err
+// says, as one it can: without its outputs and its problems, and, if it
+// finished, with one that says so. That is the worker's own bug, which
+// fails the job (failEnd), rather than stop the attempt, which the
+// coordinator would take for a lost worker, and run again.
+func (a *attempt) reportNotEncoded(e workerapi.Event, err error) workerapi.Event {
+	a.log.Error("a step's event couldn't be encoded", "step", e.Step, "try", e.Try, "cleanup", e.Cleanup, "error", a.mask.Mask(err.Error()))
+	a.cutReports.Store(true)
+	e.Outputs, e.Diagnostics = nil, nil
+	if e.Finished {
+		e.Diagnostics = problems.Diagnostics{a.at(problems.ReportNotEncoded, a.job.Steps[e.Step].Path, nil)}
+	}
+	return e
+}
+
+// failEnd fails end, the attempt's end, for a report the worker couldn't
+// encode, unless the job was cancelled or failed already, and says so in
+// its problems.
+func (a *attempt) failEnd(end *workerapi.Complete) {
+	if end.Outcome == plan.OutcomeSuccess || end.Outcome == plan.OutcomeSkipped {
+		end.Outcome = plan.OutcomeFailure
+	}
+	path := ""
+	if a.job != nil {
+		path = a.job.Path
+	}
+	end.Diagnostics = append(end.Diagnostics, a.at(problems.ReportNotEncoded, path, nil))
 }
 
 // heartbeat renews the attempt's lease every heartbeat period, and stops

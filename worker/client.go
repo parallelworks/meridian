@@ -63,6 +63,16 @@ type temporaryError struct {
 func (e *temporaryError) Error() string { return e.err.Error() }
 func (e *temporaryError) Unwrap() error { return e.err }
 
+// An encodeError is a report the worker couldn't encode, and never sent: a
+// bug of the worker's, not the coordinator's refusal, nor the attempt's
+// end.
+type encodeError struct {
+	err error
+}
+
+func (e *encodeError) Error() string { return "worker: encoding a report: " + e.err.Error() }
+func (e *encodeError) Unwrap() error { return e.err }
+
 // A client makes the worker API's requests to one coordinator.
 type client struct {
 	base      string
@@ -341,12 +351,13 @@ func (c *client) control(ctx context.Context, version int64) (*workerapi.Control
 	return ctl, err
 }
 
-// events reports events.
+// events reports events. It returns an *encodeError for events it can't
+// encode.
 func (c *client) events(ctx context.Context, events []workerapi.Event) (workerapi.EventsAck, error) {
 	var ack workerapi.EventsAck
 	body, err := workerapi.Marshal(&workerapi.Events{Events: events})
 	if err != nil {
-		return ack, err
+		return ack, &encodeError{err}
 	}
 	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathEvents, body: body, timeout: requestTimeout}, &ack)
 	return ack, err
@@ -371,11 +382,12 @@ func (c *client) upload(ctx context.Context, key logKey, offset int64, data []by
 	return ack, err
 }
 
-// complete reports the attempt's end.
+// complete reports the attempt's end. It returns an *encodeError for an
+// end it can't encode.
 func (c *client) complete(ctx context.Context, end *workerapi.Complete) error {
 	body, err := workerapi.Marshal(end)
 	if err != nil {
-		return err
+		return &encodeError{err}
 	}
 	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathComplete, body: body, timeout: requestTimeout}, nil)
 }

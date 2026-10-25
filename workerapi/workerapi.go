@@ -443,7 +443,8 @@ type Complete struct {
 	StepOutputs       map[string]map[string]string `json:"stepOutputs,omitempty"`
 	SecretStepOutputs map[string][]string          `json:"secretStepOutputs,omitempty"`
 	// Diagnostics are the problems with the job's env:, from its JobEnv
-	// phase, and End's with its outputs. A job whose env: fails has no
-	// steps that ran.
+	// phase, and End's with its outputs, and the worker's own with a
+	// report it couldn't encode. A job whose env: fails has no steps that
+	// ran.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
 }

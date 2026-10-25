@@ -397,6 +397,20 @@ func (f *fakeCoordinator) serve() string {
 	return socket
 }
 
+// claimedClient returns a client that has claimed f's attempt, served on a
+// Unix socket, as a worker's has once it runs it.
+func claimedClient(t *testing.T, f *fakeCoordinator) *client {
+	t.Helper()
+	c := newClient(endpoint{address: f.serve(), token: f.token}, testTiming, testLogger(t))
+	t.Cleanup(c.close)
+	credential := newCredential()
+	if _, _, err := c.claim(t.Context(), f.token, workerapi.ClaimRequest{Credential: credential, PlanVersion: plan.Version}); err != nil {
+		t.Fatal(err)
+	}
+	c.credential = credential
+	return c
+}
+
 // testTiming is the worker's timing, shortened for tests.
 var testTiming = timing{
 	grace:      2 * time.Second,

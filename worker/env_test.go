@@ -176,6 +176,9 @@ func TestParseOutputsNotUTF8(t *testing.T) {
 		if got, replaced := validUTF8(s); got != stored || replaced != (s != stored) {
 			t.Errorf("validUTF8(%q) = %q, %t; encoding/json stores %q", s, got, replaced, stored)
 		}
+		if n := validLen(s); n != len(stored) {
+			t.Errorf("validLen(%q) = %d, want %d", s, n, len(stored))
+		}
 	}
 	line := "v=" + strings.Repeat("\xff", maxOutputsLine-2)
 	if got, _, err := parseOutputs(line); err != nil || got["v"] != strings.Repeat("\uFFFD", maxOutputsLine-2) {

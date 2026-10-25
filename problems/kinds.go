@@ -265,6 +265,7 @@ var (
 	OutputsNotFile        = define(Error, "outputs_not_file", "$OUTPUTS isn't a file")
 	OutputsRemoved        = define(Warning, "outputs_removed", "$OUTPUTS removed as the step ran")
 	LogNotKept            = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")
+	ReportNotEncoded      = define(Error, "report_not_encoded", "Report the worker couldn't encode")
 )
 
 // The meridian command's own problems, in CommandRegistry. A path, an

@@ -1056,7 +1056,7 @@
   },
   "outputs_too_large": {
     "title": "Salidas del paso demasiado grandes",
-    "why": "Las salidas de un trabajo se guardan con su ejecución y se dan a los trabajos que lo necesitan, así que Meridian limita a 1 MiB cada archivo de salidas que escribe un paso, el archivo que indica $OUTPUTS. El límite es de Meridian, no del formato de flujo de trabajo.",
+    "why": "Las salidas de un trabajo se guardan con su ejecución y se dan a los trabajos que lo necesitan, así que Meridian limita a 1 MiB cada archivo de salidas que escribe un paso, el archivo que indica $OUTPUTS, y cuenta cada byte que no es UTF-8 como los 3 bytes del U+FFFD que lo reemplaza. El límite es de Meridian, no del formato de flujo de trabajo.",
     "fix": [
       "Escribe los resultados grandes en un archivo del directorio de la ejecución y da su ruta como salida."
     ]
@@ -1095,6 +1095,13 @@
     "why": "Mientras no puede comunicarse con el coordinador, el worker sigue ejecutando los pasos del trabajo y guarda sus registros en disco, hasta un límite, para enviarlos cuando pueda. Pasado el límite, o cuando el disco está lleno, no guarda lo que imprimen los pasos, así que al registro le falta esa parte.",
     "fix": [
       "Comprueba la conexión entre el host donde se ejecutó el trabajo y el coordinador, y el espacio del disco que contiene el directorio del worker, que por omisión está en TMPDIR."
+    ]
+  },
+  "report_not_encoded": {
+    "title": "Informe que el worker no pudo codificar",
+    "why": "El worker informa al coordinador de los eventos de cada paso, y del final del trabajo, en JSON. No pudo codificar uno de ellos, por ejemplo uno con texto que no es UTF-8, lo que es un error del worker: reemplaza esos bytes en las salidas de un paso. En lugar de detener el intento, que el coordinador tomaría por un worker perdido, envió el informe sin sus salidas ni sus problemas e hizo fallar el trabajo, para que ningún trabajo que lo necesite lea salidas que faltan. El registro del worker dice qué no pudo codificar.",
+    "fix": [
+      "Informa del error, con el registro del worker."
     ]
   },
   "workflow_too_large": {

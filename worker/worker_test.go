@@ -924,6 +924,97 @@ func TestProblemsNotUTF8(t *testing.T) {
 	}
 }
 
+// TestOutputsTooLargeNotUTF8 checks that the limit on a step's $OUTPUTS
+// counts its outputs as they are kept, each byte that isn't UTF-8 as the 3
+// of the U+FFFD that replaces it, though the file itself is within it, so
+// that what the worker reports keeps to the limit.
+func TestOutputsTooLargeNotUTF8(t *testing.T) {
+	t.Parallel()
+	// Lines of 60,004 bytes, each 180,004 once its bytes are replaced.
+	lines := func(n int) plan.Value {
+		return plan.Literal(`for i in $(seq ` + strconv.Itoa(n) + `); do printf 'v%d=' "$i"; head -c 60000 /dev/zero | LC_ALL=C tr '\0' '\377'; echo; done >> "$OUTPUTS"`)
+	}
+	over := plan.Step{ID: "over", Run: lines(6)}
+	under := plan.Step{ID: "under", Run: lines(5), If: cond("always()")}
+	f := newFakeCoordinator(t, newJob(over, under))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 failure 0", "started 1.0", "finished 1.0 success 0")
+	e := f.finishedEvent(0, 0, false)
+	if len(e.Outputs) != 0 || !slices.Equal(codes(e.Diagnostics), []string{"outputs_too_large"}) || e.Diagnostics[0].Params["size"] != float64(6*180004) {
+		t.Errorf("step 0 has %d outputs, and the diagnostics %v", len(e.Outputs), e.Diagnostics)
+	}
+	if e := f.finishedEvent(1, 0, false); len(e.Outputs) != 5 || !slices.Equal(codes(e.Diagnostics), []string{"outputs_not_utf8"}) {
+		t.Errorf("step 1 has %d outputs, and the diagnostics %v", len(e.Outputs), codes(e.Diagnostics))
+	}
+	checkEnd(t, f, plan.OutcomeFailure, "")
+}
+
+// TestReportNotEncoded checks that a report the worker can't encode, its
+// own bug, fails the job, rather than stop the attempt as if it had ended
+// without the worker: an event is sent without its outputs and problems,
+// with one that says so, and the attempt's end as a failure, without what
+// it couldn't encode, if it couldn't encode that.
+func TestReportNotEncoded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// event and end are the outputs of the step's finished event and
+		// of the attempt's end.
+		event, end map[string]string
+	}{
+		{"event", map[string]string{"a": "\xff"}, map[string]string{"a": "ok"}},
+		{"end", map[string]string{"a": "ok"}, map[string]string{"a": "\xff"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			job := newJob(command("true"))
+			f := newFakeCoordinator(t, job)
+			c := claimedClient(t, f)
+			a := &attempt{client: c, log: testLogger(t), events: newEventQueue(), spool: newSpool(nil, 0), job: job, mask: plan.NewMasker()}
+			ctx, cancel := context.WithCancel(t.Context())
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			defer cancel()
+			wg.Go(func() {
+				stop := func(err error) {
+					t.Errorf("the worker stopped: %v", err)
+					cancel()
+				}
+				a.events.send(ctx, c, stop, a.reportNotEncoded)
+			})
+			a.events.add(workerapi.Event{Time: now(), Step: 0})
+			a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 0, Outcome: plan.OutcomeSuccess, Outputs: tc.event})
+			end := &workerapi.Complete{Outcome: plan.OutcomeSuccess, Outputs: tc.end, StepOutputs: map[string]map[string]string{"s": tc.end}}
+			if err := a.deliver(ctx, end); err != nil {
+				t.Fatal(err)
+			}
+			checkEvents(t, f, "started 0.0", "finished 0.0 success 0")
+			e := f.finishedEvent(0, 0, false)
+			got := checkEnd(t, f, plan.OutcomeFailure, "")
+			if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) || got.Diagnostics[0].Pointer != "#/jobs/build" {
+				t.Errorf("the end has the diagnostics %v", got.Diagnostics)
+			}
+			if tc.name == "event" {
+				if e.Outputs != nil || !slices.Equal(codes(e.Diagnostics), []string{"report_not_encoded"}) || e.Diagnostics[0].Pointer != "#/jobs/build/steps/0" {
+					t.Errorf("the event has the outputs %q and the diagnostics %v", e.Outputs, e.Diagnostics)
+				}
+				if !reflect.DeepEqual(got.Outputs, tc.end) || !reflect.DeepEqual(got.StepOutputs, end.StepOutputs) {
+					t.Errorf("the end has the outputs %q and %q", got.Outputs, got.StepOutputs)
+				}
+			} else {
+				if !reflect.DeepEqual(e.Outputs, tc.event) || len(e.Diagnostics) != 0 {
+					t.Errorf("the event has the outputs %q and the diagnostics %v", e.Outputs, e.Diagnostics)
+				}
+				if got.Outputs != nil || got.StepOutputs != nil {
+					t.Errorf("the end has the outputs %q and %q", got.Outputs, got.StepOutputs)
+				}
+			}
+		})
+	}
+}
+
 // TestPlanTooNew checks that a worker that doesn't read the run's plan
 // version exits without running anything.
 func TestPlanTooNew(t *testing.T) {

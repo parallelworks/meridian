@@ -1526,7 +1526,9 @@ opened without waiting, so that a FIFO there fails the step rather than make
 the worker wait forever, as it makes format 1 wait, which is a bug; format 1
 is to fail it too. A job's outputs are capped at 1 MB and a run's at 50 MB,
 a limit of Meridian's, which format 1 doesn't have: the worker reads no more
-than 1 MiB of a step's file, and a step whose file is larger fails, but for
+than 1 MiB of a step's file, counting each byte that isn't UTF-8 as the
+3 bytes of the U+FFFD that replaces it, and a step whose file is larger
+fails, but for
 one without an `id` whose job's shared file was already larger, which can't
 add to it. A job's outputs are format 1's: what its steps wrote, the later
 step's where two wrote the same name, what its cleanups wrote over that, and

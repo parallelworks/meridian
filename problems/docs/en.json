@@ -905,7 +905,7 @@
     ]
   },
   "outputs_too_large": {
-    "why": "A job's outputs are kept with its run and given to the jobs that need it, so Meridian limits each file of outputs that a step writes, the file $OUTPUTS names, to 1 MiB. The limit is Meridian's own, not part of the workflow format.",
+    "why": "A job's outputs are kept with its run and given to the jobs that need it, so Meridian limits each file of outputs that a step writes, the file $OUTPUTS names, to 1 MiB, counting each byte that isn't UTF-8 as the 3 bytes of the U+FFFD that replaces it. The limit is Meridian's own, not part of the workflow format.",
     "fix": [
       "Write large results to a file in the run's directory, and give its path as the output."
     ]
@@ -939,6 +939,12 @@
     "why": "While the coordinator can't be reached, the worker keeps running the job's steps, and keeps their logs on disk to send once it can, up to a limit. Past the limit, or once the disk is full, it doesn't keep what the steps print, so the log is missing that much of it.",
     "fix": [
       "Check the connection between the host the job ran on and the coordinator, and the space on the disk that holds the worker's directory, as TMPDIR does by default."
+    ]
+  },
+  "report_not_encoded": {
+    "why": "The worker reports each step's events, and the job's end, to the coordinator as JSON. It couldn't encode one of them, as one holding text that isn't UTF-8, which is a bug in the worker: it replaces such bytes in a step's outputs. Rather than stop the attempt, which the coordinator would take for a lost worker, it sent the report without its outputs and problems, and failed the job, so that no job that needs it reads outputs that are missing. The worker's log says what it couldn't encode.",
+    "fix": [
+      "Report the bug, with the worker's log."
     ]
   },
   "workflow_too_large": {
