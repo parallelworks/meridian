@@ -44,3 +44,33 @@ b: {type: string, optional: true}`)
 		t.Errorf("the plans differ by what the ignore decided:\n%s\n%s", plans[0], plans[1])
 	}
 }
+
+// A value given at the key of a flattened group with a password among its
+// inputs is kept as a secret, whatever its shape, as the group's inputs sent
+// under its name can hold the password, misspelt or as text: the plan
+// doesn't hold it, and the run masks it.
+func TestFlattenedGroupValueHoldsPassword(t *testing.T) {
+	src := workflow("g: {type: group, flatten: true, items: {pw: {type: password, optional: true}, u: {type: string}}}")
+	for name, given := range map[string]any{
+		"a misspelt key": map[string]any{"pW": "SECRET-zz9"},
+		"text":           `{"pw":"SECRET-zz9"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, res, diags := started(t, src, map[string]any{"u": "a", "g": given}, testVariables{})
+			if res == nil {
+				t.Fatal(diags)
+			}
+			data, err := plan.Encode(c.Plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "SECRET-zz9") {
+				t.Errorf("the plan holds the value: %s", data)
+			}
+			masker := plan.NewMasker(res.Run.Masked()...)
+			if got := masker.Mask(canonical(t, res.Run.Inputs.Get())); strings.Contains(got, "SECRET-zz9") {
+				t.Errorf("the run's values show it: %s", got)
+			}
+		})
+	}
+}

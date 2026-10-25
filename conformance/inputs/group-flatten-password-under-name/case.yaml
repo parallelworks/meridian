@@ -1,0 +1,32 @@
+description: >-
+  A value given at the key of a group that flattens with a password among
+  its inputs is kept as a secret, whatever its shape: its inputs sent under
+  the group's name can hold the password, misspelt or as text, which
+  ACTIVATE keeps there. One given at the key of a group without a password
+  is kept among the values.
+source: Meridian
+inputs:
+  a:
+    pW: HUNTER2SECRET
+  b: '{"pass":"HUNTER2SECRET"}'
+  c: plain
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/a
+      params: {input: a}
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/b
+      params: {input: b}
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/c
+      params: {input: c}
+  inputs:
+    c: plain
+  secrets:
+    a:
+      pW: HUNTER2SECRET
+    b: '{"pass":"HUNTER2SECRET"}'

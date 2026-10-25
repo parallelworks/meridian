@@ -672,8 +672,10 @@ ACTIVATE's launch form and its backend do together:
   `flatten: true`: then its inputs' values are beside the group's, under
   their own names, as ACTIVATE runs it, in a list's row, a wizard step or
   another group as well, and the group has none of its own. A value given
-  at its key is kept, as ACTIVATE keeps it, with a warning
-  (`flattened_group_value`), and none of its inputs reads it; ignoring the
+  at its key, of any shape, is kept, as ACTIVATE keeps it, with a warning
+  (`flattened_group_value`), and none of its inputs reads it; it is kept as
+  a secret if the group has a password among its inputs, which the group's
+  inputs sent under its name, misspelt or as text, can hold. Ignoring the
   group drops its inputs' values and that one, and hiding it hides its
   inputs, as for any group. `inputs.<group>.<input>` doesn't read such an
   input, which the compiler warns of in a job (`flattened_input_ref`), as

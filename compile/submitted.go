@@ -257,7 +257,9 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 // misspelling is; or v is a mapping or a list, and key is close to the
 // name of one with a password among its inputs, or v holds a key that is a
 // password field's name or can be a secret's, as a flattened wizard step's
-// inputs sent under its name do.
+// inputs sent under its name do; or key is a flattened group's with a
+// password among its inputs, whatever v is, as its inputs sent under its
+// name, misspelt or as text, can hold one.
 func (r *inputResolver) namesPassword(key string, v any, inputs *knownInputs) bool {
 	if r.passwordKeys == nil {
 		r.passwordKeys = map[string]bool{}
@@ -265,6 +267,9 @@ func (r *inputResolver) namesPassword(key string, v any, inputs *knownInputs) bo
 		passwordKeys(defs, r.passwordKeys)
 	}
 	if r.passwordKeys[key] || namesSecret(key) || r.holdsPasswordKey(v) {
+		return true
+	}
+	if g := inputs.flattened[key]; g != nil && holdsPassword(g.def) {
 		return true
 	}
 	if inputs.passwords == nil {
