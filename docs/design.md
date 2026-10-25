@@ -197,10 +197,15 @@ files.
   ignored a timeout it couldn't read and fell back to a retry's defaults:
   an expression's value for a job's or a step's `timeout:`, a retry's
   `interval:` or `timeout:` (`duration_invalid`), or `max-retries:`
-  (`count_invalid`). A literal one is a schema error already. 11 workflows
-  take retry values from expressions, of inputs whose defaults read as one
-  and of outputs a step wrote, and none takes a timeout from one. In
-  detail: `+5m` is a duration, as in format 1;
+  (`count_invalid`). A literal one is a schema error already. A step's
+  `timeout:` and `retry:` read `env` as its other values do, with the
+  variables the worker defines: its `timeout:` for each try, and its
+  `retry:` as its first try is evaluated, where format 1 left an
+  expression there that read `env` as its text, and so ignored it. 11
+  workflows take retry values from expressions, of inputs whose defaults
+  read as one and of outputs a step wrote, none takes a timeout from one,
+  and none of the 18 step retries reads `env`. In detail: `+5m` is a
+  duration, as in format 1;
   null, `""` and `0` without a unit are the default, as format 1 reads a
   value it has none of, so a retry waits 5 seconds and a step's timeout is
   none; `0s` is 0, which for a job's or a step's timeout is none, where
