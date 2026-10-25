@@ -532,6 +532,9 @@ func TestPasswordOfEachKindMasked(t *testing.T) {
 		"a row's number":  {"l: {type: list, template: {p: {type: password}}}", map[string]any{"l": []any{map[string]any{"p": 55667788}}}, "55667788"},
 		"text":            {"pw: {type: password}", map[string]any{"pw": "98765432"}, "98765432"},
 		"a group's value": {"g: {type: group, items: {pw: {type: password}}}", map[string]any{"g": map[string]any{"pw": 24681357}}, "24681357"},
+		// Read as a float64, as ACTIVATE reads it, every rendering of it
+		// is the same number.
+		"a whole number past 2^53": {"pw: {type: password}", map[string]any{"pw": int64(9007199254740993)}, "9007199254740992"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, res, diags := started(t, workflow(tc.defs), tc.submitted, testVariables{})
@@ -552,6 +555,51 @@ func TestPasswordOfEachKindMasked(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// firstStep starts a run of src, readies its job main and returns its first
+// step's command, and the command masked as a worker masks it.
+func firstStep(t *testing.T, src string, submitted map[string]any) (raw, masked string) {
+	t.Helper()
+	c, res, diags := started(t, src, submitted, testVariables{})
+	if res == nil {
+		t.Fatal(diags)
+	}
+	j := &c.Plan.Jobs[slices.IndexFunc(c.Plan.Jobs, func(j plan.Job) bool { return j.Name == "main" })]
+	ready, _, err := j.Ready(t.Context(), plan.ReadyInput{Run: res.Run})
+	if err != nil || ready.Job == nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: res.Run, Masked: res.Run.Masked()}
+	env, d, err := ready.Job.JobEnv(t.Context(), state)
+	if err != nil || d.HasErrors() {
+		t.Fatal(d, err)
+	}
+	state.JobEnv = env
+	state.Masked = append(slices.Clone(state.Masked), env.Masked...)
+	s, d, err := ready.Job.Step(t.Context(), 0, state)
+	if err != nil || d.HasErrors() {
+		t.Fatal(d, err)
+	}
+	return s.Run, plan.NewMasker(slices.Concat(state.Masked, s.Masked)...).Mask(s.Run)
+}
+
+// A submitted whole number past 2^53 is read as ACTIVATE reads a JSON
+// number, as the float64 nearest it, everywhere: so a password's every
+// rendering, the value a round trip through JSON gives among them, is the
+// same text, which the run masks.
+func TestWholeNumberPast2To53ReadAsFloat(t *testing.T) {
+	src := workflow("pw: {type: password}\nn: {type: number}",
+		"jobs:\n  main:\n    steps:\n      - run: echo ${{ inputs.pw }} ${{ fromJSON(toJSON(inputs.pw)) }} ${{ toJSON(inputs) }} n=${{ inputs.n }}\n")
+	raw, masked := firstStep(t, src, map[string]any{"pw": int64(9007199254740995), "n": int64(9007199254740993)})
+	if !strings.Contains(raw, "n=9007199254740992") || strings.Contains(raw, "9007199254740993") {
+		t.Errorf("n reads otherwise than 9007199254740992: %s", raw)
+	}
+	for _, text := range []string{"9007199254740995", "9007199254740996"} {
+		if strings.Contains(masked, text) {
+			t.Errorf("the password shows as %s: %s", text, masked)
+		}
 	}
 }
 

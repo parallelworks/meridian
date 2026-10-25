@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      n:
+        type: number
+      s:
+        type: string
+        default: n=${{ inputs.n }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

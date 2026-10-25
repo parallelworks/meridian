@@ -141,6 +141,10 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 }
 
 func newInputResolver(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
+	if submitted != nil {
+		submitted = jsonvalue.CloneMap(submitted)
+		floatNumbers(submitted)
+	}
 	return &inputResolver{
 		doc:          doc,
 		opts:         opts,
@@ -206,7 +210,8 @@ type inputResolver struct {
 	// language's limits as well.
 	budget expr.Scope
 	// values are the inputs' values, and submitted those the run was given,
-	// as they were given, which the caller keeps.
+	// as they were given, but for a number, read as ACTIVATE reads it
+	// (floatNumbers).
 	values, submitted map[string]any
 	secretState
 	taintState

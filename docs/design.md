@@ -657,8 +657,11 @@ ACTIVATE's launch form and its backend do together:
 - **Types.** Format 1 reads every input value as it was submitted, as
   ACTIVATE does, and converts none: its defaults, conditions, `env:` and
   steps read a number sent as text as that text, so `"8" + 1` is `"81"`,
-  and the text `"true"` isn't `true`, nor is `"false"` false; and a
-  submitted null stays null, as Defaults says. ACTIVATE's
+  and the text `"true"` isn't `true`, nor is `"false"` false; a
+  submitted null stays null, as Defaults says; and a submitted number is
+  read as ACTIVATE reads a JSON number, as a 64-bit float, so a whole
+  number past 2^53 is the float nearest it: 9007199254740993 is
+  9007199254740992 wherever it is read. ACTIVATE's
   run form sends a number field's value as a JSON number and a checkbox's
   as a JSON boolean, and a JSON caller writes the types itself; a client
   that has only text converts by the field's type, as `meridian
