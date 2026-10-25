@@ -119,7 +119,10 @@ var (
 // location a workflow's place, as a plan's Source names it; commit, digest
 // and pinned as Git and the plan write them; and reason what git said.
 var (
-	SourceRefInvalid       = define(Error, "source_ref_invalid", "Not a reference to a workflow in Git", "ref")
+	SourceRefInvalid = define(Error, "source_ref_invalid", "Not a reference to a workflow in Git", "ref")
+	// SourceWithInvalid is a step's with: $yaml or $host, key, that isn't a
+	// file's path or a server's name: what is server or file.
+	SourceWithInvalid      = define(Error, "source_with_invalid", "Workflow's server or file not one a uses: can name", "key", "what")
 	SourceOnPlatform       = define(Error, "source_on_platform", "Workflow a platform stores", "ref")
 	SourceRevisionNotFound = define(Error, "source_revision_not_found", "No such repository or revision", "repo", "revision", "reason")
 	SourceFileNotFound     = define(Error, "source_file_not_found", "No such workflow file in the repository", "repo", "path", "commit")

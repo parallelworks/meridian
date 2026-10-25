@@ -171,7 +171,7 @@
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",
   "source_ref_invalid": "El uses: “{ref}” no es una referencia a un flujo de trabajo en un repositorio Git, como github/propietario/repositorio@revisión.",
   "source_on_platform": "El uses: “{ref}” nombra un flujo de trabajo que guarda una plataforma, y solo esa plataforma puede leerlo.",
-  "source_revision_not_found": "Git no encontró la revisión “{revision}” del repositorio {repo}: {reason}.",
+  "source_revision_not_found": "Git no encontró la revisión “{revision}” del repositorio {repo}: {reason}. Una confirmación se nombra por su SHA completo.",
   "source_file_not_found": "El repositorio {repo} no tiene ningún archivo “{path}” en la confirmación {commit}.",
   "source_too_large": "El flujo de trabajo {location} en la confirmación {commit} tiene más de {limit} bytes, lo máximo que lee Meridian.",
   "source_changed": "El flujo de trabajo {location} en la confirmación {commit} no es el texto al que se fijó: su resumen es {digest}, no {pinned}.",
@@ -251,5 +251,6 @@
   "worker_system_unsupported": "El worker no se ejecuta en {os}, donde no puede mantener tus otros procesos fuera de su memoria.",
   "source_server_unknown": "El servidor de GitLab “{server}” que nombra el with: $host del paso no es uno registrado aquí.",
   "compute_target_unknown": "Aquí no hay ningún destino de cómputo “{target}” en el modo {mode}.",
-  "gitlab_server_invalid": "El servidor de GitLab “{server}” no es un nombre de host, sin puerto, como git.example.com."
+  "gitlab_server_invalid": "El servidor de GitLab “{server}” no es un nombre de host, sin puerto, como git.example.com.",
+  "source_with_invalid": "El with: {key} del paso no es {what, select, server {el nombre de un servidor de GitLab, un nombre DNS sin puerto, como git.example.com} other {la ruta de un archivo del repositorio, como flows/workflow.yaml, sin nombres vacíos, . ni .., ni caracteres de control}}."
 }

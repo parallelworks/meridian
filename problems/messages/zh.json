@@ -171,7 +171,7 @@
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
   "source_ref_invalid": "uses:“{ref}”不是对 Git 仓库中工作流的引用，例如 github/owner/repository@revision。",
   "source_on_platform": "uses:“{ref}”指定的是平台存储的工作流，只有该平台才能读取。",
-  "source_revision_not_found": "Git 未找到仓库 {repo} 的修订“{revision}”：{reason}",
+  "source_revision_not_found": "Git 未找到仓库 {repo} 的修订“{revision}”：{reason}。提交要用完整的 SHA 指定。",
   "source_file_not_found": "仓库 {repo} 在提交 {commit} 中没有文件“{path}”。",
   "source_too_large": "提交 {commit} 中的工作流 {location} 超过 {limit} 字节，超出了 Meridian 读取的上限。",
   "source_changed": "提交 {commit} 中的工作流 {location} 不是固定时的文本：其摘要为 {digest}，而不是 {pinned}。",
@@ -251,5 +251,6 @@
   "worker_system_unsupported": "工作进程不在 {os} 上运行：在那里它无法阻止你的其他进程访问它的内存。",
   "source_server_unknown": "该步骤的 with: $host 指定的 GitLab 服务器“{server}”在这里未注册。",
   "compute_target_unknown": "这里没有模式为 {mode} 的计算目标“{target}”。",
-  "gitlab_server_invalid": "GitLab 服务器“{server}”不是不带端口的主机名，例如 git.example.com。"
+  "gitlab_server_invalid": "GitLab 服务器“{server}”不是不带端口的主机名，例如 git.example.com。",
+  "source_with_invalid": "该步骤的 with: {key} {what, select, server {不是 GitLab 服务器的名称，即不带端口的 DNS 名称，例如 git.example.com} other {不是仓库中文件的路径，例如 flows/workflow.yaml，其中不能有空名称、. 或 ..，也不能有控制字符}}。"
 }

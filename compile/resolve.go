@@ -263,7 +263,8 @@ var workflowUses = []string{"github/", "gitlab/", "marketplace/", "workflow/"}
 // again from pinned, so that a run reads one workflow at one commit
 // however its steps write its name.
 func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.SourceRef]*plan.Source) error {
-	if !slices.ContainsFunc(workflowUses, func(prefix string) bool { return strings.HasPrefix(s.Uses, prefix) }) {
+	written := !strings.Contains(s.Uses, "${{")
+	if written && !slices.ContainsFunc(workflowUses, func(prefix string) bool { return strings.HasPrefix(s.Uses, prefix) }) {
 		return nil
 	}
 	loc, err := jsonptr.Split(s.Path)
@@ -271,6 +272,14 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 		return err
 	}
 	usesLoc := appendPath(loc, "uses")
+	if !written {
+		// ACTIVATE evaluates a uses: with the run's inputs before it reads
+		// it, and so can find a workflow in one; the workflow is pinned as
+		// the run is created, so the reference must be written out
+		// (docs/design.md).
+		c.reportAt(problems.SourceNotKnown, usesLoc, problems.Params{"key": "uses:"})
+		return nil
+	}
 	ref := plan.SourceRef{Uses: s.Uses}
 	for _, with := range []struct {
 		key string
@@ -312,7 +321,14 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 	pinned[key] = nil
 	w, err := c.opts.Sources.Resolve(ctx, ref)
 	if err != nil {
-		return c.resolverError(ctx, err, usesLoc, problems.SourceNotFound, problems.Params{"ref": s.Uses})
+		at := usesLoc
+		if k, p, ok := workflowProblem(err); ok && k == problems.SourceWithInvalid {
+			// What is wrong is the step's $yaml or $host.
+			if key, _ := p["key"].(string); key == "$yaml" || key == "$host" {
+				at = appendPath(loc, "with", key)
+			}
+		}
+		return c.resolverError(ctx, err, at, problems.SourceNotFound, problems.Params{"ref": s.Uses})
 	}
 	if w == nil {
 		return errors.New("compile: Sources.Resolve gave neither a workflow nor an error")

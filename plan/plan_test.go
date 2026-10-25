@@ -961,8 +961,12 @@ func TestSourceRefNormal(t *testing.T) {
 		{Uses: "gitlab/g/p", Host: " Git.Example.COM "}:          {Uses: "gitlab/g/p", Path: "workflow.yaml", Host: "git.example.com"},
 		{Uses: "gitlab/g/p", Host: " "}:                          {Uses: "gitlab/g/p", Path: "workflow.yaml", Host: "gitlab.com"},
 		{Uses: " github/o/r"}:                                    {Uses: " github/o/r"},
-		{Uses: "workflow/w", Path: "x"}:                          {Uses: "workflow/w", Path: "x"},
-		{Uses: "marketplace/m"}:                                  {Uses: "marketplace/m"},
+		// A $yaml from the root, as ACTIVATE fetches the file.
+		{Uses: "github/o/r", Path: "//a/w.yaml"}: {Uses: "github/o/r", Path: "a/w.yaml"},
+		{Uses: "gitlab/g/p", Path: "//a/w.yaml"}: {Uses: "gitlab/g/p", Path: "/a/w.yaml", Host: "gitlab.com"},
+		{Uses: "github/o/r", Path: "/"}:          {Uses: "github/o/r", Path: ""},
+		{Uses: "workflow/w", Path: "x"}:          {Uses: "workflow/w", Path: "x"},
+		{Uses: "marketplace/m"}:                  {Uses: "marketplace/m"},
 	} {
 		if got := ref.Normal(); got != want {
 			t.Errorf("%+v.Normal() = %+v, want %+v", ref, got, want)

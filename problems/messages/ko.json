@@ -171,7 +171,7 @@
   "execution_group_unknown": "‘{input}’ 입력이 지정한 실행 그룹 {value}은(는) 그룹 {groups} 중 하나가 아닙니다.",
   "source_ref_invalid": "uses: ‘{ref}’은(는) github/owner/repository@revision 같은 Git 저장소의 워크플로 참조가 아닙니다.",
   "source_on_platform": "uses: ‘{ref}’은(는) 플랫폼이 저장한 워크플로를 가리키므로 그 플랫폼만 읽을 수 있습니다.",
-  "source_revision_not_found": "Git이 {repo} 저장소의 ‘{revision}’ 리비전을 찾지 못했습니다: {reason}",
+  "source_revision_not_found": "Git이 {repo} 저장소의 ‘{revision}’ 리비전을 찾지 못했습니다: {reason}. 커밋은 전체 SHA로 지정합니다.",
   "source_file_not_found": "{repo} 저장소의 {commit} 커밋에는 ‘{path}’ 파일이 없습니다.",
   "source_too_large": "{commit} 커밋의 워크플로 {location}이(가) Meridian이 읽는 최대 크기인 {limit}바이트보다 큽니다.",
   "source_changed": "{commit} 커밋의 워크플로 {location}이(가) 고정한 텍스트와 다릅니다. 다이제스트가 {pinned}이(가) 아니라 {digest}입니다.",
@@ -251,5 +251,6 @@
   "worker_system_unsupported": "워커는 {os}에서 실행되지 않습니다. 그곳에서는 당신의 다른 프로세스를 자신의 메모리에서 막을 수 없기 때문입니다.",
   "source_server_unknown": "단계의 with: $host가 지정한 GitLab 서버 ‘{server}’은(는) 여기에 등록되어 있지 않습니다.",
   "compute_target_unknown": "여기에는 모드 {mode}의 컴퓨팅 대상 ‘{target}’이(가) 없습니다.",
-  "gitlab_server_invalid": "GitLab 서버 ‘{server}’은(는) git.example.com처럼 포트를 붙이지 않은 호스트 이름이 아닙니다."
+  "gitlab_server_invalid": "GitLab 서버 ‘{server}’은(는) git.example.com처럼 포트를 붙이지 않은 호스트 이름이 아닙니다.",
+  "source_with_invalid": "단계의 with: {key}은(는) {what, select, server {GitLab 서버의 이름, 즉 git.example.com 같은 포트 없는 DNS 이름이 아닙니다} other {flows/workflow.yaml 같은 저장소 안 파일의 경로가 아닙니다. 빈 이름, . 또는 .., 제어 문자를 담을 수 없습니다}}."
 }

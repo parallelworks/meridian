@@ -651,9 +651,9 @@
   },
   "source_not_known": {
     "title": "创建运行时还不知道工作流的位置",
-    "why": "步骤的 uses: 指定的工作流会在创建运行时被解析，并固定到其提交和文本摘要，使运行及其重新运行执行相同的文本。其 with: 的 $yaml 和 $host 说明它在哪里，因此必须直接写出，而不能引用之后才知道的内容。",
+    "why": "步骤的 uses: 指定的工作流会在创建运行时被解析，并固定到其提交和文本摘要，使运行及其重新运行执行相同的文本。其 uses: 以及 with: 的 $yaml 和 $host 说明它在哪里，因此必须直接写出，而不能引用之后才知道的内容。ACTIVATE 会在读取它们之前用运行的输入对其求值；已知的工作流中没有在其中使用表达式的。",
     "fix": [
-      "在步骤的 with: 中直接写出文件和服务器。"
+      "在步骤的 uses: 中直接写出引用，并在其 with: 中直接写出文件和服务器。"
     ]
   },
   "expression_failed": {
@@ -1189,7 +1189,7 @@
     "title": "没有该仓库或修订",
     "why": "Meridian 使用 git 获取 uses: 指定的修订，但 git 未找到该仓库，或仓库中没有该分支、标签或提交。git 无法用您的凭据读取的私有仓库看起来也可能是这样。",
     "fix": [
-      "检查仓库的所有者和名称，以及 @ 后面的修订。",
+      "检查仓库的所有者和名称，以及 @ 后面的修订。git 按 40 或 64 个字符的完整 SHA 获取提交，而 ACTIVATE 也接受短 SHA。",
       "检查 git 能否用您的凭据获取该仓库，例如使用 git ls-remote 和仓库的 URL。"
     ]
   },
@@ -1758,6 +1758,13 @@
     "fix": [
       "将服务器写为 git.example.com。",
       "对于其他端口上的服务器，请注册它的名称，并用 Git 的 url.<base>.insteadOf 设置让 Git 通过该端口访问它，例如：git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
+    ]
+  },
+  "source_with_invalid": {
+    "title": "uses: 无法指定的工作流服务器或文件",
+    "why": "步骤的 with: $host 按 ACTIVATE 的读法，用不带端口的 DNS 名称指定存放其 uses: 所指工作流的 GitLab 服务器；$yaml 用从仓库根目录起的路径指定仓库中工作流的文件。以斜杠开头的路径按 ACTIVATE 获取文件的方式从根目录起算：在 GitHub 上去掉开头的所有斜杠，在 GitLab 上去掉一个。为了让路径指向仓库自己的文件，路径中的任何名称都不能为空（./ 或连续两个斜杠会产生空名称），不能是 . 或 ..，也不能含有控制字符。",
+    "fix": [
+      "把服务器写成 git.example.com，把文件写成 flows/workflow.yaml。"
     ]
   }
 }

@@ -241,7 +241,9 @@ const DefaultSourcePath = "workflow.yaml"
 // one whose uses: starts with github/ or gitlab/: its uses: without the
 // space after it, or, on GitLab, after gitlab/ too, and without one slash
 // and then .git after the repository's name, which is before the first @;
-// its Path, DefaultSourcePath if it is ""; and its Host in lower case
+// its Path, DefaultSourcePath if it is "", and otherwise from the
+// repository's root, as ACTIVATE fetches the file: without the slashes
+// before it on GitHub, and without one on GitLab; and its Host in lower case
 // without the space around it, gitlab.com if that leaves none, for a
 // GitLab project's, and none for a GitHub repository's, whose server a
 // $host doesn't name. Any other is r. Normal doesn't check what it reads:
@@ -253,16 +255,18 @@ func (r SourceRef) Normal() SourceRef {
 	case strings.HasPrefix(r.Uses, "github/"):
 		out.Uses = "github/"
 		rest = strings.TrimPrefix(strings.TrimSpace(r.Uses), "github/")
+		out.Path = strings.TrimLeft(out.Path, "/")
 	case strings.HasPrefix(r.Uses, "gitlab/"):
 		out.Uses = "gitlab/"
 		rest = strings.TrimSpace(strings.TrimPrefix(r.Uses, "gitlab/"))
 		if out.Host = strings.ToLower(strings.TrimSpace(r.Host)); out.Host == "" {
 			out.Host = "gitlab.com"
 		}
+		out.Path = strings.TrimPrefix(out.Path, "/")
 	default:
 		return r
 	}
-	if out.Path == "" {
+	if r.Path == "" {
 		out.Path = DefaultSourcePath
 	}
 	name, rev, hasRev := strings.Cut(rest, "@")

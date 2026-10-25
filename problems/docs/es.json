@@ -651,9 +651,9 @@
   },
   "source_not_known": {
     "title": "Lugar del flujo de trabajo no conocido al crear la ejecución",
-    "why": "El flujo de trabajo que nombra el uses: de un paso se resuelve y se fija a su commit y al resumen de su texto al crear la ejecución, para que la ejecución y sus reejecuciones ejecuten el mismo texto. Su with: $yaml y $host dicen dónde está, así que deben estar escritos tal cual, no leídos de algo que solo se conoce después.",
+    "why": "El flujo de trabajo que nombra el uses: de un paso se resuelve y se fija a su commit y al resumen de su texto al crear la ejecución, para que la ejecución y sus reejecuciones ejecuten el mismo texto. Su uses:, y su with: $yaml y $host, dicen dónde está, así que deben estar escritos tal cual, no leídos de algo que solo se conoce después. ACTIVATE los evalúa con las entradas de la ejecución antes de leerlos; ningún flujo de trabajo conocido tiene una expresión en uno de ellos.",
     "fix": [
-      "Escribe el archivo y el servidor tal cual en el with: del paso."
+      "Escribe la referencia tal cual en el uses: del paso, y el archivo y el servidor en su with:."
     ]
   },
   "expression_failed": {
@@ -1189,7 +1189,7 @@
     "title": "No existe el repositorio o la revisión",
     "why": "Meridian obtiene con git la revisión que nombra un uses:, y git no encontró tal repositorio, o tal rama, etiqueta o confirmación en él. Un repositorio privado que git no puede leer con tus credenciales puede parecer lo mismo.",
     "fix": [
-      "Comprueba el propietario y el nombre del repositorio, y la revisión después de @.",
+      "Comprueba el propietario y el nombre del repositorio, y la revisión después de @. Git obtiene una confirmación por su SHA completo, de 40 o 64 caracteres, donde ACTIVATE también acepta uno corto.",
       "Comprueba que git puede obtener el repositorio con tus credenciales, como con git ls-remote y la URL del repositorio."
     ]
   },
@@ -1758,6 +1758,13 @@
     "fix": [
       "Escribe el servidor como git.example.com.",
       "Para un servidor en otro puerto, registra su nombre y haz que Git llegue a él por su puerto con el ajuste url.<base>.insteadOf de Git, como en: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
+    ]
+  },
+  "source_with_invalid": {
+    "title": "Servidor o archivo del flujo de trabajo que un uses: no puede nombrar",
+    "why": "El with: $host de un paso nombra el servidor de GitLab que contiene el flujo de trabajo que nombra su uses:, por su nombre DNS, sin puerto, como lo lee ACTIVATE; y $yaml nombra el archivo del flujo de trabajo en el repositorio por su ruta desde la raíz del repositorio. Una ruta que empieza con una barra es desde la raíz, como ACTIVATE obtiene el archivo: se quitan todas las barras iniciales en GitHub, y una en GitLab. Ningún nombre de la ruta puede estar vacío, como lo dejan ./ o una barra doble, ni ser . o .., ni contener un carácter de control, para que la ruta nombre un archivo del propio repositorio.",
+    "fix": [
+      "Escribe el servidor como git.example.com, y el archivo como flows/workflow.yaml."
     ]
   }
 }

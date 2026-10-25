@@ -558,9 +558,9 @@
     ]
   },
   "source_not_known": {
-    "why": "The workflow a step's uses: names is resolved and pinned to its commit and its text's digest when the run is created, so that the run and its reruns run the same text. Its with: $yaml and $host say where it is, so they must be written out, not read from what is known only later.",
+    "why": "The workflow a step's uses: names is resolved and pinned to its commit and its text's digest when the run is created, so that the run and its reruns run the same text. Its uses:, and its with: $yaml and $host, say where it is, so they must be written out, not read from what is known only later. ACTIVATE evaluates them with the run's inputs before it reads them; no known workflow has an expression in one.",
     "fix": [
-      "Write the file and the server out in the step's with:."
+      "Write the reference out in the step's uses:, and the file and the server in its with:."
     ]
   },
   "expression_failed": {
@@ -1020,7 +1020,7 @@
   "source_revision_not_found": {
     "why": "Meridian fetches the revision a uses: names with git, and git found no such repository, or no such branch, tag or commit in it. A private repository that git can't read with your credentials can look the same.",
     "fix": [
-      "Check the repository's owner and name, and the revision after @.",
+      "Check the repository's owner and name, and the revision after @. Git fetches a commit by its full SHA, of 40 or 64 characters, where ACTIVATE takes a short one too.",
       "Check that git can fetch the repository with your credentials, as with git ls-remote and the repository's URL."
     ]
   },
@@ -1510,6 +1510,12 @@
     "fix": [
       "Write the server as git.example.com.",
       "For a server at another port, register its name, and have Git reach it at its port with Git's url.<base>.insteadOf setting, as in: git config --global url.https://git.example.com:8443/.insteadOf https://git.example.com/"
+    ]
+  },
+  "source_with_invalid": {
+    "why": "A step's with: $host names the GitLab server that holds the workflow its uses: names, by its DNS name, with no port, as ACTIVATE reads it; and $yaml names the workflow's file in the repository by its path from the repository's root. A path that starts with a slash is from the root, as ACTIVATE fetches the file: every slash before it goes on GitHub, and one on GitLab. No name in the path can be empty, as ./ or a doubled slash makes one, nor . or .., nor hold a control character, so that the path names a file among the repository's own.",
+    "fix": [
+      "Write the server as git.example.com, and the file as flows/workflow.yaml."
     ]
   }
 }

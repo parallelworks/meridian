@@ -171,7 +171,7 @@
   "execution_group_unknown": "入力「{input}」が指定している実行グループ {value} は、グループ {groups} のいずれでもありません。",
   "source_ref_invalid": "uses:「{ref}」は、github/owner/repository@revision のような Git リポジトリ内のワークフローへの参照ではありません。",
   "source_on_platform": "uses:「{ref}」はプラットフォームが保存するワークフローを指定しており、そのプラットフォームしか読み込めません。",
-  "source_revision_not_found": "Git はリポジトリ {repo} のリビジョン「{revision}」を見つけられませんでした: {reason}",
+  "source_revision_not_found": "Git はリポジトリ {repo} のリビジョン「{revision}」を見つけられませんでした: {reason}。コミットは完全な SHA で指定します。",
   "source_file_not_found": "リポジトリ {repo} のコミット {commit} にファイル「{path}」はありません。",
   "source_too_large": "コミット {commit} のワークフロー {location} は {limit} バイトを超えており、Meridian が読み込める上限を超えています。",
   "source_changed": "コミット {commit} のワークフロー {location} は固定したテキストと異なります。ダイジェストが {pinned} ではなく {digest} です。",
@@ -251,5 +251,6 @@
   "worker_system_unsupported": "ワーカーは {os} では動作しません。そこではあなたの他のプロセスを自分のメモリから締め出せないためです。",
   "source_server_unknown": "ステップの with: $host が指定する GitLab サーバー「{server}」は、ここで登録されていません。",
   "compute_target_unknown": "ここにはモード {mode} のコンピュートターゲット「{target}」がありません。",
-  "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com のような、ポートを付けないホスト名ではありません。"
+  "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com のような、ポートを付けないホスト名ではありません。",
+  "source_with_invalid": "ステップの with: {key} は{what, select, server {GitLab サーバーの名前、つまり git.example.com のようなポートのない DNS 名ではありません} other {flows/workflow.yaml のようなリポジトリ内のファイルのパスではありません。空の名前、. や ..、制御文字は含められません}}。"
 }

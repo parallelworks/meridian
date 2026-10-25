@@ -397,6 +397,17 @@ func TestCreatePinsWorkflows(t *testing.T) {
 			&testSources{err: problems.SourceRefInvalid.Problem(problems.Params{"ref": "github/acme/none"})}, "source_ref_invalid", "/jobs/a/steps/0/uses",
 		},
 		"no resolver": {"jobs:\n  a:\n    steps:\n      - uses: workflow/mine\n", nil, "resolver_missing", "/jobs/a/steps/0/uses"},
+		// What is wrong with the step's $host or $yaml is theirs.
+		"a $host that isn't a server": {
+			"jobs:\n  a:\n    steps:\n      - uses: gitlab/g/p\n        with: {$host: 'git.example.com:8443'}\n",
+			&testSources{err: problems.SourceWithInvalid.Problem(problems.Params{"key": "$host", "what": "server"})}, "source_with_invalid", "/jobs/a/steps/0/with/$host",
+		},
+		// ACTIVATE evaluates a uses: before it reads it; the workflow is
+		// pinned as the run is created, so the reference is written out.
+		"an expression in a uses:": {
+			"on:\n  execute:\n    inputs:\n      r: {type: string, default: main}\njobs:\n  a:\n    steps:\n      - uses: github/acme/flows@${{ inputs.r }}\n",
+			&testSources{}, "source_not_known", "/jobs/a/steps/0/uses",
+		},
 		"not written out": {
 			"on:\n  execute:\n    inputs:\n      f: {type: string, default: w.yaml}\njobs:\n  a:\n    steps:\n      - uses: github/acme/flows\n        with: {$yaml: '${{ inputs.f }}'}\n",
 			&testSources{}, "source_not_known", "/jobs/a/steps/0/with/$yaml",

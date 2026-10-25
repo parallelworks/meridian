@@ -209,13 +209,15 @@ func notFound(k *problems.Kind, params problems.Params) error {
 // (plan.SourceRef.Normal): on GitHub, an owner and a repository, and
 // nothing after them, and on GitLab, a project's path, in a group or more;
 // a revision after the first @, if there is one, which isn't empty; and
-// the file $yaml names, and the GitLab server $host names. One that isn't
-// a Git repository's, such as one to a workflow a platform stores, or that
-// isn't well formed, names no workflow here. Besides what ACTIVATE
-// refuses, parseRef refuses a name or a revision that starts with a
-// hyphen, a revision git refuses as a branch's or a tag's name
-// (validRevision), a group's name that ends in .git or .lock, and a file's
-// path that leaves the repository's files, has an empty name in it or a
+// the file $yaml names, from the repository's root, and the GitLab server
+// $host names. One that isn't a Git repository's, such as one to a
+// workflow a platform stores, or that isn't well formed, names no workflow
+// here: what is wrong with $yaml or $host is source_with_invalid, and with
+// the rest source_ref_invalid. Besides what ACTIVATE refuses, parseRef
+// refuses a name or a revision that starts with a hyphen, a revision git
+// refuses as a branch's or a tag's name (validRevision), a group's name
+// that ends in .git or .lock or starts with a dot, and a file's path that
+// leaves the repository's files, has an empty name in it, as ./ does, or a
 // control character.
 func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	uses := ref.Uses
@@ -224,6 +226,11 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	}
 	invalid := func() (sourceRef, error) {
 		return sourceRef{}, notFound(problems.SourceRefInvalid, problems.Params{"ref": uses})
+	}
+	// What is wrong with the step's $yaml or $host is that key's, not the
+	// reference's.
+	withInvalid := func(key, what string) (sourceRef, error) {
+		return sourceRef{}, notFound(problems.SourceWithInvalid, problems.Params{"key": key, "what": what})
 	}
 	norm := ref.Normal()
 	kind, rest, ok := strings.Cut(norm.Uses, "/")
@@ -248,22 +255,24 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 		}
 		// Each name but the last is a directory of the cache (open), as a
 		// GitLab group's is, beside the copies of repositories, which end
-		// in .git, and their lock files, in .git.lock: one that ends so
-		// could be another repository's copy, or where its lock goes.
+		// in .git, their lock files, in .git.lock, and the copies being
+		// made, which start with a dot: one that ends so could be another
+		// repository's copy, or where its lock goes, and one that starts
+		// with a dot where a copy is being made.
 		lower := strings.ToLower(p)
-		if i < len(repo)-1 && (strings.HasSuffix(lower, ".git") || strings.HasSuffix(lower, ".lock")) {
+		if i < len(repo)-1 && (strings.HasSuffix(lower, ".git") || strings.HasSuffix(lower, ".lock") || strings.HasPrefix(p, ".")) {
 			return invalid()
 		}
 	}
 	for p := range strings.SplitSeq(norm.Path, "/") {
 		if p == "" || p == "." || p == ".." || strings.ContainsFunc(p, func(c rune) bool { return c < ' ' || c == 0x7f }) {
-			return invalid()
+			return withInvalid("$yaml", "file")
 		}
 	}
 	if kind == "gitlab" {
 		// A GitLab project can be on a server of a platform's own.
 		if host = norm.Host; !validHost(host) {
-			return invalid()
+			return withInvalid("$host", "server")
 		}
 	}
 	return sourceRef{kind: kind, host: host, repo: name, path: norm.Path, rev: rev}, nil
@@ -299,11 +308,12 @@ func (r sourceRef) location() string {
 // repoName is the repository as a problem shows it: its server and name.
 func (r sourceRef) repoName() string { return r.host + "/" + r.repo }
 
-// remoteContext is what the remote context holds for a workflow at r: the
-// repository's address and the revision, as remote.repo and
-// remote.branch.
+// remoteContext is what the remote context holds for a workflow at r, as
+// ACTIVATE's does: the repository's address, the revision, if r names
+// one, and the workflow's file, as remote.repo, remote.branch and
+// remote.yaml.
 func (r sourceRef) remoteContext() map[string]string {
-	remote := map[string]string{"repo": "https://" + r.host + "/" + r.repo}
+	remote := map[string]string{"repo": "https://" + r.host + "/" + r.repo, "yaml": r.path}
 	if r.rev != "" {
 		remote["branch"] = r.rev
 	}

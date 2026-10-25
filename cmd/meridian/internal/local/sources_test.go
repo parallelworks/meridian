@@ -130,6 +130,8 @@ func TestSourcesResolve(t *testing.T) {
 		{plan.SourceRef{Uses: "github/acme/flows@" + first}, "github.com/acme/flows@" + first + ":workflow.yaml", first, "first\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": first}},
 		// Format 1 names the file with $yaml.
 		{plan.SourceRef{Uses: "github/acme/flows@dev", Path: "sub/flow.yaml"}, "github.com/acme/flows@dev:sub/flow.yaml", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
+		// A $yaml written from the repository's root, as ACTIVATE fetches it.
+		{plan.SourceRef{Uses: "github/acme/flows@dev", Path: "//sub/flow.yaml"}, "github.com/acme/flows@dev:sub/flow.yaml", dev, "dev\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "dev"}},
 		// As ACTIVATE reads them: with .git or a slash after the name, and
 		// space after it.
 		{plan.SourceRef{Uses: "github/acme/flows.git@main "}, "github.com/acme/flows@main:workflow.yaml", second, "second\n", map[string]string{"repo": "https://github.com/acme/flows", "branch": "main"}},
@@ -141,6 +143,8 @@ func TestSourcesResolve(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%+v): %v", tc.ref, err)
 		}
+		// The remote context names the file, as ACTIVATE's does.
+		tc.remote["yaml"] = tc.ref.Normal().Path
 		want := plan.Source{Location: tc.location, Revision: tc.commit, Digest: digest([]byte(tc.text)), Ref: tc.ref}
 		if w.Source != want || string(w.Text) != tc.text || !reflect.DeepEqual(w.Remote, tc.remote) {
 			t.Errorf("Resolve(%+v) = %+v, %q, %v, want %+v, %q, %v", tc.ref, w.Source, w.Text, w.Remote, want, tc.text, tc.remote)
@@ -218,7 +222,9 @@ func TestSourcesServers(t *testing.T) {
 	}
 	for _, host := range []string{"git.example.com:443", "git.example.com:8443"} {
 		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host})
-		wantProblem(t, err, problems.SourceRefInvalid)
+		if p := wantProblem(t, err, problems.SourceWithInvalid); p.Params["key"] != "$host" || p.Params["what"] != "server" {
+			t.Errorf("a $host with a port: %v", p.Params)
+		}
 	}
 	// A pin made on a server is read again only while it is registered.
 	w, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: "git.example.com"})
@@ -346,6 +352,11 @@ func TestParseRef(t *testing.T) {
 		{Uses: "github/acme/flows", Host: "x.example.com"}:    {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
 		{Uses: "gitlab/ g/p.git@v1 ", Host: " X.Example.COM"}: {kind: "gitlab", host: "x.example.com", repo: "g/p", path: "workflow.yaml", rev: "v1"},
 		{Uses: "gitlab/g/p.git.git"}:                          {kind: "gitlab", host: "gitlab.com", repo: "g/p.git", path: "workflow.yaml"},
+		// A $yaml from the repository's root reads as ACTIVATE fetches the
+		// file: every slash before it goes on GitHub, and one on GitLab.
+		{Uses: "github/acme/flows", Path: "/w.yaml"}:  {kind: "github", host: "github.com", repo: "acme/flows", path: "w.yaml"},
+		{Uses: "github/acme/flows", Path: "//w.yaml"}: {kind: "github", host: "github.com", repo: "acme/flows", path: "w.yaml"},
+		{Uses: "gitlab/g/p", Path: "/a/w.yaml"}:       {kind: "gitlab", host: "gitlab.com", repo: "g/p", path: "a/w.yaml"},
 		// Every name after gitlab/ is the project's path, with or without
 		// $yaml.
 		{Uses: "gitlab/g/sub/p@main"}: {kind: "gitlab", host: "gitlab.com", repo: "g/sub/p", path: "workflow.yaml", rev: "main"},
@@ -362,20 +373,34 @@ func TestParseRef(t *testing.T) {
 			t.Errorf("parseRef(%+v) = %+v, %v, want %+v", ref, got, err, want)
 		}
 	}
-	// $yaml and $host are checked as the rest of a reference is.
+	// $yaml and $host are checked as the rest of a reference is, and what
+	// is wrong with them is theirs, not the uses:'s.
+	for ref, key := range map[plan.SourceRef]string{
+		{Uses: "github/acme/flows", Path: "../w.yaml"}:        "$yaml",
+		{Uses: "github/acme/flows", Path: "./w.yaml"}:         "$yaml",
+		{Uses: "github/acme/flows", Path: "a//w.yaml"}:        "$yaml",
+		{Uses: "github/acme/flows", Path: "w.yaml\n"}:         "$yaml",
+		{Uses: "github/acme/flows", Path: "/"}:                "$yaml",
+		{Uses: "gitlab/g/p", Path: "//w.yaml"}:                "$yaml",
+		{Uses: "gitlab/g/p", Host: "-x.example.com"}:          "$host",
+		{Uses: "gitlab/g/p", Host: "a.example.com/evil"}:      "$host",
+		{Uses: "gitlab/g/p", Host: "user@a.example.com"}:      "$host",
+		{Uses: "gitlab/g/p", Host: "a..example.com"}:          "$host",
+		{Uses: "gitlab/g/p", Host: "a.example.com."}:          "$host",
+		{Uses: "gitlab/g/p@main", Host: "a.example.com:8443"}: "$host",
+	} {
+		_, err := parseRef(ref)
+		if p := wantProblem(t, err, problems.SourceWithInvalid); p.Params["key"] != key {
+			t.Errorf("parseRef(%+v): the problem names %v, want %s", ref, p.Params["key"], key)
+		}
+	}
 	for _, ref := range []plan.SourceRef{
 		{Uses: "github/acme/flows/sub@main", Path: "w.yaml"},
-		{Uses: "github/acme/flows", Path: "../w.yaml"},
-		{Uses: "github/acme/flows", Path: "/w.yaml"},
-		{Uses: "github/acme/flows", Path: "a//w.yaml"},
-		{Uses: "github/acme/flows", Path: "w.yaml\n"},
-		{Uses: "gitlab/g/p", Host: "-x.example.com"},
-		{Uses: "gitlab/g/p", Host: "a.example.com/evil"},
-		{Uses: "gitlab/g/p", Host: "user@a.example.com"},
-		{Uses: "gitlab/g/p", Host: "a..example.com"},
-		{Uses: "gitlab/g/p", Host: "a.example.com."},
-		{Uses: "gitlab/g/p", Host: "a.example.com:8443"},
 		{Uses: "gitlab/g/../p", Path: "w.yaml"},
+		// A group's name doesn't start with a dot, as the copies of
+		// repositories being made in the cache do; a repository's can.
+		{Uses: "gitlab/.hooks/p"},
+		{Uses: "gitlab/g/.p.git-123/q"},
 		// As ACTIVATE reads them: a GitHub owner's name has no dot or
 		// underscore, a GitLab project is in a group, a name has nothing
 		// but letters, digits, dots, underscores and hyphens, a revision
