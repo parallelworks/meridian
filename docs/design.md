@@ -174,11 +174,13 @@ its content, 220 files.
   the last to finish's. None of the 14 matrix jobs has `outputs:`, and
   nothing reads a matrix job's outputs.
 - **An `if:` whose value is null is false**, as `docs/expressions.md` says
-  conditions go by truthiness, where format 1 ran the job or step. All 7
-  `if:`s that are a bare reference read a boolean input, and none of those
-  inputs is hidden or ignored, so none is null: each has a default but
-  sl_core's `push_to_gh`, which ACTIVATE fills with `false` when it is left
-  out, as Meridian does.
+  conditions go by truthiness, where format 1 ran the job or step. So is
+  an `if:` written empty, which is null: format 1 ran its job or step too,
+  and Meridian refused it as the wrong type. None of the 329 `if:`s is
+  written empty. All 7 that are a bare reference read a boolean input, and
+  none of those inputs is hidden or ignored, so none is null: each has a
+  default but sl_core's `push_to_gh`, which ACTIVATE fills with `false`
+  when it is left out, as Meridian does.
 - **A duration or a count that isn't one is a problem**, where format 1
   ignored a timeout it couldn't read and fell back to a retry's defaults:
   an expression's value for a job's or a step's `timeout:`, a retry's
@@ -321,7 +323,8 @@ replaces it: one that doesn't is true only when `success()` is too. An
 `if:` whose value is the word `always` means `always()`: it is the older
 spelling, which the compiler warns about, and a later format can drop it.
 Otherwise an `if:` goes by its value's truthiness
-([The language](#the-language)).
+([The language](#the-language)), so one written empty, which is null, is
+false.
 
 A job fails, for `failure()`, when a job it needs failed, or was skipped
 because a job it needs had failed in turn, and is cancelled, for

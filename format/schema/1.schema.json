@@ -233,8 +233,8 @@
               "additionalProperties": false
             },
             "if": {
-              "description": "prevents a job from running unless conditional evaluates to true.",
-              "type": ["boolean", "string"]
+              "description": "prevents a job from running unless conditional evaluates to true. An if: written empty, or whose value is null, is false.",
+              "type": ["boolean", "string", "null"]
             },
             "working-directory": {
               "description": "Directory that this command is run in, path will be created if it does not exist.",
@@ -475,8 +475,8 @@
                     "type": "string"
                   },
                   "if": {
-                    "description": "prevents a step from running unless conditional evaluates to true.",
-                    "type": ["boolean", "string"]
+                    "description": "prevents a step from running unless conditional evaluates to true. An if: written empty, or whose value is null, is false.",
+                    "type": ["boolean", "string", "null"]
                   },
                   "working-directory": {
                     "description": "Directory that this command is run in, path will be created if it does not exist. Set to null to opt out of the job's working-directory and use the default.",
