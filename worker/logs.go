@@ -3,12 +3,12 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"sync"
 
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -351,7 +351,7 @@ func (s *spool) send(ctx context.Context, c *client, stop func(error)) {
 			// The coordinator has less of the log than it said it had:
 			// send again from where it says, if the worker still has it.
 			if !s.rewind(u.log, order.expected) {
-				stop(fmt.Errorf("worker: the coordinator has lost a log's bytes from %d, which the worker no longer has", order.expected))
+				stop(problems.CoordinatorLostData.Problem(problems.Params{"data": "log", "from": order.expected}))
 				return
 			}
 			continue

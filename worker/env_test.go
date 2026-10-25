@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -38,6 +40,8 @@ func TestReadEnv(t *testing.T) {
 		{name: "tls without a key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
 		{name: "a key that isn't sha256", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + strings.Repeat("ab", 32), "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
 		{name: "a short key", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=sha256:abab", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an address no URL holds", environ: []string{"MERIDIAN_COORDINATOR=login1:7443 ", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an address with a path", environ: []string{"MERIDIAN_COORDINATOR=login1:7443/x", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
 		{name: "a key for a socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
 		{name: "no token", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock"}, fails: problems.WorkerEnvironmentMissing},
 		{name: "two tokens", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_BOOTSTRAP_TOKEN_FILE=/x"}, fails: problems.WorkerEnvironmentInvalid},
@@ -232,6 +236,74 @@ func TestShellCommand(t *testing.T) {
 	} {
 		if got := shellCommand(tc.shell, script).Args; !slices.Equal(got, tc.want) {
 			t.Errorf("%q: got %q, want %q", tc.shell, got, tc.want)
+		}
+	}
+}
+
+// TestPlatformEnvSecret checks that a secret variable a platform gives is
+// masked wherever the worker shows it, however short: logs, events and
+// problems; and that an output that holds it keeps its value, as format 1
+// passes it to the jobs that need the job, and is named private and a
+// secret, which holds a secret's own text, not only what was made from one.
+func TestPlatformEnvSecret(t *testing.T) {
+	t.Parallel()
+	step := command(`echo "key=$PW_API_KEY"; echo "k=$PW_API_KEY" >> $OUTPUTS`)
+	step.WorkingDirectory = plan.Literal("/proc/sekr1t-api-key/x")
+	ok := command(`echo "key=$PW_API_KEY pin=$PW_PIN user=$PW_USER"; echo "k=$PW_API_KEY" >> $OUTPUTS; echo "pin=$PW_PIN" >> $OUTPUTS`)
+	ok.If = cond("always()")
+	f := newFakeCoordinator(t, newJob(step, ok))
+	f.claim.Env = map[string]workerapi.EnvVar{
+		"PW_API_KEY": {Value: "sekr1t-api-key", Secret: true}, "PW_PIN": {Value: "4321", Secret: true}, "PW_USER": {Value: "alice"},
+	}
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "key=*** pin=*** user=alice\n")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.events {
+		if shown := fmt.Sprint(e.Outputs, e.Diagnostics); strings.Contains(shown, "sekr1t") || strings.Contains(shown, "4321") {
+			t.Errorf("an event quotes the secret: %v %v", e.Outputs, e.Diagnostics)
+		}
+	}
+	if f.end == nil || f.end.Outputs["k"] != "sekr1t-api-key" || f.end.Outputs["pin"] != "4321" ||
+		!slices.Equal(f.end.SecretOutputs, []string{"k", "pin"}) || !slices.Equal(f.end.PrivateOutputs, []string{"k", "pin"}) || len(f.end.DerivedOutputs) > 0 {
+		t.Errorf("the job's end doesn't keep the outputs private and secrets of their own: %+v", f.end)
+	}
+}
+
+// TestEnvPrecedence checks how the environments are laid over each other:
+// the worker's, the workflow's over it, the platform's over that, and the
+// worker's own over all.
+func TestEnvPrecedence(t *testing.T) {
+	t.Parallel()
+	step := command(`echo "id=$PW_JOB_ID parent=$PW_PARENT_JOB_DIR user=$PW_USER outputs=$([ "$OUTPUTS" = wf ] || [ "$OUTPUTS" = plat ] && echo theirs || echo ours) dir=$PW_JOB_DIR ci=$CI"`)
+	step.Env = map[string]plan.Value{
+		"PW_JOB_ID": plan.Literal("wf"), "PW_PARENT_JOB_DIR": plan.Literal("wf"), "PW_USER": plan.Literal("wf"),
+		"OUTPUTS": plan.Literal("wf"), "PW_JOB_DIR": plan.Literal("wf"), "CI": plan.Literal("wf"),
+	}
+	f := newFakeCoordinator(t, newJob(step))
+	f.claim.Env = map[string]workerapi.EnvVar{"PW_JOB_ID": {Value: "plat"}, "PW_USER": {Value: "plat"}, "OUTPUTS": {Value: "plat"}, "PW_JOB_DIR": {Value: "plat"}}
+	if err := f.runWorker(t.Context(), Config{Environ: []string{"PW_USER=worker", "CI=worker"}}); err != nil {
+		t.Fatal(err)
+	}
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0},
+		"id=plat parent="+f.claim.RunDir+" user=plat outputs=ours dir="+f.claim.RunDir+" ci=wf\n")
+}
+
+// TestEnvNameInvalid checks that a variable a platform gives that no
+// variable can be named fails the attempt before its first step.
+func TestEnvNameInvalid(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"", "A=B", "A\x00B"} {
+		f := newFakeCoordinator(t, newJob(command("true")))
+		f.claim.Env = map[string]workerapi.EnvVar{name: {Value: "x"}}
+		if err := f.runWorker(t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		checkEvents(t, f)
+		if end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed); end.Problem == nil || end.Problem.Code != "env_name_invalid" {
+			t.Errorf("%q: the attempt's problem is %+v", name, end.Problem)
 		}
 	}
 }

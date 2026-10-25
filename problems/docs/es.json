@@ -1105,6 +1105,20 @@
       "Comprueba que el shell del paso está en el host y que su directorio de trabajo se puede crear allí."
     ]
   },
+  "evaluation_failed": {
+    "title": "Paso o trabajo que el worker no pudo evaluar",
+    "why": "El worker evalúa el env: de un trabajo cuando el trabajo empieza, cada paso cuando está a punto de ejecutarse, y las salidas del trabajo cuando sus pasos ya se han ejecutado. Una de estas evaluaciones falló por un error propio de Meridian, no por un problema del flujo de trabajo, así que el paso, o el trabajo, falló.",
+    "fix": [
+      "Informa del fallo, junto con el log del worker, que registra el error."
+    ]
+  },
+  "worker_dir_unusable": {
+    "title": "Sin directorio propio del worker para los archivos de un paso",
+    "why": "Un worker guarda el script y el $OUTPUTS de un paso en un directorio propio, que solo tú puedes usar, y crea otro si un paso lo elimina: en el mismo lugar, o si no en el siguiente que habría usado, entre meridian/worker en tu directorio de caché, XDG_RUNTIME_DIR y el directorio temporal del sistema. No pudo crear uno en ninguno de ellos, así que el paso no se inició. El código es el problema con el primero de ellos, y su página dice por qué.",
+    "fix": [
+      "Corrige lo que dice la página del código, para el directorio que nombra el mensaje, o pon en XDG_RUNTIME_DIR un directorio que solo tú puedas cambiar."
+    ]
+  },
   "shell_not_supported": {
     "title": "Shell que el formato 1 no ejecuta",
     "why": "El formato 1 solo ejecuta el comando de un paso con bash o sh, según indica su shell:, así que el paso falla sin ejecutarse. El esquema del flujo de trabajo no permite otro shell, así que esto solo ocurre con un plan hecho sin comprobarlo.",
@@ -1256,32 +1270,32 @@
   },
   "directory_unavailable": {
     "title": "No se puede crear ni abrir el directorio",
-    "why": "Meridian crea sus directorios de estado y de caché la primera vez que los necesita, y el sistema operativo lo rechazó o falló.",
+    "why": "Meridian crea sus directorios de estado y de caché la primera vez que los necesita, y un worker el directorio en el que guarda sus propios archivos, y el sistema operativo lo rechazó o falló.",
     "fix": [
       "Corrige lo que indica el motivo, como un directorio padre en el que no puedes escribir.",
-      "O elige otro directorio con MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+      "O elige otro directorio con MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR, o, para un worker, pon en XDG_RUNTIME_DIR uno que solo tú puedas cambiar."
     ]
   },
   "not_a_directory": {
     "title": "No es un directorio",
-    "why": "Meridian guarda su configuración, su estado y su caché en directorios, y en la ruta que usaría para uno hay otra cosa.",
+    "why": "Meridian guarda su configuración, su estado y su caché en directorios, y un worker sus propios archivos, y en la ruta que usaría para uno hay otra cosa.",
     "fix": [
-      "Mueve lo que hay en la ruta, o elige otro directorio con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+      "Mueve lo que hay en la ruta, o elige otro directorio con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR, o, para un worker, pon en XDG_RUNTIME_DIR uno que solo tú puedas cambiar."
     ]
   },
   "directory_not_owned": {
     "title": "Directorio de otro usuario",
-    "why": "Los directorios de Meridian guardan tu configuración, la clave que envuelve los secretos de tus ejecuciones, tus registros y copias de repositorios privados. Un directorio que es de otro usuario es uno que ese usuario puede cambiar.",
+    "why": "Los directorios de Meridian guardan tu configuración, la clave que envuelve los secretos de tus ejecuciones, tus logs y copias de repositorios privados, y el de un worker los scripts y las salidas de sus pasos. Un directorio que es de otro usuario es uno que ese usuario puede cambiar.",
     "fix": [
-      "Elige un directorio tuyo con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+      "Elige un directorio tuyo con MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR, o, para un worker, pon en XDG_RUNTIME_DIR uno que solo tú puedas cambiar."
     ]
   },
   "directory_not_private": {
     "title": "Directorio que otros pueden leer o cambiar",
-    "why": "El directorio de estado de Meridian guarda la clave que envuelve los secretos de tus ejecuciones, y su directorio de caché copias de repositorios que pueden ser privados, así que solo tú puedes leerlos. Meridian no restringe un directorio que estuvo abierto, ya que lo que había en él pudo haberse leído.",
+    "why": "El directorio de estado de Meridian guarda la clave que envuelve los secretos de tus ejecuciones, su directorio de caché copias de repositorios que pueden ser privados, y el directorio de un worker los scripts de sus pasos, que pueden contener secretos, así que solo tú puedes leerlos; y nadie más puede cambiar un directorio en el que un worker crea el suyo. Meridian no restringe un directorio que estaba abierto, porque lo que había en él puede haberse leído ya.",
     "fix": [
-      "Ejecuta chmod 700 sobre el directorio, cuando estés seguro de que nada en él se leyó ni se cambió.",
-      "O elige un directorio nuevo con MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR."
+      "Ejecuta chmod 700 en el directorio, cuando estés seguro de que nada en él se leyó ni se cambió.",
+      "O elige un directorio nuevo con MERIDIAN_STATE_DIR o MERIDIAN_CACHE_DIR, o, para un worker, pon en XDG_RUNTIME_DIR uno que solo tú puedas cambiar."
     ]
   },
   "path_unsafe": {
@@ -1647,6 +1661,13 @@
       "Ejecuta Meridian en un sistema Unix, como Linux o macOS."
     ]
   },
+  "directory_replaced": {
+    "title": "Directorio reemplazado mientras se creaba",
+    "why": "Un worker guarda sus propios archivos en un directorio que crea, que solo tú puedes usar, y lo mantiene abierto, para no usar nunca una ruta que haya pasado a nombrar otra cosa. Algo reemplazó este entre que el worker lo creó y lo abrió: un proceso tuyo, como un paso de un trabajo, o de root.",
+    "fix": [
+      "Busca qué elimina o reemplaza los directorios cuyo nombre empieza por .meridian-worker- en el directorio que contiene este, y detenlo."
+    ]
+  },
   "path_links_too_many": {
     "title": "Ruta con demasiados enlaces simbólicos",
     "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
@@ -1701,6 +1722,27 @@
     "why": "Un worker llega a un coordinador por TLS mediante su clave: el backend le da el hash SHA-256 de la clave pública del coordinador, y el worker solo se comunica con un servidor que tenga esa clave, diga lo que diga su certificado. Este servidor tiene otra.",
     "fix": [
       "Comprueba que MERIDIAN_COORDINATOR indica el coordinador, o su relay, y que las réplicas del coordinador comparten una clave."
+    ]
+  },
+  "coordinator_answer_invalid": {
+    "title": "Respuesta del coordinador que el worker no puede leer",
+    "why": "Un worker lee las respuestas del coordinador de forma estricta, como las define la versión de la API de workers, y el coordinador rechaza una solicitud con un problema que tiene un código. Esta respuesta no era ninguna de las dos cosas, o era más grande de lo que puede ser un rechazo, así que el worker se detuvo, en lugar de adivinar qué quería decir el coordinador. Responden así un worker y un coordinador de versiones distintas de Meridian, o un servidor que no es el coordinador.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador, y comprueba que el worker llega al coordinador y no a otro servidor."
+    ]
+  },
+  "coordinator_lost_data": {
+    "title": "El coordinador perdió lo que había almacenado",
+    "why": "Un worker guarda lo que informa solo hasta que el coordinador dice que lo ha almacenado. Este coordinador volvió a pedirlo después, desde antes, como haría uno que perdió lo que había almacenado, por ejemplo uno cuya base de datos se restauró desde una copia de seguridad. El worker detiene el trabajo, en lugar de dejar un hueco en lo que registra la ejecución.",
+    "fix": [
+      "Averigua por qué el coordinador perdió lo que había almacenado. El trabajo se ejecuta de nuevo si su retry: incluye worker-lost."
+    ]
+  },
+  "coordinator_stored_unsent": {
+    "title": "El coordinador almacenó eventos que el worker no envió",
+    "why": "Un worker numera los eventos que informa, y el coordinador responde con el número del último que ha almacenado. Uno posterior a los que envió el worker significa que el coordinador tiene eventos que este worker nunca envió, como tendría uno que confundiera dos intentos, así que el worker se detiene, en lugar de seguir informándole.",
+    "fix": [
+      "Informa del fallo, junto con los logs del coordinador y del worker."
     ]
   },
   "bootstrap_token_refused": {

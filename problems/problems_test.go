@@ -6,9 +6,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"maps"
 	"math"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -73,30 +75,45 @@ func TestEveryKindIsReported(t *testing.T) {
 	if len(defined) != len(Kinds()) {
 		t.Fatalf("kinds.go names %d kinds, and Kinds() returns %d", len(defined), len(Kinds()))
 	}
-	for _, dir := range []string{"../format", "../compile", "../expr", "../plan", "../worker", "../cmd/meridian", "../cmd/meridian/internal/local", "../internal/safepath"} {
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	// Every package of the module but this one, tests aside, whatever
+	// system its files build for: a directory with a go.mod of its own is
+	// another module, and one whose name starts with a dot, or testdata,
+	// holds no package of it.
+	err = filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
-		for _, file := range files {
-			if strings.HasSuffix(file, "_test.go") {
-				continue
+		if d.IsDir() {
+			name := d.Name()
+			if path != ".." && (strings.HasPrefix(name, ".") || name == "testdata" || name == "problems" && filepath.Dir(path) == "..") {
+				return filepath.SkipDir
 			}
-			f, err := parser.ParseFile(fset, file, nil, 0)
-			if err != nil {
-				t.Fatal(err)
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); path != ".." && err == nil {
+				return filepath.SkipDir
 			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok {
-					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "problems" {
-						if _, ok := defined[sel.Sel.Name]; ok {
-							defined[sel.Sel.Name] = true
-						}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "problems" {
+					if _, ok := defined[sel.Sel.Name]; ok {
+						defined[sel.Sel.Name] = true
 					}
 				}
-				return true
-			})
-		}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, name := range slices.Sorted(maps.Keys(defined)) {
 		if !defined[name] {
@@ -561,6 +578,30 @@ func TestControlCharactersEscaped(t *testing.T) {
 		if got := EscapeControl(in); got != want {
 			t.Errorf("EscapeControl(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestDiagnosticStringEscapes checks that a diagnostic of a problem from
+// elsewhere, as a coordinator's that the worker passes on, prints no
+// control character: not its code, which is its message when it has
+// neither a detail nor a kind this version knows, nor a param, however
+// deep in a list or a mapping, keys too.
+func TestDiagnosticStringEscapes(t *testing.T) {
+	for name, d := range map[string]Diagnostic{
+		"a code with an escape sequence": {Code: "refused\x1b]0;owned\x07\nmeridian: error: fake (x"},
+		"a detail with one":              {Code: "refused", Detail: "fine\nmeridian: error: fake"},
+		"a list param":                   {Code: InputRequired.Code(), Params: Params{"input": []any{"\x1b[2Jcleared"}}},
+		"a list of texts":                {Code: InputRequired.Code(), Params: Params{"input": []string{"\x1b[2J"}}},
+		"a mapping param":                {Code: InputRequired.Code(), Params: Params{"input": map[string]any{"k": []any{"\x1b[31m"}}}},
+		"a mapping's key":                {Code: InputRequired.Code(), Params: Params{"input": map[string]any{"\x1b[31m": 1}}},
+	} {
+		if s := d.String(); strings.ContainsAny(s, "\x1b\x07\n") {
+			t.Errorf("%s: prints %q", name, s)
+		}
+	}
+	nested := []any{"a\x1bb"}
+	if got, _ := escapedValue(nested); got.([]any)[0] != `a\x1bb` || nested[0] != "a\x1bb" {
+		t.Errorf("escapedValue gives %q, and leaves %q", got, nested)
 	}
 }
 

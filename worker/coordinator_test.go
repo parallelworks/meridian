@@ -47,15 +47,37 @@ const (
 	fence
 	unauthorized
 	// forget forgets the log the request uploads to, or the events it
-	// stored, as a coordinator that lost what it had stored would, then
-	// handles the request.
+	// stored, or that the attempt's end follows, as a coordinator that lost
+	// what it had stored would, then handles the request.
 	forget
 	// redirect answers with a redirect to the same path.
 	redirect
 	// hang holds the request until the worker gives up on it, as a
 	// connection that is half open would.
 	hang
+	// refuse answers with a problem of the coordinator's, refuseBlank with
+	// an about:blank problem whose detail holds an escape sequence,
+	// badRequest with a 400 and no problem, and garble with a 200 whose
+	// body isn't JSON.
+	refuse
+	refuseBlank
+	badRequest
+	// refuseHostile answers with a problem whose code isn't one, and
+	// refuseNested with one of a known kind whose param holds an escape
+	// sequence in a list; refuseLarge with one larger than a refusal is.
+	refuseHostile
+	refuseNested
+	refuseLarge
+	// wrongClaim answers a claim with one whose run's ID is a number.
+	wrongClaim
+	garble
+	// ackAhead answers events with an acknowledgement of events past
+	// those the worker sent.
+	ackAhead
 )
+
+// refusal is the problem a fake coordinator refuses a request with.
+const refusal problem.Code = "request_refused"
 
 // A fakeCoordinator serves the worker API for one attempt, in memory, as
 // the coordinator does, strictly: it refuses events out of order, logs
@@ -151,6 +173,35 @@ func (f *fakeCoordinator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case unauthorized:
 		w.WriteHeader(http.StatusUnauthorized)
 		return
+	case refuse:
+		writeProblem(w, http.StatusUnprocessableEntity, refusal, map[string]any{"path": r.URL.Path})
+		return
+	case refuseBlank:
+		w.Header().Set("Content-Type", problem.MediaType)
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(problem.Problem{Type: problem.Blank, Status: http.StatusNotFound, Detail: "no such\x1b[2J attempt"})
+		return
+	case refuseHostile:
+		writeProblem(w, http.StatusUnprocessableEntity, "refused\x1b]0;owned\x07\nmeridian: error: all is well (ok", nil)
+		return
+	case refuseNested:
+		writeProblem(w, http.StatusUnprocessableEntity, problems.InputRequired.Code(), map[string]any{"input": []any{"\x1b[2J"}})
+		return
+	case refuseLarge:
+		writeProblem(w, http.StatusUnprocessableEntity, refusal, map[string]any{"path": strings.Repeat("x", maxRefusal)})
+		return
+	case wrongClaim:
+		writeJSON(w, map[string]any{"runID": 1})
+		return
+	case badRequest:
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	case garble:
+		_, _ = w.Write([]byte("not json"))
+		return
+	case ackAhead:
+		writeJSON(w, workerapi.EventsAck{Seq: 1 << 20})
+		return
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -170,7 +221,7 @@ func (f *fakeCoordinator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		step, _ := strconv.Atoi(q.Get(workerapi.QueryStep))
 		try, _ := strconv.Atoi(q.Get(workerapi.QueryTry))
 		delete(f.logs, logKey{workerapi.LogPart(q.Get(workerapi.QueryPart)), step, try})
-		if r.URL.Path == workerapi.PathEvents {
+		if r.URL.Path == workerapi.PathEvents || r.URL.Path == workerapi.PathComplete {
 			f.events = nil
 		}
 		f.mu.Unlock()

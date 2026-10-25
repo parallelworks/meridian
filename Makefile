@@ -44,8 +44,9 @@ vulncheck: ## Check dependencies and the standard library for known vulnerabilit
 # tests included, and cgo-check checks it.
 CROSS_OS := darwin freebsd openbsd netbsd
 # 32-bit FreeBSD passes procctl's 64-bit argument differently on each
-# architecture, so each is vetted.
-CROSS_TARGETS := darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/386 freebsd/arm openbsd/amd64 netbsd/amd64
+# architecture, so each is vetted. Windows isn't a target, but is vetted
+# too, so that what only builds on Unix says so.
+CROSS_TARGETS := darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/386 freebsd/arm openbsd/amd64 netbsd/amd64 windows/amd64
 
 .PHONY: cgo-check
 cgo-check: ## Verify that no package or dependency uses cgo
@@ -55,7 +56,7 @@ cgo-check: ## Verify that no package or dependency uses cgo
 	done
 
 .PHONY: vet-cross
-vet-cross: ## Compile and vet the code for macOS and the BSDs, tests included
+vet-cross: ## Compile and vet the code for macOS, the BSDs and Windows, tests included
 	@for target in $(CROSS_TARGETS); do \
 		echo "GOOS=$${target%/*} GOARCH=$${target#*/} go vet ./..."; \
 		GOOS=$${target%/*} GOARCH=$${target#*/} go vet ./... || exit 1; \

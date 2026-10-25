@@ -27,9 +27,9 @@ const maxOutputsLine = bufio.MaxScanTokenSize - 1
 // other than a regular file at, such as a FIFO, which reading would wait
 // on.
 var (
-	errOutputsTooLarge    = errors.New("worker: $OUTPUTS is too large")
-	errOutputsLineTooLong = errors.New("worker: a line of $OUTPUTS is too long")
-	errOutputsNotFile     = errors.New("worker: $OUTPUTS isn't a file")
+	errOutputsTooLarge    = errors.New("worker: $OUTPUTS is too large")          //nolint:forbidigo // outputsWritten reports it as OutputsTooLarge
+	errOutputsLineTooLong = errors.New("worker: a line of $OUTPUTS is too long") //nolint:forbidigo // outputsWritten reports it as OutputsLineTooLong
+	errOutputsNotFile     = errors.New("worker: $OUTPUTS isn't a file")          //nolint:forbidigo // outputsWritten reports it as OutputsNotFile
 )
 
 // readOutputs reads the outputs a step wrote to the file named by $OUTPUTS,
