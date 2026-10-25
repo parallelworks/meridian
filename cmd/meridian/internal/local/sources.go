@@ -59,6 +59,10 @@ const waitDelay = time.Second
 // a repository's whole fork network, so a commit that a reference names
 // may be one that only a fork has (docs/design.md, Security).
 //
+// git must be Git 2.29 or later, the first whose fetch takes
+// --no-write-fetch-head, which Sources passes so that a fetch leaves no
+// FETCH_HEAD in the copy; an older one fails the fetch.
+//
 // git runs with no hooks, without fetching submodules, checking the
 // objects it fetches, and with no automatic maintenance, which would go
 // on writing into a copy after git returned. It never asks for a

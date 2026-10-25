@@ -1044,7 +1044,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command |
+| Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
 | Actions | Built-in actions | `parallelworks/checkout`, and those that need no platform |
 | Sessions | Interactive sessions a workflow serves | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
@@ -2146,6 +2146,14 @@ so, rather than assume that no one else can change them. So Meridian's own
 directories and config must be used outside such a namespace, or in one
 that maps root; a worker in a container, which uses none of them, isn't
 affected.
+
+The command's Sources, which reads the workflows that `uses:` names, runs
+the `git` command on `PATH`, with the user's own Git configuration and
+credentials. It needs Git 2.29 or later, the first whose `git fetch`
+takes `--no-write-fetch-head`, which Sources passes so that a fetch leaves
+no `FETCH_HEAD` in its copy of the repository; an older Git fails the
+fetch, and a missing one is `git_unavailable`. Nothing else the command
+does needs Git.
 
 Every problem the command reports is a kind, with its code, its params and
 its message in each language, as a workflow's are: its own, such as a
