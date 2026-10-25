@@ -78,6 +78,15 @@ l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ va
 			map[string]any{"m": rows(n, emptyRow), "l": rows(n, func() map[string]any { return map[string]any{"u": "x"} })},
 			testVariables{"vars.S": {Value: "s", Secret: true}}
 	}},
+	// Each of l's rows was given what its default gives, which Create
+	// compares with what it gives once, and Start evaluates once: each
+	// evaluation reads all of m.
+	{name: "submitted rows whose field is what a default that reads all of another list gives", n: 1000, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
+		return workflow(`m: {type: list, template: {v: {type: string, optional: true, default: '${{ vars.V }}x'}}}
+l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ vars.V != '''' && length(toJSON(inputs.m)) > 0 && ''yes'' || ''no'' }}'}}}`),
+			map[string]any{"m": rows(n, emptyRow), "l": rows(n, func() map[string]any { return map[string]any{"u": "x", "h": "yes"} })},
+			testVariables{"vars.V": {Value: "VARV"}}
+	}},
 	{name: "lists whose rows are held for Start, beside a long list", n: 200, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
 		var defs strings.Builder
 		submitted := map[string]any{"big": rows(100*n, func() map[string]any { return map[string]any{"u": "x"} })}

@@ -125,6 +125,9 @@ func (r *inputResolver) remove(path []string) {
 // changes.
 func (r *inputResolver) refresh(path []string) {
 	r.evaluators = nil
+	if r.start != nil {
+		r.start.forget(path)
+	}
 	if r.view == nil {
 		return
 	}

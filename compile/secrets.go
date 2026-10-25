@@ -83,6 +83,9 @@ func (r *inputResolver) mark(path []string) {
 	r.marks.Add(slices.Concat([]string{"inputs"}, path))
 	r.markedInputs.Add(path, struct{}{})
 	r.evaluators = nil
+	if r.start != nil {
+		r.start.forget(path)
+	}
 }
 
 // marked reports whether the value at path in the inputs' values is

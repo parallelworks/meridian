@@ -256,6 +256,14 @@ type startState struct {
 	// madeSecret and madePrivate name the values Start made from a secret,
 	// and from a variable or a password but no secret.
 	madeSecret, madePrivate map[string]bool
+	// shared holds, by the JSON Pointer of a part's expressions, what they
+	// read, for those that give the same for each row of a list (sharedPart),
+	// or nil for those that don't; memo what each of those gave, until
+	// what it read changes (forget); and memoAt the same by the patterns
+	// of what each read.
+	shared map[string]*sharedExprs
+	memo   map[string]*memoized
+	memoAt reach.Trie[*memoized]
 }
 
 // contexts returns what Start's evaluations read: the inputs' values,
@@ -928,44 +936,126 @@ func waits(err error) bool {
 	return ok && (u.Name == "inputs" || u.Name == "env")
 }
 
+// A sharedExprs is what a part's expressions, and what they read through a
+// definition, read of the inputs, by its patterns (reach.Patterns), for
+// expressions that read neither a row index, nor a definition by a
+// relative reference, nor an env value: they give the same for each row of
+// a list while what they read doesn't change.
+type sharedExprs struct{ patterns [][]string }
+
+// A memoized is what evaluating a part's expressions, at key, gave, which
+// each part with the same expressions takes while nothing they read
+// changes, and the patterns of what they read.
+type memoized struct {
+	key      string
+	v        any
+	read     expr.Read
+	patterns [][]string
+}
+
+// sharedPart returns the key of what evaluating p's expressions gives, for
+// the part at path, if it is the same for each part with them
+// (sharedExprs), and the part doesn't read itself, and what they read.
+// Create compares what a form sent for each of a list's rows with what
+// such a default gives once (evalCompare), and Start evaluates it once,
+// rather than for each row, each of which can read all of another list.
+func (st *starter) sharedPart(p laterPart, path []string) (string, [][]string, bool) {
+	s := st.s
+	key := jsonptr.Format(p.loc)
+	shared, known := s.shared[key]
+	if !known {
+		if exprs, err := st.r.workflow.Exprs(p.loc); err == nil {
+			exprs = st.r.throughDefinitions(exprs, p.loc)
+			if !slices.ContainsFunc(exprs, func(e *expr.Expr) bool {
+				return readsIndex(e) || slices.ContainsFunc(e.Refs(), func(ref expr.Ref) bool { return ref.Context == "env" })
+			}) {
+				shared = &sharedExprs{readPatterns(exprs, nil)}
+			}
+		}
+		if s.shared == nil {
+			s.shared = map[string]*sharedExprs{}
+		}
+		s.shared[key] = shared
+	}
+	if shared == nil || slices.ContainsFunc(shared.patterns, func(q []string) bool { return reach.Reaches(q, path) }) {
+		return "", nil, false
+	}
+	return key, shared.patterns, true
+}
+
+// remember keeps what the expressions at key gave, which read what
+// patterns reach, until it changes.
+func (s *startState) remember(key string, v any, read expr.Read, patterns [][]string) {
+	if old := s.memo[key]; old != nil {
+		s.drop(old)
+	}
+	// A copy, as the value can be part of what the evaluation read.
+	m := &memoized{key: key, v: jsonvalue.Clone(v), read: read, patterns: patterns}
+	if s.memo == nil {
+		s.memo = map[string]*memoized{}
+	}
+	s.memo[key] = m
+	for _, q := range patterns {
+		s.memoAt.Add(q, m)
+	}
+}
+
+// forget drops what was remembered of evaluations that read the inputs'
+// value at path, which changed, or was marked.
+func (s *startState) forget(path []string) {
+	if len(s.memo) == 0 {
+		return
+	}
+	var stale []*memoized
+	for m := range s.memoAt.Reaching(path) {
+		stale = append(stale, m)
+	}
+	for _, m := range stale {
+		s.drop(m)
+	}
+}
+
+// drop drops m.
+func (s *startState) drop(m *memoized) {
+	if s.memo[m.key] != m {
+		return
+	}
+	delete(s.memo, m.key)
+	for _, q := range m.patterns {
+		s.memoAt.Remove(q, m)
+	}
+}
+
 // evalPart evaluates the i'th part of f's value held for Start, where the
 // workflow writes it, and reports whether it did, or failed: not if it
-// read what isn't evaluated yet.
+// read what isn't evaluated yet. A part whose expressions give the same
+// for each row of a list takes what they gave for another, while nothing
+// they read has changed (sharedPart).
 func (st *starter) evalPart(f *field, i int) bool {
 	r := st.r
 	p := f.later[i]
 	path := slices.Concat(f.path, p.path)
-	// What reads the value it gives reads it as the compiler's evaluation
-	// did, rather than as what isn't known yet: a form's text as it is, and
-	// what was missing as null.
-	r.scope()
-	self := false
-	if v, ok := jsonptr.Lookup(r.view, path); ok {
-		if _, unknown := v.(expr.Unknown); unknown {
-			var was any
-			if p.text {
-				was = lookup(r.doc.Value, p.loc)
-			}
-			setIn(r.view, path, was)
-			r.evaluators, self = nil, true
+	key, patterns, shared := st.sharedPart(p, path)
+	var (
+		v    any
+		read expr.Read
+	)
+	if m := st.s.memo[key]; shared && m != nil {
+		v, read = m.v, m.read
+	} else {
+		var err error
+		if v, read, err = st.evalHeld(p, path); waits(err) {
+			return false
+		} else if err != nil {
+			st.reportEval(p.loc, err, read)
+			f.later[i].variable = true
+			st.failed[f] = true
+			st.pending[f]--
+			return true
 		}
-	}
-	v, read, err := r.evalRead(p.loc, p.index)
-	switch {
-	case waits(err):
-		if self {
-			r.refresh(path)
+		if shared {
+			st.s.remember(key, v, read, patterns)
 		}
-		return false
-	case err != nil:
-		if self {
-			r.refresh(path)
-		}
-		st.reportEval(p.loc, err, read)
-		f.later[i].variable = true
-		st.failed[f] = true
-		st.pending[f]--
-		return true
 	}
 	f.later[i].variable = true
 	switch {
@@ -993,6 +1083,31 @@ func (st *starter) evalPart(f *field, i int) bool {
 		st.fillRows(f)
 	}
 	return true
+}
+
+// evalHeld evaluates p, the part of an input's value at path held for
+// Start. What reads the value it gives reads it as the compiler's
+// evaluation did, rather than as what isn't known yet: a form's text as it
+// is, and what was missing as null, until it gives one.
+func (st *starter) evalHeld(p laterPart, path []string) (any, expr.Read, error) {
+	r := st.r
+	r.scope()
+	self := false
+	if v, ok := jsonptr.Lookup(r.view, path); ok {
+		if _, unknown := v.(expr.Unknown); unknown {
+			var was any
+			if p.text {
+				was = lookup(r.doc.Value, p.loc)
+			}
+			setIn(r.view, path, was)
+			r.evaluators, self = nil, true
+		}
+	}
+	v, read, err := r.evalRead(p.loc, p.index)
+	if err != nil && self {
+		r.refresh(path)
+	}
+	return v, read, err
 }
 
 // removeEmpty removes the mappings on the way to each default of f's value
