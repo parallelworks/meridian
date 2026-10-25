@@ -255,7 +255,7 @@ type ReadyStepRetry struct {
 // The step fails, for failure(), when one before it failed as its job
 // counts it, and is cancelled, for cancelled(), when state.Cancelled says
 // so or one before it was cancelled, as one early-cancel: stops is; its
-// if: is true as a job's is (Job.Ready). In its expressions, needs holds
+// if: is true as a job's is (Plan.Ready). In its expressions, needs holds
 // the job itself too, whose outputs are those its steps without an id have
 // written so far, the later step's where two wrote the same name, and
 // whose steps are those with one, as format 1 has them: a step with an id

@@ -64,7 +64,7 @@ jobs:
 		t.Fatalf("compiling: %v", diags)
 	}
 	run := runValues(t, p, map[string]string{"token": token})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil || ready.Job == nil {
 		t.Fatal(err)
 	}

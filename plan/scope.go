@@ -30,7 +30,7 @@ const (
 	// status functions. A job's strategy: is evaluated here, and a matrix
 	// job's if: that doesn't read matrix.
 	PhaseStrategy
-	// PhaseReady is the rest of Ready (Job.Ready): matrix. A job's if:,
+	// PhaseReady is the rest of Ready (Plan.Ready): matrix. A job's if:,
 	// runs-on:, resources:, retry:, timeout:, working-directory: and ssh:
 	// are evaluated here.
 	PhaseReady
