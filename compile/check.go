@@ -106,6 +106,42 @@ func (r *inputResolver) checkKnown(f *field, passwords []*field) {
 	f.dflt = plan.Value{}
 }
 
+// readsPrivate reports whether an expression in f's definition, in its
+// rows' and its items' among them, reads an organization or user variable,
+// or an input that holds a password or reads one: a value given in its
+// place, as a list given as text whose rows' defaults read a variable, can
+// be what it would have made, which a problem with it mustn't show.
+func (r *inputResolver) readsPrivate(f *field) bool {
+	exprs, err := r.workflow.Exprs(f.loc)
+	if err != nil {
+		return true
+	}
+	for _, e := range exprs {
+		for _, ref := range e.Refs() {
+			switch {
+			case ref.Context == "org" || ref.Context == "vars":
+				return true
+			case ref.Context != "inputs":
+			case unnamed(ref.Path):
+				// Any input, a password among them.
+				if slices.ContainsFunc(r.fields, func(g *field) bool { return holdsPassword(g.def) || g.variable || g.deferred }) {
+					return true
+				}
+			default:
+				for n := len(ref.Path); n > 0; n-- {
+					if g := r.fieldAt(ref.Path[:n]); g != nil {
+						if holdsPassword(g.def) || g.variable || g.deferred || r.marked(g.path) {
+							return true
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 // checkField checks f's value, and moves it to the secrets if f is a
 // password, unless later is set: the value is evaluated again as the run
 // starts. A value given for a password is never kept, even one of the
@@ -126,7 +162,7 @@ func (r *inputResolver) checkField(f *field, later bool) {
 	switch {
 	case bad.kind != nil:
 		bad.params["input"] = at.label()
-		if f.variable || password || r.marked(f.path) {
+		if f.variable || password || r.marked(f.path) || r.readsPrivate(f) {
 			bad.params = mask(bad.params)
 		}
 		r.reportAt(bad.kind, at.loc, bad.params)
