@@ -12,14 +12,14 @@ import (
 )
 
 // An evaluation is a part of a field's value, at path in it, that the
-// compiler evaluated from raw, the workflow's value, or that a form
+// compiler evaluated from raw, the workflow's value at loc, or that a form
 // evaluated from it, which a default, a form's text or a comparison gave.
 // done is set once it is evaluated as the run starts instead (holdWhole).
 type evaluation struct {
-	f    *field
-	path []string
-	raw  any
-	done bool
+	f         *field
+	path, loc []string
+	raw       any
+	done      bool
 }
 
 // fillDefaults fills in the values. Each input without a value gets its
@@ -126,36 +126,49 @@ func (r *inputResolver) prepare(f *field) bool {
 func (r *inputResolver) evalPending(f *field) {
 	if f.texts == nil {
 		loc := appendPath(f.loc, "default")
-		switch v, marked, err := r.evalAt(loc, f.index); {
+		before, ok := jsonptr.Lookup(r.values, f.path)
+		f.nullBefore = ok && before == nil
+		f.textBefore = ok && before != nil && before == f.def["default"]
+		switch v, read, err := r.evalRead(loc, f.index); {
 		case expr.IsUnknown(err):
-			r.deferPart(f, nil, f.def["default"], false)
+			r.deferPart(f, nil, loc, f.def["default"], false)
 		case err != nil:
-			r.reportError(loc, 0, maskedIf(marked, err))
+			r.reportError(loc, 0, maskedIf(read.Private, err))
 		default:
 			r.setDefault(f, v)
 			r.noteEvaluation(f, nil, loc, f.def["default"])
-			if marked {
-				r.deferPart(f, nil, f.def["default"], true)
-			}
+			r.noteRead(f, nil, loc, f.def["default"], read)
 		}
 		return
 	}
 	value := lookup(r.values, f.path)
 	for _, t := range f.texts {
 		text := lookup(value, t.path)
-		switch v, marked, err := r.evalAt(t.loc, f.index); {
+		switch v, read, err := r.evalRead(t.loc, f.index); {
 		case expr.IsUnknown(err):
-			r.deferPart(f, t.path, text, false)
+			r.deferPart(f, t.path, t.loc, text, false)
 		case err != nil:
-			r.reportError(t.loc, 0, maskedIf(marked, err))
+			r.reportError(t.loc, 0, maskedIf(read.Private, err))
 		default:
 			// A copy, as the value can be part of what the evaluation read.
 			r.set(slices.Concat(f.path, t.path), jsonvalue.Clone(v))
 			r.noteEvaluation(f, t.path, t.loc, text)
-			if marked {
-				r.deferPart(f, t.path, text, true)
-			}
+			r.noteRead(f, t.path, t.loc, text, read)
 		}
+	}
+}
+
+// noteRead notes what the evaluation that gave the part of f's value at
+// path, raw at loc in the workflow, read. As the run is created, a part
+// that read a variable or a password is evaluated again as it starts, as a
+// plan never holds what is made from one; as it starts, Start names it
+// among what it made from one (startState.made).
+func (r *inputResolver) noteRead(f *field, path, loc []string, raw any, read expr.Read) {
+	switch {
+	case r.start != nil:
+		r.start.made(r, slices.Concat(f.path, path), read)
+	case read.Private:
+		r.deferPart(f, path, loc, raw, true)
 	}
 }
 
@@ -168,10 +181,11 @@ func (r *inputResolver) noteEvaluation(f *field, path, loc []string, raw any) {
 	if err != nil {
 		return
 	}
-	e := &evaluation{f: f, path: path, raw: raw}
+	e := &evaluation{f: f, path: path, loc: loc, raw: raw}
 	for _, p := range readPatterns(exprs, f.index) {
 		r.evaluated.Add(p, e)
 	}
+	r.evaluations = append(r.evaluations, e)
 }
 
 // setDefault sets f's value to its default, unless the default is "", which
@@ -236,9 +250,44 @@ func (r *inputResolver) collectRows(f *field) []*field {
 	}
 	if len(out) > 0 {
 		r.rows = append(r.rows, out...)
+		if r.rowsOf != nil {
+			r.rowsOf[f.holder()] = append(r.rowsOf[f.holder()], out...)
+		}
 		r.refresh(f.path)
 	}
 	return out
+}
+
+// dropRows drops the fields of the rows in f's value, and of the rows of
+// the lists in them, as Start collects them again (fillRows). They are
+// gone from rows at once, and dropped from it once they are half of it,
+// or it is read (liveRows), so that collecting each of many lists' rows
+// again doesn't go through the rows of all of them.
+func (r *inputResolver) dropRows(f *field) {
+	if r.rowsOf == nil {
+		r.rowsOf = map[*field][]*field{}
+		for _, c := range r.liveRows() {
+			r.rowsOf[c.in] = append(r.rowsOf[c.in], c)
+		}
+	}
+	for _, c := range r.rowsOf[f] {
+		c.gone = true
+	}
+	r.goneRows += len(r.rowsOf[f])
+	delete(r.rowsOf, f)
+	if r.goneRows*2 > len(r.rows) {
+		r.liveRows()
+	}
+}
+
+// liveRows returns the fields of the lists' rows, without those that are
+// gone (dropRows).
+func (r *inputResolver) liveRows() []*field {
+	if r.goneRows > 0 {
+		r.rows = slices.DeleteFunc(r.rows, func(c *field) bool { return c.gone })
+		r.goneRows = 0
+	}
+	return r.rows
 }
 
 // missing reports whether f has no value: none at all, "" when "" isn't one

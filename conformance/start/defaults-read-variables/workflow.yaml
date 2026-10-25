@@ -1,0 +1,22 @@
+on:
+  execute:
+    inputs:
+      region:
+        type: string
+        default: ${{ org.REGION }}
+      code:
+        type: string
+        default: ${{ vars.TOKEN }}
+      endpoint:
+        type: string
+        default: https://${{ inputs.region }}.example.com
+      replicas:
+        type: number
+        default: ${{ vars.REPLICAS }}
+      fixed:
+        type: string
+        default: fixed
+jobs:
+  main:
+    steps:
+      - run: echo ok

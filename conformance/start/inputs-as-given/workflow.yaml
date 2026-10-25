@@ -1,0 +1,18 @@
+on:
+  execute:
+    inputs:
+      cpus:
+        type: number
+      label:
+        type: string
+        default: ${{ org.PREFIX }}-${{ inputs.cpus }}
+      wide:
+        type: string
+        optional: true
+        hidden: ${{ org.PREFIX == 'p' && inputs.cpus == '2.50' }}
+env:
+  CPUS: ${{ inputs.cpus }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

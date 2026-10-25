@@ -1,0 +1,19 @@
+description: >-
+  A list given in the place of a default that reads a secret, that isn't
+  what the default gives, is one of the run's secrets as given, derived,
+  and the password in its row is a secret of its own: the run keeps both
+  names, and the value at each.
+source: Meridian
+contexts:
+  vars:
+    CREDS: '[{"user": "b", "pass": "other"}]'
+secret-variables: [CREDS]
+inputs:
+  creds:
+    - {user: a, pass: HUNTER2SECRET}
+expect:
+  inputs:
+    creds:
+      - {user: a, pass: HUNTER2SECRET}
+  run-secrets: [inputs.creds, inputs.creds.0.pass]
+  run-derived: [inputs.creds]

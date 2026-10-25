@@ -9,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -80,12 +81,17 @@ func (r *inputResolver) compare(f *field) {
 			}
 			part := lookup(value, path)
 			i := slices.IndexFunc(gave, func(res comparison) bool { return res.ok && sameValue(part, res.v) })
+			if i >= 0 && r.readsPart(c.locs[i], f.index, slices.Concat(f.path, path)) {
+				// What reads the part gives it, whatever it is, so it isn't
+				// what made it.
+				i = -1
+			}
 			switch {
 			case i >= 0:
 				if loc := c.locs[i]; r.reads(loc, false) {
 					raw := lookup(r.doc.Value, loc)
 					r.noteEvaluation(f, path, loc, raw)
-					r.deferPart(f, path, raw, true)
+					r.deferPart(f, path, loc, raw, true)
 				}
 			case c.option && f.findOptions().literal(part):
 			case f.typ == "password" && len(path) == 0:
@@ -97,6 +103,87 @@ func (r *inputResolver) compare(f *field) {
 			}
 		}
 	}
+}
+
+// readsPart reports whether what is at loc in the workflow, for the list
+// rows at index, reads the inputs' value at path: itself, or through a
+// value an evaluation made from it, as a default that reads another input
+// whose default reads it does.
+//
+// It looks from both ends, a step at a time: from what loc reads, through
+// the evaluations that gave it, and from the value, through the
+// evaluations that read it, either of which finds the answer alone. Each
+// step is taken on the side with less to follow, the value's first when
+// the two have as much, as most often nothing has read it. So a comparison costs
+// what the smaller side reaches, not what loc reads through, which can be
+// each row of a long list, or each default of a long chain, for each of
+// many values compared.
+func (r *inputResolver) readsPart(loc []string, index []int, path []string) bool {
+	exprs, err := r.workflow.Exprs(loc)
+	if err != nil {
+		return false
+	}
+	reads := readPatterns(exprs, index)
+	readsPath := func(patterns [][]string, path []string) bool {
+		return slices.ContainsFunc(patterns, func(p []string) bool { return reach.Reaches(p, path) })
+	}
+	if readsPath(reads, path) {
+		return true
+	}
+	for _, e := range r.evaluations[r.gaveTo:] {
+		r.gave.Add(slices.Concat(e.f.path, e.path), e)
+	}
+	r.gaveTo = len(r.evaluations)
+	// fromLoc holds the evaluations that gave what loc reads, and those
+	// that gave what they read, and so on, and fromPart those that read the
+	// value, and those that read what they gave, and so on; next and
+	// before are the patterns and the paths each side follows next. When
+	// the two have as much to follow, the sides take turns.
+	fromLoc, fromPart := map[*evaluation]bool{}, map[*evaluation]bool{}
+	next, before := reads, [][]string{path}
+	forward := true
+	for len(next) > 0 && len(before) > 0 {
+		forward = len(next) < len(before) || len(next) == len(before) && !forward
+		if !forward {
+			var paths [][]string
+			for _, q := range before {
+				for e := range r.evaluated.Reaching(q) {
+					if fromPart[e] {
+						continue
+					}
+					fromPart[e] = true
+					at := slices.Concat(e.f.path, e.path)
+					if fromLoc[e] || readsPath(reads, at) {
+						return true
+					}
+					paths = append(paths, at)
+				}
+			}
+			before = paths
+			continue
+		}
+		var patterns [][]string
+		for _, p := range next {
+			for e := range r.gave.Reached(p) {
+				if fromLoc[e] {
+					continue
+				}
+				fromLoc[e] = true
+				if fromPart[e] {
+					return true
+				}
+				if exprs, err := r.workflow.Exprs(e.loc); err == nil {
+					read := readPatterns(exprs, e.f.index)
+					if readsPath(read, path) {
+						return true
+					}
+					patterns = append(patterns, read...)
+				}
+			}
+		}
+		next = patterns
+	}
+	return false
 }
 
 // A comparison is what a string in the workflow gave, if it gave one,
@@ -331,7 +418,10 @@ func rowTexts(rows []any, value any, loc []string) ([]text, []candidate) {
 				continue
 			}
 			path := slices.Concat([]string{strconv.Itoa(i)}, p.at)
-			if i < len(rows) && v == lookup(rows[i], p.at) {
+			// A form's text is a string; a row that a default row's
+			// expression gives, all of it, is a mapping, which == can't
+			// compare.
+			if s, isText := v.(string); isText && i < len(rows) && s == lookup(rows[i], p.at) {
 				texts = append(texts, text{path, slices.Concat(loc, path)})
 				continue
 			}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
@@ -95,6 +96,10 @@ type Options struct {
 	// decide the run's shape, such as which inputs are ignored and which
 	// jobs a job needs, and keeps what else reads them an expression.
 	Contexts map[string]any
+	// Limits are Meridian's limits on the run's size that the phases after
+	// Create apply, such as a matrix's instances, which the plan records
+	// (plan.Run.Limits). A zero field is the default.
+	Limits plan.Limits
 }
 
 // definitionsPath is where a workflow defines its inputs.
@@ -187,10 +192,20 @@ type inputResolver struct {
 	// evaluated holds the parts of the values that evaluations gave, by the
 	// patterns (reach.Patterns) of the paths of the values they read.
 	evaluated reach.Trie[*evaluation]
-	fields    []*field
+	// evaluations are the same, in order, and gave those of them up to
+	// gaveTo by the paths of the parts they gave, made as a comparison
+	// first needs them (readsPart).
+	evaluations []*evaluation
+	gave        reach.Trie[*evaluation]
+	gaveTo      int
+	fields      []*field
 	// rows are the fields of lists' rows: each field of a list's template,
-	// once for each row.
-	rows []*field
+	// once for each row, and some that are gone (liveRows); goneRows counts
+	// those, and rowsOf holds the others by the inputs they are in, once
+	// Start first collects an input's rows again (dropRows).
+	rows     []*field
+	goneRows int
+	rowsOf   map[*field][]*field
 	// templates holds the fields of each list's template, and each repeated
 	// step's inputs, collected once with their paths in a row, by where they
 	// are in the workflow.
@@ -201,19 +216,143 @@ type inputResolver struct {
 	// workflow defines, anywhere, once one is.
 	unknown      int
 	passwordKeys map[string]bool
+	// decisions are the JSON Pointers of the conditions that read a
+	// variable or a password, in order, which the plan names for Start,
+	// and decided what each decided, which the secret record keeps;
+	// ignored the names of the inputs the conditions ignored, as in
+	// inputs.region, and ignoredValues their values, as they were given,
+	// for those that had one; and unconverted
+	// the values of the inputs whose values checking them converted, as
+	// they were before, by their paths' names, which what was evaluated
+	// before read.
+	decisions     []string
+	decided       map[string]bool
+	ignored       []string
+	ignoredValues map[string]any
+	unconverted   map[string]any
+	// ignoredLater holds the inputs that an ignore which read a variable
+	// or a password ignored, whose values the plan holds for Start to drop
+	// (applyConditions), and shapeView the inputs' values without them, as
+	// the jobs' needs: read them (shapeScope).
+	ignoredLater []*field
+	shapeView    map[string]any
+	// start is set when the resolver completes a run's values as it
+	// starts (Start), and nil when it creates the run.
+	start *startState
+}
+
+// privateExprs returns the expressions of the definitions of the inputs
+// that hold a private value: one the run was given in the place of what
+// reads a variable that isn't a secret.
+func (r *inputResolver) privateExprs() []*expr.Expr {
+	var out []*expr.Expr
+	seen := map[*field]bool{}
+	for name := range jsonvalue.Sorted(r.private) {
+		path := plan.SplitPath(name)
+		for n := len(path); n > 0; n-- {
+			if f := r.fieldAt(path[:n]); f != nil {
+				if !seen[f] {
+					seen[f] = true
+					exprs, _ := r.workflow.Exprs(f.loc)
+					out = append(out, exprs...)
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
+// withheldParts returns where, in the workflow, the parts of the input
+// definitions are that can hold a password, which a plan doesn't hold:
+// the default of each input that holds a password, a password input's, a
+// password field's of a list's rows, and a list's or a repeated step's
+// whose rows have a password input, each once, in order.
+func (r *inputResolver) withheldParts() [][]string {
+	var out [][]string
+	seen := map[string]bool{}
+	var walk func(fields []*field)
+	walk = func(fields []*field) {
+		for _, f := range fields {
+			if _, ok := f.def["default"]; ok && holdsPassword(f.def) {
+				loc := appendPath(f.loc, "default")
+				if pointer := jsonptr.Format(loc); !seen[pointer] {
+					seen[pointer] = true
+					out = append(out, loc)
+				}
+			}
+			if defs, loc := f.rowInputs(); defs != nil {
+				walk(r.collect(defs, loc, appendPath(f.path, "[index]"), nil))
+			}
+		}
+	}
+	walk(r.fields)
+	return out
 }
 
 // deferred returns the defaults that are evaluated once the run is
 // underway, by their inputs' paths.
 func (r *inputResolver) deferred() map[string]plan.Value {
 	var out map[string]plan.Value
+	for _, f := range r.deferredFields() {
+		if out == nil {
+			out = map[string]plan.Value{}
+		}
+		out[plan.JoinPath(f.path...)] = f.dflt
+	}
+	return out
+}
+
+// deferredFields returns the inputs whose values are evaluated once the run
+// is underway, in order. One whose value can't be held, as it isn't JSON,
+// has none.
+func (r *inputResolver) deferredFields() []*field {
+	var out []*field
 	for _, f := range r.fields {
-		// One whose value can't be held, as it isn't JSON, has none.
 		if (f.deferred || f.variable) && !f.ignored && !f.dflt.IsZero() {
-			if out == nil {
-				out = map[string]plan.Value{}
-			}
-			out[plan.JoinPath(f.path...)] = f.dflt
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// unconvertedData returns the values of the inputs the plan keeps, kept,
+// that checking them converted, as they were given (plan.Run.Unconverted):
+// none the plan doesn't keep, as a private one.
+func (r *inputResolver) unconvertedData(kept map[string]any) map[string]plan.Data {
+	var out map[string]plan.Data
+	for name, v := range r.unconverted {
+		if _, ok := jsonptr.Lookup(kept, plan.SplitPath(name)); !ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]plan.Data{}
+		}
+		out[name] = plan.DataOf(v)
+	}
+	return out
+}
+
+// deferredParts returns where the parts of the deferred values that hold
+// expressions are in the workflow, in order: each input's, in the order
+// they were held, or the one that is all of its value.
+func (r *inputResolver) deferredParts() []plan.DeferredPart {
+	var out []plan.DeferredPart
+	for _, f := range r.deferredFields() {
+		parts := f.later
+		if i := slices.IndexFunc(parts, func(p laterPart) bool { return len(p.path) == 0 }); i >= 0 {
+			parts = parts[i : i+1]
+		}
+		for _, p := range parts {
+			out = append(out, plan.DeferredPart{
+				Name:       plan.JoinPath(slices.Concat([]string{"inputs"}, f.path, p.path)...),
+				Location:   jsonptr.Format(p.loc),
+				Index:      slices.Clone(p.index),
+				Default:    p.dflt,
+				Text:       p.text,
+				Null:       p.null,
+				Containers: p.containers,
+			})
 		}
 	}
 	return out

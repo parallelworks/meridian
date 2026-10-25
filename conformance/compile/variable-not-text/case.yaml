@@ -1,0 +1,23 @@
+description: >-
+  A variable's value is text. One the compiler is given that isn't, such as
+  a number, is read as "", as the run reads one that isn't set, which a
+  warning says, without its value.
+source: Meridian
+contexts:
+  org:
+    COUNT: 3
+    NAME: n
+  vars:
+    SIZE: [1]
+expect:
+  diagnostics:
+    - severity: warning
+      code: variable_not_text
+      path: ""
+      params: {context: org, name: COUNT}
+    - severity: warning
+      code: variable_not_text
+      path: ""
+      params: {context: vars, name: SIZE}
+  plan:
+    /run/variables: [org.COUNT, org.NAME, vars.SIZE]

@@ -35,6 +35,16 @@ type field struct {
 	hidden     bool
 	ignored    bool
 	optional   bool
+	// shaped is set for an input whose ignore read a variable or a
+	// password, or one in a group whose did: the plan holds it the same
+	// whatever that decided, out of its values, and Start drops it if it
+	// is ignored (applyConditions). ignoredLater is set for one ignored by
+	// such a decision, which only Start applies.
+	shaped, ignoredLater bool
+	// hiddenDecides, ignoreDecides and optionalDecides are set for each of
+	// its conditions that is a decision of the run's shape, which Start
+	// makes again (condition).
+	hiddenDecides, ignoreDecides, optionalDecides bool
 	// deferred is set for an input whose value is evaluated once the run is
 	// underway, because its default, or a part of its value, reads something
 	// the compiler doesn't know. variable is set for one whose value reads
@@ -44,6 +54,12 @@ type field struct {
 	// starts in its place. dflt holds what is evaluated then.
 	deferred, variable bool
 	dflt               plan.Value
+	// nullBefore is set for one whose value was null when its default was
+	// evaluated, as a list's default row can make it, and textBefore for
+	// one whose value was its default's text, as a form sends it, which a
+	// default that gives nothing leaves, and what the default reads of
+	// the value reads.
+	nullBefore, textBefore bool
 	// secretWhole is set for a list, a group or a wizard step with a
 	// password among its inputs, whose value, or one of whose rows, is
 	// evaluated as the run starts: the plan can't say which of its values
@@ -62,6 +78,9 @@ type field struct {
 	// seq is the field's place among the inputs' fields and then the rows'
 	// fields, the order evalValues fills in their values.
 	seq int
+	// gone is set for a field of a row that Start collects again
+	// (dropRows), which the inputResolver's rows hold until it drops them.
+	gone bool
 	// options is what checking the value reads of the field's options,
 	// once it is read, which the fields of a list's rows share with its
 	// template's.

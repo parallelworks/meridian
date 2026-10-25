@@ -34,7 +34,10 @@ var formats = []string{"text", "json"}
 
 // runValidate compiles a workflow without running it, with the user's
 // variables and groups, and the input values given, and reports every
-// error and warning.
+// error and warning. With -start, it starts the run too, as far as it can
+// without running anything: it reads every variable the run reads, secret
+// ones too, evaluates what waits for the start and checks it, and reports
+// what would fail the run as it starts, but makes no session.
 func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	var set []string
 	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name; it can be given again", func(s string) error {
@@ -43,6 +46,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	})
 	inputsFile := fs.String("inputs", "", "reads input values from the JSON `file`, an object of them by name; -input sets values over them")
 	out := fs.String("format", "text", "writes errors and warnings as `text`, one a line as compilers write them, or as json, an RFC 9457 validation problem")
+	start := fs.Bool("start", false, "starts the run too, without running it: reads every variable it reads, secret ones too, and checks what waits for the run's start")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return flagError(c, fs, err)
@@ -83,7 +87,23 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	}
 	diags := tooLarge
 	if diags == nil {
-		_, diags = compile.Compile(name, data, submitted, compile.Options{Inputs: cfg, Contexts: contexts})
+		var created *compile.Created
+		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{Inputs: cfg, Contexts: contexts})
+		if err != nil {
+			return c.fail(err)
+		}
+		if *start && created != nil {
+			// There is no session provider here, so a run with sessions
+			// can't start.
+			_, started, err := compile.Start(ctx, created.Plan, compile.StartInput{
+				Variables: cfg, Record: created.Record, Inputs: cfg,
+			})
+			if err != nil {
+				return c.fail(err)
+			}
+			diags = append(diags, located(name, data, started)...)
+			diags.Sort()
+		}
 	}
 	if *out == "json" {
 		err = writeProblemJSON(c.stdout, diags)
@@ -97,6 +117,21 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		return exitInvalid
 	}
 	return exitOK
+}
+
+// located returns diags, the run's problems as it starts, which have no
+// file position, each where the workflow writes what it is about, in the
+// file name, which holds data.
+func located(name string, data []byte, diags problems.Diagnostics) problems.Diagnostics {
+	doc, _ := format.Load(name, data)
+	out := make(problems.Diagnostics, len(diags))
+	for i, d := range diags {
+		out[i] = d
+		if k, ok := d.Kind(); ok && doc != nil {
+			out[i] = k.At(name, doc.ReportPosition(d.Path()), d.Path(), d.Params)
+		}
+	}
+	return out
 }
 
 // stdinName is what diagnostics call a workflow read from standard input.

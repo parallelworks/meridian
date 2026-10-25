@@ -44,6 +44,29 @@ type Run struct {
 	// Inputs are the run's input values, with defaults applied and ignored
 	// inputs left out: a mapping.
 	Inputs Data `json:"inputs,omitzero"`
+	// Unconverted are the values of the inputs Inputs holds that the
+	// compiler converted to their types, or a platform resolved, as the run
+	// was given them, by their input's path: the text "2.50" of a number,
+	// or a cluster's name. What the compiler evaluated of the inputs, their
+	// defaults and conditions, read them as they were given, before they
+	// were converted, and so does what Start evaluates, which then reads
+	// Inputs' (docs/design.md, Starting a run).
+	Unconverted map[string]Data `json:"unconverted,omitempty"`
+	// Definitions are the workflow's input definitions, on.execute.inputs,
+	// as the workflow writes them, with their expressions parsed, but for
+	// what Withheld names. Start evaluates what is left to it where the
+	// workflow writes it (DeferredParts, Decisions), as the compiler would
+	// have, so that relative references, reads of a definition and lists'
+	// templates read what they read as the run was created. They hold no
+	// value the run was given.
+	Definitions Value `json:"definitions,omitzero"`
+	// Withheld are the JSON Pointers, in the workflow, of the parts of the
+	// input definitions that Definitions leaves out, as it can't hold a
+	// password: each password input's default, a field's of a list's rows
+	// among them, and the default of each list whose rows have a password
+	// input, whose rows can hold one. The run's secret record holds them,
+	// and Start puts them back.
+	Withheld []string `json:"withheld,omitempty"`
 	// DeferredInputs are the defaults of inputs that read what is known
 	// only once the run is underway, such as a secret variable, or what the
 	// plan never holds, an organization or user variable or a password
@@ -54,10 +77,40 @@ type Run struct {
 	// secrets. They are evaluated as the run starts, with the other inputs'
 	// values, and give the inputs' values.
 	DeferredInputs map[string]Value `json:"deferredInputs,omitempty"`
+	// DeferredParts are the parts of DeferredInputs that hold expressions,
+	// in the order the compiler held them: each is evaluated as the run
+	// starts where the workflow writes it, in Definitions, and gives the
+	// value it names.
+	DeferredParts []DeferredPart `json:"deferredParts,omitempty"`
+	// Decisions are the JSON Pointers, in the workflow, of the inputs'
+	// hidden, ignore and optional that read an organization or user
+	// variable, or a password, as the run was created, in order. Start
+	// decides each again, in the order the compiler did (docs/design.md,
+	// Starting a run). What each decided can say something of what it
+	// read, so the run's secret record holds it, and the plan holds the
+	// inputs the same whatever it was: an input whose ignore is one, or
+	// one in a group whose is, the plan holds out of Inputs, as a private
+	// value or a derived one, and Start drops it if it is ignored; the
+	// conditions in such a group are each one, whatever they read; and
+	// whether an input one of them decides about is required, Start
+	// decides. What a job's needs: decided shows in its Needs, as the plan
+	// holds the jobs' graph, read with each input an ignore that is one
+	// ignored as ignored. A job's needs: that read one is its
+	// Job.NeedsExpr.
+	Decisions []string `json:"decisions,omitempty"`
 	// Env is the workflow's env:.
 	Env map[string]Value `json:"env,omitempty"`
 	// Timeout is the run's timeout:.
 	Timeout Value `json:"timeout,omitzero"`
+	// Remote is the remote context, by name, as the run was created: where
+	// a workflow its caller fetched came from, such as remote.repo and
+	// remote.branch.
+	Remote map[string]string `json:"remote,omitempty"`
+	// Sessions is the workflow's sessions:, and SessionNames what the
+	// session provider gave for each as the run was created, which
+	// sessions.<name> reads. Start makes the sessions from both.
+	Sessions     Value             `json:"sessions,omitzero"`
+	SessionNames map[string]string `json:"sessionNames,omitempty"`
 	// Secrets names the secret variables the run reads, as in vars.token,
 	// each of a context's for a read of every variable of the context, as
 	// vars.* is; and its passwords, by their paths in the inputs' values: a
@@ -93,15 +146,50 @@ type Run struct {
 	Permissions []string `json:"permissions,omitempty"`
 	// Limits are Meridian's limits on the run's size that the phases after
 	// Create apply, so that every replica, and every rerun, applies the
-	// same ones. The compiler sets none yet; when it first does, the plan's
-	// version rises, so that a replica of a release that doesn't know them
-	// leaves the run alone.
+	// same ones: those the compiler was given (compile.Options.Limits).
 	Limits Limits `json:"limits,omitzero"`
+}
+
+// A DeferredPart is a part of an input's value that is evaluated as the
+// run starts: what the workflow writes at Location, for the list rows at
+// Index, gives the value Name names.
+type DeferredPart struct {
+	// Name is the name of the value the part gives (JoinPath): an input's,
+	// as in inputs.region, or a part of one's, as in inputs.hosts.0.zone.
+	Name string `json:"name"`
+	// Location is the JSON Pointer, in the workflow, of the string, list or
+	// mapping that is evaluated: an input's default, a part of one, or one
+	// of its options' values, as in /on/execute/inputs/hosts/template/zone/
+	// default. Definitions holds it.
+	Location string `json:"location"`
+	// Index holds the indexes of the list rows it is evaluated for,
+	// outermost first, which [index] reads.
+	Index []int `json:"index,omitempty"`
+	// Default is set for an input's default, or a field's of a list's
+	// rows, all of the value it gives: one that gives "" or null gives no
+	// value, as when the run is created.
+	Default bool `json:"default,omitzero"`
+	// Text is set for a form's text for the expression, which the run was
+	// given in its place: what the expression reads of the value it gives
+	// reads the text, as when the run was created, where what a default
+	// reads of the value it gives reads none.
+	Text bool `json:"text,omitzero"`
+	// Null is set for a default whose input's value was null before it,
+	// as a list's default row can make a field's: one that gives no value
+	// leaves it null, as when the run was created, where another leaves
+	// none.
+	Null bool `json:"null,omitzero"`
+	// Containers is how many of the mappings on the way to a default, from
+	// the innermost, the run's values didn't have, as a group of a row
+	// whose fields had no values, which DeferredInputs holds only to hold
+	// it: one left empty once the defaults in it give no value isn't
+	// there, as it wasn't when the run was created.
+	Containers int `json:"containers,omitzero"`
 }
 
 // Limits are Meridian's limits on a run's size, which whoever runs the
 // workflow sets, and which aren't part of the format. A zero field is the
-// default. The compiler sets none yet: they come with its Options.Limits.
+// default.
 type Limits struct {
 	// MaxInstances is how many instances a matrix can have, or 0 for
 	// DefaultMaxInstances.
@@ -140,6 +228,11 @@ type Job struct {
 	Strategy *Strategy `json:"strategy,omitzero"`
 	// Needs are the jobs this one waits for.
 	Needs []Need `json:"needs,omitempty"`
+	// NeedsExpr is the job's needs:, when it is an expression that read an
+	// organization or user variable, or a password, as the run was
+	// created: Start evaluates it again, and fails the run if it gives
+	// other jobs than Needs.
+	NeedsExpr Value `json:"needsExpr,omitzero"`
 	// If is the job's if:. Unset means success(), and null, as an if:
 	// written empty is, is false.
 	If Value `json:"if,omitzero"`
@@ -224,8 +317,9 @@ type StepRetry struct {
 	CleanOnRetry Value `json:"cleanOnRetry,omitzero"`
 }
 
-// Exprs returns every expression the plan holds, in its run and its jobs.
-// The plan of a workflow that a step runs holds its own.
+// Exprs returns every expression the plan holds, in its run, its input
+// definitions among them, and its jobs. The plan of a workflow that a step
+// runs holds its own.
 func (p *Plan) Exprs() []*expr.Expr {
 	var out []*expr.Expr
 	add := func(vs ...Value) {
@@ -238,10 +332,12 @@ func (p *Plan) Exprs() []*expr.Expr {
 			add(v)
 		}
 	}
+	add(p.Run.Definitions)
 	addAll(p.Run.DeferredInputs)
 	addAll(p.Run.Env)
-	add(p.Run.Timeout)
+	add(p.Run.Timeout, p.Run.Sessions)
 	for _, j := range p.Jobs {
+		add(j.NeedsExpr)
 		if s := j.Strategy; s != nil {
 			add(s.Matrix, s.FailFast, s.MaxParallel)
 		}

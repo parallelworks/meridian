@@ -136,9 +136,10 @@ Format 1 is the format Parallel Works ACTIVATE runs.
 - **Strictness.** A workflow that needs something the environment can't
   provide fails to compile: an input type that names platform resources, a
   `uses:` that names a workflow with no Sources resolver, sessions without a
-  session provider. The error names the key and what would provide it.
-  There is no flag to run the workflow anyway. The compiler doesn't yet
-  refuse the last two.
+  session provider. The error names the key and what would provide it
+  (`resolver_missing`). There is no flag to run the workflow anyway. The
+  compiler doesn't yet refuse the last two; Start refuses sessions without
+  a session provider.
 - **What ACTIVATE ignores.** ACTIVATE has never checked workflows against
   the schema, so workflows that run there can have keys the schema doesn't
   define, which ACTIVATE ignores. In format 1, such a key is a warning, and
@@ -170,11 +171,12 @@ loads, resolves or compiles to, the problems it has, or both. Cases come
 from ACTIVATE's own tests, from public workflows and from Meridian. They
 live in `conformance/`, in areas, and each package runs the cases of its
 own: `format` for loading and validation, `expressions` for what
-expressions evaluate to, `inputs` for a run's input values, and `compile`
-for plans and the problems with jobs and expressions. Cases for the later
-phases come with them: Start's values and its check of the run's shape,
-matrix expansion, the shape of each context in each phase, and runs, with
-the outcomes and outputs they must end with, status functions and step
+expressions evaluate to, `inputs` for a run's input values, `compile` for
+plans and the problems with jobs and expressions, `start` for a run's
+values as it starts and its check of the run's shape, `matrices` for
+matrix expansion, and `contexts` for the shape of each context in the
+phases after Start. Cases for runs come with what runs them, with the
+outcomes and outputs they must end with, status functions and step
 retries among them.
 
 Behavior that workflows rely on is kept, even where it is surprising. Behavior
@@ -292,7 +294,7 @@ phase's inputs and keep what it gives, so every implementation, whether
 
 | Phase | When | Function | Contexts it adds | Evaluates |
 | --- | --- | --- | --- | --- |
-| Create | The run is created | `compile.Compile`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
+| Create | The run is created | `compile.Create`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values Create left, the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
 | Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
 | Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
@@ -323,10 +325,10 @@ Each phase reads the contexts of the phases before it too.
   they decide is kept: that a job is skipped, a matrix's instances, a job's
   outcome and outputs.
 
-Create, matrix expansion, Ready, Step and End are built, and so are the
-scope builder and the masker. Start is designed here, and not built yet,
-and nothing calls the phases after Create yet: the coordinator and the
-worker are designed here too.
+The five phases are built, and so are matrix expansion, the scope builder
+and the masker. The worker calls Step and End; the coordinator, which calls
+Start and Ready, is designed here, and until it is built only
+`meridian validate --start` calls Start.
 
 ### Contexts
 
@@ -476,17 +478,27 @@ its resolvers into a plan, in order:
      row are `api key`, `private key` or `access key`, so `HF_TOKEN` and
      `apiKey` do and `tokenizer` doesn't. A variable is warned about once,
      where it is first read.
-7. **Emit** the plan, and beside it the run's passwords, which the plan
-   doesn't hold.
+7. **Emit** the plan, and beside it what the run's secret record holds
+   from its start, which the plan doesn't (`compile.Record`): the run's
+   passwords and its private values, named as the plan names them; the
+   parts of the input definitions that can hold a password; what each
+   decision of the run's shape that read a variable or a password decided;
+   and the inputs the run ignored, with their values. Beside the input
+   values it knows, the plan holds what Start needs to complete the rest as
+   Create would have: the input definitions, where each part of an input
+   held for Start is in them (`Run.DeferredParts`), where the parts it
+   withholds are (`Run.Withheld`), and where each decision of the run's
+   shape that read a variable or a password is (`Run.Decisions` and a
+   job's `NeedsExpr`).
 
 The compiler does no I/O of its own: files, networks and platforms are
 reached only through resolvers, which get the context the compiler is
 given, so cancellation, deadlines and traces reach them. It is
 deterministic, so the same workflow, inputs and resolver answers give a
 byte-identical plan. That is also what lets it build to WebAssembly
-unchanged (see [Editors and web UIs](#editors-and-web-uis)). Today
-`Compile` takes no context, and doesn't return the run's passwords, which
-only `ResolveInputs` gives.
+unchanged (see [Editors and web UIs](#editors-and-web-uis)). `Create`
+takes a context; `Compile`, which gives the plan alone, doesn't, and nor
+does the Inputs resolver, the one Create reaches today.
 
 Errors and warnings are reported together rather than one at a time.
 Warnings, such as a deprecated key, don't stop a run, and are kept with it,
@@ -543,8 +555,9 @@ language's limits, the same wherever a workflow runs. A plan's JSON nests at
 most 10,000 levels, as deep as its encoding reads, so a value nested deeper
 is an error. The plan records the limits that the phases after Create
 apply, such as a matrix's instances, so every coordinator replica, and
-every rerun, applies the same ones. Today the file's size and the nets are
-fixed, there are no others, and the plan records none.
+every rerun, applies the same ones (`Run.Limits`). Today the file's size
+and the nets are fixed, and of the others `Options.Limits` has only a
+matrix's instances.
 
 ### Inputs
 
@@ -595,7 +608,11 @@ ACTIVATE's launch form and its backend do together:
   and what a password or a secret variable, is found from the definitions
   before anything is evaluated, following relative references to the
   definitions they read. A default that reads its own input, which a form
-  doesn't fill in, gives what the compiler gives it.
+  doesn't fill in, gives what the compiler gives it. A submitted value that
+  an expression which reads it gives back, as a default that reads its own
+  input does, or one that reads another input whose default reads the
+  first, isn't what made it, however the two compare: it is kept as what a
+  person typed over the expression is.
 - **Lists.** A list's default is the rows it starts with. Each row, given or
   a default, is a group of the template's fields, which take their defaults
   as inputs do, in the same order as the rest; in a field's default,
@@ -626,45 +643,52 @@ ACTIVATE's launch form and its backend do together:
   each row is a group of the step's inputs, as a list's row is of its
   template's fields. A repeated step given no value has none. A header has
   no value.
-- **Types.** A number or a boolean given as text, such as `"5"` or
-  `"true"`, is converted, and a text input given a number or a boolean gets
-  its text. Anything else that doesn't fit the input's type is an error, as
-  is a number outside its `min` and `max`, or a choice that isn't one of a
-  dropdown's options when they are written in the workflow. A value for an
+- **Types.** A number or a boolean given as text, such as `"5"` or `"true"`,
+  is converted, and a text input given a number or a boolean gets its text.
+  ACTIVATE converts no value it is given: its defaults, conditions, `env:`
+  and steps all read a value as it was submitted, so a number sent as text
+  is that text, `"8" + 1` is `"81"`, and `"true"` isn't `true`. Meridian's
+  conversion is a difference from ACTIVATE that the next change removes:
+  format 1 reads every input value as it was submitted, and `meridian`'s
+  `--input` gives a number or a boolean input a number or a boolean, as
+  ACTIVATE's form does. Until then, Meridian's own evaluations at Create and
+  Start read a value as it was given (`Run.Unconverted`), and the jobs read
+  it converted. Anything else that doesn't fit the input's type is an error,
+  as is a number outside its `min` and `max`, or a choice that isn't one of
+  a dropdown's options when they are written in the workflow. A value for an
   input the workflow doesn't define is a warning that suggests the nearest
   name, and is kept, as ACTIVATE keeps it. One whose name is a password
   field's, wherever the workflow defines it, as a repeated step's password
   sent beside the step is, or is close to a password input's there, as a
-  misspelling is, is kept as a password: it is one of the run's secrets,
-  and not in the plan. So is one whose name can be a secret's, as one sent
-  for a password field that was renamed can: it looks like one, by the
-  words that make an input's name look like a secret's
-  ([Compiling](#compiling)), or one of its words is a letter from one of
-  the longer of them, `password`, `passwd`, `passphrase`, `secret` and
-  `credential`, as `pasword` is; not from `token`, whose neighbours, such
-  as `tokens` and `taken`, are common words. That errs toward a secret,
-  such as `passed`, which is kept as one, and still given to the run. So
-  is a mapping or list whose name is close to an input's with a
-  password among its inputs, or that holds a key named as a password field
-  or that can be a secret's, as a flattened wizard step's inputs sent
-  under the step's name do. A row of a list or a repeated step is checked the same
-  way, against the inputs its rows have, and a value there for one they
-  don't have is reported by its path, as `creds.0.pasword`, and kept as a
-  password by the same rules, by that path, as a password field of a row
-  is: among the secrets, and in neither the values nor, for a list held
-  for Start, its value that waits there. A key of a list's default rows,
-  written in the workflow, that isn't one of its rows' inputs is a warning
-  where it is written (`default_row_unknown_input`), once, and the row
-  keeps it; a launch form sends the default rows back, so a submitted
-  row's key that a default row has isn't reported again, and a value a
-  default row has at that key isn't taken for a password by its name, as
-  `api_token: none` written in the workflow isn't. A row's inputs are
-  those of every list at its list's path, where a list and a wizard step's
-  list share one. A value that isn't JSON, such
-  as NaN or text that isn't UTF-8, is an error, whether it was submitted or
-  a default gave it, as `0/0` gives NaN and `1/0` an infinity: ACTIVATE
-  can't encode such a run's values, and fails it as it starts. One in a
-  list's rows is reported at the row's field, and so is one in what the
+  misspelling is, is kept as a password: it is one of the run's secrets, and
+  not in the plan. So is one whose name can be a secret's, as one sent for a
+  password field that was renamed can: it looks like one, by the words that
+  make an input's name look like a secret's ([Compiling](#compiling)), or
+  one of its words is a letter from one of the longer of them, `password`,
+  `passwd`, `passphrase`, `secret` and `credential`, as `pasword` is; not
+  from `token`, whose neighbours, such as `tokens` and `taken`, are common
+  words. That errs toward a secret, such as `passed`, which is kept as one,
+  and still given to the run. So is a mapping or list whose name is close to
+  an input's with a password among its inputs, or that holds a key named as
+  a password field or that can be a secret's, as a flattened wizard step's
+  inputs sent under the step's name do. A row of a list or a repeated step
+  is checked the same way, against the inputs its rows have, and a value
+  there for one they don't have is reported by its path, as
+  `creds.0.pasword`, and kept as a password by the same rules, by that path,
+  as a password field of a row is: among the secrets, and in neither the
+  values nor, for a list held for Start, its value that waits there. A key
+  of a list's default rows, written in the workflow, that isn't one of its
+  rows' inputs is a warning where it is written
+  (`default_row_unknown_input`), once, and the row keeps it; a launch form
+  sends the default rows back, so a submitted row's key that a default row
+  has isn't reported again, and a value a default row has at that key isn't
+  taken for a password by its name, as `api_token: none` written in the
+  workflow isn't. A row's inputs are those of every list at its list's path,
+  where a list and a wizard step's list share one. A value that isn't JSON,
+  such as NaN or text that isn't UTF-8, is an error, whether it was
+  submitted or a default gave it, as `0/0` gives NaN and `1/0` an infinity:
+  ACTIVATE can't encode such a run's values, and fails it as it starts. One
+  in a list's rows is reported at the row's field, and so is one in what the
   compiler knows of a value that waits for Start.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
@@ -690,9 +714,14 @@ ACTIVATE's launch form and its backend do together:
   `job` or a status function in one is an error. Start evaluates the
   workflow's `env:` with the inputs, in the order they need, so a default
   can read `env` and an `env:` value an input; a default and an `env:` value
-  that read each other are an error, as two defaults that do are. Today the
-  compiler accepts a later context in a definition, and holds its input for
-  a start that can't evaluate it.
+  that read each other are an error (`values_read_each_other`), as two
+  defaults that do are. A default reads the workflow's `env:` alone, not
+  the variables the worker defines for a job, such as `PW_PARENT_JOB_DIR`,
+  which it reads as `""`, where ACTIVATE evaluates an input expression
+  that reads `env` where it is read, with the env there. No known workflow
+  reads `env` in an input expression. Today the compiler accepts a later
+  context in a definition, and holds its input for Start, which reports it
+  (`context_not_known`).
 - **Variables.** A plan never holds an organization or user variable's
   value, secret or not ([The plan](#the-plan)). A default that reads `org`
   or `vars`, or a part of an input's value that reads one, stays an
@@ -740,29 +769,101 @@ coordinator runs it as the run's first hopper job, which every other job of
 the run waits for ([On hopper](#on-hopper)).
 
 1. **Read.** Read the variables the plan lists through the Variables
-   interface, by name, or a context's whole when the plan names it alone,
-   and take the run's passwords from its secret record.
-2. **Check the shape.** Evaluate again each decision of the run's shape
-   that read a variable: an input's `hidden`, `ignore` and `optional`, and a
-   job's `needs`. If one differs from what the plan records, the run fails
-   with `run_shape_changed`, rather than run with values from two readings.
-3. **Complete the inputs.** Evaluate the inputs the plan holds for Start,
-   and the workflow's `env:` and `timeout:`, against the plan's input
-   definitions, so relative references, reads of a definition and lists'
-   templates work as they do at Create. Each input's value is checked as
-   Create checks one: its type, whether it is required, and a platform
-   type with the Inputs resolver.
-4. **Expand** each matrix whose values are known by now, written out or
+   interface, once, secret ones included: by name, or a context's whole
+   when the plan names it alone. The interface reads a variable by its
+   context, a dot and its name as it is, which can hold dots of its own, as
+   `vars.my.token`; the plan writes the same name `vars.my~1token`
+   (`plan.JoinPath`). A variable the interface gives as a secret is one, and
+   so is one the plan names as one though the interface no longer does.
+   Take the run's passwords and private values from its secret record, and
+   put each in the inputs' values at the path its name leads to
+   (`plan.SplitPath`), an outer one before those in it, in a list at its
+   index, where the plan holds null in its place; and put the parts of the
+   input definitions the plan withholds back in their places. A record
+   that doesn't hold what the plan names is an error.
+2. **Complete the inputs.** Evaluate the parts of the inputs the plan holds
+   for Start where the input definitions write them (`Run.DeferredParts`),
+   with the index of the list rows each is for, so relative references,
+   reads of a definition and lists' templates work as they do at Create; and
+   the workflow's `env:`. Each is evaluated once, in the order they read
+   each other, as Create fills in the inputs: one once nothing its
+   expressions read waits any longer, and what is left reads itself
+   (`values_read_each_other`). Once every part of a list is evaluated, its
+   rows' fields, and those of the lists in its rows, take their defaults as
+   Create fills in a row's, so a list, a row or a list in a row that a part
+   gives is filled in as Create filled it in before the plan held the part's
+   expression in its place. What Start evaluates reads the inputs as
+   Create's evaluations read them: before Create converted them to their
+   types, so a number a form sent as the text `2.50` is that text to a
+   default that reads it, and to the workflow's `env:` (`Run.Unconverted`),
+   but for a value the secret record holds, which it reads converted until
+   format 1 reads values as submitted ([Inputs](#inputs)); each list's rows
+   with a field that has no value as null; and what a default reads of the
+   value it gives as Create's evaluation did, none, or the form's text for
+   it. What reads a definition, as a relative reference does, is evaluated
+   after what the definition reads. A default that gives no value leaves
+   what was there, null, a form's text, or nothing, and no mapping the plan
+   held only to hold it. A relative reference reads the input definitions;
+   one that climbs out of them reads nothing, where Create read the rest of
+   the workflow, which no known workflow does: each of theirs reads a key of
+   the input it is in, as `.hidden` does, or, with `..`, of an input beside
+   it. One difference stays: Create fills in the inputs in the order their
+   own expressions read each other, which doesn't see what a relative
+   reference reads, so a default that reads, through a relative reference,
+   an input that Create fills in later reads it before it is filled in,
+   where Start reads it after.
+3. **Check the shape.** Evaluate again each decision of the run's shape that
+   read a variable or a password: an input's `hidden`, `ignore` and
+   `optional`, where the definitions write it (`Run.Decisions`), in the
+   inputs' order, reading the inputs as Create's conditions did: as given,
+   and an input the run ignored with its value, from the secret record,
+   until the conditions reach it, and drops each input whose `ignore:` is
+   one of them if it decides so; and then, with the inputs converted, a
+   job's `needs` (`Job.NeedsExpr`), which names the same jobs in whatever
+   order. If one differs from what Create decided, which the secret record
+   holds, the run fails with `run_shape_changed`, rather than run with
+   values from two readings. It comes after the inputs, as a condition can
+   read an input whose value reads a variable, which Start has evaluated
+   again. Everything else Start evaluates reads an ignored input as null, as
+   the jobs do: a workflow's `env:` value that reads an input whose
+   `ignore:` Start decides again is evaluated once it has. Whether an input
+   such a decision decides about is required, Start checks then.
+4. **Check the inputs** Start evaluated as Create checks one: its type,
+   whether it is required, and a platform type with the Inputs resolver; and
+   evaluate the workflow's `timeout:`. ACTIVATE leaves as text a workflow's
+   `timeout:` or a `strategy:` that reads `env`, and evaluates a `strategy:`
+   without the user's variables, so that `vars.X` reads `""` there, where
+   Meridian evaluates both with them; a `timeout:` reads `vars` in
+   ACTIVATE's final pass as Meridian's does. No known workflow has either.
+5. **Expand** each matrix whose values are known by now, written out or
    read from inputs or variables ([Matrices](#matrices)), so a matrix that
    can't be expanded fails the run before any job runs.
-5. **Make the sessions** of the workflow's `sessions:`, through the
-   Sessions interface, under the names Create gave them. Create only
+6. **Make the sessions** of the workflow's `sessions:`, through the
+   Sessions interface, under the names Create gave them, once everything
+   else has passed, so a run that fails to start makes none. Create only
    checks them, since a run that is created may never start, and making
-   them again for the same run makes nothing more.
-6. **Keep** the variables it read in the secret record, and what it
+   them again for the same run makes nothing more. A run with sessions
+   can't start without a session provider (`resolver_missing`).
+7. **Keep** the variables it read in the secret record, and what it
    evaluated there or as run state, by whether evaluating it read a
    variable or a password ([Phases](#phases)), and its diagnostics with the
-   run, all in the transaction that ends its hopper job.
+   run, all in the transaction that ends its hopper job. What Start made
+   from a secret is a secret, masked as what is made from one rather than
+   as a secret's own text (`RunValues.Derived`), so that an `env:` value
+   that says whether a secret is set, `true`, masks no `true` in the logs;
+   and from a variable or a password private, by its name
+   (`RunValues.Secrets` and `Private`), beside what the plan names so. A
+   variable that was plain as the run was created and is a secret as it
+   starts makes every private value the plan names masked from then on as
+   made from a secret, since the plan doesn't say which variable each was
+   given in the place of: Create lists, among the variables Start reads,
+   those that what a private value was given in the place of reads. The
+   secret record holds what `RunValues.Split` gives it, and the timeout and
+   the matrices expanded when they are private.
+
+Start's problems are the run's, at the JSON Pointer of what they are about,
+with no file position, as Ready's are. Given the same plan, passwords and
+resolver answers, it gives the same result, byte for byte.
 
 A coordinator that dies during Start leaves its job to another replica,
 which starts it again from the beginning: nothing reads Start's results
@@ -797,14 +898,21 @@ It holds:
 - **The run:** the workflow's source and revision, its format and metadata,
   the Meridian release that compiled it, the input values known when the
   run was created, the inputs left to Start, the workflow's `env`, the run's
-  timeout, `remote` and `sessions`, the decisions of its shape that read a
-  variable, and the secrets and variables Start reads. A revision names the
+  timeout, `remote` and `sessions`, where the decisions of its shape that
+  read a variable or a password are, and the secrets and variables Start
+  reads. A revision names the
   exact text that ran: a Git commit, or the SHA-256 digest of the text when
   no commit has it, as for a file with uncommitted changes or a workflow a
   platform stores.
 - **The input definitions**, `on.execute.inputs` as the workflow writes
   them, with their expressions parsed and no values, so that Start
-  evaluates what was left to it as Create would have.
+  evaluates what was left to it as Create would have, where they write it.
+  They leave out what can hold a password, which the secret record holds
+  and the plan names by its JSON Pointer (`Run.Withheld`): each password
+  input's default, a password field's of a list's rows among them, and the
+  default of each list whose rows have a password input. A person who
+  keeps a password's default runs with it as the run's password, which the
+  plan never holds.
 - **Jobs**, one per job: dependencies (on all instances of a job, or `:any`
   of them), its `strategy:`, its `if:`, group, resources and `retry:`,
   steps, outputs, timeout and `env`, and the secrets and variables it reads.
@@ -857,33 +965,68 @@ run can read it. So what reads a variable stays an expression: an input's
 default, as the run's deferred inputs, and a matrix, as its job's strategy.
 The plan names the variables the run reads that aren't secrets, for Start
 and for each job, as `org.<name>` and `vars.<name>`, found in every
-expression it holds; a read of each variable of a context, as `vars.*` is,
-names the context, `org` or `vars`. (In format 1, `vars` alone is a word,
-not a read of the context.)
+expression the run evaluates: those it holds, but of the input
+definitions only those Start can evaluate, the parts held for it, the
+conditions it decides again and the rows it fills in, or all of them when
+one of those reads a definition, as a relative reference does. A read of
+each variable of a context, as `vars.*` is, names the context, `org` or
+`vars`. (In format 1, `vars` alone is a word, not a read of the context.)
 
 What decides the run's shape still reads variables when the run is created:
 an input's `hidden`, `ignore` and `optional`, and a job's `needs`. The plan
-holds only what they decided, which inputs the run has and which jobs each
-job waits for, and Start decides them again to check that nothing changed
-([Starting a run](#starting-a-run)). That can say something of a variable's
-value, such as that it names a job, which is accepted: the plan has to hold
-the run's shape.
+holds the run's shape, which inputs the run has and which jobs each job
+waits for, and, for each decision that read a variable or a password, where
+it is, or the job's `needs:` expression; Start decides them again to check
+that nothing changed ([Starting a run](#starting-a-run)). What each
+condition decided is in the secret record, not the plan: a workflow could
+otherwise spell a password out into the plan a bit at a time, one `hidden:`
+that tests a character of it for each. Nor does what such an `ignore:`
+decided show in which inputs have values: the plan holds an input whose
+`ignore:` read a variable or a password, and each input in a group whose
+did, out of its values, as private, or as derived when the `ignore:` read an
+input, whatever it decided, and Start drops it if the `ignore:` decides so
+again. The conditions in such a group are each a decision, whatever they
+read, so the plan names the same ones either way; a later condition that
+reads such an input reads what a variable or a password decided, and is one
+too; and whether an input such a decision decides about is required, Start
+decides, so creating the run doesn't fail for one value and not another.
+Which inputs the run ignored the plan doesn't name. What a `needs:` decided
+shows in the jobs' graph, which the plan has to hold: a `needs:` that reads
+an input such an `ignore:` ignored reads it as ignored, both as the run is
+created and as it starts, so the graph says what the `ignore:` decided
+there, as it says what a `needs:` that read a password itself decided, while
+the input's value stays out of the plan. So does a matrix that reads such an
+input, which Start expands, in the number of its instances, which are run
+state, while their values are private.
+
+One bit about a variable that isn't a secret still shows: a value given in
+the place of a default that reads one is held as private when it isn't
+what the default gives, and the plan holds the default's expression for
+Start when it is, so the plan says whether the variable's value is what
+was typed. Hiding it would mean holding both and deciding at Start, which
+is left for later.
 
 A source's location names the workflow to whoever can see the run, so it
 says nothing of the machine the run was created on: a platform gives its
 own name for the workflow, and `meridian` gives the workflow's path in its
 Git repository, or its file's name outside one.
 
-Today the plan doesn't hold the input definitions, `remote`, `sessions`, the
-release, the shape's decisions, or each job's secrets and variables.
+Today the plan doesn't hold the release, or each job's secrets and
+variables, which `plan.Job.Reads` finds from the job's expressions.
 
 ### The secret record
 
-The secret record holds what a run needs that the plan can't: its
-passwords, from Create; the variables it read at Start, plain and secret;
-what Start made from them; and the job outputs made from a variable or a
-password but not from a secret, which jobs that need them read
-([Outputs](#outputs)).
+The secret record holds what a run needs that the plan can't: from Create
+(`compile.Record`), its passwords and private values, the parts of the input
+definitions that can hold a password, what each condition of its shape that
+read a variable or a password decided, and the inputs it ignored with their
+values, as given, for the conditions Start decides again; the variables it
+read at Start, plain and secret; what Start made from them (the record half
+of `RunValues.Split`, and the run's timeout and its matrices' instances when
+they are private); and the job outputs made from a variable or a password
+but not from a secret, which jobs that need them read ([Outputs](#outputs)).
+Create and Start give what goes in it; the coordinator encrypts and stores
+it.
 
 - **Encrypted.** The coordinator stores it beside the run, in the same
   database, encrypted with AES-256-GCM under a data key of its own, which
@@ -935,11 +1078,15 @@ sees one version.
   records.
 - **The release.** The plan records the Meridian release that compiled it.
 
-Today a plan is version 1, and has no schema. Version 1 stays open until
-the first release: no release has yet stored a plan or sent one to a
-worker, so what the plan and the worker API's bodies gain before then,
-such as what Start needs, is part of version 1. The first release freezes
-it, with its schema, and every change after that gets a version.
+Today a plan is version 1, and has no schema. Version 1 stays open until the
+first release: no release has yet stored a plan or sent one to a worker, so
+what the plan and the worker API's bodies gain before then, such as what
+Start needs, is part of version 1: the input definitions, where the parts
+held for Start are in them and where those withheld are, the inputs' values
+as given where Create converted them, where the shape's decisions are, a
+job's `needs:` expression, `remote`, `sessions` and the names a session
+provider gave them, and the limits. The first release freezes it, with its
+schema, and every change after that gets a version.
 
 ## Expressions
 
@@ -1107,8 +1254,10 @@ Resolvers get the caller's context, so cancellation, deadlines and traces
 reach them. They report what is wrong as a problem, a kind and its params
 ([Compiling](#compiling)), rather than as text, so that a platform's reason
 reaches each reader in their own language. Today the Inputs resolver
-takes no context and returns a Go error, and the compiler uses none of the
-others: it is given variables as mappings, in `Options.Contexts`.
+takes no context and returns a Go error, and Create uses none of the
+others: it is given variables as mappings, in `Options.Contexts`. Start
+reads the variables through Variables, and makes sessions through
+Sessions.
 
 ## Durable execution
 
@@ -1183,7 +1332,8 @@ name, `#` and its index from 0, as in `build#2`.
   each with the same function where its values are known, and checks that
   the jobs and outputs a matrix reads exist; only the values wait. Today the
   compiler keeps every `strategy:` in the plan and checks none with
-  `plan.Expand`, and Ready is the only phase that expands one.
+  `plan.Expand`; Start expands those whose values are known by then, and
+  Ready the rest.
 - **A matrix job's `if:`** that doesn't read `matrix` is evaluated before
   the matrix is expanded, so a job it skips has no instances. One that
   reads `matrix` is evaluated for each instance: format 1 allows it, as
@@ -1347,7 +1497,14 @@ secret record ([Run data](#run-data)).
   variable's value; what reads one waits for Start.
 - **Once at Start**, the coordinator reads every variable the plan lists, a
   context's whole when the plan names it alone, and keeps them in the
-  secret record, so every expression of the run reads the same values.
+  secret record, so every expression of the run reads the same values. A
+  variable is a secret if the Variables interface says so as the run
+  starts, or said so as it was created: one that became a secret in
+  between is masked, and one that stopped being one is masked still.
+- **Text.** A variable's value is text. One the compiler is given that
+  isn't, in `Options.Contexts`, reads as `""`, as one that isn't set does,
+  and the compiler warns of it (`variable_not_text`); the Variables
+  interface gives only text.
 - **Each job gets its own.** An attempt receives only the inputs,
   variables and secrets its own job's expressions read, directly or
   through an input made from one, when it is claimed, which `plan.Job.Reads`
@@ -2247,7 +2404,12 @@ config file another user can change, are in the problems package's
 an API sends them ([Compiling](#compiling)): a workflow with errors is an
 RFC 9457 validation problem, with its warnings beside them. It exits 0
 for a workflow without errors, 1 for one with, and 2 when it couldn't
-compile it.
+compile it. With `--start`, it starts the run too, as far as it can
+without running anything: it reads every variable the run reads, secret
+ones too, evaluates what waits for the start, checks it and the run's
+shape, and expands the matrices known then, and reports what would fail
+the run as it starts, where the workflow writes it. It makes no session:
+there is no session provider here, so a run with sessions can't start.
 
 ## Editors and web UIs
 

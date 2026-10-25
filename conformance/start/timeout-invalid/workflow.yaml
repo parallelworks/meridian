@@ -1,0 +1,5 @@
+timeout: ${{ org.TIMEOUT }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

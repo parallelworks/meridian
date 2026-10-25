@@ -1,0 +1,18 @@
+description: >-
+  An input's condition that read a variable as the run was created is
+  decided again as it starts. If the variable changed in between, as it can
+  before a rerun, and the condition decides otherwise, the run fails rather
+  than run with values from two readings.
+source: Meridian
+contexts:
+  org:
+    ENV: prod
+start-contexts:
+  org:
+    ENV: dev
+expect:
+  diagnostics:
+    - severity: error
+      code: run_shape_changed
+      path: /on/execute/inputs/debug/ignore
+      params: {key: ignore, name: debug}

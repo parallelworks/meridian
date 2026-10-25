@@ -25,6 +25,9 @@ type jobInfo struct {
 	name  string
 	loc   []string
 	needs []plan.Need
+	// needsExpr is the job's needs:, when it is an expression that read a
+	// variable or a password, which Start evaluates again.
+	needsExpr plan.Value
 	// needed holds the names of the jobs it needs.
 	needed map[string]bool
 	// stepIDs maps its steps' ids to their indexes, and step is the index
@@ -116,7 +119,8 @@ func (c *compiler) jobInfo(name string, def map[string]any) *jobInfo {
 // expression of what is known when the run is created that gives either. A
 // name followed by :any waits for any one instance of a matrix job. The
 // expression can read a variable, since the plan holds only the jobs it
-// names, but a problem with what it gives doesn't show it.
+// names, but a problem with what it gives doesn't show it, and the plan
+// keeps it for Start to evaluate again.
 func (c *compiler) resolveNeeds(info *jobInfo) {
 	loc := appendPath(info.loc, "needs")
 	raw, ok := jsonptr.Lookup(c.doc.Value, loc)
@@ -138,7 +142,7 @@ func (c *compiler) resolveNeeds(info *jobInfo) {
 		if t, isTemplate := parsed.(*expr.Template); isTemplate {
 			// What decides the run's shape is one group with the inputs'
 			// defaults and conditions, which shares their budget.
-			v, marked, err := t.EvalMarked(c.inputs.scope())
+			v, marked, err := t.EvalMarked(c.inputs.shapeScope())
 			if u, ok := errors.AsType[*expr.UnknownError](err); ok {
 				c.reportAt(problems.NeedsNotKnown, loc, problems.Params{"name": u.Name})
 				return
@@ -148,6 +152,9 @@ func (c *compiler) resolveNeeds(info *jobInfo) {
 				return
 			}
 			raw, fromVariable = v, marked
+			if marked {
+				info.needsExpr = c.planned(loc, parsed)
+			}
 		}
 	}
 	var list []string
@@ -224,7 +231,7 @@ func (c *compiler) checkCycles(infos map[string]*jobInfo, names []string) {
 func (c *compiler) job(info *jobInfo) plan.Job {
 	at := func(keys ...string) []string { return appendPath(info.loc, keys...) }
 	def := mapping(lookup(c.doc.Value, info.loc))
-	j := plan.Job{Key: info.name, Name: info.name, Needs: info.needs, Path: jsonptr.Format(info.loc)}
+	j := plan.Job{Key: info.name, Name: info.name, Needs: info.needs, NeedsExpr: info.needsExpr, Path: jsonptr.Format(info.loc)}
 	info.step = -1
 	if _, ok := def["strategy"]; ok {
 		j.Strategy = &plan.Strategy{

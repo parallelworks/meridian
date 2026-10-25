@@ -1,0 +1,13 @@
+description: >-
+  A matrix expanded as the run starts that has no combinations fails the
+  run before any job runs.
+source: Meridian
+contexts:
+  vars:
+    SITES: '[]'
+secret-variables: [SITES]
+expect:
+  diagnostics:
+    - severity: error
+      code: matrix_empty
+      path: /jobs/main/strategy/matrix

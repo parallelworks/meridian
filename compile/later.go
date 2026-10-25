@@ -13,13 +13,26 @@ import (
 
 // A laterPart is a part of an input's value, at path in it, that is
 // evaluated once the run is underway: v, a workflow's JSON values with its
-// templates parsed. variable is set for a part that reads a variable or a
-// password, whose value the compiler knows, and keeps in the values, until
-// the plan holds its expressions in its place.
+// templates parsed, which the workflow writes at loc, and which is
+// evaluated for the list rows at index. variable is set for a part that
+// reads a variable or a password, whose value the compiler knows, and
+// keeps in the values, until the plan holds its expressions in its place;
+// and as the run starts, for one Start has evaluated (startState). dflt is
+// set for a field's default, all of its value, which gives no value when
+// it gives "" or null (setDefault).
 type laterPart struct {
 	path     []string
 	v        any
 	variable bool
+	loc      []string
+	index    []int
+	dflt     bool
+	// containers is how many of the mappings on the way to a default the
+	// input's value didn't have (plan.DeferredPart.Containers); null is
+	// set for one whose value was null before it (Null), and text for a
+	// form's text for the expression (Text).
+	containers int
+	null, text bool
 }
 
 // evaluatedLater reports whether f's value is evaluated as the run starts,
@@ -97,14 +110,15 @@ func (f *field) startsLater(path []string, known bool) bool {
 	return false
 }
 
-// deferPart records that the part of f's value at path, raw in the
-// workflow, is evaluated once the run is underway. The value of f's input
-// is then evaluated as the run starts, all of it, with raw's expressions
-// in that part, parsed for f's rows. A part that reads a variable keeps
-// its value until then, and what reads it reads a variable too. A part
-// that is evaluated as the run starts already stays one, and isn't known
-// now if either says it isn't.
-func (r *inputResolver) deferPart(f *field, path []string, raw any, variable bool) {
+// deferPart records that the part of f's value at path, raw, which the
+// workflow writes at loc, which mustn't change, is evaluated once the run
+// is underway. The value
+// of f's input is then evaluated as the run starts, all of it, with raw's
+// expressions in that part, parsed for f's rows. A part that reads a
+// variable keeps its value until then, and what reads it reads a variable
+// too. A part that is evaluated as the run starts already stays one, and
+// isn't known now if either says it isn't.
+func (r *inputResolver) deferPart(f *field, path, loc []string, raw any, variable bool) {
 	v, err := parseFor(raw, f.index)
 	if err != nil {
 		return // checkSyntax reported it.
@@ -118,7 +132,12 @@ func (r *inputResolver) deferPart(f *field, path []string, raw any, variable boo
 			return
 		}
 	}
-	in.addLater(laterPart{at, v, variable})
+	// A form's text for all of f's value is never its default's, which
+	// means the default (missing).
+	n := len(f.loc)
+	dflt := len(path) == 0 && len(loc) == n+1 && loc[n] == "default" && slices.Equal(loc[:n], f.loc)
+	text := dflt && f.textBefore || slices.ContainsFunc(f.texts, func(t text) bool { return slices.Equal(t.path, path) })
+	in.addLater(laterPart{path: at, v: v, variable: variable, loc: loc, index: f.index, dflt: dflt, null: dflt && f.nullBefore, text: text})
 	if variable {
 		r.mark(slices.Concat(f.path, path))
 	}
@@ -141,7 +160,7 @@ func (r *inputResolver) holdLater() {
 	// wizard steps with password fields among their inputs, by their paths.
 	passwords := map[*field][]*field{}
 	holders := map[string]*field{}
-	for _, fields := range [][]*field{r.fields, r.rows} {
+	for _, fields := range [][]*field{r.fields, r.liveRows()} {
 		for _, f := range fields {
 			if f.typ == "password" && f.in != nil {
 				passwords[f.in] = append(passwords[f.in], f)
@@ -155,11 +174,20 @@ func (r *inputResolver) holdLater() {
 		if f.later == nil {
 			continue
 		}
-		held := jsonvalue.Clone(lookup(r.values, f.path))
+		value := lookup(r.values, f.path)
+		held := jsonvalue.Clone(value)
 		for _, c := range passwords[f] {
 			deletePath(held, c.path[len(f.path):])
 		}
-		for _, p := range f.later {
+		for i, p := range f.later {
+			// Holding a default can make the mappings on the way to it,
+			// which the value didn't have.
+			for n := len(p.path) - 1; p.dflt && n > 0; n-- {
+				if _, ok := jsonptr.Lookup(value, p.path[:n]); ok {
+					break
+				}
+				f.later[i].containers++
+			}
 			// A part that is the value of a list, a group or a step with a
 			// password among its inputs, or one of a list's rows, holds
 			// passwords the plan can't name.
@@ -239,7 +267,7 @@ func (r *inputResolver) holdWhole() {
 			return cmp.Or(cmp.Compare(a.f.seq, b.f.seq), slices.Compare(a.path, b.path))
 		})
 		for _, e := range found {
-			r.deferPart(e.f, e.path, e.raw, false)
+			r.deferPart(e.f, e.path, e.loc, e.raw, false)
 			if in := e.f.holder(); !seen[in] {
 				seen[in] = true
 				held = append(held, in)

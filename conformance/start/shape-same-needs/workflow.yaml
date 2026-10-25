@@ -1,0 +1,14 @@
+jobs:
+  a:
+    steps:
+      - run: echo a
+  b:
+    strategy:
+      matrix:
+        n: [1, 2]
+    steps:
+      - run: echo b
+  c:
+    needs: ${{ fromJSON(org.AFTER) }}
+    steps:
+      - run: echo c

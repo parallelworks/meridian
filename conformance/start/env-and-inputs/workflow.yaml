@@ -1,0 +1,22 @@
+on:
+  execute:
+    inputs:
+      size:
+        type: number
+        default: 2
+      dir:
+        type: string
+        default: ${{ env.BASE }}/runs
+      label:
+        type: string
+        default: ${{ vars.PREFIX }}-${{ env.SUFFIX }}
+env:
+  BASE: /data/${{ inputs.size }}
+  SUFFIX: ${{ inputs.size }}x
+  OUT: ${{ inputs.dir }}/out
+  LABEL: ${{ inputs.label }}
+timeout: ${{ inputs.size * 60 }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

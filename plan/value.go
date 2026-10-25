@@ -149,6 +149,34 @@ func (v Value) Literal() (any, bool) {
 	return v.v, true
 }
 
+// Written returns the Value's JSON values as the workflow writes them: a
+// copy, with each template as its text. A string that holds ${{ }} as
+// text, which a run's data can, is the same text, so what Written gives
+// doesn't tell the two apart: it is for what reads the workflow as it is
+// written, as the compiler's evaluator of input definitions does, and a
+// session provider reads a workflow's sessions:.
+func (v Value) Written() any { return written(v.v) }
+
+func written(v any) any {
+	switch v := v.(type) {
+	case *expr.Template:
+		return v.String()
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = written(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[k] = written(item)
+		}
+		return out
+	}
+	return v
+}
+
 func hasTemplate(v any) bool {
 	switch v := v.(type) {
 	case *expr.Template:

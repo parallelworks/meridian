@@ -1,0 +1,26 @@
+description: >-
+  A default that reads an organization or user variable, secret or not, is
+  evaluated as the run starts, with the variables the run reads then, and
+  checked against its input's type, as the text 3 is a number. So is a
+  default that reads such a default. What reads a secret is a secret, and
+  what reads a variable that isn't one is private, by its name; the
+  variables the run read are private whole, and the secret ones are
+  secrets.
+source: Meridian
+contexts:
+  org:
+    REGION: us-east
+  vars:
+    TOKEN: t0ken
+    REPLICAS: "3"
+secret-variables: [TOKEN]
+expect:
+  inputs:
+    region: us-east
+    code: t0ken
+    endpoint: https://us-east.example.com
+    replicas: 3
+    fixed: fixed
+  run-secrets: [inputs.code, vars.TOKEN]
+  run-derived: [inputs.code]
+  run-private: [inputs.endpoint, inputs.region, inputs.replicas]

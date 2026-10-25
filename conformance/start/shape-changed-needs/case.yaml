@@ -1,0 +1,16 @@
+description: >-
+  A job's needs: that read a variable as the run was created is evaluated
+  again as it starts, and if it names other jobs, the run fails.
+source: Meridian
+contexts:
+  org:
+    AFTER: '["a"]'
+start-contexts:
+  org:
+    AFTER: '["a", "b"]'
+expect:
+  diagnostics:
+    - severity: error
+      code: run_shape_changed
+      path: /jobs/c/needs
+      params: {key: needs, name: c}

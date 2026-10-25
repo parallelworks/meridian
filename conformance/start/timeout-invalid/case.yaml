@@ -1,0 +1,14 @@
+description: >-
+  The workflow's timeout: is evaluated as the run starts, as a duration,
+  and one that isn't fails the run, without showing a value made from a
+  variable.
+source: Meridian
+contexts:
+  org:
+    TIMEOUT: soon
+expect:
+  diagnostics:
+    - severity: error
+      code: duration_invalid
+      path: /timeout
+      params: {key: timeout, value: "***"}

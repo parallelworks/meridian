@@ -1,0 +1,12 @@
+on:
+  execute:
+    inputs:
+      dir:
+        type: string
+        default: ${{ env.OUT }}/x
+env:
+  OUT: ${{ inputs.dir }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -20,8 +21,73 @@ import (
 
 // Compile loads a workflow file and compiles it, with the input values
 // submitted for a run, into a plan. It reports every problem it finds, and
-// returns no plan if any is an error.
+// returns no plan if any is an error. It is Create, for a caller that needs
+// only the plan, such as one that checks a workflow.
 func Compile(name string, data []byte, submitted map[string]any, opts Options) (*plan.Plan, problems.Diagnostics) {
+	created, diags := create(name, data, submitted, opts)
+	if created == nil {
+		return nil, diags
+	}
+	return created.Plan, diags
+}
+
+// Created is what Create gives: the run's plan, and what the run's secret
+// record holds from its start, which the plan doesn't.
+type Created struct {
+	Plan   *plan.Plan
+	Record Record
+}
+
+// A Record is what a run's secret record holds from the run's start, which
+// the plan doesn't, as the plan names it, and as Start takes it
+// (StartInput.Record). The coordinator stores it, encrypted, with the plan.
+type Record struct {
+	// Passwords are the values of the run's password inputs, and of the
+	// other values it was given that are kept as passwords are, such as
+	// one in the place of a default that reads a password, by their names,
+	// as plan.Run.Secrets names them, as in inputs.creds.0.pass.
+	Passwords map[string]any `json:"passwords,omitempty"`
+	// Private are the values the run was given that the plan doesn't hold,
+	// though they aren't secrets, by their names (plan.Run.Private). One can
+	// hold a password the run was given in it, as a list's row can, which
+	// Passwords names too, and the run's values mask.
+	Private map[string]any `json:"private,omitempty"`
+	// Withheld are the parts of the input definitions that the plan leaves
+	// out, as they can hold a password, as the workflow writes them, by
+	// their JSON Pointers (plan.Run.Withheld).
+	Withheld map[string]any `json:"withheld,omitempty"`
+	// Decisions are what each condition of the run's shape that read a
+	// variable or a password decided, by its JSON Pointer
+	// (plan.Run.Decisions).
+	Decisions map[string]bool `json:"decisions,omitempty"`
+	// Ignored are the inputs the run ignored, by their names, as in
+	// inputs.region, each with its value as it was given, or null if it had
+	// none. Start reads none of them, as the phases after it don't, but for
+	// the conditions it decides again, which read each until they reach it,
+	// as the compiler's did. The plan doesn't name them, as which inputs a
+	// condition that read a password ignored can say something of it.
+	Ignored map[string]any `json:"ignored,omitempty"`
+}
+
+// Create is the Create phase: it loads a workflow file and compiles it,
+// with the input values submitted for a run, into the run's plan, and
+// gives beside it what the run's secret record holds from the start. It
+// reports every problem it finds, and gives nothing if any is an error. It
+// returns an error, and nothing else, only when ctx is done before it
+// starts or once it has finished, with ctx.Err().
+func Create(ctx context.Context, name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	created, diags := create(name, data, submitted, opts)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return created, diags, nil
+}
+
+// create is Create, without a context.
+func create(name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics) {
 	doc, diags := format.Load(name, data)
 	if diags.HasErrors() {
 		return nil, listed(diags) // Load sorts them.
@@ -52,13 +118,14 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 	for k := range inputs.secretsLater {
 		c.secrets["inputs."+k] = true
 	}
-	for _, v := range p.Run.DeferredInputs {
-		for _, e := range v.Exprs() {
-			for _, r := range e.Refs() {
-				c.recordSecret(r)
-			}
-		}
-	}
+	// The run reads the variables that what Start evaluates reads, as well
+	// as its jobs': the inputs held for it, the conditions and the jobs'
+	// needs: it decides again, and the rows it fills in.
+	variables := map[string]bool{}
+	c.eachRead(p, func(r expr.Ref) {
+		c.recordSecret(r)
+		c.noteVariable(variables, r)
+	})
 	p.Run.Secrets = slices.Sorted(maps.Keys(c.secrets))
 	for k := range inputs.derived {
 		p.Run.Derived = append(p.Run.Derived, "inputs."+k)
@@ -68,7 +135,8 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		p.Run.Private = append(p.Run.Private, "inputs."+k)
 	}
 	slices.Sort(p.Run.Private)
-	p.Run.Variables = c.variables(p)
+	p.Run.Variables = slices.Sorted(maps.Keys(variables))
+	c.checkVariableValues(p)
 
 	c.diags.Sort()
 	c.diags = listed(slices.DeleteFunc(c.diags, repeatedVariable()))
@@ -81,7 +149,118 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 		d.Detail = ""
 		p.Warnings = append(p.Warnings, d)
 	}
-	return p, c.diags
+	created := &Created{Plan: p, Record: Record{Withheld: c.withheld, Decisions: inputs.decided}}
+	for k, v := range inputs.secrets {
+		if created.Record.Passwords == nil {
+			created.Record.Passwords = map[string]any{}
+		}
+		created.Record.Passwords["inputs."+k] = v
+	}
+	for k, v := range inputs.private {
+		if created.Record.Private == nil {
+			created.Record.Private = map[string]any{}
+		}
+		created.Record.Private["inputs."+k] = v
+	}
+	for _, name := range inputs.ignored {
+		if created.Record.Ignored == nil {
+			created.Record.Ignored = map[string]any{}
+		}
+		created.Record.Ignored[name] = inputs.ignoredValues[name]
+	}
+	return created, c.diags
+}
+
+// eachRead calls read with each reference of the expressions the run
+// evaluates, whose reads name the variables it reads: of every expression
+// the plan holds but its input definitions, of which only those Start can
+// evaluate (startExprs), and those in the place of which the run was given
+// a private value (privateExprs). Each expression's are found once, but
+// for those of an input that is both.
+func (c *compiler) eachRead(p *plan.Plan, read func(expr.Ref)) {
+	defs, held := p.Run.Definitions, p.Run.DeferredInputs
+	p.Run.Definitions, p.Run.DeferredInputs = plan.Value{}, nil
+	exprs := p.Exprs()
+	p.Run.Definitions, p.Run.DeferredInputs = defs, held
+	for _, e := range exprs {
+		for _, r := range e.Refs() {
+			read(r)
+		}
+	}
+	// What Start evaluates of the definitions depends on whether what the
+	// plan holds for it can read one.
+	readsDefinition := false
+	for _, v := range held {
+		for _, e := range v.Exprs() {
+			readsDefinition = readsDefinition || e.Relative()
+			for _, r := range e.Refs() {
+				read(r)
+				readsDefinition = readsDefinition || readsDefinitionKey(r)
+			}
+		}
+	}
+	for _, e := range c.startExprs(p, readsDefinition) {
+		for _, r := range e.Refs() {
+			read(r)
+		}
+	}
+	// Start reads, too, the variables that what the run was given in the
+	// place of reads: one that is a secret by then has what was given
+	// masked as what is made from one.
+	for _, e := range c.inputs.privateExprs() {
+		for _, r := range e.Refs() {
+			read(r)
+		}
+	}
+}
+
+// startExprs returns the expressions of the input definitions that Start
+// can evaluate, besides the inputs held for it, which the plan holds
+// apart: the conditions it decides again, and the definitions of the rows
+// of each list held for it, whose fields take their defaults again once
+// Start has evaluated what it holds of the list. One of these, or of the
+// inputs held, that reads a definition, as a relative reference does, can
+// read any string of them, and then they are all of the definitions'
+// expressions: readsDefinition says whether one of the inputs held does.
+func (c *compiler) startExprs(p *plan.Plan, readsDefinition bool) []*expr.Expr {
+	r := c.inputs
+	// All of the definitions' expressions are the workflow's: the plan's
+	// Definitions withhold some (plan.Run.Withheld), which Start reads.
+	all := func() []*expr.Expr {
+		exprs, _ := r.workflow.Exprs(definitionsPath)
+		return exprs
+	}
+	if readsDefinition {
+		return all()
+	}
+	var out []*expr.Expr
+	add := func(loc []string) {
+		if exprs, err := r.workflow.Exprs(loc); err == nil {
+			out = append(out, exprs...)
+		}
+	}
+	for _, pointer := range p.Run.Decisions {
+		if loc, err := jsonptr.Split(pointer); err == nil {
+			add(loc)
+		}
+	}
+	for _, f := range r.deferredFields() {
+		if _, loc := f.rowInputs(); loc != nil {
+			add(loc)
+		}
+	}
+	if slices.ContainsFunc(out, func(e *expr.Expr) bool {
+		return e.Relative() || slices.ContainsFunc(e.Refs(), readsDefinitionKey)
+	}) {
+		return all()
+	}
+	return out
+}
+
+// readsDefinitionKey reports whether r can read a key of an input's
+// definition, as inputs.x.type does when x's value has none.
+func readsDefinitionKey(r expr.Ref) bool {
+	return r.Context == "inputs" && len(r.Path) > 1 && slices.ContainsFunc(r.Path[1:], func(k string) bool { return definitionKeys[k] })
 }
 
 // maxListed is how many problems of each kind Compile and ResolveInputs
@@ -142,7 +321,10 @@ type compiler struct {
 	opts   Options
 	inputs *inputResolver
 	// secrets are the secret variables and inputs the run reads.
-	secrets  map[string]bool
+	secrets map[string]bool
+	// withheld are the parts of the input definitions the plan leaves out,
+	// by their JSON Pointers (Record.Withheld).
+	withheld map[string]any
 	jobInfos map[string]*jobInfo
 	// jobNames, names and sessionNames are the names of the jobs, the
 	// inputs and the sessions, for the checks of what references name.
@@ -243,32 +425,76 @@ func maskedIf(marked bool, err error) error {
 // checked for what they read yet.
 func (c *compiler) run(source plan.Source) plan.Run {
 	w := c.doc.Value
+	known := createContexts(c.opts, nil)
+	kept := c.inputs.kept()
 	r := plan.Run{
-		Source:    source,
-		Format:    c.doc.Format,
-		Name:      str(w["name"]),
-		Icon:      str(w["icon"]),
-		Thumbnail: str(w["thumbnail"]),
-		Inputs:    plan.DataOf(c.inputs.kept()),
-		Env:       c.values([]string{"env"}, plan.PhaseCreate, nil),
-		Timeout:   c.value([]string{"timeout"}, plan.PhaseCreate, nil),
+		Source:      source,
+		Format:      c.doc.Format,
+		Name:        str(w["name"]),
+		Icon:        str(w["icon"]),
+		Thumbnail:   str(w["thumbnail"]),
+		Inputs:      plan.DataOf(kept),
+		Unconverted: c.inputs.unconvertedData(kept),
+		Definitions: c.definitions(),
+		Env:         c.values([]string{"env"}, plan.PhaseCreate, nil),
+		Timeout:     c.value([]string{"timeout"}, plan.PhaseCreate, nil),
+		Remote:      known.Run.Remote,
+		// The session provider checked the sessions:, which Start makes.
+		Sessions:     c.value([]string{"sessions"}, plan.PhaseCreate, nil),
+		SessionNames: known.Run.Sessions,
+		Limits:       c.opts.Limits,
 
 		DeferredInputs: c.inputs.deferred(),
+		DeferredParts:  c.inputs.deferredParts(),
+		Decisions:      c.inputs.decisions,
 	}
+	r.Withheld = slices.Sorted(maps.Keys(c.withheld))
 	r.Description, _ = w["description"].(string)
 	for _, p := range list(w["permissions"]) {
 		if s, ok := p.(string); ok {
 			r.Permissions = append(r.Permissions, s)
 		}
 	}
-	for _, key := range []string{"sessions", "links"} {
-		c.check([]string{key}, w[key], plan.PhaseCreate, nil)
-	}
+	c.check([]string{"links"}, w["links"], plan.PhaseCreate, nil)
 	c.checkDefinitions(slices.Clip(definitionsPath), lookup(w, definitionsPath))
 	c.checkInputNames(c.inputs.fields)
 	c.checkDefaultRows(c.inputs.fields)
 	c.checkInputDepths(r)
 	return r
+}
+
+// definitions returns the input definitions as the plan holds them, for
+// Start: as the workflow writes them, each string with an expression in it
+// parsed, as the input resolver parsed it, without the parts that can hold
+// a password (withheldParts), which it keeps in c.withheld for the secret
+// record.
+func (c *compiler) definitions() plan.Value {
+	defs, ok := lookup(c.doc.Value, definitionsPath).(map[string]any)
+	if !ok {
+		return plan.Value{}
+	}
+	v, ok := c.inputs.parsed(defs)
+	if !ok {
+		return plan.Value{} // Resolving the inputs reported it.
+	}
+	for _, loc := range c.inputs.withheldParts() {
+		raw, ok := jsonptr.Lookup(c.doc.Value, loc)
+		if !ok {
+			continue
+		}
+		if c.withheld == nil {
+			c.withheld = map[string]any{}
+		}
+		c.withheld[jsonptr.Format(loc)] = jsonvalue.Clone(raw)
+		deletePath(v, loc[len(definitionsPath):])
+	}
+	// The plan holds them in its run, two levels deep.
+	pv := plan.Literal(v)
+	if 2+pv.Depth() > plan.MaxDepth {
+		c.reportAt(problems.ValueTooDeep, definitionsPath, problems.Params{"max": plan.MaxDepth})
+		return plan.Value{}
+	}
+	return pv
 }
 
 // checkDefinitions reports the probable mistakes in the expressions in v, at

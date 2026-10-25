@@ -1,0 +1,15 @@
+on:
+  execute:
+    inputs:
+      creds:
+        type: list
+        template:
+          user:
+            type: string
+          pass:
+            type: password
+        default: ${{ fromJSON(vars.CREDS) }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

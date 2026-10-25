@@ -22,7 +22,14 @@ func Format(tokens []string) string {
 
 // Append returns the JSON Pointer of what tokens lead to from pointer.
 func Append(pointer string, tokens ...string) string {
+	// A token rarely has a ~ or a / to escape, so the pointer is most
+	// likely this long.
+	n := len(pointer) + len(tokens)
+	for _, tok := range tokens {
+		n += len(tok)
+	}
 	var b strings.Builder
+	b.Grow(n)
 	b.WriteString(pointer)
 	for _, tok := range tokens {
 		b.WriteByte('/')
