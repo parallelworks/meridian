@@ -478,17 +478,36 @@ var (
 	))
 )
 
+// checkJobOrder returns an error when p's jobs aren't in the order of
+// their names, each once (Jobs).
+func (p *Plan) checkJobOrder() error {
+	for i := 1; i < len(p.Jobs); i++ {
+		switch a, b := p.Jobs[i-1].Name, p.Jobs[i].Name; {
+		case a == b:
+			return fmt.Errorf("plan: the job %q is in the plan twice", b)
+		case a > b:
+			return fmt.Errorf("plan: the job %q comes after %q, where the jobs are in the order of their names", b, a)
+		}
+	}
+	return nil
+}
+
 // ErrVersion is what Decode returns for a plan of a version this release
 // doesn't read, such as one a newer release wrote.
 var ErrVersion = errors.New("plan: unsupported version")
 
 // Decode decodes a plan that Encode encoded. It fails on a plan of another
 // version, with ErrVersion, and on keys it doesn't know, which a newer
-// release wrote. Keys match exactly, and no key can be given twice.
+// release wrote. Keys match exactly, and no key can be given twice. It
+// fails too on jobs that aren't in the order of their names, each once,
+// as Jobs is, since Ready finds a job by its name in that order.
 func Decode(data []byte) (*Plan, error) {
 	p := new(Plan)
 	err := jsonv2.Unmarshal(data, p, decoding, jsonv2.RejectUnknownMembers(true))
 	if err == nil && p.Version == Version {
+		if err := p.checkJobOrder(); err != nil {
+			return nil, err
+		}
 		return p, nil
 	}
 	// A plan of another version need not decode as this one, so its version
