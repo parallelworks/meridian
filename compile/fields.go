@@ -76,9 +76,11 @@ type field struct {
 	// in a list's rows, once the Inputs resolver was asked for its value,
 	// as soon as the value was known (resolvePlatform), and given holds the
 	// value it was asked for, which compare reads; failed is set if it
-	// couldn't give one, which was reported then.
-	resolved, failed bool
-	given            any
+	// couldn't give one, which was reported then. resolveLater is set for
+	// one whose value compare makes, as the run starts, before the
+	// resolver is asked for it (meansLater).
+	resolved, failed, resolveLater bool
+	given                          any
 	// options is what checking the value reads of the field's options,
 	// once it is read, which the fields of a list's rows share with its
 	// template's.

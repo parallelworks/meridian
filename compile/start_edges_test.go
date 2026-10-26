@@ -542,6 +542,104 @@ func TestPlatformInputMeansChangedVariable(t *testing.T) {
 	}
 }
 
+// badInputs resolves a name, or each part of a mapping, as a platform
+// does, with an id made from it, and refuses one that holds BAD, quoting
+// it.
+type badInputs struct{}
+
+func (badInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+	refused := func(s string) error {
+		return problems.InputRejected.Problem(problems.Params{"reason": fmt.Sprintf("no resource named %q", s)})
+	}
+	switch v := v.(type) {
+	case string:
+		if strings.Contains(v, "BAD") {
+			return nil, refused(v)
+		}
+		return map[string]any{"name": v, "id": "id-" + v}, nil
+	case map[string]any:
+		out := maps.Clone(v)
+		for k, x := range v {
+			if s := fmt.Sprint(x); strings.Contains(s, "BAD") {
+				return nil, refused(s)
+			}
+			out[k+"_id"] = fmt.Sprint("id-", x)
+		}
+		return out, nil
+	}
+	return v, nil
+}
+
+// goneInputs is badInputs once the resources named old are gone.
+type goneInputs struct{}
+
+func (goneInputs) ResolveInput(typ string, def map[string]any, v any) (any, error) {
+	if strings.Contains(fmt.Sprint(v), "old") {
+		return nil, problems.InputRejected.Problem(problems.Params{"reason": "gone"})
+	}
+	return badInputs{}.ResolveInput(typ, def, v)
+}
+
+// A platform input's value, or a part of one, that a form made from a
+// default that reads a variable means the default, whether or not
+// anything reads the input: if the variable changed by the start, the run
+// reads what the Inputs resolver gives for what the default gives then,
+// which is all the resolver is asked for, and a value the resolver refuses
+// fails the run, without showing it.
+func TestPlatformInputMeansChangedVariableUnread(t *testing.T) {
+	part := map[string]any{"k": map[string]any{"name": "k1", "token": "old"}}
+	for name, tc := range map[string]struct {
+		defs, rest string
+		submitted  map[string]any
+		want       string
+	}{
+		"whole, unread": {"k: {type: compute-clusters, default: '${{ org.V }}'}", "", map[string]any{"k": "old"}, `{"k":{"id":"id-NOW","name":"NOW"}}`},
+		"whole, read": {
+			"k: {type: compute-clusters, default: '${{ org.V }}'}\nd: {type: string, default: '${{ inputs.k.id }}'}", "env:\n  E: ${{ inputs.k.name }}\n",
+			map[string]any{"k": "old"},
+			`{"d":"id-NOW","k":{"id":"id-NOW","name":"NOW"}}`,
+		},
+		"a part, unread": {"k: {type: storage, default: {name: k1, token: '${{ org.V }}'}}", "", part, `{"k":{"name":"k1","name_id":"id-k1","token":"NOW","token_id":"id-NOW"}}`},
+		"a part, read": {
+			"k: {type: storage, default: {name: k1, token: '${{ org.V }}'}}\nd: {type: string, default: '${{ inputs.k.token_id }}'}", "",
+			part, `{"d":"id-NOW","k":{"name":"k1","name_id":"id-k1","token":"NOW","token_id":"id-NOW"}}`,
+		},
+		"in a list's row, unread": {
+			"l: {type: list, template: {k: {type: compute-clusters, default: '${{ org.V }}'}}}", "",
+			map[string]any{"l": []any{map[string]any{"k": "old"}}},
+			`{"l":[{"k":{"id":"id-NOW","name":"NOW"}}]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := workflow(tc.defs, tc.rest)
+			c := createWith(t, src, tc.submitted, compile.Options{Inputs: badInputs{}, Contexts: testVariables{"org.V": {Value: "old"}}.contexts()})
+			for _, now := range []string{"new", "newBAD"} {
+				res, diags := startRun(t, c, testVariables{"org.V": {Value: now}}, compile.StartInput{Inputs: goneInputs{}})
+				if now == "newBAD" {
+					if res != nil {
+						t.Errorf("the run started with %s, which the resolver refuses", canonical(t, res.Run.Inputs.Get()))
+						continue
+					}
+					if errs := diags.Errors(); len(errs) != 1 || errs[0].Code != "input_rejected" || strings.Contains(fmt.Sprint(diags), "BAD") {
+						t.Errorf("diagnostics %v, want input_rejected, masked", diags)
+					}
+					continue
+				}
+				if res == nil {
+					t.Fatal(diags)
+				}
+				want := strings.ReplaceAll(tc.want, "NOW", now)
+				if got := canonical(t, res.Run.Inputs.Get()); got != want {
+					t.Errorf("the run's inputs are %s, want %s", got, want)
+				}
+				if e, ok := res.Run.Env["E"]; ok && e != now {
+					t.Errorf("env.E = %q, want %q", e, now)
+				}
+			}
+		})
+	}
+}
+
 // detailInputs gives a platform input's mapping with an id, and an id
 // made from each of its parts, as a platform's Inputs resolver gives a
 // resource's details for what names it.

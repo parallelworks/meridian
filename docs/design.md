@@ -924,6 +924,11 @@ made from one, it doesn't hold in another form either.
      ([Inputs](#inputs)). The secret record doesn't keep what the resolver
      gave Create: the run reads a resource as it is when it starts, as a
      rerun does, and Create's answer only checked that the value names one.
+     A value, or a part of one, that means the default a form made it from
+     is what the default gives as the run starts, and the resolver is asked
+     for that, never for what was submitted, whether or not anything reads
+     the input: a variable that names another resource since the run was
+     created names that one, which the resolver can refuse, masked.
      An Inputs resolver that can't answer fails the run (`input_rejected`),
      as it fails Create; giving the interface a way to say it couldn't
      answer is open.

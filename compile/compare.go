@@ -219,6 +219,14 @@ func (r *inputResolver) compare(f *field) {
 	// it out of the plan, masked if a part read a secret.
 	resolved := platformTypes[f.typ]
 	whole, wholeKind := false, heldPrivate
+	// With one that the resolver is asked for once it is compared
+	// (field.resolveLater), regiven is its value with each part that means
+	// its expression what the expression gives now, and reread what they
+	// read.
+	var (
+		regiven any
+		reread  expr.Read
+	)
 	hold := func(path []string, kind holding) {
 		if resolved && len(path) > 0 {
 			whole = true
@@ -266,6 +274,14 @@ func (r *inputResolver) compare(f *field) {
 						if v, read, err := r.evalMeant(c.locs[j], f.index); err == nil {
 							r.noteRemeant(at, v)
 							r.noteEvaluation(f, path, c.locs[j], lookup(r.doc.Value, c.locs[j]))
+							if f.resolveLater {
+								if regiven == nil {
+									regiven = jsonvalue.Clone(value)
+								}
+								regiven = setPart(regiven, path, jsonvalue.Clone(v))
+								reread = reread.Or(read)
+								continue
+							}
 							r.set(at, jsonvalue.Clone(v))
 							r.start.made(r, at, read)
 							continue
@@ -295,6 +311,48 @@ func (r *inputResolver) compare(f *field) {
 	if whole {
 		r.holdPath(f.holder(), f.path, wholeKind)
 	}
+	if f.resolveLater {
+		// The resolver is asked for the value with what its parts mean in
+		// their places, as it is for one whose parts are texts of their
+		// expressions (meanTexts), and what is wrong with it is masked, as
+		// what made it read a variable or a password.
+		if regiven != nil {
+			r.set(f.path, regiven)
+			r.start.made(r, f.path, reread)
+		}
+		r.askPlatformValue(f)
+	}
+}
+
+// setPart returns v with x at path in it: x, for an empty path.
+func setPart(v any, path []string, x any) any {
+	if len(path) == 0 {
+		return x
+	}
+	setIn(v, path, x)
+	return v
+}
+
+// meansLater reports whether, as the run starts, a part of f's value, an
+// input of a platform's type, means the expression a form made it from
+// (plan.Record.Means) and isn't a text of it (meanTexts), so that compare
+// evaluates it once the values are filled in. Nothing reads such a value
+// before then, as a part that what is filled in reads is a text.
+func (r *inputResolver) meansLater(f *field) bool {
+	if !r.final || len(r.means) == 0 || !platformTypes[f.typ] {
+		return false
+	}
+	for _, c := range f.candidates {
+		for _, path := range r.parts(f, c) {
+			if f.isText(path) {
+				continue
+			}
+			if _, ok := r.means[plan.JoinPath(slices.Concat([]string{"inputs"}, f.path, path)...)]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // givenValue returns f's value as it was before the Inputs resolver gave
@@ -633,7 +691,13 @@ func (r *inputResolver) meanTexts(f *field) {
 				continue
 			}
 			exprs, err := r.workflow.Exprs(c.locs[i])
-			if err != nil || !r.orderMeant(at, exprs, f.index) {
+			// What reads any part of an input of a platform's type reads
+			// what the Inputs resolver gives for its whole value.
+			reached := at
+			if platformTypes[f.typ] {
+				reached = f.path
+			}
+			if err != nil || !r.orderMeant(reached, exprs, f.index) {
 				continue // checkSyntax reported it, or compare evaluates it.
 			}
 			f.texts = append(f.texts, text{path: path, loc: c.locs[i], meant: true})

@@ -241,11 +241,24 @@ func (r *inputResolver) submittedAs(path []string, v any) bool {
 // reported at once, whether or not the input is ignored, as ACTIVATE fails
 // the run; what reads it then reads it as it was. A value that holds a part
 // made from a variable or a password is marked whole, as what the resolver
-// gave can't be split by the parts that made it.
+// gave can't be split by the parts that made it. A value with a part that
+// means the expression a form made it from, which compare evaluates as the
+// run starts, is asked for then, with what the expression gives in the
+// part's place (meansLater), never as it was submitted.
 func (r *inputResolver) resolvePlatform(f *field) {
-	if !platformTypes[f.typ] || f.resolved || f.deferred {
+	if !platformTypes[f.typ] || f.resolved || f.deferred || f.resolveLater {
 		return
 	}
+	if r.meansLater(f) {
+		f.resolveLater = true
+		return
+	}
+	r.askPlatformValue(f)
+}
+
+// askPlatformValue asks the Inputs resolver for f's value, as
+// resolvePlatform says, and puts what it gives in its place.
+func (r *inputResolver) askPlatformValue(f *field) {
 	v, ok := jsonptr.Lookup(r.values, f.path)
 	if !ok || v == nil {
 		return
