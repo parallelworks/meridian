@@ -109,3 +109,39 @@ func TestHoldEndpoint(t *testing.T) {
 		t.Error("HoldEndpoint without a holder succeeded")
 	}
 }
+
+// TestHoldDropped checks that a Hold dropped without Release keeps the
+// endpoint, though nothing but the store reaches it, until the store is
+// closed: the garbage collector would otherwise close its lock's file.
+func TestHoldDropped(t *testing.T) {
+	skipWithoutFileLocks(t)
+	s := open(t)
+	other := openAt(t, s.file)
+	func() {
+		if _, err := s.HoldEndpoint(t.Context(), "socket", "dropped"); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	for range 3 {
+		runtime.GC()
+	}
+	// The wait gives the finalizers the collector queued time to run.
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if h, err := other.HoldEndpoint(ctx, "socket", "other"); !errors.Is(err, context.DeadlineExceeded) {
+		if err == nil {
+			_ = h.Release(t.Context())
+		}
+		t.Fatalf("HoldEndpoint while a dropped Hold holds it = %v, want context.DeadlineExceeded", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h, err := other.HoldEndpoint(t.Context(), "socket", "other")
+	if err != nil {
+		t.Fatalf("HoldEndpoint once the store that held it closed = %v", err)
+	}
+	if err := h.Release(t.Context()); err != nil {
+		t.Error(err)
+	}
+}

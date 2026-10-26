@@ -48,7 +48,8 @@ func (tx *Tx) Endpoint(name string) (*Endpoint, error) {
 
 // RestartGrace starts the endpoint's grace period again, from now, as for a
 // host that woke from sleep, whose workers' leases lapsed while it slept:
-// ErrNotFound if it isn't recorded.
+// ErrNotFound if it isn't recorded. Like every time the store records,
+// now is read once the transaction holds the write lock (Tx.Now).
 func (tx *Tx) RestartGrace(name string) error {
 	now, err := tx.now()
 	if err != nil {
@@ -61,8 +62,9 @@ func (tx *Tx) RestartGrace(name string) error {
 	return oneRow(res, ErrNotFound)
 }
 
-// A Hold is an endpoint that this process holds, until it releases it or
-// ends.
+// A Hold is an endpoint that this process holds, until it releases it,
+// closes the store, or ends. The store keeps it, so that a Hold dropped
+// without Release keeps holding the endpoint.
 type Hold struct {
 	s        *Store
 	endpoint Endpoint
@@ -90,6 +92,9 @@ func (s *Store) HoldEndpoint(ctx context.Context, name, holder string) (*Hold, e
 	}
 	h := &Hold{s: s, unlock: unlock}
 	err = s.Tx(ctx, func(tx *Tx) error {
+		// Read once the transaction holds the write lock (Tx.Now), so
+		// that the grace starts no earlier than the last that another
+		// process recorded.
 		now, err := tx.now()
 		if err != nil {
 			return err
@@ -109,6 +114,12 @@ ON CONFLICT (name) DO UPDATE SET holder = excluded.holder, taken_at = excluded.t
 		unlock()
 		return nil, err
 	}
+	s.holdsMu.Lock()
+	defer s.holdsMu.Unlock()
+	if s.holds == nil {
+		s.holds = map[*Hold]struct{}{}
+	}
+	s.holds[h] = struct{}{}
 	return h, nil
 }
 
@@ -118,6 +129,9 @@ func (h *Hold) Endpoint() Endpoint { return h.endpoint }
 // Release stops holding the endpoint: it deletes its record, if it is
 // still this hold's, and unlocks it, even if ctx has ended.
 func (h *Hold) Release(ctx context.Context) error {
+	h.s.holdsMu.Lock()
+	delete(h.s.holds, h)
+	h.s.holdsMu.Unlock()
 	defer h.unlock()
 	return h.s.Tx(context.WithoutCancel(ctx), func(tx *Tx) error {
 		_, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_endpoints WHERE name = ? AND holder = ? AND taken_at = ?",

@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/parallelworks/hopper/driver/hoppersqlite"
@@ -90,6 +91,12 @@ type Store struct {
 	// resolved: the same for every process that opens the database.
 	file string
 	id   string
+
+	// holds are the endpoints this store holds, kept here until they are
+	// released, or the store closed: a lock's file that nothing reaches
+	// would be closed by the garbage collector, which releases the lock.
+	holdsMu sync.Mutex
+	holds   map[*Hold]struct{}
 }
 
 // openSQLite is hoppersqlite.OpenContext, which tests replace.
@@ -289,17 +296,40 @@ func (s *Store) ID() string { return s.id }
 // hopper client.
 func (s *Store) Driver() *hoppersqlite.Driver { return s.driver }
 
-// Close closes the store's database. It releases no endpoint a Hold holds.
-func (s *Store) Close() error { return s.driver.Close() }
+// Close closes the store's database. It unlocks the endpoints its Holds
+// hold, but leaves their records, as a process that ends does.
+func (s *Store) Close() error {
+	s.holdsMu.Lock()
+	for h := range s.holds {
+		h.unlock()
+	}
+	s.holds = nil
+	s.holdsMu.Unlock()
+	return s.driver.Close()
+}
 
 // A Tx is a transaction of the store's, which the calls of a function
 // that Store.Tx or Store.View runs go through. A hopper call given SQL()
 // runs in it too.
+//
+// A call that fails may have written part of what it does, as one that
+// runs several statements does: return its error from the function,
+// which rolls the transaction back, rather than go on and commit.
+//
+// The calls that read and then write what they read, as NewAttempt,
+// Claim, Authorize, Renew, StepStarted, EndAttempt and Reseal do, rely on
+// SQLite's one writer: a transaction holds the database's write lock from
+// its first statement (BEGIN IMMEDIATE), so nothing changes between the
+// read and the write. A store on Postgres needs SELECT ... FOR UPDATE, or
+// SERIALIZABLE transactions, for them.
 type Tx struct {
 	//nolint:containedctx // a Tx lives for the call of the function it is given, as the context does
 	ctx context.Context
 	tx  *sql.Tx
 	s   *Store
+	// begun is set once a statement has run in the transaction, which,
+	// for one that may write, holds the write lock from then on.
+	begun bool
 	// erased is set once the transaction has deleted a secret record,
 	// which a checkpoint of the write-ahead log then erases from it.
 	erased bool
@@ -344,7 +374,7 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 			return err
 		}
 	}
-	tx := &Tx{ctx: ctx, tx: sqlTx, s: s}
+	tx := &Tx{ctx: ctx, tx: sqlTx, s: s, begun: opts == nil}
 	if err := fn(tx); err != nil {
 		return err
 	}
@@ -360,10 +390,10 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 // truncateLog checkpoints the write-ahead log into the database and
 // truncates it, so that what a transaction deleted, which secure_delete
 // overwrote with zeros in the pages the checkpoint writes, is in neither
-// any more. A reader in another process that still reads from the log
-// keeps the checkpoint from finishing, and the next one, of the next run
-// to end, of the next Open, or of hopper's maintenance, truncates it: the
-// store says so in its log.
+// any more. A reader in another process that still reads from the log, or
+// a writer, keeps the checkpoint from finishing, and the next one, of the
+// next run to end, of the next Open, or of hopper's maintenance, truncates
+// it: the store says so in its log.
 func (s *Store) truncateLog(ctx context.Context) {
 	var busy, logPages, checkpointed int64
 	err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &checkpointed)
@@ -371,7 +401,7 @@ func (s *Store) truncateLog(ctx context.Context) {
 	case err != nil:
 		s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
 	case busy != 0:
-		s.log.WarnContext(ctx, "store: a reader kept the write-ahead log from being checkpointed and truncated", "pages", logPages, "checkpointed", checkpointed)
+		s.log.WarnContext(ctx, "store: a reader or a writer kept the write-ahead log from being checkpointed and truncated", "pages", logPages, "checkpointed", checkpointed)
 	}
 }
 
@@ -379,8 +409,20 @@ func (s *Store) truncateLog(ctx context.Context) {
 // InsertWorkflowTx and CompleteTx.
 func (tx *Tx) SQL() *sql.Tx { return tx.tx }
 
-// Now returns the store's clock: hopper's.
+// Now returns the store's clock: hopper's. It reads it once the
+// transaction has run a statement, which takes the write lock in one that
+// may write, so that the times transactions record are in the order they
+// commit: one read before the lock could be earlier than a time another
+// transaction recorded, and committed, while this one waited for it.
+// Today a transaction's first statement is secure_delete's pragma; it
+// stays right once that moves to hoppersqlite's Config.
 func (tx *Tx) Now() (time.Time, error) {
+	if !tx.begun {
+		if _, err := tx.tx.ExecContext(tx.ctx, "SELECT 1"); err != nil {
+			return time.Time{}, err
+		}
+		tx.begun = true
+	}
 	return tx.s.driver.UnwrapTx(tx.tx).Now(tx.ctx)
 }
 
