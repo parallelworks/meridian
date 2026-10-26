@@ -3,10 +3,111 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
 )
+
+// stepEvent is the event of a step's try, numbered seq: started, or
+// finished with outcome when it isn't "".
+func stepEvent(seq int64, step, try int, outcome plan.Outcome) workerapi.Event {
+	return workerapi.Event{Seq: seq, Time: time.Unix(seq, 0).UTC(), Step: step, Try: try, Finished: outcome != "", Outcome: outcome}
+}
+
+// TestFailedStepMarks checks that a step that fails marks its run, in the
+// transaction that stores its events, once the next event shows it wasn't
+// tried again; and that neither a try that is tried again, nor a cleanup
+// that fails, does.
+func TestFailedStepMarks(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	n := func(job string) NewAttempt {
+		return NewAttempt{Run: id, Job: job, LeaseSeconds: 60, HeartbeatSeconds: 10}
+	}
+	var a, b *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		var token string
+		var err error
+		if a, token, err = tx.NewAttempt(n("build")); err != nil {
+			return err
+		}
+		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+			return err
+		}
+		if b, token, err = tx.NewAttempt(n("test")); err != nil {
+			return err
+		}
+		_, err = tx.Claim(token, credential('b'), testWorker)
+		return err
+	})
+	cleanupFailed := workerapi.Event{Seq: 3, Time: time.Unix(3, 0).UTC(), Step: 0, Cleanup: true, Finished: true, Outcome: plan.OutcomeFailure}
+	for _, batch := range []struct {
+		events []workerapi.Event
+		marked bool
+	}{
+		{[]workerapi.Event{stepEvent(1, 0, 0, ""), stepEvent(2, 0, 0, plan.OutcomeSuccess)}, false},
+		// A cleanup that fails, and then a step, marks nothing.
+		{[]workerapi.Event{cleanupFailed, stepEvent(4, 1, 0, "")}, false},
+		// A try that fails, which the step tries again.
+		{[]workerapi.Event{stepEvent(5, 1, 0, plan.OutcomeFailure)}, false},
+		{[]workerapi.Event{stepEvent(6, 1, 1, "")}, false},
+		// The step's last try fails, which the next event, of a batch of
+		// its own, shows.
+		{[]workerapi.Event{stepEvent(7, 1, 1, plan.OutcomeFailure)}, false},
+		{[]workerapi.Event{stepEvent(8, 2, 0, plan.OutcomeSkipped)}, true},
+	} {
+		inTx(t, s, func(tx *Tx) error {
+			if _, err := tx.AppendEvents(a.ID, batch.events); err != nil {
+				return err
+			}
+			r, err := tx.Run(id)
+			if err != nil {
+				return err
+			}
+			if marked := !r.AnyJobFailedAt.IsZero(); marked != batch.marked || tx.ControlsChanged() != batch.marked {
+				t.Errorf("after event %d, the run is marked: %v, and controls changed: %v", batch.events[0].Seq, marked, tx.ControlsChanged())
+			}
+			return nil
+		})
+	}
+	inTx(t, s, func(tx *Tx) error {
+		if c, err := tx.Control(b.ID); err != nil || !c.AnyJobFailed {
+			t.Errorf("the other job's attempt is told %+v, %v", c, err)
+		}
+		return nil
+	})
+}
+
+// TestUpdateControl checks that a control is changed with what it asked
+// kept, at the next version, and isn't when nothing changes.
+func TestUpdateControl(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		a, _, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		if err != nil {
+			return err
+		}
+		cancel := func(c *workerapi.Control) bool {
+			c.Cancel, c.Reason = true, plan.ReasonCancelled
+			return true
+		}
+		if v, err := tx.UpdateControl(a.ID, cancel); err != nil || v != 1 || !tx.ControlsChanged() {
+			t.Errorf("UpdateControl = %d, %v", v, err)
+		}
+		if err := tx.tellJobFailed(a.ID); err != nil {
+			return err
+		}
+		if err := tx.tellJobFailed(a.ID); err != nil {
+			return err
+		}
+		if c, err := tx.Control(a.ID); err != nil || c.Version != 2 || !c.Cancel || c.Reason != plan.ReasonCancelled || !c.AnyJobFailed {
+			t.Errorf("the control is %+v, %v", c, err)
+		}
+		return nil
+	})
+}
 
 // TestMarkJobFailed checks that the first job of a run to fail marks the
 // run, once, and has each of its attempts that hasn't ended tell its worker

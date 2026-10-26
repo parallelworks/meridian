@@ -259,13 +259,15 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 }
 
 // endJob ends the run's job key as end says, in a transaction that done
-// writes to as well. The first job of the run to fail marks the run in it,
-// which every attempt of the run then tells its worker, for its steps
-// whose early-cancel: is any-job-failed. A job that has ended meanwhile is
-// errSettled, and one that has an attempt that hasn't, as one another
-// supervisor placed, errAgain.
+// writes to as well. A job that fails marks the run in it, unless a failed
+// step of the run did already, as the worker API stored it, or another job
+// that failed: every attempt of the run then tells its worker, for its
+// steps whose early-cancel: is any-job-failed. That covers a job that
+// fails without a failed step, as when Ready fails or its setup does. A
+// job that has ended meanwhile is errSettled, and one that has an attempt
+// that hasn't, as one another supervisor placed, errAgain.
 func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	var marked bool
+	var changed bool
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.EndJob(runID, key, end); errors.Is(err, store.ErrState) {
 			j, jerr := tx.Job(runID, key)
@@ -280,14 +282,17 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 			return err
 		}
 		if end.Result.Outcome == plan.OutcomeFailure {
-			var err error
-			if marked, err = tx.MarkJobFailed(runID); err != nil {
+			if _, err := tx.MarkJobFailed(runID); err != nil {
 				return err
 			}
 		}
-		return done(ctx, tx)
+		if err := done(ctx, tx); err != nil {
+			return err
+		}
+		changed = tx.ControlsChanged()
+		return nil
 	})
-	if err == nil && marked {
+	if err == nil && changed {
 		c.controlsChanged()
 	}
 	return err

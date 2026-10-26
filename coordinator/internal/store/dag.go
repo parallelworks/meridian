@@ -3,10 +3,14 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+
+	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // MarkJobFailed marks the run as one a job of which failed, as the first
-// of its jobs to fail does, in the transaction that ends it, and has each
+// failure of the run does, in the transaction that stores it, and has each
 // of the run's attempts that hasn't ended tell its worker so
 // (workerapi.Control.AnyJobFailed), for its steps whose early-cancel: is
 // any-job-failed. It reports whether it marked the run now: false for one
@@ -54,7 +58,8 @@ func (tx *Tx) MarkJobFailed(run string) (bool, error) {
 
 // StartControl gives the new attempt id, of a run a job of which has
 // failed, what each of the run's attempts tells its worker from then on
-// (MarkJobFailed), as its first control.
+// (MarkJobFailed), as its first control. NewAttempt calls it, so that no
+// attempt misses it.
 func (tx *Tx) StartControl(id string) error {
 	var failed sql.NullInt64
 	err := tx.tx.QueryRowContext(tx.ctx, `SELECT r.any_job_failed_at FROM meridian_attempts a JOIN meridian_runs r ON r.id = a.run_id WHERE a.id = ?`, id).
@@ -71,11 +76,90 @@ func (tx *Tx) StartControl(id string) error {
 // tellJobFailed adds to what the attempt id's control asks that a job of
 // its run failed.
 func (tx *Tx) tellJobFailed(id string) error {
+	_, err := tx.UpdateControl(id, func(c *workerapi.Control) bool {
+		if c.AnyJobFailed {
+			return false
+		}
+		c.AnyJobFailed = true
+		return true
+	})
+	return err
+}
+
+// UpdateControl changes what the attempt id's control asks, as change says,
+// keeping what it asked already, at the next version, which it returns: or
+// leaves it as it is, at its version, when change reports it changed
+// nothing. Every writer of a control goes through it, so that none drops
+// what another asked, as a cancel AnyJobFailed. An attempt that has ended
+// is ErrState.
+func (tx *Tx) UpdateControl(id string, change func(c *workerapi.Control) bool) (int64, error) {
 	c, err := tx.Control(id)
-	if err != nil || c.AnyJobFailed {
+	if err != nil {
+		return 0, err
+	}
+	if !change(&c) {
+		return c.Version, nil
+	}
+	version, err := tx.SetControl(id, c)
+	if err != nil {
+		return 0, err
+	}
+	tx.controls = true
+	return version, nil
+}
+
+// markFailedStep marks the attempt id's run as one a job of which failed
+// (MarkJobFailed) once fresh, the attempt's events AppendEvents has just
+// stored, show that a step of it failed: a step's try that finished
+// failed, and that the step didn't try again, as the next event, which
+// isn't its next try, says. A try that is tried again isn't the step's
+// failure, nor is a cleanup's, nor a step that ignores its errors, which
+// reports success; a failed step with no event after it is marked as its
+// job ends. So the run is marked as format 1 marks it, as a step fails,
+// but for the next event's coming.
+func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
+	if len(fresh) == 0 {
+		return nil
+	}
+	events := fresh
+	if before := fresh[0].Seq - 1; before > 0 {
+		prev, err := tx.event(id, before)
+		if err != nil {
+			return err
+		}
+		events = append([]workerapi.Event{prev}, fresh...)
+	}
+	for k := 1; k < len(events); k++ {
+		failed, next := events[k-1], events[k]
+		if !failed.Finished || failed.Cleanup || failed.Outcome != plan.OutcomeFailure {
+			continue
+		}
+		if !next.Cleanup && next.Step == failed.Step && next.Try == failed.Try+1 {
+			continue // tried again
+		}
+		var run int64
+		if err := tx.tx.QueryRowContext(tx.ctx, "SELECT run_id FROM meridian_attempts WHERE id = ?", id).Scan(&run); err != nil {
+			return err
+		}
+		_, err := tx.MarkJobFailed(runID(run))
 		return err
 	}
-	c.AnyJobFailed = true
-	_, err = tx.SetControl(id, c)
-	return err
+	return nil
+}
+
+// event returns the attempt id's event with the sequence number seq.
+func (tx *Tx) event(id string, seq int64) (workerapi.Event, error) {
+	var body []byte
+	err := tx.tx.QueryRowContext(tx.ctx, "SELECT body FROM meridian_events WHERE attempt_id = ? AND seq = ?", id, seq).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return workerapi.Event{}, ErrNotFound
+	}
+	if err != nil {
+		return workerapi.Event{}, err
+	}
+	var e workerapi.Event
+	if err := workerapi.Unmarshal(body, &e); err != nil {
+		return workerapi.Event{}, fmt.Errorf("%w: attempt %s's event %d: %w", ErrMalformed, id, seq, err)
+	}
+	return e, nil
 }

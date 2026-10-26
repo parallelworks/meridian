@@ -210,6 +210,11 @@ func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
 		id, run, n.Job, number, fence, AttemptPlacing, digest(token), n.SelfFencing, n.LeaseSeconds, n.HeartbeatSeconds, now); err != nil {
 		return nil, "", err
 	}
+	// What every attempt of the run tells its worker, this one does from
+	// the start.
+	if err := tx.StartControl(id); err != nil {
+		return nil, "", err
+	}
 	a, err := tx.Attempt(id)
 	return a, token, err
 }

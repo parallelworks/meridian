@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,6 +205,23 @@ jobs:
 	rec := storedRecord(t, c, id)
 	if got := neededResult(a, rec); got.Outputs["token"] != "tok-SECRET-456" || len(got.Secrets) != 1 {
 		t.Errorf("b reads a's result as %+v", got)
+	}
+	// The job placed, with the needs it is readied with, as its claim
+	// gives them, masks the token where its step reads it: its worker
+	// masks what Step gives (plan.ReadyStep.Masked), not Ready, which
+	// made no string of the token.
+	run := storedRun(t, c, id)
+	r, err := c.readyJob(t.Context(), run, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	needs := map[string]plan.JobResult{"a": neededResult(a, rec)}
+	step, _, err := r.result.Job.Step(t.Context(), 0, plan.JobState{Run: run.StartState.Run, Needs: needs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(step.Masked, "tok-SECRET-456") {
+		t.Errorf("b's step masks %v", step.Masked)
 	}
 	close(release)
 	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeSuccess {

@@ -398,7 +398,15 @@ type Tx struct {
 	// events is set once the transaction has added a run's event, which
 	// Changes says once it commits.
 	events bool
+	// controls is set once the transaction has changed what an attempt's
+	// control asks (UpdateControl).
+	controls bool
 }
+
+// ControlsChanged reports whether the transaction has changed what an
+// attempt's control asks, so that, once it commits, whoever holds control
+// polls answers them (workerapisrv.Server.Notify).
+func (tx *Tx) ControlsChanged() bool { return tx.controls }
 
 // Tx runs fn in a transaction, which it commits if fn returns nil and
 // rolls back otherwise, returning fn's error. Everything fn does through

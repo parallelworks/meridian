@@ -96,12 +96,7 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 		if err != nil {
 			return err
 		}
-		if err := tx.ChoosePlace(a.ID, place); err != nil {
-			return err
-		}
-		// What every attempt of the run tells its worker, this one does
-		// from the start.
-		return tx.StartControl(a.ID)
+		return tx.ChoosePlace(a.ID, place)
 	})
 	if errors.Is(err, store.ErrState) || errors.Is(err, store.ErrFenced) {
 		return 0, errAgain

@@ -206,6 +206,10 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 			return 0, err
 		}
 	}
+	// A step that failed marks the run, for early-cancel: any-job-failed.
+	if err := tx.markFailedStep(id, fresh); err != nil {
+		return 0, err
+	}
 	return next, nil
 }
 
