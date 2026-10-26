@@ -47,7 +47,10 @@ import (
 // strings escaped as encoding/json escapes them by default, as trees have
 // always been written. It is read in one pass too, and what a node may be
 // that depends on the nodes around it, a lambda or a parameter, is checked
-// once its parent is read.
+// once its parent is read. It is read only as it is written, as the plan's
+// schema has it (plan.Schemas): null where a string, a number, a list or
+// a node is, a member a node of its kind always has left out, and not
+// other than true, are refused.
 
 // MarshalJSON encodes the expression as its source and its tree.
 func (e *Expr) MarshalJSON() ([]byte, error) { return e.appendJSON(nil) }
@@ -405,7 +408,7 @@ func decodeExpr(dec *jsontext.Decoder) (*Expr, error) {
 	}
 	e := new(Expr)
 	var root decoded
-	var hasTree bool
+	var hasSrc, hasTree bool
 	for dec.PeekKind() != '}' {
 		name, err := readName(dec)
 		if err != nil {
@@ -416,6 +419,7 @@ func decodeExpr(dec *jsontext.Decoder) (*Expr, error) {
 			if e.src, err = readString(dec); err != nil {
 				return nil, err
 			}
+			hasSrc = true
 		case "tree":
 			if root, err = decodeNode(dec, 0); err != nil {
 				return nil, err
@@ -429,6 +433,8 @@ func decodeExpr(dec *jsontext.Decoder) (*Expr, error) {
 		return nil, err
 	}
 	switch {
+	case !hasSrc:
+		return nil, errors.New(`expr: an expression has no "src"`)
 	case !hasTree:
 		return nil, errors.New(`expr: an expression has no "tree"`)
 	case root.lambda:
@@ -446,8 +452,6 @@ func decodeTemplate(dec *jsontext.Decoder) (*Template, error) {
 	switch tok, err := dec.ReadToken(); {
 	case err != nil:
 		return nil, err
-	case tok.Kind() == 'n':
-		return t, nil
 	case tok.Kind() != '[':
 		return nil, errors.New("expr: a template must be a list")
 	}
@@ -502,7 +506,7 @@ func readName(dec *jsontext.Decoder) ([]byte, error) {
 	return jsontext.AppendUnquote(nil, raw)
 }
 
-// readString reads a string, or null, which is "" as encoding/json reads it.
+// readString reads a string.
 func readString(dec *jsontext.Decoder) (string, error) {
 	tok, err := dec.ReadToken()
 	switch {
@@ -510,8 +514,6 @@ func readString(dec *jsontext.Decoder) (string, error) {
 		return "", err
 	case tok.Kind() == '"':
 		return tok.String(), nil
-	case tok.Kind() == 'n':
-		return "", nil
 	}
 	return "", errors.New("expr: want a string")
 }
@@ -585,9 +587,10 @@ var (
 		}
 		return all
 	}()
-	// needed is the keys of the nodes under a node that a node of a kind
-	// that can have them must have.
-	needed = keyX | keyThen | keyElse | keyBody
+	// needed is the keys that a node of a kind that can have them must
+	// have, as MarshalJSON always writes them: the nodes under it, a
+	// path, and a call's arguments.
+	needed = keyX | keyThen | keyElse | keyBody | keyPath | keyArgs
 )
 
 // A decoded node, with what the node around it checks: whether it is a
@@ -618,8 +621,7 @@ type wireNode struct {
 	x, y, cond, then, els, body decoded
 	args                        []decoded
 	start, end                  decoded
-	// not is the value of not: true, false, or null; notOK is false for any
-	// other.
+	// not is the value of not, true or false; notOK is false for any other.
 	not, notOK bool
 }
 
@@ -814,13 +816,17 @@ func (w *wireNode) op() (decoded, error) {
 		if w.text != "!" && w.text != "-" && !prefixOperators[w.text] {
 			return decoded{}, fmt.Errorf("expr: %q isn't a unary operator", w.text)
 		}
+		if w.keys&keyNot != 0 {
+			return decoded{}, errors.New("expr: a unary operator isn't negated")
+		}
 		return decoded{n: &unary{op: w.text, x: w.x.n}, free: w.x.free}, nil
 	}
 	if !binaryOperator(w.text) {
 		return decoded{}, fmt.Errorf("expr: %q isn't a binary operator", w.text)
 	}
-	if w.keys&keyNot != 0 && !w.notOK {
-		return decoded{}, errors.New("expr: not is true or false")
+	// MarshalJSON writes not only for a negated operator, as true.
+	if w.keys&keyNot != 0 && (!w.notOK || !w.not) {
+		return decoded{}, errors.New("expr: not is true, or left out")
 	}
 	if w.not && !negatable[w.text] {
 		return decoded{}, fmt.Errorf("expr: %q can't be negated", w.text)
@@ -841,13 +847,11 @@ func union(sets ...[]string) []string {
 	return out
 }
 
-// decodeArgs reads a call's arguments: a list of nodes, or null for none.
+// decodeArgs reads a call's arguments: a list of nodes.
 func decodeArgs(dec *jsontext.Decoder, depth int) ([]decoded, error) {
 	switch tok, err := dec.ReadToken(); {
 	case err != nil:
 		return nil, err
-	case tok.Kind() == 'n':
-		return nil, nil
 	case tok.Kind() != '[':
 		return nil, errors.New("expr: a call's arguments are a list")
 	}
@@ -892,44 +896,37 @@ func (w *wireNode) readSlice(dec *jsontext.Decoder, depth int) error {
 	return nil
 }
 
-// readInt reads a whole number, or null, which is 0 as encoding/json reads
-// it into an int. ok is false for anything else, which is read all the
-// same.
+// readInt reads a whole number, written without a fraction or an exponent,
+// that has 32 bits, as an int has on some systems. ok is false for anything
+// else, which is read all the same.
 func readInt(dec *jsontext.Decoder) (n int, ok bool, err error) {
-	switch dec.PeekKind() {
-	case 'n':
-		_, err := dec.ReadToken()
-		return 0, true, err
-	case '0':
-		tok, err := dec.ReadToken()
-		if err != nil {
-			return 0, false, err
-		}
-		i, err := strconv.ParseInt(tok.String(), 10, strconv.IntSize)
-		return int(i), err == nil, nil
+	if dec.PeekKind() != '0' {
+		return 0, false, dec.SkipValue()
 	}
-	return 0, false, dec.SkipValue()
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return 0, false, err
+	}
+	i, err := strconv.ParseInt(tok.String(), 10, 32)
+	return int(i), err == nil, nil
 }
 
-// readBool reads true, false or null, which is false as encoding/json reads
-// it. ok is false for anything else, which is read all the same.
+// readBool reads true or false. ok is false for anything else, which is
+// read all the same.
 func readBool(dec *jsontext.Decoder) (b, ok bool, err error) {
 	switch dec.PeekKind() {
-	case 't', 'f', 'n':
+	case 't', 'f':
 		tok, err := dec.ReadToken()
 		return tok.Kind() == 't', true, err
 	}
 	return false, false, dec.SkipValue()
 }
 
-// readParams reads a lambda's parameters: a list of strings, in which null
-// is "" as encoding/json reads it, or null for none.
+// readParams reads a lambda's parameters: a list of strings.
 func readParams(dec *jsontext.Decoder) ([]string, error) {
 	switch tok, err := dec.ReadToken(); {
 	case err != nil:
 		return nil, err
-	case tok.Kind() == 'n':
-		return nil, nil
 	case tok.Kind() != '[':
 		return nil, errParams
 	}
@@ -957,13 +954,11 @@ func binaryOperator(op string) bool {
 	return false
 }
 
-// decodePath reads a path: a list of segments, or null for none.
+// decodePath reads a path: a list of segments.
 func decodePath(dec *jsontext.Decoder) ([]segment, error) {
 	switch tok, err := dec.ReadToken(); {
 	case err != nil:
 		return nil, err
-	case tok.Kind() == 'n':
-		return []segment{}, nil
 	case tok.Kind() != '[':
 		return nil, errors.New("expr: a path is a list")
 	}
@@ -979,8 +974,8 @@ func decodePath(dec *jsontext.Decoder) ([]segment, error) {
 	return path, err
 }
 
-// decodeSegment reads a path segment: a name, null, which is "" as
-// encoding/json reads it, or an object with one key.
+// decodeSegment reads a path segment: a name, or an object with one key,
+// whose value is true for [index] and .*.
 func decodeSegment(dec *jsontext.Decoder) (segment, error) {
 	if dec.PeekKind() != '{' {
 		name, err := readString(dec)
@@ -1009,10 +1004,10 @@ func decodeSegment(dec *jsontext.Decoder) (segment, error) {
 		s.name, err = readString(dec)
 	case "index":
 		s = segment{name: "index", kind: index}
-		err = dec.SkipValue()
+		err = readTrue(dec)
 	case "each":
 		s = segment{name: "*", kind: wildcard}
-		err = dec.SkipValue()
+		err = readTrue(dec)
 	default:
 		return segment{}, errors.New("expr: unknown path segment")
 	}
@@ -1023,4 +1018,12 @@ func decodeSegment(dec *jsontext.Decoder) (segment, error) {
 		return segment{}, cmp.Or(err, errSegment)
 	}
 	return s, nil
+}
+
+// readTrue reads the value of [index]'s and .*'s key, true.
+func readTrue(dec *jsontext.Decoder) error {
+	if b, ok, err := readBool(dec); err != nil || !ok || !b {
+		return cmp.Or(err, errors.New("expr: [index] and .* are written true"))
+	}
+	return nil
 }

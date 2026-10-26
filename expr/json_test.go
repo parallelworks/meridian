@@ -145,8 +145,8 @@ func TestJSONDecodeErrors(t *testing.T) {
 		{"a lambda without a body", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["x"]}]}}`, `a node is missing "body"`},
 		{"a lambda's unknown key", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["x"],"body":{"lit":1},"x":{"lit":1}}]}}`, `a lambda node has no "x"`},
 		{"a parameter outside a lambda", `{"src":"x","tree":{"param":"x","path":[]}}`, `"x" isn't a parameter of a lambda around it`},
-		{"another lambda's parameter", `{"src":"x","tree":{"call":"map","args":[{"call":"map","args":[{"lit":[]},{"lambda":["y"],"body":{"param":"y"}}]},{"lambda":["x"],"body":{"param":"y"}}]}}`, `"y" isn't a parameter of a lambda around it`},
-		{"a parameter read before its lambda", `{"src":"x","tree":{"call":"map","args":[{"param":"x"},{"body":{"param":"x"},"lambda":["x"]}]}}`, `"x" isn't a parameter of a lambda around it`},
+		{"another lambda's parameter", `{"src":"x","tree":{"call":"map","args":[{"call":"map","args":[{"lit":[]},{"lambda":["y"],"body":{"param":"y","path":[]}}]},{"lambda":["x"],"body":{"param":"y","path":[]}}]}}`, `"y" isn't a parameter of a lambda around it`},
+		{"a parameter read before its lambda", `{"src":"x","tree":{"call":"map","args":[{"param":"x","path":[]},{"body":{"param":"x","path":[]},"lambda":["x"]}]}}`, `"x" isn't a parameter of a lambda around it`},
 		{"an empty key", `{"src":"x","tree":{"ref":"inputs","path":[],"":1}}`, `a ref node has no ""`},
 		{"a key of a node in another case", `{"src":"x","tree":{"Lit":1}}`, "a node has no kind"},
 		{"no tree", `{"src":"x"}`, `has no "tree"`},
@@ -154,8 +154,33 @@ func TestJSONDecodeErrors(t *testing.T) {
 		{"a key twice in a segment", `{"src":"x","tree":{"ref":"inputs","path":[{"quoted":"a","quoted":"b"}]}}`, "duplicate object member name"},
 		{"a segment of two keys", `{"src":"x","tree":{"ref":"inputs","path":[{"quoted":"a","bare":"b"}]}}`, "a path segment is a name or an object with one key"},
 		{"a segment that is a number", `{"src":"x","tree":{"ref":"inputs","path":[1]}}`, "a path segment is a name or an object with one key"},
-		{"a negation that isn't true or false", `{"src":"x","tree":{"op":"in","not":1,"x":{"lit":1},"y":{"lit":2}}}`, "not is true or false"},
+		{"a negation that isn't true or false", `{"src":"x","tree":{"op":"in","not":1,"x":{"lit":1},"y":{"lit":2}}}`, "not is true, or left out"},
 		{"up that isn't whole", `{"src":"x","tree":{"up":1.0,"path":[]}}`, "goes up at least one level"},
+		// What the tree's encoding never holds, which encoding/json read: null
+		// where a string, a number, a list or a node is, and a member a node
+		// always has left out.
+		{"no src", `{"tree":{"lit":1}}`, `has no "src"`},
+		{"src that is null", `{"src":null,"tree":{"lit":1}}`, "want a string"},
+		{"a word that is null", `{"src":"x","tree":{"word":null}}`, "want a string"},
+		{"a concat that is null", `{"src":"x","tree":{"concat":null,"x":{"lit":1}}}`, "want a string"},
+		{"a negation that is false", `{"src":"x","tree":{"op":"in","not":false,"x":{"lit":1},"y":{"lit":[]}}}`, "not is true, or left out"},
+		{"a negation that is null", `{"src":"x","tree":{"op":"in","not":null,"x":{"lit":1},"y":{"lit":[]}}}`, "not is true, or left out"},
+		{"a unary operator negated", `{"src":"x","tree":{"op":"!","not":true,"x":{"lit":1}}}`, "a unary operator isn't negated"},
+		{"a reference without a path", `{"src":"x","tree":{"ref":"inputs"}}`, `a node is missing "path"`},
+		{"a relative reference without a path", `{"src":"x","tree":{"up":1}}`, `a node is missing "path"`},
+		{"a member without a path", `{"src":"x","tree":{"member":{"lit":{}}}}`, `a node is missing "path"`},
+		{"a parameter without a path", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["x"],"body":{"param":"x"}}]}}`, `a node is missing "path"`},
+		{"a path that is null", `{"src":"x","tree":{"ref":"inputs","path":null}}`, "a path is a list"},
+		{"a segment that is null", `{"src":"x","tree":{"ref":"inputs","path":[null]}}`, "a path segment is a name or an object with one key"},
+		{"a quoted segment that is null", `{"src":"x","tree":{"ref":"inputs","path":[{"quoted":null}]}}`, "want a string"},
+		{"an index that isn't true", `{"src":"x","tree":{"ref":"inputs","path":[{"index":-1}]}}`, "[index] and .* are written true"},
+		{"an each that isn't true", `{"src":"x","tree":{"ref":"inputs","path":[{"each":[]}]}}`, "[index] and .* are written true"},
+		{"a call without arguments", `{"src":"x","tree":{"call":"success"}}`, `a node is missing "args"`},
+		{"arguments that are null", `{"src":"x","tree":{"call":"success","args":null}}`, "a call's arguments are a list"},
+		{"parameters that are null", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":null,"body":{"lit":1}}]}}`, "a lambda has one or two parameters"},
+		{"a parameter that is null", `{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":[null],"body":{"lit":1}}]}}`, "a lambda has one or two parameters"},
+		{"up that is null", `{"src":"x","tree":{"up":null,"path":[]}}`, "goes up at least one level"},
+		{"up past 32 bits", `{"src":"x","tree":{"up":2147483648,"path":[]}}`, "goes up at least one level"},
 		{"a path that isn't a list", `{"src":"x","tree":{"ref":"inputs","path":"x"}}`, "a path is a list"},
 		{"an empty slice", `{"src":"x","tree":{"slice":[]}}`, "a slice is [start, end]"},
 		{"a slice of one", `{"src":"x","tree":{"slice":[{"lit":1}]}}`, "a slice is [start, end]"},
@@ -170,7 +195,7 @@ func TestJSONDecodeErrors(t *testing.T) {
 			t.Errorf("%s: got %v, want an error with %q", tc.name, err, tc.want)
 		}
 	}
-	for _, data := range []string{`{}`, `[1]`, `[[]]`, `["a",{"src":"x"}]`, `["a"] ["b"]`} {
+	for _, data := range []string{`{}`, `[1]`, `[[]]`, `["a",{"src":"x"}]`, `["a"] ["b"]`, `null`, `[null,"a"]`} {
 		var tmpl expr.Template
 		if err := tmpl.UnmarshalJSON([]byte(data)); err == nil {
 			t.Errorf("template %s: decoded", data)
@@ -178,29 +203,16 @@ func TestJSONDecodeErrors(t *testing.T) {
 	}
 }
 
-// What encoding/json read in a tree still decodes: null where a string, a
-// number or a list is, a negation that a unary operator doesn't read, and
-// any value for [index] and .*.
+// A tree decodes whatever the order of its keys, and a template of no
+// parts.
 func TestJSONDecodeAccepts(t *testing.T) {
-	for _, data := range []string{
-		`{"src":null,"tree":{"word":null}}`,
-		`{"src":"x","tree":{"concat":null,"x":{"lit":1}}}`,
-		`{"src":"x","tree":{"op":"!","not":"unread","x":{"lit":1}}}`,
-		`{"src":"x","tree":{"op":"in","not":null,"x":{"lit":1},"y":{"lit":[]}}}`,
-		`{"src":"x","tree":{"ref":"inputs","path":null}}`,
-		`{"src":"x","tree":{"ref":"inputs","path":[null,{"quoted":null},{"index":5},{"each":[]}]}}`,
-		`{"tree":{"lit":{"b":[1,{"c":null}],"a":"\u0041"}},"src":"x"}`,
-	} {
-		var e expr.Expr
-		if err := e.UnmarshalJSON([]byte(data)); err != nil {
-			t.Errorf("%s: %v", data, err)
-		}
+	var e expr.Expr
+	if err := e.UnmarshalJSON([]byte(`{"tree":{"lit":{"b":[1,{"c":null}],"a":"\u0041"}},"src":"x"}`)); err != nil {
+		t.Error(err)
 	}
-	for _, data := range []string{`null`, `[]`, `[null,"a"]`} {
-		var tmpl expr.Template
-		if err := tmpl.UnmarshalJSON([]byte(data)); err != nil {
-			t.Errorf("template %s: %v", data, err)
-		}
+	var tmpl expr.Template
+	if err := tmpl.UnmarshalJSON([]byte(`[]`)); err != nil {
+		t.Error(err)
 	}
 }
 
