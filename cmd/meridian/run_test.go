@@ -47,11 +47,31 @@ func runEnv(t *testing.T) map[string]string {
 	}
 }
 
+// A lockedBuffer is a strings.Builder that goroutines can write at once,
+// as meridian run's coordinator logs to its standard error from its own,
+// some of which, as hopper's, can outlive the command.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 // runTest runs meridian run with args in the environment vars, as a
 // test sets c up, and returns what it did.
 func runTest(t *testing.T, vars map[string]string, setUp func(*cli), args ...string) result {
 	t.Helper()
-	var stdout, stderr strings.Builder
+	var stdout, stderr lockedBuffer
 	c := &cli{
 		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
 		lookupEnv: func(name string) (string, bool) { v, ok := vars[name]; return v, ok },
