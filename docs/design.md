@@ -2326,11 +2326,16 @@ is, or evaluates to, the word `always`, as a step's can be (below).
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
   of a job whose `if:` isn't cancel-aware, through its control poll, and
-  wakes every job's supervisor. A placement of such a job that no worker
-  has claimed yet is withdrawn (`scancel`, `qdel`, deleting the pod,
-  signalling the process), and the job ends cancelled: it was readied, so
-  its needs had all ended, and format 1 would be running it, and would
-  stop it as below. A running attempt that is stopped is waited for while
+  wakes every job's supervisor. After a cancel, a placement of such a job
+  that no worker has claimed yet is withdrawn (`scancel`, `qdel`, deleting
+  the pod, signalling the process), and the job ends cancelled: it was
+  readied, so its needs had all ended, and format 1 would be running it,
+  and would stop it as below. After the run's timeout, such a placement
+  isn't withdrawn: its worker claims it and is told at once that the run's
+  timeout has passed, so that its steps end as format 1's do when they
+  start under the passed deadline, failing but for those that outlive a
+  cancel and a last try that ignores its errors. A running attempt that
+  is stopped is waited for while
   it renews its lease, since its cleanups have no timeout, and withdrawn
   as a placement is if its lease lapses. `meridian cancel` stores the
   record whether or not a coordinator is running, and withdraws
@@ -2387,12 +2392,19 @@ is, or evaluates to, the word `always`, as a step's can be (below).
   that comes to run after it, so `failure()` is true after it and
   `cancelled()` false, even if a cancel follows, and the job fails with
   the reason `timeout`, as in format 1, whose context keeps the reason it
-  ended with first. That is so when the timeout stops a step, or one is
-  still to run: one that comes once no such step is left, as during a
-  last step that outlives a cancel, or the cleanups, leaves the job
-  ending as its steps did. The run goes on: the jobs that need it
-  are skipped because their needs failed, and those whose `if:` calls
-  `failure()` run. The coordinator enforces it too, as a backstop for a
+  ended with first. That is so when the timeout fails a step: one that
+  comes once no step is left that it stops, as during a last step that
+  outlives a cancel, or the cleanups, leaves the job ending as its steps
+  did. A step with `ignore-errors:` whose last try, with no retry left, a
+  deadline stops, its own, the job's or the run's, succeeds, as in format
+  1, and so does one with no retry left that comes to run after the
+  job's or the run's deadline has passed. An earlier try that the job's
+  or the run's deadline stops fails, and isn't tried again, as does a
+  step waiting to try again when it passes. A job whose deadline stopped
+  only steps that succeed so fails no step, and ends as its steps did,
+  with no reason. The run goes on: the jobs that need it are skipped
+  because their needs failed, and those whose `if:` calls `failure()`
+  run. The coordinator enforces it too, as a backstop for a
   worker that doesn't: once the job's timeout, the worker's own time to
   stop its steps, a heartbeat period and the margin have passed since the
   attempt was claimed, without its end, it tells the worker to stop the

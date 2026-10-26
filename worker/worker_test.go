@@ -456,6 +456,147 @@ func TestTimeoutThenCancel(t *testing.T) {
 	}
 }
 
+// TestIgnoreErrorsDeadline checks that, as in format 1, a step with
+// ignore-errors: whose last try a deadline stops, the job's timeout: or the
+// run's, succeeds, and the job goes on as format 1's does: a step that
+// comes to run after the deadline fails without starting, but one that
+// ignores its errors too, which succeeds; a step that outlives a cancel
+// runs, and so do cleanups; and the job ends failure, timeout, if a step
+// failed, and as its steps did otherwise, as success, with no reason.
+func TestIgnoreErrorsDeadline(t *testing.T) {
+	t.Parallel()
+	for _, deadline := range []string{"job", "run"} {
+		for _, place := range []string{"middle", "last"} {
+			t.Run(deadline+" "+place, func(t *testing.T) {
+				t.Parallel()
+				ignoring := command("echo waiting; sleep 30")
+				ignoring.IgnoreErrors = plan.Literal(true)
+				ignoring.Cleanup = plan.Literal("echo cleaned > $PW_JOB_DIR/cleaned")
+				steps := []plan.Step{ignoring}
+				if place == "middle" {
+					later := command("echo later")
+					later.IgnoreErrors = plan.Literal(true)
+					always := command("echo always")
+					always.If = cond("always()")
+					steps = append(steps, later, command("echo after"), always)
+				}
+				job := newJob(steps...)
+				if deadline == "job" {
+					job.TimeoutSeconds = 1
+				}
+				f := workerapitest.NewFake(t, job)
+				if deadline == "run" {
+					timeoutOnFirstLog(f, 1)
+				}
+				if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+					t.Fatal(err)
+				}
+				if place == "last" {
+					checkEvents(t, f,
+						"started 0.0", "finished 0.0 success -1",
+						"cleanup started 0.0", "cleanup finished 0.0 success 0",
+					)
+					checkEnd(t, f, plan.OutcomeSuccess, "")
+				} else {
+					checkEvents(t, f,
+						"started 0.0", "finished 0.0 success -1",
+						"finished 1.0 success -1",
+						"finished 2.0 failure -1",
+						"started 3.0", "finished 3.0 success 0",
+						"cleanup started 0.0", "cleanup finished 0.0 success 0",
+					)
+					checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
+				}
+				if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "cleaned")); err != nil {
+					t.Errorf("the cleanup: command didn't run: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// TestDeadlineReason checks that, as in format 1, the job's timeout: or
+// the run's fails a step with ignore-errors: on a try that isn't its last:
+// one whose earlier try it stops, which isn't tried again, and one waiting
+// to try again; and that the job ends with the reason timeout only when
+// its deadline failed a step: one whose deadline stopped only a step that
+// ignores its errors, and whose step after fails of its own, ends failure
+// as its steps did, with no reason.
+func TestDeadlineReason(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		steps func() []plan.Step
+		// betweenTries has the run's timeout come once the first try has
+		// ended, rather than once it has printed.
+		betweenTries bool
+		events       []string
+		reason       plan.Reason
+	}{{
+		name: "an earlier try",
+		steps: func() []plan.Step {
+			s := command("echo waiting; sleep 30")
+			s.IgnoreErrors = plan.Literal(true)
+			s.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
+			return []plan.Step{s}
+		},
+		events: []string{"started 0.0", "finished 0.0 failure -1"},
+		reason: plan.ReasonTimeout,
+	}, {
+		name: "between tries",
+		steps: func() []plan.Step {
+			s := command("echo failing; exit 1")
+			s.IgnoreErrors = plan.Literal(true)
+			s.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: number(30)}
+			return []plan.Step{s}
+		},
+		betweenTries: true,
+		events:       []string{"started 0.0", "finished 0.0 failure 1", "finished 0.1 failure -1"},
+		reason:       plan.ReasonTimeout,
+	}, {
+		name: "a later step fails",
+		steps: func() []plan.Step {
+			s := command("echo waiting; sleep 30")
+			s.IgnoreErrors = plan.Literal(true)
+			after := command("exit 3")
+			after.If = cond("always()")
+			return []plan.Step{s, after}
+		},
+		events: []string{
+			"started 0.0", "finished 0.0 success -1",
+			"started 1.0", "finished 1.0 failure 3",
+		},
+	}}
+	for _, deadline := range []string{"job", "run"} {
+		for _, c := range cases {
+			t.Run(deadline+" "+c.name, func(t *testing.T) {
+				t.Parallel()
+				job := newJob(c.steps()...)
+				if deadline == "job" {
+					job.TimeoutSeconds = 1
+				}
+				f := workerapitest.NewFake(t, job)
+				switch {
+				case deadline == "run" && c.betweenTries:
+					var once sync.Once
+					f.OnEvent = func(e workerapi.Event) {
+						if e.Finished && e.Step == 0 && e.Try == 0 {
+							once.Do(func() { f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout, GraceSeconds: 1}) })
+						}
+					}
+				case deadline == "run":
+					timeoutOnFirstLog(f, 1)
+				}
+				if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+					t.Fatal(err)
+				}
+				checkEvents(t, f, c.events...)
+				checkEnd(t, f, plan.OutcomeFailure, c.reason)
+			})
+		}
+	}
+}
+
 // TestOutlivesCancel checks that, as in format 1, a step whose if: is
 // cancel-aware runs to its end whatever happens to its job: neither the
 // job's cancellation nor the step's own timeout: stops it, though its
