@@ -1370,9 +1370,9 @@ The coordinator encrypts and stores it.
   rather than leave it in free space. Once the transaction that ends the
   run commits, the store checkpoints the write-ahead log into the
   database and truncates it, so the log keeps no copy either. If a reader
-  in another process holds the log open, that checkpoint can't truncate
-  it, and the next one does: when the next run ends, when the store is
-  next opened, or in hopper's maintenance. A backup of the database taken
+  or a writer in another process holds the log, that checkpoint can't
+  truncate it, and the next one does: when the next run ends, when the
+  store is next opened, or in hopper's maintenance. A backup of the database taken
   before the run ended holds the record, sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
   calls, and `meridian resume` picks a run up in another process, so a run's
