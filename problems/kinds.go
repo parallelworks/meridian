@@ -351,6 +351,20 @@ var (
 // environment variable's name or value, or what the operating system said,
 // reason, is a param as it is.
 
+// Placing a job's attempt on a member of its group, through the member's
+// backend (package backend), whose Fit or error the attempt records:
+// member is the member's name; isolation what it names, which
+// has_isolation says it does; resource is cpu, memory or gpu, with asks
+// and offers in thousandths of a core, bytes or GPUs; backend is the
+// member's; path is the meridian binary's that would start the worker, and
+// code the problem with it, whose page says why.
+var (
+	IsolationNotBuilt     = define(Error, "isolation_not_built", "Isolation its backend can't give yet", "member", "isolation", "has_isolation")
+	ResourcesExceedMember = define(Error, "resources_exceed_member", "Job asks for more than its member offers", "member", "resource", "asks", "offers")
+	BackendNotBuilt       = define(Error, "backend_not_built", "Backend this release doesn't have yet", "member", "backend")
+	WorkerBinaryUnsafe    = define(Error, "worker_binary_unsafe", "Meridian binary that isn't safe to start", "path", "code")
+)
+
 // The meridian command's directories. mode is a file's or directory's
 // permissions in octal, as 0755.
 var (

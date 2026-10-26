@@ -1955,5 +1955,33 @@
     "fix": [
       "Compila meridian con GOFIPS140=certified: con make build en su repositorio, con GOFIPS140=certified go install github.com/parallelworks/meridian/cmd/meridian@ y la versión, o una vez para todas las compilaciones con go env -w GOFIPS140=certified."
     ]
+  },
+  "isolation_not_built": {
+    "title": "Aislamiento que su backend aún no puede dar",
+    "why": "Un miembro nombra cómo aísla los trabajos que se le asignan: un entorno de contenedores, como podman, docker o apptainer, o host, que ejecuta los pasos de un trabajo en el host, como tú. Un miembro que no nombra ninguno los aísla en un contenedor sin root. Hoy el backend local ejecuta trabajos solo en el host, y Meridian nunca ejecuta un trabajo con un aislamiento más débil que el que nombra su miembro, así que la asignación deja fuera al miembro y asigna el trabajo a otro miembro de su grupo, si lo hay.",
+    "fix": [
+      "Nombra el aislamiento host para el miembro en groups.yaml, si lo que quieres es ejecutar los pasos de sus trabajos en el host, como tú."
+    ]
+  },
+  "resources_exceed_member": {
+    "title": "El trabajo pide más de lo que ofrece su miembro",
+    "why": "Un miembro ofrece los recursos que declara en groups.yaml o, para uno del backend local que no declara ninguno, las CPU y la memoria del host, y ninguna GPU salvo que declare alguna. Un trabajo cuyo resources: pide más que eso nunca puede ejecutarse allí, así que la asignación deja fuera al miembro y asigna el trabajo a otro miembro de su grupo, si alguno ofrece suficiente.",
+    "fix": [
+      "Pide menos en el resources: del trabajo, declara lo que ofrece el miembro en groups.yaml, o ejecuta el trabajo en un grupo con un miembro que ofrezca suficiente."
+    ]
+  },
+  "backend_not_built": {
+    "title": "Backend que esta versión aún no tiene",
+    "why": "Un miembro nombra el backend que inicia workers en él: local, ssh, kubernetes, slurm o pbs. Esta versión de Meridian solo tiene el backend local, así que la asignación deja fuera a un miembro de otro backend y asigna el trabajo a otro miembro de su grupo, si lo hay.",
+    "fix": [
+      "Ejecuta el trabajo en un grupo con un miembro del backend local, hasta que una versión tenga el backend del miembro."
+    ]
+  },
+  "worker_binary_unsafe": {
+    "title": "Binario de Meridian que no es seguro iniciar",
+    "why": "El backend local inicia cada worker desde el binario de meridian que lo asigna, y el worker guarda la credencial del intento mientras se ejecuta. Por eso el binario debe ser un archivo regular tuyo o de root que ningún otro usuario pueda cambiar, ni ningún directorio en el camino hasta él: si no, otro usuario podría reemplazarlo por un programa que lea lo que recibe el worker. El código es el problema que tiene, y su página dice por qué.",
+    "fix": [
+      "Corrige lo que dice la página del código, para el binario que nombra el mensaje, o instala meridian donde solo tú o root puedan cambiarlo, como /usr/local/bin."
+    ]
   }
 }

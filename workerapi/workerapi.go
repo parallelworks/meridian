@@ -220,12 +220,18 @@ const (
 	// worker checks the TLS connection against. It is unset for a Unix
 	// socket.
 	EnvKeySHA256 = "MERIDIAN_COORDINATOR_KEY_SHA256"
-	// EnvBootstrapToken is the attempt's bootstrap token, and
+	// EnvBootstrapToken is the attempt's bootstrap token;
 	// EnvBootstrapTokenFile the path of a file only the user can read that
-	// holds it, which the worker deletes once it has read it. One of the
-	// two is set.
+	// holds it, which the worker deletes once it has read it; and
+	// EnvBootstrapTokenFD the number of a stream Unix socket the worker
+	// inherits, on which it writes one byte once it has kept the user's
+	// other processes out of its memory, and then reads the token, to the
+	// socket's end. One of the three is set. The socket is the local
+	// backend's: no other process of the user's can read the token from
+	// it, as one could from a file, or from the environment on macOS.
 	EnvBootstrapToken     = "MERIDIAN_BOOTSTRAP_TOKEN"
 	EnvBootstrapTokenFile = "MERIDIAN_BOOTSTRAP_TOKEN_FILE"
+	EnvBootstrapTokenFD   = "MERIDIAN_BOOTSTRAP_TOKEN_FD"
 )
 
 // The codes of the API's own problems: each is a kind of package problems,

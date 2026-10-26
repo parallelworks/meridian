@@ -1955,5 +1955,33 @@
     "fix": [
       "使用 GOFIPS140=certified 构建 meridian：在其仓库中使用 make build，使用 GOFIPS140=certified go install github.com/parallelworks/meridian/cmd/meridian@ 加上版本，或者用 go env -w GOFIPS140=certified 设置一次，之后的所有构建都会使用它。"
     ]
+  },
+  "isolation_not_built": {
+    "title": "其后端尚不能提供的隔离方式",
+    "why": "成员会指定如何隔离放置到它上面的作业：使用容器运行时（如 podman、docker 或 apptainer），或使用 host，即以你的身份在主机上运行作业的步骤。未指定隔离方式的成员会在无 root 容器中隔离作业。目前本地后端只能在主机上运行作业，而 Meridian 从不以比成员指定的更弱的隔离方式运行作业，因此放置时会排除该成员，如果其组中还有其他成员，则把作业放置到那里。",
+    "fix": [
+      "如果你希望以自己的身份在主机上运行其作业的步骤，请在 groups.yaml 中为该成员指定 host 隔离。"
+    ]
+  },
+  "resources_exceed_member": {
+    "title": "作业请求的超过其成员提供的",
+    "why": "成员提供它在 groups.yaml 中声明的资源；对于未声明任何资源的本地后端成员，则提供主机的 CPU 和内存，除非声明否则不提供 GPU。作业的 resources: 请求超过这些时，永远无法在那里运行，因此放置时会排除该成员，如果其组中有其他成员能提供足够的资源，则把作业放置到那里。",
+    "fix": [
+      "在作业的 resources: 中少请求一些，在 groups.yaml 中声明该成员提供的资源，或在有能提供足够资源的成员的组中运行该作业。"
+    ]
+  },
+  "backend_not_built": {
+    "title": "此版本尚无的后端",
+    "why": "成员会指定在它上面启动工作进程的后端：local、ssh、kubernetes、slurm 或 pbs。此版本的 Meridian 只有本地后端，因此放置时会排除使用其他后端的成员，如果其组中还有其他成员，则把作业放置到那里。",
+    "fix": [
+      "在有某个版本提供该成员的后端之前，请在有本地后端成员的组中运行该作业。"
+    ]
+  },
+  "worker_binary_unsafe": {
+    "title": "启动起来并不安全的 Meridian 二进制文件",
+    "why": "本地后端会用放置作业的 meridian 二进制文件启动每个工作进程，而工作进程运行时持有该尝试的凭据。因此，该二进制文件必须是你或 root 拥有的普通文件，其他用户不能更改它，也不能更改通往它的任何目录：否则其他用户可以把它替换成读取工作进程所获内容的程序。代码表示它的问题，其页面说明了原因。",
+    "fix": [
+      "针对消息指出的二进制文件，按代码页面所说的进行修复，或者把 meridian 安装在只有你或 root 能更改的位置，例如 /usr/local/bin。"
+    ]
   }
 }

@@ -19,7 +19,7 @@ pull request that makes any part of it wrong updates it.
 | Member | One place a group can run jobs: a backend, its settings and the resources it offers. |
 | Backend | How a member starts work: `local`, `ssh`, `kubernetes`, `slurm` or `pbs`. |
 | Plan | The compiled form of a run: typed, checked, holding no secret, and stored with the run. |
-| Secret record | What a run needs that its plan can't hold: what was submitted, passwords among it, what the plan withholds of the input definitions and what Create decided of them, and what Start read and made that is private, the variables among it; encrypted and kept only until the run ends (`plan.Record`). |
+| Secret record | What a run needs that its plan can't hold: what was submitted, passwords among it, what the plan withholds of the input definitions and what Create decided of them, and what Start read and made that is private, the variables among it; encrypted under a data key of the run's own, bound to the run, and kept only until the run ends (`plan.Record`). |
 | Coordinator | The part of Meridian that schedules jobs, places them on groups and hears from workers. |
 | Worker | The process that runs one attempt's steps and reports on them: the `meridian` binary itself. |
 
@@ -462,9 +462,11 @@ false.
 
 A job fails, for `failure()`, when a job it needs failed, or was skipped
 because a job it needs had failed in turn, and is cancelled, for
-`cancelled()`, when the run is being cancelled or a job it needs was
-cancelled, as in format 1. A job its own `if:` skipped counts as a success,
-so a job that needs an optional one still runs. So a failure reaches the
+`cancelled()`, when a job it needs ended cancelled, as in format 1: a
+cancel of the run alone doesn't make `cancelled()` true for a job
+([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)).
+A job its own `if:` skipped counts as a success, so a job that needs an
+optional one still runs. So a failure reaches the
 jobs below it through those it skips: a job whose `if:` the jobs it needs
 made false, because one failed or was cancelled, is skipped with that
 reason, which the jobs that need it read as a failure. A step fails, for
@@ -1143,10 +1145,12 @@ A run's data is of three kinds, kept apart by who may read them:
 | [Run state](#run-state) | Jobs, attempts, outcomes, outputs and diagnostics | Whoever can see the run | With the run |
 
 What Meridian makes from a variable or a password is kept only in the
-secret record, so the plan and run state can be shown to whoever can see the
-run. A job's outputs and logs hold what its steps write, and Meridian masks
-only secrets in them ([Outputs](#outputs)), so a plain variable's value
-that a step writes stays as it is
+secret record, or sealed under its data key beside it, as a private
+placement is ([Run state](#run-state)), so the plan and run state can be
+shown to whoever can see the run. A job's outputs and logs hold what its
+steps write, and Meridian masks only secrets in them
+([Outputs](#outputs)), so a plain variable's value that a step writes
+stays as it is
 ([Variables and secrets](#variables-and-secrets)).
 
 ### The plan
@@ -1355,9 +1359,10 @@ The coordinator encrypts and stores it.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
-- **Deleted when the run ends.** Nothing in it is needed once the run has
-  ended. A rerun is the stored plan and what is submitted again, from
-  which Create makes the rerun's record again ([Reruns](#reruns)). Each of
+- **Deleted when the run ends**, in the transaction that ends it. Nothing
+  in it is needed once the run has ended. A rerun is the stored plan and
+  what is submitted again, from which Create makes the rerun's record
+  again ([Reruns](#reruns)). Each of
   the record's parts is either what a person or a form gives, the
   workflow's own text (`Withheld`, which the pinned workflow holds), or
   what Create and Start make again from them.
@@ -1381,17 +1386,38 @@ The coordinator encrypts and stores it.
 
 ### Run state
 
-Run state is hopper's: the run's jobs, their attempts, outcomes and outputs,
-beside Meridian's run record, which holds the plan and the run's
-diagnostics. It holds no secret that Meridian can recognize: a job's
-outputs are checked against the secrets its attempt received before they
-leave the worker ([Outputs](#outputs)), and diagnostics never show a value
-made from a variable or a password. Nor does where a job runs, when its
-`runs-on:`, `resources:`, `retry:` or `timeout:` reads one: Ready says
-which of them did (`plan.ReadyJob.PrivateFields`, and `SecretFields` for a
-secret), and the coordinator keeps them, and the placement made from them,
-such as the member chosen and why, only where it keeps the run's secrets,
-as it keeps the run's timeout when that reads one.
+Run state is the store's: hopper's jobs, and Meridian's rows beside them
+([On hopper](#on-hopper)).
+
+- **The run's** holds its plan, with the plan's version and digest beside
+  it, so a replica tells whether it reads the run without decoding it; the
+  run's diagnostics; its state and outcome; its stop record, once a cancel
+  or its timeout stops it
+  ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup));
+  and the secret record's generation, apart from the record itself
+  ([The secret record](#the-secret-record)).
+- **Each job instance's** holds its state, its outcome, the part of its
+  result that run state holds (`plan.JobResult.Split`), a matrix job's
+  instances (`plan.Expansion.Split`), and what it was readied with
+  ([A job's lifecycle](#a-jobs-lifecycle)).
+- **Each attempt's** holds its lease and fencing number
+  ([Leases and fencing](#leases-and-fencing)), the hashes of its bootstrap
+  token and its credential, and its audit record
+  ([Operations](#operations)).
+- **The run's events**, each change to it in order, which every process
+  that follows the run reads, whichever process made the change.
+
+It holds no secret that Meridian can recognize: a job's outputs are checked
+against the secrets its attempt received before they leave the worker
+([Outputs](#outputs)), and diagnostics never show a value made from a
+variable or a password. Nor does where a job runs, when its `runs-on:`,
+`resources:`, `retry:` or `timeout:` reads one: Ready says which of them
+did (`plan.ReadyJob.PrivateFields`, and `SecretFields` for a secret), and
+the coordinator keeps them out of run state: Ready gives them again from
+the secret record whenever the coordinator needs them, as the record holds
+the run's timeout when that reads one, and the placement made from them,
+the member chosen and why each other wasn't, is in the attempt's row,
+sealed under the run's data key as the secret record is.
 
 ### Plans across versions
 
@@ -1407,7 +1433,7 @@ sees one version.
   trees of stored expressions are part of it, and so are the worker API's
   bodies, which carry a run's values and the job Ready evaluated
   ([The worker API](#the-worker-api)).
-- **The version says who can read it.** The run record keeps its plan's
+- **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
   rolling upgrade old replicas leave newer runs alone. A release still
@@ -1609,7 +1635,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 | --- | --- | --- |
 | Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; a scheduler's partitions, accounts and queues come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
-| Keys | The key that wraps each run's secret record's data key | A key file in Meridian's state directory, which only the user can read |
+| Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
 | Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
 | Actions | Built-in actions, which no interface provides yet: the worker refuses a step that `uses:` one (`uses_not_supported`) | `parallelworks/checkout`, and those that need no platform, once built |
@@ -1721,27 +1747,50 @@ Where ACTIVATE reads a `uses:` otherwise, no known workflow depends on it:
 
 ### On hopper
 
-Durable state is [hopper](https://github.com/parallelworks/hopper)'s.
-Meridian keeps no scheduling state of its own, and only adds run records
-that hopper doesn't model, such as the plan and the secret record, in the
-same database.
+Durable state is [hopper](https://github.com/parallelworks/hopper)'s, and
+Meridian's own tables beside hopper's, in the same database and in the same
+transactions: SQLite, through hopper's pure-Go driver, for `meridian`, and
+Postgres for a platform. hopper holds a run's jobs, and schedules and
+retries them; Meridian's tables hold what hopper doesn't model, the plan,
+the secret record, and the state of each job and each attempt
+([Run state](#run-state)). Meridian uses only what hopper has: workflows of
+jobs with dependency edges, jobs that snooze until a time without using an
+attempt, and jobs that complete in their caller's transaction.
 
-- **A run is a hopper workflow.** One transaction stores the run record and
-  the secret record, with the run's passwords, and inserts the workflow, its
-  jobs and their edges, so a run is stored before anything executes, and
-  either all of it is stored or none of it is. Its first job is Start
-  ([Starting a run](#starting-a-run)), which every other job waits for.
-- **Each job is a hopper job**, and `needs:` becomes hopper's dependency
-  edges. A matrix job's instances are a hopper workflow of their own
+- **A run is a hopper workflow.** One transaction gives the run its ID,
+  stores its plan, its secret record, sealed, and its state, and inserts
+  the workflow, so a run is stored before anything executes, and either all
+  of it is stored or none of it is. The workflow's first job is Start
+  ([Starting a run](#starting-a-run)), which every other job waits for, and
+  its last the run's finisher, which waits for every job, decides the
+  run's outcome, and deletes the secret record in the transaction that
+  ends the run.
+- **Each job has a supervisor**, a hopper job that waits for its needs'
+  supervisors, so `needs:` becomes hopper's dependency edges. The
+  supervisor drives its job from Ready to its end: it readies the job,
+  places its attempts and waits on them, and ends the job. It waits by
+  snoozing until its next deadline, such as a lease's, and a worker's report
+  that changes the job, stored by whichever replica the worker reached,
+  wakes it at once. Before it snoozes, it checks, in the transaction that
+  snoozes it, that nothing woke it meanwhile. Each instance of a matrix job
+  has a supervisor of its own, which the job's inserts
   ([Matrices](#matrices)).
 - **Meridian decides what a dependency's outcome means.** Its edges let a
   dependent run whatever its dependencies' outcomes were. A job ends with
-  Meridian's outcome (success, failure, cancelled or skipped) stored with its
-  outputs, and the coordinator evaluates the dependent's `if:` against it.
-  hopper cancels nothing on Meridian's behalf.
+  Meridian's outcome (success, failure, cancelled or skipped), stored with
+  its outputs in Meridian's tables, where they stay as long as the run, as
+  its reruns need them: hopper keeps a finished job's result only in its
+  history, which its retention prunes. The coordinator evaluates the
+  dependent's `if:` against it. hopper cancels nothing on Meridian's
+  behalf.
 - **`needs: <job>:any`** waits for any one instance of a matrix job to
-  complete or be skipped. This needs an any-of edge, which hopper doesn't
-  have yet.
+  succeed or be skipped by its own `if:`, or for every instance to end. A
+  marker job stands for it, which ends then, and which the dependent's
+  supervisor waits for with a plain edge, so hopper needs no edge of
+  another kind.
+- **A supervisor's own error**, a store's or a bug of the coordinator's,
+  hopper retries, with backoff and a bound. A job whose supervisor hopper
+  gives up on fails, and the run goes on to its end.
 
 ### A job's lifecycle
 
@@ -1755,7 +1804,11 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
   expands a matrix that reads `needs`, and evaluates the job's `if:`, so a
   false `if:` skips it here. Otherwise it evaluates the rest of what was left
   for this point, such as a `runs-on:` that uses `needs`, and picks a member
-  of the job's group ([Placement](#placement)).
+  of the job's group ([Placement](#placement)). The coordinator runs Ready
+  again whenever it needs the job, as when it places it and each time a
+  worker claims it, with what the job was readied with kept: whether the
+  run had been cancelled then, and which instance each `:any` need took. So
+  every claim of an attempt gets the same job, byte for byte.
 - **placing:** the member's backend is starting a worker: a scheduler job
   waiting in a queue, a pod being scheduled, a process starting over SSH. No
   user code runs yet, and the time this takes doesn't count against any
@@ -1796,12 +1849,13 @@ name, `#` and its index from 0, as in `build#2`.
   the matrix is expanded, so a job it skips has no instances. One that
   reads `matrix` is evaluated for each instance: format 1 allows it, as
   GitHub Actions doesn't, and the compiler accepts it.
-- **One hopper job.** A matrix job is one hopper job, whichever phase
-  expanded it. When it is ready, the coordinator inserts its instances as a
-  hopper workflow of their own, and finishes the job once they have all
-  finished, with their combined outcome and outputs. Jobs that need it wait
-  for all its instances. So a matrix written out and one sized from earlier
-  results run the same way.
+- **One supervisor, and one for each instance.** A matrix job has one
+  supervisor ([On hopper](#on-hopper)), whichever phase expanded it. When
+  it is ready, its supervisor inserts a supervisor for each instance, and
+  ends the job once they have all ended, with their combined outcome and
+  outputs (`plan.Combine`). Jobs that need it wait for all its instances.
+  So a matrix written out and one sized from earlier results run the same
+  way.
 - **`fail-fast` and `max-parallel`** belong to the strategy: the coordinator
   cancels the remaining instances when one fails, and places no more than
   `max-parallel` at a time. The strategy is evaluated as one value, so they
@@ -1876,7 +1930,17 @@ not assumed idempotent.
   backoff and a bound: placement failed, the scheduler rejected the job,
   the image couldn't be pulled, or the worker never connected. None of the
   workflow's code has run, so the retry can go to another member of the
-  job's group ([Placement](#placement)).
+  job's group ([Placement](#placement)). A job is placed again after 5
+  seconds, then 30, then 2 minutes, and its fourth such failure fails it,
+  or its second with a problem of the same kind, with the last one's
+  problem.
+  A backend that can't answer, as when a scheduler's command fails, is
+  asked again after a second, twice as long each time up to a minute, ten
+  times, after which that counts as such a failure.
+- **A run's Start that can't finish**, as when a resolver can't answer, is
+  tried again after 2 seconds, twice as long each time up to 2 minutes,
+  eight times, about four minutes in all, after which the run fails
+  ([Starting a run](#starting-a-run)).
 - **The worker records that the first step is starting**, and waits for the
   coordinator to store that, before it runs it. Whether user code may have
   run is therefore always known.
@@ -2141,13 +2205,28 @@ and checks neither declared list.
 ### Leases and fencing
 
 A running attempt holds a lease of its own, with a fencing number that
-grows with every attempt. The worker renews it with heartbeats, through
-whichever coordinator replica it reaches, and every write it makes (step
-events, logs, outputs, the result) carries the attempt's credential, which
-names the attempt, and is stored only while the attempt holds the job's
-fencing number. A write from a superseded attempt fails, and the worker
-that made it stops its job. hopper's leases today belong to the client
-that claimed a job; per-job leases are something it doesn't have yet.
+grows with every attempt: the job's next, which the transaction that makes
+the attempt takes. Both are in Meridian's row for the attempt, not
+hopper's, whose leases belong to the client that claimed a job, where an
+attempt's must outlive the replica that placed it. The worker renews the
+lease with heartbeats, through whichever coordinator replica it reaches,
+and every write it makes (step events, logs, outputs, the result) carries
+the attempt's credential, which names the attempt, and is stored only
+while the attempt holds the job's fencing number and hasn't ended, which
+the write's own transaction checks. A write from a superseded attempt
+fails (`fenced`), and the worker that made it stops its job; a repeat of
+the result the attempt already stored, as a worker sends after a dropped
+connection, is answered as the first was.
+
+The coordinator's numbers are the same for every job; only tests change
+them:
+
+| | | |
+| --- | --- | --- |
+| Lease | 60 s | How long a lease lasts after a heartbeat. |
+| Heartbeat | 10 s | How often a worker renews its lease: a fifth of the lease at most. |
+| Margin | 15 s | How long past a lapsed lease the coordinator waits before it starts a self-fencing job's next attempt. |
+| Grace | 60 s | How long after a replica takes over, or its host wakes, before it counts a lapsed lease. |
 
 Fencing numbers keep a superseded attempt's reports out of the store, but
 not what it writes elsewhere, such as checkpoints in the run directory.
@@ -2163,62 +2242,146 @@ lease stops leading:
   suspended: from six tenths of a lease period without a renewal it may
   start stopping them, with SIGTERM, and by nine tenths it has sent every
   process group the attempt started SIGKILL, and stopped waiting for them,
-  as `workerapi.Claim.SelfFencing` says. It shortens the grace period of a
-  cancellation in progress to do so. A process that left its group, as
-  with `setsid`, isn't its to stop. It then stops renewing the lease, and
-  sends what it has until the lease lapses. It reads the wall clock at
+  as `workerapi.Claim.SelfFencing` says: with the coordinator's 60-second
+  lease, SIGTERM at 37 seconds, SIGKILL by 49, and no more waiting by 54.
+  It shortens the grace period of a cancellation in progress to do so. A
+  process that left its group, as with `setsid`, isn't its to stop. It
+  then stops renewing the lease, and sends what it has until the lease
+  lapses, when its credential stops working. It reads the wall clock at
   least every second, so once a host that was suspended past the lease
   resumes, a step can run for up to about a second more.
 - **Its heartbeats** come often enough to try three times before it would
   start stopping the job, more often than the coordinator asks if need
   be, and it gives up on one that hasn't been answered in a third of the
   time then left, to send another, so that one heartbeat held by a
-  connection that is half open doesn't stop the job.
-- **The coordinator waits** until the lease has lapsed for that period and a
-  margin, by the store's clock, before it starts a new attempt. Neither
+  connection that is half open doesn't stop the job: every 10 seconds,
+  each given 9, and one that fails tried again within a period, so at
+  least three tries before 37 seconds.
+- **The coordinator waits** until the lease has lapsed and the margin
+  passed, 75 seconds after the last renewal by the store's clock, before
+  it starts a new attempt: 21 seconds after the worker stopped waiting,
+  which covers clocks that run at different rates, the second a resumed
+  host's worker can take to notice, and the time a commit takes. Neither
   side reads the other's clock; each only measures the period.
-- **The cost** is that such a job stops when it is cut off from every
-  coordinator replica for longer than a lease period, even when its host is
-  fine. Its new attempt resumes it, as its `retry:` asks.
+- **The cost** is that such a job starts stopping when it is cut off from
+  every coordinator replica for about six tenths of a lease period, 37
+  seconds, even when its host is fine. Its new attempt resumes it, as its
+  `retry:` asks.
 
 Other jobs keep running while they are cut off, since nothing runs them
 again: their workers spool reports and deliver them when they reconnect
-([Running steps](#running-steps)).
+([Running steps](#running-steps)). Their credential lasts until the
+attempt ends, however long ago its lease lapsed.
 
 A worker is lost only when its backend says it is, or, for a job that
-fences itself, once its lease has lapsed for the period and the margin. A
-backend check that can't decide, such as one over an SSH connection that is
-down, counts as not lost.
+fences itself, once its lease has lapsed and the margin passed. When the
+lease of an attempt that doesn't fence itself lapses, the coordinator asks
+the attempt's backend, and again every heartbeat period while the backend
+says the worker is running or queued, or can't decide, as over an SSH
+connection that is down, which counts as not lost. Once the backend says
+the worker has ended without completing its attempt, the attempt ends
+with the reason `worker-lost` if a step had started, and otherwise as a
+failure before its first step, which is placed again
+([Failures and retries](#failures-and-retries)); or with `timeout` when a
+scheduler ended it at its time limit, and `out-of-memory` when a scheduler
+or the kernel ended it for its memory.
 
-When the coordinator comes back after being down, its workers get a grace
-period to reconnect before their attempts count as lost. Jobs keep running
-while Meridian is down, but for those that fence themselves, and a laptop
-waking up or `meridian run` restarting must not make them all look lost.
+When a replica takes over what workers connect through
+([Connections](#connections)), as `meridian run` or `resume` does after
+another stopped, and when a replica sees its wall clock jump more than 10
+seconds past its monotonic clock, as when a laptop wakes, it counts no
+lapsed lease until the grace has passed. Jobs keep running while Meridian
+is down, but for those that fence themselves, and a cut-off worker tries
+again at least every 30 seconds, so it reaches the replica at least twice
+within the grace: a laptop waking up or `meridian run` restarting doesn't
+make them all look lost.
 
 ### Cancellation, timeouts and cleanup
 
-- **Cancelling a run is stored first.** Jobs that haven't been placed are
-  cancelled in the store; workers are told to stop and send each running
-  step SIGTERM, then SIGKILL after a grace period; placements in progress
-  are withdrawn (`scancel`, `qdel`, deleting the pod). The run's outcome
-  comes from that record, as format 1's comes from its record of an
-  external cancellation, since a job whose last steps were cancel-aware
-  can end otherwise than cancelled (below).
-- **Timeouts:** the worker enforces step and job timeouts. The coordinator
-  enforces the run's timeout, and a job's as a backstop. As in format 1, a
+A run stops early when a person cancels it, or when it runs past its own
+`timeout:`, and does what format 1 does in each case. Either way, what
+happens to a job depends on whether its `if:` is cancel-aware: whether it
+calls `always()` or `cancelled()`, negates `success()` or `failure()`, or
+is, or evaluates to, the word `always`, as a step's can be (below).
+
+- **Stopping a run is stored first**: the stop record, when and why, in
+  the run's row, in one transaction that also tells every running attempt
+  of a job whose `if:` isn't cancel-aware, through its control poll, and
+  wakes every job's supervisor. A placement of such a job that no worker
+  has claimed yet is withdrawn (`scancel`, `qdel`, deleting the pod,
+  signalling the process), and the job ends cancelled: it was readied, so
+  its needs had all ended, and format 1 would be running it, and would
+  stop it as below. A running attempt that is stopped is waited for while
+  it renews its lease, since its cleanups have no timeout, and withdrawn
+  as a placement is if its lease lapses. `meridian cancel` stores the
+  record whether or not a coordinator is running, and withdraws
+  placements itself when none is.
+- **A running job, when a person cancels the run**, has the step it is
+  running stopped, if its `if:` isn't cancel-aware: SIGTERM, then SIGKILL
+  after a grace period. The step and the job end cancelled, and the job's
+  later steps are skipped, but for those whose `if:` outlives a cancel;
+  the cleanup of each step that ran still runs (below).
+- **A job whose `if:` is cancel-aware runs on**, as format 1 runs it apart
+  from the run: neither a cancel nor the run's timeout stops it, whether
+  it is running, or placed and not yet claimed, which is then claimed and
+  runs. It ends as its steps do: neither stops it, though its own
+  timeout still does.
+- **A job not yet readied**, still waiting for its needs, takes one of
+  three paths, by its `if:`:
+  - **One that is cancel-aware** waits until its needs have ended. Its
+    `if:` is then evaluated with the status of its needs alone, as a
+    job's always is: `cancelled()` is true when a job it needs ended
+    cancelled, and `failure()` when one failed, or was skipped because
+    its own needs failed. If it is true, the job runs, and runs on as
+    above.
+  - **One that calls a status function, or reads `needs` or `env`**, and
+    isn't cancel-aware, waits until its needs have ended, then ends
+    cancelled, unless its `if:` then evaluates to the word `always`, when
+    it runs on as above.
+  - **Any other**, a job with no `if:` among them, ends at once, skipped
+    because its needs failed, as format 1 ends a job whose dependency
+    failed. A job that needs none was readied when the run started, so
+    it never takes this path.
+- **A matrix instance waiting for its turn** under `max-parallel` ends
+  cancelled, whatever its `if:`, as format 1 ends one waiting for its
+  turn.
+- **The run's outcome after a cancel** is cancelled, whatever its jobs did
+  after it, an `always()` job that succeeds among them. It comes from the
+  stop record, as format 1's comes from its record of an external
+  cancellation, rather than from the jobs.
+- **The run's own timeout isn't a cancel.** A job of the run's own waits
+  for it, and then stores the stop record with the reason `timeout`. When
+  the timeout is private, that job wakes at least every minute rather than
+  at the timeout, so that hopper's schedule doesn't show it. The step
+  running in a job whose `if:` isn't cancel-aware then fails with the
+  reason `timeout`, and so does its job; a cancel-aware job runs on, as
+  after a cancel. The job's worker is told to stop it with the reason
+  `timeout`, which it takes as the job's own timeout, below. Jobs not yet
+  readied take the same three paths as after a cancel. The run's outcome
+  then comes from its jobs, as format 1's does: failure if one failed, as
+  a stopped one has, or was skipped because its needs failed, with the
+  reason `timeout`, which Meridian adds since format 1 records none; and
+  success when nothing failed, as when only cancel-aware jobs were left
+  and they succeeded.
+- **A job's own timeout** ends only that job, and the worker enforces it.
+  The job isn't cancelled: the step it was running fails, and so does one
+  that comes to run after it, so `failure()` is true after it and
+  `cancelled()` false, even if a cancel follows, and the job fails with
+  the reason `timeout`, as in format 1, whose context keeps the reason it
+  ended with first. That is so when the timeout stops a step, or one is
+  still to run: one that comes once no such step is left, as during a
+  last step that outlives a cancel, or the cleanups, leaves the job
+  ending as its steps did. The run goes on: the jobs that need it
+  are skipped because their needs failed, and those whose `if:` calls
+  `failure()` run. The coordinator enforces it too, as a backstop for a
+  worker that doesn't: once the job's timeout, the worker's own time to
+  stop its steps, a heartbeat period and the margin have passed since the
+  attempt was claimed, without its end, it tells the worker to stop the
+  job, with the reason `timeout`, and withdraws its placement once its
+  lease lapses.
+- **A step's timeouts:** the worker enforces them. As in format 1, a
   step's `timeout:`, and its `retry:`'s, bound each of its tries, and a try
-  past the step's own `timeout:` isn't tried again. A job that runs past its
-  timeout isn't cancelled: the step it was running fails, so `failure()` is
-  true after it and `cancelled()` false, as in format 1. Nor is a job whose
-  run runs past the run's timeout: the coordinator asks its worker to stop
-  with the reason `timeout`, which the worker takes as the job's own
-  timeout, so the job ends failure, with the reason `timeout`, when the
-  deadline stops a step, or one is still to run, as format 1 fails the step
-  its run's deadline stops. A deadline that comes once no such step is
-  left, as during a last step that outlives a cancel, or the cleanups,
-  leaves the job ending as its steps did. A cancellation after either
-  deadline leaves `cancelled()` false, as in format 1, whose context keeps
-  the reason it ended with first.
+  past the step's own `timeout:` isn't tried again.
 - **A step whose `if:` is cancel-aware**, one that calls `always()` or
   `cancelled()`, negates `success()` or `failure()`, or is the word
   `always`, outlives its job's cancellation and timeout, as in format 1: it
@@ -2244,7 +2407,10 @@ waking up or `meridian run` restarting must not make them all look lost.
   or the attempt ends.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
   fails, or a step of its own job did, as in format 1. The coordinator
-  tells the step's worker when another job fails. The step ends cancelled,
+  tells the step's worker when another job fails: the first job of the run
+  to fail marks the run, in the transaction that ends it, and every running
+  attempt's control poll then says so, as a new attempt's first one does.
+  The step ends cancelled,
   which cancels the rest of its job, as in format 1: a later step runs only
   if it outlives a cancel, and the job ends cancelled unless a step of it
   failed (`plan.JobState.Cancelled`). It doesn't cut short the wait between
@@ -2329,29 +2495,56 @@ read. Instead:
   receive it with their needs and read it as private, so what they make of
   it is kept out of run state too.
 
- When a job is claimed, it receives its dependencies'
-outcomes and outputs with it, rather than reading each one back. hopper
-keeps finalized jobs' outputs only in its history, so this, too, needs
-something hopper doesn't have yet.
+When a job is claimed, it receives its dependencies' outcomes and outputs
+with it, rather than reading each one back: the coordinator joins what run
+state holds of each dependency's result with what the secret record holds
+(`plan.JoinJobResult`), and gives the job those its expressions read
+([Variables and secrets](#variables-and-secrets)).
 
 ## The coordinator
 
 The coordinator is a hopper client whose handlers keep no state between
 calls: each reads the job's state, acts, and stores what it did. Any replica
-can therefore handle any job, and a replica that dies loses nothing.
+can therefore handle any job, and a replica that dies loses nothing. What a
+replica keeps is a cache of the plans it has decoded, which never change.
 
+- **Supervisors drive jobs**, one for each job and each matrix instance,
+  as hopper jobs that any replica works ([On hopper](#on-hopper)). A
+  worker's report that changes a job, stored by the replica the worker
+  reached, wakes the job's supervisor, wherever it runs.
 - **Placement is idempotent.** A placement carries its attempt's ID (in a
   Slurm or PBS job name, a pod label, a process's arguments), and before
   placing, the coordinator looks for one that already exists. A coordinator
-  that crashed between submitting and recording never submits twice.
+  that crashed between submitting and recording never submits twice: a
+  supervisor that another replica rescues finds the placement, and the
+  job's fencing number keeps a second one from reporting.
 - **It places jobs** on the members of their groups
   ([Placement](#placement)), within each member's capacity and priorities.
 - **It serves the worker API** (below).
+- **Every change to a run** adds an event to the run's events in the
+  transaction that makes it, so whoever follows the run, in any process,
+  sees one ordered stream.
 
-Locally, `meridian run` coordinates in the foreground, with SQLite, and exits
-when the run ends. If it is interrupted or exits early, it detaches from the
-run rather than cancelling it: workers keep running and hold their reports,
-and `meridian resume` picks the run back up. `meridian cancel` cancels.
+Locally, `meridian run` creates the run, coordinates it in the foreground,
+with SQLite, and exits when the run ends.
+
+- **Every `meridian run` is a replica**, and so is every `meridian resume`.
+  One at a time holds the socket workers connect to, under a lock on a file
+  beside the store's database, and serves every run's workers; the others
+  work the store's jobs too, and follow their own run. When the holder
+  exits, one that waits for the lock takes the socket over, and the
+  workers reconnect to it.
+- **Start runs where the run was made.** Only the `meridian run` that
+  created a run works its Start, or a `meridian resume` of it once that has
+  gone, so the variables it reads from environment variables are read from
+  the shell that ran it.
+- **Interrupting it.** In a terminal, Ctrl-C asks whether to cancel the
+  run, leave it running, or keep watching it. Otherwise, as when a script
+  runs it, an interrupt leaves the run running: `meridian run` detaches
+  from it rather than cancel it, its workers keep running and hold their
+  reports, and `meridian resume` picks the run back up. `meridian cancel`
+  cancels.
+
 `meridian serve` is a coordinator that keeps running, for example on a
 cluster's login node, and `meridian run` hands its run to one if it finds
 one using the same store.
@@ -2387,8 +2580,9 @@ one member:
 When a job is ready, the coordinator places it on one member of its group:
 
 1. **Filter.** Members that are unhealthy, or can't offer the job's
-   `resources:`, are left out. A job that no member could ever run is
-   refused when the run is created, with each member's reason.
+   `resources:`, are left out. A job that no member could ever run fails
+   when it is placed, with each member's reason. Refusing it when the run
+   is created, from the resources each member declares, isn't built.
 2. **Rank.** The rest are ranked by whether they can start the job now,
    then whether they have capacity for it, then whether it would queue, and
    in the group's order within each.
@@ -2426,11 +2620,15 @@ with three things:
   goes over TLS;
 - a bootstrap token: random and single-use, valid for this one attempt until
   the attempt is claimed or its placement withdrawn, however long a
-  scheduler's queue holds the job, and stored only as a hash. It travels in
-  the job's environment or in a file only the user can read, on a path no
-  other user can change, never on a command line, where other users could
-  see it in `ps`. On macOS it travels only in a file, which the worker
-  removes as soon as it has read it: any process of the user can read the
+  scheduler's queue holds the job, and stored only as a hash. It travels on
+  a socket the worker inherits, in the job's environment, or in a file only
+  the user can read, on a path no other user can change, never on a command
+  line, where other users could see it in `ps`. The local backend gives it
+  on the socket, where no other process of the user's can read it first,
+  as one could a file: the worker says there that it has kept the user's
+  other processes out of its memory, and only then is the token written to
+  it. On macOS it never travels in the environment, and a file is removed
+  as soon as the worker has read it: any process of the user can read the
   environment of any other of theirs there, as `ps -E` does
   (`bootstrap_token_in_environment`). Wherever it travels, the user's own
   processes can read it until it is claimed, from the file until the
@@ -2525,7 +2723,18 @@ serves every attempt that reaches it there, of whichever job: any replica
 can serve any job. It closes the connection only when it gives the lease
 up. A replica that takes the lease over, once its holder has stopped
 renewing it, sets the connection up again at the same address, so the
-member's running workers reconnect to it.
+member's running workers reconnect to it. Locally, the socket is held
+under a lock on a file beside the store's database,
+which the system releases when its holder exits, however it exits, and
+the store records which process holds it and since when, from which the
+grace after a takeover is counted ([Leases and fencing](#leases-and-fencing)).
+
+On a Unix socket, the coordinator asks the system who each connection is
+from before it reads a request, as the worker asks who serves its socket
+([Running steps](#running-steps)), and serves only its own user, or root.
+A platform's coordinator that serves several users from one account maps
+the connection's user to the one it acts for, and serves each only their
+own runs.
 
 ### Running steps
 
@@ -2707,6 +2916,52 @@ a step's outputs, which are capped.
 A member can choose stronger isolation, such as a microVM, or name host
 isolation explicitly. It never gets weaker isolation than it asked for: when
 a member's runtime is missing, jobs fail there with an error that says so.
+Until Meridian drives container runtimes, a member that doesn't name host
+isolation, as the built-in `local` group's does, runs no job: a job that no
+other member can take fails, with that member's reason among the rest,
+rather than run on the host.
+
+Today only the `local` backend is built (`backend/local`), and it runs a
+member's jobs on the host only. A member of it names `isolation: host`, as
+the built-in `local` group's member does. One that names a runtime, or
+none, which is a rootless container, has `isolation_not_built`, so
+placement leaves it out rather than run its jobs on the host. A member of
+another backend has `backend_not_built` (`backend.NotBuilt`).
+
+The `local` backend starts `meridian worker` from the binary that places
+it, once it has checked that no other user can change that binary, or the
+way to it (`worker_binary_unsafe`). The worker starts in `/`, in a session
+of its own, so that the terminal's Ctrl-C and SIGHUP don't reach it, with
+the user's environment but its `MERIDIAN_` variables. It gets its
+bootstrap token on a socket it inherits, once it has said there that it
+is hardened (`workerapi.EnvBootstrapTokenFD`), and the token is in no
+file. One window is known, and left: from `exec` until the worker hardens
+itself, which it does as soon as Go's runtime has started, about 300 µs
+on Linux, the new process is dumpable, so a process of the same user that
+already knows its ID, where `kernel.yama.ptrace_scope` is 1 or less, could
+copy its descriptor 3 with `pidfd_getfd` and race it for the token. A file
+was readable for the whole of the worker's start. Closing the window would
+need the child made non-dumpable before `exec`, which takes cgo, and
+Meridian builds without it. On Linux the backend starts the file it runs itself, and reports
+that file's digest, which the worker reports too, even if an upgrade has
+taken its path since. A placement's file in the state directory says
+which process the worker is, by its ID, its start time and the boot it
+started in, which no change to the clock moves (Linux's
+`/proc/<pid>/stat` and `boot_id`, macOS's `p_starttime` and
+`kern.bootsessionuuid`, FreeBSD's `ki_start` less `kern.boottime`, and
+`kern.boot_id`), so that any process of the user's finds, checks and
+cancels it, and none takes a later process with the same ID for it. One
+process at a time places an attempt. Cancel sends SIGTERM, and SIGKILL if
+the worker still runs 60 seconds later, to that process only, through a
+pidfd on Linux; a worker killed so can't stop its steps' process groups.
+The coordinator has the backend forget a placement once it has recorded
+how it ended (`Driver.Forget`). A member offers what it declares, or else
+the host's CPUs and memory, and no GPU.
+
+A worker passes its steps nothing it inherited but its standard input,
+output and error: it marks every other descriptor close-on-exec as it
+starts, and a signal it was started ignoring, as `nohup` ignores SIGHUP,
+is one its steps get the default handling of.
 
 ### Container runtimes
 
@@ -2798,7 +3053,10 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   key is an error until the user accepts it explicitly; Meridian never
   accepts a key on first use by itself.
 - **Secrets** stay out of the plan and run state. A run's passwords and
-  secret variables are in its secret record, encrypted, until the run ends.
+  secret variables are in its secret record, encrypted under a data key of
+  the run's own, until the run ends, and the record opens only as the
+  latest of its own run, in its own store
+  ([The secret record](#the-secret-record)).
   Each attempt receives only those its own job reads, when it claims, and
   they are masked in its logs and outputs.
 - **Variables** stay out of the plan and run state too, secret or not, since
@@ -2830,8 +3088,10 @@ program calls it, as every entry point of Meridian's must
   algorithms in FIPS mode. A server that offers none of them can't be used.
 - **Secret records** are encrypted with AES-256-GCM, through `crypto/cipher`
   with random nonces (`cipher.NewGCMWithRandomNonce`), the way the module
-  approves, under data keys from `crypto/rand`. A platform's Keys interface
-  wraps them with its own key management.
+  approves, each under a data key of its run's own from `crypto/rand`, and
+  bound by its associated data to its store, its run and its generation.
+  A platform's Keys interface wraps the data keys with its own key
+  management, and the local one with AES-256-GCM under a key in a file.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
   digests are SHA-256.
 - **External tools** that Meridian runs (`git`, container runtimes,
@@ -2854,8 +3114,8 @@ binaries still link `libSystem`, as Apple requires.
   placement ID (such as a Slurm job ID), its timestamps, and its outcome and
   reason.
 - **Retention:** runs, logs and hopper's history are kept for a configured
-  time. A job's outputs are kept until every job that depends on it has
-  finished. A run's secret record is deleted when the run ends.
+  time. A job's outputs are kept with its run. A run's secret record is
+  deleted when the run ends.
 - **Benchmarks:** compile time for large workflows, the time Meridian adds
   between a job becoming ready and its placement, and job throughput on
   SQLite and Postgres. Their thresholds live in the repository and gate
@@ -2876,6 +3136,26 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
 | `meridian worker`, `meridian relay` | Started by backends, not by people. |
+
+A run's ID is a number, one more than the last its store gave, which people
+type, as in `meridian logs 42`, and which the run's steps see as
+`PW_JOB_ID`. The store's own ID, which is random, keeps a number that a new
+store gives again apart from an old store's
+([The secret record](#the-secret-record)).
+
+A run's directory, `PW_JOB_DIR`, is temporary: a directory of its own under
+the system's temporary directory, in one of the user's that only they can
+use, which Meridian checks as it checks its own. Meridian makes it once the
+run is stored, and makes it new, so that a run never shares one with an
+earlier run of the same number. A step can remove it, as `cleanup: rm -r
+${PW_JOB_DIR}` does in workflows we know of, so it isn't in Meridian's
+state directory, and a reboot can empty it, so what a run keeps belongs
+elsewhere. `--run-dir` names another.
+
+`meridian run` exits 0 when the run succeeded; 1 when the workflow has
+errors, or the run failed or was cancelled; and 2 when Meridian couldn't do
+what it was asked, and when it leaves the run running, as when it is
+interrupted ([The coordinator](#the-coordinator)).
 
 Execution groups, variables and the GitLab servers a workflow can name
 live in Meridian's config directory, and `--group` picks a group. A
@@ -3047,6 +3327,3 @@ Larger features that aren't designed yet are proposed in
   ([Reruns](#reruns)). Should a platform keep what was submitted, so a rerun
   needn't ask again? It would keep the run's passwords past its end, in a
   store of its own, where Meridian keeps none.
-- **What hopper adds.** Per-job leases with fencing and a grace period after
-  a coordinator restart, an any-of edge, dependencies' outputs at claim, and
-  a SQLite driver.

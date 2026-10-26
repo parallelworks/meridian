@@ -130,6 +130,12 @@ type Driver interface {
 	// placement only when that fails or a grace period passes. Cancelling a
 	// placement that has ended is not an error.
 	Cancel(ctx context.Context, m *Member, p Placement) error
+	// Forget removes what the driver keeps of a placement whose worker has
+	// ended, once the coordinator has recorded how it ended, such as a
+	// local worker's placement file and its log, so that what it keeps
+	// doesn't grow. A placement whose worker still runs is kept, and an
+	// error; one that isn't there is none.
+	Forget(ctx context.Context, m *Member, p Placement) error
 }
 
 // Demand is what a job asks of a member.
