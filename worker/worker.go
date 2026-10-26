@@ -5,14 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"log/slog"
 	"net/url"
 	"os"
 	"strings"
-
-	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
@@ -261,7 +258,7 @@ func hostPort(address string) bool {
 func readTokenFile(path string) (string, error) {
 	data, err := safepath.ReadFile(path, safepath.Private, maxTokenFile)
 	if err != nil {
-		if _, ok := errors.AsType[*problem.Problem](err); ok {
+		if problems.IsProblem(err) {
 			return "", err
 		}
 		return "", problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})

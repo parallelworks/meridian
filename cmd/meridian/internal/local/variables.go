@@ -228,7 +228,7 @@ func readValueFile(v variable) (string, error) {
 	}
 	data, err := safepath.ReadFile(v.file, access, maxConfigSize)
 	if err != nil {
-		if isProblem(err) {
+		if problems.IsProblem(err) {
 			return "", err
 		}
 		return "", problems.VariableFileUnreadable.Problem(problems.Params{"variable": v.name, "file": v.file, "reason": err.Error()})

@@ -8,6 +8,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	"strconv"
 )
 
 // Decode reads a JSON value from dec, with each number as number makes it
@@ -54,6 +55,16 @@ func Decode(dec *jsontext.Decoder, number func(string) (any, error)) (any, error
 	}
 	_, err = dec.ReadToken()
 	return m, err
+}
+
+// Number returns the value of a JSON number from its text, as YAML reads
+// one: an int64 when it is whole and fits, and a float64 otherwise. It
+// fails for one too large for a float64, with strconv's error.
+func Number(text string) (any, error) {
+	if i, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return i, nil
+	}
+	return strconv.ParseFloat(text, 64)
 }
 
 // Clone copies v's lists and mappings deeply, so that changing the copy

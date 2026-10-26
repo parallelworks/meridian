@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/parallelworks/foundation/problem"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/backend"
@@ -125,17 +124,10 @@ func readConfig(path string, access safepath.Access) ([]byte, error) {
 // itself when it is one, and FileUnreadable, with what the operating
 // system said, otherwise.
 func unreadable(path string, err error) error {
-	if isProblem(err) {
+	if problems.IsProblem(err) {
 		return err
 	}
 	return problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
-}
-
-// isProblem says whether err is, or wraps, a problem: what is wrong, which
-// says why, rather than what the operating system said.
-func isProblem(err error) bool {
-	_, ok := errors.AsType[*problem.Problem](err)
-	return ok
 }
 
 // A configFile is a config file as it is read: its path, for the problems

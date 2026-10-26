@@ -377,6 +377,14 @@ func (k *Kind) Problem(params Params) *problem.Problem {
 	return p
 }
 
+// IsProblem reports whether err is, or wraps, a problem: what is wrong,
+// which says why with a code and params, rather than what the operating
+// system or a library said.
+func IsProblem(err error) bool {
+	_, ok := errors.AsType[*problem.Problem](err)
+	return ok
+}
+
 // displayed returns params with each text's control characters escaped,
 // however deep in a list or a mapping, keys too, for a message to show:
 // params itself when none has any.

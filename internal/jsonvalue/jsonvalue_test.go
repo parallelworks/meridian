@@ -23,6 +23,24 @@ func number(text string) (any, error) {
 	return "#" + text, nil
 }
 
+// Number reads a number as YAML does: an int64 when it is whole and fits,
+// and a float64 otherwise, but never one too large for a float64.
+func TestNumber(t *testing.T) {
+	for text, want := range map[string]any{
+		"0": int64(0), "-0": int64(0), "42": int64(42), "-9223372036854775808": int64(-1 << 63),
+		"9223372036854775808": 9223372036854775808.0, "1.5": 1.5, "1e3": 1000.0, "2.0": 2.0,
+	} {
+		if got, err := jsonvalue.Number(text); err != nil || got != want {
+			t.Errorf("Number(%q) = %#v, %v, want %#v", text, got, err, want)
+		}
+	}
+	for _, text := range []string{"1e400", "-1e400"} {
+		if _, err := jsonvalue.Number(text); err == nil {
+			t.Errorf("Number(%q) is a number", text)
+		}
+	}
+}
+
 func TestDecode(t *testing.T) {
 	for _, tc := range []struct {
 		name, json string
