@@ -1,0 +1,25 @@
+description: >-
+  An ignored group with flatten true in a group with flatten true, or in a
+  wizard step that flattens, drops its inputs' values and a value at its own
+  key, as an ignored group anywhere does. This is a bug fix to format 1:
+  ACTIVATE copied back from the outer container only its own inputs' keys,
+  so the inner group's inputs, which its form sends, their defaults when
+  untouched, reached the run. ACTIVATE takes the same fix. None of the 221
+  known workflows has a group with flatten.
+source: Meridian, after the review of ACTIVATE's fillDefaultValues and its form's filterIgnoredFieldsInternal
+inputs:
+  flag: true
+  a: ad
+  v: vd
+  w: wd
+  g2:
+    q: 1
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/g1/items/g2
+      params: {input: g2, source: run}
+  inputs:
+    flag: true
+    a: ad

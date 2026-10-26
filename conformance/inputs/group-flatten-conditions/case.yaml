@@ -1,0 +1,19 @@
+description: >-
+  A hidden group that flattens has its inputs hidden, so they aren't
+  required, as a group that doesn't flatten does. An ignored one drops its
+  inputs' values beside it, those of a group in it that flattens too, and a
+  value given at its own key, as ACTIVATE drops them.
+source: ACTIVATE's filling of defaults
+inputs:
+  gone: given
+  deep: given
+  ig:
+    gone: given
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/ig
+      params: {input: ig}
+  inputs:
+    keep: k

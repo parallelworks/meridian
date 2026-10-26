@@ -275,7 +275,8 @@ func jobName(job *jobInfo) string {
 }
 
 // checkInputRef checks that inputs.<path> names an input, and an input in
-// it for a group's.
+// it for a group's, but for a container whose inputs' values are beside
+// its own, which none of its inputs is read through.
 func (c *compiler) checkInputRef(path []string) finding {
 	names := c.inputNames()
 	f := names.byKey[path[0]]
@@ -283,10 +284,19 @@ func (c *compiler) checkInputRef(path []string) finding {
 		return suggesting(problems.UndefinedInput, problems.Params{"name": path[0]}, path[0], names.top)
 	}
 	for _, key := range path[1:] {
-		if !f.container || f.flatten || definitionKeys[key] || key == "*" || key == "[index]" {
+		if !f.container || definitionKeys[key] || key == "*" || key == "[index]" {
 			return finding{}
 		}
 		g := names.group(f)
+		if f.flatten {
+			// Its inputs' values are beside its own, as ACTIVATE reads them.
+			if in := g.byKey[key]; in != nil {
+				return finding{problems.FlattenedInputRef, problems.Params{
+					"group": strings.Join(f.path, "."), "name": key, "input": strings.Join(in.path, "."),
+				}}
+			}
+			return finding{}
+		}
 		next := g.byKey[key]
 		if next == nil {
 			return suggesting(problems.UndefinedNestedInput, problems.Params{"group": strings.Join(f.path, "."), "name": key}, key, g.names)

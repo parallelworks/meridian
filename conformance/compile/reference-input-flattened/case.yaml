@@ -1,0 +1,18 @@
+description: >-
+  A group with flatten: true, and a wizard step unless
+  $meta.wizard.flatten is false, has its inputs' values beside its own, so
+  a reference to one of its inputs through it doesn't read the input's
+  value, as it doesn't in ACTIVATE, and is a warning that names the
+  reference that does. A key of its definition, and its own value, read as
+  any input's do.
+source: Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_input_ref
+      path: /jobs/build/steps/1/run
+      params: {group: db, name: host, input: host}
+    - severity: warning
+      code: flattened_input_ref
+      path: /jobs/build/steps/2/run
+      params: {group: first, name: size, input: size}

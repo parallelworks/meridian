@@ -1,0 +1,31 @@
+on:
+  execute:
+    inputs:
+      h:
+        type: group
+        flatten: true
+        hidden: true
+        items:
+          req:
+            type: string
+      ig:
+        type: group
+        flatten: true
+        ignore: true
+        items:
+          gone:
+            type: string
+            default: x
+          nested:
+            type: group
+            flatten: true
+            items:
+              deep:
+                type: string
+      keep:
+        type: string
+        default: k
+jobs:
+  main:
+    steps:
+      - run: echo ok

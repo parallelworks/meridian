@@ -1,0 +1,26 @@
+on:
+  execute:
+    inputs:
+      $meta:
+        wizard:
+          mode: wizard
+      db:
+        type: group
+        flatten: true
+        items:
+          host:
+            type: string
+            default: h
+      first:
+        type: step
+        title: Step
+        options:
+          size:
+            type: number
+            default: 1
+jobs:
+  build:
+    steps:
+      - run: echo ${{ inputs.host }} ${{ inputs.size }} ${{ inputs.db.label }} ${{ inputs.db }}
+      - run: echo ${{ inputs.db.host }}
+      - run: echo ${{ inputs.first.size }}

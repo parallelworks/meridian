@@ -452,8 +452,8 @@ type inputKind int
 
 const (
 	inputLeaf inputKind = iota
-	// inputFlattened is a wizard step that flattens: its inputs are beside
-	// it.
+	// inputFlattened is a group with flatten: true, or a wizard step that
+	// flattens: its inputs are beside it.
 	inputFlattened
 	// inputNested is a group, or a wizard step that doesn't flatten: a
 	// mapping under its name.
@@ -463,15 +463,16 @@ const (
 )
 
 // classifyInput says how a run reads the values in def, an input among
-// siblings, and the definitions of the inputs in it. A group's are under
-// its name: format 1 has no flatten for a group, which the workflow's
-// definitions don't hold once loaded.
+// siblings, and the definitions of the inputs in it.
 func classifyInput(siblings, def map[string]any) (inputKind, map[string]any) {
 	switch typeOf(def) {
 	case "group":
 		items, ok := def["items"].(map[string]any)
-		if !ok {
+		switch {
+		case !ok:
 			return inputLeaf, nil
+		case def["flatten"] == true:
+			return inputFlattened, items
 		}
 		return inputNested, items
 	case "step":
@@ -499,8 +500,8 @@ func wizardFlattens(defs map[string]any) bool {
 	return wizard["flatten"] != false
 }
 
-// findInput finds name's definition in defs, or in a wizard step there
-// that flattens, and the definitions beside it.
+// findInput finds name's definition in defs, or in a group or wizard step
+// there that flattens, and the definitions beside it.
 func findInput(defs map[string]any, name string) (def, siblings map[string]any, ok bool) {
 	if name == "$meta" {
 		return nil, nil, false

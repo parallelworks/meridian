@@ -1,0 +1,22 @@
+description: >-
+  A group with flatten: true has its inputs' values beside its own, under
+  their own names, as ACTIVATE runs it: they take their defaults there, and
+  what reads them reads them there; the group has no value of its own. A
+  group in it that doesn't flatten has its value under
+  its own name beside the group's, one that flattens puts its inputs beside
+  them too, and a group that flattens in one that doesn't puts its inputs in
+  that one's value.
+source: ACTIVATE's filling of defaults
+inputs:
+  a: given
+expect:
+  inputs:
+    name: run
+    a: given
+    n: 3
+    inner:
+      x: ix
+    d: false
+    reads: given-3-ix
+    outer:
+      o: od

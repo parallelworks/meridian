@@ -1,0 +1,19 @@
+description: >-
+  In a list's row, a group that flattens has its inputs' values beside its
+  own in the row, where they take their defaults, as ACTIVATE fills in a
+  row's.
+source: ACTIVATE's filling of a row's defaults
+inputs:
+  hosts:
+    - name: a
+    - name: b
+      port: 2222
+expect:
+  inputs:
+    hosts:
+      - name: a
+        port: 22
+        user: root
+      - name: b
+        port: 2222
+        user: root

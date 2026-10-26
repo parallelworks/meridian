@@ -11,6 +11,7 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A field is an input definition.
@@ -23,8 +24,10 @@ type field struct {
 	typ       string
 	group     *field
 	// container is set for a group or a wizard step, which holds other
-	// inputs rather than a value of its own; flatten for a step whose
-	// inputs' values are beside its own key rather than under it.
+	// inputs rather than a value of its own; flatten for one whose inputs'
+	// values are beside its own key rather than under it: a step, unless
+	// $meta.wizard.flatten is false, or a group with flatten true. A value
+	// given at a flattened group's key is kept (ownsKey).
 	container, flatten bool
 	// children are a container's inputs.
 	children []*field
@@ -144,12 +147,7 @@ func (o *options) literal(v any) bool {
 // workflow, define, and those in them, whose values are at path.
 func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *field) []*field {
 	var out []*field
-	flattenSteps := true
-	if meta, ok := defs["$meta"].(map[string]any); ok {
-		if wizard, ok := meta["wizard"].(map[string]any); ok && wizard["flatten"] == false {
-			flattenSteps = false
-		}
-	}
+	flattenSteps := wizardFlattens(defs)
 	for key, v := range jsonvalue.Sorted(defs) {
 		def, ok := v.(map[string]any)
 		if !ok || strings.HasPrefix(key, "$") {
@@ -173,11 +171,84 @@ func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *
 			f.container, f.flatten = true, flattenSteps
 			out = append(out, r.collect(options, appendPath(f.loc, "options"), f.childPath(), f)...)
 		case hasItems && typ != "list":
-			f.container = true
+			f.container, f.flatten = true, def["flatten"] == true
 			out = append(out, r.collect(items, appendPath(f.loc, "items"), f.childPath(), f)...)
 		}
 	}
 	return out
+}
+
+// checkShared reports each two input definitions, of defs at loc in the
+// workflow and those in them, whose values have one key in one mapping,
+// where a group that flattens puts one beside the other
+// (flattened_name_taken): ACTIVATE fills such a value from both, in the
+// order the file writes them, which a map doesn't keep. A group that
+// flattens counts at its own key too, which a value given there, and
+// ignoring the group, reach. Wizard steps whose inputs share a key are
+// left as they were.
+func (r *inputResolver) checkShared(defs map[string]any, loc []string) {
+	type definition struct {
+		loc     []string
+		brought bool // by a group that flattens
+	}
+	byKey := map[string][]definition{}
+	var gather func(defs map[string]any, loc []string, brought bool)
+	gather = func(defs map[string]any, loc []string, brought bool) {
+		for key, v := range jsonvalue.Sorted(defs) {
+			def, ok := v.(map[string]any)
+			if !ok || strings.HasPrefix(key, "$") {
+				continue
+			}
+			at := appendPath(loc, key)
+			byKey[key] = append(byKey[key], definition{at, brought})
+			typ, _ := def["type"].(string)
+			items, hasItems := def["items"].(map[string]any)
+			options, hasOptions := def["options"].(map[string]any)
+			switch {
+			case typ == "step" && hasOptions && def["multi"] != true && wizardFlattens(defs):
+				gather(options, appendPath(at, "options"), brought)
+			case typ == "step" && hasOptions:
+				r.checkShared(options, appendPath(at, "options"))
+			case typ == "list":
+				if template, ok := def["template"].(map[string]any); ok {
+					r.checkShared(template, appendPath(at, "template"))
+				}
+			case hasItems && def["flatten"] == true:
+				gather(items, appendPath(at, "items"), true)
+			case hasItems:
+				r.checkShared(items, appendPath(at, "items"))
+			}
+		}
+	}
+	gather(defs, loc, false)
+	for key, found := range jsonvalue.Sorted(byKey) {
+		for _, d := range found[1:] {
+			if d.brought || found[0].brought {
+				r.reportAt(problems.FlattenedNameTaken, d.loc, problems.Params{
+					"input": key, "first": definitionName(found[0].loc), "second": definitionName(d.loc),
+				})
+			}
+		}
+	}
+}
+
+// wizardFlattens reports whether the wizard steps among defs have their
+// inputs' values beside their own: unless $meta.wizard.flatten is false.
+func wizardFlattens(defs map[string]any) bool {
+	meta, _ := defs["$meta"].(map[string]any)
+	wizard, _ := meta["wizard"].(map[string]any)
+	return wizard["flatten"] != false
+}
+
+// definitionName names the input definition at loc in the workflow by its
+// keys in the input definitions, as in group.name, or list.name for a
+// field of a list's rows.
+func definitionName(loc []string) string {
+	var names []string
+	for i := len(definitionsPath); i < len(loc); i += 2 {
+		names = append(names, loc[i])
+	}
+	return strings.Join(names, ".")
 }
 
 // holder returns the input whose value holds f's: f, or the input whose
@@ -231,6 +302,16 @@ func holdsPassword(def map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// ownsKey reports whether the value at f's key goes with f: whether
+// ignoring f drops it, and an ignore that read a variable or a password
+// holds it. It does for every input but a wizard step whose inputs'
+// values are beside its key, which takes no ignore. A group that flattens
+// has none of its inputs' values there, but a value given there is dropped
+// with them, as ACTIVATE drops it.
+func (f *field) ownsKey() bool {
+	return !f.container || !f.flatten || f.typ != "step"
 }
 
 // childPath is where a container's inputs' values are.

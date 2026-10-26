@@ -472,6 +472,13 @@
       "입력의 이름을 고치거나 그룹에 입력을 추가하세요."
     ]
   },
+  "flattened_input_ref": {
+    "title": "평탄화되는 컨테이너를 통해 읽는 입력",
+    "why": "flatten: true인 그룹과, $meta.wizard.flatten이 false가 아닌 한 마법사 단계는 ACTIVATE가 실행하는 대로 그 입력의 값을 자신의 옆에 각자의 이름으로 둡니다. 따라서 inputs.<그룹>.<이름>은 ACTIVATE에서처럼 그 입력의 값을 읽지 않습니다.",
+    "fix": [
+      "입력은 inputs.<이름>처럼 자신의 이름으로 읽으세요."
+    ]
+  },
   "needs_outside_job": {
     "title": "작업 밖의 needs",
     "why": "needs 컨텍스트는 작업이 기다리는 작업들을 읽으므로 작업 안에서만 알 수 있습니다.",
@@ -1832,6 +1839,20 @@
       "meridian validate의 -input은 ACTIVATE의 pw workflows run --input과 마찬가지로 입력의 유형에 따라 값을 변환합니다."
     ]
   },
+  "flattened_group_value": {
+    "title": "평탄화되는 그룹의 값",
+    "why": "flatten: true인 그룹은 ACTIVATE가 실행하는 대로 그 입력의 값을 자신의 옆에 각자의 이름으로 둡니다. 따라서 실행에 주어졌든 목록의 기본 행에 적혔든, 그룹의 키에 있는 값은 그 입력의 값이 아닙니다. 값은 ACTIVATE처럼 그대로 유지되며, 그룹의 입력에 비밀번호가 있으면 시크릿으로 유지됩니다. inputs.<그룹>을 읽는 표현식은 그 값을 읽습니다. 그룹이 무시되면 그 입력과 함께 버려집니다.",
+    "fix": [
+      "그룹의 입력에는 그룹 옆에서 각자의 이름으로 값을 주거나, 값을 삭제하세요."
+    ]
+  },
+  "flattened_name_taken": {
+    "title": "값이 하나인 두 입력",
+    "why": "flatten: true인 그룹은 그 입력의 값을 자신의 옆에 각자의 이름으로 두므로, 각 입력에는 그곳에 값이 있는 다른 어떤 입력과도, 그룹 자신과도 다른 이름이 필요합니다. ACTIVATE는 그런 값을 파일에 적힌 순서대로 두 정의에서 채우는데, 워크플로의 의미가 그 순서에 좌우되어서는 안 되므로, ACTIVATE는 실행하지만 Meridian은 이를 거부합니다.",
+    "fix": [
+      "입력 중 하나의 이름을 바꾸거나, 그룹의 flatten: true를 삭제하세요."
+    ]
+  },
   "input_flag_unsplit": {
     "title": "=가 없는 -input 옵션",
     "why": "-input은 path=value 형태로 입력 하나를 설정합니다. =가 없으면 경로가 없으며, 이 문제는 주어진 내용을 되풀이하지 않습니다. 그것이 비밀번호일 수 있기 때문입니다.",
@@ -1862,7 +1883,7 @@
   },
   "input_flag_path_not_settable": {
     "title": "설정할 수 없는 -input 경로",
-    "why": "경로는 ACTIVATE의 pw workflows run --input이 읽는 대로 입력의 이름, 또는 group.name처럼 그룹의 이름과 그 입력의 이름입니다. 평탄화되는 마법사 단계($meta.wizard.flatten이 false가 아니면 평탄화됩니다)는 입력을 옆에 두므로, 그 입력은 각자의 이름으로 설정합니다. 목록이나 반복되는 마법사 단계는 JSON으로 전체를 설정하며, 입력을 담지 않은 입력에는 설정할 것이 없습니다.",
+    "why": "경로는 ACTIVATE의 pw workflows run --input이 읽는 대로 입력의 이름, 또는 group.name처럼 그룹의 이름과 그 입력의 이름입니다. 평탄화되는 마법사 단계($meta.wizard.flatten이 false가 아니면 평탄화됩니다)와 flatten: true인 그룹은 입력을 옆에 두므로, 그 입력은 각자의 이름으로 설정합니다. 목록이나 반복되는 마법사 단계는 JSON으로 전체를 설정하며, 입력을 담지 않은 입력에는 설정할 것이 없습니다.",
     "fix": [
       "입력을 자신의 이름으로 지정하거나, 목록을 JSON으로 전체 설정하세요."
     ]

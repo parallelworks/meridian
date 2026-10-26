@@ -1,0 +1,22 @@
+description: >-
+  A list's default row that writes a value at the key of a group with
+  flatten true, whose inputs' values are beside it in the row, is a warning
+  where the workflow writes it, once, and the row keeps the value, which
+  none of the group's inputs reads: the row's port takes its default. A
+  launch form sends the default rows back, so a submitted row with it isn't
+  reported again.
+source: Meridian
+inputs:
+  hosts:
+    - name: cpu-1
+      conn: {port: 2222}
+expect:
+  diagnostics:
+    - severity: warning
+      code: flattened_group_value
+      path: /on/execute/inputs/hosts/default/0/conn
+      line: 18
+      params: {input: conn, source: row}
+  plan:
+    /run/inputs/hosts/0/conn: {port: 2222}
+    /run/inputs/hosts/0/port: 22

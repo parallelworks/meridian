@@ -472,6 +472,13 @@
       "更正输入的名称，或将它添加到组中。"
     ]
   },
+  "flattened_input_ref": {
+    "title": "通过会展平的容器读取的输入",
+    "why": "flatten: true 的组，以及除非 $meta.wizard.flatten 为 false 否则都会展平的向导步骤，会像 ACTIVATE 运行时那样，把其输入的值放在自身旁边，使用各自的名称。因此 inputs.<组>.<名称> 读取不到该输入的值，在 ACTIVATE 中也是如此。",
+    "fix": [
+      "按输入自己的名称读取它，如 inputs.<名称>。"
+    ]
+  },
   "needs_outside_job": {
     "title": "作业之外的 needs",
     "why": "上下文 needs 读取作业所等待的作业，因此只在作业中可知。",
@@ -1832,6 +1839,20 @@
       "meridian validate 的 -input 与 ACTIVATE 的 pw workflows run --input 一样，按输入的类型转换值。"
     ]
   },
+  "flattened_group_value": {
+    "title": "会展平的组的值",
+    "why": "flatten: true 的组会像 ACTIVATE 运行时那样，把其输入的值放在自身旁边，使用各自的名称，因此组的键上的值，无论是为运行提供的，还是列表的默认行中写的，都不属于它的输入。该值会像 ACTIVATE 那样按原样保留；如果组的输入中有密码，则作为密钥保留。读取 inputs.<组> 的表达式会读到它；如果组被忽略，它会与组的输入一起被丢弃。",
+    "fix": [
+      "在组的旁边按各自的名称为组的输入提供值，或删除该值。"
+    ]
+  },
+  "flattened_name_taken": {
+    "title": "两个输入共用一个值",
+    "why": "flatten: true 的组会把其输入的值放在自身旁边，使用各自的名称，因此每个输入都需要一个与该处其他有值的输入（包括组本身）都不同的名称。ACTIVATE 会按文件书写的顺序用两个定义来填充这样的值，而工作流的含义不应取决于这种顺序，因此 ACTIVATE 会运行它，而 Meridian 会拒绝它。",
+    "fix": [
+      "重命名其中一个输入，或删除组的 flatten: true。"
+    ]
+  },
   "input_flag_unsplit": {
     "title": "没有 = 的 -input 选项",
     "why": "-input 以 path=value 的形式设置一个输入。没有 = 就没有路径，而这个问题不会重复给出的内容，因为它可能是密码。",
@@ -1862,7 +1883,7 @@
   },
   "input_flag_path_not_settable": {
     "title": "-input 不能设置的路径",
-    "why": "路径是输入的名称，或者像 group.name 那样是组的名称加上其输入的名称，这与 ACTIVATE 的 pw workflows run --input 的读法相同。会展平的向导步骤（除非 $meta.wizard.flatten 为 false，否则都会展平）会把输入放在自己旁边，所以这些输入按各自的名称设置；列表或重复的向导步骤以 JSON 整体设置；不含输入的输入没有可设置的内容。",
+    "why": "路径是输入的名称，或者像 group.name 那样是组的名称加上其输入的名称，这与 ACTIVATE 的 pw workflows run --input 的读法相同。会展平的向导步骤（除非 $meta.wizard.flatten 为 false，否则都会展平）和 flatten: true 的组会把输入放在自己旁边，所以这些输入按各自的名称设置；列表或重复的向导步骤以 JSON 整体设置；不含输入的输入没有可设置的内容。",
     "fix": [
       "用输入自己的名称指定它，或者以 JSON 整体设置列表。"
     ]

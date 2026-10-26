@@ -1,0 +1,32 @@
+on:
+  execute:
+    inputs:
+      a:
+        type: string
+        optional: true
+      g:
+        type: group
+        flatten: true
+        items:
+          a:
+            type: number
+            optional: true
+          g:
+            type: string
+            optional: true
+      hosts:
+        type: list
+        optional: true
+        template:
+          port:
+            type: number
+          conn:
+            type: group
+            flatten: true
+            items:
+              port:
+                type: number
+jobs:
+  main:
+    steps:
+      - run: echo ok

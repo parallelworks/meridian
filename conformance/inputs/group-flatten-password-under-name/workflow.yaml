@@ -1,0 +1,28 @@
+on:
+  execute:
+    inputs:
+      a:
+        type: group
+        flatten: true
+        items:
+          pw:
+            type: password
+            optional: true
+      b:
+        type: group
+        flatten: true
+        items:
+          pass:
+            type: password
+            optional: true
+      c:
+        type: group
+        flatten: true
+        items:
+          note:
+            type: string
+            optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ok

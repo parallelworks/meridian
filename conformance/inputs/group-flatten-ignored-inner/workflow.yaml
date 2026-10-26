@@ -1,0 +1,39 @@
+on:
+  execute:
+    inputs:
+      $meta:
+        wizard:
+          mode: wizard
+      flag:
+        type: boolean
+      g1:
+        type: group
+        flatten: true
+        items:
+          a:
+            type: string
+            default: ad
+          g2:
+            type: group
+            flatten: true
+            ignore: ${{ inputs.flag }}
+            items:
+              v:
+                type: string
+                default: vd
+      s:
+        type: step
+        title: Step
+        options:
+          g3:
+            type: group
+            flatten: true
+            ignore: ${{ inputs.flag }}
+            items:
+              w:
+                type: string
+                default: wd
+jobs:
+  main:
+    steps:
+      - run: echo ok

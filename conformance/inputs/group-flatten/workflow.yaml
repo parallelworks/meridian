@@ -1,0 +1,44 @@
+on:
+  execute:
+    inputs:
+      name:
+        type: string
+        default: run
+      g:
+        type: group
+        flatten: true
+        items:
+          a:
+            type: string
+          n:
+            type: number
+            default: 3
+          inner:
+            type: group
+            items:
+              x:
+                type: string
+                default: ix
+          deeper:
+            type: group
+            flatten: true
+            items:
+              d:
+                type: boolean
+      reads:
+        type: string
+        default: ${{ inputs.a }}-${{ inputs.n }}-${{ inputs.inner.x }}
+      outer:
+        type: group
+        items:
+          fl:
+            type: group
+            flatten: true
+            items:
+              o:
+                type: string
+                default: od
+jobs:
+  main:
+    steps:
+      - run: echo ok

@@ -127,7 +127,29 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     ([Contexts](#contexts));
   - `map()` and `filter()`, with their lambdas
     ([The language](#the-language));
-  - a job's `retry:`, which can rerun a job whose worker was lost.
+  - a job's `retry:`, which can rerun a job whose worker was lost;
+  - a group's `flatten: true`, which puts its inputs' values beside its own
+    ([Inputs](#inputs)), as ACTIVATE runs it, though ACTIVATE's schema
+    doesn't allow the key: Meridian's format dropped it, with a warning, as
+    a key the schema doesn't define, and none of the 221 known workflows
+    has it.
+- **Stricter than ACTIVATE.** Where ACTIVATE runs a workflow whose meaning
+  would depend on something it shouldn't, Meridian refuses it rather than
+  guess. Each such place comes with its addition, and no known workflow
+  has one:
+  - a group's `flatten` is `true` or `false` written out. An expression
+    there is a schema error: ACTIVATE reads it as evaluated where it fills
+    the defaults, as text that isn't `true` where it resolves resources,
+    redacts passwords and fills rows, and its form as `true`, so where the
+    group's inputs' values are would depend on which reads it;
+  - two inputs whose values have one key, where a group with
+    `flatten: true` puts one beside the other, the group's own key among
+    them, are an error (`flattened_name_taken`). ACTIVATE fills such a
+    value from both definitions in the order the file writes them, and an
+    ignored group drops the other's value with its own, which a workflow's
+    meaning shouldn't depend on. Wizard steps whose inputs share a key are
+    run as they were. None of the 221 known workflows has a group with
+    `flatten`, so none has either.
 - **Metadata.** A workflow can carry `name`, `description`, `icon` and
   `thumbnail`. `description` is a string or `{file: <path>}`; `icon` and
   `thumbnail` are paths. Paths are relative to the workflow file and may not
@@ -285,6 +307,16 @@ files.
   reads `env.PW_API_KEY`. ACTIVATE takes the same fix by leaving it out of
   the env map its parser reads, while keeping it in the step's process
   environment.
+- **An ignored group with `flatten: true` drops its inputs' values in a
+  group that flattens or a wizard step that flattens too**, as it does
+  anywhere else, where ACTIVATE kept them: the outer container copied back
+  to the run's values only its own inputs' keys, so what the inner group
+  dropped stayed in them, and its form, which drops them the same way,
+  sends them, their defaults when untouched. An ignored group's inputs reaching the run is plainly a
+  bug. ACTIVATE takes the same fix by dropping, from the outer values, the
+  keys the inner group dropped. None of the 221 known workflows has a group
+  with `flatten`, which format 1 adds
+  ([The workflow format](#the-workflow-format)).
 
 ## Phases
 
@@ -646,14 +678,27 @@ ACTIVATE's launch form and its backend do together:
   null is a value, so an input given null isn't required, and a boolean
   given null stays null. Every missing input is reported, not only the
   first.
-- **Containers.** A group's values are under its name. A wizard step's
-  inputs have their values beside the step's, unless `$meta.wizard.flatten`
-  is `false`. A wizard step with `multi: true` repeats, as many times as the
-  person running the workflow adds it: its value is a list under its name,
-  one row for each time, whatever `flatten` says, as a form keeps it, and
-  each row is a group of the step's inputs, as a list's row is of its
-  template's fields. A repeated step given no value has none. A header has
-  no value.
+- **Containers.** A group's values are under its name, unless it has
+  `flatten: true`: then its inputs' values are beside the group's, under
+  their own names, as ACTIVATE runs it, in a list's row, a wizard step or
+  another group as well, and the group has none of its own. A value given at
+  its key, of any shape, is kept, as ACTIVATE keeps it, with a warning
+  (`flattened_group_value`), and none of its inputs reads it; it is kept as
+  a secret if the group has a password among its inputs, which the group's
+  inputs sent under its name, misspelt or as text, can hold. Ignoring the
+  group drops its inputs' values and that one, and hiding it hides its
+  inputs, as for any group, wherever it is: in another group that flattens
+  or a wizard step that flattens too, where ACTIVATE kept its inputs' values
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+  `inputs.<group>.<input>` doesn't read such an input, which the compiler
+  warns of in a job (`flattened_input_ref`), as it does for a flattened
+  wizard step's. A wizard step's inputs have their values beside the step's,
+  unless `$meta.wizard.flatten` is `false`. A wizard step with `multi: true`
+  repeats, as many times as the person running the workflow adds it: its
+  value is a list under its name, one row for each time, whatever `flatten`
+  says, as a form keeps it, and each row is a group of the step's inputs, as
+  a list's row is of its template's fields. A repeated step given no value
+  has none. A header has no value.
 - **Types.** Format 1 reads every input value as it was submitted, as
   ACTIVATE does, and converts none: its defaults, conditions, `env:` and
   steps read a number sent as text as that text, so `"8" + 1` is `"81"`,
@@ -2564,9 +2609,10 @@ no option's value is that text and an option is a number or a boolean the
 text reads as, when it takes that option's value, among the list an
 `option-key` picks by the values sent, or every list; and a header is an
 error. A path is an input's name, or a group's and its input's, as
-`group.name`; a flattened wizard step's inputs are set by their own names,
-and naming the step is an error, as a path through a list's rows is: a
-list is set whole. A problem with an `-input` names its path, never its
+`group.name`; the inputs of a group with `flatten: true` and of a
+flattened wizard step are set by their own names, and naming the group or
+the step is an error, as a path through a list's rows is: a list is set
+whole. A problem with an `-input` names its path, never its
 value, which can be a password.
 
 ## Editors and web UIs

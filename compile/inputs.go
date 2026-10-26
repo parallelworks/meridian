@@ -175,6 +175,7 @@ func (r *inputResolver) fill() {
 		f.seq = i
 	}
 	r.checkSyntax(append(make([]string, 0, 16), definitionsPath...), defs)
+	r.checkShared(defs, definitionsPath)
 	// The format drops the keys it doesn't define, but every expression in
 	// the input definitions must parse, theirs too.
 	for path, v := range r.doc.Dropped() {

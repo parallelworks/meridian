@@ -1,0 +1,17 @@
+on:
+  execute:
+    inputs:
+      g:
+        type: group
+        flatten: true
+        items:
+          a:
+            type: string
+            default: d
+      r:
+        type: string
+        default: ${{ inputs.g.a }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
