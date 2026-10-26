@@ -511,6 +511,22 @@ func TestGroupWorkBudget(t *testing.T) {
 	if _, err := mustParse(t, "1").Eval(inputs(nil).WithBudget(shared)); !isOver(err) {
 		t.Errorf("a step more, in another scope that shares the budget: %v, want %s", err, problems.ExpressionsTooMuchWork.Code())
 	}
+
+	// What is done besides evaluating counts toward the group too (Charge),
+	// but not toward a scope without a budget.
+	charged := expr.Scope{}.Budgeted()
+	if err := charged.Charge(groupWork); err != nil {
+		t.Errorf("the group's 256 MiB, charged: %v", err)
+	}
+	if err := charged.Charge(1); !isOver(err) {
+		t.Errorf("a byte more, charged: %v, want %s", err, problems.ExpressionsTooMuchWork.Code())
+	}
+	if _, err := mustParse(t, "1").Eval(inputs(nil).WithBudget(charged)); !isOver(err) {
+		t.Errorf("a step after the group's work was charged: %v, want %s", err, problems.ExpressionsTooMuchWork.Code())
+	}
+	if err := (expr.Scope{}).Charge(groupWork + 1); err != nil {
+		t.Errorf("a scope without a budget, charged: %v", err)
+	}
 }
 
 // A template that fails the language's limits counts toward its group what

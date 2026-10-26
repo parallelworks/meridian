@@ -3,23 +3,31 @@ package compile_test
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A startScaled is a run whose size grows with n, which Start completes:
 // its workflow, the values submitted for it and its variables, and the
 // variables as it starts, if they changed since (changed). timed is set to
 // check the time Start takes as well, for a run whose cost, once, was work
-// that allocated nothing.
+// that allocated nothing. roundWork is set for a run whose rounds of
+// resolving its inputs are each as large as it is, one for each link of a
+// chain: it is what each round after the first counts toward the budget
+// for each input, row field and env: value (compile.SetRoundWork), so that
+// at either size the rounds pass the budget, and Start fails the run with
+// expressions_too_much_work, having done no more than the budget allows.
 type startScaled struct {
-	name     string
-	n        int
-	workload func(n int) (string, map[string]any, testVariables)
-	changed  testVariables
-	timed    bool
+	name      string
+	n         int
+	workload  func(n int) (string, map[string]any, testVariables)
+	changed   testVariables
+	timed     bool
+	roundWork int
 }
 
 // startScaledRuns grow with what Start completes: the parts of the inputs
@@ -113,6 +121,44 @@ l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ va
 	{name: "inputs and env values that read each other in turn, against the inputs' order", n: 250, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
 		return envInTurn(n, true)
 	}},
+	// A round of resolving the inputs for each link of a chain: env: values
+	// that each read the input before and an input a condition drops, which
+	// Start evaluates only once a round has filled the values in; and values
+	// a form made, each reading the next through a relative reference, of a
+	// variable that changed since. Beside a long list, each round is as
+	// large as the list, and the budget stops them.
+	{name: "env values that each read an input a condition drops and the input before, beside a long list", n: 500, roundWork: 32 << 10, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs, env strings.Builder
+		env.WriteString("env:\n")
+		for i := range 50 {
+			read := "${{ vars.S }}"
+			if i > 0 {
+				read = fmt.Sprintf("${{ env.E%05d }}+", i-1)
+			}
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '%s'}\n", i, read)
+			fmt.Fprintf(&defs, "d%05d: {type: string, optional: true, default: d, ignore: '${{ vars.SKIP == ''yes'' }}'}\n", i)
+			fmt.Fprintf(&env, "  E%05d: ${{ inputs.d%05d }}${{ inputs.a%05d }}\n", i, i, i)
+		}
+		defs.WriteString("big: {type: list, template: {u: {type: string}}}\n")
+		return workflow(defs.String(), env.String()), map[string]any{"big": rows(n, func() map[string]any { return map[string]any{"u": "x"} })},
+			testVariables{"vars.S": {Value: "s", Secret: true}, "vars.SKIP": {Value: "yes"}}
+	}},
+	{name: "values a form made, each reading the next through a relative reference, of a variable that changed since, beside a long list", n: 500, roundWork: 32 << 10, changed: testVariables{"vars.V": {Value: "w"}}, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs strings.Builder
+		submitted := map[string]any{"big": rows(n, func() map[string]any { return map[string]any{"u": "x"} })}
+		for i := range 50 {
+			submitted[fmt.Sprintf("x%05d", i)] = "v"
+			if i == 49 {
+				fmt.Fprintf(&defs, "x%05d: {type: string, default: '${{ vars.V }}'}\n", i)
+				continue
+			}
+			submitted[fmt.Sprintf("h%05d", i)] = "v"
+			fmt.Fprintf(&defs, "x%05d: {type: string, default: '${{ ..h%05d.default }}'}\n", i, i)
+			fmt.Fprintf(&defs, "h%05d: {type: string, optional: true, hidden: true, default: '${{ inputs.x%05d == vars.V && vars.V || ''x'' }}'}\n", i, i+1)
+		}
+		defs.WriteString("big: {type: list, template: {u: {type: string}}}\n")
+		return workflow(defs.String()), submitted, testVariables{"vars.V": {Value: "v"}}
+	}},
 	{name: "lists whose rows are held for Start, beside a long list", n: 200, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
 		var defs strings.Builder
 		submitted := map[string]any{"big": rows(100*n, func() map[string]any { return map[string]any{"u": "x"} })}
@@ -183,8 +229,17 @@ func (w startScaled) measure(t *testing.T, n int) (bytes uint64, allocs float64,
 	if w.changed != nil {
 		vars = w.changed
 	}
+	if w.roundWork != 0 {
+		defer compile.SetRoundWork(w.roundWork)()
+	}
 	start = func() {
-		if res, diags := startRun(t, c, vars, compile.StartInput{}); res == nil {
+		res, diags := startRun(t, c, vars, compile.StartInput{})
+		switch {
+		case w.roundWork != 0:
+			if res != nil || !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.ExpressionsTooMuchWork.Code() }) {
+				t.Fatalf("at %d, the rounds keep within the budget: %v", n, diags)
+			}
+		case res == nil:
 			t.Fatal(diags)
 		}
 	}

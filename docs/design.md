@@ -894,7 +894,13 @@ made from one, it doesn't hold in another form either.
      in turn are resolved in one round, in the order they read each other.
      An `env:` value that gives otherwise once the inputs are resolved, as
      one that reads an input a condition drops does, Start evaluates only
-     then, and resolves the inputs again with it.
+     then, and resolves the inputs again with it. The rounds share the
+     budget of what Start evaluates, and each after the first counts
+     toward it the work of resolving every input, row field and `env:`
+     value again, so rounds that go on, one for each link of a chain of
+     such values, fail the run with `expressions_too_much_work` in a few
+     seconds at most, rather than outlast whatever deadline the
+     coordinator gives Start.
    - Every condition decides, and every input it ignores is dropped, those
      whose `ignore:` read a variable or a password among them, which Create
      held out of the plan whatever it decided. Whether each input is

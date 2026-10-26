@@ -294,6 +294,16 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	return res, diags, nil
 }
 
+// roundWork is the work, in the budget's bytes, that each round of resolve
+// after the first counts toward the rounds' budget for each input, each
+// field of a list's rows and each env: value: what a template of 256 steps
+// counts, as resolving one again costs as much as that takes, or more. So
+// the rounds of a run pass the budget, 256 MiB, once they have resolved
+// 128 Ki of them again, in a few seconds at most, and a run of 1,000
+// inputs and env: values has more than a hundred rounds to spare. Tests
+// set it.
+var roundWork = 2048
+
 // A starter is a run as Start completes its values.
 type starter struct {
 	ctx context.Context
@@ -504,7 +514,10 @@ func (st *starter) definitions() (map[string]any, error) {
 // a part's expression gave another value than was submitted, Start
 // resolves the inputs again with what it gave in its place, a round for
 // each such part at most. The rounds share one budget, so all of them
-// together keep to its limits.
+// together keep to its limits, and each round after the first counts the
+// work of resolving every input, row and env: value again toward it
+// (roundWork): a run whose rounds pass it fails with
+// expressions_too_much_work.
 //
 // What is left once nothing more is evaluated reads itself, or each other
 // (values_read_each_other), or a context Start doesn't know.
@@ -538,9 +551,20 @@ func (st *starter) resolve(defs map[string]any) error {
 	st.budget = expr.Scope{}.Budgeted()
 	reported := len(st.diags)
 	remeant := 0
-	for {
+	for round := 0; ; round++ {
 		if err := st.ctx.Err(); err != nil {
 			return err
+		}
+		if round > 0 {
+			// Resolving the inputs again is work the budget counts, so that
+			// rounds without end, each as large as the run, fail the run.
+			nodes := len(st.r.fields) + len(st.r.rows) + len(st.envKeys)
+			if err := st.budget.Charge(roundWork * nodes); err != nil {
+				if be, ok := errors.AsType[*expr.BudgetError](err); ok {
+					st.report(be.Kind, jsonptr.Format(definitionsPath), problems.Params{"limit": be.Limit})
+				}
+				return nil
+			}
 		}
 		st.s = &startState{
 			madeSecret: map[string]bool{}, madePrivate: map[string]bool{}, pendingEnv: map[string]bool{},
