@@ -15,5 +15,7 @@ expect:
   inputs:
     creds:
       - {user: a, pass: HUNTER2SECRET}
-  run-secrets: [inputs.creds, inputs.creds.0.pass]
+  # Start reads the secret variable the default reads, to decide what the
+  # value given in its place means.
+  run-secrets: [inputs.creds, inputs.creds.0.pass, vars.CREDS]
   run-derived: [inputs.creds]

@@ -148,26 +148,19 @@ func TestStartRefusesMalformedPlans(t *testing.T) {
 	src := workflow(`l: {type: list, template: {pass: {type: password}}}
 a: {type: string, default: '${{ vars.A }}', hidden: '${{ vars.A == "" }}'}`)
 	vars := testVariables{"vars.A": {Value: "a"}}
-	c := createRun(t, src, map[string]any{"l": []any{map[string]any{"pass": "p"}}}, vars)
 	for name, change := range map[string]func(p *plan.Plan, in *compile.StartInput){
-		"a held input at a huge index": func(p *plan.Plan, _ *compile.StartInput) {
-			p.Run.DeferredInputs["l.9223372036854775807"] = p.Run.DeferredInputs["a"]
-		},
-		"a password at a huge index": func(p *plan.Plan, in *compile.StartInput) {
-			p.Run.Secrets = append(p.Run.Secrets, "inputs.l.100000000000.pass")
-			in.Record.Passwords = map[string]any{"inputs.l.100000000000.pass": "p"}
-		},
 		"a decision of no condition": func(p *plan.Plan, in *compile.StartInput) {
 			p.Run.Decisions = append(p.Run.Decisions, "/jobs/main")
 			in.Record.Decisions = map[string]bool{"/jobs/main": true}
 		},
-		"a part outside the definitions": func(p *plan.Plan, _ *compile.StartInput) {
-			p.Run.DeferredParts[0].Location = "/jobs/main/steps/0/run"
+		"a part withheld outside the definitions": func(p *plan.Plan, in *compile.StartInput) {
+			p.Run.Withheld = append(p.Run.Withheld, "/jobs/main/steps/0/run")
+			in.Record.Withheld = map[string]plan.Data{"/jobs/main/steps/0/run": plan.DataOf("x")}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			again := createRun(t, src, map[string]any{"l": []any{map[string]any{"pass": "p"}}}, vars)
-			in := compile.StartInput{Variables: vars, Record: compile.Record{Passwords: c.Record.Passwords}, Inputs: passThrough{}}
+			in := compile.StartInput{Variables: vars, Record: again.Record, Inputs: passThrough{}}
 			change(again.Plan, &in)
 			if res, diags, err := compile.Start(t.Context(), again.Plan, in); err == nil {
 				t.Errorf("no error: %v, %v", res, diags)
@@ -185,12 +178,9 @@ func TestStartRestoresPrivateAroundPasswords(t *testing.T) {
   template: {user: {type: string}, pass: {type: password}}
   default: ${{ fromJSON(org.CREDS) }}`)
 	vars := testVariables{"org.CREDS": {Value: `[{"user":"b","pass":"x"}]`}}
-	c, res, diags := started(t, src, map[string]any{"creds": []any{map[string]any{"user": "a", "pass": "HUNTER2"}}}, vars)
+	_, res, diags := started(t, src, map[string]any{"creds": []any{map[string]any{"user": "a", "pass": "HUNTER2"}}}, vars)
 	if res == nil {
 		t.Fatal(diags)
-	}
-	if _, ok := c.Record.Private["inputs.creds"]; !ok {
-		t.Fatalf("private %v", c.Record.Private)
 	}
 	if got := canonical(t, res.Run.Inputs.Get()); got != `{"creds":[{"pass":"HUNTER2","user":"a"}]}` {
 		t.Errorf("inputs %s", got)
@@ -415,10 +405,10 @@ func (clusterInputs) ResolveInput(typ string, _ map[string]any, v any) (any, err
 
 // What is evaluated before the inputs are checked reads an input of a
 // platform's type as it was submitted, at Create as at Start, where the
-// Inputs resolver gave another value for it (plan.Run.Unresolved), and
-// what reads it after, the run's values among them, as the resolver gave
-// it: a condition decided again doesn't change the run's shape, and a
-// default reads the same whether it reads a secret too.
+// Inputs resolver gave another value for it, and so does the workflow's
+// env:; what reads it after, the run's values among them, reads it as the
+// resolver gave it: a condition decided again doesn't change the run's
+// shape, and a default reads the same whether it reads a secret too.
 func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
 	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "v"}}
 	for name, tc := range map[string]struct {
@@ -476,11 +466,9 @@ func (detailInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error)
 // A part of a platform input's value typed over a part of its default that
 // reads a variable is private, or a secret if the variable is one; and as
 // what the Inputs resolver gives can't be split by the parts that made it,
-// as an id made from the part, the whole value is: neither the plan's
-// Inputs nor what it holds of the value as it was submitted
-// (plan.Run.Unresolved) has any of it, and Start reads it as the resolver
-// gave it.
-func TestUnresolvedHoldsNoPrivatePart(t *testing.T) {
+// as an id made from the part, the whole value is: the plan's Inputs have
+// none of it, and Start reads it as the resolver gives it.
+func TestResolvedHoldsNoPrivatePart(t *testing.T) {
 	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "plain"}}
 	for _, typ := range []string{
 		"kubernetes-clusters", "storage", "bucket", "organization-groups",
@@ -661,5 +649,277 @@ func TestStartKeepsHeldNulls(t *testing.T) {
 				t.Errorf("the run's inputs are %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// Keep splits all of what Start gives: run state holds no password, no
+// variable's value and nothing made from one, a private matrix's instances
+// by key and index alone, and no private timeout; the secret record holds
+// those, and nothing that isn't.
+func TestKeepSplitsWhatStartGives(t *testing.T) {
+	src := workflow("pw: {type: password}\nv: {type: string, default: plain}", "timeout: ${{ org.T }}\njobs:\n  a:\n    strategy:\n      matrix:\n        x: ['${{ inputs.pw }}', '${{ org.V }}']\n    steps:\n      - run: echo\n  b:\n    strategy:\n      matrix:\n        y: [one, two]\n    steps:\n      - run: echo\n")
+	vars := testVariables{"org.V": {Value: "VARSENT-1"}, "org.T": {Value: "1h"}}
+	_, res, diags := started(t, src, map[string]any{"pw": "PWSENT-1"}, vars)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	var record plan.Record
+	state := res.Keep(&record)
+	shown := canonical(t, state)
+	for _, s := range []string{"PWSENT", "VARSENT", "3600"} {
+		if strings.Contains(shown, s) {
+			t.Errorf("run state holds %s: %s", s, shown)
+		}
+	}
+	if !state.TimeoutPrivate || state.TimeoutSeconds != 0 || record.TimeoutSeconds == nil || *record.TimeoutSeconds != 3600 {
+		t.Errorf("the timeout: state %d (private %v), record %v", state.TimeoutSeconds, state.TimeoutPrivate, record.TimeoutSeconds)
+	}
+	a, b := state.Expansions["a"], state.Expansions["b"]
+	if a == nil || len(a.Instances) != 2 || a.Instances[1].Key != "a#1" || !a.Instances[1].Matrix.IsZero() {
+		t.Errorf("run state's private matrix: %s", canonical(t, a))
+	}
+	if b == nil || canonical(t, b.Instances[1].Matrix.Get()) != `{"y":"two"}` || record.Expansions["b"] != nil {
+		t.Errorf("a matrix that isn't private: state %s, record %s", canonical(t, b), canonical(t, record.Expansions["b"]))
+	}
+	if x := record.Expansions["a"]; x == nil || !strings.Contains(canonical(t, x), "PWSENT-1") || !strings.Contains(canonical(t, x), "VARSENT-1") {
+		t.Errorf("the record's private matrix: %s", canonical(t, x))
+	}
+	if record.Run == nil || !strings.Contains(canonical(t, record.Run), "PWSENT-1") {
+		t.Errorf("the record's values: %s", canonical(t, record.Run))
+	}
+	// Neither shares what res holds.
+	record.Expansions["a"].Instances[0].Matrix = plan.DataOf(map[string]any{"x": "changed"})
+	if strings.Contains(canonical(t, res.Expansions["a"]), "changed") {
+		t.Error("the record shares the result's expansion")
+	}
+}
+
+// An input whose ignore read a variable or a password is held out of the
+// plan whatever it decided: as private when the ignore can read only
+// variables that aren't secrets, directly or through an input made from
+// one, as a variable's value is; and as derived, masked as what is made
+// from a secret, when it can read a password, or an input held so because
+// its own ignore can. Create and Start name it alike.
+func TestIgnoredInputsHeldByWhatTheIgnoreReads(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs    string
+		private bool
+	}{
+		"a variable": {
+			defs: `e: {type: string, ignore: '${{ org.V == ''zzz'' }}'}`, private: true,
+		},
+		"an input made from a variable": {
+			defs:    "c: {type: string, default: '${{ org.V }}'}\ne: {type: string, ignore: '${{ inputs.c == ''zzz'' }}'}",
+			private: true,
+		},
+		"a password": {
+			defs: "pw: {type: password}\ne: {type: string, ignore: '${{ inputs.pw == ''zzz'' }}'}",
+		},
+		"an input held as derived": {
+			defs: "pw: {type: password}\nd: {type: string, ignore: '${{ inputs.pw == ''zzz'' }}'}\ne: {type: string, ignore: '${{ inputs.d == ''zzz'' }}'}",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vars := testVariables{"org.V": {Value: "v"}}
+			c, res, diags := started(t, workflow(tc.defs), map[string]any{"pw": "p", "d": "dd", "e": "kept"}, vars)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			for what, names := range map[string][3][]string{
+				"plan": {c.Plan.Run.Private, c.Plan.Run.Secrets, c.Plan.Run.Derived},
+				"run":  {res.Run.Private, res.Run.Secrets, res.Run.Derived},
+			} {
+				private, secret, derived := slices.Contains(names[0], "inputs.e"), slices.Contains(names[1], "inputs.e"), slices.Contains(names[2], "inputs.e")
+				if private != tc.private || secret == tc.private || derived == tc.private {
+					t.Errorf("%s: inputs.e private %v, secret %v, derived %v; want private %v", what, private, secret, derived, tc.private)
+				}
+			}
+		})
+	}
+}
+
+// Start refuses a secret record that isn't the one Create gave with the
+// plan (ErrMismatch), and says so without a value of it: one of another
+// plan, by its digest, and one whose values the plan's digest doesn't
+// cover, as what was submitted is, that give other values than the plan
+// holds, a value for an input the workflow doesn't define, or a password
+// the plan doesn't name. A record that lacks a password the plan names is
+// the run's problem, as it is when the run is created without it. What the
+// plan doesn't hold, as a password's value, or a value given in place of a
+// default that reads a variable, a record of another run of the same plan
+// can give otherwise: the digest binds a record to its plan, not its run.
+func TestStartRefusesAnotherRecord(t *testing.T) {
+	vars := testVariables{"vars.V": {Value: "v"}}
+	src := workflow("pw: {type: password, optional: true}\nc: {type: string, optional: true}\nn: {type: number, default: 1}\nd: {type: string, default: '${{ vars.V }}'}")
+	created := createRun(t, src, map[string]any{"pw": "SENT-pw", "c": "planned"}, vars)
+	start := func(p *plan.Plan, record plan.Record) (*compile.StartResult, problems.Diagnostics, error) {
+		return compile.Start(t.Context(), p, compile.StartInput{RunID: "run", Variables: vars, Record: record, Inputs: passThrough{}})
+	}
+	// The record, with what was submitted changed.
+	changed := func(change func(m map[string]any)) plan.Record {
+		record := created.Record
+		m := maps.Clone(record.Submitted.Get().(map[string]any))
+		change(m)
+		record.Submitted = plan.DataOf(m)
+		return record
+	}
+	refused := func(name string, p *plan.Plan, record plan.Record) {
+		t.Helper()
+		res, diags, err := start(p, record)
+		if !errors.Is(err, compile.ErrMismatch) {
+			t.Errorf("%s: %v, %v, %v; want ErrMismatch", name, res != nil, diags, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "SENT") {
+			t.Errorf("%s: the error quotes a value: %v", name, err)
+		}
+	}
+	for name, change := range map[string]func(m map[string]any){
+		"a plain value changed":                func(m map[string]any) { m["c"] = "SENT-other" },
+		"a value given over a default":         func(m map[string]any) { m["n"] = 99 },
+		"an input the workflow doesn't define": func(m map[string]any) { m["zzz"] = "SENT-unknown" },
+		"a password under another name":        func(m map[string]any) { m["pW"] = m["pw"]; delete(m, "pw") },
+	} {
+		refused(name, created.Plan, changed(change))
+	}
+	refused("no record", created.Plan, plan.Record{})
+	refused("submitted values that aren't a mapping", created.Plan, func() plan.Record {
+		record := created.Record
+		record.Submitted = plan.DataOf([]any{"SENT-list"})
+		return record
+	}())
+	// Records of other runs, of other plans.
+	for name, sub := range map[string]map[string]any{
+		"another plain value":    {"pw": "SENT-pw", "c": "SENT-other"},
+		"no password":            {"c": "planned"},
+		"a value over a default": {"pw": "SENT-pw", "c": "planned", "n": 2},
+	} {
+		refused(name+", another plan", created.Plan, createRun(t, src, sub, vars).Record)
+	}
+	other := workflow("pw: {type: password, optional: true}\nc: {type: string, optional: true}")
+	refused("another workflow's", created.Plan, createRun(t, other, map[string]any{"pw": "SENT-pw", "c": "planned"}, vars).Record)
+	// A password the plan doesn't name, given in a record that names the
+	// plan.
+	without := createRun(t, src, map[string]any{"c": "planned"}, vars)
+	record := without.Record
+	record.Submitted = plan.DataOf(map[string]any{"c": "planned", "pw": "SENT-pw"})
+	refused("a password the plan doesn't name", without.Plan, record)
+
+	required := createRun(t, workflow("pw: {type: password}"), map[string]any{"pw": "SENT-pw"}, vars)
+	record = required.Record
+	record.Submitted = plan.DataOf(map[string]any{})
+	res, diags, err := start(required.Plan, record)
+	if err != nil || res != nil || !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputRequired.Code() }) {
+		t.Errorf("a password the record lacks: %v, %v, %v; want input_required", res != nil, diags, err)
+	}
+	if res, diags, err := start(created.Plan, created.Record); res == nil || err != nil {
+		t.Errorf("the record Create gave: %v, %v", diags, err)
+	}
+}
+
+// Values a form made from expressions that read each other and a variable
+// are each what its expression gives as the run starts: with the variable
+// as it was, what was submitted, as Create found, and once it changed,
+// what the expressions give then. As they can't be evaluated in the order
+// they read each other, each reads the others as they were submitted, the
+// first first, and what reads them reads what they give.
+func TestStartFormValuesThatReadEachOther(t *testing.T) {
+	src := workflow("a: {type: string, default: '${{ vars.V == ''v'' && inputs.b || ''x'' }}'}\nb: {type: string, default: '${{ vars.V == ''v'' && inputs.a || ''y'' }}'}\nc: {type: string, default: '${{ inputs.a }}-c'}")
+	c := createRun(t, src, map[string]any{"a": "1", "b": "1", "c": "1-c"}, testVariables{"vars.V": {Value: "v"}})
+	if len(c.Record.Means) != 3 {
+		t.Fatalf("means %v, want a, b and c", c.Record.Means)
+	}
+	for v, want := range map[string]string{"v": `{"a":"1","b":"1","c":"1-c"}`, "w": `{"a":"x","b":"y","c":"x-c"}`} {
+		res, diags := startRun(t, c, testVariables{"vars.V": {Value: v}}, compile.StartInput{RunID: "run"})
+		if res == nil {
+			t.Fatalf("V=%s: %v", v, diags)
+		}
+		if got := canonical(t, res.Run.Inputs.Get()); got != want {
+			t.Errorf("V=%s: inputs %s, want %s", v, got, want)
+		}
+	}
+}
+
+// Parts of a list's rows that mean their expressions, which read what
+// reads the list in turn, are read as Create read them: the list's rows
+// with their fields filled in, a field without a value as null, and the
+// parts as they were submitted until they are evaluated, by what reads
+// them first.
+func TestStartReadsRowsThatMeanExpressionsAsCreateDid(t *testing.T) {
+	vars := testVariables{"vars.V": {Value: "v"}, "vars.S": {Value: "s", Secret: true}}
+	for name, c := range map[string]struct {
+		src       string
+		submitted map[string]any
+		want      string
+	}{
+		"a default that reads a field the rows don't have, which a row reads": {
+			src: workflow(`a: {type: string, optional: true, default: '${{ join(inputs.l.*.p, '','') }}'}
+k: {type: string, default: '${{ vars.S }}'}
+l: {type: list, optional: true, template: {u: {type: string, optional: true}, p: {type: password, optional: true}}, default: [{u: '${{ vars.V }}'}, {u: '${{ inputs.a }}'}]}`),
+			submitted: map[string]any{"a": ",", "l": []any{map[string]any{"u": "v"}, map[string]any{"u": ","}}},
+			want:      `{"a":",","k":"s","l":[{"u":"v"},{"u":","}]}`,
+		},
+		"a default that reads a row's field, whose default reads a part the row means": {
+			src: workflow(`a: {type: string, optional: true, default: '${{ inputs.l[0].h }}'}
+pw: {type: password, optional: true}
+l: {type: list, optional: true, template: {u: {type: string, optional: true}, h: {type: string, optional: true, default: '${{ inputs.l[index].u }}'}}, default: [{u: '${{ inputs.a }}', h: lit}, {u: '${{ vars.V }}', h: '${{ inputs.pw }}'}]}`),
+			submitted: map[string]any{"l": []any{map[string]any{"h": "alice", "u": "alice"}}},
+			want:      `{"a":"alice","l":[{"h":"alice","u":"alice"}]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, res, diags := started(t, c.src, c.submitted, vars)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			if got := canonical(t, res.Run.Inputs.Get()); got != c.want {
+				t.Errorf("inputs %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// A default that reads, through a relative reference, a value a form made
+// from a variable that changed since reads what the value's expression
+// gives as the run starts: a relative reference doesn't make it wait for
+// the value, so Start resolves the inputs again with what the expression
+// gave in the value's place.
+func TestStartFormValueReadThroughARelativeReference(t *testing.T) {
+	src := workflow("a: {type: string, optional: true, default: '${{ inputs.c }}'}\nb: {type: string, optional: true, default: '${{ ..a.default }}'}\nc: {type: string, optional: true, default: 'x-${{ vars.V }}'}")
+	c := createRun(t, src, map[string]any{"a": "typed", "c": "x-v"}, testVariables{"vars.V": {Value: "v"}})
+	res, diags := startRun(t, c, testVariables{"vars.V": {Value: "w"}}, compile.StartInput{RunID: "run"})
+	if res == nil {
+		t.Fatal(diags)
+	}
+	if got, want := canonical(t, res.Run.Inputs.Get()), `{"a":"typed","b":"x-w","c":"x-w"}`; got != want {
+		t.Errorf("inputs %s, want %s", got, want)
+	}
+}
+
+// A strategy whose fail-fast: and max-parallel: a password made, over a
+// matrix written out: its instances are private, as Expand evaluates the
+// strategy as one value, and run state holds the same of it whatever the
+// password is, its keys and indexes alone; the record holds it whole.
+func TestKeepLeavesAPrivateStrategyOutOfRunState(t *testing.T) {
+	src := workflow("pw: {type: password}", "jobs:\n  main:\n    strategy:\n      matrix:\n        x: [a, b]\n      fail-fast: ${{ startsWith(inputs.pw, 'SENTa') }}\n      max-parallel: ${{ length(inputs.pw) }}\n    steps:\n      - run: echo\n")
+	var states []string
+	for _, pw := range []string{"SENTaaa111", "SENTbbbbbbbbb222"} {
+		_, res, diags := started(t, src, map[string]any{"pw": pw}, nil)
+		if res == nil {
+			t.Fatal(diags)
+		}
+		var record plan.Record
+		state := res.Keep(&record)
+		x := state.Expansions["main"]
+		if x == nil || x.FailFast || x.MaxParallel != 0 || len(x.Instances) != 2 || !x.Instances[0].Private || !x.Instances[0].Matrix.IsZero() {
+			t.Errorf("%s: run state holds %s", pw, canonical(t, x))
+		}
+		states = append(states, canonical(t, state.Expansions))
+		whole := record.Expansions["main"]
+		if whole == nil || whole.MaxParallel != len(pw) || whole.FailFast != strings.HasPrefix(pw, "SENTa") || canonical(t, whole.Instances[1].Matrix.Get()) != `{"x":"b"}` {
+			t.Errorf("%s: the record holds %s", pw, canonical(t, whole))
+		}
+	}
+	if states[0] != states[1] {
+		t.Errorf("run state differs by the password: %s, %s", states[0], states[1])
 	}
 }

@@ -1,10 +1,8 @@
 package compile_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -15,12 +13,11 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// The plan holds what Start needs to complete the run's values as Create
-// would have: the input definitions as the workflow writes them; where
-// each part of an input held for Start is in them, with the rows it is
-// for; the decisions of the run's shape that read a variable or a
-// password, and no others; a job's needs: that read one; remote, sessions:
-// and the names a session provider gave them; and the limits.
+// The plan holds what Start needs to resolve the run's inputs again as
+// Create did: the input definitions as the workflow writes them; the
+// decisions of the run's shape that read a variable or a password, and no
+// others; a job's needs: that read one; remote, sessions: and the names a
+// session provider gave them; and the limits.
 func TestPlanHoldsWhatStartNeeds(t *testing.T) {
 	src := `on:
   execute:
@@ -74,26 +71,6 @@ jobs:
 		t.Fatal(diags, err)
 	}
 	r := c.Plan.Run
-	parts := map[string]plan.DeferredPart{}
-	for _, part := range r.DeferredParts {
-		parts[part.Name] = part
-	}
-	want := map[string]plan.DeferredPart{
-		"inputs.region":       {Name: "inputs.region", Location: "/on/execute/inputs/region/default", Default: true},
-		"inputs.cluster.name": {Name: "inputs.cluster.name", Location: "/on/execute/inputs/cluster/items/name/default", Default: true},
-		"inputs.config":       {Name: "inputs.config", Location: "/on/execute/inputs/config/default", Default: true},
-		"inputs.hosts.0.zone": {Name: "inputs.hosts.0.zone", Location: "/on/execute/inputs/hosts/template/zone/default", Index: []int{0}, Default: true},
-		"inputs.hosts.1.zone": {Name: "inputs.hosts.1.zone", Location: "/on/execute/inputs/hosts/template/zone/default", Index: []int{1}, Default: true},
-		// The form sent the option's text, which what it reads of the
-		// value reads.
-		"inputs.choice": {Name: "inputs.choice", Location: "/on/execute/inputs/choice/options/0", Text: true},
-	}
-	if !reflect.DeepEqual(parts, want) {
-		t.Errorf("parts %v, want %v", parts, want)
-	}
-	if got := slices.Sorted(maps.Keys(r.DeferredInputs)); !slices.Equal(got, []string{"choice", "cluster.name", "config", "hosts", "region"}) {
-		t.Errorf("deferred inputs %v", got)
-	}
 	// optional reads the region, which reads a variable; ignore: false is
 	// written out, and reads nothing. The plan names them, and the secret
 	// record holds what they decided.
@@ -174,7 +151,7 @@ func TestPlanHoldsNoDecisionOfAPassword(t *testing.T) {
 	}
 	src := workflow(strings.TrimSuffix(defs.String(), "\n"))
 	var encoded []string
-	var records []compile.Record
+	var records []plan.Record
 	for _, pw := range []string{"hunter2", "zzzzzzz"} {
 		c := createRun(t, src, map[string]any{"pw": pw}, nil)
 		if len(c.Plan.Run.Decisions) != 36 {
@@ -271,15 +248,16 @@ func TestPlansDontSayWhatSecretsAre(t *testing.T) {
 					t.Fatal(err)
 				}
 				plans = append(plans, string(data))
-				record, err := json.Marshal(created.Record)
+				record, err := plan.EncodeRecord(&created.Record)
 				if err != nil {
 					t.Fatal(err)
 				}
 				back := *created
-				back.Record = compile.Record{}
-				if err := json.Unmarshal(record, &back.Record); err != nil {
+				decoded, err := plan.DecodeRecord(record)
+				if err != nil {
 					t.Fatal(err)
 				}
+				back.Record = *decoded
 				res, diags := startRun(t, created, vars, compile.StartInput{RunID: "run"})
 				again, diags2 := startRun(t, &back, vars, compile.StartInput{RunID: "run"})
 				if fmt.Sprint(diags) != fmt.Sprint(diags2) || (res == nil) != (again == nil) || res != nil && canonical(t, res.Run) != canonical(t, again.Run) {
@@ -294,5 +272,23 @@ func TestPlansDontSayWhatSecretsAre(t *testing.T) {
 				t.Errorf("the plans differ:\n%s\n%s", plans[0], plans[1])
 			}
 		})
+	}
+}
+
+// The secret record names each part of what was submitted that means the
+// expression a form made it from as the plan names a value, with its
+// context, as inputs.region and inputs.hosts.0.zone, with where the
+// expression is in the workflow.
+func TestRecordNamesWhatMeansAnExpression(t *testing.T) {
+	src := workflow(`region: {type: string, default: '${{ org.REGION }}'}
+hosts: {type: list, template: {name: {type: string}, zone: {type: string, default: '${{ org.REGION }}-a'}}}`)
+	vars := testVariables{"org.REGION": {Value: "east"}}
+	c := createRun(t, src, map[string]any{"region": "east", "hosts": []any{map[string]any{"name": "h", "zone": "east-a"}}}, vars)
+	want := map[string]string{
+		"inputs.region":       "/on/execute/inputs/region/default",
+		"inputs.hosts.0.zone": "/on/execute/inputs/hosts/template/zone/default",
+	}
+	if !maps.Equal(c.Record.Means, want) {
+		t.Errorf("means %v, want %v", c.Record.Means, want)
 	}
 }

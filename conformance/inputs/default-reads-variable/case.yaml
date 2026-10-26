@@ -19,14 +19,6 @@ inputs:
 expect:
   inputs:
     fixed: fixed
-  deferred:
-    region: ${{ org.REGION }}
-    site: ${{ inputs.region }}-1
-    cluster:
-      name: ${{ org.REGION }}
-      size: 2
-    hosts:
-      - name: a
-        zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
+  deferred: [region, site, cluster, hosts]
   private:
     extra: given

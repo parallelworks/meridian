@@ -15,7 +15,5 @@ secret-variables: [TOKEN]
 expect:
   plan:
     /run/inputs: {size: 2}
-    /run/deferredInputs/region/${{/0/src: " org.REGION "
-    /run/deferredInputs/key/${{/0/src: " vars.ZONE "
     /run/variables: [org.REGION, vars, vars.ZONE]
     /run/secrets: [inputs.key, vars.TOKEN]

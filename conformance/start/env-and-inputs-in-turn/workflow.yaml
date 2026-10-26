@@ -1,0 +1,27 @@
+on:
+  execute:
+    inputs:
+      out:
+        type: string
+        default: ${{ env.DIR }}/out
+      dir:
+        type: string
+        default: ${{ env.BASE }}/runs
+      base:
+        type: string
+        default: /data
+      scratch:
+        type: string
+        default: /scratch
+        ignore: ${{ vars.SCRATCH == 'off' }}
+      note:
+        type: string
+        default: tmp=${{ env.TMP }}
+env:
+  DIR: ${{ inputs.dir }}
+  BASE: ${{ inputs.base }}
+  TMP: ${{ inputs.scratch }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

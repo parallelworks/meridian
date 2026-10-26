@@ -23,7 +23,7 @@ const DefaultMaxInstances = 256
 // each of its instances is as private, and as secret, as the others, and
 // FailFast and MaxParallel follow its instances' Private and Secret: the
 // coordinator keeps them only in the run's secret record when its
-// instances are private.
+// instances are private (Split), and runs the instances by the record's.
 type Expansion struct {
 	// Instances are the job's instances, in the order of their indexes.
 	Instances []Instance `json:"instances"`
@@ -33,6 +33,31 @@ type Expansion struct {
 	// MaxParallel is the strategy's max-parallel:, how many instances the
 	// coordinator places at a time, or 0 for no limit.
 	MaxParallel int `json:"maxParallel,omitzero"`
+}
+
+// Split splits x into what the run's secret record holds of it, and what
+// run state holds. When its instances are private, the record holds all of
+// it, and run state each instance's key, index and Secret alone: neither
+// its matrix values nor the strategy's FailFast and MaxParallel, which
+// read what the matrix read, so a password's length, say, isn't run
+// state. When they aren't, the record holds none of it (nil), and run
+// state all of it. Neither shares a mapping or a list with x.
+func (x *Expansion) Split() (private, state *Expansion) {
+	whole := &Expansion{FailFast: x.FailFast, MaxParallel: x.MaxParallel, Instances: make([]Instance, len(x.Instances))}
+	state = &Expansion{Instances: make([]Instance, len(x.Instances))}
+	for i, instance := range x.Instances {
+		instance.Matrix = DataOf(jsonvalue.Clone(instance.Matrix.Get()))
+		whole.Instances[i] = instance
+		if instance.Private {
+			private = whole
+			instance.Matrix = Data{}
+		}
+		state.Instances[i] = instance
+	}
+	if private == nil {
+		state.FailFast, state.MaxParallel = x.FailFast, x.MaxParallel
+	}
+	return private, state
 }
 
 // An Instance is one combination of a matrix's values.

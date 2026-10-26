@@ -11,7 +11,4 @@ expect:
   inputs:
     cluster:
       config: '{"zone": "z1"}'
-  deferred:
-    cluster.token: ${{ vars.TOKEN }}
-    zones: ${{ inputs.cluster.*.zone }}
-    zones_text: ${{ toJSON(inputs.cluster.*.zone) }}
+  deferred: [cluster.token, zones, zones_text]

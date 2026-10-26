@@ -1,0 +1,15 @@
+on:
+  execute:
+    inputs:
+      pw:
+        type: password
+        default: ${{ vars.S }}
+        optional: true
+      a:
+        type: number
+        default: ${{ inputs.pw == 'zz' && 'y' || inputs.a }}
+        optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ok

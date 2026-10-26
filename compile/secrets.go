@@ -74,6 +74,17 @@ func (r *inputResolver) markPassword(f *field) {
 	if f.typ == "password" {
 		r.passwords = append(r.passwords, f)
 		r.mark(f.path)
+		r.markSecret(f.path)
+	}
+}
+
+// markSecret marks the value at path in the inputs' values as a secret's,
+// as the run starts: what reads it is made from a secret
+// (expr.Scope.Marked).
+func (r *inputResolver) markSecret(path []string) {
+	if r.final {
+		r.start.secrets.Add(slices.Concat([]string{"inputs"}, path))
+		r.forgetMeant(path)
 	}
 }
 
@@ -83,9 +94,7 @@ func (r *inputResolver) mark(path []string) {
 	r.marks.Add(slices.Concat([]string{"inputs"}, path))
 	r.markedInputs.Add(path, struct{}{})
 	r.evaluators = nil
-	if r.start != nil {
-		r.start.forget(path)
-	}
+	r.forgetMeant(path)
 }
 
 // marked reports whether the value at path in the inputs' values is
@@ -106,6 +115,9 @@ func (r *inputResolver) marked(path []string) bool {
 // the value in its place.
 func (r *inputResolver) holdPath(in *field, path []string, kind holding) {
 	r.mark(path)
+	if kind != heldPrivate {
+		r.markSecret(path)
+	}
 	r.held = append(r.held, heldPart{in, path, kind})
 }
 

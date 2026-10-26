@@ -15,11 +15,4 @@ inputs:
   sites:
     - {}
 expect:
-  deferred:
-    first: ${{ inputs.sites[0].region }}
-    label: ${{ inputs.first }}-label
-    sites:
-      - token: ${{ vars.TOKEN }}
-        region: east
-        zone: east-a
-    other: ${{ vars.REGION }}
+  deferred: [first, label, sites, other]

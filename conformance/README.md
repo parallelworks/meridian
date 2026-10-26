@@ -8,7 +8,7 @@ These cases pin what workflows mean, in areas:
 | `expressions` | What `${{ }}` expressions evaluate to |
 | `inputs` | A run's input values: defaults, conditions, types and what's required |
 | `compile` | The plan a workflow compiles to, and the problems with its jobs and expressions |
-| `start` | A run's values as it starts: what the plan left to the start, the workflow's `env:` and `timeout:`, the matrices expanded then, and the run's shape decided again |
+| `start` | A run's values as it starts: the inputs resolved again from what was submitted, the workflow's `env:` and `timeout:`, the matrices expanded then, and the run's shape decided again |
 | `matrices` | How a job's `strategy:` expands into its instances |
 | `contexts` | What each context holds in each phase after the run starts, and what a job's and a step's values evaluate to |
 

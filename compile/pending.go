@@ -35,6 +35,8 @@ type pendingFields struct {
 	// stamp marks the fields found while a field is added, so that each
 	// is counted once.
 	stamp int
+	// waited is how many of all, from the first, no longer wait.
+	waited int
 }
 
 // A pendingField is a field that waits.
@@ -54,6 +56,9 @@ type pendingField struct {
 	stamp   int
 	// sets are the sets it is in, at its path and at what it reads.
 	sets []*fieldSet
+	// env is set when it waits for what an env: value it reads reads
+	// (pendingReads).
+	env bool
 }
 
 // A fieldSet is the fields that wait at one path, or read one pattern. A
@@ -120,9 +125,10 @@ func waitingIn(seq iter.Seq[*fieldSet]) iter.Seq[*pendingField] {
 	}
 }
 
-// add adds f, which waits, after the others.
-func (q *pendingFields) add(f *field) {
-	p := &pendingField{f: f, pos: len(q.all), pass: q.pass, reads: readPatterns(f.reads, f.index)}
+// add adds f, which waits, after the others, for the fields reads reaches
+// (pendingReads), env set if an env: value's reads are among them.
+func (q *pendingFields) add(f *field, reads [][]string, env bool) {
+	p := &pendingField{f: f, pos: len(q.all), pass: q.pass, reads: reads, env: env}
 	q.all = append(q.all, p)
 	// f waits for the fields it reads, and the fields that read f wait for
 	// it.
@@ -189,6 +195,25 @@ func (q *pendingFields) filled(p *pendingField) {
 			heap.Push(&q.ready, readyField{r, r.pass})
 		}
 	}
+}
+
+// release returns the first field that still waits, in the order they
+// started to, that free reports true for, and fills it in as next does, as
+// though it waited no longer, or nil if there is none: the fields that
+// read it wait for it until filled.
+func (q *pendingFields) release(free func(*pendingField) bool) *pendingField {
+	for q.waited < len(q.all) && q.all[q.waited].done {
+		q.waited++
+	}
+	for _, p := range q.all[q.waited:] {
+		if !p.done && free(p) {
+			p.done = true
+			p.leave()
+			q.pass = p.pass
+			return p
+		}
+	}
+	return nil
 }
 
 // waiting returns the fields that still wait, in the order they started

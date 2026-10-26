@@ -45,21 +45,21 @@ var platformTypes = map[string]bool{
 	"pbs-queues": true, "ai-model": true, "allocations": true,
 }
 
-// Inputs are a run's input values. Deferred, Secrets and Private name each
-// value by its path in the values, as plan.JoinPath names it: keys joined
-// with dots, a key's own . and ~ written ~1 and ~0, as in db~1pass for a
+// Inputs are a run's input values. Secrets and Private name each value by
+// its path in the values, as plan.JoinPath names it: keys joined with
+// dots, a key's own . and ~ written ~1 and ~0, as in db~1pass for a
 // submitted value's key db.pass. The plan names the same value with
 // inputs. before it.
 type Inputs struct {
-	// Values are the input values, with defaults applied, and ignored inputs
-	// and passwords left out.
+	// Values are the input values, with defaults applied, and ignored
+	// inputs, passwords and the inputs whose values read something the
+	// compiler doesn't know, or a variable or a password, left out: Start
+	// resolves them.
 	Values map[string]any
-	// Deferred are the defaults that read something the compiler doesn't
-	// know, such as a secret variable, or an organization or user variable
-	// or a password input, whose values a plan never holds, by their
-	// input's path, as in group.name. They are evaluated once the run is
-	// underway, and their inputs aren't in Values or Secrets. A password's
-	// value isn't in one: it is among Secrets.
+	// Deferred are the inputs whose values Start resolves, as they read
+	// what the compiler doesn't know, such as a secret variable, or a
+	// variable or a password, by their input's path, as in group.name, each
+	// with its default as the definitions write it.
 	Deferred map[string]plan.Value
 	// Secrets are the values of password inputs, by their path in the
 	// values, such as k8s.token, or creds.0.pass for a password field of a
@@ -130,6 +130,22 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
 	r := resolveInputs(doc, submitted, opts)
 	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets, Private: r.private}, listed(r.diags)
+}
+
+// deferred returns the inputs whose values Start resolves, each with its
+// default as the definitions write it (Inputs.Deferred).
+func (r *inputResolver) deferred() map[string]plan.Value {
+	var out map[string]plan.Value
+	for _, f := range r.fields {
+		if (f.deferred || f.variable) && !f.ignored {
+			if out == nil {
+				out = map[string]plan.Value{}
+			}
+			v, _ := r.parsed(f.def["default"])
+			out[plan.JoinPath(f.path...)] = plan.Literal(v)
+		}
+	}
+	return out
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
@@ -228,12 +244,8 @@ type inputResolver struct {
 	gaveTo      int
 	fields      []*field
 	// rows are the fields of lists' rows: each field of a list's template,
-	// once for each row, and some that are gone (liveRows); goneRows counts
-	// those, and rowsOf holds the others by the inputs they are in, once
-	// Start first collects an input's rows again (dropRows).
-	rows     []*field
-	goneRows int
-	rowsOf   map[*field][]*field
+	// once for each row.
+	rows []*field
 	// templates holds the fields of each list's template, and each repeated
 	// step's inputs, collected once with their paths in a row, by where they
 	// are in the workflow.
@@ -246,49 +258,42 @@ type inputResolver struct {
 	passwordKeys map[string]bool
 	// decisions are the JSON Pointers of the conditions that read a
 	// variable or a password, in order, which the plan names for Start,
-	// and decided what each decided, which the secret record keeps;
-	// ignored the names of the inputs the conditions ignored, as in
-	// inputs.region, and ignoredValues their values, as they were given,
-	// for those that had one.
-	decisions     []string
-	decided       map[string]bool
-	ignored       []string
-	ignoredValues map[string]any
+	// and decided what each decided, which the secret record keeps.
+	decisions []string
+	decided   map[string]bool
 	// unresolved holds the values of the inputs of a platform's types that
 	// the Inputs resolver changed, as they were submitted, by their paths'
-	// names, which what was evaluated before read (plan.Run.Unresolved).
+	// names, which the workflow's env: reads as the run starts.
 	unresolved map[string]any
 	// ignoredLater holds the inputs that an ignore which read a variable
-	// or a password ignored, whose values the plan holds for Start to drop
-	// (applyConditions), and shapeView the inputs' values without them, as
-	// the jobs' needs: read them (shapeScope).
+	// or a password ignored, whose values the compiler holds out of the
+	// plan whatever it decided, and Start drops (applyConditions); and
+	// shapeView the inputs' values without them, as the jobs' needs: read
+	// them (shapeScope).
 	ignoredLater []*field
 	shapeView    map[string]any
 	// start is set when the resolver completes a run's values as it
 	// starts (Start), and nil when it creates the run.
 	start *startState
-}
-
-// privateExprs returns the expressions of the definitions of the inputs
-// that hold a private value: one the run was given in the place of what
-// reads a variable that isn't a secret.
-func (r *inputResolver) privateExprs() []*expr.Expr {
-	var out []*expr.Expr
-	seen := map[*field]bool{}
-	for name := range jsonvalue.Sorted(r.private) {
-		path := plan.SplitPath(name)
-		for n := len(path); n > 0; n-- {
-			if f := r.fieldAt(path[:n]); f != nil {
-				if !seen[f] {
-					seen[f] = true
-					exprs, _ := r.workflow.Exprs(f.loc)
-					out = append(out, exprs...)
-				}
-				break
-			}
-		}
-	}
-	return out
+	// final is set as the run starts: the resolver resolves the inputs
+	// from what was submitted with everything known, so it decides what a
+	// value a form can have made from a variable or a password means,
+	// applies every condition, and checks every input.
+	final bool
+	// means names each part of a submitted value that means the expression
+	// a form made it from, one that reads a variable or a password, as the
+	// plan names a value, with its context, as in inputs.region
+	// (plan.JoinPath), with the expression's JSON Pointer: as the run is
+	// created, what the compiler decided (compare), which the secret record
+	// keeps (plan.Record.Means); as it starts, what Start reads of it, each
+	// a text of the expression in the part's place (meanTexts). remeant
+	// holds those whose expressions gave another value as the run started
+	// than was submitted, as a variable changed, by their paths in the
+	// values, as in region, with what they gave: what reads one through a
+	// relative reference doesn't wait for it, and can have read what was
+	// submitted (starter.resolve).
+	means   map[string]string
+	remeant map[string]any
 }
 
 // withheldParts returns where, in the workflow, the parts of the input
@@ -315,74 +320,6 @@ func (r *inputResolver) withheldParts() [][]string {
 		}
 	}
 	walk(r.fields)
-	return out
-}
-
-// deferred returns the defaults that are evaluated once the run is
-// underway, by their inputs' paths.
-func (r *inputResolver) deferred() map[string]plan.Value {
-	var out map[string]plan.Value
-	for _, f := range r.deferredFields() {
-		if out == nil {
-			out = map[string]plan.Value{}
-		}
-		out[plan.JoinPath(f.path...)] = f.dflt
-	}
-	return out
-}
-
-// deferredFields returns the inputs whose values are evaluated once the run
-// is underway, in order. One whose value can't be held, as it isn't JSON,
-// has none.
-func (r *inputResolver) deferredFields() []*field {
-	var out []*field
-	for _, f := range r.fields {
-		if (f.deferred || f.variable) && !f.ignored && !f.dflt.IsZero() {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// unresolvedData returns the values of the inputs the plan keeps, kept,
-// that the Inputs resolver changed, as they were submitted
-// (plan.Run.Unresolved): none the plan doesn't keep, as a private one.
-func (r *inputResolver) unresolvedData(kept map[string]any) map[string]plan.Data {
-	var out map[string]plan.Data
-	for name, v := range r.unresolved {
-		if _, ok := jsonptr.Lookup(kept, plan.SplitPath(name)); !ok {
-			continue
-		}
-		if out == nil {
-			out = map[string]plan.Data{}
-		}
-		out[name] = plan.DataOf(v)
-	}
-	return out
-}
-
-// deferredParts returns where the parts of the deferred values that hold
-// expressions are in the workflow, in order: each input's, in the order
-// they were held, or the one that is all of its value.
-func (r *inputResolver) deferredParts() []plan.DeferredPart {
-	var out []plan.DeferredPart
-	for _, f := range r.deferredFields() {
-		parts := f.later
-		if i := slices.IndexFunc(parts, func(p laterPart) bool { return len(p.path) == 0 }); i >= 0 {
-			parts = parts[i : i+1]
-		}
-		for _, p := range parts {
-			out = append(out, plan.DeferredPart{
-				Name:       plan.JoinPath(slices.Concat([]string{"inputs"}, f.path, p.path)...),
-				Location:   jsonptr.Format(p.loc),
-				Index:      slices.Clone(p.index),
-				Default:    p.dflt,
-				Text:       p.text,
-				Null:       p.null,
-				Containers: p.containers,
-			})
-		}
-	}
 	return out
 }
 

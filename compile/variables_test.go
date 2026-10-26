@@ -10,7 +10,6 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -260,10 +259,11 @@ jobs:
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	// skipped's ignore read after, which reads a variable, so its value is
-	// held, out of the plan, whatever the ignore decided.
-	if len(inputs.Values) != 0 || len(inputs.Secrets) != 1 || inputs.Secrets["skipped"] != "x" {
-		t.Errorf("values %v and secrets %v, want skipped's alone", inputs.Values, inputs.Secrets)
+	// skipped's ignore read after, which reads a variable that isn't a
+	// secret, so its value is held, out of the plan, whatever the ignore
+	// decided, as private, as the variable's value is.
+	if len(inputs.Values) != 0 || len(inputs.Secrets) != 0 || len(inputs.Private) != 1 || inputs.Private["skipped"] != "x" {
+		t.Errorf("values %v, secrets %v and private %v, want skipped's alone, private", inputs.Values, inputs.Secrets, inputs.Private)
 	}
 	if got := slices.Sorted(maps.Keys(inputs.Deferred)); !slices.Equal(got, []string{"after", "key", "n"}) {
 		t.Errorf("deferred %v, want after, key and n", got)
@@ -278,10 +278,6 @@ jobs:
 	}
 	if !slices.Equal(p.Run.Secrets, []string{"inputs.key"}) || !slices.Equal(p.Run.Variables, []string{"org.AFTER", "vars.KEY", "vars.N"}) {
 		t.Errorf("secrets %v and variables %v", p.Run.Secrets, p.Run.Variables)
-	}
-	got, err := p.Run.DeferredInputs["n"].Eval(expr.Scope{Contexts: map[string]any{"vars": map[string]any{"N": "6"}}})
-	if err != nil || got != "6" {
-		t.Errorf("n is %v, %v, as the run starts", got, err)
 	}
 }
 
@@ -307,9 +303,6 @@ func TestPlanHoldsNoVariableFromRows(t *testing.T) {
 		}
 		if bytes.Contains(encoded, []byte("s3cr3t-region")) {
 			t.Errorf("%s: the plan holds the variable's value: %s", read, encoded)
-		}
-		if _, ok := p.Run.DeferredInputs["summary"]; !ok {
-			t.Errorf("%s: summary isn't evaluated as the run starts", read)
 		}
 	}
 }

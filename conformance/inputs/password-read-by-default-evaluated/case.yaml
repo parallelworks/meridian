@@ -24,18 +24,21 @@ inputs:
       hint: HUNTER3SECRET
   note: typed
 expect:
-  deferred:
-    copy: ${{ inputs.pw }}
-    dsn: postgres://app:${{ inputs.pw }}@db
-    choice: ${{ inputs.pw }}
-    tags: [plain, "${{ inputs.pw }}"]
+  # Create holds what a form sent in the place of a default that reads a
+  # password, whatever it is, and Start decides what it means.
+  inputs:
+    tags: [plain, null]
     creds:
       - user: a
-        hint: ${{ inputs.creds.[index].pass }}
       - user: b
-        hint: ${{ inputs.creds.[index].pass }}
   secrets:
     pw: HUNTER2SECRET
+    copy: HUNTER2SECRET
+    dsn: postgres://app:HUNTER2SECRET@db
+    choice: HUNTER2SECRET
+    tags.1: HUNTER2SECRET
     creds.0.pass: HUNTER2SECRET
+    creds.0.hint: HUNTER2SECRET
     creds.1.pass: HUNTER3SECRET
+    creds.1.hint: HUNTER3SECRET
     note: typed

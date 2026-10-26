@@ -8,6 +8,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -35,30 +36,51 @@ func (r *inputResolver) fillDefaults() {
 	r.taintInputs()
 	var pending pendingFields
 	var compared []*field
+	// rowsKnown holds the lists whose rows were collected though they wait.
+	rowsKnown := map[*field]bool{}
 	var start func(fields []*field)
 	start = func(fields []*field) {
 		for _, f := range fields {
 			waits := r.prepare(f)
 			if waits {
-				pending.add(f)
+				reads, env := r.pendingReads(f)
+				pending.add(f, reads, env)
 			}
 			if f.candidates != nil {
 				compared = append(compared, f)
 				for _, c := range f.candidates {
+					secret := r.final && slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, true) })
 					for _, path := range r.parts(f, c) {
 						r.mark(slices.Concat(f.path, path))
+						if secret {
+							r.markSecret(slices.Concat(f.path, path))
+						}
 					}
 				}
 			}
-			if !waits {
+			// A list whose rows only hold parts that mean expressions has
+			// those rows already: its fields are read as filled in, as Create
+			// read them.
+			if !waits || meantInRows(f) {
+				rowsKnown[f] = waits
 				start(r.collectRows(f))
 			}
 		}
 	}
 	start(r.fields)
-	for p := pending.next(); p != nil; p = pending.next() {
+	for {
+		p := pending.next()
+		if p == nil && r.final {
+			p = r.release(&pending)
+		}
+		if p == nil {
+			break
+		}
+		r.settleEnv(p.f, &pending)
 		r.evalPending(p.f)
-		start(r.collectRows(p.f))
+		if !rowsKnown[p.f] {
+			start(r.collectRows(p.f))
+		}
 		pending.filled(p)
 	}
 	if left := pending.waiting(); len(left) > 0 {
@@ -81,6 +103,78 @@ func (r *inputResolver) fillDefaults() {
 	r.holdLater()
 }
 
+// meantInRows reports whether f's texts are each a part of one of its
+// rows that means its expression (meanTexts), which leaves the rows as
+// they are.
+func meantInRows(f *field) bool {
+	return f.texts != nil && !slices.ContainsFunc(f.texts, func(t text) bool { return !t.meant || len(t.path) < 2 })
+}
+
+// meantOnly reports whether f waits only for its parts that mean their
+// expressions (meanTexts).
+func meantOnly(f *field) bool {
+	return f.texts != nil && !slices.ContainsFunc(f.texts, func(t text) bool { return !t.meant })
+}
+
+// release returns, as the run starts, once no field that waits can be
+// filled in in the order the values read each other, one that can be all
+// the same, which it fills in as next does: one whose expressions read, of
+// what waits, only parts that mean their expressions, which it reads as
+// they were submitted, as compare reads them; the field of such a part
+// first, and else one that reads one. So parts that mean expressions that
+// read each other are filled in, and what reads them; and a field that
+// waits for what an env: value it reads reads, which reads the field in
+// turn, reads the env: value as not evaluated yet (settleEnv). It returns
+// nil if there is none, as when defaults read each other.
+func (r *inputResolver) release(pending *pendingFields) *pendingField {
+	readsOnlyMeant := func(p *pendingField) bool {
+		for _, pattern := range readPatterns(p.f.reads, p.f.index) {
+			for w := range waitingIn(pending.paths.Reached(pattern)) {
+				if w != p && !meantOnly(w.f) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if p := pending.release(func(p *pendingField) bool { return meantOnly(p.f) && readsOnlyMeant(p) }); p != nil {
+		return p
+	}
+	return pending.release(readsOnlyMeant)
+}
+
+// pendingReads returns the patterns (reach.Patterns) of the paths in the
+// values that f, which waits, waits for: those its expressions read, and as
+// the run starts, those that the env: values they read that aren't
+// evaluated yet read, which are evaluated as f is filled in (settleEnv).
+func (r *inputResolver) pendingReads(f *field) ([][]string, bool) {
+	reads := readPatterns(f.reads, f.index)
+	if r.start == nil || r.start.envReadsOf == nil {
+		return reads, false
+	}
+	env := r.start.envReadsOf(f.reads)
+	return append(reads, env...), env != nil
+}
+
+// settleEnv evaluates, as the run starts, the env: values that f's
+// expressions read that aren't evaluated yet, before f is filled in, each
+// once none of what it reads of the values waits to be filled in, f's own
+// value among them (startState.settle).
+func (r *inputResolver) settleEnv(f *field, pending *pendingFields) {
+	if r.start == nil || r.start.settle == nil {
+		return
+	}
+	r.start.settle(f.reads, func(pattern []string) bool {
+		if reach.Reaches(pattern, f.path) {
+			return false
+		}
+		for range waitingIn(pending.paths.Reached(pattern)) {
+			return false
+		}
+		return true
+	})
+}
+
 // prepare fills in what it can of f's value without evaluating anything: a
 // default that has no expressions. It reports whether f waits for its
 // default's expressions, or its texts', to be evaluated; and finds the
@@ -92,6 +186,7 @@ func (r *inputResolver) prepare(f *field) bool {
 	}
 	if !r.missing(f) {
 		r.findTexts(f)
+		r.meanTexts(f)
 		return f.texts != nil
 	}
 	if !f.hasDefault {
@@ -126,9 +221,6 @@ func (r *inputResolver) prepare(f *field) bool {
 func (r *inputResolver) evalPending(f *field) {
 	if f.texts == nil {
 		loc := appendPath(f.loc, "default")
-		before, ok := jsonptr.Lookup(r.values, f.path)
-		f.nullBefore = ok && before == nil
-		f.textBefore = ok && before != nil && before == f.def["default"]
 		switch v, read, err := r.evalRead(loc, f.index); {
 		case expr.IsUnknown(err):
 			r.deferPart(f, nil, loc, f.def["default"], false)
@@ -142,19 +234,38 @@ func (r *inputResolver) evalPending(f *field) {
 		return
 	}
 	value := lookup(r.values, f.path)
+	var typed []text
 	for _, t := range f.texts {
 		text := lookup(value, t.path)
-		switch v, read, err := r.evalRead(t.loc, f.index); {
+		if t.meant {
+			text = lookup(r.doc.Value, t.loc)
+		}
+		eval := r.evalRead
+		if t.meant {
+			eval = r.evalMeant
+		}
+		switch v, read, err := eval(t.loc, f.index); {
+		case t.meant && err != nil && !waits(err):
+			// What the part means can't be had: it is what was typed.
+			typed = append(typed, t)
 		case expr.IsUnknown(err):
 			r.deferPart(f, t.path, t.loc, text, false)
 		case err != nil:
 			r.reportError(t.loc, 0, maskedIf(read.Private, err))
 		default:
+			if t.meant {
+				r.noteRemeant(slices.Concat(f.path, t.path), v)
+			}
 			// A copy, as the value can be part of what the evaluation read.
 			r.set(slices.Concat(f.path, t.path), jsonvalue.Clone(v))
 			r.noteEvaluation(f, t.path, t.loc, text)
 			r.noteRead(f, t.path, t.loc, text, read)
 		}
+	}
+	if typed != nil {
+		f.texts = slices.DeleteFunc(f.texts, func(t text) bool {
+			return slices.ContainsFunc(typed, func(u text) bool { return slices.Equal(t.path, u.path) })
+		})
 	}
 }
 
@@ -250,45 +361,13 @@ func (r *inputResolver) collectRows(f *field) []*field {
 	}
 	if len(out) > 0 {
 		r.rows = append(r.rows, out...)
-		if r.rowsOf != nil {
-			r.rowsOf[f.holder()] = append(r.rowsOf[f.holder()], out...)
-		}
 		r.refresh(f.path)
 	}
 	return out
 }
 
-// dropRows drops the fields of the rows in f's value, and of the rows of
-// the lists in them, as Start collects them again (fillRows). They are
-// gone from rows at once, and dropped from it once they are half of it,
-// or it is read (liveRows), so that collecting each of many lists' rows
-// again doesn't go through the rows of all of them.
-func (r *inputResolver) dropRows(f *field) {
-	if r.rowsOf == nil {
-		r.rowsOf = map[*field][]*field{}
-		for _, c := range r.liveRows() {
-			r.rowsOf[c.in] = append(r.rowsOf[c.in], c)
-		}
-	}
-	for _, c := range r.rowsOf[f] {
-		c.gone = true
-	}
-	r.goneRows += len(r.rowsOf[f])
-	delete(r.rowsOf, f)
-	if r.goneRows*2 > len(r.rows) {
-		r.liveRows()
-	}
-}
-
-// liveRows returns the fields of the lists' rows, without those that are
-// gone (dropRows).
-func (r *inputResolver) liveRows() []*field {
-	if r.goneRows > 0 {
-		r.rows = slices.DeleteFunc(r.rows, func(c *field) bool { return c.gone })
-		r.goneRows = 0
-	}
-	return r.rows
-}
+// liveRows returns the fields of the lists' rows.
+func (r *inputResolver) liveRows() []*field { return r.rows }
 
 // missing reports whether f has no value: none at all, "" when "" isn't one
 // of its options, or the text of its default when that is an expression,

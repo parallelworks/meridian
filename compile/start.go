@@ -1,8 +1,6 @@
 package compile
 
 import (
-	"cmp"
-	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +13,6 @@ import (
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
-	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -27,37 +24,33 @@ type StartInput struct {
 	// Variables reads the variables the plan lists, plain and secret. Nil
 	// means there are none: a run that reads one can't start.
 	Variables Variables
-	// Record is the run's secret record as Create gave it
-	// (Created.Record). Start puts each password and private value at the
-	// path plan.SplitPath reads from its name, as in inputs.creds.0.pass
-	// for the field pass of the list creds's first row, an outer one
-	// before those in it, and each part of the input definitions the plan
-	// withheld back in its place; and reads what each decision of the
-	// run's shape decided, and the ignored inputs' values, as it decides
-	// them again. A record that doesn't fit the plan is an error.
-	Record Record
+	// Record is the run's secret record as Create gave it (Created.Record):
+	// what was submitted, which Start resolves again, the parts of the
+	// input definitions the plan withheld, which it puts back in their
+	// places, what each decision of the run's shape decided, and which
+	// parts of what was submitted mean the expression a form made them
+	// from. A record that doesn't fit the plan is an error (ErrMismatch).
+	Record plan.Record
 	// Inputs provides the input types that name a platform's resources, as
-	// Options.Inputs does when the run is created. Nil means there is no
-	// platform.
+	// Options.Inputs does when the run is created: Start asks it again for
+	// each input of a platform's type. Nil means there is no platform.
 	Inputs InputResolver
 	// Sessions makes the run's sessions. Nil means there is no session
 	// provider: a run with sessions can't start.
 	Sessions Sessions
 }
 
-// StartResult is what Start gives: the run's values, complete.
-//
-// What goes in the run's secret record of it is what is private: the
-// record half of Run.Split, and the timeout and the expansions when they
-// are private. The rest is run state.
+// StartResult is what Start gives: the run's values, complete. It holds
+// what is private beside what isn't, so the coordinator stores none of it
+// as it is: Keep splits it into what the run's secret record holds and
+// what run state holds (StartState).
 type StartResult struct {
-	// Run is what the phases after Start read of the run, whole: the plan's
-	// input values with Start's evaluated and each password and private
-	// value at its path, the workflow's env:, every variable Start read,
-	// plain and secret, and in Run.Private and Run.Secrets what of it is
-	// private, and secret. The coordinator keeps the private part only in
-	// the run's secret record, and the rest as run state too
-	// (plan.RunValues.Split).
+	// Run is what the phases after Start read of the run, whole: the input
+	// values, each password and private value among them, the workflow's
+	// env:, every variable Start read, plain and secret, and in Run.Private
+	// and Run.Secrets what of it is private, and secret. The coordinator
+	// keeps the private part only in the run's secret record, and the rest
+	// as run state too (plan.RunValues.Split).
 	Run plan.RunValues
 	// TimeoutSeconds is the run's timeout:, in seconds, or 0 for none.
 	// TimeoutPrivate is set when evaluating it read a variable or a
@@ -72,44 +65,138 @@ type StartResult struct {
 	Expansions map[string]*plan.Expansion
 }
 
-// Start is the Start phase: it completes what p leaves to the run's start,
-// as docs/design.md describes under Starting a run. It reads the variables
-// p lists, through in.Variables, once for the run, secret ones included,
-// and puts the run's passwords and private values in their places in the
-// inputs' values. It evaluates the parts of the inputs p holds for Start
-// (plan.Run.DeferredParts) where the input definitions write them, as the
-// compiler evaluates them, with the variables, the passwords and the
-// workflow's env:, which it evaluates too, each once, in the order they
-// read each other, and fills in the fields of the rows of each list it
-// evaluated a part of, as the compiler fills in a row's. It decides again
-// each input's condition that read a variable or a password
-// (plan.Run.Decisions), reading the inputs as they were given, as format 1
-// reads them, as the compiler's evaluations did. It then checks each input it
-// evaluated as Compile checks one; decides again each job's needs: that
-// read a variable or a password (plan.Job.NeedsExpr), reporting
-// run_shape_changed for a decision that differs from what the run's
-// secret record, or p for a job's needs, says Create decided;
-// evaluates the workflow's timeout:; and expands each matrix whose values
-// are known by then, with plan.Expand and p's Run.Limits. Only once all of
-// that has passed does it make the run's sessions, through in.Sessions,
-// so a run that fails to start makes none. A rerun calls Start again, with
-// the same plan, and reads every variable again.
+// StartState is what run state holds of what Start gives, which whoever
+// can see the run can read: all of a StartResult but what Keep puts in the
+// run's secret record.
+type StartState struct {
+	// Run is the run's values but for those that are private (the state
+	// half of plan.RunValues.Split), with the names of those that are.
+	Run plan.RunValues
+	// TimeoutSeconds is the run's timeout, in seconds, or 0 for none; and
+	// when evaluating it read a variable or a password, TimeoutPrivate is
+	// set, and the secret record holds the timeout instead.
+	TimeoutSeconds int64
+	TimeoutPrivate bool
+	// Expansions are the matrices Start expanded, by job name, with each
+	// private instance's matrix values left out (plan.Instance.Private),
+	// and the strategy's fail-fast: and max-parallel: of a matrix whose
+	// instances are: their keys and indexes are run state, and the secret
+	// record holds the expansion whole (plan.Expansion.Split).
+	Expansions map[string]*plan.Expansion
+}
+
+// Keep splits what Start gave into what the run's secret record holds and
+// what run state holds, which it returns: the one place that says which is
+// which, for each of res's members. The record gets the private half of
+// the run's values (plan.RunValues.Split), the timeout if it is private,
+// and each expansion whose instances are private, whole
+// (plan.Expansion.Split). Neither shares a mapping or a list with res.
+func (res *StartResult) Keep(record *plan.Record) StartState {
+	private, values := res.Run.Split()
+	record.Run = &private
+	state := StartState{Run: values, TimeoutPrivate: res.TimeoutPrivate}
+	if res.TimeoutPrivate {
+		seconds := res.TimeoutSeconds
+		record.TimeoutSeconds = &seconds
+	} else {
+		state.TimeoutSeconds = res.TimeoutSeconds
+	}
+	for job, x := range jsonvalue.Sorted(res.Expansions) {
+		private, shown := x.Split()
+		if state.Expansions == nil {
+			state.Expansions = map[string]*plan.Expansion{}
+		}
+		state.Expansions[job] = shown
+		if private != nil {
+			if record.Expansions == nil {
+				record.Expansions = map[string]*plan.Expansion{}
+			}
+			record.Expansions[job] = private
+		}
+	}
+	return state
+}
+
+// ErrMismatch is what Start's error wraps when what it is given doesn't fit
+// together: a plan this release's compiler didn't make, or a secret record
+// that isn't the one Create gave with the plan. Start checks, in order:
 //
-// A relative reference in what it evaluates reads the input definitions,
-// which the plan holds; one that climbs out of them reads nothing, where
-// the compiler read the rest of the workflow.
+//   - that there is a plan, and that the record names it, by its digest
+//     (plan.Record.PlanDigest, plan.Digest), and holds what was submitted
+//     as a mapping, if anything;
+//   - that the record's withheld parts and decisions are those the plan
+//     names (Run.Withheld, Run.Decisions), no more and no fewer, and that
+//     each withheld part is in the input definitions and each decision is
+//     of an input's condition;
+//   - and, once the inputs are resolved again and the run's shape is what
+//     Create decided, with no other problem, that each value the
+//     resolution keeps out of the plan, as a password or a private value,
+//     is one the plan names, or in one it names (Run.Secrets, Run.Private),
+//     but for the parts of an input the plan holds none of, which a
+//     password input never is; and that what was submitted, resolved
+//     again, gives the values the plan holds (Run.Inputs), and none for an
+//     input the workflow doesn't define that the plan doesn't hold, but
+//     for what Create keeps out of the plan and the inputs of a platform's
+//     type, which the Inputs resolver gives again (checkPlanned).
+//
+// So the digest binds a record to its plan, and these checks, what was
+// submitted to what the plan holds; neither binds it to its run. What the
+// plan doesn't hold, as a password, a value given in place of a default
+// that reads a variable, or which parts of what was submitted mean their
+// expressions (plan.Record.Means), a record of another run of the same
+// plan can give otherwise, and Start starts with what it gives: the
+// coordinator keeps each run's record with its plan. A value the plan
+// names that the record doesn't hold, as a password, is the run's problem
+// (input_required), not a mismatch. Starting the run again gives the same
+// error, so the coordinator fails the run rather than start it again. Any
+// other error but ctx's, and plan.ErrVersion's for a plan of another
+// release, is a resolver that couldn't answer, which starting again can
+// get past.
+var ErrMismatch = errors.New("compile: the plan and the secret record don't fit")
+
+// mismatch returns an error that wraps ErrMismatch, which says what doesn't
+// fit.
+func mismatch(format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrMismatch}, args...)...)
+}
+
+// Start is the Start phase: it completes the run's values as it starts, as
+// docs/design.md describes under Starting a run. It reads the variables p
+// lists, through in.Variables, once for the run, secret ones included, and
+// resolves the inputs again from what was submitted (plan.Record.Submitted),
+// as Create resolved them, but with everything known: the variables, the
+// passwords and the workflow's env:, which it evaluates too, and what the
+// Inputs resolver gives now for each input of a platform's type. A part of
+// what was submitted that Create decided means the expression a form made
+// it from (plan.Record.Means) is what the expression gives now, as a
+// variable can have changed since, which Start evaluates in the part's
+// place, in the order the values read each other, so that what reads the
+// part reads what it is; and an env: value that a value reads it evaluates
+// before the value, in that order too.
+//
+// It then checks the run's shape against what Create decided: each input's
+// condition that read a variable or a password (plan.Run.Decisions), with
+// what the record says it decided, and each job's needs: that read one
+// (plan.Job.NeedsExpr), with the plan's, reporting run_shape_changed where
+// one differs; evaluates the workflow's timeout:; and expands each matrix
+// whose values are known by then, with plan.Expand and p's Run.Limits. Only
+// once all of that has passed does it make the run's sessions, through
+// in.Sessions, so a run that fails to start makes none. A rerun calls Start
+// again, with the same plan and what is submitted again, and reads every
+// variable again.
+//
+// A relative reference reads the input definitions, which the plan holds;
+// one that climbs out of them reads nothing, where the compiler read the
+// rest of the workflow.
 //
 // What it made from a variable or a password is private, and what it made
 // from a secret is a secret too, by its name, in the values it gives
-// (plan.RunValues.Private and Secrets), beside what p names so: the
-// variables it read, the passwords, and the values the run was given in
-// the place of what is made from one, which p names as derived
-// (plan.Run.Derived). A variable the Variables interface gives as a secret
-// is one, and so is one p names as a secret though the interface no
-// longer does.
+// (plan.RunValues.Private and Secrets), beside what p names so. A variable
+// the Variables interface gives as a secret is one, and so is one p names
+// as a secret though the interface no longer does.
 //
 // The coordinator runs Start as the run's first job, and stores what it
-// gives in the transaction that ends that job. Given the same plan, input
+// gives in the transaction that ends that job. Given the same plan, record
 // and resolver answers, it gives the same result, byte for byte, so a
 // coordinator that dies during Start leaves another to start it again.
 //
@@ -117,43 +204,61 @@ type StartResult struct {
 // never show a value made from a variable or a password; an error among
 // them fails the run, and then there is no result. It returns an error,
 // and no result, when it couldn't finish for a reason that isn't the
-// run's: a resolver that couldn't answer, a plan that isn't one the
-// compiler made, input that doesn't fit it, such as a password p doesn't
-// name, or ctx done, with ctx.Err(). The coordinator starts the run again
-// then.
+// run's. One that wraps ErrMismatch, a plan or a record that doesn't fit,
+// fails the run; one that wraps plan.ErrVersion is a plan of another
+// release, which a coordinator of that release starts; ctx's, when ctx is
+// done, and any other, a resolver that couldn't answer, the coordinator
+// starts the run again after.
 func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	if p == nil || p.Version != plan.Version {
-		return nil, nil, errors.New("compile: Start needs a plan of this release's version")
+	switch {
+	case p == nil:
+		return nil, nil, mismatch("no plan")
+	case p.Version != plan.Version:
+		return nil, nil, fmt.Errorf("compile: %w %d; this release starts plans of version %d", plan.ErrVersion, p.Version, plan.Version)
 	}
-	st := &starter{ctx: ctx, p: p, in: in, failed: map[*field]bool{}, pending: map[*field]int{}, emptied: map[*field][]laterPart{}, above: map[*field]int{}}
+	switch ok, err := plan.HasDigest(p, in.Record.PlanDigest); {
+	case err != nil:
+		return nil, nil, mismatch("the plan doesn't encode: %v", err)
+	case !ok:
+		return nil, nil, mismatch("the secret record is of another plan")
+	}
+	if _, ok := in.Record.Submitted.Get().(map[string]any); !ok && !in.Record.Submitted.IsZero() {
+		return nil, nil, mismatch("what the secret record holds as submitted isn't a mapping")
+	}
+	st := &starter{ctx: ctx, p: p, in: in}
 	if err := st.readVariables(); err != nil {
 		return nil, nil, err
 	}
-	if err := st.restore(); err != nil {
+	defs, err := st.definitions()
+	if err != nil {
 		return nil, nil, err
 	}
-	// An env: value that reads an input whose ignore Start decides again
-	// waits for it, as the compiler evaluates the workflow's env: once it
-	// has dropped the inputs it ignores.
-	st.holdEnv = true
-	if err := st.evaluate(false); err != nil {
+	decided, err := recordFor(p.Run.Decisions, in.Record.Decisions, "decision")
+	if err != nil {
 		return nil, nil, err
 	}
-	if err := st.checkDecisions(); err != nil {
+	if err := st.resolve(defs); err != nil {
 		return nil, nil, err
 	}
-	st.holdEnv = false
-	if err := st.evaluate(true); err != nil {
+	// Create's warnings are Create's: Start keeps only what fails the run.
+	st.r.diags = st.r.diags.Errors()
+	if err := st.checkDecided(decided); err != nil {
 		return nil, nil, err
 	}
-	// What the run reads from here on reads the inputs of a platform's
-	// types as the Inputs resolver gave them, as the jobs' do.
-	st.resolve()
-	st.checkInputs()
 	st.checkNeeds()
+	// A run whose shape changed, or that has another problem, fails as it
+	// is: what it resolved can differ from the plan for that reason.
+	if !st.diagnostics().HasErrors() {
+		if err := st.checkFits(); err != nil {
+			return nil, nil, err
+		}
+		if err := st.checkPlanned(); err != nil {
+			return nil, nil, err
+		}
+	}
 	run := st.runValues()
 	res := &StartResult{Run: run}
 	// The timeout and the matrices read the run's values, complete, as the
@@ -189,54 +294,54 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	return res, diags, nil
 }
 
+// roundWork is the work, in the budget's bytes, that each round of resolve
+// after the first counts toward the rounds' budget for each input, each
+// field of a list's rows and each env: value: what a template of 256 steps
+// counts, as resolving one again costs as much as that takes, or more. So
+// the rounds of a run pass the budget, 256 MiB, once they have resolved
+// 128 Ki of them again, in a few seconds at most, and a run of 1,000
+// inputs and env: values has more than a hundred rounds to spare. Tests
+// set it.
+var roundWork = 2048
+
 // A starter is a run as Start completes its values.
 type starter struct {
 	ctx context.Context
 	p   *plan.Plan
 	in  StartInput
-	// r is the input resolver, over the plan's input definitions, which
-	// evaluates what the plan holds for Start, and s what it keeps of the
-	// start (r.start).
+	// r is the input resolver that resolved the inputs last (resolve), and
+	// s what it keeps of the start (r.start).
 	r *inputResolver
 	s *startState
-	// deferred are the inputs whose values the plan holds for Start, in
-	// order.
-	deferred []*field
-	// secretVariables names the variables that are secrets: those the
-	// Variables interface gives as secrets, and those the plan names so.
+	// org and vars are the variables Start read, and secretVariables names
+	// those that are secrets: those the Variables interface gives as
+	// secrets, and those the plan names so.
+	org, vars       map[string]string
 	secretVariables map[string]bool
 	// envKeys are the workflow's env: names, in order.
 	envKeys []string
-	// failed holds the inputs a part of whose value failed to evaluate,
-	// which aren't checked then; pending, how many parts of each input's
-	// value Start has yet to evaluate; emptied, the defaults among them
-	// that gave no value, whose containers Start removes once the input's
-	// parts are evaluated, if they are empty; and above, how many of the
-	// mappings on the way to each input held for Start the plan's values
-	// didn't have, which holding it made.
-	failed  map[*field]bool
-	pending map[*field]int
-	// resolved holds the values of the inputs of a platform's types that
-	// the Inputs resolver changed, as it gave them, by their paths, which
-	// Start reads as they were submitted until it has decided the run's
-	// shape (plan.Run.Unresolved).
-	resolved map[string]any
-	emptied  map[*field][]laterPart
-	above    map[*field]int
-	// hiddenAt and optionalAt hold whether each input Start evaluated, and
-	// each group it is in, is hidden and optional, as checkDecisions
-	// decided them, in the inputs' order, as the compiler does; decisionAt
-	// holds the JSON Pointers of the decisions the plan names.
-	hiddenAt, optionalAt map[*field]bool
-	decisionAt           map[string]bool
-	// holdEnv is set while Start evaluates what it does before it decides
-	// the run's shape again, when an env: value that reads one of shaped,
-	// the inputs whose ignore it decides again, waits (readsShaped).
-	holdEnv bool
-	shaped  *reach.Trie[struct{}]
 	// diags are the problems Start found of its own, beside those the
 	// input resolver reports.
 	diags problems.Diagnostics
+	// budget is the one budget of what each round of resolve evaluates.
+	budget expr.Scope
+	// demanded holds the env: values that a round evaluated as the inputs'
+	// values were filled in (settle), with what each gave and read, which
+	// evalEnv checks once they are; and late those that gave otherwise
+	// than they give then, which Start evaluates only once a round has
+	// filled the values in, from then on.
+	demanded map[string]demandedEnv
+	late     map[string]bool
+	// envPatterns holds, by name, what envReadsOf found of each env: value
+	// in the round.
+	envPatterns map[string][][]string
+}
+
+// demandedEnv is what an env: value gave as the inputs' values were filled
+// in, and what it read.
+type demandedEnv struct {
+	text string
+	read expr.Read
 }
 
 // startState is what the input resolver keeps as it completes the run's
@@ -256,14 +361,20 @@ type startState struct {
 	// madeSecret and madePrivate name the values Start made from a secret,
 	// and from a variable or a password but no secret.
 	madeSecret, madePrivate map[string]bool
-	// shared holds, by the JSON Pointer of a part's expressions, what they
-	// read, for those that give the same for each row of a list (sharedPart),
-	// or nil for those that don't; memo what each of those gave, until
-	// what it read changes (forget); and memoAt the same by the patterns
-	// of what each read.
-	shared map[string]*sharedExprs
-	memo   map[string]*memoized
-	memoAt reach.Trie[*memoized]
+	// envReads are the patterns (reach.Patterns) of the paths in the
+	// inputs' values that the workflow's env: values read.
+	envReads [][]string
+	// settle evaluates, as a value is filled in, each env: value not
+	// evaluated yet that exprs, the expressions that fill it in, read, and
+	// that those read in turn, whose reads of the values ready reports are
+	// filled in (starter.settle); and envReadsOf returns the patterns of
+	// those reads, which the value waits for (starter.envReadsOf). Neither
+	// takes a value Start evaluates only once the values are filled in
+	// (starter.late).
+	settle     func(exprs []*expr.Expr, ready func(pattern []string) bool)
+	envReadsOf func(exprs []*expr.Expr) [][]string
+	// budget is the budget that every round shares (expr.Scope.WithBudget).
+	budget expr.Scope
 }
 
 // contexts returns what Start's evaluations read: the inputs' values,
@@ -298,7 +409,6 @@ func (s *startState) made(r *inputResolver, path []string, read expr.Read) {
 func (st *starter) readVariables() error {
 	p := st.p
 	st.secretVariables = map[string]bool{}
-	st.s = &startState{madeSecret: map[string]bool{}, madePrivate: map[string]bool{}}
 	whole, one := map[string]bool{}, map[string]bool{}
 	var first string
 	for _, names := range [][]string{p.Run.Variables, p.Run.Secrets} {
@@ -347,9 +457,9 @@ func (st *starter) readVariables() error {
 		if !ok || !whole[context] && !one[key] {
 			continue // It wasn't asked for.
 		}
-		values := &st.s.run.Org
+		values := &st.org
 		if context == "vars" {
-			values = &st.s.run.Vars
+			values = &st.vars
 		}
 		if *values == nil {
 			*values = map[string]string{}
@@ -362,562 +472,370 @@ func (st *starter) readVariables() error {
 	return nil
 }
 
-// restore makes the input resolver over the plan's input definitions, with
-// the inputs' values the run has: the plan's, those it holds for Start,
-// with each part that Start evaluates unknown until it is, and each
-// password and private value at its path.
-func (st *starter) restore() error {
+// definitions returns the plan's input definitions with the parts it
+// withheld put back from the secret record.
+func (st *starter) definitions() (map[string]any, error) {
 	p := st.p
 	defs, _ := p.Run.Definitions.Written().(map[string]any)
 	defs = orEmptyMap(defs)
-	// What the plan withheld of the definitions, which can hold a
-	// password, the secret record gives back.
 	withheld, err := recordFor(p.Run.Withheld, st.in.Record.Withheld, "part of the input definitions")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, pointer := range p.Run.Withheld {
 		loc, err := jsonptr.Split(pointer)
 		if err != nil || len(loc) <= len(definitionsPath) || !slices.Equal(loc[:len(definitionsPath)], definitionsPath) {
-			return fmt.Errorf("compile: the plan withholds %s, which isn't in the input definitions", pointer)
+			return nil, mismatch("the plan withholds %s, which isn't in the input definitions", pointer)
 		}
-		if err := setGrow(defs, loc[len(definitionsPath):], jsonvalue.Clone(withheld[pointer])); err != nil {
-			return err
+		if err := setGrow(defs, loc[len(definitionsPath):], jsonvalue.Clone(withheld[pointer].Get())); err != nil {
+			return nil, err
 		}
 	}
+	return defs, nil
+}
+
+// resolve resolves the inputs from what was submitted, as Create does, but
+// with every variable known and as the run starts (inputResolver.final),
+// and evaluates the workflow's env:. Its last resolver is st.r.
+//
+// An env: value that an input's default, or a text, reads, it evaluates as
+// the values are filled in, before the value that reads it, which waits
+// for what the env: value reads (settle): so inputs and env: values that
+// read each other in turn are evaluated in one round, in the order they
+// read each other. The rest it evaluates once the round has filled the
+// values in, applied the conditions and checked the values, and checks
+// that those it evaluated before give the same then, and read the same of
+// what is private; if one doesn't, as one that reads an input a condition
+// drops, it starts again, and evaluates that one only then (late). It
+// resolves the inputs again, with the env: values it has, while what reads
+// one waits for it and a round evaluated more of them. What reads a part
+// that means its expression waits for it too, but for what reads it
+// through a relative reference: where the input definitions make one, and
+// a part's expression gave another value than was submitted, Start
+// resolves the inputs again with what it gave in its place, a round for
+// each such part at most. The rounds share one budget, so all of them
+// together keep to its limits, and each round after the first counts the
+// work of resolving every input, row and env: value again toward it
+// (roundWork): a run whose rounds pass it fails with
+// expressions_too_much_work.
+//
+// What is left once nothing more is evaluated reads itself, or each other
+// (values_read_each_other), or a context Start doesn't know.
+func (st *starter) resolve(defs map[string]any) error {
+	p := st.p
 	doc := &format.Document{Format: p.Run.Format, Value: map[string]any{
 		"on": map[string]any{"execute": map[string]any{"inputs": defs}},
 	}}
-	r := newInputResolver(doc, nil, Options{Inputs: st.in.Inputs})
-	r.start = st.s
-	st.r = r
-	r.fields = r.collect(defs, definitionsPath, nil, nil)
-	for i, f := range r.fields {
-		f.seq = i
-	}
-
-	values, _ := jsonvalue.Clone(p.Run.Inputs.Get()).(map[string]any)
-	if values == nil {
-		values = map[string]any{}
-	}
-	st.resolved = map[string]any{}
-	for name, given := range jsonvalue.Sorted(p.Run.Unresolved) {
-		path := plan.SplitPath(name)
-		v, ok := jsonptr.Lookup(values, path)
-		if !ok {
-			return fmt.Errorf("compile: the plan holds the input %s as it was submitted, but not as it was resolved", name)
-		}
-		st.resolved[name] = v
-		if err := setGrow(values, path, jsonvalue.Clone(given.Get())); err != nil {
-			return err
-		}
-	}
-	held := slices.Sorted(maps.Keys(p.Run.DeferredInputs))
-	var holders reach.Trie[*field]
-	for _, name := range held {
-		f := r.fieldAt(plan.SplitPath(name))
-		if f == nil {
-			return fmt.Errorf("compile: the plan holds the input %s for Start, which its definitions don't have", name)
-		}
-		holders.Add(f.path, f)
-		for n := len(f.path) - 1; n > 0; n-- {
-			if _, ok := jsonptr.Lookup(values, f.path[:n]); ok {
-				break
+	// What finds what can read a secret (taint) reads each secret variable
+	// as not known, as Create reads it.
+	contexts := map[string]any{}
+	for name, values := range map[string]map[string]string{"org": st.org, "vars": st.vars} {
+		m := make(map[string]any, len(values))
+		for k, v := range values {
+			if st.secretVariables[plan.JoinPath(name, k)] {
+				m[k] = expr.Unknown{Name: name}
+			} else {
+				m[k] = v
 			}
-			st.above[f]++
 		}
-		if err := setGrow(values, f.path, p.Run.DeferredInputs[name].Written()); err != nil {
+		contexts[name] = m
+	}
+	opts := Options{Inputs: st.in.Inputs, Contexts: contexts}
+	st.envKeys = slices.Sorted(maps.Keys(p.Run.Env))
+	var envReads [][]string
+	for _, k := range st.envKeys {
+		envReads = append(envReads, readPatterns(p.Run.Env[k].Exprs(), nil)...)
+	}
+	env, envSecret, envPrivate := map[string]string{}, map[string]bool{}, map[string]bool{}
+	submitted, _ := st.in.Record.Submitted.Get().(map[string]any)
+	st.budget = expr.Scope{}.Budgeted()
+	reported := len(st.diags)
+	remeant := 0
+	for round := 0; ; round++ {
+		if err := st.ctx.Err(); err != nil {
 			return err
 		}
-	}
-	// What the run was given goes in its place, an outer one before those
-	// in it, as a password in a list held as derived, or as private.
-	secrets, private := setOf(p.Run.Secrets), setOf(p.Run.Private)
-	type given struct {
-		name string
-		path []string
-		v    any
-	}
-	var gave []given
-	for _, from := range []struct {
-		values map[string]any
-		names  map[string]bool
-		what   string
-	}{{st.in.Record.Passwords, secrets, "password"}, {st.in.Record.Private, private, "private value"}} {
-		for name, v := range from.values {
-			path := plan.SplitPath(name)
-			if len(path) < 2 || path[0] != "inputs" || !from.names[name] {
-				return fmt.Errorf("compile: the plan names no %s %s", from.what, name)
+		if round > 0 {
+			// Resolving the inputs again is work the budget counts, so that
+			// rounds without end, each as large as the run, fail the run.
+			nodes := len(st.r.fields) + len(st.r.rows) + len(st.envKeys)
+			if err := st.budget.Charge(roundWork * nodes); err != nil {
+				if be, ok := errors.AsType[*expr.BudgetError](err); ok {
+					st.report(be.Kind, jsonptr.Format(definitionsPath), problems.Params{"limit": be.Limit})
+				}
+				return nil
 			}
-			gave = append(gave, given{name, path[1:], v})
 		}
-	}
-	slices.SortFunc(gave, func(a, b given) int {
-		return cmp.Or(cmp.Compare(len(a.path), len(b.path)), slices.Compare(a.path, b.path), cmp.Compare(a.name, b.name))
-	})
-	for _, g := range gave {
-		if err := setGrow(values, g.path, jsonvalue.Clone(g.v)); err != nil {
-			return err
+		st.s = &startState{
+			madeSecret: map[string]bool{}, madePrivate: map[string]bool{}, pendingEnv: map[string]bool{},
+			envReads: envReads, budget: st.budget,
 		}
-	}
-
-	r.values = values
-
-	// What is private and what is a secret are marked by the names the
-	// plan gives them, and the variables by their contexts.
-	for name := range st.secretVariables {
-		st.s.secrets.Add(plan.SplitPath(name))
-	}
-	for _, f := range r.fields {
-		if f.typ == "password" {
-			r.mark(f.path)
-			st.s.secrets.Add(slices.Concat([]string{"inputs"}, f.path))
+		st.demanded, st.envPatterns = map[string]demandedEnv{}, map[string][][]string{}
+		st.s.settle, st.s.envReadsOf = st.settle, st.envReadsOf
+		st.s.run = plan.RunValues{
+			Format: p.Run.Format, Org: st.org, Vars: st.vars, Env: maps.Clone(env),
+			Remote: maps.Clone(p.Run.Remote), Sessions: maps.Clone(p.Run.SessionNames),
 		}
-	}
-	for _, names := range [][]string{p.Run.Secrets, p.Run.Private} {
-		for _, name := range names {
-			if path := plan.SplitPath(name); path[0] == "inputs" && len(path) > 1 {
-				r.mark(path[1:])
-				if secrets[name] {
-					st.s.secrets.Add(path)
+		for _, k := range st.envKeys {
+			if _, ok := env[k]; !ok {
+				st.s.pendingEnv[plan.JoinPath("env", k)] = true
+			}
+		}
+		for name := range st.secretVariables {
+			st.s.secrets.Add(plan.SplitPath(name))
+		}
+		st.r = newInputResolver(doc, submitted, opts)
+		st.r.start, st.r.final, st.r.means = st.s, true, st.in.Record.Means
+		// What a round evaluated of env: before reads as it did.
+		for k := range envPrivate {
+			st.r.marks.Add([]string{"env", k})
+			name := plan.JoinPath("env", k)
+			if envSecret[k] {
+				st.s.secrets.Add([]string{"env", k})
+				st.s.madeSecret[name] = true
+			} else {
+				st.s.madePrivate[name] = true
+			}
+		}
+		// What the plan names as a secret, or private, is one still.
+		for _, names := range [][]string{p.Run.Secrets, p.Run.Private} {
+			for _, name := range names {
+				if path := plan.SplitPath(name); path[0] == "inputs" && len(path) > 1 {
+					st.r.mark(path[1:])
 				}
 			}
 		}
-	}
-
-	// Each part held for Start is a part of its input's value that Start
-	// evaluates, which is unknown until it does. The input is the one held
-	// whose path leads to the part's, by the trie of their paths.
-	parted := map[*field]bool{}
-	for _, part := range p.Run.DeferredParts {
-		path := plan.SplitPath(part.Name)
-		loc, err := jsonptr.Split(part.Location)
-		if err != nil || len(path) < 2 || path[0] != "inputs" || len(loc) <= len(definitionsPath) || !slices.Equal(loc[:len(definitionsPath)], definitionsPath) {
-			return fmt.Errorf("compile: the plan's part %s, at %s, isn't one the compiler holds for Start", part.Name, part.Location)
-		}
-		var f *field
-		for g := range holders.Reached(path[1:]) {
-			if isPrefix(g.path, path[1:]) && (f == nil || len(g.path) > len(f.path) || len(g.path) == len(f.path) && g.seq < f.seq) {
-				f = g
+		for _, name := range p.Run.Secrets {
+			if path := plan.SplitPath(name); path[0] == "inputs" && len(path) > 1 {
+				st.s.secrets.Add(path)
 			}
 		}
-		if f == nil {
-			return fmt.Errorf("compile: the plan's part %s is in no input it holds for Start", part.Name)
-		}
-		f.addLater(laterPart{path: path[1+len(f.path):], loc: loc, index: slices.Clone(part.Index), dflt: part.Default, text: part.Text, null: part.Null, containers: part.Containers})
-		parted[f] = true
-		st.pending[f]++
-	}
-	for _, f := range r.fields {
-		if parted[f] {
-			st.deferred = append(st.deferred, f)
-		}
-	}
-	// What the run ignored has no value, as the compiler left it.
-	for name := range jsonvalue.Sorted(st.in.Record.Ignored) {
-		var f *field
-		if path := plan.SplitPath(name); len(path) > 1 && path[0] == "inputs" {
-			f = r.fieldAt(path[1:])
-		}
-		if f == nil {
-			return fmt.Errorf("compile: the secret record names an ignored input %s the definitions don't have", name)
-		}
-		if _, has := jsonptr.Lookup(values, f.path); has {
-			return fmt.Errorf("compile: the plan holds a value of the ignored input %s", name)
-		}
-		f.ignored = true
-	}
-	if len(st.deferred) != len(held) {
-		return errors.New("compile: the plan holds an input for Start without any of its parts")
-	}
-	// Every value the plan names that Start doesn't evaluate is in the
-	// secret record.
-	for _, from := range []struct {
-		names  []string
-		values map[string]any
-	}{{p.Run.Secrets, st.in.Record.Passwords}, {p.Run.Private, st.in.Record.Private}} {
-		for _, name := range from.names {
-			path := plan.SplitPath(name)
-			if _, ok := from.values[name]; ok || path[0] != "inputs" {
-				continue
+		st.r.resolve()
+		progress, late := st.evalEnv()
+		again := late != nil
+		for _, k := range late {
+			if st.late == nil {
+				st.late = map[string]bool{}
 			}
-			if !slices.ContainsFunc(held, func(h string) bool {
-				at := plan.SplitPath(h)
-				return isPrefix(at, path[1:]) || isPrefix(path[1:], at)
-			}) {
-				return fmt.Errorf("compile: the secret record holds no value of %s, which the plan names", name)
+			st.late[k] = true
+		}
+		if !again && len(st.r.remeant) > 0 && remeant < len(st.in.Record.Means) && st.readsRelative() {
+			// A part whose expression gave another value than was
+			// submitted, which a relative reference can have read, is what
+			// it gave in its place in what was submitted, a round for each
+			// such part at most.
+			again = true
+			remeant++
+			submitted = orEmptyMap(jsonvalue.CloneMap(submitted))
+			for name, v := range jsonvalue.Sorted(st.r.remeant) {
+				// A part not in what was submitted, as one of a list's
+				// default rows, is what the expression gives all the same.
+				_ = setGrow(submitted, plan.SplitPath(name), v)
 			}
 		}
-	}
-	// The rows of each list are known as they were to the compiler, which
-	// read a row's field that has no value as null (evalValues): those of a
-	// list Start evaluates a part of it collects again once it has
-	// (fillRows).
-	var collect func(fields []*field)
-	collect = func(fields []*field) {
-		for _, f := range fields {
-			collect(r.collectRows(f))
-		}
-	}
-	collect(r.fields)
-
-	st.envKeys = slices.Sorted(maps.Keys(p.Run.Env))
-	st.s.pendingEnv = map[string]bool{}
-	for _, k := range st.envKeys {
-		st.s.pendingEnv[plan.JoinPath("env", k)] = true
-	}
-	st.s.run = plan.RunValues{
-		Format: p.Run.Format, Org: st.s.run.Org, Vars: st.s.run.Vars, Env: map[string]string{},
-		Remote: maps.Clone(p.Run.Remote), Sessions: maps.Clone(p.Run.SessionNames),
-	}
-	return nil
-}
-
-// recordFor returns what the secret record holds, given, for each of the
-// names the plan gives, by them, or an error if it holds another, or none
-// for one: a record that doesn't fit the plan.
-func recordFor[V any](names []string, given map[string]V, what string) (map[string]V, error) {
-	out := make(map[string]V, len(names))
-	for _, name := range names {
-		v, ok := given[name]
-		if !ok {
-			return nil, fmt.Errorf("compile: the secret record holds no %s %s", what, name)
-		}
-		out[name] = v
-	}
-	for name := range given {
-		if _, ok := out[name]; !ok {
-			return nil, fmt.Errorf("compile: the plan names no %s %s", what, name)
-		}
-	}
-	return out, nil
-}
-
-// fieldAt returns the first input whose value is at path, or nil.
-func (r *inputResolver) fieldAt(path []string) *field {
-	var out *field
-	for f := range r.fieldsAt().Reached(path) {
-		if slices.Equal(f.path, path) && (out == nil || f.seq < out.seq) {
-			out = f
-		}
-	}
-	return out
-}
-
-// isPrefix reports whether path is prefix or is under it.
-func isPrefix(prefix, path []string) bool {
-	return len(prefix) <= len(path) && slices.Equal(prefix, path[:len(prefix)])
-}
-
-// setOfFields returns the set of fields.
-func setOfFields(fields []*field) map[*field]bool {
-	set := make(map[*field]bool, len(fields))
-	for _, f := range fields {
-		set[f] = true
-	}
-	return set
-}
-
-// setOf returns the set of the strings list holds.
-func setOf(list []string) map[string]bool {
-	set := make(map[string]bool, len(list))
-	for _, s := range list {
-		set[s] = true
-	}
-	return set
-}
-
-// A startNode is what Start evaluates of what the plan left to it: the
-// i'th part of f's value, or the workflow's env: value env.
-type startNode struct {
-	f   *field
-	i   int
-	env string
-}
-
-// evaluate evaluates what the plan holds for Start, the parts of the
-// inputs' values and the workflow's env:, each once, in the order they
-// read each other, as the compiler fills in the inputs (pendingFields):
-// one is evaluated once nothing its expressions read waits any longer,
-// what they read through a definition, as a relative reference does,
-// among it (nodeExprs). One that reads what waits in a way the order can't
-// see is evaluated again once what it read is, in another round. Once
-// final, what is left once a round evaluates nothing reads itself, or each
-// other. It returns ctx's error once ctx is done.
-func (st *starter) evaluate(final bool) error {
-	for {
-		nodes := st.pendingNodes()
-		if len(nodes) == 0 || !st.evaluateInOrder(nodes) {
-			break
-		}
-	}
-	if err := st.ctx.Err(); err != nil {
-		return err
-	}
-	if !final {
-		return nil
-	}
-	var left []string
-	for _, n := range st.pendingNodes() {
-		if n.f == nil {
-			left = append(left, plan.JoinPath("env", n.env))
+		if again {
+			clear(env)
+			clear(envSecret)
+			clear(envPrivate)
+			st.diags = st.diags[:reported]
 			continue
 		}
-		left = append(left, plan.JoinPath(slices.Concat([]string{"inputs"}, n.f.path, n.f.later[n.i].path)...))
+		for _, k := range st.envKeys {
+			if name := plan.JoinPath("env", k); !st.s.pendingEnv[name] {
+				env[k] = st.s.run.Env[k]
+				envSecret[k] = st.s.madeSecret[name]
+				if st.s.madeSecret[name] || st.s.madePrivate[name] {
+					envPrivate[k] = true
+				}
+			}
+		}
+		waiting := slices.ContainsFunc(st.r.fields, func(f *field) bool { return f.deferred && !f.ignored })
+		if waiting && progress {
+			continue
+		}
+		if waiting || len(st.s.pendingEnv) > 0 {
+			st.reportLeft()
+		}
+		return nil
 	}
+}
+
+// reportLeft reports what is left once Start can evaluate nothing more:
+// each input whose value reads what Start doesn't know, as needs, as that
+// context's problem; and the rest, inputs and env: values that read
+// themselves or each other, as values_read_each_other.
+func (st *starter) reportLeft() {
+	r := st.r
+	var left []string
+	for _, f := range r.fields {
+		if !f.deferred || f.ignored {
+			continue
+		}
+		waiting := false
+		for _, part := range f.later {
+			if part.variable {
+				continue
+			}
+			_, read, err := r.evalRead(part.loc, part.index)
+			if u, ok := errors.AsType[*expr.UnknownError](err); ok && u.Name != "inputs" && u.Name != "env" {
+				st.reportEval(part.loc, err, read)
+				continue
+			}
+			waiting = true
+		}
+		if waiting {
+			left = append(left, plan.JoinPath(slices.Concat([]string{"inputs"}, f.path)...))
+		}
+	}
+	left = append(left, slices.Sorted(maps.Keys(st.s.pendingEnv))...)
 	if len(left) > 0 {
 		st.report(problems.ValuesReadEachOther, "", problems.Params{"names": problems.QuoteAll(left)})
 	}
-	return nil
 }
 
-// pendingNodes returns what Start has yet to evaluate, in order: the
-// parts of each input, in the order of the inputs and of their parts, and
-// then the env: values, in the order of their names.
-func (st *starter) pendingNodes() []startNode {
-	var out []startNode
-	for _, f := range st.deferred {
-		for i, p := range f.later {
-			if !p.variable {
-				out = append(out, startNode{f: f, i: i})
-			}
+// evalEnv evaluates the workflow's env: values not known yet, each after
+// those it reads, and reports whether it evaluated any; or else returns
+// those that the round evaluated as the values were filled in (demanded)
+// that give otherwise than they gave then, or read otherwise of what is
+// private, without evaluating any. They read an input of a platform's type
+// as it was submitted, as what the compiler evaluates before it checks the
+// inputs does (plan.Run.Inputs).
+func (st *starter) evalEnv() (progress bool, late []string) {
+	r := st.r
+	if len(st.s.pendingEnv) == 0 && len(st.demanded) == 0 {
+		return false, nil
+	}
+	resolved := map[string]any{}
+	for name, given := range jsonvalue.Sorted(r.unresolved) {
+		path := plan.SplitPath(name)
+		if v, ok := jsonptr.Lookup(r.values, path); ok {
+			resolved[name] = v
+			r.set(path, jsonvalue.Clone(given))
 		}
 	}
-	for _, k := range st.envKeys {
-		if st.s.pendingEnv[plan.JoinPath("env", k)] {
-			out = append(out, startNode{env: k})
+	for _, k := range slices.Sorted(maps.Keys(st.demanded)) {
+		d := st.demanded[k]
+		out, read, err := st.p.Run.Env[k].EvalRead(r.scope())
+		if err != nil || expr.Text(out) != d.text || read.Private != d.read.Private || read.Marked != d.read.Marked {
+			late = append(late, k)
 		}
 	}
-	return out
+	if late == nil {
+		left := len(st.s.pendingEnv)
+		visiting := map[string]bool{}
+		for _, k := range st.envKeys {
+			st.settleEnv(k, visiting, nil)
+		}
+		progress = len(st.s.pendingEnv) < left
+	}
+	for name, v := range jsonvalue.Sorted(resolved) {
+		r.set(plan.SplitPath(name), v)
+	}
+	return progress, late
 }
 
-// A nodeGroup is the nodes that a pattern reaches, such as a list's parts,
-// or all the env: values, which each node that reads them all waits for
-// as one: a node waits once for each group it reads, not once for each of
-// the group's nodes, so that each of a list's rows reading another list
-// adds a wait for each row, not one for each row of each list. left is how
-// many of the nodes aren't evaluated yet. A reader that is one of them
-// waits for the others (selfReaders): it is ready once it is the one left.
-type nodeGroup struct {
-	members, readers, selfReaders []int
-	left                          int
+// settle evaluates each env: value not evaluated yet that exprs read, and
+// those they read in turn, that it can as the inputs' values are filled
+// in: once ready reports that what it reads of them is filled in, if it
+// evaluates without an error, which the round reports once the values are
+// filled in, if it is one still, and unless, in a round before, it gave
+// otherwise once they were (late): such a one is evaluated only then.
+func (st *starter) settle(exprs []*expr.Expr, ready func(pattern []string) bool) {
+	if len(st.s.pendingEnv) == 0 {
+		return
+	}
+	var visiting map[string]bool
+	for _, k := range st.envRefs(exprs) {
+		if visiting == nil {
+			visiting = map[string]bool{}
+		}
+		st.settleEnv(k, visiting, ready)
+	}
 }
 
-// evaluateInOrder evaluates nodes in the order they read each other, as
-// their expressions say, and then once each of those left, as one that
-// reads what waits through a definition is; and reports whether it
-// evaluated any.
-func (st *starter) evaluateInOrder(nodes []startNode) bool {
-	var at reach.Trie[int]
-	envAt := map[string]int{}
-	paths := make([][]string, len(nodes))
-	for i, n := range nodes {
-		if n.f != nil {
-			paths[i] = slices.Concat(n.f.path, n.f.later[n.i].path)
-			at.Add(paths[i], i)
-		} else {
-			envAt[n.env] = i
-		}
+// readsRelative reports whether an expression of the input definitions
+// makes a relative reference, which doesn't make what makes it wait for
+// the value it reads.
+func (st *starter) readsRelative() bool {
+	exprs, _ := st.r.workflow.Exprs(definitionsPath)
+	return slices.ContainsFunc(exprs, (*expr.Expr).Relative)
+}
+
+// settleEnv evaluates the workflow's env: value k, if it isn't evaluated
+// yet, after those it reads: as the values are filled in, only once ready
+// reports that each pattern of what it reads of them is (settle), and once
+// they are, with a nil ready, whatever it gives. visiting holds the values
+// that are under way, or were: one that reads itself, through others,
+// isn't evaluated, and reads as not evaluated yet.
+func (st *starter) settleEnv(k string, visiting map[string]bool, ready func(pattern []string) bool) {
+	if !st.s.pendingEnv[plan.JoinPath("env", k)] || visiting[k] || ready != nil && st.late[k] {
+		return
 	}
-	waits := make([]int, len(nodes))
-	readers := make([][]int, len(nodes))
-	groupAt := map[string]*nodeGroup{}
-	inGroups := make([][]*nodeGroup, len(nodes))
-	// group returns the group of the nodes members makes, under key, made
-	// once.
-	group := func(key string, members func() []int) *nodeGroup {
-		g, ok := groupAt[key]
-		if !ok {
-			g = &nodeGroup{members: members()}
-			g.left = len(g.members)
-			for _, j := range g.members {
-				inGroups[j] = append(inGroups[j], g)
-			}
-			groupAt[key] = g
-		}
-		return g
+	visiting[k] = true
+	exprs := st.p.Run.Env[k].Exprs()
+	for _, j := range st.envRefs(exprs) {
+		st.settleEnv(j, visiting, ready)
 	}
-	for i, n := range nodes {
-		exprs, index := st.nodeExprs(n)
-		seen := map[int]bool{i: true}
-		read := func(j int) {
-			if !seen[j] {
-				seen[j] = true
-				readers[j] = append(readers[j], i)
-				waits[i]++
-			}
-		}
-		seenGroup := map[*nodeGroup]bool{}
-		readAll := func(g *nodeGroup, self bool) {
-			switch {
-			case len(g.members) == 1:
-				read(g.members[0])
-			case seenGroup[g] || len(g.members) == 0:
-			case self:
-				seenGroup[g] = true
-				g.selfReaders = append(g.selfReaders, i)
-				waits[i]++
-			default:
-				seenGroup[g] = true
-				g.readers = append(g.readers, i)
-				waits[i]++
-			}
-		}
-		for _, pattern := range readPatterns(exprs, index) {
-			g := group("inputs"+jsonptr.Format(pattern), func() []int {
-				members := slices.Collect(at.Reached(pattern))
-				slices.Sort(members)
-				return slices.Compact(members)
-			})
-			readAll(g, n.f != nil && reach.Reaches(pattern, paths[i]))
-		}
-		for _, e := range exprs {
-			for _, ref := range e.Refs() {
-				switch {
-				case ref.Context != "env":
-				case unnamed(ref.Path):
-					readAll(group("env", func() []int { return slices.Sorted(maps.Values(envAt)) }), n.f == nil)
-				default:
-					if j, ok := envAt[ref.Path[0]]; ok {
-						read(j)
-					}
-				}
-			}
-		}
+	if ready != nil && slices.ContainsFunc(readPatterns(exprs, nil), func(p []string) bool { return !ready(p) }) {
+		return
 	}
-	var ready intHeap
-	for i := range nodes {
-		if waits[i] == 0 {
-			heap.Push(&ready, i)
-		}
+	st.evalEnvValue(k, ready != nil)
+}
+
+// envReadsOf returns the patterns (reach.Patterns) of the paths in the
+// inputs' values that the env: values exprs read, of those not evaluated
+// yet, read, and that those they read read, in turn.
+func (st *starter) envReadsOf(exprs []*expr.Expr) [][]string {
+	if len(st.s.pendingEnv) == 0 {
+		return nil
 	}
-	done := make([]bool, len(nodes))
-	release := func(j int) {
-		if waits[j]--; waits[j] == 0 {
-			heap.Push(&ready, j)
-		}
-	}
-	progress := false
-	for ready.Len() > 0 {
-		if st.ctx.Err() != nil {
-			return false
-		}
-		i := heap.Pop(&ready).(int)
-		if !st.evalNode(nodes[i]) {
+	var out [][]string
+	for _, k := range st.envRefs(exprs) {
+		if !st.s.pendingEnv[plan.JoinPath("env", k)] {
 			continue
 		}
-		done[i], progress = true, true
-		for _, j := range readers[i] {
-			release(j)
-		}
-		for _, g := range inGroups[i] {
-			switch g.left--; g.left {
-			case 0:
-				for _, j := range g.readers {
-					release(j)
+		reads, ok := st.envPatterns[k]
+		if !ok {
+			seen := map[string]bool{}
+			var walk func(k string)
+			walk = func(k string) {
+				if seen[k] || st.late[k] || !st.s.pendingEnv[plan.JoinPath("env", k)] {
+					return
 				}
-			case 1:
-				if len(g.selfReaders) > 0 {
-					last := g.members[slices.IndexFunc(g.members, func(j int) bool { return !done[j] })]
-					if slices.Contains(g.selfReaders, last) {
-						release(last)
-					}
+				seen[k] = true
+				e := st.p.Run.Env[k].Exprs()
+				reads = append(reads, readPatterns(e, nil)...)
+				for _, j := range st.envRefs(e) {
+					walk(j)
 				}
 			}
+			walk(k)
+			st.envPatterns[k] = reads
 		}
-	}
-	for i, n := range nodes {
-		if st.ctx.Err() != nil {
-			return false
-		}
-		if !done[i] && st.evalNode(n) {
-			progress = true
-		}
-	}
-	return progress
-}
-
-// nodeExprs returns the expressions n evaluates, and those of what they
-// read through a definition (throughDefinitions), and the list rows they
-// are for.
-func (st *starter) nodeExprs(n startNode) ([]*expr.Expr, []int) {
-	if n.f == nil {
-		return st.p.Run.Env[n.env].Exprs(), nil
-	}
-	p := n.f.later[n.i]
-	exprs, err := st.r.workflow.Exprs(p.loc)
-	if err != nil {
-		return nil, nil
-	}
-	return st.r.throughDefinitions(exprs, p.loc), p.index
-}
-
-// throughDefinitions returns exprs, the expressions at loc in the
-// workflow, with those of what their relative references read, and of
-// what those read in turn: what evaluating them reads through a
-// definition, as ..region.default reads what the default of region does.
-// One that reads into a mapping is taken as at the mapping.
-func (r *inputResolver) throughDefinitions(exprs []*expr.Expr, loc []string) []*expr.Expr {
-	type at struct {
-		exprs []*expr.Expr
-		loc   []string
-	}
-	// A copy once, as exprs are the workflow's.
-	out := slices.Clip(exprs)
-	seen := map[string]bool{jsonptr.Format(loc): true}
-	queue := []at{{exprs, loc}}
-	for len(queue) > 0 {
-		q := queue[0]
-		queue = queue[1:]
-		for _, e := range q.exprs {
-			for _, rel := range e.Relatives() {
-				if rel.Up > len(q.loc) {
-					continue
-				}
-				base := len(q.loc) - rel.Up
-				target := slices.Concat(q.loc[:base], rel.Path)
-				// What it reads is at the target, or in a string on the way.
-				for n := len(target); n > base; n-- {
-					if _, ok := jsonptr.Lookup(r.doc.Value, target[:n]); !ok {
-						continue
-					}
-					if k := jsonptr.Format(target[:n]); !seen[k] {
-						seen[k] = true
-						found, err := r.workflow.Exprs(target[:n])
-						if err == nil && len(found) > 0 {
-							out = append(out, found...)
-							queue = append(queue, at{found, target[:n]})
-						}
-					}
-					break
-				}
-			}
-		}
+		out = append(out, reads...)
 	}
 	return out
 }
 
-// evalNode evaluates n, if it is still to be, and reports whether it did,
-// or failed: not if it read what isn't evaluated yet.
-func (st *starter) evalNode(n startNode) bool {
-	if n.f == nil {
-		return st.s.pendingEnv[plan.JoinPath("env", n.env)] && st.evalEnv(n.env)
+// envRefs returns the names of the workflow's env: values that exprs
+// read, in order: all of them, for one that reads env whole.
+func (st *starter) envRefs(exprs []*expr.Expr) []string {
+	var out []string
+	for _, e := range exprs {
+		for _, ref := range e.Refs() {
+			if ref.Context != "env" {
+				continue
+			}
+			if len(ref.Path) == 0 {
+				return st.envKeys
+			}
+			if _, ok := st.p.Run.Env[ref.Path[0]]; ok {
+				out = append(out, ref.Path[0])
+			}
+		}
 	}
-	return !n.f.later[n.i].variable && st.evalPart(n.f, n.i)
-}
-
-// intHeap is a heap of ints, the least first.
-type intHeap []int
-
-func (h intHeap) Len() int           { return len(h) }
-func (h intHeap) Less(i, j int) bool { return h[i] < h[j] }
-func (h intHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *intHeap) Push(x any)        { *h = append(*h, x.(int)) }
-func (h *intHeap) Pop() any {
-	old := *h
-	x := old[len(old)-1]
-	*h = old[:len(old)-1]
-	return x
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // waits reports whether err is an evaluation that read what Start hasn't
@@ -927,216 +845,22 @@ func waits(err error) bool {
 	return ok && (u.Name == "inputs" || u.Name == "env")
 }
 
-// A sharedExprs is what a part's expressions, and what they read through a
-// definition, read of the inputs, by its patterns (reach.Patterns), for
-// expressions that read neither a row index, nor a definition by a
-// relative reference, nor an env value: they give the same for each row of
-// a list while what they read doesn't change.
-type sharedExprs struct{ patterns [][]string }
-
-// A memoized is what evaluating a part's expressions, at key, gave, which
-// each part with the same expressions takes while nothing they read
-// changes, and the patterns of what they read.
-type memoized struct {
-	key      string
-	v        any
-	read     expr.Read
-	patterns [][]string
-}
-
-// sharedPart returns the key of what evaluating p's expressions gives, for
-// the part at path, if it is the same for each part with them
-// (sharedExprs), and the part doesn't read itself, and what they read.
-// Create compares what a form sent for each of a list's rows with what
-// such a default gives once (evalCompare), and Start evaluates it once,
-// rather than for each row, each of which can read all of another list.
-func (st *starter) sharedPart(p laterPart, path []string) (string, [][]string, bool) {
-	s := st.s
-	key := jsonptr.Format(p.loc)
-	shared, known := s.shared[key]
-	if !known {
-		if exprs, err := st.r.workflow.Exprs(p.loc); err == nil {
-			exprs = st.r.throughDefinitions(exprs, p.loc)
-			if !slices.ContainsFunc(exprs, func(e *expr.Expr) bool {
-				return readsIndex(e) || slices.ContainsFunc(e.Refs(), func(ref expr.Ref) bool { return ref.Context == "env" })
-			}) {
-				shared = &sharedExprs{readPatterns(exprs, nil)}
-			}
-		}
-		if s.shared == nil {
-			s.shared = map[string]*sharedExprs{}
-		}
-		s.shared[key] = shared
-	}
-	if shared == nil || slices.ContainsFunc(shared.patterns, func(q []string) bool { return reach.Reaches(q, path) }) {
-		return "", nil, false
-	}
-	return key, shared.patterns, true
-}
-
-// remember keeps what the expressions at key gave, which read what
-// patterns reach, until it changes.
-func (s *startState) remember(key string, v any, read expr.Read, patterns [][]string) {
-	if old := s.memo[key]; old != nil {
-		s.drop(old)
-	}
-	// A copy, as the value can be part of what the evaluation read.
-	m := &memoized{key: key, v: jsonvalue.Clone(v), read: read, patterns: patterns}
-	if s.memo == nil {
-		s.memo = map[string]*memoized{}
-	}
-	s.memo[key] = m
-	for _, q := range patterns {
-		s.memoAt.Add(q, m)
-	}
-}
-
-// forget drops what was remembered of evaluations that read the inputs'
-// value at path, which changed, or was marked.
-func (s *startState) forget(path []string) {
-	if len(s.memo) == 0 {
-		return
-	}
-	var stale []*memoized
-	for m := range s.memoAt.Reaching(path) {
-		stale = append(stale, m)
-	}
-	for _, m := range stale {
-		s.drop(m)
-	}
-}
-
-// drop drops m.
-func (s *startState) drop(m *memoized) {
-	if s.memo[m.key] != m {
-		return
-	}
-	delete(s.memo, m.key)
-	for _, q := range m.patterns {
-		s.memoAt.Remove(q, m)
-	}
-}
-
-// evalPart evaluates the i'th part of f's value held for Start, where the
-// workflow writes it, and reports whether it did, or failed: not if it
-// read what isn't evaluated yet. A part whose expressions give the same
-// for each row of a list takes what they gave for another, while nothing
-// they read has changed (sharedPart).
-func (st *starter) evalPart(f *field, i int) bool {
+// evalEnvValue evaluates the workflow's env: value k, and reports whether
+// it did, or failed: not if it read what isn't evaluated yet, nor, for one
+// demanded as the values are filled in, if it failed. What it reports is
+// Start's own, which a later round, which reads the value as it is,
+// doesn't report again.
+func (st *starter) evalEnvValue(k string, demand bool) bool {
 	r := st.r
-	p := f.later[i]
-	path := slices.Concat(f.path, p.path)
-	key, patterns, shared := st.sharedPart(p, path)
-	var (
-		v    any
-		read expr.Read
-	)
-	if m := st.s.memo[key]; shared && m != nil {
-		v, read = m.v, m.read
-	} else {
-		var err error
-		if v, read, err = st.evalHeld(p, path); waits(err) {
-			return false
-		} else if err != nil {
-			st.reportEval(p.loc, err, read)
-			f.later[i].variable = true
-			st.failed[f] = true
-			st.pending[f]--
-			return true
-		}
-		if shared {
-			st.s.remember(key, v, read, patterns)
-		}
-	}
-	f.later[i].variable = true
-	switch {
-	case p.dflt && (v == nil || v == "") && (p.null || p.text):
-		// A default of "" or null gives no value, as when the run is
-		// created (setDefault), and leaves the value as it was: null, or
-		// the form's text.
-		var was any
-		if p.text {
-			was = lookup(r.doc.Value, p.loc)
-		}
-		r.set(path, was)
-	case p.dflt && (v == nil || v == ""):
-		r.remove(path)
-		if p.containers > 0 || len(p.path) == 0 && st.above[f] > 0 {
-			st.emptied[f] = append(st.emptied[f], f.later[i])
-		}
-	default:
-		// A copy, as the value can be part of what the evaluation read.
-		r.set(path, jsonvalue.Clone(v))
-	}
-	st.s.made(r, path, read)
-	if st.pending[f]--; st.pending[f] == 0 {
-		st.removeEmpty(f)
-		st.fillRows(f)
-	}
-	return true
-}
-
-// evalHeld evaluates p, the part of an input's value at path held for
-// Start. What reads the value it gives reads it as the compiler's
-// evaluation did, rather than as what isn't known yet: a form's text as it
-// is, and what was missing as null, until it gives one.
-func (st *starter) evalHeld(p laterPart, path []string) (any, expr.Read, error) {
-	r := st.r
-	r.scope()
-	self := false
-	if v, ok := jsonptr.Lookup(r.view, path); ok {
-		if _, unknown := v.(expr.Unknown); unknown {
-			var was any
-			if p.text {
-				was = lookup(r.doc.Value, p.loc)
-			}
-			setIn(r.view, path, was)
-			r.evaluators, self = nil, true
-		}
-	}
-	v, read, err := r.evalRead(p.loc, p.index)
-	if err != nil && self {
-		r.refresh(path)
-	}
-	return v, read, err
-}
-
-// removeEmpty removes the mappings on the way to each default of f's value
-// that gave no value, which the plan held only to hold it, that are empty
-// now (plan.DeferredPart.Containers), as the compiler never made them; and
-// for one that is all of f's value, those on the way to f that holding f
-// made.
-func (st *starter) removeEmpty(f *field) {
-	for _, p := range st.emptied[f] {
-		path := slices.Concat(f.path, p.path)
-		levels := p.containers
-		if len(p.path) == 0 {
-			levels = st.above[f]
-		}
-		for n := 1; n <= levels; n++ {
-			at := path[:len(path)-n]
-			if m, ok := lookup(st.r.values, at).(map[string]any); !ok || len(m) > 0 {
-				break
-			}
-			st.r.remove(at)
-		}
-	}
-	delete(st.emptied, f)
-}
-
-// evalEnv evaluates the workflow's env: value k, and reports whether it
-// did, or failed: not if it read what isn't evaluated yet.
-func (st *starter) evalEnv(k string) bool {
-	r := st.r
-	if st.holdEnv && st.readsShaped(k) {
-		return false
-	}
 	out, read, err := st.p.Run.Env[k].EvalRead(r.scope())
 	switch {
-	case waits(err):
+	case waits(err), demand && err != nil:
 		return false
 	case err != nil:
+		n := len(r.diags)
 		st.reportEval([]string{"env", k}, err, read)
+		st.diags = append(st.diags, r.diags[n:]...)
+		r.diags = r.diags[:n]
 	}
 	name := plan.JoinPath("env", k)
 	text := ""
@@ -1163,377 +887,48 @@ func (st *starter) evalEnv(k string) bool {
 		}
 	}
 	r.evaluators = nil
-	return true
-}
-
-// fillRows fills in the values of the fields of f's rows, and of the rows
-// of the lists in them, once Start has evaluated every part of f's value
-// it holds: each row's fields take their defaults, as they do when the
-// run is created (fillDefaults), so a row, or a list in a row, that a part
-// gives has its fields filled in, as Create filled them in before the plan
-// held the part's expression in their place. The rows are collected again
-// from f's value as it is, so that a field that has a value keeps it. A
-// default that reads what Start hasn't evaluated yet is a part of f's
-// value that it evaluates once it has, after which it fills in f's rows
-// again.
-func (st *starter) fillRows(f *field) {
-	r := st.r
-	if defs, _ := f.rowInputs(); defs == nil {
-		return
-	}
-	r.dropRows(f)
-	f.rows = nil
-	var pending pendingFields
-	var start func(fields []*field)
-	start = func(fields []*field) {
-		for _, c := range fields {
-			if r.prepare(c) {
-				pending.add(c)
-			} else {
-				start(r.collectRows(c))
-			}
-		}
-	}
-	start(r.collectRows(f))
-	for p := pending.next(); p != nil; p = pending.next() {
-		r.evalPending(p.f)
-		start(r.collectRows(p.f))
-		pending.filled(p)
-	}
-	if left := pending.waiting(); len(left) > 0 {
-		names := make([]string, len(left))
-		for i, c := range left {
-			names[i] = strings.Join(c.path, ".")
-		}
-		r.reportAt(problems.DefaultsReadEachOther, left[0].loc, problems.Params{"inputs": problems.QuoteAll(names)})
-	}
-}
-
-// conditionKeys are an input's conditions, in the order the compiler
-// evaluates them (applyConditions).
-var conditionKeys = []string{"hidden", "ignore", "optional"}
-
-// checkDecisions decides again each input's condition that read a
-// variable or a password as the run was created (plan.Run.Decisions),
-// where the input definitions write it, and reports run_shape_changed
-// where one decides otherwise than the secret record says it did. It goes
-// through the inputs in the order the compiler did, and reads them as the
-// compiler's conditions read them: as they were given, with each ignored
-// input's value, from the secret record (Record.Ignored), until it reaches
-// the input, which it then drops. On the way, it decides whether
-// each input Start evaluated, and each group it is in, is hidden and
-// optional, which checkInputs reads. A decision of no input's condition,
-// or a record that doesn't fit the plan, is an error.
-func (st *starter) checkDecisions() error {
-	r, p := st.r, st.p
-	decided, err := recordFor(p.Run.Decisions, st.in.Record.Decisions, "decision")
-	if err != nil {
-		return err
-	}
-	byLoc := make(map[string]*field, len(r.fields))
-	for _, f := range r.fields {
-		if _, ok := byLoc[jsonptr.Format(f.loc)]; !ok {
-			byLoc[jsonptr.Format(f.loc)] = f
-		}
-	}
-	for _, pointer := range p.Run.Decisions {
-		loc, err := jsonptr.Split(pointer)
-		if err != nil || len(loc) <= len(definitionsPath) || byLoc[jsonptr.Format(loc[:len(loc)-1])] == nil || !slices.Contains(conditionKeys, loc[len(loc)-1]) {
-			return fmt.Errorf("compile: the plan's decision %s is of no input's condition", pointer)
-		}
-	}
-	// Each ignored input that had a value has it until the conditions
-	// reach it (restore found them).
-	dropped := map[*field]bool{}
-	for name, v := range jsonvalue.Sorted(st.in.Record.Ignored) {
-		if v == nil {
-			continue
-		}
-		f := r.fieldAt(plan.SplitPath(name)[1:])
-		// What reads it reads it as private, as it can be made from a
-		// variable or a password.
-		f.ignored = false
-		r.set(f.path, jsonvalue.Clone(v))
-		r.mark(f.path)
-		dropped[f] = true
-	}
-	// Whether an input Start evaluated, or one whose being required a
-	// decision Start makes again says, is hidden and optional, checkInputs
-	// reads.
-	wanted := map[*field]bool{}
-	for _, f := range r.fields {
-		if slices.Contains(st.deferred, f) || st.shapeDecided(f) {
-			for g := f; g != nil; g = g.group {
-				wanted[g] = true
-			}
-		}
-	}
-	st.hiddenAt, st.optionalAt = map[*field]bool{}, map[*field]bool{}
-	for _, f := range r.fields {
-		if f.group != nil && f.group.ignored {
-			f.ignored = true
-			continue
-		}
-		ignore := false
-		for _, key := range conditionKeys {
-			pointer := jsonptr.Format(appendPath(f.loc, key))
-			want, isDecision := decided[pointer]
-			if !isDecision && (!wanted[f] || key == "ignore") {
-				continue
-			}
-			got, ok := st.condition(f, key)
-			if ok && isDecision && got != want {
-				st.report(problems.RunShapeChanged, pointer, problems.Params{"key": key, "name": f.label()})
-			}
-			switch key {
-			case "hidden":
-				st.hiddenAt[f] = got
-			case "ignore":
-				// The plan holds an input whose ignore read a variable
-				// or a password whatever it decided, and Start drops it.
-				ignore = isDecision && got
-			case "optional":
-				st.optionalAt[f] = got
-			}
-		}
-		if dropped[f] || ignore {
-			f.ignored = true
-			r.drop(f)
-		}
-	}
-	return nil
-}
-
-// readsShaped reports whether the workflow's env: value k reads an input
-// whose ignore, or a group's around it, is a decision Start makes again.
-func (st *starter) readsShaped(k string) bool {
-	if st.shaped == nil {
-		st.shaped = &reach.Trie[struct{}]{}
-		if st.decisionAt == nil {
-			st.decisionAt = setOf(st.p.Run.Decisions)
-		}
-		for _, f := range st.r.fields {
-			for g := f; g != nil; g = g.group {
-				if st.decisionAt[jsonptr.Format(appendPath(g.loc, "ignore"))] {
-					st.shaped.Add(f.path, struct{}{})
-					break
-				}
-			}
-		}
-	}
-	for _, p := range readPatterns(st.p.Run.Env[k].Exprs(), nil) {
-		for range st.shaped.Reached(p) {
-			return true
-		}
-	}
-	return false
-}
-
-// shapeDecided reports whether whether f is required is for Start to
-// decide, as the compiler left it: whether f's optional, or its or a group
-// around it's ignore or hidden, is a decision of the run's shape the plan
-// names (inputResolver.shapeDecided).
-func (st *starter) shapeDecided(f *field) bool {
-	if st.decisionAt == nil {
-		st.decisionAt = setOf(st.p.Run.Decisions)
-	}
-	decided := func(g *field, key string) bool {
-		return st.decisionAt[jsonptr.Format(appendPath(g.loc, key))]
-	}
-	if decided(f, "optional") {
-		return true
-	}
-	for g := f; g != nil; g = g.group {
-		if decided(g, "ignore") || decided(g, "hidden") {
-			return true
-		}
-	}
-	return false
-}
-
-// resolve puts the values of the inputs of a platform's types that the
-// Inputs resolver changed back as it gave them, which Start read as they
-// were submitted until it had decided the run's shape (plan.Run.Unresolved).
-func (st *starter) resolve() {
-	for name, v := range jsonvalue.Sorted(st.resolved) {
-		st.r.set(plan.SplitPath(name), jsonvalue.Clone(v))
-	}
-}
-
-// checkNeeds evaluates again each job's needs: that read a variable or a
-// password as the run was created (plan.Job.NeedsExpr), and reports
-// run_shape_changed where one names other jobs than the plan's. It reads
-// the inputs as the compiler's needs: read them.
-func (st *starter) checkNeeds() {
-	r := st.r
-	scope := r.scope()
-	jobs := map[string]bool{}
-	for _, j := range st.p.Jobs {
-		jobs[j.Name] = true
-	}
-	for _, j := range st.p.Jobs {
-		if j.NeedsExpr.IsZero() {
-			continue
-		}
-		pointer := jsonptr.Append(j.Path, "needs")
-		v, read, err := j.NeedsExpr.EvalRead(scope)
-		if err != nil {
-			loc, _ := jsonptr.Split(pointer)
-			st.reportEval(loc, err, read)
-			continue
-		}
-		if !sameNeeds(v, j, jobs) {
-			st.report(problems.RunShapeChanged, pointer, problems.Params{"key": "needs", "name": j.Name})
-		}
-	}
-}
-
-// sameNeeds reports whether v, what a job's needs: gives, is what j needs:
-// the same jobs, each on all its instances or any one, as the compiler
-// reads them (resolveNeeds), in any order. jobs holds the names of the
-// run's jobs.
-func sameNeeds(v any, j plan.Job, jobs map[string]bool) bool {
-	var names []any
-	switch v := v.(type) {
-	case string:
-		names = []any{v}
-	case []any:
-		names = v
-	default:
-		return false
-	}
-	got := map[string]bool{}
-	for _, item := range names {
-		s, ok := item.(string)
-		if !ok {
-			return false
-		}
-		job, anyInstance := strings.CutSuffix(s, ":any")
-		if job == j.Name || !jobs[job] {
-			return false
-		}
-		if _, seen := got[job]; !seen {
-			got[job] = anyInstance
-		}
-	}
-	if len(got) != len(j.Needs) {
-		return false
-	}
-	for _, n := range j.Needs {
-		if anyInstance, ok := got[n.Job]; !ok || anyInstance != n.Any {
-			return false
-		}
+	r.forgetMeant(nil)
+	if demand {
+		st.demanded[k] = demandedEnv{text, read}
 	}
 	return true
-}
-
-// checkInputs checks each input Start evaluated as the compiler checks
-// one: its type, whether it is required, and a platform type with the
-// Inputs resolver; and each password field of the rows Start filled in.
-func (st *starter) checkInputs() {
-	r := st.r
-	for _, f := range st.deferred {
-		if st.failed[f] {
-			continue
-		}
-		if !r.missing(f) {
-			r.checkField(f, false)
-			continue
-		}
-		// An input with no value and no default is required unless it is
-		// optional, or hidden or in a hidden group; a boolean with none is
-		// false.
-		if f.container || f.header || f.hasDefault || f.repeats() {
-			continue
-		}
-		switch {
-		case st.optionalAt[f] || st.hidden(f):
-		case f.typ == "boolean":
-			r.set(f.path, false)
-		default:
-			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
-		}
-	}
-	evaluated := setOfFields(st.deferred)
-	// And each the compiler left to Start, as what decides whether it is
-	// required read a variable or a password.
-	for _, f := range r.fields {
-		if evaluated[f] || f.ignored || !st.shapeDecided(f) || f.container || f.header || f.hasDefault || f.repeats() || !r.missing(f) {
-			continue
-		}
-		switch {
-		case st.optionalAt[f] || st.hidden(f):
-		case f.typ == "boolean":
-			r.set(f.path, false)
-		default:
-			r.reportAt(problems.InputRequired, f.loc, problems.Params{"input": f.label()})
-		}
-	}
-	for _, c := range r.liveRows() {
-		if c.typ == "password" && evaluated[c.in] {
-			r.checkField(c, false)
-		}
-	}
-}
-
-// hidden reports whether f, or a group it is in, is hidden, as
-// checkDecisions decided it.
-func (st *starter) hidden(f *field) bool {
-	for g := f; g != nil; g = g.group {
-		if st.hiddenAt[g] {
-			return true
-		}
-	}
-	return false
-}
-
-// condition evaluates one of f's hidden, ignore and optional as the run
-// starts, and reports whether it could: one that fails is reported.
-func (st *starter) condition(f *field, key string) (decided, ok bool) {
-	v, ok := f.def[key]
-	if !ok {
-		return false, true
-	}
-	if _, isString := v.(string); isString {
-		loc := appendPath(f.loc, key)
-		var read expr.Read
-		var err error
-		if v, read, err = st.r.evalRead(loc, f.index); err != nil {
-			st.reportEval(loc, err, read)
-			return false, false
-		}
-	}
-	return conditionValue(v), true
 }
 
 // runValues returns the run's values as Start completed them, with what of
-// them is private, a secret and derived, by name.
+// them is private, a secret and derived, by name: what the plan names so,
+// and what the resolution kept or made so.
 func (st *starter) runValues() plan.RunValues {
-	p, s := st.p, st.s
+	p, s, r := st.p, st.s, st.r
 	run := s.run
 	run.Format = p.Run.Format
 	run.Env = maps.Clone(s.run.Env)
 	if len(run.Env) == 0 {
 		run.Env = nil
 	}
-	run.Inputs = plan.DataOf(st.r.values)
-	secrets := map[string]bool{}
-	for _, name := range p.Run.Secrets {
-		secrets[name] = true
-	}
+	run.Inputs = plan.DataOf(r.values)
+	secrets := setOf(p.Run.Secrets)
 	maps.Copy(secrets, st.secretVariables)
 	maps.Copy(secrets, s.madeSecret)
-	// What Start made from a secret is masked as what is made from one,
-	// not as a secret's own text: an env: value that says whether a secret
-	// is set, true, would mask every true. One that is a secret's own text
-	// is masked whole all the same, as the secret's.
+	for k := range r.secrets {
+		secrets["inputs."+k] = true
+	}
+	for k := range r.secretsLater {
+		secrets["inputs."+k] = true
+	}
 	derived := setOf(p.Run.Derived)
 	maps.Copy(derived, s.madeSecret)
+	for k := range r.derived {
+		derived["inputs."+k] = true
+	}
 	private := map[string]bool{}
+	for k := range r.private {
+		private["inputs."+k] = true
+	}
 	if st.becameSecret() {
-		// What the compiler made from a variable that is a secret now is
-		// masked from here on as what is made from one, with whatever else
-		// it made from a variable, as the plan doesn't say which.
+		// What the compiler held as private, in the place of what a variable
+		// that is a secret now makes, is masked from here on as what is made
+		// from one, with whatever else it held so, as the plan doesn't say
+		// which.
 		for _, name := range p.Run.Private {
 			secrets[name], derived[name] = true, true
 		}
@@ -1542,9 +937,10 @@ func (st *starter) runValues() plan.RunValues {
 			private[name] = true
 		}
 	}
-	for name := range s.madePrivate {
-		if !secrets[name] {
-			private[name] = true
+	maps.Copy(private, s.madePrivate)
+	for name := range private {
+		if secrets[name] {
+			delete(private, name)
 		}
 	}
 	run.Secrets = slices.Sorted(maps.Keys(secrets))
@@ -1663,11 +1059,30 @@ func (st *starter) diagnostics() problems.Diagnostics {
 	return listed(diags)
 }
 
+// fieldAt returns the first input whose value is at path, or nil.
+func (r *inputResolver) fieldAt(path []string) *field {
+	var out *field
+	for f := range r.fieldsAt().Reached(path) {
+		if slices.Equal(f.path, path) && (out == nil || f.seq < out.seq) {
+			out = f
+		}
+	}
+	return out
+}
+
+// setOf returns the set of the strings list holds.
+func setOf(list []string) map[string]bool {
+	set := make(map[string]bool, len(list))
+	for _, s := range list {
+		set[s] = true
+	}
+	return set
+}
+
 // setGrow sets the value at path in m, making the mappings on the way to
 // it that aren't there, and a list's item at its index if it is the item
-// after the list's last, as when the list is held whole and its items
-// given apart. A list holds null in place of each item a plan doesn't
-// hold, so any other index isn't one the plan names, an error.
+// after the list's last. Any other index of a list is an error, which
+// changes nothing.
 func setGrow(m map[string]any, path []string, v any) error {
 	_, err := grow(m, path, v)
 	return err
@@ -1686,7 +1101,7 @@ func grow(c any, path []string, v any) (any, error) {
 	if l, isList := c.([]any); isList || !isMap && isListIndex(key) {
 		n, err := strconv.Atoi(key)
 		if err != nil || n < 0 || n > len(l) || strconv.Itoa(n) != key {
-			return nil, fmt.Errorf("compile: the plan names an item %s of a list of %d", key, len(l))
+			return nil, mismatch("an item %s of a list of %d", key, len(l))
 		}
 		if n == len(l) {
 			l = append(l, nil)

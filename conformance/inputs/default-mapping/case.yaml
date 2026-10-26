@@ -14,7 +14,4 @@ expect:
     cluster:
       name: web
       labels: [web, fixed]
-  deferred:
-    auth:
-      token: ${{ vars.TOKEN }}
-      user: ${{ inputs.name }}
+  deferred: [auth]

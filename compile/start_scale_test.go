@@ -3,21 +3,31 @@ package compile_test
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A startScaled is a run whose size grows with n, which Start completes:
-// its workflow, the values submitted for it and its variables. timed is
-// set to check the time Start takes as well, for a run whose cost, once,
-// was work that allocated nothing.
+// its workflow, the values submitted for it and its variables, and the
+// variables as it starts, if they changed since (changed). timed is set to
+// check the time Start takes as well, for a run whose cost, once, was work
+// that allocated nothing. roundWork is set for a run whose rounds of
+// resolving its inputs are each as large as it is, one for each link of a
+// chain: it is what each round after the first counts toward the budget
+// for each input, row field and env: value (compile.SetRoundWork), so that
+// at either size the rounds pass the budget, and Start fails the run with
+// expressions_too_much_work, having done no more than the budget allows.
 type startScaled struct {
-	name     string
-	n        int
-	workload func(n int) (string, map[string]any, testVariables)
-	timed    bool
+	name      string
+	n         int
+	workload  func(n int) (string, map[string]any, testVariables)
+	changed   testVariables
+	timed     bool
+	roundWork int
 }
 
 // startScaledRuns grow with what Start completes: the parts of the inputs
@@ -87,6 +97,68 @@ l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ va
 			map[string]any{"m": rows(n, emptyRow), "l": rows(n, func() map[string]any { return map[string]any{"u": "x", "h": "yes"} })},
 			testVariables{"vars.V": {Value: "VARV"}}
 	}},
+	// Each value a form made from an expression that reads the next value
+	// and a variable that changed since, the last the variable's own: Start
+	// evaluates each once, in the order they read each other, though the
+	// inputs' order is the other way.
+	{name: "values a form made, each reading the next, of a variable that changed since, against the inputs' order", n: 250, timed: true, changed: testVariables{"vars.V": {Value: "w"}}, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs strings.Builder
+		submitted := map[string]any{}
+		for i := range n - 1 {
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ inputs.a%05d == vars.V && vars.V || ''x'' }}'}\n", i, i+1)
+			submitted[fmt.Sprintf("a%05d", i)] = "v"
+		}
+		fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ vars.V }}'}\n", n-1)
+		submitted[fmt.Sprintf("a%05d", n-1)] = "v"
+		return workflow(defs.String()), submitted, testVariables{"vars.V": {Value: "v"}}
+	}},
+	// Inputs and env: values that read each other in turn: Start evaluates
+	// each once, in the order they read each other, in either of the
+	// inputs' orders.
+	{name: "inputs and env values that read each other in turn", n: 250, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
+		return envInTurn(n, false)
+	}},
+	{name: "inputs and env values that read each other in turn, against the inputs' order", n: 250, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
+		return envInTurn(n, true)
+	}},
+	// A round of resolving the inputs for each link of a chain: env: values
+	// that each read the input before and an input a condition drops, which
+	// Start evaluates only once a round has filled the values in; and values
+	// a form made, each reading the next through a relative reference, of a
+	// variable that changed since. Beside a long list, each round is as
+	// large as the list, and the budget stops them.
+	{name: "env values that each read an input a condition drops and the input before, beside a long list", n: 500, roundWork: 32 << 10, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs, env strings.Builder
+		env.WriteString("env:\n")
+		for i := range 50 {
+			read := "${{ vars.S }}"
+			if i > 0 {
+				read = fmt.Sprintf("${{ env.E%05d }}+", i-1)
+			}
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '%s'}\n", i, read)
+			fmt.Fprintf(&defs, "d%05d: {type: string, optional: true, default: d, ignore: '${{ vars.SKIP == ''yes'' }}'}\n", i)
+			fmt.Fprintf(&env, "  E%05d: ${{ inputs.d%05d }}${{ inputs.a%05d }}\n", i, i, i)
+		}
+		defs.WriteString("big: {type: list, template: {u: {type: string}}}\n")
+		return workflow(defs.String(), env.String()), map[string]any{"big": rows(n, func() map[string]any { return map[string]any{"u": "x"} })},
+			testVariables{"vars.S": {Value: "s", Secret: true}, "vars.SKIP": {Value: "yes"}}
+	}},
+	{name: "values a form made, each reading the next through a relative reference, of a variable that changed since, beside a long list", n: 500, roundWork: 32 << 10, changed: testVariables{"vars.V": {Value: "w"}}, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs strings.Builder
+		submitted := map[string]any{"big": rows(n, func() map[string]any { return map[string]any{"u": "x"} })}
+		for i := range 50 {
+			submitted[fmt.Sprintf("x%05d", i)] = "v"
+			if i == 49 {
+				fmt.Fprintf(&defs, "x%05d: {type: string, default: '${{ vars.V }}'}\n", i)
+				continue
+			}
+			submitted[fmt.Sprintf("h%05d", i)] = "v"
+			fmt.Fprintf(&defs, "x%05d: {type: string, default: '${{ ..h%05d.default }}'}\n", i, i)
+			fmt.Fprintf(&defs, "h%05d: {type: string, optional: true, hidden: true, default: '${{ inputs.x%05d == vars.V && vars.V || ''x'' }}'}\n", i, i+1)
+		}
+		defs.WriteString("big: {type: list, template: {u: {type: string}}}\n")
+		return workflow(defs.String()), submitted, testVariables{"vars.V": {Value: "v"}}
+	}},
 	{name: "lists whose rows are held for Start, beside a long list", n: 200, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
 		var defs strings.Builder
 		submitted := map[string]any{"big": rows(100*n, func() map[string]any { return map[string]any{"u": "x"} })}
@@ -97,6 +169,27 @@ l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ va
 		defs.WriteString("big: {type: list, template: {u: {type: string}}}\n")
 		return workflow(defs.String()), submitted, testVariables{"vars.S": {Value: "s", Secret: true}}
 	}},
+}
+
+// envInTurn is n inputs, each of whose defaults reads an env: value that
+// reads the input before, the first a secret variable, in that order, or
+// with reverse, the other way.
+func envInTurn(n int, reverse bool) (string, map[string]any, testVariables) {
+	var defs, env strings.Builder
+	env.WriteString("env:\n")
+	for j := range n {
+		i := j
+		if reverse {
+			i = n - 1 - j
+		}
+		if i == 0 {
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ vars.S }}'}\n", i)
+		} else {
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ env.E%05d }}'}\n", i, i-1)
+		}
+		fmt.Fprintf(&env, "  E%05d: ${{ inputs.a%05d }}\n", i, i)
+	}
+	return workflow(defs.String(), env.String()), nil, testVariables{"vars.S": {Value: "s", Secret: true}}
 }
 
 // TestStartScales checks that starting each of startScaledRuns at four
@@ -133,8 +226,20 @@ func (w startScaled) measure(t *testing.T, n int) (bytes uint64, allocs float64,
 	t.Helper()
 	src, submitted, vars := w.workload(n)
 	c := createRun(t, src, submitted, vars)
+	if w.changed != nil {
+		vars = w.changed
+	}
+	if w.roundWork != 0 {
+		defer compile.SetRoundWork(w.roundWork)()
+	}
 	start = func() {
-		if res, diags := startRun(t, c, vars, compile.StartInput{}); res == nil {
+		res, diags := startRun(t, c, vars, compile.StartInput{})
+		switch {
+		case w.roundWork != 0:
+			if res != nil || !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.ExpressionsTooMuchWork.Code() }) {
+				t.Fatalf("at %d, the rounds keep within the budget: %v", n, diags)
+			}
+		case res == nil:
 			t.Fatal(diags)
 		}
 	}
@@ -151,6 +256,9 @@ func BenchmarkStart(b *testing.B) {
 		b.Run(w.name, func(b *testing.B) {
 			src, submitted, vars := w.workload(w.n)
 			c := createRun(b, src, submitted, vars)
+			if w.changed != nil {
+				vars = w.changed
+			}
 			b.ReportAllocs()
 			for b.Loop() {
 				_, _ = startRun(b, c, vars, compile.StartInput{})

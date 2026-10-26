@@ -157,9 +157,6 @@ token: {type: string, default: '${{ vars["my.token"] }}'}`, `jobs:
 	if want := []string{"vars.API_TOKEN", "vars.my~1token"}; !slices.Equal(c.Plan.Run.Secrets, want) {
 		t.Errorf("secrets %v, want %v", c.Plan.Run.Secrets, want)
 	}
-	if _, ok := c.Plan.Run.DeferredInputs["token"]; !ok {
-		t.Errorf("the default that reads a secret isn't held for Start: %v", c.Plan.Run.DeferredInputs)
-	}
 	// Compile reaches none of the resolvers that take a context.
 	p, diags := compile.Compile("workflow.yaml", []byte(src), nil, compile.Options{Variables: failingVariables{errors.New("asked")}})
 	if p == nil || len(vars.asked) != 1 {

@@ -76,12 +76,12 @@ type Expect struct {
 	// Inputs, Deferred and Secrets hold only the values the case checks,
 	// and the run can have others.
 	Inputs map[string]any `yaml:"inputs,omitempty"`
-	// Deferred are the values that stay expressions until the run is
-	// underway, such as a default that reads a secret variable, by their
-	// input's path, as in group.name. Each is its text: a template as the
-	// string it is written as, and a list or mapping with each template in
-	// it as its text.
-	Deferred map[string]any `yaml:"deferred,omitempty"`
+	// Deferred names the inputs, by their paths, as in group.name, whose
+	// values wait until the run starts, which resolves them again: those
+	// whose value, or a part of it, reads what isn't known when the run is
+	// created, such as a secret variable or the workflow's env, or reads a
+	// variable or a password, which a plan never holds.
+	Deferred []string `yaml:"deferred,omitempty"`
 	// Secrets are the values of password inputs, by their path, and of
 	// the other values kept as secrets.
 	Secrets map[string]any `yaml:"secrets,omitempty"`

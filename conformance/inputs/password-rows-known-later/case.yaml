@@ -15,10 +15,6 @@ inputs:
     - name: a
       key: HUNTER2SECRET
 expect:
-  deferred:
-    hosts:
-      - name: a
-        site: ${{ vars.SITE }}
-    keys: ${{ fromJSON(vars.KEYS) }}
+  deferred: [hosts, keys]
   secrets:
     hosts.0.key: HUNTER2SECRET

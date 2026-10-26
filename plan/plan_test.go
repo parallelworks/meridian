@@ -35,21 +35,15 @@ func samplePlan(t *testing.T) *plan.Plan {
 	return &plan.Plan{
 		Version: plan.Version,
 		Run: plan.Run{
-			Source:         plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
-			Format:         1,
-			Inputs:         plan.DataOf(map[string]any{"name": "Alice", "n": int64(3), "note": "${{ not.parsed }}"}),
-			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
-			Env:            map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
-			Variables:      []string{"org.REGION", "vars"},
+			Source:    plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
+			Format:    1,
+			Inputs:    plan.DataOf(map[string]any{"name": "Alice", "n": int64(3), "note": "${{ not.parsed }}"}),
+			Env:       map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
+			Variables: []string{"org.REGION", "vars"},
 			Definitions: mustValue(t, map[string]any{
 				"token": map[string]any{"type": "string", "default": "${{ vars.TOKEN }}", "hidden": "${{ org.H }}"},
 				"$meta": map[string]any{"$wizard": "x"},
 			}),
-			DeferredParts: []plan.DeferredPart{
-				{Name: "inputs.token", Location: "/on/execute/inputs/token/default"},
-				{Name: "inputs.rows.1.a", Location: "/on/execute/inputs/rows/template/a/default", Index: []int{1}},
-				{Name: "inputs.rows.0.g.b", Location: "/on/execute/inputs/rows/template/g/items/b/default", Index: []int{0}, Default: true, Text: true, Null: true, Containers: 1},
-			},
 			Withheld:     []string{"/on/execute/inputs/pw/default"},
 			Decisions:    []string{"/on/execute/inputs/token/hidden", "/on/execute/inputs/x/ignore"},
 			Remote:       map[string]string{"repo": "https://example.com/r", "branch": "main"},
@@ -111,11 +105,10 @@ func edgePlan(t testing.TB) *plan.Plan {
 				"${{":     []any{"stays data"},
 				"$":       map[string]any{"$x": "also data"},
 			}),
-			DeferredInputs: map[string]plan.Value{"token": mustValue(t, "${{ vars.TOKEN }}")},
-			Env:            map[string]plan.Value{"TEXT": mustValue(t, text+" ${{ inputs.text < 'b' && !contains(inputs.text, '&') }}")},
-			Timeout:        plan.Literal(map[string]any{"$only": "marked"}),
-			Secrets:        []string{"inputs.token"},
-			Permissions:    []string{},
+			Env:         map[string]plan.Value{"TEXT": mustValue(t, text+" ${{ inputs.text < 'b' && !contains(inputs.text, '&') }}")},
+			Timeout:     plan.Literal(map[string]any{"$only": "marked"}),
+			Secrets:     []string{"inputs.token"},
+			Permissions: []string{},
 		},
 		Jobs: []plan.Job{{
 			Key: "a#0", Name: "a", Path: "/jobs/a",
@@ -346,23 +339,35 @@ func TestDecodeRefuses(t *testing.T) {
 		if !strings.Contains(string(good), `"timeout":"1h"`) {
 			t.Fatalf("the sample plan changed: %s", good)
 		}
-		if _, err := plan.Decode([]byte(data)); err == nil {
+		_, err := plan.Decode([]byte(data))
+		if err == nil {
 			t.Errorf("%s: decoded", name)
+		}
+		if want := name != "another version"; errors.Is(err, plan.ErrMalformed) != want {
+			t.Errorf("%s: %v, ErrMalformed %v", name, err, want)
 		}
 	}
 	for name, data := range map[string]string{
 		"another version":             strings.Replace(string(good), `"version":1`, `"version":2`, 1),
 		"another version's keys":      strings.Replace(string(good), `"version":1`, `"version":2,"later":true`, 1),
 		"another version, last":       strings.Replace(string(good), `"version":1,`, ``, 1)[:len(good)-len(`"version":1,`)-1] + `,"later":{},"version":2}`,
-		"no version":                  strings.Replace(string(good), `"version":1,`, ``, 1),
 		"another version's templates": strings.Replace(strings.Replace(string(good), `"version":1`, `"version":2`, 1), `"ref":"inputs"`, `"ref":"later"`, 1),
 	} {
 		if _, err := plan.Decode([]byte(data)); !errors.Is(err, plan.ErrVersion) {
 			t.Errorf("%s: %v, want ErrVersion", name, err)
 		}
 	}
-	if _, err := plan.Decode([]byte(strings.Replace(string(good), `"version":1`, `"version":"1"`, 1))); err == nil || errors.Is(err, plan.ErrVersion) {
-		t.Errorf("a version that isn't a number: %v, want an error other than ErrVersion", err)
+	// What names no release's version is no release's plan.
+	for name, data := range map[string]string{
+		"no version": strings.Replace(string(good), `"version":1,`, ``, 1),
+		"version 0":  strings.Replace(string(good), `"version":1`, `"version":0`, 1),
+		"empty":      `{}`,
+		"null":       `null`,
+		"a list":     `[]`,
+	} {
+		if _, err := plan.Decode([]byte(data)); !errors.Is(err, plan.ErrMalformed) || errors.Is(err, plan.ErrVersion) {
+			t.Errorf("%s: %v, want ErrMalformed", name, err)
+		}
 	}
 }
 
@@ -393,6 +398,9 @@ func TestDecodeJobOrder(t *testing.T) {
 		back, err := plan.Decode(data)
 		if (err == nil) != c.ok {
 			t.Errorf("%v: decoded %t, want %t: %v", c.names, err == nil, c.ok, err)
+		}
+		if err != nil && !errors.Is(err, plan.ErrMalformed) {
+			t.Errorf("%v: %v, want ErrMalformed", c.names, err)
 		}
 		if err == nil && len(c.names) > 0 {
 			if r, _, err := back.Ready(t.Context(), c.names[len(c.names)-1], plan.ReadyInput{}); err != nil || r.Job == nil {

@@ -6,6 +6,15 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
+// SetRoundWork sets roundWork, the work each round of Start's resolution
+// after the first counts for each input, row field and env: value, and
+// returns what restores it. Tests that set it don't run in parallel.
+func SetRoundWork(n int) (restore func()) {
+	old := roundWork
+	roundWork = n
+	return func() { roundWork = old }
+}
+
 // NamesSecret is namesSecret, for TestSecretNames.
 var NamesSecret = namesSecret
 

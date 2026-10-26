@@ -69,10 +69,10 @@ func (r *inputResolver) checkValues() {
 
 // checkKnown checks what the compiler knows of the value of f, an input
 // whose value is evaluated as the run starts because a part of it reads
-// what isn't known yet: the plan holds the rest of the value as it is, so
-// it must be JSON, as a value that is known must. A part that isn't is
-// reported at the innermost field of the input's rows that holds it, and
-// the input has no value to hold. What the parts that read a variable or a
+// what isn't known yet: the rest of the value is known now, so it must be
+// JSON, as a value that is known must, and is reported now rather than as
+// the run starts. A part that isn't is reported at the innermost field of
+// the input's rows that holds it. What the parts that read a variable or a
 // password gave isn't shown, and the input's passwords, the password
 // fields of its rows, aren't checked here.
 func (r *inputResolver) checkKnown(f *field, passwords []*field) {
@@ -103,7 +103,6 @@ func (r *inputResolver) checkKnown(f *field, passwords []*field) {
 	in := r.innermostRow(f, slices.Concat(f.path, at))
 	params["input"] = in.label()
 	r.reportAt(problems.InputNotJSON, in.loc, params)
-	f.dflt = plan.Value{}
 }
 
 // readsPrivate reports whether an expression in f's definition, in its
@@ -177,17 +176,13 @@ func (r *inputResolver) checkField(f *field, later bool) {
 		if !password && bad.kind != problems.InputNotJSON {
 			return
 		}
-		if bad.kind == problems.InputNotJSON && f.in == nil {
-			// Nor can the plan hold what is evaluated as the run starts.
-			f.dflt = plan.Value{}
-		}
 		r.remove(f.path)
 		return
 	case f.typ == "password" && !later:
 		r.secrets[plan.JoinPath(f.path...)] = out
 	case !later && f.in == nil && platformTypes[f.typ] && !reflect.DeepEqual(v, out):
 		// What was evaluated before read the value as it was submitted,
-		// and so does what Start evaluates (plan.Run.Unresolved).
+		// and so does the workflow's env: as the run starts (unresolved).
 		if r.unresolved == nil {
 			r.unresolved = map[string]any{}
 		}
