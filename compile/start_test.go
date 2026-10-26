@@ -907,6 +907,14 @@ func TestInputResolverUnanswered(t *testing.T) {
 		"a password's":                  {"pw: {type: password}\nc: {type: compute-clusters, default: '${{ inputs.pw }}'}", map[string]any{"pw": "PASSWORD"}, false},
 		"a part of a variable's":        {"k: {type: storage, default: {name: k1, token: '${{ org.V }}'}}", map[string]any{"k": map[string]any{"name": "k1", "token": "TYPED"}}, false},
 		"a row's field over a secret's": {"l: {type: list, template: {c: {type: compute-clusters, default: '${{ vars.S }}'}}}", map[string]any{"l": []any{map[string]any{"c": "TYPED"}}}, false},
+		// What is in a group or a list whose condition reads a variable or
+		// a password, which the plan holds out of its values.
+		"in a group a password ignores":                    {"pw: {type: password}\ng: {type: group, ignore: '${{ inputs.pw == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"pw": "PASSWORD", "g": map[string]any{"c": "TYPED"}}, false},
+		"in a group a variable ignores":                    {"g: {type: group, ignore: '${{ org.V == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"g": map[string]any{"c": "TYPED"}}, false},
+		"in a group in one a variable hides":               {"g: {type: group, hidden: '${{ org.V == ''x'' }}', items: {h: {type: group, items: {c: {type: compute-clusters}}}}}", map[string]any{"g": map[string]any{"h": map[string]any{"c": "TYPED"}}}, false},
+		"in a flattened group a password ignores":          {"pw: {type: password}\ng: {type: group, flatten: true, ignore: '${{ inputs.pw == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"pw": "PASSWORD", "c": "TYPED"}, false},
+		"in a row of a list a password ignores":            {"pw: {type: password}\nl: {type: list, ignore: '${{ inputs.pw == ''x'' }}', template: {c: {type: compute-clusters}}}", map[string]any{"pw": "PASSWORD", "l": []any{map[string]any{"c": "TYPED"}}}, false},
+		"in a group whose condition reads nothing private": {"g: {type: group, ignore: '${{ 1 == 2 }}', items: {c: {type: compute-clusters}}}", map[string]any{"g": map[string]any{"c": "GIVEN"}}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := workflow(tc.defs)

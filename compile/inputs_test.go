@@ -17,6 +17,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -84,6 +85,64 @@ func TestPlatformInputs(t *testing.T) {
 	_, diags = resolveInputs(t, doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 1 || diags[0].Code != problems.PlatformInput.Code() {
 		t.Errorf("a type the platform doesn't provide: %v", diags)
+	}
+}
+
+// A refusal of a value in a group or a list whose condition reads a
+// variable or a password, which the plan holds out of its values, doesn't
+// show it, as one of an input whose own condition reads one doesn't.
+func TestPlatformInputRejectedInPrivateContainer(t *testing.T) {
+	vars := testVariables{"org.V": {Value: "v"}}
+	quoting := resolverFunc(func(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+		return nil, problems.InputRejected.Problem(problems.Params{"reason": fmt.Sprintf("no cluster named %v", v)})
+	})
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+	}{
+		"its own ignore reads a password": {"pw: {type: password}\nc: {type: compute-clusters, ignore: '${{ inputs.pw == ''x'' }}'}", map[string]any{"pw": "p", "c": "TYPED"}},
+		"in a group a password ignores":   {"pw: {type: password}\ng: {type: group, ignore: '${{ inputs.pw == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"pw": "p", "g": map[string]any{"c": "TYPED"}}},
+		"in a group a variable ignores":   {"g: {type: group, ignore: '${{ org.V == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"g": map[string]any{"c": "TYPED"}}},
+		"in a flattened group":            {"pw: {type: password}\ng: {type: group, flatten: true, ignore: '${{ inputs.pw == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"pw": "p", "c": "TYPED"}},
+		"in a list's row":                 {"pw: {type: password}\nl: {type: list, ignore: '${{ inputs.pw == ''x'' }}', template: {c: {type: compute-clusters}}}", map[string]any{"pw": "p", "l": []any{map[string]any{"c": "TYPED"}}}},
+		// A condition that reads an input made from a variable, which isn't
+		// filled in when the value is asked for, reads the variable.
+		"its own ignore reads an input made from a variable": {"v: {type: string, default: '${{ org.V }}'}\nc: {type: compute-clusters, ignore: '${{ inputs.v == ''x'' }}'}", map[string]any{"c": "TYPED"}},
+		"in turn":                     {"v: {type: string, default: '${{ org.V }}'}\nw: {type: string, default: 'w${{ inputs.v }}'}\nc: {type: compute-clusters, ignore: '${{ inputs.w == ''x'' }}'}", map[string]any{"c": "TYPED"}},
+		"in a list that one ignores":  {"v: {type: string, default: '${{ org.V }}'}\nl: {type: list, ignore: '${{ inputs.v == ''x'' }}', template: {c: {type: compute-clusters}}}", map[string]any{"l": []any{map[string]any{"c": "TYPED"}}}},
+		"in a group that one ignores": {"v: {type: string, default: '${{ org.V }}'}\ng: {type: group, ignore: '${{ inputs.v == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"g": map[string]any{"c": "TYPED"}}},
+	} {
+		_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow(tc.defs)), tc.submitted, compile.Options{Inputs: quoting, Contexts: vars.contexts()})
+		errs := diags.Errors()
+		if err != nil || len(errs) != 1 || errs[0].Code != problems.InputRejected.Code() || strings.Contains(fmt.Sprint(diags), "TYPED") {
+			t.Errorf("%s: %v, %v, want input_rejected, masked", name, diags, err)
+		}
+	}
+	// What isn't private is shown: a condition that reads an input made
+	// from neither.
+	src := workflow("v: {type: string, default: plain}\nc: {type: compute-clusters, ignore: '${{ inputs.v == ''x'' }}'}")
+	_, diags, _ := compile.Create(t.Context(), "workflow.yaml", []byte(src), map[string]any{"c": "TYPED"}, compile.Options{Inputs: quoting})
+	if !strings.Contains(fmt.Sprint(diags), "TYPED") {
+		t.Errorf("a condition that reads nothing private: %v, want the value shown", diags)
+	}
+}
+
+// A row's fields' conditions aren't evaluated, as ACTIVATE applies none in
+// a row: a group in a row whose ignore reads the row's password gives the
+// same plan whatever the password is.
+func TestRowConditionsNotApplied(t *testing.T) {
+	src := workflow("l: {type: list, template: {p: {type: password}, g: {type: group, ignore: '${{ inputs.l[0].p == ''x'' }}', items: {k: {type: string}}}}}")
+	var plans []string
+	for _, pw := range []string{"x", "y"} {
+		c := createWith(t, src, map[string]any{"l": []any{map[string]any{"p": pw, "g": map[string]any{"k": "kv"}}}}, compile.Options{Inputs: passThrough{}})
+		data, err := plan.Encode(c.Plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plans = append(plans, string(data))
+	}
+	if plans[0] != plans[1] {
+		t.Errorf("the plans differ by the password:\n%s\n%s", plans[0], plans[1])
 	}
 }
 
