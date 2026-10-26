@@ -201,8 +201,9 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 	default:
 		// Placed, claimed or running: its worker reports to the worker
 		// API, which wakes the supervisor once the attempt ends, and
-		// renews its lease, which the supervisor watches.
-		return c.watch(ctx, run, job, a)
+		// renews its lease, which the supervisor watches; and once the
+		// run is stopped, the supervisor sees the stop through for it.
+		return c.liveAttempt(ctx, run, job, a, done)
 	}
 }
 

@@ -189,6 +189,7 @@
   "worker_ended_early": "作业 {job} 的工作进程在作业的第一个步骤之前就结束了。",
   "worker_killed": "作业 {job} 的工作进程{reason, select, timeout {在达到时间限制时被其调度器} other {因使用了超出允许的内存而被}}结束了。",
   "member_gone": "作业 {job} 的尝试被放置在其组中已不存在的成员上，因此无法向其后端询问其工作进程是否还在运行。",
+  "job_timeout_enforced": "作业 {job} 运行超过了其超时时间，而其工作进程没有停止它，因此协调器结束了它的尝试。",
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",

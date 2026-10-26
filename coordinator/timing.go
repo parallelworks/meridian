@@ -44,6 +44,12 @@ type Timing struct {
 	// clock, which stops while the host sleeps, for the coordinator to
 	// take it that its host slept.
 	WakeJump time.Duration
+	// WorkerStop is how long a worker takes to stop its job's steps once
+	// told to: its grace between SIGTERM and SIGKILL, and the time it
+	// waits for their output after SIGKILL. The coordinator waits that,
+	// a heartbeat period and the fence margin past a job's timeout:
+	// before it stops the job itself.
+	WorkerStop time.Duration
 }
 
 // DefaultTiming returns the timing a coordinator runs with.
@@ -54,6 +60,7 @@ func DefaultTiming() Timing {
 		FenceMargin: 15 * time.Second,
 		Grace:       60 * time.Second,
 		WakeJump:    10 * time.Second,
+		WorkerStop:  35 * time.Second,
 	}
 }
 

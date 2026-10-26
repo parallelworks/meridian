@@ -195,6 +195,7 @@
   "worker_ended_early": "Job {job}'s worker ended before the job's first step.",
   "worker_killed": "Job {job}'s worker was ended {reason, select, timeout {by its scheduler, at its time limit} other {for using more memory than it may}}.",
   "member_gone": "Job {job}'s attempt was placed on a member that its group no longer has, so its backend can't be asked whether its worker runs.",
+  "job_timeout_enforced": "Job {job} ran past its timeout, and its worker didn't stop it, so the coordinator ended its attempt.",
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",

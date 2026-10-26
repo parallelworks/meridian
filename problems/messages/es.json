@@ -189,6 +189,7 @@
   "worker_ended_early": "El worker del trabajo {job} terminó antes del primer paso del trabajo.",
   "worker_killed": "El worker del trabajo {job} fue terminado {reason, select, timeout {por su planificador, al llegar a su límite de tiempo} other {por usar más memoria de la que puede}}.",
   "member_gone": "El intento del trabajo {job} se asignó a un miembro que su grupo ya no tiene, así que no se puede preguntar a su backend si su worker sigue en marcha.",
+  "job_timeout_enforced": "El trabajo {job} se ejecutó más allá de su timeout, y su worker no lo detuvo, así que el coordinador terminó su intento.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",

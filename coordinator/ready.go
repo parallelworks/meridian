@@ -143,9 +143,13 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 			}
 			keys = append(keys, k)
 		}
-		// Nothing stops a run yet, so a job is readied as one whose run
-		// hasn't been stopped.
-		if job, err = tx.PinReady(run.ID, key, false, choices); err != nil {
+		// A job readied once its run is stopped takes the path its if:
+		// gives it (plan.CancelPath), as the run's stop record says now.
+		now, err := tx.Run(run.ID)
+		if err != nil {
+			return err
+		}
+		if job, err = tx.PinReady(run.ID, key, !now.StoppedAt.IsZero(), choices); err != nil {
 			return err
 		}
 		if job.Instance >= 0 {
