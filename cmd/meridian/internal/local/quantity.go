@@ -3,9 +3,7 @@ package local
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
-	"fmt"
 	"math"
-	"time"
 
 	"github.com/parallelworks/meridian/plan"
 )
@@ -35,14 +33,13 @@ func parseGPU(s string) (int, bool) {
 	return plan.ParseGPU(s)
 }
 
-// parseSeconds reads a duration, as 24h or 90m, which must be a whole
-// number of seconds greater than 0, and returns it in seconds.
-func parseSeconds(s string) (int64, error) {
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 || d%time.Second != 0 || d/time.Second > math.MaxInt32 {
-		return 0, fmt.Errorf("%q isn't a duration of whole seconds greater than 0, such as 24h, 90m or 30s", s)
-	}
-	return int64(d / time.Second), nil
+// parseSeconds reads a duration as a workflow's timeout: writes it, a
+// whole number of seconds, or of minutes, hours or days, as 3600, 90m or
+// 1d, which must be more than 0, and returns it in seconds. Placement
+// compares it with jobs' timeouts, so the two are read alike.
+func parseSeconds(s string) (int64, bool) {
+	n, ok := plan.ParseDuration(s)
+	return n, ok && n > 0 && n <= math.MaxInt32
 }
 
 // settingsJSON encodes a member's settings, as YAML decoded them, as the

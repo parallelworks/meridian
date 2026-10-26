@@ -408,7 +408,7 @@ func decodeValue(dec *jsontext.Decoder) (any, error) {
 	case '{':
 		return decodeMapping(dec)
 	}
-	return jsonvalue.Decode(dec, number)
+	return jsonvalue.Decode(dec, jsonvalue.Number)
 }
 
 // decodeMapping reads a mapping, or what a mapping whose only key starts
@@ -567,7 +567,7 @@ func writtenValue(n any) (any, error) {
 		}
 		return m, nil
 	case writtenNumber:
-		return number(string(n))
+		return jsonvalue.Number(string(n))
 	}
 	return n, nil
 }

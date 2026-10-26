@@ -1427,7 +1427,7 @@
   },
   "member_invalid": {
     "title": "올바르지 않은 구성원",
-    "why": "구성원의 이름에는 문자, 숫자, _, -, .를 쓰며 문자나 숫자로 시작합니다. backend는 local, ssh, kubernetes, slurm, pbs 중 하나이고, isolation은 podman 같은 컨테이너 런타임이나 host이며, cpu는 코어 수(4나 0.5 등) 또는 천분의 일 단위의 수(500m 등), memory는 바이트 수나 접미사가 붙은 수(8Gi나 512M 등), gpu는 정수입니다. max-walltime, margin, default-timeout은 초 단위 정수의 기간(24h, 90m, 30s 등)입니다.",
+    "why": "구성원의 이름에는 문자, 숫자, _, -, .를 쓰며 문자나 숫자로 시작합니다. backend는 local, ssh, kubernetes, slurm, pbs 중 하나이고, isolation은 podman 같은 컨테이너 런타임이나 host이며, cpu는 코어 수(4나 0.5 등) 또는 천분의 일 단위의 수(500m 등), memory는 바이트 수나 접미사가 붙은 수(8Gi나 512M 등), gpu는 정수입니다. max-walltime, margin, default-timeout은 0보다 큰 기간으로, 워크플로의 timeout:처럼 초 단위의 정수나 분, 시간, 일 단위의 정수로 씁니다(3600, 90m, 24h, 1d 등).",
     "fix": [
       "키에 맞게 값을 고치세요."
     ]

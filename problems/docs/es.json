@@ -1427,7 +1427,7 @@
   },
   "member_invalid": {
     "title": "Miembro no válido",
-    "why": "El nombre de un miembro tiene letras, dígitos, _, - y ., y empieza por una letra o un dígito. Su backend es local, ssh, kubernetes, slurm o pbs; su isolation nombra un entorno de contenedores, como podman, o host; su cpu es un número de núcleos, como 4 o 0.5, o de milésimas de uno, como 500m; su memory es un número de bytes, o un número con un sufijo, como 8Gi o 512M; y su gpu es un número entero. Sus max-walltime, margin y default-timeout son duraciones de segundos enteros, como 24h, 90m o 30s.",
+    "why": "El nombre de un miembro tiene letras, dígitos, _, - y ., y empieza por una letra o un dígito. Su backend es local, ssh, kubernetes, slurm o pbs; su isolation nombra un entorno de contenedores, como podman, o host; su cpu es un número de núcleos, como 4 o 0.5, o de milésimas de uno, como 500m; su memory es un número de bytes, o un número con un sufijo, como 8Gi o 512M; y su gpu es un número entero. Sus max-walltime, margin y default-timeout son duraciones mayores que 0, escritas como el timeout: de un flujo de trabajo: un número entero de segundos, o de minutos, horas o días, como 3600, 90m, 24h o 1d.",
     "fix": [
       "Corrige el valor como necesita su clave."
     ]

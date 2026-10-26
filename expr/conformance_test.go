@@ -2,7 +2,6 @@ package expr_test
 
 import (
 	"cmp"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"iter"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -28,7 +28,7 @@ func TestConformance(t *testing.T) {
 	for _, f := range files {
 		t.Run(strings.TrimSuffix(strings.TrimPrefix(f.Name, "expressions/"), ".yaml"), func(t *testing.T) {
 			t.Parallel()
-			scope, workflow := canonical(t, f.Scope), canonical(t, f.Workflow)
+			scope, workflow := conformancetest.Canonical(t, f.Scope), conformancetest.Canonical(t, f.Workflow)
 			for i, c := range f.Cases {
 				name := cmp.Or(c.Expr, c.Template, c.At)
 				t.Run(fmt.Sprintf("%d %s", i+1, name), func(t *testing.T) {
@@ -37,21 +37,11 @@ func TestConformance(t *testing.T) {
 			}
 			// The cases share the file's scope and workflow, so a case that
 			// changed them would change what the cases after it see.
-			if canonical(t, f.Scope) != scope || canonical(t, f.Workflow) != workflow {
+			if conformancetest.Canonical(t, f.Scope) != scope || conformancetest.Canonical(t, f.Workflow) != workflow {
 				t.Error("evaluating the cases changed the file's scope or workflow")
 			}
 		})
 	}
-}
-
-// canonical encodes v as JSON, with mappings in the order of their keys.
-func canonical(t *testing.T, v any) string {
-	t.Helper()
-	data, err := jsonv2.Marshal(v, jsonv2.Deterministic(true))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
 }
 
 // stopped is a clock that never moves, so that an evaluation passes
@@ -75,20 +65,15 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		}
 		src = s
 	}
-	// newScope returns the case's scope, whose evaluations are a group of
-	// their own, with a stopped clock.
-	newScope := func() expr.Scope {
-		scope := expr.WithClock(expr.Scope{Contexts: s.Contexts, Index: s.Index}, stopped)
-		if s.Status != nil {
-			scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
-		}
-		if f.Workflow != nil {
-			w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
-			scope = w.Scope(location, scope)
-		}
-		return scope
+	// The case's scope, with a stopped clock.
+	scope := expr.WithClock(expr.Scope{Contexts: s.Contexts, Index: s.Index}, stopped)
+	if s.Status != nil {
+		scope.Status = &expr.Status{Failed: s.Status.Failed, Cancelled: s.Status.Cancelled}
 	}
-	scope := newScope()
+	if f.Workflow != nil {
+		w := &expr.Workflow{Root: f.Workflow, Definitions: []string{"on", "execute", "inputs"}}
+		scope = w.Scope(location, scope)
+	}
 
 	var got any
 	var err error
@@ -129,36 +114,6 @@ func runCase(t *testing.T, f *conformance.ExpressionFile, c *conformance.Express
 		t.Fatalf("got error %v; want %s", err, show(c.Value))
 	case !equal(got, c.Value):
 		t.Fatalf("got %s, want %s", show(got), show(c.Value))
-	case len(scope.Index) > 0:
-		if c.Expr != "" {
-			src = "${{" + c.Expr + "}}"
-		}
-		// Evaluated again, in a group of its own, without the Index, though
-		// what reads the workflow still has it.
-		again := newScope()
-		again.Index = nil
-		checkParsedFor(t, src, scope.Index, again, c.Value)
-	}
-}
-
-// checkParsedFor checks that src, parsed for the list items index, has the
-// value want after a trip through JSON, in scope, which has no Index.
-func checkParsedFor(t *testing.T, src string, index []int, scope expr.Scope, want any) {
-	t.Helper()
-	tmpl, err := expr.ParseTemplateFor(src, index)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := tmpl.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stored expr.Template
-	if err := stored.UnmarshalJSON(data); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := stored.Eval(scope); err != nil || !equal(got, want) {
-		t.Errorf("parsed for %v: got %s, %v; want %s", index, show(got), err, show(want))
 	}
 }
 

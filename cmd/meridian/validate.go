@@ -11,10 +11,8 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"math"
 	"os"
 	"slices"
-	"strconv"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -91,6 +89,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		}
 		var created *compile.Created
 		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
+			Source: plan.Source{Location: workflowLocation(positional[0])},
 			Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
 		})
 		if err != nil {
@@ -245,7 +244,7 @@ func readWorkflow(ctx context.Context, c *cli, path string) (string, []byte, pro
 	limit := format.DefaultMaxSize
 	got, err := read(ctx, c, path, limit)
 	switch {
-	case isProblem(err):
+	case problems.IsProblem(err):
 		return "", nil, nil, err
 	case err != nil:
 		return "", nil, nil, problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
@@ -255,12 +254,6 @@ func readWorkflow(ctx context.Context, c *cli, path string) (string, []byte, pro
 		return name, nil, problems.Diagnostics{problems.FileTooLarge.At(name, problems.Position{}, "", problems.Params{"size": got.size, "limit": limit})}, nil
 	}
 	return name, got.data, nil, nil
-}
-
-// isProblem says whether err is, or wraps, a problem.
-func isProblem(err error) bool {
-	_, ok := errors.AsType[*problem.Problem](err)
-	return ok
 }
 
 // submittedInputs returns the input values of the JSON file, if any, as it
@@ -291,7 +284,7 @@ func inputDefinitions(name string, data []byte) map[string]any {
 func readInputsFile(ctx context.Context, c *cli, name string) (map[string]any, error) {
 	got, err := read(ctx, c, name, maxInputsSize)
 	switch {
-	case isProblem(err):
+	case problems.IsProblem(err):
 		return nil, err
 	case err != nil:
 		return nil, problems.FileUnreadable.Problem(problems.Params{"path": name, "reason": err.Error()})
@@ -320,17 +313,14 @@ func readInputsFile(ctx context.Context, c *cli, name string) (map[string]any, e
 	return values, nil
 }
 
-// jsonNumber reads a JSON number as YAML would: an int64 when it is whole
-// and fits, and a float64 otherwise.
+// jsonNumber reads a JSON number as YAML would (jsonvalue.Number), and
+// one too large for a float64 is a problem.
 func jsonNumber(s string) (any, error) {
-	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return n, nil
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsInf(f, 0) {
+	n, err := jsonvalue.Number(s)
+	if err != nil {
 		return nil, problems.InputsNumberTooLarge.Problem(problems.Params{"number": s})
 	}
-	return f, nil
+	return n, nil
 }
 
 // writeText writes the diagnostics one a line, as compilers write them:

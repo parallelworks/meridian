@@ -3,7 +3,6 @@ package expr
 import (
 	"errors"
 	"iter"
-	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/problems"
@@ -53,47 +52,6 @@ func ParseTemplate(s string) (*Template, error) {
 		t.parts = append(t.parts, part{expr: e, at: at})
 		consumed := start + 3 + end + 2
 		rest, offset = rest[consumed:], offset+consumed
-	}
-}
-
-// ParseTemplateFor parses s as ParseTemplate does, for the list items at
-// index, outermost first: each [index] in a path reads one of them, as it
-// would with index as a Scope's Index. The template keeps them where no
-// scope gives them, such as in a plan.
-func ParseTemplateFor(s string, index []int) (*Template, error) {
-	t, err := ParseTemplate(s)
-	if err != nil || len(index) == 0 {
-		return t, err
-	}
-	for _, p := range t.parts {
-		if p.expr != nil {
-			visit(p.expr.root, func(n node) { bindIndex(n, index) })
-		}
-	}
-	return t, nil
-}
-
-// bindIndex replaces each [index] in n's path with the index it reads. An
-// [index] past the end of indexes stays one.
-func bindIndex(n node, indexes []int) {
-	var path []segment
-	switch n := n.(type) {
-	case *ref:
-		path = n.path
-	case *relative:
-		path = n.path
-	case *member:
-		path = n.path
-	case *param:
-		path = n.path
-	}
-	k := 0
-	for i, s := range path {
-		if s.kind != index || k >= len(indexes) {
-			continue
-		}
-		path[i] = segment{name: strconv.Itoa(indexes[k]), kind: field}
-		k++
 	}
 }
 

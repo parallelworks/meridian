@@ -1225,7 +1225,7 @@
     ]
   },
   "member_invalid": {
-    "why": "A member's name has letters, digits, _, - and ., and starts with a letter or a digit. Its backend is local, ssh, kubernetes, slurm or pbs; its isolation names a container runtime, such as podman, or host; its cpu is a number of cores, such as 4 or 0.5, or of thousandths of one, such as 500m; its memory is a number of bytes, or a number with a suffix, such as 8Gi or 512M; and its gpu is a whole number. Its max-walltime, margin and default-timeout are durations of whole seconds, such as 24h, 90m or 30s.",
+    "why": "A member's name has letters, digits, _, - and ., and starts with a letter or a digit. Its backend is local, ssh, kubernetes, slurm or pbs; its isolation names a container runtime, such as podman, or host; its cpu is a number of cores, such as 4 or 0.5, or of thousandths of one, such as 500m; its memory is a number of bytes, or a number with a suffix, such as 8Gi or 512M; and its gpu is a whole number. Its max-walltime, margin and default-timeout are durations greater than 0, written as a workflow's timeout: is: a whole number of seconds, or of minutes, hours or days, such as 3600, 90m, 24h or 1d.",
     "fix": [
       "Correct the value as its key needs."
     ]

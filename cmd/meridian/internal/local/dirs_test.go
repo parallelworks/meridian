@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -84,7 +85,7 @@ func TestLocateRefuses(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Locate(env(tc.vars))
-			wantProblem(t, err, tc.kind)
+			kindtest.Want(t, err, tc.kind)
 		})
 	}
 }
@@ -114,7 +115,7 @@ func TestEnsureStateRefusesOpenDirectory(t *testing.T) {
 	if err := os.Chmod(d.State, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := wantProblem(t, d.EnsureState(), problems.DirectoryNotPrivate)
+	p := kindtest.Want(t, d.EnsureState(), problems.DirectoryNotPrivate)
 	if p.Params["path"] != d.State || p.Params["mode"] != "0755" {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
@@ -125,7 +126,7 @@ func TestEnsureStateRefusesFile(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantProblem(t, (Dirs{State: path}).EnsureState(), problems.DirectoryUnavailable)
+	kindtest.Want(t, (Dirs{State: path}).EnsureState(), problems.DirectoryUnavailable)
 }
 
 func TestEnsureStateFollowsLink(t *testing.T) {
@@ -160,7 +161,7 @@ func TestDatabaseRefusesNetworkFilesystem(t *testing.T) {
 	detectNetworkFS = func(string) (string, bool, error) { return "nfs4", true, nil }
 	d := Dirs{State: filepath.Join(t.TempDir(), "state")}
 	_, err := d.Database()
-	p := wantProblem(t, err, problems.NetworkFilesystem)
+	p := kindtest.Want(t, err, problems.NetworkFilesystem)
 	for _, want := range []string{d.State, "nfs4", EnvStateDir} {
 		if !strings.Contains(p.Detail, want) {
 			t.Errorf("Database's problem %q doesn't say %q", p.Detail, want)
@@ -180,7 +181,7 @@ func TestEnsureStateRefusesOpenParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := Dirs{State: filepath.Join(parent, "meridian")}
-	p := wantProblem(t, d.EnsureState(), problems.PathUnsafe)
+	p := kindtest.Want(t, d.EnsureState(), problems.PathUnsafe)
 	if p.Params["dir"] != parent {
 		t.Errorf("the unsafe directory is %v, want %s", p.Params["dir"], parent)
 	}
@@ -209,5 +210,5 @@ func TestDatabaseMountNotFound(t *testing.T) {
 	t.Cleanup(func() { detectNetworkFS = detect })
 	detectNetworkFS = func(string) (string, bool, error) { return "", false, errNoMount }
 	_, err := (Dirs{State: filepath.Join(t.TempDir(), "state")}).Database()
-	wantProblem(t, err, problems.MountNotFound)
+	kindtest.Want(t, err, problems.MountNotFound)
 }

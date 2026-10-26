@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/parallelworks/foundation/problem"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/backend"
@@ -125,17 +124,10 @@ func readConfig(path string, access safepath.Access) ([]byte, error) {
 // itself when it is one, and FileUnreadable, with what the operating
 // system said, otherwise.
 func unreadable(path string, err error) error {
-	if isProblem(err) {
+	if problems.IsProblem(err) {
 		return err
 	}
 	return problems.FileUnreadable.Problem(problems.Params{"path": path, "reason": err.Error()})
-}
-
-// isProblem says whether err is, or wraps, a problem: what is wrong, which
-// says why, rather than what the operating system said.
-func isProblem(err error) bool {
-	_, ok := errors.AsType[*problem.Problem](err)
-	return ok
 }
 
 // A configFile is a config file as it is read: its path, for the problems
@@ -362,8 +354,8 @@ func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, e
 			case "isolation":
 				m.Isolation = text
 			default:
-				seconds, err := parseSeconds(text)
-				if err != nil {
+				seconds, ok := parseSeconds(text)
+				if !ok {
 					return m, invalid(v, key, text)
 				}
 				switch key {
@@ -434,8 +426,8 @@ func (f configFile) resources(group string, n *yaml.Node, r *backend.Resources) 
 var sourcesKeys = []string{"gitlab-servers"}
 
 // loadSources reads the sources file at path: the GitLab servers, besides
-// gitlab.com, that a workflow's $host can name, each a host name and,
-// after a colon, a port.
+// gitlab.com, that a workflow's $host can name, each a host name with no
+// port, as a $host names it (validHost).
 func (c *Config) loadSources(path string) error {
 	data, err := readConfig(path, safepath.Unchangeable)
 	if err != nil || data == nil {

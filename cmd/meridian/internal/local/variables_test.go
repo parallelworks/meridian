@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -119,7 +120,7 @@ func TestReadSecretsLazily(t *testing.T) {
 func TestReadPlainFromMissingEnv(t *testing.T) {
 	c := variablesConfig(t, nil)
 	_, err := c.Read(t.Context(), []string{"vars.build"}, false)
-	if p := wantProblem(t, err, problems.VariableEnvUnset); p.Params["env"] != "BUILD" || p.Params["variable"] != "vars.build" {
+	if p := kindtest.Want(t, err, problems.VariableEnvUnset); p.Params["env"] != "BUILD" || p.Params["variable"] != "vars.build" {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 }
@@ -167,7 +168,7 @@ func TestVariablesFileRefuses(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadConfig(configDir(t, map[string]string{VariablesFile: tc.text}), lookup(map[string]string{"HOME": "home"}))
-			wantProblem(t, err, tc.kind)
+			kindtest.Want(t, err, tc.kind)
 		})
 	}
 }
@@ -206,7 +207,7 @@ func TestVariableFileModes(t *testing.T) {
 			}
 			continue
 		}
-		wantProblem(t, err, tc.kind)
+		kindtest.Want(t, err, tc.kind)
 	}
 }
 
@@ -230,7 +231,7 @@ func TestVariableFileDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c.Read(t.Context(), []string{"org.v"}, true)
-	if p := wantProblem(t, err, problems.PathUnsafe); p.Params["dir"] != shared {
+	if p := kindtest.Want(t, err, problems.PathUnsafe); p.Params["dir"] != shared {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 }

@@ -407,7 +407,7 @@ var (
 			return err
 		}),
 		jsonv2.UnmarshalFromFunc(func(dec *jsontext.Decoder, d *Data) error {
-			out, err := jsonvalue.Decode(dec, number)
+			out, err := jsonvalue.Decode(dec, jsonvalue.Number)
 			if err == nil {
 				d.v = out
 			}
