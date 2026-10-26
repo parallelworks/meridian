@@ -1,6 +1,10 @@
 package workerapisrv
 
-import "time"
+import (
+	"time"
+
+	"github.com/parallelworks/meridian/coordinator/internal/store"
+)
 
 // SetReads sets the newest plan version s reads, as a replica of an older
 // release reads fewer.
@@ -32,3 +36,7 @@ func HeldPolls(s *Server, id string) int {
 	}
 	return 0
 }
+
+// SetControlsChanged sets what s reads, in the transaction that stores
+// events, of the attempts whose controls it changed.
+func SetControlsChanged(s *Server, f func(tx *store.Tx) ([]string, error)) { s.controlsChanged = f }

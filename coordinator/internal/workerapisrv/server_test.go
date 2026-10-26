@@ -476,6 +476,55 @@ func TestWake(t *testing.T) {
 	}
 }
 
+// Once events are stored, the polls held of the attempts whose controls
+// storing them changed are answered at once, not at the next recheck.
+func TestEventsNotify(t *testing.T) {
+	var target string
+	r := newRig(t, rigOptions{hold: 10 * time.Second, configure: func(s *workerapisrv.Server) {
+		workerapisrv.SetControlsChanged(s, func(tx *store.Tx) ([]string, error) {
+			// As a failed step that stops the run would.
+			_, err := tx.SetControl(target, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
+			return []string{target}, err
+		})
+	}})
+	c := newClient(t, r.socket)
+	_, _, reporter := r.claimed(c, placed{})
+	b, _, polling := r.claimed(c, placed{})
+	target = b.ID
+	answered := make(chan []byte, 1)
+	go func() {
+		_, body, _ := newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, polling)
+		answered <- body
+	}()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for workerapisrv.HeldPolls(r.server, b.ID) < 1 {
+		select {
+		case <-tick.C:
+		case <-t.Context().Done():
+			t.Fatal("the poll wasn't held")
+		}
+	}
+	events, _ := workerapi.Marshal(workerapi.Events{Events: []workerapi.Event{{Seq: 1, Time: time.Unix(1, 0).UTC()}}})
+	start := time.Now()
+	if status, body, _ := c.send(http.MethodPost, workerapi.PathEvents, events, reporter); status != http.StatusOK {
+		t.Fatalf("events were answered %d: %s", status, body)
+	}
+	select {
+	case body := <-answered:
+		// The recheck reads the controls a second after the poll began.
+		if took := time.Since(start); took > 500*time.Millisecond {
+			t.Errorf("the poll was answered %v after the events were stored", took)
+		}
+		var got workerapi.Control
+		if err := workerapi.Unmarshal(body, &got); err != nil || !got.Cancel || got.Version != 1 {
+			t.Errorf("the poll was answered %s, %v", body, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the poll wasn't answered")
+	}
+}
+
 // A request that didn't come through Serve, whose listener says who a
 // connection is from, is refused.
 func TestNotThroughServe(t *testing.T) {
