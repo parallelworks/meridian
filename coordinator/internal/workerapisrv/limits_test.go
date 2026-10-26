@@ -73,7 +73,7 @@ func TestSlowBody(t *testing.T) {
 // connections that send nothing, however many, keep no worker out; while
 // every one is handling a request, it waits until one is done.
 func TestConnectionLimit(t *testing.T) {
-	r := newRig(t, rigOptions{maxConns: 4, hold: 1500 * time.Millisecond})
+	r := newRig(t, rigOptions{maxConns: 4, hold: time.Minute})
 	a, _, credential := r.claimed(newClient(t, r.socket), placed{})
 	var held []net.Conn
 	defer func() {
@@ -92,7 +92,9 @@ func TestConnectionLimit(t *testing.T) {
 	if status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathHeartbeat, nil, credential); err != nil || status != http.StatusNoContent {
 		t.Errorf("a heartbeat while connections that send nothing were held was answered %d, %v: %s", status, err, body)
 	}
-	if took := time.Since(start); took > time.Second {
+	// Not the time a request's headers are given, after which the server
+	// would close one that sent nothing.
+	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("a heartbeat while connections that send nothing were held took %v", took)
 	}
 	// The oldest of those were closed.
@@ -104,32 +106,53 @@ func TestConnectionLimit(t *testing.T) {
 	}
 
 	// Every connection handling a request: control polls, which the server
-	// holds.
-	var wg sync.WaitGroup
+	// holds until the test answers them.
+	polls := make(chan error, 4)
 	for range 4 {
-		wg.Go(func() {
-			_, _, _ = newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, credential)
-		})
+		go func() {
+			status, body, err := newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, credential)
+			if err == nil && status != http.StatusOK {
+				err = fmt.Errorf("answered %d: %s", status, body)
+			}
+			polls <- err
+		}()
 	}
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for workerapisrv.HeldPolls(r.server, a.ID) < 4 {
+	waitHeld(t, r.server, a.ID, 4)
+	heartbeat := make(chan int, 1)
+	go func() {
+		status, _, _ := newClient(t, r.socket).send(http.MethodPost, workerapi.PathHeartbeat, nil, credential)
+		heartbeat <- status
+	}()
+	select {
+	case status := <-heartbeat:
+		t.Fatalf("a heartbeat was answered %d while every connection handled a poll held", status)
+	case <-time.After(500 * time.Millisecond):
+	}
+	// Answered, the polls' connections wait for a request, and the
+	// heartbeat's takes one's place.
+	r.inTx(func(tx *store.Tx) error {
+		_, err := tx.SetControl(a.ID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
+		return err
+	})
+	r.server.Notify(a.ID)
+	deadline := time.After(10 * time.Second)
+	for range 4 {
 		select {
-		case <-tick.C:
-		case <-t.Context().Done():
-			t.Fatal("the polls weren't held")
+		case err := <-polls:
+			if err != nil {
+				t.Errorf("a poll: %v", err)
+			}
+		case <-deadline:
+			t.Fatal("the polls weren't answered")
 		}
 	}
-	start = time.Now()
-	status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathHeartbeat, nil, credential)
-	took := time.Since(start)
-	wg.Wait()
-	if err != nil || status != http.StatusNoContent {
-		t.Errorf("a heartbeat once the polls were answered was answered %d, %v: %s", status, err, body)
-	}
-	// The polls are held for 1.5s from their start.
-	if took < 500*time.Millisecond {
-		t.Errorf("a heartbeat was answered after %v, while every connection handled a poll held", took)
+	select {
+	case status := <-heartbeat:
+		if status != http.StatusNoContent {
+			t.Errorf("the heartbeat, once the polls were answered, was answered %d", status)
+		}
+	case <-deadline:
+		t.Fatal("the heartbeat wasn't answered once the polls were")
 	}
 }
 

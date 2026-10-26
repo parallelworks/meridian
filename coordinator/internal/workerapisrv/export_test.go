@@ -40,3 +40,7 @@ func HeldPolls(s *Server, id string) int {
 // SetControlsChanged sets what s reads, in the transaction that stores
 // events, of the attempts whose controls it changed.
 func SetControlsChanged(s *Server, f func(tx *store.Tx) ([]string, error)) { s.controlsChanged = f }
+
+// SetRecheck sets how often s reads again the controls of the attempts it
+// holds polls for.
+func SetRecheck(s *Server, d time.Duration) { s.polls.every = d }

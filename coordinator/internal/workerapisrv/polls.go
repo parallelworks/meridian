@@ -23,6 +23,8 @@ const recheck = time.Second
 type polls struct {
 	store *store.Store
 	log   *slog.Logger
+	// every is how often the recheck reads: recheck, but in tests.
+	every time.Duration
 
 	mu       sync.Mutex
 	attempts map[string]*polled
@@ -39,7 +41,7 @@ type polled struct {
 }
 
 func newPolls(s *store.Store, log *slog.Logger) *polls {
-	return &polls{store: s, log: log, attempts: map[string]*polled{}}
+	return &polls{store: s, log: log, every: recheck, attempts: map[string]*polled{}}
 }
 
 // watch registers a poll of the attempt id, which read its control at
@@ -91,7 +93,7 @@ func (p *polls) wake(ids []string) {
 // recheck reads again, every second while any poll waits, the versions of
 // the controls polled for, and wakes the polls of those that are newer.
 func (p *polls) recheck(ctx context.Context) {
-	tick := time.NewTicker(recheck)
+	tick := time.NewTicker(p.every)
 	defer tick.Stop()
 	for range tick.C {
 		p.mu.Lock()

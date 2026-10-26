@@ -477,10 +477,12 @@ func TestWake(t *testing.T) {
 }
 
 // Once events are stored, the polls held of the attempts whose controls
-// storing them changed are answered at once, not at the next recheck.
+// storing them changed are answered, without waiting for the recheck,
+// which the test puts off.
 func TestEventsNotify(t *testing.T) {
 	var target string
-	r := newRig(t, rigOptions{hold: 10 * time.Second, configure: func(s *workerapisrv.Server) {
+	r := newRig(t, rigOptions{hold: time.Minute, configure: func(s *workerapisrv.Server) {
+		workerapisrv.SetRecheck(s, time.Hour)
 		workerapisrv.SetControlsChanged(s, func(tx *store.Tx) ([]string, error) {
 			// As a failed step that stops the run would.
 			_, err := tx.SetControl(target, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
@@ -496,32 +498,35 @@ func TestEventsNotify(t *testing.T) {
 		_, body, _ := newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, polling)
 		answered <- body
 	}()
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for workerapisrv.HeldPolls(r.server, b.ID) < 1 {
-		select {
-		case <-tick.C:
-		case <-t.Context().Done():
-			t.Fatal("the poll wasn't held")
-		}
-	}
+	waitHeld(t, r.server, b.ID, 1)
 	events, _ := workerapi.Marshal(workerapi.Events{Events: []workerapi.Event{{Seq: 1, Time: time.Unix(1, 0).UTC()}}})
-	start := time.Now()
 	if status, body, _ := c.send(http.MethodPost, workerapi.PathEvents, events, reporter); status != http.StatusOK {
 		t.Fatalf("events were answered %d: %s", status, body)
 	}
 	select {
 	case body := <-answered:
-		// The recheck reads the controls a second after the poll began.
-		if took := time.Since(start); took > 500*time.Millisecond {
-			t.Errorf("the poll was answered %v after the events were stored", took)
-		}
 		var got workerapi.Control
 		if err := workerapi.Unmarshal(body, &got); err != nil || !got.Cancel || got.Version != 1 {
 			t.Errorf("the poll was answered %s, %v", body, err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the poll wasn't answered")
+	}
+}
+
+// waitHeld waits until s holds n control polls of the attempt id, for ten
+// seconds at most.
+func waitHeld(t *testing.T, s *workerapisrv.Server, id string, n int) {
+	t.Helper()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
+	for workerapisrv.HeldPolls(s, id) < n {
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("%d of %d polls were held", workerapisrv.HeldPolls(s, id), n)
+		}
 	}
 }
 
