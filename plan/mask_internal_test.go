@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/parallelworks/meridian/internal/words"
 )
 
 func naiveFind(s string, values []string) []span {
@@ -137,12 +139,12 @@ func TestShownFormsLength(t *testing.T) {
 	}
 }
 
-// A key a credential is kept under is one of the credential words, or has
 // A key a credential is kept under is one of the credential words, has one
 // among its words, or ends with key or keys after a qualifier, whatever
-// its case, and isn't one whose last word describes a credential rather
-// than holding one. Of the keys of common configs, only those that hold a
-// credential are.
+// its case and whatever separates its words, as a space or a slash does,
+// and isn't one whose last word describes a credential rather than holding
+// one. Of the keys of common configs, only those that hold a credential
+// are.
 func TestCredentialKey(t *testing.T) {
 	for key, want := range map[string]bool{
 		"password": true, "PASSWORD": true, "db_password": true, "api_key": true, "apiKey": true, "APIKey": true,
@@ -153,9 +155,27 @@ func TestCredentialKey(t *testing.T) {
 		"passphrase": true, "passcode": true, "pw": true, "secrets": false, "tokens": true, "keys": false,
 		"password2": true, "Password1": true, "OAuth2Token": true, "token_v2": true, "creds": true,
 		"monkey": false, "turkey": false, "auth": false, "bearer": false, "x-api-key": true, "DBPassword": true,
+		// Words apart that aren't split at _, - or ., as a form's labels
+		// and a path's names are.
+		"Client Secret": true, "API Key": true, "db password": true, "aws/secret": true, "vault:token": true,
+		"Secret Name": false, "sort key": false, "token url": false,
+		// A count of them holds none.
+		"token_count": false, "token count": false, "tokenCount": false,
 	} {
 		if got, _ := credentialKey(key); got != want {
-			t.Errorf("credentialKey(%q) = %v, want %v (words %q)", key, got, want, keyWords(key))
+			t.Errorf("credentialKey(%q) = %v, want %v (words %q)", key, got, want, words.Split(key))
+		}
+	}
+	// A plural word decides only if no singular one does: a path under
+	// credentials names one of them.
+	for key, want := range map[string]bool{
+		"credentials/db_password": false, "creds/db_password": false, "creds:api_token": false,
+		"tokens/github_token": false, "Credentials db_password": false, "credentials.db_password": false,
+		"credentials_db_password": false, "tokens": true, "api_keys": true, "db-credentials": true,
+		"pin/client_keys": false, "secret.api_keys": false,
+	} {
+		if credential, isPlural := credentialKey(key); !credential || isPlural != want {
+			t.Errorf("credentialKey(%q) = %v, plural %v, want a credential, plural %v (words %q)", key, credential, isPlural, want, words.Split(key))
 		}
 	}
 	keys := []string{

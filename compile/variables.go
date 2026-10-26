@@ -5,12 +5,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/words"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -180,7 +180,7 @@ var (
 // its words is one of secretWords, or two in a row are one of secretPairs. A
 // word is whole, so tokenizer and secretary aren't.
 func looksSecret(name string) bool {
-	words := nameWords(name)
+	words := words.Split(name)
 	for i, w := range words {
 		if secretWords[w] || i > 0 && secretPairs[[2]string{words[i-1], w}] {
 			return true
@@ -205,7 +205,7 @@ func namesSecret(name string) bool {
 	if looksSecret(name) {
 		return true
 	}
-	for _, w := range nameWords(name) {
+	for _, w := range words.Split(name) {
 		if slices.ContainsFunc(secretSpellings, func(s string) bool { return oneEdit(w, s) }) {
 			return true
 		}
@@ -237,40 +237,4 @@ func oneEdit(a, b string) bool {
 		return true
 	}
 	return i+1 < len(x) && x[i] == y[i+1] && x[i+1] == y[i] && string(x[i+2:]) == string(y[i+2:])
-}
-
-// nameWords splits a name into its words, in lower case. A word ends at
-// anything that isn't a letter or a digit, such as _, -, . or a space, and
-// where letters and digits meet. An upper-case letter after a lower-case one
-// starts a word, as in apiKey, and so does the last of a run of them before
-// a lower-case one, as in APIKey.
-func nameWords(name string) []string {
-	var words []string
-	runes := []rune(name)
-	start := -1
-	end := func(i int) {
-		if start >= 0 {
-			words = append(words, strings.ToLower(string(runes[start:i])))
-			start = -1
-		}
-	}
-	for i, r := range runes {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			end(i)
-			continue
-		}
-		if start >= 0 {
-			prev := runes[i-1]
-			if unicode.IsDigit(r) != unicode.IsDigit(prev) ||
-				unicode.IsUpper(r) && unicode.IsLower(prev) ||
-				unicode.IsUpper(r) && unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
-				end(i)
-			}
-		}
-		if start < 0 {
-			start = i
-		}
-	}
-	end(len(runes))
-	return words
 }
