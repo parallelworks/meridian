@@ -239,11 +239,13 @@ expect:
   set for a job skipped because one it needs failed, rather than by its own
   `if:`, or a matrix job one of whose instances was; and `cancelled`, set
   for a matrix job one of whose instances was cancelled. A job's own
-  `cancelled` says the run is being cancelled. A matrix job's `index` and
-  `matrix` are those of the instance evaluated. `attempt`, from 1, `group`
-  and `member` are the job context's. `steps` are how the job's steps
-  ended, in order, each with its `outcome` and the `outputs` it wrote: a
-  step that ended `cancelled` cancels the rest of the job.
+  `cancelled` says the run is being cancelled, or is past its timeout, so
+  a job that hadn't started takes the path its `if:` gives it. A matrix
+  job's `index` and `matrix` are those of the instance evaluated.
+  `attempt`, from 1, `group` and `member` are the job context's. `steps`
+  are how the job's steps ended, in order, each with its `outcome` and the
+  `outputs` it wrote: a step that ended `cancelled` cancels the rest of the
+  job.
 - Each job is evaluated where its dependencies have finished, and each of
   its steps as it is about to run, up to the one after the last that
   `steps` gives, and once `steps` gives every step, each step's
@@ -254,10 +256,14 @@ expect:
 - `expect.skipped` lists the JSON Pointers of the jobs and steps whose
   `if:` is false, and of the `cleanup:` of each step that didn't run or
   whose `if:` is false as the job ends, and every other job, step and
-  `cleanup:` evaluated runs.
+  `cleanup:` evaluated runs, but those `expect.cancelled` lists.
 - `expect.needs-failed` lists the JSON Pointers of the jobs skipped because
   a job they need failed, which the jobs that need them read as failed.
   Every other job skipped was skipped by its own `if:`.
+- `expect.cancelled` lists the JSON Pointers of the jobs that end cancelled
+  without running: a job that hadn't started when the run was cancelled,
+  whose `if:` reads what the jobs it needs give, `env` or a status
+  function, but can't be true once the run is cancelled.
 - `expect.private-outputs` lists the JSON Pointers of the job outputs that
   are private: made from a variable, a password or a secret, or holding a
   secret, so kept only with the run's secrets. No other output is.

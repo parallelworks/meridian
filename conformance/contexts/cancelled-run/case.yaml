@@ -1,0 +1,63 @@
+description: >-
+  Once a run is cancelled, or is past its timeout, a job that hadn't
+  started takes the path its if: gives it, and the status functions read
+  the jobs it needs alone. One whose if: is unset, or is decided before its
+  needs finish, ends at once, skipped because its needs failed, a matrix
+  job and a need on any instance among them. One whose if: reads what its
+  needs give, env or a status function, but can't be true once the run is
+  cancelled, waits for its needs and ends cancelled. One whose if: can be
+  true once the run is cancelled is evaluated, and cancelled() is false
+  while none of its needs was cancelled, so on-cancel is skipped by its own
+  if:.
+source: ACTIVATE's executor
+jobs:
+  test:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  docs:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  sites:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  first-site:
+    cancelled: true
+    needs:
+      probe: {result: success}
+  publish:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  announce:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  report:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  on-cancel:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+expect:
+  skipped:
+    - /jobs/test
+    - /jobs/docs
+    - /jobs/sites
+    - /jobs/first-site
+    - /jobs/on-cancel
+  needs-failed:
+    - /jobs/test
+    - /jobs/docs
+    - /jobs/sites
+    - /jobs/first-site
+  cancelled:
+    - /jobs/publish
+    - /jobs/announce
+    - /jobs/report
+  values:
+    /jobs/build/steps/0/run: echo tag=v1 >> $OUTPUTS

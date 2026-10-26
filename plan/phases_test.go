@@ -239,15 +239,173 @@ jobs:
 			}
 		}
 	}
-	// A run being cancelled skips a job whose if: is success(), and runs
-	// one whose is cancelled().
-	for name, skipped := range map[string]bool{"plain": true, "on-cancel": false, "word": false} {
-		r, _, _ := p.Ready(t.Context(), name, plan.ReadyInput{
-			Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess}},
-		})
-		if r.Skipped != skipped || r.NeedsFailed {
-			t.Errorf("%s while cancelling: %+v", name, r)
+}
+
+// Once the run is cancelled, a job that hasn't started takes the path its
+// if: gives it, as ACTIVATE's do: one that can't outlive the cancel and is
+// decided before its needs finish is skipped because its needs failed; one
+// that reads its needs, env or a status function ends cancelled; and one
+// that can outlive the cancel is readied as ever, with cancelled() read
+// from its needs alone.
+func TestReadyCancelled(t *testing.T) {
+	p := compiled(t, `
+inputs:
+  go: {type: boolean, default: true}
+env:
+  MODE: fast
+jobs:
+  dep:
+    steps: [{run: "true"}]
+  free:
+    steps: [{run: "true"}]
+  plain:
+    needs: [dep]
+    steps: [{run: "true"}]
+  false:
+    needs: [dep]
+    if: false
+    steps: [{run: "true"}]
+  input:
+    needs: [dep]
+    if: ${{ inputs.go }}
+    steps: [{run: "true"}]
+  as-text:
+    needs: [dep]
+    if: ${{ needs.dep != '' }}
+    steps: [{run: "true"}]
+  value-always:
+    needs: [dep]
+    if: ${{ 'always' }}
+    steps: [{run: "true"}]
+  output:
+    needs: [dep]
+    if: ${{ needs.dep.outputs.go == 'yes' }}
+    steps: [{run: "true"}]
+  result:
+    needs: [dep]
+    if: ${{ needs.dep.result == 'success' }}
+    steps: [{run: "true"}]
+  env:
+    needs: [dep]
+    if: ${{ env.MODE == 'fast' }}
+    steps: [{run: "true"}]
+  env-free:
+    if: ${{ env.MODE == 'fast' }}
+    steps: [{run: "true"}]
+  on-success:
+    needs: [dep]
+    if: success()
+    steps: [{run: "true"}]
+  on-failure:
+    needs: [dep]
+    if: failure()
+    steps: [{run: "true"}]
+  not-cancelled:
+    needs: [dep]
+    if: ${{ !cancelled() }}
+    steps: [{run: "true"}]
+  word:
+    needs: [dep]
+    if: always
+    steps: [{run: "true"}]
+  on-always:
+    needs: [dep]
+    if: ${{ always() && env.MODE == 'fast' }}
+    steps: [{run: "true"}]
+  on-cancel:
+    needs: [dep]
+    if: cancelled()
+    steps: [{run: "true"}]
+  not-failure:
+    needs: [dep]
+    if: ${{ !failure() }}
+    steps: [{run: "true"}]
+  matrix:
+    needs: [dep]
+    strategy:
+      matrix:
+        os: [linux, mac]
+    steps: [{run: "true"}]
+  matrix-reads:
+    needs: [dep]
+    if: ${{ matrix.os == needs.dep.outputs.os }}
+    strategy:
+      matrix:
+        os: [linux, mac]
+    steps: [{run: "true"}]
+`, nil)
+	paths := map[string]plan.CancelPath{
+		"dep": plan.CancelPathSkip, "free": plan.CancelPathSkip, "plain": plan.CancelPathSkip, "false": plan.CancelPathSkip,
+		"input": plan.CancelPathSkip, "as-text": plan.CancelPathSkip, "value-always": plan.CancelPathSkip, "matrix": plan.CancelPathSkip,
+		"output": plan.CancelPathEnd, "result": plan.CancelPathEnd, "env": plan.CancelPathEnd, "env-free": plan.CancelPathEnd,
+		"on-success": plan.CancelPathEnd, "on-failure": plan.CancelPathEnd, "not-cancelled": plan.CancelPathEnd,
+		"matrix-reads": plan.CancelPathEnd,
+		"word":         plan.CancelPathOutlive, "on-always": plan.CancelPathOutlive, "on-cancel": plan.CancelPathOutlive,
+		"not-failure": plan.CancelPathOutlive,
+	}
+	for _, j := range p.Jobs {
+		if got, want := j.CancelPath(), paths[j.Name]; got != want {
+			t.Errorf("%s takes %d, want %d", j.Name, got, want)
 		}
+	}
+
+	run := runValues(t, p, nil)
+	type result struct{ skipped, needsFailed, cancelled, runs bool }
+	ready := func(name string, dep plan.Outcome) result {
+		t.Helper()
+		in := plan.ReadyInput{Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": {Outcome: dep}}}
+		if len(job(t, p, name).Needs) == 0 {
+			in.Needs = nil
+		}
+		r, diags, err := p.Ready(t.Context(), name, in)
+		if err != nil || len(diags) > 0 {
+			t.Fatalf("%s: %v, %v", name, diags, err)
+		}
+		return result{r.Skipped, r.NeedsFailed, r.Cancelled, r.Job != nil || r.Expansion != nil}
+	}
+	skip, ends, runs, skipped := result{skipped: true, needsFailed: true}, result{cancelled: true}, result{runs: true}, result{skipped: true}
+	for name, want := range map[string][2]result{
+		// What it gives once dep succeeded, and once dep was cancelled.
+		"free":          {runs, runs},
+		"plain":         {skip, skip},
+		"false":         {skip, skip},
+		"input":         {skip, skip},
+		"value-always":  {skip, skip},
+		"matrix":        {skip, skip},
+		"output":        {ends, ends},
+		"result":        {ends, ends},
+		"env":           {ends, ends},
+		"env-free":      {ends, ends},
+		"on-failure":    {ends, ends},
+		"not-cancelled": {ends, ends},
+		"matrix-reads":  {ends, ends},
+		"word":          {runs, runs},
+		"on-always":     {runs, runs},
+		"on-cancel":     {skipped, runs},
+		"not-failure":   {runs, runs},
+	} {
+		for i, dep := range []plan.Outcome{plan.OutcomeSuccess, plan.OutcomeCancelled} {
+			if got := ready(name, dep); got != want[i] {
+				t.Errorf("%s while cancelling, after dep's %s: %+v, want %+v", name, dep, got, want[i])
+			}
+		}
+	}
+
+	// An instance takes its job's path.
+	instance := &plan.Instance{Key: "matrix-reads#0", Matrix: plan.DataOf(map[string]any{"os": "linux"})}
+	needs := map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"os": "linux"}}}
+	for cancelled, want := range map[bool]result{false: runs, true: ends} {
+		r, diags, err := p.Ready(t.Context(), "matrix-reads", plan.ReadyInput{Run: run, Cancelled: cancelled, Needs: needs, Instance: instance})
+		if err != nil || len(diags) > 0 {
+			t.Fatal(diags, err)
+		}
+		if got := (result{r.Skipped, r.NeedsFailed, r.Cancelled, r.Job != nil}); got != want {
+			t.Errorf("an instance, cancelled %v: %+v, want %+v", cancelled, got, want)
+		}
+	}
+	instance = &plan.Instance{Key: "matrix#1", Index: 1, Matrix: plan.DataOf(map[string]any{"os": "mac"})}
+	if r, _, err := p.Ready(t.Context(), "matrix", plan.ReadyInput{Run: run, Cancelled: true, Needs: needs, Instance: instance}); err != nil || !r.Skipped || !r.NeedsFailed {
+		t.Errorf("an instance of matrix while cancelling: %+v, %v", r, err)
 	}
 }
 

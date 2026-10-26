@@ -127,6 +127,11 @@ type Expect struct {
 	// read as failed. Every other job skipped there was skipped by its own
 	// if:.
 	NeedsFailed []string `yaml:"needs-failed,omitempty"`
+	// Cancelled are the JSON Pointers of the jobs that end cancelled
+	// without running, in the contexts area, as a run being cancelled ends
+	// a job that hadn't started whose if: reads what its needs give, env
+	// or a status function, but can't be true once the run is cancelled.
+	Cancelled []string `yaml:"cancelled,omitempty"`
 }
 
 // JobState is what is known of a job where the phases after the run
@@ -135,7 +140,8 @@ type Expect struct {
 type JobState struct {
 	// Needs are the results of the jobs it needs, by name.
 	Needs map[string]NeedResult `yaml:"needs,omitempty"`
-	// Cancelled says the run is being cancelled.
+	// Cancelled says the run is being cancelled, or is past its timeout:,
+	// so a job that hadn't started takes the path its if: gives it.
 	Cancelled bool `yaml:"cancelled,omitempty"`
 	// Index and Matrix are the matrix instance's index, from 0, and its
 	// values, for a job with a matrix.
