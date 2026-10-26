@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -67,7 +68,7 @@ func TestCheckInfo(t *testing.T) {
 				}
 				return
 			}
-			if params := wantProblem(t, err, tc.kind); params["path"] != "/p" {
+			if params := kindtest.Want(t, err, tc.kind).Params; params["path"] != "/p" {
 				t.Errorf("the problem's params are %v", params)
 			}
 		})
@@ -84,7 +85,7 @@ func TestPathCheckerOwnerUnknown(t *testing.T) {
 		readlink: func(string) (string, error) { return "", fs.ErrInvalid },
 		unmapped: func(int) bool { return false },
 	}
-	if params := wantProblem(t, pc.check("/home/u/x", false), problems.OwnerUnknown); params["path"] != "/" {
+	if params := kindtest.Want(t, pc.check("/home/u/x", false), problems.OwnerUnknown).Params; params["path"] != "/" {
 		t.Errorf("the problem's params are %v", params)
 	}
 }
@@ -122,13 +123,13 @@ func TestEnsureDir(t *testing.T) {
 	if err := os.Chmod(shared, 0o777); err != nil { //nolint:gosec // a directory others can change, which EnsureDir refuses
 		t.Fatal(err)
 	}
-	if params := wantProblem(t, EnsureDir(filepath.Join(shared, "x"), Private), problems.PathUnsafe); params["dir"] != shared {
+	if params := kindtest.Want(t, EnsureDir(filepath.Join(shared, "x"), Private), problems.PathUnsafe).Params; params["dir"] != shared {
 		t.Errorf("the problem's params are %v", params)
 	}
 	if _, err := os.Stat(filepath.Join(shared, "x")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("EnsureDir made a directory it refused: %v", err)
 	}
-	if params := wantProblem(t, CheckDir(shared, Unchangeable), problems.DirectoryNotPrivate); params["mode"] != "0777" {
+	if params := kindtest.Want(t, CheckDir(shared, Unchangeable), problems.DirectoryNotPrivate).Params; params["mode"] != "0777" {
 		t.Errorf("the problem's params are %v", params)
 	}
 }
@@ -154,17 +155,17 @@ func TestReadFile(t *testing.T) {
 	if data, err := ReadFile(private, Private, 6); err != nil || string(data) != "secret" {
 		t.Errorf("got %q, %v", data, err)
 	}
-	wantProblem(t, func() error { _, err := ReadFile(private, Private, 5); return err }(), problems.FileOverLimit)
+	kindtest.Want(t, func() error { _, err := ReadFile(private, Private, 5); return err }(), problems.FileOverLimit)
 	readable := write("readable", "x", 0o644)
 	if _, err := ReadFile(readable, Unchangeable, 10); err != nil {
 		t.Errorf("a file others can read but not change: %v", err)
 	}
-	wantProblem(t, func() error { _, err := ReadFile(readable, Private, 10); return err }(), problems.FileNotPrivate)
+	kindtest.Want(t, func() error { _, err := ReadFile(readable, Private, 10); return err }(), problems.FileNotPrivate)
 	link := filepath.Join(dir, "link")
 	if err := os.Symlink(private, link); err != nil {
 		t.Fatal(err)
 	}
-	wantProblem(t, func() error { _, err := ReadFile(link, Private, 10); return err }(), problems.FileNotRegular)
+	kindtest.Want(t, func() error { _, err := ReadFile(link, Private, 10); return err }(), problems.FileNotRegular)
 	if _, err := ReadFile(filepath.Join(dir, "missing"), Private, 10); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a file that isn't there: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestReadFile(t *testing.T) {
 	if err := os.Chmod(shared, 0o777); err != nil { //nolint:gosec // a directory others can change, which ReadFile refuses
 		t.Fatal(err)
 	}
-	if params := wantProblem(t, func() error { _, err := ReadFile(inShared, Private, 10); return err }(), problems.PathUnsafe); !strings.HasPrefix(params["dir"].(string), shared) {
+	if params := kindtest.Want(t, func() error { _, err := ReadFile(inShared, Private, 10); return err }(), problems.PathUnsafe).Params; !strings.HasPrefix(params["dir"].(string), shared) {
 		t.Errorf("the problem's params are %v", params)
 	}
 }
@@ -242,9 +243,9 @@ func TestReadFileAdversarial(t *testing.T) {
 		_, err := ReadFile(path, access, 10)
 		return err
 	}
-	wantProblem(t, read(filepath.Join(dir, "toopen", "g"), Private), problems.PathUnsafe)
-	wantProblem(t, read(filepath.Join(dir, "loop1", "x"), Private), problems.PathLinksTooMany)
-	wantProblem(t, CheckDir(filepath.Join(dir, "toroot"), Unchangeable), problems.DirectoryNotOwned)
+	kindtest.Want(t, read(filepath.Join(dir, "toopen", "g"), Private), problems.PathUnsafe)
+	kindtest.Want(t, read(filepath.Join(dir, "loop1", "x"), Private), problems.PathLinksTooMany)
+	kindtest.Want(t, CheckDir(filepath.Join(dir, "toroot"), Unchangeable), problems.DirectoryNotOwned)
 	if err := read(f+"/", Private); !errors.Is(err, syscall.ENOTDIR) {
 		t.Errorf("a file through a trailing slash: %v", err)
 	}
@@ -253,5 +254,5 @@ func TestReadFileAdversarial(t *testing.T) {
 		t.Logf("no hard link to a file of root's: %v", err)
 		return
 	}
-	wantProblem(t, read(hard, Unchangeable), problems.FileNotOwned)
+	kindtest.Want(t, read(hard, Unchangeable), problems.FileNotOwned)
 }

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -68,24 +69,24 @@ func TestKeysUnwrapRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = k.Unwrap(t.Context(), "run-2", wrapped)
-	if p := wantProblem(t, err, problems.KeyUnwrapFailed); p.Params["run"] != "run-2" {
+	if p := kindtest.Want(t, err, problems.KeyUnwrapFailed); p.Params["run"] != "run-2" {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 	changed := bytes.Clone(wrapped)
 	changed[len(changed)-1] ^= 1
 	_, err = k.Unwrap(t.Context(), "run-1", changed)
-	wantProblem(t, err, problems.KeyUnwrapFailed)
+	kindtest.Want(t, err, problems.KeyUnwrapFailed)
 	_, err = k.Unwrap(t.Context(), "run-1", nil)
-	wantProblem(t, err, problems.KeyWrappingUnknown)
+	kindtest.Want(t, err, problems.KeyWrappingUnknown)
 	other := append([]byte{wrapVersion + 1}, wrapped[1:]...)
 	_, err = k.Unwrap(t.Context(), "run-1", other)
-	wantProblem(t, err, problems.KeyWrappingUnknown)
+	kindtest.Want(t, err, problems.KeyWrappingUnknown)
 	another := NewKeys(t.TempDir())
 	if _, err := another.Wrap(t.Context(), "run-0", dataKey(t)); err != nil {
 		t.Fatal(err)
 	}
 	_, err = another.Unwrap(t.Context(), "run-1", wrapped)
-	wantProblem(t, err, problems.KeyUnwrapFailed)
+	kindtest.Want(t, err, problems.KeyUnwrapFailed)
 }
 
 func TestKeysWrapRefusesShortKey(t *testing.T) {
@@ -113,7 +114,7 @@ func TestKeysRefuseOpenKeyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t))
-	wantProblem(t, err, problems.FileNotPrivate)
+	kindtest.Want(t, err, problems.FileNotPrivate)
 }
 
 func TestKeysRefuseShortKeyFile(t *testing.T) {
@@ -122,7 +123,7 @@ func TestKeysRefuseShortKeyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t))
-	if p := wantProblem(t, err, problems.KeyFileInvalid); p.Params["size"] != 5 {
+	if p := kindtest.Want(t, err, problems.KeyFileInvalid); p.Params["size"] != 5 {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
 }

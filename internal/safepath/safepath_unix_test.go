@@ -3,15 +3,13 @@
 package safepath
 
 import (
-	"errors"
 	"io/fs"
 	"maps"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/parallelworks/foundation/problem"
-
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -150,7 +148,7 @@ func TestPathChecker(t *testing.T) {
 				}
 				return
 			}
-			params := wantProblem(t, err, problems.PathUnsafe)
+			params := kindtest.Want(t, err, problems.PathUnsafe).Params
 			if params["dir"] != tc.unsafe || params["path"] != tc.path {
 				t.Errorf("check(%s) names %v, want %s", tc.path, params, tc.unsafe)
 			}
@@ -162,7 +160,7 @@ func TestPathCheckerLinkLoop(t *testing.T) {
 	infos := base()
 	infos["/home/u/a"] = fakeInfo{fs.ModeSymlink | 0o777, user}
 	err := fakeFS{infos, map[string]string{"/home/u/a": "/home/u/a"}, false}.checker().check("/home/u/a/x", false)
-	wantProblem(t, err, problems.PathLinksTooMany)
+	kindtest.Want(t, err, problems.PathLinksTooMany)
 }
 
 // TestPathCheckerUnmapped checks that, in a user namespace that doesn't map
@@ -174,23 +172,9 @@ func TestPathCheckerUnmapped(t *testing.T) {
 	infos["/"] = fakeDir(0o755, nobody)
 	infos["/home"] = fakeDir(0o755, nobody)
 	err := fakeFS{infos, nil, true}.checker().check("/home/u/.local/state/meridian", false)
-	if params := wantProblem(t, err, problems.OwnerUnmapped); params["dir"] != "/" {
+	if params := kindtest.Want(t, err, problems.OwnerUnmapped).Params; params["dir"] != "/" {
 		t.Errorf("the problem's params are %v", params)
 	}
 	err = fakeFS{infos, nil, false}.checker().check("/home/u/.local/state/meridian", false)
-	wantProblem(t, err, problems.PathUnsafe)
-}
-
-// wantProblem fails the test unless err is a problem of kind k, and
-// returns its params.
-func wantProblem(t *testing.T, err error, k *problems.Kind) map[string]any {
-	t.Helper()
-	p, ok := errors.AsType[*problem.Problem](err)
-	if !ok {
-		t.Fatalf("err = %v, want a problem of kind %s", err, k.Code())
-	}
-	if p.Code != k.Code() {
-		t.Fatalf("err is %s (%v), want %s", p.Code, p, k.Code())
-	}
-	return p.Params
+	kindtest.Want(t, err, problems.PathUnsafe)
 }

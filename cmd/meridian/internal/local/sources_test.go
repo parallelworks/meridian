@@ -22,6 +22,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -216,13 +217,13 @@ func TestSourcesServers(t *testing.T) {
 			t.Errorf("Resolve on %s: %v, want ErrNotFound", host, err)
 			continue
 		}
-		if p := wantProblem(t, err, problems.SourceServerUnknown); p.Params["server"] != host {
+		if p := kindtest.Want(t, err, problems.SourceServerUnknown); p.Params["server"] != host {
 			t.Errorf("the problem names %v", p.Params["server"])
 		}
 	}
 	for _, host := range []string{"git.example.com:443", "git.example.com:8443"} {
 		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "gitlab/g/p", Path: "w.yaml", Host: host})
-		if p := wantProblem(t, err, problems.SourceWithInvalid); p.Params["key"] != "$host" || p.Params["what"] != "server" {
+		if p := kindtest.Want(t, err, problems.SourceWithInvalid); p.Params["key"] != "$host" || p.Params["what"] != "server" {
 			t.Errorf("a $host with a port: %v", p.Params)
 		}
 	}
@@ -289,7 +290,7 @@ func TestSourcesReadRefuses(t *testing.T) {
 	changed := w.Source
 	changed.Digest = digest([]byte("other text\n"))
 	_, err = s.Read(t.Context(), changed)
-	p := wantProblem(t, err, problems.SourceChanged)
+	p := kindtest.Want(t, err, problems.SourceChanged)
 	if p.Params["digest"] != w.Source.Digest || p.Params["pinned"] != changed.Digest || p.Params["commit"] != w.Source.Revision {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
@@ -327,7 +328,7 @@ func TestSourcesNotFound(t *testing.T) {
 			t.Errorf("Resolve(%s): %v, want ErrNotFound", ref, err)
 			continue
 		}
-		wantProblem(t, err, kind)
+		kindtest.Want(t, err, kind)
 	}
 }
 
@@ -390,7 +391,7 @@ func TestParseRef(t *testing.T) {
 		{Uses: "gitlab/g/p@main", Host: "a.example.com:8443"}: "$host",
 	} {
 		_, err := parseRef(ref)
-		if p := wantProblem(t, err, problems.SourceWithInvalid); p.Params["key"] != key {
+		if p := kindtest.Want(t, err, problems.SourceWithInvalid); p.Params["key"] != key {
 			t.Errorf("parseRef(%+v): the problem names %v, want %s", ref, p.Params["key"], key)
 		}
 	}
@@ -577,7 +578,7 @@ func TestSourcesAccessDenied(t *testing.T) {
 	defer server.Close()
 	s.remote = func(_, repo string) string { return server.URL + "/" + repo + ".git" }
 	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/private@main"})
-	p := wantProblem(t, err, problems.SourceAccessDenied)
+	p := kindtest.Want(t, err, problems.SourceAccessDenied)
 	if p.Params["location"] != "github.com/acme/private@main:workflow.yaml" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
@@ -854,7 +855,7 @@ func TestSourcesGitMissing(t *testing.T) {
 	newOrigin(t, origins, "github.com", "acme/flows").commit(map[string]string{"workflow.yaml": "text\n"})
 	s.git = filepath.Join(t.TempDir(), "no-git")
 	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"})
-	wantProblem(t, err, problems.GitUnavailable)
+	kindtest.Want(t, err, problems.GitUnavailable)
 }
 
 func TestSourcesCancelled(t *testing.T) {

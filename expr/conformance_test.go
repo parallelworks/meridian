@@ -2,7 +2,6 @@ package expr_test
 
 import (
 	"cmp"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"iter"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -28,7 +28,7 @@ func TestConformance(t *testing.T) {
 	for _, f := range files {
 		t.Run(strings.TrimSuffix(strings.TrimPrefix(f.Name, "expressions/"), ".yaml"), func(t *testing.T) {
 			t.Parallel()
-			scope, workflow := canonical(t, f.Scope), canonical(t, f.Workflow)
+			scope, workflow := conformancetest.Canonical(t, f.Scope), conformancetest.Canonical(t, f.Workflow)
 			for i, c := range f.Cases {
 				name := cmp.Or(c.Expr, c.Template, c.At)
 				t.Run(fmt.Sprintf("%d %s", i+1, name), func(t *testing.T) {
@@ -37,21 +37,11 @@ func TestConformance(t *testing.T) {
 			}
 			// The cases share the file's scope and workflow, so a case that
 			// changed them would change what the cases after it see.
-			if canonical(t, f.Scope) != scope || canonical(t, f.Workflow) != workflow {
+			if conformancetest.Canonical(t, f.Scope) != scope || conformancetest.Canonical(t, f.Workflow) != workflow {
 				t.Error("evaluating the cases changed the file's scope or workflow")
 			}
 		})
 	}
-}
-
-// canonical encodes v as JSON, with mappings in the order of their keys.
-func canonical(t *testing.T, v any) string {
-	t.Helper()
-	data, err := jsonv2.Marshal(v, jsonv2.Deterministic(true))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
 }
 
 // stopped is a clock that never moves, so that an evaluation passes

@@ -11,6 +11,7 @@ import (
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -140,7 +141,7 @@ func TestGroupsFileRefuses(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := configDir(t, map[string]string{GroupsFile: tc.text})
 			_, err := LoadConfig(dir, lookup(nil))
-			p := wantProblem(t, err, tc.kind)
+			p := kindtest.Want(t, err, tc.kind)
 			if p.Params[problems.ParamFile] != filepath.Join(dir, GroupsFile) {
 				t.Errorf("the problem's file is %v", p.Params[problems.ParamFile])
 			}
@@ -182,7 +183,7 @@ func TestSourcesFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := configDir(t, map[string]string{SourcesFile: tc.text})
 			_, err := LoadConfig(dir, lookup(nil))
-			p := wantProblem(t, err, tc.kind)
+			p := kindtest.Want(t, err, tc.kind)
 			if line, _ := p.Params[problems.ParamLine].(int); line != tc.line || p.Params[problems.ParamFile] != filepath.Join(dir, SourcesFile) {
 				t.Errorf("the problem is at %v:%d, want line %d", p.Params[problems.ParamFile], line, tc.line)
 			}
@@ -217,7 +218,7 @@ func TestConfigFilesOthersCanChange(t *testing.T) {
 			}
 			continue
 		}
-		p := wantProblem(t, err, tc.kind)
+		p := kindtest.Want(t, err, tc.kind)
 		if p.Params["path"] != path || p.Params["mode"] != fmt.Sprintf("%04o", tc.mode) {
 			t.Errorf("the problem's params are %v", p.Params)
 		}
@@ -232,7 +233,7 @@ func TestConfigDirOthersCanChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := LoadConfig(dir, lookup(nil))
-	wantProblem(t, err, problems.PathUnsafe)
+	kindtest.Want(t, err, problems.PathUnsafe)
 }
 
 // TestConfigFileLink checks that a config file isn't read through a
@@ -246,7 +247,7 @@ func TestConfigFileLink(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err := LoadConfig(dir, lookup(nil))
-		wantProblem(t, err, problems.FileNotRegular)
+		kindtest.Want(t, err, problems.FileNotRegular)
 	}
 	link := filepath.Join(t.TempDir(), "config")
 	if err := os.Symlink(target, link); err != nil {
@@ -263,7 +264,7 @@ func TestConfigFIFO(t *testing.T) {
 		t.Skipf("can't make a FIFO: %v", err)
 	}
 	_, err := LoadConfig(dir, lookup(nil))
-	wantProblem(t, err, problems.FileNotRegular)
+	kindtest.Want(t, err, problems.FileNotRegular)
 }
 
 func TestPlatformGroupsNotFound(t *testing.T) {
@@ -287,12 +288,12 @@ func TestResolveInput(t *testing.T) {
 		}
 	}
 	_, err := c.ResolveInput("execution-groups", nil, "cpu")
-	p := wantProblem(t, err, problems.ExecutionGroupUnknown)
+	p := kindtest.Want(t, err, problems.ExecutionGroupUnknown)
 	if p.Params["value"] != `"cpu"` || p.Params["groups"] != `"gpu", "local"` {
 		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", p.Params)
 	}
 	_, err = c.ResolveInput("execution-groups", nil, 3)
-	if p := wantProblem(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
+	if p := kindtest.Want(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
 		t.Errorf("ResolveInput of a number: %v", p.Params)
 	}
 	if _, err := c.ResolveInput("slurm-partitions", nil, "debug"); !errors.Is(err, compile.ErrInputType) {
