@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // TestWaitExitHolds checks that waiting for a step's process gives its
@@ -54,8 +56,8 @@ func TestWaitExitHolds(t *testing.T) {
 // in its group. It doesn't run in parallel, as other tests' workers hold
 // leaders of their own.
 func TestNoZombiesLeft(t *testing.T) {
-	f := newFakeCoordinator(t, newJob(command(`nohup sleep 1 >/dev/null 2>&1 </dev/null &`), command("sleep 1.5")))
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, newJob(command(`nohup sleep 1 >/dev/null 2>&1 </dev/null &`), command("sleep 1.5")))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	me := strconv.Itoa(os.Getpid())

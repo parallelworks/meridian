@@ -15,6 +15,7 @@ import (
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
+	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // TestReadEnv checks how a worker reads where its coordinator is, and its
@@ -251,24 +252,22 @@ func TestPlatformEnvSecret(t *testing.T) {
 	step.WorkingDirectory = plan.Literal("/proc/sekr1t-api-key/x")
 	ok := command(`echo "key=$PW_API_KEY pin=$PW_PIN user=$PW_USER"; echo "k=$PW_API_KEY" >> $OUTPUTS; echo "pin=$PW_PIN" >> $OUTPUTS`)
 	ok.If = cond("always()")
-	f := newFakeCoordinator(t, newJob(step, ok))
-	f.claim.Env = map[string]workerapi.EnvVar{
+	f := workerapitest.NewFake(t, newJob(step, ok))
+	f.Claim.Env = map[string]workerapi.EnvVar{
 		"PW_API_KEY": {Value: "sekr1t-api-key", Secret: true}, "PW_PIN": {Value: "4321", Secret: true}, "PW_USER": {Value: "alice"},
 	}
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "key=*** pin=*** user=alice\n")
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, e := range f.events {
+	for _, e := range f.Events() {
 		if shown := fmt.Sprint(e.Outputs, e.Diagnostics); strings.Contains(shown, "sekr1t") || strings.Contains(shown, "4321") {
 			t.Errorf("an event quotes the secret: %v %v", e.Outputs, e.Diagnostics)
 		}
 	}
-	if f.end == nil || f.end.Result.Outputs["k"] != "sekr1t-api-key" || f.end.Result.Outputs["pin"] != "4321" ||
-		!slices.Equal(f.end.Result.Secrets, []string{"k", "pin"}) || !slices.Equal(f.end.Result.Private, []string{"k", "pin"}) || len(f.end.Result.Derived) > 0 {
-		t.Errorf("the job's end doesn't keep the outputs private and secrets of their own: %+v", f.end)
+	if end := f.End(); end == nil || end.Result.Outputs["k"] != "sekr1t-api-key" || end.Result.Outputs["pin"] != "4321" ||
+		!slices.Equal(end.Result.Secrets, []string{"k", "pin"}) || !slices.Equal(end.Result.Private, []string{"k", "pin"}) || len(end.Result.Derived) > 0 {
+		t.Errorf("the job's end doesn't keep the outputs private and secrets of their own: %+v", end)
 	}
 }
 
@@ -282,13 +281,13 @@ func TestEnvPrecedence(t *testing.T) {
 		"PW_JOB_ID": plan.Literal("wf"), "PW_PARENT_JOB_DIR": plan.Literal("wf"), "PW_USER": plan.Literal("wf"),
 		"OUTPUTS": plan.Literal("wf"), "PW_JOB_DIR": plan.Literal("wf"), "CI": plan.Literal("wf"),
 	}
-	f := newFakeCoordinator(t, newJob(step))
-	f.claim.Env = map[string]workerapi.EnvVar{"PW_JOB_ID": {Value: "plat"}, "PW_USER": {Value: "plat"}, "OUTPUTS": {Value: "plat"}, "PW_JOB_DIR": {Value: "plat"}}
-	if err := f.runWorker(t.Context(), Config{Environ: []string{"PW_USER=worker", "CI=worker"}}); err != nil {
+	f := workerapitest.NewFake(t, newJob(step))
+	f.Claim.Env = map[string]workerapi.EnvVar{"PW_JOB_ID": {Value: "plat"}, "PW_USER": {Value: "plat"}, "OUTPUTS": {Value: "plat"}, "PW_JOB_DIR": {Value: "plat"}}
+	if err := runWorker(t, f, t.Context(), Config{Environ: []string{"PW_USER=worker", "CI=worker"}}); err != nil {
 		t.Fatal(err)
 	}
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 0},
-		"id=plat parent="+f.claim.RunDir+" user=plat outputs=ours dir="+f.claim.RunDir+" ci=wf\n")
+		"id=plat parent="+f.Claim.RunDir+" user=plat outputs=ours dir="+f.Claim.RunDir+" ci=wf\n")
 }
 
 // TestEnvNameInvalid checks that a variable a platform gives that no
@@ -296,9 +295,9 @@ func TestEnvPrecedence(t *testing.T) {
 func TestEnvNameInvalid(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"", "A=B", "A\x00B"} {
-		f := newFakeCoordinator(t, newJob(command("true")))
-		f.claim.Env = map[string]workerapi.EnvVar{name: {Value: "x"}}
-		if err := f.runWorker(t.Context(), Config{}); err != nil {
+		f := workerapitest.NewFake(t, newJob(command("true")))
+		f.Claim.Env = map[string]workerapi.EnvVar{name: {Value: "x"}}
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 			t.Fatal(err)
 		}
 		checkEvents(t, f)

@@ -13,6 +13,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
+	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // readied compiles a workflow whose run reads the variables vars, of which
@@ -92,9 +93,9 @@ jobs:
     outputs:
       try: ${{ steps.flaky.outputs.try }}
 `, "build", map[string]string{"token": "s3cr3t-token"}, "token")
-	f := newFakeCoordinator(t, job)
-	f.claim.Run = run
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, job)
+	f.Claim.Run = run
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f,
@@ -105,14 +106,14 @@ jobs:
 		"cleanup finished 2.0 skipped -1",
 		"cleanup started 0.0", "cleanup finished 0.0 success 0",
 	)
-	work := filepath.Join(f.claim.RunDir, "work")
+	work := filepath.Join(f.Claim.RunDir, "work")
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "try 0 of 2 in "+work+"\n")
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 1}, "try 1 of 2 in "+work+"\n")
-	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "token=*** where="+f.claim.RunDir+"\n")
-	if got, want := f.finishedEvent(1, 0, false).Outputs, map[string]string{"token": "***", "plain": "yes"}; !maps.Equal(got, want) {
+	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "token=*** where="+f.Claim.RunDir+"\n")
+	if got, want := finishedEvent(t, f, 1, 0, false).Outputs, map[string]string{"token": "***", "plain": "yes"}; !maps.Equal(got, want) {
 		t.Errorf("step 1's event shows its outputs as %v, want %v", got, want)
 	}
-	if got, want := f.finishedEvent(0, 0, true).Outputs, map[string]string{"cleaned": "1"}; !maps.Equal(got, want) {
+	if got, want := finishedEvent(t, f, 0, 0, true).Outputs, map[string]string{"cleaned": "1"}; !maps.Equal(got, want) {
 		t.Errorf("the cleanup's event shows its outputs as %v, want %v", got, want)
 	}
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
@@ -142,9 +143,9 @@ jobs:
     steps:
       - run: echo never
 `, "build", nil)
-	f := newFakeCoordinator(t, job)
-	f.claim.Run = run
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, job)
+	f.Claim.Run = run
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f)
@@ -163,13 +164,13 @@ func TestCancelledStep(t *testing.T) {
 	waits.EarlyCancel = "any-job-failed"
 	onCancel := command("echo cancelled")
 	onCancel.If = cond("cancelled()")
-	f := newFakeCoordinator(t, newJob(waits, command("echo skipped"), onCancel))
-	f.onEvent = func(e workerapi.Event) {
+	f := workerapitest.NewFake(t, newJob(waits, command("echo skipped"), onCancel))
+	f.OnEvent = func(e workerapi.Event) {
 		if !e.Finished && e.Step == 0 {
-			f.setControlLocked(workerapi.Control{AnyJobFailed: true})
+			f.SetControl(workerapi.Control{AnyJobFailed: true})
 		}
 	}
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f,
@@ -187,8 +188,8 @@ func TestStepsSkipped(t *testing.T) {
 	t.Parallel()
 	skipped := command("echo never")
 	skipped.If = cond("false")
-	f := newFakeCoordinator(t, newJob(skipped, skipped))
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, newJob(skipped, skipped))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f, "finished 0.0 skipped -1", "finished 1.0 skipped -1")
@@ -214,14 +215,14 @@ func TestStepHosts(t *testing.T) {
 	}
 	t.Run("the job's host", func(t *testing.T) {
 		t.Parallel()
-		f := newFakeCoordinator(t, newJob(steps()...))
-		if err := f.runWorker(t.Context(), Config{}); err != nil {
+		f := workerapitest.NewFake(t, newJob(steps()...))
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 			t.Fatal(err)
 		}
 		checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
 		checkEnd(t, f, plan.OutcomeSuccess, "")
 		checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "null\n")
-		note := f.finishedEvent(1, 0, false).Diagnostics
+		note := finishedEvent(t, f, 1, 0, false).Diagnostics
 		if got := codes(note); !slices.Equal(got, []string{"ssh_host_empty"}) {
 			t.Fatalf("the step's diagnostics are %v", got)
 		}
@@ -237,15 +238,15 @@ func TestStepHosts(t *testing.T) {
 		other.If = cond("always()")
 		j := newJob(append(steps(), same, other)...)
 		j.Target = plan.Target{Inline: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "elsewhere", "port": 22.0})}}
-		f := newFakeCoordinator(t, j)
-		if err := f.runWorker(t.Context(), Config{}); err != nil {
+		f := workerapitest.NewFake(t, j)
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 			t.Fatal(err)
 		}
 		checkEvents(t, f, "finished 0.0 failure -1", "finished 1.0 failure -1", "started 2.0", "finished 2.0 success 0", "finished 3.0 failure -1")
 		checkEnd(t, f, plan.OutcomeFailure, "")
 		checkLog(t, f, logKey{workerapi.LogStep, 2, 0}, "same\n")
 		for step, want := range []string{"step_off_job_host", "step_off_job_host", "", "step_ssh_not_supported"} {
-			if got := codes(f.finishedEvent(step, 0, false).Diagnostics); want != "" && !slices.Equal(got, []string{want}) {
+			if got := codes(finishedEvent(t, f, step, 0, false).Diagnostics); want != "" && !slices.Equal(got, []string{want}) {
 				t.Errorf("step %d's diagnostics are %v, want %s", step, got, want)
 			}
 		}
@@ -262,8 +263,8 @@ func TestCleanupAfterFailedIf(t *testing.T) {
 	badIf.If = cond("fromJSON('{')")
 	badIf.Cleanup = plan.Literal("echo if >> $PW_JOB_DIR/cleaned")
 	badRun := plan.Step{Run: cond("fromJSON('{')"), If: cond("always()"), Cleanup: plan.Literal("echo run >> $PW_JOB_DIR/cleaned")}
-	f := newFakeCoordinator(t, newJob(badIf, badRun))
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, newJob(badIf, badRun))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f,
@@ -273,10 +274,10 @@ func TestCleanupAfterFailedIf(t *testing.T) {
 		"cleanup finished 0.0 skipped -1",
 	)
 	checkEnd(t, f, plan.OutcomeFailure, "")
-	if cleaned, err := os.ReadFile(filepath.Join(f.claim.RunDir, "cleaned")); err != nil || string(cleaned) != "run\n" {
+	if cleaned, err := os.ReadFile(filepath.Join(f.Claim.RunDir, "cleaned")); err != nil || string(cleaned) != "run\n" {
 		t.Errorf("the cleanups that ran wrote %q (%v), want run", cleaned, err)
 	}
-	if got := f.finishedEvent(0, 0, true).Diagnostics; len(got) > 0 {
+	if got := finishedEvent(t, f, 0, 0, true).Diagnostics; len(got) > 0 {
 		t.Errorf("the skipped cleanup has the problems %v", got)
 	}
 }
@@ -288,13 +289,13 @@ func TestCleanupAfterFailedIf(t *testing.T) {
 func TestPlatformSecretFields(t *testing.T) {
 	t.Parallel()
 	step := command(`pw=$(echo "$PW_CREDS" | sed 's/.*"password":"\([^"]*\)".*/\1/'); echo "password is $pw"; echo "pw=$pw" >> $OUTPUTS`)
-	f := newFakeCoordinator(t, newJob(step))
-	f.claim.Env = map[string]workerapi.EnvVar{"PW_CREDS": {Value: `{"user":"svc","password":"hunt3r2"}`, Secret: true}}
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, newJob(step))
+	f.Claim.Env = map[string]workerapi.EnvVar{"PW_CREDS": {Value: `{"user":"svc","password":"hunt3r2"}`, Secret: true}}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "password is ***\n")
-	if got := f.finishedEvent(0, 0, false).Outputs; got["pw"] != "***" {
+	if got := finishedEvent(t, f, 0, 0, false).Outputs; got["pw"] != "***" {
 		t.Errorf("the step's event shows its outputs as %v", got)
 	}
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
