@@ -2699,6 +2699,28 @@ A member can choose stronger isolation, such as a microVM, or name host
 isolation explicitly. It never gets weaker isolation than it asked for: when
 a member's runtime is missing, jobs fail there with an error that says so.
 
+Today only the `local` backend is built (`backend/local`), and it runs a
+member's jobs on the host only. A member of it names `isolation: host`, as
+the built-in `local` group's member does. One that names a runtime, or
+none, which is a rootless container, has `isolation_not_built`, so
+placement leaves it out rather than run its jobs on the host. A member of
+another backend has `backend_not_built` (`backend.NotBuilt`).
+
+The `local` backend starts `meridian worker` from the binary that places
+it, once it has checked that no other user can change that binary, or the
+way to it (`worker_binary_unsafe`). The worker starts in `/`, in a session
+of its own, so that the terminal's Ctrl-C and SIGHUP don't reach it, with
+the user's environment but its `MERIDIAN_` variables. Its bootstrap token
+is in a file only the user can read, in a directory only they can use,
+which the worker removes once it has read it: on every system, as macOS
+requires. A placement's file in the state directory says which process
+the worker is, by its ID, its start time and the boot it started in, so
+that any process of the user's finds, checks and cancels it, and none
+takes a later process with the same ID for it. Cancel sends SIGTERM, and
+SIGKILL if the worker still runs 60 seconds later; a worker killed so
+can't stop its steps' process groups. A member offers what it declares,
+or else the host's CPUs and memory, and no GPU.
+
 ### Container runtimes
 
 Meridian drives the container runtimes a host already has, through their

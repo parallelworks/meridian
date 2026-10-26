@@ -284,5 +284,9 @@
   "out_of_order": "The report is out of order: the coordinator expects what comes next from {expected}, the number of the next event or the offset of a log's next byte.",
   "plan_too_new": "This worker doesn't read the version of the run's plan, so the coordinator sends it nothing of the run.",
   "fips_not_enforced": "Meridian runs only with its cryptography's FIPS 140-3 mode enforced, and this process's GODEBUG has it {mode, select, on {on, but not enforced} other {off}}.",
-  "fips_module_not_validated": "This meridian binary was built with the FIPS 140-3 module {version}, compiled from Go's source rather than the validated one, and Meridian runs only with the validated module."
+  "fips_module_not_validated": "This meridian binary was built with the FIPS 140-3 module {version}, compiled from Go's source rather than the validated one, and Meridian runs only with the validated module.",
+  "isolation_not_built": "The member \"{member}\" isolates its jobs {has_isolation, select, true {with \"{isolation}\"} other {in a container, as a member that names no isolation does}}, which its backend can't do yet. Meridian doesn't run them on the host instead, which would isolate them less.",
+  "resources_exceed_member": "The job asks for {asks} {resource, select, cpu {thousandths of a CPU core} memory {bytes of memory} other {GPUs}}, more than the member \"{member}\" offers, {offers}.",
+  "backend_not_built": "The member \"{member}\" runs jobs with the {backend} backend, which this release of Meridian doesn't have yet.",
+  "worker_binary_unsafe": "Meridian won't start a worker from {path}, which isn't safe to run ({code})."
 }

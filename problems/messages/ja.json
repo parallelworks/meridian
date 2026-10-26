@@ -278,5 +278,9 @@
   "out_of_order": "報告の順序が正しくありません。コーディネーターは次のものを {expected} から求めています。これは次のイベントの番号か、ログの次のバイトの位置です。",
   "plan_too_new": "このワーカーは実行の計画のバージョンを読み取れないため、コーディネーターは実行のものを何も送りません。",
   "fips_not_enforced": "Meridian は暗号の FIPS 140-3 モードが強制されているときにしか実行されませんが、このプロセスの GODEBUG では{mode, select, on {有効ですが強制されていません} other {無効です}}。",
-  "fips_module_not_validated": "この meridian バイナリは、検証済みのモジュールではなく Go のソースからコンパイルされた FIPS 140-3 モジュール {version} でビルドされていますが、Meridian は検証済みのモジュールでしか実行されません。"
+  "fips_module_not_validated": "この meridian バイナリは、検証済みのモジュールではなく Go のソースからコンパイルされた FIPS 140-3 モジュール {version} でビルドされていますが、Meridian は検証済みのモジュールでしか実行されません。",
+  "isolation_not_built": "メンバー「{member}」はジョブを{has_isolation, select, true {「{isolation}」で} other {コンテナで（分離を指定しないメンバーと同じく）}}分離しますが、そのバックエンドはまだそれができません。分離が弱くなるため、Meridian は代わりにホストで実行することもしません。",
+  "resources_exceed_member": "ジョブは{resource, select, cpu {CPU コアの千分の一単位で {asks}} memory {メモリを {asks} バイト} other {GPU を {asks} 個}}求めていますが、メンバー「{member}」が提供するのは {offers} までです。",
+  "backend_not_built": "メンバー「{member}」は {backend} バックエンドでジョブを実行しますが、このリリースの Meridian にはまだそのバックエンドがありません。",
+  "worker_binary_unsafe": "{path} は実行しても安全ではないため（{code}）、Meridian はそこからワーカーを起動しません。"
 }
