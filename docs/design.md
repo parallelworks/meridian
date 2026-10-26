@@ -2387,16 +2387,19 @@ is, or evaluates to, the word `always`, as a step's can be (below).
   that comes to run after it, so `failure()` is true after it and
   `cancelled()` false, even if a cancel follows, and the job fails with
   the reason `timeout`, as in format 1, whose context keeps the reason it
-  ended with first. That is so when the timeout stops a step, or one is
-  still to run: one that comes once no such step is left, as during a
-  last step that outlives a cancel, or the cleanups, leaves the job
-  ending as its steps did. A step with `ignore-errors:` whose last try a
+  ended with first. That is so when the timeout fails a step: one that
+  comes once no step is left that it stops, as during a last step that
+  outlives a cancel, or the cleanups, leaves the job ending as its steps
+  did. A step with `ignore-errors:` whose last try, with no retry left, a
   deadline stops, its own, the job's or the run's, succeeds, as in format
-  1, and so does one that comes to run after the job's or the run's
-  deadline has passed, which fails otherwise: a job whose steps all end
-  so ends as they did, as success, with no reason. The run goes on: the jobs that need it
-  are skipped because their needs failed, and those whose `if:` calls
-  `failure()` run. The coordinator enforces it too, as a backstop for a
+  1, and so does one with no retry left that comes to run after the
+  job's or the run's deadline has passed. An earlier try that the job's
+  or the run's deadline stops fails, and isn't tried again, as does a
+  step waiting to try again when it passes. A job whose deadline stopped
+  only steps that succeed so fails no step, and ends as its steps did,
+  with no reason. The run goes on: the jobs that need it are skipped
+  because their needs failed, and those whose `if:` calls `failure()`
+  run. The coordinator enforces it too, as a backstop for a
   worker that doesn't: once the job's timeout, the worker's own time to
   stop its steps, a heartbeat period and the margin have passed since the
   attempt was claimed, without its end, it tells the worker to stop the

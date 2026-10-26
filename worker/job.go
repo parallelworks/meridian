@@ -80,6 +80,11 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		// steps after that don't run, but those that outlive it.
 		stopped bool
 		why     stopCause
+		// deadlineFailed is set once the job's timeout:, or the run's,
+		// has failed a step: one it stopped, or one that came to run
+		// after it, but for a step that ignores its errors on its last
+		// try, which succeeds.
+		deadlineFailed bool
 	)
 	// A job halted before a step's turn, or a cleanup's, hasn't ended, and
 	// neither has one halted as a step, or a cleanup, ran, which it cut
@@ -118,6 +123,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		}
 		results = append(results, end.result)
 		ifFailed[i] = end.ifFailed
+		if end.cause == stopJobTimeout && end.result.Outcome == plan.OutcomeFailure {
+			deadlineFailed = true
+		}
 		if end.cause == stopCancelled {
 			cancelled = true
 		}
@@ -166,11 +174,11 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	end := &workerapi.Complete{}
 	outcome := plan.OutcomeSuccess
 	switch {
-	case why == stopJobTimeout && failed:
-		// As in format 1, a job past its timeout, or whose run is, ends
-		// as its steps did: failed when one of them failed, which a
-		// deadline does, but for a step that ignores its errors, after
-		// which the job succeeds if no other fails.
+	case why == stopJobTimeout && deadlineFailed:
+		// A job past its timeout, or whose run is, fails, for the reason
+		// timeout, when the deadline failed a step. One whose deadline
+		// failed none, as when it stopped only steps that ignore their
+		// errors, which succeed, ends as its steps did, as in format 1.
 		outcome, end.Reason = plan.OutcomeFailure, plan.ReasonTimeout
 	case failed:
 		outcome = plan.OutcomeFailure

@@ -395,13 +395,15 @@ type Control struct {
 	// A run past its timeout isn't cancelled, in format 1: its deadline
 	// fails the step it stops. So a Cancel whose Reason is timeout stops
 	// the job as the job's own timeout: does: the step it stops ends
-	// failure, so failure() is true for the steps after it and cancelled()
-	// false, even if a cancellation follows, and the job ends failure,
-	// with the reason timeout, when it stops a step, or one is still to
-	// run. One that comes when the job has no step left that it stops, as
-	// during a last step that outlives a cancel, or the cleanups, leaves
-	// the job ending as its steps did, as does one that stops only steps
-	// with ignore-errors:, which succeed then, as in format 1.
+	// failure, and so does one that comes to run after it, so failure()
+	// is true for the steps after them and cancelled() false, even if a
+	// cancellation follows, and the job ends failure, with the reason
+	// timeout. As in format 1, a step with ignore-errors: that it stops
+	// on its last try, with no retry left, succeeds instead; an earlier
+	// try fails, and isn't tried again, as does a step waiting to try
+	// again. A deadline that fails no step, as one that comes during a
+	// last step that outlives a cancel, or the cleanups, or that stops
+	// only steps that succeed so, leaves the job ending as its steps did.
 	//
 	// As in format 1, a step whose if: is cancel-aware, as always() is
 	// (plan.ReadyStep.OutlivesCancel), still runs after a cancellation,
@@ -488,11 +490,11 @@ type Complete struct {
 	Result plan.JobResult `json:"result"`
 	// Reason is why the job ended other than as its steps did, or "":
 	// timeout for a job past its timeout:, or whose run is past the run's,
-	// with the outcome failure, when the deadline stopped a step, or one
-	// was still to run; the Control's reason for a job cancelled, with the
-	// outcome cancelled; or setup-failed. As in format 1, a job whose
-	// deadline stopped only steps with ignore-errors:, which succeed, ends
-	// as its steps did, with no reason.
+	// with the outcome failure, when the deadline failed a step; the
+	// Control's reason for a job cancelled, with the outcome cancelled; or
+	// setup-failed. As in format 1, a job whose deadline failed no step,
+	// as one that stopped only steps with ignore-errors: on their last
+	// try, which succeed, ends as its steps did, with no reason.
 	Reason plan.Reason `json:"reason,omitempty"`
 	// Problem is what failed before the first step started, with the
 	// outcome failure and the reason setup-failed: an image that couldn't
