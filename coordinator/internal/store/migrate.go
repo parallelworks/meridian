@@ -9,8 +9,6 @@ import (
 	"path"
 	"regexp"
 	"strconv"
-
-	"github.com/parallelworks/meridian/problems"
 )
 
 // A migration is one version of Meridian's schema, beside hopper's: the
@@ -80,11 +78,7 @@ func (s *Store) migrate(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("store: read the schema's version: %w", err)
 		}
 		if current > len(migrations) {
-			file, err := tx.dbFile()
-			if err != nil {
-				return err
-			}
-			return problems.DatabaseTooNew.Problem(problems.Params{"path": file, "version": current, "latest": len(migrations)})
+			return s.tooNew("meridian", current, len(migrations))
 		}
 		for _, m := range migrations[current:] {
 			if _, err := tx.tx.ExecContext(ctx, m.script); err != nil {

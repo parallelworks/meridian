@@ -371,30 +371,46 @@ func TestMigrations(t *testing.T) {
 	}
 }
 
+// TestDatabaseTooNew checks that Open refuses a database a newer release
+// migrated past what this one knows: Meridian's schema, or hopper's, which
+// hoppermigrate.Up leaves as it is.
 func TestDatabaseTooNew(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
-	s, err := Open(t.Context(), path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inTx(t, s, func(tx *Tx) error {
-		_, err := tx.tx.ExecContext(tx.ctx, "INSERT INTO meridian_schema (version, applied_at) VALUES (?, 0)", SchemaVersion()+1)
-		return err
-	})
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	_, err = Open(t.Context(), path, nil)
-	p, ok := errors.AsType[*problem.Problem](err)
-	if !ok || p.Code != problems.DatabaseTooNew.Code() {
-		t.Fatalf("Open = %v, want a problem of kind %s", err, problems.DatabaseTooNew.Code())
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Params["path"] != resolved || p.Params["version"] != SchemaVersion()+1 || p.Params["latest"] != SchemaVersion() {
-		t.Errorf("the problem's params are %v", p.Params)
+	for _, tc := range []struct {
+		schema, table   string
+		version, latest int
+	}{
+		{"meridian", "meridian_schema", SchemaVersion() + 1, SchemaVersion()},
+		{"hopper", "hopper_schema", hoppermigrate.Latest() + 1, hoppermigrate.Latest()},
+	} {
+		t.Run(tc.schema, func(t *testing.T) {
+			path := filepath.Join(privateDir(t), "meridian.db")
+			s, err := Open(t.Context(), path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inTx(t, s, func(tx *Tx) error {
+				_, err := tx.tx.ExecContext(tx.ctx, "INSERT INTO "+tc.table+" (version, applied_at) VALUES (?, 0)", tc.version)
+				return err
+			})
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err = Open(t.Context(), path, nil)
+			if err == nil {
+				s.Close()
+			}
+			p, ok := errors.AsType[*problem.Problem](err)
+			if !ok || p.Code != problems.DatabaseTooNew.Code() {
+				t.Fatalf("Open = %v, want a problem of kind %s", err, problems.DatabaseTooNew.Code())
+			}
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Params["path"] != resolved || p.Params["schema"] != tc.schema || p.Params["version"] != tc.version || p.Params["latest"] != tc.latest {
+				t.Errorf("the problem's params are %v", p.Params)
+			}
+		})
 	}
 }
 

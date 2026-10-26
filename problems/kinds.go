@@ -371,10 +371,11 @@ var (
 )
 
 // The coordinator's store, a database in the state directory: path is its
-// file, and version and latest the version of Meridian's schema it is at,
-// and the latest this release knows.
+// file; schema is which of its schemas, hopper's (hopper) or Meridian's own
+// (meridian); and version and latest the version that schema is at, and
+// the latest this release knows.
 var (
-	DatabaseTooNew = defineCommand("database_too_new", "Database newer than this release reads", "path", "version", "latest")
+	DatabaseTooNew = defineCommand("database_too_new", "Database newer than this release reads", "path", "schema", "version", "latest")
 )
 
 // The files the meridian command reads: its config, its key, a variable's

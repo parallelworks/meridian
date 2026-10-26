@@ -216,7 +216,26 @@ func networkFilesystem(path string, err error) error {
 
 // setUp migrates a store just opened, and reads its ID and its file.
 func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
+	if err := s.View(ctx, func(tx *Tx) error {
+		var err error
+		if s.file, err = tx.dbFile(); err == nil && !filepath.IsAbs(s.file) {
+			err = fmt.Errorf("store: SQLite opened %q, not a file", s.file)
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	// hoppermigrate.Up leaves a schema a newer release of hopper brought
+	// past what this one knows as it is, which this release's hopper may
+	// not read: it is refused before Up, and after, in case a newer
+	// release migrated it meanwhile.
+	if err := s.checkHopperSchema(ctx); err != nil {
+		return err
+	}
 	if _, err := hoppermigrate.Up(ctx, s.driver, &hoppermigrate.Options{Logger: log}); err != nil {
+		return err
+	}
+	if err := s.checkHopperSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.migrate(ctx, log); err != nil {
@@ -226,11 +245,7 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 		if err := tx.tx.QueryRowContext(ctx, "SELECT value FROM meridian_store WHERE key = 'store_id'").Scan(&s.id); err != nil {
 			return fmt.Errorf("store: read the store's ID: %w", err)
 		}
-		var err error
-		if s.file, err = tx.dbFile(); err == nil && !filepath.IsAbs(s.file) {
-			err = fmt.Errorf("store: SQLite opened %q, not a file", s.file)
-		}
-		return err
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -238,6 +253,25 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	// left the log holding the run's secret record.
 	s.truncateLog(ctx)
 	return nil
+}
+
+// checkHopperSchema refuses hopper's schema at a version past the latest
+// this release's hopper knows.
+func (s *Store) checkHopperSchema(ctx context.Context) error {
+	v, err := hoppermigrate.Version(ctx, s.driver)
+	if err != nil {
+		return err
+	}
+	if v > hoppermigrate.Latest() {
+		return s.tooNew("hopper", v, hoppermigrate.Latest())
+	}
+	return nil
+}
+
+// tooNew is the problem of a database whose schema, hopper's or
+// meridian's, a newer release brought to version, past latest.
+func (s *Store) tooNew(schema string, version, latest int) error {
+	return problems.DatabaseTooNew.Problem(problems.Params{"path": s.file, "schema": schema, "version": version, "latest": latest})
 }
 
 // newID returns n random bytes, as hex.
