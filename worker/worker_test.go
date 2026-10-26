@@ -288,6 +288,74 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+// cancelDuringFirst has f cancel the job as its first step starts, which
+// outlives the cancel, and runs for a second, so that the cancel comes
+// between it and the next.
+func cancelDuringFirst(f *workerapitest.Fake) {
+	f.OnEvent = func(e workerapi.Event) {
+		if e.Step == 0 && !e.Finished {
+			f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
+		}
+	}
+}
+
+// TestCancelNextStep checks a cancel between steps, as format 1 has it:
+// the next step that comes to run whose if: passes, as cancelled() is
+// still false, ends cancelled without starting, and its cleanup runs; a
+// step whose if: is cancelled() right after the cancel is skipped, since
+// no step has been cancelled yet; and once one has, the plain steps after
+// it are skipped, with their cleanups, and a cancelled() step runs.
+func TestCancelNextStep(t *testing.T) {
+	t.Parallel()
+	first := command("echo first; sleep 1")
+	first.If = cond("always()")
+	onCancel := command("echo cancelled")
+	onCancel.If = cond("cancelled()")
+	next := command("touch $PW_JOB_DIR/ran")
+	next.Cleanup = plan.Literal("touch $PW_JOB_DIR/next-cleaned")
+	later := command("touch $PW_JOB_DIR/ran")
+	later.Cleanup = plan.Literal("touch $PW_JOB_DIR/later-cleaned")
+	f := workerapitest.NewFake(t, newJob(first, onCancel, next, later, onCancel))
+	cancelDuringFirst(f)
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success 0",
+		"finished 1.0 skipped -1",
+		"finished 2.0 cancelled -1",
+		"finished 3.0 skipped -1",
+		"started 4.0", "finished 4.0 success 0",
+		"cleanup finished 3.0 skipped -1",
+		"cleanup started 2.0", "cleanup finished 2.0 success 0",
+	)
+	checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
+	checkLog(t, f, logKey{workerapi.LogStep, 4, 0}, "cancelled\n")
+	for name, want := range map[string]bool{"ran": false, "next-cleaned": true, "later-cleaned": false} {
+		if _, err := os.Stat(filepath.Join(f.Claim.RunDir, name)); (err == nil) != want {
+			t.Errorf("%s is there: %t, want %t", name, err == nil, want)
+		}
+	}
+}
+
+// TestCancelOutlived checks that a job whose steps after a cancel all
+// outlive it ends as they did, as in format 1, where only a step that
+// ended cancelled cancels its job.
+func TestCancelOutlived(t *testing.T) {
+	t.Parallel()
+	first := command("echo first; sleep 1")
+	first.If = cond("always()")
+	after := command("echo after")
+	after.If = cond("always()")
+	f := workerapitest.NewFake(t, newJob(first, after))
+	cancelDuringFirst(f)
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+}
+
 // TestRunTimeout checks that a job whose run is past its timeout, which
 // the coordinator stops with a Cancel whose reason is timeout, isn't
 // cancelled, as in format 1, whose run's deadline fails the step it stops:
