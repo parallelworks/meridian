@@ -147,15 +147,14 @@ const DatabaseFile = "meridian.db"
 // it creates if it isn't there. SQLite can't lock reliably on a network
 // filesystem, which is where home directories on clusters often are, so
 // Database refuses a state directory on one, and says how to choose a
-// local one.
+// local one: as the store's SQLite driver does, it takes every FUSE
+// filesystem, and every folder a virtual machine shares with its host, for
+// one.
 func (d Dirs) Database() (string, error) {
 	if err := d.EnsureState(); err != nil {
 		return "", err
 	}
 	fsType, network, err := detectNetworkFS(d.State)
-	if errors.Is(err, errNoMount) {
-		return "", problems.MountNotFound.Problem(problems.Params{"path": d.State})
-	}
 	if err != nil {
 		return "", problems.FilesystemUnknown.Problem(problems.Params{"path": d.State, "reason": err.Error()})
 	}
@@ -169,6 +168,10 @@ func (d Dirs) Database() (string, error) {
 // type. A test can replace it.
 var detectNetworkFS = networkFS
 
-// errNoMount is what networkFS returns for a path on a filesystem whose
-// type only the mount table says, which has no mount for it.
-var errNoMount = errors.New("local: no mount holds the path")
+// SocketFile is the name of the coordinator's socket in the state
+// directory, which workers on this machine connect to.
+const SocketFile = "coordinator.sock"
+
+// Socket returns the path of the coordinator's socket, in the state
+// directory, which only its user can open.
+func (d Dirs) Socket() string { return filepath.Join(d.State, SocketFile) }

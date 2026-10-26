@@ -398,7 +398,6 @@ var (
 	OwnerUnknown              = defineCommand("owner_unknown", "Owner can't be told", "path")
 	DirectoryReplaced         = defineCommand("directory_replaced", "Directory replaced as it was made", "path")
 	PathLinksTooMany          = defineCommand("path_links_too_many", "Path through too many symbolic links", "path", "max")
-	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
 
 // The coordinator's store, a database in the state directory: path is its
@@ -496,6 +495,16 @@ var (
 	InputsNumberTooLarge     = defineCommand("inputs_number_too_large", "Number too large", "number")
 	Interrupted              = defineCommand("interrupted", "Interrupted")
 	UnexpectedError          = defineCommand("unexpected_error", "Unexpected error", "reason")
+)
+
+// meridian run's own: path is a run's directory, or the coordinator's
+// socket; reason what the operating system said; and limit the most bytes
+// a socket's path can have on the system.
+var (
+	RunDirExists      = defineCommand("run_dir_exists", "Run directory already there", "path")
+	RunDirNotMade     = defineCommand("run_dir_not_made", "Run directory that can't be made", "path", "reason")
+	SocketPathTooLong = defineCommand("socket_path_too_long", "Socket path too long", "path", "limit")
+	SocketUnusable    = defineCommand("socket_unusable", "Coordinator socket that can't be listened on", "path", "reason")
 )
 
 // meridian worker's own problems, which end it: variable is an environment

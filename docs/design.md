@@ -3181,7 +3181,8 @@ run is stored, and makes it new, so that a run never shares one with an
 earlier run of the same number. A step can remove it, as `cleanup: rm -r
 ${PW_JOB_DIR}` does in workflows we know of, so it isn't in Meridian's
 state directory, and a reboot can empty it, so what a run keeps belongs
-elsewhere. `--run-dir` names another.
+elsewhere. Its name is the run's number and the store's ID. `--run-dir`
+names another, which mustn't be there yet.
 
 `meridian run` exits 0 when the run succeeded; 1 when the workflow has
 errors, or the run failed or was cancelled; and 2 when Meridian couldn't do
@@ -3222,11 +3223,13 @@ the file's own path, so that what it reads is the file the path names: a
 directory on the way to one, the config directory among them, can be a link,
 and is checked through it.
 
-The database, the key that wraps secret records, and logs live in
-Meridian's state directory, which only its user can read. SQLite can't lock
-reliably on a network filesystem, which is where home directories on
-clusters often are, so Meridian refuses to open a database there and says
-how to choose a local path: one that only the user can change, and that
+The database, the key that wraps secret records, logs and the socket that
+workers on the machine connect to live in Meridian's state directory, which
+only its user can read. SQLite can't lock reliably on a network filesystem,
+which is where home directories on clusters often are, so Meridian refuses
+to open a database there, as on any FUSE filesystem and in any folder a
+virtual machine shares with its host, whose locks it can't tell hold, and
+says how to choose a local path: one that only the user can change, and that
 lasts, since it holds the database and the key, such as one that
 `mktemp -d -p /var/tmp` makes, but not one in `/tmp`, which a reboot can
 empty. On Linux the directories are the XDG base

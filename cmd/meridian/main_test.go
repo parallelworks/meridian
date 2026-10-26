@@ -164,8 +164,12 @@ func TestHelpCommand(t *testing.T) {
 		t.Errorf("meridian help version = %+v", r)
 	}
 	r = runCLI(t, nil, "", "help", "run")
-	if r.code != exitOK || !strings.Contains(r.stdout, "It isn't built yet.") {
+	if r.code != exitOK || !strings.Contains(r.stdout, "usage: meridian run <workflow>") || !strings.Contains(r.stdout, "-run-dir") {
 		t.Errorf("meridian help run = %+v", r)
+	}
+	r = runCLI(t, nil, "", "help", "resume")
+	if r.code != exitOK || !strings.Contains(r.stdout, "It isn't built yet.") {
+		t.Errorf("meridian help resume = %+v", r)
 	}
 	r = runCLI(t, nil, "", "help", "nope")
 	if r.code != exitError {
@@ -231,7 +235,9 @@ func TestUsageProblems(t *testing.T) {
 	}{
 		{nil, "command_missing"},
 		{[]string{"frobnicate"}, "command_unknown"},
-		{[]string{"run", "w.yaml"}, "command_not_built"},
+		{[]string{"resume", "1"}, "command_not_built"},
+		{[]string{"run"}, "arguments_invalid"},
+		{[]string{"run", "--group", "w.yaml"}, "arguments_invalid"},
 		{[]string{"help", "a", "b"}, "arguments_invalid"},
 		{[]string{"version", "extra"}, "arguments_invalid"},
 		{[]string{"validate"}, "arguments_invalid"},
