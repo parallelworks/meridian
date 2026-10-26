@@ -628,6 +628,8 @@ func TestKindProblem(t *testing.T) {
 // A masked problem shows nothing of a value: its params and its field
 // errors' are masked, its detail is its message with them, and it has no
 // instance; one of a kind this release doesn't know shows its title.
+// Masked diagnostics show nothing of one either, and keep their code and
+// where in the workflow they are.
 func TestMaskProblem(t *testing.T) {
 	p := MemberInvalid.Problem(Params{"group": "gpu-secret", "key": "cpu", "value": "lots"})
 	p.Instance = "/members/gpu-secret"
@@ -658,5 +660,28 @@ func TestMaskProblem(t *testing.T) {
 	}
 	if MaskProblem(nil) != nil {
 		t.Error("MaskProblem(nil) isn't nil")
+	}
+
+	diags := Diagnostics{
+		MemberInvalid.At("", Position{}, "/jobs/build/env/X", Params{"group": "gpu-secret", "key": "cpu", "value": "lots"}),
+		{problem.FieldError{Code: "not_a_kind", Detail: "gpu-secret", Params: map[string]any{"path": "/home/gpu-secret"}}},
+	}
+	maskedDiags := MaskDiagnostics(diags)
+	data, err = jsonv2.Marshal(maskedDiags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "gpu-secret") || strings.Contains(string(data), "lots") {
+		t.Errorf("the masked diagnostics show a value: %s", data)
+	}
+	if d := maskedDiags[0]; d.Code != MemberInvalid.Code() || d.Path() != "/jobs/build/env/X" || d.Params["key"] != "cpu" ||
+		d.Message() != `A member of the group "***" has cpu: ***, which isn't valid.` {
+		t.Errorf("the diagnostic is masked as %+v, %q", d, d.Message())
+	}
+	if diags[0].Params["value"] != "lots" {
+		t.Error("MaskDiagnostics changed the diagnostics it masked")
+	}
+	if MaskDiagnostics(nil) != nil {
+		t.Error("MaskDiagnostics(nil) isn't nil")
 	}
 }

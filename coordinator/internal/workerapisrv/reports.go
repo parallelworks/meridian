@@ -281,9 +281,9 @@ const partTries = 8
 // result's private part as its job's part of the run's secret record,
 // sealed (seal.Sealer.SealJob) before the transaction that stores it,
 // and the rest with the attempt, in that one transaction. Of an attempt
-// whose placement is private (store.Attempt.Private), the problem it
-// reports, which can name the member, is masked before anything of it is
-// stored, as the store masks the problem it keeps.
+// whose placement is private (store.Attempt.Private), the problem and the
+// diagnostics it reports, which can name the member, are masked before
+// anything of it is stored, as the store masks the problem it keeps.
 func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
 	ctx := r.Context()
 	body, ok := s.readBody(w, r, MaxCompleteBody)
@@ -297,6 +297,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	}
 	if a.Private {
 		end.Problem = problems.MaskProblem(end.Problem)
+		end.Diagnostics = problems.MaskDiagnostics(end.Diagnostics)
 	}
 	// The end as the API writes it, which a repeat must match.
 	canonical, err := workerapi.Marshal(end)

@@ -364,15 +364,19 @@ func (r *rig) part(run, job string) (plan.JobRecord, uint64) {
 	return opened[job], p.Generation
 }
 
-// Of an attempt whose placement is private, the problem it ends with,
-// which can name the member, is stored masked, with its report, and so is
-// a refusal of its claim; what the worker is answered isn't.
+// Of an attempt whose placement is private, the problem and the
+// diagnostics it ends with, which can name the member, are stored masked,
+// in its report too, and so is a refusal of its claim; what the worker is
+// answered isn't.
 func TestPrivatePlacementMasked(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{private: true})
 	setup := problems.MemberInvalid.Problem(problems.Params{"group": "secret-group", "key": "cpu", "value": "secret-member"})
-	end, err := workerapi.Marshal(workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: setup})
+	diag := problems.MemberInvalid.At("", problems.Position{}, "/jobs/build/env/HOST", problems.Params{"group": "secret-group", "key": "cpu", "value": "/home/secret-member"})
+	end, err := workerapi.Marshal(workerapi.Complete{
+		Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: setup, Diagnostics: problems.Diagnostics{diag},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,8 +398,13 @@ func TestPrivatePlacementMasked(t *testing.T) {
 	if got := stored(a.ID); strings.Contains(got, "secret-") || !strings.Contains(got, problems.Masked) {
 		t.Errorf("the private attempt's end is stored as %s", got)
 	}
-	if got := r.attempt(a.ID); got.End.Problem == nil || got.End.Problem.Code != problems.MemberInvalid.Code() || got.End.Problem.Params["key"] != "cpu" {
+	got := r.attempt(a.ID)
+	if got.End.Problem == nil || got.End.Problem.Code != problems.MemberInvalid.Code() || got.End.Problem.Params["key"] != "cpu" {
 		t.Errorf("the attempt's problem is %+v", got.End.Problem)
+	}
+	if report, err := got.Complete(); err != nil || len(report.Diagnostics) != 1 || report.Diagnostics[0].Path() != "/jobs/build/env/HOST" ||
+		report.Diagnostics[0].Params["value"] != problems.Masked {
+		t.Errorf("the attempt's report is %+v, %v", report, err)
 	}
 
 	run := r.newRun(nil)
