@@ -1,10 +1,11 @@
 -- What the worker API keeps of an attempt, beside what 0001 keeps.
 
--- Where the attempt was placed: its group and member, unless where its job
--- runs is private (plan.ReadyJob.PrivateFields), the backend and its own
--- name for the placement, and the digest of the worker binary the
+-- Where the attempt was placed: its group, its member, the backend and its
+-- own name for the placement, unless where its job runs is private
+-- (plan.ReadyJob.PrivateFields); and the digest of the worker binary the
 -- placement started, as sha256: and its hex, which the worker's claim must
--- give (workerapi.Worker.Digest), or NULL where its backend can't say.
+-- give (workerapi.Worker.Digest), and which every placement recorded has,
+-- a private one's too, so that it says the attempt is placed.
 ALTER TABLE meridian_attempts ADD COLUMN grp TEXT;
 ALTER TABLE meridian_attempts ADD COLUMN member TEXT;
 ALTER TABLE meridian_attempts ADD COLUMN backend TEXT;
@@ -12,8 +13,9 @@ ALTER TABLE meridian_attempts ADD COLUMN placement_id TEXT;
 ALTER TABLE meridian_attempts ADD COLUMN placed_digest TEXT;
 
 -- Where an attempt is placed when where its job runs is private: its
--- group, member and backend, sealed under the run's data key, which only
--- the coordinator opens; grp, member and backend are then NULL. A problem
+-- group, member and backend, and the backend's name for the placement,
+-- sealed under the run's data key, which only the coordinator opens; grp,
+-- member, backend and placement_id are then NULL. A problem
 -- such an attempt ends with is stored masked, since it can name the
 -- member.
 ALTER TABLE meridian_attempts ADD COLUMN private_placement BLOB;

@@ -78,7 +78,9 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 }
 
 // serveEvents stores the attempt's events it hasn't yet, in order, and
-// answers with the sequence number of the last it has.
+// answers with the sequence number of the last it has. Of an attempt whose
+// placement is private, the diagnostics of each event, which can name the
+// member, are masked before they are stored, as its end's are.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.Attempt) {
 	ctx := r.Context()
 	body, ok := s.readBody(w, r, MaxEventsBody)
@@ -89,6 +91,11 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 	if err := workerapi.Unmarshal(body, &events); err != nil {
 		s.badRequest(w, r, "events that aren't")
 		return
+	}
+	if a.Private {
+		for i := range events.Events {
+			events.Events[i].Diagnostics = problems.MaskDiagnostics(events.Events[i].Diagnostics)
+		}
 	}
 	var last int64
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {

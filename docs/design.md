@@ -1461,10 +1461,14 @@ did (`plan.ReadyJob.PrivateFields`, and `SecretFields` for a secret), and
 the coordinator keeps them out of run state: Ready gives them again from
 the secret record whenever the coordinator needs them, as the record holds
 the run's timeout when that reads one, and the placement made from them,
-the member chosen and why each other wasn't, is in the attempt's row,
-sealed under the run's data key as the secret record is. A problem such an
-attempt ends with, which can name the member, is stored with what it shows
-of values masked (`problems.MaskProblem`).
+the member chosen and why each other wasn't, and the backend's own name for
+the placement, which can say where it is, as a pod's name can, is in the
+attempt's row, sealed as the secret record's parts are. Run state holds
+only the digest of the worker binary the
+placement started, which says the attempt is placed. What such an attempt
+reports that can name the member, the problem it ends with and the
+diagnostics of its end and of its steps' events, is stored with what it
+shows of values masked (`problems.MaskProblem`, `problems.MaskDiagnostics`).
 
 ### Plans across versions
 

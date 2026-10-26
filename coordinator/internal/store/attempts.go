@@ -73,7 +73,8 @@ type Attempt struct {
 	HeartbeatSeconds int64
 	// Worker is the worker that claimed it.
 	Worker workerapi.Worker
-	// Placement is where it was placed, once it has been (RecordPlacement).
+	// Placement is where it was placed, once it has been (RecordPlacement,
+	// Placed).
 	Placement Placement
 	// Private reports whether where it is placed is private, as where its
 	// job runs is when that reads a variable or a password: its group,
@@ -98,6 +99,11 @@ type Attempt struct {
 
 	tokenHash, credentialHash []byte
 }
+
+// Placed reports whether the attempt's placement is recorded
+// (RecordPlacement): whether it has the digest of the worker binary it
+// started, which every placement recorded has, a private one's too.
+func (a *Attempt) Placed() bool { return a.Placement.WorkerDigest != "" }
 
 // LeaseLapses returns when the attempt's lease lapses unless it is renewed,
 // by the store's clock: LeaseSeconds after RenewedAt, or the zero time
@@ -306,7 +312,7 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
 	switch {
 	case !a.Holds:
 		return nil, ErrFenced
-	case a.Placement.ID == "":
+	case !a.Placed():
 		return nil, ErrNotPlaced
 	}
 	var taken bool

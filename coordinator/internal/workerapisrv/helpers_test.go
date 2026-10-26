@@ -413,7 +413,7 @@ func (r *rig) newAttempt(run, job string, p placed) (*store.Attempt, string) {
 			if _, err := tx.SQL().ExecContext(r.t.Context(), "UPDATE meridian_attempts SET private_placement = x'01' WHERE id = ?", a.ID); err != nil {
 				return err
 			}
-			return tx.RecordPlacement(a.ID, store.Placement{ID: "1:2", WorkerDigest: p.digest})
+			return tx.RecordPlacement(a.ID, store.Placement{WorkerDigest: p.digest})
 		}
 		return tx.RecordPlacement(a.ID, store.Placement{Group: p.group, Member: p.member, Backend: "local", ID: "1:2", WorkerDigest: p.digest})
 	})

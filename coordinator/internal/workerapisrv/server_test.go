@@ -418,6 +418,39 @@ func TestPrivatePlacementMasked(t *testing.T) {
 	if got := stored(b.ID); strings.Contains(got, placedDigest[7:]) || !strings.Contains(got, problems.Masked) {
 		t.Errorf("the private attempt's refusal is stored as %s", got)
 	}
+
+	// A step's events: their diagnostics are stored masked.
+	e, _, other := r.claimed(c, placed{private: true})
+	events, err := workerapi.Marshal(workerapi.Events{Events: []workerapi.Event{
+		{Seq: 1, Time: time.Unix(1, 0).UTC()},
+		{Seq: 2, Time: time.Unix(2, 0).UTC(), Finished: true, Outcome: plan.OutcomeFailure, ExitCode: 1, Diagnostics: problems.Diagnostics{diag}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, answer, _ := c.send(http.MethodPost, workerapi.PathEvents, events, other); status != http.StatusOK {
+		t.Fatalf("the events were answered %d: %s", status, answer)
+	}
+	var bodies []string
+	r.inTx(func(tx *store.Tx) error {
+		rows, err := tx.SQL().QueryContext(t.Context(), "SELECT body FROM meridian_events WHERE attempt_id = ? ORDER BY seq", e.ID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var body []byte
+			if err := rows.Scan(&body); err != nil {
+				return err
+			}
+			bodies = append(bodies, string(body))
+		}
+		return rows.Err()
+	})
+	if all := strings.Join(bodies, "\n"); len(bodies) != 2 || strings.Contains(all, "secret-") || !strings.Contains(all, problems.Masked) ||
+		!strings.Contains(all, "/jobs/build/env/HOST") {
+		t.Errorf("the private attempt's events are stored as\n%s", all)
+	}
 }
 
 // The server wakes a job's supervisor once its attempt is claimed, once a

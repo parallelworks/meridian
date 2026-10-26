@@ -14,18 +14,19 @@ import (
 // A Placement is where an attempt was placed: what its backend placed, and
 // the worker binary it started.
 type Placement struct {
-	// Group and Member are the group and the member it was placed on, and
-	// Backend the member's backend, or "" where the attempt's placement is
-	// private (Attempt.Private), which the store holds only sealed.
+	// Group and Member are the group and the member it was placed on,
+	// Backend the member's backend, and ID the backend's own name for the
+	// placement (backend.Placement.ID); or "" where the attempt's placement
+	// is private (Attempt.Private), whose coordinator holds them only
+	// sealed, since an ID, as a pod's name, can say where it is.
 	Group   string
 	Member  string
 	Backend string
-	// ID is the backend's own name for the placement (backend.Placement.ID),
-	// which shows nothing of where it is.
-	ID string
+	ID      string
 	// WorkerDigest is sha256: and the hex of the SHA-256 digest of the
 	// worker binary the placement started, which the worker's claim must
-	// give (workerapi.Worker.Digest), or "" where its backend can't say.
+	// give (workerapi.Worker.Digest): every placement recorded has it, so
+	// it says the placement is (Attempt.Placed).
 	WorkerDigest string
 }
 
@@ -34,18 +35,16 @@ type Placement struct {
 var workerDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // RecordPlacement records where the attempt was placed, which its first
-// claim waits for (ErrNotPlaced). A placement without its backend's ID for
-// it, or without the digest of the worker binary it started, is refused:
-// every backend says which binary it started, so that no claim is taken
-// from another. So is one without its backend, unless the attempt's
-// placement is private, and one of those with its group, member or
-// backend, which are held only sealed. An attempt that no longer holds its
-// job is ErrFenced, and one that has been claimed ErrState.
+// claim waits for (ErrNotPlaced). A placement without the digest of the
+// worker binary it started is refused: every backend says which binary it
+// started, so that no claim is taken from another. So is one without its
+// backend or the backend's ID for it, unless the attempt's placement is
+// private, and one of those with its group, member, backend or ID, which
+// are held only sealed: of a private placement, the store holds only the
+// digest in the clear. An attempt that no longer holds its job is
+// ErrFenced, and one that has been claimed ErrState.
 func (tx *Tx) RecordPlacement(id string, p Placement) error {
-	switch {
-	case p.ID == "":
-		return fmt.Errorf("store: attempt %s placed without the backend's ID for it", id)
-	case !workerDigest.MatchString(p.WorkerDigest):
+	if !workerDigest.MatchString(p.WorkerDigest) {
 		return fmt.Errorf("store: attempt %s placed without the digest of the worker binary it started", id)
 	}
 	a, err := tx.Attempt(id)
@@ -57,10 +56,10 @@ func (tx *Tx) RecordPlacement(id string, p Placement) error {
 		return ErrFenced
 	case a.State != AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
-	case a.Private && (p.Group != "" || p.Member != "" || p.Backend != ""):
-		return fmt.Errorf("store: attempt %s's placement is private, and its group, member and backend are held only sealed", id)
-	case !a.Private && p.Backend == "":
-		return fmt.Errorf("store: attempt %s placed without its backend", id)
+	case a.Private && (p.Group != "" || p.Member != "" || p.Backend != "" || p.ID != ""):
+		return fmt.Errorf("store: attempt %s's placement is private, and its group, member, backend and the backend's ID for it are held only sealed", id)
+	case !a.Private && (p.Backend == "" || p.ID == ""):
+		return fmt.Errorf("store: attempt %s placed without its backend or the backend's ID for it", id)
 	}
 	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
 		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest), id)

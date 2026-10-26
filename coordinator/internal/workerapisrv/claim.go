@@ -99,7 +99,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 	// isn't the binary its placement started, which ends the attempt,
 	// failed before its first step.
 	if a.Holds && a.ClaimedAt.IsZero() {
-		if a.Placement.ID == "" {
+		if !a.Placed() {
 			notPlaced(w)
 			return
 		}
