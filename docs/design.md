@@ -2414,8 +2414,8 @@ member's running workers reconnect to it.
 - **Logs** are masked on the worker, before they leave the host, and so are
   outputs ([Outputs](#outputs)).
 - **While the coordinator is unreachable**, a worker keeps running its steps,
-  spools logs and events to disk up to a limit, and delivers them in order
-  when it reconnects, unless its job fences itself
+  spools logs to disk up to a limit, keeps events in memory, and delivers
+  them in order when it reconnects, unless its job fences itself
   ([Leases and fencing](#leases-and-fencing)). Past the limit, or once the
   disk is full, a log keeps nothing more until there is room, and the
   step's event says how much it lost. A log's file holds what the

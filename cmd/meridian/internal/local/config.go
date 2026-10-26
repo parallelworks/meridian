@@ -426,8 +426,8 @@ func (f configFile) resources(group string, n *yaml.Node, r *backend.Resources) 
 var sourcesKeys = []string{"gitlab-servers"}
 
 // loadSources reads the sources file at path: the GitLab servers, besides
-// gitlab.com, that a workflow's $host can name, each a host name and,
-// after a colon, a port.
+// gitlab.com, that a workflow's $host can name, each a host name with no
+// port, as a $host names it (validHost).
 func (c *Config) loadSources(path string) error {
 	data, err := readConfig(path, safepath.Unchangeable)
 	if err != nil || data == nil {

@@ -70,14 +70,17 @@
 // and a different one is refused, 409 Conflict.
 //
 // While the coordinator can't be reached, a worker keeps running its
-// steps, spools its events and logs to disk up to a limit, and sends them
-// in order once it can, unless its job fences itself. But before the
+// steps, spools its logs to disk up to a limit, keeps its events in
+// memory, and sends them in order once it can, unless its job fences
+// itself. But before the
 // first of the job's steps that runs, it sends that step's started event
 // and waits until the coordinator has stored it, so whether the workflow's
 // code may have run is always known.
 //
-// Child runs, through which a step runs a workflow its uses: names, come
-// with the Sources resolver, and aren't defined yet.
+// Child runs, through which a step runs a workflow its uses: names, aren't
+// defined yet: the Sources resolver pins and reads such a workflow, and
+// the requests that start its run and wait for it come with the
+// coordinator.
 package workerapi
 
 import (
