@@ -129,11 +129,39 @@ func (res *StartResult) Keep(record *plan.Record) StartState {
 
 // ErrMismatch is what Start's error wraps when what it is given doesn't fit
 // together: a plan this release's compiler didn't make, or a secret record
-// that isn't the one Create gave with the plan. Starting the run again
-// gives the same error, so the coordinator fails the run rather than start
-// it again. Any other error but ctx's, and plan.ErrVersion's for a plan of
-// another release, is a resolver that couldn't answer, which starting again
-// can get past.
+// that isn't the one Create gave with the plan. Start checks, in order:
+//
+//   - that there is a plan, and that the record names it, by its digest
+//     (plan.Record.PlanDigest, plan.Digest), and holds what was submitted
+//     as a mapping, if anything;
+//   - that the record's withheld parts and decisions are those the plan
+//     names (Run.Withheld, Run.Decisions), no more and no fewer, and that
+//     each withheld part is in the input definitions and each decision is
+//     of an input's condition;
+//   - and, once the inputs are resolved again and the run's shape is what
+//     Create decided, with no other problem, that each value the
+//     resolution keeps out of the plan, as a password or a private value,
+//     is one the plan names, or in one it names (Run.Secrets, Run.Private),
+//     but for the parts of an input the plan holds none of, which a
+//     password input never is; and that what was submitted, resolved
+//     again, gives the values the plan holds (Run.Inputs), and none for an
+//     input the workflow doesn't define that the plan doesn't hold, but
+//     for what Create keeps out of the plan and the inputs of a platform's
+//     type, which the Inputs resolver gives again (checkPlanned).
+//
+// So the digest binds a record to its plan, and these checks, what was
+// submitted to what the plan holds; neither binds it to its run. What the
+// plan doesn't hold, as a password, a value given in place of a default
+// that reads a variable, or which parts of what was submitted mean their
+// expressions (plan.Record.Means), a record of another run of the same
+// plan can give otherwise, and Start starts with what it gives: the
+// coordinator keeps each run's record with its plan. A value the plan
+// names that the record doesn't hold, as a password, is the run's problem
+// (input_required), not a mismatch. Starting the run again gives the same
+// error, so the coordinator fails the run rather than start it again. Any
+// other error but ctx's, and plan.ErrVersion's for a plan of another
+// release, is a resolver that couldn't answer, which starting again can
+// get past.
 var ErrMismatch = errors.New("compile: the plan and the secret record don't fit")
 
 // mismatch returns an error that wraps ErrMismatch, which says what doesn't
@@ -199,6 +227,15 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	case p.Version != plan.Version:
 		return nil, nil, fmt.Errorf("compile: %w %d; this release starts plans of version %d", plan.ErrVersion, p.Version, plan.Version)
 	}
+	switch digest, err := plan.Digest(p); {
+	case err != nil:
+		return nil, nil, mismatch("the plan doesn't encode: %v", err)
+	case in.Record.PlanDigest != digest:
+		return nil, nil, mismatch("the secret record is of another plan")
+	}
+	if _, ok := in.Record.Submitted.Get().(map[string]any); !ok && !in.Record.Submitted.IsZero() {
+		return nil, nil, mismatch("what the secret record holds as submitted isn't a mapping")
+	}
 	st := &starter{ctx: ctx, p: p, in: in}
 	if err := st.readVariables(); err != nil {
 		return nil, nil, err
@@ -216,13 +253,20 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	}
 	// Create's warnings are Create's: Start keeps only what fails the run.
 	st.r.diags = st.r.diags.Errors()
-	if err := st.checkFits(); err != nil {
-		return nil, nil, err
-	}
 	if err := st.checkDecided(decided); err != nil {
 		return nil, nil, err
 	}
 	st.checkNeeds()
+	// A run whose shape changed, or that has another problem, fails as it
+	// is: what it resolved can differ from the plan for that reason.
+	if !st.diagnostics().HasErrors() {
+		if err := st.checkFits(); err != nil {
+			return nil, nil, err
+		}
+		if err := st.checkPlanned(); err != nil {
+			return nil, nil, err
+		}
+	}
 	run := st.runValues()
 	res := &StartResult{Run: run}
 	// The timeout and the matrices read the run's values, complete, as the

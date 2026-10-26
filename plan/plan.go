@@ -420,26 +420,48 @@ var (
 // doesn't read, such as one a newer release wrote.
 var ErrVersion = errors.New("plan: unsupported version")
 
+// ErrMalformed is what Decode and DecodeRecord return for what isn't a
+// plan, or a secret record, that this release reads: what isn't JSON, or
+// isn't a mapping, or names no release's version, as one without a version
+// does, or that doesn't decode as this release reads its version, as one
+// with a key it doesn't know does. Decoding it again gives the same error,
+// so a coordinator fails the run rather than read it again.
+var ErrMalformed = errors.New("plan: malformed")
+
 // Decode decodes a plan that Encode encoded. It fails on a plan of another
-// version, with ErrVersion, and on keys it doesn't know, which a newer
-// release wrote. Keys match exactly, and no key can be given twice.
+// version, with ErrVersion, and on what isn't a plan of this one, with
+// ErrMalformed: keys it doesn't know, which a newer release wrote, among
+// them. Keys match exactly, and no key can be given twice.
 func Decode(data []byte) (*Plan, error) {
 	p := new(Plan)
-	err := jsonv2.Unmarshal(data, p, decoding, jsonv2.RejectUnknownMembers(true))
-	if err == nil && p.Version == Version {
-		return p, nil
+	if err := decodeVersioned(data, p, func() int { return p.Version }, "the plan"); err != nil {
+		return nil, err
 	}
-	// A plan of another version need not decode as this one, so its version
-	// is read on its own, and only when the plan doesn't decode as this
+	return p, nil
+}
+
+// decodeVersioned decodes data into v, whose version version reads once
+// it is decoded, as Decode does: it fails with ErrVersion if data is of a
+// version this release doesn't read, and with ErrMalformed if it isn't
+// what of names, of any release's version, or of this release's.
+func decodeVersioned(data []byte, v any, version func() int, of string) error {
+	err := jsonv2.Unmarshal(data, v, decoding, jsonv2.RejectUnknownMembers(true))
+	if err == nil && version() == Version {
+		return nil
+	}
+	// One of another version need not decode as this one, so its version
+	// is read on its own, and only when it doesn't decode as this
 	// version's.
 	var head struct {
 		Version int `json:"version"`
 	}
-	if err := jsonv2.Unmarshal(data, &head); err != nil {
-		return nil, fmt.Errorf("plan: %w", err)
+	switch err := jsonv2.Unmarshal(data, &head); {
+	case err != nil:
+		return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
+	case head.Version < 1:
+		return fmt.Errorf("%w: %s names no version", ErrMalformed, of)
+	case head.Version != Version:
+		return fmt.Errorf("%w %d of %s; this release reads version %d", ErrVersion, head.Version, of, Version)
 	}
-	if head.Version != Version {
-		return nil, fmt.Errorf("%w %d; this release reads version %d", ErrVersion, head.Version, Version)
-	}
-	return nil, fmt.Errorf("plan: %w", err)
+	return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
 }

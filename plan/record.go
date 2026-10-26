@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	jsonv2 "encoding/json/v2"
 	"fmt"
 	"maps"
@@ -19,6 +21,9 @@ type Record struct {
 	// Version is the record encoding's version, the plan's: a release
 	// reads the records of the plans it reads.
 	Version int `json:"version"`
+	// PlanDigest names the plan the record was made with, by its digest
+	// (Digest), which Start checks.
+	PlanDigest string `json:"planDigest,omitempty"`
 
 	// Submitted is what the run was submitted, a mapping, as it was given:
 	// every input value, passwords among them. Start resolves the inputs
@@ -171,6 +176,29 @@ func cloneNames(names map[string][]string) map[string][]string {
 	return out
 }
 
+// Digest returns the SHA-256 digest of p's encoding as it reads back, as
+// "sha256:" and its hex: the same for p as for the plan Decode gives of
+// what Encode gave of it, as a coordinator stores it. A secret record
+// names the plan it was made with by it (Record.PlanDigest). A plan holds
+// no secret and no variable's value, so neither does its digest.
+func Digest(p *Plan) (string, error) {
+	data, err := Encode(p)
+	if err != nil {
+		return "", err
+	}
+	// What Decode reads can encode otherwise than what was encoded, as
+	// -0 reads as 0.
+	back, err := Decode(data)
+	if err != nil {
+		return "", err
+	}
+	if data, err = Encode(back); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 // EncodeRecord encodes a secret record as JSON, as Encode encodes a plan:
 // the same record always encodes to the same bytes. The coordinator
 // encrypts what it gives.
@@ -180,21 +208,15 @@ func EncodeRecord(r *Record) ([]byte, error) {
 
 // DecodeRecord decodes a secret record that EncodeRecord encoded. As
 // Decode does a plan, it fails on a record of another version, with
-// ErrVersion, and on keys it doesn't know.
+// ErrVersion, and with ErrMalformed on what isn't a record of this one: a
+// key it doesn't know, or what was submitted that isn't a mapping.
 func DecodeRecord(data []byte) (*Record, error) {
 	r := new(Record)
-	err := jsonv2.Unmarshal(data, r, decoding, jsonv2.RejectUnknownMembers(true))
-	if err == nil && r.Version == Version {
-		return r, nil
+	if err := decodeVersioned(data, r, func() int { return r.Version }, "the secret record"); err != nil {
+		return nil, err
 	}
-	var head struct {
-		Version int `json:"version"`
+	if _, ok := r.Submitted.Get().(map[string]any); !ok && !r.Submitted.IsZero() {
+		return nil, fmt.Errorf("%w: the secret record: what was submitted isn't a mapping", ErrMalformed)
 	}
-	if err := jsonv2.Unmarshal(data, &head); err != nil {
-		return nil, fmt.Errorf("plan: the secret record: %w", err)
-	}
-	if head.Version != Version {
-		return nil, fmt.Errorf("%w %d of the secret record; this release reads version %d", ErrVersion, head.Version, Version)
-	}
-	return nil, fmt.Errorf("plan: the secret record: %w", err)
+	return r, nil
 }

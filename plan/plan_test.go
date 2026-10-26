@@ -339,23 +339,35 @@ func TestDecodeRefuses(t *testing.T) {
 		if !strings.Contains(string(good), `"timeout":"1h"`) {
 			t.Fatalf("the sample plan changed: %s", good)
 		}
-		if _, err := plan.Decode([]byte(data)); err == nil {
+		_, err := plan.Decode([]byte(data))
+		if err == nil {
 			t.Errorf("%s: decoded", name)
+		}
+		if want := name != "another version"; errors.Is(err, plan.ErrMalformed) != want {
+			t.Errorf("%s: %v, ErrMalformed %v", name, err, want)
 		}
 	}
 	for name, data := range map[string]string{
 		"another version":             strings.Replace(string(good), `"version":1`, `"version":2`, 1),
 		"another version's keys":      strings.Replace(string(good), `"version":1`, `"version":2,"later":true`, 1),
 		"another version, last":       strings.Replace(string(good), `"version":1,`, ``, 1)[:len(good)-len(`"version":1,`)-1] + `,"later":{},"version":2}`,
-		"no version":                  strings.Replace(string(good), `"version":1,`, ``, 1),
 		"another version's templates": strings.Replace(strings.Replace(string(good), `"version":1`, `"version":2`, 1), `"ref":"inputs"`, `"ref":"later"`, 1),
 	} {
 		if _, err := plan.Decode([]byte(data)); !errors.Is(err, plan.ErrVersion) {
 			t.Errorf("%s: %v, want ErrVersion", name, err)
 		}
 	}
-	if _, err := plan.Decode([]byte(strings.Replace(string(good), `"version":1`, `"version":"1"`, 1))); err == nil || errors.Is(err, plan.ErrVersion) {
-		t.Errorf("a version that isn't a number: %v, want an error other than ErrVersion", err)
+	// What names no release's version is no release's plan.
+	for name, data := range map[string]string{
+		"no version": strings.Replace(string(good), `"version":1,`, ``, 1),
+		"version 0":  strings.Replace(string(good), `"version":1`, `"version":0`, 1),
+		"empty":      `{}`,
+		"null":       `null`,
+		"a list":     `[]`,
+	} {
+		if _, err := plan.Decode([]byte(data)); !errors.Is(err, plan.ErrMalformed) || errors.Is(err, plan.ErrVersion) {
+			t.Errorf("%s: %v, want ErrMalformed", name, err)
+		}
 	}
 }
 

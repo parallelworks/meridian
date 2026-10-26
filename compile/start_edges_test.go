@@ -738,3 +738,81 @@ func TestIgnoredInputsHeldByWhatTheIgnoreReads(t *testing.T) {
 		})
 	}
 }
+
+// Start refuses a secret record that isn't the one Create gave with the
+// plan (ErrMismatch), and says so without a value of it: one of another
+// plan, by its digest, and one whose values the plan's digest doesn't
+// cover, as what was submitted is, that give other values than the plan
+// holds, a value for an input the workflow doesn't define, or a password
+// the plan doesn't name. A record that lacks a password the plan names is
+// the run's problem, as it is when the run is created without it. What the
+// plan doesn't hold, as a password's value, or a value given in place of a
+// default that reads a variable, a record of another run of the same plan
+// can give otherwise: the digest binds a record to its plan, not its run.
+func TestStartRefusesAnotherRecord(t *testing.T) {
+	vars := testVariables{"vars.V": {Value: "v"}}
+	src := workflow("pw: {type: password, optional: true}\nc: {type: string, optional: true}\nn: {type: number, default: 1}\nd: {type: string, default: '${{ vars.V }}'}")
+	created := createRun(t, src, map[string]any{"pw": "SENT-pw", "c": "planned"}, vars)
+	start := func(p *plan.Plan, record plan.Record) (*compile.StartResult, problems.Diagnostics, error) {
+		return compile.Start(t.Context(), p, compile.StartInput{RunID: "run", Variables: vars, Record: record, Inputs: passThrough{}})
+	}
+	// The record, with what was submitted changed.
+	changed := func(change func(m map[string]any)) plan.Record {
+		record := created.Record
+		m := maps.Clone(record.Submitted.Get().(map[string]any))
+		change(m)
+		record.Submitted = plan.DataOf(m)
+		return record
+	}
+	refused := func(name string, p *plan.Plan, record plan.Record) {
+		t.Helper()
+		res, diags, err := start(p, record)
+		if !errors.Is(err, compile.ErrMismatch) {
+			t.Errorf("%s: %v, %v, %v; want ErrMismatch", name, res != nil, diags, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "SENT") {
+			t.Errorf("%s: the error quotes a value: %v", name, err)
+		}
+	}
+	for name, change := range map[string]func(m map[string]any){
+		"a plain value changed":                func(m map[string]any) { m["c"] = "SENT-other" },
+		"a value given over a default":         func(m map[string]any) { m["n"] = 99 },
+		"an input the workflow doesn't define": func(m map[string]any) { m["zzz"] = "SENT-unknown" },
+		"a password under another name":        func(m map[string]any) { m["pW"] = m["pw"]; delete(m, "pw") },
+	} {
+		refused(name, created.Plan, changed(change))
+	}
+	refused("no record", created.Plan, plan.Record{})
+	refused("submitted values that aren't a mapping", created.Plan, func() plan.Record {
+		record := created.Record
+		record.Submitted = plan.DataOf([]any{"SENT-list"})
+		return record
+	}())
+	// Records of other runs, of other plans.
+	for name, sub := range map[string]map[string]any{
+		"another plain value":    {"pw": "SENT-pw", "c": "SENT-other"},
+		"no password":            {"c": "planned"},
+		"a value over a default": {"pw": "SENT-pw", "c": "planned", "n": 2},
+	} {
+		refused(name+", another plan", created.Plan, createRun(t, src, sub, vars).Record)
+	}
+	other := workflow("pw: {type: password, optional: true}\nc: {type: string, optional: true}")
+	refused("another workflow's", created.Plan, createRun(t, other, map[string]any{"pw": "SENT-pw", "c": "planned"}, vars).Record)
+	// A password the plan doesn't name, given in a record that names the
+	// plan.
+	without := createRun(t, src, map[string]any{"c": "planned"}, vars)
+	record := without.Record
+	record.Submitted = plan.DataOf(map[string]any{"c": "planned", "pw": "SENT-pw"})
+	refused("a password the plan doesn't name", without.Plan, record)
+
+	required := createRun(t, workflow("pw: {type: password}"), map[string]any{"pw": "SENT-pw"}, vars)
+	record = required.Record
+	record.Submitted = plan.DataOf(map[string]any{})
+	res, diags, err := start(required.Plan, record)
+	if err != nil || res != nil || !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.InputRequired.Code() }) {
+		t.Errorf("a password the record lacks: %v, %v, %v; want input_required", res != nil, diags, err)
+	}
+	if res, diags, err := start(created.Plan, created.Record); res == nil || err != nil {
+		t.Errorf("the record Create gave: %v, %v", diags, err)
+	}
+}

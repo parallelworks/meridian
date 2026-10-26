@@ -912,11 +912,24 @@ made from one, it doesn't hold in another form either.
 4. **Check the record fits the plan.** A value the resolution kept out of
    the plan, as a password or a private value, that the plan doesn't name
    means the secret record isn't the one Create gave with the plan, and so
-   does a withheld part or a decision the plan doesn't name, or one it
-   names the record doesn't hold: each is an error (`compile.ErrMismatch`).
-   A value the plan names that the record doesn't hold, as a password, is
-   the run's problem, `input_required`, as it is when a run is created
-   without it.
+   does a value the plan holds that what was submitted, resolved again,
+   doesn't give, or a value for an input the workflow doesn't define that
+   the plan doesn't hold: each is an error (`compile.ErrMismatch`). A
+   password input's value is one the plan names whenever the run has it.
+   Start checks these once it has checked the shape, as a run whose shape
+   changed gives other values, and fails as it is. Before it reads
+   anything, it checks that the record names the plan, by its digest
+   (`plan.Record.PlanDigest`, `plan.Digest`), and that the record's
+   withheld parts and decisions are those the plan names, no more and no
+   fewer. What the plan doesn't hold isn't checked: an input of a
+   platform's type, which the resolver gives again, a password, a value
+   given in place of a default that reads a variable, and which values
+   mean their expressions. So the digest binds a record to its plan, and
+   not to its run: a record of another run of the same plan starts with
+   what it gives, and the coordinator keeps each run's record with its
+   plan. A value the plan names that the record doesn't hold, as a
+   password, is the run's problem, `input_required`, as it is when a run
+   is created without it.
 5. **Check the shape.** Compare each decision of the run's shape that read
    a variable or a password as the run was created, an input's `hidden`,
    `ignore` and `optional` (`Run.Decisions`), with what the secret record
@@ -976,6 +989,12 @@ says what the coordinator does next:
   ([Plans across versions](#plans-across-versions)).
 - **Any other**, a resolver that couldn't answer, or the context's end,
   the coordinator starts the run again after.
+
+Decoding the plan or the secret record before Start fails alike: with
+`plan.ErrVersion` for another release's version, and with
+`plan.ErrMalformed` for what no release encoded, or this one can't read
+as its own version, which decoding again gives too, so the coordinator
+fails the run.
 
 A coordinator that dies during Start leaves its job to another replica,
 which starts it again from the beginning: nothing reads Start's results
@@ -1131,17 +1150,18 @@ can't: what the run was given, and what it made from a variable or a
 password. It is one type, `plan.Record`, which the coordinator keeps for
 the run in one place, encoded as a plan is (`plan.EncodeRecord` and
 `plan.DecodeRecord`), with the plan's version: a release reads the records
-of the plans it reads, and refuses a key it doesn't know. Each phase adds
-its part:
+of the plans it reads, and refuses one with a key it doesn't know, one
+that names no version, and one whose submitted values aren't a mapping
+(`plan.ErrMalformed`). Each phase adds its part:
 
 - **Create** (`compile.Created.Record`): what was submitted, as it was
   given, passwords among it (`Submitted`); the parts of the input
   definitions that can hold a password (`Withheld`); what each condition
   of the run's shape that read a variable or a password decided
-  (`Decisions`); and which parts of what was submitted mean the
-  expression a form made them from, as Create decided, with the
-  expression's place (`Means`). Start resolves the inputs again from
-  these.
+  (`Decisions`); which parts of what was submitted mean the expression a
+  form made them from, as Create decided, with the expression's place
+  (`Means`); and the digest of the plan it made with them (`PlanDigest`),
+  which Start checks. Start resolves the inputs again from these.
 - **Start** (`compile.StartResult.Keep`): the variables it read, plain
   and secret, and the private half of the run's values (`Run`, as
   `RunValues.Split` gives it); the run's timeout, when it is private
@@ -1201,7 +1221,9 @@ sees one version.
   plan. A replica claims only runs whose version it reads, so during a
   rolling upgrade old replicas leave newer runs alone. A release still
   refuses a plan with a key it doesn't know, rather than run it without
-  that part. Keys match exactly, and a key given twice is refused.
+  that part, and one that names no version, which is no release's
+  (`plan.ErrMalformed`). Keys match exactly, and a key given twice is
+  refused.
 - **What an expression means is its format's.** A stored tree is read the
   same in every version, and evaluated by the rules of the format the plan
   records.

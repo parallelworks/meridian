@@ -16,7 +16,8 @@ import (
 func sampleRecord() *plan.Record {
 	seconds := int64(3600)
 	return &plan.Record{
-		Version: plan.Version,
+		Version:    plan.Version,
+		PlanDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Submitted: plan.DataOf(map[string]any{
 			"name": "Alice", "n": int64(3), "pw": "hunter2", "note": "${{ not.parsed }}",
 			"rows": []any{map[string]any{"pass": "p", "user": "a"}, nil},
@@ -64,26 +65,41 @@ func TestRecordEncodingIsStable(t *testing.T) {
 	}
 }
 
-// A record of another version, or with a key this release doesn't know,
-// doesn't decode, as a plan doesn't.
+// A record of another version doesn't decode, with ErrVersion, as a plan
+// doesn't; nor does what isn't a record of this one, with ErrMalformed: one
+// with a key this release doesn't know, one that names no version, as an
+// empty one doesn't, and one whose submitted values aren't a mapping.
 func TestDecodeRecordRefuses(t *testing.T) {
 	good, err := plan.EncodeRecord(sampleRecord())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(good), `"submitted":{`) {
+		t.Fatalf("the sample record changed: %s", good)
+	}
 	for name, data := range map[string]string{
-		"another version": strings.Replace(string(good), `"version":1`, `"version":2`, 1),
-		"an unknown key":  strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
-		"a key twice":     strings.Replace(string(good), `"version":1`, `"version":1,"version":1`, 1),
-		"not JSON":        "{",
+		"another version":           strings.Replace(string(good), `"version":1`, `"version":2`, 1),
+		"an unknown key":            strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
+		"a key twice":               strings.Replace(string(good), `"version":1`, `"version":1,"version":1`, 1),
+		"not JSON":                  "{",
+		"empty":                     "{}",
+		"null":                      "null",
+		"version 0":                 strings.Replace(string(good), `"version":1`, `"version":0`, 1),
+		"submitted values, a list":  `{"version":1,"submitted":[]}`,
+		"submitted values, a text":  `{"version":1,"submitted":"x"}`,
+		"submitted values, a value": `{"version":1,"submitted":1}`,
 	} {
 		r, err := plan.DecodeRecord([]byte(data))
 		if err == nil {
 			t.Errorf("%s: decoded as %+v", name, r)
 		}
-		if want := name == "another version"; errors.Is(err, plan.ErrVersion) != want {
-			t.Errorf("%s: %v, ErrVersion %v", name, err, want)
+		version := name == "another version"
+		if errors.Is(err, plan.ErrVersion) != version || errors.Is(err, plan.ErrMalformed) == version {
+			t.Errorf("%s: %v, want ErrVersion %v and ErrMalformed %v", name, err, version, !version)
 		}
+	}
+	if r, err := plan.DecodeRecord([]byte(`{"version":1,"submitted":null}`)); err != nil || !r.Submitted.IsZero() {
+		t.Errorf("a record that holds nothing submitted: %+v, %v", r, err)
 	}
 }
 
@@ -146,4 +162,30 @@ func canonicalJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// A plan's digest is the same for the plan as for what decoding its
+// encoding gives, as a coordinator stores it, and another for another
+// plan.
+func TestDigest(t *testing.T) {
+	p := samplePlan(t)
+	want, err := plan.Digest(p)
+	if err != nil || !strings.HasPrefix(want, "sha256:") || len(want) != len("sha256:")+64 {
+		t.Fatalf("digest %q, %v", want, err)
+	}
+	data, err := plan.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := plan.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := plan.Digest(back); got != want || err != nil {
+		t.Errorf("the plan decoded has the digest %q, %v; want %q", got, err, want)
+	}
+	back.Run.Source.Revision = "sha256:01"
+	if got, err := plan.Digest(back); got == want || err != nil {
+		t.Errorf("another plan has the same digest %q, %v", got, err)
+	}
 }

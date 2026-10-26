@@ -68,6 +68,12 @@ func Create(ctx context.Context, name string, data []byte, submitted map[string]
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	if created != nil {
+		// The record names its plan, by its digest, which Start checks.
+		if created.Record.PlanDigest, err = plan.Digest(created.Plan); err != nil {
+			return nil, nil, err
+		}
+	}
 	return created, diags, nil
 }
 
