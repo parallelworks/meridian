@@ -144,16 +144,21 @@ type laterInputs struct {
 // reads in turn; or one the plan holds part of, a group, a wizard step, a
 // list or one of its rows, a part of which it holds no value for reads one
 // so. ACTIVATE leaves such a value to its executor, and so an expression
-// that reads it, while a value the run was given reads nothing. Of a
-// list's rows, or a repeated wizard step's, it reads only what gives the
-// field path names: that field's definition in the rows' template, and its
-// place in each default row.
+// that reads it, while a value the run was given reads nothing, nor does
+// the key of a group or a wizard step that flattens its inputs beside it.
+// Of a list's rows, or a repeated wizard step's, it reads only what gives
+// the field path names: that field's definition in the rows' template, and
+// its place in each default row.
 func (l *laterInputs) reads(path []string) bool {
 	if len(path) == 0 || path[0] == "*" || path[0] == "[index]" {
 		return false
 	}
 	in, n, ok := findInput(l.defs, path)
-	if !ok {
+	switch {
+	case !ok:
+		return false
+	case n == len(path) && in.container && in.flatten:
+		// Its inputs' values are beside its key, which holds none of them.
 		return false
 	}
 	if v, held := jsonptr.Lookup(l.values, path); held {

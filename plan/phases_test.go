@@ -267,6 +267,11 @@ on:
         flatten: true
         items:
           fe: {type: string, default: '${{ env.MODE }}'}
+      wizard:
+        type: step
+        title: Settings
+        options:
+          we: {type: string, default: '${{ env.MODE }}'}
       rows:
         optional: true
         type: list
@@ -370,6 +375,18 @@ jobs:
     needs: [dep]
     if: ${{ inputs.fe == 'fast' }}
     steps: [{run: "true"}]
+  env-wizard:
+    needs: [dep]
+    if: ${{ inputs.we == 'fast' }}
+    steps: [{run: "true"}]
+  flat-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.flat) != '' }}
+    steps: [{run: "true"}]
+  wizard-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.wizard) != '' }}
+    steps: [{run: "true"}]
   env-row:
     needs: [dep]
     if: ${{ inputs.rows[0].x == 'fast' }}
@@ -429,9 +446,12 @@ jobs:
 	for name, want := range map[string]plan.CancelPath{
 		"dep": skips, "free": skips, "plain": skips, "false": skips, "input": skips, "as-text": skips,
 		"group-plain": skips, "row-plain": skips, "matrix": skips, "matrix-when": skips, "input-broken": skips,
+		// A group, or a wizard step, that flattens its inputs beside its key
+		// has no value there.
+		"flat-whole": skips, "wizard-whole": skips,
 		// The plan holds the group read whole, its plain input in it, but not
 		// its input made from env; nor the list, whose rows have one.
-		"group-whole": ends, "list-whole": ends, "row-whole": ends,
+		"group-whole": ends, "list-whole": ends, "row-whole": ends, "env-wizard": ends,
 		"output": ends, "output-always": ends, "output-broken": ends, "result": ends,
 		"env": ends, "env-free": ends, "env-input": ends,
 		"env-chain": ends, "env-group": ends, "env-flat": ends, "env-row": ends, "on-success": ends,
@@ -443,8 +463,8 @@ jobs:
 			t.Errorf("%s takes %d, %v; want %d", name, got, err, want)
 		}
 	}
-	if len(p.Jobs) != 36 {
-		t.Errorf("the plan has %d jobs, and the test names 36", len(p.Jobs))
+	if len(p.Jobs) != 39 {
+		t.Errorf("the plan has %d jobs, and the test names 39", len(p.Jobs))
 	}
 	// An input the run was given a value for reads nothing, whatever its
 	// default reads, nor does one whose default reads only such an input,
