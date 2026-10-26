@@ -108,7 +108,7 @@ func TestUnmarshalAgreesWithTheSchema(t *testing.T) {
 		}
 		t.Run(typ.Name(), func(t *testing.T) {
 			t.Parallel()
-			schematest.Agree(t, "workerapi/schema/1/workerapi.schema.json#/$defs/"+typ.Name(), typ.Name(), data, decode, func(string) bool { return false })
+			schematest.Agree(t, "plan/schema/1/workerapi.schema.json#/$defs/"+typ.Name(), typ.Name(), data, decode, func(string) bool { return false })
 		})
 	}
 }
@@ -117,7 +117,7 @@ func TestUnmarshalAgreesWithTheSchema(t *testing.T) {
 // it, and writes again to the same bytes: numbers in a run's values that a
 // float64 can't hold, diagnostics, a problem, and lists and mappings that
 // are empty; and each fits its definition in the API's schema
-// (workerapi.Schemas).
+// (plan.Schemas).
 func TestBodiesRoundTrip(t *testing.T) {
 	for _, body := range bodies() {
 		data, err := workerapi.Marshal(body)
@@ -125,7 +125,7 @@ func TestBodiesRoundTrip(t *testing.T) {
 			t.Fatalf("%T: %v", body, err)
 		}
 		name := reflect.TypeOf(body).Elem().Name()
-		schematest.Validate(t, schematest.Schema(t, "workerapi/schema/1/workerapi.schema.json#/$defs/"+name), name, data)
+		schematest.Validate(t, schematest.Schema(t, "plan/schema/1/workerapi.schema.json#/$defs/"+name), name, data)
 		back := reflect.New(reflect.TypeOf(body).Elem()).Interface()
 		if err := workerapi.Unmarshal(data, back); err != nil {
 			t.Fatalf("%T: reading %s: %v", body, data, err)
@@ -229,7 +229,7 @@ func TestUnmarshalRefuses(t *testing.T) {
 		if err := decode(); err == nil {
 			t.Errorf("%s: read %s", tc.name, data)
 		}
-		if err := schematest.Check(schematest.Schema(t, "workerapi/schema/1/workerapi.schema.json#/$defs/"+tc.body), []byte(data)); err == nil {
+		if err := schematest.Check(schematest.Schema(t, "plan/schema/1/workerapi.schema.json#/$defs/"+tc.body), []byte(data)); err == nil {
 			t.Errorf("%s: fits the schema", tc.name)
 		}
 	}

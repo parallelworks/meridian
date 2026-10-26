@@ -1,5 +1,5 @@
 // Package schematest checks what Meridian encodes against the JSON Schemas
-// of the plan and of the worker API's bodies, for tests.
+// of the plan and of the worker API's bodies (plan.Schemas), for tests.
 package schematest
 
 import (
@@ -15,16 +15,12 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/parallelworks/meridian/plan"
-	"github.com/parallelworks/meridian/workerapi"
 )
 
-// sources are the schemas, by the directories they are in, in the
-// repository: they refer to each other by their paths relative to each
-// other, as the repository has them.
-var sources = map[string]fs.FS{
-	"plan":      plan.Schemas,
-	"workerapi": workerapi.Schemas,
-}
+// dir is the directory, in the repository, that plan.Schemas holds the
+// schemas of: each version's refer to each other by their names, as they
+// are in the same directory.
+const dir = "plan"
 
 var (
 	compileOnce sync.Once
@@ -93,47 +89,27 @@ func compile(id string, doc any) (*jsonschema.Schema, error) {
 	return s, nil
 }
 
-// Paths returns the paths, in the repository, of every schema.
-func Paths() ([]string, error) {
-	var out []string
-	for dir, fsys := range sources {
-		err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
-			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".schema.json") {
-				out = append(out, path.Join(dir, p))
-			}
-			return err
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 // load adds every schema to compiler.
 func load() {
 	compiler = jsonschema.NewCompiler()
 	compiler.DefaultDraft(jsonschema.Draft2020)
 	compiler.UseLoader(noLoader{})
-	for dir, fsys := range sources {
-		err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".schema.json") {
-				return err
-			}
-			data, err := fs.ReadFile(fsys, p)
-			if err != nil {
-				return err
-			}
-			doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
-			if err != nil {
-				return fmt.Errorf("%s: %w", path.Join(dir, p), err)
-			}
-			return compiler.AddResource("file:///"+path.Join(dir, p), doc)
-		})
-		if err != nil {
-			compileErr = fmt.Errorf("schematest: %w", err)
-			return
+	err := fs.WalkDir(plan.Schemas, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".schema.json") {
+			return err
 		}
+		data, err := fs.ReadFile(plan.Schemas, p)
+		if err != nil {
+			return err
+		}
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("%s: %w", path.Join(dir, p), err)
+		}
+		return compiler.AddResource("file:///"+path.Join(dir, p), doc)
+	})
+	if err != nil {
+		compileErr = fmt.Errorf("schematest: %w", err)
 	}
 }
 

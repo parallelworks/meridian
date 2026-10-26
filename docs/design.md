@@ -1360,20 +1360,20 @@ rules above are the record's too.
 
 Version 1 is frozen: every change to the plan's encoding, or to the worker
 API's bodies, from here on raises the version, an addition among them. Its
-schemas are in `plan/schema/1`, a plan's (`plan.schema.json`), whose
-definitions hold the other types', and a ready job's, a secret record's, a
-run's values' and a job's result's, which name them; and the worker API's
-bodies' in `workerapi/schema/1`, which refer to the plan's
-(`plan.Schemas`, `workerapi.Schemas`). Tests check that every encoded
-type's members are what its schema describes, that golden files setting
-every member, and what Meridian encodes for every conformance case, fit
-the schemas, that decoding agrees with the schemas on each member of the
-goldens and the bodies left out, null, or a number past its bounds, and
-that every member has the version that gave it, in plan's and the worker
-API's since tables, so that a member added later can't go in without a
-version. A value is named one way throughout, by its path with
-its context (`plan.JoinPath`), as in `inputs.region`, in the plan, the
-secret record and a run's values.
+schemas are in `plan/schema/1` (`plan.Schemas`): a plan's
+(`plan.schema.json`), whose definitions hold the other types'; a ready
+job's, a secret record's, a run's values' and a job's result's, which name
+them; and the worker API's bodies' (`workerapi.schema.json`), which refer
+to them. They refer to each other by their names, so they resolve wherever
+the directory is. Tests check that every encoded type's members are what
+its schema describes, that golden files setting every member, and what
+Meridian encodes for every conformance case, fit the schemas, that
+decoding agrees with the schemas on each member of the goldens and the
+bodies left out, null, or a number past its bounds, and that every member
+has the version that gave it, in plan's and the worker API's since tables,
+so that a member added later can't go in without a version. A value is
+named one way throughout, by its path with its context (`plan.JoinPath`),
+as in `inputs.region`, in the plan, the secret record and a run's values.
 
 ## Expressions
 

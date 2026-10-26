@@ -25,8 +25,9 @@
 //
 // Version 1 is frozen, as the plan's is (docs/design.md, Plans across
 // versions): every change to a body from here on is a version. The JSON
-// Schema of the bodies of each version is in Schemas, and refers to the
-// plan's (plan.Schemas) for what a body carries of a run.
+// Schema of the bodies of each version is beside the plan's, in
+// plan.Schemas, as schema/<version>/workerapi.schema.json, and refers to
+// them for what a body carries of a run.
 //
 // As it claims, a worker says the newest version it reads
 // (ClaimRequest.PlanVersion), and the coordinator refuses one that doesn't
@@ -104,7 +105,7 @@ func Marshal(v any) ([]byte, error) {
 }
 
 // Unmarshal decodes a body as the API reads it, as strictly as its schema
-// (Schemas): a member the type doesn't have, or one given twice, is an
+// (plan.Schemas): a member the type doesn't have, or one given twice, is an
 // error, and so is one that Marshal always writes that is missing, null,
 // which Marshal never writes but for data that holds nothing, and what a
 // package plan type the body holds refuses, such as an outcome that isn't

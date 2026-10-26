@@ -79,7 +79,7 @@
         },
         "job": {
           "description": "The job as Ready evaluated it, as plan.EncodeReadyJob writes it.",
-          "$ref": "../../../plan/schema/1/readyjob.schema.json"
+          "$ref": "readyjob.schema.json"
         },
         "attempt": {
           "type": "integer",
@@ -107,13 +107,13 @@
         },
         "run": {
           "description": "The run's values that the job reads.",
-          "$ref": "../../../plan/schema/1/runvalues.schema.json"
+          "$ref": "runvalues.schema.json"
         },
         "needs": {
           "description": "The results of the jobs it needs, by name.",
           "type": "object",
           "additionalProperties": {
-            "$ref": "../../../plan/schema/1/jobresult.schema.json"
+            "$ref": "jobresult.schema.json"
           }
         },
         "runDir": {
@@ -181,7 +181,7 @@
           "type": "boolean"
         },
         "reason": {
-          "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Reason"
+          "$ref": "plan.schema.json#/$defs/Reason"
         },
         "graceSeconds": {
           "type": "integer",
@@ -239,7 +239,7 @@
           "type": "boolean"
         },
         "outcome": {
-          "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Outcome"
+          "$ref": "plan.schema.json#/$defs/Outcome"
         },
         "exitCode": {
           "type": "integer",
@@ -298,10 +298,10 @@
           "maximum": 9223372036854775807
         },
         "result": {
-          "$ref": "../../../plan/schema/1/jobresult.schema.json"
+          "$ref": "jobresult.schema.json"
         },
         "reason": {
-          "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Reason"
+          "$ref": "plan.schema.json#/$defs/Reason"
         },
         "problem": {
           "$ref": "#/$defs/Problem"
@@ -316,7 +316,7 @@
     "Diagnostics": {
       "type": "array",
       "items": {
-        "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Diagnostic"
+        "$ref": "plan.schema.json#/$defs/Diagnostic"
       }
     },
     "Problem": {
@@ -351,7 +351,7 @@
         "errors": {
           "type": "array",
           "items": {
-            "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Diagnostic"
+            "$ref": "plan.schema.json#/$defs/Diagnostic"
           }
         }
       },
