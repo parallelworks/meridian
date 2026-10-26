@@ -4,7 +4,8 @@
 // Every part of a workflow that can hold expressions is a Value, which keeps
 // each string's expressions parsed. A plan stores parsed expressions rather
 // than their source, so that a run resumed by a later release means what it
-// meant when it was compiled.
+// meant when it was compiled. The encoding is versioned (Version), and JSON
+// Schemas describe each version's (Schemas).
 //
 // The package also holds the phases after Start, each one function that
 // reaches nothing: Plan.Ready, in the coordinator, and ReadyJob.Step and

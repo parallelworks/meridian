@@ -1344,23 +1344,20 @@ A run's secret record is versioned with its plan, and encoded as it is
 (`plan.Record`): a release reads the records of the plans it reads, and the
 rules above are the record's too.
 
-Today a plan is version 1, and has no schema. Version 1 stays open until the
-first release: no release has yet stored a plan or sent one to a worker, so
-what the plan and the worker API's bodies gain before then, such as what
-Start needs, is part of version 1: the input definitions, where the parts
-withheld from them are, where the shape's decisions are, a job's `needs:`
-expression, `remote`, `sessions` and the names a session provider gave
-them, the limits, the digest of the run's own text, the pinned workflow a
-step's `uses:` names, with the reference it was resolved by, which of a
-ready job's fields were made from a variable or a password
-(`plan.ReadyJob.PrivateFields` and `SecretFields`), and the secret record;
-and in the worker API, a job's result as End gives it
-(`workerapi.Complete.Result`, a `plan.JobResult`), in place of the lists of
-outputs the end had. Version 1 no longer holds what Start resumed, as it
-resolves the inputs again ([Starting a run](#starting-a-run)): the inputs
-held for it, where their parts are, and the values a platform's resolver
-changed as they were submitted. The first release freezes it, with its
-schema, and every change after that gets a version.
+Version 1 is frozen: every change to the plan's encoding, or to the worker
+API's bodies, from here on raises the version, an addition among them. Its
+schemas are in `plan/schema/1`, a plan's (`plan.schema.json`), whose
+definitions hold the other types', and a ready job's, a secret record's, a
+run's values' and a job's result's, which name them; and the worker API's
+bodies' in `workerapi/schema/1`, which refer to the plan's
+(`plan.Schemas`, `workerapi.Schemas`). Tests check that every encoded
+type's members are what its schema describes, that golden files setting
+every member, and what Meridian encodes for every conformance case, fit
+the schemas, and that every member has the version that gave it, in plan's
+and the worker API's since tables, so that a member added later can't go in
+without a version. A value is named one way throughout, by its path with
+its context (`plan.JoinPath`), as in `inputs.region`, in the plan, the
+secret record and a run's values.
 
 ## Expressions
 

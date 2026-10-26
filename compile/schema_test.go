@@ -2,6 +2,8 @@ package compile_test
 
 import (
 	"encoding/json/v2"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
@@ -15,7 +17,8 @@ import (
 // once the run starts, the record with what Start keeps in it, and the
 // run's values, whole and as run state; and each job Ready gives,
 // instance by instance, as if what it needs succeeded, with each
-// expansion Ready makes.
+// expansion Ready makes. And the plan, the record and the run's values
+// name each value by its path, with its context (plan.JoinPath).
 func TestEncodingsFitTheSchemas(t *testing.T) {
 	plans := schematest.Schema(t, "plan/schema/1/plan.schema.json")
 	records := schematest.Schema(t, "plan/schema/1/record.schema.json")
@@ -48,6 +51,9 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 			checked++
 			schematest.Validate(t, plans, c.Name+"'s plan", encoded(t, plan.Encode, created.Plan))
 			schematest.Validate(t, records, c.Name+"'s record", encoded(t, plan.EncodeRecord, &created.Record))
+			r := created.Plan.Run
+			namedByPath(t, c.Name+"'s plan", slices.Concat(r.Secrets, r.Derived, r.Private, r.Variables))
+			namedByPath(t, c.Name+"'s record", slices.Collect(maps.Keys(created.Record.Means)))
 			res, _, err := compile.Start(ctx, created.Plan, compile.StartInput{
 				RunID: c.Name, Variables: startVariables(c), Record: created.Record, Inputs: opts.Inputs, Sessions: &testSessions{},
 			})
@@ -62,6 +68,7 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 			state := res.Keep(&record)
 			schematest.Validate(t, records, c.Name+"'s record as the run starts", encoded(t, plan.EncodeRecord, &record))
 			schematest.Validate(t, runValues, c.Name+"'s run values", encoded(t, marshal, &res.Run))
+			namedByPath(t, c.Name+"'s run values", slices.Concat(res.Run.Private, res.Run.Secrets, res.Run.Derived))
 			schematest.Validate(t, runValues, c.Name+"'s run values in run state", encoded(t, marshal, &state.Run))
 			for _, j := range created.Plan.Jobs {
 				needs := map[string]plan.JobResult{}
@@ -101,7 +108,19 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 	if checked < 150 || started < 140 || readied < 150 {
 		t.Errorf("checked %d runs, started %d and readied %d jobs, want more", checked, started, readied)
 	}
+}
 
+// namedByPath checks that each of names, which what names, names a value
+// by its path with its context, as plan.JoinPath writes it: the one rule
+// for naming a value that the plan, the record and RunValues have.
+func namedByPath(t *testing.T, what string, names []string) {
+	t.Helper()
+	for _, name := range names {
+		path := plan.SplitPath(name)
+		if !slices.Contains([]string{"inputs", "env", "org", "vars", "remote", "sessions"}, path[0]) || plan.JoinPath(path...) != name {
+			t.Errorf("%s names %q, which isn't a value's path with its context", what, name)
+		}
+	}
 }
 
 // marshal encodes v as the worker API does (workerapi.Marshal).

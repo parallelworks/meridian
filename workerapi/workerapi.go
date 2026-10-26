@@ -21,12 +21,10 @@
 // for a run whose version has it, so each reads the other's bodies
 // strictly and never meets a member it doesn't know.
 //
-// Version 1 stays open until Meridian's first release, as the plan's does
-// (docs/design.md, Plans across versions): no release has yet sent a body,
-// so what the bodies gain or change before then, such as Complete.Result
-// in place of the seven fields of outputs Complete had, is version 1's.
-// The first release freezes them, and every change after that is a
-// version.
+// Version 1 is frozen, as the plan's is (docs/design.md, Plans across
+// versions): every change to a body from here on is a version. The JSON
+// Schema of the bodies of each version is in Schemas, and refers to the
+// plan's (plan.Schemas) for what a body carries of a run.
 //
 // As it claims, a worker says the newest version it reads
 // (ClaimRequest.PlanVersion), and the coordinator refuses one that doesn't

@@ -8,10 +8,12 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
-// Values named by their paths, as Run and RunValues name the secrets, and
-// Contexts what is unknown or private: a context, then the keys that lead
-// to the value from there, a list's items by their indexes, joined with
-// dots (JoinPath). A key can hold a dot, as a submitted value's can, so a
+// Values named by their paths, as Run and RunValues name the secrets, the
+// secret record what means an expression (Record.Means), and Contexts what
+// is unknown or private: a context, then the keys that lead to the value
+// from there, a list's items by their indexes, joined with dots
+// (JoinPath). It is the one way the plan, the record and the run's values
+// name a value. A key can hold a dot, as a submitted value's can, so a
 // key's own . and ~ are written ~1 and ~0, as JSON Pointer writes / and ~,
 // and every name leads back to its value (SplitPath).
 
