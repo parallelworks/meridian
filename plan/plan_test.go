@@ -995,6 +995,66 @@ func TestExprsReachEveryValue(t *testing.T) {
 	}
 }
 
+// Check refuses what format 1 refuses of a reference to a workflow in Git,
+// as ACTIVATE does, once it is normal, and says nothing of any other.
+func TestSourceRefCheck(t *testing.T) {
+	// What is wrong: the reference, its $yaml or its $host, or nothing.
+	const invalid, yaml, host = "ref", "$yaml", "$host"
+	for _, tc := range []struct {
+		ref  plan.SourceRef
+		want string
+	}{
+		{plan.SourceRef{Uses: "github/acme/flows"}, ""},
+		{plan.SourceRef{Uses: " github/acme/flows.git/@release/v1.2_x "}, ""},
+		{plan.SourceRef{Uses: "github/acme/.github", Path: "/a/w.yaml"}, ""},
+		{plan.SourceRef{Uses: "github/acme/flows", Host: "not a server"}, ""},
+		{plan.SourceRef{Uses: "gitlab/g/s/p@v1", Host: " Git.Example.COM "}, ""},
+		{plan.SourceRef{Uses: "gitlab/g/p", Host: "gitlab"}, ""},
+		{plan.SourceRef{Uses: "gitlab/g/p", Path: "a..b/w..yaml"}, ""},
+		{plan.SourceRef{Uses: "marketplace/anything at all@"}, ""},
+		{plan.SourceRef{Uses: "workflow/w", Path: "../x"}, ""},
+		{plan.SourceRef{Uses: "github/acme"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/flows/more"}, invalid},
+		{plan.SourceRef{Uses: "github/ac.me/flows"}, invalid},
+		{plan.SourceRef{Uses: "github/ac_me/flows"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/fl+ows"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/.."}, invalid},
+		{plan.SourceRef{Uses: "github/acme/flows//"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/flows@"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/flows@a..b"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/flows@a~1"}, invalid},
+		{plan.SourceRef{Uses: "gitlab/p"}, invalid},
+		{plan.SourceRef{Uses: "gitlab/g/./p"}, invalid},
+		{plan.SourceRef{Uses: "gitlab/g//p"}, invalid},
+		{plan.SourceRef{Uses: "github/acme/flows", Path: "../w.yaml"}, yaml},
+		{plan.SourceRef{Uses: "gitlab/g/p", Path: "/a/../../w.yaml"}, yaml},
+		{plan.SourceRef{Uses: "gitlab/g/p", Host: "git.example.com:8443"}, host},
+		{plan.SourceRef{Uses: "gitlab/g/p", Host: "https://git.example.com"}, host},
+		{plan.SourceRef{Uses: "gitlab/g/p", Host: "git..example.com"}, host},
+		// What is wrong with the reference is found before its $yaml.
+		{plan.SourceRef{Uses: "gitlab/p", Path: "../w.yaml", Host: "x:1"}, invalid},
+	} {
+		var want error
+		switch tc.want {
+		case invalid:
+			want = problems.SourceRefInvalid.Problem(problems.Params{"ref": tc.ref.Uses})
+		case yaml:
+			want = problems.SourceWithInvalid.Problem(problems.Params{"key": "$yaml", "what": "file"})
+		case host:
+			want = problems.SourceWithInvalid.Problem(problems.Params{"key": "$host", "what": "server"})
+		}
+		got := tc.ref.Check()
+		gotJSON, _ := json.Marshal(got)
+		wantJSON, _ := json.Marshal(want)
+		if !bytes.Equal(gotJSON, wantJSON) {
+			t.Errorf("%+v.Check() = %s, want %s", tc.ref, gotJSON, wantJSON)
+		}
+	}
+	if !plan.ValidHost("git.example.com") || plan.ValidHost("") || plan.ValidHost("git.example.com.") {
+		t.Error("ValidHost reads a server otherwise than as a DNS name")
+	}
+}
+
 // A reference reads as format 1 reads it, as ACTIVATE does: two that name
 // the same workflow are equal once they are normal.
 func TestSourceRefNormal(t *testing.T) {

@@ -256,6 +256,17 @@ func (c *compiler) checkRunsOn(ctx context.Context, j *plan.Job, asked map[strin
 // built-in action.
 var workflowUses = []string{"github/", "gitlab/", "marketplace/", "workflow/"}
 
+// refProblemAt is where a problem of kind k, with params, of the reference
+// the step at loc names a workflow by is: what is wrong with the step's
+// $yaml or $host (source_with_invalid) is at it, in its with:, and
+// anything else at its uses:.
+func refProblemAt(loc []string, k *problems.Kind, params problems.Params) []string {
+	if key, _ := params["key"].(string); k == problems.SourceWithInvalid && (key == "$yaml" || key == "$host") {
+		return appendPath(loc, "with", key)
+	}
+	return appendPath(loc, "uses")
+}
+
 // pinSource resolves the workflow step's uses: names, if it names one,
 // through Sources, pins it in the step, and loads and validates its text,
 // whose errors are the run's. A workflow pinned already, as another step's,
@@ -305,6 +316,13 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 		// An empty $yaml means workflow.yaml, as ACTIVATE reads it.
 		*to = text
 	}
+	// What format 1 refuses of a reference is refused wherever the run is
+	// created, whatever Sources resolver there is, or none.
+	if err := ref.Check(); err != nil {
+		k, p, _ := workflowProblem(err)
+		c.reportAt(k, refProblemAt(loc, k, p), p)
+		return nil
+	}
 	if c.opts.Sources == nil {
 		c.reportAt(problems.ResolverMissing, usesLoc, problems.Params{"key": "uses", "interface": "Sources"})
 		return nil
@@ -322,11 +340,8 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 	w, err := c.opts.Sources.Resolve(ctx, ref)
 	if err != nil {
 		at := usesLoc
-		if k, p, ok := workflowProblem(err); ok && k == problems.SourceWithInvalid {
-			// What is wrong is the step's $yaml or $host.
-			if key, _ := p["key"].(string); key == "$yaml" || key == "$host" {
-				at = appendPath(loc, "with", key)
-			}
+		if k, p, ok := workflowProblem(err); ok {
+			at = refProblemAt(loc, k, p)
 		}
 		return c.resolverError(ctx, err, at, problems.SourceNotFound, problems.Params{"ref": s.Uses})
 	}
