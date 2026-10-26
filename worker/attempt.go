@@ -77,8 +77,11 @@ type attempt struct {
 	// anyJobFailed is fired when a job of the run has failed: this one, or
 	// another, as the coordinator says.
 	anyJobFailed *signal
-	// timedOut is fired when the job has run past its timeout:.
-	timedOut *signal
+	// timedOut is fired when the job has run past its timeout:, or its
+	// run past the run's, as the coordinator says; a step it stops is sent
+	// SIGKILL at timeoutKill.
+	timedOut    *signal
+	timeoutKill time.Time
 	// cancelJob ends the context the job's phases are evaluated in, and
 	// cancelSend the one the worker sends with.
 	cancelJob  context.CancelFunc
@@ -212,7 +215,10 @@ func (a *attempt) fireLocked(sig *signal) {
 
 // cancel records the coordinator's cancellation of the job: a step it
 // stops has its grace period, or the worker's for 0. A later one that
-// gives less time makes SIGKILL sooner.
+// gives less time makes SIGKILL sooner. One whose reason is timeout, the
+// run's, isn't a cancellation: as in format 1, the run's deadline stops
+// the job as the job's own timeout does (timedOut), so that the step it
+// stops fails, and the job with it.
 func (a *attempt) cancel(ctl *workerapi.Control) {
 	grace := seconds(ctl.GraceSeconds)
 	if grace <= 0 {
@@ -221,6 +227,10 @@ func (a *attempt) cancel(ctl *workerapi.Control) {
 	kill := time.Now().Add(grace)
 	a.stopMu.Lock()
 	defer a.stopMu.Unlock()
+	if ctl.Reason == plan.ReasonTimeout {
+		a.timeOutLocked(kill, "the run ran past its timeout")
+		return
+	}
 	switch {
 	case !a.cancelled.fired():
 		a.cancelReason, a.cancelKill = ctl.Reason, kill
@@ -228,6 +238,29 @@ func (a *attempt) cancel(ctl *workerapi.Control) {
 		a.log.Info("the coordinator cancelled the job", "reason", ctl.Reason)
 	case kill.Before(a.cancelKill):
 		a.cancelKill = kill
+		a.stopsChanged()
+	}
+}
+
+// timeOut records that the job is past a deadline, its own timeout: or
+// its run's, which says, for the worker's log: a step it stops is sent
+// SIGKILL at kill, or at an earlier time an earlier deadline gave. A
+// later deadline that gives less time makes SIGKILL sooner.
+func (a *attempt) timeOut(kill time.Time, says string) {
+	a.stopMu.Lock()
+	defer a.stopMu.Unlock()
+	a.timeOutLocked(kill, says)
+}
+
+// timeOutLocked is timeOut. Its caller holds stopMu.
+func (a *attempt) timeOutLocked(kill time.Time, says string) {
+	switch {
+	case !a.timedOut.fired():
+		a.timeoutKill = kill
+		a.fireLocked(a.timedOut)
+		a.log.Info(says)
+	case kill.Before(a.timeoutKill):
+		a.timeoutKill = kill
 		a.stopsChanged()
 	}
 }

@@ -288,6 +288,174 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+// TestRunTimeout checks that a job whose run is past its timeout, which
+// the coordinator stops with a Cancel whose reason is timeout, isn't
+// cancelled, as in format 1, whose run's deadline fails the step it stops:
+// the step fails, failure() is true after it and cancelled() false, so a
+// step whose if: is failure() comes to run, and fails without starting, as
+// a step past the deadline does, and one whose if: is cancelled() is
+// skipped; a step that outlives a cancel runs, as one does after the job's
+// own timeout; its cleanup runs; and the job ends failure, timeout.
+func TestRunTimeout(t *testing.T) {
+	t.Parallel()
+	stubborn := command("trap '' TERM; echo waiting; sleep 30")
+	stubborn.Cleanup = plan.Literal("echo cleaned > $PW_JOB_DIR/cleaned")
+	always := command("echo always")
+	always.If = cond("always()")
+	onFailure := command("echo failed")
+	onFailure.If = cond("failure()")
+	onCancel := command("echo cancelled")
+	onCancel.If = cond("cancelled()")
+	f := workerapitest.NewFake(t, newJob(stubborn, always, onFailure, command("echo skipped"), onCancel))
+	// The run's timeout, once the step has printed, and so ignores SIGTERM,
+	// with a grace of its own, shorter than the worker's.
+	sent, ended := timeoutOnFirstLog(f, 1)
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if took := ended().Sub(sent()); took < time.Second || took >= testTiming.grace {
+		t.Errorf("the step was killed %v after the run's timeout, not after its grace of 1 s", took)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 failure -1",
+		"started 1.0", "finished 1.0 success 0",
+		"finished 2.0 failure -1",
+		"finished 3.0 skipped -1",
+		"finished 4.0 skipped -1",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "waiting\n")
+	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "always\n")
+	if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "cleaned")); err != nil {
+		t.Errorf("the cleanup: command didn't run: %v", err)
+	}
+}
+
+// timeoutOnFirstLog has f stop the job for the run's timeout, with grace
+// seconds of grace, once its first step has printed, and returns when it
+// did, and when the first step ended, which the worker says.
+func timeoutOnFirstLog(f *workerapitest.Fake, grace int64) (sent, ended func() time.Time) {
+	var mu sync.Mutex
+	var at, end time.Time
+	var once sync.Once
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+			once.Do(func() {
+				mu.Lock()
+				at = time.Now()
+				mu.Unlock()
+				f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout, GraceSeconds: grace})
+			})
+		}
+		return workerapitest.Answer
+	}
+	f.OnEvent = func(e workerapi.Event) {
+		if e.Finished && e.Step == 0 && !e.Cleanup {
+			mu.Lock()
+			end = e.Time
+			mu.Unlock()
+		}
+	}
+	return func() time.Time { mu.Lock(); defer mu.Unlock(); return at },
+		func() time.Time { mu.Lock(); defer mu.Unlock(); return end }
+}
+
+// TestRunTimeoutKills checks that a step a deadline stops is killed at the
+// soonest any deadline gives: a later run's timeout that gives less grace
+// makes SIGKILL sooner, and so does the job's own timeout: after a run's
+// timeout with a long grace, as before the run's timeout was taken as
+// the job's.
+func TestRunTimeoutKills(t *testing.T) {
+	t.Parallel()
+	t.Run("a shorter grace", func(t *testing.T) {
+		t.Parallel()
+		f := workerapitest.NewFake(t, newJob(command("trap '' TERM; echo waiting; sleep 30")))
+		sent, ended := timeoutOnFirstLog(f, 20)
+		go func() {
+			// A second, with less grace, once the first has come.
+			for sent().IsZero() {
+				select {
+				case <-t.Context().Done():
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout, GraceSeconds: 1})
+		}()
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		if took := ended().Sub(sent()); took < time.Second || took > 5*time.Second {
+			t.Errorf("the step was killed %v after the run's timeout, not after the second's grace of 1 s", took)
+		}
+		checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
+	})
+	t.Run("the job's own timeout", func(t *testing.T) {
+		t.Parallel()
+		job := newJob(command("trap '' TERM; echo waiting; sleep 60"))
+		job.TimeoutSeconds = 2
+		f := workerapitest.NewFake(t, job)
+		sent, ended := timeoutOnFirstLog(f, 25)
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		// The job's timeout, 2 s after its claim, and the worker's grace
+		// after that, not the run's timeout's grace of 25 s.
+		if took := ended().Sub(sent()); took > 2*time.Second+testTiming.grace+3*time.Second {
+			t.Errorf("the step was killed %v after the run's timeout, not at the job's", took)
+		}
+		checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
+	})
+}
+
+// TestTimeoutThenCancel checks that, as in format 1, whose context keeps
+// the reason it ended with first, a job past its timeout, or whose run is,
+// that the coordinator then cancels, as an always() step runs, isn't
+// cancelled: cancelled() stays false, and a step whose if: is cancelled()
+// is skipped.
+func TestTimeoutThenCancel(t *testing.T) {
+	t.Parallel()
+	for _, deadline := range []string{"run", "job"} {
+		t.Run(deadline, func(t *testing.T) {
+			t.Parallel()
+			slowAlways := command("echo always; sleep 2")
+			slowAlways.If = cond("always()")
+			onCancel := command("echo cancelled")
+			onCancel.If = cond("cancelled()")
+			job := newJob(command("trap '' TERM; echo waiting; sleep 30"), slowAlways, onCancel)
+			if deadline == "job" {
+				job.TimeoutSeconds = 1
+			}
+			f := workerapitest.NewFake(t, job)
+			var first, second sync.Once
+			f.Fault = func(r *http.Request) workerapitest.Fault {
+				q := r.URL.Query()
+				if q.Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+					switch q.Get(workerapi.QueryStep) {
+					case "0":
+						if deadline == "run" {
+							first.Do(func() { f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout, GraceSeconds: 1}) })
+						}
+					case "1":
+						second.Do(func() { f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 1}) })
+					}
+				}
+				return workerapitest.Answer
+			}
+			if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+				t.Fatal(err)
+			}
+			checkEvents(t, f,
+				"started 0.0", "finished 0.0 failure -1",
+				"started 1.0", "finished 1.0 success 0",
+				"finished 2.0 skipped -1",
+			)
+			checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
+		})
+	}
+}
+
 // TestOutlivesCancel checks that, as in format 1, a step whose if: is
 // cancel-aware runs to its end whatever happens to its job: neither the
 // job's cancellation nor the step's own timeout: stops it, though its

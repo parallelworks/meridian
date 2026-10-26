@@ -2374,16 +2374,23 @@ is, or evaluates to, the word `always`, as a step's can be (below).
   at the timeout, so that hopper's schedule doesn't show it. The step
   running in a job whose `if:` isn't cancel-aware then fails with the
   reason `timeout`, and so does its job; a cancel-aware job runs on, as
-  after a cancel. Jobs not yet readied take the same three paths as after
-  a cancel. The run's outcome then comes from its jobs, as format 1's
-  does: failure if one failed, as a stopped one has, or was skipped
-  because its needs failed, with the reason `timeout`, which Meridian adds
-  since format 1 records none; and success when nothing failed, as when
-  only cancel-aware jobs were left and they succeeded.
+  after a cancel. The job's worker is told to stop it with the reason
+  `timeout`, which it takes as the job's own timeout, below. Jobs not yet
+  readied take the same three paths as after a cancel. The run's outcome
+  then comes from its jobs, as format 1's does: failure if one failed, as
+  a stopped one has, or was skipped because its needs failed, with the
+  reason `timeout`, which Meridian adds since format 1 records none; and
+  success when nothing failed, as when only cancel-aware jobs were left
+  and they succeeded.
 - **A job's own timeout** ends only that job, and the worker enforces it.
-  The job isn't cancelled: the step it was running fails, so `failure()`
-  is true after it and `cancelled()` false, and the job fails with the
-  reason `timeout`, as in format 1. The run goes on: the jobs that need it
+  The job isn't cancelled: the step it was running fails, and so does one
+  that comes to run after it, so `failure()` is true after it and
+  `cancelled()` false, even if a cancel follows, and the job fails with
+  the reason `timeout`, as in format 1, whose context keeps the reason it
+  ended with first. That is so when the timeout stops a step, or one is
+  still to run: one that comes once no such step is left, as during a
+  last step that outlives a cancel, or the cleanups, leaves the job
+  ending as its steps did. The run goes on: the jobs that need it
   are skipped because their needs failed, and those whose `if:` calls
   `failure()` run. The coordinator enforces it too, as a backstop for a
   worker that doesn't: once the job's timeout, the worker's own time to
