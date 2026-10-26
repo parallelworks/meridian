@@ -112,19 +112,3 @@ func BenchmarkSuggest(b *testing.B) {
 		hint.Suggest("nothing-like-any-of-them", names)
 	}
 }
-
-func TestJoinList(t *testing.T) {
-	for _, tc := range []struct {
-		items []string
-		want  string
-	}{
-		{nil, ""},
-		{[]string{"a"}, "a"},
-		{[]string{"a", "b"}, "a or b"},
-		{[]string{"a", "b", "c"}, "a, b or c"},
-	} {
-		if got := hint.JoinList(tc.items, "or"); got != tc.want {
-			t.Errorf("JoinList(%q) = %q, want %q", tc.items, got, tc.want)
-		}
-	}
-}

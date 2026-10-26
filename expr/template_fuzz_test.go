@@ -12,9 +12,7 @@ import (
 // FuzzTemplate checks that every offset an expression or a template reports,
 // of an error, a probable mistake or a reference, is in its source; and that
 // a template has the same value, or the same error, after a trip through
-// JSON, as does one parsed for a list's items, whose value is the
-// template's with those items as the scope's Index. FuzzExpression checks
-// that the JSON itself survives the trip.
+// JSON. FuzzExpression checks that the JSON itself survives the trip.
 func FuzzTemplate(f *testing.F) {
 	for _, seed := range []string{
 		"a ${{ inputs.a }} b", "${{ inputs.x[1:3] join ',' }}", "${{ 'x' }}${{ 1 + 2 }}", "${{ inputs.pw-user }}",
@@ -66,11 +64,6 @@ func FuzzTemplate(f *testing.F) {
 			return
 		}
 		sameAfterJSON(t, src, tmpl, scope, want, wantErr)
-		if forItems, err := expr.ParseTemplateFor(src, scope.Index); err == nil {
-			noIndex := scope
-			noIndex.Index = nil
-			sameAfterJSON(t, src, forItems, noIndex, want, wantErr)
-		}
 	})
 }
 

@@ -1,5 +1,4 @@
-// Package hint helps diagnostics say what was probably meant, and list
-// things as a sentence does.
+// Package hint helps diagnostics say what was probably meant.
 package hint
 
 import (
@@ -119,13 +118,4 @@ func (d *distance) within(b string, k int) int {
 		prev, cur = cur, prev
 	}
 	return min(prev[n], over)
-}
-
-// JoinList joins items as a sentence does, with conj, such as "and", before
-// the last: "a", "a and b", "a, b and c".
-func JoinList(items []string, conj string) string {
-	if len(items) < 2 {
-		return strings.Join(items, "")
-	}
-	return strings.Join(items[:len(items)-1], ", ") + " " + conj + " " + items[len(items)-1]
 }
