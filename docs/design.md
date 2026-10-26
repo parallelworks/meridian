@@ -2302,7 +2302,7 @@ A run stops early when a person cancels it, or when it runs past its own
 `timeout:`, and does what format 1 does in each case. Either way, what
 happens to a job depends on whether its `if:` is cancel-aware: whether it
 calls `always()` or `cancelled()`, negates `success()` or `failure()`, or
-is the word `always`, as a step's can be (below).
+is, or evaluates to, the word `always`, as a step's can be (below).
 
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
@@ -2336,7 +2336,8 @@ is the word `always`, as a step's can be (below).
     above.
   - **One that calls a status function, or reads `needs` or `env`**, and
     isn't cancel-aware, waits until its needs have ended, then ends
-    cancelled, without its `if:` being evaluated.
+    cancelled, unless its `if:` then evaluates to the word `always`, when
+    it runs on as above.
   - **Any other**, a job with no `if:` among them, ends at once, skipped
     because its needs failed, as format 1 ends a job whose dependency
     failed. A job that needs none was readied when the run started, so
