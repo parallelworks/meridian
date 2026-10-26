@@ -80,6 +80,18 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 		selfFence = rj.Retry != nil && slices.Contains(rj.Retry.Reasons, plan.ReasonWorkerLost)
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
+		// Not once the run has stopped since the look, which the stop
+		// may not have told: the supervisor looks again, and ends the
+		// job, unless it outlives the stop (placesNoMore).
+		if run.StoppedAt.IsZero() {
+			now, err := tx.Run(run.ID)
+			switch {
+			case err != nil:
+				return err
+			case !now.StoppedAt.IsZero():
+				return store.ErrState
+			}
+		}
 		// Only of the job as the look saw it: a supervisor rescued from a
 		// replica still running it doesn't supersede the attempt the other
 		// made meanwhile.

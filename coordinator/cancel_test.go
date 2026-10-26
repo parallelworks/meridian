@@ -459,3 +459,199 @@ func TestJobTimeoutBackstop(t *testing.T) {
 		t.Errorf("a job's timeout stopped the run: %+v", r)
 	}
 }
+
+// TestStopBetweenAttempts checks that a job between attempts as its run
+// stops, waiting to be placed again after a failure before its first
+// step, isn't placed again: it ends cancelled after a cancel, and failed,
+// with the reason timeout, after the run's timeout.
+func TestStopBetweenAttempts(t *testing.T) {
+	for _, tc := range []struct {
+		name, workflow string
+		outcome        plan.Outcome
+		reason         plan.Reason
+	}{
+		{"cancel", oneJob, plan.OutcomeCancelled, plan.ReasonCancelled},
+		{"timeout", timedOut, plan.OutcomeFailure, plan.ReasonTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := open(t, Options{})
+			c.supervision.setup = []time.Duration{time.Minute, time.Minute, time.Minute}
+			failSetup(c, setupProblems[0])
+			id, _ := create(t, c, tc.workflow, nil, nil)
+			serve(t, c)
+			latestIs(t, c, id, "main", func(a *store.Attempt) bool { return a.End.Reason == plan.ReasonSetupFailed })
+			if tc.reason == plan.ReasonCancelled {
+				if err := c.Cancel(t.Context(), id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := waitEnded(t, c, id)
+			if r.Outcome != tc.outcome || r.StopReason != tc.reason {
+				t.Errorf("the run ended %s, stopped for %s", r.Outcome, r.StopReason)
+			}
+			if j := storedJob(t, c, id, "main"); j.Outcome != tc.outcome || j.Reason != tc.reason || j.Attempts != 1 {
+				t.Errorf("the job is %+v", j)
+			}
+			if placed := placedJobs(c); len(placed) != 1 {
+				t.Errorf("the job was placed %d times", len(placed))
+			}
+		})
+	}
+}
+
+// TestStopWhilePlacing checks that a run stopped after its job's supervisor
+// looked, and before it made the job's attempt, has no attempt made: the
+// supervisor looks again, and ends the job, which doesn't outlive the stop.
+func TestStopWhilePlacing(t *testing.T) {
+	c := open(t, Options{})
+	id, _ := create(t, c, oneJob, nil, nil)
+	var once sync.Once
+	driverOf(c).set(func(d *testDriver) {
+		d.probe = func(*backend.Member) (backend.Fit, error) {
+			// The look began before the stop, and the attempt would be
+			// made after it.
+			once.Do(func() {
+				if err := c.Cancel(context.WithoutCancel(t.Context()), id); err != nil {
+					t.Error(err)
+				}
+			})
+			return backend.Fit{Availability: backend.StartsNow}, nil
+		}
+	})
+	serve(t, c)
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Attempts != 0 {
+		t.Errorf("the job is %+v", j)
+	}
+	if placed := placedJobs(c); len(placed) != 0 {
+		t.Errorf("the job was placed: %v", placed)
+	}
+}
+
+// TestCancelIfAlways checks that a job readied before a cancel, whose if:
+// was read once its needs had ended, and evaluated to the word always,
+// runs on through the cancel: its placement isn't withdrawn, and its
+// worker runs it.
+func TestCancelIfAlways(t *testing.T) {
+	c := open(t, Options{})
+	release := make(chan struct{})
+	byJob(c, map[string]testEnd{
+		"a": {result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"mode": "always"}}},
+		"b": {result: plan.JobResult{Outcome: plan.OutcomeSuccess}, wait: release},
+	})
+	id, _ := create(t, c, `
+jobs:
+  a:
+    steps:
+      - run: echo mode=always >> $OUTPUTS
+  b:
+    needs: [a]
+    if: ${{ needs.a.outputs.mode }}
+    steps:
+      - run: echo b
+`, nil, nil)
+	serve(t, c)
+	latestIs(t, c, id, "b", func(a *store.Attempt) bool { return a.Placement.ID != "" })
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	c.wakeJob(t.Context(), id, "b")
+	close(release)
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	if j := storedJob(t, c, id, "b"); j.Outcome != plan.OutcomeSuccess || j.Attempts != 1 {
+		t.Errorf("b, whose if: is always once a has ended, is %+v", j)
+	}
+	if a := latestAttempt(t, c, id, "b"); a.End.Kind != store.EndCompleted {
+		t.Errorf("b's attempt is %+v", a)
+	}
+}
+
+// TestStopTwice checks that the first stop of a run is its record: a
+// cancel after the run's timeout, or the run's timeout after a cancel,
+// changes nothing, neither the run's outcome nor what its worker is told.
+func TestStopTwice(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first, second plan.Reason
+		outcome       plan.Outcome
+	}{
+		{"cancel first", plan.ReasonCancelled, plan.ReasonTimeout, plan.OutcomeCancelled},
+		{"timeout first", plan.ReasonTimeout, plan.ReasonCancelled, plan.OutcomeFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, d := openStop(t, map[string]string{"main": hold})
+			id, _ := create(t, c, oneJob, nil, nil)
+			serve(t, c)
+			a := latestIs(t, c, id, "main", running)
+			for _, reason := range []plan.Reason{tc.first, tc.second} {
+				if err := c.stop(t.Context(), id, reason); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if ctl := controlOf(t, c, a.ID); !ctl.Cancel || ctl.Reason != tc.first {
+				t.Errorf("the attempt's control is %+v", ctl)
+			}
+			close(d.release)
+			r := waitEnded(t, c, id)
+			if r.StopReason != tc.first || r.Outcome != tc.outcome {
+				t.Errorf("the run ended %s, stopped for %s", r.Outcome, r.StopReason)
+			}
+		})
+	}
+}
+
+// TestCancelPlacing checks a cancel as the job's placement is made, once
+// its attempt is: the attempt is told, its placement is withdrawn once it
+// is recorded, and the job ends cancelled.
+func TestCancelPlacing(t *testing.T) {
+	c, d := openStop(t, map[string]string{"main": never})
+	id, _ := create(t, c, oneJob, nil, nil)
+	var once sync.Once
+	d.set(func(td *testDriver) {
+		td.place = func(backend.PlaceRequest) error {
+			once.Do(func() {
+				if err := c.Cancel(context.WithoutCancel(t.Context()), id); err != nil {
+					t.Error(err)
+				}
+			})
+			return nil
+		}
+	})
+	serve(t, c)
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	a := latestAttempt(t, c, id, "main")
+	if a.End.Kind != store.EndWithdrawn {
+		t.Errorf("the attempt is %+v", a)
+	}
+	if w := d.withdrawn(); len(w) != 1 || w[0] != a.ID {
+		t.Errorf("the backend cancelled %v", w)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled {
+		t.Errorf("the job is %+v", j)
+	}
+}
+
+// TestCancelClaiming checks a cancel as a worker claims its attempt:
+// whether the claim or the withdrawal comes first, the job ends
+// cancelled, and so does the run.
+func TestCancelClaiming(t *testing.T) {
+	c, _ := openStop(t, map[string]string{"main": late})
+	id, _ := create(t, c, oneJob, nil, nil)
+	serve(t, c)
+	latestIs(t, c, id, "main", func(a *store.Attempt) bool { return a.Placement.ID != "" })
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled {
+		t.Errorf("the job is %+v", j)
+	}
+}

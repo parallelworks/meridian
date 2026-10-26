@@ -2429,11 +2429,18 @@ for any other only once they have (`plan.Plan.CancelPath`).
   timeout has passed, so that its steps end as format 1's do when they
   start under the passed deadline, failing but for those that outlive a
   cancel and a last try that ignores its errors. A running attempt that
-  is stopped is waited for while
-  it renews its lease, since its cleanups have no timeout, and withdrawn
-  as a placement is if its lease lapses. `meridian cancel` stores the
-  record whether or not a coordinator is running, and withdraws
-  placements itself when none is.
+  is stopped is waited for while it renews its lease, since its cleanups
+  have no timeout, and withdrawn as a placement is if its lease lapses.
+  A job between attempts when the run stops, readied before the stop, as
+  one waiting to be placed again after a failure before its first step,
+  or for a backend to answer, isn't placed again, unless it outlives the
+  stop: it ends cancelled after a cancel, as a placement withdrawn does,
+  and failed, with the reason `timeout`, after the run's timeout. Format 1
+  would start it under the passed deadline, which would run its steps
+  that outlive a cancel; here they don't run. No attempt is made once the
+  run has stopped since the job's supervisor looked: it looks again.
+  `meridian cancel` stores the record whether or not a coordinator is
+  running, and withdraws placements itself when none is.
 - **A running job, when a person cancels the run**, has the step it is
   running stopped, if its `if:` isn't cancel-aware: SIGTERM, then SIGKILL
   after a grace period. The step and the job end cancelled, and the job's

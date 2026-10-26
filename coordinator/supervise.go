@@ -190,6 +190,14 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 			return c.matrixStep(ctx, run, job, done)
 		}
 	}
+	// A job between attempts as its run stops, which it doesn't outlive,
+	// ends as the stop says: nothing places it again.
+	if stopped, err := c.placesNoMore(ctx, run, job, a); err != nil || stopped {
+		if err != nil {
+			return 0, err
+		}
+		return 0, c.endJob(ctx, run.ID, job.Key, stopEnd(run.StopReason), done)
+	}
 	switch {
 	case a == nil:
 		return c.placeJob(ctx, run, job, done)

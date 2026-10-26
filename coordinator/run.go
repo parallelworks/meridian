@@ -221,6 +221,10 @@ type Coordinator struct {
 	// timeouts by "run" and the run's ID, as the coordinator read them
 	// (jobTimeout, runTimeout).
 	timeouts map[string]time.Duration
+	// outlives says, by the run's ID and the job's key, whether a job of a
+	// stopped run outlives the stop, as the coordinator read it
+	// (jobOutlives).
+	outlives map[string]bool
 }
 
 // Open opens a coordinator on the store at opts.Database. It works no
@@ -259,6 +263,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, timeouts: map[string]time.Duration{},
+		outlives: map[string]bool{},
 	}
 	if opts.ReadOnly {
 		// Neither seals nor inserts anything.

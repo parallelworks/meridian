@@ -163,10 +163,12 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	for _, key := range readied {
 		c.wakeJob(ctx, run.ID, key)
 	}
+	// The stop is stored: a job that can't be ended now, its supervisor
+	// ends once its needs have, as stopped.
 	run.StoppedAt, run.StopReason = time.Now(), reason
 	for _, key := range paths.skipNow {
 		if err := c.endUnreadied(ctx, run, key); err != nil {
-			return err
+			c.log.WarnContext(ctx, "coordinator: a job of a stopped run couldn't be ended at once, so its supervisor ends it", "run", run.ID, "job", key, "error", err)
 		}
 	}
 	return nil
@@ -242,9 +244,18 @@ func (c *Coordinator) readiedOutlives(ctx context.Context, run *store.Run, j *st
 	return r.result.Job != nil && r.result.Job.IfAlways, nil
 }
 
-// jobOutlives reports whether the readied job j of run outlives the run's
-// stop.
+// jobOutlives reports whether the readied job j of run, which has been
+// stopped, outlives the stop. The answer never changes once the run is
+// stopped, and the coordinator keeps it, rather than open the run's
+// secret record at each look.
 func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.Job) (bool, error) {
+	id := run.ID + "/" + j.Key
+	c.mu.Lock()
+	outlives, ok := c.outlives[id]
+	c.mu.Unlock()
+	if ok {
+		return outlives, nil
+	}
 	p, err := c.plans.get(run)
 	if err != nil {
 		return false, err
@@ -257,7 +268,48 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 	if err != nil {
 		return false, err
 	}
-	return c.readiedOutlives(ctx, run, j, path)
+	if outlives, err = c.readiedOutlives(ctx, run, j, path); err != nil {
+		return false, err
+	}
+	c.mu.Lock()
+	if len(c.outlives) >= maxTimeouts {
+		clear(c.outlives)
+	}
+	c.outlives[id] = outlives
+	c.mu.Unlock()
+	return outlives, nil
+}
+
+// placesNoMore reports whether the job, whose latest attempt is a, or nil
+// before its first, has no attempt that runs, nor one whose worker's end
+// is the job's, and was readied before its run stopped, which it doesn't
+// outlive: its supervisor
+// places no attempt of it again, as after a failure before its first step,
+// or once a backend answers, and ends it as the stop says (stopEnd).
+func (c *Coordinator) placesNoMore(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (bool, error) {
+	switch {
+	case run.StoppedAt.IsZero(), job.ReadyAt.IsZero(), job.ReadiedStopped:
+		// A job readied once the run had stopped is as Ready gave it.
+		return false, nil
+	case a == nil:
+	case a.State != store.AttemptEnded:
+		return false, nil
+	case a.End.Kind == store.EndCompleted && a.End.Reason != plan.ReasonSetupFailed:
+		// Its worker's end is the job's.
+		return false, nil
+	}
+	outlives, err := c.jobOutlives(ctx, run, job)
+	return !outlives, err
+}
+
+// stopEnd is how a job of a run stopped for reason that doesn't outlive the
+// stop ends, as no worker ended it: cancelled after a cancel; failed, with
+// the reason timeout, after the run's timeout.
+func stopEnd(reason plan.Reason) store.JobEnd {
+	if reason == plan.ReasonTimeout {
+		return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonTimeout}
+	}
+	return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}, Reason: plan.ReasonCancelled}
 }
 
 // runValues are run's values, the run's state's and its secret record's
@@ -382,10 +434,7 @@ func (c *Coordinator) liveAttempt(ctx context.Context, run *store.Run, job *stor
 // ends cancelled, or failed with the reason timeout.
 func (c *Coordinator) stoppedAttempt(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	reason := run.StopReason
-	end := store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}, Reason: plan.ReasonCancelled}
-	if reason == plan.ReasonTimeout {
-		end = store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonTimeout}
-	}
+	end := stopEnd(reason)
 	if reason == plan.ReasonCancelled && a.State == store.AttemptPlacing {
 		return 0, c.withdraw(ctx, run, job, a, end, done)
 	}
