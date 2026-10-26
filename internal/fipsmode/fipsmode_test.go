@@ -52,16 +52,29 @@ func withoutGODEBUG(env []string) []string {
 	return out
 }
 
-// Only the mode only passes; any other is fips_not_enforced, with the
-// mode.
+// Only the mode only, with a validated module, passes; any other mode is
+// fips_not_enforced, and the module latest, compiled from Go's source,
+// fips_module_not_validated.
 func TestCheck(t *testing.T) {
-	if err := fipsmode.Check("only"); err != nil {
+	if err := fipsmode.Check("only", "v1.0.0"); err != nil {
 		t.Errorf("only: %v", err)
 	}
 	for _, mode := range []string{"on", "off"} {
-		p, ok := errors.AsType[*problem.Problem](fipsmode.Check(mode))
+		p, ok := errors.AsType[*problem.Problem](fipsmode.Check(mode, "v1.0.0"))
 		if !ok || p.Code != problems.FIPSNotEnforced.Code() || p.Params["mode"] != mode {
 			t.Errorf("%s: %v", mode, p)
 		}
+	}
+	p, ok := errors.AsType[*problem.Problem](fipsmode.Check("only", "latest"))
+	if !ok || p.Code != problems.FIPSModuleNotValidated.Code() || p.Params["version"] != "latest" {
+		t.Errorf("the module latest: %v", p)
+	}
+}
+
+// The test binary is built as make builds it, with the validated module
+// (GOFIPS140=certified).
+func TestModule(t *testing.T) {
+	if module := fipsmode.Module(); module == "latest" || module == "" {
+		t.Errorf("the module is %q: run the tests with GOFIPS140=certified, as make does", module)
 	}
 }

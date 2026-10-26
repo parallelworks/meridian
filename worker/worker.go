@@ -100,9 +100,10 @@ const memorySpoolLimit = 64 << 20
 // it.
 //
 // It refuses to run unless the process's cryptography runs in FIPS 140-3
-// mode, enforced (fipsmode), whatever program it runs in.
+// mode, enforced, with the validated module (fipsmode), whatever program
+// it runs in.
 func Run(ctx context.Context, cfg Config) error {
-	if err := fipsmode.Check(fipsmode.Mode()); err != nil {
+	if err := fipsmode.CheckProcess(); err != nil {
 		return err
 	}
 	return run(ctx, cfg, defaultTiming, harden)

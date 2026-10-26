@@ -32,7 +32,7 @@ make fmt    # format Go code
 ```sh
 make test                      # all tests
 make test-race                 # all tests, with the race detector
-go test -run TestName ./...    # one test
+GOFIPS140=certified go test -run TestName ./...    # one test
 ```
 
 Tests run in FIPS 140-3 mode: `GODEBUG=fips140=only` comes from `go.mod`, and
@@ -40,5 +40,8 @@ Tests run in FIPS 140-3 mode: `GODEBUG=fips140=only` comes from `go.mod`, and
 are. `make` also builds without cgo (`CGO_ENABLED=0`), except for the race
 detector, which needs cgo on Linux; nothing built with it ships. A plain
 `go test` uses the toolchain's newer FIPS module, and cgo when a C compiler is
-installed, so use `make` to match CI. If a test fails with a FIPS error, the fix is an approved
-algorithm, not a different flag.
+installed, so use `make` to match CI. The `meridian` command, and the worker,
+refuse to run with a FIPS module that isn't the validated one, so the tests
+of `cmd/meridian` fail under a plain `go test`: set `GOFIPS140=certified`, as
+`make` does, or `go env -w GOFIPS140=certified` once. If a test fails with a
+FIPS error, the fix is an approved algorithm, not a different flag.

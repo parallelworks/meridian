@@ -34,18 +34,26 @@ func runCLI(t *testing.T, vars map[string]string, stdin string, args ...string) 
 // TestFIPSRequired checks that no command runs, help and the worker
 // included, unless the process's cryptography runs in FIPS 140-3 mode,
 // enforced, as GODEBUG could otherwise turn it off.
+//
+// The test process itself must be built with the validated module
+// (GOFIPS140=certified, as make sets it) for the commands of the other
+// tests to run.
 func TestFIPSRequired(t *testing.T) {
-	for _, mode := range []string{"off", "on"} {
+	for _, tc := range []struct{ mode, module, code string }{
+		{"off", "v1.0.0", "fips_not_enforced"},
+		{"on", "v1.0.0", "fips_not_enforced"},
+		{"only", "latest", "fips_module_not_validated"},
+	} {
 		for _, args := range [][]string{{"version"}, {"help"}, {"worker"}, {"validate", "workflow.yaml"}} {
 			var stdout, stderr strings.Builder
 			c := &cli{
 				stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
 				lookupEnv: func(string) (string, bool) { return "", false },
-				fips:      func() string { return mode },
+				fips:      func() (string, string) { return tc.mode, tc.module },
 			}
 			code := run(t.Context(), c, args)
-			if code != exitError || stdout.Len() > 0 || !strings.Contains(stderr.String(), "(fips_not_enforced)") {
-				t.Errorf("meridian %s with FIPS 140-3 %s: %d, %q, %q", args, mode, code, stdout.String(), stderr.String())
+			if code != exitError || stdout.Len() > 0 || !strings.Contains(stderr.String(), "("+tc.code+")") {
+				t.Errorf("meridian %s with FIPS 140-3 %s, module %s: %d, %q, %q", args, tc.mode, tc.module, code, stdout.String(), stderr.String())
 			}
 		}
 	}

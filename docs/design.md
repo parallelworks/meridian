@@ -2793,10 +2793,14 @@ Releases are built with Go's FIPS 140-3 cryptographic module
 the use of a non-approved algorithm into an error. The binary makes that
 its default, but a default is all it is: the `GODEBUG` environment
 variable overrides it, and a worker can be started by hand, or over SSH,
-with any environment. So no `meridian` command runs, the worker above
-all, unless the process's cryptography runs in FIPS 140-3 mode, enforced
-(`fips_not_enforced`), and `worker.Run` checks it too, whatever program
-calls it.
+with any environment. And a build without `GOFIPS140` compiles the
+module from Go's source, as the version `latest`, which isn't the
+validated module in any mode. So no `meridian` command runs, the worker
+above all, unless the process's cryptography runs in FIPS 140-3 mode,
+enforced (`fips_not_enforced`), with a validated module
+(`fips_module_not_validated`); `worker.Run` checks both too, whatever
+program calls it, as every entry point of Meridian's must
+(`internal/fipsmode`).
 
 - **TLS 1.3**, through `crypto/tls`, with the algorithms FIPS mode allows.
   The coordinator's certificate uses an ECDSA P-256 key.
