@@ -40,6 +40,8 @@ import (
 
 	"github.com/parallelworks/hopper/driver/hoppersqlite"
 	"github.com/parallelworks/hopper/hoppermigrate"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
@@ -106,7 +108,9 @@ var openSQLite = hoppersqlite.OpenContext
 // it isn't there, readable only by its user, and brings its schema,
 // hopper's and Meridian's, up to this release's, as several processes may
 // do at once. It waits for another process that holds the database for as
-// long as ctx allows.
+// long as ctx allows, and while SQLite reports the database busy as it
+// opens it or migrates it, as it can when processes open a new database at
+// once, for up to openBusyFor.
 //
 // Whoever can write the database can claim an attempt, and with it the
 // private values its job reads, so Open trusts nothing at path that
@@ -134,13 +138,50 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := openSQLite(ctx, path, nil)
-	if errors.Is(err, hoppersqlite.ErrNetworkFilesystem) {
-		if created {
-			_ = os.Remove(path) //nolint:gosec // the empty file Open made just now
+	start, wait := time.Now(), openBusyFirstWait
+	for {
+		s, err := openOnce(ctx, path, log)
+		switch {
+		case errors.Is(err, hoppersqlite.ErrNetworkFilesystem):
+			if created {
+				_ = os.Remove(path) //nolint:gosec // the empty file Open made just now
+			}
+			return nil, networkFilesystem(path, err)
+		case !busy(err):
+			return s, err
+		case time.Since(start)+wait > openBusyFor:
+			return nil, fmt.Errorf("store: the database was busy for %s as it opened: %w", time.Since(start).Round(time.Millisecond), err)
 		}
-		return nil, networkFilesystem(path, err)
+		log.DebugContext(ctx, "store: the database is busy as it opens; trying again", "error", err, "after", wait)
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, fmt.Errorf("store: the database was busy for %s as it opened: %w", time.Since(start).Round(time.Millisecond), errors.Join(ctx.Err(), err))
+		case <-t.C:
+		}
+		wait = min(2*wait, openBusyMaxWait)
 	}
+}
+
+// openBusyFor is the longest Open tries for while SQLite reports the
+// database busy as it opens it, and openBusyFirstWait and openBusyMaxWait
+// the shortest and the longest it waits between tries, doubling from the
+// one to the other. A connection that hoppersqlite opens sets itself up,
+// before its statements wait for another's lock, with statements that wait
+// for one no more than 50 ms: when processes open a new database at once,
+// one of them sets its connection up while another holds the database to
+// turn its write-ahead log on.
+const (
+	openBusyFor       = time.Minute
+	openBusyFirstWait = 10 * time.Millisecond
+	openBusyMaxWait   = time.Second
+)
+
+// openOnce opens the store at path once, and brings its schema up to this
+// release's.
+func openOnce(ctx context.Context, path string, log *slog.Logger) (*Store, error) {
+	d, err := openSQLite(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +190,13 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 		return nil, errors.Join(err, d.Close())
 	}
 	return s, nil
+}
+
+// busy reports whether err is SQLite's, of its busy family: another
+// connection held a lock it needed for longer than it waited.
+func busy(err error) bool {
+	var e *sqlite.Error
+	return errors.As(err, &e) && e.Code()&0xff == sqlite3.SQLITE_BUSY
 }
 
 // sqliteFiles are the suffixes of the files SQLite keeps beside a
