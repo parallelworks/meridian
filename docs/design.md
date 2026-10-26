@@ -309,6 +309,22 @@ files.
   reads `env.PW_API_KEY`. ACTIVATE takes the same fix by leaving it out of
   the env map its parser reads, while keeping it in the step's process
   environment.
+- **`sessions:` and `links:` read the inputs' values as the run has
+  them**, defaults filled in and ignored inputs dropped, as the workflow's
+  `env:` and its jobs read them, where ACTIVATE evaluated both with the
+  inputs as they were submitted, before their defaults were filled in, so
+  that a session or a link read an input given no value as null, and an
+  ignored input's value. Meridian checks `links:` but doesn't make them
+  yet; it will read them so. ACTIVATE takes the same fix by evaluating
+  both with the values it fills in. Of the 221 known workflows, 16 have
+  `sessions:`, none writes an expression in them, and none has `links:`.
+- **An expression in `sessions:` or `links:` can't read `env`, `needs` or
+  `steps`**: it is an error as the run is created (`context_not_known`),
+  as in the workflow's `env:`, where ACTIVATE left such an expression for
+  the worker to evaluate, which neither reaches, so the session or the
+  link was made with the expression's text. ACTIVATE takes the same fix by
+  refusing it as the run is created. None of the 16 workflows with
+  `sessions:` writes an expression in them, and none has `links:`.
 - **An ignored group with `flatten: true` drops its inputs' values in a
   group that flattens or a wizard step that flattens too**, as it does
   anywhere else, where ACTIVATE kept them: the outer container copied back
@@ -331,7 +347,7 @@ phase's inputs and keep what it gives, so every implementation, whether
 | Phase | When | Function | Contexts it adds | Evaluates |
 | --- | --- | --- | --- | --- |
 | Create | The run is created | `compile.Create`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
-| Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values again, from what was submitted, with everything known; the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
+| Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values again, from what was submitted, with everything known; the workflow's `env:`, `timeout:` and `sessions:`, and matrices whose values are known; the run's shape again |
 | Ready | A job's dependencies have finished | `plan.Plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
 | Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
 | End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
@@ -991,10 +1007,21 @@ made from one, it doesn't hold in another form either.
    can't be expanded fails the run before any job runs.
 8. **Make the sessions** of the workflow's `sessions:`, through the
    Sessions interface, under the names Create gave them, once everything
-   else has passed, so a run that fails to start makes none. Create only
-   checks them, since a run that is created may never start, and making
-   them again for the same run makes nothing more. A run with sessions
-   can't start without a session provider (`resolver_missing`).
+   else has passed, so a run that fails to start makes none. Start
+   evaluates them with the run's values, as the phases after it read them,
+   and tells the provider what evaluating them read: what is made from a
+   variable or a password is private, and from a secret masked as what is
+   made from one is. One that fails to evaluate fails the run, as an
+   `env:` value does, without showing what it read. Create only checks
+   them, as they are written, since a run that is created may never start.
+   Making them again for a run that has them makes nothing more, and a
+   rerun, whose sessions ended with the run, makes them again. A run with
+   sessions can't start without a session provider (`resolver_missing`).
+   What the provider refuses, or fails with, of sessions that read a
+   variable or a password shows nothing of them: a refusal's params are
+   masked, and any other error is Start's, saying only that the provider
+   couldn't make them ([Bug fixes to format 1](#bug-fixes-to-format-1)
+   says how `sessions:` read the inputs and `env`).
 9. **Keep** the variables it read in the secret record, and what it
    evaluated there or as run state, by whether evaluating it read a
    variable or a password ([Phases](#phases)), and its diagnostics with the

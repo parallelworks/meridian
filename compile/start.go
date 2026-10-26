@@ -182,7 +182,8 @@ func mismatch(format string, args ...any) error {
 // one differs; evaluates the workflow's timeout:; and expands each matrix
 // whose values are known by then, with plan.Expand and p's Run.Limits. Only
 // once all of that has passed does it make the run's sessions, through
-// in.Sessions, so a run that fails to start makes none. A rerun calls Start
+// in.Sessions, from its sessions: evaluated with the run's values, so a
+// run that fails to start makes none. A rerun calls Start
 // again, with the same plan and what is submitted again, and reads every
 // variable again.
 //
@@ -273,17 +274,14 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	if err := st.expand(res, scope); err != nil {
 		return nil, nil, err
 	}
-	sessions := st.sessions()
-	if sessions != nil && st.in.Sessions == nil {
-		st.report(problems.ResolverMissing, "/sessions", problems.Params{"key": "sessions", "interface": "Sessions"})
-	}
+	sessions, sessionsRead := st.sessions(scope)
 	diags := st.diagnostics()
 	if diags.HasErrors() {
 		return nil, diags, nil
 	}
 	if sessions != nil {
-		if err := st.in.Sessions.Make(ctx, st.in.RunID, sessions, maps.Clone(p.Run.SessionNames)); err != nil {
-			if err := st.resolverError(err, "/sessions"); err != nil {
+		if err := st.in.Sessions.Make(ctx, st.in.RunID, sessions, maps.Clone(p.Run.SessionNames), sessionsRead); err != nil {
+			if err := st.sessionsError(err, sessionsRead); err != nil {
 				return nil, nil, err
 			}
 			return nil, st.diagnostics(), nil
@@ -993,15 +991,60 @@ func (st *starter) expand(res *StartResult, scope expr.Scope) error {
 	return nil
 }
 
-// sessions returns the workflow's sessions:, as it writes them, for the
-// session provider, or nil if it has none.
-func (st *starter) sessions() map[string]any {
-	m, _ := st.p.Run.Sessions.Written().(map[string]any)
-	if len(m) == 0 {
+// sessions returns the workflow's sessions:, evaluated in scope, the run's,
+// for the session provider, and what evaluating them read; or nil if it has
+// none, or there is no session provider (resolver_missing), or evaluating
+// them failed, which it reports as it reports what env: gives.
+func (st *starter) sessions(scope expr.Scope) (map[string]any, expr.Read) {
+	if m, _ := st.p.Run.Sessions.Written().(map[string]any); len(m) == 0 {
+		return nil, expr.Read{}
+	}
+	if st.in.Sessions == nil {
+		st.report(problems.ResolverMissing, "/sessions", problems.Params{"key": "sessions", "interface": "Sessions"})
+		return nil, expr.Read{}
+	}
+	out, read, err := st.p.Run.Sessions.EvalRead(scope)
+	if err != nil {
+		st.reportEval([]string{"sessions"}, err, read)
+		return nil, read
+	}
+	m, _ := out.(map[string]any)
+	return m, read
+}
+
+// sessionsError reports err, the session provider's error making the
+// run's sessions, as resolverError does; but of sessions that read a
+// variable or a password as they were evaluated (read.Private), it shows
+// nothing of what they gave, which the provider's error can quote: a
+// refusal's params are masked, and any other error, which says the
+// provider couldn't make them, is one that says only that
+// (sessionsNotMade).
+func (st *starter) sessionsError(err error, read expr.Read) error {
+	if !read.Private {
+		return st.resolverError(err, "/sessions")
+	}
+	if ctxErr := st.ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if k, params, ok := workflowProblem(err); ok {
+		st.report(k, "/sessions", mask(params))
 		return nil
 	}
-	return m
+	return &sessionsNotMade{ctx: contextEnd(err)}
 }
+
+// sessionsNotMade is the error of a session provider that couldn't make
+// sessions that read a variable or a password. It says nothing of the
+// provider's error, which can quote what they gave, and wraps only the
+// context's error, where the context was done, so that the run is started
+// again after it, as after any resolver that couldn't answer.
+type sessionsNotMade struct{ ctx error }
+
+func (e *sessionsNotMade) Error() string {
+	return "compile: the session provider couldn't make the run's sessions"
+}
+
+func (e *sessionsNotMade) Unwrap() error { return e.ctx }
 
 // reportEval reports err, an error evaluating what is at loc in the
 // workflow, which read what read says: with the values it shows masked if
