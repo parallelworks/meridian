@@ -1066,6 +1066,12 @@
       "Start the run with the release of Meridian that created it, or a later one."
     ]
   },
+  "log_truncated": {
+    "why": "A step's log is stored by the coordinator as the worker uploads it. So that a job that prints without end can't fill the coordinator's disk, the coordinator keeps the bytes of an attempt's logs up to a limit on all of them together. A log that goes past it keeps its bytes to there, then this line, and nothing more of it, and the attempt's later logs keep only this line. The steps run on, and the worker is told the rest is stored.",
+    "fix": [
+      "Have the step print less, or write what it makes to a file of its own, in the run's directory, rather than to its output."
+    ]
+  },
   "workflow_too_large": {
     "why": "A workflow file is read whole, so there is a limit on its size. This one came from a stream, such as standard input, which Meridian stopped reading once it passed the limit.",
     "fix": [
@@ -1718,6 +1724,13 @@
     "why": "A run's plan, and the worker API's bodies, are versioned, and a worker says the newest version it reads as it claims an attempt. The coordinator refuses one that doesn't read the run's, before it sends anything of the run, so that no worker runs a job with a part it doesn't understand. The worker exits, and the attempt, which failed before its first step, is placed again.",
     "fix": [
       "Start workers of the same release of Meridian as the coordinator."
+    ]
+  },
+  "worker_digest_mismatch": {
+    "why": "A backend records the SHA-256 digest of the meridian binary it starts for an attempt, and a worker says its own as it claims the attempt. The coordinator refuses a claim whose digest isn't the one recorded, before it sends anything of the run: the binary was replaced between the placement and the claim, or another program claimed with the attempt's bootstrap token. The attempt fails before its first step, and is placed again.",
+    "fix": [
+      "If Meridian was upgraded while the job was being placed, nothing needs doing: the job is placed again, with the new binary.",
+      "Otherwise find out what replaced the binary, or what else read the attempt's bootstrap token."
     ]
   },
   "fips_not_enforced": {

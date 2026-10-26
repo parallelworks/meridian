@@ -118,22 +118,8 @@ func TestEveryKindIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The worker API's kinds are the coordinator's to report, as it
-	// refuses a worker's request, and no coordinator reports them yet: only
-	// workerapitest's Fake does, and workerapi names them by their codes,
-	// which its TestCodesAreKinds checks. Once something else reports one,
-	// it comes off this list.
-	awaitingCoordinator := map[string]bool{"Fenced": true, "OutOfOrder": true, "PlanTooNew": true}
-	for name := range awaitingCoordinator {
-		if _, ok := defined[name]; !ok {
-			t.Errorf("awaitingCoordinator names %s, which kinds.go doesn't define", name)
-		}
-	}
 	for _, name := range slices.Sorted(maps.Keys(defined)) {
-		switch {
-		case awaitingCoordinator[name] && defined[name]:
-			t.Errorf("something reports problems.%s now: take it off awaitingCoordinator", name)
-		case !awaitingCoordinator[name] && !defined[name]:
+		if !defined[name] {
 			t.Errorf("nothing reports problems.%s", name)
 		}
 	}
@@ -636,5 +622,66 @@ func TestKindProblem(t *testing.T) {
 	}
 	if p := ExecutionGroupUnknown.Problem(Params{"value": "cpu", "groups": `"local"`}); p.Type != "/problems/workflow/execution_group_unknown" {
 		t.Errorf("a workflow kind's problem has type %s", p.Type)
+	}
+}
+
+// A masked problem shows nothing of a value: its params and its field
+// errors' are masked, its detail is its message with them, and it has no
+// instance; one of a kind this release doesn't know shows its title.
+// Masked diagnostics show nothing of one either, and keep their code and
+// where in the workflow they are.
+func TestMaskProblem(t *testing.T) {
+	p := MemberInvalid.Problem(Params{"group": "gpu-secret", "key": "cpu", "value": "lots"})
+	p.Instance = "/members/gpu-secret"
+	p.Errors = []*problem.FieldError{{Code: MemberInvalid.Code(), Detail: "gpu-secret", Pointer: "#/member", Params: map[string]any{"group": "gpu-secret", "key": "cpu"}}}
+	masked := MaskProblem(p)
+	data, err := jsonv2.Marshal(masked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "gpu-secret") || strings.Contains(string(data), "lots") {
+		t.Errorf("the masked problem shows a value: %s", data)
+	}
+	if masked.Code != p.Code || masked.Type != p.Type || masked.Status != p.Status || masked.Title != p.Title {
+		t.Errorf("the masked problem is another kind: %+v", masked)
+	}
+	if want := `A member of the group "***" has cpu: ***, which isn't valid.`; masked.Detail != want {
+		t.Errorf("Detail = %q, want %q", masked.Detail, want)
+	}
+	if fe := masked.Errors[0]; fe.Pointer != "#/member" || fe.Params["key"] != "cpu" || fe.Params["group"] != Masked {
+		t.Errorf("the field error is masked as %+v", fe)
+	}
+	if p.Params["group"] != "gpu-secret" {
+		t.Error("MaskProblem changed the problem it masked")
+	}
+	unknown := MaskProblem(&problem.Problem{Code: "not_a_kind", Title: "Something", Detail: "gpu-secret", Params: map[string]any{"member": "gpu-secret"}})
+	if unknown.Detail != "Something" || unknown.Params["member"] != Masked {
+		t.Errorf("a problem of a kind this release doesn't know is masked as %+v", unknown)
+	}
+	if MaskProblem(nil) != nil {
+		t.Error("MaskProblem(nil) isn't nil")
+	}
+
+	diags := Diagnostics{
+		MemberInvalid.At("", Position{}, "/jobs/build/env/X", Params{"group": "gpu-secret", "key": "cpu", "value": "lots"}),
+		{problem.FieldError{Code: "not_a_kind", Detail: "gpu-secret", Params: map[string]any{"path": "/home/gpu-secret"}}},
+	}
+	maskedDiags := MaskDiagnostics(diags)
+	data, err = jsonv2.Marshal(maskedDiags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "gpu-secret") || strings.Contains(string(data), "lots") {
+		t.Errorf("the masked diagnostics show a value: %s", data)
+	}
+	if d := maskedDiags[0]; d.Code != MemberInvalid.Code() || d.Path() != "/jobs/build/env/X" || d.Params["key"] != "cpu" ||
+		d.Message() != `A member of the group "***" has cpu: ***, which isn't valid.` {
+		t.Errorf("the diagnostic is masked as %+v, %q", d, d.Message())
+	}
+	if diags[0].Params["value"] != "lots" {
+		t.Error("MaskDiagnostics changed the diagnostics it masked")
+	}
+	if MaskDiagnostics(nil) != nil {
+		t.Error("MaskDiagnostics(nil) isn't nil")
 	}
 }

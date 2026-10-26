@@ -184,6 +184,7 @@
   "run_malformed": "Run {run}'s stored plan or secret record isn't one this release reads: it names no version, or doesn't decode as the version it names, so the run can't go on.",
   "run_not_started": "Run {run} ended without starting: the coordinator couldn't start it.",
   "run_plan_newer": "Run {run}'s plan, of version {version}, holds what only a newer release of Meridian reads (this one reads version {latest} and earlier), so a release that reads it starts the run.",
+  "log_truncated": "The coordinator keeps at most {limit} bytes of an attempt's logs, so it didn't keep the rest of this one.",
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",
@@ -291,6 +292,7 @@
   "fenced": "Another attempt of the job has superseded this one, or the attempt has completed, so the coordinator refuses this request.",
   "out_of_order": "The report is out of order: the coordinator expects what comes next from {expected}, the number of the next event or the offset of a log's next byte.",
   "plan_too_new": "This worker doesn't read the version of the run's plan, so the coordinator sends it nothing of the run.",
+  "worker_digest_mismatch": "The worker that claimed the attempt runs the binary {claimed}, not {placed}, which its placement started, so the coordinator sends it nothing of the run.",
   "fips_not_enforced": "Meridian runs only with its cryptography's FIPS 140-3 mode enforced, and this process's GODEBUG has it {mode, select, on {on, but not enforced} other {off}}.",
   "fips_module_not_validated": "This meridian binary was built with the FIPS 140-3 module {version}, compiled from Go's source rather than the validated one, and Meridian runs only with the validated module.",
   "isolation_not_built": "The member \"{member}\" isolates its jobs {has_isolation, select, true {with \"{isolation}\"} other {in a container, as a member that names no isolation does}}, which its backend can't do yet. Meridian doesn't run them on the host instead, which would isolate them less.",

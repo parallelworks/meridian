@@ -20,9 +20,10 @@ import (
 // param.
 func TestCodesAreKinds(t *testing.T) {
 	for code, kind := range map[problem.Code]*problems.Kind{
-		workerapi.Fenced:     problems.Fenced,
-		workerapi.OutOfOrder: problems.OutOfOrder,
-		workerapi.PlanTooNew: problems.PlanTooNew,
+		workerapi.Fenced:               problems.Fenced,
+		workerapi.OutOfOrder:           problems.OutOfOrder,
+		workerapi.PlanTooNew:           problems.PlanTooNew,
+		workerapi.WorkerDigestMismatch: problems.WorkerDigestMismatch,
 	} {
 		if kind.Code() != code {
 			t.Errorf("%s is the code of the kind %s", code, kind.Code())
@@ -33,6 +34,9 @@ func TestCodesAreKinds(t *testing.T) {
 	}
 	if got := problems.OutOfOrder.Type().Params; !slices.Equal(got, []string{workerapi.ParamExpected}) {
 		t.Errorf("out_of_order's params are %v, want [%s]", got, workerapi.ParamExpected)
+	}
+	if got := problems.WorkerDigestMismatch.Type().Params; !slices.Equal(got, []string{workerapi.ParamPlaced, workerapi.ParamClaimed}) {
+		t.Errorf("worker_digest_mismatch's params are %v, want [%s %s]", got, workerapi.ParamPlaced, workerapi.ParamClaimed)
 	}
 }
 

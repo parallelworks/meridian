@@ -342,3 +342,83 @@ func TestMalformedRun(t *testing.T) {
 		return nil
 	})
 }
+
+// A job's part of a run's secret record is stored at the next generation
+// only, under the run's data key, which WrappedKey gives without the
+// record; JobRecords gives the parts of the jobs that have one; and the
+// run's end deletes them.
+func TestJobRecords(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	parts := func() map[string]JobRecord {
+		t.Helper()
+		var got map[string]JobRecord
+		inTx(t, s, func(tx *Tx) error {
+			var err error
+			got, err = tx.JobRecords(id, []string{"build", "test", "nothing"})
+			return err
+		})
+		return got
+	}
+	if got := parts(); len(got) != 0 {
+		t.Errorf("before any part, JobRecords = %v", got)
+	}
+	inTx(t, s, func(tx *Tx) error {
+		if key, err := tx.WrappedKey(id); err != nil || string(key) != "wrapped "+id {
+			t.Errorf("WrappedKey = %q, %v", key, err)
+		}
+		if _, err := tx.WrappedKey("9"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("WrappedKey of no run = %v, want ErrNotFound", err)
+		}
+		return tx.PutJobRecord(id, "build", 1, []byte("build 1"))
+	})
+	inTx(t, s, func(tx *Tx) error { return tx.PutJobRecord(id, "build", 2, []byte("build 2")) })
+	if got := parts(); len(got) != 1 || got["build"].Generation != 2 || string(got["build"].Sealed) != "build 2" {
+		t.Errorf("JobRecords = %v, want build's at generation 2", got)
+	}
+
+	// A generation that isn't the next changes neither the part nor its
+	// generation, and nor does a write rolled back.
+	inTx(t, s, func(tx *Tx) error {
+		for _, gen := range []uint64{0, 1, 2, 4} {
+			if err := tx.PutJobRecord(id, "build", gen, []byte("build x")); !errors.Is(err, ErrState) || !errors.Is(err, ErrRecordChanged) {
+				t.Errorf("PutJobRecord with generation %d = %v, want ErrState and ErrRecordChanged", gen, err)
+			}
+		}
+		if err := tx.PutJobRecord(id, "nothing", 1, []byte("x")); !errors.Is(err, ErrNotFound) {
+			t.Errorf("PutJobRecord of no job = %v, want ErrNotFound", err)
+		}
+		if err := tx.PutJobRecord("9", "build", 1, []byte("x")); !errors.Is(err, ErrNotFound) {
+			t.Errorf("PutJobRecord of no run = %v, want ErrNotFound", err)
+		}
+		if err := tx.PutJobRecord(id, "build", 3, nil); err == nil {
+			t.Error("PutJobRecord stored a part without its bytes")
+		}
+		return nil
+	})
+	_ = s.Tx(t.Context(), func(tx *Tx) error {
+		if err := tx.PutJobRecord(id, "build", 3, []byte("build 3")); err != nil {
+			t.Error(err)
+		}
+		return errors.New("rolled back")
+	})
+	if got := parts(); got["build"].Generation != 2 || string(got["build"].Sealed) != "build 2" {
+		t.Errorf("after a write rolled back, JobRecords = %v", got)
+	}
+	// The parts are the record's own: the run's record keeps its generation.
+	inTx(t, s, func(tx *Tx) error {
+		if rec, err := tx.Record(id); err != nil || rec.Generation != 1 {
+			t.Errorf("the run's record is %+v, %v; want generation 1", rec, err)
+		}
+		return tx.EndRun(id, plan.OutcomeSuccess, "")
+	})
+	if got := parts(); len(got) != 0 {
+		t.Errorf("once the run has ended, JobRecords = %v", got)
+	}
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.PutJobRecord(id, "build", 3, []byte("build 3")); !errors.Is(err, ErrState) {
+			t.Errorf("PutJobRecord once the run has ended = %v, want ErrState", err)
+		}
+		return nil
+	})
+}

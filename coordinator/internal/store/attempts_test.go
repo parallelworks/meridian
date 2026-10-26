@@ -28,7 +28,7 @@ func TestAttempt(t *testing.T) {
 	var token string
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		a, token, err = tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		a, token, err = placedAttempt(tx, NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
 		return err
 	})
 	switch {
@@ -177,7 +177,7 @@ func TestFence(t *testing.T) {
 	var attempts []started
 	for i := range 4 {
 		inTx(t, s, func(tx *Tx) error {
-			a, token, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+			a, token, err := placedAttempt(tx, NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
 			if err != nil {
 				return err
 			}
@@ -251,7 +251,7 @@ func TestNewToken(t *testing.T) {
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
-		a, old, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		a, old, err := placedAttempt(tx, NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
 		if err != nil {
 			return err
 		}
@@ -285,7 +285,7 @@ func TestLapse(t *testing.T) {
 	inTx(t, s, func(tx *Tx) error {
 		for _, self := range []bool{true, false} {
 			job := map[bool]string{true: "build", false: "test"}[self]
-			_, token, err := tx.NewAttempt(NewAttempt{Run: id, Job: job, SelfFencing: self, LeaseSeconds: 60, HeartbeatSeconds: 10})
+			_, token, err := placedAttempt(tx, NewAttempt{Run: id, Job: job, SelfFencing: self, LeaseSeconds: 60, HeartbeatSeconds: 10})
 			if err != nil {
 				return err
 			}

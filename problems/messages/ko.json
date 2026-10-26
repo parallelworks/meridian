@@ -178,6 +178,7 @@
   "run_malformed": "실행 {run}의 저장된 계획이나 시크릿 기록은 이 릴리스가 읽는 것이 아닙니다. 버전을 가리키지 않거나 가리키는 버전으로 디코딩되지 않으므로, 실행을 계속할 수 없습니다.",
   "run_not_started": "실행 {run}이(가) 시작되지 않은 채 끝났습니다. 코디네이터가 시작할 수 없었습니다.",
   "run_plan_newer": "실행 {run}의 계획(버전 {version})에는 더 새로운 릴리스의 Meridian만 읽는 것이 들어 있습니다(이 릴리스는 버전 {latest} 이하를 읽습니다). 그래서 그것을 읽는 릴리스가 실행을 시작합니다.",
+  "log_truncated": "코디네이터는 한 시도의 로그를 합쳐 최대 {limit}바이트까지만 보관하므로, 이 로그의 나머지는 보관하지 않았습니다.",
 
   "workflow_too_large": "워크플로가 {limit}바이트를 넘어 크기 한도를 초과합니다.",
   "execution_group_unknown": "‘{input}’ 입력이 지정한 실행 그룹 {value}은(는) 그룹 {groups} 중 하나가 아닙니다.",
@@ -285,6 +286,7 @@
   "fenced": "작업의 다른 시도가 이 시도를 대신했거나 시도가 이미 끝났으므로, 코디네이터는 이 요청을 거부합니다.",
   "out_of_order": "보고의 순서가 맞지 않습니다. 코디네이터는 다음 것을 {expected}부터 기대합니다. 이는 다음 이벤트의 번호이거나 로그의 다음 바이트의 위치입니다.",
   "plan_too_new": "이 워커는 실행 계획의 버전을 읽지 못하므로, 코디네이터는 실행에 관한 어떤 것도 보내지 않습니다.",
+  "worker_digest_mismatch": "시도를 요청한 워커는 배치가 시작한 바이너리 {placed}가 아니라 {claimed}를 실행하므로, 코디네이터는 실행에 관한 어떤 것도 보내지 않습니다.",
   "fips_not_enforced": "Meridian은 암호화의 FIPS 140-3 모드가 강제될 때만 실행되는데, 이 프로세스의 GODEBUG에서는 {mode, select, on {켜져 있지만 강제되지 않습니다} other {꺼져 있습니다}}.",
   "fips_module_not_validated": "이 meridian 바이너리는 검증된 모듈이 아니라 Go의 소스에서 컴파일된 FIPS 140-3 모듈 {version}(으)로 빌드되었는데, Meridian은 검증된 모듈로만 실행됩니다.",
   "isolation_not_built": "구성원 ‘{member}’은(는) 작업을 {has_isolation, select, true {‘{isolation}’(으)로} other {컨테이너에서(격리를 지정하지 않은 구성원처럼)}} 격리하는데, 그 백엔드는 아직 이를 할 수 없습니다. 격리가 약해지므로 Meridian은 대신 호스트에서 실행하지도 않습니다.",

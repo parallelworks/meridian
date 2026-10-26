@@ -4,11 +4,15 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -68,7 +72,15 @@ type Attempt struct {
 	LeaseSeconds     int64
 	HeartbeatSeconds int64
 	// Worker is the worker that claimed it.
-	Worker    workerapi.Worker
+	Worker workerapi.Worker
+	// Placement is where it was placed, once it has been (RecordPlacement,
+	// Placed).
+	Placement Placement
+	// Private reports whether where it is placed is private, as where its
+	// job runs is when that reads a variable or a password: its group,
+	// member and backend are then sealed, and never held in the clear, and
+	// a problem it ends with is stored masked (EndAttempt).
+	Private   bool
 	CreatedAt time.Time
 	// ClaimedAt is when its worker claimed it, RenewedAt when its lease was
 	// last renewed, by the claim or a heartbeat, and StepStartedAt when a
@@ -87,6 +99,11 @@ type Attempt struct {
 
 	tokenHash, credentialHash []byte
 }
+
+// Placed reports whether the attempt's placement is recorded
+// (RecordPlacement): whether it has the digest of the worker binary it
+// started, which every placement recorded has, a private one's too.
+func (a *Attempt) Placed() bool { return a.Placement.WorkerDigest != "" }
 
 // LeaseLapses returns when the attempt's lease lapses unless it is renewed,
 // by the store's clock: LeaseSeconds after RenewedAt, or the zero time
@@ -108,6 +125,14 @@ type AttemptEnd struct {
 	// CompleteDigest is the SHA-256 digest of the worker's report that
 	// completed it, so that the same report repeated is known.
 	CompleteDigest []byte
+	// Report is the worker's report that completed it, a
+	// workerapi.Complete as the worker API encodes it, with only the part
+	// of its result that run state holds (plan.JobResult.Split), or nil
+	// for one that didn't complete.
+	Report []byte
+	// Problem is what failed before a step started, for one that ended
+	// so, or nil.
+	Problem *problem.Problem
 }
 
 // A NewAttempt is an attempt to start.
@@ -191,8 +216,9 @@ func (tx *Tx) NewToken(id string) (string, error) {
 
 const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a.token_hash, a.credential_hash,
   a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest,
+  a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.private_placement IS NOT NULL,
   a.created_at, a.claimed_at, a.renewed_at, a.step_started_at,
-  a.end_kind, a.outcome, a.reason, a.complete_digest, a.ended_at,
+  a.end_kind, a.outcome, a.reason, a.complete_digest, a.report, a.problem, a.ended_at,
   a.state <> 'ended' AND a.fence = j.fence AND j.outcome IS NULL`
 
 // attemptWhere returns the attempt where is true of: ErrNotFound if it is
@@ -203,15 +229,18 @@ func (tx *Tx) attemptWhere(where string, args ...any) (*Attempt, error) {
 		run, created                            int64
 		state                                   string
 		version, wdigest, kind, outcome, reason sql.NullString
+		group, member, backend, pid, placed     sql.NullString
 		claimed, renewed, started, ended        sql.NullInt64
+		prob                                    []byte
 	)
 	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+attemptColumns+`
 FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
 WHERE `+where, args...).Scan(
 		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
 		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest,
+		&group, &member, &backend, &pid, &placed, &a.Private,
 		&created, &claimed, &renewed, &started,
-		&kind, &outcome, &reason, &a.End.CompleteDigest, &ended, &a.Holds)
+		&kind, &outcome, &reason, &a.End.CompleteDigest, &a.End.Report, &prob, &ended, &a.Holds)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -220,10 +249,24 @@ WHERE `+where, args...).Scan(
 	}
 	a.Run, a.State = runID(run), AttemptState(state)
 	a.Worker = workerapi.Worker{Version: version.String, Digest: wdigest.String}
+	a.Placement = Placement{Group: group.String, Member: member.String, Backend: backend.String, ID: pid.String, WorkerDigest: placed.String}
 	a.CreatedAt, a.ClaimedAt, a.RenewedAt, a.StepStartedAt = time.UnixMicro(created).UTC(), timeOf(claimed), timeOf(renewed), timeOf(started)
 	a.End.Kind, a.End.Outcome, a.End.Reason = EndKind(kind.String), plan.Outcome(outcome.String), plan.Reason(reason.String)
 	a.EndedAt = timeOf(ended)
+	if prob != nil {
+		a.End.Problem = new(problem.Problem)
+		if err := jsonv2.Unmarshal(prob, a.End.Problem, jsonv2.RejectUnknownMembers(true)); err != nil {
+			return nil, fmt.Errorf("%w: the problem attempt %s ended with: %w", ErrMalformed, a.ID, err)
+		}
+	}
 	return &a, nil
+}
+
+// AttemptByToken returns the attempt whose bootstrap token is token,
+// whatever its state: ErrNotFound if it is no attempt's, as a token
+// replaced by NewToken is no longer.
+func (tx *Tx) AttemptByToken(token string) (*Attempt, error) {
+	return tx.attemptWhere("a.token_hash = ?", digest(token))
 }
 
 // Attempt returns the attempt with the ID id.
@@ -241,8 +284,9 @@ func (tx *Tx) AttemptByCredential(credential string) (*Attempt, error) {
 // token, with credential, which its later calls give, and returns the
 // attempt, its lease running from now. A claim repeated with the same
 // credential changes nothing. A token that is no attempt's is ErrNotFound,
-// one of an attempt claimed with another credential ErrCredential, and one
-// of an attempt that no longer holds its job ErrFenced.
+// one of an attempt claimed with another credential ErrCredential, one of
+// an attempt that no longer holds its job ErrFenced, and a first claim of
+// one whose placement isn't recorded yet ErrNotPlaced.
 func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, error) {
 	if len(credential) < 32 {
 		return nil, errors.New("store: a credential shorter than 32 bytes")
@@ -265,8 +309,11 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
 		}
 		return a, nil
 	}
-	if !a.Holds {
+	switch {
+	case !a.Holds:
 		return nil, ErrFenced
+	case !a.Placed():
+		return nil, ErrNotPlaced
 	}
 	var taken bool
 	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE credential_hash = ?)", cred).Scan(&taken); err != nil {
@@ -363,8 +410,11 @@ func (tx *Tx) StepStarted(id string) error {
 	return err
 }
 
-// EndAttempt records how the attempt ended. An attempt that no longer
-// holds its job, as one that has ended doesn't, is ErrFenced.
+// EndAttempt records how the attempt ended. The problem of an attempt
+// whose placement is private (Attempt.Private) is stored masked
+// (problems.MaskProblem), since it can name the member; its report is the
+// caller's to mask. An attempt that no longer holds its job, as one that
+// has ended doesn't, is ErrFenced.
 func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	switch end.Kind {
 	case EndCompleted:
@@ -377,11 +427,14 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 			return errors.New("store: an attempt completed without the digest of its report")
 		}
 	case EndSetupFailed, EndLost, EndSuperseded, EndWithdrawn:
-		if len(end.CompleteDigest) != 0 {
-			return fmt.Errorf("store: an attempt that ended %s with the digest of a report", end.Kind)
+		if len(end.CompleteDigest) != 0 || end.Report != nil {
+			return fmt.Errorf("store: an attempt that ended %s with a report", end.Kind)
 		}
 	default:
 		return fmt.Errorf("store: %q isn't how an attempt ends", end.Kind)
+	}
+	if end.Problem != nil && end.Kind != EndCompleted && end.Kind != EndSetupFailed {
+		return fmt.Errorf("store: an attempt that ended %s with a problem", end.Kind)
 	}
 	a, err := tx.Attempt(id)
 	if err != nil {
@@ -393,12 +446,24 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	case end.Kind == EndCompleted && a.State == AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s completed before it was claimed", ErrState, id)
 	}
+	var prob []byte
+	if end.Problem != nil {
+		p := end.Problem
+		if a.Private {
+			p = problems.MaskProblem(p)
+		}
+		if prob, err = jsonv2.Marshal(p, jsonv2.Deterministic(true)); err != nil {
+			return err
+		}
+	}
 	now, err := tx.now()
 	if err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, complete_digest = ?, ended_at = ? WHERE id = ?",
-		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)), end.CompleteDigest, now, id)
+	_, err = tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, complete_digest = ?,
+  report = ?, problem = ?, ended_at = ? WHERE id = ?`,
+		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)), end.CompleteDigest,
+		end.Report, prob, now, id)
 	return err
 }
 

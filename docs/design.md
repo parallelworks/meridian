@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); and its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases and fences, and the endpoints workers reach it through. The coordinator creates runs, starts them and ends them; placing their jobs and serving the worker API aren't built yet ([The coordinator](#the-coordinator)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them and ends them; placing their jobs isn't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -1328,7 +1328,8 @@ that names no version, and one whose submitted values aren't a mapping
 - **Each job, as it ends** (`plan.JobResult.Split`): its private outputs
   and its steps' outputs that hold a secret (`Jobs`), by the key of the job
   or of its matrix instance, which the jobs that need it read
-  ([Outputs](#outputs)).
+  ([Outputs](#outputs)). Each job's is sealed as a part of its own, stored
+  beside the job, so that a job's end seals and writes only its own.
 
 The coordinator encrypts and stores it.
 
@@ -1343,15 +1344,17 @@ The coordinator encrypts and stores it.
   is read before the record is authenticated, and leaves the run to a
   later release without asking Keys: one byte written to the store can so
   leave a run waiting, which costs only what deleting the record would.
-  Each time the coordinator adds a part, as a job's as the job ends, it
-  encrypts the whole record again under the same data key, with a new
-  nonce, at most 2^24 times for a run (`record_reseal_limit`), which keeps
-  the chance that two of the data key's nonces are the same below 2^-48.
-  Neither the data key nor what the record holds is ever in an error, and
-  nothing decrypted is kept between calls. Both are cleared once used, as
-  far as Go lets them be: not AES's key schedule or GCM's hash key, inside
-  the cipher, the buffer the record is encoded in, which the JSON encoder
-  keeps for reuse, or the record's strings (`coordinator/internal/seal`).
+  Each time the coordinator adds to the record, as Ready does a matrix it
+  expands, it encrypts the whole record again under the same data key,
+  with a new nonce, at most 2^24 times for a run (`record_reseal_limit`),
+  which keeps the chance that two of the data key's nonces are the same
+  below 2^-48. Parts kept apart from the record take nothing from that
+  bound (below). Neither the data key nor what the record holds is ever in
+  an error, and nothing decrypted is kept between calls. Both are cleared
+  once used, as far as Go lets them be: not AES's key schedule or GCM's
+  hash key, inside the cipher, the buffer the record is encoded in, which
+  the JSON encoder keeps for reuse, or the record's strings
+  (`coordinator/internal/seal`).
 - **Bound to its run.** The record's associated data is
   `meridian/record/1`, the store's ID, the run's and the record's
   generation, written in decimal, each after a NUL byte, and Keys wraps the
@@ -1375,6 +1378,28 @@ The coordinator encrypts and stores it.
   replaced, put back in the store, fails the run as one changed does. A
   store restored whole, the run's state with its record, is the store as
   it was, which this can't tell apart.
+- **Parts apart from it.** What the record holds of each job (`Jobs`) is
+  kept as a part of its own, beside the job, so that a job's end seals and
+  writes only its own: it neither opens the record nor holds the store's
+  lock while Keys unwraps the data key. Any other secret the coordinator
+  keeps apart from the record is sealed the same way, with a purpose of
+  its own. A part is encrypted with AES-256-GCM and a random nonce under a
+  key of its own, which HKDF-SHA256 (NIST SP 800-56C, inside Go's FIPS
+  140-3 module) derives from the run's data key, with no salt and the info
+  of the part's purpose, the store's ID, the run's, the part's ID and its
+  generation, joined with NUL bytes; the info is the part's associated
+  data too. Its purpose is a versioned label, as `meridian/job-record/1`,
+  and its ID its own among the run's parts of that purpose, as a job's
+  key. So a part opens only as the latest generation of its own purpose,
+  ID, run and store: never as the record, as another job's part, as a part
+  of another purpose, or as one of its own older generations. A part's
+  generation is 1 when it is first stored, and the coordinator keeps it
+  with what the part is of, apart from the part, as it keeps the record's,
+  and stores a part only at the generation after the one it read. Each
+  derived key seals one generation of one part, once, or again only for a
+  write that raced another, so the parts, however many a run's jobs and
+  attempts make, take nothing from the bound on the data key's nonces
+  (`seal.Sealer.SealPart`).
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
@@ -1390,12 +1415,12 @@ The coordinator encrypts and stores it.
   so that someone who later has both a copy of the database and the key
   that wrapped the record's data key can't open it. On SQLite, the store
   writes with `secure_delete` on, which overwrites with zeros what it
-  deletes or replaces, the sealed record and its wrapped key among it,
-  rather than leave it in free space. Once the transaction that ends the
-  run commits, the store checkpoints the write-ahead log into the
-  database and truncates it, so the log keeps no copy either. If a reader
-  or a writer in another process holds the log, that checkpoint can't
-  truncate it, and the next one does: when the next run ends, when the
+  deletes or replaces, the sealed record, its jobs' parts and its wrapped
+  key among them, rather than leave it in free space. Once the transaction
+  that ends the run commits, the store checkpoints the write-ahead log
+  into the database and truncates it, so the log keeps no copy either. If
+  a reader or a writer in another process holds the log, that checkpoint
+  can't truncate it, and the next one does: when the next run ends, when the
   store is next opened, or in hopper's maintenance. A backup of the database taken
   before the run ended holds the record, sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
@@ -1417,8 +1442,9 @@ Run state is the store's: hopper's jobs, and Meridian's rows beside them
   ([The secret record](#the-secret-record)).
 - **Each job instance's** holds its state, its outcome, the part of its
   result that run state holds (`plan.JobResult.Split`), a matrix job's
-  instances (`plan.Expansion.Split`), and what it was readied with
-  ([A job's lifecycle](#a-jobs-lifecycle)).
+  instances (`plan.Expansion.Split`), what it was readied with
+  ([A job's lifecycle](#a-jobs-lifecycle)), and the generation of its part
+  of the secret record.
 - **Each attempt's** holds its lease and fencing number
   ([Leases and fencing](#leases-and-fencing)), the hashes of its bootstrap
   token and its credential, and its audit record
@@ -1435,8 +1461,14 @@ did (`plan.ReadyJob.PrivateFields`, and `SecretFields` for a secret), and
 the coordinator keeps them out of run state: Ready gives them again from
 the secret record whenever the coordinator needs them, as the record holds
 the run's timeout when that reads one, and the placement made from them,
-the member chosen and why each other wasn't, is in the attempt's row,
-sealed under the run's data key as the secret record is.
+the member chosen and why each other wasn't, and the backend's own name for
+the placement, which can say where it is, as a pod's name can, is in the
+attempt's row, sealed as the secret record's parts are. Run state holds
+only the digest of the worker binary the
+placement started, which says the attempt is placed. What such an attempt
+reports that can name the member, the problem it ends with and the
+diagnostics of its end and of its steps' events, is stored with what it
+shows of values masked (`problems.MaskProblem`, `problems.MaskDiagnostics`).
 
 ### Plans across versions
 
@@ -2683,7 +2715,16 @@ The coordinator looks for the attempt's placement before it makes the
 token, and makes one only for a placement that doesn't exist yet. When the
 worker claims the attempt, it presents the bootstrap token with a
 credential it makes itself, which is the attempt's credential from then on,
-so the credential never travels from the coordinator.
+so the credential never travels from the coordinator. A backend says the
+digest of the binary it started, which the coordinator records with the
+placement, and the coordinator refuses a claim from a worker whose digest
+is another, before it sends anything of the run
+(`worker_digest_mismatch`): the attempt fails before its first step, and
+is placed again. A first claim before the placement is recorded, as from
+a worker that claims before the call that started it returns, is asked to
+come again (503), never taken. The digest catches a binary replaced
+between the placement and the claim; it isn't authentication, since
+whoever holds the token can say any digest.
 
 ### The worker API
 

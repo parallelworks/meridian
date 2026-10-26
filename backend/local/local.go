@@ -270,7 +270,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 			return backend.Placement{}, err
 		}
 		if alive {
-			return backend.Placement{Attempt: req.Attempt, ID: r.id()}, nil
+			return backend.Placement{Attempt: req.Attempt, ID: r.id(), WorkerDigest: r.Digest}, nil
 		}
 		d.remove(req.Attempt)
 	}
@@ -331,7 +331,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 			_ = d.writeFile(d.path(req.Attempt, ".exit"), exit)
 		}
 	}()
-	return backend.Placement{Attempt: req.Attempt, ID: r.id()}, nil
+	return backend.Placement{Attempt: req.Attempt, ID: r.id(), WorkerDigest: r.Digest}, nil
 }
 
 // socketPair returns the two ends of a new stream Unix socket: the
@@ -456,7 +456,7 @@ func (d *Driver) Find(_ context.Context, _ *backend.Member, attempt string) (bac
 	if err != nil || !ok {
 		return backend.Placement{}, false, err
 	}
-	return backend.Placement{Attempt: attempt, ID: r.id()}, true, nil
+	return backend.Placement{Attempt: attempt, ID: r.id(), WorkerDigest: r.Digest}, true, nil
 }
 
 // Check says whether a placement's worker runs: whether a process of its

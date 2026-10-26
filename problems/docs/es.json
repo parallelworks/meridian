@@ -1242,6 +1242,13 @@
       "Empieza la ejecución con la versión de Meridian que la creó, o con una posterior."
     ]
   },
+  "log_truncated": {
+    "title": "Log que el coordinador no guardó entero",
+    "why": "El coordinador guarda el log de un paso a medida que el worker lo sube. Para que un trabajo que imprime sin fin no llene el disco del coordinador, este guarda los bytes de los logs de un intento hasta un límite para todos ellos juntos. Un log que lo pasa guarda sus bytes hasta ahí, luego esta línea, y nada más de él, y los logs posteriores del intento guardan solo esta línea. Los pasos siguen, y al worker se le dice que el resto está guardado.",
+    "fix": [
+      "Haz que el paso imprima menos, o que escriba lo que produce en un archivo propio, en el directorio de la ejecución, en lugar de en su salida."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",
@@ -1999,6 +2006,14 @@
     "why": "El plan de una ejecución, y los cuerpos de la API de workers, tienen versión, y un worker dice la versión más nueva que lee al reclamar un intento. El coordinador rechaza uno que no lee la de la ejecución, antes de enviar nada de la ejecución, para que ningún worker ejecute un trabajo con una parte que no entiende. El worker termina, y el intento, que falló antes de su primer paso, se coloca de nuevo.",
     "fix": [
       "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "worker_digest_mismatch": {
+    "title": "Worker que no es el binario colocado",
+    "why": "Un backend registra el resumen SHA-256 del binario meridian que inicia para un intento, y un worker dice el suyo al reclamar el intento. El coordinador rechaza una reclamación cuyo resumen no es el registrado, antes de enviar nada de la ejecución: el binario se sustituyó entre la colocación y la reclamación, u otro programa reclamó con el token de arranque del intento. El intento falla antes de su primer paso, y se coloca de nuevo.",
+    "fix": [
+      "Si Meridian se actualizó mientras se colocaba el trabajo, no hay que hacer nada: el trabajo se coloca de nuevo, con el binario nuevo.",
+      "Si no, averigua qué sustituyó el binario, o qué más leyó el token de arranque del intento."
     ]
   },
   "fips_not_enforced": {

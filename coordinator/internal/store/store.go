@@ -69,6 +69,15 @@ var (
 	// the lease of an attempt whose job fences itself has lapsed: its
 	// credential lapses with it.
 	ErrLapsed = errors.New("store: the attempt's lease has lapsed")
+	// ErrNotPlaced is what Claim returns for an attempt whose placement
+	// isn't recorded yet (RecordPlacement), as one whose worker claims it
+	// before the call that started it returns: it is claimed once it is.
+	ErrNotPlaced = errors.New("store: the attempt's placement isn't recorded yet")
+	// ErrRecordChanged is what Reseal and PutJobRecord return, beside
+	// ErrState, for a run's secret record, or a job's part of it, that was
+	// sealed again since the generation given was read: read it again, and
+	// add to that.
+	ErrRecordChanged = errors.New("store: the run's secret record was sealed again meanwhile")
 	// ErrMalformed is what a call returns for what the store holds that
 	// this release doesn't read as it would write it, such as a job's
 	// result with a member it doesn't know.

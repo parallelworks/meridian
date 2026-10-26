@@ -209,6 +209,25 @@ func cancel(t *testing.T, d *Driver, p backend.Placement) {
 }
 
 // mustStart returns when the process pid started, as the driver says.
+// binaryDigest returns the digest of the binary the driver starts as the
+// worker, this test's, as the worker reports its own.
+func binaryDigest(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(exe) //nolint:gosec // the test's own binary
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func mustStart(t *testing.T, pid int) string {
 	t.Helper()
 	start, err := processStart(pid)
@@ -244,6 +263,8 @@ func TestPlace(t *testing.T) {
 		t.Error("the worker shares its session, and its terminal's signals")
 	case p.Attempt != req.Attempt || p.ID != strconv.Itoa(r.PID)+":"+mustStart(t, r.PID):
 		t.Errorf("the placement is %+v, of worker %d", p, r.PID)
+	case p.WorkerDigest != binaryDigest(t):
+		t.Errorf("the placement says the worker's digest is %q, not %q", p.WorkerDigest, binaryDigest(t))
 	}
 	// The token is in no file of the driver's.
 	_ = filepath.WalkDir(d.State, func(path string, e fs.DirEntry, err error) error {

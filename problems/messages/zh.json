@@ -178,6 +178,7 @@
   "run_malformed": "运行 {run} 存储的计划或密钥记录不是此发行版本能读取的：它没有标明版本，或者无法按其标明的版本解码，因此运行无法继续。",
   "run_not_started": "运行 {run} 未开始就结束了：协调器无法开始它。",
   "run_plan_newer": "运行 {run} 的计划（版本 {version}）包含只有更新的 Meridian 发行版本才能读取的内容（此发行版本读取版本 {latest} 及更早的版本），因此由能读取它的发行版本开始该运行。",
+  "log_truncated": "协调器对一次尝试的所有日志合计最多保留 {limit} 字节，因此没有保留此日志的其余部分。",
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
@@ -285,6 +286,7 @@
   "fenced": "该作业的另一个尝试已取代此尝试，或者此尝试已完成，因此协调器拒绝此请求。",
   "out_of_order": "报告的顺序不对：协调器期望下一个内容从 {expected} 开始，即下一个事件的编号或日志下一个字节的偏移量。",
   "plan_too_new": "此工作进程无法读取运行计划的版本，因此协调器不向它发送运行的任何内容。",
+  "worker_digest_mismatch": "领取该尝试的工作进程运行的是二进制文件 {claimed}，而不是其放置所启动的 {placed}，因此协调器不向它发送运行的任何内容。",
   "fips_not_enforced": "Meridian 只在其加密的 FIPS 140-3 模式被强制执行时运行，而此进程的 GODEBUG {mode, select, on {启用了该模式，但未强制执行} other {关闭了该模式}}。",
   "fips_module_not_validated": "此 meridian 二进制文件使用从 Go 源代码编译的 FIPS 140-3 模块 {version} 构建，而不是经过验证的模块，而 Meridian 只在使用经过验证的模块时运行。",
   "isolation_not_built": "成员“{member}”{has_isolation, select, true {用“{isolation}”} other {在容器中（与未指定隔离方式的成员一样）}}隔离其作业，而其后端尚不能做到。Meridian 也不会改为在主机上运行这些作业，因为那样隔离会更弱。",

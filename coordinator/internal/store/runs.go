@@ -281,8 +281,9 @@ func (tx *Tx) StartRun(id string, state *compile.StartState, diags problems.Diag
 	return tx.AddDiagnostics(id, diags)
 }
 
-// EndRun records how the run ended, and deletes its secret record, which
-// nothing needs once the run has ended. The record is erased: overwritten
+// EndRun records how the run ended, and deletes its secret record, its
+// jobs' parts of it too (PutJobRecord), which nothing needs once the run
+// has ended. The record is erased: overwritten
 // with zeros as it is deleted, and, once the transaction commits, gone
 // from the write-ahead log too, which the store checkpoints and
 // truncates. A run that has ended already, or that has an attempt that
@@ -317,6 +318,9 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 		return err
 	}
 	if _, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
+		return err
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_job_records WHERE run_id = ?", n); err != nil {
 		return err
 	}
 	tx.erased = true
@@ -433,8 +437,9 @@ FROM meridian_records s JOIN meridian_runs r ON r.id = s.run_id WHERE s.run_id =
 // Reseal replaces the run's sealed secret record with sealed, sealed again
 // under the same data key with generation, which is one more than the
 // record's: the record and its generation change together, or neither
-// does. A generation that isn't the next is ErrState, as a reseal that
-// raced another's is; a run without a record is ErrNotFound.
+// does. A generation that isn't the next is ErrState and ErrRecordChanged,
+// as a reseal that raced another's is; a run without a record is
+// ErrNotFound.
 func (tx *Tx) Reseal(run string, generation uint64, sealed []byte) error {
 	if len(sealed) == 0 {
 		return errors.New("store: a secret record without its bytes")
@@ -444,7 +449,7 @@ func (tx *Tx) Reseal(run string, generation uint64, sealed []byte) error {
 		return err
 	}
 	if generation != current.Generation+1 {
-		return fmt.Errorf("%w: generation %d isn't the next of run %s's secret record, %d", ErrState, generation, run, current.Generation+1)
+		return fmt.Errorf("%w: %w: generation %d isn't the next of run %s's secret record, %d", ErrState, ErrRecordChanged, generation, run, current.Generation+1)
 	}
 	n, _ := runNumber(run)
 	now, err := tx.now()
@@ -457,7 +462,7 @@ func (tx *Tx) Reseal(run string, generation uint64, sealed []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := oneRow(res, fmt.Errorf("%w: run %s's secret record was sealed again meanwhile", ErrState, run)); err != nil {
+	if err := oneRow(res, fmt.Errorf("%w: %w: run %s", ErrState, ErrRecordChanged, run)); err != nil {
 		return err
 	}
 	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_records SET sealed = ?, updated_at = ? WHERE run_id = ?", sealed, now, n)
@@ -478,3 +483,94 @@ func oneRow(res sql.Result, err error) error {
 
 // nullString is s, or NULL for "".
 func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: s != ""} }
+
+// WrappedKey returns the data key of the run's secret record, as Keys
+// wrapped it (Record.WrappedKey), without the record: ErrNotFound for a
+// run that has none.
+func (tx *Tx) WrappedKey(run string) ([]byte, error) {
+	n, ok := runNumber(run)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	var key []byte
+	err := tx.tx.QueryRowContext(tx.ctx, "SELECT wrapped_key FROM meridian_records WHERE run_id = ?", n).Scan(&key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return key, err
+}
+
+// A JobRecord is a job's part of a run's secret record, as the store holds
+// it: sealed under a key that the run's data key (Record.WrappedKey)
+// derives, with its generation, which the store keeps with the job, apart from the part.
+type JobRecord struct {
+	Generation uint64
+	Sealed     []byte
+}
+
+// JobRecords returns the parts of the run's secret record of those of the
+// jobs keys that have one, by key: a job that hasn't ended with private
+// outputs has none.
+func (tx *Tx) JobRecords(run string, keys []string) (map[string]JobRecord, error) {
+	n, ok := runNumber(run)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	out := make(map[string]JobRecord, len(keys))
+	for _, key := range keys {
+		var r JobRecord
+		err := tx.tx.QueryRowContext(tx.ctx, `SELECT j.record_gen, p.sealed FROM meridian_job_records p
+JOIN meridian_jobs j ON j.run_id = p.run_id AND j.key = p.job_key WHERE p.run_id = ? AND p.job_key = ?`, n, key).Scan(&r.Generation, &r.Sealed)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[key] = r
+	}
+	return out, nil
+}
+
+// PutJobRecord stores sealed as the run's job's part of its secret record,
+// sealed with generation, which is one more than the part's, or 1 for the
+// job's first: the part and its generation change together, or neither
+// does. A generation that isn't the next is ErrState and ErrRecordChanged,
+// as a write that raced another's is; a run that has ended, and has no
+// secret record, is ErrState, and a job the run hasn't ErrNotFound.
+func (tx *Tx) PutJobRecord(run, job string, generation uint64, sealed []byte) error {
+	if len(sealed) == 0 {
+		return errors.New("store: a job's part of a secret record without its bytes")
+	}
+	n, err := tx.liveRun(run)
+	if err != nil {
+		return err
+	}
+	var current uint64
+	err = tx.tx.QueryRowContext(tx.ctx, "SELECT record_gen FROM meridian_jobs WHERE run_id = ? AND key = ?", n, job).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if generation != current+1 {
+		return fmt.Errorf("%w: %w: generation %d isn't the next of run %s's part of job %q, %d", ErrState, ErrRecordChanged, generation, run, job, current+1)
+	}
+	now, err := tx.now()
+	if err != nil {
+		return err
+	}
+	// Only from the generation read, so that a write that raced this one
+	// fails, where the database runs transactions side by side.
+	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET record_gen = ? WHERE run_id = ? AND key = ? AND record_gen = ?", generation, n, job, current)
+	if err != nil {
+		return err
+	}
+	if err := oneRow(res, fmt.Errorf("%w: %w: run %s's part of job %q", ErrState, ErrRecordChanged, run, job)); err != nil {
+		return err
+	}
+	_, err = tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_job_records (run_id, job_key, sealed, updated_at) VALUES (?, ?, ?, ?)
+ON CONFLICT (run_id, job_key) DO UPDATE SET sealed = excluded.sealed, updated_at = excluded.updated_at`, n, job, sealed, now)
+	return err
+}

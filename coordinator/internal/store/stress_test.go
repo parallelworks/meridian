@@ -96,7 +96,7 @@ func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters 
 			self := rng.IntN(2) == 0
 			var m stressAttempt
 			err = s.Tx(ctx, func(tx *Tx) error {
-				a, token, err := tx.NewAttempt(NewAttempt{Run: "1", Job: job, SelfFencing: self, LeaseSeconds: 60, HeartbeatSeconds: 10})
+				a, token, err := placedAttempt(tx, NewAttempt{Run: "1", Job: job, SelfFencing: self, LeaseSeconds: 60, HeartbeatSeconds: 10})
 				if err != nil {
 					return err
 				}

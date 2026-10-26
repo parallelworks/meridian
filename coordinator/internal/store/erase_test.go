@@ -54,8 +54,8 @@ func TestRecordErased(t *testing.T) {
 	// Large enough for SQLite to keep on overflow pages of their own, which
 	// split them, so the files are searched for any piece of one: the
 	// unit it repeats.
-	firstUnit, secondUnit := []byte("first-sealed-record."), []byte("second-sealed-record.")
-	first, second := bytes.Repeat(firstUnit, 600), bytes.Repeat(secondUnit, 600)
+	firstUnit, secondUnit, partUnit := []byte("first-sealed-record."), []byte("second-sealed-record."), []byte("a-job's-sealed-part.")
+	first, second, part := bytes.Repeat(firstUnit, 600), bytes.Repeat(secondUnit, 600), bytes.Repeat(partUnit, 600)
 	key := []byte("the-wrapped-data-key")
 	var id string
 	inTx(t, s, func(tx *Tx) error {
@@ -66,9 +66,13 @@ func TestRecordErased(t *testing.T) {
 		if err := tx.InsertRun(NewRun{ID: id, Plan: p, DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(0)}); err != nil {
 			return err
 		}
+		if err := tx.InsertJob(NewJob{Run: id, Name: "build", Key: "build", SupervisorID: fakeJobID(1)}); err != nil {
+			return err
+		}
 		return tx.InsertRecord(id, 1, key, first)
 	})
 	inTx(t, s, func(tx *Tx) error { return tx.Reseal(id, 2, second) })
+	inTx(t, s, func(tx *Tx) error { return tx.PutJobRecord(id, "build", 1, part) })
 
 	files := []string{path, path + "-wal"}
 	holds := func(secret []byte) []string {
@@ -85,7 +89,7 @@ func TestRecordErased(t *testing.T) {
 		return in
 	}
 	// The test can tell: before the run ends, the files hold the record.
-	for _, secret := range [][]byte{secondUnit, key} {
+	for _, secret := range [][]byte{secondUnit, partUnit, key} {
 		if len(holds(secret)) == 0 {
 			t.Fatalf("before the run ends, the files don't hold %.20q", secret)
 		}
@@ -94,7 +98,7 @@ func TestRecordErased(t *testing.T) {
 	inTx(t, s, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
 	check := func(when string) {
 		t.Helper()
-		for _, secret := range [][]byte{firstUnit, secondUnit, key} {
+		for _, secret := range [][]byte{firstUnit, secondUnit, partUnit, key} {
 			if in := holds(secret); len(in) != 0 {
 				t.Errorf("%s, %v hold %.20q", when, in, secret)
 			}
