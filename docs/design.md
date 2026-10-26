@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); and its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases and fences, and the endpoints workers reach it through. The rest of the coordinator isn't built yet ([The coordinator](#the-coordinator)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); and its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases and fences, and the endpoints workers reach it through. The coordinator creates runs, starts them and ends them; placing their jobs and serving the worker API aren't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -1115,24 +1115,40 @@ Start's error, when it can't finish for a reason that isn't the run's,
 says what the coordinator does next:
 
 - **A plan or a record that doesn't fit** wraps `compile.ErrMismatch`:
-  starting again gives the same error, so the coordinator fails the run.
+  starting again gives the same error, so the coordinator fails the run,
+  with `run_record_mismatch`.
 - **A plan of another release's version** wraps `plan.ErrVersion`: a
   replica of a release that reads it starts it
-  ([Plans across versions](#plans-across-versions)).
+  ([Plans across versions](#plans-across-versions)), and one that doesn't
+  leaves the run as it is, saying so in its log (`run_plan_newer`).
 - **Any other**, a resolver that couldn't answer, as the Inputs
-  resolver's, which wraps `compile.ErrUnanswered`, or the context's end,
-  the coordinator starts the run again after.
+  resolver's, which wraps `compile.ErrUnanswered`, or a try that ran out
+  of time, the coordinator starts the run again after, waiting longer each
+  time, from 2 seconds to 2 minutes: 8 times, in about 4 minutes, after
+  which it fails the run with `run_start_unanswered`, and says why in its
+  log.
 
 Decoding the plan or the secret record before Start fails alike: with
 `plan.ErrVersion` for another release's version, or for a plan whose
 trees name what a newer release's format has, and with
 `plan.ErrMalformed` for what no release encoded, or this one can't read
 as its own version, which decoding again gives too, so the coordinator
-fails the run.
+fails the run, with `run_malformed`.
+
+What Start gave that run state holds, the coordinator stores encoded with
+the plan's version (`compile.EncodeStartState`), and reads back as
+strictly as a plan, in the transaction that seals the secret record again
+with the rest and completes Start's hopper job.
 
 A coordinator that dies during Start leaves its job to another replica,
 which starts it again from the beginning: nothing reads Start's results
-until they are stored. A rerun runs Start again ([Reruns](#reruns)).
+until they are stored, and a Start that two replicas run at once stores
+its results once. A run's Start can be in a hopper queue of the run's
+own, which only the coordinator that created the run works, as `meridian
+run`'s is, so that Start reads a variable whose value comes from the
+environment from the one the command ran in; its job is then left to the
+next process that works that queue. A rerun runs Start again
+([Reruns](#reruns)).
 
 ## Run data
 

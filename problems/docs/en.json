@@ -1035,6 +1035,37 @@
       "Otherwise report it as a bug: no run with fewer jobs adds to its record that often."
     ]
   },
+  "run_record_mismatch": {
+    "why": "A run's secret record holds what the run was given, and names the plan it was made with. As the run starts, Meridian checks that the record fits the plan: that it names the plan by its digest, and holds what the plan says it holds. This one doesn't, as when a record or a plan was changed in the store, or written by a release that made them otherwise. Rather than start with values that don't belong to its plan, the run fails.",
+    "fix": [
+      "Rerun the run, which makes its plan and its secret record again from the workflow and what is submitted."
+    ]
+  },
+  "run_start_unanswered": {
+    "why": "As a run starts, Meridian reads the organization and user variables it needs, and asks the platform again about the inputs of its types. One of them couldn't answer each time Meridian tried, as when a service it reaches is down. Meridian tries again a few times, waiting longer each time, and then fails the run rather than leave it waiting.",
+    "fix": [
+      "Check that what the run reads as it starts can be reached, such as the platform's services, then rerun the run."
+    ]
+  },
+  "run_malformed": {
+    "why": "Meridian stores a run's plan and its secret record encoded in the version of plans the run was created with. This run's plan or record names a version this release reads, but doesn't decode as one: it was changed in the store, or written by a release with a fault.",
+    "fix": [
+      "Rerun the run.",
+      "Find out what changed the store's database."
+    ]
+  },
+  "run_not_started": {
+    "why": "Each run starts with a step of the coordinator's own, which reads what the run needs and stores what it gives. The coordinator tried that step again and again and failed each time, as when its store can't be written, so it ended the run rather than leave it waiting.",
+    "fix": [
+      "Check the coordinator's log for why it couldn't start the run, then rerun the run."
+    ]
+  },
+  "run_plan_newer": {
+    "why": "A run's plan is versioned, and a release of Meridian starts only runs whose plans are of a version it reads. A newer release created this run, so Meridian leaves it as it is, for a release that reads its plan.",
+    "fix": [
+      "Start the run with the release of Meridian that created it, or a later one."
+    ]
+  },
   "workflow_too_large": {
     "why": "A workflow file is read whole, so there is a limit on its size. This one came from a stream, such as standard input, which Meridian stopped reading once it passed the limit.",
     "fix": [

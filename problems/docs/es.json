@@ -1206,6 +1206,42 @@
       "Si no, informa del error: ninguna ejecución con menos trabajos añade algo a su registro tan a menudo."
     ]
   },
+  "run_record_mismatch": {
+    "title": "Registro secreto que no corresponde al plan de la ejecución",
+    "why": "El registro secreto de una ejecución guarda lo que se le dio a la ejecución y nombra el plan con el que se hizo. Al empezar la ejecución, Meridian comprueba que el registro corresponde al plan: que nombra el plan por su resumen y que guarda lo que el plan dice que guarda. Este no lo hace, como cuando un registro o un plan se cambió en el almacén, o lo escribió una versión que los hacía de otra forma. En lugar de empezar con valores que no pertenecen a su plan, la ejecución falla.",
+    "fix": [
+      "Repite la ejecución, que vuelve a crear su plan y su registro secreto a partir del flujo de trabajo y de lo que se envía."
+    ]
+  },
+  "run_start_unanswered": {
+    "title": "Ejecución que no pudo empezar",
+    "why": "Al empezar una ejecución, Meridian lee las variables de la organización y del usuario que necesita, y vuelve a preguntar a la plataforma por las entradas de sus tipos. Uno de ellos no pudo responder ninguna de las veces que Meridian lo intentó, como cuando un servicio al que accede no funciona. Meridian lo intenta de nuevo unas cuantas veces, esperando cada vez más, y después hace fallar la ejecución en lugar de dejarla esperando.",
+    "fix": [
+      "Comprueba que se puede acceder a lo que la ejecución lee al empezar, como los servicios de la plataforma, y después repite la ejecución."
+    ]
+  },
+  "run_malformed": {
+    "title": "Ejecución que no se puede leer",
+    "why": "Meridian guarda el plan de una ejecución y su registro secreto codificados en la versión de planes con la que se creó la ejecución. El plan o el registro de esta ejecución nombra una versión que esta versión lee, pero no se decodifica como tal: se cambió en el almacén, o lo escribió una versión con un fallo.",
+    "fix": [
+      "Repite la ejecución.",
+      "Averigua qué cambió la base de datos del almacén."
+    ]
+  },
+  "run_not_started": {
+    "title": "Ejecución que terminó sin empezar",
+    "why": "Cada ejecución empieza con un paso propio del coordinador, que lee lo que la ejecución necesita y guarda lo que da. El coordinador intentó ese paso una y otra vez y falló cada vez, como cuando no se puede escribir en su almacén, así que terminó la ejecución en lugar de dejarla esperando.",
+    "fix": [
+      "Mira en el registro del coordinador por qué no pudo empezar la ejecución, y después repite la ejecución."
+    ]
+  },
+  "run_plan_newer": {
+    "title": "Ejecución más reciente de lo que esta versión empieza",
+    "why": "El plan de una ejecución tiene versión, y una versión de Meridian solo empieza ejecuciones cuyos planes son de una versión que lee. Una versión más reciente creó esta ejecución, así que Meridian la deja como está, para una versión que lea su plan.",
+    "fix": [
+      "Empieza la ejecución con la versión de Meridian que la creó, o con una posterior."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",
