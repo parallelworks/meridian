@@ -50,7 +50,9 @@ import (
 // once its parent is read. It is read only as it is written, as the plan's
 // schema has it (plan.Schemas): null where a string, a number, a list or
 // a node is, a member a node of its kind always has left out, and not
-// other than true, are refused.
+// other than true, are refused. A tree written as trees are that names a
+// context, an operator or a function this release doesn't know is refused
+// with ErrUnknown: a newer release wrote it.
 
 // MarshalJSON encodes the expression as its source and its tree.
 func (e *Expr) MarshalJSON() ([]byte, error) { return e.appendJSON(nil) }
@@ -396,6 +398,20 @@ var (
 	errSlice       = errors.New("expr: a slice is [start, end]")
 	errSegment     = errors.New("expr: a path segment is a name or an object with one key")
 )
+
+// ErrUnknown is what decoding a tree returns, wrapped, for one that is
+// written as a tree is but names what this release doesn't know: a
+// context, an operator or a function, or a function's arguments, or an
+// operator's negation, that it doesn't take. A format gains these without
+// a new plan version, so such a tree is one a newer release wrote, rather
+// than one no release did.
+var ErrUnknown = errors.New("expr: unknown to this release")
+
+// unknown returns an error that wraps ErrUnknown, which says what this
+// release doesn't know.
+func unknown(format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrUnknown}, args...)...)
+}
 
 // decodeExpr reads an expression that MarshalJSON encoded: its source, and
 // its tree.
@@ -743,7 +759,7 @@ func (w *wireNode) node() (decoded, error) {
 		return decoded{n: &word{text: w.text}}, nil
 	case keyRef:
 		if c, ok := contexts[w.text]; !ok || c.name != w.text {
-			return decoded{}, fmt.Errorf("expr: %q isn't a context", w.text)
+			return decoded{}, unknown("%q isn't a context", w.text)
 		}
 		return decoded{n: &ref{context: w.text, path: w.path}}, nil
 	case keyUp:
@@ -772,17 +788,17 @@ func (w *wireNode) node() (decoded, error) {
 func (w *wireNode) call() (decoded, error) {
 	fn, ok := functions[w.text]
 	if !ok {
-		return decoded{}, fmt.Errorf("expr: %s isn't a function", w.text)
+		return decoded{}, unknown("%s isn't a function", w.text)
 	}
 	n := len(w.args)
 	if n < fn.minArgs || fn.maxArgs >= 0 && n > fn.maxArgs || w.text == "case" && n%2 == 0 {
-		return decoded{}, fmt.Errorf("expr: %s() can't take %d arguments", w.text, n)
+		return decoded{}, unknown("%s() can't take %d arguments", w.text, n)
 	}
 	c := &call{name: w.text, args: make([]node, n)}
 	var free []string
 	for i, a := range w.args {
 		if a.lambda != (fn.each != nil && i == n-1) {
-			return decoded{}, errLambdaPlace
+			return decoded{}, unknown("%s() takes no lambda there: a lambda is the last argument of map() and filter(), and nothing else", w.text)
 		}
 		c.args[i] = a.n
 		free = union(free, a.free)
@@ -812,24 +828,27 @@ func (w *wireNode) lambda() (decoded, error) {
 }
 
 func (w *wireNode) op() (decoded, error) {
+	// What isn't written as an operator is, MarshalJSON's not only for a
+	// negated binary operator, as true, is refused first; then an operator
+	// this release doesn't know, or a negation it doesn't take, which a
+	// newer release can write.
 	if w.keys&keyY == 0 {
-		if w.text != "!" && w.text != "-" && !prefixOperators[w.text] {
-			return decoded{}, fmt.Errorf("expr: %q isn't a unary operator", w.text)
-		}
 		if w.keys&keyNot != 0 {
 			return decoded{}, errors.New("expr: a unary operator isn't negated")
 		}
+		if w.text != "!" && w.text != "-" && !prefixOperators[w.text] {
+			return decoded{}, unknown("%q isn't a unary operator", w.text)
+		}
 		return decoded{n: &unary{op: w.text, x: w.x.n}, free: w.x.free}, nil
 	}
-	if !binaryOperator(w.text) {
-		return decoded{}, fmt.Errorf("expr: %q isn't a binary operator", w.text)
-	}
-	// MarshalJSON writes not only for a negated operator, as true.
 	if w.keys&keyNot != 0 && (!w.notOK || !w.not) {
 		return decoded{}, errors.New("expr: not is true, or left out")
 	}
+	if !binaryOperator(w.text) {
+		return decoded{}, unknown("%q isn't a binary operator", w.text)
+	}
 	if w.not && !negatable[w.text] {
-		return decoded{}, fmt.Errorf("expr: %q can't be negated", w.text)
+		return decoded{}, unknown("%q can't be negated", w.text)
 	}
 	return decoded{n: &binary{op: w.text, negated: w.not, x: w.x.n, y: w.y.n}, free: union(w.x.free, w.y.free)}, nil
 }

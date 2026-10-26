@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Meridian worker API bodies, version 1",
-  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 1: each is one of the $defs, which the API's path says. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0 or 2e0, which decoding refuses though JSON Schema counts them as integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
+  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 1: each is one of the $defs, which the API's path says. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
   "anyOf": [
     {
       "$ref": "#/$defs/ClaimRequest"

@@ -2,6 +2,7 @@ package expr_test
 
 import (
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -199,6 +200,38 @@ func TestJSONDecodeErrors(t *testing.T) {
 		var tmpl expr.Template
 		if err := tmpl.UnmarshalJSON([]byte(data)); err == nil {
 			t.Errorf("template %s: decoded", data)
+		}
+	}
+}
+
+// What a newer release can write, as its format gains it without a new
+// plan version, is refused with ErrUnknown: a context, an operator or a
+// function this release doesn't know, or a function's arguments, or an
+// operator's negation, that it doesn't take. What no release writes is
+// refused without it.
+func TestJSONDecodeUnknown(t *testing.T) {
+	for data, newer := range map[string]bool{
+		`{"src":"x","tree":{"ref":"secrets","path":[]}}`:                                               true,
+		`{"src":"x","tree":{"call":"hashFiles","args":[]}}`:                                            true,
+		`{"src":"x","tree":{"call":"contains","args":[{"lit":1}]}}`:                                    true,
+		`{"src":"x","tree":{"call":"contains","args":[{"lit":[]},{"lambda":["x"],"body":{"lit":1}}]}}`: true,
+		`{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lit":1}]}}`:                              true,
+		`{"src":"x","tree":{"op":"=","x":{"lit":1},"y":{"lit":2}}}`:                                    true,
+		`{"src":"x","tree":{"op":"+","x":{"lit":1}}}`:                                                  true,
+		`{"src":"x","tree":{"op":"==","not":true,"x":{"lit":1},"y":{"lit":2}}}`:                        true,
+		`{"src":"x","tree":{"op":"!","not":true,"x":{"lit":1}}}`:                                       false,
+		`{"src":"x","tree":{"op":"in","not":false,"x":{"lit":1},"y":{"lit":[]}}}`:                      false,
+		`{"src":"x","tree":{"op":"=","not":null,"x":{"lit":1},"y":{"lit":2}}}`:                         false,
+		`{"src":"x","tree":{"lambda":["x"],"body":{"lit":1}}}`:                                         false,
+		`{"src":"x","tree":{"call":"map","args":[{"lit":[]},{"lambda":["1x"],"body":{"lit":1}}]}}`:     false,
+		`{"src":"x","tree":{"num":"1"}}`:                                                               false,
+		`{"src":"x","tree":{"words":"x"}}`:                                                             false,
+		`{"src":"x","tree":{"ref":"inputs"}}`:                                                          false,
+	} {
+		var e expr.Expr
+		err := e.UnmarshalJSON([]byte(data))
+		if err == nil || errors.Is(err, expr.ErrUnknown) != newer {
+			t.Errorf("%s: %v, want ErrUnknown %t", data, err, newer)
 		}
 	}
 }

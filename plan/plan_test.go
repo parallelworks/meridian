@@ -301,7 +301,7 @@ func TestDecodeRefuses(t *testing.T) {
 	for name, data := range map[string]string{
 		"another version":                  strings.Replace(string(good), `"version":1`, `"version":2`, 1),
 		"an unknown key":                   strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
-		"a bad tree":                       strings.Replace(string(good), `"ref":"inputs"`, `"ref":"secrets"`, 1),
+		"a bad tree":                       strings.Replace(string(good), `"ref":"inputs"`, `"ref":null`, 1),
 		"a node of two kinds":              strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","word":"x"`, 1),
 		"a node's unknown key":             strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","later":1`, 1),
 		"a key in another case":            strings.Replace(string(good), `"jobs":`, `"JOBS":`, 1),

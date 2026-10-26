@@ -1090,7 +1090,8 @@ says what the coordinator does next:
   the coordinator starts the run again after.
 
 Decoding the plan or the secret record before Start fails alike: with
-`plan.ErrVersion` for another release's version, and with
+`plan.ErrVersion` for another release's version, or for a plan whose
+trees name what a newer release's format has, and with
 `plan.ErrMalformed` for what no release encoded, or this one can't read
 as its own version, which decoding again gives too, so the coordinator
 fails the run.
@@ -1343,12 +1344,20 @@ sees one version.
   that is always written missing, null where none is written, an integer
   past the bounds its Go type has in every build, and what a member holds
   that the schema says it can't, such as an empty name or an outcome that
-  isn't one. Decoding refuses more only where a schema can't say it, as of
-  which contexts, operators and functions a tree names, and which job
-  comes before another.
+  isn't one. Decoding refuses more only where a schema can't say it: an
+  integer written as `2.0` or `-0.0`, which JSON Schema can't tell from
+  `2` and `0`, which job comes before another, and what a tree names that
+  the release doesn't know.
 - **What an expression means is its format's.** A stored tree is read the
   same in every version, and evaluated by the rules of the format the plan
-  records.
+  records. A format can gain a context, an operator or a function, or a
+  function's arguments, without a new plan version, so a newer release
+  can write a tree, of a version an older one reads, that names what the
+  older one doesn't know. The older release refuses that plan, or that
+  ready job, as one of a newer release (`plan.ErrVersion`, not
+  `plan.ErrMalformed`), and leaves its run to a replica that reads it,
+  rather than fail the run. A worker refuses such a job as one it can't
+  read, and the job is placed again.
 - **The release.** The plan records the Meridian release that compiled it,
   for whoever reads the run, but its digest leaves it out, as a rerun's
   comparison does ([Reruns](#reruns)): the same plan from another build is

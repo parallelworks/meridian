@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Meridian plan, version 1",
-  "description": "A compiled run, as plan.Encode writes it: everything a coordinator needs to schedule the run, and a worker to run its jobs. Its $defs describe the plan's other types too, which readyjob.schema.json, record.schema.json, runvalues.schema.json and jobresult.schema.json name, and the stored values and expressions every one of them holds. Every member is described; a member this version doesn't have is refused, as plan.Decode refuses it. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0 or 2e0, which decoding refuses though JSON Schema counts them as integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
+  "description": "A compiled run, as plan.Encode writes it: everything a coordinator needs to schedule the run, and a worker to run its jobs. Its $defs describe the plan's other types too, which readyjob.schema.json, record.schema.json, runvalues.schema.json and jobresult.schema.json name, and the stored values and expressions every one of them holds. Every member is described; a member this version doesn't have is refused, as plan.Decode refuses it. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
   "$ref": "#/$defs/Plan",
   "$defs": {
     "Plan": {
@@ -1001,7 +1001,7 @@
       "additionalProperties": false
     },
     "Node": {
-      "description": "A node of an expression's tree: an object, one of whose members names its kind, with the members a node of that kind has. Each member is checked once, against properties, and the members a kind has, by name, against allOf, so that a tree is checked in time linear in its size.",
+      "description": "A node of an expression's tree: an object, one of whose members names its kind, with the members a node of that kind has. Each member is checked once, against properties, and the members a kind has, by name, against allOf, so that a tree is checked in time linear in its size. Which contexts, operators and functions a tree can name, and the arguments each takes, are its format's, which can gain more without a new version: a release refuses one it doesn't know as a newer release's (plan.ErrVersion).",
       "type": "object",
       "properties": {
         "lit": true,

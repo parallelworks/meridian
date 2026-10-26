@@ -468,8 +468,13 @@ func (p *Plan) checkJobOrder() error {
 	return nil
 }
 
-// ErrVersion is what Decode returns for a plan of a version this release
-// doesn't read, such as one a newer release wrote.
+// ErrVersion is what Decode and DecodeReadyJob return for a plan, or a
+// ready job, of a version this release doesn't read, such as one a newer
+// release wrote; and for one of this version whose expressions name what
+// this release doesn't know: a context, an operator or a function, or a
+// function's arguments or an operator's negation it doesn't take
+// (expr.ErrUnknown). A format gains these without a new plan version, so a
+// newer release wrote that one too, and a release that knows them reads it.
 var ErrVersion = errors.New("plan: unsupported version")
 
 // ErrMalformed is what Decode, DecodeRecord and DecodeReadyJob return for
@@ -486,9 +491,15 @@ var ErrMalformed = errors.New("plan: malformed")
 // ErrMalformed: keys it doesn't know, which a newer release wrote, among
 // them, a member that is always written that is missing, null where a
 // member is never null, and whatever else the version's schema refuses
-// (Schemas). Keys match exactly, and no key can be given twice. It fails
-// too, with ErrMalformed, on jobs that aren't in the order of their names,
-// each once, as Jobs is, since Ready finds a job by its name in that order.
+// (Schemas). Keys match exactly, and no key can be given twice. An integer
+// member is a whole number written as Encode writes one: 2.0, 2e0 and -0.0
+// are refused, though JSON Schema takes them for integers. It fails too,
+// with ErrMalformed, on jobs that aren't in the order of their names, each
+// once, as Jobs is, since Ready finds a job by its name in that order. A
+// plan of this version whose expressions name a context, an operator or a
+// function this release doesn't know, which the schema takes, fails with
+// ErrVersion: a newer release wrote it, and one that knows them reads it.
+// Decode reports the first of what it refuses that it reads.
 func Decode(data []byte) (*Plan, error) {
 	p := new(Plan)
 	if err := decodeVersioned(data, p, func() int { return p.Version }, "the plan"); err != nil {
@@ -525,6 +536,16 @@ func decodeVersioned(data []byte, v any, version func() int, of string) error {
 		return fmt.Errorf("%w: %s names no version", ErrMalformed, of)
 	case head.Version != Version:
 		return fmt.Errorf("%w %d of %s; this release reads version %d", ErrVersion, head.Version, of, Version)
+	}
+	return decodeError(of, err)
+}
+
+// decodeError returns err, the error of decoding what of names, of this
+// version: one that wraps ErrVersion if err wraps expr.ErrUnknown, as what
+// a newer release of the version wrote, and ErrMalformed otherwise.
+func decodeError(of string, err error) error {
+	if errors.Is(err, expr.ErrUnknown) {
+		return fmt.Errorf("%w: %s names what a newer release of version %d knows: %w", ErrVersion, of, Version, err)
 	}
 	return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
 }

@@ -169,3 +169,63 @@ func TestDecodingAgreesWithTheSchemas(t *testing.T) {
 		}
 	}
 }
+
+// A plan, or a ready job, of this version whose expressions name what this
+// release doesn't know, though the schema takes it, as a function its
+// format gained, is a newer release's: decoding it fails with ErrVersion,
+// which a coordinator leaves to a replica of a release that reads it,
+// rather than ErrMalformed, which fails the run.
+func TestDecodingANewerReleasesNames(t *testing.T) {
+	plans := encoded(t, plan.Encode, fullPlan(t))
+	job := encoded(t, plan.EncodeReadyJob, readyJobs(t)[0])
+	for _, tc := range []struct{ name, old, new string }{
+		{"a function", `"call":"contains"`, `"call":"containsAll"`},
+		{"a function's arguments", `{"lit":"a"}],"call":"contains"`, `{"lit":"a"},{"lit":"b"}],"call":"contains"`},
+		{"a context", `"ref":"inputs"`, `"ref":"secrets"`},
+		{"a binary operator", `"op":"=="`, `"op":"=~"`},
+		{"a unary operator", `"op":"!"`, `"op":"~"`},
+	} {
+		for _, kind := range []struct {
+			what, schema string
+			good         []byte
+			decode       func([]byte) error
+		}{
+			{"plan", "plan/schema/1/plan.schema.json", plans, decoders[reflect.TypeFor[plan.Plan]()]},
+			{"ready job", "plan/schema/1/readyjob.schema.json", job, decoders[reflect.TypeFor[plan.ReadyJob]()]},
+		} {
+			data := strings.Replace(string(kind.good), tc.old, tc.new, 1)
+			if data == string(kind.good) {
+				t.Fatalf("%s: the golden %s changed", tc.name, kind.what)
+			}
+			schematest.Validate(t, schematest.Schema(t, kind.schema), tc.name, []byte(data))
+			if err := kind.decode([]byte(data)); !errors.Is(err, plan.ErrVersion) || errors.Is(err, plan.ErrMalformed) {
+				t.Errorf("a %s with %s this release doesn't know: %v, want ErrVersion", kind.what, tc.name, err)
+			}
+		}
+	}
+}
+
+// An integer member is a whole number written as Encode writes one:
+// decoding refuses 1.0, 1e0 and -0.0, which JSON Schema takes for
+// integers, as the schemas' description says.
+func TestDecodingRefusesIntegersWrittenAsFractions(t *testing.T) {
+	plans := string(encoded(t, plan.Encode, fullPlan(t)))
+	record := string(encoded(t, plan.EncodeRecord, sampleRecord()))
+	for _, tc := range []struct {
+		name, good, old, new, schema string
+		decode                       func([]byte) error
+	}{
+		{"a format of 1.0", plans, `"format":1`, `"format":1.0`, "plan/schema/1/plan.schema.json", decoders[reflect.TypeFor[plan.Plan]()]},
+		{"a format of 1e0", plans, `"format":1`, `"format":1e0`, "plan/schema/1/plan.schema.json", decoders[reflect.TypeFor[plan.Plan]()]},
+		{"an index of -0.0", record, `"index":0`, `"index":-0.0`, "plan/schema/1/record.schema.json", decoders[reflect.TypeFor[plan.Record]()]},
+	} {
+		data := strings.Replace(tc.good, tc.old, tc.new, 1)
+		if data == tc.good {
+			t.Fatalf("%s: the golden changed", tc.name)
+		}
+		schematest.Validate(t, schematest.Schema(t, tc.schema), tc.name, []byte(data))
+		if err := tc.decode([]byte(data)); !errors.Is(err, plan.ErrMalformed) {
+			t.Errorf("%s: %v, want ErrMalformed", tc.name, err)
+		}
+	}
+}

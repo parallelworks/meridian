@@ -278,9 +278,11 @@ func (a *attempt) setUp() *problem.Problem {
 // from err, DecodeReadyJob's, as a kind of problem, without the decoder's
 // own text, which can quote the job, and in it a value made from a secret,
 // before the worker knows what masks it (ReadyJob.Masked). The job is
-// JSON, as the claim that holds it decoded.
+// JSON, as the claim that holds it decoded. One of a version the worker
+// reads that names what it doesn't know, as a function a newer release's
+// format has, is one it can't read, as one encoded otherwise is.
 func decodeFailure(version int, err error) (*problems.Kind, problems.Params) {
-	if errors.Is(err, plan.ErrVersion) {
+	if errors.Is(err, plan.ErrVersion) && version != plan.Version {
 		return problems.JobVersionUnsupported, problems.Params{"version": version, "supported": plan.Version}
 	}
 	return problems.JobUnreadable, nil
