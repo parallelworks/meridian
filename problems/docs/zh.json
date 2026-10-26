@@ -1932,5 +1932,20 @@
     "fix": [
       "启动与协调器相同发行版本的 Meridian 工作进程。"
     ]
+  },
+  "fips_not_enforced": {
+    "title": "未强制执行 FIPS 140-3 的加密",
+    "why": "Meridian 使用 Go 经过验证的 FIPS 140-3 加密模块构建，只在 GODEBUG 的 fips140=only 下运行，该设置使使用模块未批准的算法成为错误。二进制文件把 fips140=only 设为默认值，但环境变量 GODEBUG 会覆盖默认值，而工作进程可以手动或通过 SSH 以任意环境启动。因此，每个 meridian 命令，尤其是工作进程，都会拒绝在没有它的情况下运行，而不是以更弱的加密运行。",
+    "fix": [
+      "从 GODEBUG 中删除 fips140，或将其设为 fips140=only，然后再次运行该命令。",
+      "在自行运行 Meridian 工作进程（worker.Run）的程序中，把 fips140=only 设为默认值：在其 go.mod 中加入 godebug fips140=only，或在其 main 包中加入 //go:debug fips140=only。"
+    ]
+  },
+  "fips_module_not_validated": {
+    "title": "不是经过验证的 FIPS 140-3 模块",
+    "why": "Go 的 FIPS 140-3 模块在构建程序时由 GOFIPS140 指定的冻结版本（如 certified）中经过验证。不设置 GOFIPS140 的构建会以 latest 版本从 Go 源代码编译该模块，无论以何种模式运行，它都不是经过验证的模块。Meridian 拒绝使用它运行，而不是以未经验证的加密运行。",
+    "fix": [
+      "使用 GOFIPS140=certified 构建 meridian：在其仓库中使用 make build，使用 GOFIPS140=certified go install github.com/parallelworks/meridian/cmd/meridian@ 加上版本，或者用 go env -w GOFIPS140=certified 设置一次，之后的所有构建都会使用它。"
+    ]
   }
 }

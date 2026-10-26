@@ -1660,5 +1660,18 @@
     "fix": [
       "Start workers of the same release of Meridian as the coordinator."
     ]
+  },
+  "fips_not_enforced": {
+    "why": "Meridian is built with Go's validated FIPS 140-3 cryptographic module, and runs only with GODEBUG's fips140=only, which makes the use of an algorithm the module doesn't approve an error. The binary makes fips140=only its default, but the GODEBUG environment variable overrides a default, and a worker can be started by hand or over SSH with any environment. So every meridian command, the worker above all, refuses to run without it, rather than run with weaker cryptography.",
+    "fix": [
+      "Remove fips140 from GODEBUG, or set it to fips140=only, and run the command again.",
+      "In a program that runs Meridian's worker itself (worker.Run), make fips140=only its default: add godebug fips140=only to its go.mod, or //go:debug fips140=only to its main package."
+    ]
+  },
+  "fips_module_not_validated": {
+    "why": "Go's FIPS 140-3 module is validated in the frozen versions that GOFIPS140 names as it builds a program, such as certified. A build without GOFIPS140 compiles the module from Go's source, as the version latest, which isn't the validated module, whatever mode it runs in. Meridian refuses to run with it, rather than run with cryptography that isn't validated.",
+    "fix": [
+      "Build meridian with GOFIPS140=certified: with make build in its repository, with GOFIPS140=certified go install github.com/parallelworks/meridian/cmd/meridian@ and the version, or once for every build with go env -w GOFIPS140=certified."
+    ]
   }
 }

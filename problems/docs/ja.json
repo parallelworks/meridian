@@ -1932,5 +1932,20 @@
     "fix": [
       "コーディネーターと同じリリースの Meridian のワーカーを起動してください。"
     ]
+  },
+  "fips_not_enforced": {
+    "title": "FIPS 140-3 が強制されていない暗号",
+    "why": "Meridian は Go の検証済み FIPS 140-3 暗号モジュールでビルドされ、GODEBUG の fips140=only のもとでしか実行されません。これにより、モジュールが承認していないアルゴリズムの使用はエラーになります。バイナリは fips140=only を既定値にしていますが、環境変数 GODEBUG は既定値を上書きでき、ワーカーは手動や SSH 経由で任意の環境で起動できます。そのため、すべての meridian コマンド、とりわけワーカーは、弱い暗号で実行するのではなく、それなしでは実行を拒否します。",
+    "fix": [
+      "GODEBUG から fips140 を取り除くか fips140=only にして、コマンドをもう一度実行してください。",
+      "Meridian のワーカーを自分で実行するプログラム（worker.Run）では、fips140=only を既定値にしてください。go.mod に godebug fips140=only を加えるか、main パッケージに //go:debug fips140=only を加えます。"
+    ]
+  },
+  "fips_module_not_validated": {
+    "title": "検証済みではない FIPS 140-3 モジュール",
+    "why": "Go の FIPS 140-3 モジュールは、プログラムのビルド時に GOFIPS140 が指定する凍結されたバージョン（certified など）で検証されています。GOFIPS140 を指定しないビルドは、モジュールを Go のソースからバージョン latest としてコンパイルします。これは、どのモードで実行しても検証済みのモジュールではありません。Meridian は、検証されていない暗号で実行するのではなく、それでの実行を拒否します。",
+    "fix": [
+      "GOFIPS140=certified で meridian をビルドしてください。リポジトリで make build を使うか、GOFIPS140=certified go install github.com/parallelworks/meridian/cmd/meridian@ にバージョンを付けて使うか、go env -w GOFIPS140=certified で一度設定すればすべてのビルドに適用されます。"
+    ]
   }
 }
