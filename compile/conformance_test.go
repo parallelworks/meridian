@@ -10,7 +10,6 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
@@ -40,7 +39,7 @@ func TestInputsConformance(t *testing.T) {
 			if diags.HasErrors() {
 				t.Fatalf("the workflow doesn't load: %v", diags)
 			}
-			opts := compile.Options{Contexts: contexts(c)}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}
@@ -84,26 +83,6 @@ func TestInputsConformance(t *testing.T) {
 	}
 }
 
-// contexts gives the case's contexts, with its secret variables unknown.
-func contexts(c conformance.Case) map[string]any {
-	out := maps.Clone(c.Contexts)
-	if out == nil {
-		out = map[string]any{}
-	}
-	if len(c.SecretVariables) > 0 {
-		vars, _ := out["vars"].(map[string]any)
-		vars = maps.Clone(vars)
-		if vars == nil {
-			vars = map[string]any{}
-		}
-		for _, name := range c.SecretVariables {
-			vars[name] = expr.Unknown{Name: "vars"}
-		}
-		out["vars"] = vars
-	}
-	return out
-}
-
 func orEmpty(m map[string]any) map[string]any {
 	if m == nil {
 		return map[string]any{}
@@ -123,7 +102,7 @@ func TestCompileConformance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts := compile.Options{Contexts: contexts(c)}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}
@@ -172,7 +151,7 @@ func TestStartConformance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts := compile.Options{Contexts: contexts(c)}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}
@@ -185,7 +164,7 @@ func TestStartConformance(t *testing.T) {
 			if created != nil {
 				var startDiags problems.Diagnostics
 				res, startDiags, err = compile.Start(ctx, created.Plan, compile.StartInput{
-					RunID: c.Name, Variables: startVariables(c), Record: created.Record, Inputs: opts.Inputs,
+					RunID: c.Name, Variables: conformancetest.StartVariables(c), Record: created.Record, Inputs: opts.Inputs,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -221,25 +200,6 @@ func TestStartConformance(t *testing.T) {
 			check("matrices", matrices, orEmptyMatrices(e.Matrices))
 		})
 	}
-}
-
-// startVariables gives the variables of a case in the start area as the
-// run reads them as it starts: its contexts', with those its start-contexts
-// replace, each secret one secret.
-func startVariables(c conformance.Case) compile.Variables {
-	out := testVariables{}
-	for _, context := range []string{"org", "vars"} {
-		vars, _ := c.Contexts[context].(map[string]any)
-		if v, ok := c.StartContexts[context].(map[string]any); ok {
-			vars = v
-		}
-		for name, v := range vars {
-			if s, ok := v.(string); ok {
-				out[context+"."+name] = compile.Variable{Value: s, Secret: context == "vars" && slices.Contains(c.SecretVariables, name)}
-			}
-		}
-	}
-	return out
 }
 
 func orEmptyStrings(m map[string]string) map[string]string {
@@ -279,7 +239,7 @@ func TestConformancePlansEncode(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				opts := compile.Options{Contexts: contexts(c)}
+				opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 				if !c.NoPlatform {
 					opts.Inputs = passThrough{}
 				}

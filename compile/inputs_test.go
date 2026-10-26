@@ -112,7 +112,7 @@ func TestPlatformInputRejectedInPrivateContainer(t *testing.T) {
 		"in a list that one ignores":  {"v: {type: string, default: '${{ org.V }}'}\nl: {type: list, ignore: '${{ inputs.v == ''x'' }}', template: {c: {type: compute-clusters}}}", map[string]any{"l": []any{map[string]any{"c": "TYPED"}}}},
 		"in a group that one ignores": {"v: {type: string, default: '${{ org.V }}'}\ng: {type: group, ignore: '${{ inputs.v == ''x'' }}', items: {c: {type: compute-clusters}}}", map[string]any{"g": map[string]any{"c": "TYPED"}}},
 	} {
-		_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow(tc.defs)), tc.submitted, compile.Options{Inputs: quoting, Contexts: vars.contexts()})
+		_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow(tc.defs)), tc.submitted, compile.Options{Inputs: quoting, Contexts: vars.Contexts()})
 		errs := diags.Errors()
 		if err != nil || len(errs) != 1 || errs[0].Code != problems.InputRejected.Code() || strings.Contains(fmt.Sprint(diags), "TYPED") {
 			t.Errorf("%s: %v, %v, want input_rejected, masked", name, diags, err)

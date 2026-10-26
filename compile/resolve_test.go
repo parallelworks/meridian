@@ -190,7 +190,7 @@ func TestCreateVariablesAsContexts(t *testing.T) {
 			}
 			opts := compile.Options{Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
 			byContexts, byVariables := opts, opts
-			byContexts.Contexts, byVariables.Variables = vars.contexts(), vars
+			byContexts.Contexts, byVariables.Variables = vars.Contexts(), vars
 			viaContexts, d1, err1 := compile.Create(t.Context(), "workflow.yaml", data, c.Inputs, byContexts)
 			viaVariables, d2, err2 := compile.Create(t.Context(), "workflow.yaml", data, c.Inputs, byVariables)
 			if err1 != nil || err2 != nil {

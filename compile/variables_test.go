@@ -11,6 +11,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -333,7 +334,7 @@ func TestVariablesNeverInPlans(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, c := range cases {
-			opts := compile.Options{Contexts: contexts(c)}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/plan"
 )
@@ -36,7 +37,7 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts := compile.Options{Contexts: contexts(c)}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}
@@ -55,7 +56,7 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 			namedByPath(t, c.Name+"'s plan", slices.Concat(r.Secrets, r.Derived, r.Private, r.Variables))
 			namedByPath(t, c.Name+"'s record", slices.Collect(maps.Keys(created.Record.Means)))
 			res, _, err := compile.Start(ctx, created.Plan, compile.StartInput{
-				RunID: c.Name, Variables: startVariables(c), Record: created.Record, Inputs: opts.Inputs, Sessions: &testSessions{},
+				RunID: c.Name, Variables: conformancetest.StartVariables(c), Record: created.Record, Inputs: opts.Inputs, Sessions: &testSessions{},
 			})
 			if err != nil {
 				t.Fatalf("%s: %v", c.Name, err)

@@ -429,7 +429,7 @@ func TestPlatformInputsReadResolved(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := workflow(tc.defs, tc.rest)
-			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), tc.submitted, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), tc.submitted, compile.Options{Inputs: clusterInputs{}, Contexts: vars.Contexts()})
 			if err != nil || c == nil {
 				t.Fatal(diags, err)
 			}
@@ -451,7 +451,7 @@ func TestPlatformInputsReadResolved(t *testing.T) {
 	}
 	t.Run("a field of a list's rows", func(t *testing.T) {
 		src := workflow("l: {type: list, template: {c: {type: compute-clusters}, d: {type: string, default: '${{ inputs.l[index].c.id }}'}}}")
-		c := createWith(t, src, map[string]any{"l": []any{map[string]any{"c": "c1"}}}, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
+		c := createWith(t, src, map[string]any{"l": []any{map[string]any{"c": "c1"}}}, compile.Options{Inputs: clusterInputs{}, Contexts: vars.Contexts()})
 		res, diags := startRun(t, c, vars, compile.StartInput{Inputs: clusterInputs{}})
 		if res == nil {
 			t.Fatal(diags)
@@ -478,7 +478,7 @@ func TestPlatformInputRejectedWhenIgnored(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			submitted := map[string]any{"c": "gone-cluster", "l": []any{map[string]any{"c": "gone-cluster"}}, "g": map[string]any{"c": "gone-cluster"}}
-			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow(tc.defs)), submitted, compile.Options{Inputs: rejecting{}, Contexts: testVariables{"vars.V": {Value: "v"}}.contexts()})
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow(tc.defs)), submitted, compile.Options{Inputs: rejecting{}, Contexts: testVariables{"vars.V": {Value: "v"}}.Contexts()})
 			if err != nil || c != nil {
 				t.Fatalf("Create gave a run: %v", err)
 			}
@@ -529,7 +529,7 @@ func TestPlatformDetailsChangeByStart(t *testing.T) {
 // the new value, the workflow's env: among them.
 func TestPlatformInputMeansChangedVariable(t *testing.T) {
 	src := workflow("c: {type: compute-clusters, default: '${{ vars.V }}'}\nd: {type: string, default: '${{ inputs.c.id }}'}", "env:\n  E: ${{ inputs.c.id }}\n")
-	c := createWith(t, src, map[string]any{"c": "old"}, compile.Options{Inputs: clusterInputs{}, Contexts: testVariables{"vars.V": {Value: "old"}}.contexts()})
+	c := createWith(t, src, map[string]any{"c": "old"}, compile.Options{Inputs: clusterInputs{}, Contexts: testVariables{"vars.V": {Value: "old"}}.Contexts()})
 	res, diags := startRun(t, c, testVariables{"vars.V": {Value: "new"}}, compile.StartInput{Inputs: clusterInputs{}})
 	if res == nil {
 		t.Fatal(diags)
@@ -612,7 +612,7 @@ func TestPlatformInputMeansChangedVariableUnread(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := workflow(tc.defs, tc.rest)
-			c := createWith(t, src, tc.submitted, compile.Options{Inputs: badInputs{}, Contexts: testVariables{"org.V": {Value: "old"}}.contexts()})
+			c := createWith(t, src, tc.submitted, compile.Options{Inputs: badInputs{}, Contexts: testVariables{"org.V": {Value: "old"}}.Contexts()})
 			for _, now := range []string{"new", "newBAD"} {
 				res, diags := startRun(t, c, testVariables{"org.V": {Value: now}}, compile.StartInput{Inputs: goneInputs{}})
 				if now == "newBAD" {
@@ -673,7 +673,7 @@ func TestResolvedHoldsNoPrivatePart(t *testing.T) {
 			t.Run(typ+" "+variable, func(t *testing.T) {
 				src := workflow("k: {type: " + typ + ", optional: true, default: {name: k1, token: '${{ " + variable + " }}'}}")
 				submitted := map[string]any{"k": map[string]any{"name": "k1", "token": "TYPED"}}
-				c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), submitted, compile.Options{Inputs: detailInputs{}, Contexts: vars.contexts()})
+				c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), submitted, compile.Options{Inputs: detailInputs{}, Contexts: vars.Contexts()})
 				if err != nil || c == nil {
 					t.Fatal(diags, err)
 				}
