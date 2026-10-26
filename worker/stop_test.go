@@ -258,6 +258,100 @@ func TestFencedAfterJob(t *testing.T) {
 	}
 }
 
+// TestEndAnswerLost checks that a worker whose end the coordinator stored,
+// but whose answer was lost, ends as that end says, though a heartbeat
+// fails with Fenced before the end, sent again, is answered, as one does
+// once the attempt has ended.
+func TestEndAnswerLost(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("echo done=1 >> $OUTPUTS")))
+	fenced := make(chan struct{})
+	var once sync.Once
+	var ends atomic.Int32
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		switch r.URL.Path {
+		case workerapi.PathHeartbeat:
+			if f.End() != nil {
+				// The Fake answers it Fenced: the attempt has ended.
+				once.Do(func() { close(fenced) })
+			}
+		case workerapi.PathComplete:
+			if ends.Add(1) == 1 {
+				return workerapitest.DropAnswer
+			}
+			// The end again, once a heartbeat has been fenced, and the
+			// worker has had a second to read that answer, unless it
+			// gives up on the end first.
+			select {
+			case <-fenced:
+			case <-r.Context().Done():
+				return workerapitest.Answer
+			}
+			select {
+			case <-time.After(time.Second):
+			case <-r.Context().Done():
+			}
+		}
+		return workerapitest.Answer
+	}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fenced:
+	default:
+		t.Error("no heartbeat came once the end was stored")
+	}
+	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Result.Outputs["done"] != "1" {
+		t.Errorf("the job's outputs are %v", end.Result.Outputs)
+	}
+}
+
+// TestEndFenced checks that a worker whose end the coordinator refuses as
+// Fenced, as once another attempt has superseded this one, exits with
+// that, and stops what its steps left running, as when a heartbeat is
+// fenced.
+func TestEndFenced(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command(`nohup sleep 60 >/dev/null 2>&1 </dev/null & echo $! > "$PW_JOB_DIR/bg"`)))
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		if r.URL.Path == workerapi.PathComplete {
+			return workerapitest.Fence
+		}
+		return workerapitest.Answer
+	}
+	err := runWorker(t, f, t.Context(), Config{})
+	data, readErr := os.ReadFile(filepath.Join(f.Claim.RunDir, "bg"))
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	if pid > 0 {
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	}
+	if !errors.Is(err, errFenced) {
+		t.Fatalf("got %v, want %v", err, errFenced)
+	}
+	if pid <= 0 {
+		t.Fatalf("no background process: %q, %v", data, readErr)
+	}
+	for wait := time.After(5 * time.Second); syscall.Kill(pid, 0) == nil && !zombie(pid); {
+		select {
+		case <-wait:
+			t.Fatalf("the step's background process %d still runs after its end was fenced", pid)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// zombie reports whether the process pid has ended, and waits for its
+// parent to reap it, where /proc says.
+func zombie(pid int) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	_, after, ok := strings.Cut(string(data), ") ")
+	return ok && strings.HasPrefix(after, "Z")
+}
+
 // withCleanup returns s with the cleanup: command cleanup.
 func withCleanup(s plan.Step, cleanup string) plan.Step {
 	s.Cleanup = plan.Literal(cleanup)

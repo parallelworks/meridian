@@ -54,6 +54,9 @@ type attempt struct {
 	// cutReports is set once the worker has sent an event without what it
 	// couldn't encode (reportNotEncoded), which fails the job.
 	cutReports atomic.Bool
+	// sentEnd is set once the worker is sending the attempt's end, which
+	// may end the attempt before the worker has the answer (endedWithout).
+	sentEnd atomic.Bool
 
 	// stopMu guards what stops the job, and stopChanged, closed and
 	// replaced whenever that changes.
@@ -158,6 +161,11 @@ func (a *attempt) run(ctx context.Context) error {
 	close(stepsStopped)
 	if end != nil {
 		err := a.deliver(send, end)
+		if errors.Is(err, errFenced) || errors.Is(err, errUnauthorized) {
+			// The attempt ended without this end: the worker stops what
+			// its steps left running, as for a heartbeat that fails so.
+			a.halt(err)
+		}
 		if err == nil || !a.halted.fired() {
 			return err
 		}
@@ -368,6 +376,7 @@ func (a *attempt) deliver(ctx context.Context, end *workerapi.Complete) error {
 	if a.cutReports.Load() {
 		a.failEnd(end)
 	}
+	a.sentEnd.Store(true)
 	err := a.client.complete(ctx, end)
 	if enc, ok := errors.AsType[*encodeError](err); ok {
 		a.log.Error("the attempt's end couldn't be encoded", "error", a.mask.Mask(enc.Error()))
@@ -452,7 +461,7 @@ func (a *attempt) heartbeat(ctx context.Context) {
 			a.renew(sent)
 			wait, failures = period-time.Since(sent), 0
 		case errors.Is(err, errFenced), errors.Is(err, errUnauthorized):
-			a.halt(err)
+			a.endedWithout(err)
 			return
 		case ctx.Err() != nil:
 			return
@@ -462,6 +471,20 @@ func (a *attempt) heartbeat(ctx context.Context) {
 			failures++
 		}
 	}
+}
+
+// endedWithout is what a heartbeat or a control poll that fails with err,
+// Fenced or 401, does: the attempt has ended without the worker, which
+// halts. Once the worker is sending the attempt's end, though, that end may
+// be what ended it, stored though its answer was lost: the worker stops
+// heartbeating, or polling, and the answer to the end, which it repeats
+// until it has one, says whether the attempt ended without it.
+func (a *attempt) endedWithout(err error) {
+	if a.sentEnd.Load() {
+		a.log.Debug("the attempt has ended, perhaps with the end the worker sent", "error", err)
+		return
+	}
+	a.halt(err)
 }
 
 // renew records that a heartbeat the worker sent at sent succeeded.
@@ -558,7 +581,7 @@ func (a *attempt) control(ctx context.Context) {
 		case err == nil:
 			failures = 0
 		case errors.Is(err, errFenced), errors.Is(err, errUnauthorized):
-			a.halt(err)
+			a.endedWithout(err)
 			return
 		case ctx.Err() != nil:
 			return

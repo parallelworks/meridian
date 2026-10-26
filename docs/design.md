@@ -2235,7 +2235,10 @@ while the attempt holds the job's fencing number and hasn't ended, which
 the write's own transaction checks. A write from a superseded attempt
 fails (`fenced`), and the worker that made it stops its job; a repeat of
 the result the attempt already stored, as a worker sends after a dropped
-connection, is answered as the first was.
+connection, is answered as the first was. A heartbeat fails too once the
+result is stored, so a worker that has sent its result takes the answer
+to it, repeated until it has one, as saying how the attempt ended, not a
+heartbeat's.
 
 The coordinator's numbers are the same for every job; only tests change
 them:
