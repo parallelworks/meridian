@@ -134,3 +134,23 @@ func TestPlatformInputsStartAgreesWithCreate(t *testing.T) {
 		t.Errorf("compared %d runs, want more", compared)
 	}
 }
+
+// What a launch form sends for an input of a platform's type is the
+// resource's name, which the form reads the details of, as the defaults
+// that read them do: FormValues gives the name, in a list's rows too, and
+// the defaults what read the details.
+func TestFormValuesSendPlatformNames(t *testing.T) {
+	src := "on:\n  execute:\n    inputs:\n" +
+		"      c: {type: compute-clusters}\n" +
+		"      d: {type: string, default: '${{ inputs.c.id }}'}\n" +
+		"      l: {type: list, template: {c: {type: compute-clusters}}}\n" +
+		"jobs:\n  main:\n    steps:\n      - run: echo\n"
+	doc, diags := format.Load("workflow.yaml", []byte(src))
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	got := FormValues(doc, map[string]any{"c": "c1", "l": []any{map[string]any{"c": "c2"}}}, Options{Inputs: detailsOf{}})
+	if want := `{"c":"c1","d":"id-c1","l":[{"c":"c2"}]}`; canonicalValues(t, got) != want {
+		t.Errorf("FormValues gives %s, want %s", canonicalValues(t, got), want)
+	}
+}

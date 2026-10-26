@@ -23,7 +23,11 @@ var NamesSecret = namesSecret
 // form's text it can evaluate evaluated, as ACTIVATE's form evaluates them,
 // those that read a password or a variable too. What reads a secret
 // variable, which it can't evaluate, it leaves out, as if it sent the
-// text. It sends the values of inputs that are ignored too.
+// text. It sends the values of inputs that are ignored too. What reads an
+// input of a platform's type reads what opts.Inputs gives for it, as the
+// form reads the resource a person picks, but the input's own value is the
+// one opts.Inputs was given, as a form sends a resource's name, as
+// pw://user/name, rather than its details.
 func FormValues(doc *format.Document, submitted map[string]any, opts Options) map[string]any {
 	plain := *doc
 	plain.Value = jsonvalue.CloneMap(doc.Value)
@@ -39,6 +43,13 @@ func FormValues(doc *format.Document, submitted map[string]any, opts Options) ma
 	for _, f := range r.fields {
 		if f.deferred {
 			deletePath(out, f.path)
+		}
+	}
+	for _, fields := range [][]*field{r.fields, r.liveRows()} {
+		for _, f := range fields {
+			if f.resolved && !f.failed {
+				setIn(out, f.path, jsonvalue.Clone(f.given))
+			}
 		}
 	}
 	return out
