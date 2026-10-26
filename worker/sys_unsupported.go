@@ -3,7 +3,6 @@
 package worker
 
 import (
-	"net"
 	"runtime"
 
 	"github.com/parallelworks/meridian/problems"
@@ -17,8 +16,6 @@ import (
 // user's others from tracing it, and OpenBSD's ktrace records what a
 // process it traces writes, the worker's requests among them, whatever
 // kern.global_ptrace says.
-
-func checkPeer(*net.UnixConn, string) error { return systemUnsupported() }
 
 func harden() error { return systemUnsupported() }
 
