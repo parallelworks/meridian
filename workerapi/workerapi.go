@@ -386,6 +386,12 @@ type Control struct {
 	// Cancel that gives less time makes SIGKILL sooner; one that gives
 	// more doesn't make it later.
 	//
+	// A run past its timeout isn't cancelled, in format 1: its deadline
+	// fails the step it stops. So a Cancel whose Reason is timeout stops
+	// the job as the job's own timeout: does: the step it stops ends
+	// failure, so failure() is true for the steps after it and cancelled()
+	// false, and the job ends failure, with the reason timeout.
+	//
 	// As in format 1, a step whose if: is cancel-aware, as always() is
 	// (plan.ReadyStep.OutlivesCancel), still runs after a cancellation,
 	// and to its end, so a job can end otherwise than cancelled, as
@@ -469,8 +475,10 @@ type Complete struct {
 	// record. NeedsFailed and Cancelled are the coordinator's, and the
 	// worker leaves them unset.
 	Result plan.JobResult `json:"result"`
-	// Reason is why the job ended other than as its steps did, such as
-	// timeout, or "".
+	// Reason is why the job ended other than as its steps did, or "":
+	// timeout for a job past its timeout:, or whose run is past the run's,
+	// with the outcome failure; the Control's reason for a job cancelled,
+	// with the outcome cancelled; or setup-failed.
 	Reason plan.Reason `json:"reason,omitempty"`
 	// Problem is what failed before the first step started, with the
 	// outcome failure and the reason setup-failed: an image that couldn't

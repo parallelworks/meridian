@@ -288,6 +288,56 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+// TestRunTimeout checks that a job whose run is past its timeout, which
+// the coordinator stops with a Cancel whose reason is timeout, isn't
+// cancelled, as in format 1, whose run's deadline fails the step it stops:
+// the step fails, failure() is true after it and cancelled() false, so a
+// step whose if: is failure() comes to run, and fails without starting, as
+// a step past the deadline does, and one whose if: is cancelled() is
+// skipped; a step that outlives a cancel runs, as one does after the job's
+// own timeout; its cleanup runs; and the job ends failure, timeout.
+func TestRunTimeout(t *testing.T) {
+	t.Parallel()
+	stubborn := command("trap '' TERM; echo waiting; sleep 30")
+	stubborn.Cleanup = plan.Literal("echo cleaned > $PW_JOB_DIR/cleaned")
+	always := command("echo always")
+	always.If = cond("always()")
+	onFailure := command("echo failed")
+	onFailure.If = cond("failure()")
+	onCancel := command("echo cancelled")
+	onCancel.If = cond("cancelled()")
+	f := workerapitest.NewFake(t, newJob(stubborn, always, onFailure, command("echo skipped"), onCancel))
+	// The run's timeout, once the step has printed, and so ignores SIGTERM.
+	var once sync.Once
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
+			once.Do(func() { f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout, GraceSeconds: 1}) })
+		}
+		return workerapitest.Answer
+	}
+	start := time.Now()
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Errorf("the job took %v to stop", elapsed)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 failure -1",
+		"started 1.0", "finished 1.0 success 0",
+		"finished 2.0 failure -1",
+		"finished 3.0 skipped -1",
+		"finished 4.0 skipped -1",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	checkEnd(t, f, plan.OutcomeFailure, plan.ReasonTimeout)
+	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "waiting\n")
+	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "always\n")
+	if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "cleaned")); err != nil {
+		t.Errorf("the cleanup: command didn't run: %v", err)
+	}
+}
+
 // TestOutlivesCancel checks that, as in format 1, a step whose if: is
 // cancel-aware runs to its end whatever happens to its job: neither the
 // job's cancellation nor the step's own timeout: stops it, though its

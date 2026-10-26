@@ -45,7 +45,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: problem}
 	}
 	if a.job.TimeoutSeconds > 0 {
-		t := time.AfterFunc(seconds(a.job.TimeoutSeconds)-time.Since(a.claimed), func() { a.fire(a.timedOut, nil) })
+		t := time.AfterFunc(seconds(a.job.TimeoutSeconds)-time.Since(a.claimed), func() {
+			a.fire(a.timedOut, func() { a.timeoutKill = time.Now().Add(a.tm.grace) })
+		})
 		defer t.Stop()
 	}
 
@@ -100,9 +102,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 				stopped, why = true, stopJobTimeout
 			}
 		}
-		// As in format 1, a job past its timeout isn't cancelled: the step
-		// it was running failed, so its steps' failure() is true, and
-		// cancelled() false. A step that ended cancelled, as early-cancel:
+		// As in format 1, a job past its timeout isn't cancelled, nor is
+		// one whose run is past the run's: the step it was running failed,
+		// so its steps' failure() is true, and cancelled() false. A step that ended cancelled, as early-cancel:
 		// stops one, makes cancelled() true for those after it, as the
 		// Step phase reads from their results.
 		end := a.runStep(ctx, i, a.state(results, cancelled, nil), stopped, why)

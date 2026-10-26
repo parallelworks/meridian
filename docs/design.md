@@ -2209,7 +2209,11 @@ waking up or `meridian run` restarting must not make them all look lost.
   step's `timeout:`, and its `retry:`'s, bound each of its tries, and a try
   past the step's own `timeout:` isn't tried again. A job that runs past its
   timeout isn't cancelled: the step it was running fails, so `failure()` is
-  true after it and `cancelled()` false, as in format 1.
+  true after it and `cancelled()` false, as in format 1. Nor is a job whose
+  run runs past the run's timeout: the coordinator asks its worker to stop
+  with the reason `timeout`, which the worker takes as the job's own
+  timeout, so the job ends failure, with the reason `timeout`, as format 1
+  fails the step its run's deadline stops.
 - **A step whose `if:` is cancel-aware**, one that calls `always()` or
   `cancelled()`, negates `success()` or `failure()`, or is the word
   `always`, outlives its job's cancellation and timeout, as in format 1: it

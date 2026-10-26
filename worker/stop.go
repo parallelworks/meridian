@@ -16,7 +16,8 @@ const (
 	// stopEarlyCancel is a job of the run failing, for a step whose
 	// early-cancel: is any-job-failed.
 	stopEarlyCancel
-	// stopJobTimeout is the job running past its timeout:.
+	// stopJobTimeout is the job running past its timeout:, or its run past
+	// the run's.
 	stopJobTimeout
 	// stopStepTimeout is the step running past its timeout:, and
 	// stopTryTimeout one of its tries past its retry:'s timeout.
@@ -109,7 +110,7 @@ func (a *attempt) jobStop(s stops) stopWinner {
 		w.consider(a.cancelled.at, stopRequest{stopCancelled, a.cancelKill, a.tm.afterKill})
 	}
 	if s.cancellable && a.timedOut.fired() {
-		w.consider(a.timedOut.at, stopRequest{stopJobTimeout, a.timedOut.at.Add(a.tm.grace), a.tm.afterKill})
+		w.consider(a.timedOut.at, stopRequest{stopJobTimeout, a.timeoutKill, a.tm.afterKill})
 	}
 	if s.earlyCancel && a.anyJobFailed.fired() {
 		w.consider(a.anyJobFailed.at, stopRequest{stopEarlyCancel, a.anyJobFailed.at.Add(a.tm.grace), a.tm.afterKill})
