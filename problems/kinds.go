@@ -420,6 +420,13 @@ var (
 	GitUnavailable     = defineCommand("git_unavailable", "git can't be run", "reason")
 )
 
+// What no meridian command, the worker above all, runs without: mode is
+// how the process's cryptography runs, as GODEBUG's fips140 says: on, FIPS
+// 140-3 mode without enforcing it, or off.
+var (
+	FIPSNotEnforced = defineCommand("fips_not_enforced", "Cryptography without FIPS 140-3 enforced", "mode")
+)
+
 // The meridian command's arguments, and what stops it. command is a
 // command's name, as validate, and flag an option's, without its dashes.
 var (

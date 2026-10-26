@@ -1932,5 +1932,12 @@
     "fix": [
       "Inicia workers de la misma versión de Meridian que el coordinador."
     ]
+  },
+  "fips_not_enforced": {
+    "title": "Criptografía sin FIPS 140-3 aplicado",
+    "why": "Meridian se compila con el módulo criptográfico FIPS 140-3 validado de Go, y solo se ejecuta con fips140=only en GODEBUG, que convierte en un error el uso de un algoritmo que el módulo no aprueba. El binario tiene fips140=only como valor por defecto, pero la variable de entorno GODEBUG anula ese valor, y un worker puede iniciarse a mano o por SSH con cualquier entorno. Por eso todos los comandos de meridian, y el worker sobre todo, se niegan a ejecutarse sin él, en vez de ejecutarse con una criptografía más débil.",
+    "fix": [
+      "Quita fips140 de GODEBUG, o ponlo en fips140=only, y vuelve a ejecutar el comando."
+    ]
   }
 }

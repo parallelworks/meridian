@@ -29,6 +29,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -64,6 +65,9 @@ type cli struct {
 	// json says to write problems as RFC 9457 problem details, one a line,
 	// as validate --format json does.
 	json bool
+	// fips returns how the process's cryptography runs, which a test
+	// gives in place of the process's (fipsmode.Mode) for nil.
+	fips func() string
 }
 
 // getenv reads an environment variable, or "" if it isn't set.
@@ -140,8 +144,18 @@ func init() {
 	}
 }
 
-// run runs the command args name, and returns its exit status.
+// run runs the command args name, and returns its exit status. No command
+// runs unless FIPS 140-3 mode is enforced: go.mod's godebug line is only
+// the binary's default, which GODEBUG overrides, and a worker can be
+// started by hand, or over SSH, with any environment.
 func run(ctx context.Context, c *cli, args []string) int {
+	mode := fipsmode.Mode
+	if c.fips != nil {
+		mode = c.fips
+	}
+	if err := fipsmode.Check(mode()); err != nil {
+		return c.fail(err)
+	}
 	if len(args) == 0 {
 		code := c.failf(problems.CommandMissing, nil)
 		usage(c.stderr)

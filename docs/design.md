@@ -2790,7 +2790,13 @@ A job's time limit is its `timeout:`. There is no separate walltime:
 
 Releases are built with Go's FIPS 140-3 cryptographic module
 (`GOFIPS140=certified`) and run under `GODEBUG=fips140=only`, which turns
-the use of a non-approved algorithm into an error.
+the use of a non-approved algorithm into an error. The binary makes that
+its default, but a default is all it is: the `GODEBUG` environment
+variable overrides it, and a worker can be started by hand, or over SSH,
+with any environment. So no `meridian` command runs, the worker above
+all, unless the process's cryptography runs in FIPS 140-3 mode, enforced
+(`fips_not_enforced`), and `worker.Run` checks it too, whatever program
+calls it.
 
 - **TLS 1.3**, through `crypto/tls`, with the algorithms FIPS mode allows.
   The coordinator's certificate uses an ECDSA P-256 key.

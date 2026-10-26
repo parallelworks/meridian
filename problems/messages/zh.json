@@ -275,5 +275,6 @@
   "input_flag_path_not_settable": "-input {path}：输入“{input}”{reason, select, flattened {的类型是 {type}，它的输入按各自的名称设置} rows {含有一个行列表；请以 JSON 数组整体设置它} other {的类型是 {type}，它不含输入，所以没有输入“{next}”}}。",
   "fenced": "该作业的另一个尝试已取代此尝试，或者此尝试已完成，因此协调器拒绝此请求。",
   "out_of_order": "报告的顺序不对：协调器期望下一个内容从 {expected} 开始，即下一个事件的编号或日志下一个字节的偏移量。",
-  "plan_too_new": "此工作进程无法读取运行计划的版本，因此协调器不向它发送运行的任何内容。"
+  "plan_too_new": "此工作进程无法读取运行计划的版本，因此协调器不向它发送运行的任何内容。",
+  "fips_not_enforced": "Meridian 只在其加密的 FIPS 140-3 模式被强制执行时运行，而此进程的 GODEBUG {mode, select, on {启用了该模式，但未强制执行} other {关闭了该模式}}。"
 }

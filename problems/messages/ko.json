@@ -275,5 +275,6 @@
   "input_flag_path_not_settable": "-input {path}: 입력 ‘{input}’은(는) {reason, select, flattened {{type} 유형이며, 그 입력은 각자의 이름으로 설정합니다} rows {행 목록을 담고 있습니다. JSON 배열로 전체를 설정하세요} other {{type} 유형이며, 입력을 담고 있지 않으므로 ‘{next}’ 입력이 없습니다}}.",
   "fenced": "작업의 다른 시도가 이 시도를 대신했거나 시도가 이미 끝났으므로, 코디네이터는 이 요청을 거부합니다.",
   "out_of_order": "보고의 순서가 맞지 않습니다. 코디네이터는 다음 것을 {expected}부터 기대합니다. 이는 다음 이벤트의 번호이거나 로그의 다음 바이트의 위치입니다.",
-  "plan_too_new": "이 워커는 실행 계획의 버전을 읽지 못하므로, 코디네이터는 실행에 관한 어떤 것도 보내지 않습니다."
+  "plan_too_new": "이 워커는 실행 계획의 버전을 읽지 못하므로, 코디네이터는 실행에 관한 어떤 것도 보내지 않습니다.",
+  "fips_not_enforced": "Meridian은 암호화의 FIPS 140-3 모드가 강제될 때만 실행되는데, 이 프로세스의 GODEBUG에서는 {mode, select, on {켜져 있지만 강제되지 않습니다} other {꺼져 있습니다}}."
 }

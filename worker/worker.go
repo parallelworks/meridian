@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -97,7 +98,13 @@ const memorySpoolLimit = 64 << 20
 // to run on a system where it can't; and it sends a token over a Unix
 // socket only once the system has said that its own user, or root, serves
 // it.
+//
+// It refuses to run unless the process's cryptography runs in FIPS 140-3
+// mode, enforced (fipsmode), whatever program it runs in.
 func Run(ctx context.Context, cfg Config) error {
+	if err := fipsmode.Check(fipsmode.Mode()); err != nil {
+		return err
+	}
 	return run(ctx, cfg, defaultTiming, harden)
 }
 
