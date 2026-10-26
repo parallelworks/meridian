@@ -2350,7 +2350,12 @@ for any other only once they have (`plan.Plan.CancelPath`).
   running stopped, if its `if:` isn't cancel-aware: SIGTERM, then SIGKILL
   after a grace period. The step and the job end cancelled, and the job's
   later steps are skipped, but for those whose `if:` outlives a cancel;
-  the cleanup of each step that ran still runs (below).
+  the cleanup of each step that ran still runs (below). A cancel that
+  comes between steps, as format 1's does, cancels the next step that
+  comes to run whose `if:` passes, with `cancelled()` still false: it ends
+  cancelled without starting, and its cleanup runs. Only a step that
+  ended cancelled cancels the job, so one whose steps after the cancel
+  all outlive it ends as they did.
 - **A job whose `if:` is cancel-aware runs on**, as format 1 runs it apart
   from the run: neither a cancel nor the run's timeout stops it, whether
   it is running, or placed and not yet claimed, which is then claimed and

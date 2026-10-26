@@ -72,9 +72,12 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		results []plan.StepResult
 		// ifFailed is set for each step whose if: failed to evaluate.
 		ifFailed = make([]bool, len(a.job.Steps))
-		// cancelled is set once the job's steps have seen the coordinator
-		// cancel it: cancelled() is true for the steps after, as the
-		// Cancelled of their state.
+		// cancelled is set once a step has ended cancelled because the
+		// coordinator cancelled the job: cancelled() is true for the steps
+		// after, as the Cancelled of their state. As in format 1, a cancel
+		// cancels the job through the step it stops, or the next that
+		// comes to run, which ends cancelled without starting; until then
+		// cancelled() is false.
 		cancelled bool
 		// stopped is set once the job is stopping, for why says: its
 		// steps after that don't run, but those that outlive it.
@@ -108,12 +111,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		// one whose run is past the run's: the step it was running failed,
 		// or succeeded if it ignores its errors, and cancelled() is false
 		// for the steps after it, even if the coordinator cancels it
-		// after. A step that ended cancelled, as early-cancel: stops one,
-		// makes cancelled() true for those after it, as the Step phase
-		// reads from their results.
-		if a.cancelled.fired() && why != stopJobTimeout {
-			cancelled = true
-		}
+		// after. A step that ended cancelled, as a cancel or early-cancel:
+		// stops one, makes cancelled() true for those after it, as the
+		// Step phase reads from their results.
 		end := a.runStep(ctx, i, a.state(results, cancelled, nil), stopped, why)
 		if a.stepEnded != nil {
 			a.stepEnded(a, i, false)
@@ -171,6 +171,12 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	skipped := len(results) > 0 && !slices.ContainsFunc(results, func(r plan.StepResult) bool {
 		return r.Outcome != plan.OutcomeSkipped
 	})
+	// As in format 1, a job is cancelled only by a step that ended
+	// cancelled: one whose steps after a cancel all outlive it, or are
+	// skipped, ends as they did.
+	stepCancelled := slices.ContainsFunc(results, func(r plan.StepResult) bool {
+		return r.Outcome == plan.OutcomeCancelled
+	})
 	end := &workerapi.Complete{}
 	outcome := plan.OutcomeSuccess
 	switch {
@@ -182,7 +188,7 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		outcome, end.Reason = plan.OutcomeFailure, plan.ReasonTimeout
 	case failed:
 		outcome = plan.OutcomeFailure
-	case why == stopCancelled || why == stopEarlyCancel:
+	case stepCancelled:
 		outcome = plan.OutcomeCancelled
 		if cancelled {
 			end.Reason = a.cancelReason
