@@ -349,6 +349,20 @@ files.
   with the expression's text, and takes the same fix by refusing it as the
   run is created. None of the 16 workflows with `sessions:` writes an
   expression in them, and none has `links:`.
+- **An `env:` value is text in the `env` context**, as it is in the step's
+  process: one whose expression gives null is `""`, and one that gives a
+  number, a boolean, a list or a mapping is its text, as a template writes
+  it, where ACTIVATE's `env` context held what the expression gave, so
+  that an expression could read null or a number where the step's process
+  read `""` or the number's text. ACTIVATE takes the same fix by keeping
+  an `env:` value's text, as it exports it, in the env map its parser
+  reads. Of the 221 values of the 124 `env:` blocks, 2 are written as other
+  than text and 139 are an expression whole, which can give other than
+  text, and no expression reads a value any of them defines: the known
+  workflows read them in the shell. A job's `runs-on:` that is an `env:`
+  value holding a mapping names the group its JSON text names, where
+  ACTIVATE refuses it; none of the known workflows' jobs has a
+  `runs-on:`.
 - **An ignored group with `flatten: true` drops its inputs' values in a
   group that flattens or a wizard step that flattens too**, as it does
   anywhere else, where ACTIVATE kept them: the outer container copied back
@@ -722,7 +736,8 @@ ACTIVATE's launch form and its backend do together:
   reads only variables and passwords, which the compiler knows, can be
   read.
   An ignored input has no value, even one that was submitted: a condition
-  evaluated once it is ignored reads it as null, a list with rows too. An
+  evaluated once it is ignored reads it as null, a list with rows too, and
+  a group read whole leaves it out. An
   input with no value and no default is required unless it is optional, or
   hidden or in a hidden group; a boolean with none is `false`. A submitted
   null is a value, so an input given null isn't required, and a boolean
@@ -731,7 +746,24 @@ ACTIVATE's launch form and its backend do together:
 - **Containers.** A group's values are under its name, unless it has
   `flatten: true`: then its inputs' values are beside the group's, under
   their own names, as ACTIVATE runs it, in a list's row, a wizard step or
-  another group as well, and the group has none of its own. A value given at
+  another group as well, and the group has none of its own. A group's
+  value, and a wizard step's whose inputs' values are under its name, is a
+  mapping in the run's values, though none of its inputs has a value, or
+  it was given null, as ACTIVATE fills in a run's values, so the jobs read
+  `{}`. One that is ignored, or in one that is, has none, and so has one in
+  a list's row none of whose inputs has a value, as ACTIVATE fills in a
+  row. The input definitions and the workflow's `env:` read a group whole
+  as the jobs do, as the values its inputs have, without the inputs that
+  have none, as ACTIVATE's do with what a launch form sends, which gives
+  an untouched group's booleans as `false`; an input in it read alone with
+  no value reads null, or `false` for a boolean, as above, and so does a
+  row's input that a lambda reads through its parameter, as `r.b` in
+  `map(inputs.l, r => r.b)` does, while the row read whole, as `toJSON(r)`
+  reads it, leaves the input out, as a list's rows read whole do. A group
+  given no value at all, as only a request made without a form can be,
+  reads in ACTIVATE's input definitions as its definition, where
+  Meridian's reads `{}`, among the differences of incomplete values below.
+  A value given at
   its key, of any shape, is kept, as ACTIVATE keeps it, with a warning
   (`flattened_group_value`), and none of its inputs reads it; it is kept as
   a secret if the group has a password among its inputs, which the group's

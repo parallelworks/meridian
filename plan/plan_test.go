@@ -429,6 +429,27 @@ func TestValueDecodingIsStrict(t *testing.T) {
 	}
 }
 
+// A Placeholder, which stands in an expression's context for an input with
+// no value, is never written: a Value or Data that held one fails to
+// encode, rather than write it as a mapping no one gave. JSON has none, so
+// what is decoded holds none either.
+func TestPlaceholderNotWritten(t *testing.T) {
+	held := map[string]any{"g": map[string]any{"a": expr.Placeholder{}, "c": "x"}}
+	if data, err := plan.Literal(held).MarshalJSON(); err == nil {
+		t.Errorf("a Value that holds a Placeholder was written: %s", data)
+	}
+	if data, err := plan.DataOf(held).MarshalJSON(); err == nil {
+		t.Errorf("Data that holds a Placeholder was written: %s", data)
+	}
+	var d plan.Data
+	if err := d.UnmarshalJSON([]byte(`{"g": {"Value": null}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if g, ok := d.Get().(map[string]any)["g"].(map[string]any); !ok || g["Value"] != nil || len(g) != 1 {
+		t.Errorf("decoded as %#v", d.Get())
+	}
+}
+
 // Data a run was given, and data in a workflow, are never taken for a
 // template, whatever they hold.
 func TestDataStaysData(t *testing.T) {

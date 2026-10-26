@@ -1,0 +1,17 @@
+on:
+  execute:
+    inputs:
+      g:
+        type: group
+        items:
+          a:
+            type: string
+            optional: true
+          b:
+            type: boolean
+env:
+  G: ${{ toJSON(inputs.g) }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

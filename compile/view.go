@@ -154,7 +154,7 @@ func (r *inputResolver) refresh(path []string) {
 	for _, f := range fill {
 		if v, ok := f.filledWith(); ok {
 			if _, has := jsonptr.Lookup(r.view, f.path); !has {
-				setIn(r.view, f.path, v)
+				setIn(r.view, f.path, expr.Placeholder{Value: v})
 			}
 		}
 	}
@@ -263,7 +263,7 @@ func (r *inputResolver) evalValues() map[string]any {
 				continue
 			}
 			if _, has := jsonptr.Lookup(values, f.path); !has {
-				setIn(values, f.path, v)
+				setIn(values, f.path, expr.Placeholder{Value: v})
 			}
 		}
 	}

@@ -50,6 +50,7 @@ var scaledWorkloads = []scaled{
 	{name: "submitted rows whose default reads another list's rows, each evaluated", n: 1000, workload: rowsReadingRows, timed: true},
 	{name: "submitted defaults that each read the one before, each what its default gives", n: 250, workload: givenChain(false), timed: true},
 	{name: "submitted defaults that each read the next, each what its default gives", n: 250, workload: givenChain(true), timed: true},
+	{name: "rows that each read the length of a list whose rows have inputs with no value", n: 500, workload: lengthOfEmptyRows},
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
@@ -270,6 +271,20 @@ func crossRows(n int) ([]byte, map[string]any) {
 	return withInputs([]string{
 		"l: {type: list, template: {name: {type: string}, total: {type: number, default: '${{ length(inputs.l) }}'}}}",
 	}, ""), map[string]any{"l": rows(n, func() map[string]any { return map[string]any{"name": "a", "total": n} })}
+}
+
+// lengthOfEmptyRows is n rows of a list whose template's default reads
+// the length of another list of n rows, whose inputs have no value: what
+// the evaluation reads of that list holds a Placeholder for each, which
+// reading its length doesn't copy it to leave out.
+func lengthOfEmptyRows(n int) ([]byte, map[string]any) {
+	return withInputs([]string{
+		"m: {type: list, optional: true, template: {u: {type: string, optional: true}, b: {type: boolean, optional: true}}}",
+		"l: {type: list, optional: true, template: {h: {type: string, optional: true, default: '${{ length(inputs.m) }}'}}}",
+	}, ""), map[string]any{
+		"m": rows(n, func() map[string]any { return map[string]any{} }),
+		"l": rows(n, func() map[string]any { return map[string]any{} }),
+	}
 }
 
 // crossPasswordRows is crossRows with a password field in each row, so

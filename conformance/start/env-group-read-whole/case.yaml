@@ -1,0 +1,16 @@
+description: >-
+  The workflow's env: reads a group whole as the values its inputs have,
+  without the inputs that have none, as the jobs read it.
+source: ACTIVATE
+inputs:
+  g:
+    b: false
+expect:
+  inputs:
+    g:
+      b: false
+  env:
+    G: |-
+      {
+        "b": false
+      }

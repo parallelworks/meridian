@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"iter"
 	"maps"
 	"math"
 	"math/big"
@@ -259,6 +260,7 @@ func appendJSON(b []byte, v any, indent string, depth int) []byte {
 	case string:
 		b = appendString(b, v, false)
 	case []any:
+		v = visibleItems(v)
 		if len(v) == 0 {
 			return append(b, "[]"...)
 		}
@@ -273,11 +275,12 @@ func appendJSON(b []byte, v any, indent string, depth int) []byte {
 		newline(depth)
 		b = append(b, ']')
 	case map[string]any:
-		if len(v) == 0 {
+		keys := visibleKeys(v)
+		if len(keys) == 0 {
 			return append(b, "{}"...)
 		}
 		b = append(b, '{')
-		for i, k := range slices.Sorted(maps.Keys(v)) {
+		for i, k := range keys {
 			if i > 0 {
 				b = append(b, ',')
 			}
@@ -322,6 +325,7 @@ func jsonLen(v any, indent string, depth int) int {
 	case string:
 		return stringLen(v, false)
 	case []any:
+		v = visibleItems(v)
 		if len(v) == 0 {
 			return len("[]")
 		}
@@ -331,12 +335,13 @@ func jsonLen(v any, indent string, depth int) int {
 		}
 		return n
 	case map[string]any:
-		if len(v) == 0 {
+		keys := visibleKeys(v)
+		if len(keys) == 0 {
 			return len("{}")
 		}
-		n := len("{}") + len(v) - 1 + newline(depth)
-		for k, item := range v {
-			n += newline(depth+1) + stringLen(k, false) + len(":") + jsonLen(item, indent, depth+1)
+		n := len("{}") + len(keys) - 1 + newline(depth)
+		for _, k := range keys {
+			n += newline(depth+1) + stringLen(k, false) + len(":") + jsonLen(v[k], indent, depth+1)
 			if indent != "" {
 				n += len(" ")
 			}
@@ -456,10 +461,14 @@ func deepEqual(a, b any) bool {
 	switch a := a.(type) {
 	case []any:
 		b, ok := b.([]any)
-		return ok && slices.EqualFunc(a, b, strictEqual)
+		return ok && slices.EqualFunc(visibleItems(a), visibleItems(b), strictEqual)
 	case map[string]any:
 		b, ok := b.(map[string]any)
-		return ok && maps.EqualFunc(a, b, strictEqual)
+		if !ok {
+			return false
+		}
+		keys := visibleKeys(a)
+		return slices.Equal(keys, visibleKeys(b)) && !slices.ContainsFunc(keys, func(k string) bool { return !strictEqual(a[k], b[k]) })
 	}
 	return false
 }
@@ -540,14 +549,14 @@ func key(v any) (string, bool) {
 func contains(collection, x any) bool {
 	switch c := collection.(type) {
 	case []any:
-		return slices.ContainsFunc(c, func(item any) bool { return looseEqual(item, x) })
+		return slices.ContainsFunc(c, func(item any) bool { return !isPlaceholder(item) && looseEqual(item, x) })
 	case map[string]any:
 		k, ok := x.(string)
 		if !ok {
 			return false
 		}
-		_, ok = c[k]
-		return ok
+		v, ok := c[k]
+		return ok && !isPlaceholder(v)
 	case string:
 		return strings.Contains(c, stringOf(x))
 	}
@@ -555,19 +564,51 @@ func contains(collection, x any) bool {
 }
 
 // length returns the number of characters in a string, or of items in a
-// list or mapping, and 0 for anything else. It counts a string's
-// characters: what reads a string as the JSON it holds reads it first
-// (collection).
+// list or mapping, but Placeholders, and 0 for anything else. It counts a
+// string's characters: what reads a string as the JSON it holds reads it
+// first (collection).
 func length(v any) float64 {
 	switch v := v.(type) {
 	case string:
 		return float64(utf8.RuneCountInString(v))
 	case []any:
-		return float64(len(v))
+		return float64(len(v) - countPlaceholders(slices.Values(v)))
 	case map[string]any:
-		return float64(len(v))
+		return float64(len(v) - countPlaceholders(maps.Values(v)))
 	}
 	return 0
+}
+
+// countPlaceholders counts the Placeholders among items.
+func countPlaceholders(items iter.Seq[any]) int {
+	n := 0
+	for item := range items {
+		if isPlaceholder(item) {
+			n++
+		}
+	}
+	return n
+}
+
+// visibleItems returns list without its Placeholders: list itself if it
+// holds none.
+func visibleItems(list []any) []any {
+	if !slices.ContainsFunc(list, isPlaceholder) {
+		return list
+	}
+	return slices.DeleteFunc(slices.Clone(list), isPlaceholder)
+}
+
+// visibleKeys returns m's keys, sorted, but those of its Placeholders.
+func visibleKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k, v := range m {
+		if !isPlaceholder(v) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // size estimates the bytes a value takes, to bound what an evaluation can

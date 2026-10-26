@@ -165,7 +165,7 @@ func (e *evaluator) join(at int, v any, sep string) (any, error) {
 	case string:
 		return c, nil
 	case []any:
-		list = c
+		list = visibleItems(c)
 	default:
 		return "", nil
 	}
@@ -271,12 +271,16 @@ func (e *evaluator) prefix(at int, op string, v any) (any, error) {
 		}
 		m, _ := c.(map[string]any)
 		keys := e.sortedKeys(m)
-		out := make([]any, len(keys))
-		for i, k := range keys {
-			if op == "keys" {
-				out[i] = k
-			} else {
-				out[i] = m[k]
+		out := make([]any, 0, len(keys))
+		for _, k := range keys {
+			switch {
+			case isPlaceholder(m[k]):
+				// What has no value isn't among a mapping's keys or
+				// values, as toJSON leaves it out.
+			case op == "keys":
+				out = append(out, k)
+			default:
+				out = append(out, m[k])
 			}
 		}
 		return out, nil

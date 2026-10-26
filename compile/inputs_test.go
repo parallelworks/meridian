@@ -353,8 +353,10 @@ jobs:
 	if inputs.Values["g"] != "mine" {
 		t.Errorf("g = %#v, want the value given for it", inputs.Values["g"])
 	}
-	if s, _ := inputs.Values["s"].(map[string]any); s == nil || s["g"] != nil {
-		t.Errorf("s = %#v, want s.g dropped", inputs.Values["s"])
+	// What was given for s.g is dropped; s.g is a group with no value in
+	// it, as ACTIVATE fills one in.
+	if s, _ := inputs.Values["s"].(map[string]any); s == nil || canonical(t, s["g"]) != "{}" {
+		t.Errorf("s = %#v, want s.g dropped, and {}", inputs.Values["s"])
 	}
 }
 
