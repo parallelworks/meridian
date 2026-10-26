@@ -524,7 +524,9 @@ its resolvers into a plan, in order:
      text rather than a password, whose name looks like a secret's is a
      warning: a plain variable's value isn't masked, and a text input's is
      kept with the run. A name looks like a secret's when one of its words,
-     split at `_`, `-`, `.`, spaces and changes of case, is `token`,
+     split at anything that isn't a letter or a digit, where letters and
+     digits meet, and at changes of case, as the masker splits a key
+     (`internal/words`), is `token`,
      `password`, `passwd`, `pwd`, `passphrase`, `secret`, `apikey`,
      `privatekey`, `accesskey`, `credential` or `credentials`, or two in a
      row are `api key`, `private key` or `access key`, so `HF_TOKEN` and
@@ -1915,8 +1917,10 @@ secret record ([Run data](#run-data)).
   JSON, holds as the value of a key a credential is kept under, or as an
   item of a list that is, but not in a mapping under it, which has keys of
   its own: `{"pin":1234}` holds `1234`, and `{"token":{"type":"bearer"}}`
-  nothing. Such a key is one whose words, split at `_`, `-`, `.`, digits
-  and changes of case, whatever their case, hold a credential word,
+  nothing. Such a key is one whose words, split as an input's name is for
+  the warning about secret-looking names ([Compiling](#compiling)), at
+  anything that isn't a letter or a digit, where letters and digits meet,
+  and at changes of case, whatever their case, hold a credential word,
   `password`, `passwd`, `pass`, `passphrase`, `passcode`, `pwd`, `pw`,
   `secret`, `token`, `pin`, `credential` or `cred`, or the plurals
   `passwords`, `tokens`, `credentials` or `creds`, whose value holds them

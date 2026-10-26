@@ -10,11 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/words"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -302,11 +302,11 @@ func credentialFields(texts []string) map[string]bool {
 // {"secrets":{"github":"ghp_…"}} and {"credentials":{"value":"…"}} are:
 // its last word is secrets, credentials or creds.
 func credentialSection(key string) bool {
-	words := keyWords(key)
+	words := words.Split(key)
 	if len(words) == 0 {
 		return false
 	}
-	switch strings.ToLower(words[len(words)-1]) {
+	switch words[len(words)-1] {
 	case "secrets", "credentials", "creds":
 		return true
 	}
@@ -350,87 +350,60 @@ var keyDescriptors = map[string]bool{
 	"name": true, "id": true, "type": true, "url": true, "uri": true, "endpoint": true, "path": true, "file": true,
 	"alias": true, "prefix": true, "policy": true, "length": true, "version": true, "schema": true, "region": true,
 	"arn": true, "format": true, "algorithm": true, "expiry": true, "ttl": true, "scope": true, "provider": true,
+	"count": true,
 }
 
 // credentialKey reports whether key is one a credential is kept under, and
 // whether a plural word decides it, as credentialFields reads it. Its
-// words, split at _, -, ., digits and changes of case, whatever their
-// case, decide it: it isn't one if its last word is a descriptor
-// (keyDescriptors), as keyFile and tokenUrl are, nor if its last word is
-// key or keys without a qualifier before it (keyQualifiers), as key,
-// sortKey and token-key are, where api_key and privateKey are; it is one
-// if a word is a credential word, as password, accessToken and password2
-// are, or key or keys after a qualifier; and a word written without breaks
-// is one if it is a credential word after a head (credentialHeads), or key
-// or keys after a qualifier, as apikey and clientsecret are, and keyboard,
-// monkey and passport aren't.
+// words (words.Split), whatever their case, decide it: it isn't one if its
+// last word is a descriptor (keyDescriptors), as keyFile, tokenUrl and
+// token_count are, nor if its last word is key or keys without a
+// qualifier before it (keyQualifiers), as key, sortKey and token-key are,
+// where api_key and privateKey are; it is one if a word is a credential
+// word, as password, accessToken and password2 are, or key or keys after
+// a qualifier; and a word written without breaks is one if it is a
+// credential word after a head (credentialHeads), or key or keys after a
+// qualifier, as apikey and clientsecret are, and keyboard, monkey and
+// passport aren't. A plural word decides it only if no singular one does,
+// so credentials/db_password holds one password, as db_password does.
 func credentialKey(key string) (credential, isPlural bool) {
-	words := keyWords(key)
-	for i := range words {
-		words[i] = strings.ToLower(words[i])
-	}
+	words := words.Split(key)
 	n := len(words)
 	if n == 0 || keyDescriptors[words[n-1]] || keyDescriptors[strings.TrimSuffix(words[n-1], "s")] {
 		return false, false
 	}
 	keyWord := func(w string) bool { return w == "key" || w == "keys" }
-	if keyWord(words[n-1]) {
+	if keyWord(words[n-1]) && (n < 2 || !keyQualifiers[words[n-2]]) {
 		// key or keys last is one only after a qualifier: api_key is, and
 		// key, sortKey and token-key aren't.
-		if n >= 2 && keyQualifiers[words[n-2]] {
-			return true, plural[words[n-1]]
-		}
 		return false, false
+	}
+	singular := false
+	note := func(w string) {
+		credential = true
+		singular = singular || !plural[w]
 	}
 	for i, w := range words {
 		switch {
 		case credentialWords[w]:
-			return true, plural[w]
+			note(w)
+			continue
 		case keyWord(w) && i > 0 && keyQualifiers[words[i-1]]:
-			return true, plural[w]
+			note(w)
+			continue
 		}
 		for c := range credentialWords {
 			if head, ok := strings.CutSuffix(w, c); ok && credentialHeads[head] {
-				return true, plural[c]
+				note(c)
 			}
 		}
 		for _, c := range []string{"key", "keys"} {
 			if head, ok := strings.CutSuffix(w, c); ok && keyQualifiers[head] {
-				return true, plural[c]
+				note(c)
 			}
 		}
 	}
-	return false, false
-}
-
-// keyWords splits a key into its words, at _, -, ., runs of digits, which
-// are words of their own, and changes of case: apiKey, API_KEY and APIKey
-// are api and key, and OAuth2Token is OAuth, 2 and Token.
-func keyWords(key string) []string {
-	var words []string
-	runes := []rune(key)
-	start := 0
-	cut := func(i int) {
-		if i > start {
-			words = append(words, string(runes[start:i]))
-		}
-	}
-	for i, r := range runes {
-		switch {
-		case r == '_' || r == '-' || r == '.':
-			cut(i)
-			start = i + 1
-		case i > start && unicode.IsDigit(r) != unicode.IsDigit(runes[i-1]):
-			cut(i)
-			start = i
-		case i > start && unicode.IsUpper(r) &&
-			(unicode.IsLower(runes[i-1]) || i+1 < len(runes) && unicode.IsUpper(runes[i-1]) && unicode.IsLower(runes[i+1])):
-			cut(i)
-			start = i
-		}
-	}
-	cut(len(runes))
-	return words
+	return credential, credential && !singular
 }
 
 // jsonWord reports whether s is true, false or null, which a secret
