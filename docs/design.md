@@ -2299,33 +2299,40 @@ make them all look lost.
 ### Cancellation, timeouts and cleanup
 
 A run stops early when a person cancels it, or when it runs past its own
-`timeout:`, and does what format 1 does in each case.
+`timeout:`, and does what format 1 does in each case. Either way, what
+happens to a job depends on whether its `if:` is cancel-aware: whether it
+calls `always()` or `cancelled()`, negates `success()` or `failure()`, or
+is the word `always`, as a step's can be (below).
 
 - **Stopping a run is stored first**: the stop record, when and why, in
-  the run's row, in one transaction that also tells every running
-  attempt, through its control poll, and wakes every job's supervisor. A
-  placement that no worker has claimed yet is withdrawn (`scancel`,
-  `qdel`, deleting the pod, signalling the process), and its job ends
-  cancelled, whatever its `if:`: the job was readied, so its needs had all
-  ended, and format 1 would be running it, and would stop it as below. A
-  running attempt is waited for while it renews its lease,
-  since its cleanups have no timeout, and withdrawn as a placement is if
-  its lease lapses. `meridian cancel` stores the record whether or not a
-  coordinator is running, and withdraws placements itself when none is.
+  the run's row, in one transaction that also tells every running attempt
+  of a job whose `if:` isn't cancel-aware, through its control poll, and
+  wakes every job's supervisor. A placement of such a job that no worker
+  has claimed yet is withdrawn (`scancel`, `qdel`, deleting the pod,
+  signalling the process), and the job ends cancelled: it was readied, so
+  its needs had all ended, and format 1 would be running it, and would
+  stop it as below. A running attempt that is stopped is waited for while
+  it renews its lease, since its cleanups have no timeout, and withdrawn
+  as a placement is if its lease lapses. `meridian cancel` stores the
+  record whether or not a coordinator is running, and withdraws
+  placements itself when none is.
 - **A running job, when a person cancels the run**, has the step it is
-  running stopped: SIGTERM, then SIGKILL after a grace period. The step
-  and the job end cancelled, and the job's later steps are skipped, but
-  for those whose `if:` outlives a cancel; the cleanup of each step that
-  ran still runs (below).
+  running stopped, if its `if:` isn't cancel-aware: SIGTERM, then SIGKILL
+  after a grace period. The step and the job end cancelled, and the job's
+  later steps are skipped, but for those whose `if:` outlives a cancel;
+  the cleanup of each step that ran still runs (below).
+- **A job whose `if:` is cancel-aware runs on**, as format 1 runs it apart
+  from the run: neither a cancel nor the run's timeout stops it, whether
+  it is running, or placed and not yet claimed, which is then claimed and
+  runs. It ends as its steps do, and only its own timeout stops it.
 - **A job not yet readied**, still waiting for its needs, takes one of
   three paths, by its `if:`:
-  - **One that is cancel-aware**, one that calls `always()` or
-    `cancelled()`, negates `success()` or `failure()`, or is the word
-    `always`, waits until its needs have ended. Its `if:` is then
-    evaluated with the status of its needs alone, as a job's always is:
-    `cancelled()` is true when a job it needs ended cancelled, and
-    `failure()` when one failed, or was skipped because its own needs
-    failed. If it is true, the job runs.
+  - **One that is cancel-aware** waits until its needs have ended. Its
+    `if:` is then evaluated with the status of its needs alone, as a
+    job's always is: `cancelled()` is true when a job it needs ended
+    cancelled, and `failure()` when one failed, or was skipped because
+    its own needs failed. If it is true, the job runs, and runs on as
+    above.
   - **One that calls a status function, or reads `needs`**, and isn't
     cancel-aware, waits until its needs have ended, then ends cancelled,
     without its `if:` being evaluated.
@@ -2340,10 +2347,11 @@ A run stops early when a person cancels it, or when it runs past its own
   for it, and then stores the stop record with the reason `timeout`. When
   the timeout is private, that job wakes at least every minute rather than
   at the timeout, so that hopper's schedule doesn't show it. The step
-  running then fails with the reason `timeout`, and so does its job. Jobs
-  not yet readied take the same three paths as after a cancel. The
-  run's outcome is failure, with the reason `timeout`, which Meridian adds:
-  format 1 records no reason.
+  running in a job whose `if:` isn't cancel-aware then fails with the
+  reason `timeout`, and so does its job; a cancel-aware job runs on, as
+  after a cancel. Jobs not yet readied take the same three paths as after
+  a cancel. The run's outcome is failure, with the reason `timeout`, which
+  Meridian adds: format 1 records no reason.
 - **A job's own timeout** ends only that job, and the worker enforces it.
   The job isn't cancelled: the step it was running fails, so `failure()`
   is true after it and `cancelled()` false, and the job fails with the
