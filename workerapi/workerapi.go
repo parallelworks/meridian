@@ -160,7 +160,10 @@ const (
 	// worker, answered with a Control. Its query names the last version
 	// the worker has seen (QueryVersion), and the coordinator answers once
 	// it has a newer one, or after ControlWaitSeconds with the same one.
-	// The worker polls again at once.
+	// The worker polls again at once. Its first poll names -1, for none,
+	// which the coordinator answers at once, with the control as it is:
+	// the worker reads its first control so before the job's first step
+	// (Control).
 	PathControl = "/v1/control"
 	// PathEvents reports step events: Events, answered with an EventsAck.
 	PathEvents = "/v1/events"
@@ -403,6 +406,17 @@ type Container struct {
 }
 
 // Control is what the coordinator asks of a worker.
+//
+// What it asked before the claim applies from the job's first step: once
+// it has claimed the attempt, the worker reads its first control, which
+// the coordinator answers at once (PathControl), and does as it asks
+// before the first step starts, as format 1 starts a job whose context
+// has already ended, as when the run was cancelled, or its timeout
+// passed, or a job of it failed, before the attempt was placed. A
+// coordinator puts what it has asked of the attempt's run in the control
+// as it makes the attempt. The worker waits a few seconds at most for
+// that first answer, and then starts the job's steps without it, and does
+// as the control asks once a poll has it.
 type Control struct {
 	// Version grows each time the coordinator asks something more.
 	Version int64 `json:"version"`

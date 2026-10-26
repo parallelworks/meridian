@@ -80,6 +80,9 @@ type attempt struct {
 	// anyJobFailed is fired when a job of the run has failed: this one, or
 	// another, as the coordinator says.
 	anyJobFailed *signal
+	// firstControl is closed once the worker has read its first control,
+	// and done as it asks, or failed to read it (awaitFirstControl).
+	firstControl chan struct{}
 	// timedOut is fired when the job has run past its timeout:, or its
 	// run past the run's, as the coordinator says; a step it stops is sent
 	// SIGKILL at timeoutKill.
@@ -117,7 +120,7 @@ var errLeaseLapsed error = problems.AttemptLeaseLapsed.Problem(nil)
 func (a *attempt) run(ctx context.Context) error {
 	a.stopChanged = make(chan struct{})
 	a.halted, a.cancelled, a.anyJobFailed, a.timedOut = newSignal(), newSignal(), newSignal(), newSignal()
-	a.reaped = make(chan struct{})
+	a.reaped, a.firstControl = make(chan struct{}), make(chan struct{})
 	a.groups = map[int]*exec.Cmd{}
 	a.renewed, a.renewal = a.claimed, make(chan struct{})
 	// What the worker sends goes on while its job runs and after: until
@@ -570,9 +573,15 @@ func (a *attempt) fence(ctx context.Context) {
 
 // control waits for what the coordinator asks of the worker: to cancel the
 // job, perhaps again with less time, or that another job of the run
-// failed.
+// failed. Its first poll names no version, -1, which the coordinator
+// answers at once with the control as it is, so that what it asked before
+// the claim, as when the run was stopped before the attempt was placed,
+// applies from the job's first step, which waits for it
+// (awaitFirstControl).
 func (a *attempt) control(ctx context.Context) {
-	var version int64
+	version := int64(-1)
+	read := sync.OnceFunc(func() { close(a.firstControl) })
+	defer read()
 	failures, quick := 0, 0
 	for {
 		asked := time.Now()
@@ -587,6 +596,9 @@ func (a *attempt) control(ctx context.Context) {
 			return
 		default:
 			a.log.Debug("polling for control failed", "error", err)
+			// A first poll that fails leaves the control to the polls
+			// after it, which go on beside the job's steps.
+			read()
 			if sleep(ctx, a.tm.backoff(failures)) != nil {
 				return
 			}
@@ -594,6 +606,7 @@ func (a *attempt) control(ctx context.Context) {
 			continue
 		}
 		if ctl.Version <= version {
+			read()
 			// A coordinator holds a poll until it has something newer;
 			// one that answers at once is asked again after a while,
 			// rather than at once.
@@ -614,6 +627,26 @@ func (a *attempt) control(ctx context.Context) {
 		if ctl.AnyJobFailed {
 			a.fire(a.anyJobFailed, nil)
 		}
+		read()
+	}
+}
+
+// awaitFirstControl waits until the worker has read its first control,
+// and done as it asks, or failed to read it, for tm.firstControl at most,
+// or until the job is halted: so that a job whose run was stopped, or a
+// job of whose run failed, before its attempt was claimed doesn't start
+// its first step as though it hadn't been, as format 1's job starts with
+// its context already ended. A coordinator that doesn't answer in that
+// time leaves what it asked to the polls after, which go on beside the
+// job's steps.
+func (a *attempt) awaitFirstControl() {
+	t := time.NewTimer(a.tm.firstControl)
+	defer t.Stop()
+	select {
+	case <-a.firstControl:
+	case <-a.halted.c:
+	case <-t.C:
+		a.log.Info("the coordinator hasn't answered the first control poll, so the job's steps start without it", "waited", a.tm.firstControl)
 	}
 }
 

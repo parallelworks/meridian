@@ -781,6 +781,112 @@ func TestEarlyCancel(t *testing.T) {
 	checkEnd(t, f, plan.OutcomeCancelled, "")
 }
 
+// TestFirstControl checks that what the coordinator asked before the
+// claim applies from the job's first step, as format 1 starts a job whose
+// context has already ended: after a cancel, the first step, which doesn't
+// outlive it, ends cancelled without starting, and its cleanup runs, as
+// does one that outlives it, with its own, and the job ends cancelled;
+// after the run's timeout, the first step fails without starting, as a
+// step that comes to run past a deadline does, so its cleanup runs, and
+// the job ends failure, with the reason timeout; and after a job of the
+// run failed, a step whose early-cancel: is any-job-failed doesn't run.
+func TestFirstControl(t *testing.T) {
+	t.Parallel()
+	plain := command("touch $PW_JOB_DIR/ran")
+	plain.Cleanup = plan.Literal("echo cleaned")
+	always := command("echo always")
+	always.If, always.Cleanup = cond("always()"), plan.Literal("echo cleaned")
+	early := command("touch $PW_JOB_DIR/ran")
+	early.EarlyCancel = "any-job-failed"
+	for _, tc := range []struct {
+		name    string
+		job     *plan.ReadyJob
+		control workerapi.Control
+		events  []string
+		outcome plan.Outcome
+		reason  plan.Reason
+	}{
+		{
+			"cancelled", newJob(plain, always),
+			workerapi.Control{Cancel: true, Reason: plan.ReasonFailFast},
+			[]string{
+				"finished 0.0 cancelled -1",
+				"started 1.0", "finished 1.0 success 0",
+				"cleanup started 1.0", "cleanup finished 1.0 success 0",
+				"cleanup started 0.0", "cleanup finished 0.0 success 0",
+			},
+			plan.OutcomeCancelled, plan.ReasonFailFast,
+		},
+		{
+			"run timeout", newJob(plain, always),
+			workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout},
+			[]string{
+				"finished 0.0 failure -1",
+				"started 1.0", "finished 1.0 success 0",
+				"cleanup started 1.0", "cleanup finished 1.0 success 0",
+				"cleanup started 0.0", "cleanup finished 0.0 success 0",
+			},
+			plan.OutcomeFailure, plan.ReasonTimeout,
+		},
+		{
+			"a job failed", newJob(early),
+			workerapi.Control{AnyJobFailed: true},
+			[]string{"finished 0.0 cancelled -1"},
+			plan.OutcomeCancelled, "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := workerapitest.NewFake(t, tc.job)
+			f.SetControl(tc.control)
+			// The first poll is answered after the first step would have
+			// started, were it not waiting for it.
+			var requests counter
+			f.Fault = func(r *http.Request) workerapitest.Fault {
+				if r.URL.Path == workerapi.PathControl && requests.next(r.URL.Path) == 1 {
+					// The delay is the test: a coordinator that answers a
+					// little late, well within the worker's wait.
+					time.Sleep(testTiming.firstControl / 5) //nolint:forbidigo // the delay is the test
+				}
+				return workerapitest.Answer
+			}
+			if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+				t.Fatal(err)
+			}
+			checkEvents(t, f, tc.events...)
+			checkEnd(t, f, tc.outcome, tc.reason)
+			if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "ran")); err == nil {
+				t.Error("the first step ran")
+			}
+		})
+	}
+}
+
+// TestFirstControlHangs checks that a first control poll the coordinator
+// doesn't answer, as a connection that is half open would hold it,
+// doesn't hold the job: its first step starts once the worker has waited
+// a while for it.
+func TestFirstControlHangs(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("echo ran")))
+	var requests counter
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		if r.URL.Path == workerapi.PathControl && requests.next(r.URL.Path) == 1 {
+			return workerapitest.Hang
+		}
+		return workerapitest.Answer
+	}
+	start := time.Now()
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < testTiming.firstControl || took > 15*time.Second {
+		t.Errorf("the job took %v, with a first control poll that hung, and a wait for it of %v", took, testTiming.firstControl)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0")
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+}
+
 // TestCleanupOrder checks that the cleanup: commands of the steps that ran
 // run at the job's end, whatever its outcome, in reverse order, each with
 // its events and log, and that those of the steps that didn't run are

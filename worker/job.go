@@ -67,6 +67,9 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	}
 	a.jobEnv = jobEnv
 	a.addMasked(jobEnv.Masked...)
+	// What the coordinator asked before the claim applies from the first
+	// step: a cancel, the run's timeout, or a job of the run failing.
+	a.awaitFirstControl()
 
 	var (
 		results []plan.StepResult

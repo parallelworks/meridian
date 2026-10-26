@@ -2744,6 +2744,10 @@ that embeds Meridian serve the same API.
   that it reads.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
+  The worker reads it once, answered at once, before the job's first step,
+  so that a stop asked before the claim applies from that step, as format
+  1 starts a job whose context has already ended; a coordinator that
+  doesn't answer within a few seconds leaves it to the polls after.
 - **Step events:** a step started, or finished with its exit code.
 - **Logs:** each step's output, uploaded as a stream with byte offsets, so
   an interrupted upload resumes without duplicating or losing lines.
