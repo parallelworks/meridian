@@ -462,9 +462,11 @@ false.
 
 A job fails, for `failure()`, when a job it needs failed, or was skipped
 because a job it needs had failed in turn, and is cancelled, for
-`cancelled()`, when the run is being cancelled or a job it needs was
-cancelled, as in format 1. A job its own `if:` skipped counts as a success,
-so a job that needs an optional one still runs. So a failure reaches the
+`cancelled()`, when a job it needs ended cancelled, as in format 1: a
+cancel of the run alone doesn't make `cancelled()` true for a job
+([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)).
+A job its own `if:` skipped counts as a success, so a job that needs an
+optional one still runs. So a failure reaches the
 jobs below it through those it skips: a job whose `if:` the jobs it needs
 made false, because one failed or was cancelled, is skipped with that
 reason, which the jobs that need it read as a failure. A step fails, for
@@ -1143,10 +1145,12 @@ A run's data is of three kinds, kept apart by who may read them:
 | [Run state](#run-state) | Jobs, attempts, outcomes, outputs and diagnostics | Whoever can see the run | With the run |
 
 What Meridian makes from a variable or a password is kept only in the
-secret record, so the plan and run state can be shown to whoever can see the
-run. A job's outputs and logs hold what its steps write, and Meridian masks
-only secrets in them ([Outputs](#outputs)), so a plain variable's value
-that a step writes stays as it is
+secret record, or sealed under its data key beside it, as a private
+placement is ([Run state](#run-state)), so the plan and run state can be
+shown to whoever can see the run. A job's outputs and logs hold what its
+steps write, and Meridian masks only secrets in them
+([Outputs](#outputs)), so a plain variable's value that a step writes
+stays as it is
 ([Variables and secrets](#variables-and-secrets)).
 
 ### The plan
@@ -1355,11 +1359,10 @@ The coordinator encrypts and stores it.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
-- **Deleted when the run ends**, in the transaction that ends it, with
-  SQLite's `secure_delete` on, so that what it held isn't left in the
-  database file's free pages. Nothing in it is needed once the run has
-  ended. A rerun is the stored plan and what is submitted again, from
-  which Create makes the rerun's record again ([Reruns](#reruns)). Each of
+- **Deleted when the run ends**, in the transaction that ends it. Nothing
+  in it is needed once the run has ended. A rerun is the stored plan and
+  what is submitted again, from which Create makes the rerun's record
+  again ([Reruns](#reruns)). Each of
   the record's parts is either what a person or a form gives, the
   workflow's own text (`Withheld`, which the pinned workflow holds), or
   what Create and Start make again from them.
@@ -1928,8 +1931,9 @@ not assumed idempotent.
   the image couldn't be pulled, or the worker never connected. None of the
   workflow's code has run, so the retry can go to another member of the
   job's group ([Placement](#placement)). A job is placed again after 5
-  seconds, then 30, then 2 minutes, and fails after its third such
-  failure, or its second for the same reason, with the last one's problem.
+  seconds, then 30, then 2 minutes, and its fourth such failure fails it,
+  or its second with a problem of the same kind, with the last one's
+  problem.
   A backend that can't answer, as when a scheduler's command fails, is
   asked again after a second, twice as long each time up to a minute, ten
   times, after which that counts as such a failure.
@@ -2251,16 +2255,18 @@ lease stops leading:
   be, and it gives up on one that hasn't been answered in a third of the
   time then left, to send another, so that one heartbeat held by a
   connection that is half open doesn't stop the job: every 10 seconds,
-  each given 9, so at 10, 20 and 30 seconds before 37.
+  each given 9, and one that fails tried again within a period, so at
+  least three tries before 37 seconds.
 - **The coordinator waits** until the lease has lapsed and the margin
   passed, 75 seconds after the last renewal by the store's clock, before
   it starts a new attempt: 21 seconds after the worker stopped waiting,
   which covers clocks that run at different rates, the second a resumed
   host's worker can take to notice, and the time a commit takes. Neither
   side reads the other's clock; each only measures the period.
-- **The cost** is that such a job stops when it is cut off from every
-  coordinator replica for longer than a lease period, even when its host is
-  fine. Its new attempt resumes it, as its `retry:` asks.
+- **The cost** is that such a job starts stopping when it is cut off from
+  every coordinator replica for about six tenths of a lease period, 37
+  seconds, even when its host is fine. Its new attempt resumes it, as its
+  `retry:` asks.
 
 Other jobs keep running while they are cut off, since nothing runs them
 again: their workers spool reports and deliver them when they reconnect
@@ -2300,7 +2306,9 @@ A run stops early when a person cancels it, or when it runs past its own
   attempt, through its control poll, and wakes every job's supervisor. A
   placement that no worker has claimed yet is withdrawn (`scancel`,
   `qdel`, deleting the pod, signalling the process), and its job ends
-  cancelled. A running attempt is waited for while it renews its lease,
+  cancelled, whatever its `if:`: the job was readied, so its needs had all
+  ended, and format 1 would be running it, and would stop it as below. A
+  running attempt is waited for while it renews its lease,
   since its cleanups have no timeout, and withdrawn as a placement is if
   its lease lapses. `meridian cancel` stores the record whether or not a
   coordinator is running, and withdraws placements itself when none is.
@@ -2309,7 +2317,8 @@ A run stops early when a person cancels it, or when it runs past its own
   and the job end cancelled, and the job's later steps are skipped, but
   for those whose `if:` outlives a cancel; the cleanup of each step that
   ran still runs (below).
-- **A job that hasn't started** takes one of three paths, by its `if:`:
+- **A job not yet readied**, still waiting for its needs, takes one of
+  three paths, by its `if:`:
   - **One that is cancel-aware**, one that calls `always()` or
     `cancelled()`, negates `success()` or `failure()`, or is the word
     `always`, waits until its needs have ended. Its `if:` is then
@@ -2332,7 +2341,7 @@ A run stops early when a person cancels it, or when it runs past its own
   the timeout is private, that job wakes at least every minute rather than
   at the timeout, so that hopper's schedule doesn't show it. The step
   running then fails with the reason `timeout`, and so does its job. Jobs
-  that haven't started take the same three paths as after a cancel. The
+  not yet readied take the same three paths as after a cancel. The
   run's outcome is failure, with the reason `timeout`, which Meridian adds:
   format 1 records no reason.
 - **A job's own timeout** ends only that job, and the worker enforces it.
@@ -2473,8 +2482,7 @@ state holds of each dependency's result with what the secret record holds
 The coordinator is a hopper client whose handlers keep no state between
 calls: each reads the job's state, acts, and stores what it did. Any replica
 can therefore handle any job, and a replica that dies loses nothing. What a
-replica keeps is a cache of the plans it has decoded, which never change,
-bounded by their number and their size.
+replica keeps is a cache of the plans it has decoded, which never change.
 
 - **Supervisors drive jobs**, one for each job and each matrix instance,
   as hopper jobs that any replica works ([On hopper](#on-hopper)). A
@@ -2498,10 +2506,10 @@ with SQLite, and exits when the run ends.
 
 - **Every `meridian run` is a replica**, and so is every `meridian resume`.
   One at a time holds the socket workers connect to, under a lock on a file
-  in the state directory, and serves every run's workers; the others work
-  the store's jobs too, and follow their own run. When the holder exits,
-  one that waits for the lock takes the socket over, and the workers
-  reconnect to it.
+  beside the store's database, and serves every run's workers; the others
+  work the store's jobs too, and follow their own run. When the holder
+  exits, one that waits for the lock takes the socket over, and the
+  workers reconnect to it.
 - **Start runs where the run was made.** Only the `meridian run` that
   created a run works its Start, or a `meridian resume` of it once that has
   gone, so the variables it reads from environment variables are read from
@@ -2688,10 +2696,10 @@ can serve any job. It closes the connection only when it gives the lease
 up. A replica that takes the lease over, once its holder has stopped
 renewing it, sets the connection up again at the same address, so the
 member's running workers reconnect to it. Locally, the socket in the state
-directory is held under a lock on a file beside it, which the system
-releases when its holder exits, however it exits, and the store records
-which process holds it and since when, from which the grace after a
-takeover is counted ([Leases and fencing](#leases-and-fencing)).
+directory is held under a lock on a file beside the store's database,
+which the system releases when its holder exits, however it exits, and
+the store records which process holds it and since when, from which the
+grace after a takeover is counted ([Leases and fencing](#leases-and-fencing)).
 
 On a Unix socket, the coordinator asks the system who each connection is
 from before it reads a request, as the worker asks who serves its socket
@@ -3036,8 +3044,8 @@ binaries still link `libSystem`, as Apple requires.
   placement ID (such as a Slurm job ID), its timestamps, and its outcome and
   reason.
 - **Retention:** runs, logs and hopper's history are kept for a configured
-  time. A job's outputs are kept until every job that depends on it has
-  finished. A run's secret record is deleted when the run ends.
+  time. A job's outputs are kept with its run. A run's secret record is
+  deleted when the run ends.
 - **Benchmarks:** compile time for large workflows, the time Meridian adds
   between a job becoming ready and its placement, and job throughput on
   SQLite and Postgres. Their thresholds live in the repository and gate
