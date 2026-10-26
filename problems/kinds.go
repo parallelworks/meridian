@@ -339,8 +339,12 @@ var (
 // ID.
 var (
 	// RecordUnreadable is a run's secret record that doesn't decrypt as
-	// the run's: one sealed for another run or another store, or changed.
+	// the run's latest: one sealed for another run or another store, one
+	// that a later one replaced, or one changed.
 	RecordUnreadable = define(Error, "record_unreadable", "Secret record that can't be decrypted", "run")
+	// RecordResealLimit is a run's secret record that has been encrypted
+	// again limit times, as many as its data key is used for.
+	RecordResealLimit = define(Error, "record_reseal_limit", "Secret record encrypted too many times", "run", "limit")
 )
 
 // The meridian command's own problems, in CommandRegistry. A path, an

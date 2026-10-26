@@ -1192,10 +1192,18 @@
   },
   "record_unreadable": {
     "title": "Registro secreto que no se puede descifrar",
-    "why": "El registro secreto de una ejecución guarda lo que se le dio a la ejecución y los secretos que leyó. Se cifra con AES-256-GCM con una clave de datos propia de la ejecución, ligada al ID de la ejecución y al de su almacén, para que no se pueda trasladar a otra ejecución, ni siquiera a una del mismo flujo de trabajo con las mismas entradas, ni a una ejecución con el mismo ID en otro almacén. Este no se descifra como el de su ejecución: se trajo de otra ejecución o de otro almacén, o se cambió. En lugar de ejecutarse con lo que se le dio a otra ejecución, la ejecución falla.",
+    "why": "El registro secreto de una ejecución guarda lo que se le dio a la ejecución y los secretos que leyó. Se cifra con AES-256-GCM con una clave de datos propia de la ejecución, ligada al ID de la ejecución, al de su almacén y a cuántas veces se ha vuelto a cifrar, para que no se pueda trasladar a otra ejecución, ni siquiera a una del mismo flujo de trabajo con las mismas entradas, ni a una ejecución con el mismo ID en otro almacén, ni volver a ponerse en lugar de un registro posterior de su ejecución. Este no se descifra como el más reciente de su ejecución: se trajo de otra ejecución o de otro almacén, se volvió a poner uno anterior, o se cambió. En lugar de ejecutarse con lo que se le dio a otra ejecución, o con lo que su propia ejecución tenía antes, la ejecución falla.",
     "fix": [
       "Repite la ejecución, que vuelve a crear su registro secreto a partir de lo que se envía.",
       "Averigua qué cambió la base de datos del almacén: Meridian escribe el registro secreto de una ejecución solo para esa ejecución."
+    ]
+  },
+  "record_reseal_limit": {
+    "title": "Registro secreto cifrado demasiadas veces",
+    "why": "El registro secreto de una ejecución se vuelve a cifrar con la misma clave de datos, con un nonce aleatorio nuevo, cada vez que la ejecución le añade algo, como cuando un trabajo termina con salidas privadas. Una clave de datos se usa un número limitado de veces, para que nunca sea probable que dos de sus nonces coincidan, lo que debilitaría el cifrado. Esta ejecución ha añadido algo a su registro tantas veces, y falla en lugar de pasar del límite.",
+    "fix": [
+      "Si la ejecución tiene tantos trabajos e instancias de matriz con salidas privadas, divídela en varias ejecuciones.",
+      "Si no, informa del error: ninguna ejecución con menos trabajos añade algo a su registro tan a menudo."
     ]
   },
   "workflow_too_large": {

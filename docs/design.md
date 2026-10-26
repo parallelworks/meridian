@@ -1284,25 +1284,42 @@ The coordinator encrypts and stores it.
   platform's key management service, or locally a key file only the user
   can read. The record's encoding is encrypted with a random nonce
   (`cipher.NewGCMWithRandomNonce`), after a byte that says how it was
-  sealed, so that a later way can be told from this one. Each time the
-  coordinator adds a part, as a job's as the job ends, it encrypts the
-  whole record again under the same data key, with a new nonce. Neither
-  the data key nor what the record holds is ever in an error, both are
-  cleared once used, and nothing decrypted is kept between calls
-  (`coordinator/internal/seal`).
+  sealed, so that a later way can be told from this one. A later version
+  is read before the record is authenticated, and leaves the run to a
+  later release without asking Keys: one byte written to the store can so
+  leave a run waiting, which costs only what deleting the record would.
+  Each time the coordinator adds a part, as a job's as the job ends, it
+  encrypts the whole record again under the same data key, with a new
+  nonce, at most 2^24 times for a run (`record_reseal_limit`), which keeps
+  the chance that two of the data key's nonces are the same below 2^-48.
+  Neither the data key nor what the record holds is ever in an error, and
+  nothing decrypted is kept between calls. Both are cleared once used, as
+  far as Go lets them be: not AES's key schedule or GCM's hash key, inside
+  the cipher, the buffer the record is encoded in, which the JSON encoder
+  keeps for reuse, or the record's strings (`coordinator/internal/seal`).
 - **Bound to its run.** The record's associated data is
-  `meridian/record/1`, the store's ID and the run's, each after a NUL
-  byte, and Keys wraps the data key for the two IDs joined with a `/`. The
-  store's ID is random, made once when the store is, so a run ID that a
-  store reuses, as one whose runs are numbered would after its database is
-  replaced, can't open another store's record. That binding is mandatory,
-  and fails closed: a record that doesn't decrypt as its run's fails the
-  run, with `record_unreadable`. It is what ties a record to its run, as
-  the plan's digest (`PlanDigest`) ties it only to its plan: two runs of
-  one workflow with the same plain inputs have the same plan, and Start
-  can't tell their records apart. A problem from Keys, such as a wrapped
-  key that doesn't unwrap for the run, fails the run too; any other error
-  from Keys is tried again.
+  `meridian/record/1`, the store's ID, the run's and the record's
+  generation, written in decimal, each after a NUL byte, and Keys wraps the
+  data key for the two IDs joined with a `/`. Neither ID can hold a NUL or
+  a `/`, so neither reads two ways. The store's ID is random, made once
+  when the store is, so a run ID that a store reuses, as one whose runs are
+  numbered would after its database is replaced, can't open another
+  store's record. That binding is mandatory, and fails closed: a record
+  that doesn't decrypt as its run's fails the run, with
+  `record_unreadable`. It is what ties a record to its run, as the plan's
+  digest (`PlanDigest`) ties it only to its plan: two runs of one workflow
+  with the same plain inputs have the same plan, and Start can't tell
+  their records apart. A problem from Keys, such as a wrapped key that
+  doesn't unwrap for the run, or the local key file gone
+  (`key_file_missing`), fails the run too; any other error from Keys is
+  tried again.
+- **The latest only.** A record's generation is 1 when the run is created,
+  and one more each time it is encrypted again. The coordinator keeps the
+  current generation with the run's own state, apart from the record, and
+  opens the record only as that generation, so a record that a later one
+  replaced, put back in the store, fails the run as one changed does. A
+  store restored whole, the run's state with its record, is the store as
+  it was, which this can't tell apart.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).

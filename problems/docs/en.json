@@ -1022,10 +1022,17 @@
     ]
   },
   "record_unreadable": {
-    "why": "A run's secret record holds what the run was given and the secrets it read. It is encrypted with AES-256-GCM under a data key of the run's own, bound to the run's ID and to its store's, so that it can't be moved to another run, even one of the same workflow with the same inputs, nor to a run with the same ID in another store. This one doesn't decrypt as its run's: it was moved from another run or another store, or was changed. Rather than run with what another run was given, the run fails.",
+    "why": "A run's secret record holds what the run was given and the secrets it read. It is encrypted with AES-256-GCM under a data key of the run's own, bound to the run's ID, to its store's, and to how many times it has been encrypted again, so that it can't be moved to another run, even one of the same workflow with the same inputs, nor to a run with the same ID in another store, nor be put back in the place of a later record of its run. This one doesn't decrypt as its run's latest: it was moved from another run or another store, an older one was put back, or it was changed. Rather than run with what another run was given, or with what its own run had before, the run fails.",
     "fix": [
       "Rerun the run, which makes its secret record again from what is submitted.",
       "Find out what changed the store's database: Meridian writes a run's secret record for that run alone."
+    ]
+  },
+  "record_reseal_limit": {
+    "why": "A run's secret record is encrypted again under the same data key, with a new random nonce, each time the run adds to it, as when a job ends with private outputs. A data key is used a limited number of times, so that two of its nonces are never likely to be the same, which would weaken the encryption. This run has added to its record that many times, and it fails rather than go past the limit.",
+    "fix": [
+      "If the run has that many jobs and matrix instances with private outputs, split it into several runs.",
+      "Otherwise report it as a bug: no run with fewer jobs adds to its record that often."
     ]
   },
   "workflow_too_large": {

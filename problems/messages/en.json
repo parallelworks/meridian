@@ -177,7 +177,8 @@
   "outputs_removed": "The worker's directory, which holds $OUTPUTS, was removed while the step ran, so what the step wrote to $OUTPUTS after that is lost.",
   "log_not_kept": "The worker didn't keep {size} bytes of the step's log: it keeps at most {limit} bytes of logs that the coordinator hasn't stored, while it can't reach it, and none once its disk is full.",
   "report_not_encoded": "The worker couldn't encode its report for the coordinator, so it sent it without the outputs and problems in it, and the job fails, unless it was cancelled.",
-  "record_unreadable": "Run {run}'s secret record can't be decrypted as the run's: it was encrypted for another run or another store, or has been changed.",
+  "record_unreadable": "Run {run}'s secret record can't be decrypted as the run's latest: it was encrypted for another run or another store, a later one has replaced it, or it has been changed.",
+  "record_reseal_limit": "Run {run}'s secret record has been encrypted again {limit} times, as many as its data key is used for, so the run can't go on.",
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",

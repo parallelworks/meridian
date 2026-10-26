@@ -171,7 +171,8 @@
   "outputs_removed": "包含 $OUTPUTS 的工作进程目录在步骤运行期间被删除，因此步骤此后写入 $OUTPUTS 的内容会丢失。",
   "log_not_kept": "工作进程未保留该步骤日志中的 {size} 字节：在无法连接到协调器时，它最多只保留 {limit} 字节协调器尚未存储的日志，而在磁盘已满时则一点也不保留。",
   "report_not_encoded": "工作进程无法为协调器编码它的报告，因此发送时去掉了其中的输出和问题，除非该作业已被取消，否则它会失败。",
-  "record_unreadable": "无法将运行 {run} 的密钥记录作为该运行的记录解密：它是为其他运行或其他存储加密的，或者已被更改。",
+  "record_unreadable": "无法将运行 {run} 的密钥记录作为该运行的最新记录解密：它是为其他运行或其他存储加密的，已被后来的记录取代，或者已被更改。",
+  "record_reseal_limit": "运行 {run} 的密钥记录已被重新加密 {limit} 次，达到其数据密钥的使用次数上限，因此该运行无法继续。",
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",

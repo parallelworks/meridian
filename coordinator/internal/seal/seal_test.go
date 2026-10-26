@@ -177,18 +177,22 @@ func newSealer(t *testing.T, keys coordinator.Keys, storeID string) *seal.Sealer
 	return s
 }
 
+// sealRecord seals record() for the run runID, whose generation is then 1.
 func sealRecord(t *testing.T, s *seal.Sealer, runID string) seal.Sealed {
 	t.Helper()
-	sealed, err := s.Seal(t.Context(), runID, record())
+	sealed, gen, err := s.Seal(t.Context(), runID, record())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if gen != 1 {
+		t.Fatalf("Seal gives generation %d, want 1", gen)
 	}
 	return sealed
 }
 
 // associated is a record's associated data, as the package says it is.
-func associated(storeID, runID string) []byte {
-	return []byte("meridian/record/1\x00" + storeID + "\x00" + runID)
+func associated(storeID, runID, gen string) []byte {
+	return []byte("meridian/record/1\x00" + storeID + "\x00" + runID + "\x00" + gen)
 }
 
 // The tests run in FIPS 140-3 mode, which go.mod's godebug sets, so the
@@ -207,7 +211,7 @@ func TestRoundTrip(t *testing.T) {
 	keys := newKeys(t, false)
 	s := newSealer(t, keys, "store-1")
 	sealed := sealRecord(t, s, "42")
-	got, err := s.Open(t.Context(), "42", sealed)
+	got, err := s.Open(t.Context(), "42", 1, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +228,7 @@ func TestRoundTrip(t *testing.T) {
 	if sealed.Record[0] != 1 {
 		t.Errorf("a sealed record starts with %d, want 1", sealed.Record[0])
 	}
-	data, err := newAEAD(t, keys.dataKeys()[0]).Open(nil, nil, sealed.Record[1:], associated("store-1", "42"))
+	data, err := newAEAD(t, keys.dataKeys()[0]).Open(nil, nil, sealed.Record[1:], associated("store-1", "42", "1"))
 	if err != nil {
 		t.Fatalf("the record doesn't open with its data key and associated data: %v", err)
 	}
@@ -239,38 +243,42 @@ func TestRoundTrip(t *testing.T) {
 }
 
 // Reseal seals a record again under the same data key, which it keeps
-// wrapped as it was, with a new nonce each time.
+// wrapped as it was, with a new nonce each time, and the next generation,
+// written in decimal in the associated data.
 func TestReseal(t *testing.T) {
 	keys := newKeys(t, false)
 	s := newSealer(t, keys, "store-1")
 	sealed := sealRecord(t, s, "42")
-	rec, err := s.Open(t.Context(), "42", sealed)
+	rec, err := s.Open(t.Context(), "42", 1, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec.Jobs["deploy#2"] = plan.JobRecord{Steps: map[string]map[string]string{"login": {"token": secret}}}
-	resealed, err := s.Reseal(t.Context(), "42", sealed, rec)
+	resealed, gen, err := s.Reseal(t.Context(), "42", 1, sealed, rec)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if gen != 2 {
+		t.Errorf("Reseal of generation 1 gives generation %d, want 2", gen)
 	}
 	if !bytes.Equal(resealed.Key, sealed.Key) {
 		t.Error("Reseal changed the wrapped data key")
 	}
-	got, err := s.Open(t.Context(), "42", resealed)
+	got, err := s.Open(t.Context(), "42", 2, resealed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, rec) {
 		t.Errorf("the resealed record opens as %+v", got)
 	}
-	data, err := newAEAD(t, keys.dataKeys()[0]).Open(nil, nil, resealed.Record[1:], associated("store-1", "42"))
+	data, err := newAEAD(t, keys.dataKeys()[0]).Open(nil, nil, resealed.Record[1:], associated("store-1", "42", "2"))
 	if err != nil {
-		t.Fatalf("the resealed record doesn't open with the first data key and the same associated data: %v", err)
+		t.Fatalf("the resealed record doesn't open with the first data key and generation 2: %v", err)
 	}
 	if want, _ := plan.EncodeRecord(rec); !bytes.Equal(data, want) {
 		t.Errorf("the record reseals\n%s\nwant\n%s", data, want)
 	}
-	again, err := s.Reseal(t.Context(), "42", resealed, rec)
+	again, _, err := s.Reseal(t.Context(), "42", 2, resealed, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,18 +287,74 @@ func TestReseal(t *testing.T) {
 	}
 }
 
+// A record that a later one replaced doesn't open in its place, as one
+// rolled back in the store would, nor does a later one open as an earlier
+// generation: each opens only as its own.
+func TestRollback(t *testing.T) {
+	for _, loose := range []bool{false, true} {
+		s := newSealer(t, newKeys(t, loose), "store-1")
+		records := []seal.Sealed{sealRecord(t, s, "42")}
+		for gen := uint64(1); gen < 4; gen++ {
+			rec := record()
+			rec.Decisions["/on/execute/inputs/x/ignore"] = gen%2 == 0
+			next, got, err := s.Reseal(t.Context(), "42", gen, records[gen-1], rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != gen+1 {
+				t.Fatalf("Reseal of generation %d gives %d", gen, got)
+			}
+			records = append(records, next)
+		}
+		for i, sealed := range records {
+			for gen := uint64(1); gen <= uint64(len(records)); gen++ {
+				_, err := s.Open(t.Context(), "42", gen, seal.Sealed{Key: records[len(records)-1].Key, Record: sealed.Record})
+				if gen == uint64(i+1) {
+					if err != nil {
+						t.Errorf("generation %d doesn't open as itself: %v", gen, err)
+					}
+					continue
+				}
+				if p := kindtest.Want(t, err, problems.RecordUnreadable); p.Params["run"] != "42" {
+					t.Errorf("the problem's params are %v", p.Params)
+				}
+			}
+		}
+	}
+}
+
+// A record is sealed again at most MaxReseals times, after which Reseal
+// refuses with a problem, which fails the run.
+func TestResealLimit(t *testing.T) {
+	s := newSealer(t, newKeys(t, false), "store-1")
+	sealed := sealRecord(t, s, "42")
+	last, gen, err := s.Reseal(t.Context(), "42", seal.MaxReseals, sealed, record())
+	if err != nil || gen != seal.MaxReseals+1 {
+		t.Fatalf("the last reseal gives generation %d, %v", gen, err)
+	}
+	if _, err := s.Open(t.Context(), "42", gen, last); err != nil {
+		t.Errorf("the last generation doesn't open: %v", err)
+	}
+	for _, gen := range []uint64{seal.MaxReseals + 1, 1 << 63, ^uint64(0)} {
+		_, _, err = s.Reseal(t.Context(), "42", gen, last, record())
+		if p := kindtest.Want(t, err, problems.RecordResealLimit); p.Params["run"] != "42" || p.Params["limit"] != seal.MaxReseals {
+			t.Errorf("the problem's params are %v", p.Params)
+		}
+	}
+}
+
 // Each Open decrypts and decodes the record anew, so what one caller does
 // to its record isn't what another opens.
 func TestOpenGivesItsOwnRecord(t *testing.T) {
 	s := newSealer(t, newKeys(t, false), "store-1")
 	sealed := sealRecord(t, s, "42")
-	first, err := s.Open(t.Context(), "42", sealed)
+	first, err := s.Open(t.Context(), "42", 1, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first.Decisions["/on/execute/inputs/x/hidden"] = false
 	first.Run.Vars["TOKEN"] = "changed"
-	second, err := s.Open(t.Context(), "42", sealed)
+	second, err := s.Open(t.Context(), "42", 1, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,12 +375,11 @@ func TestMovedRecord(t *testing.T) {
 		{"store-1", "43"},
 		{"store-1", "4"},
 		{"store-1", "420"},
-		{"store-1", "42\x00"},
 		{"store-2", "42"},
 		{"store-14", "2"},
 		{"store-", "142"},
 	} {
-		_, err := newSealer(t, loose, to.store).Open(t.Context(), to.run, sealed)
+		_, err := newSealer(t, loose, to.store).Open(t.Context(), to.run, 1, sealed)
 		if p := kindtest.Want(t, err, problems.RecordUnreadable); p.Params["run"] != to.run {
 			t.Errorf("moved to %q, the problem's params are %v", to, p.Params)
 		}
@@ -325,11 +388,11 @@ func TestMovedRecord(t *testing.T) {
 	keys := newKeys(t, false)
 	s := newSealer(t, keys, "store-1")
 	sealed, other := sealRecord(t, s, "42"), sealRecord(t, s, "43")
-	_, err := s.Open(t.Context(), "43", seal.Sealed{Key: other.Key, Record: sealed.Record})
+	_, err := s.Open(t.Context(), "43", 1, seal.Sealed{Key: other.Key, Record: sealed.Record})
 	kindtest.Want(t, err, problems.RecordUnreadable)
-	_, err = s.Open(t.Context(), "43", sealed)
+	_, err = s.Open(t.Context(), "43", 1, sealed)
 	kindtest.Want(t, err, problems.KeyUnwrapFailed)
-	_, err = newSealer(t, keys, "store-2").Open(t.Context(), "42", sealed)
+	_, err = newSealer(t, keys, "store-2").Open(t.Context(), "42", 1, sealed)
 	kindtest.Want(t, err, problems.KeyUnwrapFailed)
 }
 
@@ -340,17 +403,17 @@ func TestMovedKey(t *testing.T) {
 	keys := newKeys(t, false)
 	s := newSealer(t, keys, "store-1")
 	sealed, other := sealRecord(t, s, "42"), sealRecord(t, s, "43")
-	_, err := s.Open(t.Context(), "43", seal.Sealed{Key: sealed.Key, Record: other.Record})
+	_, err := s.Open(t.Context(), "43", 1, seal.Sealed{Key: sealed.Key, Record: other.Record})
 	if p := kindtest.Want(t, err, problems.KeyUnwrapFailed); p.Params["run"] != "store-1/43" {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
-	_, err = s.Reseal(t.Context(), "43", seal.Sealed{Key: sealed.Key, Record: other.Record}, record())
+	_, _, err = s.Reseal(t.Context(), "43", 1, seal.Sealed{Key: sealed.Key, Record: other.Record}, record())
 	kindtest.Want(t, err, problems.KeyUnwrapFailed)
 
 	loose := newKeys(t, true)
 	s = newSealer(t, loose, "store-1")
 	sealed, other = sealRecord(t, s, "42"), sealRecord(t, s, "43")
-	_, err = s.Open(t.Context(), "43", seal.Sealed{Key: sealed.Key, Record: other.Record})
+	_, err = s.Open(t.Context(), "43", 1, seal.Sealed{Key: sealed.Key, Record: other.Record})
 	kindtest.Want(t, err, problems.RecordUnreadable)
 }
 
@@ -370,17 +433,17 @@ func TestTampered(t *testing.T) {
 			}
 			changed := bytes.Clone(sealed.Record)
 			changed[i] ^= bit
-			_, err := s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key, Record: changed})
+			_, err := s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key, Record: changed})
 			kindtest.Want(t, err, problems.RecordUnreadable)
 		}
 	}
-	_, err := s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key, Record: append(bytes.Clone(sealed.Record), 0)})
+	_, err := s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key, Record: append(bytes.Clone(sealed.Record), 0)})
 	kindtest.Want(t, err, problems.RecordUnreadable)
 
 	before := keys.unwraps
 	later := bytes.Clone(sealed.Record)
 	later[0] = 2
-	_, err = s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key, Record: later})
+	_, err = s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key, Record: later})
 	if !errors.Is(err, plan.ErrVersion) || problems.IsProblem(err) {
 		t.Errorf("a record of version 2 gives %v, want plan.ErrVersion", err)
 	}
@@ -391,7 +454,7 @@ func TestTampered(t *testing.T) {
 	for i := range sealed.Key {
 		changed := bytes.Clone(sealed.Key)
 		changed[i] ^= 0x01
-		_, err := s.Open(t.Context(), "42", seal.Sealed{Key: changed, Record: sealed.Record})
+		_, err := s.Open(t.Context(), "42", 1, seal.Sealed{Key: changed, Record: sealed.Record})
 		kindtest.Want(t, err, problems.KeyUnwrapFailed)
 	}
 }
@@ -402,15 +465,15 @@ func TestTruncated(t *testing.T) {
 	s := newSealer(t, newKeys(t, false), "store-1")
 	sealed := sealRecord(t, s, "42")
 	for n := range len(sealed.Record) {
-		_, err := s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key, Record: sealed.Record[:n]})
+		_, err := s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key, Record: sealed.Record[:n]})
 		kindtest.Want(t, err, problems.RecordUnreadable)
 	}
-	_, err := s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key})
+	_, err := s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key})
 	kindtest.Want(t, err, problems.RecordUnreadable)
 	for n := range len(sealed.Key) {
-		_, err := s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key[:n], Record: sealed.Record})
+		_, err := s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key[:n], Record: sealed.Record})
 		kindtest.Want(t, err, problems.KeyUnwrapFailed)
-		_, err = s.Reseal(t.Context(), "42", seal.Sealed{Key: sealed.Key[:n], Record: sealed.Record}, record())
+		_, _, err = s.Reseal(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key[:n], Record: sealed.Record}, record())
 		kindtest.Want(t, err, problems.KeyUnwrapFailed)
 	}
 }
@@ -427,15 +490,15 @@ func TestKeysErrors(t *testing.T) {
 		unwrap: func(string, []byte) ([]byte, error) { return nil, down },
 	}
 	s := newSealer(t, failing, "store-1")
-	_, err := s.Seal(t.Context(), "42", record())
+	_, _, err := s.Seal(t.Context(), "42", record())
 	if !errors.Is(err, down) || problems.IsProblem(err) {
 		t.Errorf("Seal gives %v, want the Keys' error, which isn't a problem", err)
 	}
-	_, err = s.Open(t.Context(), "42", sealed)
+	_, err = s.Open(t.Context(), "42", 1, sealed)
 	if !errors.Is(err, down) || problems.IsProblem(err) {
 		t.Errorf("Open gives %v, want the Keys' error, which isn't a problem", err)
 	}
-	_, err = s.Reseal(t.Context(), "42", sealed, record())
+	_, _, err = s.Reseal(t.Context(), "42", 1, sealed, record())
 	if !errors.Is(err, down) || problems.IsProblem(err) {
 		t.Errorf("Reseal gives %v, want the Keys' error, which isn't a problem", err)
 	}
@@ -446,15 +509,15 @@ func TestKeysErrors(t *testing.T) {
 		unwrap: func(string, []byte) ([]byte, error) { return nil, refused },
 	}
 	s = newSealer(t, refusing, "store-1")
-	_, err = s.Seal(t.Context(), "42", record())
+	_, _, err = s.Seal(t.Context(), "42", record())
 	kindtest.Want(t, err, problems.KeyWrappingUnknown)
-	_, err = s.Open(t.Context(), "42", sealed)
+	_, err = s.Open(t.Context(), "42", 1, sealed)
 	kindtest.Want(t, err, problems.KeyWrappingUnknown)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	s = newSealer(t, newKeys(t, false), "store-1")
-	if _, err := s.Seal(ctx, "42", record()); !errors.Is(err, context.Canceled) || problems.IsProblem(err) {
+	if _, _, err := s.Seal(ctx, "42", record()); !errors.Is(err, context.Canceled) || problems.IsProblem(err) {
 		t.Errorf("Seal with a cancelled context gives %v", err)
 	}
 
@@ -465,21 +528,21 @@ func TestKeysErrors(t *testing.T) {
 			return given, nil
 		}}
 		s := newSealer(t, short, "store-1")
-		_, err := s.Open(t.Context(), "42", sealed)
+		_, err := s.Open(t.Context(), "42", 1, sealed)
 		kindtest.Want(t, err, problems.RecordUnreadable)
 		if !bytes.Equal(given, make([]byte, size)) {
 			t.Errorf("a %d-byte key from Unwrap isn't cleared", size)
 		}
-		_, err = s.Reseal(t.Context(), "42", sealed, record())
+		_, _, err = s.Reseal(t.Context(), "42", 1, sealed, record())
 		kindtest.Want(t, err, problems.RecordUnreadable)
 	}
 }
 
 // sealData seals data, as if it were an encoded record, as the package
-// does, under key, for the run runID of the store storeID.
+// does, under key, for the run runID of the store storeID, of generation 1.
 func sealData(t *testing.T, key []byte, storeID, runID string, data []byte) []byte {
 	t.Helper()
-	return newAEAD(t, key).Seal([]byte{1}, nil, data, associated(storeID, runID))
+	return newAEAD(t, key).Seal([]byte{1}, nil, data, associated(storeID, runID, "1"))
 }
 
 // A record that opens but doesn't decode is malformed, or of a version
@@ -497,7 +560,7 @@ func TestUndecodable(t *testing.T) {
 		`{"version":2,"secret":"` + secret + `"}`:          plan.ErrVersion,
 	} {
 		sealed := seal.Sealed{Record: sealData(t, key, "store-1", "42", []byte(data))}
-		_, err := s.Open(t.Context(), "42", sealed)
+		_, err := s.Open(t.Context(), "42", 1, sealed)
 		if !errors.Is(err, want) || problems.IsProblem(err) {
 			t.Errorf("%s opens with %v, want %v", data, err, want)
 		}
@@ -516,10 +579,11 @@ func TestDataKeyNeverShown(t *testing.T) {
 	s := newSealer(t, keys, "store-1")
 	sealed := sealRecord(t, s, "42")
 	other := sealRecord(t, s, "43")
-	if _, err := s.Open(t.Context(), "42", sealed); err != nil {
+	if _, err := s.Open(t.Context(), "42", 1, sealed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Reseal(t.Context(), "42", sealed, record()); err != nil {
+	resealed, _, err := s.Reseal(t.Context(), "42", 1, sealed, record())
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !keys.cleared() {
@@ -530,25 +594,28 @@ func TestDataKeyNeverShown(t *testing.T) {
 	changed := bytes.Clone(sealed.Record)
 	changed[len(changed)-1] ^= 1
 	var errs []error
-	try := func(_ any, err error) {
+	try := func(err error) {
 		if err == nil {
 			t.Error("an operation that should fail didn't")
 		}
 		errs = append(errs, err)
 	}
-	try(s.Open(t.Context(), "43", sealed))
-	try(s.Open(t.Context(), "43", seal.Sealed{Key: other.Key, Record: sealed.Record}))
-	try(newSealer(t, newKeys(t, true), "store-2").Open(t.Context(), "42", sealed))
-	try(s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key, Record: changed}))
-	try(s.Open(t.Context(), "42", seal.Sealed{Key: sealed.Key, Record: sealed.Record[:20]}))
+	try(second(s.Open(t.Context(), "43", 1, sealed)))
+	try(second(s.Open(t.Context(), "43", 1, seal.Sealed{Key: other.Key, Record: sealed.Record})))
+	try(second(s.Open(t.Context(), "42", 2, sealed)))
+	try(second(s.Open(t.Context(), "42", 1, resealed)))
+	try(second(newSealer(t, newKeys(t, true), "store-2").Open(t.Context(), "42", 1, sealed)))
+	try(second(s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key, Record: changed})))
+	try(second(s.Open(t.Context(), "42", 1, seal.Sealed{Key: sealed.Key, Record: sealed.Record[:20]})))
 	for _, give := range [][]byte{dataKey[:16], append(bytes.Clone(dataKey), dataKey...)} {
 		wrong := funcKeys{unwrap: func(string, []byte) ([]byte, error) { return bytes.Clone(give), nil }}
-		try(newSealer(t, wrong, "store-1").Open(t.Context(), "42", sealed))
+		try(second(newSealer(t, wrong, "store-1").Open(t.Context(), "42", 1, sealed)))
 	}
 	given := funcKeys{unwrap: func(string, []byte) ([]byte, error) { return bytes.Clone(dataKey), nil }}
-	try(newSealer(t, given, "store-1").Open(t.Context(), "42",
-		seal.Sealed{Record: sealData(t, dataKey, "store-1", "42", []byte(`{"version":1,"decisions":{"x":"`+secret+`"}}`))}))
-	try(s.Seal(t.Context(), "42", &plan.Record{Version: plan.Version, Submitted: plan.DataOf(map[string]any{"pw": func() {}})}))
+	try(second(newSealer(t, given, "store-1").Open(t.Context(), "42", 1,
+		seal.Sealed{Record: sealData(t, dataKey, "store-1", "42", []byte(`{"version":1,"decisions":{"x":"`+secret+`"}}`))})))
+	try(third(s.Seal(t.Context(), "42", &plan.Record{Version: plan.Version, Submitted: plan.DataOf(map[string]any{"pw": func() {}})})))
+	try(third(s.Reseal(t.Context(), "42", seal.MaxReseals+1, sealed, record())))
 
 	half := dataKey[:16]
 	for _, err := range errs {
@@ -566,34 +633,47 @@ func TestDataKeyNeverShown(t *testing.T) {
 	}
 }
 
-// A caller's mistakes, which no store or run makes, are refused: no Keys,
-// a store ID that is empty or holds what separates it from a run's, no run
-// ID, no record, and one of another version.
+// A caller's mistakes, which no store or run makes, are refused with an
+// error that isn't a problem: no Keys; a store or run ID that is empty,
+// isn't UTF-8, or holds a NUL or a slash, which could otherwise make two
+// pairs of IDs read as one in the associated data or Keys' ID; generation
+// 0; no record, and one of another version.
 func TestCallerMistakes(t *testing.T) {
 	keys := newKeys(t, false)
 	if _, err := seal.New(nil, "store-1"); err == nil {
 		t.Error("New takes no Keys")
 	}
-	for _, id := range []string{"", "a/b", "a\x00b", "/", "\x00"} {
+	bad := []string{"", "a/b", "a\x00b", "/", "\x00", "4\x00", "\xff", "a\xc3"}
+	for _, id := range bad {
 		if _, err := seal.New(keys, id); err == nil {
 			t.Errorf("New takes the store ID %q", id)
 		}
 	}
 	s := newSealer(t, keys, "store-1")
 	sealed := sealRecord(t, s, "42")
-	for name, err := range map[string]error{
-		"Seal without a run":        second(s.Seal(t.Context(), "", record())),
-		"Seal without a record":     second(s.Seal(t.Context(), "42", nil)),
-		"Seal of version 0":         second(s.Seal(t.Context(), "42", &plan.Record{})),
-		"Reseal without a run":      second(s.Reseal(t.Context(), "", sealed, record())),
-		"Reseal without a record":   second(s.Reseal(t.Context(), "42", sealed, nil)),
-		"Reseal of another version": second(s.Reseal(t.Context(), "42", sealed, &plan.Record{Version: plan.Version + 1})),
-		"Open without a run":        second(s.Open(t.Context(), "", sealed)),
-	} {
+	mistakes := map[string]error{
+		"Seal without a record":     third(s.Seal(t.Context(), "42", nil)),
+		"Seal of version 0":         third(s.Seal(t.Context(), "42", &plan.Record{})),
+		"Reseal without a record":   third(s.Reseal(t.Context(), "42", 1, sealed, nil)),
+		"Reseal of another version": third(s.Reseal(t.Context(), "42", 1, sealed, &plan.Record{Version: plan.Version + 1})),
+		"Reseal of generation 0":    third(s.Reseal(t.Context(), "42", 0, sealed, record())),
+		"Open of generation 0":      second(s.Open(t.Context(), "42", 0, sealed)),
+	}
+	for _, id := range bad {
+		mistakes[fmt.Sprintf("Seal for run %q", id)] = third(s.Seal(t.Context(), id, record()))
+		mistakes[fmt.Sprintf("Reseal for run %q", id)] = third(s.Reseal(t.Context(), id, 1, sealed, record()))
+		mistakes[fmt.Sprintf("Open for run %q", id)] = second(s.Open(t.Context(), id, 1, sealed))
+	}
+	for name, err := range mistakes {
 		if err == nil || problems.IsProblem(err) {
 			t.Errorf("%s gives %v, want an error that isn't a problem", name, err)
 		}
 	}
+	if len(keys.ids) != 1 {
+		t.Errorf("Keys was asked %d times for a caller's mistakes", len(keys.ids)-1)
+	}
 }
 
 func second[T any](_ T, err error) error { return err }
+
+func third[T, U any](_ T, _ U, err error) error { return err }
