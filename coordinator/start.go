@@ -32,16 +32,30 @@ type startWorker struct {
 func (w *startWorker) Work(ctx context.Context, job *hopper.Job[startArgs]) error {
 	done := func(ctx context.Context, tx *store.Tx) error { return hopper.CompleteTx(ctx, tx.SQL(), job) }
 	snooze, err := w.c.startRun(ctx, job.Args.Run, done)
+	if stopping(ctx) {
+		// What cut the try short is the coordinator's stopping, not the
+		// run: a snooze gives hopper its attempt back. A job completed
+		// already stays so, whatever the work returns.
+		return hopper.Snooze(w.c.retry.first)
+	}
 	switch {
 	case errors.Is(err, errSettled):
-		err = w.c.complete(ctx, done)
+		if err := w.c.complete(ctx, done); err != nil {
+			return err
+		}
 	case err != nil:
 		return err
 	case snooze > 0:
 		return hopper.Snooze(snooze)
 	}
 	w.c.retireQueue(ctx, job.Queue)
-	return err
+	return nil
+}
+
+// stopping reports whether ctx, a job's work's, ended because the
+// coordinator is stopping, and not because the work ran past its time.
+func stopping(ctx context.Context) bool {
+	return ctx.Err() != nil && !errors.Is(context.Cause(ctx), hopper.ErrJobTimeout)
 }
 
 // Timeout bounds one try at starting a run: a try that takes longer counts
@@ -94,18 +108,18 @@ func (c *Coordinator) startRun(ctx context.Context, id string, done func(context
 	}
 	p, err := c.plans.get(run)
 	if err != nil {
-		return c.startFailed(ctx, run, err, done)
+		return c.startFailed(ctx, run, causeStore, err, done)
 	}
 	sealed := sealedOf(stored)
 	record, err := c.sealer.Open(ctx, id, stored.Generation, sealed)
 	if err != nil {
-		return c.startFailed(ctx, run, err, done)
+		return c.startFailed(ctx, run, causeKeys, err, done)
 	}
 	res, diags, err := compile.Start(ctx, p, compile.StartInput{
 		RunID: id, Variables: c.opts.Variables, Record: *record, Inputs: c.opts.Inputs, Sessions: c.opts.Sessions,
 	})
 	if err != nil {
-		return c.startFailed(ctx, run, err, done)
+		return c.startFailed(ctx, run, causeResolver, err, done)
 	}
 	if diags.HasErrors() {
 		return 0, c.endStart(ctx, id, diags, done)
@@ -113,7 +127,7 @@ func (c *Coordinator) startRun(ctx context.Context, id string, done func(context
 	state := res.Keep(record)
 	resealed, gen, err := c.sealer.Reseal(ctx, id, stored.Generation, sealed, record)
 	if err != nil {
-		return c.startFailed(ctx, run, err, done)
+		return c.startFailed(ctx, run, causeKeys, err, done)
 	}
 	return 0, c.store.Tx(ctx, func(tx *store.Tx) error {
 		if r, err := tx.Run(id); err != nil || r.State != store.RunCreated {
@@ -136,20 +150,33 @@ func (c *Coordinator) startRun(ctx context.Context, id string, done func(context
 	})
 }
 
-// startFailed handles err, what kept the coordinator from starting run, as
-// the error says it should:
+// The causes of a try that couldn't start a run, as the coordinator's log
+// names them: never the error's text, which can quote what a resolver or
+// Keys was given, a secret among it.
+const (
+	causeStore      = "store"
+	causeKeys       = "keys"
+	causeResolver   = "resolver"
+	causeUnanswered = "unanswered"
+	causeTimeout    = "timeout"
+)
+
+// startFailed handles err, what kept the coordinator from starting run at
+// the step cause names, as the error says it should:
 //
 //   - a problem (problems.IsProblem), as one that Keys or the record gave,
 //     a record that doesn't fit the plan (compile.ErrMismatch), and a plan
 //     or a record that doesn't decode (plan.ErrMalformed), fail the run;
 //   - a plan, or a record, only a newer release reads (plan.ErrVersion) is
 //     left to one, as the coordinator says in its log;
-//   - the context's end is the coordinator's: it stops;
+//   - a try the coordinator's stopping cut short is tried again, soon, and
+//     doesn't count;
 //   - any other error, such as a resolver that couldn't answer
 //     (compile.ErrUnanswered), or a try that ran out of time, is tried
 //     again, after a while, until the run has been tried as many times as
-//     it may be, when it fails.
-func (c *Coordinator) startFailed(ctx context.Context, run *store.Run, err error, done func(context.Context, *store.Tx) error) (time.Duration, error) {
+//     it may be, when it fails. The log says which kind of try failed,
+//     never what the error says.
+func (c *Coordinator) startFailed(ctx context.Context, run *store.Run, cause string, err error, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	id := run.ID
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
 		return 0, c.endStart(ctx, id, problems.Diagnostics{problemDiagnostic(p)}, done)
@@ -163,10 +190,16 @@ func (c *Coordinator) startFailed(ctx context.Context, run *store.Run, err error
 		newer := problems.RunPlanNewer.Problem(problems.Params{"run": id, "version": run.PlanVersion, "latest": plan.Version})
 		c.log.WarnContext(ctx, newer.Detail, "run", id, "code", newer.Code)
 		return c.retry.newer, nil
-	case ctx.Err() != nil && !errors.Is(context.Cause(ctx), hopper.ErrJobTimeout):
-		return 0, ctx.Err()
+	case stopping(ctx):
+		return c.retry.first, nil
+	case errors.Is(err, compile.ErrUnanswered):
+		cause = causeUnanswered
+	case ctx.Err() != nil:
+		cause = causeTimeout
 	}
-	c.log.WarnContext(ctx, "coordinator: couldn't start a run, and tries again later", "run", id, "error", err)
+	c.log.WarnContext(ctx, "coordinator: couldn't start a run, and tries again later", "run", id, "cause", cause)
+	// The count isn't fenced by Start's hopper job: an attempt hopper
+	// rescued from a replica still running it can count a try as well.
 	var tries int
 	terr := c.store.Tx(context.WithoutCancel(ctx), func(tx *store.Tx) error {
 		var err error

@@ -138,6 +138,7 @@ type Coordinator struct {
 	retry        startRetry
 	startTimeout time.Duration
 	pollInterval time.Duration
+	stopTimeout  time.Duration
 
 	mu      sync.Mutex
 	serving bool
@@ -172,7 +173,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	}
 	return &Coordinator{
 		opts: opts, log: log, store: st, sealer: sealer, plans: newPlanCache(planCacheCount, planCacheBytes), inserter: inserter,
-		timing: DefaultTiming(), retry: defaultStartRetry, startTimeout: 5 * time.Minute, pollInterval: time.Second,
+		timing: DefaultTiming(), retry: defaultStartRetry, startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second,
 		queues: map[string]bool{},
 	}, nil
 }
@@ -214,7 +215,9 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 			return err
 		}
 		// Keys wraps the record's data key while the transaction holds
-		// the store's write lock: a local key file is quick to read.
+		// the store's write lock, so every other write waits for it,
+		// workers' heartbeats among them: a local key file is quick to
+		// read, and a key service slow to answer holds them all up.
 		sealed, gen, err := c.sealer.Seal(ctx, id, &created.Record)
 		if err != nil {
 			return err
@@ -299,7 +302,8 @@ func (c *Coordinator) retireQueue(ctx context.Context, q string) {
 // Serve works runs' hopper jobs, as a replica of the store's coordinators,
 // until ctx is done: the shared queue, and the start queue of each run
 // this coordinator created, until it has started. Once ctx is done, it
-// waits for the jobs it is working, for as long as hopper's StopTimeout.
+// waits a few seconds for the jobs it is working, and then cuts them
+// short, to be done again. Serve can be called again once it returns.
 func (c *Coordinator) Serve(ctx context.Context) error {
 	c.mu.Lock()
 	if c.serving {
@@ -329,11 +333,18 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 	c.mu.Unlock()
 
 	<-ctx.Done()
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hopper.DefaultStopTimeout)
+	// Jobs still running at the deadline have their contexts cancelled:
+	// each of a run's steps can be done again, and gives its attempt back
+	// to hopper when it is cut short so (stopping).
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.stopTimeout)
 	defer cancel()
 	err = served.Stop(stopCtx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		c.log.InfoContext(ctx, "coordinator: stopped the jobs it was working, to be done again")
+		err = nil
+	}
 	c.mu.Lock()
-	c.served = nil
+	c.served, c.serving = nil, false
 	c.mu.Unlock()
 	c.retired.Wait()
 	return err

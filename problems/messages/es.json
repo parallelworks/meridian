@@ -175,7 +175,7 @@
   "record_reseal_limit": "El registro secreto de la ejecución {run} se ha vuelto a cifrar {limit} veces, tantas como se usa su clave de datos, así que la ejecución no puede continuar.",
   "run_record_mismatch": "El registro secreto de la ejecución {run} no corresponde a su plan: no es el registro que se creó con el plan, así que la ejecución no puede empezar.",
   "run_start_unanswered": "La ejecución {run} no pudo empezar: lo que lee al empezar no se pudo leer en {tries} intentos.",
-  "run_malformed": "El plan o el registro secreto almacenado de la ejecución {run} nombra una versión que esta versión lee, pero no se decodifica como tal, así que la ejecución no puede seguir.",
+  "run_malformed": "El plan o el registro secreto almacenado de la ejecución {run} no es uno que esta versión lea: no nombra ninguna versión, o no se decodifica como la versión que nombra, así que la ejecución no puede seguir.",
   "run_not_started": "La ejecución {run} terminó sin empezar: el coordinador no pudo empezarla.",
   "run_plan_newer": "El plan de la ejecución {run}, de la versión {version}, contiene lo que solo lee una versión más reciente de Meridian (esta lee la versión {latest} y anteriores), así que la empieza una versión que lo lea.",
 

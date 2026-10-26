@@ -181,7 +181,7 @@
   "record_reseal_limit": "Run {run}'s secret record has been encrypted again {limit} times, as many as its data key is used for, so the run can't go on.",
   "run_record_mismatch": "Run {run}'s secret record doesn't fit its plan: it isn't the record that was created with the plan, so the run can't start.",
   "run_start_unanswered": "Run {run} couldn't start: what it reads as it starts couldn't be read in {tries} tries.",
-  "run_malformed": "Run {run}'s stored plan or secret record names a version this release reads, but doesn't decode as one, so the run can't go on.",
+  "run_malformed": "Run {run}'s stored plan or secret record isn't one this release reads: it names no version, or doesn't decode as the version it names, so the run can't go on.",
   "run_not_started": "Run {run} ended without starting: the coordinator couldn't start it.",
   "run_plan_newer": "Run {run}'s plan, of version {version}, holds what only a newer release of Meridian reads (this one reads version {latest} and earlier), so a release that reads it starts the run.",
 

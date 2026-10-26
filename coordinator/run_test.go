@@ -361,7 +361,7 @@ func TestStartOnce(t *testing.T) {
 	// The finisher ends it once; a second does nothing.
 	noop := func(context.Context, *store.Tx) error { return nil }
 	for range 2 {
-		if err := c.finishRun(t.Context(), id, noop); err != nil {
+		if _, err := c.finishRun(t.Context(), id, noop); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -3,6 +3,8 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/parallelworks/hopper"
 
@@ -19,15 +21,24 @@ type finishWorker struct {
 }
 
 // Work ends the run, as finishRun does, in the transaction that completes
-// the job.
+// the job, and stops working the run's start queue, if the coordinator
+// still does, as one whose Start hopper gave up on.
 func (w *finishWorker) Work(ctx context.Context, job *hopper.Job[finishArgs]) error {
-	err := w.c.finishRun(ctx, job.Args.Run, func(ctx context.Context, tx *store.Tx) error {
+	snooze, err := w.c.finishRun(ctx, job.Args.Run, func(ctx context.Context, tx *store.Tx) error {
 		return hopper.CompleteTx(ctx, tx.SQL(), job)
 	})
-	if errors.Is(err, hopper.ErrJobFenced) {
+	switch {
+	case stopping(ctx):
+		return hopper.Snooze(w.c.retry.first)
+	case errors.Is(err, hopper.ErrJobFenced):
 		return nil
+	case err != nil:
+		return err
+	case snooze > 0:
+		return hopper.Snooze(snooze)
 	}
-	return err
+	w.c.retireQueue(ctx, w.c.startQueue(job.Args.Run))
+	return nil
 }
 
 // finishRun ends the run id, once its jobs have, with its outcome, and
@@ -36,12 +47,19 @@ func (w *finishWorker) Work(ctx context.Context, job *hopper.Job[finishArgs]) er
 // one that never started, as one whose Start the coordinator gave up on,
 // ends failed, with run_not_started. A run that has started ends failed if
 // one of its jobs failed, or was skipped because a job it needs failed,
-// and with success otherwise.
-func (c *Coordinator) finishRun(ctx context.Context, id string, done func(context.Context, *store.Tx) error) error {
-	return c.store.Tx(ctx, func(tx *store.Tx) error {
+// and with success otherwise. A run of a plan only a newer release reads
+// is left to one, as Start leaves it, and finishRun returns how long to
+// wait before trying again.
+func (c *Coordinator) finishRun(ctx context.Context, id string, done func(context.Context, *store.Tx) error) (time.Duration, error) {
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		// A newer run's start state, of a newer version, doesn't decode:
+		// plan.ErrVersion, as its plan's version says.
 		r, err := tx.Run(id)
 		if err != nil {
 			return err
+		}
+		if r.PlanVersion != plan.Version {
+			return fmt.Errorf("%w %d of run %s's plan", plan.ErrVersion, r.PlanVersion, id)
 		}
 		switch r.State {
 		case store.RunCreated:
@@ -62,6 +80,11 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		}
 		return done(ctx, tx)
 	})
+	if errors.Is(err, plan.ErrVersion) {
+		c.log.WarnContext(ctx, "coordinator: a run's plan is newer than this release reads, so a release that reads it ends the run", "run", id, "code", problems.RunPlanNewer.Code())
+		return c.retry.newer, nil
+	}
+	return 0, err
 }
 
 // runOutcome is how the run id ended, from how its jobs did: failure if one

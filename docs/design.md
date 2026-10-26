@@ -1125,8 +1125,9 @@ says what the coordinator does next:
   resolver's, which wraps `compile.ErrUnanswered`, or a try that ran out
   of time, the coordinator starts the run again after, waiting longer each
   time, from 2 seconds to 2 minutes: 8 times, in about 4 minutes, after
-  which it fails the run with `run_start_unanswered`, and says why in its
-  log.
+  which it fails the run with `run_start_unanswered`. Its log says which
+  kind of try failed, never what the error says, which can quote a
+  secret. A try cut short because the coordinator stopped doesn't count.
 
 Decoding the plan or the secret record before Start fails alike: with
 `plan.ErrVersion` for another release's version, or for a plan whose
@@ -1147,7 +1148,9 @@ its results once. A run's Start can be in a hopper queue of the run's
 own, which only the coordinator that created the run works, as `meridian
 run`'s is, so that Start reads a variable whose value comes from the
 environment from the one the command ran in; its job is then left to the
-next process that works that queue. A rerun runs Start again
+next process that works that queue. Only `meridian resume` of the run
+works it, and that isn't built yet: until it is, a run whose creator
+ended before its Start stays created. A rerun runs Start again
 ([Reruns](#reruns)).
 
 ## Run data

@@ -1222,7 +1222,7 @@
   },
   "run_malformed": {
     "title": "Ejecución que no se puede leer",
-    "why": "Meridian guarda el plan de una ejecución y su registro secreto codificados en la versión de planes con la que se creó la ejecución. El plan o el registro de esta ejecución nombra una versión que esta versión lee, pero no se decodifica como tal: se cambió en el almacén, o lo escribió una versión con un fallo.",
+    "why": "Meridian guarda el plan de una ejecución y su registro secreto codificados en la versión de planes con la que se creó la ejecución, que nombran. El plan o el registro de esta ejecución no nombra ninguna versión, o nombra una que esta versión lee pero no se decodifica como tal: se cambió en el almacén, o lo escribió una versión con un fallo.",
     "fix": [
       "Repite la ejecución.",
       "Averigua qué cambió la base de datos del almacén."

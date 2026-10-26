@@ -1048,7 +1048,7 @@
     ]
   },
   "run_malformed": {
-    "why": "Meridian stores a run's plan and its secret record encoded in the version of plans the run was created with. This run's plan or record names a version this release reads, but doesn't decode as one: it was changed in the store, or written by a release with a fault.",
+    "why": "Meridian stores a run's plan and its secret record encoded in the version of plans the run was created with, which they name. This run's plan or record names no version, or names one this release reads but doesn't decode as it: it was changed in the store, or written by a release with a fault.",
     "fix": [
       "Rerun the run.",
       "Find out what changed the store's database."
