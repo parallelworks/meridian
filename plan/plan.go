@@ -224,9 +224,6 @@ type Job struct {
 	Key string `json:"key"`
 	// Name is the job's name in the workflow.
 	Name string `json:"name"`
-	// Matrix is unused: a matrix instance's values are its Instance's. The
-	// compiler never sets it, and it goes with the plan's next version.
-	Matrix Data `json:"matrix,omitzero"`
 	// Strategy is the job's strategy:. Start expands its matrix when its
 	// values are known by then, and Ready otherwise, when it reads needs.
 	Strategy *Strategy `json:"strategy,omitzero"`
@@ -294,10 +291,7 @@ type Step struct {
 	// created from it, through the Sources resolver's Read, when the step
 	// runs, so the run and its reruns run the same text. It is nil for a
 	// built-in action.
-	Source *Source `json:"source,omitzero"`
-	// Workflow is unused: the compiler never sets it, as Source holds the
-	// workflow's pinned reference. It goes with the plan's next version.
-	Workflow         *Plan            `json:"workflow,omitzero"`
+	Source           *Source          `json:"source,omitzero"`
 	With             Value            `json:"with,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`
 	Shell            string           `json:"shell,omitempty"`
@@ -320,14 +314,12 @@ type StepRetry struct {
 	Timeout    Value `json:"timeout,omitzero"`
 	// CleanOnRetry is the step's clean-on-retry: true or false, or an
 	// expression that gives one. The compiler fills in true, the format's
-	// default, for a retry: without one. Unset, as in a plan a release
-	// wrote before it was a Value, which held only true, means false.
+	// default, for a retry: without one, and unset means it too.
 	CleanOnRetry Value `json:"cleanOnRetry,omitzero"`
 }
 
 // Exprs returns every expression the plan holds, in its run, its input
-// definitions among them, and its jobs. The plan of a workflow that a step
-// runs holds its own.
+// definitions among them, and its jobs.
 func (p *Plan) Exprs() []*expr.Expr {
 	var out []*expr.Expr
 	add := func(vs ...Value) {

@@ -53,9 +53,8 @@ func samplePlan(t *testing.T) *plan.Plan {
 			Limits:       plan.Limits{MaxInstances: 10},
 		},
 		Jobs: []plan.Job{{
-			Key:       "build#1",
+			Key:       "build",
 			Name:      "build",
-			Matrix:    plan.DataOf(map[string]any{"os": "linux"}),
 			Needs:     []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
 			NeedsExpr: mustValue(t, "${{ fromJSON(vars.NEEDS) }}"),
 			If:        mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
@@ -85,14 +84,6 @@ func samplePlan(t *testing.T) *plan.Plan {
 // a value as empty, marked mappings, and fields at their zero values.
 func edgePlan(t testing.TB) *plan.Plan {
 	text := "<a href=\"x\">Tom & Jerry</a>\u2028\u2029 \x00\x1f\t\b\f\\ é😀 bad \xff byte"
-	nested := &plan.Plan{
-		Version: plan.Version,
-		Run:     plan.Run{Source: plan.Source{Location: "sub.yaml", Revision: "sha256:01"}, Format: 1},
-		Jobs: []plan.Job{{
-			Key: "s", Name: "s", Path: "/jobs/s",
-			Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/s/steps/0"}},
-		}},
-	}
 	return &plan.Plan{
 		Version: plan.Version,
 		Run: plan.Run{
@@ -112,8 +103,7 @@ func edgePlan(t testing.TB) *plan.Plan {
 			Permissions: []string{},
 		},
 		Jobs: []plan.Job{{
-			Key: "a#0", Name: "a", Path: "/jobs/a",
-			Matrix:           plan.DataOf(map[string]any{"os": text}),
+			Key: "a", Name: "a", Path: "/jobs/a",
 			Needs:            []plan.Need{{Job: "b"}, {Job: "c", Any: true}},
 			Retry:            &plan.JobRetry{},
 			WorkingDirectory: plan.Literal([]any{[]any(nil), map[string]any(nil), 3, int64(4), 0.5}),
@@ -123,7 +113,7 @@ func edgePlan(t testing.TB) *plan.Plan {
 			Steps: []plan.Step{
 				{Retry: &plan.StepRetry{}, Path: "/jobs/b/steps/0"},
 				{
-					ID: "w", Uses: "sub.yaml", Workflow: nested, Path: "/jobs/b/steps/1",
+					ID: "w", Uses: "sub.yaml", Path: "/jobs/b/steps/1",
 					With:  mustValue(t, map[string]any{"$out": "${{ inputs.x }}", "list": []any{nil, true, 1.5, int64(2)}}),
 					Retry: &plan.StepRetry{CleanOnRetry: plan.Literal(true), MaxRetries: plan.Literal(int64(2))},
 				},
@@ -164,11 +154,10 @@ func TestEncodeDecode(t *testing.T) {
 	}
 
 	// The decoded plan's values evaluate.
-	matrix := back.Jobs[0].Matrix.Get()
 	inputs := back.Run.Inputs.Get()
 	scope := expr.Scope{Contexts: map[string]any{
 		"env":    map[string]any{"GREETING": "hi"},
-		"matrix": matrix,
+		"matrix": map[string]any{"os": "linux"},
 		"inputs": inputs,
 	}}
 	got, err := back.Jobs[0].Steps[0].Run.Eval(scope)
@@ -318,7 +307,7 @@ func TestDecodeRefuses(t *testing.T) {
 		"an unmarked $ key":                strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$yaml":"x"}`, 1),
 		"not JSON":                         "{",
 		"a key twice in a value":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"a":1,"a":2}`, 1),
-		"a key twice in data":              strings.Replace(string(good), `"os":"linux"`, `"os":"linux","os":"linux"`, 1),
+		"a key twice in data":              strings.Replace(string(good), `"n":3`, `"n":3,"n":3`, 1),
 		"a key twice in a tree":            strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","ref":"inputs"`, 1),
 		"invalid UTF-8":                    strings.Replace(string(good), `"timeout":"1h"`, "\"timeout\":\"\xff\"", 1),
 		"a lone surrogate":                 strings.Replace(string(good), `"timeout":"1h"`, `"timeout":"\ud800"`, 1),
@@ -948,8 +937,7 @@ func FuzzDecode(f *testing.F) {
 
 // Exprs finds the expressions of every Value a plan holds: every Value
 // field of the run, a job and a step, found by reflection, holds one that
-// reads a variable named after it. It leaves out those of the plan of a
-// workflow a step runs, which holds its own.
+// reads a variable named after it.
 func TestExprsReachEveryValue(t *testing.T) {
 	value := reflect.TypeFor[plan.Value]()
 	var want []string
@@ -965,7 +953,7 @@ func TestExprsReachEveryValue(t *testing.T) {
 					fill(v.Field(i), path+"."+typ.Field(i).Name)
 				}
 			}
-		case typ.Kind() == reflect.Pointer && typ != reflect.TypeFor[*plan.Plan]():
+		case typ.Kind() == reflect.Pointer:
 			v.Set(reflect.New(typ.Elem()))
 			fill(v.Elem(), path)
 		case typ.Kind() == reflect.Slice && typ.Elem().Kind() == reflect.Struct:
@@ -980,7 +968,6 @@ func TestExprsReachEveryValue(t *testing.T) {
 	}
 	var p plan.Plan
 	fill(reflect.ValueOf(&p).Elem(), "plan")
-	p.Jobs[0].Steps[0].Workflow = &plan.Plan{Run: plan.Run{Env: map[string]plan.Value{"X": mustValue(t, "${{ vars.nested }}")}}}
 
 	var got []string
 	for _, e := range p.Exprs() {

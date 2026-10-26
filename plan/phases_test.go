@@ -1527,8 +1527,7 @@ func TestCombineSecrets(t *testing.T) {
 
 // A step's clean-on-retry: is true unless the workflow says otherwise, and
 // an expression's value reads as true or false as format 1 reads it, or
-// as true. A plan written before it was a Value, which leaves it unset, is
-// false.
+// as true. A retry without one is true too.
 func TestStepCleanOnRetry(t *testing.T) {
 	p := compiled(t, `
 on:
@@ -1563,9 +1562,9 @@ jobs:
 			t.Errorf("step %d: %+v, %v, %v, want clean-on-retry %v", i, s, diags, err, want)
 		}
 	}
-	old := &plan.ReadyJob{Key: "j", Steps: []plan.Step{{Path: "/jobs/j/steps/0", Run: mustValue(t, "true"), Retry: &plan.StepRetry{}}}}
-	if s, _, err := old.Step(t.Context(), 0, plan.JobState{}); err != nil || s.Retry == nil || s.Retry.CleanOnRetry {
-		t.Errorf("a plan without clean-on-retry: %+v, %v", s, err)
+	unset := &plan.ReadyJob{Key: "j", Steps: []plan.Step{{Path: "/jobs/j/steps/0", Run: mustValue(t, "true"), Retry: &plan.StepRetry{}}}}
+	if s, _, err := unset.Step(t.Context(), 0, plan.JobState{}); err != nil || s.Retry == nil || !s.Retry.CleanOnRetry {
+		t.Errorf("a retry without clean-on-retry: %+v, %v", s, err)
 	}
 }
 
