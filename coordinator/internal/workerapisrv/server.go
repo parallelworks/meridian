@@ -3,23 +3,27 @@
 // control polls, step events, logs and ends (docs/design.md, The worker
 // API).
 //
-// The server keeps nothing between requests but a broadcast that wakes the
-// control polls it holds: each request reads the store, acts, and stores
-// what it did, so any replica serves any attempt. It checks every write
-// against the attempt's fence and credential in the transaction that
-// stores it, so a superseded attempt's reports are refused (workerapi.Fenced),
-// and nothing it sends is stored.
+// The server keeps nothing between requests but the control polls it
+// holds: each request reads the store, acts, and stores what it did, so any
+// replica serves any attempt. It checks every write against the attempt's
+// fence and credential in the transaction that stores it, so a superseded
+// attempt's reports are refused (workerapi.Fenced), and nothing it sends is
+// stored.
 //
 // It takes connections on a Unix socket only, and asks the system who each
 // is from before it reads a request (Peers): a connection it doesn't trust
-// is closed unread. It refuses a body larger than the API allows, 413, and
-// reads every body strictly (workerapi.Unmarshal), 400.
+// is closed unread. It holds at most a number of connections at once,
+// gives each request's headers and body a time to arrive in, at a least
+// rate for its size, refuses a body larger than the API allows, 413, and
+// reads every body strictly (workerapi.Unmarshal), 400. So a process of the
+// user's, as every step is, can't hold the server's connections or
+// handlers by sending slowly.
 //
 // What it needs of the rest of the coordinator comes through narrow
-// interfaces: the store; where logs go (Logs); the run's secret record,
-// opened and sealed again (Sealer); the job an attempt claims, as Ready
-// gives it again (Readier, which PlanReadier is from the plan); and whom
-// to wake once an attempt changes (Options.Wake).
+// interfaces: the store; where logs go (runlog.Logs); the run's secret
+// record, opened and sealed again (Sealer); the job an attempt claims, as
+// Ready gives it again (Readier, which PlanReadier is from the plan); and
+// whom to wake once an attempt changes (Options.Wake).
 package workerapisrv
 
 import (
@@ -35,6 +39,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/coordinator/internal/runlog"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/peercred"
@@ -54,40 +59,38 @@ const (
 	MaxCompleteBody = 64 << 20
 )
 
-// recheck is how often a held control poll reads the store again, for a
-// control another process stored, whose Notify doesn't reach this one.
-const recheck = time.Second
+// What the server keeps of an attempt's reports at most: its events, by
+// their number and the bytes they take, and the bytes of each of its logs.
+// Events past them are refused, 413, as no worker of a job the plan bounds
+// sends them; a log keeps its first MaxLogBytes, then a line that says the
+// rest wasn't kept (problems.LogTruncated), and the worker is told the rest
+// is stored, so that it goes on.
+const (
+	MaxEvents      = 1 << 20
+	MaxEventsBytes = 1 << 30
+	MaxLogBytes    = 1 << 30
+)
 
-// A LogKey names one log of an attempt, as coordinator.LogKey does.
-type LogKey struct {
-	Run string
-	// Job is the job instance's key, and Attempt the attempt's number,
-	// from 1.
-	Job     string
-	Attempt int
-	// Part is which of the attempt's logs it is, and Step and Try the
-	// step's index and its try, for a step's and a cleanup's.
-	Part workerapi.LogPart
-	Step int
-	Try  int
-}
+// The bounds on a request's time: its headers arrive within headerTime,
+// and its body within bodyTime and as long as minRate takes for the body's
+// limit; its answer is written within writeTime, past how long a control
+// poll is held. maxHeaderBytes bounds its headers.
+const (
+	headerTime     = 10 * time.Second
+	bodyTime       = 10 * time.Second
+	minRate        = 1 << 20 // bytes a second
+	writeTime      = time.Minute
+	maxHeaderBytes = 16 << 10
+)
 
-// ErrLogGap is what Logs.Append returns for an offset past a log's end, or
-// for bytes past the end of a log that has ended (coordinator.ErrLogGap).
-var ErrLogGap = errors.New("workerapisrv: log write past its end")
+// DefaultMaxConnections is how many connections a server holds at once
+// unless Options.MaxConnections says another: far more than the workers of
+// a machine's jobs hold, each a few.
+const DefaultMaxConnections = 1024
 
-// Logs stores the logs workers upload: the coordinator's Logs
-// (coordinator.Logs), whose rules these are, with ErrLogGap for its gap.
-// The package names it itself, since the coordinator, which serves the API
-// through it, imports this one.
-type Logs interface {
-	// Append stores data as the part of the log at key that starts at
-	// offset, skipping what the log has, and returns the log's length after
-	// it, and whether it has ended; end ends it. An offset past the log's
-	// end, or bytes past the end of one that has ended, return the length
-	// and ErrLogGap.
-	Append(ctx context.Context, key LogKey, offset int64, data []byte, end bool) (length int64, ended bool, err error)
-}
+// shutdownTime is how long Serve waits, once its context is done, for the
+// requests it is handling to end.
+const shutdownTime = 5 * time.Second
 
 // Sealer opens a run's secret record, and seals it again with a part added:
 // *seal.Sealer.
@@ -102,8 +105,8 @@ var _ Sealer = (*seal.Sealer)(nil)
 type Options struct {
 	// Store is the coordinator's store.
 	Store *store.Store
-	// Logs stores the logs workers upload.
-	Logs Logs
+	// Logs stores the logs workers upload: the coordinator's Logs.
+	Logs runlog.Logs
 	// Sealer opens runs' secret records, and seals them again, as an
 	// attempt's end adds its private outputs.
 	Sealer Sealer
@@ -112,6 +115,9 @@ type Options struct {
 	// Peers says whom the server takes requests from, and for which runs.
 	// Nil means LocalPeers: the process's own user, or root, for every run.
 	Peers Peers
+	// MaxConnections is how many connections the server holds at once, or
+	// DefaultMaxConnections for 0. Another waits until one closes.
+	MaxConnections int
 	// Wake, if it isn't nil, is called once the server has stored a change
 	// to an attempt that its job's supervisor acts on: its claim, its
 	// first step's start, and its end, before its first step or after.
@@ -123,23 +129,28 @@ type Options struct {
 
 // A Server serves the worker API. Its methods are safe for concurrent use.
 type Server struct {
-	store   *store.Store
-	logs    Logs
-	sealer  Sealer
-	readier Readier
-	peers   Peers
-	wake    func(ctx context.Context, run, job string)
-	log     *slog.Logger
+	store    *store.Store
+	logs     runlog.Logs
+	sealer   Sealer
+	readier  Readier
+	peers    Peers
+	maxConns int
+	wake     func(ctx context.Context, run, job string)
+	log      *slog.Logger
+	polls    *polls
 
-	// reads is the newest plan version the server reads, and hold how long
-	// it holds a control poll: plan.Version and
-	// workerapi.ControlWaitSeconds, but in tests.
-	reads int
-	hold  time.Duration
-
-	mu sync.Mutex
-	// changed is closed, and replaced, by Notify.
-	changed chan struct{}
+	// What tests change: the newest plan version the server reads, how
+	// long it holds a control poll, and how many bytes of a log it keeps.
+	reads          int
+	hold           time.Duration
+	maxLogBytes    int64
+	maxEvents      int64
+	maxEventsBytes int64
+	headerTime     time.Duration
+	bodyTime       time.Duration
+	// beforeEnd, if it is set, is called as an end is stored, between its
+	// checks and its transaction.
+	beforeEnd func()
 }
 
 // New returns a Server that serves from opts.
@@ -155,47 +166,47 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("workerapisrv: no Readier")
 	}
 	s := &Server{
-		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers, wake: opts.Wake, log: opts.Log,
-		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second, changed: make(chan struct{}),
+		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers,
+		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
+		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second,
+		maxLogBytes: MaxLogBytes, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
 	}
 	if s.peers == nil {
 		s.peers = LocalPeers{}
 	}
+	if s.maxConns <= 0 {
+		s.maxConns = DefaultMaxConnections
+	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
+	s.polls = newPolls(s.store, s.log)
 	return s, nil
 }
 
-// Notify wakes the control polls the server holds, to read the store again:
-// call it once a control stored in this process has committed. A poll
-// reads the store again every second besides, for a control another
-// process stored.
-func (s *Server) Notify() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	close(s.changed)
-	s.changed = make(chan struct{})
-}
-
-// changes returns a channel that Notify closes.
-func (s *Server) changes() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.changed
-}
+// Notify wakes the control polls the server holds for the attempts ids, or
+// for every attempt for none, to read the store again: call it once a
+// control stored in this process has committed. The server reads the
+// controls of the attempts it holds polls for again every second besides,
+// for one another process stored.
+func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
 
 // Serve serves the worker API on l, a Unix socket's listener, until ctx is
-// done, and then closes l. It takes a connection only from a peer that
-// Peers accepts, as the system says who it is (peercred), and closes any
-// other, and every connection that isn't a Unix socket's, before it reads
-// a request from it.
+// done, and then closes l, once the requests it is handling have ended,
+// for a short while. It takes a connection only from a peer that Peers
+// accepts, as the system says who it is (peercred), and closes any other,
+// and every connection that isn't a Unix socket's, before it reads a
+// request from it.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	srv := &http.Server{
 		Handler:           s,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: s.headerTime,
+		ReadTimeout:       s.headerTime + s.bodyTime,
 		IdleTimeout:       2 * time.Minute,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+		MaxHeaderBytes:    maxHeaderBytes,
+		// The requests' context ends with ctx, which ends the control
+		// polls held, so that a shutdown waits for none of them.
+		BaseContext: func(net.Listener) context.Context { return ctx },
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if pc, ok := c.(*peerConn); ok {
 				return context.WithValue(ctx, peerKey{}, pc.uid)
@@ -203,10 +214,25 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 			return ctx
 		},
 	}
-	stop := context.AfterFunc(ctx, func() { srv.Close() })
-	defer stop()
-	err := srv.Serve(&peerListener{Listener: l, s: s})
-	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
+	shut := make(chan error, 1)
+	stop := context.AfterFunc(ctx, func() {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTime)
+		defer cancel()
+		err := srv.Shutdown(sctx)
+		if err != nil {
+			err = errors.Join(err, srv.Close())
+		}
+		shut <- err
+	})
+	err := srv.Serve(&peerListener{Listener: l, s: s, slots: make(chan struct{}, s.maxConns)})
+	if stop() {
+		// Serve ended on its own, before ctx: nothing shuts it down.
+		return err
+	}
+	if serr := <-shut; serr != nil {
+		s.log.Warn("workerapisrv: requests outlived the shutdown", "error", serr)
+	}
+	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
@@ -224,42 +250,60 @@ func peerOf(r *http.Request) (int, bool) {
 }
 
 // A peerListener takes only connections from the peers its server
-// accepts.
+// accepts, and holds at most as many at once as slots has room for.
 type peerListener struct {
 	net.Listener
-	s *Server
+	s     *Server
+	slots chan struct{}
 }
 
 // A peerConn is a connection a peerListener took, and the user it is from.
+// Closing it gives its slot back.
 type peerConn struct {
 	net.Conn
-	uid int
+	uid  int
+	free func()
+}
+
+func (c *peerConn) Close() error {
+	err := c.Conn.Close()
+	c.free()
+	return err
 }
 
 func (l *peerListener) Accept() (net.Conn, error) {
 	for {
+		// A slot first: past the limit, connections wait in the system's
+		// queue until one closes.
+		l.slots <- struct{}{}
+		var once sync.Once
+		free := func() { once.Do(func() { <-l.slots }) }
 		c, err := l.Listener.Accept()
 		if err != nil {
+			free()
 			return nil, err
 		}
 		uc, ok := c.(*net.UnixConn)
 		if !ok {
 			l.s.log.Warn("workerapisrv: refused a connection that isn't a Unix socket's", "remote", c.RemoteAddr().String())
 			c.Close()
+			free()
 			continue
 		}
 		uid, err := peercred.UID(uc)
 		if err != nil {
 			l.s.log.Warn("workerapisrv: refused a connection whose user the system doesn't say", "error", err)
 			c.Close()
+			free()
 			continue
 		}
 		if !l.s.peers.Accept(uid) {
 			l.s.log.Warn("workerapisrv: refused a connection from another user", "uid", uid)
 			c.Close()
+			free()
 			continue
 		}
-		return &peerConn{Conn: c, uid: uid}, nil
+		return &peerConn{Conn: c, uid: uid, free: free}, nil
 	}
 }
 
@@ -302,6 +346,9 @@ var methods = map[string]string{
 // ServeHTTP serves one request of the worker API, which came on a
 // connection Serve took.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The answer is written in time, or not at all: a worker that reads it
+	// slowly holds nothing past it.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.hold + writeTime))
 	method, ok := methods[r.URL.Path]
 	switch {
 	case !ok:
@@ -352,7 +399,8 @@ func bearer(r *http.Request) string {
 // that is no attempt's, of a run the peer may not report on, or that has
 // lapsed with a lease, and 503 for a run whose plan is of a version the
 // server doesn't read. Whether the attempt still holds its job, its write
-// checks in its own transaction.
+// checks in its own transaction. Nothing of the request's body is read
+// before.
 func (s *Server) attempt(w http.ResponseWriter, r *http.Request, uid int) (*store.Attempt, *store.Run, bool) {
 	ctx := r.Context()
 	credential := bearer(r)
@@ -390,9 +438,11 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, uid int) (*stor
 	return a, run, true
 }
 
-// readBody reads the request's body, at most limit bytes, once it has
-// answered one larger, 413.
-func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+// readBody reads the request's body, at most limit bytes, in the time a
+// body of limit bytes takes at minRate, once it has answered one larger,
+// 413, or one that didn't arrive in time.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.bodyTime + time.Duration(limit/minRate)*time.Second))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -408,8 +458,9 @@ func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool
 // writeError answers with what err says of the request: 401 for a token or
 // a credential that is no attempt's, or another credential, or one that
 // has lapsed; Fenced for an attempt that no longer holds its job;
-// OutOfOrder for events that skip one; and 500 for the rest, which the
-// server logs, and which the worker tries again.
+// OutOfOrder for events that skip one; 503 for a run of a plan version
+// this release doesn't read, which another replica may; and 500 for the
+// rest, which the server logs, and which the worker tries again.
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if gap, ok := errors.AsType[*store.GapError](err); ok {
 		problem.Write(w, outOfOrder(gap.Expected))
@@ -429,8 +480,12 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // writeStatus answers with an about:blank problem: one its status says all
-// of.
+// of. A refusal closes the connection after it, so that a body the server
+// didn't read isn't read to its end, however slowly it comes.
 func writeStatus(w http.ResponseWriter, status int) {
+	if status >= 400 {
+		w.Header().Set("Connection", "close")
+	}
 	problem.Write(w, problem.Status(status, ""))
 }
 

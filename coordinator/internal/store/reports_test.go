@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,13 +11,31 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
+// testPlacement is where the tests' attempts are placed.
+var testPlacement = Placement{Group: "local", Member: "laptop", Backend: "local", ID: "12:34", WorkerDigest: "sha256:" + strings.Repeat("ab", 32)}
+
+// placedAttempt starts an attempt, as NewAttempt does, and records its
+// placement, as the coordinator does once its backend has placed it, which
+// its claim waits for.
+func placedAttempt(tx *Tx, n NewAttempt) (*Attempt, string, error) {
+	a, token, err := tx.NewAttempt(n)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := tx.RecordPlacement(a.ID, testPlacement); err != nil {
+		return nil, "", err
+	}
+	a, err = tx.Attempt(a.ID)
+	return a, token, err
+}
+
 // claimedAttempt starts and claims an attempt of a new run's build job.
 func claimedAttempt(t *testing.T, s *Store, c byte) *Attempt {
 	t.Helper()
 	id := createRun(t, s)
 	var a *Attempt
 	inTx(t, s, func(tx *Tx) error {
-		_, token, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		_, token, err := placedAttempt(tx, NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
 		if err != nil {
 			return err
 		}
@@ -89,8 +108,9 @@ func TestControl(t *testing.T) {
 	})
 }
 
-// RecordPlacement records where an attempt was placed, until it is
-// claimed; an attempt's end keeps its report and its problem; and
+// RecordPlacement records where an attempt was placed, with the digest of
+// the worker binary it started, until it is claimed, and its first claim
+// waits for it; an attempt's end keeps its report and its problem; and
 // StartedBefore counts the attempts before one that started a step.
 func TestPlacementAndEnd(t *testing.T) {
 	s := open(t)
@@ -100,7 +120,20 @@ func TestPlacementAndEnd(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		p := Placement{Group: "local", Member: "laptop", Backend: "local", ID: "12:34", WorkerDigest: "sha256:ab"}
+		if _, err := tx.Claim(token, credential('a'), testWorker); !errors.Is(err, ErrNotPlaced) {
+			t.Errorf("Claim before the placement is recorded = %v, want ErrNotPlaced", err)
+		}
+		p := testPlacement
+		for _, bad := range []Placement{
+			{Backend: "local", ID: "1:2"},
+			{Backend: "local", ID: "1:2", WorkerDigest: "sha256:ab"},
+			{Backend: "local", WorkerDigest: p.WorkerDigest},
+			{ID: "1:2", WorkerDigest: p.WorkerDigest},
+		} {
+			if err := tx.RecordPlacement(a.ID, bad); err == nil {
+				t.Errorf("RecordPlacement(%+v) succeeded", bad)
+			}
+		}
 		if err := tx.RecordPlacement(a.ID, p); err != nil {
 			return err
 		}
@@ -158,7 +191,7 @@ func TestLapsed(t *testing.T) {
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
 		for _, selfFencing := range []bool{false, true} {
-			_, token, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", SelfFencing: selfFencing, LeaseSeconds: 60, HeartbeatSeconds: 10})
+			_, token, err := placedAttempt(tx, NewAttempt{Run: id, Job: "build", SelfFencing: selfFencing, LeaseSeconds: 60, HeartbeatSeconds: 10})
 			if err != nil {
 				return err
 			}

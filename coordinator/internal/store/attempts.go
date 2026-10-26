@@ -243,7 +243,7 @@ WHERE `+where, args...).Scan(
 	a.EndedAt = timeOf(ended)
 	if prob != nil {
 		a.End.Problem = new(problem.Problem)
-		if err := jsonv2.Unmarshal(prob, a.End.Problem); err != nil {
+		if err := jsonv2.Unmarshal(prob, a.End.Problem, jsonv2.RejectUnknownMembers(true)); err != nil {
 			return nil, fmt.Errorf("%w: the problem attempt %s ended with: %w", ErrMalformed, a.ID, err)
 		}
 	}
@@ -272,8 +272,9 @@ func (tx *Tx) AttemptByCredential(credential string) (*Attempt, error) {
 // token, with credential, which its later calls give, and returns the
 // attempt, its lease running from now. A claim repeated with the same
 // credential changes nothing. A token that is no attempt's is ErrNotFound,
-// one of an attempt claimed with another credential ErrCredential, and one
-// of an attempt that no longer holds its job ErrFenced.
+// one of an attempt claimed with another credential ErrCredential, one of
+// an attempt that no longer holds its job ErrFenced, and a first claim of
+// one whose placement isn't recorded yet ErrNotPlaced.
 func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, error) {
 	if len(credential) < 32 {
 		return nil, errors.New("store: a credential shorter than 32 bytes")
@@ -296,8 +297,11 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
 		}
 		return a, nil
 	}
-	if !a.Holds {
+	switch {
+	case !a.Holds:
 		return nil, ErrFenced
+	case a.Placement.ID == "":
+		return nil, ErrNotPlaced
 	}
 	var taken bool
 	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE credential_hash = ?)", cred).Scan(&taken); err != nil {

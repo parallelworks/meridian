@@ -239,9 +239,9 @@ type Placement struct {
 	// given the same ID later isn't taken for it.
 	ID string `json:"id"`
 	// WorkerDigest is sha256: and the hex of the SHA-256 digest of the
-	// worker binary the driver started, where it can say, as the local
-	// driver can, or "". The coordinator records it with the attempt, and
-	// refuses a claim from a worker that says another
+	// worker binary the driver started, which every driver says: the
+	// coordinator records it with the attempt, refuses a placement without
+	// it, and refuses a claim from a worker that says another
 	// (workerapi.WorkerDigestMismatch).
 	WorkerDigest string `json:"workerDigest,omitempty"`
 }

@@ -2683,12 +2683,16 @@ The coordinator looks for the attempt's placement before it makes the
 token, and makes one only for a placement that doesn't exist yet. When the
 worker claims the attempt, it presents the bootstrap token with a
 credential it makes itself, which is the attempt's credential from then on,
-so the credential never travels from the coordinator. A backend that can
-say which binary it started, as the local one can, records its digest with
-the placement, and the coordinator refuses a claim from a worker whose
-digest is another, before it sends anything of the run
+so the credential never travels from the coordinator. A backend says the
+digest of the binary it started, which the coordinator records with the
+placement, and the coordinator refuses a claim from a worker whose digest
+is another, before it sends anything of the run
 (`worker_digest_mismatch`): the attempt fails before its first step, and
-is placed again.
+is placed again. A first claim before the placement is recorded, as from
+a worker that claims before the call that started it returns, is asked to
+come again (503), never taken. The digest catches a binary replaced
+between the placement and the claim; it isn't authentication, since
+whoever holds the token can say any digest.
 
 ### The worker API
 

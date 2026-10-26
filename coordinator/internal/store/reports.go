@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -26,10 +29,23 @@ type Placement struct {
 	WorkerDigest string
 }
 
-// RecordPlacement records where the attempt was placed. An attempt that no
-// longer holds its job is ErrFenced, and one that has been claimed
-// ErrState.
+// workerDigest is what a worker binary's digest is: sha256: and 64 hex
+// digits.
+var workerDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// RecordPlacement records where the attempt was placed, which its first
+// claim waits for (ErrNotPlaced). A placement without its backend's ID for
+// it, or without the digest of the worker binary it started, is refused:
+// every backend says which binary it started, so that no claim is taken
+// from another. An attempt that no longer holds its job is ErrFenced, and
+// one that has been claimed ErrState.
 func (tx *Tx) RecordPlacement(id string, p Placement) error {
+	switch {
+	case p.ID == "" || p.Backend == "":
+		return fmt.Errorf("store: attempt %s placed without its backend or the backend's ID for it", id)
+	case !workerDigest.MatchString(p.WorkerDigest):
+		return fmt.Errorf("store: attempt %s placed without the digest of the worker binary it started", id)
+	}
 	a, err := tx.Attempt(id)
 	if err != nil {
 		return err
@@ -166,6 +182,48 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 		}
 	}
 	return next, nil
+}
+
+// EventsStored returns how many events the attempt has, and how many bytes
+// they take.
+func (tx *Tx) EventsStored(id string) (count, size int64, err error) {
+	err = tx.tx.QueryRowContext(tx.ctx, "SELECT count(*), coalesce(sum(length(body)), 0) FROM meridian_events WHERE attempt_id = ?", id).Scan(&count, &size)
+	return count, size, err
+}
+
+// ControlVersions returns the version of the control of each of the
+// attempts ids that the store has, by ID.
+func (tx *Tx) ControlVersions(ids []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(ids))
+	for chunk := range slices.Chunk(ids, 500) {
+		// Only placeholders are joined into the query: the IDs are its
+		// arguments.
+		query := "SELECT id, control_version FROM meridian_attempts WHERE id IN (?" + strings.Repeat(", ?", len(chunk)-1) + ")" //nolint:gosec // placeholders only
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := tx.tx.QueryContext(tx.ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			var v int64
+			if err := rows.Scan(&id, &v); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = v
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // LastEvent returns the sequence number of the attempt's last event, or 0

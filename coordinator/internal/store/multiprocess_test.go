@@ -119,7 +119,7 @@ func child(ctx context.Context, s *Store, role string) error {
 		var token string
 		err := s.Tx(ctx, func(tx *Tx) error {
 			var err error
-			_, token, err = tx.NewAttempt(NewAttempt{Run: "1", Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+			_, token, err = placedAttempt(tx, NewAttempt{Run: "1", Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
 			return err
 		})
 		if err != nil {

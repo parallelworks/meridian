@@ -53,19 +53,8 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		writeStatus(w, http.StatusUnauthorized)
 		return
 	}
-	body, ok := readBody(w, r, MaxClaimBody)
-	if !ok {
-		return
-	}
-	var req workerapi.ClaimRequest
-	if err := workerapi.Unmarshal(body, &req); err != nil {
-		s.badRequest(w, r, "a claim that isn't one")
-		return
-	}
-	if !credentialForm(req.Credential) {
-		s.badRequest(w, r, "a credential that isn't 32 bytes as hex")
-		return
-	}
+	// The token is looked up before the body is read: one that is no
+	// attempt's has the server read nothing more.
 	var (
 		a   *store.Attempt
 		run *store.Run
@@ -89,16 +78,36 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		writeStatus(w, http.StatusUnauthorized)
 		return
 	}
-	// A first claim, of an attempt that holds its job: refused, before
-	// anything of the run is sent, for a worker that doesn't read the
-	// run's plan, or that isn't the binary its placement started, which
-	// ends the attempt, failed before its first step.
+	body, ok := s.readBody(w, r, MaxClaimBody)
+	if !ok {
+		return
+	}
+	var req workerapi.ClaimRequest
+	if err := workerapi.Unmarshal(body, &req); err != nil {
+		s.badRequest(w, r, "a claim that isn't one")
+		return
+	}
+	if !credentialForm(req.Credential) {
+		s.badRequest(w, r, "a credential that isn't 32 bytes as hex")
+		return
+	}
+	// A first claim, of an attempt that holds its job: until its placement
+	// is recorded, as when the worker the call that places it started
+	// claims before the call returns, it is answered 503, which the
+	// worker tries again; then it is refused, before anything of the run
+	// is sent, for a worker that doesn't read the run's plan, or that
+	// isn't the binary its placement started, which ends the attempt,
+	// failed before its first step.
 	if a.Holds && a.ClaimedAt.IsZero() {
+		if a.Placement.ID == "" {
+			notPlaced(w)
+			return
+		}
 		var refusal *problem.Problem
 		switch placed := a.Placement.WorkerDigest; {
 		case req.PlanVersion < run.PlanVersion:
 			refusal = problems.PlanTooNew.Problem(nil)
-		case placed != "" && placed != req.Worker.Digest:
+		case placed != req.Worker.Digest:
 			refusal = problems.WorkerDigestMismatch.Problem(problems.Params{workerapi.ParamPlaced: placed, workerapi.ParamClaimed: req.Worker.Digest})
 		}
 		if refusal != nil {
@@ -119,6 +128,9 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		// claims nothing.
 		writeStatus(w, http.StatusUnauthorized)
 		return
+	case errors.Is(err, store.ErrNotPlaced):
+		notPlaced(w)
+		return
 	case err != nil:
 		s.writeError(w, r, err)
 		return
@@ -132,6 +144,13 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		return
 	}
 	writeJSON(w, c)
+}
+
+// notPlaced answers a first claim of an attempt whose placement isn't
+// recorded yet: 503, which the worker tries again, after a second.
+func notPlaced(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	writeStatus(w, http.StatusServiceUnavailable)
 }
 
 // credentialForm reports whether a credential is as a worker makes one: 32

@@ -20,6 +20,7 @@ import (
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/coordinator/internal/runlog"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
@@ -144,14 +145,14 @@ func (k *testKeys) Unwrap(_ context.Context, runID string, wrapped []byte) ([]by
 // memLogs keeps logs in memory, as coordinator.Logs says.
 type memLogs struct {
 	mu   sync.Mutex
-	logs map[workerapisrv.LogKey]*workerapitest.Log
+	logs map[runlog.Key]*workerapitest.Log
 }
 
-func (l *memLogs) Append(_ context.Context, key workerapisrv.LogKey, offset int64, data []byte, end bool) (int64, bool, error) {
+func (l *memLogs) Append(_ context.Context, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.logs == nil {
-		l.logs = map[workerapisrv.LogKey]*workerapitest.Log{}
+		l.logs = map[runlog.Key]*workerapitest.Log{}
 	}
 	log := l.logs[key]
 	if log == nil {
@@ -161,7 +162,7 @@ func (l *memLogs) Append(_ context.Context, key workerapisrv.LogKey, offset int6
 	length := int64(len(log.Data))
 	switch {
 	case offset > length, log.Ended && offset+int64(len(data)) > length:
-		return length, log.Ended, workerapisrv.ErrLogGap
+		return length, log.Ended, runlog.ErrGap
 	case offset+int64(len(data)) > length:
 		log.Data = append(log.Data, data[length-offset:]...)
 	}
@@ -169,6 +170,20 @@ func (l *memLogs) Append(_ context.Context, key workerapisrv.LogKey, offset int6
 		log.Ended = true
 	}
 	return int64(len(log.Data)), log.Ended, nil
+}
+
+func (l *memLogs) Read(_ context.Context, key runlog.Key, offset int64, limit int) ([]byte, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	log := l.logs[key]
+	if log == nil {
+		return nil, false, nil
+	}
+	end := min(int64(len(log.Data)), offset+int64(limit))
+	if offset >= end {
+		return nil, log.Ended, nil
+	}
+	return bytes.Clone(log.Data[offset:end]), log.Ended && end == int64(len(log.Data)), nil
 }
 
 // of returns the logs of the attempt number of run's job.
@@ -242,8 +257,11 @@ type rigOptions struct {
 	peers workerapisrv.Peers
 	// older makes the server a replica of an older release, which reads
 	// only the plan versions before this one's.
-	older bool
-	hold  time.Duration
+	older    bool
+	hold     time.Duration
+	maxConns int
+	// configure, if it is set, changes the server before it serves.
+	configure func(*workerapisrv.Server)
 }
 
 func newRig(t *testing.T, opts rigOptions) *rig {
@@ -263,7 +281,7 @@ func newRig(t *testing.T, opts rigOptions) *rig {
 func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 	r.t.Helper()
 	srv, err := workerapisrv.New(workerapisrv.Options{
-		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Peers: opts.peers,
+		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Peers: opts.peers, MaxConnections: opts.maxConns,
 		Wake: func(_ context.Context, run, job string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -281,6 +299,9 @@ func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 		hold = 2 * time.Second
 	}
 	workerapisrv.SetHold(srv, hold)
+	if opts.configure != nil {
+		opts.configure(srv)
+	}
 	socket := listen(r.t, srv)
 	if r.socket == "" {
 		r.socket = socket
@@ -320,9 +341,17 @@ func listen(t *testing.T, srv *workerapisrv.Server) string {
 func (r *rig) newRun(rec *plan.Record) string {
 	r.t.Helper()
 	c := created(r.t)
-	if rec == nil {
-		rec = &c.Record
+	if rec != nil {
+		c.Record = *rec
 	}
+	return r.newRunOf(c)
+}
+
+// newRunOf stores a run of what Create gave, c, with its jobs and its
+// secret record, and returns its ID.
+func (r *rig) newRunOf(c *compile.Created) string {
+	r.t.Helper()
+	rec := &c.Record
 	var id string
 	err := r.store.Tx(r.t.Context(), func(tx *store.Tx) error {
 		var err error
@@ -354,6 +383,9 @@ type placed struct {
 	selfFencing           bool
 	lease, heartbeat      int64
 	digest, group, member string
+	// unplaced leaves the attempt without a placement recorded, and
+	// digest "" is conformanceDigest.
+	unplaced bool
 }
 
 // newAttempt starts an attempt of run's job, placed with p, and returns it
@@ -368,8 +400,11 @@ func (r *rig) newAttempt(run, job string, p placed) (*store.Attempt, string) {
 	err := r.store.Tx(r.t.Context(), func(tx *store.Tx) error {
 		var err error
 		a, token, err = tx.NewAttempt(store.NewAttempt{Run: run, Job: job, SelfFencing: p.selfFencing, LeaseSeconds: p.lease, HeartbeatSeconds: p.heartbeat})
-		if err != nil {
+		if err != nil || p.unplaced {
 			return err
+		}
+		if p.digest == "" {
+			p.digest = conformanceDigest
 		}
 		return tx.RecordPlacement(a.ID, store.Placement{Group: p.group, Member: p.member, Backend: "local", ID: "1:2", WorkerDigest: p.digest})
 	})

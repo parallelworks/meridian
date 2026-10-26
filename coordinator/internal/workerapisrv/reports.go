@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -13,9 +12,11 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/coordinator/internal/runlog"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -44,31 +45,34 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 	}
 	hold := time.NewTimer(s.hold)
 	defer hold.Stop()
-	tick := time.NewTicker(recheck)
-	defer tick.Stop()
 	for {
-		// The broadcast is taken before the store is read, so that a
-		// Notify after the read wakes the wait below.
-		changed := s.changes()
+		// The poll waits before the store is read, so that a control
+		// stored after the read wakes it.
+		changed, done := s.polls.watch(ctx, a.ID, seen)
 		var c workerapi.Control
-		if err := s.store.View(ctx, func(tx *store.Tx) error {
+		err := s.store.View(ctx, func(tx *store.Tx) error {
+			var err error
 			c, err = tx.Control(a.ID)
 			return err
-		}); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if c.Version > seen {
-			writeJSON(w, &c)
+		})
+		if err != nil || c.Version > seen {
+			done()
+			if err != nil {
+				s.writeError(w, r, err)
+			} else {
+				writeJSON(w, &c)
+			}
 			return
 		}
 		select {
 		case <-changed:
-		case <-tick.C:
+			done()
 		case <-hold.C:
+			done()
 			writeJSON(w, &c)
 			return
 		case <-ctx.Done():
+			done()
 			return
 		}
 	}
@@ -78,7 +82,7 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 // answers with the sequence number of the last it has.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.Attempt) {
 	ctx := r.Context()
-	body, ok := readBody(w, r, MaxEventsBody)
+	body, ok := s.readBody(w, r, MaxEventsBody)
 	if !ok {
 		return
 	}
@@ -92,11 +96,21 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		if _, err := tx.Authorize(bearer(r)); err != nil {
 			return err
 		}
-		var err error
+		count, size, err := tx.EventsStored(a.ID)
+		if err != nil {
+			return err
+		}
+		if count+int64(len(events.Events)) > s.maxEvents || size+int64(len(body)) > s.maxEventsBytes {
+			return errTooMuch
+		}
 		last, err = tx.AppendEvents(a.ID, events.Events)
 		return err
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, errTooMuch):
+		writeStatus(w, http.StatusRequestEntityTooLarge)
+		return
+	case err != nil:
 		s.writeError(w, r, err)
 		return
 	}
@@ -108,15 +122,20 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 	writeJSON(w, &workerapi.EventsAck{Seq: last})
 }
 
+// errTooMuch is an attempt's reports past what the server keeps of them.
+var errTooMuch = errors.New("workerapisrv: more of an attempt's reports than the server keeps")
+
 // logParts are the logs an attempt has.
 var logParts = []workerapi.LogPart{workerapi.LogSetup, workerapi.LogStep, workerapi.LogCleanup}
 
 // serveLogs stores part of one of the attempt's logs, and answers with the
-// log's length and whether it has ended.
+// log's length and whether it has ended. A log keeps its first bytes, to
+// the server's limit, then a line that says the rest wasn't kept, and the
+// worker is told the rest is stored, so that it goes on.
 func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
 	ctx := r.Context()
 	q := r.URL.Query()
-	key := LogKey{Run: a.Run, Job: a.Job, Attempt: a.Number, Part: workerapi.LogPart(q.Get(workerapi.QueryPart))}
+	key := runlog.Key{Run: a.Run, Job: a.Job, Attempt: a.Number, Part: workerapi.LogPart(q.Get(workerapi.QueryPart))}
 	offset, err := strconv.ParseInt(q.Get(workerapi.QueryOffset), 10, 64)
 	if err != nil || offset < 0 || !slices.Contains(logParts, key.Part) {
 		s.badRequest(w, r, "a log upload whose log or offset isn't one")
@@ -147,47 +166,72 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 		}
 		key.Step, key.Try = step, try
 	}
-	data, err := io.ReadAll(io.LimitReader(r.Body, workerapi.MaxLogUpload+1))
-	if err != nil {
-		writeStatus(w, http.StatusBadRequest)
+	data, ok := s.readBody(w, r, workerapi.MaxLogUpload)
+	if !ok {
 		return
 	}
-	if len(data) > workerapi.MaxLogUpload {
-		writeStatus(w, http.StatusRequestEntityTooLarge)
-		return
+	authorized := func() error {
+		return s.store.View(ctx, func(tx *store.Tx) error {
+			_, err := tx.Authorize(bearer(r))
+			return err
+		})
 	}
-	// Logs aren't in the store: the attempt is checked to hold its job
-	// first. One superseded between the check and the append can add to
-	// its own logs, which are its attempt's alone.
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		_, err := tx.Authorize(bearer(r))
-		return err
-	}); err != nil {
+	if err := authorized(); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	length, ended, err := s.logs.Append(ctx, key, offset, data, end)
+	length, ended, err := s.appendLog(ctx, key, offset, data, end)
 	switch {
-	case errors.Is(err, ErrLogGap):
+	case errors.Is(err, runlog.ErrGap):
 		problem.Write(w, outOfOrder(length))
 		return
 	case err != nil:
 		s.writeError(w, r, err)
 		return
 	}
+	// Logs aren't in the store: an attempt superseded as its upload was
+	// appended has added to its own logs, by its own number, which no other
+	// attempt's are; it is told it no longer holds its job.
+	if err := authorized(); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	writeJSON(w, &workerapi.LogAck{Length: length, Ended: ended})
 }
 
-// resealTries is how many times serveComplete seals the run's record again
-// when another change to it raced its own.
+// appendLog appends data, the part of the log key that starts at offset,
+// as Logs.Append does, but for the part past the server's limit on a log:
+// the log keeps its first bytes to the limit, and then a line that says the
+// rest wasn't kept, and ends there; the rest is answered as stored.
+func (s *Server) appendLog(ctx context.Context, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
+	limit := s.maxLogBytes
+	past := offset+int64(len(data)) > limit
+	if !past {
+		return s.logs.Append(ctx, key, offset, data, end)
+	}
+	if offset < limit {
+		if length, ended, err := s.logs.Append(ctx, key, offset, data[:limit-offset], false); err != nil {
+			return length, ended, err
+		}
+	}
+	line := []byte("\n" + problems.LogTruncated.Message(problems.Params{"limit": limit}) + "\n")
+	if length, ended, err := s.logs.Append(ctx, key, limit, line, true); err != nil {
+		return length, ended, err
+	}
+	return offset + int64(len(data)), end, nil
+}
+
+// resealTries is how many times serveComplete stores an end whose run's
+// secret record another store sealed again as it did, as one on another
+// database than SQLite, whose transactions run side by side, can.
 const resealTries = 8
 
 // serveComplete stores the attempt's end, once its events are stored: its
 // result's private part in the run's secret record, sealed again, and the
-// rest with the attempt.
+// rest with the attempt, in one transaction.
 func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
 	ctx := r.Context()
-	body, ok := readBody(w, r, MaxCompleteBody)
+	body, ok := s.readBody(w, r, MaxCompleteBody)
 	if !ok {
 		return
 	}
@@ -219,6 +263,9 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	if ok := s.checkSeq(w, r, a, end.Seq); !ok {
 		return
 	}
+	if s.beforeEnd != nil {
+		s.beforeEnd()
+	}
 	private, state := result.Split()
 	report := *end
 	report.Result = state
@@ -231,14 +278,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		Kind: store.EndCompleted, Outcome: result.Outcome, Reason: end.Reason, CompleteDigest: sum[:], Report: reportBody, Problem: end.Problem,
 	}
 	hasPrivate := len(private.Outputs) > 0 || len(private.Steps) > 0
-	for try := 0; ; try++ {
-		var resealed *sealedRecord
-		if hasPrivate {
-			if resealed, err = s.withJob(ctx, run.ID, a.Job, private); err != nil {
-				s.writeError(w, r, err)
-				return
-			}
-		}
+	for try := 1; ; try++ {
 		err = s.store.Tx(ctx, func(tx *store.Tx) error {
 			if _, err := tx.Authorize(bearer(r)); err != nil {
 				return err
@@ -248,18 +288,19 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 			} else if last != end.Seq {
 				return errSeqChanged
 			}
-			if resealed != nil {
-				if err := tx.Reseal(run.ID, resealed.gen, resealed.sealed); err != nil {
+			// The record is opened and sealed again in the transaction
+			// that stores it, which holds the database's lock, so that
+			// ends of a run's jobs at once each add to the last.
+			if hasPrivate {
+				if err := s.addJob(ctx, tx, run.ID, a.Job, private); err != nil {
 					return err
 				}
 			}
 			return tx.EndAttempt(a.ID, stored)
 		})
-		if errors.Is(err, store.ErrState) && resealed != nil && try < resealTries {
-			// Another change sealed the record again meanwhile.
-			continue
+		if !errors.Is(err, store.ErrRecordChanged) || try == resealTries {
+			break
 		}
-		break
 	}
 	switch {
 	case errors.Is(err, errSeqChanged):
@@ -330,32 +371,19 @@ func (s *Server) repeatedEnd(w http.ResponseWriter, a *store.Attempt, sum []byte
 	problem.Write(w, fenced())
 }
 
-// A sealedRecord is a run's secret record sealed again, with the next
-// generation, to store in place of the one it was made from.
-type sealedRecord struct {
-	gen    uint64
-	sealed []byte
-}
-
-// withJob returns the run's secret record sealed again with job's private
-// result, rec, which End gave: its private outputs, and its steps' that
-// hold a secret (plan.JobResult.Split). The record is read, opened and
-// sealed outside the transaction that stores it, which Keys may take a
-// while for, and stored only if no other change sealed it again meanwhile
-// (store.Tx.Reseal).
-func (s *Server) withJob(ctx context.Context, run, job string, rec plan.JobRecord) (*sealedRecord, error) {
-	var stored *store.Record
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		stored, err = tx.Record(run)
+// addJob adds job's private result, rec, as End gave it, to the run's
+// secret record, in tx: its private outputs, and its steps' that hold a
+// secret (plan.JobResult.Split). It opens the record and seals it again
+// under the run's data key, which Keys unwraps, with the next generation.
+func (s *Server) addJob(ctx context.Context, tx *store.Tx, run, job string, rec plan.JobRecord) error {
+	stored, err := tx.Record(run)
+	if err != nil {
 		return err
-	}); err != nil {
-		return nil, err
 	}
 	sealed := seal.Sealed{Key: stored.WrappedKey, Record: stored.Sealed}
 	record, err := s.sealer.Open(ctx, run, stored.Generation, sealed)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if record.Jobs == nil {
 		record.Jobs = map[string]plan.JobRecord{}
@@ -363,7 +391,7 @@ func (s *Server) withJob(ctx context.Context, run, job string, rec plan.JobRecor
 	record.Jobs[job] = rec
 	resealed, gen, err := s.sealer.Reseal(ctx, run, stored.Generation, sealed, record)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &sealedRecord{gen: gen, sealed: resealed.Record}, nil
+	return tx.Reseal(run, gen, resealed.Record)
 }

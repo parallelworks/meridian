@@ -178,6 +178,7 @@
   "run_malformed": "运行 {run} 存储的计划或密钥记录不是此发行版本能读取的：它没有标明版本，或者无法按其标明的版本解码，因此运行无法继续。",
   "run_not_started": "运行 {run} 未开始就结束了：协调器无法开始它。",
   "run_plan_newer": "运行 {run} 的计划（版本 {version}）包含只有更新的 Meridian 发行版本才能读取的内容（此发行版本读取版本 {latest} 及更早的版本），因此由能读取它的发行版本开始该运行。",
+  "log_truncated": "协调器最多保留日志的 {limit} 字节，因此没有保留此日志的其余部分。",
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
