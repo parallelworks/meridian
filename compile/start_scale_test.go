@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/scaletest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -194,13 +195,14 @@ func envInTurn(n int, reverse bool) (string, map[string]any, testVariables) {
 
 // TestStartScales checks that starting each of startScaledRuns at four
 // times the size allocates about four times as much, in bytes and in
-// allocations, not sixteen, and for one that is timed, takes no more than
-// eight times as long, the best of five runs each, as TestCompileScales
-// times compiling.
+// allocations, not sixteen; and for one that is timed, that starting it at
+// four times the size, from half of it, scaletest.Factor times, takes at
+// most scaletest.Bound of it times as long (scaletest.Within), as
+// TestCompileScales times compiling.
 func TestStartScales(t *testing.T) {
 	for _, w := range startScaledRuns {
 		t.Run(w.name, func(t *testing.T) {
-			smallBytes, smallAllocs, startSmall := w.measure(t, w.n)
+			smallBytes, smallAllocs, _ := w.measure(t, w.n)
 			largeBytes, largeAllocs, startLarge := w.measure(t, 4*w.n)
 			if ratio := float64(largeBytes) / float64(smallBytes); ratio > 8 {
 				t.Errorf("at %d, Start allocates %d bytes, and at %d, %d: %.1f times as much", w.n, smallBytes, 4*w.n, largeBytes, ratio)
@@ -211,9 +213,14 @@ func TestStartScales(t *testing.T) {
 			if !w.timed {
 				return
 			}
-			times := fastest(startSmall, startLarge)
-			if ratio := float64(times[1]) / float64(times[0]); ratio > 8 {
-				t.Errorf("at %d, Start takes %v, and at %d, %v: %.1f times as long", w.n, times[0], 4*w.n, times[1], ratio)
+			if w.n%2 != 0 {
+				t.Fatalf("a timed run's size, %d, isn't even", w.n)
+			}
+			_, _, startHalf := w.measure(t, w.n/2)
+			bound := scaletest.Bound(scaletest.Factor)
+			if times, ok := scaletest.Within(bound, startHalf, startLarge); !ok {
+				t.Errorf("at %d, Start takes %v, and at %d, %v: %.1f times as long, more than %.1f",
+					w.n/2, times[0], 4*w.n, times[1], float64(times[1])/float64(times[0]), bound)
 			}
 		})
 	}
