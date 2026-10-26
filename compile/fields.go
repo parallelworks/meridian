@@ -72,6 +72,13 @@ type field struct {
 	// seq is the field's place among the inputs' fields and then the rows'
 	// fields, the order evalValues fills in their values.
 	seq int
+	// resolved is set for an input of a platform's type, or a field of one
+	// in a list's rows, once the Inputs resolver was asked for its value,
+	// as soon as the value was known (resolvePlatform), and given holds the
+	// value it was asked for, which compare reads; failed is set if it
+	// couldn't give one, which was reported then.
+	resolved, failed bool
+	given            any
 	// options is what checking the value reads of the field's options,
 	// once it is read, which the fields of a list's rows share with its
 	// template's.

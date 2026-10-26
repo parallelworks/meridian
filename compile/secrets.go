@@ -88,6 +88,19 @@ func (r *inputResolver) markSecret(path []string) {
 	}
 }
 
+// markedSecret reports whether the value at path in the inputs' values is
+// marked as a secret's as the run starts (markSecret), holds such a value,
+// or is in one.
+func (r *inputResolver) markedSecret(path []string) bool {
+	full := slices.Concat([]string{"inputs"}, path)
+	for p := range r.start.secrets.All() {
+		if related(p, full) {
+			return true
+		}
+	}
+	return false
+}
+
 // mark marks the value at path in the inputs' values: what reads it reads a
 // variable or a password. The evaluations that follow read the marks anew.
 func (r *inputResolver) mark(path []string) {

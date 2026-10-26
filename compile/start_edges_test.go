@@ -403,27 +403,33 @@ func (clusterInputs) ResolveInput(typ string, _ map[string]any, v any) (any, err
 	return v, nil
 }
 
-// What is evaluated before the inputs are checked reads an input of a
-// platform's type as it was submitted, at Create as at Start, where the
-// Inputs resolver gave another value for it, and so does the workflow's
-// env:; what reads it after, the run's values among them, reads it as the
-// resolver gave it: a condition decided again doesn't change the run's
-// shape, and a default reads the same whether it reads a secret too.
-func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
+// Everything that reads an input of a platform's type reads what the
+// Inputs resolver gave for it, as ACTIVATE resolves a run's resources
+// before it evaluates any of its expressions: the other inputs' defaults
+// and conditions, the workflow's env:, at Create as at Start, whether the
+// value was submitted, is a default written out, or is a field of a list's
+// rows. So a condition that reads a cluster's details decides the same at
+// Create and at Start, and doesn't change the run's shape.
+func TestPlatformInputsReadResolved(t *testing.T) {
 	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "v"}}
+	given := map[string]any{"c": "c1"}
 	for name, tc := range map[string]struct {
 		defs, rest string
+		submitted  map[string]any
 		want       string
 	}{
-		"a default that reads a secret":  {"c: {type: compute-clusters}\nd: {type: string, default: '${{ toJSON(inputs.c) }}-${{ vars.S }}'}", "", `"c1"-SECRET`},
-		"a default that reads no secret": {"c: {type: compute-clusters}\nd: {type: string, default: '${{ toJSON(inputs.c) }}'}", "", `"c1"`},
-		"a hidden a variable decides":    {"c: {type: compute-clusters}\nd: {type: string, hidden: '${{ inputs.c == \"c1\" && vars.V != \"\" }}', default: dd}", "", "dd"},
-		"an ignore a variable decides":   {"c: {type: compute-clusters}\nd: {type: string, optional: true, ignore: '${{ inputs.c == \"c1\" && vars.V != \"\" }}', default: dd}", "", ""},
-		"the env":                        {"c: {type: compute-clusters}", "env:\n  E: ${{ toJSON(inputs.c) }}-${{ vars.S }}\n", ""},
+		"a default that reads a secret":   {"c: {type: compute-clusters}\nd: {type: string, default: '${{ inputs.c.id }}-${{ vars.S }}'}", "", given, "id-c1-SECRET"},
+		"a default that reads no secret":  {"c: {type: compute-clusters}\nd: {type: string, default: '${{ inputs.c.id }}'}", "", given, "id-c1"},
+		"a hidden a variable decides":     {"c: {type: compute-clusters}\nd: {type: string, hidden: '${{ inputs.c.name == \"c1\" && vars.V != \"\" }}', default: dd}", "", given, "dd"},
+		"an ignore a variable decides":    {"c: {type: compute-clusters}\nd: {type: string, optional: true, ignore: '${{ inputs.c.id == \"id-c1\" && vars.V != \"\" }}', default: dd}", "", given, ""},
+		"an ignore that reads its hidden": {"c: {type: compute-clusters}\nd: {type: string, default: dd, hidden: '${{ inputs.c.id != ''id-c1'' }}', ignore: '${{ .hidden }}'}", "", given, "dd"},
+		"the env":                         {"c: {type: compute-clusters}", "env:\n  E: ${{ inputs.c.id }}-${{ vars.S }}\n", given, ""},
+		"a default written out":           {"c: {type: compute-clusters, default: c1}\nd: {type: string, default: '${{ inputs.c.id }}'}", "", map[string]any{}, "id-c1"},
+		"what a default gives":            {"n: {type: string, default: c1}\nc: {type: compute-clusters, default: '${{ inputs.n }}'}\nd: {type: string, default: '${{ inputs.c.id }}'}", "", map[string]any{}, "id-c1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := workflow(tc.defs, tc.rest)
-			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), map[string]any{"c": "c1"}, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), tc.submitted, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
 			if err != nil || c == nil {
 				t.Fatal(diags, err)
 			}
@@ -438,10 +444,101 @@ func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
 			if got, _ := inputs["d"].(string); got != tc.want {
 				t.Errorf("d = %q, want %q", got, tc.want)
 			}
-			if e, ok := res.Run.Env["E"]; ok && e != `"c1"-SECRET` {
-				t.Errorf("env.E = %q, want what reads the name", e)
+			if e, ok := res.Run.Env["E"]; ok && e != "id-c1-SECRET" {
+				t.Errorf("env.E = %q, want what reads the details", e)
 			}
 		})
+	}
+	t.Run("a field of a list's rows", func(t *testing.T) {
+		src := workflow("l: {type: list, template: {c: {type: compute-clusters}, d: {type: string, default: '${{ inputs.l[index].c.id }}'}}}")
+		c := createWith(t, src, map[string]any{"l": []any{map[string]any{"c": "c1"}}}, compile.Options{Inputs: clusterInputs{}, Contexts: vars.contexts()})
+		res, diags := startRun(t, c, vars, compile.StartInput{Inputs: clusterInputs{}})
+		if res == nil {
+			t.Fatal(diags)
+		}
+		if got := canonical(t, res.Run.Inputs.Get()); got != `{"l":[{"c":{"id":"id-c1","name":"c1"},"d":"id-c1"}]}` {
+			t.Errorf("the run's inputs are %s", got)
+		}
+	})
+}
+
+// A value of a platform's type the Inputs resolver can't resolve is an
+// error even for an ignored input, as ACTIVATE resolves a run's resources
+// before it decides what is ignored, and fails the run; what is wrong with
+// one in the place of a default that reads a variable doesn't show it.
+func TestPlatformInputRejectedWhenIgnored(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs   string
+		masked bool
+	}{
+		"ignored":                   {"c: {type: compute-clusters, optional: true, ignore: true}", false},
+		"over a variable's default": {"c: {type: compute-clusters, default: '${{ vars.V }}'}", true},
+		"in a list's row":           {"l: {type: list, template: {c: {type: compute-clusters}}}", false},
+		"in a group that's ignored": {"g: {type: group, ignore: true, items: {c: {type: compute-clusters}}}", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			submitted := map[string]any{"c": "gone-cluster", "l": []any{map[string]any{"c": "gone-cluster"}}, "g": map[string]any{"c": "gone-cluster"}}
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow(tc.defs)), submitted, compile.Options{Inputs: rejecting{}, Contexts: testVariables{"vars.V": {Value: "v"}}.contexts()})
+			if err != nil || c != nil {
+				t.Fatalf("Create gave a run: %v", err)
+			}
+			if len(diags.Errors()) != 1 || diags.Errors()[0].Code != "input_rejected" {
+				t.Fatalf("diagnostics %v, want input_rejected", diags)
+			}
+			if shown := strings.Contains(diags.Errors()[0].Error(), "no such cluster"); shown == tc.masked {
+				t.Errorf("the resolver's reason shows %v, want %v: %v", shown, !tc.masked, diags)
+			}
+		})
+	}
+}
+
+// hostInputs gives a cluster's details with the host the cluster has now.
+type hostInputs struct{ host string }
+
+func (h hostInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+	if s, ok := v.(string); ok {
+		return map[string]any{"name": s, "ip": h.host}, nil
+	}
+	return v, nil
+}
+
+// The Inputs resolver can give a resource's details otherwise as the run
+// starts than as it was created, as a cluster's address changes: Start
+// reads what it gives then, in what reads the details too, a list's rows
+// among them, and doesn't take the difference for a plan the submission
+// doesn't fit.
+func TestPlatformDetailsChangeByStart(t *testing.T) {
+	src := workflow("c: {type: compute-clusters}\nd: {type: string, default: '${{ inputs.c.ip }}'}\n" +
+		"h: {type: string, default: hh, hidden: '${{ inputs.c.ip != ''10.0.0.1'' }}', ignore: '${{ .hidden }}'}\n" +
+		"l: {type: list, template: {c: {type: compute-clusters}, e: {type: string, default: '${{ inputs.l[index].c.ip }}'}}}")
+	submitted := map[string]any{"c": "c1", "l": []any{map[string]any{"c": "c2"}}}
+	c := createWith(t, src, submitted, compile.Options{Inputs: hostInputs{"10.0.0.1"}})
+	res, diags := startRun(t, c, testVariables{}, compile.StartInput{Inputs: hostInputs{"10.0.0.2"}})
+	if res == nil {
+		t.Fatal(diags)
+	}
+	want := `{"c":{"ip":"10.0.0.2","name":"c1"},"d":"10.0.0.2","l":[{"c":{"ip":"10.0.0.2","name":"c2"},"e":"10.0.0.2"}]}`
+	if got := canonical(t, res.Run.Inputs.Get()); got != want {
+		t.Errorf("the run's inputs are %s, want %s", got, want)
+	}
+}
+
+// A platform input's value a form made from a default that reads a
+// variable means the default, which Start evaluates again; if the variable
+// changed, what reads the input reads what the Inputs resolver gives for
+// the new value, the workflow's env: among them.
+func TestPlatformInputMeansChangedVariable(t *testing.T) {
+	src := workflow("c: {type: compute-clusters, default: '${{ vars.V }}'}\nd: {type: string, default: '${{ inputs.c.id }}'}", "env:\n  E: ${{ inputs.c.id }}\n")
+	c := createWith(t, src, map[string]any{"c": "old"}, compile.Options{Inputs: clusterInputs{}, Contexts: testVariables{"vars.V": {Value: "old"}}.contexts()})
+	res, diags := startRun(t, c, testVariables{"vars.V": {Value: "new"}}, compile.StartInput{Inputs: clusterInputs{}})
+	if res == nil {
+		t.Fatal(diags)
+	}
+	if got := canonical(t, res.Run.Inputs.Get()); got != `{"c":{"id":"id-new","name":"new"},"d":"id-new"}` {
+		t.Errorf("the run's inputs are %s", got)
+	}
+	if e := res.Run.Env["E"]; e != "id-new" {
+		t.Errorf("env.E = %q, want id-new", e)
 	}
 }
 

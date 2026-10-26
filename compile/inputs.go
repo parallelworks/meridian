@@ -22,14 +22,20 @@ var ErrInputType = errors.New("compile: no such input type")
 type InputResolver interface {
 	// ResolveInput checks the value given for an input of a platform type
 	// and returns what the run sees for it, such as a cluster's details for
-	// its name. It returns ErrInputType for a type it doesn't provide. An
-	// error that is, or wraps, a *problem.Problem of one of the problems
-	// package's kinds of error, foundation's shared rules among them, but
-	// not the command's, is reported as that kind, with its params and the
-	// input's name as input; any other error, a problem of a warning's kind
-	// or of the command's among them, is input_rejected, with the error's
-	// text as its reason, so that an error never becomes a warning that
-	// lets the value through.
+	// its name. It is asked as soon as the value is known, and what reads
+	// the input, the other inputs' definitions and the workflow's env: among
+	// them, reads what it returns; a field of a list's rows is asked for
+	// too, and so is an input that turns out to be ignored, whose error
+	// fails the run all the same. A resolver that runs format 1 as ACTIVATE
+	// does gives a compute-clusters or a bucket input's details, and every
+	// other type's value as it is. It returns ErrInputType for a type it
+	// doesn't provide. An error that is, or wraps, a *problem.Problem of one
+	// of the problems package's kinds of error, foundation's shared rules
+	// among them, but not the command's, is reported as that kind, with its
+	// params and the input's name as input; any other error, a problem of a
+	// warning's kind or of the command's among them, is input_rejected, with
+	// the error's text as its reason, so that an error never becomes a
+	// warning that lets the value through.
 	ResolveInput(typ string, definition map[string]any, value any) (any, error)
 }
 
@@ -261,10 +267,6 @@ type inputResolver struct {
 	// and decided what each decided, which the secret record keeps.
 	decisions []string
 	decided   map[string]bool
-	// unresolved holds the values of the inputs of a platform's types that
-	// the Inputs resolver changed, as they were submitted, by their paths'
-	// names, which the workflow's env: reads as the run starts.
-	unresolved map[string]any
 	// ignoredLater holds the inputs that an ignore which read a variable
 	// or a password ignored, whose values the compiler holds out of the
 	// plan whatever it decided, and Start drops (applyConditions); and

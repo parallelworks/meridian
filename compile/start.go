@@ -136,8 +136,9 @@ func (res *StartResult) Keep(record *plan.Record) StartState {
 //     password input never is; and that what was submitted, resolved
 //     again, gives the values the plan holds (Run.Inputs), and none for an
 //     input the workflow doesn't define that the plan doesn't hold, but
-//     for what Create keeps out of the plan and the inputs of a platform's
-//     type, which the Inputs resolver gives again (checkPlanned).
+//     for what Create keeps out of the plan, the inputs of a platform's
+//     type, which the Inputs resolver gives again, and those whose
+//     definitions read what it gives (checkPlanned).
 //
 // So the digest binds a record to its plan, and these checks, what was
 // submitted to what the plan holds; neither binds it to its run. What the
@@ -698,20 +699,11 @@ func (st *starter) reportLeft() {
 // those that the round evaluated as the values were filled in (demanded)
 // that give otherwise than they gave then, or read otherwise of what is
 // private, without evaluating any. They read an input of a platform's type
-// as it was submitted, as what the compiler evaluates before it checks the
-// inputs does (plan.Run.Inputs).
+// as the Inputs resolver gave it, as everything does (resolvePlatform).
 func (st *starter) evalEnv() (progress bool, late []string) {
 	r := st.r
 	if len(st.s.pendingEnv) == 0 && len(st.demanded) == 0 {
 		return false, nil
-	}
-	resolved := map[string]any{}
-	for name, given := range jsonvalue.Sorted(r.unresolved) {
-		path := plan.SplitPath(name)
-		if v, ok := jsonptr.Lookup(r.values, path); ok {
-			resolved[name] = v
-			r.set(path, jsonvalue.Clone(given))
-		}
 	}
 	for _, k := range slices.Sorted(maps.Keys(st.demanded)) {
 		d := st.demanded[k]
@@ -727,9 +719,6 @@ func (st *starter) evalEnv() (progress bool, late []string) {
 			st.settleEnv(k, visiting, nil)
 		}
 		progress = len(st.s.pendingEnv) < left
-	}
-	for name, v := range jsonvalue.Sorted(resolved) {
-		r.set(plan.SplitPath(name), v)
 	}
 	return progress, late
 }

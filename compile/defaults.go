@@ -58,6 +58,9 @@ func (r *inputResolver) fillDefaults() {
 					}
 				}
 			}
+			if !waits {
+				r.resolvePlatform(f)
+			}
 			// A list whose rows only hold parts that mean expressions has
 			// those rows already: its fields are read as filled in, as Create
 			// read them.
@@ -78,6 +81,7 @@ func (r *inputResolver) fillDefaults() {
 		}
 		r.settleEnv(p.f, &pending)
 		r.evalPending(p.f)
+		r.resolvePlatform(p.f)
 		if !rowsKnown[p.f] {
 			start(r.collectRows(p.f))
 		}
