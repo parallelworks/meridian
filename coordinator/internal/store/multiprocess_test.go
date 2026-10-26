@@ -225,7 +225,7 @@ func runChildren(t *testing.T, path string, roles ...string) [][]string {
 // TestConcurrentOpen checks that processes that open a new store at once
 // migrate it once, and agree on its ID.
 func TestConcurrentOpen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	outs := runChildren(t, path, "open", "open", "open")
 	for _, out := range outs[1:] {
 		if !slices.Equal(out, outs[0]) || len(out) != 1 || !hexID.MatchString(out[0]) {
@@ -252,7 +252,7 @@ func TestConcurrentOpen(t *testing.T) {
 // attempts of one job and runs at once, each get a fence and a run number
 // of their own, which only grow.
 func TestTwoProcesses(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	s := openAt(t, path)
 	createRun(t, s)
 
@@ -323,7 +323,7 @@ func TestTwoProcesses(t *testing.T) {
 // before it commits, leaves nothing of it: no run, no hopper job, and the
 // run's number to give again.
 func TestCrashCreatingRun(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	cmd := startChild(t, "crash-create", path)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); !isKilled(err) {
@@ -356,7 +356,7 @@ func TestCrashCreatingRun(t *testing.T) {
 // and nothing of the second: the attempt is placing, with its fence, and
 // can be claimed.
 func TestCrashBetweenSteps(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	s := openAt(t, path)
 	id := createRun(t, s)
 	cmd := startChild(t, "crash-claim", path)
@@ -399,7 +399,7 @@ func isKilled(err error) bool {
 // until it ends, however it ends, and another then takes it over.
 func TestEndpointAcrossProcesses(t *testing.T) {
 	skipWithoutFileLocks(t)
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	s := openAt(t, path)
 	cmd := startChild(t, "hold", path)
 	cmd.Stderr = os.Stderr

@@ -40,6 +40,7 @@ import (
 	"github.com/parallelworks/hopper/driver/hoppersqlite"
 	"github.com/parallelworks/hopper/hoppermigrate"
 
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -97,15 +98,27 @@ var openSQLite = hoppersqlite.OpenContext
 // do at once. It waits for another process that holds the database for as
 // long as ctx allows.
 //
-// A database on a network filesystem, where SQLite can't lock it
-// reliably, is refused with a problem of kind network_filesystem, and one
-// whose schema a newer release of Meridian brought past what this one
-// knows, with one of kind database_too_new. Any other error is the
-// operating system's or SQLite's.
+// Whoever can write the database can claim an attempt, and with it the
+// private values its job reads, so Open trusts nothing at path that
+// another user could have put there or could change (checkFiles), whoever
+// chose the path. What is wrong is a problem: of a kind
+// safepath's checks give, such as directory_not_private or
+// file_not_private; of kind network_filesystem for a database on a
+// network filesystem, where SQLite can't lock it reliably; and of kind
+// database_too_new for one whose schema a newer release of Meridian
+// brought past what this one knows. Any other error is the operating
+// system's or SQLite's.
 func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	log := slog.New(slog.DiscardHandler)
 	if opts != nil && opts.Log != nil {
 		log = opts.Log
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkFiles(path); err != nil {
+		return nil, err
 	}
 	created, err := createPrivate(path)
 	if err != nil {
@@ -128,11 +141,51 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	return s, nil
 }
 
+// sqliteFiles are the suffixes of the files SQLite keeps beside a
+// database: its write-ahead log and the log's index, and a rollback
+// journal, which it would play back as it opens the database.
+var sqliteFiles = []string{"-wal", "-shm", "-journal"}
+
+// checkFiles checks the database at path, an absolute path, before SQLite
+// opens anything: that no other user can change the directories on the way
+// to it, and that its directory is the user's, which no other user can
+// read or change (safepath.CheckDir); and that the database, and each file
+// SQLite keeps beside it, is, where it is there, a regular file of the
+// user's, not a link, which no other user can read or change
+// (safepath.CheckFileInfo). The directory can be a link to one elsewhere,
+// whose way is checked too.
+func checkFiles(path string) error {
+	if err := safepath.CheckDir(filepath.Dir(path), safepath.Private); err != nil {
+		return err
+	}
+	for _, f := range append([]string{path}, suffixed(path, sqliteFiles)...) {
+		info, err := os.Lstat(f) //nolint:gosec // the path being checked
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := safepath.CheckFileInfo(f, info, safepath.Private); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// suffixed returns path with each of suffixes.
+func suffixed(path string, suffixes []string) []string {
+	out := make([]string, len(suffixes))
+	for i, s := range suffixes {
+		out[i] = path + s
+	}
+	return out
+}
+
 // createPrivate creates the database's file, readable and writable only
 // by its user, if nothing is at path, so that SQLite opens it rather than
 // creating it as others may read it; the files it keeps beside it take its
-// mode. A link at path is left to SQLite, which follows it. It reports
-// whether it created the file.
+// mode. It reports whether it created the file.
 func createPrivate(path string) (bool, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the coordinator's own database
 	if errors.Is(err, fs.ErrExist) {

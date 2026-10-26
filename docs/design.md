@@ -2908,6 +2908,17 @@ directory, as it does wherever neither is safe, with a warning in its log
 that says why, and refuses a bootstrap token's file, which its backend can
 give it in its environment instead.
 
+Whoever can write the coordinator's database can claim an attempt, and
+with it the private values its job reads, so the coordinator's store
+checks the database's path itself as it opens it, whoever chose the path,
+before SQLite opens anything. The way to the database's directory is
+checked as above, and the directory must be the user's, with no access
+for others. The database, and each file SQLite keeps beside it (its
+write-ahead log, the log's index and a rollback journal), must be, where
+it is there, a regular file of the user's, not a link, with no access for
+others. The store makes the database readable and writable only by its
+user, so the files SQLite makes beside it are too.
+
 The command's Sources, which reads the workflows that `uses:` names, runs
 the `git` command on `PATH`, with the user's own Git configuration and
 credentials. It needs Git 2.29 or later, the first whose `git fetch`

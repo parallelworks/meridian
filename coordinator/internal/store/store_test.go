@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 // open opens a new store in a directory of the test's.
 func open(t *testing.T) *Store {
 	t.Helper()
-	return openAt(t, filepath.Join(t.TempDir(), "meridian.db"))
+	return openAt(t, filepath.Join(privateDir(t), "meridian.db"))
 }
 
 // openAt opens the store at path, which the test closes.
@@ -170,7 +170,7 @@ func checkIntegrity(t *testing.T, s *Store) {
 var hexID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func TestOpen(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	path := filepath.Join(dir, "meridian.db")
 	s, err := Open(t.Context(), path, nil)
 	if err != nil {
@@ -208,10 +208,130 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+// TestOpenRefuses checks that Open trusts nothing at the database's path
+// that another user could have put there or could change, before SQLite
+// opens anything: whoever can write the database can claim an attempt.
+func TestOpenRefuses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows doesn't say who owns a file, so Open refuses every path")
+	}
+	for _, tc := range []struct {
+		name string
+		// set up puts what is at the database's path, path, in dir, and
+		// returns where SQLite would have made a file it shouldn't, or "".
+		setUp func(t *testing.T, dir, path string) string
+		kind  *problems.Kind
+		at    string // the suffix of the path the problem names, after dir
+	}{
+		{"a database others can read", func(t *testing.T, _, path string) string {
+			writeFile(t, path, 0o644)
+			return ""
+		}, problems.FileNotPrivate, "/meridian.db"},
+		{"a database others can change", func(t *testing.T, _, path string) string {
+			writeFile(t, path, 0o666)
+			return ""
+		}, problems.FileNotPrivate, "/meridian.db"},
+		{"a link to a database elsewhere", func(t *testing.T, _, path string) string {
+			target := filepath.Join(t.TempDir(), "elsewhere.db")
+			writeFile(t, target, 0o600)
+			symlink(t, target, path)
+			return target + "-wal"
+		}, problems.FileNotRegular, "/meridian.db"},
+		{"a link to nothing", func(t *testing.T, _, path string) string {
+			target := filepath.Join(t.TempDir(), "elsewhere.db")
+			symlink(t, target, path)
+			return target
+		}, problems.FileNotRegular, "/meridian.db"},
+		{"a directory at the database's path", func(t *testing.T, _, path string) string {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		}, problems.FileNotRegular, "/meridian.db"},
+		{"a log others can change, before the database", func(t *testing.T, _, path string) string {
+			writeFile(t, path+"-wal", 0o666)
+			return path
+		}, problems.FileNotPrivate, "/meridian.db-wal"},
+		{"a log's index that is a link", func(t *testing.T, _, path string) string {
+			symlink(t, filepath.Join(t.TempDir(), "shm"), path+"-shm")
+			return path
+		}, problems.FileNotRegular, "/meridian.db-shm"},
+		{"a journal others can read", func(t *testing.T, _, path string) string {
+			writeFile(t, path, 0o600)
+			writeFile(t, path+"-journal", 0o644)
+			return ""
+		}, problems.FileNotPrivate, "/meridian.db-journal"},
+		{"a directory others can change", func(t *testing.T, dir, _ string) string {
+			chmod(t, dir, 0o777)
+			return filepath.Join(dir, "meridian.db")
+		}, problems.DirectoryNotPrivate, ""},
+		{"a directory others can read", func(t *testing.T, dir, _ string) string {
+			chmod(t, dir, 0o755)
+			return filepath.Join(dir, "meridian.db")
+		}, problems.DirectoryNotPrivate, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := privateDir(t)
+			path := filepath.Join(dir, "meridian.db")
+			made := tc.setUp(t, dir, path)
+			s, err := Open(t.Context(), path, nil)
+			if err == nil {
+				s.Close()
+				t.Fatal("Open succeeded")
+			}
+			p, ok := errors.AsType[*problem.Problem](err)
+			if !ok || p.Code != tc.kind.Code() {
+				t.Fatalf("Open = %v, want a problem of kind %s", err, tc.kind.Code())
+			}
+			if want := dir + tc.at; p.Params["path"] != want {
+				t.Errorf("the problem names %v, want %s", p.Params["path"], want)
+			}
+			if made != "" {
+				if _, err := os.Lstat(made); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("Open made %s: %v", made, err)
+				}
+			}
+		})
+	}
+}
+
+// privateDir returns a directory of the test's that only its user can
+// use, as Open asks of the database's: t.TempDir makes it as the umask
+// allows.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	chmod(t, dir, 0o700)
+	return dir
+}
+
+// writeFile makes an empty file at path with the mode perm.
+func writeFile(t *testing.T, path string, perm os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	chmod(t, path, perm)
+}
+
+func chmod(t *testing.T, path string, perm os.FileMode) {
+	t.Helper()
+	if err := os.Chmod(path, perm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func symlink(t *testing.T, target, path string) {
+	t.Helper()
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestMigrations checks that Open migrates an empty database, and that
 // opening it again changes nothing.
 func TestMigrations(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	applied := func() map[int]int64 {
 		s := openAt(t, path)
 		out := map[int]int64{}
@@ -252,7 +372,7 @@ func TestMigrations(t *testing.T) {
 }
 
 func TestDatabaseTooNew(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meridian.db")
+	path := filepath.Join(privateDir(t), "meridian.db")
 	s, err := Open(t.Context(), path, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +413,7 @@ func TestNetworkFilesystem(t *testing.T) {
 			was := openSQLite
 			t.Cleanup(func() { openSQLite = was })
 			openSQLite = func(context.Context, string, *hoppersqlite.Config) (*hoppersqlite.Driver, error) { return nil, tc.err }
-			path := filepath.Join(t.TempDir(), "meridian.db")
+			path := filepath.Join(privateDir(t), "meridian.db")
 			_, err := Open(t.Context(), path, nil)
 			p, ok := errors.AsType[*problem.Problem](err)
 			if !ok || p.Code != problems.NetworkFilesystem.Code() {
@@ -315,7 +435,7 @@ func TestNetworkFilesystem(t *testing.T) {
 	openSQLite = func(context.Context, string, *hoppersqlite.Config) (*hoppersqlite.Driver, error) {
 		return nil, fmt.Errorf("%w, somehow", hoppersqlite.ErrNetworkFilesystem)
 	}
-	dir := t.TempDir()
+	dir := privateDir(t)
 	_, err := Open(t.Context(), filepath.Join(dir, "meridian.db"), nil)
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Params["path"] != dir || p.Params["type"] != hoppersqlite.ErrNetworkFilesystem.Error()+", somehow" {
 		t.Errorf("Open = %v", err)
