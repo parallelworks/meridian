@@ -703,73 +703,84 @@ ACTIVATE's launch form and its backend do together:
   has none. A header has no value.
 - **Types.** Format 1 reads every input value as it was submitted, as
   ACTIVATE does, and converts none: its defaults, conditions, `env:` and
-  steps read a number sent as text as that text, so `"8" + 1` is `"81"`,
-  and the text `"true"` isn't `true`, nor is `"false"` false; a
-  submitted null stays null, as Defaults says; and a submitted number is
-  read as ACTIVATE reads a JSON number, as a 64-bit float, so a whole
-  number past 2^53 is the float nearest it: 9007199254740993 is
-  9007199254740992 wherever it is read. ACTIVATE's
-  run form sends a number field's value as a JSON number and a checkbox's
-  as a JSON boolean, and a JSON caller writes the types itself; a client
-  that has only text converts by the field's type, as `meridian
-  validate`'s `-input` does ([The `meridian` command](#the-meridian-command)).
-  The checks take what they took when Meridian converted: text that reads
-  as a number passes a number input's type and its `min` and `max`, and the
-  text true or false, in any case and with space around it, a boolean's,
-  each read for the check and kept as it was submitted. A value submitted
-  as another JSON type than its input's, text for a number or a boolean,
-  or a number or a boolean for a text input, is a warning
-  (`input_read_as_submitted`), which names the input, its type and the
-  JSON type it was given, never the value, and changes nothing else. A
-  later format can refuse such a value. An input of a platform's type is
+  steps read a number sent as text as that text, so `"8" + 1` is `"81"`, and
+  the text `"true"` isn't `true`, nor is `"false"` false; a submitted null
+  stays null, as Defaults says; and a submitted number is read as ACTIVATE
+  reads a JSON number, as a 64-bit float, so a whole number past 2^53 is the
+  float nearest it: 9007199254740993 is 9007199254740992 wherever it is
+  read. ACTIVATE's run form sends a number field's value as a JSON number
+  and a checkbox's as a JSON boolean, and a JSON caller writes the types
+  itself; a client that has only text converts by the field's type, as
+  `meridian validate`'s `-input` does ([The `meridian`
+  command](#the-meridian-command)). The checks take what they took when
+  Meridian converted: text that reads as a number passes a number input's
+  type and its `min` and `max`, and the text true or false, in any case and
+  with space around it, a boolean's, each read for the check and kept as it
+  was submitted. A value submitted as another JSON type than its input's,
+  text for a number or a boolean, or a number or a boolean for a text input,
+  is a warning (`input_read_as_submitted`), which names the input, its type
+  and the JSON type it was given, never the value, and changes nothing else.
+  A later format can refuse such a value. An input of a platform's type is
   what the Inputs resolver gives for it, as a cluster's details for its
-  name; what Create evaluates before it checks the value reads it as
-  submitted, and so does what Start evaluates before it does, as it
-  resolves the inputs again, and the workflow's `env:`; what reads it
-  after, the jobs among them, reads it as the resolver gave it. Start asks
-  the resolver again ([Starting a run](#starting-a-run)). What the
-  resolver gives can't be split by the parts of the value that made it, so
-  a value of which a part isn't the plan's, as a part typed over a part of
-  a default that reads a variable, is held whole: private, or a secret if
-  a part read one, out of the plan's values. The local resolver gives back
-  what it is given.
-  Anything else that doesn't fit the input's type is an error,
-  as is a number outside its `min` and `max`, or a choice that isn't one of
-  a dropdown's options when they are written in the workflow. A value for an
-  input the workflow doesn't define is a warning that suggests the nearest
-  name, and is kept, as ACTIVATE keeps it. One whose name is a password
-  field's, wherever the workflow defines it, as a repeated step's password
-  sent beside the step is, or is close to a password input's there, as a
-  misspelling is, is kept as a password: it is one of the run's secrets, and
-  not in the plan. So is one whose name can be a secret's, as one sent for a
-  password field that was renamed can: it looks like one, by the words that
-  make an input's name look like a secret's ([Compiling](#compiling)), or
-  one of its words is a letter from one of the longer of them, `password`,
-  `passwd`, `passphrase`, `secret` and `credential`, as `pasword` is; not
-  from `token`, whose neighbours, such as `tokens` and `taken`, are common
-  words. That errs toward a secret, such as `passed`, which is kept as one,
-  and still given to the run. So is a mapping or list whose name is close to
-  an input's with a password among its inputs, or that holds a key named as
-  a password field or that can be a secret's, as a flattened wizard step's
-  inputs sent under the step's name do. A row of a list or a repeated step
-  is checked the same way, against the inputs its rows have, and a value
-  there for one they don't have is reported by its path, as
-  `creds.0.pasword`, and kept as a password by the same rules, by that path,
-  as a password field of a row is: among the secrets, and not in the
-  plan's values. A key
-  of a list's default rows, written in the workflow, that isn't one of its
-  rows' inputs is a warning where it is written
-  (`default_row_unknown_input`), once, and the row keeps it; a launch form
-  sends the default rows back, so a submitted row's key that a default row
-  has isn't reported again, and a value a default row has at that key isn't
-  taken for a password by its name, as `api_token: none` written in the
-  workflow isn't. A row's inputs are those of every list at its list's path,
-  where a list and a wizard step's list share one. A value that isn't JSON,
-  such as NaN or text that isn't UTF-8, is an error, whether it was
-  submitted or a default gave it, as `0/0` gives NaN and `1/0` an infinity:
-  ACTIVATE can't encode such a run's values, and fails it as it starts. One
-  in a list's rows is reported at the row's field, and so is one in what the
-  compiler knows of a value that waits for Start.
+  name, from the moment its value is known: the value submitted, a field's
+  of a list's rows among them, its default, or what its default gave. So
+  everything that reads it reads what the resolver gave: the other inputs'
+  defaults and conditions, as `hidden: ${{ inputs.cluster.schedulerType !=
+  'slurm' }}`, the workflow's `env:` and the jobs, at Create and at Start,
+  as ACTIVATE resolves a run's resources before it evaluates any of its
+  expressions. ACTIVATE resolves a `compute-clusters` or `bucket` input's
+  name, and leaves every other type's value as it is, which the resolver of
+  a platform that runs format 1 as ACTIVATE does does too. A value the
+  resolver can't resolve is an error, as it fails ACTIVATE's run, even for
+  an input that is ignored, as ACTIVATE resolves before it decides what is
+  ignored. ACTIVATE gives a `compute-clusters` or `bucket` input given null,
+  or a value that isn't text, its default, where Meridian keeps the null, as
+  for every input, and asks the resolver for the value; and it asks for a
+  default that is an expression unevaluated, which names no resource and
+  fails the run, where Meridian asks for what the default gives. None of the
+  221 known workflows has a `compute-clusters` or `bucket` input whose
+  default is an expression. Start asks the resolver again ([Starting a
+  run](#starting-a-run)). What the resolver gives can't be split by the
+  parts of the value that made it, so a value of which a part isn't the
+  plan's, as a part typed over a part of a default that reads a variable, is
+  held whole: private, or a secret if a part read one, out of the plan's
+  values. The local resolver gives back what it is given. Anything else that
+  doesn't fit the input's type is an error, as is a number outside its `min`
+  and `max`, or a choice that isn't one of a dropdown's options when they
+  are written in the workflow. A value for an input the workflow doesn't
+  define is a warning that suggests the nearest name, and is kept, as
+  ACTIVATE keeps it. One whose name is a password field's, wherever the
+  workflow defines it, as a repeated step's password sent beside the step
+  is, or is close to a password input's there, as a misspelling is, is kept
+  as a password: it is one of the run's secrets, and not in the plan. So is
+  one whose name can be a secret's, as one sent for a password field that
+  was renamed can: it looks like one, by the words that make an input's name
+  look like a secret's ([Compiling](#compiling)), or one of its words is a
+  letter from one of the longer of them, `password`, `passwd`, `passphrase`,
+  `secret` and `credential`, as `pasword` is; not from `token`, whose
+  neighbours, such as `tokens` and `taken`, are common words. That errs
+  toward a secret, such as `passed`, which is kept as one, and still given
+  to the run. So is a mapping or list whose name is close to an input's with
+  a password among its inputs, or that holds a key named as a password field
+  or that can be a secret's, as a flattened wizard step's inputs sent under
+  the step's name do. A row of a list or a repeated step is checked the same
+  way, against the inputs its rows have, and a value there for one they
+  don't have is reported by its path, as `creds.0.pasword`, and kept as a
+  password by the same rules, by that path, as a password field of a row is:
+  among the secrets, and not in the plan's values. A key of a list's default
+  rows, written in the workflow, that isn't one of its rows' inputs is a
+  warning where it is written (`default_row_unknown_input`), once, and the
+  row keeps it; a launch form sends the default rows back, so a submitted
+  row's key that a default row has isn't reported again, and a value a
+  default row has at that key isn't taken for a password by its name, as
+  `api_token: none` written in the workflow isn't. A row's inputs are those
+  of every list at its list's path, where a list and a wizard step's list
+  share one. A value that isn't JSON, such as NaN or text that isn't UTF-8,
+  is an error, whether it was submitted or a default gave it, as `0/0` gives
+  NaN and `1/0` an infinity: ACTIVATE can't encode such a run's values, and
+  fails it as it starts. One in a list's rows is reported at the row's
+  field, and so is one in what the compiler knows of a value that waits for
+  Start.
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
@@ -907,28 +918,28 @@ made from one, it doesn't hold in another form either.
      required is checked.
    - An input of a platform's type is checked with the Inputs resolver
      again, which gives what the platform says of the resource as the run
-     starts, as Start reads the variables as it starts. What is evaluated
-     before the inputs are checked reads the value as it was submitted, as
-     at Create. The secret record doesn't keep what the resolver gave
-     Create: the run reads a resource as it is when it starts, as a rerun
-     does, and Create's answer only checked that the value names one. An
-     Inputs resolver that can't answer fails the run (`input_rejected`), as
-     it fails Create; giving the interface a way to say it couldn't answer
-     is open.
+     starts, as Start reads the variables as it starts. Everything that
+     reads the value reads what the resolver gives, as at Create
+     ([Inputs](#inputs)). The secret record doesn't keep what the resolver
+     gave Create: the run reads a resource as it is when it starts, as a
+     rerun does, and Create's answer only checked that the value names one.
+     An Inputs resolver that can't answer fails the run (`input_rejected`),
+     as it fails Create; giving the interface a way to say it couldn't
+     answer is open.
    - What Create reported as a warning isn't reported again.
 
    A relative reference reads the input definitions; one that climbs out
    of them reads nothing, where Create read the rest of the workflow,
    which no known workflow does: each of theirs reads a key of the input
    it is in, as `.hidden` does, or, with `..`, of an input beside it.
-3. **Evaluate the workflow's `env:`** with the inputs resolved: an input
-   the run ignored reads as having none, as the jobs read it, and one of a
-   platform's type as it was submitted. A default that reads `env` waits
-   for it: Start resolves the inputs again with the `env:` values it has
-   evaluated, until a round evaluates nothing more. What is left then reads
-   itself, or each other (`values_read_each_other`), or a context Start
-   doesn't know, as `needs` (`context_not_known`). No known workflow reads
-   `env` in an input's definition.
+3. **Evaluate the workflow's `env:`** with the inputs resolved: an input the
+   run ignored reads as having none, as the jobs read it, and one of a
+   platform's type as the Inputs resolver gave it. A default that reads
+   `env` waits for it: Start resolves the inputs again with the `env:`
+   values it has evaluated, until a round evaluates nothing more. What is
+   left then reads itself, or each other (`values_read_each_other`), or a
+   context Start doesn't know, as `needs` (`context_not_known`). No known
+   workflow reads `env` in an input's definition.
 4. **Check the record fits the plan.** A value the resolution kept out of
    the plan, as a password or a private value, that the plan doesn't name
    means the secret record isn't the one Create gave with the plan, and so

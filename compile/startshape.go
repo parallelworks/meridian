@@ -9,6 +9,7 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -84,7 +85,8 @@ func (st *starter) checkFits() error {
 // or as private, held, or taken for passwords; and the parts that mean
 // their expressions (plan.Record.Means). Nor does it compare an input of a
 // platform's type, which the Inputs resolver gives again as the run starts,
-// and can give otherwise. Where an input's definition reads the workflow's
+// and can give otherwise, nor one whose definition reads what it gave
+// (platformDependent). Where an input's definition reads the workflow's
 // env or the sessions, which Create doesn't know, and Start doesn't mark,
 // it doesn't compare the values at all, as which of them Create kept out it
 // can't tell; no known workflow has one.
@@ -127,11 +129,7 @@ func (st *starter) checkPlanned() error {
 	for _, f := range r.passwords {
 		out = append(out, f.path)
 	}
-	for _, f := range r.fields {
-		if f.in == nil && platformTypes[f.typ] {
-			out = append(out, f.path)
-		}
-	}
+	out = append(out, st.platformDependent()...)
 	skip := skipped{}
 	for _, path := range out {
 		skip.add(path)
@@ -162,6 +160,53 @@ func (st *starter) checkPlanned() error {
 		return mismatch("what was submitted doesn't give the values the plan holds of %s", strings.Join(differ, ", "))
 	}
 	return nil
+}
+
+// platformDependent returns the paths of the inputs whose values can be
+// otherwise as the run starts than as it was created, from what was
+// submitted alike: each of a platform's type, a field of a list's rows
+// among them, which the Inputs resolver gives again, and can give
+// otherwise; and each whose definition reads one, and so reads what the
+// resolver gave (resolvePlatform), or reads such an input, in turn, which
+// for a field of a list's rows is the list.
+func (st *starter) platformDependent() [][]string {
+	r := st.r
+	fields := slices.Concat(r.fields, r.liveRows())
+	var out [][]string
+	var reached reach.Trie[struct{}]
+	depends := map[*field]bool{}
+	add := func(f *field, path []string) {
+		depends[f] = true
+		out = append(out, path)
+		reached.Add(path, struct{}{})
+	}
+	for _, f := range fields {
+		if platformTypes[f.typ] {
+			add(f, f.path)
+		}
+	}
+	for more := len(out) > 0; more; {
+		more = false
+		for _, f := range fields {
+			if depends[f] {
+				continue
+			}
+			exprs, err := r.workflow.Exprs(f.loc)
+			if err != nil {
+				continue
+			}
+			if slices.ContainsFunc(readPatterns(exprs, f.index), func(p []string) bool {
+				for range reached.Reached(p) {
+					return true
+				}
+				return false
+			}) {
+				add(f, f.holder().path)
+				more = true
+			}
+		}
+	}
+	return out
 }
 
 // readsUnmarked reports whether an expression of the input definitions

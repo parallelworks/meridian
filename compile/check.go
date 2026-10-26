@@ -13,8 +13,9 @@ import (
 )
 
 // checkValues checks each value against its input's type, which reads it
-// as it was submitted, text for a number among them (readAs), resolves
-// platform types, and puts password
+// as it was submitted, text for a number among them (readAs), takes what
+// the Inputs resolver gave for a platform's type (resolvePlatform), and
+// puts password
 // values among the secrets: a password input's, and a password field's in
 // a list's or a repeated step's rows, which is checked as an input's is,
 // though the rows' other fields aren't. A value that isn't JSON, which a
@@ -149,7 +150,9 @@ func (r *inputResolver) readsPrivate(f *field) bool {
 // but isn't among those the plan keeps (kept).
 func (r *inputResolver) checkField(f *field, later bool) {
 	v, ok := jsonptr.Lookup(r.values, f.path)
-	if !ok {
+	if !ok || f.failed {
+		// What the Inputs resolver couldn't give was reported as it was
+		// asked (resolvePlatform).
 		return
 	}
 	if v == nil {
@@ -180,13 +183,6 @@ func (r *inputResolver) checkField(f *field, later bool) {
 		return
 	case f.typ == "password" && !later:
 		r.secrets[plan.JoinPath(f.path...)] = out
-	case !later && f.in == nil && platformTypes[f.typ] && !reflect.DeepEqual(v, out):
-		// What was evaluated before read the value as it was submitted,
-		// and so does the workflow's env: as the run starts (unresolved).
-		if r.unresolved == nil {
-			r.unresolved = map[string]any{}
-		}
-		r.unresolved[plan.JoinPath(f.path...)] = jsonvalue.Clone(v)
 	}
 	if given := readAs(f, v); given != "" && r.submittedAs(f.path, v) {
 		typ := f.typ
@@ -234,6 +230,82 @@ func (r *inputResolver) submittedAs(path []string, v any) bool {
 	return ok && reflect.DeepEqual(given, v)
 }
 
+// resolvePlatform asks the Inputs resolver for the value of f, an input of
+// a platform's type or a field of one in a list's rows, as soon as the
+// value is known: the value submitted, its default, or what its default
+// gave. So what reads it, the other inputs' defaults and conditions, the
+// workflow's env: and the jobs, reads what the resolver gave, as a
+// cluster's details for its name, as ACTIVATE resolves a run's resources
+// before it evaluates any of its expressions. A value that is evaluated as
+// the run starts is asked for then. What is wrong with the value is
+// reported at once, whether or not the input is ignored, as ACTIVATE fails
+// the run; what reads it then reads it as it was. A value that holds a part
+// made from a variable or a password is marked whole, as what the resolver
+// gave can't be split by the parts that made it.
+func (r *inputResolver) resolvePlatform(f *field) {
+	if !platformTypes[f.typ] || f.resolved || f.deferred {
+		return
+	}
+	v, ok := jsonptr.Lookup(r.values, f.path)
+	if !ok || v == nil {
+		return
+	}
+	f.resolved = true
+	out, bad := r.askPlatform(f, v)
+	if bad.kind != nil {
+		f.failed = true
+		bad.params["input"] = f.label()
+		if f.variable || r.marked(f.path) || r.readsPrivate(f) {
+			bad.params = mask(bad.params)
+		}
+		r.reportAt(bad.kind, f.loc, bad.params)
+		return
+	}
+	f.given = v
+	if r.marked(f.path) {
+		secret := r.final && r.markedSecret(f.path)
+		r.mark(f.path)
+		if secret {
+			r.markSecret(f.path)
+		}
+	}
+	r.set(f.path, out)
+}
+
+// askPlatform asks the Inputs resolver for v, the value of f, an input of a
+// platform's type, and returns what it gave, or what is wrong with v: a
+// finding whose params the caller adds the input to.
+func (r *inputResolver) askPlatform(f *field, v any) (any, finding) {
+	wrong := func(k *problems.Kind, params problems.Params) (any, finding) {
+		if params == nil {
+			params = problems.Params{}
+		}
+		return nil, finding{k, params}
+	}
+	if r.opts.Inputs == nil {
+		return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
+	}
+	out, err := r.opts.Inputs.ResolveInput(f.typ, f.def, v)
+	switch {
+	case errors.Is(err, ErrInputType):
+		return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
+	case err != nil:
+		// A problem of one of the kinds of error a workflow can have,
+		// foundation's shared rules among them, is reported as itself, so
+		// that each reader sees it in their own language. Any other error,
+		// a warning's kind among them, which would let the value through,
+		// or the command's own, is the platform's reason, as it gives it.
+		if k, params, ok := workflowProblem(err); ok {
+			return wrong(k, params)
+		}
+		return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
+	}
+	if what, bad, _ := notJSON(out); what != "" {
+		return wrong(problems.PlatformValueNotJSON, problems.Params{"what": what, "value": bad})
+	}
+	return out, finding{}
+}
+
 // checkValue checks v, the value of f, and returns it as the run sees it, or
 // what is wrong with it: a finding whose params the caller adds the input
 // to.
@@ -245,29 +317,11 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		return nil, finding{k, params}
 	}
 	switch {
+	case platformTypes[f.typ] && f.resolved:
+		// The Inputs resolver gave it as soon as it was known.
+		return v, finding{}
 	case platformTypes[f.typ]:
-		if r.opts.Inputs == nil {
-			return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
-		}
-		out, err := r.opts.Inputs.ResolveInput(f.typ, f.def, v)
-		switch {
-		case errors.Is(err, ErrInputType):
-			return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
-		case err != nil:
-			// A problem of one of the kinds of error a workflow can have,
-			// foundation's shared rules among them, is reported as itself, so
-			// that each reader sees it in their own language. Any other error,
-			// a warning's kind among them, which would let the value through,
-			// or the command's own, is the platform's reason, as it gives it.
-			if k, params, ok := workflowProblem(err); ok {
-				return wrong(k, params)
-			}
-			return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
-		}
-		if what, bad, _ := notJSON(out); what != "" {
-			return wrong(problems.PlatformValueNotJSON, problems.Params{"what": what, "value": bad})
-		}
-		return out, finding{}
+		return r.askPlatform(f, v)
 	case f.typ == "number":
 		// Text that reads as a number passes, and stays text: format 1
 		// reads a value as it was submitted (readAs).

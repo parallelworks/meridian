@@ -213,11 +213,11 @@ type candidate struct {
 // is the same for each candidate it is compared with, at each row index it
 // reads.
 func (r *inputResolver) compare(f *field) {
-	value := lookup(r.values, f.path)
+	value := r.givenValue(f)
 	// What the Inputs resolver gives for an input of a platform's type can't
 	// be split by the parts that made it, so a part of one held keeps all of
 	// it out of the plan, masked if a part read a secret.
-	resolved := f.in == nil && platformTypes[f.typ]
+	resolved := platformTypes[f.typ]
 	whole, wholeKind := false, heldPrivate
 	hold := func(path []string, kind holding) {
 		if resolved && len(path) > 0 {
@@ -293,8 +293,18 @@ func (r *inputResolver) compare(f *field) {
 		}
 	}
 	if whole {
-		r.holdPath(f, f.path, wholeKind)
+		r.holdPath(f.holder(), f.path, wholeKind)
 	}
+}
+
+// givenValue returns f's value as it was before the Inputs resolver gave
+// what the run reads for it (resolvePlatform), which is what compare
+// compares with what made it.
+func (r *inputResolver) givenValue(f *field) any {
+	if f.resolved && !f.failed {
+		return f.given
+	}
+	return lookup(r.values, f.path)
 }
 
 // madeAtStart reports whether the value at path in the inputs' values, or
@@ -462,7 +472,7 @@ func (r *inputResolver) parts(f *field, c candidate) [][]string {
 		return [][]string{c.path}
 	}
 	var out [][]string
-	list, _ := lookup(r.values, slices.Concat(f.path, c.path)).([]any)
+	list, _ := lookup(r.givenValue(f), c.path).([]any)
 	for i := range list {
 		if path := appendPath(c.path, strconv.Itoa(i)); !f.isText(path) {
 			out = append(out, path)
