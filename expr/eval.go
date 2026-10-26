@@ -183,6 +183,15 @@ func (s Scope) Budgeted() Scope {
 	return s
 }
 
+// WithBudget returns s with the budget of budgeted, a scope Budgeted
+// returned or a copy of one, so that what is evaluated with either counts
+// toward one group's limits: as what is evaluated in each of the rounds of
+// one resolution of a run's inputs does.
+func (s Scope) WithBudget(budgeted Scope) Scope {
+	s.budget = budgeted.budget
+	return s
+}
+
 // start notes that one of the group's evaluations starts, and reads the
 // clock: the time counts from then if no other is under way, and up to then
 // if one is, as a template that another reads starts while its reader is

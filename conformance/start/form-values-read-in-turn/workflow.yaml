@@ -1,0 +1,19 @@
+on:
+  execute:
+    inputs:
+      first:
+        type: string
+        default: ${{ inputs.second == vars.REGION && vars.REGION || 'other' }}
+      second:
+        type: string
+        default: ${{ inputs.third == vars.REGION && vars.REGION || 'other' }}
+      third:
+        type: string
+        default: ${{ vars.REGION }}
+      label:
+        type: string
+        default: ${{ inputs.first }}-label
+jobs:
+  main:
+    steps:
+      - run: echo ok

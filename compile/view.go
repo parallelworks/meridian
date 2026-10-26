@@ -88,10 +88,11 @@ func (r *inputResolver) scope() expr.Scope {
 		r.view = r.evalValues()
 		if r.start != nil {
 			r.created = plan.NewScope(plan.PhaseStart, r.start.contexts(r.view))
+			r.budget = r.created.WithBudget(r.start.budget)
 		} else {
 			r.created = plan.NewScope(plan.PhaseCreate, createContexts(r.opts, r.view))
+			r.budget = r.created.Budgeted()
 		}
-		r.budget = r.created.Budgeted()
 	}
 	if r.checkView != nil {
 		r.checkView()
@@ -125,6 +126,7 @@ func (r *inputResolver) remove(path []string) {
 // changes.
 func (r *inputResolver) refresh(path []string) {
 	r.evaluators = nil
+	r.forgetMeant(path)
 	if r.view == nil {
 		return
 	}

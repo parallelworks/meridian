@@ -816,3 +816,82 @@ func TestStartRefusesAnotherRecord(t *testing.T) {
 		t.Errorf("the record Create gave: %v, %v", diags, err)
 	}
 }
+
+// Values a form made from expressions that read each other and a variable
+// are each what its expression gives as the run starts: with the variable
+// as it was, what was submitted, as Create found, and once it changed,
+// what the expressions give then. As they can't be evaluated in the order
+// they read each other, each reads the others as they were submitted, the
+// first first, and what reads them reads what they give.
+func TestStartFormValuesThatReadEachOther(t *testing.T) {
+	src := workflow("a: {type: string, default: '${{ vars.V == ''v'' && inputs.b || ''x'' }}'}\nb: {type: string, default: '${{ vars.V == ''v'' && inputs.a || ''y'' }}'}\nc: {type: string, default: '${{ inputs.a }}-c'}")
+	c := createRun(t, src, map[string]any{"a": "1", "b": "1", "c": "1-c"}, testVariables{"vars.V": {Value: "v"}})
+	if len(c.Record.Means) != 3 {
+		t.Fatalf("means %v, want a, b and c", c.Record.Means)
+	}
+	for v, want := range map[string]string{"v": `{"a":"1","b":"1","c":"1-c"}`, "w": `{"a":"x","b":"y","c":"x-c"}`} {
+		res, diags := startRun(t, c, testVariables{"vars.V": {Value: v}}, compile.StartInput{RunID: "run"})
+		if res == nil {
+			t.Fatalf("V=%s: %v", v, diags)
+		}
+		if got := canonical(t, res.Run.Inputs.Get()); got != want {
+			t.Errorf("V=%s: inputs %s, want %s", v, got, want)
+		}
+	}
+}
+
+// Parts of a list's rows that mean their expressions, which read what
+// reads the list in turn, are read as Create read them: the list's rows
+// with their fields filled in, a field without a value as null, and the
+// parts as they were submitted until they are evaluated, by what reads
+// them first.
+func TestStartReadsRowsThatMeanExpressionsAsCreateDid(t *testing.T) {
+	vars := testVariables{"vars.V": {Value: "v"}, "vars.S": {Value: "s", Secret: true}}
+	for name, c := range map[string]struct {
+		src       string
+		submitted map[string]any
+		want      string
+	}{
+		"a default that reads a field the rows don't have, which a row reads": {
+			src: workflow(`a: {type: string, optional: true, default: '${{ join(inputs.l.*.p, '','') }}'}
+k: {type: string, default: '${{ vars.S }}'}
+l: {type: list, optional: true, template: {u: {type: string, optional: true}, p: {type: password, optional: true}}, default: [{u: '${{ vars.V }}'}, {u: '${{ inputs.a }}'}]}`),
+			submitted: map[string]any{"a": ",", "l": []any{map[string]any{"u": "v"}, map[string]any{"u": ","}}},
+			want:      `{"a":",","k":"s","l":[{"u":"v"},{"u":","}]}`,
+		},
+		"a default that reads a row's field, whose default reads a part the row means": {
+			src: workflow(`a: {type: string, optional: true, default: '${{ inputs.l[0].h }}'}
+pw: {type: password, optional: true}
+l: {type: list, optional: true, template: {u: {type: string, optional: true}, h: {type: string, optional: true, default: '${{ inputs.l[index].u }}'}}, default: [{u: '${{ inputs.a }}', h: lit}, {u: '${{ vars.V }}', h: '${{ inputs.pw }}'}]}`),
+			submitted: map[string]any{"l": []any{map[string]any{"h": "alice", "u": "alice"}}},
+			want:      `{"a":"alice","l":[{"h":"alice","u":"alice"}]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, res, diags := started(t, c.src, c.submitted, vars)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			if got := canonical(t, res.Run.Inputs.Get()); got != c.want {
+				t.Errorf("inputs %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// A default that reads, through a relative reference, a value a form made
+// from a variable that changed since reads what the value's expression
+// gives as the run starts: a relative reference doesn't make it wait for
+// the value, so Start resolves the inputs again with what the expression
+// gave in the value's place.
+func TestStartFormValueReadThroughARelativeReference(t *testing.T) {
+	src := workflow("a: {type: string, optional: true, default: '${{ inputs.c }}'}\nb: {type: string, optional: true, default: '${{ ..a.default }}'}\nc: {type: string, optional: true, default: 'x-${{ vars.V }}'}")
+	c := createRun(t, src, map[string]any{"a": "typed", "c": "x-v"}, testVariables{"vars.V": {Value: "v"}})
+	res, diags := startRun(t, c, testVariables{"vars.V": {Value: "w"}}, compile.StartInput{RunID: "run"})
+	if res == nil {
+		t.Fatal(diags)
+	}
+	if got, want := canonical(t, res.Run.Inputs.Get()), `{"a":"typed","b":"x-w","c":"x-w"}`; got != want {
+		t.Errorf("inputs %s, want %s", got, want)
+	}
+}

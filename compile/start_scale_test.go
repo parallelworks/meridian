@@ -10,13 +10,15 @@ import (
 )
 
 // A startScaled is a run whose size grows with n, which Start completes:
-// its workflow, the values submitted for it and its variables. timed is
-// set to check the time Start takes as well, for a run whose cost, once,
-// was work that allocated nothing.
+// its workflow, the values submitted for it and its variables, and the
+// variables as it starts, if they changed since (changed). timed is set to
+// check the time Start takes as well, for a run whose cost, once, was work
+// that allocated nothing.
 type startScaled struct {
 	name     string
 	n        int
 	workload func(n int) (string, map[string]any, testVariables)
+	changed  testVariables
 	timed    bool
 }
 
@@ -87,6 +89,30 @@ l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ va
 			map[string]any{"m": rows(n, emptyRow), "l": rows(n, func() map[string]any { return map[string]any{"u": "x", "h": "yes"} })},
 			testVariables{"vars.V": {Value: "VARV"}}
 	}},
+	// Each value a form made from an expression that reads the next value
+	// and a variable that changed since, the last the variable's own: Start
+	// evaluates each once, in the order they read each other, though the
+	// inputs' order is the other way.
+	{name: "values a form made, each reading the next, of a variable that changed since, against the inputs' order", n: 250, timed: true, changed: testVariables{"vars.V": {Value: "w"}}, workload: func(n int) (string, map[string]any, testVariables) {
+		var defs strings.Builder
+		submitted := map[string]any{}
+		for i := range n - 1 {
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ inputs.a%05d == vars.V && vars.V || ''x'' }}'}\n", i, i+1)
+			submitted[fmt.Sprintf("a%05d", i)] = "v"
+		}
+		fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ vars.V }}'}\n", n-1)
+		submitted[fmt.Sprintf("a%05d", n-1)] = "v"
+		return workflow(defs.String()), submitted, testVariables{"vars.V": {Value: "v"}}
+	}},
+	// Inputs and env: values that read each other in turn: Start evaluates
+	// each once, in the order they read each other, in either of the
+	// inputs' orders.
+	{name: "inputs and env values that read each other in turn", n: 250, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
+		return envInTurn(n, false)
+	}},
+	{name: "inputs and env values that read each other in turn, against the inputs' order", n: 250, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
+		return envInTurn(n, true)
+	}},
 	{name: "lists whose rows are held for Start, beside a long list", n: 200, timed: true, workload: func(n int) (string, map[string]any, testVariables) {
 		var defs strings.Builder
 		submitted := map[string]any{"big": rows(100*n, func() map[string]any { return map[string]any{"u": "x"} })}
@@ -97,6 +123,27 @@ l: {type: list, template: {u: {type: string}, h: {type: string, default: '${{ va
 		defs.WriteString("big: {type: list, template: {u: {type: string}}}\n")
 		return workflow(defs.String()), submitted, testVariables{"vars.S": {Value: "s", Secret: true}}
 	}},
+}
+
+// envInTurn is n inputs, each of whose defaults reads an env: value that
+// reads the input before, the first a secret variable, in that order, or
+// with reverse, the other way.
+func envInTurn(n int, reverse bool) (string, map[string]any, testVariables) {
+	var defs, env strings.Builder
+	env.WriteString("env:\n")
+	for j := range n {
+		i := j
+		if reverse {
+			i = n - 1 - j
+		}
+		if i == 0 {
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ vars.S }}'}\n", i)
+		} else {
+			fmt.Fprintf(&defs, "a%05d: {type: string, default: '${{ env.E%05d }}'}\n", i, i-1)
+		}
+		fmt.Fprintf(&env, "  E%05d: ${{ inputs.a%05d }}\n", i, i)
+	}
+	return workflow(defs.String(), env.String()), nil, testVariables{"vars.S": {Value: "s", Secret: true}}
 }
 
 // TestStartScales checks that starting each of startScaledRuns at four
@@ -133,6 +180,9 @@ func (w startScaled) measure(t *testing.T, n int) (bytes uint64, allocs float64,
 	t.Helper()
 	src, submitted, vars := w.workload(n)
 	c := createRun(t, src, submitted, vars)
+	if w.changed != nil {
+		vars = w.changed
+	}
 	start = func() {
 		if res, diags := startRun(t, c, vars, compile.StartInput{}); res == nil {
 			t.Fatal(diags)
@@ -151,6 +201,9 @@ func BenchmarkStart(b *testing.B) {
 		b.Run(w.name, func(b *testing.B) {
 			src, submitted, vars := w.workload(w.n)
 			c := createRun(b, src, submitted, vars)
+			if w.changed != nil {
+				vars = w.changed
+			}
 			b.ReportAllocs()
 			for b.Loop() {
 				_, _ = startRun(b, c, vars, compile.StartInput{})

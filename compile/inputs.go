@@ -285,11 +285,13 @@ type inputResolver struct {
 	// plan names a value, with its context, as in inputs.region
 	// (plan.JoinPath), with the expression's JSON Pointer: as the run is
 	// created, what the compiler decided (compare), which the secret record
-	// keeps (plan.Record.Means); as it starts, what Start reads of it.
-	// remeant holds those that the expression gives another value for as
-	// the run starts than was submitted, as a variable changed, by their
-	// paths in the values, as in region, with what it gives, which Start
-	// resolves the inputs again with.
+	// keeps (plan.Record.Means); as it starts, what Start reads of it, each
+	// a text of the expression in the part's place (meanTexts). remeant
+	// holds those whose expressions gave another value as the run started
+	// than was submitted, as a variable changed, by their paths in the
+	// values, as in region, with what they gave: what reads one through a
+	// relative reference doesn't wait for it, and can have read what was
+	// submitted (starter.resolve).
 	means   map[string]string
 	remeant map[string]any
 }

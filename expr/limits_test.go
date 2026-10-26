@@ -498,6 +498,19 @@ func TestGroupWorkBudget(t *testing.T) {
 			t.Fatalf("a template on its own: %v", err)
 		}
 	}
+
+	// Scopes that share a budget (WithBudget) are one group: eight
+	// templates of 32 MiB, each with a scope of its own, do the group's
+	// 256 MiB, and a step more, with another scope, is too much.
+	shared := expr.Scope{}.Budgeted()
+	for i := range 8 {
+		if _, err := mustParse(t, heavy).Eval(inputs(values).WithBudget(shared)); err != nil {
+			t.Fatalf("template %d of 32 MiB, in a scope of its own that shares the budget: %v", i+1, err)
+		}
+	}
+	if _, err := mustParse(t, "1").Eval(inputs(nil).WithBudget(shared)); !isOver(err) {
+		t.Errorf("a step more, in another scope that shares the budget: %v, want %s", err, problems.ExpressionsTooMuchWork.Code())
+	}
 }
 
 // A template that fails the language's limits counts toward its group what

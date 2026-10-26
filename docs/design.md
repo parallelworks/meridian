@@ -877,10 +877,24 @@ made from one, it doesn't hold in another form either.
      password, which Create decided means the expression
      (`plan.Record.Means`, [What a form sends](#inputs)), is what the
      expression gives now, so a variable that changed since the run was
-     created is read as it is. If that isn't what was submitted, Start
-     resolves the inputs once more with it in the value's place, so that
-     what reads the value reads what it is. Any other value in such a
-     place, which Create decided was typed, is what was typed.
+     created is read as it is. Start evaluates it in the value's place, as
+     a form's text for the expression, in the order the values read each
+     other, so that what reads the value reads what it is, and each is
+     evaluated once; values that mean expressions that read each other
+     read each other as they were submitted. What reads one through a
+     relative reference doesn't wait for it, so where the input
+     definitions make one, and the expression gives another value than
+     was submitted, Start resolves the inputs once more with it in the
+     value's place. Any other value in such a place, which Create decided
+     was typed, is what was typed, and so is one whose expression fails
+     now.
+   - A default, or such a value, that reads an `env:` value waits for what
+     the `env:` value reads, and Start evaluates the `env:` value then,
+     before what reads it, so inputs and `env:` values that read each other
+     in turn are resolved in one round, in the order they read each other.
+     An `env:` value that gives otherwise once the inputs are resolved, as
+     one that reads an input a condition drops does, Start evaluates only
+     then, and resolves the inputs again with it.
    - Every condition decides, and every input it ignores is dropped, those
      whose `ignore:` read a variable or a password among them, which Create
      held out of the plan whatever it decided. Whether each input is

@@ -84,6 +84,7 @@ func (r *inputResolver) markPassword(f *field) {
 func (r *inputResolver) markSecret(path []string) {
 	if r.final {
 		r.start.secrets.Add(slices.Concat([]string{"inputs"}, path))
+		r.forgetMeant(path)
 	}
 }
 
@@ -93,6 +94,7 @@ func (r *inputResolver) mark(path []string) {
 	r.marks.Add(slices.Concat([]string{"inputs"}, path))
 	r.markedInputs.Add(path, struct{}{})
 	r.evaluators = nil
+	r.forgetMeant(path)
 }
 
 // marked reports whether the value at path in the inputs' values is

@@ -1,0 +1,26 @@
+description: >-
+  A value a form made from an expression that reads a variable is what the
+  expression gives as the run starts, in its place, and what reads the
+  value reads that, though the variable changed since the run was created,
+  as it can before a rerun. Such values that read each other are each
+  evaluated once, in the order they read each other, whatever the inputs'
+  order.
+source: Meridian
+contexts:
+  vars:
+    REGION: east
+start-contexts:
+  vars:
+    REGION: west
+inputs:
+  first: east
+  second: east
+  third: east
+  label: east-label
+expect:
+  inputs:
+    first: west
+    second: west
+    third: west
+    label: west-label
+  run-private: [inputs.first, inputs.label, inputs.second, inputs.third]

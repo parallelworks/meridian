@@ -178,9 +178,11 @@ func mismatch(format string, args ...any) error {
 // passwords and the workflow's env:, which it evaluates too, and what the
 // Inputs resolver gives now for each input of a platform's type. A part of
 // what was submitted that Create decided means the expression a form made
-// it from (plan.Record.Means) is what the expression gives now, and Start
-// resolves the inputs again with that, if it differs, as a variable can
-// have changed since, so that what reads the part reads what it is.
+// it from (plan.Record.Means) is what the expression gives now, as a
+// variable can have changed since, which Start evaluates in the part's
+// place, in the order the values read each other, so that what reads the
+// part reads what it is; and an env: value that a value reads it evaluates
+// before the value, in that order too.
 //
 // It then checks the run's shape against what Create decided: each input's
 // condition that read a variable or a password (plan.Run.Decisions), with
@@ -321,6 +323,25 @@ type starter struct {
 	// diags are the problems Start found of its own, beside those the
 	// input resolver reports.
 	diags problems.Diagnostics
+	// budget is the one budget of what each round of resolve evaluates.
+	budget expr.Scope
+	// demanded holds the env: values that a round evaluated as the inputs'
+	// values were filled in (settle), with what each gave and read, which
+	// evalEnv checks once they are; and late those that gave otherwise
+	// than they give then, which Start evaluates only once a round has
+	// filled the values in, from then on.
+	demanded map[string]demandedEnv
+	late     map[string]bool
+	// envPatterns holds, by name, what envReadsOf found of each env: value
+	// in the round.
+	envPatterns map[string][][]string
+}
+
+// demandedEnv is what an env: value gave as the inputs' values were filled
+// in, and what it read.
+type demandedEnv struct {
+	text string
+	read expr.Read
 }
 
 // startState is what the input resolver keeps as it completes the run's
@@ -340,6 +361,20 @@ type startState struct {
 	// madeSecret and madePrivate name the values Start made from a secret,
 	// and from a variable or a password but no secret.
 	madeSecret, madePrivate map[string]bool
+	// envReads are the patterns (reach.Patterns) of the paths in the
+	// inputs' values that the workflow's env: values read.
+	envReads [][]string
+	// settle evaluates, as a value is filled in, each env: value not
+	// evaluated yet that exprs, the expressions that fill it in, read, and
+	// that those read in turn, whose reads of the values ready reports are
+	// filled in (starter.settle); and envReadsOf returns the patterns of
+	// those reads, which the value waits for (starter.envReadsOf). Neither
+	// takes a value Start evaluates only once the values are filled in
+	// (starter.late).
+	settle     func(exprs []*expr.Expr, ready func(pattern []string) bool)
+	envReadsOf func(exprs []*expr.Expr) [][]string
+	// budget is the budget that every round shares (expr.Scope.WithBudget).
+	budget expr.Scope
 }
 
 // contexts returns what Start's evaluations read: the inputs' values,
@@ -461,16 +496,25 @@ func (st *starter) definitions() (map[string]any, error) {
 
 // resolve resolves the inputs from what was submitted, as Create does, but
 // with every variable known and as the run starts (inputResolver.final),
-// and then evaluates the workflow's env:. Its last resolver is st.r. It
-// resolves them again, from the start:
+// and evaluates the workflow's env:. Its last resolver is st.r.
 //
-//   - while a part that means its expression is what the expression gives
-//     only now, as a variable changed since the run was created
-//     (inputResolver.remeant): what was submitted has it in the part's
-//     place, so that what reads the part reads it, a round for each such
-//     part at most;
-//   - and while an input's default reads an env: value, which it waits
-//     for, and env: values it can read were evaluated, with those known.
+// An env: value that an input's default, or a text, reads, it evaluates as
+// the values are filled in, before the value that reads it, which waits
+// for what the env: value reads (settle): so inputs and env: values that
+// read each other in turn are evaluated in one round, in the order they
+// read each other. The rest it evaluates once the round has filled the
+// values in, applied the conditions and checked the values, and checks
+// that those it evaluated before give the same then, and read the same of
+// what is private; if one doesn't, as one that reads an input a condition
+// drops, it starts again, and evaluates that one only then (late). It
+// resolves the inputs again, with the env: values it has, while what reads
+// one waits for it and a round evaluated more of them. What reads a part
+// that means its expression waits for it too, but for what reads it
+// through a relative reference: where the input definitions make one, and
+// a part's expression gave another value than was submitted, Start
+// resolves the inputs again with what it gave in its place, a round for
+// each such part at most. The rounds share one budget, so all of them
+// together keep to its limits.
 //
 // What is left once nothing more is evaluated reads itself, or each other
 // (values_read_each_other), or a context Start doesn't know.
@@ -495,14 +539,28 @@ func (st *starter) resolve(defs map[string]any) error {
 	}
 	opts := Options{Inputs: st.in.Inputs, Contexts: contexts}
 	st.envKeys = slices.Sorted(maps.Keys(p.Run.Env))
+	var envReads [][]string
+	for _, k := range st.envKeys {
+		envReads = append(envReads, readPatterns(p.Run.Env[k].Exprs(), nil)...)
+	}
 	env, envSecret, envPrivate := map[string]string{}, map[string]bool{}, map[string]bool{}
 	submitted, _ := st.in.Record.Submitted.Get().(map[string]any)
+	st.budget = expr.Scope{}.Budgeted()
+	reported := len(st.diags)
+	// What reads a value through a relative reference doesn't wait for it.
+	definitions, _ := (&expr.Workflow{Root: doc.Value}).Exprs(definitionsPath)
+	relative := slices.ContainsFunc(definitions, (*expr.Expr).Relative)
 	remeant := 0
 	for {
 		if err := st.ctx.Err(); err != nil {
 			return err
 		}
-		st.s = &startState{madeSecret: map[string]bool{}, madePrivate: map[string]bool{}, pendingEnv: map[string]bool{}}
+		st.s = &startState{
+			madeSecret: map[string]bool{}, madePrivate: map[string]bool{}, pendingEnv: map[string]bool{},
+			envReads: envReads, budget: st.budget,
+		}
+		st.demanded, st.envPatterns = map[string]demandedEnv{}, map[string][][]string{}
+		st.s.settle, st.s.envReadsOf = st.settle, st.envReadsOf
 		st.s.run = plan.RunValues{
 			Format: p.Run.Format, Org: st.org, Vars: st.vars, Env: maps.Clone(env),
 			Remote: maps.Clone(p.Run.Remote), Sessions: maps.Clone(p.Run.SessionNames),
@@ -542,7 +600,35 @@ func (st *starter) resolve(defs map[string]any) error {
 			}
 		}
 		st.r.resolve()
-		progress := st.evalEnv()
+		progress, late := st.evalEnv()
+		again := late != nil
+		for _, k := range late {
+			if st.late == nil {
+				st.late = map[string]bool{}
+			}
+			st.late[k] = true
+		}
+		if !again && relative && len(st.r.remeant) > 0 && remeant < len(st.in.Record.Means) {
+			// A part whose expression gave another value than was
+			// submitted, which a relative reference can have read, is what
+			// it gave in its place in what was submitted, a round for each
+			// such part at most.
+			again = true
+			remeant++
+			submitted = orEmptyMap(jsonvalue.CloneMap(submitted))
+			for name, v := range jsonvalue.Sorted(st.r.remeant) {
+				// A part not in what was submitted, as one of a list's
+				// default rows, is what the expression gives all the same.
+				_ = setGrow(submitted, plan.SplitPath(name), v)
+			}
+		}
+		if again {
+			clear(env)
+			clear(envSecret)
+			clear(envPrivate)
+			st.diags = st.diags[:reported]
+			continue
+		}
 		for _, k := range st.envKeys {
 			if name := plan.JoinPath("env", k); !st.s.pendingEnv[name] {
 				env[k] = st.s.run.Env[k]
@@ -551,16 +637,6 @@ func (st *starter) resolve(defs map[string]any) error {
 					envPrivate[k] = true
 				}
 			}
-		}
-		if len(st.r.remeant) > 0 && remeant < len(st.in.Record.Means) {
-			remeant++
-			submitted = orEmptyMap(jsonvalue.CloneMap(submitted))
-			for name, v := range jsonvalue.Sorted(st.r.remeant) {
-				// A part not in what was submitted, as one of a list's
-				// default rows, is what the expression gives all the same.
-				_ = setGrow(submitted, plan.SplitPath(name), v)
-			}
-			continue
 		}
 		waiting := slices.ContainsFunc(st.r.fields, func(f *field) bool { return f.deferred && !f.ignored })
 		if waiting && progress {
@@ -606,14 +682,17 @@ func (st *starter) reportLeft() {
 	}
 }
 
-// evalEnv evaluates the workflow's env: values not known yet, in passes
-// until a pass evaluates none, and reports whether it evaluated any. They
-// read an input of a platform's type as it was submitted, as what the
-// compiler evaluates before it checks the inputs does (plan.Run.Inputs).
-func (st *starter) evalEnv() bool {
+// evalEnv evaluates the workflow's env: values not known yet, each after
+// those it reads, and reports whether it evaluated any; or else returns
+// those that the round evaluated as the values were filled in (demanded)
+// that give otherwise than they gave then, or read otherwise of what is
+// private, without evaluating any. They read an input of a platform's type
+// as it was submitted, as what the compiler evaluates before it checks the
+// inputs does (plan.Run.Inputs).
+func (st *starter) evalEnv() (progress bool, late []string) {
 	r := st.r
-	if len(st.s.pendingEnv) == 0 {
-		return false
+	if len(st.s.pendingEnv) == 0 && len(st.demanded) == 0 {
+		return false, nil
 	}
 	resolved := map[string]any{}
 	for name, given := range jsonvalue.Sorted(r.unresolved) {
@@ -623,19 +702,112 @@ func (st *starter) evalEnv() bool {
 			r.set(path, jsonvalue.Clone(given))
 		}
 	}
-	evaluated := false
-	for progress := true; progress; {
-		progress = false
-		for _, k := range st.envKeys {
-			if st.s.pendingEnv[plan.JoinPath("env", k)] && st.evalEnvValue(k) {
-				progress, evaluated = true, true
-			}
+	for _, k := range slices.Sorted(maps.Keys(st.demanded)) {
+		d := st.demanded[k]
+		out, read, err := st.p.Run.Env[k].EvalRead(r.scope())
+		if err != nil || expr.Text(out) != d.text || read.Private != d.read.Private || read.Marked != d.read.Marked {
+			late = append(late, k)
 		}
+	}
+	if late == nil {
+		left := len(st.s.pendingEnv)
+		visiting := map[string]bool{}
+		for _, k := range st.envKeys {
+			st.settleEnv(k, visiting, nil)
+		}
+		progress = len(st.s.pendingEnv) < left
 	}
 	for name, v := range jsonvalue.Sorted(resolved) {
 		r.set(plan.SplitPath(name), v)
 	}
-	return evaluated
+	return progress, late
+}
+
+// settle evaluates each env: value not evaluated yet that exprs read, and
+// those they read in turn, that it can as the inputs' values are filled
+// in: once ready reports that what it reads of them is filled in, if it
+// evaluates without an error, which the round reports once the values are
+// filled in, if it is one still, and unless, in a round before, it gave
+// otherwise once they were (late): such a one is evaluated only then.
+func (st *starter) settle(exprs []*expr.Expr, ready func(pattern []string) bool) {
+	visiting := map[string]bool{}
+	for _, k := range st.envRefs(exprs) {
+		st.settleEnv(k, visiting, ready)
+	}
+}
+
+// settleEnv evaluates the workflow's env: value k, if it isn't evaluated
+// yet, after those it reads: as the values are filled in, only once ready
+// reports that each pattern of what it reads of them is (settle), and once
+// they are, with a nil ready, whatever it gives. visiting holds the values
+// that are under way, or were: one that reads itself, through others,
+// isn't evaluated, and reads as not evaluated yet.
+func (st *starter) settleEnv(k string, visiting map[string]bool, ready func(pattern []string) bool) {
+	if !st.s.pendingEnv[plan.JoinPath("env", k)] || visiting[k] || ready != nil && st.late[k] {
+		return
+	}
+	visiting[k] = true
+	exprs := st.p.Run.Env[k].Exprs()
+	for _, j := range st.envRefs(exprs) {
+		st.settleEnv(j, visiting, ready)
+	}
+	if ready != nil && slices.ContainsFunc(readPatterns(exprs, nil), func(p []string) bool { return !ready(p) }) {
+		return
+	}
+	st.evalEnvValue(k, ready != nil)
+}
+
+// envReadsOf returns the patterns (reach.Patterns) of the paths in the
+// inputs' values that the env: values exprs read, of those not evaluated
+// yet, read, and that those they read read, in turn.
+func (st *starter) envReadsOf(exprs []*expr.Expr) [][]string {
+	var out [][]string
+	for _, k := range st.envRefs(exprs) {
+		if !st.s.pendingEnv[plan.JoinPath("env", k)] {
+			continue
+		}
+		reads, ok := st.envPatterns[k]
+		if !ok {
+			seen := map[string]bool{}
+			var walk func(k string)
+			walk = func(k string) {
+				if seen[k] || st.late[k] || !st.s.pendingEnv[plan.JoinPath("env", k)] {
+					return
+				}
+				seen[k] = true
+				e := st.p.Run.Env[k].Exprs()
+				reads = append(reads, readPatterns(e, nil)...)
+				for _, j := range st.envRefs(e) {
+					walk(j)
+				}
+			}
+			walk(k)
+			st.envPatterns[k] = reads
+		}
+		out = append(out, reads...)
+	}
+	return out
+}
+
+// envRefs returns the names of the workflow's env: values that exprs
+// read, in order: all of them, for one that reads env whole.
+func (st *starter) envRefs(exprs []*expr.Expr) []string {
+	var out []string
+	for _, e := range exprs {
+		for _, ref := range e.Refs() {
+			if ref.Context != "env" {
+				continue
+			}
+			if len(ref.Path) == 0 {
+				return st.envKeys
+			}
+			if _, ok := st.p.Run.Env[ref.Path[0]]; ok {
+				out = append(out, ref.Path[0])
+			}
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // waits reports whether err is an evaluation that read what Start hasn't
@@ -646,15 +818,21 @@ func waits(err error) bool {
 }
 
 // evalEnvValue evaluates the workflow's env: value k, and reports whether
-// it did, or failed: not if it read what isn't evaluated yet.
-func (st *starter) evalEnvValue(k string) bool {
+// it did, or failed: not if it read what isn't evaluated yet, nor, for one
+// demanded as the values are filled in, if it failed. What it reports is
+// Start's own, which a later round, which reads the value as it is,
+// doesn't report again.
+func (st *starter) evalEnvValue(k string, demand bool) bool {
 	r := st.r
 	out, read, err := st.p.Run.Env[k].EvalRead(r.scope())
 	switch {
-	case waits(err):
+	case waits(err), demand && err != nil:
 		return false
 	case err != nil:
+		n := len(r.diags)
 		st.reportEval([]string{"env", k}, err, read)
+		st.diags = append(st.diags, r.diags[n:]...)
+		r.diags = r.diags[:n]
 	}
 	name := plan.JoinPath("env", k)
 	text := ""
@@ -681,6 +859,10 @@ func (st *starter) evalEnvValue(k string) bool {
 		}
 	}
 	r.evaluators = nil
+	r.forgetMeant(nil)
+	if demand {
+		st.demanded[k] = demandedEnv{text, read}
+	}
 	return true
 }
 

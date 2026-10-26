@@ -1,0 +1,20 @@
+description: >-
+  Inputs and env: values that read each other in turn are evaluated as the
+  run starts in the order they read each other, whatever the inputs'
+  order. An env: value reads an input the run ignored as having none, as
+  the jobs read it, and so does what reads the env: value.
+source: Meridian
+contexts:
+  vars:
+    SCRATCH: "off"
+expect:
+  inputs:
+    base: /data
+    dir: /data/runs
+    out: /data/runs/out
+    note: tmp=
+  env:
+    BASE: /data
+    DIR: /data/runs
+    TMP: ""
+  run-private: [env.TMP, inputs.note, inputs.scratch]
