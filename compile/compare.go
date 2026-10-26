@@ -104,7 +104,7 @@ func (r *inputResolver) compare(f *field) {
 				// what made it.
 				i = -1
 			}
-			name := plan.JoinPath(at...)
+			name := plan.JoinPath(slices.Concat([]string{"inputs"}, at)...)
 			switch {
 			case i >= 0 && !r.reads(c.locs[i], false):
 				// What reads no variable and no password gave it, as Create
@@ -141,7 +141,7 @@ func (r *inputResolver) compare(f *field) {
 					if r.remeant == nil {
 						r.remeant = map[string]any{}
 					}
-					r.remeant[name] = jsonvalue.Clone(gave[i].v)
+					r.remeant[plan.JoinPath(at...)] = jsonvalue.Clone(gave[i].v)
 				}
 				loc := c.locs[i]
 				r.noteEvaluation(f, path, loc, lookup(r.doc.Value, loc))

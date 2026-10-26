@@ -274,3 +274,21 @@ func TestPlansDontSayWhatSecretsAre(t *testing.T) {
 		})
 	}
 }
+
+// The secret record names each part of what was submitted that means the
+// expression a form made it from as the plan names a value, with its
+// context, as inputs.region and inputs.hosts.0.zone, with where the
+// expression is in the workflow.
+func TestRecordNamesWhatMeansAnExpression(t *testing.T) {
+	src := workflow(`region: {type: string, default: '${{ org.REGION }}'}
+hosts: {type: list, template: {name: {type: string}, zone: {type: string, default: '${{ org.REGION }}-a'}}}`)
+	vars := testVariables{"org.REGION": {Value: "east"}}
+	c := createRun(t, src, map[string]any{"region": "east", "hosts": []any{map[string]any{"name": "h", "zone": "east-a"}}}, vars)
+	want := map[string]string{
+		"inputs.region":       "/on/execute/inputs/region/default",
+		"inputs.hosts.0.zone": "/on/execute/inputs/hosts/template/zone/default",
+	}
+	if !maps.Equal(c.Record.Means, want) {
+		t.Errorf("means %v, want %v", c.Record.Means, want)
+	}
+}

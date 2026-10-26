@@ -280,14 +280,16 @@ type inputResolver struct {
 	// value a form can have made from a variable or a password means,
 	// applies every condition, and checks every input.
 	final bool
-	// means names, by its name in the values, each part of a submitted
-	// value that means the expression a form made it from, one that reads a
-	// variable or a password, with the expression's JSON Pointer: as the
-	// run is created, what the compiler decided (compare), which the secret
-	// record keeps (plan.Record.Means); as it starts, what Start reads of
-	// it. remeant holds those that the expression gives another value for
-	// as the run starts than was submitted, as a variable changed, with
-	// what it gives, which Start resolves the inputs again with.
+	// means names each part of a submitted value that means the expression
+	// a form made it from, one that reads a variable or a password, as the
+	// plan names a value, with its context, as in inputs.region
+	// (plan.JoinPath), with the expression's JSON Pointer: as the run is
+	// created, what the compiler decided (compare), which the secret record
+	// keeps (plan.Record.Means); as it starts, what Start reads of it.
+	// remeant holds those that the expression gives another value for as
+	// the run starts than was submitted, as a variable changed, by their
+	// paths in the values, as in region, with what it gives, which Start
+	// resolves the inputs again with.
 	means   map[string]string
 	remeant map[string]any
 }
