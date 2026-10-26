@@ -217,6 +217,78 @@ func TestDiscardedStartQueue(t *testing.T) {
 	})
 }
 
+// slowVariables gives vars after delay, saying on reading that a read
+// began.
+type slowVariables struct {
+	vars    conformancetest.Variables
+	delay   time.Duration
+	reading chan struct{}
+}
+
+func (v *slowVariables) Read(ctx context.Context, names []string, secrets bool) (map[string]compile.Variable, error) {
+	select {
+	case v.reading <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(v.delay):
+	}
+	return v.vars.Read(ctx, names, secrets)
+}
+
+// TestRetireWhileStopping checks that the start queues of runs that start
+// as the coordinator stops, which it stops working, leave its hopper client
+// to stop as it would, as the race detector sees; and that a run created
+// as the coordinator stops is started by the next coordinator that serves.
+func TestRetireWhileStopping(t *testing.T) {
+	vars := &slowVariables{vars: regionVars, delay: 50 * time.Millisecond, reading: make(chan struct{}, 64)}
+	c := open(t, Options{Variables: vars, StartQueue: func(id string) string { return "meridian.start." + id }})
+	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(regionWorkflow), regionSubmitted,
+		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: regionVars.Contexts()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for round := range 5 {
+		for range 4 {
+			id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
+			ids = append(ids, id)
+		}
+		for len(vars.reading) > 0 {
+			<-vars.reading // the last round's
+		}
+		stop := serving(t, c)
+		// Stopped as runs start, which then finish their Starts, and stop
+		// working their queues, as it stops; and one more is created.
+		<-vars.reading
+		late := make(chan error, 1)
+		go func() {
+			id, err := c.CreateRun(context.WithoutCancel(t.Context()), created, runOptions)
+			if err == nil {
+				ids = append(ids, id)
+			}
+			late <- err
+		}()
+		stop()
+		if err := <-late; err != nil {
+			t.Errorf("round %d: a run created as the coordinator stopped: %v", round, err)
+		}
+	}
+	serving(t, c)
+	for _, id := range ids {
+		if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeSuccess {
+			t.Errorf("run %s ended with %s", id, r.Outcome)
+		}
+	}
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.queues) == 0
+	})
+}
+
 // TestFinishNewer checks that the finisher leaves a run whose plan only a
 // newer release reads to one, as Start does.
 func TestFinishNewer(t *testing.T) {
