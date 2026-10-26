@@ -1249,6 +1249,34 @@
       "Haz que el paso imprima menos, o que escriba lo que produce en un archivo propio, en el directorio de la ejecución, en lugar de en su salida."
     ]
   },
+  "placement_impossible": {
+    "title": "Trabajo que ningún miembro puede ejecutar",
+    "why": "Antes de que se ejecute un trabajo, Meridian pregunta a cada miembro de su grupo de ejecución si puede ejecutarlo: si está en buen estado y tiene lo que el trabajo pide, dentro de su tiempo de ejecución más largo. Ninguno puede, y el motivo de cada miembro sigue a este.",
+    "fix": [
+      "Corrige lo que dice el motivo de cada miembro, por ejemplo pidiendo menos recursos o un timeout: más corto, o ejecuta el trabajo en un grupo con un miembro que pueda ejecutarlo, y después repite la ejecución."
+    ]
+  },
+  "placement_unanswered": {
+    "title": "Trabajo que no se pudo asignar",
+    "why": "Para asignar un trabajo, Meridian pregunta a los backends de los miembros de su grupo, como un planificador por SSH, si pueden ejecutarlo, y hace que uno inicie su worker. No pudieron responder ninguna de las veces que Meridian preguntó, como cuando no se puede llegar a un host. Meridian vuelve a preguntar unas cuantas veces, esperando más cada vez, y después lo cuenta como un fallo antes del primer paso del trabajo: vuelve a asignar el trabajo un rato después, y la segunda vez lo hace fallar, con setup_failed.",
+    "fix": [
+      "Comprueba que se puede llegar a los miembros del grupo, y mira en el registro del coordinador por qué no pudieron responder, y después repite la ejecución."
+    ]
+  },
+  "setup_failed": {
+    "title": "Trabajo que no pudo empezar",
+    "why": "Cada intento de un trabajo inicia un worker, que prepara el trabajo antes de que se ejecute su primer paso: crea el directorio de la ejecución, inicia el contenedor del trabajo y comprueba que es el worker que Meridian asignó. Un fallo ahí no ejecuta nada del código del flujo de trabajo, así que Meridian vuelve a asignar el trabajo unas cuantas veces, esperando más cada vez. Hace fallar el trabajo tras el cuarto fallo de ese tipo, o tras el segundo con el mismo motivo, que sigue a este.",
+    "fix": [
+      "Corrige lo que dice el motivo del último fallo, y después repite la ejecución."
+    ]
+  },
+  "coordinator_job_failed": {
+    "title": "Trabajo que el coordinador no pudo ejecutar",
+    "why": "El coordinador de Meridian lleva cada trabajo desde que está listo hasta su fin. Con este trabajo no pudo: falló una y otra vez, como cuando no se puede escribir en su almacén, o se perdió el worker del trabajo, o se retiró su asignación. Así que terminó el trabajo como fallido en lugar de dejarlo esperando.",
+    "fix": [
+      "Mira en el registro del coordinador qué le impidió ejecutar el trabajo, y después repite la ejecución."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",

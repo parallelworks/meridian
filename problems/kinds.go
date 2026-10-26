@@ -368,6 +368,24 @@ var (
 // its plan, and says so.
 var RunPlanNewer = define(Warning, "run_plan_newer", "Run newer than this release starts", "run", "version", "latest")
 
+// The problems of placing a job, and of seeing it to its end.
+var (
+	// PlacementImpossible is a job that no member of its group can run, as
+	// their drivers' Probe said: each member's reason follows it.
+	PlacementImpossible = define(Error, "placement_impossible", "Job no member can run", "job")
+	// PlacementUnanswered is a job whose group's backends couldn't answer
+	// as it was placed, tries times in a row, which counts as a failure
+	// before its first step.
+	PlacementUnanswered = define(Error, "placement_unanswered", "Job that couldn't be placed", "job", "tries")
+	// SetupFailed is a job whose attempts failed before a step started,
+	// tries times, the last of which, or twice for the same reason, which
+	// follows it.
+	SetupFailed = define(Error, "setup_failed", "Job that failed to start", "job", "tries")
+	// CoordinatorJobFailed is a job the coordinator couldn't see to its
+	// end, as one whose supervisor failed again and again.
+	CoordinatorJobFailed = define(Error, "coordinator_job_failed", "Job the coordinator couldn't run", "job")
+)
+
 // The meridian command's own problems, in CommandRegistry. A path, an
 // environment variable's name or value, or what the operating system said,
 // reason, is a param as it is.

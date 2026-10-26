@@ -47,7 +47,8 @@ func (w *finishWorker) Work(ctx context.Context, job *hopper.Job[finishArgs]) er
 // one that never started, as one whose Start the coordinator gave up on,
 // ends failed, with run_not_started. A run that has started ends failed if
 // one of its jobs failed, or was skipped because a job it needs failed,
-// and with success otherwise. A run of a plan only a newer release reads
+// and with success otherwise; a job that never ended, as one whose
+// supervisor hopper gave up on, fails first (failUnended). A run of a plan only a newer release reads
 // is left to one, as Start leaves it, and finishRun returns how long to
 // wait before trying again.
 func (c *Coordinator) finishRun(ctx context.Context, id string, done func(context.Context, *store.Tx) error) (time.Duration, error) {
@@ -70,6 +71,9 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 				return err
 			}
 		case store.RunRunning:
+			if err := failUnended(tx, id); err != nil {
+				return err
+			}
 			outcome, err := runOutcome(tx, id)
 			if err != nil {
 				return err
@@ -85,6 +89,38 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		return c.retry.newer, nil
 	}
 	return 0, err
+}
+
+// failUnended fails each job of the run id that hasn't ended, with
+// coordinator_job_failed: one whose supervisor hopper gave up on, as after
+// the coordinator itself failed again and again. Its attempt that hasn't
+// ended is withdrawn, so that its worker's reports are refused.
+func failUnended(tx *store.Tx, id string) error {
+	jobs, err := tx.Jobs(id)
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		if j.Outcome != "" {
+			continue
+		}
+		switch a, err := tx.LatestAttempt(id, j.Key); {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			return err
+		case a.State != store.AttemptEnded:
+			if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn}); err != nil {
+				return err
+			}
+		}
+		if err := tx.EndJob(id, j.Key, store.JobEnd{
+			Result:      plan.JobResult{Outcome: plan.OutcomeFailure},
+			Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": j.Key})},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // runOutcome is how the run id ended, from how its jobs did: failure if one

@@ -16,6 +16,7 @@ import (
 
 	"github.com/parallelworks/hopper"
 
+	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
@@ -84,9 +85,19 @@ func privateDir(t *testing.T) string {
 // fastStart is how tests try again to start a run: soon, and few times.
 var fastStart = startRetry{tries: 3, first: 10 * time.Millisecond, most: 40 * time.Millisecond, newer: 50 * time.Millisecond, attempts: 2}
 
+// fastSupervision is how tests' supervisors wait: briefly, but for a live
+// attempt, which they wait on until the attempt's worker wakes them, as
+// the worker API does.
+var fastSupervision = supervision{
+	setup: []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond},
+	first: 10 * time.Millisecond, most: 40 * time.Millisecond, tries: 3,
+	wait: 20 * time.Second, timeout: 30 * time.Second,
+}
+
 // open opens a coordinator on a new store in a directory of the test's,
-// with opts, Keys of the test's own unless opts has some, and the timing
-// of a test.
+// with opts, Keys of the test's own unless opts has some, testGroups and a
+// testDriver of testBackend unless it has Groups and Drivers, and the
+// timing of a test.
 func open(t *testing.T, opts Options) *Coordinator {
 	t.Helper()
 	if opts.Database == "" {
@@ -95,17 +106,40 @@ func open(t *testing.T, opts Options) *Coordinator {
 	if opts.Keys == nil {
 		opts.Keys = newTestKeys(t)
 	}
+	if opts.Groups == nil {
+		opts.Groups = testGroups{}
+	}
+	var drivers []*testDriver
+	if opts.Drivers == nil {
+		d := newTestDriver()
+		opts.Drivers = map[string]backend.Driver{testBackend: d}
+	}
+	for _, d := range opts.Drivers {
+		if d, ok := d.(*testDriver); ok {
+			drivers = append(drivers, d)
+		}
+	}
 	c, err := Open(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.retry, c.pollInterval = fastStart, 10*time.Millisecond
+	c.retry, c.supervision, c.pollInterval = fastStart, fastSupervision, 10*time.Millisecond
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
 			t.Error(err)
 		}
 	})
+	for _, d := range drivers {
+		d.c = c
+		// Before the store closes, the driver's workers have finished.
+		t.Cleanup(d.workers.Wait)
+	}
 	return c
+}
+
+// driverOf returns c's testDriver.
+func driverOf(c *Coordinator) *testDriver {
+	return c.opts.Drivers[testBackend].(*testDriver)
 }
 
 // serve runs c.Serve until the test ends.

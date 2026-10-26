@@ -179,6 +179,10 @@
   "run_not_started": "실행 {run}이(가) 시작되지 않은 채 끝났습니다. 코디네이터가 시작할 수 없었습니다.",
   "run_plan_newer": "실행 {run}의 계획(버전 {version})에는 더 새로운 릴리스의 Meridian만 읽는 것이 들어 있습니다(이 릴리스는 버전 {latest} 이하를 읽습니다). 그래서 그것을 읽는 릴리스가 실행을 시작합니다.",
   "log_truncated": "코디네이터는 한 시도의 로그를 합쳐 최대 {limit}바이트까지만 보관하므로, 이 로그의 나머지는 보관하지 않았습니다.",
+  "placement_impossible": "작업 {job}을(를) 실행하는 그룹의 구성원 중 그것을 실행할 수 있는 구성원이 없습니다.",
+  "placement_unanswered": "작업 {job}을(를) 배치할 수 없었습니다. 그룹의 백엔드가 {tries}번 시도하는 동안 응답하지 않았습니다.",
+  "setup_failed": "작업 {job}을(를) 시작할 수 없었습니다. 그 시도가 단계가 실행되기 전에 {tries}번 실패했습니다.",
+  "coordinator_job_failed": "코디네이터가 작업 {job}을(를) 끝까지 실행할 수 없었습니다.",
 
   "workflow_too_large": "워크플로가 {limit}바이트를 넘어 크기 한도를 초과합니다.",
   "execution_group_unknown": "‘{input}’ 입력이 지정한 실행 그룹 {value}은(는) 그룹 {groups} 중 하나가 아닙니다.",

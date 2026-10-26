@@ -179,6 +179,10 @@
   "run_not_started": "La ejecución {run} terminó sin empezar: el coordinador no pudo empezarla.",
   "run_plan_newer": "El plan de la ejecución {run}, de la versión {version}, contiene lo que solo lee una versión más reciente de Meridian (esta lee la versión {latest} y anteriores), así que la empieza una versión que lo lea.",
   "log_truncated": "El coordinador guarda como mucho {limit} bytes de los logs de un intento, así que no guardó el resto de este.",
+  "placement_impossible": "Ningún miembro del grupo en que se ejecuta el trabajo {job} puede ejecutarlo.",
+  "placement_unanswered": "No se pudo asignar el trabajo {job}: los backends de su grupo no respondieron en {tries} intentos.",
+  "setup_failed": "El trabajo {job} no pudo empezar: sus intentos fallaron antes de que se ejecutara un paso, {tries} veces.",
+  "coordinator_job_failed": "El coordinador no pudo llevar el trabajo {job} hasta su fin.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",

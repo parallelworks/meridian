@@ -13,6 +13,7 @@ import (
 
 	"github.com/parallelworks/hopper"
 
+	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -31,11 +32,16 @@ const sharedQueue = "meridian"
 const sharedWorkers = 8
 
 // The hopper jobs of a run, which the run's workflow holds: Start, which
-// every other job waits for, and the finisher, which ends the run once
-// everything else has.
+// every other job waits for; each job's supervisor, which waits for its
+// needs' too; and the finisher, which ends the run once everything else
+// has.
 type (
 	startArgs struct {
 		Run string `json:"run"`
+	}
+	jobArgs struct {
+		Run string `json:"run"`
+		Key string `json:"key"`
 	}
 	finishArgs struct {
 		Run string `json:"run"`
@@ -43,6 +49,7 @@ type (
 )
 
 func (startArgs) Kind() string  { return "meridian.start" }
+func (jobArgs) Kind() string    { return "meridian.job" }
 func (finishArgs) Kind() string { return "meridian.run" }
 
 // Options say what a coordinator works with.
@@ -59,8 +66,18 @@ type Options struct {
 	Inputs    compile.InputResolver
 	Sessions  compile.Sessions
 	// Groups gives the execution groups jobs run in. CreateRun checks a
-	// run's default group with it. Nil means it isn't checked.
+	// run's default group with it. Nil means it isn't checked, and that no
+	// job can be placed.
 	Groups compile.Groups
+	// Drivers are the drivers of the backends jobs' workers are placed
+	// with, by the backend's name (backend.Member.Backend). A member of a
+	// backend without one is one that placement leaves out, with
+	// backend_not_built (backend.NotBuilt).
+	Drivers map[string]backend.Driver
+	// Endpoint is where this coordinator serves the worker API, which each
+	// member's driver makes its workers able to reach
+	// (backend.Driver.Connect).
+	Endpoint backend.Endpoint
 	// StartQueue names the hopper queue the Start of the run runID goes
 	// in. A coordinator works the queue of each run it creates until the
 	// run has started, so a queue of a run's own is worked only by the
@@ -136,6 +153,7 @@ type Coordinator struct {
 	// What only tests change.
 	timing       Timing
 	retry        startRetry
+	supervision  supervision
 	startTimeout time.Duration
 	pollInterval time.Duration
 	stopTimeout  time.Duration
@@ -154,6 +172,9 @@ type Coordinator struct {
 	// Serve stops.
 	retired  sync.WaitGroup
 	retiring context.Context
+	// connections are where members' workers reach the coordinator, as
+	// their drivers' Connect gave it, by member (memberKey).
+	connections map[string]connection
 }
 
 // Open opens a coordinator on the store at opts.Database. It works no
@@ -180,23 +201,38 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	}
 	return &Coordinator{
 		opts: opts, log: log, store: st, sealer: sealer, plans: newPlanCache(planCacheCount, planCacheBytes), inserter: inserter,
-		timing: DefaultTiming(), retry: defaultStartRetry, startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second,
-		queues: map[string]bool{},
+		timing: DefaultTiming(), retry: defaultStartRetry, supervision: defaultSupervision,
+		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second,
+		queues: map[string]bool{}, connections: map[string]connection{},
 	}, nil
 }
 
-// Close closes the coordinator's store. Serve must have returned.
-func (c *Coordinator) Close() error { return c.store.Close() }
+// Close closes what members' drivers set up for their workers to reach the
+// coordinator, and the coordinator's store. Serve must have returned.
+func (c *Coordinator) Close() error {
+	c.mu.Lock()
+	var errs []error
+	for _, key := range slices.Sorted(maps.Keys(c.connections)) {
+		if closer := c.connections[key].closer; closer != nil {
+			errs = append(errs, closer.Close())
+		}
+	}
+	clear(c.connections)
+	c.mu.Unlock()
+	return errors.Join(append(errs, c.store.Close())...)
+}
 
 // CreateRun stores a run of what Create gave, and returns its ID, the
 // next number in the store. One transaction stores the run with its plan,
 // its secret record, sealed under a data key of its own that Keys wraps,
-// and its hopper workflow, so that either all of it is stored or none of
-// it is: Start, which runs once a coordinator works its queue, and the
+// its jobs, and its hopper workflow, so that either all of it is stored or
+// none of it is: Start, which runs once a coordinator works its queue; each
+// job's supervisor, after Start and its needs' supervisors; and the
 // finisher, which ends the run. A default group that Groups doesn't have
-// is a problem of kind group_unknown. An error once the run is stored, as
-// one that keeps the coordinator from working its start queue, comes with
-// the run's ID.
+// is a problem of kind group_unknown. A plan with a matrix job, or a need
+// on any instance of one, which the coordinator doesn't run yet, is
+// refused. An error once the run is stored, as one that keeps the
+// coordinator from working its start queue, comes with the run's ID.
 func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, opts RunOptions) (string, error) {
 	switch {
 	case created == nil || created.Plan == nil:
@@ -205,6 +241,19 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		return "", errors.New("coordinator: a run without a default group")
 	case opts.RunDir == nil:
 		return "", errors.New("coordinator: a run without a directory")
+	}
+	if err := checkRunnable(created.Plan); err != nil {
+		return "", err
+	}
+	return c.createRun(ctx, created, opts)
+}
+
+// createRun is CreateRun once the plan and the options are checked, but
+// for the default group, which it checks.
+func (c *Coordinator) createRun(ctx context.Context, created *compile.Created, opts RunOptions) (string, error) {
+	jobs, err := jobOrder(created.Plan)
+	if err != nil {
+		return "", err
 	}
 	if c.opts.Groups != nil {
 		_, err := c.opts.Groups.Group(ctx, opts.DefaultGroup)
@@ -216,7 +265,7 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		}
 	}
 	var id, queue string
-	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		if id, err = tx.NewRunID(); err != nil {
 			return err
@@ -232,8 +281,25 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		queue = c.startQueue(id)
 		wf := hopper.NewWorkflow("meridian run "+id, nil)
 		start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
+		// Each job's supervisor runs after Start and its needs' supervisors,
+		// whatever became of them: Ready decides what their outcomes mean.
+		after := map[string]hopper.Step{}
+		for _, j := range jobs {
+			deps := []hopper.Step{start}
+			for _, n := range j.Needs {
+				deps = append(deps, after[n.Job])
+			}
+			after[j.Name] = wf.Add(jobArgs{Run: id, Key: j.Name}, &hopper.StepOpts{
+				After: deps, OnDependencyFailure: hopper.DependencyIgnore,
+				Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
+			})
+		}
+		deps := []hopper.Step{start}
+		for _, j := range jobs {
+			deps = append(deps, after[j.Name])
+		}
 		wf.Add(finishArgs{Run: id}, &hopper.StepOpts{
-			After: []hopper.Step{start}, OnDependencyFailure: hopper.DependencyIgnore,
+			After: deps, OnDependencyFailure: hopper.DependencyIgnore,
 			Insert: &hopper.InsertOpts{Queue: sharedQueue, Await: true},
 		})
 		res, err := c.inserter.InsertWorkflowTx(ctx, tx.SQL(), wf)
@@ -242,6 +308,13 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		}
 		if err := tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: opts.DefaultGroup, RunDir: opts.RunDir(id), WorkflowID: res.ID}); err != nil {
 			return err
+		}
+		for i, j := range jobs {
+			// The workflow's jobs are in the order of its steps: Start,
+			// then the supervisors.
+			if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: res.Jobs[i+1].Job.ID}); err != nil {
+				return err
+			}
 		}
 		return tx.InsertRecord(id, gen, sealed.Key, sealed.Record)
 	})
@@ -330,6 +403,7 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 	}
 	workers := hopper.NewWorkers()
 	hopper.AddWorker(workers, &startWorker{c: c})
+	hopper.AddWorker(workers, &jobWorker{c: c})
 	hopper.AddWorker(workers, &finishWorker{c: c})
 	served, err := hopper.NewClient(c.store.Driver(), &hopper.Config{
 		Queues: queues, Workers: workers, Logger: c.log, PollInterval: c.pollInterval,

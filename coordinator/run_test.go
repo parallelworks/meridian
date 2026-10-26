@@ -358,16 +358,34 @@ func TestStartOnce(t *testing.T) {
 	if err := c.endStart(t.Context(), id, failed, nil); !errors.Is(err, errSettled) {
 		t.Errorf("endStart of a run started = %v, want errSettled", err)
 	}
-	// The finisher ends it once; a second does nothing.
+	// The finisher ends it once, failing its job, which no supervisor
+	// ended; a second does nothing.
 	noop := func(context.Context, *store.Tx) error { return nil }
 	for range 2 {
 		if _, err := c.finishRun(t.Context(), id, noop); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if r := storedRun(t, c, id); r.State != store.RunEnded || r.Outcome != plan.OutcomeSuccess || len(r.Diagnostics) != 0 {
+	if r := storedRun(t, c, id); r.State != store.RunEnded || r.Outcome != plan.OutcomeFailure || len(r.Diagnostics) != 0 {
 		t.Errorf("the run is %s, %s, with %v", r.State, r.Outcome, r.Diagnostics)
 	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeFailure || !hasCode(j.Diagnostics, problems.CoordinatorJobFailed) {
+		t.Errorf("the job no supervisor ended is %s, with %v", j.Outcome, j.Diagnostics)
+	}
+}
+
+// storedJob returns the run id's job key, as the store holds it.
+func storedJob(t *testing.T, c *Coordinator, id, key string) *store.Job {
+	t.Helper()
+	var j *store.Job
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		j, err = tx.Job(id, key)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return j
 }
 
 // TestCreateRunRollsBack checks that a run that can't be stored whole
