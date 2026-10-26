@@ -358,6 +358,14 @@ jobs:
     needs: [dep]
     if: ${{ toJSON(inputs.group) != '' }}
     steps: [{run: "true"}]
+  list-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.rows) != '' }}
+    steps: [{run: "true"}]
+  row-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.rows[0]) != '' }}
+    steps: [{run: "true"}]
   env-flat:
     needs: [dep]
     if: ${{ inputs.fe == 'fast' }}
@@ -421,8 +429,10 @@ jobs:
 	for name, want := range map[string]plan.CancelPath{
 		"dep": skips, "free": skips, "plain": skips, "false": skips, "input": skips, "as-text": skips,
 		"group-plain": skips, "row-plain": skips, "matrix": skips, "matrix-when": skips, "input-broken": skips,
-		// The plan holds the group read whole, its plain input in it.
-		"group-whole": skips, "output": ends, "output-always": ends, "output-broken": ends, "result": ends,
+		// The plan holds the group read whole, its plain input in it, but not
+		// its input made from env; nor the list, whose rows have one.
+		"group-whole": ends, "list-whole": ends, "row-whole": ends,
+		"output": ends, "output-always": ends, "output-broken": ends, "result": ends,
 		"env": ends, "env-free": ends, "env-input": ends,
 		"env-chain": ends, "env-group": ends, "env-flat": ends, "env-row": ends, "on-success": ends,
 		"on-failure": ends, "not-cancelled": ends, "matrix-reads": ends,
@@ -433,21 +443,34 @@ jobs:
 			t.Errorf("%s takes %d, %v; want %d", name, got, err, want)
 		}
 	}
-	if len(p.Jobs) != 34 {
-		t.Errorf("the plan has %d jobs, and the test names 34", len(p.Jobs))
+	if len(p.Jobs) != 36 {
+		t.Errorf("the plan has %d jobs, and the test names 36", len(p.Jobs))
 	}
 	// An input the run was given a value for reads nothing, whatever its
 	// default reads, nor does one whose default reads only such an input,
-	// nor a list's row given a value.
-	given, diags := compile.Compile("workflow.yaml", []byte(workflow), map[string]any{
-		"fromenv": "fast", "group": map[string]any{"e": "slow"}, "rows": []any{map[string]any{"x": "x", "y": "y"}},
-	}, compile.Options{})
-	if diags.HasErrors() {
-		t.Fatal(diags)
-	}
-	for _, name := range []string{"env-input", "env-chain", "env-group", "env-row"} {
-		if got, err := given.CancelPath(name, runValues(t, given, nil), nil); err != nil || got != skips {
-			t.Errorf("%s, given its input, takes %d, %v; want %d", name, got, err, skips)
+	// nor a list's row given a value, nor a group, a list or a row read
+	// whole once each of its inputs made from env is given one. While one
+	// isn't, as a row's here, the list and the row read env.
+	for _, tc := range []struct {
+		rows any
+		want plan.CancelPath
+	}{
+		{[]any{map[string]any{"x": "x", "y": "y"}}, skips},
+		{[]any{map[string]any{"y": "y"}}, ends},
+	} {
+		given, diags := compile.Compile("workflow.yaml", []byte(workflow), map[string]any{
+			"fromenv": "fast", "group": map[string]any{"e": "slow"}, "rows": tc.rows,
+		}, compile.Options{})
+		if diags.HasErrors() {
+			t.Fatal(diags)
+		}
+		for name, want := range map[string]plan.CancelPath{
+			"env-input": skips, "env-chain": skips, "env-group": skips, "group-whole": skips,
+			"env-row": tc.want, "list-whole": tc.want, "row-whole": tc.want,
+		} {
+			if got, err := given.CancelPath(name, runValues(t, given, nil), nil); err != nil || got != want {
+				t.Errorf("%s, given rows %v, takes %d, %v; want %d", name, tc.rows, got, err, want)
+			}
 		}
 	}
 	// An if: that reads matrix is evaluated for an instance.
