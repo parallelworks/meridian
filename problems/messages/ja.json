@@ -244,6 +244,7 @@
   "directory_replaced": "ディレクトリ {path} はワーカーが作成している間に置き換えられたため、ワーカーはそれを使いません。",
   "path_links_too_many": "パス {path} は {max} 個を超えるシンボリックリンクを経由します。",
   "mount_not_found": "Meridian は /proc/self/mountinfo に {path} を含むマウントを見つけられません。",
+  "database_too_new": "より新しいリリースの Meridian が、データベース {path} をスキーマのバージョン {version} にしました。このリリースが読み取れるのはバージョン {latest} 以前です。そのリリースを使うか、MERIDIAN_STATE_DIR を別のディレクトリに設定してください。",
   "member_settings_not_json": "グループ「{group}」のメンバーの settings に、.nan や .inf など JSON で表せない値があります。",
 
   "worker_environment_missing": "meridian worker が起動されたときの環境に {variable} が設定されていません。これは meridian worker を起動するバックエンドが設定するものです。",

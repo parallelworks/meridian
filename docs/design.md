@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events. The coordinator itself isn't built yet ([The coordinator](#the-coordinator)), but for how it encrypts a run's secret record ([The secret record](#the-secret-record)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); and its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases and fences, and the endpoints workers reach it through. The rest of the coordinator isn't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |

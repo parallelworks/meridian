@@ -244,6 +244,7 @@
   "directory_replaced": "El directorio {path} fue reemplazado mientras el worker lo creaba, así que el worker no lo usa.",
   "path_links_too_many": "La ruta {path} pasa por más de {max} enlaces simbólicos.",
   "mount_not_found": "Meridian no encuentra en /proc/self/mountinfo el montaje que contiene {path}.",
+  "database_too_new": "Una versión más reciente de Meridian llevó la base de datos {path} a la versión {version} de su esquema, y esta versión lee la versión {latest} y anteriores. Usa esa versión, o asigna a MERIDIAN_STATE_DIR otro directorio.",
   "member_settings_not_json": "Un miembro del grupo “{group}” tiene una configuración que JSON no puede contener, como .nan o .inf.",
 
   "worker_environment_missing": "El entorno con el que se inició meridian worker no define {variable}, que define el backend que lo inicia.",

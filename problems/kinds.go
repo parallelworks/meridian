@@ -370,6 +370,13 @@ var (
 	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
 
+// The coordinator's store, a database in the state directory: path is its
+// file, and version and latest the version of Meridian's schema it is at,
+// and the latest this release knows.
+var (
+	DatabaseTooNew = defineCommand("database_too_new", "Database newer than this release reads", "path", "version", "latest")
+)
+
 // The files the meridian command reads: its config, its key, a variable's
 // value, a file of inputs and a workflow.
 var (
