@@ -734,12 +734,13 @@ ACTIVATE's launch form and its backend do together:
   resolver can't resolve is an error, as it fails ACTIVATE's run, even for
   an input that is ignored, as ACTIVATE resolves before it decides what is
   ignored. ACTIVATE gives a `compute-clusters` or `bucket` input given null,
-  or a value that isn't text, its default, where Meridian keeps the null, as
-  for every input, and asks the resolver for the value; and it asks for a
-  default that is an expression unevaluated, which names no resource and
-  fails the run, where Meridian asks for what the default gives. None of the
-  221 known workflows has a `compute-clusters` or `bucket` input whose
-  default is an expression. Start asks the resolver again ([Starting a
+  or a value that isn't text, its default. Meridian keeps a null, as for
+  every input, and doesn't ask the resolver for it, and asks the resolver
+  for any other value as it was given, as `5`. ACTIVATE asks for a default
+  that is an expression unevaluated, which names no resource and fails the
+  run, where Meridian asks for what the default gives. None of the 221 known
+  workflows has a `compute-clusters` or `bucket` input whose default is an
+  expression. Start asks the resolver again ([Starting a
   run](#starting-a-run)). What the resolver gives can't be split by the
   parts of the value that made it, so a value of which a part isn't the
   plan's, as a part typed over a part of a default that reads a variable, is
