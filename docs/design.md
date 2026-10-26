@@ -1509,18 +1509,25 @@ case; a `$yaml` that starts with a slash is from the repository's root, as
 ACTIVATE fetches the file, which drops every slash before it on GitHub and
 one on GitLab; and a GitHub repository's `$host`, or a `$yaml` or `$host`
 that isn't text, is read as if it weren't there, which the schema refuses,
-as ACTIVATE's does. What is wrong with a `$yaml` or a `$host` is reported at
-it (`source_with_invalid`), and with the rest of a reference at the `uses:`
-(`source_ref_invalid`). Besides what ACTIVATE refuses, the local Sources
-refuses a name, a revision or a server that starts with a hyphen, which git
-could take for an option; a revision git refuses as a branch's or a tag's
-name, one with a name in it that is empty, starts with a dot or ends in
-`.lock`, or that ends with a dot, which ACTIVATE takes and then finds on no
-server; a group's name that ends in `.git` or `.lock`, or starts with a dot,
-which would be where another repository's copy, its lock or a copy being
-made is in the cache, where a repository's name, as `.github`, can start
-with one; and a `$yaml` with an empty name, `.` or `..` in it, or a control
-character, `./` among them, whose reading by ACTIVATE can't be confirmed.
+as ACTIVATE's does; and a `$yaml` with `..` among its names, which would
+leave the repository, names no workflow, as ACTIVATE refuses it on GitHub
+and finds no such file on GitLab. Create checks a reference by these rules
+(`SourceRef.Check`) before it asks Sources, and with no Sources, so that
+every Sources, a platform's as the local one, reads only a reference
+format 1 takes, and none decides what format 1 means: what is wrong with a
+`$yaml` or a `$host` is reported at it (`source_with_invalid`), and with
+the rest of a reference at the `uses:` (`source_ref_invalid`). A Sources
+can refuse more, with the same kinds. Besides what format 1 refuses, the
+local Sources refuses, for git and its cache, a name, a revision or a
+server that starts with a hyphen, which git could take for an option; a
+revision git refuses as a branch's or a tag's name, one with a name in it
+that is empty, starts with a dot or ends in `.lock`, or that ends with a
+dot, which ACTIVATE takes and then finds on no server; a group's name that
+ends in `.git` or `.lock`, or starts with a dot, which would be where
+another repository's copy, its lock or a copy being made is in the cache,
+where a repository's name, as `.github`, can start with one; and a `$yaml`
+with an empty name or `.` in it, or a control character, `./` among them,
+whose reading by ACTIVATE can't be confirmed.
 Two steps whose references read the same are pinned once, to one commit,
 however they write it. A pinned workflow keeps its reference beside its
 commit and digest (`Source.Ref`), so Sources reads it again by it, and gives

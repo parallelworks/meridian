@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -153,42 +155,32 @@ var hosts = map[string]string{"github": "github.com", "gitlab": "gitlab.com"}
 // platformRefs start the references to workflows a platform stores.
 var platformRefs = []string{"marketplace/", "workflow/"}
 
-// The names in a reference, as ACTIVATE reads them: a GitHub owner's is
-// letters, digits and hyphens; a GitHub repository's, and a GitLab group's
-// or project's, can hold dots and underscores too; a revision can hold
-// slashes too; and a server is a DNS name of one label or more, with no
-// port, whose labels can hold underscores.
-var (
-	ownerPattern  = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
-	namePattern   = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-	revPattern    = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
-	hostPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
-	commitPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-)
+// commitPattern is a full commit's name, as git writes it.
+var commitPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
-// validHost reports whether host names a server, as ACTIVATE reads a
-// $host: a DNS name, with no port, that doesn't start with a hyphen, which
-// Meridian refuses too, as git could take it for an option.
+// validHost reports whether host names a server format 1 takes in $host
+// (plan.ValidHost) that doesn't start with a hyphen, which git could take
+// for an option.
 func validHost(host string) bool {
-	return hostPattern.MatchString(host) && !strings.HasPrefix(host, "-")
+	return plan.ValidHost(host) && !strings.HasPrefix(host, "-")
 }
 
-// validName reports whether name is one of a repository's names, as
-// pattern says ACTIVATE reads it, and not . or .., which ACTIVATE refuses
-// too. Meridian refuses one that starts with a hyphen as well, which git
-// could take for an option.
-func validName(name string, pattern *regexp.Regexp) bool {
-	return pattern.MatchString(name) && name != "." && name != ".." && !strings.HasPrefix(name, "-")
+// validName reports whether name, one of a repository's names that format 1
+// takes (plan.SourceRef.Check), doesn't start with a hyphen, which git could
+// take for an option.
+func validName(name string) bool {
+	return !strings.HasPrefix(name, "-")
 }
 
-// validRevision reports whether rev is a revision, as ACTIVATE reads one,
-// with no .. in it, that git takes as a branch or a tag's name: none of
-// its names, between its slashes, is empty, starts with a dot or ends in
-// .lock, and it doesn't end with a dot, which git's check-ref-format
-// refuses, nor start with a hyphen, which git could take for an option.
-// ACTIVATE takes those, which then name no branch or tag on the server.
+// validRevision reports whether rev, a revision format 1 takes
+// (plan.SourceRef.Check), is one git takes as a branch or a tag's name:
+// none of its names, between its slashes, is empty, starts with a dot or
+// ends in .lock, and it doesn't end with a dot, which git's
+// check-ref-format refuses, nor start with a hyphen, which git could take
+// for an option. ACTIVATE takes those, which then name no branch or tag on
+// the server.
 func validRevision(rev string) bool {
-	if !revPattern.MatchString(rev) || strings.Contains(rev, "..") || strings.HasPrefix(rev, "-") || strings.HasSuffix(rev, ".") {
+	if strings.HasPrefix(rev, "-") || strings.HasSuffix(rev, ".") {
 		return false
 	}
 	for name := range strings.SplitSeq(rev, "/") {
@@ -205,20 +197,20 @@ func notFound(k *problems.Kind, params problems.Params) error {
 	return k.Problem(params).WithCause(compile.ErrNotFound)
 }
 
-// parseRef reads a reference as ACTIVATE does, once it is normal
-// (plan.SourceRef.Normal): on GitHub, an owner and a repository, and
-// nothing after them, and on GitLab, a project's path, in a group or more;
-// a revision after the first @, if there is one, which isn't empty; and
-// the file $yaml names, from the repository's root, and the GitLab server
-// $host names. One that isn't a Git repository's, such as one to a
-// workflow a platform stores, or that isn't well formed, names no workflow
-// here: what is wrong with $yaml or $host is source_with_invalid, and with
-// the rest source_ref_invalid. Besides what ACTIVATE refuses, parseRef
-// refuses a name or a revision that starts with a hyphen, a revision git
-// refuses as a branch's or a tag's name (validRevision), a group's name
-// that ends in .git or .lock or starts with a dot, and a file's path that
-// leaves the repository's files, has an empty name in it, as ./ does, or a
-// control character.
+// parseRef reads a reference as format 1 does (plan.SourceRef.Check), once
+// it is normal (plan.SourceRef.Normal): on GitHub, an owner and a
+// repository; on GitLab, a project's path, in a group or more; a revision
+// after the first @, if there is one; and the file $yaml names, from the
+// repository's root, and the GitLab server $host names. One that isn't a
+// Git repository's, such as one to a workflow a platform stores, or that
+// format 1 refuses, names no workflow here. Besides what format 1 refuses,
+// what is the cache's and git's own: a name or a revision that starts with
+// a hyphen, which git could take for an option, a revision git refuses as a
+// branch's or a tag's name (validRevision), a group's name that ends in
+// .git or .lock or starts with a dot, which the cache keeps beside a
+// repository's copy, and a file's path that has an empty name in it, as ./
+// does, or a control character: source_with_invalid for $yaml, and
+// source_ref_invalid for the rest.
 func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	uses := ref.Uses
 	if slices.ContainsFunc(platformRefs, func(p string) bool { return strings.HasPrefix(uses, p) }) {
@@ -227,30 +219,25 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	invalid := func() (sourceRef, error) {
 		return sourceRef{}, notFound(problems.SourceRefInvalid, problems.Params{"ref": uses})
 	}
-	// What is wrong with the step's $yaml or $host is that key's, not the
-	// reference's.
-	withInvalid := func(key, what string) (sourceRef, error) {
-		return sourceRef{}, notFound(problems.SourceWithInvalid, problems.Params{"key": key, "what": what})
-	}
 	norm := ref.Normal()
-	kind, rest, ok := strings.Cut(norm.Uses, "/")
+	kind, rest, _ := strings.Cut(norm.Uses, "/")
 	host, isGit := hosts[kind]
-	if !ok || !isGit {
+	if !isGit {
 		return invalid()
+	}
+	if err := ref.Check(); err != nil {
+		if p, ok := errors.AsType[*problem.Problem](err); ok {
+			return sourceRef{}, p.WithCause(compile.ErrNotFound)
+		}
+		return sourceRef{}, err
 	}
 	name, rev, hasRev := strings.Cut(rest, "@")
 	if hasRev && !validRevision(rev) {
 		return invalid()
 	}
 	repo := strings.Split(name, "/")
-	switch {
-	case kind == "github" && (len(repo) != 2 || !validName(repo[0], ownerPattern) || !validName(repo[1], namePattern)):
-		return invalid()
-	case kind == "gitlab" && len(repo) < 2:
-		return invalid()
-	}
 	for i, p := range repo {
-		if !validName(p, namePattern) {
+		if !validName(p) {
 			return invalid()
 		}
 		// Each name but the last is a directory of the cache (open), as a
@@ -265,14 +252,14 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 		}
 	}
 	for p := range strings.SplitSeq(norm.Path, "/") {
-		if p == "" || p == "." || p == ".." || strings.ContainsFunc(p, func(c rune) bool { return c < ' ' || c == 0x7f }) {
-			return withInvalid("$yaml", "file")
+		if p == "" || p == "." || strings.ContainsFunc(p, func(c rune) bool { return c < ' ' || c == 0x7f }) {
+			return sourceRef{}, notFound(problems.SourceWithInvalid, problems.Params{"key": "$yaml", "what": "file"})
 		}
 	}
 	if kind == "gitlab" {
 		// A GitLab project can be on a server of a platform's own.
 		if host = norm.Host; !validHost(host) {
-			return withInvalid("$host", "server")
+			return sourceRef{}, notFound(problems.SourceWithInvalid, problems.Params{"key": "$host", "what": "server"})
 		}
 	}
 	return sourceRef{kind: kind, host: host, repo: name, path: norm.Path, rev: rev}, nil

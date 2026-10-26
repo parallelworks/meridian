@@ -394,10 +394,11 @@ func TestCreatePinsWorkflows(t *testing.T) {
 			&testSources{err: problems.SourceRefInvalid.Problem(problems.Params{"ref": "github/acme/none"})}, "source_ref_invalid", "/jobs/a/steps/0/uses",
 		},
 		"no resolver": {"jobs:\n  a:\n    steps:\n      - uses: workflow/mine\n", nil, "resolver_missing", "/jobs/a/steps/0/uses"},
-		// What is wrong with the step's $host or $yaml is theirs.
-		"a $host that isn't a server": {
-			"jobs:\n  a:\n    steps:\n      - uses: gitlab/g/p\n        with: {$host: 'git.example.com:8443'}\n",
-			&testSources{err: problems.SourceWithInvalid.Problem(problems.Params{"key": "$host", "what": "server"})}, "source_with_invalid", "/jobs/a/steps/0/with/$host",
+		// What is wrong with the step's $host or $yaml is theirs, as a
+		// resolver refuses it too.
+		"a $yaml the resolver refuses": {
+			"jobs:\n  a:\n    steps:\n      - uses: gitlab/g/p\n        with: {$yaml: 'a//w.yaml'}\n",
+			&testSources{err: problems.SourceWithInvalid.Problem(problems.Params{"key": "$yaml", "what": "file"})}, "source_with_invalid", "/jobs/a/steps/0/with/$yaml",
 		},
 		// ACTIVATE evaluates a uses: before it reads it; the workflow is
 		// pinned as the run is created, so the reference is written out.
@@ -427,6 +428,43 @@ func TestCreatePinsWorkflows(t *testing.T) {
 		}
 		if tc.code == "yaml_syntax" && !strings.HasPrefix(errs[0].File(), "github/acme/bad") {
 			t.Errorf("%s: the error is in %q, not the workflow's file", name, errs[0].File())
+		}
+	}
+	// What format 1 refuses of a reference is refused as the run is created,
+	// before any Sources is asked, and with none, so a platform's reads only
+	// a reference format 1 takes.
+	for name, tc := range map[string]struct {
+		uses, with, code, pointer string
+	}{
+		"three names on GitHub":     {"github/acme/flows/more", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"an owner with a dot":       {"github/ac.me/flows", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"one name on GitLab":        {"gitlab/flows", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"a name that is ..":         {"gitlab/g/../p", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"an empty revision":         {"github/acme/flows@", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"a revision with ..":        {"github/acme/flows@a..b", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"a revision with a space":   {"github/acme/flows@a b", "", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+		"a $yaml out of the repo":   {"github/acme/flows", "{$yaml: ../w.yaml}", "source_with_invalid", "/jobs/a/steps/0/with/$yaml"},
+		"a $host with a port":       {"gitlab/g/p", "{$host: 'git.example.com:8443'}", "source_with_invalid", "/jobs/a/steps/0/with/$host"},
+		"a $host that is a URL":     {"gitlab/g/p", "{$host: 'https://git.example.com'}", "source_with_invalid", "/jobs/a/steps/0/with/$host"},
+		"a GitHub $host is ignored": {"github/acme/fl ows", "{$host: 'x:1'}", "source_ref_invalid", "/jobs/a/steps/0/uses"},
+	} {
+		src := "jobs:\n  a:\n    steps:\n      - uses: " + tc.uses + "\n"
+		if tc.with != "" {
+			src += "        with: " + tc.with + "\n"
+		}
+		for _, sources := range []*testSources{{texts: map[string]string{}}, nil} {
+			opts := compile.Options{}
+			if sources != nil {
+				opts.Sources = sources
+			}
+			_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, opts)
+			errs := diags.Errors()
+			if err != nil || len(errs) != 1 || string(errs[0].Code) != tc.code || errs[0].Path() != tc.pointer {
+				t.Errorf("%s, with Sources %t: %v, %v, want %s at %q", name, sources != nil, diags, err, tc.code, tc.pointer)
+			}
+			if sources != nil && len(sources.asked) != 0 {
+				t.Errorf("%s: Sources was asked for %+v", name, sources.asked)
+			}
 		}
 	}
 	uses := []byte("jobs:\n  a:\n    steps:\n      - uses: github/acme/x\n")
