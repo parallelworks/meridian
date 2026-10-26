@@ -8,7 +8,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
@@ -206,38 +205,6 @@ func looseKey(v any) string {
 		}
 	}
 	return fmt.Sprint(v)
-}
-
-// parseFor returns v, a workflow's JSON values, with each string that holds
-// an expression parsed as a template for the list rows at index.
-func parseFor(v any, index []int) (any, error) {
-	switch v := v.(type) {
-	case string:
-		t, err := expr.ParseTemplateFor(v, index)
-		if err != nil || t.IsText() {
-			return v, err
-		}
-		return t, nil
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			var err error
-			if out[i], err = parseFor(item, index); err != nil {
-				return nil, err
-			}
-		}
-		return out, nil
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, item := range v {
-			var err error
-			if out[k], err = parseFor(item, index); err != nil {
-				return nil, err
-			}
-		}
-		return out, nil
-	}
-	return v, nil
 }
 
 // parsed returns v, a workflow's JSON values, with each string that holds

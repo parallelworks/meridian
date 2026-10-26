@@ -4,7 +4,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -475,29 +474,8 @@ func TestHeldValuesKeepTheirExpressions(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	if got := fmt.Sprint(deferredText(t, inputs.Deferred)["l"]); got != "[map[x:${{ vars.SECRET }}]]" {
-		t.Errorf("l is %s as the run starts, want x's expression", got)
-	}
 	if len(inputs.Private) != 1 || inputs.Private["l.0.y"] != "typed" {
 		t.Errorf("private %v, want l.0.y alone", inputs.Private)
-	}
-}
-
-// A part already held for the run's start as one expression, a list's
-// default row's, isn't kept as a secret because it isn't what another, its
-// row's default, gives.
-func TestPartsHeldForTheStartAreNotSecrets(t *testing.T) {
-	src := inputs(
-		"pw: {type: password}",
-		"other: {type: string, default: o}",
-		"l: {type: list, template: {h: {type: string, default: '${{ inputs.other }}${{ inputs.pw }}'}}, default: [{h: '${{ inputs.pw }}'}]}",
-	)
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "l": []any{map[string]any{"h": sentinel}}}, compile.Options{})
-	if len(diags) != 0 || len(inputs.Secrets) != 1 {
-		t.Errorf("secrets %v, %v; want pw's alone", inputs.Secrets, diags)
-	}
-	if got := fmt.Sprint(deferredText(t, inputs.Deferred)["l"]); got != "[map[h:${{ inputs.pw }}]]" {
-		t.Errorf("l is %s as the run starts", got)
 	}
 }
 
@@ -524,7 +502,7 @@ func TestHeldValuesAreSecretOrPrivate(t *testing.T) {
 	if p == nil {
 		t.Fatal(diags)
 	}
-	if want := []string{"inputs.dsn", "inputs.key", "inputs.pw", "inputs.pw2"}; !slices.Equal(p.Run.Secrets, want) {
+	if want := []string{"inputs.dsn", "inputs.key", "inputs.pw", "inputs.pw2", "vars.KEY"}; !slices.Equal(p.Run.Secrets, want) {
 		t.Errorf("secrets %v, want %v", p.Run.Secrets, want)
 	}
 	if want := []string{"inputs.dsn", "inputs.key"}; !slices.Equal(p.Run.Derived, want) {
@@ -553,26 +531,6 @@ func TestRelativeReferencesReadWhatTheyReach(t *testing.T) {
 	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"a": "typed", "b": "typed"}, opts)
 	if len(diags) != 0 || inputs.Values["a"] != "typed" || inputs.Private["b"] != "typed" {
 		t.Errorf("values %v, private %v, %v; want a typed and b private", inputs.Values, inputs.Private, diags)
-	}
-}
-
-// A value submitted for an input the workflow doesn't define, taken for a
-// password, is read as one: a default that reads it is evaluated as the
-// run starts, and so is a value a form sent that is what the default
-// gives.
-func TestUnknownPasswordsAreRead(t *testing.T) {
-	src := inputs(
-		"hosts: {type: step, title: Host, multi: true, options: {key: {type: password}}}",
-		"copy: {type: string, default: '${{ inputs.key }}'}",
-	)
-	for _, submitted := range []map[string]any{{"key": sentinel}, {"key": sentinel, "copy": sentinel}} {
-		inputs, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
-		if diags.HasErrors() || holdsSentinel(t, inputs.Values) || inputs.Secrets["key"] != sentinel {
-			t.Errorf("%v: values %v, secrets %v, %v", submitted, inputs.Values, inputs.Secrets, diags)
-		}
-		if _, ok := inputs.Deferred["copy"]; !ok {
-			t.Errorf("%v: deferred %v, want copy", submitted, inputs.Deferred)
-		}
 	}
 }
 
@@ -682,25 +640,6 @@ func TestUnknownSecretNamesAreSecrets(t *testing.T) {
 	}
 }
 
-// A submitted value is compared with its default once the values are
-// filled in, and what reads another input's part held for the run's start
-// is held too: so a condition can't read a value that is what its default,
-// which reads a password and a part of such an input, gives.
-func TestComparedValueReadsHeldInput(t *testing.T) {
-	src := inputs(
-		"pw: {type: password}",
-		"l: {type: list, template: {a: {type: string, default: '${{ vars.SECRET }}'}, b: {type: string}}}",
-		"x: {type: string, default: '${{ inputs.l[0].b }}-${{ inputs.pw }}'}",
-		"y: {type: string, optional: true, hidden: '${{ inputs.x == ''z'' }}'}",
-	)
-	submitted := map[string]any{"pw": sentinel, "l": []any{map[string]any{"a": "${{ vars.SECRET }}", "b": "bee"}}, "x": "bee-" + sentinel}
-	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}}}}
-	_, diags := compile.ResolveInputs(load(t, src), submitted, opts)
-	if len(diags) != 1 || diags[0].Code != problems.InputConditionNotKnown.Code() || diags[0].Params["input"] != "y" {
-		t.Errorf("diagnostics %v, want %s for y", diags, problems.InputConditionNotKnown.Code())
-	}
-}
-
 // A multi-dropdown's item that is the text of an expression option is
 // evaluated as the run starts, as that option, and one that is an option
 // written in the workflow is that option: neither is kept as a secret.
@@ -709,9 +648,6 @@ func TestTextItemsAreNotCompared(t *testing.T) {
 	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "m": []any{"${{ inputs.pw }}", "plain"}}, compile.Options{})
 	if len(diags) != 0 || len(inputs.Secrets) != 1 {
 		t.Errorf("secrets %v, %v; want pw's alone", inputs.Secrets, diags)
-	}
-	if got := deferredText(t, inputs.Deferred)["m"]; fmt.Sprint(got) != "[${{ inputs.pw }} plain]" {
-		t.Errorf("m is %v as the run starts", got)
 	}
 }
 
@@ -730,17 +666,6 @@ func TestFormValuesAreReadAsPasswords(t *testing.T) {
 	}
 	if _, ok := inputs.Deferred["n"]; !ok {
 		t.Errorf("deferred %v, want n", inputs.Deferred)
-	}
-}
-
-// A choice of an option that is an expression which reads no variable and
-// no password is data, as the option's value, though another option reads
-// a password.
-func TestChoicesOfPlainOptionsAreData(t *testing.T) {
-	src := inputs("pw: {type: password}", "a: {type: string, default: x}", "d: {type: dropdown, options: ['${{ inputs.pw }}', '${{ inputs.a }}']}")
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "d": "x"}, compile.Options{})
-	if len(diags) != 0 || inputs.Values["d"] != "x" || len(inputs.Deferred) != 0 {
-		t.Errorf("values %v, deferred %v, %v; want d x", inputs.Values, inputs.Deferred, diags)
 	}
 }
 
@@ -788,30 +713,6 @@ func TestPasswordsInDefaultsThatReadEachOther(t *testing.T) {
 	}
 	if holdsSentinel(t, inputs.Values) || holdsSentinel(t, inputs.Deferred) {
 		t.Errorf("values %v or deferred %v hold the password", inputs.Values, inputs.Deferred)
-	}
-}
-
-// Values submitted for defaults that read each other, and neither a
-// variable nor a password, are data, as on their own. One whose default
-// reads them, and a password, is compared with what its default gives once
-// the values are filled in, and means its default.
-func TestSubmittedDefaultsThatReadEachOther(t *testing.T) {
-	src := inputs(
-		"pw: {type: password}",
-		"a: {type: string, default: '${{ inputs.b }}'}",
-		"b: {type: string, default: '${{ inputs.a }}'}",
-		"c: {type: string, default: '${{ inputs.pw }}-${{ inputs.a }}'}",
-	)
-	submitted := map[string]any{"pw": sentinel, "a": "x", "b": "x", "c": sentinel + "-x"}
-	inputs, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
-	if len(diags) != 0 {
-		t.Fatal(diags)
-	}
-	if want := map[string]any{"a": "x", "b": "x"}; !reflect.DeepEqual(inputs.Values, want) {
-		t.Errorf("values %v, want %v", inputs.Values, want)
-	}
-	if _, ok := inputs.Deferred["c"]; !ok || len(inputs.Deferred) != 1 {
-		t.Errorf("deferred %v, want c", inputs.Deferred)
 	}
 }
 

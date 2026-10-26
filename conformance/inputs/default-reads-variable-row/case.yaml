@@ -12,11 +12,4 @@ contexts:
 expect:
   inputs:
     names: a
-  deferred:
-    hosts:
-      - name: a
-        zone: ${{ org.REGION }}-${{ inputs.hosts[index].name }}
-    last: ${{ toJSON(inputs.hosts[-1:]) }}
-    signed: ${{ inputs.hosts['+0'].zone }} ${{ inputs.hosts[-0].zone }}
-    slice: ${{ toJSON(inputs.hosts[0:1]) }}
-    zero: ${{ inputs.hosts[00].zone }}
+  deferred: [hosts, last, signed, slice, zero]

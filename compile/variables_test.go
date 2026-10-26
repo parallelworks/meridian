@@ -10,7 +10,6 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -279,10 +278,6 @@ jobs:
 	if !slices.Equal(p.Run.Secrets, []string{"inputs.key"}) || !slices.Equal(p.Run.Variables, []string{"org.AFTER", "vars.KEY", "vars.N"}) {
 		t.Errorf("secrets %v and variables %v", p.Run.Secrets, p.Run.Variables)
 	}
-	got, err := p.Run.DeferredInputs["n"].Eval(expr.Scope{Contexts: map[string]any{"vars": map[string]any{"N": "6"}}})
-	if err != nil || got != "6" {
-		t.Errorf("n is %v, %v, as the run starts", got, err)
-	}
 }
 
 // A plan holds no variable's value that a default reads from a row whose
@@ -307,9 +302,6 @@ func TestPlanHoldsNoVariableFromRows(t *testing.T) {
 		}
 		if bytes.Contains(encoded, []byte("s3cr3t-region")) {
 			t.Errorf("%s: the plan holds the variable's value: %s", read, encoded)
-		}
-		if _, ok := p.Run.DeferredInputs["summary"]; !ok {
-			t.Errorf("%s: summary isn't evaluated as the run starts", read)
 		}
 	}
 }

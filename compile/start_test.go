@@ -296,7 +296,7 @@ c: {type: string, default: '${{ vars["my.token"] }}'}`,
 			submitted: map[string]any{"creds": []any{map[string]any{"user": "a", "pass": "HUNTER2"}}},
 			vars:      testVariables{"vars.CREDS": {Value: `[{"user":"b","pass":"x"}]`, Secret: true}},
 			inputs:    `{"creds":[{"pass":"HUNTER2","user":"a"}]}`,
-			secrets:   []string{"inputs.creds", "inputs.creds.0.pass"},
+			secrets:   []string{"inputs.creds", "inputs.creds.0.pass", "vars.CREDS"},
 			derived:   []string{"inputs.creds"},
 		},
 		"typed over a variable": {
@@ -744,29 +744,47 @@ m: {type: string, default: '${{ toJSON(inputs.l) }}'}`, "env:\n  X: ${{ inputs.m
 }
 
 // What doesn't fit the plan is a caller's mistake, which Start returns as
-// an error, as it does the context's end.
+// an error that wraps ErrMismatch, which starting again doesn't get past;
+// a plan of another release's version wraps plan.ErrVersion; and the
+// context's end is its error.
 func TestStartCallerMistakes(t *testing.T) {
 	src := workflow(`pw: {type: password}`)
 	c := createRun(t, src, map[string]any{"pw": "x"}, nil)
 	for name, in := range map[string]compile.StartInput{
-		"a password the plan doesn't name": {Record: compile.Record{Passwords: map[string]any{"inputs.other": "x"}}},
-		"a private value it doesn't name":  {Record: compile.Record{Private: map[string]any{"inputs.pw": "x"}}},
-		"a name of no input":               {Record: compile.Record{Passwords: map[string]any{"pw": "x"}}},
-		// The plan names the password, which Start doesn't evaluate.
-		"no password the plan names": {},
+		"a password the plan doesn't name": {Record: plan.Record{Submitted: plan.DataOf(map[string]any{"pw": "x", "passwd": "y"})}},
+		"a decision it doesn't name":       {Record: plan.Record{Submitted: plan.DataOf(map[string]any{"pw": "x"}), Decisions: map[string]bool{"/on/execute/inputs/pw/hidden": true}}},
+		"a part it doesn't withhold":       {Record: plan.Record{Submitted: plan.DataOf(map[string]any{"pw": "x"}), Withheld: map[string]plan.Data{"/on/execute/inputs/pw/default": plan.DataOf("d")}}},
 	} {
-		if _, _, err := compile.Start(t.Context(), c.Plan, in); err == nil {
-			t.Errorf("%s: no error", name)
+		if _, _, err := compile.Start(t.Context(), c.Plan, in); !errors.Is(err, compile.ErrMismatch) {
+			t.Errorf("%s: %v, want ErrMismatch", name, err)
 		}
 	}
-	if _, _, err := compile.Start(t.Context(), nil, compile.StartInput{}); err == nil {
-		t.Error("no plan: no error")
+	if _, _, err := compile.Start(t.Context(), nil, compile.StartInput{}); !errors.Is(err, compile.ErrMismatch) {
+		t.Errorf("no plan: %v, want ErrMismatch", err)
+	}
+	other := *c.Plan
+	other.Version = plan.Version + 1
+	if _, _, err := compile.Start(t.Context(), &other, compile.StartInput{Record: c.Record}); !errors.Is(err, plan.ErrVersion) || errors.Is(err, compile.ErrMismatch) {
+		t.Errorf("a plan of another version: %v, want ErrVersion", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, _, err := compile.Start(ctx, c.Plan, compile.StartInput{}); !errors.Is(err, context.Canceled) {
 		t.Errorf("a context that is done: %v", err)
 	}
+	// A resolver that couldn't answer is its error, which starting again
+	// can get past.
+	vars := failingVariables{errors.New("down")}
+	v := createRun(t, workflow(`a: {type: string, default: '${{ vars.A }}'}`), nil, testVariables{"vars.A": {Value: "a"}})
+	if _, _, err := compile.Start(t.Context(), v.Plan, compile.StartInput{Variables: vars, Record: v.Record}); err == nil || errors.Is(err, compile.ErrMismatch) {
+		t.Errorf("a resolver that couldn't answer: %v", err)
+	}
+}
+
+// submittedOf returns what the secret record r says was submitted.
+func submittedOf(r plan.Record) map[string]any {
+	m, _ := r.Submitted.Get().(map[string]any)
+	return m
 }
 
 // No run state that Start gives, and no diagnostic, holds a password's
@@ -1025,12 +1043,11 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 	ignore := `%s: {type: string, default: x, ignore: '${{ %s }}'}`
 	env := "env:\n  E: ${{ inputs.%s }}-${{ %s }}\n"
 	for name, tc := range map[string]struct {
-		defs   []string
-		env    string
-		vars   testVariables
-		given  map[string]any
-		read   bool
-		record func(compile.Record) map[string]any
+		defs  []string
+		env   string
+		vars  testVariables
+		given map[string]any
+		read  bool
 	}{
 		"ignored by a variable, read before": {
 			[]string{fmt.Sprintf(hidden, "a", "org.Z", "z"), fmt.Sprintf(ignore, "z", "org.IGN == ''yes''")},
@@ -1038,7 +1055,6 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			testVariables{"org.IGN": {Value: "yes"}, "org.Z": {Value: "z"}},
 			map[string]any{"z": "y"},
 			true,
-			func(r compile.Record) map[string]any { return r.Private },
 		},
 		"ignored by a variable, read after": {
 			[]string{fmt.Sprintf(ignore, "a", "org.IGN == ''yes''"), fmt.Sprintf(hidden, "z", "org.Z", "a")},
@@ -1046,7 +1062,6 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			testVariables{"org.IGN": {Value: "yes"}, "org.Z": {Value: "z"}},
 			map[string]any{"a": "y"},
 			false,
-			func(r compile.Record) map[string]any { return r.Private },
 		},
 		"ignored by a password, read before": {
 			[]string{"pw: {type: password}", fmt.Sprintf(hidden, "a", "inputs.pw", "z"), fmt.Sprintf(ignore, "z", "inputs.pw == ''p''")},
@@ -1054,7 +1069,6 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			nil,
 			map[string]any{"pw": "p", "z": "y"},
 			true,
-			func(r compile.Record) map[string]any { return r.Passwords },
 		},
 		"ignored by a password, read after": {
 			[]string{"pw: {type: password}", fmt.Sprintf(ignore, "a", "inputs.pw == ''p''"), fmt.Sprintf(hidden, "z", "inputs.pw", "a")},
@@ -1062,7 +1076,6 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			nil,
 			map[string]any{"pw": "p", "a": "y"},
 			false,
-			func(r compile.Record) map[string]any { return r.Passwords },
 		},
 		"ignored by an input, read before": {
 			[]string{"f: {type: string}", fmt.Sprintf(hidden, "a", "org.Z", "z"), fmt.Sprintf(ignore, "z", "inputs.f == ''off''")},
@@ -1070,12 +1083,11 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			testVariables{"org.Z": {Value: "z"}},
 			map[string]any{"f": "off", "z": "y"},
 			true,
-			func(r compile.Record) map[string]any { return r.Ignored },
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := createRun(t, workflow(strings.Join(tc.defs, "\n"), tc.env), tc.given, tc.vars)
-			held := tc.record(c.Record)
+			held := submittedOf(c.Record)
 			if !slices.Contains(slices.Collect(maps.Values(held)), any("y")) {
 				t.Fatalf("the record holds %+v", c.Record)
 			}
@@ -1101,10 +1113,9 @@ func TestStartConditionsReadIgnoredInputs(t *testing.T) {
 			// Without the ignored input's value in the record, the run
 			// doesn't start as it was created.
 			without := c.Record
-			without.Ignored, without.Private, without.Passwords = nil, nil, nil
-			if !strings.Contains(name, "password") {
-				without.Passwords = c.Record.Passwords
-			}
+			submitted := maps.Clone(submittedOf(c.Record))
+			maps.DeleteFunc(submitted, func(_ string, v any) bool { return v == "y" })
+			without.Submitted = plan.DataOf(submitted)
 			res, diags, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: tc.vars, Record: without, Inputs: passThrough{}})
 			if res != nil && !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.RunShapeChanged.Code() }) {
 				t.Errorf("without the ignored input: %v, %v, %v", res != nil, diags, err)

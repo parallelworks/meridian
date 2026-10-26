@@ -10,7 +10,4 @@ contexts:
     TOKEN: unused
 secret-variables: [TOKEN]
 expect:
-  deferred:
-    dir: ${{ env.PW_PARENT_JOB_DIR }}
-    token: ${{ vars.TOKEN }}
-    region: ${{ vars.REGION }}
+  deferred: [dir, token, region]

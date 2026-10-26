@@ -148,26 +148,19 @@ func TestStartRefusesMalformedPlans(t *testing.T) {
 	src := workflow(`l: {type: list, template: {pass: {type: password}}}
 a: {type: string, default: '${{ vars.A }}', hidden: '${{ vars.A == "" }}'}`)
 	vars := testVariables{"vars.A": {Value: "a"}}
-	c := createRun(t, src, map[string]any{"l": []any{map[string]any{"pass": "p"}}}, vars)
 	for name, change := range map[string]func(p *plan.Plan, in *compile.StartInput){
-		"a held input at a huge index": func(p *plan.Plan, _ *compile.StartInput) {
-			p.Run.DeferredInputs["l.9223372036854775807"] = p.Run.DeferredInputs["a"]
-		},
-		"a password at a huge index": func(p *plan.Plan, in *compile.StartInput) {
-			p.Run.Secrets = append(p.Run.Secrets, "inputs.l.100000000000.pass")
-			in.Record.Passwords = map[string]any{"inputs.l.100000000000.pass": "p"}
-		},
 		"a decision of no condition": func(p *plan.Plan, in *compile.StartInput) {
 			p.Run.Decisions = append(p.Run.Decisions, "/jobs/main")
 			in.Record.Decisions = map[string]bool{"/jobs/main": true}
 		},
-		"a part outside the definitions": func(p *plan.Plan, _ *compile.StartInput) {
-			p.Run.DeferredParts[0].Location = "/jobs/main/steps/0/run"
+		"a part withheld outside the definitions": func(p *plan.Plan, in *compile.StartInput) {
+			p.Run.Withheld = append(p.Run.Withheld, "/jobs/main/steps/0/run")
+			in.Record.Withheld = map[string]plan.Data{"/jobs/main/steps/0/run": plan.DataOf("x")}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			again := createRun(t, src, map[string]any{"l": []any{map[string]any{"pass": "p"}}}, vars)
-			in := compile.StartInput{Variables: vars, Record: compile.Record{Passwords: c.Record.Passwords}, Inputs: passThrough{}}
+			in := compile.StartInput{Variables: vars, Record: again.Record, Inputs: passThrough{}}
 			change(again.Plan, &in)
 			if res, diags, err := compile.Start(t.Context(), again.Plan, in); err == nil {
 				t.Errorf("no error: %v, %v", res, diags)
@@ -185,12 +178,9 @@ func TestStartRestoresPrivateAroundPasswords(t *testing.T) {
   template: {user: {type: string}, pass: {type: password}}
   default: ${{ fromJSON(org.CREDS) }}`)
 	vars := testVariables{"org.CREDS": {Value: `[{"user":"b","pass":"x"}]`}}
-	c, res, diags := started(t, src, map[string]any{"creds": []any{map[string]any{"user": "a", "pass": "HUNTER2"}}}, vars)
+	_, res, diags := started(t, src, map[string]any{"creds": []any{map[string]any{"user": "a", "pass": "HUNTER2"}}}, vars)
 	if res == nil {
 		t.Fatal(diags)
-	}
-	if _, ok := c.Record.Private["inputs.creds"]; !ok {
-		t.Fatalf("private %v", c.Record.Private)
 	}
 	if got := canonical(t, res.Run.Inputs.Get()); got != `{"creds":[{"pass":"HUNTER2","user":"a"}]}` {
 		t.Errorf("inputs %s", got)
@@ -415,10 +405,10 @@ func (clusterInputs) ResolveInput(typ string, _ map[string]any, v any) (any, err
 
 // What is evaluated before the inputs are checked reads an input of a
 // platform's type as it was submitted, at Create as at Start, where the
-// Inputs resolver gave another value for it (plan.Run.Unresolved), and
-// what reads it after, the run's values among them, as the resolver gave
-// it: a condition decided again doesn't change the run's shape, and a
-// default reads the same whether it reads a secret too.
+// Inputs resolver gave another value for it, and so does the workflow's
+// env:; what reads it after, the run's values among them, reads it as the
+// resolver gave it: a condition decided again doesn't change the run's
+// shape, and a default reads the same whether it reads a secret too.
 func TestStartReadsResolvedInputsAsSubmitted(t *testing.T) {
 	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "v"}}
 	for name, tc := range map[string]struct {
@@ -476,11 +466,9 @@ func (detailInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error)
 // A part of a platform input's value typed over a part of its default that
 // reads a variable is private, or a secret if the variable is one; and as
 // what the Inputs resolver gives can't be split by the parts that made it,
-// as an id made from the part, the whole value is: neither the plan's
-// Inputs nor what it holds of the value as it was submitted
-// (plan.Run.Unresolved) has any of it, and Start reads it as the resolver
-// gave it.
-func TestUnresolvedHoldsNoPrivatePart(t *testing.T) {
+// as an id made from the part, the whole value is: the plan's Inputs have
+// none of it, and Start reads it as the resolver gives it.
+func TestResolvedHoldsNoPrivatePart(t *testing.T) {
 	vars := testVariables{"vars.S": {Value: "SECRET", Secret: true}, "vars.V": {Value: "plain"}}
 	for _, typ := range []string{
 		"kubernetes-clusters", "storage", "bucket", "organization-groups",

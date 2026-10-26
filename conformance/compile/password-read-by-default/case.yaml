@@ -8,5 +8,4 @@ inputs:
 expect:
   plan:
     /run/inputs: {user: admin}
-    /run/deferredInputs/copy/${{/0/src: " inputs.pw "
     /run/secrets: [inputs.pw]

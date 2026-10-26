@@ -30,18 +30,12 @@ func planDepth(loc []string) int {
 }
 
 // checkInputDepths reports the inputs whose values nest too deeply for a
-// plan to hold: the values it keeps, and what is evaluated as the run
-// starts. It holds each in its run, three levels deep.
+// plan to hold. It holds each in its run, three levels deep.
 func (c *compiler) checkInputDepths(r plan.Run) {
 	const depth = 3
 	values, _ := r.Inputs.Get().(map[string]any)
 	for name, v := range jsonvalue.Sorted(values) {
 		if depth+plan.DataOf(v).Depth() > plan.MaxDepth {
-			c.reportAt(problems.InputTooDeep, definitionsPath, problems.Params{"input": name, "max": plan.MaxDepth})
-		}
-	}
-	for name, v := range jsonvalue.Sorted(r.DeferredInputs) {
-		if depth+v.Depth() > plan.MaxDepth {
 			c.reportAt(problems.InputTooDeep, definitionsPath, problems.Params{"input": name, "max": plan.MaxDepth})
 		}
 	}

@@ -198,6 +198,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 				r.secrets[plan.JoinPath(at...)] = v
 				r.unknownSecrets = append(r.unknownSecrets, at)
 				r.mark(at)
+				r.markSecret(at)
 			}
 			if _, ok := inputs.defaulted[key]; ok {
 				// The workflow's default rows have it, which a form sends

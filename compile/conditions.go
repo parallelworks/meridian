@@ -9,7 +9,6 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
-	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -34,7 +33,6 @@ func (r *inputResolver) applyConditions() {
 		g := f.group
 		if g != nil && g.ignored && !g.ignoredLater {
 			f.ignored = true
-			r.noteIgnored(f)
 			r.refresh(f.path)
 			continue
 		}
@@ -58,13 +56,12 @@ func (r *inputResolver) applyConditions() {
 		}
 		// An ignore that is no decision Start makes again, as true written
 		// out is, the compiler applies.
-		f.ignoredLater = f.ignored && (!ignore || f.ignoreDecides)
+		f.ignoredLater = f.ignored && (!ignore || f.ignoreDecides) && !r.final
 		f.optional, _ = r.condition(f, "optional", inShaped)
 		switch {
 		case f.ignoredLater:
 			restore = r.dropKept(f, restore)
 		case f.ignored:
-			r.noteIgnored(f)
 			r.drop(f)
 			ignored = append(ignored, f)
 		}
@@ -112,7 +109,7 @@ func (r *inputResolver) applyConditions() {
 	r.heldParts()
 	for _, f := range r.fields {
 		// A repeated step with no value has no rows.
-		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || f.repeats() || !r.missing(f) || shapeDecided(f) {
+		if f.container || f.header || f.ignored || f.hasDefault || f.deferred || f.repeats() || !r.missing(f) || shapeDecided(f) && !r.final {
 			continue
 		}
 		switch {
@@ -294,25 +291,9 @@ func conditionValue(v any) bool {
 	return false
 }
 
-// noteIgnored notes that f is ignored, by its name, for the secret record
-// (Record.Ignored), as the run is created.
-func (r *inputResolver) noteIgnored(f *field) {
-	if r.start == nil {
-		r.ignored = append(r.ignored, plan.JoinPath(slices.Concat([]string{"inputs"}, f.path)...))
-	}
-}
-
 // drop removes the values of an ignored input, and of the inputs it holds.
-// As the run is created, it keeps each value it removes, as it was given,
-// for the conditions Start decides again (ignoredValues).
 func (r *inputResolver) drop(f *field) {
 	if f.ownsKey() {
-		if v, ok := jsonptr.Lookup(r.values, f.path); ok && r.start == nil {
-			if r.ignoredValues == nil {
-				r.ignoredValues = map[string]any{}
-			}
-			r.ignoredValues[plan.JoinPath(slices.Concat([]string{"inputs"}, f.path)...)] = jsonvalue.Clone(v)
-		}
 		r.remove(f.path)
 	}
 	if f.container && f.flatten {

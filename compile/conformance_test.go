@@ -64,7 +64,17 @@ func TestInputsConformance(t *testing.T) {
 				}
 			}
 			check("inputs", inputs.Values, c.Expect.Inputs)
-			check("deferred", deferredText(t, inputs.Deferred), c.Expect.Deferred)
+			// The inputs whose values wait until the run starts, all of them,
+			// or in a case with errors, those it lists.
+			deferred := slices.Sorted(maps.Keys(inputs.Deferred))
+			for _, name := range c.Expect.Deferred {
+				if !slices.Contains(deferred, name) {
+					t.Errorf("deferred %q, want %s among them", deferred, name)
+				}
+			}
+			if want := slices.Sorted(slices.Values(c.Expect.Deferred)); !diags.HasErrors() && !slices.Equal(deferred, want) {
+				t.Errorf("deferred %q, want %q", deferred, want)
+			}
 			check("secrets", inputs.Secrets, c.Expect.Secrets)
 			check("private", inputs.Private, c.Expect.Private)
 		})
@@ -89,51 +99,6 @@ func contexts(c conformance.Case) map[string]any {
 		out["vars"] = vars
 	}
 	return out
-}
-
-// deferredText returns the deferred values by their paths, each as its
-// text.
-func deferredText(t *testing.T, deferred map[string]plan.Value) map[string]any {
-	t.Helper()
-	out := make(map[string]any, len(deferred))
-	for path, v := range deferred {
-		data, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var raw any
-		if err := json.Unmarshal(data, &raw); err != nil {
-			t.Fatal(err)
-		}
-		out[path] = templateText(raw)
-	}
-	return out
-}
-
-// templateText returns v, a Value's JSON, with each template as its text.
-func templateText(v any) any {
-	switch v := v.(type) {
-	case []any:
-		for i, item := range v {
-			v[i] = templateText(item)
-		}
-	case map[string]any:
-		if parts, ok := v["${{"].([]any); ok && len(v) == 1 {
-			var b strings.Builder
-			for _, p := range parts {
-				if s, ok := p.(string); ok {
-					b.WriteString(s)
-				} else {
-					b.WriteString("${{" + p.(map[string]any)["src"].(string) + "}}")
-				}
-			}
-			return b.String()
-		}
-		for k, item := range v {
-			v[k] = templateText(item)
-		}
-	}
-	return v
 }
 
 func orEmpty(m map[string]any) map[string]any {

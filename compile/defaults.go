@@ -45,8 +45,12 @@ func (r *inputResolver) fillDefaults() {
 			if f.candidates != nil {
 				compared = append(compared, f)
 				for _, c := range f.candidates {
+					secret := r.final && slices.ContainsFunc(c.locs, func(loc []string) bool { return r.reads(loc, true) })
 					for _, path := range r.parts(f, c) {
 						r.mark(slices.Concat(f.path, path))
+						if secret {
+							r.markSecret(slices.Concat(f.path, path))
+						}
 					}
 				}
 			}
@@ -126,9 +130,6 @@ func (r *inputResolver) prepare(f *field) bool {
 func (r *inputResolver) evalPending(f *field) {
 	if f.texts == nil {
 		loc := appendPath(f.loc, "default")
-		before, ok := jsonptr.Lookup(r.values, f.path)
-		f.nullBefore = ok && before == nil
-		f.textBefore = ok && before != nil && before == f.def["default"]
 		switch v, read, err := r.evalRead(loc, f.index); {
 		case expr.IsUnknown(err):
 			r.deferPart(f, nil, loc, f.def["default"], false)
@@ -250,45 +251,13 @@ func (r *inputResolver) collectRows(f *field) []*field {
 	}
 	if len(out) > 0 {
 		r.rows = append(r.rows, out...)
-		if r.rowsOf != nil {
-			r.rowsOf[f.holder()] = append(r.rowsOf[f.holder()], out...)
-		}
 		r.refresh(f.path)
 	}
 	return out
 }
 
-// dropRows drops the fields of the rows in f's value, and of the rows of
-// the lists in them, as Start collects them again (fillRows). They are
-// gone from rows at once, and dropped from it once they are half of it,
-// or it is read (liveRows), so that collecting each of many lists' rows
-// again doesn't go through the rows of all of them.
-func (r *inputResolver) dropRows(f *field) {
-	if r.rowsOf == nil {
-		r.rowsOf = map[*field][]*field{}
-		for _, c := range r.liveRows() {
-			r.rowsOf[c.in] = append(r.rowsOf[c.in], c)
-		}
-	}
-	for _, c := range r.rowsOf[f] {
-		c.gone = true
-	}
-	r.goneRows += len(r.rowsOf[f])
-	delete(r.rowsOf, f)
-	if r.goneRows*2 > len(r.rows) {
-		r.liveRows()
-	}
-}
-
-// liveRows returns the fields of the lists' rows, without those that are
-// gone (dropRows).
-func (r *inputResolver) liveRows() []*field {
-	if r.goneRows > 0 {
-		r.rows = slices.DeleteFunc(r.rows, func(c *field) bool { return c.gone })
-		r.goneRows = 0
-	}
-	return r.rows
-}
+// liveRows returns the fields of the lists' rows.
+func (r *inputResolver) liveRows() []*field { return r.rows }
 
 // missing reports whether f has no value: none at all, "" when "" isn't one
 // of its options, or the text of its default when that is an expression,

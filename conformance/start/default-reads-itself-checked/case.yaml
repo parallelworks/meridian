@@ -1,0 +1,21 @@
+description: >-
+  A default that reads its own input, which a form sent the text of, gives
+  that text, as the compiler gives a default that reads its own input what
+  it reads of it. Evaluated as the run starts, as it reads a password whose
+  default reads a secret variable, it is checked against its input's type
+  as one evaluated when the run is created is: the text isn't a number. A
+  run used to start with the text of an expression as a number input's
+  value.
+source: Meridian
+contexts:
+  vars:
+    S: s3cr3t
+secret-variables: [S]
+inputs:
+  a: ${{ inputs.pw == 'zz' && 'y' || inputs.a }}
+expect:
+  diagnostics:
+    - severity: error
+      code: input_not_number
+      path: /on/execute/inputs/a
+      params: {input: a, value: "***"}

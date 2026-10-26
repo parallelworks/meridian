@@ -1,9 +1,8 @@
 description: >-
-  As the run starts, the workflow's env: and the inputs the plan holds for
-  the start are evaluated in the order they read each other: a default can
-  read env, and an env: value an input, whichever is held. The workflow's
-  timeout: is evaluated then too. An env: value made from a variable is
-  private, as an input's is.
+  As the run starts, the inputs are resolved again and the workflow's env:
+  evaluated, each once what it reads is: a default can read env, and an
+  env: value an input. The workflow's timeout: is evaluated then too. An
+  env: value made from a variable is private, as an input's is.
 source: Meridian
 contexts:
   vars:

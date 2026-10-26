@@ -10,7 +10,6 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
-	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -53,16 +52,8 @@ type field struct {
 	// the compiler doesn't know. variable is set for one whose value reads
 	// an organization or user variable, or a password input, which the
 	// compiler knows but a plan never holds: what the compiler evaluates
-	// reads its value, and the plan holds what is evaluated as the run
-	// starts in its place. dflt holds what is evaluated then.
+	// reads its value, and Start resolves it again.
 	deferred, variable bool
-	dflt               plan.Value
-	// nullBefore is set for one whose value was null when its default was
-	// evaluated, as a list's default row can make it, and textBefore for
-	// one whose value was its default's text, as a form sends it, which a
-	// default that gives nothing leaves, and what the default reads of
-	// the value reads.
-	nullBefore, textBefore bool
 	// secretWhole is set for a list, a group or a wizard step with a
 	// password among its inputs, whose value, or one of whose rows, is
 	// evaluated as the run starts: the plan can't say which of its values
@@ -81,9 +72,6 @@ type field struct {
 	// seq is the field's place among the inputs' fields and then the rows'
 	// fields, the order evalValues fills in their values.
 	seq int
-	// gone is set for a field of a row that Start collects again
-	// (dropRows), which the inputResolver's rows hold until it drops them.
-	gone bool
 	// options is what checking the value reads of the field's options,
 	// once it is read, which the fields of a list's rows share with its
 	// template's.

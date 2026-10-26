@@ -34,9 +34,6 @@ expect:
       workers:
         - host: w1
         - host: w2
-    /run/deferredInputs/hosts/0/name: h
-    /run/deferredInputs/hosts/0/site/${{/0/src: " vars.SITE "
-    /run/deferredInputs/keys/${{/0/src: " fromJSON(vars.KEYS) "
     /run/secrets:
       - inputs.creds.0.pass
       - inputs.hosts.0.key

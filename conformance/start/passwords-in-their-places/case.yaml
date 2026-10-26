@@ -1,9 +1,9 @@
 description: >-
-  Each of the run's passwords is put in its place in the inputs' values as
-  the run starts, by its name: a password input's, a password field's in a
-  list's row, which the plan holds the row without, and a value for an
-  input the workflow doesn't define that is kept as a password is, whose
-  name holds a dot, written ~1 in the name.
+  Each of the run's passwords is in its place in the inputs' values as the
+  run starts, as it was submitted, and named as a secret: a password
+  input's, a password field's in a list's row, which the plan holds the row
+  without, and a value for an input the workflow doesn't define that is
+  kept as a password is, whose name holds a dot, written ~1 in the name.
 source: Meridian
 contexts:
   vars:

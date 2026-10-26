@@ -10,6 +10,7 @@ import (
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -52,19 +53,22 @@ type candidate struct {
 // evaluates each default and option it can and sends what it gives, but it
 // can send what it gave before the person changed what it read, or gave a
 // row they have since moved, and evaluates some expressions otherwise than
-// Meridian does. So a part that is what one of its expressions gives now
-// means that expression, as a form's text for it does: it is evaluated as
-// the run starts, as the expression, if the expression can read a variable
-// or a password, and is data if not. A choice of an option written in the
-// workflow is that option. Any other part, what a form gave before, or what
-// the person typed in its place, the plan doesn't hold, but the run has
-// (holdPath): it is a secret, masked as what is made from one is, if one of
-// its expressions can read a password or a secret variable, and private,
-// as a variable's value is, if not. A part already evaluated as the run
-// starts, or in one, is left as it is. The expressions are evaluated in a
-// group of their own (evalCompare). Comparing changes no value, so what an
-// expression gives is the same for each candidate it is compared with, at
-// each row index it reads.
+// Meridian does. So a part that is what one of its expressions gives as the
+// run is created means that expression, as a form's text for it does: as
+// the run starts, it is what the expression gives then, if the expression
+// can read a variable or a password, and is data if not. Which parts mean
+// their expressions says something of the variables' values, so the secret
+// record keeps it (means), and the plan doesn't hold such a part, whatever
+// it is. A choice of an option written in the workflow is that option. Any
+// other part, what a form gave before, or what the person typed in its
+// place, the plan doesn't hold, but the run has (holdPath): it is a secret,
+// masked as what is made from one is, if one of its expressions can read a
+// password or a secret variable, and private, as a variable's value is, if
+// not. A part already evaluated as the run starts, or in one, is left as
+// it is. The expressions are evaluated in a group of their own
+// (evalCompare). Comparing changes no value, so what an expression gives
+// is the same for each candidate it is compared with, at each row index it
+// reads.
 func (r *inputResolver) compare(f *field) {
 	value := lookup(r.values, f.path)
 	// What the Inputs resolver gives for an input of a platform's type can't
@@ -83,7 +87,8 @@ func (r *inputResolver) compare(f *field) {
 	for _, c := range f.candidates {
 		var gave []comparison
 		for _, path := range r.parts(f, c) {
-			if f.isText(path) {
+			at := slices.Concat(f.path, path)
+			if f.isText(path) || r.madeAtStart(at) {
 				continue
 			}
 			if gave == nil {
@@ -94,18 +99,54 @@ func (r *inputResolver) compare(f *field) {
 			}
 			part := lookup(value, path)
 			i := slices.IndexFunc(gave, func(res comparison) bool { return res.ok && sameValue(part, res.v) })
-			if i >= 0 && r.readsPart(c.locs[i], f.index, slices.Concat(f.path, path)) {
+			if i >= 0 && r.readsPart(c.locs[i], f.index, at) {
 				// What reads the part gives it, whatever it is, so it isn't
 				// what made it.
 				i = -1
 			}
+			name := plan.JoinPath(at...)
+			switch {
+			case i >= 0 && !r.reads(c.locs[i], false):
+				// What reads no variable and no password gave it, as Create
+				// and Start find alike: it is data.
+				continue
+			case r.final:
+				// What it means Create decided, which the secret record
+				// keeps (plan.Record.Means): the expression, which gives
+				// what it gives as the run starts, or what was typed.
+				i = -1
+				if pointer, ok := r.means[name]; ok {
+					i = slices.IndexFunc(c.locs, func(loc []string) bool { return jsonptr.Format(loc) == pointer })
+					if i >= 0 && !gave[i].ok {
+						i = -1
+					}
+				}
+			case i >= 0:
+				// As the run is created, the record keeps that it means the
+				// expression, and the plan holds it out of its values,
+				// whatever it is, as it holds what was typed.
+				if r.means == nil {
+					r.means = map[string]string{}
+				}
+				r.means[name] = jsonptr.Format(c.locs[i])
+				i = -1
+			}
 			switch {
 			case i >= 0:
-				if loc := c.locs[i]; r.reads(loc, false) {
-					raw := lookup(r.doc.Value, loc)
-					r.noteEvaluation(f, path, loc, raw)
-					r.deferPart(f, path, loc, raw, true)
+				// The part means the expression, which Start has evaluated:
+				// it is what the expression gave, made from what it read. One
+				// that gives another value than was sent, as a variable
+				// changed, what read the part read too soon (remeant).
+				if !sameValue(part, gave[i].v) {
+					if r.remeant == nil {
+						r.remeant = map[string]any{}
+					}
+					r.remeant[name] = jsonvalue.Clone(gave[i].v)
 				}
+				loc := c.locs[i]
+				r.noteEvaluation(f, path, loc, lookup(r.doc.Value, loc))
+				r.set(at, jsonvalue.Clone(gave[i].v))
+				r.start.made(r, at, gave[i].read)
 			case c.option && f.findOptions().literal(part):
 			case f.typ == "password" && len(path) == 0:
 				// A password is a secret, whatever made it.
@@ -119,6 +160,24 @@ func (r *inputResolver) compare(f *field) {
 	if whole {
 		r.holdPath(f, f.path, wholeKind)
 	}
+}
+
+// madeAtStart reports whether the value at path in the inputs' values, or
+// one it is in, is what an evaluation that read a variable or a password
+// made as the run starts: Create holds such a part for the start, and so
+// leaves it as it is, rather than compare it with what made it.
+func (r *inputResolver) madeAtStart(path []string) bool {
+	if !r.final {
+		return false
+	}
+	full := slices.Concat([]string{"inputs"}, path)
+	for n := len(full); n > 1; n-- {
+		name := plan.JoinPath(full[:n]...)
+		if r.start.madePrivate[name] || r.start.madeSecret[name] {
+			return true
+		}
+	}
+	return false
 }
 
 // readsPart reports whether what is at loc in the workflow, for the list
@@ -205,8 +264,9 @@ func (r *inputResolver) readsPart(loc []string, index []int, path []string) bool
 // A comparison is what a string in the workflow gave, if it gave one,
 // when compare evaluated it.
 type comparison struct {
-	v  any
-	ok bool
+	v    any
+	ok   bool
+	read expr.Read
 }
 
 // evalCompare evaluates what is at loc in the workflow, as evalAt does, for
@@ -235,14 +295,15 @@ func (r *inputResolver) evalCompare(loc []string, index []int) comparison {
 		r.compareScope = &s
 	}
 	scope := *r.compareScope
-	scope.Marked, scope.Index = base.Marked, index
-	v, err := r.workflow.Evaluator(scope).Eval(loc)
+	scope.Marked, scope.Private, scope.Index = base.Marked, base.Private, index
+	// What it read, as Start names what it makes.
+	v, read, err := r.workflow.Evaluator(scope).EvalRead(loc)
 	if be, ok := errors.AsType[*expr.BudgetError](err); ok && be.Kind == problems.ExpressionsTooSlow && !r.compareSlow {
 		r.compareSlow = true
 		r.reportError(loc, 0, err)
 	}
 	// A copy, as the value can be part of what the evaluation read.
-	res := comparison{jsonvalue.Clone(v), err == nil}
+	res := comparison{jsonvalue.Clone(v), err == nil, read}
 	if r.comparisons == nil {
 		r.comparisons = map[string]comparison{}
 	}

@@ -16,7 +16,6 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonptr"
-	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -176,105 +175,6 @@ jobs:
 	data, err := json.Marshal(inputs.Deferred["dir"])
 	if err != nil || !strings.HasPrefix(string(data), `{"${{":[{"src":" env.HOME "`) {
 		t.Errorf("the deferred default encodes as %s, %v", data, err)
-	}
-}
-
-// A submitted row with the text of part of its default that reads a secret
-// is deferred whole, with only that part an expression: the same text
-// elsewhere in the row is data.
-func TestDefaultTextKnownLater(t *testing.T) {
-	doc := load(t, `on:
-  execute:
-    inputs:
-      hosts:
-        type: list
-        template:
-          token:
-            type: string
-          note:
-            type: string
-        default:
-          - token: ${{ vars.TOKEN }}
-jobs:
-  main:
-    steps:
-      - run: echo ok
-`)
-	row := map[string]any{"token": "${{ vars.TOKEN }}", "note": "${{ vars.TOKEN }}"}
-	submitted := map[string]any{"hosts": []any{row}}
-	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"TOKEN": expr.Unknown{Name: "vars"}}}}
-	inputs, diags := compile.ResolveInputs(doc, submitted, opts)
-	if len(diags) != 0 {
-		t.Fatal(diags)
-	}
-	if _, ok := inputs.Values["hosts"]; ok {
-		t.Error("a value deferred until the run is underway has a value now")
-	}
-	data, err := json.Marshal(inputs.Deferred["hosts"])
-	if err != nil || !strings.HasPrefix(string(data), `[{"note":"${{ vars.TOKEN }}","token":{"${{":[{"src":" vars.TOKEN "`) {
-		t.Errorf("the deferred value encodes as %s, %v", data, err)
-	}
-	if row["token"] != "${{ vars.TOKEN }}" {
-		t.Errorf("submitted values changed to %v", submitted)
-	}
-}
-
-// A row's default that reads a secret is evaluated once the run is
-// underway, with the row's index in it, since no scope gives it then; and
-// the list's value with it, all of it. A value given in its place can hold
-// the secret, so it is kept as a secret, which the run's start puts back.
-func TestRowDefaultKnownLater(t *testing.T) {
-	doc := load(t, `on:
-  execute:
-    inputs:
-      names:
-        type: list
-        template:
-          name:
-            type: string
-      hosts:
-        type: list
-        template:
-          name:
-            type: string
-          token:
-            type: string
-            default: ${{ vars.TOKEN }}-${{ inputs.names.[index].name }}
-jobs:
-  main:
-    steps:
-      - run: echo ok
-`)
-	submitted := map[string]any{
-		"names": []any{map[string]any{"name": "a"}, map[string]any{"name": "b"}},
-		"hosts": []any{map[string]any{"name": "x"}, map[string]any{"name": "y", "token": "given"}},
-	}
-	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"TOKEN": expr.Unknown{Name: "vars"}}}}
-	inputs, diags := compile.ResolveInputs(doc, submitted, opts)
-	if len(diags) != 0 {
-		t.Fatal(diags)
-	}
-	if _, ok := inputs.Values["hosts"]; ok {
-		t.Error("a value deferred until the run is underway has a value now")
-	}
-	data, err := json.Marshal(inputs.Deferred["hosts"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stored plan.Value
-	if err := json.Unmarshal(data, &stored); err != nil {
-		t.Fatal(err)
-	}
-	got, err := stored.Eval(expr.Scope{Contexts: map[string]any{
-		"inputs": map[string]any{"names": submitted["names"]},
-		"vars":   map[string]any{"TOKEN": "s"},
-	}})
-	want := []any{map[string]any{"name": "x", "token": "s-a"}, map[string]any{"name": "y"}}
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Errorf("the deferred value is %v, %v; want %v", got, err, want)
-	}
-	if inputs.Secrets["hosts.1.token"] != "given" {
-		t.Errorf("secrets %v, want hosts.1.token given", inputs.Secrets)
 	}
 }
 
