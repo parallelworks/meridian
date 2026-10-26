@@ -230,7 +230,7 @@ jobs:
 		"falsy":        {{true, false}, {true, false}, {true, true}, {true, true}, {true, true}},
 	} {
 		for i, dep := range outcomes {
-			r, diags, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run, Needs: map[string]plan.JobResult{"dep": dep}})
+			r, diags, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run, Needs: map[string]plan.JobResult{"dep": dep}})
 			if err != nil || len(diags) > 0 {
 				t.Fatalf("%s: %v, %v", name, diags, err)
 			}
@@ -242,7 +242,7 @@ jobs:
 	// A run being cancelled skips a job whose if: is success(), and runs
 	// one whose is cancelled().
 	for name, skipped := range map[string]bool{"plain": true, "on-cancel": false, "word": false} {
-		r, _, _ := job(t, p, name).Ready(t.Context(), plan.ReadyInput{
+		r, _, _ := p.Ready(t.Context(), name, plan.ReadyInput{
 			Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess}},
 		})
 		if r.Skipped != skipped || r.NeedsFailed {
@@ -277,17 +277,17 @@ jobs:
 	run := runValues(t, p, nil)
 	ctx := t.Context()
 	failed := map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeFailure}}
-	if r, _, _ := job(t, p, "plain").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed}); !r.Skipped || !r.NeedsFailed {
+	if r, _, _ := p.Ready(ctx, "plain", plan.ReadyInput{Run: run, Needs: failed}); !r.Skipped || !r.NeedsFailed {
 		t.Errorf("plain after a failure: %+v", r)
 	}
 	ok := map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"oses": `["linux","mac"]`}}}
-	r, diags, err := job(t, p, "plain").Ready(ctx, plan.ReadyInput{Run: run, Needs: ok})
+	r, diags, err := p.Ready(ctx, "plain", plan.ReadyInput{Run: run, Needs: ok})
 	if err != nil || len(diags) > 0 || r.Expansion == nil || len(r.Expansion.Instances) != 2 {
 		t.Fatalf("plain: %+v, %v, %v", r, diags, err)
 	}
 	in := r.Expansion.Instances[1]
 	in.Private, in.Secret = true, true
-	r, diags, err = job(t, p, "plain").Ready(ctx, plan.ReadyInput{Run: run, Needs: ok, Instance: &in})
+	r, diags, err = p.Ready(ctx, "plain", plan.ReadyInput{Run: run, Needs: ok, Instance: &in})
 	if err != nil || len(diags) > 0 || r.Job == nil {
 		t.Fatalf("plain#1: %+v, %v, %v", r, diags, err)
 	}
@@ -295,16 +295,16 @@ jobs:
 		!slices.Equal(rj.Private, []string{"matrix"}) || !slices.Equal(rj.Secrets, []string{"matrix"}) || rj.Masked != nil {
 		t.Errorf("plain#1 is %+v", rj)
 	}
-	r, _, _ = job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed})
+	r, _, _ = p.Ready(ctx, "reads", plan.ReadyInput{Run: run, Needs: failed})
 	if r.Expansion == nil {
 		t.Fatalf("reads after a failure isn't expanded: %+v", r)
 	}
 	for _, in := range r.Expansion.Instances {
-		r, _, _ := job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: failed, Instance: &in})
+		r, _, _ := p.Ready(ctx, "reads", plan.ReadyInput{Run: run, Needs: failed, Instance: &in})
 		if !r.Skipped || !r.NeedsFailed {
 			t.Errorf("%s after a failure: %+v", in.Key, r)
 		}
-		r, _, _ = job(t, p, "reads").Ready(ctx, plan.ReadyInput{Run: run, Needs: ok, Instance: &in})
+		r, _, _ = p.Ready(ctx, "reads", plan.ReadyInput{Run: run, Needs: ok, Instance: &in})
 		if r.Skipped != (in.Matrix.Get().(map[string]any)["os"] == "mac") {
 			t.Errorf("%s: %+v", in.Key, r)
 		}
@@ -362,7 +362,7 @@ jobs:
 		"ssh":    `{"target":{"inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":{"disconnect-timeout":10,"remoteHost":"host"}}}}`,
 		"none":   `{}`,
 	} {
-		r, diags, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run})
+		r, diags, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run})
 		if err != nil || len(diags) > 0 || r.Job == nil {
 			t.Fatalf("%s: %+v, %v, %v", name, r, diags, err)
 		}
@@ -429,7 +429,7 @@ jobs:
 		},
 		"failing": {"from_json_invalid /jobs/failing/if"},
 	} {
-		r, diags, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run})
+		r, diags, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run})
 		if err != nil || r != nil {
 			t.Errorf("%s: %+v, %v", name, r, err)
 		}
@@ -442,7 +442,7 @@ jobs:
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, _, err := job(t, p, "bad").Ready(ctx, plan.ReadyInput{Run: run}); !errors.Is(err, context.Canceled) {
+	if _, _, err := p.Ready(ctx, "bad", plan.ReadyInput{Run: run}); !errors.Is(err, context.Canceled) {
 		t.Errorf("a done context: %v", err)
 	}
 }
@@ -488,7 +488,7 @@ jobs:
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "region": "eu"}})
 	run := runValues(t, p, map[string]string{"token": "s3cret", "region": "eu"})
 	run.Private = []string{}
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil || ready.Job == nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ jobs:
         cleanup: echo ${{ cancelled() }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": "s3cret"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +652,7 @@ jobs:
       fails: ${{ fromJSON(steps.a.outputs.y) }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": "s3cret"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -798,7 +798,7 @@ jobs:
           timeout: ${{ inputs.missing }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +833,7 @@ func TestStepOutlivesCancel(t *testing.T) {
 	}
 	p := compiled(t, b.String(), nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -883,7 +883,7 @@ jobs:
           max-retries: 2
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -917,7 +917,7 @@ jobs:
         if: ${{ cancelled() || env.PW_WORKFLOW_STEP_CURRENT_RETRY == '0' }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +961,7 @@ jobs:
       - run: echo ${{ env.J }} ${{ env.OUTPUTS }} ${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }} [${{ env.PW_API_KEY }}]
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -992,7 +992,7 @@ jobs:
         working-directory: /tmp/${{ 'x' }}
 `, map[string]any{"vars": map[string]any{"dir": "${PRIVATE}"}})
 	run := runValues(t, p, map[string]string{"dir": "${PRIVATE}"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1047,7 +1047,7 @@ jobs:
 	} {
 		run := runValues(t, p, nil)
 		run.Inputs = plan.DataOf(map[string]any{"v": tc.v, "n": tc.n})
-		ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+		ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1082,7 +1082,7 @@ jobs:
         timeout: ${{ 1.5 }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1120,7 +1120,7 @@ jobs:
           timeout: ${{ env.EACH }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1168,7 +1168,7 @@ jobs:
       b: ${{ 'declared' }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1212,7 +1212,7 @@ jobs:
           ALL: ${{ env.S }}-${{ join(env.*, ',') }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1231,11 +1231,52 @@ jobs:
 	}
 }
 
+// Ready says which of what it evaluated was made from a variable or a
+// password, and from a secret, so that a coordinator keeps it out of run
+// state, as for the run's timeout:; what reads neither is named by none.
+func TestReadyPrivateFields(t *testing.T) {
+	unknown := expr.Unknown{Name: "vars"}
+	p := compiled(t, `
+jobs:
+  main:
+    runs-on: ${{ vars.group }}
+    resources:
+      cpu: 2
+    retry:
+      reasons: [worker-lost]
+      max-retries: ${{ vars.tries }}
+    timeout: ${{ vars.limit }}
+    steps:
+      - run: "true"
+  plain:
+    runs-on: ${{ 'local' }}
+    timeout: 1h
+    steps:
+      - run: "true"
+`, map[string]any{"vars": map[string]any{"group": unknown, "tries": unknown, "limit": unknown}})
+	run := runValues(t, p, map[string]string{"group": "gpu", "tries": "2", "limit": "30m"})
+	// Of the variables, only limit is a secret, which the compiler, given
+	// none of their values, can't tell.
+	run.Secrets = []string{"vars.limit"}
+	for name, want := range map[string]string{"main": "[target retry timeoutSeconds] [timeoutSeconds]", "plain": "[] []"} {
+		r, diags, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run})
+		if err != nil || diags.HasErrors() || r.Job == nil {
+			t.Fatalf("%s: %v, %v", name, diags, err)
+		}
+		if got := fmt.Sprint(r.Job.PrivateFields, r.Job.SecretFields); got != want {
+			t.Errorf("%s: private and secret fields %s, want %s", name, got, want)
+		}
+	}
+	if _, _, err := p.Ready(t.Context(), "missing", plan.ReadyInput{Run: run}); err == nil {
+		t.Error("readied a job the plan doesn't have")
+	}
+}
+
 // A job's ssh: that gives null is none, as format 1 runs such a job
 // without ssh.
 func TestJobSSHNull(t *testing.T) {
-	j := &plan.Job{Name: "j", Path: "/jobs/j", SSH: mustValue(t, "${{ null }}"), Steps: []plan.Step{{Path: "/jobs/j/steps/0", Run: mustValue(t, "true")}}}
-	r, diags, err := j.Ready(t.Context(), plan.ReadyInput{})
+	p := &plan.Plan{Jobs: []plan.Job{{Name: "j", Path: "/jobs/j", SSH: mustValue(t, "${{ null }}"), Steps: []plan.Step{{Path: "/jobs/j/steps/0", Run: mustValue(t, "true")}}}}}
+	r, diags, err := p.Ready(t.Context(), "j", plan.ReadyInput{})
 	if err != nil || len(diags) > 0 || r.Job == nil || r.Job.Target != (plan.Target{}) {
 		t.Errorf("%+v, %v, %v", r, diags, err)
 	}
@@ -1264,7 +1305,7 @@ jobs:
       - run: "true"
 `, nil)
 		run := runValues(t, p, nil)
-		r, diags, err := job(t, p, "b").Ready(t.Context(), plan.ReadyInput{Run: run, Needs: map[string]plan.JobResult{"a": {Outcome: plan.OutcomeSuccess}}})
+		r, diags, err := p.Ready(t.Context(), "b", plan.ReadyInput{Run: run, Needs: map[string]plan.JobResult{"a": {Outcome: plan.OutcomeSuccess}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1297,7 +1338,7 @@ jobs:
         cleanup: "true"
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1331,7 +1372,7 @@ jobs:
       region: ${{ env.REGION }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "region": "eu"}})
 	run := runValues(t, p, map[string]string{"token": "s3cret-value", "region": "eu"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1389,7 +1430,7 @@ jobs:
       none: ${{ needs.main.outputs.none }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1434,7 +1475,7 @@ jobs:
 		Private: []string{"dsn"}, Secrets: []string{"dsn"},
 		Steps: map[string]map[string]string{"login": {"key": "k3y-value"}}, SecretSteps: map[string][]string{"login": {"key"}},
 	}}
-	ready, _, err := job(t, p, "b").Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+	ready, _, err := p.Ready(t.Context(), "b", plan.ReadyInput{Run: run, Needs: needs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1496,7 +1537,7 @@ jobs:
         retry: {max-retries: 1, clean-on-retry: "${{ null }}"}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1529,7 +1570,7 @@ jobs:
         cleanup: echo cleaned
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}

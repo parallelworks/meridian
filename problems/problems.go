@@ -12,6 +12,9 @@
 // its key and its arguments, are kinds too, in CommandRegistry, whose type
 // URIs are /problems/command/<code>. A resolver returns a kind's Problem for
 // what is wrong, so that its caller reports it with its code and params.
+// So are the worker API's own, which a coordinator answers a worker's
+// request with, in WorkerRegistry, whose type URIs are
+// /problems/worker/<code>.
 //
 // A message shows a param's control characters escaped, as \n or \x1b,
 // rather than as themselves: a key in a workflow could otherwise move a
@@ -267,6 +270,9 @@ var (
 	// CommandRegistry holds the problem types of the meridian command's own
 	// kinds: its directories, its config, its key and its arguments.
 	CommandRegistry = problem.NewRegistry("command")
+	// WorkerRegistry holds the problem types of the worker API's own kinds,
+	// which a coordinator answers a worker's request with (workerapi).
+	WorkerRegistry = problem.NewRegistry("worker")
 	// Catalog holds each kind's message, in each language.
 	Catalog = problem.MustCatalog(sub("messages"))
 	// Docs holds the text of each kind's documentation page, in each
@@ -304,6 +310,13 @@ func define(severity Severity, code, title string, params ...string) *Kind {
 // CommandRegistry. Every problem of the kind has each of params.
 func defineCommand(code, title string, params ...string) *Kind {
 	return add(CommandRegistry.Define(problem.Type{Code: problem.Code(code), Status: 422, Title: title, Params: params}), Error)
+}
+
+// defineWorker adds one of the worker API's own kinds, an error, to
+// WorkerRegistry, which a coordinator answers with 409 Conflict. Every
+// problem of the kind has each of params.
+func defineWorker(code, title string, params ...string) *Kind {
+	return add(WorkerRegistry.Define(problem.Type{Code: problem.Code(code), Status: 409, Title: title, Params: params}), Error)
 }
 
 // shared makes one of foundation's rules, which every API shares, a kind of

@@ -103,7 +103,7 @@ jobs:
 	run := runValues(t, p, nil)
 	needs := map[string]plan.JobResult{"a": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "no"}}}
 	j := job(t, p, "main")
-	ready, _, err := j.Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run, Needs: needs})
 	if err != nil || ready.Job == nil {
 		t.Fatal(err)
 	}

@@ -371,6 +371,45 @@ func TestDecodeRefuses(t *testing.T) {
 	}
 }
 
+// A plan's jobs are in the order of their names, each once, as Ready
+// finds a job by its name in that order: Decode refuses a plan whose jobs
+// aren't.
+func TestDecodeJobOrder(t *testing.T) {
+	for _, c := range []struct {
+		names []string
+		ok    bool
+	}{
+		{nil, true},
+		{[]string{"a"}, true},
+		{[]string{"A", "B", "a", "a-b", "b"}, true},
+		{[]string{"b", "a"}, false},
+		{[]string{"a", "a"}, false},
+		{[]string{"b", "a", "a"}, false},
+		{[]string{"a", "c", "b"}, false},
+	} {
+		p := &plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1, Source: plan.Source{Location: "w", Revision: "r"}}}
+		for _, name := range c.names {
+			p.Jobs = append(p.Jobs, plan.Job{Key: name, Name: name, Path: "/jobs/" + name, Steps: []plan.Step{{Path: "/jobs/" + name + "/steps/0", Run: mustValue(t, "true")}}})
+		}
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := plan.Decode(data)
+		if (err == nil) != c.ok {
+			t.Errorf("%v: decoded %t, want %t: %v", c.names, err == nil, c.ok, err)
+		}
+		if err != nil && !errors.Is(err, plan.ErrMalformed) {
+			t.Errorf("%v: %v, want ErrMalformed", c.names, err)
+		}
+		if err == nil && len(c.names) > 0 {
+			if r, _, err := back.Ready(t.Context(), c.names[len(c.names)-1], plan.ReadyInput{}); err != nil || r.Job == nil {
+				t.Errorf("%v: readying the last job: %v", c.names, err)
+			}
+		}
+	}
+}
+
 // A plan's keys can come in any order.
 func TestDecodeKeyOrder(t *testing.T) {
 	data := `{"jobs":[{"steps":[{"path":"/jobs/a/steps/0","run":{"${{":[{"tree":{"ref":"inputs","path":["x"]},"src":" inputs.x "}]}}],` +

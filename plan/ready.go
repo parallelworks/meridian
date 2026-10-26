@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
@@ -430,8 +431,6 @@ type ReadyInput struct {
 	// expanded: by Start, or by an earlier call to Ready. It is nil for a
 	// job without a strategy:, and for one whose matrix Ready is to expand.
 	Instance *Instance
-	// Limits are the plan's (Run.Limits).
-	Limits Limits
 }
 
 // ReadyResult is what Ready gives: a matrix's instances, a job skipped, or
@@ -508,6 +507,16 @@ type ReadyJob struct {
 	// Instance.Secret).
 	Private []string `json:"private,omitempty"`
 	Secrets []string `json:"secrets,omitempty"`
+	// PrivateFields and SecretFields name, by their JSON names, the fields
+	// above that Ready evaluated from a variable or a password, and from a
+	// secret: target, resources, retry and timeoutSeconds, as the plan's
+	// RunTimeout says for the run's timeout:. The coordinator keeps what
+	// they name, and the placement made from it, such as the member chosen
+	// and why, only where it keeps the run's secrets, never as run state,
+	// and never shows it, nor logs what SecretFields names. What
+	// SecretFields names, PrivateFields does too.
+	PrivateFields []string `json:"privateFields,omitempty"`
+	SecretFields  []string `json:"secretFields,omitempty"`
 	// Masked are the strings Ready made from a secret, as a Masker takes
 	// them: each string that a template, or a ${{ }} in one, that read one
 	// gave, and those of an instance's matrix values made from one, as
@@ -646,7 +655,20 @@ type ReadyJobRetry struct {
 // text (wrong_type). An error among them fails the job, and there is no
 // result. It returns an error only when ctx is done before it finishes,
 // and then ctx.Err().
-func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
+//
+// It reads the job the plan names job, and the plan's limits (Run.Limits),
+// as every replica and every rerun applies them. A job the plan doesn't
+// have is the caller's mistake, and an error.
+func (p *Plan) Ready(ctx context.Context, job string, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
+	i, ok := slices.BinarySearchFunc(p.Jobs, job, func(j Job, name string) int { return strings.Compare(j.Name, name) })
+	if !ok {
+		return nil, nil, fmt.Errorf("plan: the plan has no job %s", job)
+	}
+	return p.Jobs[i].ready(ctx, in, p.Run.Limits)
+}
+
+// ready is Ready for j, with the plan's limits.
+func (j *Job) ready(ctx context.Context, in ReadyInput, limits Limits) (*ReadyResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -671,7 +693,7 @@ func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.
 		// does; an if: that reads matrix is evaluated only for each
 		// instance.
 		c.StrictOutputs = !d.always
-		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), in.Limits)
+		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), limits)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, ctxErr
@@ -712,10 +734,20 @@ func (j *Job) Ready(ctx context.Context, in ReadyInput) (*ReadyResult, problems.
 	rj.IfAlways = d.always
 	c.StrictOutputs = !d.always
 	e = e.next(PhaseReady, c)
-	rj.Target = e.target(j)
-	rj.Resources = e.resources(j.Resources, at(j.Path, "resources"))
-	rj.Retry = e.jobRetry(j.Retry, at(j.Path, "retry"))
-	rj.TimeoutSeconds = e.duration(j.Timeout, at(j.Path, "timeout"), "timeout", 0)
+	// Which of them were made from a private value, which a coordinator
+	// keeps out of run state, as the run's timeout: (RunTimeout).
+	note := func(field string, read expr.Read) {
+		if read.Private || read.Marked {
+			rj.PrivateFields = append(rj.PrivateFields, field)
+		}
+		if read.Marked {
+			rj.SecretFields = append(rj.SecretFields, field)
+		}
+	}
+	note("target", e.reading(func() { rj.Target = e.target(j) }))
+	note("resources", e.reading(func() { rj.Resources = e.resources(j.Resources, at(j.Path, "resources")) }))
+	note("retry", e.reading(func() { rj.Retry = e.jobRetry(j.Retry, at(j.Path, "retry")) }))
+	note("timeoutSeconds", e.reading(func() { rj.TimeoutSeconds = e.duration(j.Timeout, at(j.Path, "timeout"), "timeout", 0) }))
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}

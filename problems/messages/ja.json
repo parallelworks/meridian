@@ -269,5 +269,8 @@
   "input_flag_wrong_type": "-input {path}: 入力「{input}」は {type} 型で、{type, select, boolean {true または false を取ります} number {8、-2.5、1e3 のような JSON の数値を取ります{reason, select, too_large {が、これは数値としては大きすぎます} other {}}} header {値を取りません} other {別の値を取ります}}。",
   "input_flag_not_json": "-input {path}: 入力「{input}」は {type} 型で、JSON の{shape, select, array {配列} other {オブジェクト}}を取りますが、これは{reason, select, empty {空です} extra {JSON の値を 2 つ以上含みます} number {読み取れないほど大きな数値を含みます} other {{offset} バイト目で有効な JSON ではありません}}。",
   "input_flag_wrong_shape": "-input {path}: 入力「{input}」は {type} 型で、JSON の{shape, select, array {配列} other {オブジェクト}}を取り、{kind, select, string {文字列} number {数値} boolean {ブール値} array {配列} object {オブジェクト} other {null}}は取りません。",
-  "input_flag_path_not_settable": "-input {path}: 入力「{input}」は{reason, select, flattened {{type} 型で、その入力はそれぞれの名前で設定します} rows {行のリストを持ちます。JSON の配列として全体を設定してください} other {{type} 型で、入力を持たないため、入力「{next}」はありません}}。"
+  "input_flag_path_not_settable": "-input {path}: 入力「{input}」は{reason, select, flattened {{type} 型で、その入力はそれぞれの名前で設定します} rows {行のリストを持ちます。JSON の配列として全体を設定してください} other {{type} 型で、入力を持たないため、入力「{next}」はありません}}。",
+  "fenced": "ジョブの別の試行がこの試行に取って代わったか、試行がすでに完了しているため、コーディネーターはこの要求を拒否します。",
+  "out_of_order": "報告の順序が正しくありません。コーディネーターは次のものを {expected} から求めています。これは次のイベントの番号か、ログの次のバイトの位置です。",
+  "plan_too_new": "このワーカーは実行の計画のバージョンを読み取れないため、コーディネーターは実行のものを何も送りません。"
 }

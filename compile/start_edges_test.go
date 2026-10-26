@@ -560,8 +560,7 @@ func firstStep(t *testing.T, src string, submitted map[string]any) (raw, masked 
 	if res == nil {
 		t.Fatal(diags)
 	}
-	j := &c.Plan.Jobs[slices.IndexFunc(c.Plan.Jobs, func(j plan.Job) bool { return j.Name == "main" })]
-	ready, _, err := j.Ready(t.Context(), plan.ReadyInput{Run: res.Run})
+	ready, _, err := c.Plan.Ready(t.Context(), "main", plan.ReadyInput{Run: res.Run})
 	if err != nil || ready.Job == nil {
 		t.Fatal(err)
 	}

@@ -269,5 +269,8 @@
   "input_flag_wrong_type": "-input {path}：输入“{input}”的类型是 {type}，{type, select, boolean {它接受 true 或 false} number {它接受 JSON 数字，例如 8、-2.5 或 1e3{reason, select, too_large {，而这个数太大，无法表示} other {}}} header {它不接受值} other {它接受另一种值}}。",
   "input_flag_not_json": "-input {path}：输入“{input}”的类型是 {type}，它接受 JSON {shape, select, array {数组} other {对象}}，而这个值{reason, select, empty {为空} extra {含有不止一个 JSON 值} number {含有一个大到无法读取的数字} other {在第 {offset} 个字节处不是有效的 JSON}}。",
   "input_flag_wrong_shape": "-input {path}：输入“{input}”的类型是 {type}，它接受 JSON {shape, select, array {数组} other {对象}}，而不是{kind, select, string {字符串} number {数字} boolean {布尔值} array {数组} object {对象} other {null}}。",
-  "input_flag_path_not_settable": "-input {path}：输入“{input}”{reason, select, flattened {的类型是 {type}，它的输入按各自的名称设置} rows {含有一个行列表；请以 JSON 数组整体设置它} other {的类型是 {type}，它不含输入，所以没有输入“{next}”}}。"
+  "input_flag_path_not_settable": "-input {path}：输入“{input}”{reason, select, flattened {的类型是 {type}，它的输入按各自的名称设置} rows {含有一个行列表；请以 JSON 数组整体设置它} other {的类型是 {type}，它不含输入，所以没有输入“{next}”}}。",
+  "fenced": "该作业的另一个尝试已取代此尝试，或者此尝试已完成，因此协调器拒绝此请求。",
+  "out_of_order": "报告的顺序不对：协调器期望下一个内容从 {expected} 开始，即下一个事件的编号或日志下一个字节的偏移量。",
+  "plan_too_new": "此工作进程无法读取运行计划的版本，因此协调器不向它发送运行的任何内容。"
 }

@@ -34,6 +34,8 @@ type evaluation struct {
 	masker *Masker
 	// secrets are the texts of the run's secrets the phase reads, for mask.
 	secrets *secretTexts
+	// read is what the values evaluated read, together (reading).
+	read expr.Read
 }
 
 func newEvaluation(phase Phase, c Contexts) *evaluation {
@@ -446,11 +448,22 @@ func (e *evaluation) value(v Value, pointer string) (out any, read expr.Read, ok
 			maskedStrings(out, e.mask)
 		}
 	})
+	e.read = e.read.Or(read)
 	if err != nil {
 		e.reportError(pointer, err, read)
 		return nil, read, false
 	}
 	return out, read, true
+}
+
+// reading calls f, and returns what the values it evaluated read, together.
+func (e *evaluation) reading(f func()) expr.Read {
+	before := e.read
+	e.read = expr.Read{}
+	f()
+	read := e.read
+	e.read = before.Or(read)
+	return read
 }
 
 // text evaluates v as value does, and gives its text, as a template makes

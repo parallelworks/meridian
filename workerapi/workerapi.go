@@ -189,10 +189,10 @@ const (
 	EnvBootstrapTokenFile = "MERIDIAN_BOOTSTRAP_TOKEN_FILE"
 )
 
-// The codes of the API's own problems. The coordinator defines each as a
-// kind of package problems, in a registry of its own named worker, so
-// that its type URI is /problems/worker/<code>, with its messages and its
-// page, when it first reports one.
+// The codes of the API's own problems: each is a kind of package problems,
+// in its registry named worker (problems.WorkerRegistry), whose type URI
+// is /problems/worker/<code>, with its messages and its page, and each
+// constant is its kind's code (TestCodesAreKinds).
 const (
 	// Fenced (409 Conflict) is a request from an attempt that another
 	// attempt of its job has superseded, or a report that isn't a repeat

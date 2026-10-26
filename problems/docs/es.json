@@ -1887,5 +1887,26 @@
     "fix": [
       "Nombra la entrada por su propio nombre, o define la lista entera, como JSON."
     ]
+  },
+  "fenced": {
+    "title": "Informe de un intento sustituido",
+    "why": "El coordinador comprueba cada escritura con el número de cercado del intento, para que un intento al que otro de su trabajo ha sustituido, como cuando su concesión caducó y el trabajo se ejecutó de nuevo, no pueda cambiar lo que registra la ejecución. El informe de un intento que ha terminado, salvo uno repetido tal como era, se rechaza de la misma forma. El worker detiene los pasos de su trabajo, como hace una cancelación, y termina.",
+    "fix": [
+      "No hay nada que corregir: el coordinador decide cómo terminó el intento, y si el trabajo se ejecuta de nuevo."
+    ]
+  },
+  "out_of_order": {
+    "title": "Informe fuera de orden",
+    "why": "Un worker numera sus eventos y envía los bytes de un log desde una posición, para que un informe repetido tras una conexión perdida se almacene una vez, y en orden. Este se saltó algunos, empezó más allá del final del log o después de que terminara, o terminó el intento antes de que el coordinador tuviera todos los eventos que cuenta. El worker vuelve a enviar desde donde espera el coordinador.",
+    "fix": [
+      "No hay nada que corregir: el worker vuelve a enviar desde donde espera el coordinador."
+    ]
+  },
+  "plan_too_new": {
+    "title": "Plan más nuevo de lo que lee el worker",
+    "why": "El plan de una ejecución, y los cuerpos de la API de workers, tienen versión, y un worker dice la versión más nueva que lee al reclamar un intento. El coordinador rechaza uno que no lee la de la ejecución, antes de enviar nada de la ejecución, para que ningún worker ejecute un trabajo con una parte que no entiende. El worker termina, y el intento, que falló antes de su primer paso, se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
   }
 }

@@ -330,7 +330,7 @@ phase's inputs and keep what it gives, so every implementation, whether
 | --- | --- | --- | --- | --- |
 | Create | The run is created | `compile.Create`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values again, from what was submitted, with everything known; the workflow's `env:` and `timeout:`, and matrices whose values are known; the run's shape again |
-| Ready | A job's dependencies have finished | `plan.Job.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
+| Ready | A job's dependencies have finished | `plan.Plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
 | Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
 | End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
@@ -1227,7 +1227,12 @@ beside Meridian's run record, which holds the plan and the run's
 diagnostics. It holds no secret that Meridian can recognize: a job's
 outputs are checked against the secrets its attempt received before they
 leave the worker ([Outputs](#outputs)), and diagnostics never show a value
-made from a variable or a password.
+made from a variable or a password. Nor does where a job runs, when its
+`runs-on:`, `resources:`, `retry:` or `timeout:` reads one: Ready says
+which of them did (`plan.ReadyJob.PrivateFields`, and `SecretFields` for a
+secret), and the coordinator keeps them, and the placement made from them,
+such as the member chosen and why, only where it keeps the run's secrets,
+as it keeps the run's timeout when that reads one.
 
 ### Plans across versions
 
@@ -1267,8 +1272,10 @@ Start needs, is part of version 1: the input definitions, where the parts
 withheld from them are, where the shape's decisions are, a job's `needs:`
 expression, `remote`, `sessions` and the names a session provider gave
 them, the limits, the digest of the run's own text, the pinned workflow a
-step's `uses:` names, with the reference it was resolved by, and the secret
-record; and in the worker API, a job's result as End gives it
+step's `uses:` names, with the reference it was resolved by, which of a
+ready job's fields were made from a variable or a password
+(`plan.ReadyJob.PrivateFields` and `SecretFields`), and the secret record;
+and in the worker API, a job's result as End gives it
 (`workerapi.Complete.Result`, a `plan.JobResult`), in place of the lists of
 outputs the end had. Version 1 no longer holds what Start resumed, as it
 resolves the inputs again ([Starting a run](#starting-a-run)): the inputs
