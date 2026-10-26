@@ -535,9 +535,12 @@ var (
 // The worker API's own problems, in WorkerRegistry, with which a coordinator
 // refuses a worker's request, each 409 Conflict (workerapi): expected is the
 // sequence number of the event, or the byte offset in a log, it expects
-// next.
+// next; placed and claimed are the digests, as sha256: and hex, of the
+// worker binary an attempt's placement started and of the one that
+// claimed it.
 var (
-	Fenced     = defineWorker("fenced", "Report from a superseded attempt")
-	OutOfOrder = defineWorker("out_of_order", "Report out of order", "expected")
-	PlanTooNew = defineWorker("plan_too_new", "Plan newer than the worker reads")
+	Fenced               = defineWorker("fenced", "Report from a superseded attempt")
+	OutOfOrder           = defineWorker("out_of_order", "Report out of order", "expected")
+	PlanTooNew           = defineWorker("plan_too_new", "Plan newer than the worker reads")
+	WorkerDigestMismatch = defineWorker("worker_digest_mismatch", "Worker that isn't the binary placed", "placed", "claimed")
 )

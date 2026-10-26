@@ -238,6 +238,12 @@ type Placement struct {
 	// name, or a process's ID with its start time, so that another process
 	// given the same ID later isn't taken for it.
 	ID string `json:"id"`
+	// WorkerDigest is sha256: and the hex of the SHA-256 digest of the
+	// worker binary the driver started, where it can say, as the local
+	// driver can, or "". The coordinator records it with the attempt, and
+	// refuses a claim from a worker that says another
+	// (workerapi.WorkerDigestMismatch).
+	WorkerDigest string `json:"workerDigest,omitempty"`
 }
 
 // A Status is what has become of a placement's worker.

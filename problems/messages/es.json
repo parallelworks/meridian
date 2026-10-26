@@ -285,6 +285,7 @@
   "fenced": "Otro intento del trabajo ha sustituido a este, o el intento ya ha terminado, así que el coordinador rechaza esta solicitud.",
   "out_of_order": "El informe llega fuera de orden: el coordinador espera lo siguiente desde {expected}, el número del siguiente evento o la posición del siguiente byte de un log.",
   "plan_too_new": "Este worker no lee la versión del plan de la ejecución, así que el coordinador no le envía nada de la ejecución.",
+  "worker_digest_mismatch": "El worker que reclamó el intento ejecuta el binario {claimed}, no {placed}, que inició su colocación, así que el coordinador no le envía nada de la ejecución.",
   "fips_not_enforced": "Meridian solo se ejecuta con el modo FIPS 140-3 de su criptografía aplicado, y el GODEBUG de este proceso lo tiene {mode, select, on {activado, pero sin aplicar} other {desactivado}}.",
   "fips_module_not_validated": "Este binario de meridian se compiló con el módulo FIPS 140-3 {version}, compilado desde el código fuente de Go en vez del módulo validado, y Meridian solo se ejecuta con el módulo validado.",
   "isolation_not_built": "El miembro “{member}” aísla sus trabajos {has_isolation, select, true {con “{isolation}”} other {en un contenedor, como hace un miembro que no nombra su aislamiento}}, lo que su backend aún no puede hacer. Meridian tampoco los ejecuta en el host, lo que los aislaría menos.",

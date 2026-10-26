@@ -49,7 +49,9 @@
 // coordinator stores only its SHA-256 digest, as it stores the bootstrap
 // token's. The coordinator checks every write against the attempt's
 // fencing number, so a write from an attempt that another has superseded
-// fails with Fenced.
+// fails with Fenced. Where the attempt's backend recorded the digest of the
+// worker binary it started, a claim whose Worker.Digest is another fails
+// with WorkerDigestMismatch.
 //
 // The credential is good until the attempt ends, though its lease lapses,
 // so that a worker cut off from the coordinator delivers what it kept. For
@@ -261,10 +263,26 @@ const (
 	// worker exits; the attempt failed before its first step, and is
 	// placed again.
 	PlanTooNew problem.Code = "plan_too_new"
+	// WorkerDigestMismatch (409 Conflict) is a claim from a worker whose
+	// binary's digest (ClaimRequest.Worker.Digest) isn't the one the
+	// attempt's placement started, as its backend recorded it: the binary
+	// was replaced meanwhile, or another program claims with the token.
+	// The coordinator refuses it before it sends anything of the run, and
+	// the worker exits; the attempt failed before its first step, and is
+	// placed again. Its params ParamPlaced and ParamClaimed are the two
+	// digests.
+	WorkerDigestMismatch problem.Code = "worker_digest_mismatch"
 )
 
 // ParamExpected is the param of an OutOfOrder problem.
 const ParamExpected = "expected"
+
+// ParamPlaced and ParamClaimed are the params of a WorkerDigestMismatch
+// problem.
+const (
+	ParamPlaced  = "placed"
+	ParamClaimed = "claimed"
+)
 
 // A ClaimRequest claims the attempt a bootstrap token is for. Its members
 // never change, since a worker sends it before it knows which version the

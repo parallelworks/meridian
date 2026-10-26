@@ -285,6 +285,7 @@
   "fenced": "该作业的另一个尝试已取代此尝试，或者此尝试已完成，因此协调器拒绝此请求。",
   "out_of_order": "报告的顺序不对：协调器期望下一个内容从 {expected} 开始，即下一个事件的编号或日志下一个字节的偏移量。",
   "plan_too_new": "此工作进程无法读取运行计划的版本，因此协调器不向它发送运行的任何内容。",
+  "worker_digest_mismatch": "领取该尝试的工作进程运行的是二进制文件 {claimed}，而不是其放置所启动的 {placed}，因此协调器不向它发送运行的任何内容。",
   "fips_not_enforced": "Meridian 只在其加密的 FIPS 140-3 模式被强制执行时运行，而此进程的 GODEBUG {mode, select, on {启用了该模式，但未强制执行} other {关闭了该模式}}。",
   "fips_module_not_validated": "此 meridian 二进制文件使用从 Go 源代码编译的 FIPS 140-3 模块 {version} 构建，而不是经过验证的模块，而 Meridian 只在使用经过验证的模块时运行。",
   "isolation_not_built": "成员“{member}”{has_isolation, select, true {用“{isolation}”} other {在容器中（与未指定隔离方式的成员一样）}}隔离其作业，而其后端尚不能做到。Meridian 也不会改为在主机上运行这些作业，因为那样隔离会更弱。",

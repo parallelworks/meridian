@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); and its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases and fences, and the endpoints workers reach it through. The coordinator creates runs, starts them and ends them; placing their jobs and serving the worker API aren't built yet ([The coordinator](#the-coordinator)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them and ends them; placing their jobs isn't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -2683,7 +2683,12 @@ The coordinator looks for the attempt's placement before it makes the
 token, and makes one only for a placement that doesn't exist yet. When the
 worker claims the attempt, it presents the bootstrap token with a
 credential it makes itself, which is the attempt's credential from then on,
-so the credential never travels from the coordinator.
+so the credential never travels from the coordinator. A backend that can
+say which binary it started, as the local one can, records its digest with
+the placement, and the coordinator refuses a claim from a worker whose
+digest is another, before it sends anything of the run
+(`worker_digest_mismatch`): the attempt fails before its first step, and
+is placed again.
 
 ### The worker API
 

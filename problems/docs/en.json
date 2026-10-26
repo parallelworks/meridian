@@ -1720,6 +1720,13 @@
       "Start workers of the same release of Meridian as the coordinator."
     ]
   },
+  "worker_digest_mismatch": {
+    "why": "A backend records the SHA-256 digest of the meridian binary it starts for an attempt, and a worker says its own as it claims the attempt. The coordinator refuses a claim whose digest isn't the one recorded, before it sends anything of the run: the binary was replaced between the placement and the claim, or another program claimed with the attempt's bootstrap token. The attempt fails before its first step, and is placed again.",
+    "fix": [
+      "If Meridian was upgraded while the job was being placed, nothing needs doing: the job is placed again, with the new binary.",
+      "Otherwise find out what replaced the binary, or what else read the attempt's bootstrap token."
+    ]
+  },
   "fips_not_enforced": {
     "why": "Meridian is built with Go's validated FIPS 140-3 cryptographic module, and runs only with GODEBUG's fips140=only, which makes the use of an algorithm the module doesn't approve an error. The binary makes fips140=only its default, but the GODEBUG environment variable overrides a default, and a worker can be started by hand or over SSH with any environment. So every meridian command, the worker above all, refuses to run without it, rather than run with weaker cryptography.",
     "fix": [
