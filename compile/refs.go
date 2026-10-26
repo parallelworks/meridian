@@ -8,6 +8,7 @@ import (
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/hint"
+	"github.com/parallelworks/meridian/internal/inputpath"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
@@ -246,14 +247,10 @@ func (c *compiler) laterContext(path []string, seen map[string]bool) string {
 			}
 		}
 	}
-	rows := "template"
-	if f.repeats() {
-		rows = "options"
-	}
-	if rest := path[len(f.path):]; len(rest) >= 2 && (f.typ == "list" || f.repeats()) {
+	if rows, ok := inputpath.RowsKey(f.def); ok && len(path) >= len(f.path)+2 {
 		// A field of the rows: its definition, and its value in each
 		// default row.
-		key := rest[1]
+		key := path[len(f.path)+1]
 		at := appendPath(f.loc, rows, key)
 		walk(lookup(c.doc.Value, at), at)
 		defaults, _ := lookup(c.doc.Value, appendPath(f.loc, "default")).([]any)

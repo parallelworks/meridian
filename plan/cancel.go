@@ -3,8 +3,8 @@ package plan
 import (
 	"slices"
 	"strconv"
-	"strings"
 
+	"github.com/parallelworks/meridian/internal/inputpath"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
@@ -153,18 +153,18 @@ func (l *laterInputs) reads(path []string) bool {
 	if len(path) == 0 || path[0] == "*" || path[0] == "[index]" {
 		return false
 	}
-	in, n, ok := findInput(l.defs, path)
+	in, n, ok := inputpath.Find(l.defs, path)
 	switch {
 	case !ok:
 		return false
-	case n == len(path) && in.container && in.flatten:
+	case n == len(path) && in.Container && in.Flatten:
 		// Its inputs' values are beside its key, which holds none of them.
 		return false
 	}
 	if v, held := jsonptr.Lookup(l.values, path); held {
 		return l.holds(in, n, path, v)
 	}
-	def, loc := in.def, in.loc
+	def, loc := in.Def, in.Loc
 	seen := l.seen
 	// reads reports whether the expressions in v, a value, read one.
 	reads := func(v any) bool {
@@ -194,7 +194,7 @@ func (l *laterInputs) reads(path []string) bool {
 		}
 		return false
 	}
-	if rows, ok := rowsKey(def); ok && len(path) >= n+2 {
+	if rows, ok := inputpath.RowsKey(def); ok && len(path) >= n+2 {
 		// A field of the rows: its definition, and its value in each
 		// default row.
 		key := path[n+1]
@@ -224,12 +224,12 @@ func (l *laterInputs) reads(path []string) bool {
 // the run's values: an input of a group or a wizard step read whole, or a
 // field of a list's row, of the list read whole or the row. Any other
 // value the plan holds is the run's, and reads nothing.
-func (l *laterInputs) holds(in definedInput, n int, path []string, v any) bool {
-	rows, isRows := rowsKey(in.def)
-	template, _ := in.def[rows].(map[string]any)
+func (l *laterInputs) holds(in inputpath.Input, n int, path []string, v any) bool {
+	rows, isRows := inputpath.RowsKey(in.Def)
+	template, _ := in.Def[rows].(map[string]any)
 	fields := func(row []string) bool {
-		for _, f := range definedInputs(template, nil, row) {
-			if l.reads(f.path) {
+		for _, f := range inputpath.Inputs(template, nil, row) {
+			if l.reads(f.Path) {
 				return true
 			}
 		}
@@ -238,10 +238,10 @@ func (l *laterInputs) holds(in definedInput, n int, path []string, v any) bool {
 	switch v := v.(type) {
 	case map[string]any:
 		switch {
-		case n == len(path) && in.container:
-			inner, loc, at := in.inner()
-			for _, member := range definedInputs(inner, loc, at) {
-				if l.reads(member.path) {
+		case n == len(path) && in.Container:
+			inner, loc, at := in.Inner()
+			for _, member := range inputpath.Inputs(inner, loc, at) {
+				if l.reads(member.Path) {
 					return true
 				}
 			}
@@ -258,103 +258,4 @@ func (l *laterInputs) holds(in definedInput, n int, path []string, v any) bool {
 		}
 	}
 	return false
-}
-
-// A definedInput is an input definition, where it is among the run's
-// input definitions, and where its value is, as the compiler places it.
-type definedInput struct {
-	def       map[string]any
-	typ       string
-	loc, path []string
-	// container is set for a group or a wizard step that holds other
-	// inputs, and flatten for one whose inputs' values are beside its own
-	// key rather than under it.
-	container, flatten bool
-}
-
-// definedInputs returns the input definitions among defs, which are at
-// loc, with their values at path, in the order of their keys, without those
-// they hold: a group's or a wizard step's inputs' values are under its
-// key, unless it flattens them beside it, and a list's rows are its
-// value's.
-func definedInputs(defs map[string]any, loc, path []string) []definedInput {
-	var out []definedInput
-	flattenSteps := wizardFlattens(defs)
-	for key, v := range jsonvalue.Sorted(defs) {
-		def, ok := v.(map[string]any)
-		if !ok || strings.HasPrefix(key, "$") {
-			continue
-		}
-		typ, _ := def["type"].(string)
-		in := definedInput{def: def, typ: typ, loc: slices.Concat(loc, []string{key}), path: slices.Concat(path, []string{key})}
-		switch _, hasItems := def["items"].(map[string]any); {
-		case typ == "header":
-		case typ == "step":
-			if _, ok := def["options"].(map[string]any); ok && def["multi"] != true {
-				in.container, in.flatten = true, flattenSteps
-			}
-		case hasItems && typ != "list":
-			in.container, in.flatten = true, def["flatten"] == true
-		}
-		out = append(out, in)
-	}
-	return out
-}
-
-// inner returns the input definitions a container holds, where they are,
-// and where their values are; nil for any other input.
-func (in definedInput) inner() (defs map[string]any, loc, path []string) {
-	if !in.container {
-		return nil, nil, nil
-	}
-	key := "items"
-	if in.typ == "step" {
-		key = "options"
-	}
-	defs, _ = in.def[key].(map[string]any)
-	path = in.path
-	if in.flatten {
-		path = path[:len(path)-1]
-	}
-	return defs, slices.Concat(in.loc, []string{key}), path
-}
-
-// findInput returns the input definition, among defs and those they hold,
-// whose value is at the longest prefix of path that one's is, and that
-// prefix's length; of two, the first. ok is false if none is.
-func findInput(defs map[string]any, path []string) (found definedInput, n int, ok bool) {
-	var visit func(defs map[string]any, loc, at []string)
-	visit = func(defs map[string]any, loc, at []string) {
-		for _, in := range definedInputs(defs, loc, at) {
-			if len(in.path) > n && len(in.path) <= len(path) && slices.Equal(in.path, path[:len(in.path)]) {
-				found, n, ok = in, len(in.path), true
-			}
-			if inner, innerLoc, innerPath := in.inner(); inner != nil {
-				visit(inner, innerLoc, innerPath)
-			}
-		}
-	}
-	visit(defs, nil, nil)
-	return found, n, ok
-}
-
-// rowsKey returns the key of the definitions of the inputs that each row of
-// def's value is a group of: template for a list, and options for a
-// repeated wizard step. ok is false for any other input.
-func rowsKey(def map[string]any) (key string, ok bool) {
-	switch {
-	case def["type"] == "list":
-		return "template", true
-	case def["type"] == "step" && def["multi"] == true:
-		return "options", true
-	}
-	return "", false
-}
-
-// wizardFlattens reports whether the wizard steps among defs have their
-// inputs' values beside their own: unless $meta.wizard.flatten is false.
-func wizardFlattens(defs map[string]any) bool {
-	meta, _ := defs["$meta"].(map[string]any)
-	wizard, _ := meta["wizard"].(map[string]any)
-	return wizard["flatten"] != false
 }
