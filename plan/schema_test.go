@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -155,5 +156,60 @@ func TestSchemasRefuse(t *testing.T) {
 	job := string(encoded(t, plan.EncodeReadyJob, readyJobs(t)[1]))
 	if err := schematest.Check(jobs, []byte(strings.Replace(job, `"target":{"group":"gpu"}`, `"target":{"group":"gpu","inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":null}}`, 1))); err == nil {
 		t.Error("a target of two kinds fits the schema")
+	}
+}
+
+// The schema checks an expression's tree in time linear in its size, each
+// node once whatever the nodes around it, so that one tree can't stall a
+// platform that checks the plans it is given, as a chain of 20 || did when
+// a node was checked as a unary operator, and then again as a binary one.
+// The deepest tree the parser takes of each shape is checked well within
+// the bound, which a schema that checked a node even twice for each level
+// above it would be very far past.
+func TestSchemaChecksTreesInLinearTime(t *testing.T) {
+	s := schematest.Schema(t, "plan/schema/1/plan.schema.json#/$defs/Value")
+	shapes := map[string]func(n int) string{
+		"left-deep ||":  func(n int) string { return strings.Repeat("inputs.x || ", n) + "inputs.y" },
+		"right-deep &&": func(n int) string { return strings.Repeat("inputs.x && (", n) + "inputs.y" + strings.Repeat(")", n) },
+		"!":             func(n int) string { return strings.Repeat("!", n) + "inputs.x" },
+		"-":             func(n int) string { return strings.Repeat("-(", n) + "1" + strings.Repeat(")", n) },
+		"calls":         func(n int) string { return strings.Repeat("toJSON(", n) + "inputs.x" + strings.Repeat(")", n) },
+		"ternaries":     func(n int) string { return strings.Repeat("inputs.a ? 1 : ", n) + "2" },
+		"members":       func(n int) string { return strings.Repeat("fromJSON(", n) + "inputs.x" + strings.Repeat(").a", n) },
+		"slices":        func(n int) string { return strings.Repeat("(", n) + "inputs.x" + strings.Repeat("):(1)", n) },
+	}
+	var trees [][]byte
+	for name, shape := range shapes {
+		n := 300
+		v, err := plan.ValueOf("${{ " + shape(n) + " }}")
+		for ; err != nil && n > 0; n-- {
+			v, err = plan.ValueOf("${{ " + shape(n-1) + " }}")
+		}
+		if n < 60 {
+			t.Fatalf("%s: the parser takes %d levels at most", name, n)
+		}
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trees = append(trees, data)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for _, data := range trees {
+			if err := schematest.Check(s, data); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("checking the trees took more than 30s")
 	}
 }

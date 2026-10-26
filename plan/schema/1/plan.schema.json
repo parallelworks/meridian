@@ -882,52 +882,48 @@
       "description": "JSON that is never evaluated, such as what a run was given: any JSON value, written as it is, a string with ${{ }} in it among them."
     },
     "Value": {
-      "description": "Part of a workflow that may hold expressions: JSON values, in which each string with a ${{ }} in it is a template, an object whose one member is ${{. A mapping whose only key starts with $ is written inside an object whose one member is $, so that it is never taken for a template.",
-      "anyOf": [
-        {
-          "type": ["null", "boolean", "number", "string"]
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Value"
-          }
-        },
-        {
-          "$ref": "#/$defs/Template"
-        },
-        {
-          "type": "object",
-          "properties": {
-            "$": {
-              "type": "object",
-              "minProperties": 1,
-              "maxProperties": 1,
-              "propertyNames": {
-                "pattern": "^\\$"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/Value"
-              }
-            }
-          },
-          "required": ["$"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Value"
-          },
-          "not": {
-            "minProperties": 1,
-            "maxProperties": 1,
-            "propertyNames": {
-              "pattern": "^\\$"
-            }
-          }
+      "description": "Part of a workflow that may hold expressions: JSON values, in which each string with a ${{ }} in it is a template, an object whose one member is ${{. A mapping whose only key starts with $ is written inside an object whose one member is $, so that it is never taken for a template. So an object whose only key starts with $ is one of the two, and checked as it is, and any other value is checked as JSON values are, each value in it once.",
+      "if": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1,
+        "propertyNames": {
+          "pattern": "^\\$"
         }
-      ]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Template"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "$": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "propertyNames": {
+                  "pattern": "^\\$"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/Value"
+                }
+              }
+            },
+            "required": ["$"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "else": {
+        "items": {
+          "$ref": "#/$defs/Value"
+        },
+        "additionalProperties": {
+          "$ref": "#/$defs/Value"
+        }
+      }
     },
     "Template": {
       "description": "A string with expressions in it, as its parts: text, and expressions, one at least.",
@@ -935,9 +931,6 @@
       "properties": {
         "${{": {
           "type": "array",
-          "contains": {
-            "$ref": "#/$defs/Expr"
-          },
           "items": {
             "anyOf": [
               {
@@ -947,6 +940,9 @@
                 "$ref": "#/$defs/Expr"
               }
             ]
+          },
+          "contains": {
+            "type": "object"
           }
         }
       },
@@ -968,222 +964,292 @@
       "additionalProperties": false
     },
     "Node": {
-      "description": "A node of an expression's tree: an object whose members say its kind.",
+      "description": "A node of an expression's tree: an object, one of whose members names its kind, with the members a node of that kind has. Each member is checked once, against properties, and the members a kind has, by name, against allOf, so that a tree is checked in time linear in its size.",
+      "type": "object",
+      "properties": {
+        "lit": true,
+        "num": {
+          "enum": ["NaN", "Infinity", "-Infinity"]
+        },
+        "word": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "up": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "op": {
+          "type": "string"
+        },
+        "not": {
+          "const": true
+        },
+        "x": {
+          "$ref": "#/$defs/Node"
+        },
+        "y": {
+          "$ref": "#/$defs/Node"
+        },
+        "if": {
+          "$ref": "#/$defs/Node"
+        },
+        "then": {
+          "$ref": "#/$defs/Node"
+        },
+        "else": {
+          "$ref": "#/$defs/Node"
+        },
+        "member": {
+          "$ref": "#/$defs/Node"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "call": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Node"
+          }
+        },
+        "lambda": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "body": {
+          "$ref": "#/$defs/Node"
+        },
+        "param": {
+          "type": "string"
+        },
+        "slice": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/Node"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Node"
+                }
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "concat": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
       "oneOf": [
         {
+          "required": ["lit"]
+        },
+        {
+          "required": ["num"]
+        },
+        {
+          "required": ["word"]
+        },
+        {
+          "required": ["ref"]
+        },
+        {
+          "required": ["up"]
+        },
+        {
+          "required": ["op"]
+        },
+        {
+          "required": ["if"]
+        },
+        {
+          "required": ["member"]
+        },
+        {
+          "required": ["call"]
+        },
+        {
+          "required": ["lambda"]
+        },
+        {
+          "required": ["param"]
+        },
+        {
+          "required": ["slice"]
+        },
+        {
+          "required": ["concat"]
+        }
+      ],
+      "allOf": [
+        {
           "description": "A literal.",
-          "type": "object",
-          "properties": {
-            "lit": true
+          "if": {
+            "required": ["lit"]
           },
-          "required": ["lit"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["lit"]
+            }
+          }
         },
         {
           "description": "A literal that JSON has no number for.",
-          "type": "object",
-          "properties": {
-            "num": {
-              "enum": ["NaN", "Infinity", "-Infinity"]
-            }
+          "if": {
+            "required": ["num"]
           },
-          "required": ["num"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["num"]
+            }
+          }
         },
         {
           "description": "A bare word.",
-          "type": "object",
-          "properties": {
-            "word": {
-              "type": "string"
-            }
+          "if": {
+            "required": ["word"]
           },
-          "required": ["word"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["word"]
+            }
+          }
         },
         {
           "description": "A reference to a context.",
-          "type": "object",
-          "properties": {
-            "ref": {
-              "type": "string"
-            },
-            "path": {
-              "$ref": "#/$defs/Path"
-            }
+          "if": {
+            "required": ["ref"]
           },
-          "required": ["ref", "path"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["ref", "path"]
+            },
+            "required": ["path"]
+          }
         },
         {
           "description": "A relative reference: up levels above the expression, then path.",
-          "type": "object",
-          "properties": {
-            "up": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "path": {
-              "$ref": "#/$defs/Path"
-            }
+          "if": {
+            "required": ["up"]
           },
-          "required": ["up", "path"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["up", "path"]
+            },
+            "required": ["path"]
+          }
         },
         {
-          "description": "A unary operator.",
-          "type": "object",
-          "properties": {
-            "op": {
-              "type": "string"
-            },
-            "x": {
-              "$ref": "#/$defs/Node"
-            }
+          "description": "An operator: a unary one, with x, or a binary one, with x and y, and negated, as !in is, with not.",
+          "if": {
+            "required": ["op"]
           },
-          "required": ["op", "x"],
-          "additionalProperties": false
-        },
-        {
-          "description": "A binary operator, negated, as !in is, with not.",
-          "type": "object",
-          "properties": {
-            "op": {
-              "type": "string"
+          "then": {
+            "propertyNames": {
+              "enum": ["op", "not", "x", "y"]
             },
-            "not": {
-              "const": true
-            },
-            "x": {
-              "$ref": "#/$defs/Node"
-            },
-            "y": {
-              "$ref": "#/$defs/Node"
+            "required": ["x"],
+            "dependentRequired": {
+              "not": ["y"]
             }
-          },
-          "required": ["op", "x", "y"],
-          "additionalProperties": false
+          }
         },
         {
           "description": "A ternary.",
-          "type": "object",
-          "properties": {
-            "if": {
-              "$ref": "#/$defs/Node"
-            },
-            "then": {
-              "$ref": "#/$defs/Node"
-            },
-            "else": {
-              "$ref": "#/$defs/Node"
-            }
+          "if": {
+            "required": ["if"]
           },
-          "required": ["if", "then", "else"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["if", "then", "else"]
+            },
+            "required": ["then", "else"]
+          }
         },
         {
           "description": "Properties of a computed value.",
-          "type": "object",
-          "properties": {
-            "member": {
-              "$ref": "#/$defs/Node"
-            },
-            "path": {
-              "$ref": "#/$defs/Path"
-            }
+          "if": {
+            "required": ["member"]
           },
-          "required": ["member", "path"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["member", "path"]
+            },
+            "required": ["path"]
+          }
         },
         {
           "description": "A function call.",
-          "type": "object",
-          "properties": {
-            "call": {
-              "type": "string"
-            },
-            "args": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Node"
-              }
-            }
+          "if": {
+            "required": ["call"]
           },
-          "required": ["call", "args"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["call", "args"]
+            },
+            "required": ["args"]
+          }
         },
         {
           "description": "The lambda that is the last argument of map() or filter().",
-          "type": "object",
-          "properties": {
-            "lambda": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "body": {
-              "$ref": "#/$defs/Node"
-            }
+          "if": {
+            "required": ["lambda"]
           },
-          "required": ["lambda", "body"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["lambda", "body"]
+            },
+            "required": ["body"]
+          }
         },
         {
           "description": "A lambda's parameter, read in its body.",
-          "type": "object",
-          "properties": {
-            "param": {
-              "type": "string"
-            },
-            "path": {
-              "$ref": "#/$defs/Path"
-            }
+          "if": {
+            "required": ["param"]
           },
-          "required": ["param", "path"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["param", "path"]
+            },
+            "required": ["path"]
+          }
         },
         {
           "description": "The operand (start):(end), whose end is null when it is left open.",
-          "type": "object",
-          "properties": {
-            "slice": {
-              "type": "array",
-              "prefixItems": [
-                {
-                  "$ref": "#/$defs/Node"
-                },
-                {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "$ref": "#/$defs/Node"
-                    }
-                  ]
-                }
-              ],
-              "minItems": 2,
-              "maxItems": 2
-            }
+          "if": {
+            "required": ["slice"]
           },
-          "required": ["slice"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["slice"]
+            }
+          }
         },
         {
           "description": "The operand 2:(end): the word before the group, then the group's value.",
-          "type": "object",
-          "properties": {
-            "concat": {
-              "type": "string"
-            },
-            "x": {
-              "$ref": "#/$defs/Node"
-            }
+          "if": {
+            "required": ["concat"]
           },
-          "required": ["concat", "x"],
-          "additionalProperties": false
+          "then": {
+            "propertyNames": {
+              "enum": ["concat", "x"]
+            },
+            "required": ["x"]
+          }
         }
       ]
     },
