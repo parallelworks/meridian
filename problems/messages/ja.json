@@ -264,7 +264,7 @@
   "source_with_invalid": "ステップの with: {key} は{what, select, server {GitLab サーバーの名前、つまり git.example.com のようなポートのない DNS 名ではありません} other {flows/workflow.yaml のようなリポジトリ内のファイルのパスではありません。空の名前、. や ..、制御文字は含められません}}。",
   "input_read_as_submitted": "{type} 型の入力「{input}」は{given, select, text {テキストとして送信されたため、テキストとして読まれます} number {数値として送信されたため、数値として読まれます} boolean {ブール値として送信されたため、ブール値として読まれます} other {{given}}}。",
   "flattened_name_taken": "入力「{first}」と「{second}」は、どちらも値が「{input}」にあります。平坦化するグループは、その入力の値を周りの入力の横に置くためです。",
-  "flattened_group_value": "グループ「{input}」は平坦化するため、その入力はそれぞれの名前で値を受け取ります。「{input}」に与えられた値はそのまま保持され、どの入力もそれを読みません。",
+  "flattened_group_value": "グループ「{input}」は平坦化するため、その入力はそれぞれの名前で値を受け取ります。{source, select, row {既定の行が「{input}」に書いている値} other {「{input}」に与えられた値}}はそのまま保持され、どの入力もそれを読みません。",
   "input_flag_unsplit": "{position} 番目の -input に = がありません。path=value のように書いてください。",
   "input_flag_wrong_type": "-input {path}: 入力「{input}」は {type} 型で、{type, select, boolean {true または false を取ります} number {8、-2.5、1e3 のような JSON の数値を取ります{reason, select, too_large {が、これは数値としては大きすぎます} other {}}} header {値を取りません} other {別の値を取ります}}。",
   "input_flag_not_json": "-input {path}: 入力「{input}」は {type} 型で、JSON の{shape, select, array {配列} other {オブジェクト}}を取りますが、これは{reason, select, empty {空です} extra {JSON の値を 2 つ以上含みます} number {読み取れないほど大きな数値を含みます} other {{offset} バイト目で有効な JSON ではありません}}。",

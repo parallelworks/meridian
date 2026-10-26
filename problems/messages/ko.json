@@ -264,7 +264,7 @@
   "source_with_invalid": "단계의 with: {key}은(는) {what, select, server {GitLab 서버의 이름, 즉 git.example.com 같은 포트 없는 DNS 이름이 아닙니다} other {flows/workflow.yaml 같은 저장소 안 파일의 경로가 아닙니다. 빈 이름, . 또는 .., 제어 문자를 담을 수 없습니다}}.",
   "input_read_as_submitted": "{type} 유형의 입력 ‘{input}’은(는) {given, select, text {텍스트로 제출되었으므로 텍스트로 읽힙니다} number {숫자로 제출되었으므로 숫자로 읽힙니다} boolean {불리언으로 제출되었으므로 불리언으로 읽힙니다} other {{given}}}.",
   "flattened_name_taken": "‘{first}’ 입력과 ‘{second}’ 입력은 둘 다 값이 ‘{input}’에 있습니다. 평탄화되는 그룹은 그 입력의 값을 주변 입력 옆에 두기 때문입니다.",
-  "flattened_group_value": "‘{input}’ 그룹은 평탄화되므로 그 입력은 각자의 이름으로 값을 받습니다. ‘{input}’에 주어진 값은 주어진 그대로 유지되며, 어느 입력도 그 값을 읽지 않습니다.",
+  "flattened_group_value": "‘{input}’ 그룹은 평탄화되므로 그 입력은 각자의 이름으로 값을 받습니다. {source, select, row {기본 행이 ‘{input}’에 적은 값} other {‘{input}’에 주어진 값}}은 그대로 유지되며, 어느 입력도 그 값을 읽지 않습니다.",
   "input_flag_unsplit": "{position}번째 -input에 =가 없습니다. path=value처럼 쓰세요.",
   "input_flag_wrong_type": "-input {path}: 입력 ‘{input}’은(는) {type} 유형이며, {type, select, boolean {true 또는 false를 받습니다} number {8, -2.5, 1e3 같은 JSON 숫자를 받습니다{reason, select, too_large {. 이 값은 숫자로 쓰기에 너무 큽니다} other {}}} header {값을 받지 않습니다} other {다른 값을 받습니다}}.",
   "input_flag_not_json": "-input {path}: 입력 ‘{input}’은(는) {type} 유형이며 JSON {shape, select, array {배열} other {객체}}을(를) 받는데, 이 값은 {reason, select, empty {비어 있습니다} extra {JSON 값을 둘 이상 담고 있습니다} number {읽을 수 없을 만큼 큰 숫자를 담고 있습니다} other {{offset}번째 바이트에서 유효한 JSON이 아닙니다}}.",

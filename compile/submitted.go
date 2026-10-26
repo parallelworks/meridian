@@ -208,7 +208,7 @@ func (r *inputResolver) checkUnknown(values map[string]any, path, rel []string, 
 			if g := inputs.flattened[key]; g != nil {
 				// Kept, as ACTIVATE keeps it, though none of the group's
 				// inputs reads it.
-				r.reportAt(problems.FlattenedGroupValue, g.loc, problems.Params{"input": strings.Join(at, ".")})
+				r.reportAt(problems.FlattenedGroupValue, g.loc, problems.Params{"input": strings.Join(at, "."), "source": "run"})
 				continue
 			}
 			if r.unknown++; r.unknown > maxListed {

@@ -148,7 +148,7 @@ func (c *compiler) checkDefaultRow(f *field, values map[string]any, loc, rel []s
 	for key, v := range jsonvalue.Sorted(values) {
 		in, ok := inputs.byKey[key]
 		if _, flat := inputs.flattened[key]; !ok && flat {
-			c.reportAt(problems.FlattenedGroupValue, appendPath(loc, key), problems.Params{"input": strings.Join(appendPath(rel, key), ".")})
+			c.reportAt(problems.FlattenedGroupValue, appendPath(loc, key), problems.Params{"input": strings.Join(appendPath(rel, key), "."), "source": "row"})
 			continue
 		}
 		if !ok {

@@ -105,10 +105,11 @@ var (
 	// its input's, which format 1 reads as it was submitted: given is
 	// text, number or boolean.
 	InputReadAsSubmitted = define(Warning, "input_read_as_submitted", "Input read as it was submitted", "input", "type", "given")
-	// FlattenedGroupValue is a value given at the key of a group with
-	// flatten true, whose inputs' values are beside it: input is the
-	// value's path.
-	FlattenedGroupValue = define(Warning, "flattened_group_value", "Value for a group that flattens", "input")
+	// FlattenedGroupValue is a value at the key of a group with flatten
+	// true, whose inputs' values are beside it: input is the value's path,
+	// and source run for a value the run was given, or row for one a list's
+	// default row writes.
+	FlattenedGroupValue = define(Warning, "flattened_group_value", "Value for a group that flattens", "input", "source")
 	// FlattenedNameTaken is two input definitions whose values have one key,
 	// where a group with flatten true puts one beside the other: input is
 	// the key, and first and second the definitions' names, as in

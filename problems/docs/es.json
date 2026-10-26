@@ -1841,7 +1841,7 @@
   },
   "flattened_group_value": {
     "title": "Valor para un grupo que se aplana",
-    "why": "Un grupo con flatten: true tiene los valores de sus entradas junto al suyo, bajo sus propios nombres, como lo ejecuta ACTIVATE, así que un valor dado con el nombre del grupo no es de sus entradas. Se conserva tal como se dio, como lo conserva ACTIVATE, y lo que lee inputs.<grupo> lo lee; si el grupo se ignora, se descarta con las entradas del grupo.",
+    "why": "Un grupo con flatten: true tiene los valores de sus entradas junto al suyo, bajo sus propios nombres, como lo ejecuta ACTIVATE, así que un valor en la clave del grupo, dado para la ejecución o escrito en una fila predeterminada de una lista, no es de sus entradas. Se conserva tal cual, como lo conserva ACTIVATE, como secreto si el grupo tiene una contraseña entre sus entradas, y lo que lee inputs.<grupo> lo lee; si el grupo se ignora, se descarta con las entradas del grupo.",
     "fix": [
       "Da a las entradas del grupo sus valores por sus propios nombres, junto al del grupo, o elimina el valor."
     ]
