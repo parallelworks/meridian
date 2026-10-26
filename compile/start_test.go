@@ -676,9 +676,9 @@ func TestStartEvaluatesSessions(t *testing.T) {
 }
 
 // An expression in sessions: or links: can't read env, needs or steps,
-// which no run knows before its jobs run: it is an error as the run is
-// created, where ACTIVATE made the session or the link with the
-// expression's text.
+// which no run knows before its jobs run, directly or through an input
+// whose value reads one: it is an error as the run is created, where
+// ACTIVATE made the session or the link with the expression's text.
 func TestSessionsReadNoLaterContext(t *testing.T) {
 	for _, ref := range []string{"env.E", "needs.a.outputs.x", "steps.s.outputs.x"} {
 		for _, block := range []string{
@@ -690,6 +690,42 @@ func TestSessionsReadNoLaterContext(t *testing.T) {
 			errs := diags.Errors()
 			if err != nil || c != nil || len(errs) != 1 || errs[0].Code != problems.ContextNotKnown.Code() {
 				t.Errorf("%s in %.8s: %v, %v, %v, want context_not_known", ref, block, c, diags, err)
+			}
+		}
+	}
+
+	// Nor can it read them through an input, whose value would be what the
+	// workflow's env: alone gives, which no job reads: a job's env holds its
+	// own and what the worker sets as it starts too.
+	defs := "a: {type: string, optional: true}\n" +
+		"e: {type: string, default: '${{ env.BASE }}/x'}\n" +
+		"f: {type: string, default: 'f-${{ inputs.e }}'}\n" +
+		"g: {type: group, items: {h: {type: string, default: '${{ env.BASE }}'}}}\n" +
+		"l: {type: list, default: [{r: '${{ env.BASE }}'}], template: {r: {type: string}}}\n" +
+		"p: {type: string, default: 'p-${{ inputs.a }}'}\n" +
+		"rows: {type: list, default: [{rz: '${{ env.BASE }}'}], template: {rx: {type: string, default: '${{ env.BASE }}'}, ry: {type: string, default: y}, rz: {type: string}, rw: {type: string, default: '${{ inputs.rows[index].rx }}'}}}"
+	for ref, want := range map[string]string{
+		"inputs.e": "env", "inputs.f": "env", "inputs.g.h": "env", "inputs.g": "env", "inputs.l": "env",
+		"inputs.a": "", "inputs.p": "", "toJSON(env)": "", "''env.BASE''": "",
+		// A row's field reads what its own definition and its place in the
+		// default rows read, not its siblings'.
+		"inputs.rows[0].rx": "env", "inputs.rows[0].rz": "env", "inputs.rows[0].rw": "env",
+		"inputs.rows[0].ry": "", "toJSON(inputs.rows.*.ry)": "", "toJSON(inputs.rows)": "env",
+	} {
+		for _, block := range []string{
+			"sessions:\n  desktop:\n    prompt-for-name: {default: '${{ " + ref + " }}'}\n",
+			"links:\n  docs:\n    url: 'https://example.com/${{ " + ref + " }}'\n",
+		} {
+			src := workflow(defs, "env:\n  BASE: /data\n"+block)
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Inputs: passThrough{}, Sessions: &testSessions{}})
+			errs := diags.Errors()
+			switch {
+			case err != nil:
+				t.Errorf("%s in %.8s: %v", ref, block, err)
+			case want == "" && c == nil:
+				t.Errorf("%s in %.8s: %v, want the run", ref, block, diags)
+			case want != "" && (c != nil || len(errs) != 1 || errs[0].Code != problems.ContextNotKnown.Code() || errs[0].Params["context"] != want):
+				t.Errorf("%s in %.8s: %v, want context_not_known of %s", ref, block, diags, want)
 			}
 		}
 	}
