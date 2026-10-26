@@ -46,7 +46,7 @@
           "maximum": 2147483647
         },
         "release": {
-          "description": "The Meridian release that compiled the plan, as v1.2.3, or (devel) for a build of Meridian that isn't one.",
+          "description": "The Meridian release that compiled the plan, as v1.2.3, or (devel) for a build of Meridian that isn't one. It says which build made the plan, and isn't part of what the plan is: the plan's digest leaves it out.",
           "type": "string"
         },
         "name": {
@@ -632,7 +632,7 @@
           "const": 1
         },
         "planDigest": {
-          "description": "The digest of the plan the record was made with.",
+          "description": "The digest of the plan the record was made with, as plan.Digest gives it: sha256: and the hex of the SHA-256 digest of the plan's encoding without its release.",
           "type": "string"
         },
         "submitted": {

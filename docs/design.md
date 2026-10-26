@@ -1128,7 +1128,8 @@ It holds:
 - **The run:** the workflow's source and revision, its format and metadata,
   the Meridian release that compiled it (`Run.Release`, `plan.Release`:
   the module's version in the build, or `(devel)` for a build that isn't a
-  release), the input values known when the
+  release), which says only which build made the plan, so the plan's
+  digest leaves it out ([Reruns](#reruns)), the input values known when the
   run was created that read no variable and no password, the workflow's
   `env`, the run's timeout, `remote` and `sessions`, where the decisions of
   its shape that read a variable or a password are, and the secrets and
@@ -1261,7 +1262,8 @@ that names no version, and one whose submitted values aren't a mapping
   (`Decisions`); which parts of what was submitted mean the expression a
   form made them from, as Create decided, with the expression's place
   (`Means`); and the digest of the plan it made with them (`PlanDigest`),
-  which Start checks. Start resolves the inputs again from these.
+  which Start checks, and which leaves out the release that compiled the
+  plan ([Reruns](#reruns)). Start resolves the inputs again from these.
 - **Start** (`compile.StartResult.Keep`): the variables it read, plain
   and secret, and the private half of the run's values (`Run`, as
   `RunValues.Split` gives it); the run's timeout, when it is private
@@ -1347,7 +1349,10 @@ sees one version.
 - **What an expression means is its format's.** A stored tree is read the
   same in every version, and evaluated by the rules of the format the plan
   records.
-- **The release.** The plan records the Meridian release that compiled it.
+- **The release.** The plan records the Meridian release that compiled it,
+  for whoever reads the run, but its digest leaves it out, as a rerun's
+  comparison does ([Reruns](#reruns)): the same plan from another build is
+  the same plan.
 
 A run's secret record is versioned with its plan, and encoded as it is
 (`plan.Record`): a release reads the records of the plans it reads, and the
@@ -1870,9 +1875,14 @@ as its launch form does. Create runs again on what is submitted, with the
 workflow the plan pins, and gives the rerun's secret record; the plan it
 gives must be the stored one, as a plan doesn't depend on a variable's or a
 password's value ([The plan](#the-plan)): one that differs, but for the
-jobs' graph, which Start checks, and the variables' names, whose kinds can
-have changed, means what was submitted isn't the run's, and the rerun is
-refused. Start then starts it as it starts any run: it reads each variable's
+jobs' graph, which Start checks, the variables' names, whose kinds can
+have changed, and the release that compiled it, means what was submitted
+isn't the run's, and the rerun is refused. The release is another whenever
+the build is, even of one commit, whose version a build without its VCS
+information, or with uncommitted changes, writes otherwise, and whenever a
+coordinator is upgraded; so the plan's digest, by which the rerun's record
+names the stored plan, leaves it out (`plan.Digest`), as the comparison
+does. Start then starts it as it starts any run: it reads each variable's
 value as it is then ([Variables and secrets](#variables-and-secrets)), and
 the platform's resources as they are then. A rerun whose shape would now
 differ fails with `run_shape_changed`. Each attempt of a job, and each retry

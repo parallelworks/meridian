@@ -79,7 +79,10 @@ type Run struct {
 	// Format is the workflow's format.
 	Format int `json:"format"`
 	// Release is the Meridian release that compiled the plan (Release), as
-	// v1.2.3, or (devel) for a build of Meridian that isn't one.
+	// v1.2.3, or (devel) for a build of Meridian that isn't one. It says
+	// which build made the plan, for whoever reads the run, and isn't part
+	// of what the plan is: the plan's digest leaves it out (Digest), so a
+	// rerun's plan, from another build, is the stored one.
 	Release     string `json:"release"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`

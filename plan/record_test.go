@@ -172,8 +172,8 @@ func canonicalJSON(t *testing.T, v any) string {
 }
 
 // A plan's digest is the same for the plan as for what decoding its
-// encoding gives, as a coordinator stores it, and another for another
-// plan.
+// encoding gives, as a coordinator stores it, and for the plan as another
+// build of Meridian compiles it, and another for another plan.
 func TestDigest(t *testing.T) {
 	p := samplePlan(t)
 	want, err := plan.Digest(p)
@@ -195,6 +195,21 @@ func TestDigest(t *testing.T) {
 		if ok, err := plan.HasDigest(q, want); !ok || err != nil {
 			t.Errorf("HasDigest: %v, %v", ok, err)
 		}
+	}
+	// The release that compiled a plan isn't part of what it is, so the
+	// same plan from another build has the same digest, as a rerun's does.
+	for _, release := range []string{"v1.2.3", "v0.0.0-20261021120000-0123456789ab+dirty", "(devel)", ""} {
+		other := *back
+		other.Run.Release = release
+		if got, err := plan.Digest(&other); got != want || err != nil {
+			t.Errorf("the plan of release %q has the digest %q, %v; want %q", release, got, err, want)
+		}
+		if ok, err := plan.HasDigest(&other, want); !ok || err != nil {
+			t.Errorf("HasDigest of the plan of release %q: %v, %v", release, ok, err)
+		}
+	}
+	if back.Run.Release == "" || back.Run.Release != p.Run.Release {
+		t.Errorf("the plan's release is %q, after its digest; want %q", back.Run.Release, p.Run.Release)
 	}
 	back.Run.Source.Revision = "sha256:01"
 	if got, err := plan.Digest(back); got == want || err != nil {

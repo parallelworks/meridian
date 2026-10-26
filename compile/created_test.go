@@ -294,10 +294,19 @@ hosts: {type: list, template: {name: {type: string}, zone: {type: string, defaul
 }
 
 // A plan records the Meridian release that compiled it: in a test, a
-// build of Meridian that isn't a release, (devel).
+// build of Meridian that isn't a release, (devel). Its digest leaves the
+// release out, so Start starts a rerun whichever build stored its plan.
 func TestPlanRecordsTheRelease(t *testing.T) {
 	c := createRun(t, workflow("a: {type: string, default: x}"), nil, nil)
 	if c.Plan.Run.Release != plan.Release || plan.Release != "(devel)" {
 		t.Errorf("the plan's release is %q, plan.Release %q", c.Plan.Run.Release, plan.Release)
+	}
+	// Another build stored the plan, as for a rerun that this build creates
+	// again: the record names it all the same.
+	stored := *c.Plan
+	stored.Run.Release = "v1.2.3"
+	c.Plan = &stored
+	if res, diags := startRun(t, c, nil, compile.StartInput{RunID: "run"}); res == nil {
+		t.Errorf("the run of a plan another build stored doesn't start: %v", diags)
 	}
 }
