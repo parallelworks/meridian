@@ -51,12 +51,17 @@
 // fencing number, so a write from an attempt that another has superseded
 // fails with Fenced.
 //
-// The credential is good until the attempt ends. For a job that fences
-// itself (Claim.SelfFencing) it is good only while heartbeats renew it,
-// and lapses with the lease. A worker whose request fails with 401
-// Unauthorized after its claim, or with Fenced, stops its job's steps as a
-// cancellation does, and exits: its attempt has ended without it, and
-// nothing it sends is stored.
+// The credential is good until the attempt ends, though its lease lapses,
+// so that a worker cut off from the coordinator delivers what it kept. For
+// a job that fences itself (Claim.SelfFencing) it is good only while
+// heartbeats renew it, and lapses with the lease: every request with it is
+// then 401 Unauthorized. A claim repeated once the attempt has been
+// superseded, or has ended, fails with Fenced, as every write of it does;
+// a bootstrap token whose placement was withdrawn before its claim claims
+// nothing, 401. A worker whose request fails with 401 Unauthorized after
+// its claim, or with Fenced, stops its job's steps as a cancellation does,
+// and exits: its attempt has ended without it, and nothing it sends is
+// stored.
 //
 // # Retries and idempotency
 //
@@ -65,10 +70,26 @@
 // report is never stored twice. A claim repeated with the same bootstrap
 // token and credential is given the same Claim. Events carry sequence
 // numbers, from 1 for an attempt's first, and the coordinator stores each
-// once, in order. A log upload names the byte offset it starts at, and the
+// once, in order: of events that skip one, it stores those before the gap,
+// or none of them, and says which by the sequence number it expects
+// (OutOfOrder). A log upload names the byte offset it starts at, and the
 // coordinator stores the bytes it doesn't have yet. Complete stores the
 // attempt's end once: repeating it with the same report changes nothing,
-// and a different one is refused, 409 Conflict.
+// and a different one is refused, as Fenced.
+//
+// # Errors
+//
+// Every error is an RFC 9457 problem: one of the codes below, or one of
+// foundation's for its status, as unauthenticated for 401. A body the API
+// can't read, as Unmarshal refuses it, is 400 Bad Request, and so is a log
+// upload of a step the attempt's job doesn't have, and a Complete that
+// says what only the coordinator says (plan.JobResult's NeedsFailed and
+// Cancelled), that has a Problem but with the outcome failure and the
+// reason setup-failed, or whose Seq is behind the events stored. A log
+// upload of more than MaxLogUpload bytes is 413 Content Too Large. A path
+// the API doesn't have is 404, and one of its paths with another method
+// 405, with an Allow header. The suite in package workerapitest checks a
+// coordinator against all of this.
 //
 // While the coordinator can't be reached, a worker keeps running its
 // steps, spools its logs to disk up to a limit, keeps its events in
@@ -222,7 +243,8 @@ const (
 	// end, or a Complete before the coordinator has every event up to its
 	// Seq. Its param ParamExpected is the sequence number or the byte
 	// offset the coordinator expects next, which the worker sends from
-	// again.
+	// again: of events that skip one, the coordinator may have stored
+	// those before the gap.
 	OutOfOrder problem.Code = "out_of_order"
 	// PlanTooNew (409 Conflict) is a claim from a worker that doesn't read
 	// the version of the run's plan (ClaimRequest.PlanVersion). The

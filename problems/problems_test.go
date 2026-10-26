@@ -78,14 +78,17 @@ func TestEveryKindIsReported(t *testing.T) {
 	// Every package of the module but this one, tests aside, whatever
 	// system its files build for: a directory with a go.mod of its own is
 	// another module, and one whose name starts with a dot, or testdata,
-	// holds no package of it.
+	// holds no package of it. A package whose name ends in test, as
+	// workerapitest, supports tests, as net/http/httptest does: what it
+	// reports, nothing a user meets does.
 	err = filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if path != ".." && (strings.HasPrefix(name, ".") || name == "testdata" || name == "problems" && filepath.Dir(path) == "..") {
+			if path != ".." && (strings.HasPrefix(name, ".") || name == "testdata" || strings.HasSuffix(name, "test") ||
+				name == "problems" && filepath.Dir(path) == "..") {
 				return filepath.SkipDir
 			}
 			if _, err := os.Stat(filepath.Join(path, "go.mod")); path != ".." && err == nil {
@@ -115,8 +118,22 @@ func TestEveryKindIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The worker API's kinds are the coordinator's to report, as it
+	// refuses a worker's request, and no coordinator reports them yet: only
+	// workerapitest's Fake does, and workerapi names them by their codes,
+	// which its TestCodesAreKinds checks. Once something else reports one,
+	// it comes off this list.
+	awaitingCoordinator := map[string]bool{"Fenced": true, "OutOfOrder": true, "PlanTooNew": true}
+	for name := range awaitingCoordinator {
+		if _, ok := defined[name]; !ok {
+			t.Errorf("awaitingCoordinator names %s, which kinds.go doesn't define", name)
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(defined)) {
-		if !defined[name] {
+		switch {
+		case awaitingCoordinator[name] && defined[name]:
+			t.Errorf("something reports problems.%s now: take it off awaitingCoordinator", name)
+		case !awaitingCoordinator[name] && !defined[name]:
 			t.Errorf("nothing reports problems.%s", name)
 		}
 	}

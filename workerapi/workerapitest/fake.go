@@ -95,9 +95,10 @@ const ControlHold = 200 * time.Millisecond
 
 // A Fake serves the worker API for one attempt, in memory, as a
 // coordinator does, strictly: it refuses events out of order, logs past
-// their ends, a different Complete, and every write once the attempt is
-// superseded or has ended, with the API's problems; and it takes any
-// request again. Set its exported fields before it serves.
+// their ends or of steps the job doesn't have, a different Complete or one
+// that says what only the coordinator says, and every write once the
+// attempt is superseded or has ended, with the API's problems; and it
+// takes any request again. Set its exported fields before it serves.
 type Fake struct {
 	// Token is the attempt's bootstrap token.
 	Token string
@@ -132,6 +133,7 @@ type Fake struct {
 	claimed    bool
 	superseded bool
 	lapsed     bool
+	withdrawn  bool
 	events     []workerapi.Event
 	logs       map[LogKey]*Log
 	end        *workerapi.Complete
@@ -227,12 +229,23 @@ func (f *Fake) Supersede() {
 	f.notify()
 }
 
-// Lapse lets the attempt's lease lapse, as for a job that fences itself:
-// its credential is refused from then on, 401.
+// Lapse lets the attempt's lease lapse. For a job that fences itself, its
+// credential lapses with it, and is refused from then on, 401; another
+// job's lasts until the attempt ends, so that a worker cut off from the
+// coordinator delivers what it kept.
 func (f *Fake) Lapse() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lapsed = true
+	f.notify()
+}
+
+// Withdraw withdraws the attempt's placement before it is claimed: its
+// bootstrap token is refused from then on, 401.
+func (f *Fake) Withdraw() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.withdrawn = true
 	f.notify()
 }
 
@@ -437,7 +450,7 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		f.handleClaim(w, bearer, body)
 		return nil
 	}
-	if !f.claimed || f.lapsed || sha256.Sum256([]byte(bearer)) != f.credential {
+	if !f.claimed || f.lapsed && f.Claim.SelfFencing || sha256.Sum256([]byte(bearer)) != f.credential {
 		writeStatus(w, http.StatusUnauthorized)
 		return nil
 	}
@@ -463,6 +476,16 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 	return nil
 }
 
+// steps returns how many steps the attempt's job has, and false if the
+// Fake can't read its job, as for a test of a job no worker reads.
+func (f *Fake) steps() (int, bool) {
+	job, err := plan.DecodeReadyJob(f.Claim.PlanVersion, f.Claim.Job)
+	if err != nil {
+		return 0, false
+	}
+	return len(job.Steps), true
+}
+
 // reads returns the newest plan version f reads.
 func (f *Fake) reads() int {
 	if f.Reads == 0 {
@@ -480,8 +503,13 @@ func (f *Fake) handleClaim(w http.ResponseWriter, bearer string, body []byte) {
 	}
 	cred := sha256.Sum256([]byte(req.Credential))
 	switch {
-	case bearer != f.Token, f.claimed && cred != f.credential:
+	case bearer != f.Token, f.claimed && cred != f.credential, f.withdrawn && !f.claimed:
 		writeStatus(w, http.StatusUnauthorized)
+		return
+	case f.claimed && (f.superseded || f.end != nil):
+		// The same claim again, of an attempt that has ended without its
+		// worker, or with it.
+		problem.Write(w, problems.Fenced.Problem(nil))
 		return
 	case len(req.Credential) != 64:
 		f.unexpected("the credential is %q, not 32 bytes as hex", req.Credential)
@@ -562,6 +590,11 @@ func (f *Fake) handleLogs(w http.ResponseWriter, r *http.Request, body []byte) {
 		key.Step, key.Try = step, try
 		ok = ok && errStep == nil && errTry == nil && step >= 0 && try >= 0
 	}
+	if steps, known := f.steps(); ok && known && key.Part != workerapi.LogSetup && key.Step >= steps {
+		f.unexpected("a log of step %d, of a job of %d steps", key.Step, steps)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
 	switch {
 	case !ok:
 		f.unexpected("a log upload the coordinator can't read: %s", r.URL.RawQuery)
@@ -604,9 +637,19 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 		writeStatus(w, http.StatusInternalServerError)
 		return
 	}
+	result := end.Result
 	switch {
+	case result.NeedsFailed || result.Cancelled,
+		end.Problem != nil && (result.Outcome != plan.OutcomeFailure || end.Reason != plan.ReasonSetupFailed):
+		f.unexpected("a Complete that says what only the coordinator says, or a problem other than a setup's: %s", body)
+		writeStatus(w, http.StatusBadRequest)
+		return
 	case end.Seq > int64(len(f.events)):
 		problem.Write(w, problems.OutOfOrder.Problem(problems.Params{workerapi.ParamExpected: len(f.events) + 1}))
+		return
+	case end.Seq < int64(len(f.events)):
+		f.unexpected("a Complete after event %d, of the %d stored", end.Seq, len(f.events))
+		writeStatus(w, http.StatusBadRequest)
 		return
 	case f.end != nil && !bytes.Equal(f.endBody, canonical):
 		problem.Write(w, problems.Fenced.Problem(nil))
