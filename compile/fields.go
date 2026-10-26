@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/inputpath"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/internal/reach"
@@ -144,32 +145,18 @@ func (o *options) literal(v any) bool {
 // workflow, define, and those in them, whose values are at path.
 func (r *inputResolver) collect(defs map[string]any, loc, path []string, group *field) []*field {
 	var out []*field
-	flattenSteps := wizardFlattens(defs)
-	for key, v := range jsonvalue.Sorted(defs) {
-		def, ok := v.(map[string]any)
-		if !ok || strings.HasPrefix(key, "$") {
-			continue
+	for _, in := range inputpath.Inputs(defs, loc, path) {
+		f := &field{
+			key: in.Key, def: in.Def, loc: in.Loc, path: in.Path, typ: in.Type, group: group,
+			header: in.Type == "header", container: in.Container, flatten: in.Flatten,
 		}
-		typ, _ := def["type"].(string)
-		f := &field{key: key, def: def, loc: appendPath(loc, key), path: appendPath(path, key), typ: typ, group: group}
-		_, f.hasDefault = def["default"]
+		_, f.hasDefault = in.Def["default"]
 		out = append(out, f)
 		if group != nil {
 			group.children = append(group.children, f)
 		}
-		switch items, hasItems := def["items"].(map[string]any); {
-		case typ == "header":
-			f.header = true
-		case typ == "step":
-			options, ok := def["options"].(map[string]any)
-			if !ok || def["multi"] == true {
-				continue
-			}
-			f.container, f.flatten = true, flattenSteps
-			out = append(out, r.collect(options, appendPath(f.loc, "options"), f.childPath(), f)...)
-		case hasItems && typ != "list":
-			f.container, f.flatten = true, def["flatten"] == true
-			out = append(out, r.collect(items, appendPath(f.loc, "items"), f.childPath(), f)...)
+		if inner, innerLoc, innerPath := in.Inner(); inner != nil {
+			out = append(out, r.collect(inner, innerLoc, innerPath, f)...)
 		}
 	}
 	return out
@@ -202,7 +189,7 @@ func (r *inputResolver) checkShared(defs map[string]any, loc []string) {
 			items, hasItems := def["items"].(map[string]any)
 			options, hasOptions := def["options"].(map[string]any)
 			switch {
-			case typ == "step" && hasOptions && def["multi"] != true && wizardFlattens(defs):
+			case typ == "step" && hasOptions && def["multi"] != true && inputpath.WizardFlattens(defs):
 				gather(options, appendPath(at, "options"), brought)
 			case typ == "step" && hasOptions:
 				r.checkShared(options, appendPath(at, "options"))
@@ -227,14 +214,6 @@ func (r *inputResolver) checkShared(defs map[string]any, loc []string) {
 			}
 		}
 	}
-}
-
-// wizardFlattens reports whether the wizard steps among defs have their
-// inputs' values beside their own: unless $meta.wizard.flatten is false.
-func wizardFlattens(defs map[string]any) bool {
-	meta, _ := defs["$meta"].(map[string]any)
-	wizard, _ := meta["wizard"].(map[string]any)
-	return wizard["flatten"] != false
 }
 
 // definitionName names the input definition at loc in the workflow by its
@@ -271,7 +250,7 @@ func (f *field) around() *field {
 // person running the workflow adds as many times as they like: its value is
 // a list of rows, one for each time, as a list's is.
 func (f *field) repeats() bool {
-	return f.typ == "step" && f.def["multi"] == true
+	return inputpath.Repeats(f.def)
 }
 
 // rowInputs returns the definitions of the inputs that each row of f's
@@ -279,11 +258,8 @@ func (f *field) repeats() bool {
 // template, or a repeated step's inputs. It returns nil for any other
 // input.
 func (f *field) rowInputs() (map[string]any, []string) {
-	key := "template"
-	switch {
-	case f.repeats():
-		key = "options"
-	case f.typ != "list":
+	key, ok := inputpath.RowsKey(f.def)
+	if !ok {
 		return nil, nil
 	}
 	defs, ok := f.def[key].(map[string]any)
@@ -319,14 +295,6 @@ func holdsPassword(def map[string]any) bool {
 // with them, as ACTIVATE drops it.
 func (f *field) ownsKey() bool {
 	return !f.container || !f.flatten || f.typ != "step"
-}
-
-// childPath is where a container's inputs' values are.
-func (f *field) childPath() []string {
-	if f.flatten {
-		return f.path[:len(f.path)-1]
-	}
-	return f.path
 }
 
 // label names an input in messages: its path, and its label if it has one.
