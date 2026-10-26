@@ -25,7 +25,10 @@ type Logs interface {
 	// already, so an upload repeated after a dropped connection is stored
 	// once. end says that data ends the log, whose length is final from
 	// then on. An offset past the log's end, or bytes past the end of a log
-	// that has ended, return the length and ErrGap.
+	// that has ended, return the length and ErrGap. So an append of no
+	// bytes at offset 0, which doesn't end the log, stores nothing, and
+	// gives the log's length, 0 for one that has none, and whether it has
+	// ended, as the worker API's server reads them.
 	Append(ctx context.Context, key Key, offset int64, data []byte, end bool) (length int64, ended bool, err error)
 	// Read returns the part of the log at key that starts at offset, at
 	// most limit bytes, and whether the log has ended. At the log's end it

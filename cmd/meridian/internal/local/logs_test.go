@@ -80,6 +80,31 @@ func TestLogsAppend(t *testing.T) {
 	}
 }
 
+// An append of no bytes at offset 0 stores nothing, and gives the log's
+// length and whether it has ended, as the worker API's server reads them
+// (coordinator.Logs).
+func TestLogsAppendNothing(t *testing.T) {
+	l := newLogs(t, t.TempDir())
+	probe := func(want int64, wantEnded bool) {
+		t.Helper()
+		if length, ended, err := l.Append(t.Context(), stepLog, 0, nil, false); err != nil || length != want || ended != wantEnded {
+			t.Errorf("an append of nothing = %d, %t, %v; want %d, %t", length, ended, err, want, wantEnded)
+		}
+	}
+	probe(0, false)
+	if _, _, err := l.Append(t.Context(), stepLog, 0, []byte("hello"), false); err != nil {
+		t.Fatal(err)
+	}
+	probe(5, false)
+	if _, _, err := l.Append(t.Context(), stepLog, 5, []byte("!"), true); err != nil {
+		t.Fatal(err)
+	}
+	probe(6, true)
+	if data, ended, err := l.Read(t.Context(), stepLog, 0, 100); err != nil || string(data) != "hello!" || !ended {
+		t.Errorf("Read = %q, %t, %v", data, ended, err)
+	}
+}
+
 func TestLogsEndWithData(t *testing.T) {
 	l := newLogs(t, t.TempDir())
 	if length, ended, err := l.Append(t.Context(), stepLog, 0, []byte("all of it"), true); err != nil || length != 9 || !ended {
