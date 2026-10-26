@@ -895,3 +895,32 @@ func TestStartFormValueReadThroughARelativeReference(t *testing.T) {
 		t.Errorf("inputs %s, want %s", got, want)
 	}
 }
+
+// A strategy whose fail-fast: and max-parallel: a password made, over a
+// matrix written out: its instances are private, as Expand evaluates the
+// strategy as one value, and run state holds the same of it whatever the
+// password is, its keys and indexes alone; the record holds it whole.
+func TestKeepLeavesAPrivateStrategyOutOfRunState(t *testing.T) {
+	src := workflow("pw: {type: password}", "jobs:\n  main:\n    strategy:\n      matrix:\n        x: [a, b]\n      fail-fast: ${{ startsWith(inputs.pw, 'SENTa') }}\n      max-parallel: ${{ length(inputs.pw) }}\n    steps:\n      - run: echo\n")
+	var states []string
+	for _, pw := range []string{"SENTaaa111", "SENTbbbbbbbbb222"} {
+		_, res, diags := started(t, src, map[string]any{"pw": pw}, nil)
+		if res == nil {
+			t.Fatal(diags)
+		}
+		var record plan.Record
+		state := res.Keep(&record)
+		x := state.Expansions["main"]
+		if x == nil || x.FailFast || x.MaxParallel != 0 || len(x.Instances) != 2 || !x.Instances[0].Private || !x.Instances[0].Matrix.IsZero() {
+			t.Errorf("%s: run state holds %s", pw, canonical(t, x))
+		}
+		states = append(states, canonical(t, state.Expansions))
+		whole := record.Expansions["main"]
+		if whole == nil || whole.MaxParallel != len(pw) || whole.FailFast != strings.HasPrefix(pw, "SENTa") || canonical(t, whole.Instances[1].Matrix.Get()) != `{"x":"b"}` {
+			t.Errorf("%s: the record holds %s", pw, canonical(t, whole))
+		}
+	}
+	if states[0] != states[1] {
+		t.Errorf("run state differs by the password: %s, %s", states[0], states[1])
+	}
+}

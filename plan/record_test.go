@@ -197,3 +197,42 @@ func TestDigest(t *testing.T) {
 		t.Errorf("HasDigest of another plan: %v, %v", ok, err)
 	}
 }
+
+// Split keeps all of an expansion whose instances are private in the
+// record, and leaves run state their keys and indexes, without the
+// strategy's fail-fast: and max-parallel:, which read what the matrix
+// read; an expansion whose instances aren't private run state holds whole.
+// Neither shares a mapping with what was split.
+func TestExpansionSplit(t *testing.T) {
+	x := &plan.Expansion{FailFast: true, MaxParallel: 10, Instances: []plan.Instance{
+		{Key: "a#0", Index: 0, Matrix: plan.DataOf(map[string]any{"x": "SENT-0"}), Private: true, Secret: true},
+		{Key: "a#1", Index: 1, Matrix: plan.DataOf(map[string]any{"x": "SENT-1"}), Private: true, Secret: true},
+	}}
+	private, state := x.Split()
+	if private == nil || !reflect.DeepEqual(private, x) {
+		t.Errorf("the record holds %+v, want all of %+v", private, x)
+	}
+	want := &plan.Expansion{Instances: []plan.Instance{
+		{Key: "a#0", Index: 0, Private: true, Secret: true},
+		{Key: "a#1", Index: 1, Private: true, Secret: true},
+	}}
+	if !reflect.DeepEqual(state, want) {
+		t.Errorf("run state holds %+v, want %+v", state, want)
+	}
+	private.Instances[0].Matrix.Get().(map[string]any)["x"] = "changed"
+	if x.Instances[0].Matrix.Get().(map[string]any)["x"] != "SENT-0" {
+		t.Error("the record shares a matrix with what was split")
+	}
+
+	plain := &plan.Expansion{FailFast: true, MaxParallel: 2, Instances: []plan.Instance{
+		{Key: "b#0", Index: 0, Matrix: plan.DataOf(map[string]any{"y": "one"})},
+	}}
+	private, state = plain.Split()
+	if private != nil || !reflect.DeepEqual(state, plain) {
+		t.Errorf("an expansion that isn't private: record %+v, state %+v", private, state)
+	}
+	state.Instances[0].Matrix.Get().(map[string]any)["y"] = "changed"
+	if plain.Instances[0].Matrix.Get().(map[string]any)["y"] != "one" {
+		t.Error("run state shares a matrix with what was split")
+	}
+}

@@ -78,9 +78,10 @@ type StartState struct {
 	TimeoutSeconds int64
 	TimeoutPrivate bool
 	// Expansions are the matrices Start expanded, by job name, with each
-	// private instance's matrix values left out (plan.Instance.Private):
-	// its key and index are run state, and the secret record holds the
-	// expansion whole.
+	// private instance's matrix values left out (plan.Instance.Private),
+	// and the strategy's fail-fast: and max-parallel: of a matrix whose
+	// instances are: their keys and indexes are run state, and the secret
+	// record holds the expansion whole (plan.Expansion.Split).
 	Expansions map[string]*plan.Expansion
 }
 
@@ -88,8 +89,8 @@ type StartState struct {
 // what run state holds, which it returns: the one place that says which is
 // which, for each of res's members. The record gets the private half of
 // the run's values (plan.RunValues.Split), the timeout if it is private,
-// and each expansion with an instance whose matrix values are private,
-// whole. Neither shares a mapping or a list with res.
+// and each expansion whose instances are private, whole
+// (plan.Expansion.Split). Neither shares a mapping or a list with res.
 func (res *StartResult) Keep(record *plan.Record) StartState {
 	private, values := res.Run.Split()
 	record.Run = &private
@@ -101,27 +102,16 @@ func (res *StartResult) Keep(record *plan.Record) StartState {
 		state.TimeoutSeconds = res.TimeoutSeconds
 	}
 	for job, x := range jsonvalue.Sorted(res.Expansions) {
-		shown := &plan.Expansion{FailFast: x.FailFast, MaxParallel: x.MaxParallel, Instances: make([]plan.Instance, len(x.Instances))}
-		whole := &plan.Expansion{FailFast: x.FailFast, MaxParallel: x.MaxParallel, Instances: make([]plan.Instance, len(x.Instances))}
-		private := false
-		for i, instance := range x.Instances {
-			instance.Matrix = plan.DataOf(jsonvalue.Clone(instance.Matrix.Get()))
-			whole.Instances[i] = instance
-			if instance.Private {
-				private = true
-				instance.Matrix = plan.Data{}
-			}
-			shown.Instances[i] = instance
-		}
+		private, shown := x.Split()
 		if state.Expansions == nil {
 			state.Expansions = map[string]*plan.Expansion{}
 		}
 		state.Expansions[job] = shown
-		if private {
+		if private != nil {
 			if record.Expansions == nil {
 				record.Expansions = map[string]*plan.Expansion{}
 			}
-			record.Expansions[job] = whole
+			record.Expansions[job] = private
 		}
 	}
 	return state

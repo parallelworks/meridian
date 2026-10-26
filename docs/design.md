@@ -987,7 +987,8 @@ made from one, it doesn't hold in another form either.
    private half of `RunValues.Split`, the timeout when it is private, and
    the matrices whose instances are, whole; and returns what run state
    holds (`StartState`): the rest, with a private matrix's instances by key
-   and index alone.
+   and index alone, without its `fail-fast` and `max-parallel`, which read
+   what its values read (`plan.Expansion.Split`).
 
 Start's problems are the run's, at the JSON Pointer of what they are about,
 with no file position, as Ready's are. Given the same plan, secret record
@@ -1192,7 +1193,13 @@ The coordinator encrypts and stores it.
   database, encrypted with AES-256-GCM under a data key of its own, which
   the Keys interface wraps: a platform's key management service, or locally
   a key file only the user can read. The run's ID is its associated data,
-  so a record can't be moved to another run.
+  so a record can't be moved to another run. That binding is mandatory, and
+  fails closed: a record that doesn't decrypt with its run's ID fails the
+  run. It is what ties a record to its run, as the plan's digest
+  (`PlanDigest`) ties it only to its plan: two runs of one workflow with
+  the same plain inputs have the same plan, and Start can't tell their
+  records apart. The coordinator encrypts the record again so, with the
+  run's ID, each time it adds a part, as a job's as the job ends.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
@@ -1585,7 +1592,10 @@ name, `#` and its index from 0, as in `build#2`.
   results run the same way.
 - **`fail-fast` and `max-parallel`** belong to the strategy: the coordinator
   cancels the remaining instances when one fails, and places no more than
-  `max-parallel` at a time.
+  `max-parallel` at a time. The strategy is evaluated as one value, so they
+  are as private as the matrix's values: of a matrix whose instances are
+  private, the coordinator reads them from the secret record, as run state
+  doesn't hold them (`plan.Expansion.Split`).
 - **Outcome and outputs.** The job's outcome is its instances' combined, as
   `needs.<job>.result` gives it ([Contexts](#contexts)). Its outputs are
   its instances', by name, and an output that more than one instance sets
