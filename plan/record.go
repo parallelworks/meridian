@@ -199,6 +199,22 @@ func Digest(p *Plan) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+// HasDigest reports whether p's digest (Digest) is digest. A plan that
+// Decode gave, as a coordinator's, encodes as it reads back, so one
+// encoding is most often enough.
+func HasDigest(p *Plan, digest string) (bool, error) {
+	data, err := Encode(p)
+	if err != nil {
+		return false, err
+	}
+	sum := sha256.Sum256(data)
+	if "sha256:"+hex.EncodeToString(sum[:]) == digest {
+		return true, nil
+	}
+	got, err := Digest(p)
+	return got == digest, err
+}
+
 // EncodeRecord encodes a secret record as JSON, as Encode encodes a plan:
 // the same record always encodes to the same bytes. The coordinator
 // encrypts what it gives.

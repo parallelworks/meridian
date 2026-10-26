@@ -184,8 +184,16 @@ func TestDigest(t *testing.T) {
 	if got, err := plan.Digest(back); got != want || err != nil {
 		t.Errorf("the plan decoded has the digest %q, %v; want %q", got, err, want)
 	}
+	for _, q := range []*plan.Plan{p, back} {
+		if ok, err := plan.HasDigest(q, want); !ok || err != nil {
+			t.Errorf("HasDigest: %v, %v", ok, err)
+		}
+	}
 	back.Run.Source.Revision = "sha256:01"
 	if got, err := plan.Digest(back); got == want || err != nil {
 		t.Errorf("another plan has the same digest %q, %v", got, err)
+	}
+	if ok, err := plan.HasDigest(back, want); ok || err != nil {
+		t.Errorf("HasDigest of another plan: %v, %v", ok, err)
 	}
 }

@@ -229,10 +229,10 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	case p.Version != plan.Version:
 		return nil, nil, fmt.Errorf("compile: %w %d; this release starts plans of version %d", plan.ErrVersion, p.Version, plan.Version)
 	}
-	switch digest, err := plan.Digest(p); {
+	switch ok, err := plan.HasDigest(p, in.Record.PlanDigest); {
 	case err != nil:
 		return nil, nil, mismatch("the plan doesn't encode: %v", err)
-	case in.Record.PlanDigest != digest:
+	case !ok:
 		return nil, nil, mismatch("the secret record is of another plan")
 	}
 	if _, ok := in.Record.Submitted.Get().(map[string]any); !ok && !in.Record.Submitted.IsZero() {
@@ -547,9 +547,6 @@ func (st *starter) resolve(defs map[string]any) error {
 	submitted, _ := st.in.Record.Submitted.Get().(map[string]any)
 	st.budget = expr.Scope{}.Budgeted()
 	reported := len(st.diags)
-	// What reads a value through a relative reference doesn't wait for it.
-	definitions, _ := (&expr.Workflow{Root: doc.Value}).Exprs(definitionsPath)
-	relative := slices.ContainsFunc(definitions, (*expr.Expr).Relative)
 	remeant := 0
 	for {
 		if err := st.ctx.Err(); err != nil {
@@ -608,7 +605,7 @@ func (st *starter) resolve(defs map[string]any) error {
 			}
 			st.late[k] = true
 		}
-		if !again && relative && len(st.r.remeant) > 0 && remeant < len(st.in.Record.Means) {
+		if !again && len(st.r.remeant) > 0 && remeant < len(st.in.Record.Means) && st.readsRelative() {
 			// A part whose expression gave another value than was
 			// submitted, which a relative reference can have read, is what
 			// it gave in its place in what was submitted, a round for each
@@ -730,10 +727,24 @@ func (st *starter) evalEnv() (progress bool, late []string) {
 // filled in, if it is one still, and unless, in a round before, it gave
 // otherwise once they were (late): such a one is evaluated only then.
 func (st *starter) settle(exprs []*expr.Expr, ready func(pattern []string) bool) {
-	visiting := map[string]bool{}
+	if len(st.s.pendingEnv) == 0 {
+		return
+	}
+	var visiting map[string]bool
 	for _, k := range st.envRefs(exprs) {
+		if visiting == nil {
+			visiting = map[string]bool{}
+		}
 		st.settleEnv(k, visiting, ready)
 	}
+}
+
+// readsRelative reports whether an expression of the input definitions
+// makes a relative reference, which doesn't make what makes it wait for
+// the value it reads.
+func (st *starter) readsRelative() bool {
+	exprs, _ := st.r.workflow.Exprs(definitionsPath)
+	return slices.ContainsFunc(exprs, (*expr.Expr).Relative)
 }
 
 // settleEnv evaluates the workflow's env: value k, if it isn't evaluated
@@ -761,6 +772,9 @@ func (st *starter) settleEnv(k string, visiting map[string]bool, ready func(patt
 // inputs' values that the env: values exprs read, of those not evaluated
 // yet, read, and that those they read read, in turn.
 func (st *starter) envReadsOf(exprs []*expr.Expr) [][]string {
+	if len(st.s.pendingEnv) == 0 {
+		return nil
+	}
 	var out [][]string
 	for _, k := range st.envRefs(exprs) {
 		if !st.s.pendingEnv[plan.JoinPath("env", k)] {

@@ -182,3 +182,43 @@ func TestStartAgreesWithCreate(t *testing.T) {
 		t.Errorf("compared %d runs, want more", compared)
 	}
 }
+
+// sameExcept compares what Start resolved with what the plan holds but for
+// what is skipped: a number as the plan writes it, whatever its type, a
+// skipped list item whatever it is, and a skipped key whether either side
+// holds it.
+func TestSameExcept(t *testing.T) {
+	skip := skipped{}
+	skip.add([]string{"rows", "1"})
+	skip.add([]string{"m", "secret"})
+	skip.add([]string{"m", "deep", "x"})
+	skip.add([]string{"m", "deep"})
+	planned := map[string]any{
+		"n":    int64(3),
+		"rows": []any{"a", nil},
+		"m":    map[string]any{"k": "v", "deep": nil},
+	}
+	for name, c := range map[string]struct {
+		got  map[string]any
+		same bool
+	}{
+		"the same":                 {map[string]any{"n": 3.0, "rows": []any{"a", "s"}, "m": map[string]any{"k": "v", "secret": "s", "deep": map[string]any{"x": 1}}}, true},
+		"a number of another type": {map[string]any{"n": float64(3), "rows": []any{"a", nil}, "m": map[string]any{"k": "v"}}, true},
+		"another number":           {map[string]any{"n": 4.0, "rows": []any{"a", nil}, "m": map[string]any{"k": "v"}}, false},
+		"another list item":        {map[string]any{"n": 3.0, "rows": []any{"b", nil}, "m": map[string]any{"k": "v"}}, false},
+		"a list item more":         {map[string]any{"n": 3.0, "rows": []any{"a", nil, "c"}, "m": map[string]any{"k": "v"}}, false},
+		"a key more":               {map[string]any{"n": 3.0, "rows": []any{"a", nil}, "m": map[string]any{"k": "v", "other": 1}}, false},
+		"a key less":               {map[string]any{"n": 3.0, "rows": []any{"a", nil}, "m": map[string]any{}}, false},
+		"a mapping for a text":     {map[string]any{"n": 3.0, "rows": []any{"a", nil}, "m": map[string]any{"k": map[string]any{}}}, false},
+	} {
+		same := true
+		for k, q := range planned {
+			if under, ok := skip.under(k); ok && !sameExcept(c.got[k], q, under) {
+				same = false
+			}
+		}
+		if same != c.same {
+			t.Errorf("%s: same %v, want %v", name, same, c.same)
+		}
+	}
+}

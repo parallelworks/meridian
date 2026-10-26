@@ -4,11 +4,11 @@ import (
 	"encoding/json/v2"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
-	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -132,12 +132,11 @@ func (st *starter) checkPlanned() error {
 			out = append(out, f.path)
 		}
 	}
-	got := jsonvalue.CloneMap(r.values)
-	planned, _ := jsonvalue.Clone(p.Run.Inputs.Get()).(map[string]any)
+	skip := skipped{}
 	for _, path := range out {
-		clearPath(got, path)
-		clearPath(planned, path)
+		skip.add(path)
 	}
+	planned, _ := p.Run.Inputs.Get().(map[string]any)
 	// The inputs whose values differ, by name, never what they are: one the
 	// plan holds that Start gives otherwise, or not at all, and one the
 	// workflow doesn't define that Start gives and the plan doesn't hold.
@@ -145,13 +144,17 @@ func (st *starter) checkPlanned() error {
 	// as one that read what wasn't known yet.
 	var differ []string
 	for k, q := range planned {
-		if g, ok := got[k]; !ok || canonicalJSON(g) != canonicalJSON(q) {
-			differ = append(differ, plan.JoinPath("inputs", k))
+		if under, ok := skip.under(k); ok {
+			if g, given := r.values[k]; !given || !sameExcept(g, q, under) {
+				differ = append(differ, plan.JoinPath("inputs", k))
+			}
 		}
 	}
-	for k := range got {
+	for k := range r.values {
 		if _, ok := planned[k]; !ok && r.fieldAt([]string{k}) == nil {
-			differ = append(differ, plan.JoinPath("inputs", k))
+			if _, compared := skip.under(k); compared {
+				differ = append(differ, plan.JoinPath("inputs", k))
+			}
 		}
 	}
 	if len(differ) > 0 {
@@ -170,6 +173,79 @@ func (st *starter) readsUnmarked() bool {
 	return slices.ContainsFunc(exprs, func(e *expr.Expr) bool {
 		return slices.ContainsFunc(e.Refs(), func(ref expr.Ref) bool { return ref.Context == "env" || ref.Context == "sessions" })
 	})
+}
+
+// skipped holds paths in values, by their keys: a key whose value is nil
+// skips all that is under it.
+type skipped map[string]skipped
+
+// add skips what is at path, and under it.
+func (s skipped) add(path []string) {
+	for i, k := range path {
+		next, ok := s[k]
+		switch {
+		case ok && next == nil:
+			return // What is under it is skipped already.
+		case i == len(path)-1:
+			s[k] = nil
+			return
+		case !ok:
+			next = skipped{}
+			s[k] = next
+		}
+		s = next
+	}
+}
+
+// under returns what is skipped under key, and false if all of it is.
+func (s skipped) under(key string) (skipped, bool) {
+	next, ok := s[key]
+	return next, !ok || next != nil
+}
+
+// sameExcept reports whether a, what Start resolved, and b, what the plan
+// holds, are the same values but for what skip holds, each number as the
+// plan writes it: a list's item that skip holds is the same whatever it
+// is, and so is a mapping's key, whether either holds it or not.
+func sameExcept(a, b any, skip skipped) bool {
+	switch b := b.(type) {
+	case map[string]any:
+		m, ok := a.(map[string]any)
+		if !ok {
+			return false
+		}
+		for k, v := range b {
+			if under, compared := skip.under(k); compared {
+				if w, ok := m[k]; !ok || !sameExcept(w, v, under) {
+					return false
+				}
+			}
+		}
+		for k := range m {
+			if _, ok := b[k]; !ok {
+				if _, compared := skip.under(k); compared {
+					return false
+				}
+			}
+		}
+		return true
+	case []any:
+		l, ok := a.([]any)
+		if !ok || len(l) != len(b) {
+			return false
+		}
+		for i := range b {
+			if under, compared := skip.under(strconv.Itoa(i)); compared && !sameExcept(l[i], b[i], under) {
+				return false
+			}
+		}
+		return true
+	}
+	switch a.(type) {
+	case map[string]any, []any:
+		return false
+	}
+	return a == b || canonicalJSON(a) == canonicalJSON(b)
 }
 
 // canonicalJSON returns v's JSON, with each number as the plan writes it,
