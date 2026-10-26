@@ -112,18 +112,53 @@ func (r *inputResolver) checkKnown(f *field, passwords []*field) {
 // secret, so that what a problem with it, or an error, shows of it is
 // masked: one a form made from a variable or a password in place of a
 // default that reads one, that reads one, or that is marked as made from
-// one.
+// one; or one in a group or a list, or in a group around one, whose
+// condition reads one, as whether the value is in the run says something
+// of what the condition read, and so the plan holds it out of its values
+// (applyConditions).
 func (r *inputResolver) mayBePrivate(f *field) bool {
-	return f.variable || r.marked(f.path) || r.readsPrivate(f)
+	if f.variable || r.marked(f.path) || r.readsPrivate(f) {
+		return true
+	}
+	for c := f.around(); c != nil; c = c.around() {
+		if c.in != nil {
+			// The conditions of a field of a list's rows aren't evaluated,
+			// as ACTIVATE applies none in a row.
+			continue
+		}
+		for _, key := range []string{"hidden", "ignore", "optional"} {
+			at := appendPath(c.loc, key)
+			if _, ok := jsonptr.Lookup(r.doc.Value, at); ok && r.readsPrivateAt(at) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // readsPrivate reports whether an expression in f's definition, in its
 // rows' and its items' among them, reads an organization or user variable,
-// or an input that holds a password or reads one: a value given in its
-// place, as a list given as text whose rows' defaults read a variable, can
-// be what it would have made, which a problem with it mustn't show.
+// or an input that holds a password or reads one, as its value or its
+// definition does, in turn: a value given in its place, as a list given as
+// text whose rows' defaults read a variable, can be what it would have
+// made, which a problem with it mustn't show. It doesn't wait for the
+// input it reads to be filled in, as what is marked does, so a condition
+// read before then is caught as when the plan withholds what it decides.
 func (r *inputResolver) readsPrivate(f *field) bool {
-	exprs, err := r.workflow.Exprs(f.loc)
+	return r.readsPrivateAt(f.loc)
+}
+
+// readsPrivateAt reports whether an expression at loc in the workflow, or
+// under it, reads what readsPrivate says.
+func (r *inputResolver) readsPrivateAt(loc []string) bool {
+	return r.readsPrivateIn(loc, map[*field]bool{})
+}
+
+// readsPrivateIn is readsPrivateAt, with seen holding the inputs whose
+// definitions it has read, as one that reads another in turn, which it
+// reads once.
+func (r *inputResolver) readsPrivateIn(loc []string, seen map[*field]bool) bool {
+	exprs, err := r.workflow.Exprs(loc)
 	if err != nil {
 		return true
 	}
@@ -135,7 +170,16 @@ func (r *inputResolver) readsPrivate(f *field) bool {
 			case ref.Context != "inputs":
 			case unnamed(ref.Path):
 				// Any input, a password among them.
-				if slices.ContainsFunc(r.fields, func(g *field) bool { return holdsPassword(g.def) || g.variable || g.deferred }) {
+				if slices.ContainsFunc(r.fields, func(g *field) bool {
+					if holdsPassword(g.def) || g.variable || g.deferred {
+						return true
+					}
+					if seen[g] {
+						return false
+					}
+					seen[g] = true
+					return r.readsPrivateIn(g.loc, seen)
+				}) {
 					return true
 				}
 			default:
@@ -143,6 +187,12 @@ func (r *inputResolver) readsPrivate(f *field) bool {
 					if g := r.fieldAt(ref.Path[:n]); g != nil {
 						if holdsPassword(g.def) || g.variable || g.deferred || r.marked(g.path) {
 							return true
+						}
+						if !seen[g] {
+							seen[g] = true
+							if r.readsPrivateIn(g.loc, seen) {
+								return true
+							}
 						}
 						break
 					}

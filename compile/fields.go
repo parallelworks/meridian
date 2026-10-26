@@ -257,6 +257,16 @@ func (f *field) holder() *field {
 	return f
 }
 
+// around returns the group or wizard step f is in, or, for a field of a
+// list's rows that is in none in its row, the list or the repeated step
+// whose rows it is in; or nil for an input in none.
+func (f *field) around() *field {
+	if f.group != nil {
+		return f.group
+	}
+	return f.in
+}
+
 // repeats reports whether f is a wizard step with multi true, which the
 // person running the workflow adds as many times as they like: its value is
 // a list of rows, one for each time, as a list's is.
