@@ -58,24 +58,29 @@ const (
 // whether it has started or not (CancelPath), so that the coordinator
 // knows it before the jobs the job needs have finished. run is the run's
 // values, from Start; instance is nil for a job without a strategy:, and
-// for a matrix job that Ready is to expand. CancelPath reaches nothing:
-// the same plan and arguments give the same path. A job the plan doesn't
-// have is the caller's mistake, and an error.
+// for a matrix job that Ready is to expand. CancelPath reaches nothing,
+// and the same plan and arguments give the same path, but where evaluating
+// the if: runs out of the time the language gives an evaluation, which
+// fails it. A job the plan doesn't have is the caller's mistake, and an
+// error.
 //
 // ACTIVATE leaves an if: that reads an output of a job or a step, or env,
 // or an input whose value reads env, or calls a status function, to its
 // executor, which evaluates it once the job's needs have finished; it
 // evaluates any other if: before, and then stops waiting for the needs of
-// a job whose if: can't outlive the cancel. Such an if: is evaluated here
-// with run, and instance's matrix values, as Ready evaluates it, to see
-// whether its value is the word always; one that reads matrix, asked
-// about without an instance, and one that fails to evaluate, isn't.
+// a job whose if: can't outlive the cancel. An input's value reads env
+// when the run wasn't given it, and its default reads env, as the plan's
+// values (Run.Inputs) say: Start evaluates such a default. Any other if:
+// is evaluated here with run, and instance's matrix values, as Ready
+// evaluates it, to see whether its value is the word always; one that
+// reads matrix, asked about without an instance, and one that fails to
+// evaluate, isn't.
 func (p *Plan) CancelPath(job string, run RunValues, instance *Instance) (CancelPath, error) {
 	j, err := p.job(job)
 	if err != nil {
 		return 0, err
 	}
-	shape := j.cancelShape(p.Run.Definitions)
+	shape := p.cancelShape(j)
 	if shape != CancelPathSkip || len(j.If.Exprs()) == 0 || instance == nil && readsContext(j.If, "matrix") {
 		return shape, nil
 	}
@@ -89,10 +94,9 @@ func (p *Plan) CancelPath(job string, run RunValues, instance *Instance) (Cancel
 	return CancelPathSkip, nil
 }
 
-// cancelShape returns the path the job's if: gives it by what it reads, as
-// CancelPath does before it evaluates an if: of CancelPathSkip's: defs are
-// the run's input definitions (Run.Definitions).
-func (j *Job) cancelShape(defs Value) CancelPath {
+// cancelShape returns the path the job j's if: gives it by what it reads,
+// as CancelPath does before it evaluates an if: of CancelPathSkip's.
+func (p *Plan) cancelShape(j *Job) CancelPath {
 	if v, ok := j.If.Literal(); ok && v == "always" {
 		return CancelPathOutlive
 	}
@@ -103,13 +107,14 @@ func (j *Job) cancelShape(defs Value) CancelPath {
 	case used:
 		return CancelPathEnd
 	}
-	seen := map[string]bool{}
+	defs, _ := p.Run.Definitions.v.(map[string]any)
+	later := &laterInputs{defs: defs, values: p.Run.Inputs.Get(), seen: map[string]bool{}}
 	for _, e := range j.If.Exprs() {
 		for _, r := range e.Refs() {
 			switch {
 			case r.Context == "env", r.Context == "needs" && !ReadsAsText(r.Context, r.Path):
 				return CancelPathEnd
-			case r.Context == "inputs" && inputReadsLater(defs, r.Path, seen):
+			case r.Context == "inputs" && later.reads(r.Path):
 				return CancelPathEnd
 			}
 		}
@@ -122,29 +127,42 @@ func (j *Job) cancelShape(defs Value) CancelPath {
 // one an input definition may read.
 var laterContexts = map[string]bool{"env": true, "needs": true, "steps": true, "job": true, "matrix": true}
 
-// inputReadsLater reports whether the value of the input at path, among
-// the run's input definitions defs, reads one of laterContexts: as its
-// default does, or one of its items' or its rows' does, or the value of an
-// input it reads in turn, as the compiler finds it. ACTIVATE leaves such a
-// value to its executor, and so an expression that reads it. Of a list's
-// rows, or a repeated wizard step's, it reads only what gives the field
-// path names: that field's definition in the rows' template, and its place
-// in each default row. seen holds the JSON Pointers of the definitions and
-// the values read already.
-func inputReadsLater(defs Value, path []string, seen map[string]bool) bool {
+// laterInputs finds the inputs whose values read one of laterContexts, as
+// the compiler finds them: defs are the run's input definitions
+// (Run.Definitions), and values the inputs' values the plan holds
+// (Run.Inputs), which Start completes. seen holds the JSON Pointers of the
+// definitions and the values read already.
+type laterInputs struct {
+	defs   map[string]any
+	values any
+	seen   map[string]bool
+}
+
+// reads reports whether the value of the input at path reads one of
+// laterContexts: one the plan holds no value at path for, whose default
+// does, or one of whose items' or rows' does, or the value of an input it
+// reads in turn. ACTIVATE leaves such a value to its executor, and so an
+// expression that reads it, while a value the run was given reads nothing.
+// Of a list's rows, or a repeated wizard step's, it reads only what gives
+// the field path names: that field's definition in the rows' template, and
+// its place in each default row.
+func (l *laterInputs) reads(path []string) bool {
 	if len(path) == 0 || path[0] == "*" || path[0] == "[index]" {
 		return false
 	}
-	root, _ := defs.v.(map[string]any)
-	def, loc, n := inputDefinition(root, path)
+	if _, held := jsonptr.Lookup(l.values, path); held {
+		return false
+	}
+	def, loc, n := inputDefinition(l.defs, path)
 	if def == nil {
 		return false
 	}
+	seen := l.seen
 	// reads reports whether the expressions in v, a value, read one.
 	reads := func(v any) bool {
 		for _, e := range Literal(v).Exprs() {
 			for _, r := range e.Refs() {
-				if laterContexts[r.Context] || r.Context == "inputs" && inputReadsLater(defs, r.Path, seen) {
+				if laterContexts[r.Context] || r.Context == "inputs" && l.reads(r.Path) {
 					return true
 				}
 			}

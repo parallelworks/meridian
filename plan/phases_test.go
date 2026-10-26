@@ -249,7 +249,7 @@ jobs:
 // if:'s value is the word always, is readied as ever, with cancelled()
 // read from its needs alone.
 func TestReadyCancelled(t *testing.T) {
-	p := compiled(t, `
+	const workflow = `
 on:
   execute:
     inputs:
@@ -352,6 +352,10 @@ jobs:
     steps: [{run: "true"}]
   env-group:
     needs: [dep]
+    if: ${{ inputs.group.e == 'fast' }}
+    steps: [{run: "true"}]
+  group-whole:
+    needs: [dep]
     if: ${{ toJSON(inputs.group) != '' }}
     steps: [{run: "true"}]
   env-flat:
@@ -410,13 +414,16 @@ jobs:
       matrix:
         when: [always, never]
     steps: [{run: "true"}]
-`, nil)
+`
+	p := compiled(t, workflow, nil)
 	run := runValues(t, p, nil)
 	skips, ends, outlives := plan.CancelPathSkip, plan.CancelPathEnd, plan.CancelPathOutlive
 	for name, want := range map[string]plan.CancelPath{
 		"dep": skips, "free": skips, "plain": skips, "false": skips, "input": skips, "as-text": skips,
 		"group-plain": skips, "row-plain": skips, "matrix": skips, "matrix-when": skips, "input-broken": skips,
-		"output": ends, "output-always": ends, "output-broken": ends, "result": ends, "env": ends, "env-free": ends, "env-input": ends,
+		// The plan holds the group read whole, its plain input in it.
+		"group-whole": skips, "output": ends, "output-always": ends, "output-broken": ends, "result": ends,
+		"env": ends, "env-free": ends, "env-input": ends,
 		"env-chain": ends, "env-group": ends, "env-flat": ends, "env-row": ends, "on-success": ends,
 		"on-failure": ends, "not-cancelled": ends, "matrix-reads": ends,
 		"value-always": outlives, "word-always": outlives, "input-always": outlives, "word": outlives,
@@ -426,8 +433,22 @@ jobs:
 			t.Errorf("%s takes %d, %v; want %d", name, got, err, want)
 		}
 	}
-	if len(p.Jobs) != 33 {
-		t.Errorf("the plan has %d jobs, and the test names 33", len(p.Jobs))
+	if len(p.Jobs) != 34 {
+		t.Errorf("the plan has %d jobs, and the test names 34", len(p.Jobs))
+	}
+	// An input the run was given a value for reads nothing, whatever its
+	// default reads, nor does one whose default reads only such an input,
+	// nor a list's row given a value.
+	given, diags := compile.Compile("workflow.yaml", []byte(workflow), map[string]any{
+		"fromenv": "fast", "group": map[string]any{"e": "slow"}, "rows": []any{map[string]any{"x": "x", "y": "y"}},
+	}, compile.Options{})
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	for _, name := range []string{"env-input", "env-chain", "env-group", "env-row"} {
+		if got, err := given.CancelPath(name, runValues(t, given, nil), nil); err != nil || got != skips {
+			t.Errorf("%s, given its input, takes %d, %v; want %d", name, got, err, skips)
+		}
 	}
 	// An if: that reads matrix is evaluated for an instance.
 	for i, want := range []plan.CancelPath{outlives, skips} {
@@ -502,6 +523,12 @@ jobs:
 	// One of CancelPathSkip's that fails to evaluate fails the job.
 	if r, diags, err := p.Ready(t.Context(), "input-broken", plan.ReadyInput{Run: run, Cancelled: true}); err != nil || r != nil || !diags.HasErrors() {
 		t.Errorf("input-broken: %+v, %v, %v", r, diags, err)
+	}
+	// One whose value is the word always, readied before its needs have
+	// finished, as CancelPath can't have said if its evaluation succeeded,
+	// is the caller's mistake.
+	if r, _, err := p.Ready(t.Context(), "input-always", plan.ReadyInput{Run: run, Cancelled: true}); err == nil {
+		t.Errorf("input-always readied without its needs: %+v", r)
 	}
 
 	// An instance takes its job's path, and one that reads matrix decides

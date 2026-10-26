@@ -685,13 +685,15 @@ type ReadyJobRetry struct {
 //
 // It reads the job the plan names job, and the plan's limits (Run.Limits),
 // as every replica and every rerun applies them. A job the plan doesn't
-// have is the caller's mistake, and an error.
+// have is the caller's mistake, and an error, and so is one readied once
+// the run is cancelled, before the jobs it needs have finished, whose if:
+// gives the word always, which CancelPath says waits for them.
 func (p *Plan) Ready(ctx context.Context, job string, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
 	j, err := p.job(job)
 	if err != nil {
 		return nil, nil, err
 	}
-	return j.ready(ctx, in, p.Run.Definitions, p.Run.Limits)
+	return p.ready(ctx, j, in)
 }
 
 // job returns the plan's job named name. A job the plan doesn't have is
@@ -704,28 +706,37 @@ func (p *Plan) job(name string) (*Job, error) {
 	return &p.Jobs[i], nil
 }
 
-// ready is Ready for j, with the run's input definitions and the plan's
-// limits.
-func (j *Job) ready(ctx context.Context, in ReadyInput, defs Value, limits Limits) (*ReadyResult, problems.Diagnostics, error) {
+// ready is Ready for the plan's job j.
+func (p *Plan) ready(ctx context.Context, j *Job, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	// Once the run is cancelled, the job takes the path its if: gives it
 	// (Plan.CancelPath), which an if: whose value is the word always makes
-	// CancelPathOutlive's.
+	// CancelPathOutlive's. onCancel gives what the if:'s decision d, which
+	// ok says it made, makes of the job then, if not its decision alone.
 	shape := CancelPathOutlive
 	if in.Cancelled {
-		shape = j.cancelShape(defs)
+		shape = p.cancelShape(j)
 	}
-	ends := func(d decision) *ReadyResult {
+	onCancel := func(d decision, ok bool) (*ReadyResult, error) {
 		switch {
+		case shape == CancelPathOutlive:
+		case !ok && shape == CancelPathEnd:
+			// ACTIVATE ends it cancelled all the same.
+			return &ReadyResult{Cancelled: true}, nil
+		case !ok:
+		case d.always && shape == CancelPathSkip && !j.needsGiven(in.Needs):
+			// CancelPath said the job ends at once, when its if: failed to
+			// evaluate in time, so the caller didn't wait for its needs.
+			return nil, fmt.Errorf("plan: the job %s outlives the run's cancellation, and is readied before the jobs it needs have finished", j.Key)
 		case d.always:
 		case shape == CancelPathEnd:
-			return &ReadyResult{Cancelled: true}
-		case shape == CancelPathSkip && len(j.Needs) > 0:
-			return &ReadyResult{Skipped: true, NeedsFailed: true}
+			return &ReadyResult{Cancelled: true}, nil
+		case len(j.Needs) > 0:
+			return &ReadyResult{Skipped: true, NeedsFailed: true}, nil
 		}
-		return nil
+		return nil, nil
 	}
 	status, needsOK := in.status()
 	c := Contexts{Run: in.Run, Needs: in.Needs, Status: status}
@@ -736,14 +747,12 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, defs Value, limits Limit
 		if !readsContext(j.If, "matrix") {
 			var ok bool
 			d, ok = e.condition(j.If, at(j.Path, "if"))
+			if r, err := onCancel(d, ok); r != nil || err != nil {
+				return r, nil, err
+			}
 			switch {
-			case !ok && shape == CancelPathEnd:
-				// ACTIVATE ends it cancelled all the same.
-				return &ReadyResult{Cancelled: true}, nil, nil
 			case !ok:
 				return nil, e.diags, nil
-			case ends(d) != nil:
-				return ends(d), nil, nil
 			case !d.run:
 				return skipped, nil, nil
 			}
@@ -757,7 +766,7 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, defs Value, limits Limit
 		// does; an if: that reads matrix is evaluated only for each
 		// instance.
 		c.StrictOutputs = !d.always
-		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), limits)
+		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), p.Run.Limits)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, ctxErr
@@ -787,14 +796,12 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, defs Value, limits Limit
 		maskedStrings(i.Matrix.Get(), e.mask)
 	}
 	d, ok := e.condition(j.If, at(j.Path, "if"))
+	if r, err := onCancel(d, ok); r != nil || err != nil {
+		return r, nil, err
+	}
 	switch {
-	case !ok && shape == CancelPathEnd:
-		// ACTIVATE ends it cancelled all the same.
-		return &ReadyResult{Cancelled: true}, nil, nil
 	case !ok:
 		return nil, e.diags, nil
-	case ends(d) != nil:
-		return ends(d), nil, nil
 	case !d.run:
 		return skipped, nil, nil
 	}
@@ -825,6 +832,16 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, defs Value, limits Limit
 	}
 	rj.Masked = e.masked
 	return &ReadyResult{Job: rj}, e.diags, nil
+}
+
+// needsGiven reports whether needs holds the result of each job j needs.
+func (j *Job) needsGiven(needs map[string]JobResult) bool {
+	for _, n := range j.Needs {
+		if _, ok := needs[n.Job]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // status returns how the job got here, for the status functions, from the
