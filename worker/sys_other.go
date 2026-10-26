@@ -4,7 +4,6 @@ package worker
 
 import (
 	"io"
-	"net"
 	"os/exec"
 	"runtime"
 	"syscall"
@@ -26,8 +25,6 @@ func signalGroup(int, syscall.Signal) {}
 func liveGroupsOf([]int) map[int]bool { return nil }
 
 const holdsLeaders = false
-
-func checkPeer(*net.UnixConn, string) error { return errNotUnix }
 
 func harden() error { return errNotUnix }
 
