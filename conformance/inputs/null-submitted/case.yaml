@@ -1,0 +1,31 @@
+description: >-
+  A null submitted for an input is its value, as ACTIVATE keeps it: it takes
+  no default, a boolean stays null rather than false, and a required input
+  isn't missing; what reads it reads null. Only a key not submitted, or "",
+  takes the default. A group submitted as null takes its inputs' defaults,
+  and in a list's row null is no value, so the row's field takes its
+  default, as ACTIVATE fills in a row's.
+source: Meridian, after ACTIVATE's filling of defaults
+inputs:
+  b: null
+  n: null
+  s: null
+  e: ""
+  t: ""
+  g: null
+  l:
+    - f: null
+    - f: given
+expect:
+  inputs:
+    b: null
+    n: null
+    s: null
+    e: 7
+    t: x
+    reads: true
+    g:
+      a: ga
+    l:
+      - f: d
+      - f: given

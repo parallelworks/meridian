@@ -318,10 +318,15 @@ func compactStrings(ss []string) []string {
 	return out
 }
 
-// maskedStrings gives add each string of v, a value made from a secret: v
-// itself if it is one, or each in it if it is a list or a mapping.
+// maskedStrings gives add the text of each scalar of v, a value made from
+// a secret, as an expression writes it into what a step reads (expr.Text):
+// v itself if it is a string, a number or a boolean, as 8 or true, or each
+// in it if it is a list or a mapping. Format 1 reads a value as it was
+// submitted, so a password can be a number or a boolean, and is masked as
+// its text all the same.
 func maskedStrings(v any, add func(string)) {
 	switch v := v.(type) {
+	case nil:
 	case string:
 		add(v)
 	case []any:
@@ -332,6 +337,8 @@ func maskedStrings(v any, add func(string)) {
 		for _, item := range jsonvalue.Sorted(v) {
 			maskedStrings(item, add)
 		}
+	default:
+		add(expr.Text(v))
 	}
 }
 

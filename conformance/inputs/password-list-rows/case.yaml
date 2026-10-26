@@ -2,7 +2,8 @@ description: >-
   A password field in a list's rows is one of the run's secrets, as a
   password input is, by its path in the values: the list's name, the row's
   index and the field's name. Its value isn't in its row, and it is checked
-  as a password input's is, so a number gives its text.
+  as a password input's is: a number stays a number, as ACTIVATE reads
+  every value as it was submitted, with a warning.
 source: Meridian
 inputs:
   creds:
@@ -12,6 +13,11 @@ inputs:
       pass: 42
     - user: c
 expect:
+  diagnostics:
+    - severity: warning
+      code: input_read_as_submitted
+      path: /on/execute/inputs/creds/template/pass
+      params: {input: creds.1.pass, type: password, given: number}
   inputs:
     creds:
       - user: a
@@ -19,4 +25,4 @@ expect:
       - user: c
   secrets:
     creds.0.pass: HUNTER2SECRET
-    creds.1.pass: "42"
+    creds.1.pass: 42

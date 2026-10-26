@@ -148,12 +148,12 @@ func (r *inputResolver) heldParts() {
 
 // keepHeld puts the values kept out of the plan (holdPath) among the
 // secrets, or among the private values, once they are checked: those of
-// the inputs that have them. derived names the secrets that are what can be
-// made from one.
+// the inputs that have them, a null among them, which is a value as the
+// plan's is. derived names the secrets that are what can be made from one.
 func (r *inputResolver) keepHeld() {
 	for _, p := range r.held {
 		v, ok := jsonptr.Lookup(r.values, p.path)
-		if !ok || v == nil {
+		if !ok {
 			continue
 		}
 		key := plan.JoinPath(p.path...)

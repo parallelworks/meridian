@@ -1823,5 +1823,48 @@
     "fix": [
       "サーバーは git.example.com、ファイルは flows/workflow.yaml のように書いてください。"
     ]
+  },
+  "input_read_as_submitted": {
+    "title": "送信されたとおりに読まれる入力",
+    "why": "形式 1 は、ACTIVATE と同じく、各入力の値を送信されたとおりに読み、何も変換しません。数値またはブール値の入力に送信されたテキストはテキストのままで、テキストの入力に送信された数値またはブール値は数値またはブール値のままです。ACTIVATE の実行フォームは、数値フィールドの値を JSON の数値として、チェックボックスの値を JSON のブール値として送信するため、このような値は別の JSON 型で書いた呼び出し元から来ています。入力を読むものは値をそのまま読みます。テキストの \"false\" は空ではないため、if: はそれを真として読みます。",
+    "fix": [
+      "値を入力の JSON 型で送信してください。数値なら \"5\" ではなく 5、ブール値なら \"false\" ではなく false です。",
+      "meridian validate の -input は、ACTIVATE の pw workflows run --input と同じく、入力の型に従って値を変換します。"
+    ]
+  },
+  "input_flag_unsplit": {
+    "title": "= のない -input オプション",
+    "why": "-input は path=value の形で入力を 1 つ設定します。= がないとパスがなく、この問題は指定された内容を繰り返しません。それはパスワードかもしれないためです。",
+    "fix": [
+      "-input nodes=8 のように、path=value の形で書いてください。"
+    ]
+  },
+  "input_flag_wrong_type": {
+    "title": "入力の型に合わない -input の値",
+    "why": "-input は、ACTIVATE の pw workflows run --input と同じく、設定する入力の型に従って値を変換します。ブール値の入力は true か false そのものを、数値の入力は JSON の数値を取ります。そのため 007、0x10、+1、.5、1. は数値ではなく、64 ビットに収まらない数値も同様です。見出しは値を取りません。この問題は値を繰り返しません。それはパスワードかもしれないためです。",
+    "fix": [
+      "-input debug=false や -input nodes=8 のように、入力の型の値を指定してください。"
+    ]
+  },
+  "input_flag_not_json": {
+    "title": "JSON ではない -input の値",
+    "why": "リスト、multi-dropdown、繰り返すウィザードのステップ、グループ、ウィザードのステップ、コンピュートターゲット、multi: true の compute-clusters、compute-resources、bucket の入力は構造を取り、-input は ACTIVATE の pw workflows run --input と同じくそれを JSON として読みます。この問題は JSON が誤っている位置をバイトで示し、値は繰り返しません。値にはパスワードが含まれるかもしれないためです。",
+    "fix": [
+      "-input 'files=[\"a.txt\"]' のように、シェル用に引用符で囲んだ JSON で値を書いてください。"
+    ]
+  },
+  "input_flag_wrong_shape": {
+    "title": "形が違う -input の値",
+    "why": "-input は、ACTIVATE の pw workflows run --input と同じく、構造の値を JSON として読み、それは入力が取る形でなければなりません。リスト、multi-dropdown、繰り返すウィザードのステップ、multi の入力は配列、グループ、ウィザードのステップ、コンピュートターゲットはオブジェクトです。",
+    "fix": [
+      "入力が取る JSON で値を書いてください。角かっこで囲む配列か、波かっこで囲むオブジェクトです。"
+    ]
+  },
+  "input_flag_path_not_settable": {
+    "title": "設定できない -input のパス",
+    "why": "パスは、ACTIVATE の pw workflows run --input が読むとおり、入力の名前か、group.name のようにグループの名前とその入力の名前です。平坦化するウィザードのステップ ($meta.wizard.flatten が false でない限り平坦化します) は、その入力を横に置くため、それらの入力はそれぞれの名前で設定します。リストや繰り返すウィザードのステップは JSON で全体を設定し、入力を持たない入力には設定するものがありません。",
+    "fix": [
+      "入力をその名前で指定するか、リストを JSON で全体として設定してください。"
+    ]
   }
 }

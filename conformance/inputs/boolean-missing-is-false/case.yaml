@@ -1,11 +1,12 @@
 description: >-
   A boolean input with no value and no default is false rather than
   required, and so is what another input's default reads of it: off, which
-  compares flag with false, is true. ACTIVATE sets such a boolean to false
+  compares flag with false, is true, the boolean its default gives.
+  ACTIVATE sets such a boolean to false
   only once the defaults are evaluated, so a default reads its definition
   instead, and off is false.
 source: Meridian, after ACTIVATE's tests
 expect:
   inputs:
     flag: false
-    off: "true"
+    off: true

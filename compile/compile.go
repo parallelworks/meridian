@@ -50,7 +50,9 @@ type Record struct {
 	// Passwords are the values of the run's password inputs, and of the
 	// other values it was given that are kept as passwords are, such as
 	// one in the place of a default that reads a password, by their names,
-	// as plan.Run.Secrets names them, as in inputs.creds.0.pass.
+	// as plan.Run.Secrets names them, as in inputs.creds.0.pass. A null
+	// the run was given is one, as it is a value the plan would hold, and
+	// so is it among Private.
 	Passwords map[string]any `json:"passwords,omitempty"`
 	// Private are the values the run was given that the plan doesn't hold,
 	// though they aren't secrets, by their names (plan.Run.Private). One can
@@ -474,7 +476,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		Icon:        str(w["icon"]),
 		Thumbnail:   str(w["thumbnail"]),
 		Inputs:      plan.DataOf(kept),
-		Unconverted: c.inputs.unconvertedData(kept),
+		Unresolved:  c.inputs.unresolvedData(kept),
 		Definitions: c.definitions(),
 		Env:         c.values([]string{"env"}, plan.PhaseCreate, nil),
 		Timeout:     c.value([]string{"timeout"}, plan.PhaseCreate, nil),

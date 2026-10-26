@@ -547,13 +547,15 @@ jobs:
 	}
 }
 
-// Only a secret's string is masked: a password input left empty, or a
-// boolean one, masks nothing, and a plain output that is a word such as
-// true is never masked.
+// A secret's scalars are masked as their text: a password left empty masks
+// nothing, but one submitted as a boolean or a number masks its text, as
+// format 1 reads it as it was submitted; a plain output that is a word such
+// as true, and what is only made from a secret, short as it is, aren't
+// masked.
 func TestMaskScalars(t *testing.T) {
 	r := plan.RunValues{Inputs: plan.DataOf(map[string]any{"pw": nil, "flag": true, "n": int64(5)}), Secrets: []string{"inputs.pw", "inputs.flag", "inputs.n"}}
-	if got := r.Masked(); len(got) != 0 {
-		t.Errorf("Masked() = %q", got)
+	if got := r.Masked(); !slices.Equal(got, []string{"true", "5"}) {
+		t.Errorf("Masked() = %q, want true and 5", got)
 	}
 	p := compiled(t, `
 jobs:

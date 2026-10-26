@@ -1,0 +1,11 @@
+description: >-
+  A submitted number is read as ACTIVATE reads a JSON number, as a 64-bit
+  float: a whole number past 2^53 is the float nearest it, wherever it is
+  read, so 9007199254740993 is 9007199254740992.
+source: Meridian, after ACTIVATE's reading of a run's JSON
+inputs:
+  n: 9007199254740993
+expect:
+  inputs:
+    n: 9007199254740992
+    s: n=9007199254740992

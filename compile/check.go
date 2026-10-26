@@ -4,7 +4,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/internal/jsonptr"
@@ -13,8 +12,9 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// checkValues checks each value against its input's type, converts numbers
-// and booleans given as text, resolves platform types, and puts password
+// checkValues checks each value against its input's type, which reads it
+// as it was submitted, text for a number among them (readAs), resolves
+// platform types, and puts password
 // values among the secrets: a password input's, and a password field's in
 // a list's or a repeated step's rows, which is checked as an input's is,
 // though the rows' other fields aren't. A value that isn't JSON, which a
@@ -150,7 +150,15 @@ func (r *inputResolver) readsPrivate(f *field) bool {
 // but isn't among those the plan keeps (kept).
 func (r *inputResolver) checkField(f *field, later bool) {
 	v, ok := jsonptr.Lookup(r.values, f.path)
-	if !ok || v == nil {
+	if !ok {
+		return
+	}
+	if v == nil {
+		// A password's null is a value, as any input's is, which the
+		// secret record holds, as the plan holds another input's.
+		if f.typ == "password" && !later {
+			r.secrets[plan.JoinPath(f.path...)] = nil
+		}
 		return
 	}
 	password := holdsPassword(f.def)
@@ -177,15 +185,58 @@ func (r *inputResolver) checkField(f *field, later bool) {
 		return
 	case f.typ == "password" && !later:
 		r.secrets[plan.JoinPath(f.path...)] = out
-	case !later && f.in == nil && !reflect.DeepEqual(v, out):
-		// What was evaluated before read the value as it was given, and so
-		// does what Start evaluates (plan.Run.Unconverted).
-		if r.unconverted == nil {
-			r.unconverted = map[string]any{}
+	case !later && f.in == nil && platformTypes[f.typ] && !reflect.DeepEqual(v, out):
+		// What was evaluated before read the value as it was submitted,
+		// and so does what Start evaluates (plan.Run.Unresolved).
+		if r.unresolved == nil {
+			r.unresolved = map[string]any{}
 		}
-		r.unconverted[plan.JoinPath(f.path...)] = jsonvalue.Clone(v)
+		r.unresolved[plan.JoinPath(f.path...)] = jsonvalue.Clone(v)
+	}
+	if given := readAs(f, v); given != "" && r.submittedAs(f.path, v) {
+		typ := f.typ
+		if typ == "" {
+			typ = "string"
+		}
+		r.reportAt(problems.InputReadAsSubmitted, f.loc, problems.Params{"input": f.label(), "type": typ, "given": given})
 	}
 	r.set(f.path, out)
+}
+
+// readAs returns what v, the value of f, is read as when it isn't of f's
+// type, which format 1 reads as it was submitted, as ACTIVATE does: text,
+// for a number or a boolean input given text, as "5" or "true", and a
+// number or a boolean, for a text input given one. It returns "" for any
+// other value.
+func readAs(f *field, v any) string {
+	_, isText := v.(string)
+	switch {
+	case platformTypes[f.typ] || f.typ == "list" || f.repeats() || f.typ == "multi-dropdown" || f.typ == "dropdown":
+		return ""
+	case f.typ == "number" || f.typ == "boolean":
+		if isText {
+			return "text"
+		}
+		return ""
+	}
+	if _, isBool := v.(bool); isBool {
+		return "boolean"
+	}
+	if _, ok := toNumber(v); ok && !isText {
+		return "number"
+	}
+	return ""
+}
+
+// submittedAs reports whether v, the value at path in the inputs' values,
+// is the value submitted there, as Create checks it: not a default, nor
+// what an expression a form sent the text of gave.
+func (r *inputResolver) submittedAs(path []string, v any) bool {
+	if r.start != nil {
+		return false
+	}
+	given, ok := jsonptr.Lookup(r.submitted, path)
+	return ok && reflect.DeepEqual(given, v)
 }
 
 // checkValue checks v, the value of f, and returns it as the run sees it, or
@@ -223,6 +274,8 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		}
 		return out, finding{}
 	case f.typ == "number":
+		// Text that reads as a number passes, and stays text: format 1
+		// reads a value as it was submitted (readAs).
 		n, ok := toNumber(v)
 		if !ok {
 			return wrong(problems.InputNotNumber, problems.Params{"value": problems.Show(v)})
@@ -233,17 +286,18 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		if hi, ok := toNumber(f.def["max"]); ok && n > hi {
 			return wrong(problems.InputAboveMax, problems.Params{"value": formatNumber(n), "max": formatNumber(hi)})
 		}
+		if _, isText := v.(string); isText {
+			return v, finding{}
+		}
 		return number(n), finding{}
 	case f.typ == "boolean":
-		switch v := v.(type) {
+		switch b := v.(type) {
 		case bool:
-			return v, finding{}
+			return b, finding{}
 		case string:
-			switch strings.ToLower(strings.TrimSpace(v)) {
-			case "true":
-				return true, finding{}
-			case "false":
-				return false, finding{}
+			switch strings.ToLower(strings.TrimSpace(b)) {
+			case "true", "false":
+				return v, finding{}
 			}
 		}
 		return wrong(problems.InputNotBoolean, problems.Params{"value": problems.Show(v)})
@@ -269,17 +323,11 @@ func (r *inputResolver) checkValue(f *field, v any) (any, finding) {
 		}
 		return v, finding{}
 	}
-	// Text: string, password, editor, color-picker and the like.
-	switch v := v.(type) {
-	case string:
-		return v, finding{}
-	case bool:
-		return strconv.FormatBool(v), finding{}
+	// Text: string, password, editor, color-picker and the like, which a
+	// number or a boolean is given for as it is (readAs).
+	switch v.(type) {
 	case map[string]any, []any:
 		return wrong(problems.InputNotText, problems.Params{"value": problems.Show(v)})
-	}
-	if n, ok := toNumber(v); ok {
-		return formatNumber(n), finding{}
 	}
 	return v, finding{}
 }

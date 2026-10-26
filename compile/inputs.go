@@ -141,10 +141,15 @@ func resolveInputs(doc *format.Document, submitted map[string]any, opts Options)
 }
 
 func newInputResolver(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
+	if submitted != nil {
+		submitted = jsonvalue.CloneMap(submitted)
+		floatNumbers(submitted)
+	}
 	return &inputResolver{
 		doc:          doc,
 		opts:         opts,
 		workflow:     &expr.Workflow{Root: doc.Value, Definitions: definitionsPath},
+		submitted:    submitted,
 		values:       jsonvalue.CloneMap(submitted),
 		secrets:      map[string]any{},
 		private:      map[string]any{},
@@ -204,7 +209,10 @@ type inputResolver struct {
 	// for Meridian's limits on what a group does. Each template has the
 	// language's limits as well.
 	budget expr.Scope
-	values map[string]any
+	// values are the inputs' values, and submitted those the run was given,
+	// as they were given, but for a number, read as ACTIVATE reads it
+	// (floatNumbers).
+	values, submitted map[string]any
 	secretState
 	taintState
 	compareState
@@ -240,15 +248,15 @@ type inputResolver struct {
 	// and decided what each decided, which the secret record keeps;
 	// ignored the names of the inputs the conditions ignored, as in
 	// inputs.region, and ignoredValues their values, as they were given,
-	// for those that had one; and unconverted
-	// the values of the inputs whose values checking them converted, as
-	// they were before, by their paths' names, which what was evaluated
-	// before read.
+	// for those that had one.
 	decisions     []string
 	decided       map[string]bool
 	ignored       []string
 	ignoredValues map[string]any
-	unconverted   map[string]any
+	// unresolved holds the values of the inputs of a platform's types that
+	// the Inputs resolver changed, as they were submitted, by their paths'
+	// names, which what was evaluated before read (plan.Run.Unresolved).
+	unresolved map[string]any
 	// ignoredLater holds the inputs that an ignore which read a variable
 	// or a password ignored, whose values the plan holds for Start to drop
 	// (applyConditions), and shapeView the inputs' values without them, as
@@ -335,12 +343,12 @@ func (r *inputResolver) deferredFields() []*field {
 	return out
 }
 
-// unconvertedData returns the values of the inputs the plan keeps, kept,
-// that checking them converted, as they were given (plan.Run.Unconverted):
-// none the plan doesn't keep, as a private one.
-func (r *inputResolver) unconvertedData(kept map[string]any) map[string]plan.Data {
+// unresolvedData returns the values of the inputs the plan keeps, kept,
+// that the Inputs resolver changed, as they were submitted
+// (plan.Run.Unresolved): none the plan doesn't keep, as a private one.
+func (r *inputResolver) unresolvedData(kept map[string]any) map[string]plan.Data {
 	var out map[string]plan.Data
-	for name, v := range r.unconverted {
+	for name, v := range r.unresolved {
 		if _, ok := jsonptr.Lookup(kept, plan.SplitPath(name)); !ok {
 			continue
 		}
