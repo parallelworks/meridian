@@ -32,7 +32,13 @@ const (
 	sigKill
 )
 
-func signalProcess(int, signal) error { return unsupported() }
+func signalWorker(*record, signal) error { return unsupported() }
+
+func lockFile(string) (func(), error) { return nil, unsupported() }
+
+func socketpair() ([2]int, error) { return [2]int{}, unsupported() }
+
+func runningExecutable(string) (string, error) { return "", unsupported() }
 
 func processStart(int) (string, error) { return "", unsupported() }
 

@@ -51,3 +51,8 @@ func (NotBuilt) Check(_ context.Context, m *Member, _ Placement) (Status, error)
 func (NotBuilt) Cancel(_ context.Context, m *Member, _ Placement) error {
 	return notBuilt(m)
 }
+
+// Forget fails: m's backend isn't built.
+func (NotBuilt) Forget(_ context.Context, m *Member, _ Placement) error {
+	return notBuilt(m)
+}

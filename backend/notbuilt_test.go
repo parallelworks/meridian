@@ -29,6 +29,7 @@ func TestNotBuilt(t *testing.T) {
 		"Find":    func() error { _, _, err := d.Find(t.Context(), m, "a1"); return err }(),
 		"Check":   func() error { _, err := d.Check(t.Context(), m, backend.Placement{}); return err }(),
 		"Cancel":  d.Cancel(t.Context(), m, backend.Placement{}),
+		"Forget":  d.Forget(t.Context(), m, backend.Placement{}),
 	} {
 		if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.BackendNotBuilt.Code() {
 			t.Errorf("%s: %v", name, err)

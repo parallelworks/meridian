@@ -5,7 +5,6 @@ package local
 import (
 	"errors"
 	"fmt"
-	"strconv"
 
 	"golang.org/x/sys/unix"
 )
@@ -15,8 +14,10 @@ import (
 const szomb = 5
 
 // processStart returns when the process pid started, by the wall clock, to
-// the microsecond, as kern.proc.pid says, or errNoProcess for one that
-// isn't there or has ended and waits to be reaped.
+// the microsecond, as kern.proc.pid says: p_starttime, which is set as the
+// process forks, and no change to the clock after moves. It returns
+// errNoProcess for one that isn't there or has ended and waits to be
+// reaped.
 func processStart(pid int) (string, error) {
 	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	// kern.proc.pid gives nothing for a process that isn't there, which
@@ -33,14 +34,15 @@ func processStart(pid int) (string, error) {
 	return fmt.Sprintf("%d.%06d", tv.Sec, tv.Usec), nil
 }
 
-// bootID returns when the system booted, to the second, as kern.boottime
-// says.
+// bootID returns the boot's ID, kern.bootsessionuuid, which macOS makes
+// anew each boot, and which, unlike kern.boottime, a change to the clock
+// doesn't move.
 func bootID() (string, error) {
-	tv, err := unix.SysctlTimeval("kern.boottime")
-	if err != nil {
-		return "", err
+	id, err := unix.Sysctl("kern.bootsessionuuid")
+	if err == nil && id == "" {
+		err = errors.New("local: kern.bootsessionuuid is empty")
 	}
-	return strconv.FormatInt(tv.Sec, 10), nil
+	return id, err
 }
 
 // hostMemory returns the host's memory, in bytes, as hw.memsize says.

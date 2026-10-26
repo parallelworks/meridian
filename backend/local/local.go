@@ -7,14 +7,18 @@
 // Any other isolation, the default container among them, is
 // isolation_not_built, and never the host instead.
 //
-// It keeps its files in the state directory, each in a directory only the
-// user can use: an attempt's bootstrap token in tokens/, until the worker
-// reads and removes it; the worker's standard error in workers/; and its
+// A worker gets its bootstrap token on a socket it inherits, once it has
+// said there that it has kept the user's other processes out of its
+// memory (workerapi.EnvBootstrapTokenFD): no other process of the user's,
+// another job's step among them, can read it first, as one could a file.
+//
+// The driver keeps its files in the state directory, in directories only
+// the user can use: the worker's standard error in workers/, and its
 // placement in placements/, which says which process it is by its ID, its
 // start time and the boot it started in, so that any process of the
 // user's, a coordinator that restarted among them, can find, check and
 // cancel it, and none takes another process that has the same ID later for
-// it.
+// it. A clock set back or forward changes none of them.
 //
 // It runs where the worker does: Linux, macOS and FreeBSD. Elsewhere its
 // Probe gives every member worker_system_unsupported, and every other call
@@ -23,7 +27,6 @@ package local
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
@@ -31,6 +34,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +56,10 @@ import (
 // with their grace, and send what it has.
 const DefaultKillAfter = 60 * time.Second
 
+// tokenWait is how long Place's process waits for a worker to say it is
+// ready for its token, before it gives up, and the worker gets none.
+const tokenWait = time.Minute
+
 // A Driver is the local backend's backend.Driver.
 type Driver struct {
 	// State is the directory the driver keeps its files in: the meridian
@@ -69,7 +77,6 @@ var _ backend.Driver = (*Driver)(nil)
 
 // The directories in State that the driver keeps its files in.
 const (
-	tokensDir     = "tokens"
 	workersDir    = "workers"
 	placementsDir = "placements"
 )
@@ -78,22 +85,20 @@ const (
 var attemptPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // A record is what the driver keeps of a placement, in its file: which
-// process the worker is, the token file it was started with, what it
-// asked for, and which binary it runs.
+// process the worker is, what it asked for, and which binary it runs.
 type record struct {
 	PID int `json:"pid"`
-	// Start is the process's start time, as the system says it, and Boot
-	// the boot it started in, so that another process that has the same
-	// ID later isn't taken for it.
-	Start string `json:"start"`
-	Boot  string `json:"boot"`
-	// Token is the path of the file the worker was given its bootstrap
-	// token in, which it removes once it has read it.
-	Token      string            `json:"token"`
+	// Start is when the process started, counted from the boot, and Boot
+	// the boot's ID, as the system says them, so that another process that
+	// has the same ID later isn't taken for it, and a clock set since
+	// changes neither.
+	Start      string            `json:"start"`
+	Boot       string            `json:"boot"`
 	Resources  backend.Resources `json:"resources,omitzero"`
 	Executable string            `json:"executable"`
-	// Digest is sha256: and the hex of the SHA-256 digest of Executable,
-	// as the worker reports its own.
+	// Digest is sha256: and the hex of the SHA-256 digest of the file the
+	// worker runs, as the worker reports its own (workerapi.Worker), which
+	// the coordinator compares with it.
 	Digest string `json:"digest"`
 }
 
@@ -225,13 +230,15 @@ type nopCloser struct{}
 
 func (nopCloser) Close() error { return nil }
 
-// Place starts meridian worker for req's attempt: this binary, once it has
-// checked that no other user can change it, with the token in a file only
-// the user can read, the user's environment but its MERIDIAN_ variables,
-// in a session of its own, so that a terminal's signals don't reach it,
-// and its standard error in workers/. It records the placement, and
+// Place starts meridian worker for req's attempt: the file this process
+// runs, once it has checked that no other user can change it, with the
+// user's environment but its MERIDIAN_ variables, in a session of its own,
+// so that a terminal's signals don't reach it, with its standard error in
+// workers/, and its token on a socket it inherits, which this process
+// writes once the worker says it is ready. It records the placement, and
 // returns once the worker has started. An attempt whose worker runs
-// already is found, and not placed again.
+// already is found, and not placed again, however many processes place it
+// at once.
 func (d *Driver) Place(_ context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
 	if p := unsupported(); p != nil {
 		return backend.Placement{}, p
@@ -242,6 +249,18 @@ func (d *Driver) Place(_ context.Context, m *backend.Member, req backend.PlaceRe
 	if !attemptPattern.MatchString(req.Attempt) {
 		return backend.Placement{}, fmt.Errorf("local: an attempt's ID that can't name a file: %q", req.Attempt)
 	}
+	for _, dir := range []string{workersDir, placementsDir} {
+		if err := safepath.EnsureDir(filepath.Join(d.State, dir), safepath.Private); err != nil {
+			return backend.Placement{}, err
+		}
+	}
+	// One process at a time places an attempt, from finding its placement
+	// to recording a new one.
+	unlock, err := lockFile(d.path(req.Attempt, ".lock"))
+	if err != nil {
+		return backend.Placement{}, err
+	}
+	defer unlock()
 	if r, ok, err := d.read(req.Attempt); err != nil {
 		return backend.Placement{}, err
 	} else if ok {
@@ -252,55 +271,55 @@ func (d *Driver) Place(_ context.Context, m *backend.Member, req backend.PlaceRe
 		if alive {
 			return backend.Placement{Attempt: req.Attempt, ID: r.id()}, nil
 		}
-		d.forget(req.Attempt, r)
+		d.remove(req.Attempt)
 	}
 	exe, digest, err := executable()
 	if err != nil {
 		return backend.Placement{}, err
 	}
-	for _, dir := range []string{tokensDir, workersDir, placementsDir} {
-		if err := safepath.EnsureDir(filepath.Join(d.State, dir), safepath.Private); err != nil {
-			return backend.Placement{}, err
-		}
-	}
-	token, err := d.writeToken(req.BootstrapToken)
+	worker, ours, err := socketPair()
 	if err != nil {
 		return backend.Placement{}, err
 	}
 	stderr, err := os.OpenFile(filepath.Join(d.State, workersDir, req.Attempt+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND|openNoFollow, 0o600)
 	if err != nil {
-		os.Remove(token)
+		worker.Close()
+		ours.Close()
 		return backend.Placement{}, err
 	}
 	// The worker outlives this call, and the process that placed it: it
 	// isn't started with the call's context.
-	cmd := exec.Command(exe, "worker") //nolint:gosec,noctx // this binary, which executable checked, and a worker that outlives the call
+	cmd := exec.Command(exe, "worker") //nolint:gosec,noctx // the file this process runs, which executable checked, and a worker that outlives the call
 	cmd.Dir = "/"
-	cmd.Env = d.environ(req.Coordinator, token)
+	cmd.Env = d.environ(req.Coordinator)
 	cmd.Stderr = stderr
+	cmd.ExtraFiles = []*os.File{worker}
 	detach(cmd)
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	worker.Close()
+	if err != nil {
 		stderr.Close()
-		os.Remove(token)
+		ours.Close()
 		return backend.Placement{}, err
 	}
-	r := &record{PID: cmd.Process.Pid, Token: token, Resources: req.Resources, Executable: exe, Digest: digest}
+	r := &record{PID: cmd.Process.Pid, Resources: req.Resources, Executable: exe, Digest: digest}
 	r.Start, err = processStart(r.PID)
 	if err == nil {
 		r.Boot, err = bootID()
 	}
 	if err == nil {
-		err = d.writeRecord(req.Attempt, r)
+		err = d.writeFile(d.path(req.Attempt, ".json"), mustMarshal(r))
 	}
 	if err != nil {
 		// Without its record, the worker couldn't be found again: it
-		// doesn't run.
+		// doesn't run, and gets no token.
+		ours.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		stderr.Close()
-		os.Remove(token)
 		return backend.Placement{}, err
 	}
+	go giveToken(ours, req.BootstrapToken)
 	// The worker is reaped while this process runs, and its exit status
 	// kept beside its placement; after, the system reaps it.
 	go func() {
@@ -308,16 +327,47 @@ func (d *Driver) Place(_ context.Context, m *backend.Member, req backend.PlaceRe
 		stderr.Close()
 		if cmd.ProcessState != nil {
 			exit := []byte(strconv.Itoa(cmd.ProcessState.ExitCode()) + "\n")
-			_ = d.writeFile(filepath.Join(d.State, placementsDir, req.Attempt+".exit"), exit)
+			_ = d.writeFile(d.path(req.Attempt, ".exit"), exit)
 		}
 	}()
 	return backend.Placement{Attempt: req.Attempt, ID: r.id()}, nil
 }
 
-// executable returns the path of this binary, with its symbolic links
-// resolved, once it has checked that it is a regular file of the user's or
-// root's that no other user can change, nor the directories on the way to
-// it, and its digest. Otherwise it is worker_binary_unsafe.
+// socketPair returns the two ends of a new stream Unix socket: the
+// worker's, which it inherits, and this process's, neither of which any
+// other process gets.
+func socketPair() (worker, ours *os.File, err error) {
+	fds, err := socketpair()
+	if err != nil {
+		return nil, nil, err
+	}
+	return os.NewFile(uintptr(fds[0]), "worker's token"), os.NewFile(uintptr(fds[1]), "token"), nil
+}
+
+// giveToken writes token to ours, once the worker has written that it is
+// ready on its end, and closes it. A worker that doesn't say so within
+// tokenWait, or ends first, gets no token.
+func giveToken(ours *os.File, token string) {
+	conn, err := net.FileConn(ours)
+	ours.Close()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	if conn.SetDeadline(time.Now().Add(tokenWait)) != nil {
+		return
+	}
+	ready := make([]byte, 1)
+	if _, err := io.ReadFull(conn, ready); err != nil || ready[0] != '1' {
+		return
+	}
+	_, _ = conn.Write([]byte(token))
+}
+
+// executable returns the path to start the worker with, the file this
+// process runs, and its digest, once it has checked that the file is a
+// regular file of the user's or root's that no other user can change, nor
+// any directory on the way to it. Otherwise it is worker_binary_unsafe.
 func executable() (string, string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -326,78 +376,59 @@ func executable() (string, string, error) {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return "", "", err
 	}
-	return checkExecutable(exe)
-}
-
-// checkExecutable checks exe as executable does, and returns it and its
-// digest.
-func checkExecutable(exe string) (string, string, error) {
-	unsafe := func(k *problems.Kind) error {
-		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": exe, "code": string(k.Code())})
-	}
-	if err := safepath.Check(exe, false); err != nil {
-		if p, ok := errors.AsType[*problem.Problem](err); ok {
-			return "", "", problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": exe, "code": string(p.Code)})
-		}
-		return "", "", err
-	}
-	f, err := os.OpenFile(exe, os.O_RDONLY|openNoFollow, 0) //nolint:gosec // this binary, whose way safepath checked
+	run, err := runningExecutable(exe)
 	if err != nil {
 		return "", "", err
+	}
+	digest, err := checkExecutable(exe, run)
+	return run, digest, err
+}
+
+// checkExecutable checks that no other user can change the way to path,
+// and that the file open opens, the file at path or the one the process
+// runs, is a regular file of the user's or root's that no other user can
+// change, and returns its digest.
+func checkExecutable(path, open string) (string, error) {
+	unsafe := func(code problem.Code) error {
+		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
+	}
+	if err := safepath.Check(path, false); err != nil {
+		if p, ok := errors.AsType[*problem.Problem](err); ok {
+			return "", unsafe(p.Code)
+		}
+		return "", err
+	}
+	f, err := os.Open(open) //nolint:gosec // this binary, whose way safepath checked
+	if err != nil {
+		return "", err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	owner, known := safepath.Owner(info)
 	switch {
 	case !info.Mode().IsRegular():
-		return "", "", unsafe(problems.FileNotRegular)
+		return "", unsafe(problems.FileNotRegular.Code())
 	case !known:
-		return "", "", unsafe(problems.OwnerUnknown)
+		return "", unsafe(problems.OwnerUnknown.Code())
 	case owner != os.Getuid() && owner != 0:
-		return "", "", unsafe(problems.FileNotOwned)
+		return "", unsafe(problems.FileNotOwned.Code())
 	case info.Mode().Perm()&0o022 != 0:
-		return "", "", unsafe(problems.FileChangeable)
+		return "", unsafe(problems.FileChangeable.Code())
 	}
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", "", err
-	}
-	return exe, "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// writeToken writes token to a new file in tokens/, which only the user
-// can read, never through a symbolic link nor over a file that is there,
-// and returns its path.
-func (d *Driver) writeToken(token string) (string, error) {
-	name := make([]byte, 16)
-	if _, err := rand.Read(name); err != nil {
 		return "", err
 	}
-	path := filepath.Join(d.State, tokensDir, hex.EncodeToString(name)+".token")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|openNoFollow, 0o600) //nolint:gosec // a new file of a random name, in tokens/
-	if err != nil {
-		return "", err
-	}
-	_, err = f.WriteString(token)
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(path)
-		return "", err
-	}
-	return path, nil
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // environ returns a worker's environment: d's, but its MERIDIAN_
-// variables, and where the coordinator is and the token's file.
-func (d *Driver) environ(coordinator backend.Endpoint, token string) []string {
+// variables, and where the coordinator is and the token's socket, which
+// the worker inherits as its descriptor 3.
+func (d *Driver) environ(coordinator backend.Endpoint) []string {
 	base := d.Environ
 	if base == nil {
 		base = os.Environ()
@@ -412,7 +443,7 @@ func (d *Driver) environ(coordinator backend.Endpoint, token string) []string {
 	if coordinator.KeyHash != "" {
 		out = append(out, workerapi.EnvKeySHA256+"="+coordinator.KeyHash)
 	}
-	return append(out, workerapi.EnvBootstrapTokenFile+"="+token)
+	return append(out, workerapi.EnvBootstrapTokenFD+"=3")
 }
 
 // Find returns the placement of an attempt, from its file in placements/.
@@ -430,8 +461,7 @@ func (d *Driver) Find(_ context.Context, _ *backend.Member, attempt string) (bac
 // Check says whether a placement's worker runs: whether a process of its
 // ID that started when it did, in the same boot, hasn't ended. One that
 // has is Dead, withdrawn if Cancel stopped it, and so is a placement
-// without its file. The token file of a worker that ended without reading
-// it is removed.
+// without its file.
 func (d *Driver) Check(_ context.Context, _ *backend.Member, p backend.Placement) (backend.Status, error) {
 	if pr := unsupported(); pr != nil {
 		return backend.Status{}, pr
@@ -450,9 +480,8 @@ func (d *Driver) Check(_ context.Context, _ *backend.Member, p backend.Placement
 	case alive:
 		return backend.Status{State: backend.Running}, nil
 	}
-	d.removeToken(r)
 	end := backend.EndExited
-	if _, err := os.Lstat(d.termPath(p.Attempt)); err == nil {
+	if _, err := os.Lstat(d.path(p.Attempt, ".term")); err == nil {
 		end = backend.EndWithdrawn
 	}
 	return backend.Status{State: backend.Dead, End: end}, nil
@@ -462,14 +491,18 @@ func (d *Driver) Check(_ context.Context, _ *backend.Member, p backend.Placement
 // steps with their grace and sends what it has, and SIGKILL if it still
 // runs KillAfter later, counted from the first Cancel, by any process. It
 // returns once the worker has ended, or ctx is done. A worker SIGKILL ends
-// can't stop its steps' process groups. A placement that has ended, or
-// that isn't there, is no error.
+// can't stop its steps' process groups. It signals only the process the
+// placement records, never another that has its ID since; a placement
+// that has ended, or that isn't there, is no error, and isn't withdrawn.
 func (d *Driver) Cancel(ctx context.Context, _ *backend.Member, p backend.Placement) error {
 	if pr := unsupported(); pr != nil {
 		return pr
 	}
 	r, ok, err := d.read(p.Attempt)
 	if err != nil || !ok || r.id() != p.ID {
+		return err
+	}
+	if alive, err := r.alive(); err != nil || !alive {
 		return err
 	}
 	termed, err := d.terminate(p.Attempt, r)
@@ -487,16 +520,14 @@ func (d *Driver) Cancel(ctx context.Context, _ *backend.Member, p backend.Placem
 		}
 		switch {
 		case !alive:
-			d.removeToken(r)
 			return nil
 		case killedAt.IsZero() && !time.Now().Before(killAt):
-			if err := signalProcess(r.PID, sigKill); err != nil && !errors.Is(err, errNoProcess) {
+			if err := signalWorker(r, sigKill); err != nil && !errors.Is(err, errNoProcess) {
 				return err
 			}
 			killedAt = time.Now()
 		case !killedAt.IsZero() && time.Since(killedAt) > 10*time.Second:
 			// Killed, and not yet reaped by whoever its parent is.
-			d.removeToken(r)
 			return nil
 		}
 		select {
@@ -511,7 +542,7 @@ func (d *Driver) Cancel(ctx context.Context, _ *backend.Member, p backend.Placem
 // cancelled, and returns when that was, which a file beside its placement
 // keeps for a later Cancel.
 func (d *Driver) terminate(attempt string, r *record) (time.Time, error) {
-	path := d.termPath(attempt)
+	path := d.path(attempt, ".term")
 	if data, err := safepath.ReadFile(path, safepath.Private, 64); err == nil {
 		if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data))); err == nil {
 			return t, nil
@@ -523,13 +554,32 @@ func (d *Driver) terminate(attempt string, r *record) (time.Time, error) {
 	if err := d.writeFile(path, []byte(now.Format(time.RFC3339Nano)+"\n")); err != nil {
 		return time.Time{}, err
 	}
-	if alive, err := r.alive(); err != nil || !alive {
-		return now, err
-	}
-	if err := signalProcess(r.PID, sigTerm); err != nil && !errors.Is(err, errNoProcess) {
+	if err := signalWorker(r, sigTerm); err != nil && !errors.Is(err, errNoProcess) {
 		return now, err
 	}
 	return now, nil
+}
+
+// Forget removes what the driver keeps of a placement whose worker has
+// ended, once the coordinator has recorded how it ended: its file, its
+// exit status, when Cancel stopped it, and the worker's log. A placement
+// whose worker still runs is kept, and an error.
+func (d *Driver) Forget(_ context.Context, _ *backend.Member, p backend.Placement) error {
+	if pr := unsupported(); pr != nil {
+		return pr
+	}
+	r, ok, err := d.read(p.Attempt)
+	if err != nil || !ok || r.id() != p.ID {
+		return err
+	}
+	if alive, err := r.alive(); err != nil {
+		return err
+	} else if alive {
+		return fmt.Errorf("local: the worker of %s still runs", p.Attempt)
+	}
+	d.remove(p.Attempt)
+	_ = os.Remove(d.path(p.Attempt, ".lock"))
+	return nil
 }
 
 func (d *Driver) killAfter() time.Duration {
@@ -539,12 +589,10 @@ func (d *Driver) killAfter() time.Duration {
 	return d.KillAfter
 }
 
-func (d *Driver) recordPath(attempt string) string {
-	return filepath.Join(d.State, placementsDir, attempt+".json")
-}
-
-func (d *Driver) termPath(attempt string) string {
-	return filepath.Join(d.State, placementsDir, attempt+".term")
+// path returns the path of an attempt's file in placements/ that ends in
+// suffix.
+func (d *Driver) path(attempt, suffix string) string {
+	return filepath.Join(d.State, placementsDir, attempt+suffix)
 }
 
 // read reads an attempt's record, and reports false if it has none.
@@ -552,7 +600,7 @@ func (d *Driver) read(attempt string) (*record, bool, error) {
 	if !attemptPattern.MatchString(attempt) {
 		return nil, false, nil
 	}
-	data, err := safepath.ReadFile(d.recordPath(attempt), safepath.Private, 64<<10)
+	data, err := safepath.ReadFile(d.path(attempt, ".json"), safepath.Private, 64<<10)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	} else if err != nil {
@@ -565,19 +613,21 @@ func (d *Driver) read(attempt string) (*record, bool, error) {
 	return r, true, nil
 }
 
-// writeRecord writes an attempt's record, whole or not at all.
-func (d *Driver) writeRecord(attempt string, r *record) error {
+// mustMarshal encodes a record, which can't fail.
+func mustMarshal(r *record) []byte {
 	data, err := jsonv2.Marshal(r, jsonv2.Deterministic(true))
 	if err != nil {
-		return err
+		panic(err) //nolint:forbidigo // a record of strings and numbers always encodes
 	}
-	return d.writeFile(d.recordPath(attempt), data)
+	return data
 }
 
 // writeFile writes a file in placements/ whole or not at all, readable
-// only by the user: to a new file beside it, synced, then renamed over it.
+// only by the user: to a new file beside it, synced, then renamed over it,
+// and the directory synced.
 func (d *Driver) writeFile(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".new-*")
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".new-*")
 	if err != nil {
 		return err
 	}
@@ -593,23 +643,27 @@ func (d *Driver) writeFile(path string, data []byte) error {
 	}
 	if err != nil {
 		os.Remove(f.Name())
+		return err
 	}
-	return err
+	return syncDir(dir)
 }
 
-// removeToken removes the token file of r's worker, if the worker didn't:
-// one in tokens/, and no other file.
-func (d *Driver) removeToken(r *record) {
-	if filepath.Dir(r.Token) == filepath.Join(d.State, tokensDir) && strings.HasSuffix(r.Token, ".token") {
-		_ = os.Remove(r.Token)
+// syncDir syncs the directory dir, so that what was renamed in it lasts.
+func syncDir(dir string) error {
+	f, err := os.Open(dir) //nolint:gosec // placements/, in the state directory
+	if err != nil {
+		return err
 	}
+	defer f.Close()
+	return f.Sync()
 }
 
-// forget removes what is left of an attempt's placement whose worker has
-// ended, before the attempt is placed again.
-func (d *Driver) forget(attempt string, r *record) {
-	d.removeToken(r)
-	for _, path := range []string{d.termPath(attempt), filepath.Join(d.State, placementsDir, attempt+".exit"), d.recordPath(attempt)} {
+// remove removes an attempt's files, but its lock.
+func (d *Driver) remove(attempt string) {
+	for _, path := range []string{
+		d.path(attempt, ".term"), d.path(attempt, ".exit"), d.path(attempt, ".json"),
+		filepath.Join(d.State, workersDir, attempt+".log"),
+	} {
 		_ = os.Remove(path)
 	}
 }

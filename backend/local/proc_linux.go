@@ -56,3 +56,31 @@ func hostMemory() (int64, error) {
 	}
 	return int64(info.Totalram) * int64(info.Unit), nil //nolint:gosec,unconvert // a host's memory fits in an int64, and the types differ by architecture
 }
+
+// runningExecutable returns the path that starts the file this process
+// runs: /proc/self/exe, which is that file in the process that execs it,
+// a child of this one, even if another file has taken exe's path since, as
+// an upgrade in place does.
+func runningExecutable(string) (string, error) { return "/proc/self/exe", nil }
+
+// signalWorker sends sig to r's worker, through a pidfd that names the
+// process, taken before the driver checks that it is r's: a process that
+// has its ID after it ends, as ID are reused, is never signalled.
+func signalWorker(r *record, sig syscall.Signal) error {
+	p, err := os.FindProcess(r.PID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = p.Release() }()
+	if alive, err := r.alive(); err != nil {
+		return err
+	} else if !alive {
+		return errNoProcess
+	}
+	if err := p.Signal(sig); errors.Is(err, os.ErrProcessDone) {
+		return errNoProcess
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
