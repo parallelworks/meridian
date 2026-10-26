@@ -19,6 +19,25 @@ type readied struct {
 	diags  problems.Diagnostics
 }
 
+// end is how the job ends when Ready ends it without running it: failed,
+// with Ready's diagnostics, when it couldn't evaluate what it evaluates;
+// skipped, by its if:, which the jobs that need it read as failed when
+// Ready says it was skipped because a job it needs failed (NeedsFailed);
+// or cancelled, as the path its if: gives it in a run that was stopped
+// before it was readied (plan.CancelPathEnd). It reports false for a job
+// Ready gives to run.
+func (r *readied) end() (store.JobEnd, bool) {
+	switch {
+	case r.diags.HasErrors():
+		return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: r.diags}, true
+	case r.result.Skipped:
+		return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeSkipped, NeedsFailed: r.result.NeedsFailed}}, true
+	case r.result.Cancelled:
+		return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}}, true
+	}
+	return store.JobEnd{}, false
+}
+
 // readyJob readies the run's job key, as plan.Ready does, with the run's
 // values and the results of the jobs it needs, each joined from run state
 // and the job's part of the secret record, which it opens; and with what

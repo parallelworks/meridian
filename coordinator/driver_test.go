@@ -51,11 +51,16 @@ func (testGroups) ComputeTarget(context.Context, plan.ComputeTarget) (*backend.G
 
 // A testEnd is what the worker of an attempt testDriver placed does: it
 // completes the attempt with result; or, with problem, ends it as one that
-// failed before its first step; or, with never, never claims it.
+// failed before its first step; or, with never, never claims it; or, with
+// running, claims it, starts a step, and leaves it running, closing
+// started then. It waits for wait first, unless it is nil.
 type testEnd struct {
 	result  plan.JobResult
 	problem *problem.Problem
 	never   bool
+	running bool
+	started chan<- struct{}
+	wait    <-chan struct{}
 }
 
 // testDriver is a backend.Driver in process, for tests. Its members can run
@@ -209,8 +214,27 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 		}
 		break
 	}
+	if end.wait != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-end.wait:
+		}
+	}
 	credential := make([]byte, 32)
 	_, _ = rand.Read(credential)
+	if end.running {
+		if err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
+			claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
+			if err != nil {
+				return err
+			}
+			return tx.StepStarted(claimed.ID)
+		}); err == nil && end.started != nil {
+			close(end.started)
+		}
+		return
+	}
 	report := workerapi.Complete{Result: end.result}
 	if end.problem != nil {
 		report = workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: end.problem}

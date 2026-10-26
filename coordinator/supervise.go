@@ -259,11 +259,14 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 }
 
 // endJob ends the run's job key as end says, in a transaction that done
-// writes to as well. A job that has ended meanwhile is errSettled, and one
-// that has an attempt that hasn't, as one another supervisor placed,
-// errAgain.
+// writes to as well. The first job of the run to fail marks the run in it,
+// which every attempt of the run then tells its worker, for its steps
+// whose early-cancel: is any-job-failed. A job that has ended meanwhile is
+// errSettled, and one that has an attempt that hasn't, as one another
+// supervisor placed, errAgain.
 func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	return c.store.Tx(ctx, func(tx *store.Tx) error {
+	var marked bool
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.EndJob(runID, key, end); errors.Is(err, store.ErrState) {
 			j, jerr := tx.Job(runID, key)
 			switch {
@@ -276,8 +279,35 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 		} else if err != nil {
 			return err
 		}
+		if end.Result.Outcome == plan.OutcomeFailure {
+			var err error
+			if marked, err = tx.MarkJobFailed(runID); err != nil {
+				return err
+			}
+		}
 		return done(ctx, tx)
 	})
+	if err == nil && marked {
+		c.controlsChanged()
+	}
+	return err
+}
+
+// A controlNotifier hears that attempts' controls changed, so that it
+// answers the control polls it holds: the worker API's server
+// (workerapisrv.Server.Notify), which polls in other processes read again
+// every second.
+type controlNotifier interface{ Notify() }
+
+// controlsChanged tells the coordinator's controlNotifier, if it has one,
+// that attempts' controls changed.
+func (c *Coordinator) controlsChanged() {
+	c.mu.Lock()
+	n := c.controls
+	c.mu.Unlock()
+	if n != nil {
+		n.Notify()
+	}
 }
 
 // wakeJob wakes the supervisor of the run's job key, once something it

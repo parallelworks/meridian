@@ -175,8 +175,10 @@ type Coordinator struct {
 	retired  sync.WaitGroup
 	retiring context.Context
 	// connections are where members' workers reach the coordinator, as
-	// their drivers' Connect gave it, by member (memberKey).
+	// their drivers' Connect gave it, by member.
 	connections map[string]connection
+	// controls hears that attempts' controls changed, or is nil.
+	controls controlNotifier
 }
 
 // Open opens a coordinator on the store at opts.Database. It works no

@@ -45,14 +45,13 @@ type candidate struct {
 // placement_impossible and each member's reason.
 func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.Job, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	r, err := c.readyJob(ctx, run, job.Key)
-	switch {
-	case err != nil:
+	if err != nil {
 		return 0, err
-	case r.diags.HasErrors():
-		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: r.diags}, done)
-	case r.result.Skipped:
-		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeSkipped, NeedsFailed: r.result.NeedsFailed}}, done)
-	case r.result.Job == nil:
+	}
+	if end, ok := r.end(); ok {
+		return 0, c.endJob(ctx, run.ID, job.Key, end, done)
+	}
+	if r.result.Job == nil {
 		return 0, fmt.Errorf("coordinator: Ready expanded run %s's job %q's matrix", run.ID, job.Key)
 	}
 	rj := r.result.Job
@@ -97,7 +96,12 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 		if err != nil {
 			return err
 		}
-		return tx.ChoosePlace(a.ID, place)
+		if err := tx.ChoosePlace(a.ID, place); err != nil {
+			return err
+		}
+		// What every attempt of the run tells its worker, this one does
+		// from the start.
+		return tx.StartControl(a.ID)
 	})
 	if errors.Is(err, store.ErrState) || errors.Is(err, store.ErrFenced) {
 		return 0, errAgain
