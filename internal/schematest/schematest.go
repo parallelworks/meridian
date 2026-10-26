@@ -14,13 +14,15 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // sources are the schemas, by the directories they are in, in the
 // repository: they refer to each other by their paths relative to each
 // other, as the repository has them.
 var sources = map[string]fs.FS{
-	"plan": plan.Schemas,
+	"plan":      plan.Schemas,
+	"workerapi": workerapi.Schemas,
 }
 
 var (

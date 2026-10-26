@@ -9,6 +9,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -38,7 +39,8 @@ func TestCodesAreKinds(t *testing.T) {
 // TestBodiesRoundTrip checks that each body reads back as the API wrote
 // it, and writes again to the same bytes: numbers in a run's values that a
 // float64 can't hold, diagnostics, a problem, and lists and mappings that
-// are empty.
+// are empty; and each fits its definition in the API's schema
+// (workerapi.Schemas).
 func TestBodiesRoundTrip(t *testing.T) {
 	const big = 1<<60 + 1
 	diag := problems.ExpressionFailed.At("workflow.yaml", problems.Position{Line: 3, Column: 7}, "/jobs/a/steps/0/run", problems.Params{"reason": "x"})
@@ -75,6 +77,8 @@ func TestBodiesRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%T: %v", body, err)
 		}
+		name := reflect.TypeOf(body).Elem().Name()
+		schematest.Validate(t, schematest.Schema(t, "workerapi/schema/1/workerapi.schema.json#/$defs/"+name), name, data)
 		back := reflect.New(reflect.TypeOf(body).Elem()).Interface()
 		if err := workerapi.Unmarshal(data, back); err != nil {
 			t.Fatalf("%T: reading %s: %v", body, data, err)
