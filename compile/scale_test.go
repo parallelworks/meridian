@@ -2,6 +2,7 @@ package compile_test
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -54,16 +55,14 @@ var scaledWorkloads = []scaled{
 }
 
 // TestCompileScales checks that compiling each of scaledWorkloads at four
-// times the size allocates about four times as much, not sixteen, and for
-// one that is timed, takes no more than eight times as long, the best of
-// five runs each: the geometric mean of four, as compiling grows with the
-// size, and sixteen, as it grows with the size's square, so that a runner
-// that is slow for a while doesn't fail a workload that grows as it
-// should, nor pass one that grows with the square.
+// times the size allocates about four times as much, not sixteen; and for
+// one that is timed, that compiling it at four times the size, from half
+// of it, timeFactor times, takes at most timeBound times as long (grows).
+// Half the size is still the larger of what a workflow file holds.
 func TestCompileScales(t *testing.T) {
 	for _, w := range scaledWorkloads {
 		t.Run(w.name, func(t *testing.T) {
-			small, compileSmall := w.measure(t, w.n)
+			small, _ := w.measure(t, w.n)
 			large, compileLarge := w.measure(t, 4*w.n)
 			if ratio := float64(large) / float64(small); ratio > 8 {
 				t.Errorf("at %d, compiling allocates %d bytes, and at %d, %d: %.1f times as much",
@@ -72,12 +71,69 @@ func TestCompileScales(t *testing.T) {
 			if !w.timed {
 				return
 			}
-			times := fastest(compileSmall, compileLarge)
-			if ratio := float64(times[1]) / float64(times[0]); ratio > 8 {
-				t.Errorf("at %d, compiling takes %v, and at %d, %v: %.1f times as long",
-					w.n, times[0], 4*w.n, times[1], ratio)
+			if w.n%2 != 0 {
+				t.Fatalf("a timed workload's size, %d, isn't even", w.n)
+			}
+			_, compileHalf := w.measure(t, w.n/2)
+			if times, ok := grows(compileHalf, compileLarge); !ok {
+				t.Errorf("at %d, compiling takes %v, and at %d, %v: %.1f times as long, more than %.1f",
+					w.n/2, times[0], 4*w.n, times[1], float64(times[1])/float64(times[0]), timeBound)
 			}
 		})
+	}
+}
+
+// timeFactor is how much larger the larger of the sizes a timed workload is
+// compiled at is: far enough apart that a workload that grows with its
+// size, timeFactor times, and one that grows with its square, timeFactor
+// squared, are told apart by timeBound, their geometric mean, though a
+// runner slows the one size's runs and not the other's by up to the square
+// root of timeFactor, 2.8 times. On a runner of two cores, busy with other
+// tests, a workload that grows as it should, at four times its size, once
+// took 8.2 times as long.
+const timeFactor = 8
+
+// timeBound is the most a timed workload's time may grow by, from its size
+// to timeFactor times it.
+var timeBound = math.Sqrt(timeFactor * timeFactor * timeFactor)
+
+// grows reports whether large, the work of small at timeFactor times the
+// size, takes at most timeBound times as long, and the times it compared,
+// each the best of five runs (fastest). One that takes longer is measured
+// again, and fails only if it does again: a runner slow for a while
+// doesn't fail it, and a workload that grows with the square of its size
+// takes longer every time.
+func grows(small, large func()) ([]time.Duration, bool) {
+	var times []time.Duration
+	for range 2 {
+		times = fastest(small, large)
+		if float64(times[1])/float64(times[0]) <= timeBound {
+			return times, true
+		}
+	}
+	return times, false
+}
+
+// The timing check tells a workload that grows with its size from one that
+// grows with its square: work that grows as the size does passes it, and
+// work that grows as its square fails it, every time.
+func TestGrowsTellsSquareFromLinear(t *testing.T) {
+	var sink uint64
+	work := func(iterations int) func() {
+		return func() {
+			x := sink
+			for i := range iterations {
+				x = x*6364136223846793005 + uint64(i)
+			}
+			sink = x
+		}
+	}
+	const n = 1000
+	if times, ok := grows(work(n*n), work(timeFactor*n*n)); !ok {
+		t.Errorf("work that grows with its size failed: %v", times)
+	}
+	if times, ok := grows(work(n*n/16), work(timeFactor*n*timeFactor*n/16)); ok {
+		t.Errorf("work that grows with its size's square passed: %v", times)
 	}
 }
 
