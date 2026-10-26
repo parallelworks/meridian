@@ -171,6 +171,7 @@
   "outputs_removed": "El directorio del worker, que contiene $OUTPUTS, se eliminó mientras se ejecutaba el paso, así que se pierde lo que el paso escribió en $OUTPUTS después.",
   "log_not_kept": "El worker no guardó {size} bytes del registro del paso: guarda como máximo {limit} bytes de registros que el coordinador no ha almacenado, mientras no puede comunicarse con él, y ninguno cuando su disco está lleno.",
   "report_not_encoded": "El worker no pudo codificar su informe para el coordinador, así que lo envió sin las salidas ni los problemas que contenía, y el trabajo falla, salvo que se haya cancelado.",
+  "record_unreadable": "El registro secreto de la ejecución {run} no se puede descifrar como el suyo: se cifró para otra ejecución u otro almacén, o ha cambiado.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",

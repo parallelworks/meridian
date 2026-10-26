@@ -1190,6 +1190,14 @@
       "Informa del error, con el registro del worker."
     ]
   },
+  "record_unreadable": {
+    "title": "Registro secreto que no se puede descifrar",
+    "why": "El registro secreto de una ejecución guarda lo que se le dio a la ejecución y los secretos que leyó. Se cifra con AES-256-GCM con una clave de datos propia de la ejecución, ligada al ID de la ejecución y al de su almacén, para que no se pueda trasladar a otra ejecución, ni siquiera a una del mismo flujo de trabajo con las mismas entradas, ni a una ejecución con el mismo ID en otro almacén. Este no se descifra como el de su ejecución: se trajo de otra ejecución o de otro almacén, o se cambió. En lugar de ejecutarse con lo que se le dio a otra ejecución, la ejecución falla.",
+    "fix": [
+      "Repite la ejecución, que vuelve a crear su registro secreto a partir de lo que se envía.",
+      "Averigua qué cambió la base de datos del almacén: Meridian escribe el registro secreto de una ejecución solo para esa ejecución."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",

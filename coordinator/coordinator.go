@@ -5,8 +5,11 @@
 // through interfaces, besides the compiler's resolvers and the backends'
 // drivers: Keys, which wraps the keys of runs' secret records; Logs, which
 // stores step logs; and Events, which hears of runs, jobs and steps as
-// they happen. Each gets the caller's context. An error from Keys or Logs
-// means it couldn't do what it was asked, and the coordinator tries again.
+// they happen. Each gets the caller's context. An error from Keys that is
+// a problem (problems.IsProblem), such as a wrapped key that can't be
+// unwrapped for its run, is one trying again can't fix, and fails the run;
+// any other error from Keys or Logs means it couldn't do what it was
+// asked, and the coordinator tries again.
 package coordinator
 
 import (
@@ -22,6 +25,13 @@ import (
 // management service, or locally a key file only the user can read. A
 // secret record is encrypted with AES-256-GCM under a data key of its own,
 // stored beside it wrapped. Keys uses FIPS-approved algorithms only.
+//
+// The run ID Keys is given is the store's ID and the run's, joined with a
+// slash, which names the run among every store's, since a store's run IDs
+// can be another's too. Wrap doesn't keep the key it is given, and the key
+// Unwrap gives is the caller's alone: the caller clears each once it is
+// done with it. A problem, of a kind in problems, says that what Keys was
+// given can't be wrapped or unwrapped, which trying again won't change.
 type Keys interface {
 	// Wrap encrypts key, the data key of the secret record of the run
 	// runID, for storage beside the record. It binds runID to what it

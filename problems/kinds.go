@@ -335,6 +335,14 @@ var (
 	ReportNotEncoded      = define(Error, "report_not_encoded", "Report the worker couldn't encode")
 )
 
+// The coordinator's problems with a run, which fail it: run is the run's
+// ID.
+var (
+	// RecordUnreadable is a run's secret record that doesn't decrypt as
+	// the run's: one sealed for another run or another store, or changed.
+	RecordUnreadable = define(Error, "record_unreadable", "Secret record that can't be decrypted", "run")
+)
+
 // The meridian command's own problems, in CommandRegistry. A path, an
 // environment variable's name or value, or what the operating system said,
 // reason, is a param as it is.
