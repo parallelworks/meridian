@@ -46,6 +46,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/internal/flock"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -239,7 +240,7 @@ func (nopCloser) Close() error { return nil }
 // returns once the worker has started. An attempt whose worker runs
 // already is found, and not placed again, however many processes place it
 // at once.
-func (d *Driver) Place(_ context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
+func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
 	if p := unsupported(); p != nil {
 		return backend.Placement{}, p
 	}
@@ -256,7 +257,7 @@ func (d *Driver) Place(_ context.Context, m *backend.Member, req backend.PlaceRe
 	}
 	// One process at a time places an attempt, from finding its placement
 	// to recording a new one.
-	unlock, err := lockFile(d.path(req.Attempt, ".lock"))
+	unlock, err := flock.Lock(ctx, d.path(req.Attempt, ".lock"))
 	if err != nil {
 		return backend.Placement{}, err
 	}

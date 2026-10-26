@@ -3,7 +3,6 @@
 package local
 
 import (
-	"os"
 	"os/exec"
 	"runtime"
 	"syscall"
@@ -29,20 +28,6 @@ const (
 	sigTerm = syscall.SIGTERM
 	sigKill = syscall.SIGKILL
 )
-
-// lockFile takes an exclusive lock on the file at path, which it makes if
-// need be, waiting for whoever holds it, and returns what releases it.
-func lockFile(path string) (func(), error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|openNoFollow, 0o600) //nolint:gosec // an attempt's lock, in placements/
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // a descriptor fits in an int
-		f.Close()
-		return nil, err
-	}
-	return func() { f.Close() }, nil
-}
 
 // socketpair returns the descriptors of a new stream Unix socket's ends,
 // each closed on exec, so that only a process given one, as a worker its
