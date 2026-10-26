@@ -2326,13 +2326,16 @@ is, or evaluates to, the word `always`, as a step's can be (below).
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
   of a job whose `if:` isn't cancel-aware, through its control poll, and
-  wakes every job's supervisor. A placement of such a job that no worker
-  has claimed yet is withdrawn (`scancel`, `qdel`, deleting the pod,
-  signalling the process). It was readied, so its needs had all ended,
-  and format 1 would be running it, and would stop it as below: after a
-  cancel, the job ends cancelled; after the run's timeout, it ends failure,
-  with the reason `timeout`, as format 1's would once it started under the
-  passed deadline. A running attempt that is stopped is waited for while
+  wakes every job's supervisor. After a cancel, a placement of such a job
+  that no worker has claimed yet is withdrawn (`scancel`, `qdel`, deleting
+  the pod, signalling the process), and the job ends cancelled: it was
+  readied, so its needs had all ended, and format 1 would be running it,
+  and would stop it as below. After the run's timeout, such a placement
+  isn't withdrawn: its worker claims it and is told at once that the run's
+  timeout has passed, so that its steps end as format 1's do when they
+  start under the passed deadline, failing but for those that outlive a
+  cancel and a last try that ignores its errors. A running attempt that
+  is stopped is waited for while
   it renews its lease, since its cleanups have no timeout, and withdrawn
   as a placement is if its lease lapses. `meridian cancel` stores the
   record whether or not a coordinator is running, and withdraws
