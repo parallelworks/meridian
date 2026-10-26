@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"strings"
@@ -15,7 +16,7 @@ import (
 // for its name, and a mapping with an id made from each part.
 type detailsOf struct{}
 
-func (detailsOf) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+func (detailsOf) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
 	switch v := v.(type) {
 	case string:
 		return map[string]any{"name": v, "id": "id-" + v}, nil
@@ -81,6 +82,7 @@ func TestPlatformInputsStartAgreesWithCreate(t *testing.T) {
 					t.Fatalf("%s: %v", name, diags)
 				}
 				oracle := newInputResolver(doc, submitted(), Options{Inputs: detailsOf{}, Contexts: map[string]any{"vars": map[string]any{"V": "VARV", "S": "SECRETVAL"}}})
+				oracle.ctx = t.Context()
 				oracle.resolve()
 				if oracle.diags.HasErrors() {
 					continue
@@ -149,7 +151,7 @@ func TestFormValuesSendPlatformNames(t *testing.T) {
 	if diags.HasErrors() {
 		t.Fatal(diags)
 	}
-	got := FormValues(doc, map[string]any{"c": "c1", "l": []any{map[string]any{"c": "c2"}}}, Options{Inputs: detailsOf{}})
+	got := FormValues(t.Context(), doc, map[string]any{"c": "c1", "l": []any{map[string]any{"c": "c2"}}}, Options{Inputs: detailsOf{}})
 	if want := `{"c":"c1","d":"id-c1","l":[{"c":"c2"}]}`; canonicalValues(t, got) != want {
 		t.Errorf("FormValues gives %s, want %s", canonicalValues(t, got), want)
 	}

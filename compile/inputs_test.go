@@ -1,6 +1,7 @@
 package compile_test
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -28,6 +29,18 @@ func load(t *testing.T, src string) *format.Document {
 	return doc
 }
 
+// resolveInputs resolves submitted against doc's input definitions with
+// opts, as compile.ResolveInputs does, with the test's context, and fails
+// the test if a resolver couldn't answer.
+func resolveInputs(t testing.TB, doc *format.Document, submitted map[string]any, opts compile.Options) (*compile.Inputs, problems.Diagnostics) {
+	t.Helper()
+	inputs, diags, err := compile.ResolveInputs(t.Context(), doc, submitted, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inputs, diags
+}
+
 const clusterWorkflow = `on:
   execute:
     inputs:
@@ -42,19 +55,19 @@ jobs:
 // platform resolves clusters by name, and provides no other type.
 type platform struct{}
 
-func (platform) ResolveInput(typ string, _ map[string]any, v any) (any, error) {
+func (platform) ResolveInput(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
 	if typ != "compute-clusters" {
 		return nil, compile.ErrInputType
 	}
 	if v == "missing" {
-		return nil, errors.New("there is no cluster named missing")
+		return nil, problems.InputRejected.Problem(problems.Params{"reason": "there is no cluster named missing"})
 	}
 	return map[string]any{"name": v, "ip": "10.0.0.1"}, nil
 }
 
 func TestPlatformInputs(t *testing.T) {
 	doc := load(t, clusterWorkflow)
-	inputs, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "a"}, compile.Options{Inputs: platform{}})
+	inputs, diags := resolveInputs(t, doc, map[string]any{"cluster": "a"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
@@ -62,13 +75,13 @@ func TestPlatformInputs(t *testing.T) {
 		t.Errorf("cluster = %v, want the resolver's details", inputs.Values)
 	}
 
-	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "missing"}, compile.Options{Inputs: platform{}})
+	_, diags = resolveInputs(t, doc, map[string]any{"cluster": "missing"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || !strings.Contains(diags[0].Message(), "no cluster named missing") {
 		t.Errorf("a cluster the platform rejects: %v", diags)
 	}
 
 	doc = load(t, strings.Replace(clusterWorkflow, "compute-clusters", "slurm-partitions\n        resource: ${{ inputs.other }}", 1))
-	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
+	_, diags = resolveInputs(t, doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 1 || diags[0].Code != problems.PlatformInput.Code() {
 		t.Errorf("a type the platform doesn't provide: %v", diags)
 	}
@@ -77,7 +90,9 @@ func TestPlatformInputs(t *testing.T) {
 // rejects is a platform that rejects every value with err.
 type rejects struct{ err error }
 
-func (r rejects) ResolveInput(string, map[string]any, any) (any, error) { return nil, r.err }
+func (r rejects) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+	return nil, r.err
+}
 
 // TestPlatformInputProblem checks that a resolver's problem of one of
 // Meridian's kinds is reported as that kind, with the input's name, and
@@ -85,7 +100,7 @@ func (r rejects) ResolveInput(string, map[string]any, any) (any, error) { return
 func TestPlatformInputProblem(t *testing.T) {
 	doc := load(t, clusterWorkflow)
 	p := problems.ExecutionGroupUnknown.Problem(problems.Params{"value": problems.Show("gpu"), "groups": problems.QuoteAll([]string{"local"})})
-	_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{fmt.Errorf("resolving: %w", p)}})
+	_, diags := resolveInputs(t, doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{fmt.Errorf("resolving: %w", p)}})
 	if len(diags) != 1 || diags[0].Code != problems.ExecutionGroupUnknown.Code() {
 		t.Fatalf("a resolver's problem: %v", diags)
 	}
@@ -100,31 +115,44 @@ func TestPlatformInputProblem(t *testing.T) {
 	// One of foundation's shared rules is reported as itself, as one of
 	// Meridian's own kinds of error is.
 	choice := problem.InvalidChoice.New("the cluster isn't one of the platform's").With("allowed", `"a", "b"`)
-	_, diags = compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{choice}})
+	_, diags = resolveInputs(t, doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{choice}})
 	if len(diags) != 1 || diags[0].Code != problem.InvalidChoice.Code || diags[0].Params["allowed"] != `"a", "b"` || diags[0].Params["input"] != "cluster" {
 		t.Errorf("a foundation rule's problem: %v", diags)
 	}
 
-	// A problem of a kind that isn't one of the workflow's errors, which
-	// would turn a rejection into a warning or a problem of the command's,
-	// is the platform's reason.
-	for name, p := range map[string]*problem.Problem{
-		"a platform's own":   {Code: "quota_exceeded", Detail: "the quota is spent"},
+	// Any other problem, of a kind that isn't one of the workflow's
+	// errors, which would turn a rejection into a warning or a problem of
+	// the command's, refuses the value all the same: input_rejected, with
+	// the problem's text as the reason.
+	for name, err := range map[string]error{
+		"a platform's own":   &problem.Problem{Code: "quota_exceeded", Detail: "the quota is spent"},
 		"a warning's kind":   problems.InputLooksSecret.Problem(problems.Params{"input": "cluster"}),
 		"the command's kind": problems.FileNotOwned.Problem(problems.Params{"path": "/etc/passwd"}),
 	} {
-		// An error stops the run, and its plan with the value, being made.
-		_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{p}})
-		if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || diags[0].Params["reason"] != p.Detail || !diags.HasErrors() {
-			t.Errorf("%s problem: %v", name, diags)
+		_, diags := resolveInputs(t, doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{fmt.Errorf("resolving: %w", err)}})
+		if len(diags) != 1 || diags[0].Code != problems.InputRejected.Code() || diags[0].Params["input"] != "cluster" || diags[0].Params["reason"] != "resolving: "+err.Error() {
+			t.Errorf("%s: %v, want input_rejected with its text", name, diags)
 		}
+	}
+
+	// Any other error says the resolver couldn't answer: no values, and an
+	// error that wraps ErrUnanswered, which the run can be tried again
+	// after.
+	inputs, diags, err := compile.ResolveInputs(t.Context(), doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{errors.New("the platform didn't answer")}})
+	if !errors.Is(err, compile.ErrUnanswered) || inputs != nil || diags != nil {
+		t.Errorf("a transport error: %v, %v, %v, want no values and ErrUnanswered", inputs, diags, err)
+	}
+	if want := "compile: the Inputs resolver couldn't answer for the input cluster: the platform didn't answer"; err == nil || err.Error() != want {
+		t.Errorf("the error is %v, want %q", err, want)
 	}
 }
 
 // returns is a platform whose value for every input is v.
 type returns struct{ v any }
 
-func (r returns) ResolveInput(string, map[string]any, any) (any, error) { return r.v, nil }
+func (r returns) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+	return r.v, nil
+}
 
 // A platform's value for an input is checked as a submitted one is: a plan
 // holds only JSON, so a value that isn't is an error, which says what of it
@@ -141,7 +169,7 @@ func TestPlatformValueNotJSON(t *testing.T) {
 		{map[string]any{"\xff": 1}, "key", ""},
 		{map[string]any{"since": struct{}{}}, "go_type", "struct {}"},
 	} {
-		_, diags := compile.ResolveInputs(doc, map[string]any{"cluster": "a"}, compile.Options{Inputs: returns{tc.v}})
+		_, diags := resolveInputs(t, doc, map[string]any{"cluster": "a"}, compile.Options{Inputs: returns{tc.v}})
 		if len(diags) != 1 || diags[0].Code != problems.PlatformValueNotJSON.Code() {
 			t.Errorf("%#v: %v, want %s", tc.v, diags, problems.PlatformValueNotJSON.Code())
 			continue
@@ -165,7 +193,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, nil, compile.Options{})
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
@@ -197,7 +225,7 @@ jobs:
       - run: echo ok
 `)
 	for range 2 {
-		inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+		inputs, diags := resolveInputs(t, doc, nil, compile.Options{})
 		if len(diags) != 0 {
 			t.Fatal(diags)
 		}
@@ -230,7 +258,7 @@ jobs:
       - run: echo ok
 `)
 	submitted := map[string]any{"group": map[string]any{"n": "3"}}
-	if _, diags := compile.ResolveInputs(doc, submitted, compile.Options{}); diags.HasErrors() {
+	if _, diags := resolveInputs(t, doc, submitted, compile.Options{}); diags.HasErrors() {
 		t.Fatal(diags)
 	}
 	if got := submitted["group"].(map[string]any); got["n"] != "3" || len(got) != 1 {
@@ -259,7 +287,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, map[string]any{"g": "mine", "s": map[string]any{"g": "notamap"}}, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, map[string]any{"g": "mine", "s": map[string]any{"g": "notamap"}}, compile.Options{})
 	if len(diags) != 1 || diags[0].Code != problems.InputGroupNotMapping.Code() || diags[0].Path() != "/on/execute/inputs/s/items/g" {
 		t.Fatalf("diagnostics = %v", diags)
 	}
@@ -294,7 +322,7 @@ jobs:
 		"a Go struct": struct{}{},
 	} {
 		for _, key := range []string{"s", "unknown"} {
-			inputs, diags := compile.ResolveInputs(doc, map[string]any{key: v}, compile.Options{})
+			inputs, diags := resolveInputs(t, doc, map[string]any{key: v}, compile.Options{})
 			if !diags.HasErrors() || diags[0].Code != problems.InputNotJSON.Code() {
 				t.Errorf("%s in %s: %v", name, key, diags)
 			}
@@ -330,7 +358,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, nil, compile.Options{})
 	var got []string
 	for _, d := range diags {
 		got = append(got, fmt.Sprintf("%s at %s: %v %v", d.Code, d.Path(), d.Params["input"], d.Params["value"]))
@@ -357,7 +385,7 @@ func TestDefaultsShareABudget(t *testing.T) {
 	}
 	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
 	doc := load(t, b.String())
-	_, diags := compile.ResolveInputs(doc, map[string]any{"half": strings.Repeat("x", 4<<20)}, compile.Options{})
+	_, diags := resolveInputs(t, doc, map[string]any{"half": strings.Repeat("x", 4<<20)}, compile.Options{})
 	if len(diags) != 1 || diags[0].Code != problems.ExpressionsBuildTooMuch.Code() {
 		t.Errorf("nine defaults that each build 8 MiB: %v, want %s", diags, problems.ExpressionsBuildTooMuch.Code())
 	}
@@ -376,7 +404,7 @@ func TestSubmittedDefaultsReadNothingMarked(t *testing.T) {
 		submitted[fmt.Sprintf("d%d", i)] = "given"
 	}
 	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
-	if _, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{}); len(diags) != 0 {
+	if _, diags := resolveInputs(t, load(t, b.String()), submitted, compile.Options{}); len(diags) != 0 {
 		t.Errorf("nine submitted values: %v, want none", diags)
 	}
 }
@@ -396,7 +424,7 @@ func TestComparisonsHaveTheirOwnBudget(t *testing.T) {
 		submitted[fmt.Sprintf("d%d", i)] = "given"
 	}
 	b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
-	inputs, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{})
+	inputs, diags := resolveInputs(t, load(t, b.String()), submitted, compile.Options{})
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics %v, want none", diags)
 	}
@@ -425,7 +453,7 @@ func TestDefaultsShareAWorkBudget(t *testing.T) {
 		}
 		b.WriteString("jobs:\n  main:\n    steps:\n      - run: echo ok\n")
 		submitted := map[string]any{"half": strings.Repeat("x", 16<<20-20)}
-		_, diags := compile.ResolveInputs(load(t, b.String()), submitted, compile.Options{})
+		_, diags := resolveInputs(t, load(t, b.String()), submitted, compile.Options{})
 		if len(diags) != len(tc.want) || len(diags) > 0 && (diags[0].Code != tc.want[0].Code || diags[0].Message() != tc.want[0].Message()) {
 			t.Errorf("%d defaults that each do 32 MiB of work: %v, want %v", tc.defaults, diags, tc.want)
 		}
@@ -450,7 +478,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, map[string]any{"half": strings.Repeat("x", 5<<19)}, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, map[string]any{"half": strings.Repeat("x", 5<<19)}, compile.Options{})
 	if b, _ := inputs.Values["b"].(string); len(diags) != 0 || len(b) != 15<<19 {
 		t.Errorf("b, 7.5 MiB, reads a, 5 MiB: %d bytes, %v", len(b), diags)
 	}
@@ -482,7 +510,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, nil, compile.Options{})
 	if len(diags) != 1 || diags[0].Code != problems.DefaultsReadEachOther.Code() ||
 		diags[0].Params["inputs"] != `"reader", "w", "x", "y"` {
 		t.Fatalf("diagnostics %v, want %s naming reader, w, x and y", diags, problems.DefaultsReadEachOther.Code())
@@ -511,7 +539,7 @@ jobs:
       - run: echo ok
 `)
 	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"TOKEN": expr.Unknown{Name: "vars"}}}}
-	inputs, diags := compile.ResolveInputs(doc, nil, opts)
+	inputs, diags := resolveInputs(t, doc, nil, opts)
 	if len(diags) != 0 || len(inputs.Deferred) != 0 {
 		t.Errorf("diagnostics %v and deferred %v, want none", diags, inputs.Deferred)
 	}
@@ -535,7 +563,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, nil, compile.Options{})
 	want := map[string]any{"a": "x", "b": "x", "c": "x-c", "e": "x-c", "f": "x-c"}
 	if len(diags) != 0 || !reflect.DeepEqual(inputs.Values, want) {
 		t.Errorf("values %v, %v; want %v", inputs.Values, diags, want)
@@ -561,7 +589,7 @@ jobs:
 	for i := range 250 {
 		submitted[fmt.Sprintf("n%03d", i)] = i
 	}
-	inputs, diags := compile.ResolveInputs(doc, submitted, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, submitted, compile.Options{})
 	var listed []string
 	var more problems.Diagnostics
 	for _, d := range diags {
@@ -621,7 +649,7 @@ jobs:
 	for i := range 150 {
 		rows = append(rows, map[string]any{"a": "x", "b": "y", "c": i})
 	}
-	inputs, diags := compile.ResolveInputs(doc, map[string]any{"l": rows}, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, map[string]any{"l": rows}, compile.Options{})
 	var listed []string
 	var more problems.Diagnostics
 	for _, d := range diags {
@@ -667,7 +695,7 @@ jobs:
       - run: echo ok
 `)
 	opts := compile.Options{Contexts: map[string]any{"vars": map[string]any{"S": expr.Unknown{Name: "vars"}}}}
-	inputs, diags := compile.ResolveInputs(doc, map[string]any{"l": []any{map[string]any{}}}, opts)
+	inputs, diags := resolveInputs(t, doc, map[string]any{"l": []any{map[string]any{}}}, opts)
 	if len(diags) != 1 || diags[0].Code != problems.InputConditionNotKnown.Code() || diags[0].Params["input"] != "c" {
 		t.Errorf("diagnostics %v, want %s for c", diags, problems.InputConditionNotKnown.Code())
 	}
@@ -715,7 +743,7 @@ jobs:
 			if input == "many" {
 				v = []any{"x", tc.value}
 			}
-			_, diags := compile.ResolveInputs(doc, map[string]any{input: v}, compile.Options{})
+			_, diags := resolveInputs(t, doc, map[string]any{input: v}, compile.Options{})
 			if got := !diags.HasErrors(); got != tc.ok {
 				t.Errorf("%s given %#v: %v, want ok %v", input, v, diags, tc.ok)
 			}
@@ -751,7 +779,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	_, diags := compile.ResolveInputs(doc, map[string]any{"a": []any{map[string]any{"x": "${{ 'q' }}"}}}, compile.Options{})
+	_, diags := resolveInputs(t, doc, map[string]any{"a": []any{map[string]any{"x": "${{ 'q' }}"}}}, compile.Options{})
 	if len(diags) != 1 || diags[0].Code != problems.InputNotJSON.Code() ||
 		diags[0].Path() != "/on/execute/inputs/s/options/a/template/z" || diags[0].Params["input"] != "a.0.z (Inner)" {
 		t.Errorf("diagnostics %v, want %s at the step's z", diags, problems.InputNotJSON.Code())
@@ -774,7 +802,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, map[string]any{"m": []any{"${{ .label }}"}}, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, map[string]any{"m": []any{"${{ .label }}"}}, compile.Options{})
 	if want := []any{"A"}; len(diags) != 0 || !reflect.DeepEqual(inputs.Values["m"], want) {
 		t.Errorf("m = %v, %v; want %v", inputs.Values["m"], diags, want)
 	}
@@ -804,7 +832,7 @@ jobs:
     steps:
       - run: echo ok
 `)
-	inputs, diags := compile.ResolveInputs(doc, nil, compile.Options{})
+	inputs, diags := resolveInputs(t, doc, nil, compile.Options{})
 	if want := []any{map[string]any{"f": "y"}}; len(diags) != 0 || !reflect.DeepEqual(inputs.Values["l"], want) {
 		t.Errorf("l = %v, %v; want %v", inputs.Values["l"], diags, want)
 	}

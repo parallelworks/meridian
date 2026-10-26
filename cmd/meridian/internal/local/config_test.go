@@ -283,20 +283,20 @@ func TestPlatformGroupsNotFound(t *testing.T) {
 func TestResolveInput(t *testing.T) {
 	c := load(t, map[string]string{GroupsFile: "gpu:\n  members:\n    - {name: a, backend: ssh}\n"}, nil)
 	for _, name := range []string{"gpu", "local"} {
-		if v, err := c.ResolveInput("execution-groups", nil, name); err != nil || v != name {
+		if v, err := c.ResolveInput(t.Context(), "execution-groups", nil, name); err != nil || v != name {
 			t.Errorf("ResolveInput(%s) = %v, %v", name, v, err)
 		}
 	}
-	_, err := c.ResolveInput("execution-groups", nil, "cpu")
+	_, err := c.ResolveInput(t.Context(), "execution-groups", nil, "cpu")
 	p := kindtest.Want(t, err, problems.ExecutionGroupUnknown)
 	if p.Params["value"] != `"cpu"` || p.Params["groups"] != `"gpu", "local"` {
 		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", p.Params)
 	}
-	_, err = c.ResolveInput("execution-groups", nil, 3)
+	_, err = c.ResolveInput(t.Context(), "execution-groups", nil, 3)
 	if p := kindtest.Want(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
 		t.Errorf("ResolveInput of a number: %v", p.Params)
 	}
-	if _, err := c.ResolveInput("slurm-partitions", nil, "debug"); !errors.Is(err, compile.ErrInputType) {
+	if _, err := c.ResolveInput(t.Context(), "slurm-partitions", nil, "debug"); !errors.Is(err, compile.ErrInputType) {
 		t.Errorf("ResolveInput of a type it doesn't provide: %v", err)
 	}
 }

@@ -161,9 +161,11 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   group, an environment or a compute target a job's `runs-on:` writes
   out with no Groups resolver, sessions without a session provider. The
   error names the key and what would provide it (`resolver_missing`).
-  There is no flag to run the workflow anyway. `compile.Compile`, which an editor checks a
-  workflow as it is written with, reaches no resolver that takes a
-  context, and checks none of the last three.
+  There is no flag to run the workflow anyway. `compile.Compile`, which
+  an editor checks a workflow as it is written with, reaches no resolver
+  that takes a context, and so checks none of the last three, and takes an
+  input of a platform's type as it was given, unchecked, but where there is
+  no Inputs resolver at all.
 - **What ACTIVATE ignores.** ACTIVATE has never checked workflows against
   the schema, so workflows that run there can have keys the schema doesn't
   define, which ACTIVATE ignores. In format 1, such a key is a warning, and
@@ -530,10 +532,9 @@ given, so cancellation, deadlines and traces reach them. It is
 deterministic, so the same workflow, inputs and resolver answers give a
 byte-identical plan. That is also what lets it build to WebAssembly
 unchanged (see [Editors and web UIs](#editors-and-web-uis)). `Create`
-takes a context, which it reaches Variables, Groups, Sources and Sessions
-with; `Compile`, which gives the plan alone, doesn't, and reaches none of
-them, as if they weren't there. The Inputs resolver takes no context
-today.
+takes a context, which it reaches Inputs, Variables, Groups, Sources and
+Sessions with; `Compile`, which gives the plan alone, doesn't, and reaches
+none of them, as if they weren't there.
 
 Errors and warnings are reported together rather than one at a time.
 Warnings, such as a deprecated key, don't stop a run, and are kept with it,
@@ -929,9 +930,10 @@ made from one, it doesn't hold in another form either.
      for that, never for what was submitted, whether or not anything reads
      the input: a variable that names another resource since the run was
      created names that one, which the resolver can refuse, masked.
-     An Inputs resolver that can't answer fails the run (`input_rejected`),
-     as it fails Create; giving the interface a way to say it couldn't
-     answer is open.
+     A value the resolver refuses is the run's problem, as at Create;
+     one it can't answer for, as when the platform can't be reached, is
+     Start's error, which the coordinator starts the run again after, as
+     for every resolver.
    - What Create reported as a warning isn't reported again.
 
    A relative reference reads the input definitions; one that climbs out
@@ -1025,7 +1027,8 @@ says what the coordinator does next:
 - **A plan of another release's version** wraps `plan.ErrVersion`: a
   replica of a release that reads it starts it
   ([Plans across versions](#plans-across-versions)).
-- **Any other**, a resolver that couldn't answer, or the context's end,
+- **Any other**, a resolver that couldn't answer, as the Inputs
+  resolver's, which wraps `compile.ErrUnanswered`, or the context's end,
   the coordinator starts the run again after.
 
 Decoding the plan or the secret record before Start fails alike: with
@@ -1446,7 +1449,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones, and their choices | Built-in types, plus Slurm partitions, accounts and QOS, and PBS queues, read from a member's scheduler |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; a scheduler's partitions, accounts and queues come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -1471,8 +1474,22 @@ environments a job's `runs-on:` writes out with Groups, and pins the
 workflows `uses:` names with Sources; Start reads the variables again and
 makes the sessions. A caller without a Variables or a Sessions resolver,
 such as an editor or a test, can give the variables and the sessions
-context as mappings, in `Options.Contexts`, as it gives `remote`. Today
-the Inputs resolver takes no context and returns a Go error.
+context as mappings, in `Options.Contexts`, as it gives `remote`. A
+resolver refuses what it is given with a problem of one of the workflow's
+kinds of error, as the Inputs resolver refuses a value with
+`input_rejected` and its reason, or a kind of its own, which is the run's
+problem; any other error says it couldn't answer, and Create or Start
+returns it, so the coordinator can try again. The value the Inputs resolver
+is asked for can be private, as one made from a variable or a password, so
+it is held apart: any problem it gives refuses the value, one of a kind
+that isn't the workflow's error, as a warning's, being `input_rejected`
+with the problem's text as its reason, masked as any refusal of a private
+value is; and for any other error, Create and Start return one that wraps
+`compile.ErrUnanswered` and names the input, with the resolver's text only
+where the value can't be private, and nothing else of the resolver's
+error, so that it can't be taken for a plan that doesn't fit
+(`compile.ErrMismatch`). A resolver's error that says it couldn't answer
+mustn't quote the value all the same.
 
 A uses: names a workflow by what format 1 writes (`plan.SourceRef`), as
 ACTIVATE reads it: the `uses:` itself, as

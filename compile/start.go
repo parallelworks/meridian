@@ -208,8 +208,8 @@ func mismatch(format string, args ...any) error {
 // run's. One that wraps ErrMismatch, a plan or a record that doesn't fit,
 // fails the run; one that wraps plan.ErrVersion is a plan of another
 // release, which a coordinator of that release starts; ctx's, when ctx is
-// done, and any other, a resolver that couldn't answer, the coordinator
-// starts the run again after.
+// done, and any other, a resolver that couldn't answer, as one that wraps
+// ErrUnanswered, the coordinator starts the run again after.
 func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -586,7 +586,7 @@ func (st *starter) resolve(defs map[string]any) error {
 			st.s.secrets.Add(plan.SplitPath(name))
 		}
 		st.r = newInputResolver(doc, submitted, opts)
-		st.r.start, st.r.final, st.r.means = st.s, true, st.in.Record.Means
+		st.r.ctx, st.r.start, st.r.final, st.r.means = st.ctx, st.s, true, st.in.Record.Means
 		// What a round evaluated of env: before reads as it did.
 		for k := range envPrivate {
 			st.r.marks.Add([]string{"env", k})
@@ -612,6 +612,11 @@ func (st *starter) resolve(defs map[string]any) error {
 			}
 		}
 		st.r.resolve()
+		if err := st.r.unansweredErr(); err != nil {
+			// The Inputs resolver couldn't answer: the coordinator starts
+			// the run again.
+			return err
+		}
 		progress, late := st.evalEnv()
 		again := late != nil
 		for _, k := range late {

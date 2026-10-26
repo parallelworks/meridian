@@ -612,8 +612,8 @@ func TestStartChecksWhatItEvaluated(t *testing.T) {
 // rejecting is a platform that rejects every value.
 type rejecting struct{}
 
-func (rejecting) ResolveInput(string, map[string]any, any) (any, error) {
-	return nil, errors.New("no such cluster")
+func (rejecting) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+	return nil, problems.InputRejected.Problem(problems.Params{"reason": "no such cluster"})
 }
 
 // Start makes the run's sessions only once everything else has passed,
@@ -779,6 +779,113 @@ func TestStartCallerMistakes(t *testing.T) {
 	if _, _, err := compile.Start(t.Context(), v.Plan, compile.StartInput{Variables: vars, Record: v.Record}); err == nil || errors.Is(err, compile.ErrMismatch) {
 		t.Errorf("a resolver that couldn't answer: %v", err)
 	}
+	// So is an Inputs resolver that couldn't answer, at Start as at Create:
+	// an error that wraps ErrUnanswered.
+	down := errors.New("the platform didn't answer")
+	src = workflow("c: {type: compute-clusters}")
+	if created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), map[string]any{"c": "c1"}, compile.Options{Inputs: rejects{down}}); !errors.Is(err, compile.ErrUnanswered) || created != nil || diags != nil {
+		t.Errorf("Create with an Inputs resolver that couldn't answer: %v, %v, %v", created, diags, err)
+	}
+	p := createWith(t, src, map[string]any{"c": "c1"}, compile.Options{Inputs: passThrough{}})
+	if _, _, err := compile.Start(t.Context(), p.Plan, compile.StartInput{Record: p.Record, Inputs: rejects{down}}); !errors.Is(err, compile.ErrUnanswered) || errors.Is(err, compile.ErrMismatch) {
+		t.Errorf("Start with an Inputs resolver that couldn't answer: %v", err)
+	}
+}
+
+// The error of an Inputs resolver that couldn't answer names the input,
+// and says the resolver's error only where the value can't be private: the
+// resolver's error can quote it, as a URL it couldn't reach does. It wraps
+// ErrUnanswered and the context's error, where the context was done, and
+// nothing else of the resolver's, which can't make it a run that can't be
+// started again.
+func TestInputResolverUnanswered(t *testing.T) {
+	unreachable := func(v any) error {
+		return fmt.Errorf("Get \"https://platform.example/api/clusters/%v\": connection refused", v)
+	}
+	vars := testVariables{"org.V": {Value: "VARIABLE"}, "vars.S": {Value: "SECRET", Secret: true}}
+	for name, tc := range map[string]struct {
+		defs      string
+		submitted map[string]any
+		shown     bool
+	}{
+		"given":                         {"c: {type: compute-clusters}", map[string]any{"c": "GIVEN"}, true},
+		"a default written out":         {"c: {type: compute-clusters, default: GIVEN}", nil, true},
+		"a variable's default":          {"c: {type: compute-clusters, default: '${{ org.V }}'}", nil, false},
+		"given over a variable's":       {"c: {type: compute-clusters, default: '${{ org.V }}'}", map[string]any{"c": "VARIABLE"}, false},
+		"given over a secret's":         {"c: {type: compute-clusters, default: 'c-${{ vars.S }}'}", map[string]any{"c": "TYPED"}, false},
+		"a password's":                  {"pw: {type: password}\nc: {type: compute-clusters, default: '${{ inputs.pw }}'}", map[string]any{"pw": "PASSWORD"}, false},
+		"a part of a variable's":        {"k: {type: storage, default: {name: k1, token: '${{ org.V }}'}}", map[string]any{"k": map[string]any{"name": "k1", "token": "TYPED"}}, false},
+		"a row's field over a secret's": {"l: {type: list, template: {c: {type: compute-clusters, default: '${{ vars.S }}'}}}", map[string]any{"l": []any{map[string]any{"c": "TYPED"}}}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := workflow(tc.defs)
+			var asked []any
+			inputs := resolverFunc(func(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+				asked = append(asked, v)
+				return nil, unreachable(v)
+			})
+			_, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), tc.submitted, compile.Options{Inputs: inputs, Contexts: vars.contexts()})
+			if !errors.Is(err, compile.ErrUnanswered) || len(asked) != 1 {
+				t.Fatalf("Create: %v, asked for %v", err, asked)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "the input ") {
+				t.Errorf("the error names no input: %s", msg)
+			}
+			quoted := strings.Contains(msg, fmt.Sprint(asked[0]))
+			if quoted != tc.shown {
+				t.Errorf("the error %q quotes the value: %t, want %t", msg, quoted, tc.shown)
+			}
+			for _, private := range []string{"VARIABLE", "SECRET", "PASSWORD", "TYPED"} {
+				if !tc.shown && strings.Contains(msg, private) {
+					t.Errorf("the error shows %s: %s", private, msg)
+				}
+			}
+		})
+	}
+
+	// At Start too, where what a form made from a variable is what the
+	// variable gives as the run starts.
+	src := workflow("c: {type: compute-clusters, default: '${{ org.V }}'}")
+	c := createWith(t, src, map[string]any{"c": "VARIABLE"}, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts()})
+	in := compile.StartInput{RunID: "r", Record: c.Record, Variables: testVariables{"org.V": {Value: "NEW"}}, Inputs: rejects{unreachable("NEW")}}
+	if _, _, err := compile.Start(t.Context(), c.Plan, in); !errors.Is(err, compile.ErrUnanswered) || strings.Contains(err.Error(), "NEW") || strings.Contains(err.Error(), "VARIABLE") {
+		t.Errorf("Start: %v", err)
+	}
+
+	// What the resolver's error wraps doesn't change what the run's is,
+	// but the context's end.
+	src = workflow("c: {type: compute-clusters}")
+	for _, wrapped := range []error{compile.ErrMismatch, plan.ErrMalformed, plan.ErrVersion, compile.ErrNotFound, context.Canceled, context.DeadlineExceeded} {
+		_, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), map[string]any{"c": "c1"}, compile.Options{Inputs: rejects{fmt.Errorf("asking: %w", wrapped)}})
+		if !errors.Is(err, compile.ErrUnanswered) {
+			t.Errorf("%v: %v, want ErrUnanswered", wrapped, err)
+		}
+		done := errors.Is(wrapped, context.Canceled) || errors.Is(wrapped, context.DeadlineExceeded)
+		if errors.Is(err, wrapped) != done {
+			t.Errorf("%v: the error %v wraps it: %t, want %t", wrapped, err, !done, done)
+		}
+	}
+}
+
+// resolverFunc is an InputResolver that is a function.
+type resolverFunc func(ctx context.Context, typ string, def map[string]any, v any) (any, error)
+
+func (f resolverFunc) ResolveInput(ctx context.Context, typ string, def map[string]any, v any) (any, error) {
+	return f(ctx, typ, def, v)
+}
+
+// Compile, which has no context, asks the Inputs resolver nothing: an input
+// of a platform's type is as it was given, and isn't checked.
+func TestCompileAsksNoInputResolver(t *testing.T) {
+	asked := 0
+	p, diags := compile.Compile("workflow.yaml", []byte(workflow("c: {type: compute-clusters}")), map[string]any{"c": "c1"}, compile.Options{Inputs: countingInputs{&asked}})
+	if p == nil || asked != 0 {
+		t.Fatalf("Compile asked %d times: %v", asked, diags)
+	}
+	if got := canonical(t, p.Run.Inputs.Get()); got != `{"c":"c1"}` {
+		t.Errorf("the plan's inputs are %s", got)
+	}
 }
 
 // submittedOf returns what the secret record r says was submitted.
@@ -815,7 +922,7 @@ func TestPasswordsNeverInRunState(t *testing.T) {
 				continue
 			}
 			vars := caseVariables(c, func(_, v string) string { return v })
-			for _, submitted := range append([]map[string]any{submitted}, formShapes(compile.FormValues(doc, submitted, opts))...) {
+			for _, submitted := range append([]map[string]any{submitted}, formShapes(compile.FormValues(t.Context(), doc, submitted, opts))...) {
 				created, _, err := compile.Create(t.Context(), "workflow.yaml", data, submitted, opts)
 				if err != nil {
 					t.Fatal(err)
@@ -880,7 +987,7 @@ func TestVariablesNeverInRunState(t *testing.T) {
 				continue
 			}
 			opts := compile.Options{Contexts: vars.contexts(), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
-			for _, submitted := range append([]map[string]any{c.Inputs}, formShapes(compile.FormValues(doc, c.Inputs, opts))...) {
+			for _, submitted := range append([]map[string]any{c.Inputs}, formShapes(compile.FormValues(t.Context(), doc, c.Inputs, opts))...) {
 				created, _, err := compile.Create(t.Context(), "workflow.yaml", data, submitted, opts)
 				if err != nil {
 					t.Fatal(err)

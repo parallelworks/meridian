@@ -341,7 +341,7 @@ func (v cancellingVariables) Read(ctx context.Context, names []string, secrets b
 
 type countingInputs struct{ asked *int }
 
-func (c countingInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+func (c countingInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
 	*c.asked++
 	return v, nil
 }
@@ -396,7 +396,7 @@ x: {type: string, optional: true, ignore: '${{ toJSON(inputs.a) == ''"7"'' }}'}`
 // details, as a platform's Inputs resolver does.
 type clusterInputs struct{}
 
-func (clusterInputs) ResolveInput(typ string, _ map[string]any, v any) (any, error) {
+func (clusterInputs) ResolveInput(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
 	if s, ok := v.(string); ok && typ == "compute-clusters" {
 		return map[string]any{"name": s, "id": "id-" + s}, nil
 	}
@@ -495,7 +495,7 @@ func TestPlatformInputRejectedWhenIgnored(t *testing.T) {
 // hostInputs gives a cluster's details with the host the cluster has now.
 type hostInputs struct{ host string }
 
-func (h hostInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+func (h hostInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
 	if s, ok := v.(string); ok {
 		return map[string]any{"name": s, "ip": h.host}, nil
 	}
@@ -547,7 +547,7 @@ func TestPlatformInputMeansChangedVariable(t *testing.T) {
 // it.
 type badInputs struct{}
 
-func (badInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+func (badInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
 	refused := func(s string) error {
 		return problems.InputRejected.Problem(problems.Params{"reason": fmt.Sprintf("no resource named %q", s)})
 	}
@@ -573,11 +573,11 @@ func (badInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
 // goneInputs is badInputs once the resources named old are gone.
 type goneInputs struct{}
 
-func (goneInputs) ResolveInput(typ string, def map[string]any, v any) (any, error) {
+func (goneInputs) ResolveInput(ctx context.Context, typ string, def map[string]any, v any) (any, error) {
 	if strings.Contains(fmt.Sprint(v), "old") {
 		return nil, problems.InputRejected.Problem(problems.Params{"reason": "gone"})
 	}
-	return badInputs{}.ResolveInput(typ, def, v)
+	return badInputs{}.ResolveInput(ctx, typ, def, v)
 }
 
 // A platform input's value, or a part of one, that a form made from a
@@ -645,7 +645,7 @@ func TestPlatformInputMeansChangedVariableUnread(t *testing.T) {
 // resource's details for what names it.
 type detailInputs struct{}
 
-func (detailInputs) ResolveInput(_ string, _ map[string]any, v any) (any, error) {
+func (detailInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return v, nil

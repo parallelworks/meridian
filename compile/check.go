@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
@@ -106,6 +108,15 @@ func (r *inputResolver) checkKnown(f *field, passwords []*field) {
 	r.reportAt(problems.InputNotJSON, in.loc, params)
 }
 
+// mayBePrivate reports whether f's value can be private, or made from a
+// secret, so that what a problem with it, or an error, shows of it is
+// masked: one a form made from a variable or a password in place of a
+// default that reads one, that reads one, or that is marked as made from
+// one.
+func (r *inputResolver) mayBePrivate(f *field) bool {
+	return f.variable || r.marked(f.path) || r.readsPrivate(f)
+}
+
 // readsPrivate reports whether an expression in f's definition, in its
 // rows' and its items' among them, reads an organization or user variable,
 // or an input that holds a password or reads one: a value given in its
@@ -172,7 +183,7 @@ func (r *inputResolver) checkField(f *field, later bool) {
 	switch {
 	case bad.kind != nil:
 		bad.params["input"] = at.label()
-		if f.variable || password || r.marked(f.path) || r.readsPrivate(f) {
+		if password || r.mayBePrivate(f) {
 			bad.params = mask(bad.params)
 		}
 		r.reportAt(bad.kind, at.loc, bad.params)
@@ -268,7 +279,7 @@ func (r *inputResolver) askPlatformValue(f *field) {
 	if bad.kind != nil {
 		f.failed = true
 		bad.params["input"] = f.label()
-		if f.variable || r.marked(f.path) || r.readsPrivate(f) {
+		if r.mayBePrivate(f) {
 			bad.params = mask(bad.params)
 		}
 		r.reportAt(bad.kind, f.loc, bad.params)
@@ -298,20 +309,32 @@ func (r *inputResolver) askPlatform(f *field, v any) (any, finding) {
 	if r.opts.Inputs == nil {
 		return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
 	}
-	out, err := r.opts.Inputs.ResolveInput(f.typ, f.def, v)
+	if r.ctx == nil || r.unanswered != nil {
+		// Compile asks no resolver; and once one couldn't answer, the run
+		// isn't made, so none is asked again.
+		return v, finding{}
+	}
+	out, err := r.opts.Inputs.ResolveInput(r.ctx, f.typ, f.def, v)
 	switch {
 	case errors.Is(err, ErrInputType):
 		return wrong(problems.PlatformInput, problems.Params{"type": f.typ})
 	case err != nil:
 		// A problem of one of the kinds of error a workflow can have,
 		// foundation's shared rules among them, is reported as itself, so
-		// that each reader sees it in their own language. Any other error,
-		// a warning's kind among them, which would let the value through,
-		// or the command's own, is the platform's reason, as it gives it.
+		// that each reader sees it in their own language. Any other
+		// problem, a warning's kind among them, which would let the value
+		// through, or the command's own, refuses it all the same: it is
+		// the platform's reason, as it gives it. Any other error says the
+		// resolver couldn't answer: the run isn't made, and can be tried
+		// again (unansweredErr).
 		if k, params, ok := workflowProblem(err); ok {
 			return wrong(k, params)
 		}
-		return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
+		if _, ok := errors.AsType[*problem.Problem](err); ok {
+			return wrong(problems.InputRejected, problems.Params{"reason": err.Error()})
+		}
+		r.unanswered = r.unansweredFor(f, err)
+		return v, finding{}
 	}
 	if what, bad, _ := notJSON(out); what != "" {
 		return wrong(problems.PlatformValueNotJSON, problems.Params{"what": what, "value": bad})
