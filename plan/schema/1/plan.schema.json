@@ -1,0 +1,1346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian plan, version 1",
+  "description": "A compiled run, as plan.Encode writes it: everything a coordinator needs to schedule the run, and a worker to run its jobs. Its $defs describe the plan's other types too, which readyjob.schema.json, record.schema.json, runvalues.schema.json and jobresult.schema.json name, and the stored values and expressions every one of them holds. Every member is described; a member this version doesn't have is refused, as plan.Decode refuses it. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
+  "$ref": "#/$defs/Plan",
+  "$defs": {
+    "Plan": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The plan encoding's version.",
+          "const": 1
+        },
+        "run": {
+          "$ref": "#/$defs/Run"
+        },
+        "jobs": {
+          "description": "The run's jobs, each once, in the order of their names.",
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/$defs/Job"
+          }
+        },
+        "warnings": {
+          "description": "The compiler's warnings, kept with the run so that they reach whoever runs the workflow.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          }
+        }
+      },
+      "required": ["version", "run", "jobs"],
+      "additionalProperties": false
+    },
+    "Run": {
+      "description": "What the plan holds about the run as a whole.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "format": {
+          "description": "The workflow's format.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "release": {
+          "description": "The Meridian release that compiled the plan, as v1.2.3, or (devel) for a build of Meridian that isn't one. It says which build made the plan, and isn't part of what the plan is: the plan's digest leaves it out.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "thumbnail": {
+          "type": "string"
+        },
+        "inputs": {
+          "description": "The run's input values that read no variable and no password, with defaults applied and ignored inputs left out: a mapping.",
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        },
+        "definitions": {
+          "description": "The workflow's input definitions, on.execute.inputs, with their expressions parsed, but for what withheld names.",
+          "$ref": "#/$defs/Value"
+        },
+        "withheld": {
+          "description": "The JSON Pointers, in the workflow, of the parts of the input definitions that definitions leaves out, as they can hold a password.",
+          "$ref": "#/$defs/Pointers"
+        },
+        "decisions": {
+          "description": "The JSON Pointers, in the workflow, of the inputs' hidden, ignore and optional that read a variable or a password as the run was created, in order.",
+          "$ref": "#/$defs/Pointers"
+        },
+        "env": {
+          "description": "The workflow's env:.",
+          "$ref": "#/$defs/Values"
+        },
+        "timeout": {
+          "description": "The run's timeout:.",
+          "$ref": "#/$defs/Value"
+        },
+        "remote": {
+          "description": "The remote context, by name, as the run was created.",
+          "$ref": "#/$defs/Strings"
+        },
+        "sessions": {
+          "description": "The workflow's sessions:.",
+          "$ref": "#/$defs/Value"
+        },
+        "sessionNames": {
+          "description": "What the session provider gave for each session as the run was created.",
+          "$ref": "#/$defs/Strings"
+        },
+        "secrets": {
+          "description": "The secret variables and the passwords the run reads, by name.",
+          "$ref": "#/$defs/Names"
+        },
+        "derived": {
+          "description": "The secrets, among secrets, that are values the run was given in the place of what is made from a password or a secret variable.",
+          "$ref": "#/$defs/Names"
+        },
+        "private": {
+          "description": "The values the run was given that the plan doesn't hold, though they aren't secrets, by name.",
+          "$ref": "#/$defs/Names"
+        },
+        "variables": {
+          "description": "The organization and user variables the run reads that aren't secrets, by name, in order: org or vars alone is all of the context.",
+          "$ref": "#/$defs/Names"
+        },
+        "permissions": {
+          "description": "The workflow's permissions:.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        }
+      },
+      "required": ["source", "format", "release"],
+      "additionalProperties": false
+    },
+    "Limits": {
+      "description": "Meridian's limits on the run's size that the phases after Create apply. A member left out is the default.",
+      "type": "object",
+      "properties": {
+        "maxInstances": {
+          "description": "How many instances a matrix can have.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      },
+      "additionalProperties": false
+    },
+    "Source": {
+      "description": "Where a workflow came from, and the exact text that ran.",
+      "type": "object",
+      "properties": {
+        "location": {
+          "description": "Names the workflow to whoever can see the run.",
+          "type": "string"
+        },
+        "revision": {
+          "description": "A Git commit, or sha256: and the SHA-256 digest of the text when no commit has it.",
+          "type": "string"
+        },
+        "digest": {
+          "description": "sha256: and the SHA-256 digest of the text, for a workflow a step's uses: names.",
+          "type": "string"
+        },
+        "ref": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      },
+      "required": ["location", "revision"],
+      "additionalProperties": false
+    },
+    "SourceRef": {
+      "description": "What a step's uses: names a workflow by.",
+      "type": "object",
+      "properties": {
+        "uses": {
+          "description": "The step's uses: as it is written.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The workflow's file in the repository, the step's with: $yaml.",
+          "type": "string"
+        },
+        "host": {
+          "description": "The Git server that holds the repository, the step's with: $host.",
+          "type": "string"
+        }
+      },
+      "required": ["uses"],
+      "additionalProperties": false
+    },
+    "Job": {
+      "description": "One of the workflow's jobs. A matrix job is one job, whose instances are made from its strategy as the run goes.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The job's name.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The job's name in the workflow.",
+          "type": "string"
+        },
+        "strategy": {
+          "$ref": "#/$defs/Strategy"
+        },
+        "needs": {
+          "description": "The jobs this one waits for.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Need"
+          }
+        },
+        "needsExpr": {
+          "description": "The job's needs:, when it is an expression that read a variable or a password as the run was created.",
+          "$ref": "#/$defs/Value"
+        },
+        "if": {
+          "description": "The job's if:. Left out means success(), and null is false.",
+          "$ref": "#/$defs/Value"
+        },
+        "runsOn": {
+          "$ref": "#/$defs/Value"
+        },
+        "resources": {
+          "$ref": "#/$defs/Value"
+        },
+        "ssh": {
+          "$ref": "#/$defs/Value"
+        },
+        "retry": {
+          "$ref": "#/$defs/JobRetry"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Value"
+        },
+        "env": {
+          "$ref": "#/$defs/Values"
+        },
+        "workingDirectory": {
+          "$ref": "#/$defs/Value"
+        },
+        "steps": {
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "outputs": {
+          "$ref": "#/$defs/Values"
+        },
+        "path": {
+          "description": "The JSON Pointer of the job in the workflow.",
+          "type": "string"
+        }
+      },
+      "required": ["key", "name", "steps", "path"],
+      "additionalProperties": false
+    },
+    "Need": {
+      "description": "A dependency on a job: on every one of its instances, or, with any, on whichever finishes first.",
+      "type": "object",
+      "properties": {
+        "job": {
+          "type": "string"
+        },
+        "any": {
+          "type": "boolean"
+        }
+      },
+      "required": ["job"],
+      "additionalProperties": false
+    },
+    "Strategy": {
+      "description": "A matrix to expand once its values are known.",
+      "type": "object",
+      "properties": {
+        "matrix": {
+          "description": "The strategy's matrix:, include and exclude among it.",
+          "$ref": "#/$defs/Value"
+        },
+        "failFast": {
+          "$ref": "#/$defs/Value"
+        },
+        "maxParallel": {
+          "$ref": "#/$defs/Value"
+        }
+      },
+      "required": ["matrix"],
+      "additionalProperties": false
+    },
+    "JobRetry": {
+      "description": "A job's retry:, which runs the job again on another member.",
+      "type": "object",
+      "properties": {
+        "reasons": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "string"
+          }
+        },
+        "maxRetries": {
+          "$ref": "#/$defs/Value"
+        },
+        "interval": {
+          "$ref": "#/$defs/Value"
+        }
+      },
+      "required": ["reasons"],
+      "additionalProperties": false
+    },
+    "Step": {
+      "description": "One step of a job.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/Value"
+        },
+        "if": {
+          "description": "The step's if:. Left out means success(), and null is false.",
+          "$ref": "#/$defs/Value"
+        },
+        "run": {
+          "description": "The command the step runs.",
+          "$ref": "#/$defs/Value"
+        },
+        "uses": {
+          "description": "A built-in action, or the workflow the step runs.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The workflow the step's uses: names, pinned as the run was created.",
+          "$ref": "#/$defs/Source"
+        },
+        "with": {
+          "$ref": "#/$defs/Value"
+        },
+        "env": {
+          "$ref": "#/$defs/Values"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "workingDirectory": {
+          "$ref": "#/$defs/Value"
+        },
+        "ssh": {
+          "$ref": "#/$defs/Value"
+        },
+        "retry": {
+          "$ref": "#/$defs/StepRetry"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Value"
+        },
+        "ignoreErrors": {
+          "$ref": "#/$defs/Value"
+        },
+        "earlyCancel": {
+          "type": "string"
+        },
+        "cleanup": {
+          "description": "The command the step's cleanup: runs at the end of its job.",
+          "$ref": "#/$defs/Value"
+        },
+        "path": {
+          "description": "The JSON Pointer of the step in the workflow.",
+          "type": "string"
+        }
+      },
+      "required": ["path"],
+      "additionalProperties": false
+    },
+    "StepRetry": {
+      "description": "A step's retry:.",
+      "type": "object",
+      "properties": {
+        "maxRetries": {
+          "$ref": "#/$defs/Value"
+        },
+        "interval": {
+          "$ref": "#/$defs/Value"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Value"
+        },
+        "cleanOnRetry": {
+          "description": "The step's clean-on-retry:. Left out means true, the format's default.",
+          "$ref": "#/$defs/Value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadyJob": {
+      "description": "A job as Ready evaluated it, as the worker runs it: an instance of a matrix job is one. It is encoded as a plan is.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The instance's key: the job's name, or for a matrix instance its name, # and index.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The job's name in the workflow.",
+          "type": "string"
+        },
+        "matrix": {
+          "description": "The instance's matrix values, a mapping.",
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        },
+        "retry": {
+          "$ref": "#/$defs/ReadyJobRetry"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "workingDirectory": {
+          "$ref": "#/$defs/Value"
+        },
+        "ifAlways": {
+          "description": "Set when the job's if: is the word always.",
+          "type": "boolean"
+        },
+        "env": {
+          "$ref": "#/$defs/Values"
+        },
+        "steps": {
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "outputs": {
+          "$ref": "#/$defs/Values"
+        },
+        "private": {
+          "description": "The contexts Ready gives the job that were made from a variable or a password, as matrix.",
+          "$ref": "#/$defs/Names"
+        },
+        "secrets": {
+          "description": "The contexts Ready gives the job that were made from a secret.",
+          "$ref": "#/$defs/Names"
+        },
+        "privateFields": {
+          "description": "The members above, by their JSON names, that Ready evaluated from a variable or a password.",
+          "$ref": "#/$defs/Names"
+        },
+        "secretFields": {
+          "description": "The members above, by their JSON names, that Ready evaluated from a secret.",
+          "$ref": "#/$defs/Names"
+        },
+        "masked": {
+          "description": "The strings Ready made from a secret, which the worker masks.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "description": "The JSON Pointer of the job in the workflow.",
+          "type": "string"
+        }
+      },
+      "required": ["key", "name", "steps", "path"],
+      "additionalProperties": false
+    },
+    "Target": {
+      "description": "Where a job runs, from its runs-on: or its format 1 ssh:: at most one member.",
+      "type": "object",
+      "properties": {
+        "group": {
+          "description": "An execution group's name.",
+          "type": "string"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "computeTarget": {
+          "$ref": "#/$defs/ComputeTarget"
+        },
+        "inline": {
+          "$ref": "#/$defs/Inline"
+        }
+      },
+      "maxProperties": 1,
+      "additionalProperties": false
+    },
+    "Inline": {
+      "description": "The execution group a format 1 ssh: makes, of one member.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "isolation": {
+          "type": "string"
+        },
+        "ssh": {
+          "description": "The ssh: mapping, evaluated.",
+          "$ref": "#/$defs/Data"
+        }
+      },
+      "required": ["name", "backend", "isolation", "ssh"],
+      "additionalProperties": false
+    },
+    "Resources": {
+      "description": "CPUs, memory and GPUs, as a job's resources: asks for them. A member left out asks for none of it.",
+      "type": "object",
+      "properties": {
+        "milliCPU": {
+          "description": "In thousandths of a core.",
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "memory": {
+          "description": "In bytes.",
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "gpu": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      },
+      "additionalProperties": false
+    },
+    "Environment": {
+      "description": "A platform's scheduler environment, which a format 1 runs-on: environment: names.",
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "params": {
+          "description": "Its runs-on: params:, a mapping.",
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": ["cluster", "name"],
+      "additionalProperties": false
+    },
+    "ComputeTarget": {
+      "description": "Where a job runs as a compute-target input gives it.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "environment, login or worker.",
+          "type": "string"
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "schedulingParams": {
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        },
+        "newWorker": {
+          "type": "boolean"
+        },
+        "workerId": {
+          "type": "string"
+        }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
+    },
+    "ReadyJobRetry": {
+      "description": "A job's retry: as Ready evaluated it.",
+      "type": "object",
+      "properties": {
+        "reasons": {
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/$defs/Reason"
+          }
+        },
+        "maxRetries": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": ["reasons", "maxRetries", "intervalSeconds"],
+      "additionalProperties": false
+    },
+    "Reason": {
+      "description": "Why an attempt ended other than by its own steps, or may run again.",
+      "type": "string"
+    },
+    "Outcome": {
+      "description": "How a job or a step ended.",
+      "enum": ["success", "failure", "cancelled", "skipped"]
+    },
+    "Record": {
+      "description": "A run's secret record: what the run needs that its plan and its run state can't hold. The coordinator keeps it encrypted.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The record encoding's version, the plan's.",
+          "const": 1
+        },
+        "planDigest": {
+          "description": "The digest of the plan the record was made with, as plan.Digest gives it: sha256: and the hex of the SHA-256 digest of the plan's encoding without its release.",
+          "type": "string"
+        },
+        "submitted": {
+          "description": "What the run was submitted, a mapping, as it was given.",
+          "type": "object"
+        },
+        "withheld": {
+          "description": "The parts of the input definitions the plan withholds, by their JSON Pointers.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Data"
+          }
+        },
+        "decisions": {
+          "description": "What each of the plan's decisions decided as the run was created, by its JSON Pointer.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "means": {
+          "description": "Each part of submitted that means the expression a form made it from, by name, with the expression's JSON Pointer in the workflow.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "run": {
+          "description": "The private half of the run's values.",
+          "$ref": "#/$defs/RunValues"
+        },
+        "timeoutSeconds": {
+          "description": "The run's timeout, when evaluating it read a variable or a password.",
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "expansions": {
+          "description": "The matrices whose instances are private, whole, by job name.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expansion"
+          }
+        },
+        "jobs": {
+          "description": "What each job, or matrix instance, kept private as it ended, by its key.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JobRecord"
+          }
+        }
+      },
+      "required": ["version"],
+      "additionalProperties": false
+    },
+    "JobRecord": {
+      "description": "What the secret record holds of how a job ended.",
+      "type": "object",
+      "properties": {
+        "outputs": {
+          "$ref": "#/$defs/Strings"
+        },
+        "steps": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Strings"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Expansion": {
+      "description": "A matrix job's instances, and how the coordinator runs them.",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/$defs/Instance"
+          }
+        },
+        "failFast": {
+          "type": "boolean"
+        },
+        "maxParallel": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      },
+      "required": ["instances"],
+      "additionalProperties": false
+    },
+    "Instance": {
+      "description": "One combination of a matrix's values.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "matrix": {
+          "description": "Its matrix values, a mapping, or null where run state leaves out a private instance's.",
+          "$ref": "#/$defs/Data"
+        },
+        "private": {
+          "type": "boolean"
+        },
+        "secret": {
+          "type": "boolean"
+        }
+      },
+      "required": ["key", "index", "matrix"],
+      "additionalProperties": false
+    },
+    "RunValues": {
+      "description": "The run's values as Start completed them, which the phases after Start read.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "inputs": {
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        },
+        "env": {
+          "$ref": "#/$defs/Strings"
+        },
+        "org": {
+          "$ref": "#/$defs/Strings"
+        },
+        "vars": {
+          "$ref": "#/$defs/Strings"
+        },
+        "remote": {
+          "$ref": "#/$defs/Strings"
+        },
+        "sessions": {
+          "$ref": "#/$defs/Strings"
+        },
+        "private": {
+          "$ref": "#/$defs/Names"
+        },
+        "secrets": {
+          "$ref": "#/$defs/Names"
+        },
+        "derived": {
+          "$ref": "#/$defs/Names"
+        }
+      },
+      "required": ["format"],
+      "additionalProperties": false
+    },
+    "JobResult": {
+      "description": "How a job ended, as its worker reports it.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "outputs": {
+          "$ref": "#/$defs/Strings"
+        },
+        "private": {
+          "description": "The outputs that are private, by name.",
+          "$ref": "#/$defs/Keys"
+        },
+        "secrets": {
+          "description": "The outputs that hold a secret, by name.",
+          "$ref": "#/$defs/Keys"
+        },
+        "derived": {
+          "description": "The outputs, among secrets, only made from one, by name.",
+          "$ref": "#/$defs/Keys"
+        },
+        "steps": {
+          "description": "The outputs of the job's steps that have ids, by id.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Strings"
+          }
+        },
+        "secretSteps": {
+          "description": "The outputs of the job's steps that hold a secret, by id.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Keys"
+          }
+        },
+        "derivedSteps": {
+          "description": "The outputs, among secretSteps', only made from one, by id.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Keys"
+          }
+        },
+        "needsFailed": {
+          "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "required": ["outcome"],
+      "additionalProperties": false
+    },
+    "Diagnostic": {
+      "description": "A problem, as foundation's problem.FieldError encodes it, without its text, which each reader renders in their own language from code and params.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "code": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "parameter": {
+          "type": "string"
+        },
+        "in": {
+          "enum": ["query", "path", "header", "cookie"]
+        },
+        "params": {
+          "type": "object"
+        }
+      },
+      "required": ["type", "code"],
+      "additionalProperties": false
+    },
+    "Pointers": {
+      "description": "JSON Pointers into the workflow.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(/|$)"
+      }
+    },
+    "Names": {
+      "description": "Values named by their paths, as plan.JoinPath writes them: a context, then the keys that lead to the value from there, a list's items by their indexes, joined with dots, a key's own . and ~ written ~1 and ~0, as in inputs.creds.0.pass. A context's name alone is all of it.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "Keys": {
+      "description": "Keys of a mapping beside the list, by name.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "Strings": {
+      "description": "A mapping of strings.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "Values": {
+      "description": "A mapping of stored values.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Value"
+      }
+    },
+    "Data": {
+      "description": "JSON that is never evaluated, such as what a run was given: any JSON value, written as it is, a string with ${{ }} in it among them. Data that holds nothing is null where it is written: as a member that is always written, or an item; a member that is left out when it holds nothing is never null."
+    },
+    "Value": {
+      "description": "Part of a workflow that may hold expressions: JSON values, in which each string with a ${{ }} in it is a template, an object whose one member is ${{. A mapping whose only key starts with $ is written inside an object whose one member is $, so that it is never taken for a template. So an object whose only key starts with $ is one of the two, and checked as it is, and any other value is checked as JSON values are, each value in it once.",
+      "if": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1,
+        "propertyNames": {
+          "pattern": "^\\$"
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Template"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "$": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "propertyNames": {
+                  "pattern": "^\\$"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/Value"
+                }
+              }
+            },
+            "required": ["$"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "else": {
+        "items": {
+          "$ref": "#/$defs/Value"
+        },
+        "additionalProperties": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "Template": {
+      "description": "A string with expressions in it, as its parts: text, and expressions, one at least.",
+      "type": "object",
+      "properties": {
+        "${{": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/Expr"
+              }
+            ]
+          },
+          "contains": {
+            "type": "object"
+          }
+        }
+      },
+      "required": ["${{"],
+      "additionalProperties": false
+    },
+    "Expr": {
+      "description": "An expression: its source, kept for messages, and its parsed tree, which is what it means.",
+      "type": "object",
+      "properties": {
+        "src": {
+          "type": "string"
+        },
+        "tree": {
+          "$ref": "#/$defs/Node"
+        }
+      },
+      "required": ["src", "tree"],
+      "additionalProperties": false
+    },
+    "Node": {
+      "description": "A node of an expression's tree: an object, one of whose members names its kind, with the members a node of that kind has. Each member is checked once, against properties, and the members a kind has, by name, against allOf, so that a tree is checked in time linear in its size. Which contexts, operators and functions a tree can name, and the arguments each takes, are its format's, which can gain more without a new version: a release refuses one it doesn't know as a newer release's (plan.ErrVersion).",
+      "type": "object",
+      "properties": {
+        "lit": true,
+        "num": {
+          "enum": ["NaN", "Infinity", "-Infinity"]
+        },
+        "word": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "up": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "op": {
+          "type": "string"
+        },
+        "not": {
+          "const": true
+        },
+        "x": {
+          "$ref": "#/$defs/Node"
+        },
+        "y": {
+          "$ref": "#/$defs/Node"
+        },
+        "if": {
+          "$ref": "#/$defs/Node"
+        },
+        "then": {
+          "$ref": "#/$defs/Node"
+        },
+        "else": {
+          "$ref": "#/$defs/Node"
+        },
+        "member": {
+          "$ref": "#/$defs/Node"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "call": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Node"
+          }
+        },
+        "lambda": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "body": {
+          "$ref": "#/$defs/Node"
+        },
+        "param": {
+          "type": "string"
+        },
+        "slice": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/Node"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Node"
+                }
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "concat": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["lit"]
+        },
+        {
+          "required": ["num"]
+        },
+        {
+          "required": ["word"]
+        },
+        {
+          "required": ["ref"]
+        },
+        {
+          "required": ["up"]
+        },
+        {
+          "required": ["op"]
+        },
+        {
+          "required": ["if"]
+        },
+        {
+          "required": ["member"]
+        },
+        {
+          "required": ["call"]
+        },
+        {
+          "required": ["lambda"]
+        },
+        {
+          "required": ["param"]
+        },
+        {
+          "required": ["slice"]
+        },
+        {
+          "required": ["concat"]
+        }
+      ],
+      "allOf": [
+        {
+          "description": "A literal.",
+          "if": {
+            "required": ["lit"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["lit"]
+            }
+          }
+        },
+        {
+          "description": "A literal that JSON has no number for.",
+          "if": {
+            "required": ["num"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["num"]
+            }
+          }
+        },
+        {
+          "description": "A bare word.",
+          "if": {
+            "required": ["word"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["word"]
+            }
+          }
+        },
+        {
+          "description": "A reference to a context.",
+          "if": {
+            "required": ["ref"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["ref", "path"]
+            },
+            "required": ["path"]
+          }
+        },
+        {
+          "description": "A relative reference: up levels above the expression, then path.",
+          "if": {
+            "required": ["up"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["up", "path"]
+            },
+            "required": ["path"]
+          }
+        },
+        {
+          "description": "An operator: a unary one, with x, or a binary one, with x and y, and negated, as !in is, with not.",
+          "if": {
+            "required": ["op"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["op", "not", "x", "y"]
+            },
+            "required": ["x"],
+            "dependentRequired": {
+              "not": ["y"]
+            }
+          }
+        },
+        {
+          "description": "A ternary.",
+          "if": {
+            "required": ["if"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["if", "then", "else"]
+            },
+            "required": ["then", "else"]
+          }
+        },
+        {
+          "description": "Properties of a computed value.",
+          "if": {
+            "required": ["member"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["member", "path"]
+            },
+            "required": ["path"]
+          }
+        },
+        {
+          "description": "A function call.",
+          "if": {
+            "required": ["call"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["call", "args"]
+            },
+            "required": ["args"]
+          }
+        },
+        {
+          "description": "The lambda that is the last argument of map() or filter().",
+          "if": {
+            "required": ["lambda"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["lambda", "body"]
+            },
+            "required": ["body"]
+          }
+        },
+        {
+          "description": "A lambda's parameter, read in its body.",
+          "if": {
+            "required": ["param"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["param", "path"]
+            },
+            "required": ["path"]
+          }
+        },
+        {
+          "description": "The operand (start):(end), whose end is null when it is left open.",
+          "if": {
+            "required": ["slice"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["slice"]
+            }
+          }
+        },
+        {
+          "description": "The operand 2:(end): the word before the group, then the group's value.",
+          "if": {
+            "required": ["concat"]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": ["concat", "x"]
+            },
+            "required": ["x"]
+          }
+        }
+      ]
+    },
+    "Path": {
+      "description": "The segments of a path: a name, or a quoted key, a bare key, [index] or .*.",
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "quoted": {
+                "type": "string"
+              }
+            },
+            "required": ["quoted"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "bare": {
+                "type": "string"
+              }
+            },
+            "required": ["bare"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "const": true
+              }
+            },
+            "required": ["index"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "each": {
+                "const": true
+              }
+            },
+            "required": ["each"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  }
+}

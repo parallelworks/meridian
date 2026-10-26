@@ -783,6 +783,11 @@ func TestSetupFails(t *testing.T) {
 			c.Job = []byte(`{"key":"build","steps":[],"path":"/jobs/build","s3cr3t-key":"vm"}`)
 		}, "job_unreadable", nil},
 		{"job's version", func(c *workerapi.Claim) { c.PlanVersion = plan.Version + 1 }, "job_version_unsupported", []string{"supported", "version"}},
+		// A job of the worker's version that a newer release wrote, with a
+		// function the worker doesn't know, is one it can't read.
+		{"a newer release's job", func(c *workerapi.Claim) {
+			c.Job = []byte(`{"key":"build","name":"build","steps":[{"run":{"${{":[{"src":" s3cr3t() ","tree":{"args":[],"call":"s3cr3t"}}]},"path":"/jobs/build/steps/0"}],"path":"/jobs/build"}`)
+		}, "job_unreadable", nil},
 		{"run directory", func(c *workerapi.Claim) { c.RunDir = filepath.Join(file, "run") }, "run_dir_unusable", []string{"path", "reason"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

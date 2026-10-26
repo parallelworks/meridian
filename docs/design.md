@@ -1090,7 +1090,8 @@ says what the coordinator does next:
   the coordinator starts the run again after.
 
 Decoding the plan or the secret record before Start fails alike: with
-`plan.ErrVersion` for another release's version, and with
+`plan.ErrVersion` for another release's version, or for a plan whose
+trees name what a newer release's format has, and with
 `plan.ErrMalformed` for what no release encoded, or this one can't read
 as its own version, which decoding again gives too, so the coordinator
 fails the run.
@@ -1126,7 +1127,10 @@ continues from the same plan.
 It holds:
 
 - **The run:** the workflow's source and revision, its format and metadata,
-  the Meridian release that compiled it, the input values known when the
+  the Meridian release that compiled it (`Run.Release`, `plan.Release`:
+  the module's version in the build, or `(devel)` for a build that isn't a
+  release), which says only which build made the plan, so the plan's
+  digest leaves it out ([Reruns](#reruns)), the input values known when the
   run was created that read no variable and no password, the workflow's
   `env`, the run's timeout, `remote` and `sessions`, where the decisions of
   its shape that read a variable or a password are, and the secrets and
@@ -1143,7 +1147,9 @@ It holds:
   with it as the run's password, which the plan never holds.
 - **Jobs**, one per job: dependencies (on all instances of a job, or `:any`
   of them), its `strategy:`, its `if:`, group, resources and `retry:`,
-  steps, outputs, timeout and `env`, and the secrets and variables it reads.
+  steps, outputs, timeout and `env`. The secrets and variables a job reads
+  follow from its expressions, which `plan.Job.Reads` finds, so the plan
+  doesn't list them again.
 - **Steps:** what they run (a command, a workflow by its pinned reference,
   or a built-in action), and their `if:`, `env`, `with:`, shell, working
   directory, `retry:`, timeout, `ignore-errors`, `early-cancel` and cleanup.
@@ -1162,8 +1168,8 @@ read back, and an explicit `null`, such as a step's `working-directory:
 null`, stays distinct from a value that isn't there.
 
 The plan holds no secret values, nor any value made from one. It names the
-secrets the run reads, the run's for Start and each job's for its attempts:
-the secret variables an expression reads, each of a context's when it reads
+secrets the run reads, for Start, and `plan.Job.Reads` finds each job's,
+for its attempts, among them: the secret variables an expression reads, each of a context's when it reads
 every variable of the context, as `vars.*` does; and passwords, by their
 paths in the inputs' values, `password` inputs and the password fields of
 lists' rows, lists whose rows hold one and are evaluated at Start, and
@@ -1239,9 +1245,6 @@ says nothing of the machine the run was created on: a platform gives its
 own name for the workflow, and `meridian` gives the workflow's path in its
 Git repository, or its file's name outside one.
 
-Today the plan doesn't hold the release, or each job's secrets and
-variables, which `plan.Job.Reads` finds from the job's expressions.
-
 ### The secret record
 
 The secret record holds what a run needs that its plan and its run state
@@ -1260,7 +1263,8 @@ that names no version, and one whose submitted values aren't a mapping
   (`Decisions`); which parts of what was submitted mean the expression a
   form made them from, as Create decided, with the expression's place
   (`Means`); and the digest of the plan it made with them (`PlanDigest`),
-  which Start checks. Start resolves the inputs again from these.
+  which Start checks, and which leaves out the release that compiled the
+  plan ([Reruns](#reruns)). Start resolves the inputs again from these.
 - **Start** (`compile.StartResult.Keep`): the variables it read, plain
   and secret, and the private half of the run's values (`Run`, as
   `RunValues.Split` gives it); the run's timeout, when it is private
@@ -1334,32 +1338,51 @@ sees one version.
   that part, and one that names no version, which is no release's
   (`plan.ErrMalformed`). Keys match exactly, and a key given twice is
   refused.
+- **Decoding is as strict as the schema.** What the schema refuses,
+  decoding refuses, a plan's, a ready job's, a secret record's and the
+  worker API's bodies' alike, as a job's result a worker reports: a member
+  that is always written missing, null where none is written, an integer
+  past the bounds its Go type has in every build, and what a member holds
+  that the schema says it can't, such as an empty name or an outcome that
+  isn't one. Decoding refuses more only where a schema can't say it: an
+  integer written as `2.0` or `-0.0`, which JSON Schema can't tell from
+  `2` and `0`, which job comes before another, and what a tree names that
+  the release doesn't know.
 - **What an expression means is its format's.** A stored tree is read the
   same in every version, and evaluated by the rules of the format the plan
-  records.
-- **The release.** The plan records the Meridian release that compiled it.
+  records. A format can gain a context, an operator or a function, or a
+  function's arguments, without a new plan version, so a newer release
+  can write a tree, of a version an older one reads, that names what the
+  older one doesn't know. The older release refuses that plan, or that
+  ready job, as one of a newer release (`plan.ErrVersion`, not
+  `plan.ErrMalformed`), and leaves its run to a replica that reads it,
+  rather than fail the run. A worker refuses such a job as one it can't
+  read, and the job is placed again.
+- **The release.** The plan records the Meridian release that compiled it,
+  for whoever reads the run, but its digest leaves it out, as a rerun's
+  comparison does ([Reruns](#reruns)): the same plan from another build is
+  the same plan.
 
 A run's secret record is versioned with its plan, and encoded as it is
 (`plan.Record`): a release reads the records of the plans it reads, and the
 rules above are the record's too.
 
-Today a plan is version 1, and has no schema. Version 1 stays open until the
-first release: no release has yet stored a plan or sent one to a worker, so
-what the plan and the worker API's bodies gain before then, such as what
-Start needs, is part of version 1: the input definitions, where the parts
-withheld from them are, where the shape's decisions are, a job's `needs:`
-expression, `remote`, `sessions` and the names a session provider gave
-them, the limits, the digest of the run's own text, the pinned workflow a
-step's `uses:` names, with the reference it was resolved by, which of a
-ready job's fields were made from a variable or a password
-(`plan.ReadyJob.PrivateFields` and `SecretFields`), and the secret record;
-and in the worker API, a job's result as End gives it
-(`workerapi.Complete.Result`, a `plan.JobResult`), in place of the lists of
-outputs the end had. Version 1 no longer holds what Start resumed, as it
-resolves the inputs again ([Starting a run](#starting-a-run)): the inputs
-held for it, where their parts are, and the values a platform's resolver
-changed as they were submitted. The first release freezes it, with its
-schema, and every change after that gets a version.
+Version 1 is frozen: every change to the plan's encoding, or to the worker
+API's bodies, from here on raises the version, an addition among them. Its
+schemas are in `plan/schema/1` (`plan.Schemas`): a plan's
+(`plan.schema.json`), whose definitions hold the other types'; a ready
+job's, a secret record's, a run's values' and a job's result's, which name
+them; and the worker API's bodies' (`workerapi.schema.json`), which refer
+to them. They refer to each other by their names, so they resolve wherever
+the directory is. Tests check that every encoded type's members are what
+its schema describes, that golden files setting every member, and what
+Meridian encodes for every conformance case, fit the schemas, that
+decoding agrees with the schemas on each member of the goldens and the
+bodies left out, null, or a number past its bounds, and that every member
+has the version that gave it, in plan's and the worker API's since tables,
+so that a member added later can't go in without a version. A value is
+named one way throughout, by its path with its context (`plan.JoinPath`),
+as in `inputs.region`, in the plan, the secret record and a run's values.
 
 ## Expressions
 
@@ -1861,9 +1884,14 @@ as its launch form does. Create runs again on what is submitted, with the
 workflow the plan pins, and gives the rerun's secret record; the plan it
 gives must be the stored one, as a plan doesn't depend on a variable's or a
 password's value ([The plan](#the-plan)): one that differs, but for the
-jobs' graph, which Start checks, and the variables' names, whose kinds can
-have changed, means what was submitted isn't the run's, and the rerun is
-refused. Start then starts it as it starts any run: it reads each variable's
+jobs' graph, which Start checks, the variables' names, whose kinds can
+have changed, and the release that compiled it, means what was submitted
+isn't the run's, and the rerun is refused. The release is another whenever
+the build is, even of one commit, whose version a build without its VCS
+information, or with uncommitted changes, writes otherwise, and whenever a
+coordinator is upgraded; so the plan's digest, by which the rerun's record
+names the stored plan, leaves it out (`plan.Digest`), as the comparison
+does. Start then starts it as it starts any run: it reads each variable's
 value as it is then ([Variables and secrets](#variables-and-secrets)), and
 the platform's resources as they are then. A rerun whose shape would now
 differ fails with `run_shape_changed`. Each attempt of a job, and each retry

@@ -38,6 +38,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 		Run: plan.Run{
 			Source:    plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
 			Format:    1,
+			Release:   "v1.0.0",
 			Inputs:    plan.DataOf(map[string]any{"name": "Alice", "n": int64(3), "note": "${{ not.parsed }}"}),
 			Env:       map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
 			Variables: []string{"org.REGION", "vars"},
@@ -53,9 +54,8 @@ func samplePlan(t *testing.T) *plan.Plan {
 			Limits:       plan.Limits{MaxInstances: 10},
 		},
 		Jobs: []plan.Job{{
-			Key:       "build#1",
+			Key:       "build",
 			Name:      "build",
-			Matrix:    plan.DataOf(map[string]any{"os": "linux"}),
 			Needs:     []plan.Need{{Job: "prepare"}, {Job: "probe", Any: true}},
 			NeedsExpr: mustValue(t, "${{ fromJSON(vars.NEEDS) }}"),
 			If:        mustValue(t, "${{ always() && needs.prepare.result == 'failure' }}"),
@@ -85,20 +85,13 @@ func samplePlan(t *testing.T) *plan.Plan {
 // a value as empty, marked mappings, and fields at their zero values.
 func edgePlan(t testing.TB) *plan.Plan {
 	text := "<a href=\"x\">Tom & Jerry</a>\u2028\u2029 \x00\x1f\t\b\f\\ é😀 bad \xff byte"
-	nested := &plan.Plan{
-		Version: plan.Version,
-		Run:     plan.Run{Source: plan.Source{Location: "sub.yaml", Revision: "sha256:01"}, Format: 1},
-		Jobs: []plan.Job{{
-			Key: "s", Name: "s", Path: "/jobs/s",
-			Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/s/steps/0"}},
-		}},
-	}
 	return &plan.Plan{
 		Version: plan.Version,
 		Run: plan.Run{
-			Source: plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
-			Format: 1,
-			Name:   text,
+			Source:  plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
+			Format:  1,
+			Release: "v1.0.0",
+			Name:    text,
 			Inputs: plan.DataOf(map[string]any{
 				"text":    text,
 				"numbers": []any{int64(1) << 60, 3, 1e21, 1e-7, 0.1, math.Copysign(0, -1), 123456789.0},
@@ -112,8 +105,7 @@ func edgePlan(t testing.TB) *plan.Plan {
 			Permissions: []string{},
 		},
 		Jobs: []plan.Job{{
-			Key: "a#0", Name: "a", Path: "/jobs/a",
-			Matrix:           plan.DataOf(map[string]any{"os": text}),
+			Key: "a", Name: "a", Path: "/jobs/a",
 			Needs:            []plan.Need{{Job: "b"}, {Job: "c", Any: true}},
 			Retry:            &plan.JobRetry{},
 			WorkingDirectory: plan.Literal([]any{[]any(nil), map[string]any(nil), 3, int64(4), 0.5}),
@@ -123,7 +115,7 @@ func edgePlan(t testing.TB) *plan.Plan {
 			Steps: []plan.Step{
 				{Retry: &plan.StepRetry{}, Path: "/jobs/b/steps/0"},
 				{
-					ID: "w", Uses: "sub.yaml", Workflow: nested, Path: "/jobs/b/steps/1",
+					ID: "w", Uses: "sub.yaml", Path: "/jobs/b/steps/1",
 					With:  mustValue(t, map[string]any{"$out": "${{ inputs.x }}", "list": []any{nil, true, 1.5, int64(2)}}),
 					Retry: &plan.StepRetry{CleanOnRetry: plan.Literal(true), MaxRetries: plan.Literal(int64(2))},
 				},
@@ -164,11 +156,10 @@ func TestEncodeDecode(t *testing.T) {
 	}
 
 	// The decoded plan's values evaluate.
-	matrix := back.Jobs[0].Matrix.Get()
 	inputs := back.Run.Inputs.Get()
 	scope := expr.Scope{Contexts: map[string]any{
 		"env":    map[string]any{"GREETING": "hi"},
-		"matrix": matrix,
+		"matrix": map[string]any{"os": "linux"},
 		"inputs": inputs,
 	}}
 	got, err := back.Jobs[0].Steps[0].Run.Eval(scope)
@@ -310,7 +301,7 @@ func TestDecodeRefuses(t *testing.T) {
 	for name, data := range map[string]string{
 		"another version":                  strings.Replace(string(good), `"version":1`, `"version":2`, 1),
 		"an unknown key":                   strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
-		"a bad tree":                       strings.Replace(string(good), `"ref":"inputs"`, `"ref":"secrets"`, 1),
+		"a bad tree":                       strings.Replace(string(good), `"ref":"inputs"`, `"ref":null`, 1),
 		"a node of two kinds":              strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","word":"x"`, 1),
 		"a node's unknown key":             strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","later":1`, 1),
 		"a key in another case":            strings.Replace(string(good), `"jobs":`, `"JOBS":`, 1),
@@ -318,7 +309,7 @@ func TestDecodeRefuses(t *testing.T) {
 		"an unmarked $ key":                strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"$yaml":"x"}`, 1),
 		"not JSON":                         "{",
 		"a key twice in a value":           strings.Replace(string(good), `"timeout":"1h"`, `"timeout":{"a":1,"a":2}`, 1),
-		"a key twice in data":              strings.Replace(string(good), `"os":"linux"`, `"os":"linux","os":"linux"`, 1),
+		"a key twice in data":              strings.Replace(string(good), `"n":3`, `"n":3,"n":3`, 1),
 		"a key twice in a tree":            strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","ref":"inputs"`, 1),
 		"invalid UTF-8":                    strings.Replace(string(good), `"timeout":"1h"`, "\"timeout\":\"\xff\"", 1),
 		"a lone surrogate":                 strings.Replace(string(good), `"timeout":"1h"`, `"timeout":"\ud800"`, 1),
@@ -414,7 +405,7 @@ func TestDecodeJobOrder(t *testing.T) {
 // A plan's keys can come in any order.
 func TestDecodeKeyOrder(t *testing.T) {
 	data := `{"jobs":[{"steps":[{"path":"/jobs/a/steps/0","run":{"${{":[{"tree":{"ref":"inputs","path":["x"]},"src":" inputs.x "}]}}],` +
-		`"path":"/jobs/a","name":"a","key":"a"}],"run":{"format":1,"source":{"revision":"r","location":"w"}},"version":1}`
+		`"path":"/jobs/a","name":"a","key":"a"}],"run":{"release":"v1.0.0","format":1,"source":{"revision":"r","location":"w"}},"version":1}`
 	p, err := plan.Decode([]byte(data))
 	if err != nil {
 		t.Fatal(err)
@@ -515,7 +506,7 @@ func TestDecodeNestedMarks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := &plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: value}}}}}
+		p := &plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1}, Jobs: []plan.Job{{Steps: []plan.Step{{With: value}}}}}
 		data, err := plan.Encode(p)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -582,13 +573,13 @@ func TestDepth(t *testing.T) {
 		if 5+at.Depth() > plan.MaxDepth || 5+past.Depth() <= plan.MaxDepth || past.Depth()-at.Depth() != tc.step {
 			t.Fatalf("%s: depths %d and %d", name, at.Depth(), past.Depth())
 		}
-		data, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: at}}}}})
+		data, err := plan.Encode(&plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1}, Jobs: []plan.Job{{Steps: []plan.Step{{With: at}}}}})
 		if err != nil {
 			t.Errorf("%s: a plan as deep as MaxDepth: %v", name, err)
 		} else if _, err := plan.Decode(data); err != nil {
 			t.Errorf("%s: a plan as deep as MaxDepth doesn't decode: %v", name, err)
 		}
-		if _, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: past}}}}}); err == nil {
+		if _, err := plan.Encode(&plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1}, Jobs: []plan.Job{{Steps: []plan.Step{{With: past}}}}}); err == nil {
 			t.Errorf("%s: a plan deeper than MaxDepth encoded", name)
 		}
 	}
@@ -926,7 +917,7 @@ func FuzzDecode(f *testing.F) {
 		}
 		f.Add(data)
 	}
-	f.Add([]byte(`{"version":1,"run":{"source":{"location":"w","revision":"r"},"format":1,"timeout":{"$":{"$a":1}}},"jobs":[]}`))
+	f.Add([]byte(`{"version":1,"run":{"source":{"location":"w","revision":"r"},"format":1,"release":"v1.0.0","timeout":{"$":{"$a":1}}},"jobs":[]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p, err := plan.Decode(data)
 		if err != nil {
@@ -948,8 +939,7 @@ func FuzzDecode(f *testing.F) {
 
 // Exprs finds the expressions of every Value a plan holds: every Value
 // field of the run, a job and a step, found by reflection, holds one that
-// reads a variable named after it. It leaves out those of the plan of a
-// workflow a step runs, which holds its own.
+// reads a variable named after it.
 func TestExprsReachEveryValue(t *testing.T) {
 	value := reflect.TypeFor[plan.Value]()
 	var want []string
@@ -965,7 +955,7 @@ func TestExprsReachEveryValue(t *testing.T) {
 					fill(v.Field(i), path+"."+typ.Field(i).Name)
 				}
 			}
-		case typ.Kind() == reflect.Pointer && typ != reflect.TypeFor[*plan.Plan]():
+		case typ.Kind() == reflect.Pointer:
 			v.Set(reflect.New(typ.Elem()))
 			fill(v.Elem(), path)
 		case typ.Kind() == reflect.Slice && typ.Elem().Kind() == reflect.Struct:
@@ -980,7 +970,6 @@ func TestExprsReachEveryValue(t *testing.T) {
 	}
 	var p plan.Plan
 	fill(reflect.ValueOf(&p).Elem(), "plan")
-	p.Jobs[0].Steps[0].Workflow = &plan.Plan{Run: plan.Run{Env: map[string]plan.Value{"X": mustValue(t, "${{ vars.nested }}")}}}
 
 	var got []string
 	for _, e := range p.Exprs() {

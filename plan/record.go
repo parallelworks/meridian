@@ -22,7 +22,9 @@ type Record struct {
 	// reads the records of the plans it reads.
 	Version int `json:"version"`
 	// PlanDigest names the plan the record was made with, by its digest
-	// (Digest), which Start checks.
+	// (Digest), which Start checks. The digest leaves out the release that
+	// compiled the plan, so a record a rerun's Create made, by another
+	// build of Meridian, names the stored plan.
 	PlanDigest string `json:"planDigest,omitempty"`
 
 	// Submitted is what the run was submitted, a mapping, as it was given:
@@ -176,13 +178,17 @@ func cloneNames(names map[string][]string) map[string][]string {
 	return out
 }
 
-// Digest returns the SHA-256 digest of p's encoding as it reads back, as
-// "sha256:" and its hex: the same for p as for the plan Decode gives of
-// what Encode gave of it, as a coordinator stores it. A secret record
-// names the plan it was made with by it (Record.PlanDigest). A plan holds
-// no secret and no variable's value, so neither does its digest.
+// Digest returns the SHA-256 digest of p's encoding as it reads back,
+// without its release (Run.Release), as "sha256:" and its hex: the same
+// for p as for the plan Decode gives of what Encode gave of it, as a
+// coordinator stores it. A secret record names the plan it was made with
+// by it (Record.PlanDigest). The release says which build compiled the
+// plan, which isn't what the plan is: a rerun's Create, by another build
+// than the stored plan's, a release or not, gives the same digest for the
+// same plan. A plan holds no secret and no variable's value, so neither
+// does its digest.
 func Digest(p *Plan) (string, error) {
-	data, err := Encode(p)
+	data, err := Encode(digested(p))
 	if err != nil {
 		return "", err
 	}
@@ -203,7 +209,7 @@ func Digest(p *Plan) (string, error) {
 // Decode gave, as a coordinator's, encodes as it reads back, so one
 // encoding is most often enough.
 func HasDigest(p *Plan, digest string) (bool, error) {
-	data, err := Encode(p)
+	data, err := Encode(digested(p))
 	if err != nil {
 		return false, err
 	}
@@ -213,6 +219,17 @@ func HasDigest(p *Plan, digest string) (bool, error) {
 	}
 	got, err := Digest(p)
 	return got == digest, err
+}
+
+// digested returns p as Digest digests it: without its release, in a copy
+// that shares the rest with p.
+func digested(p *Plan) *Plan {
+	if p.Run.Release == "" {
+		return p
+	}
+	q := *p
+	q.Run.Release = ""
+	return &q
 }
 
 // EncodeRecord encodes a secret record as JSON, as Encode encodes a plan:
@@ -225,7 +242,8 @@ func EncodeRecord(r *Record) ([]byte, error) {
 // DecodeRecord decodes a secret record that EncodeRecord encoded. As
 // Decode does a plan, it fails on a record of another version, with
 // ErrVersion, and with ErrMalformed on what isn't a record of this one: a
-// key it doesn't know, or what was submitted that isn't a mapping.
+// key it doesn't know, what was submitted that isn't a mapping, null among
+// it, and whatever else the version's schema refuses (Schemas).
 func DecodeRecord(data []byte) (*Record, error) {
 	r := new(Record)
 	if err := decodeVersioned(data, r, func() int { return r.Version }, "the secret record"); err != nil {

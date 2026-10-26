@@ -32,6 +32,7 @@ import (
 	"maps"
 	"math"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/parallelworks/foundation/problem"
+
+	"github.com/parallelworks/meridian/internal/jsonshape"
 )
 
 // Severity says whether a diagnostic stops a workflow from running.
@@ -547,11 +550,15 @@ type Diagnostic struct {
 }
 
 // UnmarshalJSON decodes a diagnostic as problem.FieldError's MarshalJSON
-// encodes it, refusing members it doesn't have.
+// encodes it, refusing members it doesn't have, its type or its code
+// missing, null, and an in that isn't one of those its tag lists.
 func (d *Diagnostic) UnmarshalJSON(data []byte) error {
 	type wire problem.FieldError
 	var w wire
 	if err := jsonv2.Unmarshal(data, &w, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return err
+	}
+	if err := jsonshape.Check(data, reflect.TypeFor[wire](), &jsonshape.Options{}); err != nil {
 		return err
 	}
 	d.FieldError = problem.FieldError(w)

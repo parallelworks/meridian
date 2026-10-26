@@ -9,6 +9,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -35,23 +36,31 @@ func TestCodesAreKinds(t *testing.T) {
 	}
 }
 
-// TestBodiesRoundTrip checks that each body reads back as the API wrote
-// it, and writes again to the same bytes: numbers in a run's values that a
-// float64 can't hold, diagnostics, a problem, and lists and mappings that
-// are empty.
-func TestBodiesRoundTrip(t *testing.T) {
+// bodies are a body of each type, which set every member of each type
+// they hold, between them: numbers in a run's values that a float64 can't
+// hold, diagnostics, a problem, and lists and mappings that are empty.
+func bodies() []any {
 	const big = 1<<60 + 1
 	diag := problems.ExpressionFailed.At("workflow.yaml", problems.Position{Line: 3, Column: 7}, "/jobs/a/steps/0/run", problems.Params{"reason": "x"})
-	bodies := []any{
+	result := plan.JobResult{
+		Outcome: plan.OutcomeFailure, Outputs: map[string]string{"dsn": "postgres://u:p@db", "n": "3"},
+		Private: []string{"dsn"}, Secrets: []string{"dsn"}, Derived: []string{"dsn"},
+		Steps:       map[string]map[string]string{"login": {"token": "t"}},
+		SecretSteps: map[string][]string{"login": {"token"}}, DerivedSteps: map[string][]string{"login": {"token"}},
+		NeedsFailed: true, Cancelled: true,
+	}
+	return []any{
 		&workerapi.ClaimRequest{Credential: strings.Repeat("ab", 32), PlanVersion: plan.Version, Worker: workerapi.Worker{Version: "v1.0.0", Digest: "sha256:00"}},
 		&workerapi.Claim{
 			RunID: "run", AttemptID: "attempt", PlanVersion: plan.Version, Job: []byte(`{"key":"build#2","name":"build","steps":[],"path":"/jobs/build"}`),
 			Attempt: 1, Group: "local", Member: "laptop", LeaseSeconds: 60, HeartbeatSeconds: 15, SelfFencing: true,
 			Run: plan.RunValues{
 				Format: 1, Inputs: plan.DataOf(map[string]any{"n": int64(big), "list": []any{}, "map": map[string]any{}}),
-				Vars: map[string]string{"token": "t"}, Private: []string{"inputs.n"}, Secrets: []string{"vars.token"},
+				Env: map[string]string{"E": "e"}, Org: map[string]string{"R": "r"}, Vars: map[string]string{"token": "t"},
+				Remote: map[string]string{"repo": "r"}, Sessions: map[string]string{"desktop": "d"},
+				Private: []string{"inputs.n"}, Secrets: []string{"vars.token"}, Derived: []string{"vars.token"},
 			},
-			Needs:  map[string]plan.JobResult{"setup": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "b"}}},
+			Needs:  map[string]plan.JobResult{"setup": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "b"}}, "build": result},
 			RunDir: "/runs/run",
 			Env:    map[string]workerapi.EnvVar{"PW_USER": {Value: "u"}, "PW_API_KEY": {Value: "k", Secret: true}},
 			Retry:  2, Container: &workerapi.Container{Runtime: "podman", Image: "ghcr.io/parallelworks/meridian-base@sha256:00"},
@@ -66,15 +75,57 @@ func TestBodiesRoundTrip(t *testing.T) {
 		&workerapi.EventsAck{Seq: 1},
 		&workerapi.LogAck{Length: 10, Ended: true},
 		&workerapi.Complete{
-			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed,
-			Problem: &problem.Problem{Type: "/problems/worker/image_pull_failed", Title: "Image not pulled", Status: 422, Code: "image_pull_failed", Params: map[string]any{"image": "x"}},
+			Seq: 3, Result: result, Reason: plan.ReasonSetupFailed, Diagnostics: problems.Diagnostics{diag},
+			Problem: &problem.Problem{
+				Type: "/problems/worker/image_pull_failed", Title: "Image not pulled", Status: 422, Code: "image_pull_failed", Params: map[string]any{"image": "x"},
+				Instance: "/runs/run/attempts/attempt", Detail: "no image",
+				Errors: []*problem.FieldError{{Type: "/problems/x", Code: "x", Detail: "d", Pointer: "#/a", Parameter: "p", In: "query", Params: map[string]any{"n": 1}}},
+			},
 		},
 	}
-	for _, body := range bodies {
+}
+
+// Unmarshal takes what the API's schema takes, and refuses what it
+// refuses, of each change to each body that schematest.Agree makes: a
+// claim's job as the worker reads it, with plan.DecodeReadyJob.
+func TestUnmarshalAgreesWithTheSchema(t *testing.T) {
+	for _, body := range bodies() {
+		data, err := workerapi.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		typ := reflect.TypeOf(body).Elem()
+		decode := func(data []byte) error {
+			v := reflect.New(typ).Interface()
+			if err := workerapi.Unmarshal(data, v); err != nil {
+				return err
+			}
+			if c, ok := v.(*workerapi.Claim); ok {
+				_, err := plan.DecodeReadyJob(c.PlanVersion, c.Job)
+				return err
+			}
+			return nil
+		}
+		t.Run(typ.Name(), func(t *testing.T) {
+			t.Parallel()
+			schematest.Agree(t, "plan/schema/1/workerapi.schema.json#/$defs/"+typ.Name(), typ.Name(), data, decode, func(string) bool { return false })
+		})
+	}
+}
+
+// TestBodiesRoundTrip checks that each body reads back as the API wrote
+// it, and writes again to the same bytes: numbers in a run's values that a
+// float64 can't hold, diagnostics, a problem, and lists and mappings that
+// are empty; and each fits its definition in the API's schema
+// (plan.Schemas).
+func TestBodiesRoundTrip(t *testing.T) {
+	for _, body := range bodies() {
 		data, err := workerapi.Marshal(body)
 		if err != nil {
 			t.Fatalf("%T: %v", body, err)
 		}
+		name := reflect.TypeOf(body).Elem().Name()
+		schematest.Validate(t, schematest.Schema(t, "plan/schema/1/workerapi.schema.json#/$defs/"+name), name, data)
 		back := reflect.New(reflect.TypeOf(body).Elem()).Interface()
 		if err := workerapi.Unmarshal(data, back); err != nil {
 			t.Fatalf("%T: reading %s: %v", body, data, err)
@@ -113,23 +164,76 @@ func TestBigNumbersStay(t *testing.T) {
 	}
 }
 
-// TestUnmarshalRefuses checks that a body with a member its type doesn't
-// have, or a member given twice, isn't read: a worker never runs a job
-// without a part of it that it doesn't understand.
+// TestUnmarshalRefuses checks that a body the schema refuses isn't read: one
+// with a member its type doesn't have, or a member given twice, so that a
+// worker never runs a job without a part of it that it doesn't understand;
+// and what Marshal never writes, as a member it always writes missing,
+// null, and what a type of package plan's refuses, such as an outcome that
+// isn't one, in a result a worker reports.
 func TestUnmarshalRefuses(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		data string
-		v    any
-	}{
-		{"unknown member", `{"seq":1,"later":true}`, &workerapi.EventsAck{}},
-		{"unknown member in a claim", `{"runID":"r","isolation":"microvm"}`, &workerapi.Claim{}},
-		{"unknown member in a run's values", `{"run":{"format":1,"newContext":{}}}`, &workerapi.Claim{}},
-		{"member twice", `{"seq":1,"seq":2}`, &workerapi.EventsAck{}},
-		{"unknown member in a diagnostic", `{"events":[{"seq":1,"time":"2026-01-02T03:04:05Z","step":0,"diagnostics":[{"code":"x","extra":1}]}]}`, &workerapi.Events{}},
-	} {
-		if err := workerapi.Unmarshal([]byte(tc.data), tc.v); err == nil {
-			t.Errorf("%s: read %s", tc.name, tc.data)
+	good, types := map[string]string{}, map[string]reflect.Type{}
+	var result string
+	for _, body := range bodies() {
+		data, err := workerapi.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
 		}
+		name := reflect.TypeOf(body).Elem().Name()
+		good[name], types[name] = string(data), reflect.TypeOf(body).Elem()
+		if c, ok := body.(*workerapi.Complete); ok {
+			data, err := workerapi.Marshal(c.Result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result = `"result":` + string(data)
+		}
+	}
+	for _, tc := range []struct{ name, body, old, new string }{
+		{"an unknown member", "EventsAck", `"seq":1`, `"seq":1,"later":true`},
+		{"an unknown member in a claim", "Claim", `"runID":"run"`, `"runID":"run","isolation":"microvm"`},
+		{"an unknown member in a run's values", "Claim", `"run":{`, `"run":{"newContext":{},`},
+		{"an unknown member in a diagnostic", "Events", `"code":"expression_failed"`, `"code":"expression_failed","extra":1`},
+		{"a result without its outcome", "Complete", `"outcome":"failure",`, ``},
+		{"an outcome that isn't one", "Complete", `"outcome":"failure"`, `"outcome":"failed"`},
+		{"an empty outcome", "Complete", `"outcome":"failure"`, `"outcome":""`},
+		{"a result that is null", "Complete", result, `"result":null`},
+		{"no result", "Complete", result + ",", ``},
+		{"outputs that are null", "Complete", `"outputs":{"dsn":"postgres://u:p@db","n":"3"}`, `"outputs":null`},
+		{"an output that is null", "Complete", `"n":"3"`, `"n":null`},
+		{"a need's outcome that isn't one", "Claim", `"outcome":"success"`, `"outcome":"x"`},
+		{"a run's values of format 0", "Claim", `"format":1`, `"format":0`},
+		{"a run's empty secret name", "Claim", `"secrets":["vars.token"]`, `"secrets":[""]`},
+		{"a claim of another plan version", "Claim", `"planVersion":1`, `"planVersion":2`},
+		{"a sequence number that is null", "EventsAck", `"seq":1`, `"seq":null`},
+		{"a step past 32 bits", "Events", `"step":0`, `"step":2147483648`},
+		{"an event's outcome that isn't one", "Events", `"outcome":"failure"`, `"outcome":"ok"`},
+		{"a diagnostic without its code", "Events", `"code":"expression_failed",`, ``},
+		{"a problem's field's in that isn't one", "Complete", `"in":"query"`, `"in":"body"`},
+		{"a problem without its type", "Complete", `"type":"/problems/worker/image_pull_failed",`, ``},
+	} {
+		data := strings.Replace(good[tc.body], tc.old, tc.new, 1)
+		if data == good[tc.body] {
+			t.Fatalf("%s: the %s body changed: %s", tc.name, tc.body, good[tc.body])
+		}
+		decode := func() error {
+			v := reflect.New(types[tc.body]).Interface()
+			if err := workerapi.Unmarshal([]byte(data), v); err != nil {
+				return err
+			}
+			if c, ok := v.(*workerapi.Claim); ok {
+				_, err := plan.DecodeReadyJob(c.PlanVersion, c.Job)
+				return err
+			}
+			return nil
+		}
+		if err := decode(); err == nil {
+			t.Errorf("%s: read %s", tc.name, data)
+		}
+		if err := schematest.Check(schematest.Schema(t, "plan/schema/1/workerapi.schema.json#/$defs/"+tc.body), []byte(data)); err == nil {
+			t.Errorf("%s: fits the schema", tc.name)
+		}
+	}
+	if err := workerapi.Unmarshal([]byte(`{"seq":1,"seq":2}`), &workerapi.EventsAck{}); err == nil {
+		t.Error("a member twice is read")
 	}
 }

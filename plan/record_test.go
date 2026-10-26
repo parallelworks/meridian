@@ -26,14 +26,20 @@ func sampleRecord() *plan.Record {
 		Decisions: map[string]bool{"/on/execute/inputs/x/hidden": true, "/on/execute/inputs/y/ignore": false},
 		Means:     map[string]string{"inputs.region": "/on/execute/inputs/region/default"},
 		Run: &plan.RunValues{
-			Format: 1,
-			Inputs: plan.DataOf(map[string]any{"pw": "hunter2"}),
-			Vars:   map[string]string{"TOKEN": "t0k3n"},
-			Org:    map[string]string{"REGION": "east"},
+			Format:   1,
+			Inputs:   plan.DataOf(map[string]any{"pw": "hunter2", "region": "east"}),
+			Env:      map[string]string{"TOKEN": "t0k3n"},
+			Vars:     map[string]string{"TOKEN": "t0k3n"},
+			Org:      map[string]string{"REGION": "east"},
+			Remote:   map[string]string{"repo": "r"},
+			Sessions: map[string]string{"desktop": "desktop-1"},
+			Private:  []string{"env.TOKEN", "inputs.region"},
+			Secrets:  []string{"env.TOKEN", "inputs.pw", "vars.TOKEN"},
+			Derived:  []string{"env.TOKEN"},
 		},
 		TimeoutSeconds: &seconds,
-		Expansions: map[string]*plan.Expansion{"build": {Instances: []plan.Instance{
-			{Key: "build#0", Index: 0, Matrix: plan.DataOf(map[string]any{"region": "east"}), Private: true},
+		Expansions: map[string]*plan.Expansion{"build": {FailFast: true, MaxParallel: 2, Instances: []plan.Instance{
+			{Key: "build#0", Index: 0, Matrix: plan.DataOf(map[string]any{"region": "east"}), Private: true, Secret: true},
 		}}},
 		Jobs: map[string]plan.JobRecord{"test": {
 			Outputs: map[string]string{"dsn": "postgres://u:hunter2@db"},
@@ -88,6 +94,7 @@ func TestDecodeRecordRefuses(t *testing.T) {
 		"submitted values, a list":  `{"version":1,"submitted":[]}`,
 		"submitted values, a text":  `{"version":1,"submitted":"x"}`,
 		"submitted values, a value": `{"version":1,"submitted":1}`,
+		"submitted values, null":    `{"version":1,"submitted":null}`,
 	} {
 		r, err := plan.DecodeRecord([]byte(data))
 		if err == nil {
@@ -98,7 +105,7 @@ func TestDecodeRecordRefuses(t *testing.T) {
 			t.Errorf("%s: %v, want ErrVersion %v and ErrMalformed %v", name, err, version, !version)
 		}
 	}
-	if r, err := plan.DecodeRecord([]byte(`{"version":1,"submitted":null}`)); err != nil || !r.Submitted.IsZero() {
+	if r, err := plan.DecodeRecord([]byte(`{"version":1}`)); err != nil || !r.Submitted.IsZero() {
 		t.Errorf("a record that holds nothing submitted: %+v, %v", r, err)
 	}
 }
@@ -165,8 +172,8 @@ func canonicalJSON(t *testing.T, v any) string {
 }
 
 // A plan's digest is the same for the plan as for what decoding its
-// encoding gives, as a coordinator stores it, and another for another
-// plan.
+// encoding gives, as a coordinator stores it, and for the plan as another
+// build of Meridian compiles it, and another for another plan.
 func TestDigest(t *testing.T) {
 	p := samplePlan(t)
 	want, err := plan.Digest(p)
@@ -188,6 +195,21 @@ func TestDigest(t *testing.T) {
 		if ok, err := plan.HasDigest(q, want); !ok || err != nil {
 			t.Errorf("HasDigest: %v, %v", ok, err)
 		}
+	}
+	// The release that compiled a plan isn't part of what it is, so the
+	// same plan from another build has the same digest, as a rerun's does.
+	for _, release := range []string{"v1.2.3", "v0.0.0-20261021120000-0123456789ab+dirty", "(devel)", ""} {
+		other := *back
+		other.Run.Release = release
+		if got, err := plan.Digest(&other); got != want || err != nil {
+			t.Errorf("the plan of release %q has the digest %q, %v; want %q", release, got, err, want)
+		}
+		if ok, err := plan.HasDigest(&other, want); !ok || err != nil {
+			t.Errorf("HasDigest of the plan of release %q: %v, %v", release, ok, err)
+		}
+	}
+	if back.Run.Release == "" || back.Run.Release != p.Run.Release {
+		t.Errorf("the plan's release is %q, after its digest; want %q", back.Run.Release, p.Run.Release)
 	}
 	back.Run.Source.Revision = "sha256:01"
 	if got, err := plan.Digest(back); got == want || err != nil {

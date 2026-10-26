@@ -376,6 +376,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 	r := plan.Run{
 		Source:      source,
 		Format:      c.doc.Format,
+		Release:     plan.Release,
 		Name:        str(w["name"]),
 		Icon:        str(w["icon"]),
 		Thumbnail:   str(w["thumbnail"]),

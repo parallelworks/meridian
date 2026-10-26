@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian worker API bodies, version 1",
+  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 1: each is one of the $defs, which the API's path says. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ClaimRequest"
+    },
+    {
+      "$ref": "#/$defs/Claim"
+    },
+    {
+      "$ref": "#/$defs/Control"
+    },
+    {
+      "$ref": "#/$defs/Events"
+    },
+    {
+      "$ref": "#/$defs/EventsAck"
+    },
+    {
+      "$ref": "#/$defs/LogAck"
+    },
+    {
+      "$ref": "#/$defs/Complete"
+    }
+  ],
+  "$defs": {
+    "ClaimRequest": {
+      "description": "What a worker claims an attempt with, which never changes.",
+      "type": "object",
+      "properties": {
+        "credential": {
+          "description": "The credential the worker made, which is the attempt's from then on.",
+          "type": "string"
+        },
+        "planVersion": {
+          "description": "The newest plan version the worker reads.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "worker": {
+          "$ref": "#/$defs/Worker"
+        }
+      },
+      "required": ["credential", "planVersion", "worker"],
+      "additionalProperties": false
+    },
+    "Worker": {
+      "description": "The meridian binary that runs an attempt.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "Its release.",
+          "type": "string"
+        },
+        "digest": {
+          "description": "sha256: and the hex of its binary's SHA-256 digest.",
+          "type": "string"
+        }
+      },
+      "required": ["version", "digest"],
+      "additionalProperties": false
+    },
+    "Claim": {
+      "description": "An attempt that a worker claimed: the job as Ready evaluated it, with all of the run that the job reads.",
+      "type": "object",
+      "properties": {
+        "runID": {
+          "type": "string"
+        },
+        "attemptID": {
+          "type": "string"
+        },
+        "planVersion": {
+          "description": "The version of the run's plan, which job is encoded in: this one's.",
+          "const": 1
+        },
+        "job": {
+          "description": "The job as Ready evaluated it, as plan.EncodeReadyJob writes it.",
+          "$ref": "readyjob.schema.json"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "group": {
+          "type": "string"
+        },
+        "member": {
+          "type": "string"
+        },
+        "leaseSeconds": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "heartbeatSeconds": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "selfFencing": {
+          "type": "boolean"
+        },
+        "run": {
+          "description": "The run's values that the job reads.",
+          "$ref": "runvalues.schema.json"
+        },
+        "needs": {
+          "description": "The results of the jobs it needs, by name.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "jobresult.schema.json"
+          }
+        },
+        "runDir": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvVar"
+          }
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "container": {
+          "$ref": "#/$defs/Container"
+        },
+        "traceParent": {
+          "type": "string"
+        }
+      },
+      "required": ["runID", "attemptID", "planVersion", "job", "attempt", "leaseSeconds", "heartbeatSeconds", "run", "runDir"],
+      "additionalProperties": false
+    },
+    "EnvVar": {
+      "description": "A variable the platform gives the job's steps.",
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "boolean"
+        }
+      },
+      "required": ["value"],
+      "additionalProperties": false
+    },
+    "Container": {
+      "description": "The container the job's steps run in.",
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        }
+      },
+      "required": ["runtime", "image"],
+      "additionalProperties": false
+    },
+    "Control": {
+      "description": "What the coordinator tells a running attempt.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "cancel": {
+          "type": "boolean"
+        },
+        "reason": {
+          "$ref": "plan.schema.json#/$defs/Reason"
+        },
+        "graceSeconds": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "anyJobFailed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["version"],
+      "additionalProperties": false
+    },
+    "Events": {
+      "description": "Events of an attempt's steps, in order.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Event"
+          }
+        }
+      },
+      "required": ["events"],
+      "additionalProperties": false
+    },
+    "Event": {
+      "description": "A step's try, or its cleanup, started or finished.",
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished": {
+          "type": "boolean"
+        },
+        "step": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cleanup": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "$ref": "plan.schema.json#/$defs/Outcome"
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/Diagnostics"
+        }
+      },
+      "required": ["seq", "time", "step"],
+      "additionalProperties": false
+    },
+    "EventsAck": {
+      "description": "The last event the coordinator has stored.",
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": ["seq"],
+      "additionalProperties": false
+    },
+    "LogAck": {
+      "description": "How much of a log the coordinator has stored.",
+      "type": "object",
+      "properties": {
+        "length": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "ended": {
+          "type": "boolean"
+        }
+      },
+      "required": ["length"],
+      "additionalProperties": false
+    },
+    "Complete": {
+      "description": "How an attempt ended.",
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "result": {
+          "$ref": "jobresult.schema.json"
+        },
+        "reason": {
+          "$ref": "plan.schema.json#/$defs/Reason"
+        },
+        "problem": {
+          "$ref": "#/$defs/Problem"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/Diagnostics"
+        }
+      },
+      "required": ["seq", "result"],
+      "additionalProperties": false
+    },
+    "Diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "plan.schema.json#/$defs/Diagnostic"
+      }
+    },
+    "Problem": {
+      "description": "An RFC 9457 problem, as foundation's problem.Problem writes it.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "detail": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "code": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "plan.schema.json#/$defs/Diagnostic"
+          }
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    }
+  }
+}

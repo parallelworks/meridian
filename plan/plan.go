@@ -5,6 +5,8 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
@@ -13,8 +15,46 @@ import (
 )
 
 // Version is the version of the plan encoding this package reads and
-// writes. It changes only for a change that can't be an addition.
+// writes: a Plan's, and a ReadyJob's, a Record's, and the worker API's
+// bodies', which are versioned with it. Every change to one raises it, an
+// addition among them, since decoding refuses a member it doesn't know
+// (docs/design.md, Plans across versions). Version 1 is frozen, as its
+// schemas describe it (Schemas).
 const Version = 1
+
+// modulePath is Meridian's module.
+const modulePath = "github.com/parallelworks/meridian"
+
+// Release is the Meridian release this package is, as the module's
+// version in the binary's build information says: the main module's, for
+// meridian, or the version of Meridian a platform's binary requires. It is
+// (devel), as go writes it, for a build of Meridian that isn't a release,
+// such as one of a working tree, or of a module that replaces Meridian with
+// a directory. The compiler records it in each plan (Run.Release).
+var Release = release()
+
+// release returns Release.
+func release() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "(devel)"
+	}
+	m := &info.Main
+	if m.Path != modulePath {
+		i := slices.IndexFunc(info.Deps, func(d *debug.Module) bool { return d.Path == modulePath })
+		if i < 0 {
+			return "(devel)"
+		}
+		m = info.Deps[i]
+	}
+	if m.Replace != nil {
+		m = m.Replace
+	}
+	if m.Version == "" {
+		return "(devel)"
+	}
+	return m.Version
+}
 
 // A Plan is a compiled run: everything a coordinator needs to schedule it,
 // and a worker to run its jobs, without the workflow file.
@@ -37,7 +77,13 @@ type Plan struct {
 type Run struct {
 	Source Source `json:"source"`
 	// Format is the workflow's format.
-	Format      int    `json:"format"`
+	Format int `json:"format"`
+	// Release is the Meridian release that compiled the plan (Release), as
+	// v1.2.3, or (devel) for a build of Meridian that isn't one. It says
+	// which build made the plan, for whoever reads the run, and isn't part
+	// of what the plan is: the plan's digest leaves it out (Digest), so a
+	// rerun's plan, from another build, is the stored one.
+	Release     string `json:"release"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 	Icon        string `json:"icon,omitempty"`
@@ -224,9 +270,6 @@ type Job struct {
 	Key string `json:"key"`
 	// Name is the job's name in the workflow.
 	Name string `json:"name"`
-	// Matrix is unused: a matrix instance's values are its Instance's. The
-	// compiler never sets it, and it goes with the plan's next version.
-	Matrix Data `json:"matrix,omitzero"`
 	// Strategy is the job's strategy:. Start expands its matrix when its
 	// values are known by then, and Ready otherwise, when it reads needs.
 	Strategy *Strategy `json:"strategy,omitzero"`
@@ -294,10 +337,7 @@ type Step struct {
 	// created from it, through the Sources resolver's Read, when the step
 	// runs, so the run and its reruns run the same text. It is nil for a
 	// built-in action.
-	Source *Source `json:"source,omitzero"`
-	// Workflow is unused: the compiler never sets it, as Source holds the
-	// workflow's pinned reference. It goes with the plan's next version.
-	Workflow         *Plan            `json:"workflow,omitzero"`
+	Source           *Source          `json:"source,omitzero"`
 	With             Value            `json:"with,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`
 	Shell            string           `json:"shell,omitempty"`
@@ -320,14 +360,12 @@ type StepRetry struct {
 	Timeout    Value `json:"timeout,omitzero"`
 	// CleanOnRetry is the step's clean-on-retry: true or false, or an
 	// expression that gives one. The compiler fills in true, the format's
-	// default, for a retry: without one. Unset, as in a plan a release
-	// wrote before it was a Value, which held only true, means false.
+	// default, for a retry: without one, and unset means it too.
 	CleanOnRetry Value `json:"cleanOnRetry,omitzero"`
 }
 
 // Exprs returns every expression the plan holds, in its run, its input
-// definitions among them, and its jobs. The plan of a workflow that a step
-// runs holds its own.
+// definitions among them, and its jobs.
 func (p *Plan) Exprs() []*expr.Expr {
 	var out []*expr.Expr
 	add := func(vs ...Value) {
@@ -430,24 +468,38 @@ func (p *Plan) checkJobOrder() error {
 	return nil
 }
 
-// ErrVersion is what Decode returns for a plan of a version this release
-// doesn't read, such as one a newer release wrote.
+// ErrVersion is what Decode and DecodeReadyJob return for a plan, or a
+// ready job, of a version this release doesn't read, such as one a newer
+// release wrote; and for one of this version whose expressions name what
+// this release doesn't know: a context, an operator or a function, or a
+// function's arguments or an operator's negation it doesn't take
+// (expr.ErrUnknown). A format gains these without a new plan version, so a
+// newer release wrote that one too, and a release that knows them reads it.
 var ErrVersion = errors.New("plan: unsupported version")
 
-// ErrMalformed is what Decode and DecodeRecord return for what isn't a
-// plan, or a secret record, that this release reads: what isn't JSON, or
-// isn't a mapping, or names no release's version, as one without a version
-// does, or that doesn't decode as this release reads its version, as one
-// with a key it doesn't know does. Decoding it again gives the same error,
-// so a coordinator fails the run rather than read it again.
+// ErrMalformed is what Decode, DecodeRecord and DecodeReadyJob return for
+// what isn't a plan, a secret record or a ready job that this release
+// reads: what isn't JSON, or isn't a mapping, or names no release's
+// version, as one without a version does, or that doesn't decode as this
+// release reads its version, as one with a key it doesn't know does, or
+// what its version's schema refuses (Schemas). Decoding it again gives the
+// same error, so a coordinator fails the run rather than read it again.
 var ErrMalformed = errors.New("plan: malformed")
 
 // Decode decodes a plan that Encode encoded. It fails on a plan of another
 // version, with ErrVersion, and on what isn't a plan of this one, with
 // ErrMalformed: keys it doesn't know, which a newer release wrote, among
-// them. Keys match exactly, and no key can be given twice. It fails too,
+// them, a member that is always written that is missing, null where a
+// member is never null, and whatever else the version's schema refuses
+// (Schemas). Keys match exactly, and no key can be given twice. An integer
+// member is a whole number written as Encode writes one: 2.0, 2e0 and -0.0
+// are refused, though JSON Schema takes them for integers. It fails too,
 // with ErrMalformed, on jobs that aren't in the order of their names, each
-// once, as Jobs is, since Ready finds a job by its name in that order.
+// once, as Jobs is, since Ready finds a job by its name in that order. A
+// plan of this version whose expressions name a context, an operator or a
+// function this release doesn't know, which the schema takes, fails with
+// ErrVersion: a newer release wrote it, and one that knows them reads it.
+// Decode reports the first of what it refuses that it reads.
 func Decode(data []byte) (*Plan, error) {
 	p := new(Plan)
 	if err := decodeVersioned(data, p, func() int { return p.Version }, "the plan"); err != nil {
@@ -466,6 +518,9 @@ func Decode(data []byte) (*Plan, error) {
 func decodeVersioned(data []byte, v any, version func() int, of string) error {
 	err := jsonv2.Unmarshal(data, v, decoding, jsonv2.RejectUnknownMembers(true))
 	if err == nil && version() == Version {
+		if err := checkShape(data, v); err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
+		}
 		return nil
 	}
 	// One of another version need not decode as this one, so its version
@@ -481,6 +536,16 @@ func decodeVersioned(data []byte, v any, version func() int, of string) error {
 		return fmt.Errorf("%w: %s names no version", ErrMalformed, of)
 	case head.Version != Version:
 		return fmt.Errorf("%w %d of %s; this release reads version %d", ErrVersion, head.Version, of, Version)
+	}
+	return decodeError(of, err)
+}
+
+// decodeError returns err, the error of decoding what of names, of this
+// version: one that wraps ErrVersion if err wraps expr.ErrUnknown, as what
+// a newer release of the version wrote, and ErrMalformed otherwise.
+func decodeError(of string, err error) error {
+	if errors.Is(err, expr.ErrUnknown) {
+		return fmt.Errorf("%w: %s names what a newer release of version %d knows: %w", ErrVersion, of, Version, err)
 	}
 	return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
 }
