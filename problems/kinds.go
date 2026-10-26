@@ -360,6 +360,10 @@ var (
 	// as its attempt's logs reached limit bytes in all: the line that ends
 	// it says so.
 	LogTruncated = define(Warning, "log_truncated", "Log the coordinator didn't keep whole", "limit")
+	// LogCut is a log, of the step or the setup log names, whose attempt
+	// ended before the log did, as one whose worker was lost: what its
+	// worker didn't store of it, it never will.
+	LogCut = define(Warning, "log_cut", "Log cut short", "log")
 )
 
 // RunPlanNewer is a run whose plan is of version, newer than latest, the

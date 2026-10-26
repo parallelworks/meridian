@@ -1,109 +1,248 @@
 package local
 
 import (
-	"context"
+	"bytes"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
-// progressBuffer is how many events Progress holds while it writes others.
-const progressBuffer = 1024
+// ProgressVersion is the version of the JSON lines Progress writes, which
+// each line's version member gives: a reader of one version reads its
+// members as it documents them, and a later version can add members, and
+// kinds of line, but changes what none of them means.
+const ProgressVersion = 1
 
-// Progress is the command's progress display: it writes a line for each
-// event of a run as it happens, such as
+// maxLine is the most bytes of a log's line Progress holds while it waits
+// for the line's end: a longer line it writes in parts.
+const maxLine = 64 << 10
+
+// Progress is the command's progress display: it writes a run's events,
+// and its logs, as coordinator.Follow reports them, as lines a person
+// reads, such as
 //
 //	14:02:07 build#2 attempt 1 running on local/host
+//	build#2 step 0| compiling
 //
-// Event never blocks, since it holds up the job it reports on: Progress
-// writes from a goroutine of its own, and when it falls more than a
-// thousand events behind, as when its terminal is paused, it leaves events
-// out and says how many. An event reported again, as a coordinator that
-// took a job over can, is shown once.
+// or as JSON, one object a line (ProgressVersion). A log's lines are each
+// written once whole, prefixed with what they are the log of, as the job's
+// step 0's, or its retry 1's, or its cleanup's; its setup log, of how its
+// worker started, only as JSON. What a run's problems are, and a log cut
+// short, a person reads on errs, as compilers write them.
 type Progress struct {
-	w      io.Writer
-	events chan coordinator.Event
-	done   chan struct{}
-
-	mu      sync.Mutex
-	closed  bool
-	dropped int
+	out, errs io.Writer
+	json      bool
+	// lines are the logs' parts that don't end a line yet, by log.
+	lines map[coordinator.LogKey][]byte
 }
 
-var _ coordinator.Events = (*Progress)(nil)
-
-// NewProgress returns a Progress that writes to w, until Close.
-func NewProgress(w io.Writer) *Progress {
-	p := &Progress{w: w, events: make(chan coordinator.Event, progressBuffer), done: make(chan struct{})}
-	go p.write()
-	return p
+// NewProgress returns a Progress that writes to out, as JSON when json is
+// set, and what a person reads of problems to errs.
+func NewProgress(out, errs io.Writer, json bool) *Progress {
+	return &Progress{out: out, errs: errs, json: json, lines: map[coordinator.LogKey][]byte{}}
 }
 
-// Event shows e, once those before it are shown.
-func (p *Progress) Event(_ context.Context, e coordinator.Event) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed {
-		return
+// A progressLine is one of the JSON lines Progress writes: an event, as
+// coordinator.Event says, the creation of a run, a run left running, or a
+// part of a log, with what each has.
+type progressLine struct {
+	Version  int       `json:"version"`
+	Kind     string    `json:"kind"`
+	Seq      int64     `json:"seq,omitzero"`
+	Time     time.Time `json:"time,omitzero"`
+	Run      string    `json:"run"`
+	RunDir   string    `json:"runDir,omitempty"`
+	Job      string    `json:"job,omitempty"`
+	Attempt  int       `json:"attempt,omitzero"`
+	Member   string    `json:"member,omitempty"`
+	Part     string    `json:"part,omitempty"`
+	Step     *int      `json:"step,omitempty"`
+	Try      int       `json:"try,omitzero"`
+	Cleanup  bool      `json:"cleanup,omitzero"`
+	End      string    `json:"end,omitempty"`
+	Outcome  string    `json:"outcome,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+	ExitCode *int      `json:"exitCode,omitempty"`
+	// Text is a log's line, with the newline that ends it, if one does,
+	// and its bytes that aren't UTF-8 replaced. Ended is set on a log's
+	// last line, once the log has ended, and Cut instead once its attempt
+	// ended before the log did: either can have no text.
+	Text        string               `json:"text,omitempty"`
+	Ended       bool                 `json:"ended,omitzero"`
+	Cut         bool                 `json:"cut,omitzero"`
+	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
+}
+
+// The kinds of JSON line Progress writes besides the events'.
+const (
+	kindRunCreated = "run.created"
+	kindRunLeft    = "run.left"
+	kindLog        = "log"
+)
+
+// Created writes that the run id is stored, with its directory dir.
+func (p *Progress) Created(id, dir string) error {
+	if p.json {
+		return p.writeJSON(progressLine{Kind: kindRunCreated, Run: id, RunDir: dir})
 	}
-	select {
-	case p.events <- e:
-	default:
-		p.dropped++
+	_, err := fmt.Fprintf(p.out, "run %s started (run directory %s)\n", id, dir)
+	return err
+}
+
+// Left writes that the command leaves the run id running, and how to pick
+// it up.
+func (p *Progress) Left(id string) error {
+	if p.json {
+		return p.writeJSON(progressLine{Kind: kindRunLeft, Run: id})
 	}
+	_, err := fmt.Fprintf(p.out, "run %s left running: meridian resume %s picks it up, and meridian cancel %s cancels it\n", id, id, id)
+	return err
 }
 
-// Close shows the events Progress holds, and stops it. Events after it
-// aren't shown.
-func (p *Progress) Close() {
-	p.mu.Lock()
-	if !p.closed {
-		p.closed = true
-		close(p.events)
-	}
-	p.mu.Unlock()
-	<-p.done
-}
-
-// eventKey is what tells one event from another: its fields but its time
-// and what it says of how things ended.
-type eventKey struct {
-	kind          coordinator.EventKind
-	run, job      string
-	attempt, step int
-	try           int
-	cleanup       bool
-}
-
-func (p *Progress) write() {
-	defer close(p.done)
-	seen := map[eventKey]bool{}
-	shown := 0
-	for e := range p.events {
-		k := eventKey{e.Kind, e.Run, e.Job, e.Attempt, e.Step, e.Try, e.Cleanup}
-		if seen[k] {
-			continue
+// Event writes e: as JSON, every event; and as text, each but the run's
+// start, and its end, which the command writes itself, and an attempt's
+// end that completed it, which its job's end says.
+func (p *Progress) Event(e coordinator.Event) error {
+	if p.json {
+		l := progressLine{
+			Kind: string(e.Kind), Seq: e.Seq, Time: e.Time, Run: e.Run, Job: e.Job, Attempt: e.Attempt, Member: e.Member,
+			End: string(e.End), Outcome: string(e.Outcome), Reason: string(e.Reason), Diagnostics: e.Diagnostics,
 		}
-		seen[k] = true
-		p.mu.Lock()
-		dropped := p.dropped - shown
-		shown = p.dropped
-		p.mu.Unlock()
-		if dropped > 0 {
-			fmt.Fprintf(p.w, "(%d events not shown)\n", dropped)
+		if e.Kind == coordinator.StepStarted || e.Kind == coordinator.StepFinished {
+			l.Step, l.Try, l.Cleanup = &e.Step, e.Try, e.Cleanup
 		}
-		fmt.Fprintln(p.w, line(e))
+		if e.Kind == coordinator.StepFinished && e.ExitCode >= 0 {
+			l.ExitCode = &e.ExitCode
+		}
+		return p.writeJSON(l)
 	}
-	p.mu.Lock()
-	dropped := p.dropped - shown
-	p.mu.Unlock()
-	if dropped > 0 {
-		fmt.Fprintf(p.w, "(%d events not shown)\n", dropped)
+	switch {
+	case e.Kind == coordinator.RunStarted || e.Kind == coordinator.RunFinished:
+		return nil
+	case e.Kind == coordinator.AttemptEnded && e.End == coordinator.AttemptCompleted:
+		return p.writeDiagnostics(e.Diagnostics)
 	}
+	if _, err := fmt.Fprintln(p.out, line(e)); err != nil {
+		return err
+	}
+	return p.writeDiagnostics(e.Diagnostics)
+}
+
+// Log writes the lines of part of a log that it ends, and, once the log
+// has ended or is cut short, the rest; and that it was cut short, which
+// a person reads on errs.
+func (p *Progress) Log(part coordinator.LogPart) error {
+	key := part.Key
+	held := p.lines[key]
+	held = append(held, part.Data...)
+	for {
+		i := bytes.IndexByte(held, '\n')
+		if i < 0 && len(held) <= maxLine {
+			break
+		}
+		n := i + 1
+		if i < 0 {
+			n = maxLine
+		}
+		if err := p.writeLog(key, held[:n], false, false); err != nil {
+			return err
+		}
+		held = held[n:]
+	}
+	if !part.Ended && !part.Cut {
+		p.lines[key] = bytes.Clone(held)
+		return nil
+	}
+	delete(p.lines, key)
+	if len(held) > 0 || p.json {
+		if err := p.writeLog(key, held, part.Ended, part.Cut); err != nil {
+			return err
+		}
+	}
+	if part.Cut && !p.json {
+		d := problems.LogCut.At("", problems.Position{}, "", problems.Params{"log": logName(key)})
+		_, err := fmt.Fprintln(p.errs, "meridian: "+d.String())
+		return err
+	}
+	return nil
+}
+
+// writeLog writes text, a line of the log key, or its last bytes, which
+// ended, or were cut short, when they are.
+func (p *Progress) writeLog(key coordinator.LogKey, text []byte, ended, cut bool) error {
+	if p.json {
+		l := progressLine{
+			Kind: kindLog, Run: key.Run, Job: key.Job, Attempt: key.Attempt, Part: string(key.Part),
+			Text: strings.ToValidUTF8(string(text), "�"), Ended: ended, Cut: cut,
+		}
+		if key.Part != workerapi.LogSetup {
+			step := key.Step
+			l.Step, l.Try = &step, key.Try
+		}
+		return p.writeJSON(l)
+	}
+	if key.Part == workerapi.LogSetup {
+		return nil
+	}
+	if !bytes.HasSuffix(text, []byte("\n")) {
+		text = append(bytes.Clone(text), '\n')
+	}
+	_, err := fmt.Fprintf(p.out, "%s| %s", logName(key), text)
+	return err
+}
+
+// logName names the log key as a person reads it: its job's key, its
+// attempt's number after the first, and which of the attempt's logs it is,
+// as in build#2 step 0 retry 1.
+func logName(key coordinator.LogKey) string {
+	var b strings.Builder
+	b.WriteString(key.Job)
+	if key.Attempt > 1 {
+		fmt.Fprintf(&b, " attempt %d", key.Attempt)
+	}
+	if key.Part == workerapi.LogSetup {
+		b.WriteString(" setup")
+		return b.String()
+	}
+	fmt.Fprintf(&b, " step %d", key.Step)
+	if key.Part == workerapi.LogCleanup {
+		b.WriteString(" cleanup")
+	}
+	if key.Try > 0 {
+		fmt.Fprintf(&b, " retry %d", key.Try)
+	}
+	return b.String()
+}
+
+// writeDiagnostics writes diags, as compilers write them, to errs, each
+// about the run as a whole said to be meridian's.
+func (p *Progress) writeDiagnostics(diags problems.Diagnostics) error {
+	for _, d := range diags {
+		line := d.String()
+		if d.File() == "" {
+			line = "meridian: " + line
+		}
+		if _, err := fmt.Fprintln(p.errs, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Progress) writeJSON(l progressLine) error {
+	l.Version = ProgressVersion
+	data, err := jsonv2.Marshal(l)
+	if err != nil {
+		return err
+	}
+	_, err = p.out.Write(append(data, '\n'))
+	return err
 }
 
 // line is the line Progress shows for e.
@@ -113,30 +252,28 @@ func line(e coordinator.Event) string {
 		b.WriteString(e.Time.In(time.Local).Format(time.TimeOnly))
 		b.WriteByte(' ')
 	}
+	attempt := func(what string) {
+		fmt.Fprintf(&b, "%s attempt %d %s", e.Job, e.Attempt, what)
+	}
 	switch e.Kind {
-	case coordinator.RunStarted:
-		fmt.Fprintf(&b, "run %s started", e.Run)
-	case coordinator.RunFinished:
-		fmt.Fprintf(&b, "run %s finished: %s", e.Run, e.Outcome)
 	case coordinator.JobReady:
 		fmt.Fprintf(&b, "%s ready", e.Job)
 	case coordinator.JobPlacing:
-		fmt.Fprintf(&b, "%s attempt %d placing on %s", e.Job, e.Attempt, e.Member)
-	case coordinator.JobRunning:
-		fmt.Fprintf(&b, "%s attempt %d running", e.Job, e.Attempt)
+		attempt("placing")
 		if e.Member != "" {
 			fmt.Fprintf(&b, " on %s", e.Member)
 		}
+	case coordinator.JobRunning:
+		attempt("running")
+		if e.Member != "" {
+			fmt.Fprintf(&b, " on %s", e.Member)
+		}
+	case coordinator.AttemptEnded:
+		attempt("ended: " + string(e.End))
 	case coordinator.JobFinished:
 		fmt.Fprintf(&b, "%s finished: %s", e.Job, e.Outcome)
 	case coordinator.StepStarted, coordinator.StepFinished:
-		fmt.Fprintf(&b, "%s step %d", e.Job, e.Step)
-		if e.Cleanup {
-			b.WriteString(" cleanup")
-		}
-		if e.Try > 0 {
-			fmt.Fprintf(&b, " retry %d", e.Try)
-		}
+		b.WriteString(logName(coordinator.LogKey{Job: e.Job, Attempt: e.Attempt, Part: stepPart(e.Cleanup), Step: e.Step, Try: e.Try}))
 		if e.Kind == coordinator.StepStarted {
 			b.WriteString(" started")
 			break
@@ -152,4 +289,12 @@ func line(e coordinator.Event) string {
 		fmt.Fprintf(&b, " (%s)", e.Reason)
 	}
 	return b.String()
+}
+
+// stepPart is the log of a step's event: its cleanup's, or its own.
+func stepPart(cleanup bool) workerapi.LogPart {
+	if cleanup {
+		return workerapi.LogCleanup
+	}
+	return workerapi.LogStep
 }

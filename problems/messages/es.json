@@ -179,6 +179,7 @@
   "run_not_started": "La ejecución {run} terminó sin empezar: el coordinador no pudo empezarla.",
   "run_plan_newer": "El plan de la ejecución {run}, de la versión {version}, contiene lo que solo lee una versión más reciente de Meridian (esta lee la versión {latest} y anteriores), así que la empieza una versión que lo lea.",
   "log_truncated": "El coordinador guarda como mucho {limit} bytes de los logs de un intento, así que no guardó el resto de este.",
+  "log_cut": "El log de {log} acaba aquí: su intento terminó antes de que su worker guardara el resto.",
   "placement_impossible": "Ningún miembro del grupo en que se ejecuta el trabajo {job} puede ejecutarlo.",
   "placement_unanswered": "No se pudo asignar el trabajo {job}: los backends de su grupo no respondieron en {tries} intentos.",
   "setup_failed": "El trabajo {job} no pudo empezar: sus intentos fallaron antes de que se ejecutara un paso, {tries} veces.",

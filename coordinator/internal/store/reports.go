@@ -171,6 +171,13 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	var (
+		run int64
+		job string
+	)
+	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT run_id, job_key FROM meridian_attempts WHERE id = ?", id).Scan(&run, &job); err != nil {
+		return 0, err
+	}
 	var size int64
 	for _, e := range fresh {
 		body, err := workerapi.Marshal(e)
@@ -182,6 +189,13 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 			return 0, err
 		}
 		size += int64(len(body))
+		kind := EventStepStarted
+		if e.Finished {
+			kind = EventStepFinished
+		}
+		if err := tx.addEvent(run, kind, job, id, e.Seq); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET events_count = events_count + ?, events_bytes = events_bytes + ? WHERE id = ?",
 		len(fresh), size, id); err != nil {

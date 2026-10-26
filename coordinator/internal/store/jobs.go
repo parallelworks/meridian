@@ -243,9 +243,11 @@ func (tx *Tx) EndJob(run, key string, end JobEnd) error {
 		return err
 	}
 	n, _ := runNumber(run)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET outcome = ?, reason = ?, result = ?, diagnostics = ?, ended_at = ? WHERE run_id = ? AND key = ?",
-		end.Result.Outcome, nullString(string(end.Reason)), result, diags, now, n, key)
-	return err
+	if _, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET outcome = ?, reason = ?, result = ?, diagnostics = ?, ended_at = ? WHERE run_id = ? AND key = ?",
+		end.Result.Outcome, nullString(string(end.Reason)), result, diags, now, n, key); err != nil {
+		return err
+	}
+	return tx.addEvent(n, EventJobFinished, key, "", 0)
 }
 
 // PinReady records, the first time the run's job is readied, what it was
@@ -277,6 +279,9 @@ func (tx *Tx) PinReady(run, key string, stopped bool, anyChoices map[string]stri
 	n, _ := runNumber(run)
 	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET ready_at = ?, readied_stopped = ?, any_choices = ? WHERE run_id = ? AND key = ?",
 		now, stopped, choices, n, key); err != nil {
+		return nil, err
+	}
+	if err := tx.addEvent(n, EventJobReady, key, "", 0); err != nil {
 		return nil, err
 	}
 	return tx.Job(run, key)

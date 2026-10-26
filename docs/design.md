@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, and ends them; matrix jobs and needs on any instance of one aren't built yet ([The coordinator](#the-coordinator)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)); matrix jobs and needs on any instance of one aren't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -1452,7 +1452,14 @@ Run state is the store's: hopper's jobs, and Meridian's rows beside them
   token and its credential, and its audit record
   ([Operations](#operations)).
 - **The run's events**, each change to it in order, which every process
-  that follows the run reads, whichever process made the change.
+  that follows the run reads, whichever process made the change: its
+  start; a job ready, placing, running and finished; each step's start and
+  end, as the attempt's worker reported them; an attempt's end, however it
+  ended; and the run's end. Each is added in the transaction that makes
+  the change, numbered after the run's last, and names the row that
+  changed rather than copying it, so an event shows only what that row
+  shows: never a private placement's member, which only the record holds
+  ([Following a run](#following-a-run)).
 
 It holds no secret that Meridian can recognize: a job's outputs are checked
 against the secrets its attempt received before they leave the worker
@@ -1697,11 +1704,13 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Actions | Built-in actions, which no interface provides yet: the worker refuses a step that `uses:` one (`uses_not_supported`) | `parallelworks/checkout`, and those that need no platform, once built |
 | Sessions | Interactive sessions a workflow serves | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
-| Events | Run, job and step events as they happen | The command's progress display |
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
-are interfaces in `compile`, the coordinator's, Keys, Logs and Events, in
-`coordinator`, and the backends' `Driver` in `backend`. A resolver may be
+are interfaces in `compile`, the coordinator's, Keys and Logs, in
+`coordinator`, and the backends' `Driver` in `backend`. Whoever shows a run
+as it happens, as the command's progress display does, follows its events
+and its logs (`Coordinator.Follow`, below), rather than being told of
+them. A resolver may be
 missing. Then the workflow features that need it fail to compile, with an
 error saying which interface was missing.
 
@@ -3262,6 +3271,7 @@ errors, or the run failed or was cancelled; and 2 when Meridian couldn't do
 what it was asked, and when it leaves the run running, as when it is
 interrupted ([The coordinator](#the-coordinator)).
 
+
 Execution groups, variables and the GitLab servers a workflow can name
 live in Meridian's config directory, and `--group` picks a group. A
 built-in `local` group needs no config: one member, this machine, which
@@ -3386,6 +3396,40 @@ flattened wizard step are set by their own names, and naming the group or
 the step is an error, as a path through a list's rows is: a list is set
 whole. A problem with an `-input` names its path, never its
 value, which can be a password.
+
+### Following a run
+
+`meridian run` shows its run as it goes, by following it
+(`Coordinator.Follow`): the run's events, from its first, in order, and
+its steps' logs as their workers store them.
+
+- **Which logs there are.** A log that isn't there yet can't be told from
+  one that never will be, so the events say which logs to read: an
+  attempt's claim begins its setup log, and each step's, retry's or
+  cleanup's start begins its own. A worker reports its attempt's end only
+  once every log is stored, so each log of an attempt that completed ends
+  whole. One whose attempt ended otherwise, as when its worker was lost, is
+  shown as far as it was stored, and said to be cut short (`log_cut`).
+- **In order.** An event that ends a step, an attempt or a job is shown
+  once its logs, as far as they are stored, are; and the run's end last,
+  once every log is.
+- **Promptly.** It reads the run's events again as soon as a transaction
+  of its own process adds one, and every 200 milliseconds for those
+  another process adds, and for the logs, which aren't in the store.
+- **As text or JSON.** `--format text`, the default, writes a line a
+  person reads for each event, with its time, and each line of a step's
+  log after the job and step it is of, as `build step 0| compiling`; the
+  run's problems, and the command's, go to standard error as compilers
+  write them. `--format json` writes a JSON object a line, each with
+  `version`, now 1, which a later release can add members and kinds of
+  line to, but never changes the meaning of: one for the run's creation,
+  one for each event, one for each line of a log, setup logs too, its last
+  with `ended` or `cut`, and one for a run left running; and the command's
+  problems as RFC 9457 problem details. `--logs=false` shows no logs.
+- **Nothing secret.** Logs and a step's problems are shown as the worker
+  masked them, and an attempt's problems as the coordinator stored them,
+  masked where it ran is private; a private placement's member is never
+  shown, nor anything else only the run's secret record holds.
 
 ## Editors and web UIs
 

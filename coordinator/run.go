@@ -157,6 +157,7 @@ type Coordinator struct {
 	startTimeout time.Duration
 	pollInterval time.Duration
 	stopTimeout  time.Duration
+	followEvery  time.Duration
 
 	mu      sync.Mutex
 	serving bool
@@ -199,10 +200,14 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	if err != nil {
 		return nil, errors.Join(err, st.Close())
 	}
+	timing, err := openTiming()
+	if err != nil {
+		return nil, errors.Join(err, st.Close())
+	}
 	return &Coordinator{
 		opts: opts, log: log, store: st, sealer: sealer, plans: newPlanCache(planCacheCount, planCacheBytes), inserter: inserter,
-		timing: DefaultTiming(), retry: defaultStartRetry, supervision: defaultSupervision,
-		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second,
+		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
+		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery,
 		queues: map[string]bool{}, connections: map[string]connection{},
 	}, nil
 }
