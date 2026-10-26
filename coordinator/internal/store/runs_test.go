@@ -3,11 +3,22 @@ package store
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
+
+// testState is what a run's Start keeps as run state, for a test.
+func testState() *compile.StartState {
+	return &compile.StartState{
+		Run:            plan.RunValues{Format: 1, Inputs: plan.DataOf(map[string]any{"region": "us"}), Secrets: []string{"inputs.pw"}},
+		TimeoutSeconds: 60,
+	}
+}
 
 func TestRun(t *testing.T) {
 	s := open(t)
@@ -121,20 +132,52 @@ func TestRunIDs(t *testing.T) {
 func TestRunLifecycle(t *testing.T) {
 	s := open(t)
 	id := createRun(t, s)
-	inTx(t, s, func(tx *Tx) error { return tx.StartRun(id) })
+	warning := problems.UnknownKey.At("", problems.Position{}, "", problems.Params{"key": "x", "suggested": false, "suggestion": ""})
+	inTx(t, s, func(tx *Tx) error {
+		for i := 1; i <= 2; i++ {
+			if tries, err := tx.StartTried(id); err != nil || tries != i {
+				t.Errorf("StartTried = %d, %v; want %d", tries, err, i)
+			}
+		}
+		return tx.StartRun(id, testState(), problems.Diagnostics{warning})
+	})
 	inTx(t, s, func(tx *Tx) error {
 		r, err := tx.Run(id)
 		if err != nil {
 			return err
 		}
-		if r.State != RunRunning || r.StartedAt.IsZero() {
-			t.Errorf("a started run is %s, started at %v", r.State, r.StartedAt)
+		if r.State != RunRunning || r.StartedAt.IsZero() || r.StartTries != 2 {
+			t.Errorf("a started run is %s, started at %v, after %d tries", r.State, r.StartedAt, r.StartTries)
 		}
-		if err := tx.StartRun(id); !errors.Is(err, ErrState) {
+		want, err := compile.EncodeStartState(testState())
+		if err != nil {
+			return err
+		}
+		if got, err := compile.EncodeStartState(r.StartState); err != nil || string(got) != string(want) {
+			t.Errorf("the run's start state is %s (%v), want %s", got, err, want)
+		}
+		if len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != warning.Code || !reflect.DeepEqual(r.Diagnostics[0].Params["key"], "x") {
+			t.Errorf("the run's diagnostics are %v", r.Diagnostics)
+		}
+		if err := tx.StartRun(id, testState(), nil); !errors.Is(err, ErrState) {
 			t.Errorf("StartRun again = %v, want ErrState", err)
 		}
-		if err := tx.StartRun("9"); !errors.Is(err, ErrNotFound) {
+		if _, err := tx.StartTried(id); !errors.Is(err, ErrState) {
+			t.Errorf("StartTried of a started run = %v, want ErrState", err)
+		}
+		if err := tx.StartRun("9", testState(), nil); !errors.Is(err, ErrNotFound) {
 			t.Errorf("StartRun of no run = %v, want ErrNotFound", err)
+		}
+		if err := tx.StartRun(id, nil, nil); err == nil {
+			t.Error("StartRun without a start state succeeded")
+		}
+		// Diagnostics added go after those the run has.
+		failed := problems.RunNotStarted.At("", problems.Position{}, "", problems.Params{"run": id})
+		if err := tx.AddDiagnostics(id, problems.Diagnostics{failed}); err != nil {
+			return err
+		}
+		if r, err := tx.Run(id); err != nil || len(r.Diagnostics) != 2 || r.Diagnostics[1].Code != failed.Code {
+			t.Errorf("once added to, the run's diagnostics are %v (%v)", r.Diagnostics, err)
 		}
 		if err := tx.EndRun(id, plan.OutcomeSkipped, ""); err == nil {
 			t.Error("EndRun skipped succeeded")
@@ -260,4 +303,29 @@ func TestRecord(t *testing.T) {
 		t.Error("the record's data key changed")
 	}
 	check(2, "sealed 1 2")
+}
+
+// TestMalformedRun checks that a run's start state and diagnostics are
+// read only as the store writes them.
+func TestMalformedRun(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	for _, set := range []string{
+		`start_state = CAST('{"version":1,"run":{"format":1},"later":1}' AS BLOB)`,
+		`start_state = CAST('{"version":1}' AS BLOB)`,
+		`diagnostics = CAST('[{"type":"x","code":"c","later":1}]' AS BLOB)`,
+		`diagnostics = CAST('[{"type":"x"}]' AS BLOB)`,
+		`diagnostics = CAST('not JSON' AS BLOB)`,
+	} {
+		inTx(t, s, func(tx *Tx) error {
+			_, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET start_state = NULL, diagnostics = NULL, "+set)
+			return err
+		})
+		inTx(t, s, func(tx *Tx) error {
+			if _, err := tx.Run(id); !errors.Is(err, ErrMalformed) {
+				t.Errorf("Run with %s = %v, want ErrMalformed", set, err)
+			}
+			return nil
+		})
+	}
 }

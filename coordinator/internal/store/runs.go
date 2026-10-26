@@ -2,13 +2,16 @@ package store
 
 import (
 	"database/sql"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/parallelworks/hopper"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A RunState is where a run is in its life.
@@ -44,7 +47,10 @@ type Run struct {
 	// and RunDir the run's directory.
 	DefaultGroup string
 	RunDir       string
-	// WorkflowID is the run's hopper workflow.
+	// WorkflowID is the run's hopper workflow. hopper deletes a workflow's
+	// jobs some time after they finish (hopper.Config.CompletedRetention),
+	// so it names the workflow only while the run is underway: what the
+	// coordinator knows of a run is in its own tables.
 	WorkflowID hopper.JobID
 	// RecordGeneration is the generation of the run's secret record: 0
 	// before it has one, 1 once it is stored, and one more each time it is
@@ -56,6 +62,13 @@ type Run struct {
 	Reason    plan.Reason
 	StartedAt time.Time
 	EndedAt   time.Time
+	// StartState is what run state holds of what Start gave, once Start
+	// has kept its part, or nil, and StartTries how many times the
+	// coordinator tried to start the run and couldn't.
+	StartState *compile.StartState
+	StartTries int
+	// Diagnostics are the run's problems: Start's, and the coordinator's.
+	Diagnostics problems.Diagnostics
 }
 
 // A NewRun is a run to store.
@@ -131,7 +144,8 @@ WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_
 }
 
 const runColumns = `id, created_at, plan, plan_version, plan_digest, name, location, release,
-  default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at`
+  default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at,
+  start_state, start_tries, diagnostics`
 
 // Run returns the run with the ID id.
 func (tx *Tx) Run(id string) (*Run, error) {
@@ -146,10 +160,13 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		outcome, reason sql.NullString
 		started, ended  sql.NullInt64
 		state           string
+		startState      []byte
+		diags           []byte
 	)
 	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+runColumns+" FROM meridian_runs WHERE id = ?", n).Scan(
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
-		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended)
+		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
+		&startState, &r.StartTries, &diags)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -159,12 +176,87 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	r.ID, r.CreatedAt, r.State = runID(number), time.UnixMicro(created).UTC(), RunState(state)
 	r.Outcome, r.Reason = plan.Outcome(outcome.String), plan.Reason(reason.String)
 	r.StartedAt, r.EndedAt = timeOf(started), timeOf(ended)
+	if startState != nil {
+		if r.StartState, err = compile.DecodeStartState(startState); err != nil {
+			return nil, fmt.Errorf("%w: run %s's start state: %w", ErrMalformed, id, err)
+		}
+	}
+	if r.Diagnostics, err = decodeDiagnostics(diags); err != nil {
+		return nil, fmt.Errorf("%w: run %s's diagnostics: %w", ErrMalformed, id, err)
+	}
 	return &r, nil
 }
 
-// StartRun records that the run's Start has kept its part: the run is
-// running from now. A run that isn't in the state created is ErrState.
-func (tx *Tx) StartRun(id string) error {
+// decodeDiagnostics decodes a list of diagnostics as encodeDiagnostics
+// encodes it, refusing a member a diagnostic doesn't have: nil for none.
+func decodeDiagnostics(data []byte) (problems.Diagnostics, error) {
+	if data == nil {
+		return nil, nil
+	}
+	var diags problems.Diagnostics
+	if err := jsonv2.Unmarshal(data, &diags, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return nil, err
+	}
+	for i, d := range diags {
+		if d.Code == "" {
+			return nil, fmt.Errorf("diagnostic %d has no code", i)
+		}
+	}
+	return diags, nil
+}
+
+// encodeDiagnostics encodes a list of diagnostics, as JSON.
+func encodeDiagnostics(diags problems.Diagnostics) ([]byte, error) {
+	return jsonv2.Marshal(diags, jsonv2.Deterministic(true))
+}
+
+// AddDiagnostics adds diags to the run's problems, after those it has.
+func (tx *Tx) AddDiagnostics(id string, diags problems.Diagnostics) error {
+	if len(diags) == 0 {
+		return nil
+	}
+	r, err := tx.Run(id)
+	if err != nil {
+		return err
+	}
+	data, err := encodeDiagnostics(append(r.Diagnostics, diags...))
+	if err != nil {
+		return err
+	}
+	n, _ := runNumber(id)
+	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET diagnostics = ? WHERE id = ?", data, n)
+	return err
+}
+
+// StartTried records that the coordinator tried to start the run and
+// couldn't, as when a resolver couldn't answer, and returns how many times
+// it has. A run that isn't in the state created is ErrState.
+func (tx *Tx) StartTried(id string) (int, error) {
+	n, err := tx.runNumberOf(id)
+	if err != nil {
+		return 0, err
+	}
+	var tries int
+	err = tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_runs SET start_tries = start_tries + 1 WHERE id = ? AND state = ? RETURNING start_tries",
+		n, RunCreated).Scan(&tries)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: run %s isn't %s", ErrState, id, RunCreated)
+	}
+	return tries, err
+}
+
+// StartRun records that the run's Start has kept its part: what run state
+// holds of what it gave, state, and its problems, diags, which are
+// warnings. The run is running from now. A run that isn't in the state
+// created is ErrState.
+func (tx *Tx) StartRun(id string, state *compile.StartState, diags problems.Diagnostics) error {
+	if state == nil {
+		return errors.New("store: a run started without its start state")
+	}
+	data, err := compile.EncodeStartState(state)
+	if err != nil {
+		return err
+	}
 	n, err := tx.runNumberOf(id)
 	if err != nil {
 		return err
@@ -173,12 +265,15 @@ func (tx *Tx) StartRun(id string) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET state = ?, started_at = ? WHERE id = ? AND state = ?",
-		RunRunning, now, n, RunCreated)
+	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET state = ?, started_at = ?, start_state = ? WHERE id = ? AND state = ?",
+		RunRunning, now, data, n, RunCreated)
 	if err != nil {
 		return err
 	}
-	return oneRow(res, fmt.Errorf("%w: run %s isn't %s", ErrState, id, RunCreated))
+	if err := oneRow(res, fmt.Errorf("%w: run %s isn't %s", ErrState, id, RunCreated)); err != nil {
+		return err
+	}
+	return tx.AddDiagnostics(id, diags)
 }
 
 // EndRun records how the run ended, and deletes its secret record, which
