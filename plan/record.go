@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 )
 
 // A Record is a run's secret record: what a run needs that its plan and
@@ -60,74 +62,111 @@ type Record struct {
 // values of its private outputs, and of its steps' outputs that hold a
 // secret, which JobResult names but run state doesn't hold.
 type JobRecord struct {
-	// Outputs are the job's outputs that JobResult.Private names, by name.
+	// Outputs are the job's outputs that JobResult.Private or Secrets name,
+	// by name.
 	Outputs map[string]string `json:"outputs,omitempty"`
 	// Steps are the outputs of its steps that JobResult.SecretSteps names,
 	// by step id and name.
 	Steps map[string]map[string]string `json:"steps,omitempty"`
 }
 
-// Split splits r into what the run's secret record holds of it, the values
-// of the outputs it names as private and of the steps' outputs it names as
-// holding a secret, and what run state holds: the rest, with the names.
-// JoinJobResult puts them together again. Neither shares a mapping with r.
+// Split splits r into what the run's secret record holds of it and what run
+// state holds. The record holds the values of the outputs r names as
+// private or as secrets (Private and Secrets: either is private), and of
+// its steps' outputs it names as holding a secret (SecretSteps); run state
+// holds the rest, with the names. JoinJobResult puts them together again.
+// Neither shares a mapping or a list with r.
 func (r JobResult) Split() (record JobRecord, state JobResult) {
-	state = r
-	state.Outputs = maps.Clone(r.Outputs)
-	for _, name := range r.Private {
-		if v, ok := state.Outputs[name]; ok {
-			if record.Outputs == nil {
-				record.Outputs = map[string]string{}
-			}
-			record.Outputs[name] = v
-			delete(state.Outputs, name)
+	state = r.clone()
+	private := setOf(r.Private)
+	for _, name := range r.Secrets {
+		private[name] = true
+	}
+	for name, v := range jsonvalue.Sorted(r.Outputs) {
+		if !private[name] {
+			continue
 		}
+		if record.Outputs == nil {
+			record.Outputs = map[string]string{}
+		}
+		record.Outputs[name] = v
+		delete(state.Outputs, name)
 	}
 	if len(state.Outputs) == 0 {
 		state.Outputs = nil
 	}
-	state.Steps = nil
-	for id, outputs := range r.Steps {
-		secret := r.SecretSteps[id]
-		for name, v := range outputs {
-			to := &state.Steps
-			if slices.Contains(secret, name) {
-				to = &record.Steps
+	for id, outputs := range jsonvalue.Sorted(r.Steps) {
+		for _, name := range r.SecretSteps[id] {
+			v, ok := outputs[name]
+			if !ok {
+				continue
 			}
-			if *to == nil {
-				*to = map[string]map[string]string{}
+			if record.Steps == nil {
+				record.Steps = map[string]map[string]string{}
 			}
-			if (*to)[id] == nil {
-				(*to)[id] = map[string]string{}
+			if record.Steps[id] == nil {
+				record.Steps[id] = map[string]string{}
 			}
-			(*to)[id][name] = v
+			record.Steps[id][name] = v
+			delete(state.Steps[id], name)
 		}
+		if len(state.Steps[id]) == 0 {
+			delete(state.Steps, id)
+		}
+	}
+	if len(state.Steps) == 0 {
+		state.Steps = nil
 	}
 	return record, state
 }
 
 // JoinJobResult returns how a job ended from what Split split it into. It
-// shares no mapping with either.
+// shares no mapping or list with either.
 func JoinJobResult(record JobRecord, state JobResult) JobResult {
-	out := state
-	out.Outputs = maps.Clone(state.Outputs)
+	out := state.clone()
 	for name, v := range record.Outputs {
 		if out.Outputs == nil {
 			out.Outputs = map[string]string{}
 		}
 		out.Outputs[name] = v
 	}
-	out.Steps = nil
-	for _, steps := range []map[string]map[string]string{state.Steps, record.Steps} {
-		for id, outputs := range steps {
-			if out.Steps == nil {
-				out.Steps = map[string]map[string]string{}
-			}
-			if out.Steps[id] == nil {
-				out.Steps[id] = map[string]string{}
-			}
-			maps.Copy(out.Steps[id], outputs)
+	for id, outputs := range record.Steps {
+		if out.Steps == nil {
+			out.Steps = map[string]map[string]string{}
 		}
+		if out.Steps[id] == nil {
+			out.Steps[id] = map[string]string{}
+		}
+		maps.Copy(out.Steps[id], outputs)
+	}
+	return out
+}
+
+// clone returns a copy of r that shares no mapping or list with it.
+func (r JobResult) clone() JobResult {
+	out := r
+	out.Outputs = maps.Clone(r.Outputs)
+	out.Private, out.Secrets, out.Derived = slices.Clone(r.Private), slices.Clone(r.Secrets), slices.Clone(r.Derived)
+	out.Steps = nil
+	for id, outputs := range r.Steps {
+		if out.Steps == nil {
+			out.Steps = make(map[string]map[string]string, len(r.Steps))
+		}
+		out.Steps[id] = maps.Clone(outputs)
+	}
+	out.SecretSteps, out.DerivedSteps = cloneNames(r.SecretSteps), cloneNames(r.DerivedSteps)
+	return out
+}
+
+// cloneNames returns a copy of names, lists of names by key, that shares no
+// list with it.
+func cloneNames(names map[string][]string) map[string][]string {
+	if names == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(names))
+	for k, v := range names {
+		out[k] = slices.Clone(v)
 	}
 	return out
 }

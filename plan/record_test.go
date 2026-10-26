@@ -87,29 +87,42 @@ func TestDecodeRecordRefuses(t *testing.T) {
 	}
 }
 
-// Split keeps the values of a job's private outputs, and of its steps'
-// outputs that hold a secret, out of run state, and JoinJobResult puts
-// them back.
+// Split keeps the values of a job's private outputs, those Private or
+// Secrets names, and of its steps' outputs that hold a secret, out of run
+// state, and JoinJobResult puts them back. Neither shares a mapping or a
+// list with what it was given.
 func TestJobResultSplit(t *testing.T) {
 	res := plan.JobResult{
 		Outcome: plan.OutcomeSuccess,
-		Outputs: map[string]string{"dsn": "postgres://u:hunter2@db", "count": "3", "region": "east"},
+		Outputs: map[string]string{"dsn": "postgres://u:hunter2@db", "count": "3", "region": "east", "key": "k3y"},
 		Private: []string{"dsn", "region"},
-		Secrets: []string{"dsn"},
+		Secrets: []string{"dsn", "key"},
+		Derived: []string{"dsn"},
 		Steps: map[string]map[string]string{
 			"login": {"token": "t0k3n", "user": "alice"},
 			"count": {"n": "3"},
 		},
-		SecretSteps: map[string][]string{"login": {"token"}},
+		SecretSteps:  map[string][]string{"login": {"token"}},
+		DerivedSteps: map[string][]string{"login": {"token"}},
 	}
 	record, state := res.Split()
 	if want := (plan.JobRecord{
-		Outputs: map[string]string{"dsn": "postgres://u:hunter2@db", "region": "east"},
+		Outputs: map[string]string{"dsn": "postgres://u:hunter2@db", "region": "east", "key": "k3y"},
 		Steps:   map[string]map[string]string{"login": {"token": "t0k3n"}},
 	}); !reflect.DeepEqual(record, want) {
 		t.Errorf("record %+v, want %+v", record, want)
 	}
-	for _, s := range []string{"hunter2", "t0k3n", "east"} {
+	state.Private[0], state.Secrets[0], state.Derived[0] = "x", "x", "x"
+	state.SecretSteps["login"][0], state.DerivedSteps["login"][0] = "x", "x"
+	state.Steps["login"]["user"] = "x"
+	back := plan.JoinJobResult(record, state)
+	back.Steps["count"]["n"], back.Private[1] = "x", "x"
+	if res.Private[0] != "dsn" || res.Secrets[0] != "dsn" || res.Derived[0] != "dsn" || res.SecretSteps["login"][0] != "token" ||
+		res.DerivedSteps["login"][0] != "token" || res.Steps["login"]["user"] != "alice" || res.Steps["count"]["n"] != "3" {
+		t.Errorf("Split or JoinJobResult shares what it was given: %+v", res)
+	}
+	record, state = res.Split()
+	for _, s := range []string{"hunter2", "t0k3n", "east", "k3y"} {
 		if strings.Contains(canonicalJSON(t, state), s) {
 			t.Errorf("the state holds %s: %s", s, canonicalJSON(t, state))
 		}
