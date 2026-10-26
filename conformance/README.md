@@ -264,8 +264,9 @@ expect:
   Every other job skipped was skipped by its own `if:`.
 - `expect.cancelled` lists the JSON Pointers of the jobs that end cancelled
   without running: a job that hadn't started when the run was cancelled,
-  whose `if:` reads what the jobs it needs give, `env` or a status
-  function, but can't be true once the run is cancelled.
+  whose `if:` reads what the jobs it needs give, `env`, an input whose
+  value reads `env`, or a status function, but can't be true once the run
+  is cancelled, nor is the word `always`.
 - `expect.private-outputs` lists the JSON Pointers of the job outputs that
   are private: made from a variable, a password or a secret, or holding a
   secret, so kept only with the run's secrets. No other output is.

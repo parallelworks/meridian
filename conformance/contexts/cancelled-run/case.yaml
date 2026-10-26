@@ -5,10 +5,13 @@ description: >-
   needs finish, ends at once, skipped because its needs failed, a matrix
   job and a need on any instance among them. One whose if: reads what its
   needs give, env or a status function, but can't be true once the run is
-  cancelled, waits for its needs and ends cancelled. One whose if: can be
-  true once the run is cancelled is evaluated, and cancelled() is false
-  while none of its needs was cancelled, so on-cancel is skipped by its own
-  if:.
+  cancelled, waits for its needs and ends cancelled, an input whose value
+  reads env among them. One whose if: can be true once the run is
+  cancelled is evaluated, and cancelled() is false while none of its needs
+  was cancelled, so on-cancel is skipped by its own if:. One whose if:'s
+  value is the word always runs on, as if the run weren't being
+  cancelled, whether an input gives the word, before the needs finish, or
+  an output of one, after.
 source: ACTIVATE's executor
 jobs:
   test:
@@ -43,6 +46,18 @@ jobs:
     cancelled: true
     needs:
       build: {result: success, outputs: {tag: v1}}
+  when:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
+  from-output:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1, when: always}}
+  from-env:
+    cancelled: true
+    needs:
+      build: {result: success, outputs: {tag: v1}}
 expect:
   skipped:
     - /jobs/test
@@ -59,5 +74,8 @@ expect:
     - /jobs/publish
     - /jobs/announce
     - /jobs/report
+    - /jobs/from-env
   values:
     /jobs/build/steps/0/run: echo tag=v1 >> $OUTPUTS
+    /jobs/when/steps/0/run: echo when false
+    /jobs/from-output/steps/0/run: echo from-output false

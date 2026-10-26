@@ -220,8 +220,14 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	if attempt == 0 {
 		attempt = 1
 	}
-	// The run's cancellation doesn't reach a job whose if: outlives it.
-	cancelled := state.Cancelled && job.CancelPath() != plan.CancelPathOutlive
+	// The run's cancellation doesn't reach a job that runs on through it,
+	// as the coordinator tells: one on CancelPathOutlive, or whose if:'s
+	// value was the word always.
+	path, err := r.p.CancelPath(job.Name, r.run, in.Instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := state.Cancelled && path != plan.CancelPathOutlive && !rj.IfAlways
 	js := plan.JobState{
 		Run: job.Reads(r.run), Needs: job.ReadsNeeds(in.Needs), Cancelled: cancelled, Try: state.Try, Env: state.Env,
 		Job: plan.JobContext{Name: job.Name, Key: rj.Key, Attempt: attempt, Group: state.Group, Member: state.Member},

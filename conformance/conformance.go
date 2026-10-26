@@ -129,8 +129,9 @@ type Expect struct {
 	NeedsFailed []string `yaml:"needs-failed,omitempty"`
 	// Cancelled are the JSON Pointers of the jobs that end cancelled
 	// without running, in the contexts area, as a run being cancelled ends
-	// a job that hadn't started whose if: reads what its needs give, env
-	// or a status function, but can't be true once the run is cancelled.
+	// a job that hadn't started whose if: reads what its needs give, env,
+	// an input whose value reads env, or a status function, but can't be
+	// true once the run is cancelled, nor is the word always.
 	Cancelled []string `yaml:"cancelled,omitempty"`
 }
 

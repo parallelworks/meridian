@@ -1,3 +1,12 @@
+on:
+  execute:
+    inputs:
+      when:
+        type: string
+        default: always
+      channel:
+        type: string
+        default: ${{ env.CHANNEL }}
 env:
   CHANNEL: builds
 jobs:
@@ -52,3 +61,18 @@ jobs:
     if: cancelled()
     steps:
       - run: echo cleaning up
+  when:
+    needs: [build]
+    if: ${{ inputs.when }}
+    steps:
+      - run: echo when ${{ cancelled() }}
+  from-output:
+    needs: [build]
+    if: ${{ needs.build.outputs.when }}
+    steps:
+      - run: echo from-output ${{ cancelled() }}
+  from-env:
+    needs: [build]
+    if: ${{ inputs.channel != '' }}
+    steps:
+      - run: echo from-env
