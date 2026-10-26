@@ -1362,7 +1362,8 @@
     "why": "Un usuario que puede cambiar un directorio en el camino hacia uno de los de Meridian podría sustituir lo que hay en él por algo suyo después de que Meridian lo comprobara. Como hace OpenSSH, Meridian acepta un directorio del camino solo si es tuyo o de root y solo tú o root podéis cambiarlo, o si su bit sticky impide a otros usuarios quitar lo que no es suyo, como el de /tmp, y lo que le sigue es tuyo.",
     "fix": [
       "Elige un directorio cuyos padres solo tú o root podáis cambiar, como uno dentro de tu directorio personal, o uno que cree mktemp -d -p /var/tmp.",
-      "O pide al propietario del directorio que ejecute chmod go-w sobre él."
+      "O pide al propietario del directorio que ejecute chmod go-w sobre él.",
+      "Si es el directorio en el que meridian run crea los directorios de las ejecuciones, bajo el directorio temporal del sistema, que otro usuario puede crear antes, asigna a TMPDIR un directorio tuyo, o indica el directorio de la ejecución con --run-dir."
     ]
   },
   "network_filesystem": {

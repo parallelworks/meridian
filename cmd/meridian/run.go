@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
@@ -89,10 +92,18 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		return c.fail(err)
 	}
 	// The run is stored, and its directory is made new, only now: its
-	// number is the run's alone.
+	// number is the run's alone. A run whose directory can't be made ends
+	// failed, before anything starts in what is at its path.
 	dir := dirOf(storeID, id)
 	if err := local.MakeRunDir(dir); err != nil {
-		return c.fail(err)
+		p, ok := errors.AsType[*problem.Problem](err)
+		if !ok {
+			p = problems.RunDirNotMade.Problem(problems.Params{"path": dir, "reason": err.Error()})
+		}
+		if ferr := coord.FailRun(context.WithoutCancel(ctx), id, p); ferr != nil {
+			return c.fail(errors.Join(p, ferr))
+		}
+		return c.fail(p)
 	}
 	fmt.Fprintf(c.stdout, "run %s started (run directory %s)\n", id, dir)
 	return supervise(ctx, c, coord, w, id, interrupts)

@@ -17,6 +17,7 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -105,6 +106,42 @@ func TestRunNamedDir(t *testing.T) {
 	}
 	if info, err := os.Stat(named); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("the named run directory is %v, %v", info, err)
+	}
+}
+
+// TestRunDirNotMade checks that a run whose directory can't be made once
+// it is stored, as when something is at its path, ends failed with the
+// problem, so that nothing starts in what is there, and exits 2.
+func TestRunDirNotMade(t *testing.T) {
+	env := runEnv(t)
+	dirs := local.Dirs{State: env[local.EnvStateDir]}
+	db, err := dirs.Database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dirs.State)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coord.Close() })
+	// Something is where the store's first run's directory will be.
+	parent := local.RunsDir(env["TMPDIR"])
+	if err := local.EnsureRunsDir(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(parent, local.RunDirName(coord.StoreID(), "1")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r := runTest(t, env, nil, writeFile(t, "w.yaml", helloWorkflow))
+	if r.code != exitError || !strings.Contains(r.stderr, "(run_dir_exists)") || r.stdout != "" {
+		t.Errorf("meridian run with its directory there already = %+v", r)
+	}
+	s, err := coord.Status(t.Context(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != coordinator.RunEnded || s.Outcome != plan.OutcomeFailure || len(s.Diagnostics) != 1 || s.Diagnostics[0].Code != problems.RunDirExists.Code() {
+		t.Errorf("the run whose directory couldn't be made is %+v", s)
 	}
 }
 
@@ -237,6 +274,9 @@ func TestHoldSocket(t *testing.T) {
 	ctx1, stop1 := context.WithCancel(t.Context())
 	s1 := holdSocket(ctx1, first, path, workerAPIUnavailable())
 	waitServed(t, path)
+	if info, err := os.Lstat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("the socket is %v, %v, not only its user's", info, err)
+	}
 	ctx2, stop2 := context.WithCancel(t.Context())
 	defer stop2()
 	s2 := holdSocket(ctx2, second, path, workerAPIUnavailable())

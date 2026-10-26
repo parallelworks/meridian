@@ -148,8 +148,8 @@ const DatabaseFile = "meridian.db"
 // filesystem, which is where home directories on clusters often are, so
 // Database refuses a state directory on one, and says how to choose a
 // local one: as the store's SQLite driver does, it takes every FUSE
-// filesystem, and every folder a virtual machine shares with its host, for
-// one.
+// filesystem, virtiofs and fuse-overlayfs among them, and every folder a
+// virtual machine shares with its host, for one.
 func (d Dirs) Database() (string, error) {
 	if err := d.EnsureState(); err != nil {
 		return "", err

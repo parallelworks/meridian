@@ -1170,7 +1170,8 @@
     "why": "A user who can change a directory on the way to one of Meridian's could replace what is in it with their own after Meridian checked it. As OpenSSH does, Meridian accepts a directory on the way only if it belongs to you or to root and only you or root can change it, or if its sticky bit stops other users removing what isn't theirs, as /tmp's does, and what follows it is yours.",
     "fix": [
       "Choose a directory whose parents only you or root can change, such as one in your home directory, or one that mktemp -d -p /var/tmp makes.",
-      "Or have the directory's owner run chmod go-w on it."
+      "Or have the directory's owner run chmod go-w on it.",
+      "If it is the directory meridian run makes runs' directories in, under the system's temporary directory, which another user can make first, set TMPDIR to a directory of your own, or name the run's directory with --run-dir."
     ]
   },
   "network_filesystem": {

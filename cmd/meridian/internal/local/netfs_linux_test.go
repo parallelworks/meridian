@@ -15,11 +15,11 @@ func TestNetworkFSLocal(t *testing.T) {
 }
 
 // TestNetworkMagic checks that the filesystems Database refuses are those
-// the store's SQLite driver refuses: every FUSE one among them, and the
-// folders virtual machines share.
+// the store's SQLite driver refuses: every FUSE one among them, virtiofs
+// and fuse-overlayfs too, and the folders virtual machines share.
 func TestNetworkMagic(t *testing.T) {
 	for magic, want := range map[int64]string{
-		0x6969: "nfs", 0x65735546: "fuse", 0x6a656a63: "virtiofs", 0x786f4256: "vboxsf",
+		0x6969: "nfs", 0x65735546: "fuse", 0x786f4256: "vboxsf",
 		0x7c7c6673: "prl_fs", 0xbacbacbc: "vmhgfs", 0x0bd00bd0: "lustre",
 	} {
 		if got := networkMagic[magic]; got != want {

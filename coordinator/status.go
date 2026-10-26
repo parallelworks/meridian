@@ -3,6 +3,9 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"fmt"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
@@ -62,6 +65,38 @@ func (c *Coordinator) Status(ctx context.Context, id string) (*RunStatus, error)
 		return nil
 	})
 	return s, err
+}
+
+// ErrRunStarted is what FailRun returns for a run that has started, or
+// ended.
+var ErrRunStarted = errors.New("coordinator: the run has started")
+
+// FailRun ends the run id, which hasn't started, as failed, with p, a
+// problem of one of the problems package's kinds, as for a run whose
+// directory couldn't be made once it was stored: its Start, when a
+// coordinator works it, leaves it as it is, and so does its finisher. A
+// run that has started, or ended, is ErrRunStarted, and one the store
+// doesn't have ErrRunNotFound.
+func (c *Coordinator) FailRun(ctx context.Context, id string, p *problem.Problem) error {
+	k, ok := problems.Lookup(p.Code)
+	if !ok {
+		return fmt.Errorf("coordinator: %q isn't a problem's kind", p.Code)
+	}
+	return c.store.Tx(ctx, func(tx *store.Tx) error {
+		r, err := tx.Run(id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return ErrRunNotFound
+		case err != nil:
+			return err
+		case r.State != store.RunCreated:
+			return ErrRunStarted
+		}
+		if err := tx.AddDiagnostics(id, problems.Diagnostics{k.At("", problems.Position{}, "", p.Params)}); err != nil {
+			return err
+		}
+		return tx.EndRun(id, plan.OutcomeFailure, "")
+	})
 }
 
 // An EndpointHold is an endpoint that workers reach the coordinators of

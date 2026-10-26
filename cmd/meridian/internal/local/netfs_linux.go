@@ -31,12 +31,14 @@ var networkMagic = map[int64]string{
 	// Cluster filesystems, on disks that other machines write to.
 	0x7461636f: "ocfs2",
 	0x01161970: "gfs2",
-	// The folders virtual machines share with their hosts.
-	0x6a656a63: "virtiofs",
+	// The folders virtual machines share with their hosts. virtiofs is
+	// FUSE's, below.
 	0x786f4256: "vboxsf",
 	0x7c7c6673: "prl_fs",
 	0xbacbacbc: "vmhgfs",
-	// FUSE, whether its files are on this machine's disks or not.
+	// FUSE, whether its files are on this machine's disks or not:
+	// virtiofs, and fuse-overlayfs, the usual root of a rootless Podman
+	// container, among them.
 	0x65735546: "fuse",
 }
 

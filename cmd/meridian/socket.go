@@ -75,6 +75,9 @@ func serveSocket(ctx context.Context, coord *coordinator.Coordinator, path strin
 	if err != nil {
 		return err
 	}
+	// The worker API's server takes the listener in this placeholder's
+	// place through its own Serve, which checks each connection's peer
+	// before it reads a request: never as a bare handler, which doesn't.
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
@@ -104,6 +107,13 @@ func listenSocket(ctx context.Context, path string) (net.Listener, error) {
 	}
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "unix", path)
 	if err != nil {
+		return nil, unusable(err)
+	}
+	// Only the user's processes connect to it, as the state directory,
+	// which only they can open, already sees to: this is in case it
+	// doesn't.
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = ln.Close()
 		return nil, unusable(err)
 	}
 	return ln, nil

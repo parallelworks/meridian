@@ -3228,13 +3228,14 @@ workers on the machine connect to live in Meridian's state directory, which
 only its user can read. SQLite can't lock reliably on a network filesystem,
 which is where home directories on clusters often are, so Meridian refuses
 to open a database there, as on any FUSE filesystem and in any folder a
-virtual machine shares with its host, whose locks it can't tell hold, and
-says how to choose a local path: one that only the user can change, and that
-lasts, since it holds the database and the key, such as one that
-`mktemp -d -p /var/tmp` makes, but not one in `/tmp`, which a reboot can
-empty. On Linux the directories are the XDG base
-directories' `meridian`, as `~/.config/meridian` and
-`~/.local/state/meridian`; on macOS both are
+virtual machine shares with its host, whose locks it can't tell hold, as
+the store's SQLite driver does: fuse-overlayfs, the usual root of a
+rootless Podman container, among them. It says how to choose a local
+path: one that only the user can change, and that lasts, since it holds
+the database and the key, such as one that `mktemp -d -p /var/tmp` makes,
+but not one in `/tmp`, which a reboot can empty. On Linux the
+directories are the XDG base directories' `meridian`, as
+`~/.config/meridian` and `~/.local/state/meridian`; on macOS both are
 `~/Library/Application Support/Meridian`. `MERIDIAN_CONFIG_DIR`,
 `MERIDIAN_STATE_DIR` and `MERIDIAN_CACHE_DIR` choose others, and the cache
 directory holds copies of the repositories that `uses:` names. As OpenSSH

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // TestStatus checks a run's status through its life: created, then ended
@@ -37,6 +38,40 @@ func TestStatus(t *testing.T) {
 		if _, err := c.Status(t.Context(), missing); !errors.Is(err, ErrRunNotFound) {
 			t.Errorf("Status(%q) = %v, want ErrRunNotFound", missing, err)
 		}
+	}
+}
+
+// TestFailRun checks that a run that hasn't started can be ended failed,
+// with a problem, as one whose directory couldn't be made is, and that no
+// other can.
+func TestFailRun(t *testing.T) {
+	c := open(t, Options{Variables: regionVars})
+	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
+	p := problems.RunDirExists.Problem(problems.Params{"path": "/runs/" + id})
+	if err := c.FailRun(t.Context(), id, p); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Status(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != RunEnded || s.Outcome != plan.OutcomeFailure || len(s.Diagnostics) != 1 || s.Diagnostics[0].Code != p.Code {
+		t.Errorf("a run failed is %+v", s)
+	}
+	if rec := storedRecord(t, c, id); rec != nil {
+		t.Error("a run failed keeps its secret record")
+	}
+	if err := c.FailRun(t.Context(), id, p); !errors.Is(err, ErrRunStarted) {
+		t.Errorf("FailRun of a run that has ended = %v", err)
+	}
+	if err := c.FailRun(t.Context(), "9", p); !errors.Is(err, ErrRunNotFound) {
+		t.Errorf("FailRun of a run the store hasn't = %v", err)
+	}
+	// Its Start and finisher, worked, leave it as it is.
+	serve(t, c)
+	waitEnded(t, c, id)
+	if s, err = c.Status(t.Context(), id); err != nil || s.Outcome != plan.OutcomeFailure || len(s.Diagnostics) != 1 {
+		t.Errorf("a run failed, then served, is %+v, %v", s, err)
 	}
 }
 
