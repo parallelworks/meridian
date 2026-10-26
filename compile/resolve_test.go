@@ -486,8 +486,8 @@ func TestCreatePinsWorkflows(t *testing.T) {
 			t.Errorf("%+v: pinned %+v", given, got)
 		}
 	}
-	if _, _, err := compile.Create(t.Context(), "workflow.yaml", uses, nil, compile.Options{Sources: pinnedSources{nil}}); err == nil {
-		t.Error("a resolver that gave nothing")
+	if _, _, err := compile.Create(t.Context(), "workflow.yaml", uses, nil, compile.Options{Sources: pinnedSources{nil}}); err == nil || !strings.Contains(err.Error(), "neither a workflow nor an error") {
+		t.Errorf("a resolver that gave nothing: %v", err)
 	}
 	// An empty $yaml means workflow.yaml, as ACTIVATE reads it. ACTIVATE
 	// reads one that isn't text as if it weren't there, where the schema

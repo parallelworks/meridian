@@ -162,8 +162,8 @@ a: {type: string, default: '${{ vars.A }}', hidden: '${{ vars.A == "" }}'}`)
 			again := createRun(t, src, map[string]any{"l": []any{map[string]any{"pass": "p"}}}, vars)
 			in := compile.StartInput{Variables: vars, Record: again.Record, Inputs: passThrough{}}
 			change(again.Plan, &in)
-			if res, diags, err := compile.Start(t.Context(), again.Plan, in); err == nil {
-				t.Errorf("no error: %v, %v", res, diags)
+			if res, diags, err := compile.Start(t.Context(), again.Plan, in); !errors.Is(err, compile.ErrMismatch) {
+				t.Errorf("%v, %v, %v, want ErrMismatch", res, diags, err)
 			}
 		})
 	}

@@ -31,8 +31,9 @@ const (
 	// job's if: that doesn't read matrix.
 	PhaseStrategy
 	// PhaseReady is the rest of Ready (Plan.Ready): matrix. A job's if:,
-	// runs-on:, resources:, retry:, timeout:, working-directory: and ssh:
-	// are evaluated here.
+	// runs-on:, resources:, retry:, timeout: and ssh: are evaluated here.
+	// Its working-directory: reads only what is known here too, but Step
+	// evaluates it, where the run's directory is known.
 	PhaseReady
 	// PhaseJobEnv is in Step, before the job's steps run: job. The job's
 	// env: is evaluated here, over the workflow's.

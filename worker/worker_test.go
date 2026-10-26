@@ -469,6 +469,42 @@ func TestCleanupFails(t *testing.T) {
 	}
 }
 
+// TestCleanupNotStarted checks that a cleanup: that can't run fails its
+// job, with what kept it from running and no exit code, as a step that
+// can't run does: one whose expression fails, one of a step whose ssh:
+// names another host, and one whose working directory can't be made.
+func TestCleanupNotStarted(t *testing.T) {
+	t.Parallel()
+	failing := command("true")
+	failing.Cleanup = cond("fromJSON('{')")
+	elsewhere := command("true")
+	elsewhere.If = cond("always()")
+	elsewhere.SSH = plan.Literal(map[string]any{"remoteHost": "elsewhere"})
+	elsewhere.Cleanup = plan.Literal("true")
+	noDir := command("true")
+	noDir.If = cond("always()")
+	noDir.WorkingDirectory = plan.Literal("/dev/null/x")
+	noDir.Cleanup = plan.Literal("true")
+	f := newFakeCoordinator(t, newJob(failing, elsewhere, noDir))
+	if err := f.runWorker(t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success 0",
+		"finished 1.0 failure -1",
+		"finished 2.0 failure -1",
+		"cleanup finished 2.0 failure -1",
+		"cleanup finished 1.0 failure -1",
+		"cleanup finished 0.0 failure -1",
+	)
+	checkEnd(t, f, plan.OutcomeFailure, "")
+	for step, want := range []string{"from_json_invalid", "step_ssh_not_supported", "step_not_started"} {
+		if got := codes(f.finishedEvent(step, 0, true).Diagnostics); !slices.Equal(got, []string{want}) {
+			t.Errorf("step %d's cleanup's diagnostics are %v, want %s", step, got, want)
+		}
+	}
+}
+
 // TestSecretsMasked checks that the run's secrets, and the values the job
 // and its steps made from them, are masked in logs and events before they
 // leave the worker, and that the job's outputs keep their values, as

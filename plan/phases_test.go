@@ -701,8 +701,24 @@ func TestExpand(t *testing.T) {
 		t.Errorf("from an input: %+v, %v", x, err)
 	}
 	_, err = plan.Expand(ctx, strategy(map[string]any{"n": "${{ vars.text }}"}), scope, plan.Limits{})
-	if xe, ok := errors.AsType[*plan.ExpandError](err); !ok || xe.Params["value"] != problems.Masked || xe.Params["key"] != "n" {
+	if xe, ok := errors.AsType[*plan.ExpandError](err); !ok || xe.Kind != problems.MatrixNotList || xe.Params["value"] != problems.Masked || xe.Params["key"] != "n" {
 		t.Errorf("a variable's text: %v", err)
+	}
+	// An include or exclude that isn't a list of mappings, as an
+	// expression can give, as format 1 dropped silently.
+	for name, tc := range map[string]struct {
+		matrix any
+		kind   *problems.Kind
+		key    string
+	}{
+		"an include that isn't a list":  {map[string]any{"n": []any{1}, "include": "${{ fromJSON('3') }}"}, problems.MatrixNotList, "include"},
+		"an exclude entry that is text": {map[string]any{"n": []any{1}, "exclude": "${{ fromJSON('[\"x\"]') }}"}, problems.MatrixEntryNotMapping, "exclude"},
+		"an include entry that is null": {map[string]any{"n": []any{1}, "include": []any{nil}}, problems.MatrixEntryNotMapping, "include"},
+	} {
+		_, err := plan.Expand(ctx, strategy(tc.matrix), scope, plan.Limits{})
+		if xe, ok := errors.AsType[*plan.ExpandError](err); !ok || xe.Kind != tc.kind || xe.Params["key"] != tc.key {
+			t.Errorf("%s: %v, want %s of %s", name, err, tc.kind.Code(), tc.key)
+		}
 	}
 	_, err = plan.Expand(ctx, strategy(map[string]any{"n": "${{ fromJSON(vars.text) }}"}), scope, plan.Limits{})
 	if ee, ok := errors.AsType[*expr.EvalError](err); !ok || ee.Params["text"] != problems.Masked {

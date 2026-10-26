@@ -629,8 +629,8 @@ type ReadyJobRetry struct {
 // otherwise it expands the matrix with Expand, and gives the Expansion. For
 // an instance, or a job without a strategy:, it evaluates the job's if:,
 // and gives Skipped if it is false; otherwise it gives the job, with its
-// runs-on:, resources:, retry:, timeout:, working-directory: and ssh:
-// evaluated. An instance's if: that doesn't read matrix gives what it gave
+// runs-on:, resources:, retry:, timeout: and ssh: evaluated, and its
+// working-directory: as the plan holds it, which Step evaluates. An instance's if: that doesn't read matrix gives what it gave
 // before the matrix was expanded, unless the run has been cancelled since,
 // so an instance of a matrix that Start expanded is skipped as its job
 // would have been. A job's if: may read matrix in format 1, which GitHub
@@ -650,9 +650,9 @@ type ReadyJobRetry struct {
 // password: an expression that fails, or a value that doesn't fit its key,
 // such as resources: memory that isn't a quantity (resources_invalid), a
 // timeout: or retry interval: that isn't a duration (duration_invalid), a
-// retry max-retries: that isn't a number (count_invalid), a runs-on: that
-// names no place (runs_on_invalid), or a working-directory: that isn't
-// text (wrong_type). An error among them fails the job, and there is no
+// retry max-retries: that isn't a number (count_invalid), or a runs-on:
+// that names no place (runs_on_invalid). An error among them fails the
+// job, and there is no
 // result. It returns an error only when ctx is done before it finishes,
 // and then ctx.Err().
 //

@@ -332,6 +332,22 @@ func TestSourcesNotFound(t *testing.T) {
 	}
 }
 
+// A workflow file larger than Sources reads is source_too_large, which
+// names the limit, and isn't read: it isn't ErrNotFound, as the file is
+// there.
+func TestSourcesTooLarge(t *testing.T) {
+	origins, s := newOrigins(t)
+	o := newOrigin(t, origins, "github.com", "acme/flows")
+	o.commit(map[string]string{"workflow.yaml": "# " + strings.Repeat("x", maxSourceSize) + "\n"})
+	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"})
+	if errors.Is(err, compile.ErrNotFound) {
+		t.Errorf("Resolve: %v, which names no workflow", err)
+	}
+	if p := kindtest.Want(t, err, problems.SourceTooLarge); p.Params["limit"] != maxSourceSize {
+		t.Errorf("Resolve: %v, with params %v, want the limit", err, p.Params)
+	}
+}
+
 func TestParseRef(t *testing.T) {
 	for ref, want := range map[plan.SourceRef]sourceRef{
 		{Uses: "github/acme/flows"}:                           {kind: "github", host: "github.com", repo: "acme/flows", path: "workflow.yaml"},
