@@ -17,6 +17,7 @@ import (
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
+	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // TestDirReplaced checks that once a step removes the worker's directory
@@ -26,23 +27,23 @@ import (
 func TestDirReplaced(t *testing.T) {
 	t.Parallel()
 	other := t.TempDir()
-	f := newFakeCoordinator(t, newJob(
+	f := workerapitest.NewFake(t, newJob(
 		command(`d="$(dirname "$OUTPUTS")"; rm -rf "$d"; ln -s "$OTHER" "$d"; echo "$OUTPUTS"`),
 		command(`ls -A "$OTHER"; echo "$OUTPUTS"; echo a=1 >> "$OUTPUTS"`),
 	))
-	if err := f.runWorker(t.Context(), Config{Environ: []string{"OTHER=" + other}}); err != nil {
+	if err := runWorker(t, f, t.Context(), Config{Environ: []string{"OTHER=" + other}}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0")
-	before, _ := f.log(logKey{workerapi.LogStep, 0, 0})
-	after, _ := f.log(logKey{workerapi.LogStep, 1, 0})
+	before, _ := logOf(f, logKey{workerapi.LogStep, 0, 0})
+	after, _ := logOf(f, logKey{workerapi.LogStep, 1, 0})
 	if entries, _ := os.ReadDir(other); len(entries) != 0 || strings.Count(after, "\n") != 1 {
 		t.Errorf("the worker wrote %d files in the directory the link names: %q", len(entries), after)
 	}
 	if filepath.Dir(after) == filepath.Dir(before) {
 		t.Errorf("the second step's $OUTPUTS is in the old directory: %q, then %q", before, after)
 	}
-	if got := f.finishedEvent(1, 0, false).Outputs; got["a"] != "1" {
+	if got := finishedEvent(t, f, 1, 0, false).Outputs; got["a"] != "1" {
 		t.Errorf("the second step's outputs are %v", got)
 	}
 }
@@ -106,18 +107,18 @@ func TestOutputsRemoved(t *testing.T) {
 	for _, s := range []*plan.Step{&remade, &after} {
 		s.If = cond("always()")
 	}
-	f := newFakeCoordinator(t, newJob(removed, remade, after))
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, newJob(removed, remade, after))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 success 0", "started 2.0", "finished 2.0 success 0")
 	for step := range 2 {
-		e := f.finishedEvent(step, 0, false)
+		e := finishedEvent(t, f, step, 0, false)
 		if !slices.Equal(codes(e.Diagnostics), []string{"outputs_removed"}) || len(e.Outputs) != 0 {
 			t.Errorf("step %d's outputs are %v, and its diagnostics %v", step, e.Outputs, codes(e.Diagnostics))
 		}
 	}
-	if e := f.finishedEvent(2, 0, false); e.Outputs["b"] != "2" || len(e.Diagnostics) != 0 {
+	if e := finishedEvent(t, f, 2, 0, false); e.Outputs["b"] != "2" || len(e.Diagnostics) != 0 {
 		t.Errorf("the step after has the outputs %v, and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
 	}
 	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Result.Outputs["token"] != "" {
@@ -131,11 +132,11 @@ func TestOutputsRemoved(t *testing.T) {
 func TestGlobLeavesDir(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	f := newFakeCoordinator(t, newJob(command(`rm -rf "$TMPDIR"/*; echo a=1 >> "$OUTPUTS"`)))
-	if err := f.runWorker(t.Context(), Config{Dir: tmp, Environ: []string{"TMPDIR=" + tmp}}); err != nil {
+	f := workerapitest.NewFake(t, newJob(command(`rm -rf "$TMPDIR"/*; echo a=1 >> "$OUTPUTS"`)))
+	if err := runWorker(t, f, t.Context(), Config{Dir: tmp, Environ: []string{"TMPDIR=" + tmp}}); err != nil {
 		t.Fatal(err)
 	}
-	if e := f.finishedEvent(0, 0, false); e.Outputs["a"] != "1" || len(e.Diagnostics) != 0 {
+	if e := finishedEvent(t, f, 0, 0, false); e.Outputs["a"] != "1" || len(e.Diagnostics) != 0 {
 		t.Errorf("the step's outputs are %v, and its diagnostics %v", e.Outputs, codes(e.Diagnostics))
 	}
 }

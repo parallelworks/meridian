@@ -11,6 +11,7 @@ import (
 
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
+	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // newTestSpool returns a spool, with a limit, in a private directory of
@@ -146,18 +147,18 @@ func TestSpoolLoseRace(t *testing.T) {
 func TestCompactionLostLog(t *testing.T) {
 	t.Parallel()
 	pad := strings.Repeat("x", 200)
-	f := newFakeCoordinator(t, newJob(command(`for i in $(seq 1 400); do echo "line $i `+pad+`"; sleep 0.003; done`)))
+	f := workerapitest.NewFake(t, newJob(command(`for i in $(seq 1 400); do echo "line $i `+pad+`"; sleep 0.003; done`)))
 	var uploads atomic.Int32
-	f.fault = func(r *http.Request) fault {
+	f.Fault = func(r *http.Request) workerapitest.Fault {
 		if r.URL.Path == workerapi.PathLogs && r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
 			time.Sleep(10 * time.Millisecond) //nolint:forbidigo // a coordinator some way off, so that the step prints faster than it stores
 			if uploads.Add(1) == 30 {
-				return forget
+				return workerapitest.Forget
 			}
 		}
-		return answer
+		return workerapitest.Answer
 	}
-	err := f.runWorker(t.Context(), Config{})
+	err := runWorker(t, f, t.Context(), Config{})
 	if err != nil {
 		// Lost bytes from before the file was compacted can't be sent
 		// again: the attempt ends, rather than send a log with a hole.
@@ -166,7 +167,7 @@ func TestCompactionLostLog(t *testing.T) {
 		}
 		return
 	}
-	got, _ := f.log(logKey{workerapi.LogStep, 0, 0})
+	got, _ := logOf(f, logKey{workerapi.LogStep, 0, 0})
 	for i, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
 		if want := fmt.Sprintf("line %d %s", i+1, pad); line != want {
 			t.Fatalf("line %d of the log is %.20q…", i+1, line)

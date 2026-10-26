@@ -18,6 +18,7 @@ import (
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
+	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // TestCancelBetweenTries checks that a cancellation while a step waits to
@@ -26,13 +27,13 @@ func TestCancelBetweenTries(t *testing.T) {
 	t.Parallel()
 	step := command("exit 1")
 	step.Retry = &plan.StepRetry{MaxRetries: number(3), Interval: number(30)}
-	f := newFakeCoordinator(t, newJob(step))
-	f.onEvent = func(e workerapi.Event) {
+	f := workerapitest.NewFake(t, newJob(step))
+	f.OnEvent = func(e workerapi.Event) {
 		if e.Finished {
-			f.setControlLocked(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 1})
+			f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 1})
 		}
 	}
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(t, f, "started 0.0", "finished 0.0 failure 1", "finished 0.1 cancelled -1")
@@ -45,26 +46,26 @@ func TestCancelBetweenTries(t *testing.T) {
 func TestFenceShortensGrace(t *testing.T) {
 	t.Parallel()
 	const lease = 2 * time.Second
-	f := newFakeCoordinator(t, newJob(command(`trap "" TERM; echo started; while :; do date +%s%N > "$PW_JOB_DIR/alive"; sleep 0.1; done`)))
-	f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = true, int64(lease/time.Second), 1
+	f := workerapitest.NewFake(t, newJob(command(`trap "" TERM; echo started; while :; do date +%s%N > "$PW_JOB_DIR/alive"; sleep 0.1; done`)))
+	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, int64(lease/time.Second), 1
 	var cutOff atomic.Int64
 	var once sync.Once
-	f.fault = func(r *http.Request) fault {
+	f.Fault = func(r *http.Request) workerapitest.Fault {
 		if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
 			once.Do(func() {
-				f.setControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 60})
+				f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 60})
 				cutOff.Store(time.Now().Add(500 * time.Millisecond).UnixNano())
 			})
 		}
 		if c := cutOff.Load(); c != 0 && time.Now().UnixNano() > c && r.URL.Path == workerapi.PathHeartbeat {
-			return unavailable
+			return workerapitest.Unavailable
 		}
-		return answer
+		return workerapitest.Answer
 	}
-	if err := f.runWorker(t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
+	if err := runWorker(t, f, t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
 		t.Fatalf("got %v, want %v", err, errLeaseLapsed)
 	}
-	data, err := os.ReadFile(filepath.Join(f.claim.RunDir, "alive"))
+	data, err := os.ReadFile(filepath.Join(f.Claim.RunDir, "alive"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,27 +82,27 @@ func TestFenceShortensGrace(t *testing.T) {
 // its earlier steps left running in the background too.
 func TestFenceStopsEveryGroup(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(
+	f := workerapitest.NewFake(t, newJob(
 		command(`nohup sleep 60 >/dev/null 2>&1 </dev/null & echo $! > "$PW_JOB_DIR/bg"`),
 		command("sleep 30"),
 	))
-	f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = true, 3, 1
+	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, 3, 1
 	var started atomic.Bool
-	f.onEvent = func(e workerapi.Event) {
+	f.OnEvent = func(e workerapi.Event) {
 		if !e.Finished && e.Step == 1 {
 			started.Store(true)
 		}
 	}
-	f.fault = func(r *http.Request) fault {
+	f.Fault = func(r *http.Request) workerapitest.Fault {
 		if started.Load() && r.URL.Path == workerapi.PathHeartbeat {
-			return unavailable
+			return workerapitest.Unavailable
 		}
-		return answer
+		return workerapitest.Answer
 	}
-	if err := f.runWorker(t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
+	if err := runWorker(t, f, t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
 		t.Fatalf("got %v, want %v", err, errLeaseLapsed)
 	}
-	data, err := os.ReadFile(filepath.Join(f.claim.RunDir, "bg"))
+	data, err := os.ReadFile(filepath.Join(f.Claim.RunDir, "bg"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,21 +131,21 @@ func TestSelfFencing(t *testing.T) {
 			if fences {
 				script = "sleep 30"
 			}
-			f := newFakeCoordinator(t, newJob(command(script)))
-			f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = fences, 3, 1
+			f := workerapitest.NewFake(t, newJob(command(script)))
+			f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = fences, 3, 1
 			var cutOff atomic.Int64
-			f.onEvent = func(e workerapi.Event) {
+			f.OnEvent = func(e workerapi.Event) {
 				if cutOff.Load() == 0 {
 					cutOff.Store(time.Now().UnixNano())
 				}
 			}
-			f.fault = func(r *http.Request) fault {
+			f.Fault = func(r *http.Request) workerapitest.Fault {
 				if cutOff.Load() != 0 && r.URL.Path == workerapi.PathHeartbeat {
-					return unavailable
+					return workerapitest.Unavailable
 				}
-				return answer
+				return workerapitest.Answer
 			}
-			err := f.runWorker(t.Context(), Config{})
+			err := runWorker(t, f, t.Context(), Config{})
 			if !fences {
 				if err != nil {
 					t.Fatal(err)
@@ -198,10 +199,10 @@ func TestStoppedAfterJob(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFakeCoordinator(t, tc.job)
+			f := workerapitest.NewFake(t, tc.job)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			if err := f.runWorker(ctx, stopAt(0, tc.cleanup, func(*attempt) { cancel() })); err != nil {
+			if err := runWorker(t, f, ctx, stopAt(0, tc.cleanup, func(*attempt) { cancel() })); err != nil {
 				t.Fatal(err)
 			}
 			checkEvents(t, f, tc.events...)
@@ -228,16 +229,14 @@ func TestStoppedBeforeJobEnded(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFakeCoordinator(t, tc.job)
+			f := workerapitest.NewFake(t, tc.job)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			if err := f.runWorker(ctx, stopAt(0, false, func(*attempt) { cancel() })); !errors.Is(err, context.Canceled) {
+			if err := runWorker(t, f, ctx, stopAt(0, false, func(*attempt) { cancel() })); !errors.Is(err, context.Canceled) {
 				t.Fatalf("got %v", err)
 			}
 			checkEvents(t, f, tc.events...)
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			if f.end != nil {
+			if f.End() != nil {
 				t.Error("a worker stopped before its job ended completed its attempt")
 			}
 		})
@@ -249,14 +248,12 @@ func TestStoppedBeforeJobEnded(t *testing.T) {
 // sends no end, as before.
 func TestFencedAfterJob(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("true")))
-	err := f.runWorker(t.Context(), stopAt(0, false, func(a *attempt) { a.halt(errFenced) }))
+	f := workerapitest.NewFake(t, newJob(command("true")))
+	err := runWorker(t, f, t.Context(), stopAt(0, false, func(a *attempt) { a.halt(errFenced) }))
 	if !errors.Is(err, errFenced) {
 		t.Fatalf("got %v", err)
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.end != nil {
+	if f.End() != nil {
 		t.Error("a superseded attempt completed")
 	}
 }
@@ -272,16 +269,14 @@ func withCleanup(s plan.Step, cleanup string) plan.Step {
 // the coordinator decides how it ended.
 func TestStopped(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("echo started; sleep 30")))
+	f := workerapitest.NewFake(t, newJob(command("echo started; sleep 30")))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	f.onEvent = func(e workerapi.Event) { cancel() }
-	if err := f.runWorker(ctx, Config{}); !errors.Is(err, context.Canceled) {
+	f.OnEvent = func(e workerapi.Event) { cancel() }
+	if err := runWorker(t, f, ctx, Config{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.end != nil {
+	if f.End() != nil {
 		t.Error("a stopped worker completed its attempt")
 	}
 }
@@ -290,14 +285,12 @@ func TestStopped(t *testing.T) {
 // control poll at once, with nothing new, doesn't ask it again at once.
 func TestControlBacksOff(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("sleep 1")))
-	f.controlAtOnce = true
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	f := workerapitest.NewFake(t, newJob(command("sleep 1")))
+	f.ControlAtOnce = true
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if n := f.requests[workerapi.PathControl]; n > 100 {
+	if n := f.Requests()[workerapi.PathControl]; n > 100 {
 		t.Errorf("the worker polled %d times in a second", n)
 	}
 }
@@ -309,16 +302,16 @@ func TestControlBacksOff(t *testing.T) {
 // that wouldn't leave it time to try.
 func TestHeartbeatStalls(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("sleep 4")))
-	f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = true, 5, 2
+	f := workerapitest.NewFake(t, newJob(command("sleep 4")))
+	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, 5, 2
 	var n atomic.Int32
-	f.fault = func(r *http.Request) fault {
+	f.Fault = func(r *http.Request) workerapitest.Fault {
 		if r.URL.Path == workerapi.PathHeartbeat && n.Add(1) == 1 {
-			return hang
+			return workerapitest.Hang
 		}
-		return answer
+		return workerapitest.Answer
 	}
-	if err := f.runWorker(t.Context(), Config{}); err != nil {
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatalf("one stalled heartbeat stopped the job: %v", err)
 	}
 	checkEnd(t, f, plan.OutcomeSuccess, "")
@@ -330,27 +323,27 @@ func TestHeartbeatStalls(t *testing.T) {
 // lapsing.
 func TestFenceKeepsSending(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command("echo hello; sleep 30")))
-	f.claim.SelfFencing, f.claim.LeaseSeconds, f.claim.HeartbeatSeconds = true, 3, 1
+	f := workerapitest.NewFake(t, newJob(command("echo hello; sleep 30")))
+	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, 3, 1
 	var cutOff atomic.Int64
-	f.onEvent = func(e workerapi.Event) { cutOff.CompareAndSwap(0, time.Now().UnixNano()) }
-	f.fault = func(r *http.Request) fault {
+	f.OnEvent = func(e workerapi.Event) { cutOff.CompareAndSwap(0, time.Now().UnixNano()) }
+	f.Fault = func(r *http.Request) workerapitest.Fault {
 		c := cutOff.Load()
 		if c == 0 {
-			return answer
+			return workerapitest.Answer
 		}
 		since := time.Since(time.Unix(0, c))
 		switch {
 		case r.URL.Path == workerapi.PathHeartbeat:
-			return unavailable
+			return workerapitest.Unavailable
 		case r.URL.Path == workerapi.PathLogs && since < 2200*time.Millisecond:
 			// Back after the job has stopped, at 1.8 s, and before the
 			// lease lapses, at 3 s.
-			return unavailable
+			return workerapitest.Unavailable
 		}
-		return answer
+		return workerapitest.Answer
 	}
-	if err := f.runWorker(t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
+	if err := runWorker(t, f, t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
 		t.Fatalf("got %v, want %v", err, errLeaseLapsed)
 	}
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "hello\n")
@@ -361,20 +354,20 @@ func TestFenceKeepsSending(t *testing.T) {
 // once the steps have stopped.
 func TestStoppedKeepsLastWords(t *testing.T) {
 	t.Parallel()
-	f := newFakeCoordinator(t, newJob(command(`trap 'sleep 1.5; echo last words; exit 0' TERM; echo started; while :; do sleep 0.1; done`)))
+	f := workerapitest.NewFake(t, newJob(command(`trap 'sleep 1.5; echo last words; exit 0' TERM; echo started; while :; do sleep 0.1; done`)))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var once sync.Once
-	f.fault = func(r *http.Request) fault {
+	f.Fault = func(r *http.Request) workerapitest.Fault {
 		if r.URL.Query().Get(workerapi.QueryPart) == string(workerapi.LogStep) {
 			once.Do(cancel)
 		}
-		return answer
+		return workerapitest.Answer
 	}
-	if err := f.runWorker(ctx, Config{}); !errors.Is(err, context.Canceled) {
+	if err := runWorker(t, f, ctx, Config{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
-	if log, ended := f.log(logKey{workerapi.LogStep, 0, 0}); !ended || !strings.HasPrefix(log, "started\n") || !strings.HasSuffix(log, "last words\n") {
+	if log, ended := logOf(f, logKey{workerapi.LogStep, 0, 0}); !ended || !strings.HasPrefix(log, "started\n") || !strings.HasSuffix(log, "last words\n") {
 		t.Errorf("the log is %q (ended %t), without what the step printed last", log, ended)
 	}
 }

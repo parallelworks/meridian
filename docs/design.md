@@ -2406,6 +2406,14 @@ such runs, and otherwise asks it to try again, which reaches another. The
 claim's request comes before the worker knows the run's version, so it
 never changes.
 
+What the API means is pinned by a suite, `workerapitest.Conformance`, that
+plays a worker against a coordinator over its Unix socket: the claim and
+its credential, heartbeats, control polls, events, logs and the attempt's
+end, with each refusal, fencing, strict decoding, and unknown paths and
+methods. Every coordinator passes it, Meridian's and a platform's, and so
+does `workerapitest.Fake`, the coordinator the worker's own tests run
+against, so neither side can drift from the other.
+
 ### Connections
 
 Workers only connect out, and nothing listens on a host where jobs run.
