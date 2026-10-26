@@ -69,9 +69,13 @@ func TestSlowBody(t *testing.T) {
 }
 
 // The server holds at most MaxConnections connections at once. Past it, a
-// new one closes the one that has waited longest for a request, so that
-// connections that send nothing, however many, keep no worker out; while
-// every one is handling a request, it waits until one is done.
+// new one closes the one that has waited longest for a request, once it
+// has waited a second, so that connections that send nothing, however
+// many, keep no worker out for longer, and closes none of the worker's
+// before it could send its request; while every one is handling a request,
+// it waits until one is done. (On a loaded runner, a poll that had just
+// connected was closed in place of a heartbeat's connection the server
+// hadn't yet marked idle, before the grace.)
 func TestConnectionLimit(t *testing.T) {
 	r := newRig(t, rigOptions{maxConns: 4, hold: time.Minute})
 	a, _, credential := r.claimed(newClient(t, r.socket), placed{})
@@ -92,9 +96,10 @@ func TestConnectionLimit(t *testing.T) {
 	if status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathHeartbeat, nil, credential); err != nil || status != http.StatusNoContent {
 		t.Errorf("a heartbeat while connections that send nothing were held was answered %d, %v: %s", status, err, body)
 	}
-	// Not the time a request's headers are given, after which the server
-	// would close one that sent nothing.
-	if took := time.Since(start); took > 5*time.Second {
+	// Two seconds' grace, as eight connections take the four places, but
+	// not the ten seconds a request's headers are given, after which the
+	// server would close one that sent nothing.
+	if took := time.Since(start); took > 8*time.Second {
 		t.Errorf("a heartbeat while connections that send nothing were held took %v", took)
 	}
 	// The oldest of those were closed.

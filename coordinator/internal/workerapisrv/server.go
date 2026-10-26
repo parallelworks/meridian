@@ -13,7 +13,8 @@
 // It takes connections on a Unix socket only, and asks the system who each
 // is from before it reads a request (Peers): a connection it doesn't trust
 // is closed unread. It holds at most a number of connections at once, and
-// past it closes the one that has waited longest for a request, gives
+// past it closes the one that has waited longest for a request, once it
+// has waited a second, gives
 // each request's headers and body a time to arrive in, at a least
 // rate for its size, refuses a body larger than the API allows, 413, and
 // reads every body strictly (workerapi.Unmarshal), 400. So a process of the
@@ -131,8 +132,8 @@ type Options struct {
 	Peers Peers
 	// MaxConnections is how many connections the server holds at once, or
 	// DefaultMaxConnections for 0. Another closes the one that has waited
-	// longest for a request, or, while every one is handling a request,
-	// waits until one ends.
+	// longest for a request, once that one has waited a second, and until
+	// one has, as while every one is handling a request, waits.
 	MaxConnections int
 	// Wake, if it isn't nil, is called once the server has stored a change
 	// to an attempt that its job's supervisor acts on: its claim, its
@@ -219,7 +220,7 @@ func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
 // and every connection that isn't a Unix socket's, before it reads a
 // request from it.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
-	conns := newConnSet(s.maxConns)
+	conns := newConnSet(s.maxConns, evictAfter)
 	srv := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: s.headerTime,
@@ -336,16 +337,24 @@ func (l *peerListener) Close() error {
 // at once, with whether each is waiting for a request, as the HTTP server
 // says (http.Server.ConnState): idle between requests, or new, before its
 // first. Past max, a new connection closes the one that has waited longest,
-// rather than wait for one to close, so that connections that send nothing
-// can't keep a worker out; only when every one is handling a request does
-// it wait.
+// once it has waited grace, rather than wait for one to close, so that
+// connections that send nothing can keep a worker out for grace at most.
+// Until one has waited that long, as while every one is handling a request,
+// the new one waits. grace is time enough for a connection that has just
+// connected to send its request, and for one just answered to send its
+// next, so that the set never closes one of a worker's before it could.
 type connSet struct {
 	max    int
+	grace  time.Duration
 	mu     sync.Mutex
 	room   *sync.Cond
 	held   map[*peerConn]connState
 	closed bool
 }
+
+// evictAfter is how long a connection waits for a request before a new
+// one may take its place, past the server's limit (connSet).
+const evictAfter = time.Second
 
 // connState is whether a connection is waiting for a request, and since
 // when.
@@ -354,8 +363,8 @@ type connState struct {
 	since   time.Time
 }
 
-func newConnSet(maxConns int) *connSet {
-	cs := &connSet{max: maxConns, held: map[*peerConn]connState{}}
+func newConnSet(maxConns int, grace time.Duration) *connSet {
+	cs := &connSet{max: maxConns, grace: grace, held: map[*peerConn]connState{}}
 	cs.room = sync.NewCond(&cs.mu)
 	return cs
 }
@@ -370,23 +379,52 @@ func (cs *connSet) add(c *peerConn) bool {
 			cs.held[c] = connState{waiting: true, since: time.Now()}
 			return true
 		}
-		var oldest *peerConn
-		for held, st := range cs.held {
-			if st.waiting && (oldest == nil || st.since.Before(cs.held[oldest].since)) {
-				oldest = held
-			}
-		}
-		if oldest == nil {
+		oldest, wait := cs.longestWaiting()
+		switch {
+		case oldest != nil:
+			delete(cs.held, oldest)
+			// Closed outside the lock, which its Close takes.
+			cs.mu.Unlock()
+			oldest.Close()
+			cs.mu.Lock()
+		case wait > 0:
+			// Woken once the one that has waited longest has waited grace,
+			// unless a connection is closed, or is answered, first.
+			t := time.AfterFunc(wait, cs.wake)
 			cs.room.Wait()
-			continue
+			t.Stop()
+		default:
+			cs.room.Wait()
 		}
-		delete(cs.held, oldest)
-		// Closed outside the lock, which its Close takes.
-		cs.mu.Unlock()
-		oldest.Close()
-		cs.mu.Lock()
 	}
 	return false
+}
+
+// longestWaiting returns the connection that has waited longest for a
+// request, once it has waited grace; or else how long until it has, or 0
+// while none waits.
+func (cs *connSet) longestWaiting() (*peerConn, time.Duration) {
+	var oldest *peerConn
+	for held, st := range cs.held {
+		if st.waiting && (oldest == nil || st.since.Before(cs.held[oldest].since)) {
+			oldest = held
+		}
+	}
+	if oldest == nil {
+		return nil, 0
+	}
+	if waited := time.Since(cs.held[oldest].since); waited < cs.grace {
+		return nil, cs.grace - waited
+	}
+	return oldest, 0
+}
+
+// wake wakes an add that waits, once it waits: add holds the lock until it
+// does.
+func (cs *connSet) wake() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.room.Broadcast()
 }
 
 // remove takes c out of the set, which makes room.
