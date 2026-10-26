@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -41,6 +43,19 @@ type Job struct {
 	Reason  plan.Reason
 	Result  *plan.JobResult
 	EndedAt time.Time
+	// ReadyAt is when the job was first readied, or the zero time before;
+	// ReadiedStopped and AnyChoices are what it was readied with then
+	// (PinReady).
+	ReadyAt        time.Time
+	ReadiedStopped bool
+	AnyChoices     map[string]string
+	// Wake grows each time something its supervisor waits for happens
+	// (Wake), and PlaceTries counts the times in a row that a backend
+	// couldn't answer as it was placed (PlaceTried).
+	Wake       int64
+	PlaceTries int
+	// Diagnostics are the job's problems: Ready's, or placement's.
+	Diagnostics problems.Diagnostics
 }
 
 // A NewJob is a job, or an instance of a matrix job, to store.
@@ -99,7 +114,7 @@ func instanceOf(name, key string) (int, bool) {
 }
 
 const jobColumns = `run_id, key, name, instance, supervisor_id, fence, attempts, attempts_started, created_at,
-  outcome, reason, result, ended_at`
+  outcome, reason, result, ended_at, ready_at, readied_stopped, any_choices, wake, place_tries, diagnostics`
 
 // Job returns the run's job with the key key.
 func (tx *Tx) Job(run, key string) (*Job, error) {
@@ -142,17 +157,27 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanJob(row scanner) (*Job, error) {
 	var (
-		j               Job
-		run, created    int64
-		instance, ended sql.NullInt64
-		outcome, reason sql.NullString
-		result          []byte
+		j                              Job
+		run, created                   int64
+		instance, ended, ready, halted sql.NullInt64
+		outcome, reason                sql.NullString
+		result, choices, diags         []byte
 	)
 	if err := row.Scan(&run, &j.Key, &j.Name, &instance, &j.SupervisorID, &j.Fence, &j.Attempts, &j.AttemptsStarted, &created,
-		&outcome, &reason, &result, &ended); err != nil {
+		&outcome, &reason, &result, &ended, &ready, &halted, &choices, &j.Wake, &j.PlaceTries, &diags); err != nil {
 		return nil, err
 	}
 	j.Run, j.CreatedAt, j.EndedAt = runID(run), time.UnixMicro(created).UTC(), timeOf(ended)
+	j.ReadyAt, j.ReadiedStopped = timeOf(ready), halted.Int64 != 0
+	if choices != nil {
+		if err := jsonv2.Unmarshal(choices, &j.AnyChoices, jsonv2.RejectUnknownMembers(true)); err != nil {
+			return nil, fmt.Errorf("%w: the instances that met run %s's job %q's needs: %w", ErrMalformed, j.Run, j.Key, err)
+		}
+	}
+	var err error
+	if j.Diagnostics, err = decodeDiagnostics(diags); err != nil {
+		return nil, fmt.Errorf("%w: the diagnostics of run %s's job %q: %w", ErrMalformed, j.Run, j.Key, err)
+	}
 	j.Instance = -1
 	if instance.Valid {
 		j.Instance = int(instance.Int64)
@@ -175,6 +200,9 @@ type JobEnd struct {
 	Result plan.JobResult
 	// Reason is why it ended other than as its steps did, or "".
 	Reason plan.Reason
+	// Diagnostics are the job's problems, as Ready's or placement's, which
+	// never show a value made from a variable or a password.
+	Diagnostics problems.Diagnostics
 }
 
 // EndJob records how the run's job ended. A job that has ended already, or
@@ -204,14 +232,96 @@ func (tx *Tx) EndJob(run, key string, end JobEnd) error {
 	case live:
 		return fmt.Errorf("%w: run %s's job %q has an attempt that hasn't ended", ErrState, run, key)
 	}
+	var diags []byte
+	if len(end.Diagnostics) > 0 {
+		if diags, err = encodeDiagnostics(end.Diagnostics); err != nil {
+			return err
+		}
+	}
 	now, err := tx.now()
 	if err != nil {
 		return err
 	}
 	n, _ := runNumber(run)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET outcome = ?, reason = ?, result = ?, ended_at = ? WHERE run_id = ? AND key = ?",
-		end.Result.Outcome, nullString(string(end.Reason)), result, now, n, key)
+	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET outcome = ?, reason = ?, result = ?, diagnostics = ?, ended_at = ? WHERE run_id = ? AND key = ?",
+		end.Result.Outcome, nullString(string(end.Reason)), result, diags, now, n, key)
 	return err
+}
+
+// PinReady records, the first time the run's job is readied, what it was
+// readied with: whether the run had been stopped, and for each need on any
+// instance of a matrix job, the instance that met it, by job name. It
+// returns the job, with what it was first readied with, which later calls
+// give again whatever they are given, so that Ready, run again, gives the
+// same job. A job that has ended is ErrState.
+func (tx *Tx) PinReady(run, key string, stopped bool, anyChoices map[string]string) (*Job, error) {
+	j, err := tx.Job(run, key)
+	switch {
+	case err != nil:
+		return nil, err
+	case j.Outcome != "":
+		return nil, fmt.Errorf("%w: run %s's job %q has ended", ErrState, run, key)
+	case !j.ReadyAt.IsZero():
+		return j, nil
+	}
+	var choices []byte
+	if len(anyChoices) > 0 {
+		if choices, err = jsonv2.Marshal(anyChoices, jsonv2.Deterministic(true)); err != nil {
+			return nil, err
+		}
+	}
+	now, err := tx.now()
+	if err != nil {
+		return nil, err
+	}
+	n, _ := runNumber(run)
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET ready_at = ?, readied_stopped = ?, any_choices = ? WHERE run_id = ? AND key = ?",
+		now, stopped, choices, n, key); err != nil {
+		return nil, err
+	}
+	return tx.Job(run, key)
+}
+
+// Wake records that something the run's job's supervisor waits for has
+// happened, as an attempt's claim or end, and returns the job, whose
+// supervisor the caller wakes once the transaction commits. A supervisor
+// reads the job's Wake again before it waits, so that one woken as it was
+// about to wait doesn't.
+func (tx *Tx) Wake(run, key string) (*Job, error) {
+	n, ok := runNumber(run)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET wake = wake + 1 WHERE run_id = ? AND key = ?", n, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := oneRow(res, ErrNotFound); err != nil {
+		return nil, err
+	}
+	return tx.Job(run, key)
+}
+
+// PlaceTried records that a backend couldn't answer as the run's job was
+// placed, and returns how many times in a row one hasn't, which choosing
+// where its next attempt is placed (ChoosePlace), or counting it as a
+// failure (PlaceFailed), starts again from 0. A job that has ended is
+// ErrState.
+func (tx *Tx) PlaceTried(run, key string) (int, error) {
+	n, ok := runNumber(run)
+	if !ok {
+		return 0, ErrNotFound
+	}
+	var tries int
+	err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_jobs SET place_tries = place_tries + 1 WHERE run_id = ? AND key = ? AND outcome IS NULL RETURNING place_tries",
+		n, key).Scan(&tries)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := tx.Job(run, key); err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("%w: run %s's job %q has ended", ErrState, run, key)
+	}
+	return tries, err
 }
 
 // liveAttempt reports whether the job has an attempt that hasn't ended.
