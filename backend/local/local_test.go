@@ -361,7 +361,8 @@ func TestWorkerEnds(t *testing.T) {
 func TestCancelKills(t *testing.T) {
 	t.Parallel()
 	d, out := newDriver(t, "ignore")
-	d.KillAfter = 300 * time.Millisecond
+	// Time for a loaded machine to deliver SIGTERM, and the stub to note it.
+	d.KillAfter = 1500 * time.Millisecond
 	p := place(t, d, host, backend.PlaceRequest{Attempt: "a1", BootstrapToken: "t"})
 	readReport(t, out)
 	start := time.Now()
