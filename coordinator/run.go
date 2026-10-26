@@ -143,10 +143,17 @@ type Coordinator struct {
 	mu      sync.Mutex
 	serving bool
 	served  *hopper.Client[*sql.Tx]
+	// stopping is set once Serve has begun to stop served, which then
+	// works no more queues and stops working none (retireQueue).
+	stopping bool
 	// queues are the start queues of the runs this coordinator created,
 	// which it works until their runs start.
-	queues  map[string]bool
-	retired sync.WaitGroup
+	queues map[string]bool
+	// retired counts the queues served is being made to stop working,
+	// each of which waits for the queue's jobs until retiring is done, as
+	// Serve stops.
+	retired  sync.WaitGroup
+	retiring context.Context
 }
 
 // Open opens a coordinator on the store at opts.Database. It works no
@@ -258,7 +265,7 @@ func (c *Coordinator) startQueue(id string) string {
 }
 
 // workQueue has the coordinator work the start queue q, from now if Serve
-// runs, and once it does otherwise.
+// runs, and once it next does otherwise, as when it is stopping.
 func (c *Coordinator) workQueue(ctx context.Context, q string) error {
 	if q == sharedQueue {
 		return nil
@@ -269,14 +276,19 @@ func (c *Coordinator) workQueue(ctx context.Context, q string) error {
 		return nil
 	}
 	c.queues[q] = true
-	if c.served == nil {
+	if c.served == nil || c.stopping {
 		return nil
 	}
 	return c.served.Queues().Add(ctx, q, hopper.QueueConfig{MaxWorkers: 1})
 }
 
 // retireQueue stops working the start queue q, once its run has started,
-// when its jobs have ended.
+// when its jobs have ended. A client that is stopping stops working it
+// anyway.
+//
+// hopper's Remove changes the client's queues without the lock its Stop
+// reads them under (hopper v0.8.0), so Serve starts none once it is
+// stopping, and waits for those it started before it stops the client.
 func (c *Coordinator) retireQueue(ctx context.Context, q string) {
 	if q == sharedQueue {
 		return
@@ -287,13 +299,14 @@ func (c *Coordinator) retireQueue(ctx context.Context, q string) {
 		return
 	}
 	delete(c.queues, q)
-	if c.served == nil {
+	if c.served == nil || c.stopping {
 		return
 	}
-	served := c.served
-	// Remove waits for the queue's jobs, the one retiring it among them.
+	served, retiring := c.served, c.retiring
+	// Remove waits for the queue's jobs, the one retiring it among them,
+	// until Serve stops.
 	c.retired.Go(func() {
-		if err := served.Queues().Remove(context.WithoutCancel(ctx), q); err != nil {
+		if err := served.Queues().Remove(retiring, q); err != nil {
 			c.log.DebugContext(ctx, "coordinator: stop working a start queue", "queue", q, "error", err)
 		}
 	})
@@ -329,25 +342,50 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 		c.mu.Unlock()
 		return err
 	}
-	c.served = served
+	retiring, stopRetiring := context.WithCancel(context.WithoutCancel(ctx))
+	c.served, c.retiring = served, retiring
 	c.mu.Unlock()
 
 	<-ctx.Done()
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.stopTimeout)
+	defer cancel()
+	// The queues being retired have stopped changing served's before it
+	// stops: no more are, and those that were stop waiting for their jobs.
+	c.mu.Lock()
+	c.stopping = true
+	c.mu.Unlock()
+	stopRetiring()
+	if !waitGroup(stopCtx, &c.retired) {
+		c.log.WarnContext(ctx, "coordinator: a start queue was still being retired as the coordinator stopped")
+	}
 	// Jobs still running at the deadline have their contexts cancelled:
 	// each of a run's steps can be done again, and gives its attempt back
 	// to hopper when it is cut short so (stopping).
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.stopTimeout)
-	defer cancel()
 	err = served.Stop(stopCtx)
 	if errors.Is(err, context.DeadlineExceeded) {
 		c.log.InfoContext(ctx, "coordinator: stopped the jobs it was working, to be done again")
 		err = nil
 	}
-	c.mu.Lock()
-	c.served, c.serving = nil, false
-	c.mu.Unlock()
 	c.retired.Wait()
+	c.mu.Lock()
+	c.served, c.serving, c.stopping, c.retiring = nil, false, false, nil
+	c.mu.Unlock()
 	return err
+}
+
+// waitGroup waits for wg until ctx is done, and reports whether wg was.
+func waitGroup(ctx context.Context, wg *sync.WaitGroup) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // complete completes a run's hopper job, through done, whose work another
