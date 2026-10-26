@@ -1,0 +1,78 @@
+on:
+  execute:
+    inputs:
+      when:
+        type: string
+        default: always
+      channel:
+        type: string
+        default: ${{ env.CHANNEL }}
+env:
+  CHANNEL: builds
+jobs:
+  build:
+    outputs:
+      tag: ${{ needs.build.outputs.tag }}
+    steps:
+      - run: echo tag=v1 >> $OUTPUTS
+  probe:
+    strategy:
+      matrix:
+        site: [a, b]
+    steps:
+      - run: echo ${{ matrix.site }}
+  test:
+    needs: [build]
+    steps:
+      - run: make test
+  docs:
+    needs: [build]
+    if: false
+    steps:
+      - run: make docs
+  sites:
+    needs: [build]
+    strategy:
+      matrix:
+        site: [a, b]
+    steps:
+      - run: deploy ${{ matrix.site }}
+  first-site:
+    needs: [probe:any]
+    steps:
+      - run: echo first
+  publish:
+    needs: [build]
+    if: ${{ needs.build.outputs.tag != '' }}
+    steps:
+      - run: publish ${{ needs.build.outputs.tag }}
+  announce:
+    needs: [build]
+    if: ${{ env.CHANNEL != '' }}
+    steps:
+      - run: announce
+  report:
+    needs: [build]
+    if: failure()
+    steps:
+      - run: report
+  on-cancel:
+    needs: [build]
+    if: cancelled()
+    steps:
+      - run: echo cleaning up
+  when:
+    needs: [build]
+    if: ${{ inputs.when }}
+    steps:
+      - run: echo when ${{ cancelled() }}
+  from-output:
+    needs: [build]
+    if: ${{ needs.build.outputs.when }}
+    steps:
+      - run: echo from-output ${{ cancelled() }}
+  from-env:
+    needs: [build]
+    if: ${{ inputs.channel != '' }}
+    steps:
+      - run: echo from-env

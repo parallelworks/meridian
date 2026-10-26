@@ -1,0 +1,30 @@
+description: >-
+  A job whose if: can be true once the run is cancelled, readied once the
+  run is, runs on as if the run weren't being cancelled: its steps run
+  without an if:, and cancelled() is false in them while none of them was
+  cancelled, whatever the jobs it needs did. notify runs after build
+  succeeded, and after-stop because stopped was cancelled.
+source: ACTIVATE's executor
+jobs:
+  notify:
+    cancelled: true
+    needs:
+      build: {result: success}
+    steps:
+      - {outcome: success}
+      - {outcome: success}
+  after-stop:
+    cancelled: true
+    needs:
+      stopped: {result: cancelled}
+    steps:
+      - {outcome: success}
+      - {outcome: success}
+expect:
+  values:
+    /jobs/build/steps/0/run: make
+    /jobs/stopped/steps/0/run: sleep 600
+    /jobs/notify/steps/0/run: echo notify
+    /jobs/notify/steps/1/run: echo cancelled false
+    /jobs/after-stop/steps/0/run: echo cleaning up
+    /jobs/after-stop/steps/1/run: echo cancelled false

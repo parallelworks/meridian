@@ -2322,6 +2322,9 @@ A run stops early when a person cancels it, or when it runs past its own
 happens to a job depends on whether its `if:` is cancel-aware: whether it
 calls `always()` or `cancelled()`, negates `success()` or `failure()`, or
 is, or evaluates to, the word `always`, as a step's can be (below).
+Whether it evaluates to `always` is known at once, from the run's values,
+for an `if:` format 1 evaluates before the job's needs have ended, and
+for any other only once they have (`plan.Plan.CancelPath`).
 
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
@@ -2351,21 +2354,27 @@ is, or evaluates to, the word `always`, as a step's can be (below).
   runs. It ends as its steps do: neither stops it, though its own
   timeout still does.
 - **A job not yet readied**, still waiting for its needs, takes one of
-  three paths, by its `if:`:
+  three paths, by its `if:` (`plan.Plan.CancelPath`):
   - **One that is cancel-aware** waits until its needs have ended. Its
     `if:` is then evaluated with the status of its needs alone, as a
     job's always is: `cancelled()` is true when a job it needs ended
     cancelled, and `failure()` when one failed, or was skipped because
     its own needs failed. If it is true, the job runs, and runs on as
     above.
-  - **One that calls a status function, or reads `needs` or `env`**, and
+  - **One that calls a status function, or reads `env`, an output or the
+    result of a job it needs, or an input whose value reads `env`**, and
     isn't cancel-aware, waits until its needs have ended, then ends
     cancelled, unless its `if:` then evaluates to the word `always`, when
-    it runs on as above.
+    it runs on as above. These are the `if:`s format 1 leaves until the
+    needs have ended, and those that read Meridian's `needs.<job>.result`.
+    A reference to `needs` that format 1 reads as its own text, such as
+    `needs.build` alone, isn't one.
   - **Any other**, a job with no `if:` among them, ends at once, skipped
     because its needs failed, as format 1 ends a job whose dependency
-    failed. A job that needs none was readied when the run started, so
-    it never takes this path.
+    failed, unless its `if:` evaluates to the word `always` with the run's
+    values, when it is cancel-aware, and takes the first path. A job that
+    needs none was readied when the run started, so it never takes this
+    path.
 - **A matrix instance waiting for its turn** under `max-parallel` ends
   cancelled, whatever its `if:`, as format 1 ends one waiting for its
   turn.

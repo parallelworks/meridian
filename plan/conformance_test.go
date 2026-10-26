@@ -102,6 +102,9 @@ func TestContextsConformance(t *testing.T) {
 			if g, w := slices.Sorted(slices.Values(r.needsFailed)), slices.Sorted(slices.Values(c.Expect.NeedsFailed)); !slices.Equal(g, w) {
 				t.Errorf("skipped because their needs failed %q, want %q", g, w)
 			}
+			if g, w := slices.Sorted(slices.Values(r.cancelled)), slices.Sorted(slices.Values(c.Expect.Cancelled)); !slices.Equal(g, w) {
+				t.Errorf("cancelled %q, want %q", g, w)
+			}
 			for pointer, want := range c.Expect.Values {
 				got, ok := r.got[pointer]
 				if !ok {
@@ -164,9 +167,9 @@ type contextsRun struct {
 	run plan.RunValues
 	// got holds the values evaluated, by their JSON Pointers, and skipped
 	// the JSON Pointers of the jobs and steps skipped.
-	got                                    map[string]any
-	skipped, needsFailed, private, secrets []string
-	diags                                  problems.Diagnostics
+	got                                               map[string]any
+	skipped, needsFailed, cancelled, private, secrets []string
+	diags                                             problems.Diagnostics
 }
 
 // job evaluates job, with what state says is known of it.
@@ -197,6 +200,9 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 			r.needsFailed = append(r.needsFailed, job.Path)
 		}
 		return
+	case ready.Cancelled:
+		r.cancelled = append(r.cancelled, job.Path)
+		return
 	case ready.Job == nil:
 		return // a matrix the case gives no instance of
 	}
@@ -214,8 +220,16 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	if attempt == 0 {
 		attempt = 1
 	}
+	// The run's cancellation doesn't reach a job that runs on through it,
+	// as the coordinator tells: one on CancelPathOutlive, or whose if:'s
+	// value was the word always.
+	path, err := r.p.CancelPath(job.Name, r.run, in.Instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := state.Cancelled && path != plan.CancelPathOutlive && !rj.IfAlways
 	js := plan.JobState{
-		Run: job.Reads(r.run), Needs: job.ReadsNeeds(in.Needs), Cancelled: state.Cancelled, Try: state.Try, Env: state.Env,
+		Run: job.Reads(r.run), Needs: job.ReadsNeeds(in.Needs), Cancelled: cancelled, Try: state.Try, Env: state.Env,
 		Job: plan.JobContext{Name: job.Name, Key: rj.Key, Attempt: attempt, Group: state.Group, Member: state.Member},
 	}
 	js.Masked = append(js.Run.Masked(), rj.Masked...)

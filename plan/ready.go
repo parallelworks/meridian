@@ -425,7 +425,10 @@ type ReadyInput struct {
 	// skipped by its own if:, or else, once every instance has ended, a
 	// result that failed, as format 1 waits for one.
 	Needs map[string]JobResult
-	// Cancelled is set once the run is being cancelled, for cancelled().
+	// Cancelled is set once the run is being cancelled, or is past its own
+	// timeout:. The job then takes the path its if: gives it
+	// (Plan.CancelPath), which doesn't change what the status functions
+	// read: cancelled() is true only when a job it needs was cancelled.
 	Cancelled bool
 	// Instance is the matrix instance to ready, for a job whose matrix is
 	// expanded: by Start, or by an earlier call to Ready. It is nil for a
@@ -433,9 +436,9 @@ type ReadyInput struct {
 	Instance *Instance
 }
 
-// ReadyResult is what Ready gives: a matrix's instances, a job skipped, or
-// a job ready to place. Exactly one of Expansion, Skipped and Job is set,
-// and NeedsFailed only with Skipped.
+// ReadyResult is what Ready gives: a matrix's instances, a job skipped, a
+// job cancelled, or a job ready to place. Exactly one of Expansion,
+// Skipped, Cancelled and Job is set, and NeedsFailed only with Skipped.
 type ReadyResult struct {
 	// Expansion holds the job's matrix instances, when Ready expanded its
 	// matrix. The coordinator keeps them, and readies each instance on its
@@ -452,6 +455,10 @@ type ReadyResult struct {
 	// decided: format 1's dependency failure. The coordinator records it in
 	// the job's JobResult, so that the jobs that need it read it as failed.
 	NeedsFailed bool
+	// Cancelled is set when the run is being cancelled and the job, or the
+	// instance, ends cancelled without running (CancelPathEnd). The
+	// coordinator records its outcome as cancelled.
+	Cancelled bool
 	// Job is the job as Ready evaluated it, to place and to run.
 	Job *ReadyJob
 }
@@ -617,12 +624,12 @@ type ReadyJobRetry struct {
 
 // Ready is the Ready phase: it evaluates what job leaves to the point at
 // which its dependencies have finished, in the coordinator, with the
-// status functions true or false as in.Needs and in.Cancelled say: a job
-// fails, for failure(), when one it needs failed or was skipped because
-// its own needs failed (JobResult.NeedsFailed), and is cancelled, for
-// cancelled(), when the run is being cancelled or one it needs was
-// cancelled, as in format 1. A job one needs that its own if: skipped
-// counts as a success.
+// status functions true or false as in.Needs says: a job fails, for
+// failure(), when one it needs failed or was skipped because its own needs
+// failed (JobResult.NeedsFailed), and is cancelled, for cancelled(), when
+// one it needs was cancelled (JobResult.Cancelled among them), as in
+// format 1. A job one needs that its own if: skipped counts as a success.
+// That the run is being cancelled isn't among them, as format 1 has it.
 //
 // For a job with a strategy: and no in.Instance, it first evaluates the
 // job's if:, if it doesn't read matrix, and gives Skipped if it is false;
@@ -630,12 +637,32 @@ type ReadyJobRetry struct {
 // an instance, or a job without a strategy:, it evaluates the job's if:,
 // and gives Skipped if it is false; otherwise it gives the job, with its
 // runs-on:, resources:, retry:, timeout: and ssh: evaluated, and its
-// working-directory: as the plan holds it, which Step evaluates. An instance's if: that doesn't read matrix gives what it gave
-// before the matrix was expanded, unless the run has been cancelled since,
-// so an instance of a matrix that Start expanded is skipped as its job
-// would have been. A job's if: may read matrix in format 1, which GitHub
-// Actions' doesn't: the compiler accepts it, and changing that would change
-// what a workflow means.
+// working-directory: as the plan holds it, which Step evaluates. An
+// instance's if: that doesn't read matrix gives what it gave before the
+// matrix was expanded, unless the run has been cancelled since, so an
+// instance of a matrix that Start expanded is skipped as its job would
+// have been. A job's if: may read matrix in format 1, which GitHub
+// Actions' doesn't: the compiler accepts it, and changing that would
+// change what a workflow means.
+//
+// Once the run is being cancelled, or is past its own timeout:
+// (in.Cancelled), a job that hasn't started takes the path its if: gives
+// it (Plan.CancelPath), as ACTIVATE's do. On CancelPathSkip, the
+// coordinator has Ready ready it at once, without waiting for the jobs it
+// needs, and Ready gives Skipped because they failed, for a job that needs
+// any, or the job's problems if its if: fails to evaluate. On
+// CancelPathEnd, once the jobs it needs have finished, Ready gives
+// Cancelled, as it does if the if: fails to evaluate, unless the if:'s
+// value is the word always. On CancelPathOutlive, Ready readies it as
+// ever, and it runs on through the cancellation.
+//
+// An instance of a matrix that max-parallel: keeps waiting for its turn
+// ends cancelled at once instead, whatever its if:, as ACTIVATE's
+// instances wait for their turn before they wait for their needs. While
+// the jobs a matrix job needs haven't finished, ACTIVATE gives the turns to
+// whichever of its instances take them first, in an order that is random;
+// Meridian gives them to its first max-parallel: instances, by index. The
+// coordinator does this; Ready isn't asked about such an instance.
 //
 // An if: is true when its value is: its truthiness, unless it is the word
 // always, which is always(); and, unless it calls a status function, it
@@ -658,19 +685,58 @@ type ReadyJobRetry struct {
 //
 // It reads the job the plan names job, and the plan's limits (Run.Limits),
 // as every replica and every rerun applies them. A job the plan doesn't
-// have is the caller's mistake, and an error.
+// have is the caller's mistake, and an error, and so is one readied once
+// the run is cancelled, before the jobs it needs have finished, whose if:
+// gives the word always, which CancelPath says waits for them.
 func (p *Plan) Ready(ctx context.Context, job string, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
-	i, ok := slices.BinarySearchFunc(p.Jobs, job, func(j Job, name string) int { return strings.Compare(j.Name, name) })
-	if !ok {
-		return nil, nil, fmt.Errorf("plan: the plan has no job %s", job)
+	j, err := p.job(job)
+	if err != nil {
+		return nil, nil, err
 	}
-	return p.Jobs[i].ready(ctx, in, p.Run.Limits)
+	return p.ready(ctx, j, in)
 }
 
-// ready is Ready for j, with the plan's limits.
-func (j *Job) ready(ctx context.Context, in ReadyInput, limits Limits) (*ReadyResult, problems.Diagnostics, error) {
+// job returns the plan's job named name. A job the plan doesn't have is
+// the caller's mistake, and an error.
+func (p *Plan) job(name string) (*Job, error) {
+	i, ok := slices.BinarySearchFunc(p.Jobs, name, func(j Job, name string) int { return strings.Compare(j.Name, name) })
+	if !ok {
+		return nil, fmt.Errorf("plan: the plan has no job %s", name)
+	}
+	return &p.Jobs[i], nil
+}
+
+// ready is Ready for the plan's job j.
+func (p *Plan) ready(ctx context.Context, j *Job, in ReadyInput) (*ReadyResult, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+	// Once the run is cancelled, the job takes the path its if: gives it
+	// (Plan.CancelPath), which an if: whose value is the word always makes
+	// CancelPathOutlive's. onCancel gives what the if:'s decision d, which
+	// ok says it made, makes of the job then, if not its decision alone.
+	shape := CancelPathOutlive
+	if in.Cancelled {
+		shape = p.cancelShape(j)
+	}
+	onCancel := func(d decision, ok bool) (*ReadyResult, error) {
+		switch {
+		case shape == CancelPathOutlive:
+		case !ok && shape == CancelPathEnd:
+			// ACTIVATE ends it cancelled all the same.
+			return &ReadyResult{Cancelled: true}, nil
+		case !ok:
+		case d.always && shape == CancelPathSkip && !j.needsGiven(in.Needs):
+			// CancelPath said the job ends at once, when its if: failed to
+			// evaluate in time, so the caller didn't wait for its needs.
+			return nil, fmt.Errorf("plan: the job %s outlives the run's cancellation, and is readied before the jobs it needs have finished", j.Key)
+		case d.always:
+		case shape == CancelPathEnd:
+			return &ReadyResult{Cancelled: true}, nil
+		case len(j.Needs) > 0:
+			return &ReadyResult{Skipped: true, NeedsFailed: true}, nil
+		}
+		return nil, nil
 	}
 	status, needsOK := in.status()
 	c := Contexts{Run: in.Run, Needs: in.Needs, Status: status}
@@ -681,19 +747,26 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, limits Limits) (*ReadyRe
 		if !readsContext(j.If, "matrix") {
 			var ok bool
 			d, ok = e.condition(j.If, at(j.Path, "if"))
+			if r, err := onCancel(d, ok); r != nil || err != nil {
+				return r, nil, err
+			}
 			switch {
 			case !ok:
 				return nil, e.diags, nil
 			case !d.run:
 				return skipped, nil, nil
 			}
+		} else if shape == CancelPathSkip && len(j.Needs) > 0 {
+			// Its if: reads matrix, which has no values until the matrix
+			// is expanded, after the jobs it needs have finished.
+			return &ReadyResult{Skipped: true, NeedsFailed: true}, nil, nil
 		}
 		// A strategy reads the outputs of the jobs it needs strictly,
 		// unless the job's if: is the word always, as the rest of the job
 		// does; an if: that reads matrix is evaluated only for each
 		// instance.
 		c.StrictOutputs = !d.always
-		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), limits)
+		x, err := Expand(ctx, j, NewScope(PhaseStrategy, c), p.Run.Limits)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, ctxErr
@@ -723,6 +796,9 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, limits Limits) (*ReadyRe
 		maskedStrings(i.Matrix.Get(), e.mask)
 	}
 	d, ok := e.condition(j.If, at(j.Path, "if"))
+	if r, err := onCancel(d, ok); r != nil || err != nil {
+		return r, nil, err
+	}
 	switch {
 	case !ok:
 		return nil, e.diags, nil
@@ -758,12 +834,21 @@ func (j *Job) ready(ctx context.Context, in ReadyInput, limits Limits) (*ReadyRe
 	return &ReadyResult{Job: rj}, e.diags, nil
 }
 
+// needsGiven reports whether needs holds the result of each job j needs.
+func (j *Job) needsGiven(needs map[string]JobResult) bool {
+	for _, n := range j.Needs {
+		if _, ok := needs[n.Job]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // status returns how the job got here, for the status functions, from the
-// results of the jobs it needs and whether the run is being cancelled, and
-// whether its needs succeeded: none failed, was cancelled or was skipped
-// because its own needs failed, nor had an instance that did.
+// results of the jobs it needs alone, and whether they succeeded: none
+// failed, was cancelled or was skipped because its own needs failed, nor
+// had an instance that did.
 func (in ReadyInput) status() (status expr.Status, needsOK bool) {
-	status.Cancelled = in.Cancelled
 	needsOK = true
 	for _, r := range in.Needs {
 		failed := r.Outcome == OutcomeFailure || r.NeedsFailed

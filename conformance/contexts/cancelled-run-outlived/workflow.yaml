@@ -1,0 +1,19 @@
+jobs:
+  build:
+    steps:
+      - run: make
+  stopped:
+    steps:
+      - run: sleep 600
+  notify:
+    needs: [build]
+    if: always()
+    steps:
+      - run: echo notify
+      - run: echo cancelled ${{ cancelled() }}
+  after-stop:
+    needs: [stopped]
+    if: cancelled()
+    steps:
+      - run: echo cleaning up
+      - run: echo cancelled ${{ cancelled() }}

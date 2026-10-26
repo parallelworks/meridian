@@ -239,14 +239,364 @@ jobs:
 			}
 		}
 	}
-	// A run being cancelled skips a job whose if: is success(), and runs
-	// one whose is cancelled().
-	for name, skipped := range map[string]bool{"plain": true, "on-cancel": false, "word": false} {
-		r, _, _ := p.Ready(t.Context(), name, plan.ReadyInput{
-			Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess}},
-		})
-		if r.Skipped != skipped || r.NeedsFailed {
-			t.Errorf("%s while cancelling: %+v", name, r)
+}
+
+// Once the run is cancelled, a job that hasn't started takes the path its
+// if: gives it, as ACTIVATE's do: one that can't outlive the cancel and is
+// decided before its needs finish is skipped because its needs failed; one
+// that reads its needs, env, an input whose value reads env, or a status
+// function ends cancelled; and one that can outlive the cancel, or whose
+// if:'s value is the word always, is readied as ever, with cancelled()
+// read from its needs alone.
+func TestReadyCancelled(t *testing.T) {
+	const workflow = `
+on:
+  execute:
+    inputs:
+      go: {type: boolean, default: true}
+      mode: {type: string, default: always}
+      fromenv: {type: string, default: '${{ env.MODE }}'}
+      chain: {type: string, default: '${{ inputs.fromenv }}'}
+      group:
+        type: group
+        items:
+          e: {type: string, default: '${{ env.MODE }}'}
+          plain: {type: string, default: a}
+      flat:
+        type: group
+        flatten: true
+        items:
+          fe: {type: string, default: '${{ env.MODE }}'}
+      wizard:
+        type: step
+        title: Settings
+        options:
+          we: {type: string, default: '${{ env.MODE }}'}
+      rows:
+        optional: true
+        type: list
+        template:
+          x: {type: string, default: '${{ env.MODE }}'}
+          y: {type: string, default: b}
+env:
+  MODE: fast
+jobs:
+  dep:
+    steps: [{run: "true"}]
+  free:
+    steps: [{run: "true"}]
+  plain:
+    needs: [dep]
+    steps: [{run: "true"}]
+  false:
+    needs: [dep]
+    if: false
+    steps: [{run: "true"}]
+  input:
+    needs: [dep]
+    if: ${{ inputs.go }}
+    steps: [{run: "true"}]
+  as-text:
+    needs: [dep]
+    if: ${{ needs.dep != '' }}
+    steps: [{run: "true"}]
+  group-plain:
+    needs: [dep]
+    if: ${{ inputs.group.plain != '' }}
+    steps: [{run: "true"}]
+  row-plain:
+    needs: [dep]
+    if: ${{ inputs.rows[0].y != '' }}
+    steps: [{run: "true"}]
+  value-always:
+    needs: [dep]
+    if: ${{ 'always' }}
+    steps: [{run: "true"}]
+  word-always:
+    needs: [dep]
+    if: ${{ always }}
+    steps: [{run: "true"}]
+  input-always:
+    needs: [dep]
+    if: ${{ inputs.mode }}
+    steps: [{run: "true"}]
+  output:
+    needs: [dep]
+    if: ${{ needs.dep.outputs.go == 'yes' }}
+    steps: [{run: "true"}]
+  output-always:
+    needs: [dep]
+    if: ${{ needs.dep.outputs.mode }}
+    steps: [{run: "true"}]
+  output-broken:
+    needs: [dep]
+    if: ${{ fromJSON(needs.dep.outputs.mode) }}
+    steps: [{run: "true"}]
+  input-broken:
+    needs: [dep]
+    if: ${{ fromJSON(inputs.mode) }}
+    steps: [{run: "true"}]
+  result:
+    needs: [dep]
+    if: ${{ needs.dep.result == 'success' }}
+    steps: [{run: "true"}]
+  env:
+    needs: [dep]
+    if: ${{ env.MODE == 'fast' }}
+    steps: [{run: "true"}]
+  env-free:
+    if: ${{ env.MODE == 'fast' }}
+    steps: [{run: "true"}]
+  env-input:
+    needs: [dep]
+    if: ${{ inputs.fromenv == 'fast' }}
+    steps: [{run: "true"}]
+  env-chain:
+    needs: [dep]
+    if: ${{ inputs.chain == 'fast' }}
+    steps: [{run: "true"}]
+  env-group:
+    needs: [dep]
+    if: ${{ inputs.group.e == 'fast' }}
+    steps: [{run: "true"}]
+  group-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.group) != '' }}
+    steps: [{run: "true"}]
+  list-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.rows) != '' }}
+    steps: [{run: "true"}]
+  row-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.rows[0]) != '' }}
+    steps: [{run: "true"}]
+  env-flat:
+    needs: [dep]
+    if: ${{ inputs.fe == 'fast' }}
+    steps: [{run: "true"}]
+  env-wizard:
+    needs: [dep]
+    if: ${{ inputs.we == 'fast' }}
+    steps: [{run: "true"}]
+  flat-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.flat) != '' }}
+    steps: [{run: "true"}]
+  wizard-whole:
+    needs: [dep]
+    if: ${{ toJSON(inputs.wizard) != '' }}
+    steps: [{run: "true"}]
+  env-row:
+    needs: [dep]
+    if: ${{ inputs.rows[0].x == 'fast' }}
+    steps: [{run: "true"}]
+  on-success:
+    needs: [dep]
+    if: success()
+    steps: [{run: "true"}]
+  on-failure:
+    needs: [dep]
+    if: failure()
+    steps: [{run: "true"}]
+  not-cancelled:
+    needs: [dep]
+    if: ${{ !cancelled() }}
+    steps: [{run: "true"}]
+  word:
+    needs: [dep]
+    if: always
+    steps: [{run: "true"}]
+  on-always:
+    needs: [dep]
+    if: ${{ always() && env.MODE == 'fast' }}
+    steps: [{run: "true"}]
+  on-cancel:
+    needs: [dep]
+    if: cancelled()
+    steps: [{run: "true"}]
+  not-failure:
+    needs: [dep]
+    if: ${{ !failure() }}
+    steps: [{run: "true"}]
+  matrix:
+    needs: [dep]
+    strategy:
+      matrix:
+        os: [linux, mac]
+    steps: [{run: "true"}]
+  matrix-reads:
+    needs: [dep]
+    if: ${{ matrix.os == needs.dep.outputs.os }}
+    strategy:
+      matrix:
+        os: [linux, mac]
+    steps: [{run: "true"}]
+  matrix-when:
+    needs: [dep]
+    if: ${{ matrix.when }}
+    strategy:
+      matrix:
+        when: [always, never]
+    steps: [{run: "true"}]
+`
+	p := compiled(t, workflow, nil)
+	run := runValues(t, p, nil)
+	skips, ends, outlives := plan.CancelPathSkip, plan.CancelPathEnd, plan.CancelPathOutlive
+	for name, want := range map[string]plan.CancelPath{
+		"dep": skips, "free": skips, "plain": skips, "false": skips, "input": skips, "as-text": skips,
+		"group-plain": skips, "row-plain": skips, "matrix": skips, "matrix-when": skips, "input-broken": skips,
+		// A group, or a wizard step, that flattens its inputs beside its key
+		// has no value there.
+		"flat-whole": skips, "wizard-whole": skips,
+		// The plan holds the group read whole, its plain input in it, but not
+		// its input made from env; nor the list, whose rows have one.
+		"group-whole": ends, "list-whole": ends, "row-whole": ends, "env-wizard": ends,
+		"output": ends, "output-always": ends, "output-broken": ends, "result": ends,
+		"env": ends, "env-free": ends, "env-input": ends,
+		"env-chain": ends, "env-group": ends, "env-flat": ends, "env-row": ends, "on-success": ends,
+		"on-failure": ends, "not-cancelled": ends, "matrix-reads": ends,
+		"value-always": outlives, "word-always": outlives, "input-always": outlives, "word": outlives,
+		"on-always": outlives, "on-cancel": outlives, "not-failure": outlives,
+	} {
+		if got, err := p.CancelPath(name, run, nil); err != nil || got != want {
+			t.Errorf("%s takes %d, %v; want %d", name, got, err, want)
+		}
+	}
+	if len(p.Jobs) != 39 {
+		t.Errorf("the plan has %d jobs, and the test names 39", len(p.Jobs))
+	}
+	// An input the run was given a value for reads nothing, whatever its
+	// default reads, nor does one whose default reads only such an input,
+	// nor a list's row given a value, nor a group, a list or a row read
+	// whole once each of its inputs made from env is given one. While one
+	// isn't, as a row's here, the list and the row read env.
+	for _, tc := range []struct {
+		rows any
+		want plan.CancelPath
+	}{
+		{[]any{map[string]any{"x": "x", "y": "y"}}, skips},
+		{[]any{map[string]any{"y": "y"}}, ends},
+	} {
+		given, diags := compile.Compile("workflow.yaml", []byte(workflow), map[string]any{
+			"fromenv": "fast", "group": map[string]any{"e": "slow"}, "rows": tc.rows,
+		}, compile.Options{})
+		if diags.HasErrors() {
+			t.Fatal(diags)
+		}
+		for name, want := range map[string]plan.CancelPath{
+			"env-input": skips, "env-chain": skips, "env-group": skips, "group-whole": skips,
+			"env-row": tc.want, "list-whole": tc.want, "row-whole": tc.want,
+		} {
+			if got, err := given.CancelPath(name, runValues(t, given, nil), nil); err != nil || got != want {
+				t.Errorf("%s, given rows %v, takes %d, %v; want %d", name, tc.rows, got, err, want)
+			}
+		}
+	}
+	// An if: that reads matrix is evaluated for an instance.
+	for i, want := range []plan.CancelPath{outlives, skips} {
+		instance := &plan.Instance{Key: "matrix-when#" + strconv.Itoa(i), Index: i, Matrix: plan.DataOf(map[string]any{"when": []any{"always", "never"}[i]})}
+		if got, err := p.CancelPath("matrix-when", run, instance); err != nil || got != want {
+			t.Errorf("matrix-when#%d takes %d, %v; want %d", i, got, err, want)
+		}
+	}
+	if _, err := p.CancelPath("missing", run, nil); err == nil {
+		t.Error("a job the plan doesn't have has a path")
+	}
+
+	type result struct{ skipped, needsFailed, cancelled, runs bool }
+	ready := func(name string, dep plan.JobResult) result {
+		t.Helper()
+		in := plan.ReadyInput{Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": dep}}
+		if len(job(t, p, name).Needs) == 0 {
+			in.Needs = nil
+		}
+		r, diags, err := p.Ready(t.Context(), name, in)
+		if err != nil || len(diags) > 0 {
+			t.Fatalf("%s: %v, %v", name, diags, err)
+		}
+		return result{r.Skipped, r.NeedsFailed, r.Cancelled, r.Job != nil || r.Expansion != nil}
+	}
+	skip, end, runs, skipped := result{skipped: true, needsFailed: true}, result{cancelled: true}, result{runs: true}, result{skipped: true}
+	succeeded := plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"go": "yes", "mode": "always", "os": "linux"}}
+	for name, want := range map[string][2]result{
+		// What it gives once dep succeeded, and once dep was cancelled.
+		"free":          {runs, runs},
+		"plain":         {skip, skip},
+		"false":         {skip, skip},
+		"input":         {skip, skip},
+		"group-plain":   {skip, skip},
+		"matrix":        {skip, skip},
+		"matrix-when":   {skip, skip},
+		"value-always":  {runs, runs},
+		"word-always":   {runs, runs},
+		"input-always":  {runs, runs},
+		"output":        {end, end},
+		"output-always": {runs, runs},
+		"output-broken": {end, end},
+		"result":        {end, end},
+		"env":           {end, end},
+		"env-free":      {end, end},
+		"env-input":     {end, end},
+		"on-failure":    {end, end},
+		"not-cancelled": {end, end},
+		"matrix-reads":  {runs, runs},
+		"word":          {runs, runs},
+		"on-always":     {runs, runs},
+		"on-cancel":     {skipped, runs},
+		"not-failure":   {runs, runs},
+	} {
+		for i, dep := range []plan.JobResult{succeeded, {Outcome: plan.OutcomeCancelled, Outputs: succeeded.Outputs}} {
+			if got := ready(name, dep); got != want[i] {
+				t.Errorf("%s while cancelling, after dep's %s: %+v, want %+v", name, dep.Outcome, got, want[i])
+			}
+		}
+	}
+	// An if: whose value its needs make the word always runs on, which the
+	// coordinator reads in its IfAlways; one they make anything else ends
+	// cancelled, as one that fails to evaluate does then.
+	r, _, err := p.Ready(t.Context(), "output-always", plan.ReadyInput{Run: run, Cancelled: true, Needs: map[string]plan.JobResult{"dep": succeeded}})
+	if err != nil || r.Job == nil || !r.Job.IfAlways {
+		t.Errorf("output-always: %+v, %v", r, err)
+	}
+	sometimes := map[string]plan.JobResult{"dep": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"mode": "sometimes"}}}
+	if r, diags, err := p.Ready(t.Context(), "output-always", plan.ReadyInput{Run: run, Cancelled: true, Needs: sometimes}); err != nil || len(diags) > 0 || !r.Cancelled {
+		t.Errorf("output-always after sometimes: %+v, %v, %v", r, diags, err)
+	}
+	// One of CancelPathSkip's that fails to evaluate fails the job.
+	if r, diags, err := p.Ready(t.Context(), "input-broken", plan.ReadyInput{Run: run, Cancelled: true}); err != nil || r != nil || !diags.HasErrors() {
+		t.Errorf("input-broken: %+v, %v, %v", r, diags, err)
+	}
+	// One whose value is the word always, readied before its needs have
+	// finished, as CancelPath can't have said if its evaluation succeeded,
+	// is the caller's mistake.
+	if r, _, err := p.Ready(t.Context(), "input-always", plan.ReadyInput{Run: run, Cancelled: true}); err == nil {
+		t.Errorf("input-always readied without its needs: %+v", r)
+	}
+
+	// An instance takes its job's path, and one that reads matrix decides
+	// on its own values.
+	needs := map[string]plan.JobResult{"dep": succeeded}
+	for _, tc := range []struct {
+		job       string
+		matrix    map[string]any
+		cancelled bool
+		want      result
+	}{
+		{"matrix-reads", map[string]any{"os": "linux"}, false, runs},
+		{"matrix-reads", map[string]any{"os": "mac"}, false, skipped},
+		{"matrix-reads", map[string]any{"os": "linux"}, true, end},
+		{"matrix-when", map[string]any{"when": "always"}, true, runs},
+		{"matrix-when", map[string]any{"when": "never"}, true, skip},
+		{"matrix", map[string]any{"os": "mac"}, true, skip},
+	} {
+		instance := &plan.Instance{Key: tc.job + "#0", Matrix: plan.DataOf(tc.matrix)}
+		r, diags, err := p.Ready(t.Context(), tc.job, plan.ReadyInput{Run: run, Cancelled: tc.cancelled, Needs: needs, Instance: instance})
+		if err != nil || len(diags) > 0 {
+			t.Fatal(diags, err)
+		}
+		if got := (result{r.Skipped, r.NeedsFailed, r.Cancelled, r.Job != nil}); got != tc.want {
+			t.Errorf("an instance of %s with %v, cancelled %v: %+v, want %+v", tc.job, tc.matrix, tc.cancelled, got, tc.want)
 		}
 	}
 }
