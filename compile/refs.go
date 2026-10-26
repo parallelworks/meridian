@@ -9,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/internal/jsonptr"
+	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -141,6 +142,14 @@ func (c *compiler) checkRef(r expr.Ref, ph plan.Phase, job *jobInfo, in *spot, a
 	switch r.Context {
 	case "inputs":
 		f = c.checkInputRef(path)
+		if f.kind == nil && len(in.loc) > 0 && (in.loc[0] == "sessions" || in.loc[0] == "links") {
+			// The sessions are made, and the links shown, before any job
+			// runs, so what is known only then, through an input, can't be
+			// read there either.
+			if later := c.laterContext(path, map[string]bool{}); later != "" {
+				f = finding{problems.ContextNotKnown, problems.Params{"context": later, "phase": ph.String()}}
+			}
+		}
 	case "needs":
 		f = c.checkNeedsRef(path, ph, job)
 	case "steps":
@@ -176,6 +185,89 @@ func (c *compiler) checkRef(r expr.Ref, ph plan.Phase, job *jobInfo, in *spot, a
 	}
 	c.reportIn(in, at, f.kind, f.params)
 	return f.kind.Severity() != problems.Error
+}
+
+// laterContexts are the contexts no value is known in before a job runs:
+// the workflow's env:, which a job reads with its own over it and what the
+// worker sets as each attempt starts, and what jobs give.
+var laterContexts = map[string]bool{"env": true, "needs": true, "steps": true, "job": true, "matrix": true}
+
+// laterContext returns the context of laterContexts that the value of the
+// input at path in the values reads, as its default does, or one of its
+// items' or its rows' does, or the value of an input it reads in turn; or
+// "" if it reads none. Of a list's rows, or a repeated step's, it reads
+// only what gives the field path names: that field's definition in the
+// rows' template, and its place in each default row. seen holds the
+// definitions and the values read already, by their JSON Pointers.
+func (c *compiler) laterContext(path []string, seen map[string]bool) string {
+	var f *field
+	for n := len(path); n > 0 && f == nil; n-- {
+		f = c.inputs.fieldAt(path[:n])
+	}
+	if f == nil {
+		return ""
+	}
+	var found string
+	// read looks for what the expressions at loc, a value, read.
+	read := func(loc []string) {
+		exprs, _ := c.inputs.workflow.Exprs(loc)
+		for _, e := range exprs {
+			for _, ref := range e.Refs() {
+				switch {
+				case laterContexts[ref.Context]:
+					found = ref.Context
+				case ref.Context == "inputs" && !unnamed(ref.Path):
+					found = c.laterContext(ref.Path, seen)
+				}
+				if found != "" {
+					return
+				}
+			}
+		}
+	}
+	// walk reads the defaults in def, a definition at loc, and in the
+	// definitions it holds.
+	var walk func(def any, loc []string)
+	walk = func(def any, loc []string) {
+		m, ok := def.(map[string]any)
+		pointer := jsonptr.Format(loc)
+		if !ok || found != "" || seen[pointer] {
+			return
+		}
+		seen[pointer] = true
+		for k, x := range jsonvalue.Sorted(m) {
+			if k == "default" {
+				read(appendPath(loc, k))
+			} else {
+				walk(x, appendPath(loc, k))
+			}
+			if found != "" {
+				return
+			}
+		}
+	}
+	rows := "template"
+	if f.repeats() {
+		rows = "options"
+	}
+	if rest := path[len(f.path):]; len(rest) >= 2 && (f.typ == "list" || f.repeats()) {
+		// A field of the rows: its definition, and its value in each
+		// default row.
+		key := rest[1]
+		at := appendPath(f.loc, rows, key)
+		walk(lookup(c.doc.Value, at), at)
+		defaults, _ := lookup(c.doc.Value, appendPath(f.loc, "default")).([]any)
+		for i := range defaults {
+			at := appendPath(f.loc, "default", strconv.Itoa(i), key)
+			if pointer := jsonptr.Format(at); found == "" && !seen[pointer] {
+				seen[pointer] = true
+				read(at)
+			}
+		}
+		return found
+	}
+	walk(lookup(c.doc.Value, f.loc), f.loc)
+	return found
 }
 
 // reportProblem reports p, a probable mistake in an expression, at byte

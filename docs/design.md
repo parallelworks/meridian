@@ -135,8 +135,8 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     has it.
 - **Stricter than ACTIVATE.** Where ACTIVATE runs a workflow whose meaning
   would depend on something it shouldn't, Meridian refuses it rather than
-  guess. Each such place comes with its addition, and no known workflow
-  has one:
+  guess. Each such place comes with an addition, or with a bug fix ACTIVATE
+  takes too, and no known workflow has one:
   - a group's `flatten` is `true` or `false` written out. An expression
     there is a schema error: ACTIVATE reads it as evaluated where it fills
     the defaults, as text that isn't `true` where it resolves resources,
@@ -149,7 +149,19 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     ignored group drops the other's value with its own, which a workflow's
     meaning shouldn't depend on. Wizard steps whose inputs share a key are
     run as they were. None of the 221 known workflows has a group with
-    `flatten`, so none has either.
+    `flatten`, so none has either;
+  - an expression in `sessions:` or `links:` that reads an input whose
+    value reads `env`, `needs`, `steps`, `job` or `matrix`, as its default
+    does, is an error as the run is created (`context_not_known`), whatever
+    was submitted for the input ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+    ACTIVATE refuses it only while the input's value is still that
+    expression, and reads the input's value where one was given, as a form
+    gives what it can evaluate: whether a run is created would depend on
+    what was typed. An input whose default reads `needs`, `job` or
+    `matrix` is an error on its own, which fails the run as it starts
+    (`context_not_known`, at its default), where ACTIVATE gives the
+    expression's text. None of the 16 known workflows with `sessions:`
+    writes an expression in them, and none has `links:`.
 - **Metadata.** A workflow can carry `name`, `description`, `icon` and
   `thumbnail`. `description` is a string or `{file: <path>}`; `icon` and
   `thumbnail` are paths. Paths are relative to the workflow file and may not
@@ -318,13 +330,18 @@ files.
   yet; it will read them so. ACTIVATE takes the same fix by evaluating
   both with the values it fills in. Of the 221 known workflows, 16 have
   `sessions:`, none writes an expression in them, and none has `links:`.
-- **An expression in `sessions:` or `links:` can't read `env`, `needs` or
-  `steps`**: it is an error as the run is created (`context_not_known`),
-  as in the workflow's `env:`, where ACTIVATE left such an expression for
-  the worker to evaluate, which neither reaches, so the session or the
-  link was made with the expression's text. ACTIVATE takes the same fix by
-  refusing it as the run is created. None of the 16 workflows with
-  `sessions:` writes an expression in them, and none has `links:`.
+- **An expression in `sessions:` or `links:` can't read `env`, `needs`,
+  `steps`, `job` or `matrix`**, directly or through an input whose value
+  reads one, as one whose default reads `env` does: it is an error as the
+  run is created (`context_not_known`), as in the workflow's `env:`. The
+  sessions are made, and the links shown, before any job runs; a job's
+  `env` holds its own `env:` and what the worker sets as each attempt
+  starts besides the workflow's, so what the workflow's alone gives is a
+  value no job reads. ACTIVATE left such an expression for the worker to
+  evaluate, which neither reaches, so the session or the link was made
+  with the expression's text, and takes the same fix by refusing it as the
+  run is created. None of the 16 workflows with `sessions:` writes an
+  expression in them, and none has `links:`.
 - **An ignored group with `flatten: true` drops its inputs' values in a
   group that flattens or a wizard step that flattens too**, as it does
   anywhere else, where ACTIVATE kept them: the outer container copied back
