@@ -1427,7 +1427,7 @@
   },
   "member_invalid": {
     "title": "无效的成员",
-    "why": "成员的名称由字母、数字、_、- 和 . 组成，并以字母或数字开头。其 backend 为 local、ssh、kubernetes、slurm 或 pbs；isolation 指定容器运行时（如 podman）或 host；cpu 为核数（如 4 或 0.5）或千分之一核数（如 500m）；memory 为字节数或带后缀的数（如 8Gi 或 512M）；gpu 为整数。max-walltime、margin 和 default-timeout 为整秒的时长，如 24h、90m 或 30s。",
+    "why": "成员的名称由字母、数字、_、- 和 . 组成，并以字母或数字开头。其 backend 为 local、ssh、kubernetes、slurm 或 pbs；isolation 指定容器运行时（如 podman）或 host；cpu 为核数（如 4 或 0.5）或千分之一核数（如 500m）；memory 为字节数或带后缀的数（如 8Gi 或 512M）；gpu 为整数。max-walltime、margin 和 default-timeout 为大于 0 的时长，写法与工作流的 timeout: 相同：整数秒，或整数的分钟、小时、天，如 3600、90m、24h 或 1d。",
     "fix": [
       "按其键的要求更正该值。"
     ]

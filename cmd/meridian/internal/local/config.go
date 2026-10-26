@@ -362,8 +362,8 @@ func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, e
 			case "isolation":
 				m.Isolation = text
 			default:
-				seconds, err := parseSeconds(text)
-				if err != nil {
+				seconds, ok := parseSeconds(text)
+				if !ok {
 					return m, invalid(v, key, text)
 				}
 				switch key {

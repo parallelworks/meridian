@@ -61,8 +61,8 @@ gpu:
       settings: {port: 22, host: gpu1.example.com, options: {a: [1, "x"]}}
       isolation: podman
       resources: {cpu: 500m, memory: 1.5Gi, gpu: 2}
-      max-walltime: 24h
-      margin: 5m
+      max-walltime: 1d
+      margin: 300
       default-timeout: 90s
     - name: cluster
       backend: slurm
@@ -126,6 +126,8 @@ func TestGroupsFileRefuses(t *testing.T) {
 		"gpu":               {"g:\n  members:\n    - {name: a, backend: local, resources: {gpu: -1}}\n", problems.MemberInvalid, 3},
 		"gpu text":          {"g:\n  members:\n    - {name: a, backend: local, resources: {gpu: one}}\n", problems.ConfigWrongType, 3},
 		"walltime":          {"g:\n  members:\n    - {name: a, backend: local, max-walltime: 1.5s}\n", problems.MemberInvalid, 3},
+		"walltime in parts": {"g:\n  members:\n    - {name: a, backend: local, max-walltime: 1h30m}\n", problems.MemberInvalid, 3},
+		"margin of 0":       {"g:\n  members:\n    - {name: a, backend: local, margin: 0}\n", problems.MemberInvalid, 3},
 		"settings":          {"g:\n  members:\n    - {name: a, backend: ssh, settings: [host]}\n", problems.ConfigWrongType, 3},
 		"settings nan":      {"g:\n  members:\n    - {name: a, backend: ssh, settings: {weight: .nan}}\n", problems.MemberSettingsNotJSON, 3},
 		"settings repeated": {"g:\n  members:\n    - {name: a, backend: ssh, settings: {host: a, host: b}}\n", problems.ConfigYAMLSyntax, 3},

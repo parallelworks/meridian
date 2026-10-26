@@ -43,15 +43,17 @@ func TestParseGPU(t *testing.T) {
 	}
 }
 
+// A member's durations are read as a workflow's timeout: is, since
+// placement compares the two.
 func TestParseSeconds(t *testing.T) {
-	for in, want := range map[string]int64{"24h": 86400, "90m": 5400, "30s": 30, "1h30m": 5400} {
-		if got, err := parseSeconds(in); err != nil || got != want {
-			t.Errorf("parseSeconds(%q) = %d, %v, want %d", in, got, err, want)
+	for in, want := range map[string]int64{"24h": 86400, "90m": 5400, "30s": 30, "3600": 3600, "1d": 86400, "+5m": 300} {
+		if got, ok := parseSeconds(in); !ok || got != want {
+			t.Errorf("parseSeconds(%q) = %d, %t, want %d", in, got, ok, want)
 		}
 	}
-	for _, in := range []string{"", "0s", "-1h", "1.5s", "500ms", "10", "forever"} {
-		if got, err := parseSeconds(in); err == nil {
-			t.Errorf("parseSeconds(%q) = %d, want an error", in, got)
+	for _, in := range []string{"", "0", "0s", "-1h", "1.5s", "500ms", "1h30m", "forever", "2147483648"} {
+		if got, ok := parseSeconds(in); ok {
+			t.Errorf("parseSeconds(%q) = %d, want none", in, got)
 		}
 	}
 }

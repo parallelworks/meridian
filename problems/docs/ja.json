@@ -1427,7 +1427,7 @@
   },
   "member_invalid": {
     "title": "無効なメンバー",
-    "why": "メンバーの名前には英字、数字、_、-、. を使い、英字か数字で始めます。backend は local、ssh、kubernetes、slurm、pbs のいずれか、isolation は podman などのコンテナランタイムか host、cpu はコア数（4 や 0.5 など）か千分の一単位の数（500m など）、memory はバイト数か接尾辞付きの数（8Gi や 512M など）、gpu は整数です。max-walltime、margin、default-timeout は秒単位の整数の期間（24h、90m、30s など）です。",
+    "why": "メンバーの名前には英字、数字、_、-、. を使い、英字か数字で始めます。backend は local、ssh、kubernetes、slurm、pbs のいずれか、isolation は podman などのコンテナランタイムか host、cpu はコア数（4 や 0.5 など）か千分の一単位の数（500m など）、memory はバイト数か接尾辞付きの数（8Gi や 512M など）、gpu は整数です。max-walltime、margin、default-timeout は 0 より大きい期間で、ワークフローの timeout: と同じく、秒数の整数か、分・時間・日の数の整数で書きます（3600、90m、24h、1d など）。",
     "fix": [
       "キーに合わせて値を修正してください。"
     ]
