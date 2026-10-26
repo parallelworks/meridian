@@ -8,6 +8,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -109,8 +110,20 @@ type Sessions interface {
 	// sessions.<name>. It makes none: the run may never start.
 	Check(ctx context.Context, sessions map[string]any) (map[string]string, error)
 	// Make makes the sessions of the run runID as it starts, from the
-	// workflow's sessions: and what Check gave for them. Making them again
-	// for the same run, as a coordinator that starts the run again after
-	// another stopped does, makes nothing more.
-	Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string) error
+	// workflow's sessions:, evaluated with the run's values as the phases
+	// after Start read them, and the names Check gave them. read says what
+	// evaluating them read: if it read a variable or a password
+	// (read.Private), what they give is private, to be kept out of what
+	// everyone who can see the run sees, as its private values are; and if
+	// it read a secret (read.Marked), it is to be masked as what is made
+	// from one is, with the run's masked values (plan.RunValues.Masked).
+	// Where read.Private is set, Make mustn't log or quote what they give,
+	// in an error among the rest: it can be private though the masked
+	// values don't hold it, as a redirect: a password decided is. Start
+	// masks a refusal's params then, and returns, for any other error, one
+	// that says only that the provider couldn't make them.
+	// Making them again for a run that has them, as a coordinator that
+	// starts the run again after another stopped does, makes nothing more;
+	// a rerun, whose sessions ended with the run, makes them again.
+	Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string, read expr.Read) error
 }

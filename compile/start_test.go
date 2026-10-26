@@ -633,7 +633,9 @@ func TestStartSessions(t *testing.T) {
 	if res, diags := startRun(t, c, vars, compile.StartInput{RunID: "r1", Sessions: s}); res == nil {
 		t.Fatal(diags)
 	}
-	if len(s.made) != 1 || s.made[0] != `r1 {"desktop":{"redirect":"${{ inputs.n == 2 }}","useTLS":false}}` {
+	// The provider gets the sessions evaluated with the run's values, and
+	// that what they give read a variable, through n's default.
+	if len(s.made) != 1 || s.made[0] != `r1 {"desktop":{"redirect":true,"useTLS":false}} private` {
 		t.Errorf("made %q", s.made)
 	}
 	bad := testVariables{"vars.N": {Value: "two"}}
@@ -643,6 +645,88 @@ func TestStartSessions(t *testing.T) {
 	s.err = problems.InputRejected.Problem(problems.Params{"input": "desktop", "reason": "busy"})
 	if res, diags := startRun(t, c, vars, compile.StartInput{RunID: "r3", Sessions: s}); res != nil || len(diags.Errors()) != 1 || diags.Errors()[0].Code != problems.InputRejected.Code() {
 		t.Errorf("a provider's problem: %v", diags)
+	}
+}
+
+// Start evaluates the sessions: with the run's values: a session that reads
+// a password is a secret's, which the provider is told, and one that fails
+// to evaluate fails the run, without showing what it read, and makes no
+// session.
+func TestStartEvaluatesSessions(t *testing.T) {
+	vars := testVariables{"vars.S": {Value: "s3cr3t{", Secret: true}}
+	src := workflow("pw: {type: password}", "sessions:\n  desktop:\n    useTLS: true\n    prompt-for-name: {default: '${{ inputs.pw }}'}\n")
+	s := &testSessions{}
+	c := createWith(t, src, map[string]any{"pw": "hunter2"}, compile.Options{Inputs: passThrough{}, Sessions: s})
+	if res, diags := startRun(t, c, vars, compile.StartInput{RunID: "r1", Sessions: s}); res == nil {
+		t.Fatal(diags)
+	}
+	if len(s.made) != 1 || s.made[0] != `r1 {"desktop":{"prompt-for-name":{"default":"hunter2"},"useTLS":true}} private secret` {
+		t.Errorf("made %q", s.made)
+	}
+	src = workflow("a: {type: string, optional: true}", "sessions:\n  desktop:\n    redirect: ${{ fromJSON(vars.S) }}\n")
+	c = createWith(t, src, nil, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts(), Sessions: s})
+	res, diags := startRun(t, c, vars, compile.StartInput{RunID: "r2", Sessions: s})
+	if res != nil || len(s.made) != 1 {
+		t.Fatalf("a run whose sessions fail started, or made sessions: %q", s.made)
+	}
+	errs := diags.Errors()
+	if len(errs) != 1 || errs[0].Code != problems.FromJSONInvalid.Code() || errs[0].Path() != "/sessions" || strings.Contains(errs[0].Error(), "s3cr3t") {
+		t.Errorf("diagnostics %v, want from_json_invalid at the session, masked", diags)
+	}
+}
+
+// An expression in sessions: or links: can't read env, needs or steps,
+// which no run knows before its jobs run: it is an error as the run is
+// created, where ACTIVATE made the session or the link with the
+// expression's text.
+func TestSessionsReadNoLaterContext(t *testing.T) {
+	for _, ref := range []string{"env.E", "needs.a.outputs.x", "steps.s.outputs.x"} {
+		for _, block := range []string{
+			"sessions:\n  desktop:\n    prompt-for-name: {default: '${{ " + ref + " }}'}\n",
+			"links:\n  docs:\n    url: 'https://example.com/${{ " + ref + " }}'\n",
+		} {
+			src := workflow("a: {type: string, optional: true}", "env:\n  E: e\n"+block)
+			c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Inputs: passThrough{}, Sessions: &testSessions{}})
+			errs := diags.Errors()
+			if err != nil || c != nil || len(errs) != 1 || errs[0].Code != problems.ContextNotKnown.Code() {
+				t.Errorf("%s in %.8s: %v, %v, %v, want context_not_known", ref, block, c, diags, err)
+			}
+		}
+	}
+}
+
+// What a session provider refuses or fails with, making sessions that read
+// a variable or a password, shows nothing of what they gave: a refusal's
+// params are masked, and any other error is one that says only that the
+// provider couldn't make them, which wraps the context's end but nothing
+// else of the provider's. Of sessions that read neither, the provider's
+// error is Start's as it is.
+func TestStartSessionsErrorsMasked(t *testing.T) {
+	src := workflow("pw: {type: password}", "sessions:\n  desktop:\n    prompt-for-name: {default: '${{ inputs.pw }}'}\n")
+	c := createWith(t, src, map[string]any{"pw": "hunter2"}, compile.Options{Inputs: passThrough{}, Sessions: &testSessions{}})
+	start := func(err error) (*compile.StartResult, problems.Diagnostics, error) {
+		return compile.Start(t.Context(), c.Plan, compile.StartInput{RunID: "r", Record: c.Record, Variables: testVariables{}, Inputs: passThrough{}, Sessions: &testSessions{err: err}})
+	}
+	refused := problems.InputRejected.Problem(problems.Params{"input": "desktop", "reason": `can't make {"default":"hunter2"}`})
+	res, diags, err := start(refused)
+	if res != nil || err != nil || len(diags.Errors()) != 1 || diags.Errors()[0].Path() != "/sessions" || strings.Contains(fmt.Sprint(diags), "hunter2") {
+		t.Errorf("a refusal: %v, %v, %v, want input_rejected at /sessions, masked", res, diags, err)
+	}
+	for _, wrapped := range []error{compile.ErrMismatch, context.DeadlineExceeded} {
+		_, _, err := start(fmt.Errorf(`POST /sessions {"default":"hunter2"}: %w`, wrapped))
+		if err == nil || strings.Contains(err.Error(), "hunter2") || errors.Is(err, compile.ErrMismatch) {
+			t.Errorf("an error wrapping %v: %v, want one that quotes nothing and isn't ErrMismatch", wrapped, err)
+		}
+		if done := errors.Is(wrapped, context.DeadlineExceeded); errors.Is(err, context.DeadlineExceeded) != done {
+			t.Errorf("an error wrapping %v: %v wraps the context's end: %t, want %t", wrapped, err, !done, done)
+		}
+	}
+	// Sessions that read no variable and no password.
+	src = workflow("pw: {type: password}", "sessions:\n  desktop:\n    useTLS: true\n")
+	c = createWith(t, src, map[string]any{"pw": "hunter2"}, compile.Options{Inputs: passThrough{}, Sessions: &testSessions{}})
+	down := errors.New("the session provider is down")
+	if _, _, err := start(down); !errors.Is(err, down) {
+		t.Errorf("sessions that read nothing private: %v, want the provider's error", err)
 	}
 }
 
@@ -666,7 +750,7 @@ func (s *testSessions) Check(_ context.Context, sessions map[string]any) (map[st
 	return names, nil
 }
 
-func (s *testSessions) Make(_ context.Context, runID string, sessions map[string]any, _ map[string]string) error {
+func (s *testSessions) Make(_ context.Context, runID string, sessions map[string]any, _ map[string]string, read expr.Read) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -674,7 +758,14 @@ func (s *testSessions) Make(_ context.Context, runID string, sessions map[string
 	if err != nil {
 		return err
 	}
-	s.made = append(s.made, runID+" "+string(data))
+	made := runID + " " + string(data)
+	if read.Private {
+		made += " private"
+	}
+	if read.Marked {
+		made += " secret"
+	}
+	s.made = append(s.made, made)
 	return nil
 }
 

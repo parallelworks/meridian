@@ -361,11 +361,12 @@ func maskedIf(marked bool, err error) error {
 
 // run compiles what the plan holds about the run as a whole. Its
 // expressions are checked with what Create knows (plan.PhaseCreate), so
-// they read no env: sessions: and links: are evaluated as the run is
-// created, and Start evaluates the workflow's env: and timeout:, but the
-// workflow's env: is what env holds, and format 1 never read env in the
-// workflow's timeout:, as ACTIVATE leaves an expression there that reads
-// it as its text, and so ignores the timeout. Input definitions, which
+// they read no env: Start evaluates the workflow's env:, its timeout: and
+// its sessions:, which the session provider checks as they are written as
+// the run is created, and links: are only checked; but the workflow's env:
+// is what env holds, and format 1 never read env in the workflow's
+// timeout:, as ACTIVATE leaves an expression there that reads it as its
+// text, and so ignores the timeout. Input definitions, which
 // Start evaluates with the workflow's env (plan.PhaseStart), aren't
 // checked for what they read yet.
 func (c *compiler) run(source plan.Source) plan.Run {

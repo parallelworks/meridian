@@ -88,12 +88,21 @@ func (r *inputResolver) unansweredFor(f *field, err error) error {
 	if !r.mayBePrivate(f) {
 		e.reason = err.Error()
 	}
+	e.ctx = contextEnd(err)
+	return e
+}
+
+// contextEnd returns context.Canceled or context.DeadlineExceeded, if err
+// is or wraps it, and nil if not: what an error that says nothing else of
+// err, as one that can quote a private value, wraps of it, so that a
+// caller can tell a context's end apart.
+func contextEnd(err error) error {
 	for _, done := range []error{context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, done) {
-			e.ctx = done
+			return done
 		}
 	}
-	return e
+	return nil
 }
 
 // platformTypes are the input types whose values name a platform's
