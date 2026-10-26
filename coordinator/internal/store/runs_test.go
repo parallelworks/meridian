@@ -328,4 +328,17 @@ func TestMalformedRun(t *testing.T) {
 			return nil
 		})
 	}
+
+	// A start state of a version a newer release writes is that release's,
+	// not malformed.
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_runs SET diagnostics = NULL, start_state = CAST('{"version":2,"later":1}' AS BLOB)`)
+		return err
+	})
+	inTx(t, s, func(tx *Tx) error {
+		if _, err := tx.Run(id); !errors.Is(err, plan.ErrVersion) || errors.Is(err, ErrMalformed) {
+			t.Errorf("Run with a start state of version 2 = %v, want plan.ErrVersion", err)
+		}
+		return nil
+	})
 }

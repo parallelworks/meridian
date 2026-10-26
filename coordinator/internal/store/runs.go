@@ -178,6 +178,11 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	r.StartedAt, r.EndedAt = timeOf(started), timeOf(ended)
 	if startState != nil {
 		if r.StartState, err = compile.DecodeStartState(startState); err != nil {
+			// One of a newer version is a newer release's to read, and is
+			// plan.ErrVersion, not malformed.
+			if errors.Is(err, plan.ErrVersion) {
+				return nil, fmt.Errorf("store: run %s's start state: %w", id, err)
+			}
 			return nil, fmt.Errorf("%w: run %s's start state: %w", ErrMalformed, id, err)
 		}
 	}
