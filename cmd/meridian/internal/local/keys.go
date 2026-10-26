@@ -40,9 +40,10 @@ const wrapVersion = 1
 // Wrap creates the key file the first time it is needed, and Unwrap never
 // does: a key file that has gone can't unwrap what the one before it
 // wrapped, and a new one wouldn't either. A key file that isn't the user's
-// own, or that others can read, a wrapped key that won't open, and one
-// wrapped some other way are problems, which won't go away by trying
-// again; a data key that isn't 32 bytes is the caller's mistake.
+// own, or that others can read, one that isn't there when Unwrap needs it,
+// a wrapped key that won't open, and one wrapped some other way are
+// problems, which won't go away by trying again; a data key that isn't 32
+// bytes is the caller's mistake.
 type Keys struct {
 	dir string
 
@@ -107,16 +108,28 @@ func (k *Keys) cipher(create bool) (cipher.AEAD, error) {
 	if k.aead != nil {
 		return k.aead, nil
 	}
+	// A key file that isn't there, nor its directory, can't unwrap what
+	// the one before it wrapped, and no other can, which trying again
+	// won't change.
+	missing := func() error {
+		return problems.KeyFileMissing.Problem(problems.Params{"path": filepath.Join(k.dir, KeyFile)})
+	}
 	// The key file is opened in the state directory, through a root that
 	// keeps every path in it there.
 	root, err := os.OpenRoot(k.dir)
+	if errors.Is(err, fs.ErrNotExist) && !create {
+		return nil, missing()
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
 	key, err := readKeyFile(root)
-	if errors.Is(err, fs.ErrNotExist) && create {
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && create:
 		key, err = createKeyFile(root)
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, missing()
 	}
 	if err != nil {
 		return nil, err

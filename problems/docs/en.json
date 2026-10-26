@@ -1021,6 +1021,20 @@
       "Report the bug, with the worker's log."
     ]
   },
+  "record_unreadable": {
+    "why": "A run's secret record holds what the run was given and the secrets it read. It is encrypted with AES-256-GCM under a data key of the run's own, bound to the run's ID, to its store's, and to how many times it has been encrypted again, so that it can't be moved to another run, even one of the same workflow with the same inputs, nor to a run with the same ID in another store, nor be put back in the place of a later record of its run. This one doesn't decrypt as its run's latest: it was moved from another run or another store, an older one was put back, or it was changed. Rather than run with what another run was given, or with what its own run had before, the run fails.",
+    "fix": [
+      "Rerun the run, which makes its secret record again from what is submitted.",
+      "Find out what changed the store's database: Meridian writes a run's secret record for that run alone."
+    ]
+  },
+  "record_reseal_limit": {
+    "why": "A run's secret record is encrypted again under the same data key, with a new random nonce, each time the run adds to it, as when a job ends with private outputs. A data key is used a limited number of times, so that two of its nonces are never likely to be the same, which would weaken the encryption. This run has added to its record that many times, and it fails rather than go past the limit.",
+    "fix": [
+      "If the run has that many jobs and matrix instances with private outputs, split it into several runs.",
+      "Otherwise report it as a bug: no run with fewer jobs adds to its record that often."
+    ]
+  },
   "workflow_too_large": {
     "why": "A workflow file is read whole, so there is a limit on its size. This one came from a stream, such as standard input, which Meridian stopped reading once it passed the limit.",
     "fix": [
@@ -1290,6 +1304,13 @@
     "fix": [
       "If you have a copy of the key file, put it back.",
       "Otherwise remove it: Meridian creates another, and the runs whose data keys the old one wrapped can't be resumed."
+    ]
+  },
+  "key_file_missing": {
+    "why": "The key file holds the 32-byte AES-256 key that wraps the data keys of your runs' secret records. Meridian creates it when it first wraps a key, and never makes another in its place to unwrap one: a new key file can't unwrap what the old one wrapped. The key file, or the state directory, has been moved or removed, so the runs whose data keys it wrapped can't read their secret records.",
+    "fix": [
+      "If you have a copy of the key file, or of the state directory, put it back.",
+      "Otherwise rerun the runs, whose new data keys a new key file wraps."
     ]
   },
   "key_unwrap_failed": {

@@ -96,14 +96,34 @@ func TestKeysWrapRefusesShortKey(t *testing.T) {
 }
 
 // TestKeysUnwrapCreatesNothing checks that Unwrap never makes a key file,
-// which couldn't unwrap what was wrapped before it.
+// which couldn't unwrap what was wrapped before it, and that a key file
+// that isn't there, or whose directory isn't, is a problem, which trying
+// again won't fix: one that has gone since it wrapped a key among them.
 func TestKeysUnwrapCreatesNothing(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := NewKeys(dir).Unwrap(t.Context(), "run-1", []byte{wrapVersion, 1, 2, 3}); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("Unwrap without a key file: %v", err)
+	path := filepath.Join(dir, KeyFile)
+	_, err := NewKeys(dir).Unwrap(t.Context(), "run-1", []byte{wrapVersion, 1, 2, 3})
+	if p := kindtest.Want(t, err, problems.KeyFileMissing); p.Params["path"] != path {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
-	if _, err := os.Stat(filepath.Join(dir, KeyFile)); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Error("Unwrap created a key file")
+	}
+
+	wrapped, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewKeys(dir).Unwrap(t.Context(), "run-1", wrapped)
+	kindtest.Want(t, err, problems.KeyFileMissing)
+
+	gone := filepath.Join(dir, "gone")
+	_, err = NewKeys(gone).Unwrap(t.Context(), "run-1", wrapped)
+	if p := kindtest.Want(t, err, problems.KeyFileMissing); p.Params["path"] != filepath.Join(gone, KeyFile) {
+		t.Errorf("the problem's params are %v", p.Params)
 	}
 }
 

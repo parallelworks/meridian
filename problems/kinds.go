@@ -335,6 +335,18 @@ var (
 	ReportNotEncoded      = define(Error, "report_not_encoded", "Report the worker couldn't encode")
 )
 
+// The coordinator's problems with a run, which fail it: run is the run's
+// ID.
+var (
+	// RecordUnreadable is a run's secret record that doesn't decrypt as
+	// the run's latest: one sealed for another run or another store, one
+	// that a later one replaced, or one changed.
+	RecordUnreadable = define(Error, "record_unreadable", "Secret record that can't be decrypted", "run")
+	// RecordResealLimit is a run's secret record that has been encrypted
+	// again limit times, as many as its data key is used for.
+	RecordResealLimit = define(Error, "record_reseal_limit", "Secret record encrypted too many times", "run", "limit")
+)
+
 // The meridian command's own problems, in CommandRegistry. A path, an
 // environment variable's name or value, or what the operating system said,
 // reason, is a param as it is.
@@ -402,6 +414,7 @@ var (
 // uses: names.
 var (
 	KeyFileInvalid     = defineCommand("key_file_invalid", "Key file that isn't a key", "path", "size")
+	KeyFileMissing     = defineCommand("key_file_missing", "Key file that isn't there", "path")
 	KeyUnwrapFailed    = defineCommand("key_unwrap_failed", "Data key that can't be unwrapped", "run", "path")
 	KeyWrappingUnknown = defineCommand("key_wrapping_unknown", "Data key wrapped an unknown way", "run")
 	GitUnavailable     = defineCommand("git_unavailable", "git can't be run", "reason")

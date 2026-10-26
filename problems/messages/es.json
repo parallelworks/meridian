@@ -171,6 +171,8 @@
   "outputs_removed": "El directorio del worker, que contiene $OUTPUTS, se eliminó mientras se ejecutaba el paso, así que se pierde lo que el paso escribió en $OUTPUTS después.",
   "log_not_kept": "El worker no guardó {size} bytes del registro del paso: guarda como máximo {limit} bytes de registros que el coordinador no ha almacenado, mientras no puede comunicarse con él, y ninguno cuando su disco está lleno.",
   "report_not_encoded": "El worker no pudo codificar su informe para el coordinador, así que lo envió sin las salidas ni los problemas que contenía, y el trabajo falla, salvo que se haya cancelado.",
+  "record_unreadable": "El registro secreto de la ejecución {run} no se puede descifrar como el más reciente de la ejecución: se cifró para otra ejecución u otro almacén, uno posterior lo ha sustituido, o ha cambiado.",
+  "record_reseal_limit": "El registro secreto de la ejecución {run} se ha vuelto a cifrar {limit} veces, tantas como se usa su clave de datos, así que la ejecución no puede continuar.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",
@@ -215,6 +217,7 @@
   "variable_file_unreadable": "La variable {variable} toma su valor del archivo {file}, que no se puede leer: {reason}.",
   "variable_file_home": "La variable {variable} toma su valor de {file}, y HOME no tiene una ruta absoluta para su ~/.",
   "key_file_invalid": "El archivo de clave {path} tiene {size} bytes, no los 32 de una clave.",
+  "key_file_missing": "El archivo de clave {path} no está, así que las claves de datos que envolvió no se pueden desenvolver.",
   "key_unwrap_failed": "La clave de datos de la ejecución {run} no se puede desenvolver con el archivo de clave {path}: se envolvió con otra clave o para otra ejecución, o ha cambiado.",
   "key_wrapping_unknown": "La clave de datos de la ejecución {run} se envolvió de una forma que esta versión de Meridian no conoce.",
   "git_unavailable": "Meridian no puede ejecutar git: {reason}.",
