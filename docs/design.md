@@ -1126,7 +1126,9 @@ continues from the same plan.
 It holds:
 
 - **The run:** the workflow's source and revision, its format and metadata,
-  the Meridian release that compiled it, the input values known when the
+  the Meridian release that compiled it (`Run.Release`, `plan.Release`:
+  the module's version in the build, or `(devel)` for a build that isn't a
+  release), the input values known when the
   run was created that read no variable and no password, the workflow's
   `env`, the run's timeout, `remote` and `sessions`, where the decisions of
   its shape that read a variable or a password are, and the secrets and
@@ -1143,7 +1145,9 @@ It holds:
   with it as the run's password, which the plan never holds.
 - **Jobs**, one per job: dependencies (on all instances of a job, or `:any`
   of them), its `strategy:`, its `if:`, group, resources and `retry:`,
-  steps, outputs, timeout and `env`, and the secrets and variables it reads.
+  steps, outputs, timeout and `env`. The secrets and variables a job reads
+  follow from its expressions, which `plan.Job.Reads` finds, so the plan
+  doesn't list them again.
 - **Steps:** what they run (a command, a workflow by its pinned reference,
   or a built-in action), and their `if:`, `env`, `with:`, shell, working
   directory, `retry:`, timeout, `ignore-errors`, `early-cancel` and cleanup.
@@ -1162,8 +1166,8 @@ read back, and an explicit `null`, such as a step's `working-directory:
 null`, stays distinct from a value that isn't there.
 
 The plan holds no secret values, nor any value made from one. It names the
-secrets the run reads, the run's for Start and each job's for its attempts:
-the secret variables an expression reads, each of a context's when it reads
+secrets the run reads, for Start, and `plan.Job.Reads` finds each job's,
+for its attempts, among them: the secret variables an expression reads, each of a context's when it reads
 every variable of the context, as `vars.*` does; and passwords, by their
 paths in the inputs' values, `password` inputs and the password fields of
 lists' rows, lists whose rows hold one and are evaluated at Start, and
@@ -1238,9 +1242,6 @@ A source's location names the workflow to whoever can see the run, so it
 says nothing of the machine the run was created on: a platform gives its
 own name for the workflow, and `meridian` gives the workflow's path in its
 Git repository, or its file's name outside one.
-
-Today the plan doesn't hold the release, or each job's secrets and
-variables, which `plan.Job.Reads` finds from the job's expressions.
 
 ### The secret record
 

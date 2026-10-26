@@ -38,6 +38,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 		Run: plan.Run{
 			Source:    plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
 			Format:    1,
+			Release:   "v1.0.0",
 			Inputs:    plan.DataOf(map[string]any{"name": "Alice", "n": int64(3), "note": "${{ not.parsed }}"}),
 			Env:       map[string]plan.Value{"GREETING": mustValue(t, "hello ${{ inputs.name }}")},
 			Variables: []string{"org.REGION", "vars"},
@@ -87,9 +88,10 @@ func edgePlan(t testing.TB) *plan.Plan {
 	return &plan.Plan{
 		Version: plan.Version,
 		Run: plan.Run{
-			Source: plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
-			Format: 1,
-			Name:   text,
+			Source:  plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
+			Format:  1,
+			Release: "v1.0.0",
+			Name:    text,
 			Inputs: plan.DataOf(map[string]any{
 				"text":    text,
 				"numbers": []any{int64(1) << 60, 3, 1e21, 1e-7, 0.1, math.Copysign(0, -1), 123456789.0},

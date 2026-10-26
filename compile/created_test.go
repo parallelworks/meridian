@@ -292,3 +292,12 @@ hosts: {type: list, template: {name: {type: string}, zone: {type: string, defaul
 		t.Errorf("means %v, want %v", c.Record.Means, want)
 	}
 }
+
+// A plan records the Meridian release that compiled it: in a test, a
+// build of Meridian that isn't a release, (devel).
+func TestPlanRecordsTheRelease(t *testing.T) {
+	c := createRun(t, workflow("a: {type: string, default: x}"), nil, nil)
+	if c.Plan.Run.Release != plan.Release || plan.Release != "(devel)" {
+		t.Errorf("the plan's release is %q, plan.Release %q", c.Plan.Run.Release, plan.Release)
+	}
+}

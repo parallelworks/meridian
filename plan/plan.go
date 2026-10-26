@@ -5,6 +5,8 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/parallelworks/meridian/expr"
@@ -15,6 +17,40 @@ import (
 // Version is the version of the plan encoding this package reads and
 // writes. It changes only for a change that can't be an addition.
 const Version = 1
+
+// modulePath is Meridian's module.
+const modulePath = "github.com/parallelworks/meridian"
+
+// Release is the Meridian release this package is, as the module's
+// version in the binary's build information says: the main module's, for
+// meridian, or the version of Meridian a platform's binary requires. It is
+// (devel), as go writes it, for a build of Meridian that isn't a release,
+// such as one of a working tree, or of a module that replaces Meridian with
+// a directory. The compiler records it in each plan (Run.Release).
+var Release = release()
+
+// release returns Release.
+func release() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "(devel)"
+	}
+	m := &info.Main
+	if m.Path != modulePath {
+		i := slices.IndexFunc(info.Deps, func(d *debug.Module) bool { return d.Path == modulePath })
+		if i < 0 {
+			return "(devel)"
+		}
+		m = info.Deps[i]
+	}
+	if m.Replace != nil {
+		m = m.Replace
+	}
+	if m.Version == "" {
+		return "(devel)"
+	}
+	return m.Version
+}
 
 // A Plan is a compiled run: everything a coordinator needs to schedule it,
 // and a worker to run its jobs, without the workflow file.
@@ -37,7 +73,10 @@ type Plan struct {
 type Run struct {
 	Source Source `json:"source"`
 	// Format is the workflow's format.
-	Format      int    `json:"format"`
+	Format int `json:"format"`
+	// Release is the Meridian release that compiled the plan (Release), as
+	// v1.2.3, or (devel) for a build of Meridian that isn't one.
+	Release     string `json:"release"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 	Icon        string `json:"icon,omitempty"`
