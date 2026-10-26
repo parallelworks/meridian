@@ -1361,6 +1361,19 @@ The coordinator encrypts and stores it.
   the record's parts is either what a person or a form gives, the
   workflow's own text (`Withheld`, which the pinned workflow holds), or
   what Create and Start make again from them.
+
+  Deleted means erased from the store's files, not only from its tables,
+  so that someone who later has both a copy of the database and the key
+  that wrapped the record's data key can't open it. On SQLite, the store
+  writes with `secure_delete` on, which overwrites with zeros what it
+  deletes or replaces, the sealed record and its wrapped key among it,
+  rather than leave it in free space. Once the transaction that ends the
+  run commits, the store checkpoints the write-ahead log into the
+  database and truncates it, so the log keeps no copy either. If a reader
+  in another process holds the log open, that checkpoint can't truncate
+  it, and the next one does: when the next run ends, when the store is
+  next opened, or in hopper's maintenance. A backup of the database taken
+  before the run ended holds the record, sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
   calls, and `meridian resume` picks a run up in another process, so a run's
   secrets live where its state does, and the store holds them only

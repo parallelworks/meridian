@@ -74,7 +74,9 @@ var (
 
 // Options say how to open a store. A nil *Options means the defaults.
 type Options struct {
-	// Log hears of the migrations Open applies. Nil means none.
+	// Log hears of what the store does that its calls don't say: the
+	// migrations Open applies, and a checkpoint of the write-ahead log
+	// that couldn't finish. Nil means none.
 	Log *slog.Logger
 }
 
@@ -83,6 +85,7 @@ type Options struct {
 type Store struct {
 	driver *hoppersqlite.Driver
 	db     *sql.DB
+	log    *slog.Logger
 	// file is the database's file, as SQLite opened it, its links
 	// resolved: the same for every process that opens the database.
 	file string
@@ -134,7 +137,7 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{driver: d, db: d.DB()}
+	s := &Store{driver: d, db: d.DB(), log: log}
 	if err := s.setUp(ctx, log); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
@@ -219,7 +222,7 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.migrate(ctx, log); err != nil {
 		return err
 	}
-	return s.View(ctx, func(tx *Tx) error {
+	if err := s.View(ctx, func(tx *Tx) error {
 		if err := tx.tx.QueryRowContext(ctx, "SELECT value FROM meridian_store WHERE key = 'store_id'").Scan(&s.id); err != nil {
 			return fmt.Errorf("store: read the store's ID: %w", err)
 		}
@@ -228,7 +231,13 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 			err = fmt.Errorf("store: SQLite opened %q, not a file", s.file)
 		}
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	// A process that ended between a run's end and the checkpoint after it
+	// left the log holding the run's secret record.
+	s.truncateLog(ctx)
+	return nil
 }
 
 // newID returns n random bytes, as hex.
@@ -257,6 +266,9 @@ type Tx struct {
 	ctx context.Context
 	tx  *sql.Tx
 	s   *Store
+	// erased is set once the transaction has deleted a secret record,
+	// which a checkpoint of the write-ahead log then erases from it.
+	erased bool
 }
 
 // Tx runs fn in a transaction, which it commits if fn returns nil and
@@ -287,10 +299,46 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	}
 	// After a commit, this is a no-op.
 	defer func() { _ = sqlTx.Rollback() }()
-	if err := fn(&Tx{ctx: ctx, tx: sqlTx, s: s}); err != nil {
+	if opts == nil {
+		// What a transaction deletes or overwrites, a secret record and
+		// its data key among it, SQLite overwrites with zeros in the
+		// database and its log, rather than leaving it in free space.
+		// The setting is the connection's, and is set on each that runs
+		// a transaction of the store's, since hoppersqlite's Config has
+		// no setting for its connections: once it has, it moves there.
+		if _, err := sqlTx.ExecContext(ctx, "PRAGMA secure_delete = ON"); err != nil {
+			return err
+		}
+	}
+	tx := &Tx{ctx: ctx, tx: sqlTx, s: s}
+	if err := fn(tx); err != nil {
 		return err
 	}
-	return sqlTx.Commit()
+	if err := sqlTx.Commit(); err != nil {
+		return err
+	}
+	if tx.erased {
+		s.truncateLog(context.WithoutCancel(ctx))
+	}
+	return nil
+}
+
+// truncateLog checkpoints the write-ahead log into the database and
+// truncates it, so that what a transaction deleted, which secure_delete
+// overwrote with zeros in the pages the checkpoint writes, is in neither
+// any more. A reader in another process that still reads from the log
+// keeps the checkpoint from finishing, and the next one, of the next run
+// to end, of the next Open, or of hopper's maintenance, truncates it: the
+// store says so in its log.
+func (s *Store) truncateLog(ctx context.Context) {
+	var busy, logPages, checkpointed int64
+	err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &checkpointed)
+	switch {
+	case err != nil:
+		s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
+	case busy != 0:
+		s.log.WarnContext(ctx, "store: a reader kept the write-ahead log from being checkpointed and truncated", "pages", logPages, "checkpointed", checkpointed)
+	}
 }
 
 // SQL returns the transaction, for hopper's calls in it, such as

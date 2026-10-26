@@ -182,8 +182,11 @@ func (tx *Tx) StartRun(id string) error {
 }
 
 // EndRun records how the run ended, and deletes its secret record, which
-// nothing needs once the run has ended. A run that has ended already, or
-// that has an attempt that hasn't, is ErrState.
+// nothing needs once the run has ended. The record is erased: overwritten
+// with zeros as it is deleted, and, once the transaction commits, gone
+// from the write-ahead log too, which the store checkpoints and
+// truncates. A run that has ended already, or that has an attempt that
+// hasn't, is ErrState.
 func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error {
 	switch outcome {
 	case plan.OutcomeSuccess, plan.OutcomeFailure, plan.OutcomeCancelled:
@@ -213,8 +216,11 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err := oneRow(res, fmt.Errorf("%w: run %s has ended", ErrState, id)); err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_records WHERE run_id = ?", n)
-	return err
+	if _, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
+		return err
+	}
+	tx.erased = true
+	return nil
 }
 
 // runNumberOf returns the number of the run with the ID id, which the store
