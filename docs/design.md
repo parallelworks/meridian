@@ -2334,12 +2334,16 @@ is the word `always`, as a step's can be (below).
     cancelled, and `failure()` when one failed, or was skipped because
     its own needs failed. If it is true, the job runs, and runs on as
     above.
-  - **One that calls a status function, or reads `needs`**, and isn't
-    cancel-aware, waits until its needs have ended, then ends cancelled,
-    without its `if:` being evaluated.
+  - **One that calls a status function, or reads `needs` or `env`**, and
+    isn't cancel-aware, waits until its needs have ended, then ends
+    cancelled, without its `if:` being evaluated.
   - **Any other**, a job with no `if:` among them, ends at once, skipped
     because its needs failed, as format 1 ends a job whose dependency
-    failed.
+    failed. A job that needs none was readied when the run started, so
+    it never takes this path.
+- **A matrix instance waiting for its turn** under `max-parallel` ends
+  cancelled, whatever its `if:`, as format 1 ends one waiting for its
+  turn.
 - **The run's outcome after a cancel** is cancelled, whatever its jobs did
   after it, an `always()` job that succeeds among them. It comes from the
   stop record, as format 1's comes from its record of an external
@@ -2351,8 +2355,11 @@ is the word `always`, as a step's can be (below).
   running in a job whose `if:` isn't cancel-aware then fails with the
   reason `timeout`, and so does its job; a cancel-aware job runs on, as
   after a cancel. Jobs not yet readied take the same three paths as after
-  a cancel. The run's outcome is failure, with the reason `timeout`, which
-  Meridian adds: format 1 records no reason.
+  a cancel. The run's outcome then comes from its jobs, as format 1's
+  does: failure if one failed, as a stopped one has, or was skipped
+  because its needs failed, with the reason `timeout`, which Meridian adds
+  since format 1 records none; and success when nothing failed, as when
+  only cancel-aware jobs were left and they succeeded.
 - **A job's own timeout** ends only that job, and the worker enforces it.
   The job isn't cancelled: the step it was running fails, so `failure()`
   is true after it and `cancelled()` false, and the job fails with the
