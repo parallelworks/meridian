@@ -2324,7 +2324,8 @@ is the word `always`, as a step's can be (below).
 - **A job whose `if:` is cancel-aware runs on**, as format 1 runs it apart
   from the run: neither a cancel nor the run's timeout stops it, whether
   it is running, or placed and not yet claimed, which is then claimed and
-  runs. It ends as its steps do, and only its own timeout stops it.
+  runs. It ends as its steps do: neither stops it, though its own
+  timeout still does.
 - **A job not yet readied**, still waiting for its needs, takes one of
   three paths, by its `if:`:
   - **One that is cancel-aware** waits until its needs have ended. Its
@@ -2703,8 +2704,8 @@ serves every attempt that reaches it there, of whichever job: any replica
 can serve any job. It closes the connection only when it gives the lease
 up. A replica that takes the lease over, once its holder has stopped
 renewing it, sets the connection up again at the same address, so the
-member's running workers reconnect to it. Locally, the socket in the state
-directory is held under a lock on a file beside the store's database,
+member's running workers reconnect to it. Locally, the socket is held
+under a lock on a file beside the store's database,
 which the system releases when its holder exits, however it exits, and
 the store records which process holds it and since when, from which the
 grace after a takeover is counted ([Leases and fencing](#leases-and-fencing)).
