@@ -12,6 +12,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -74,6 +75,11 @@ type Attempt struct {
 	Worker workerapi.Worker
 	// Placement is where it was placed, once it has been (RecordPlacement).
 	Placement Placement
+	// Private reports whether where it is placed is private, as where its
+	// job runs is when that reads a variable or a password: its group,
+	// member and backend are then sealed, and never held in the clear, and
+	// a problem it ends with is stored masked (EndAttempt).
+	Private   bool
 	CreatedAt time.Time
 	// ClaimedAt is when its worker claimed it, RenewedAt when its lease was
 	// last renewed, by the claim or a heartbeat, and StepStartedAt when a
@@ -204,7 +210,7 @@ func (tx *Tx) NewToken(id string) (string, error) {
 
 const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a.token_hash, a.credential_hash,
   a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest,
-  a.grp, a.member, a.backend, a.placement_id, a.placed_digest,
+  a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.private_placement IS NOT NULL,
   a.created_at, a.claimed_at, a.renewed_at, a.step_started_at,
   a.end_kind, a.outcome, a.reason, a.complete_digest, a.report, a.problem, a.ended_at,
   a.state <> 'ended' AND a.fence = j.fence AND j.outcome IS NULL`
@@ -226,7 +232,7 @@ FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key =
 WHERE `+where, args...).Scan(
 		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
 		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest,
-		&group, &member, &backend, &pid, &placed,
+		&group, &member, &backend, &pid, &placed, &a.Private,
 		&created, &claimed, &renewed, &started,
 		&kind, &outcome, &reason, &a.End.CompleteDigest, &a.End.Report, &prob, &ended, &a.Holds)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -398,8 +404,11 @@ func (tx *Tx) StepStarted(id string) error {
 	return err
 }
 
-// EndAttempt records how the attempt ended. An attempt that no longer
-// holds its job, as one that has ended doesn't, is ErrFenced.
+// EndAttempt records how the attempt ended. The problem of an attempt
+// whose placement is private (Attempt.Private) is stored masked
+// (problems.MaskProblem), since it can name the member; its report is the
+// caller's to mask. An attempt that no longer holds its job, as one that
+// has ended doesn't, is ErrFenced.
 func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	switch end.Kind {
 	case EndCompleted:
@@ -418,15 +427,8 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	default:
 		return fmt.Errorf("store: %q isn't how an attempt ends", end.Kind)
 	}
-	var prob []byte
-	if end.Problem != nil {
-		if end.Kind != EndCompleted && end.Kind != EndSetupFailed {
-			return fmt.Errorf("store: an attempt that ended %s with a problem", end.Kind)
-		}
-		var err error
-		if prob, err = jsonv2.Marshal(end.Problem, jsonv2.Deterministic(true)); err != nil {
-			return err
-		}
+	if end.Problem != nil && end.Kind != EndCompleted && end.Kind != EndSetupFailed {
+		return fmt.Errorf("store: an attempt that ended %s with a problem", end.Kind)
 	}
 	a, err := tx.Attempt(id)
 	if err != nil {
@@ -437,6 +439,16 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 		return ErrFenced
 	case end.Kind == EndCompleted && a.State == AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s completed before it was claimed", ErrState, id)
+	}
+	var prob []byte
+	if end.Problem != nil {
+		p := end.Problem
+		if a.Private {
+			p = problems.MaskProblem(p)
+		}
+		if prob, err = jsonv2.Marshal(p, jsonv2.Deterministic(true)); err != nil {
+			return err
+		}
 	}
 	now, err := tx.now()
 	if err != nil {

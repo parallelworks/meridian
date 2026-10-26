@@ -69,6 +69,20 @@ func TestAppendEvents(t *testing.T) {
 		if err != nil || len(events) != 3 || events[2].Seq != 3 {
 			t.Errorf("Events = %+v, %v", events, err)
 		}
+		var size int64
+		for _, e := range events {
+			body, err := workerapi.Marshal(e)
+			if err != nil {
+				return err
+			}
+			size += int64(len(body))
+		}
+		if n, bytes, err := tx.EventsStored(a.ID); err != nil || n != 3 || bytes != size {
+			t.Errorf("EventsStored = %d, %d, %v; want 3, %d", n, bytes, err, size)
+		}
+		if _, _, err := tx.EventsStored("nothing"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("EventsStored of no attempt = %v, want ErrNotFound", err)
+		}
 		got, err := tx.Attempt(a.ID)
 		if err != nil || got.State != AttemptRunning || got.StepStartedAt.IsZero() {
 			t.Errorf("after a step's start the attempt is %+v, %v", got, err)
@@ -216,4 +230,86 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// AddLogBytes counts an attempt's bytes of logs, which LogBytes gives.
+func TestLogBytes(t *testing.T) {
+	s := open(t)
+	a := claimedAttempt(t, s, 'a')
+	inTx(t, s, func(tx *Tx) error {
+		if n, err := tx.LogBytes(a.ID); err != nil || n != 0 {
+			t.Errorf("LogBytes before any = %d, %v", n, err)
+		}
+		for _, add := range []struct{ n, all int64 }{{10, 10}, {0, 10}, {15, 25}} {
+			if all, err := tx.AddLogBytes(a.ID, add.n); err != nil || all != add.all {
+				t.Errorf("AddLogBytes(%d) = %d, %v; want %d", add.n, all, err, add.all)
+			}
+		}
+		if n, err := tx.LogBytes(a.ID); err != nil || n != 25 {
+			t.Errorf("LogBytes = %d, %v; want 25", n, err)
+		}
+		if _, err := tx.AddLogBytes(a.ID, -1); err == nil {
+			t.Error("AddLogBytes counted -1 bytes")
+		}
+		if _, err := tx.AddLogBytes("nothing", 1); !errors.Is(err, ErrNotFound) {
+			t.Errorf("AddLogBytes of no attempt = %v, want ErrNotFound", err)
+		}
+		return nil
+	})
+}
+
+// An attempt whose placement is private is recorded without its group,
+// member and backend, which are held only sealed, and is claimed once its
+// backend's ID for it is recorded; the problem it ends with is stored
+// masked, since it can name the member.
+func TestPrivatePlacement(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		a, token, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		if err != nil {
+			return err
+		}
+		// As the coordinator records where it is to be placed, sealed.
+		if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET private_placement = x'01' WHERE id = ?", a.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Claim(token, credential('a'), testWorker); !errors.Is(err, ErrNotPlaced) {
+			t.Errorf("Claim before the placement is recorded = %v, want ErrNotPlaced", err)
+		}
+		for _, bad := range []Placement{testPlacement, {Member: "laptop", ID: "1:2", WorkerDigest: testPlacement.WorkerDigest}, {Backend: "local", ID: "1:2", WorkerDigest: testPlacement.WorkerDigest}} {
+			if err := tx.RecordPlacement(a.ID, bad); err == nil {
+				t.Errorf("RecordPlacement of a private placement with %+v succeeded", bad)
+			}
+		}
+		p := Placement{ID: "1:2", WorkerDigest: testPlacement.WorkerDigest}
+		if err := tx.RecordPlacement(a.ID, p); err != nil {
+			return err
+		}
+		if got, err := tx.Attempt(a.ID); err != nil || !got.Private || got.Placement != p {
+			t.Errorf("the attempt is %+v, %v; want private, placed at %+v", got, err, p)
+		}
+		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+			return err
+		}
+		refusal := problems.MemberInvalid.Problem(problems.Params{"group": "secret-group", "key": "cpu", "value": "secret-member"})
+		if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: refusal}); err != nil {
+			return err
+		}
+		var stored []byte
+		if err := tx.tx.QueryRowContext(tx.ctx, "SELECT problem FROM meridian_attempts WHERE id = ?", a.ID).Scan(&stored); err != nil {
+			return err
+		}
+		if strings.Contains(string(stored), "secret-") || !strings.Contains(string(stored), problems.Masked) {
+			t.Errorf("the problem of a private attempt is stored as %s", stored)
+		}
+		if refusal.Params["value"] != "secret-member" {
+			t.Error("EndAttempt changed its caller's problem")
+		}
+		got, err := tx.Attempt(a.ID)
+		if err != nil || got.End.Problem == nil || got.End.Problem.Code != problems.MemberInvalid.Code() || got.End.Problem.Params["key"] != "cpu" {
+			t.Errorf("the attempt's problem is %+v, %v", got.End.Problem, err)
+		}
+		return nil
+	})
 }

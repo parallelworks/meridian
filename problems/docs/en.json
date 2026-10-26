@@ -1067,7 +1067,7 @@
     ]
   },
   "log_truncated": {
-    "why": "A step's log is stored by the coordinator as the worker uploads it. So that a step that prints without end can't fill the coordinator's disk, the coordinator keeps the first bytes of each log, up to a limit, then this line, and nothing more of it. The step runs on, and the worker is told the rest is stored.",
+    "why": "A step's log is stored by the coordinator as the worker uploads it. So that a job that prints without end can't fill the coordinator's disk, the coordinator keeps the bytes of an attempt's logs up to a limit on all of them together. A log that goes past it keeps its bytes to there, then this line, and nothing more of it, and the attempt's later logs keep only this line. The steps run on, and the worker is told the rest is stored.",
     "fix": [
       "Have the step print less, or write what it makes to a file of its own, in the run's directory, rather than to its output."
     ]

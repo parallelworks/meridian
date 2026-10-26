@@ -184,7 +184,7 @@
   "run_malformed": "Run {run}'s stored plan or secret record isn't one this release reads: it names no version, or doesn't decode as the version it names, so the run can't go on.",
   "run_not_started": "Run {run} ended without starting: the coordinator couldn't start it.",
   "run_plan_newer": "Run {run}'s plan, of version {version}, holds what only a newer release of Meridian reads (this one reads version {latest} and earlier), so a release that reads it starts the run.",
-  "log_truncated": "The coordinator keeps at most {limit} bytes of a log, so it didn't keep the rest of this one.",
+  "log_truncated": "The coordinator keeps at most {limit} bytes of an attempt's logs, so it didn't keep the rest of this one.",
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",

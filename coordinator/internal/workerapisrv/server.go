@@ -12,8 +12,9 @@
 //
 // It takes connections on a Unix socket only, and asks the system who each
 // is from before it reads a request (Peers): a connection it doesn't trust
-// is closed unread. It holds at most a number of connections at once,
-// gives each request's headers and body a time to arrive in, at a least
+// is closed unread. It holds at most a number of connections at once, and
+// past it closes the one that has waited longest for a request, gives
+// each request's headers and body a time to arrive in, at a least
 // rate for its size, refuses a body larger than the API allows, 413, and
 // reads every body strictly (workerapi.Unmarshal), 400. So a process of the
 // user's, as every step is, can't hold the server's connections or
@@ -60,15 +61,21 @@ const (
 )
 
 // What the server keeps of an attempt's reports at most: its events, by
-// their number and the bytes they take, and the bytes of each of its logs.
-// Events past them are refused, 413, as no worker of a job the plan bounds
-// sends them; a log keeps its first MaxLogBytes, then a line that says the
-// rest wasn't kept (problems.LogTruncated), and the worker is told the rest
-// is stored, so that it goes on.
+// their number and the bytes they take, and the bytes of its logs, all of
+// them together, of its setup, of each step's try to MaxLogTry, and of
+// each step's cleanup. Events past them are refused, 413, as no worker of
+// a job the plan bounds sends them. The log that reaches MaxLogBytes keeps
+// its bytes to there, then a line that says the rest wasn't kept
+// (problems.LogTruncated), and each of the attempt's logs after it keeps
+// only that line; a try past MaxLogTry, which no workflow is likely to
+// retry to, keeps no log; and the worker is told the rest is stored, so
+// that it goes on. So the logs an attempt has are bounded too, by its job's
+// steps.
 const (
 	MaxEvents      = 1 << 20
 	MaxEventsBytes = 1 << 30
 	MaxLogBytes    = 1 << 30
+	MaxLogTry      = 1000
 )
 
 // The bounds on a request's time: its headers arrive within headerTime,
@@ -88,15 +95,22 @@ const (
 // a machine's jobs hold, each a few.
 const DefaultMaxConnections = 1024
 
+// idleTime is how long a connection is kept between requests. A worker
+// polls for control again as soon as a poll is answered, so its
+// connections are seldom idle for long, and it connects again in place of
+// one that was closed.
+const idleTime = 30 * time.Second
+
 // shutdownTime is how long Serve waits, once its context is done, for the
 // requests it is handling to end.
 const shutdownTime = 5 * time.Second
 
-// Sealer opens a run's secret record, and seals it again with a part added:
-// *seal.Sealer.
+// Sealer opens a run's secret record, and seals and opens its jobs' parts
+// of it: *seal.Sealer.
 type Sealer interface {
 	Open(ctx context.Context, runID string, gen uint64, sealed seal.Sealed) (*plan.Record, error)
-	Reseal(ctx context.Context, runID string, gen uint64, sealed seal.Sealed, rec *plan.Record) (seal.Sealed, uint64, error)
+	SealJob(ctx context.Context, runID, job string, gen uint64, wrapped []byte, rec plan.JobRecord) ([]byte, error)
+	OpenJobs(ctx context.Context, runID string, wrapped []byte, parts map[string]seal.JobPart) (map[string]plan.JobRecord, error)
 }
 
 var _ Sealer = (*seal.Sealer)(nil)
@@ -107,8 +121,8 @@ type Options struct {
 	Store *store.Store
 	// Logs stores the logs workers upload: the coordinator's Logs.
 	Logs runlog.Logs
-	// Sealer opens runs' secret records, and seals them again, as an
-	// attempt's end adds its private outputs.
+	// Sealer opens runs' secret records, and seals each job's part of its
+	// run's, as an attempt's end stores its private outputs.
 	Sealer Sealer
 	// Readier gives the job an attempt claims, as Ready gives it again.
 	Readier Readier
@@ -116,7 +130,9 @@ type Options struct {
 	// Nil means LocalPeers: the process's own user, or root, for every run.
 	Peers Peers
 	// MaxConnections is how many connections the server holds at once, or
-	// DefaultMaxConnections for 0. Another waits until one closes.
+	// DefaultMaxConnections for 0. Another closes the one that has waited
+	// longest for a request, or, while every one is handling a request,
+	// waits until one ends.
 	MaxConnections int
 	// Wake, if it isn't nil, is called once the server has stored a change
 	// to an attempt that its job's supervisor acts on: its claim, its
@@ -198,12 +214,14 @@ func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
 // and every connection that isn't a Unix socket's, before it reads a
 // request from it.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
+	conns := newConnSet(s.maxConns)
 	srv := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: s.headerTime,
 		ReadTimeout:       s.headerTime + s.bodyTime,
-		IdleTimeout:       2 * time.Minute,
+		IdleTimeout:       idleTime,
 		MaxHeaderBytes:    maxHeaderBytes,
+		ConnState:         conns.setState,
 		// The requests' context ends with ctx, which ends the control
 		// polls held, so that a shutdown waits for none of them.
 		BaseContext: func(net.Listener) context.Context { return ctx },
@@ -224,7 +242,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		}
 		shut <- err
 	})
-	err := srv.Serve(&peerListener{Listener: l, s: s, slots: make(chan struct{}, s.maxConns)})
+	err := srv.Serve(&peerListener{Listener: l, s: s, conns: conns})
 	if stop() {
 		// Serve ended on its own, before ctx: nothing shuts it down.
 		return err
@@ -250,61 +268,161 @@ func peerOf(r *http.Request) (int, bool) {
 }
 
 // A peerListener takes only connections from the peers its server
-// accepts, and holds at most as many at once as slots has room for.
+// accepts, and holds at most as many at once as conns does.
 type peerListener struct {
 	net.Listener
 	s     *Server
-	slots chan struct{}
+	conns *connSet
 }
 
 // A peerConn is a connection a peerListener took, and the user it is from.
-// Closing it gives its slot back.
+// Closing it takes it out of its set.
 type peerConn struct {
 	net.Conn
-	uid  int
-	free func()
+	uid int
+	set *connSet
 }
 
 func (c *peerConn) Close() error {
 	err := c.Conn.Close()
-	c.free()
+	c.set.remove(c)
 	return err
 }
 
 func (l *peerListener) Accept() (net.Conn, error) {
 	for {
-		// A slot first: past the limit, connections wait in the system's
-		// queue until one closes.
-		l.slots <- struct{}{}
-		var once sync.Once
-		free := func() { once.Do(func() { <-l.slots }) }
 		c, err := l.Listener.Accept()
 		if err != nil {
-			free()
 			return nil, err
 		}
 		uc, ok := c.(*net.UnixConn)
 		if !ok {
 			l.s.log.Warn("workerapisrv: refused a connection that isn't a Unix socket's", "remote", c.RemoteAddr().String())
 			c.Close()
-			free()
 			continue
 		}
 		uid, err := peercred.UID(uc)
 		if err != nil {
 			l.s.log.Warn("workerapisrv: refused a connection whose user the system doesn't say", "error", err)
 			c.Close()
-			free()
 			continue
 		}
 		if !l.s.peers.Accept(uid) {
 			l.s.log.Warn("workerapisrv: refused a connection from another user", "uid", uid)
 			c.Close()
-			free()
 			continue
 		}
-		return &peerConn{Conn: c, uid: uid, free: free}, nil
+		pc := &peerConn{Conn: c, uid: uid, set: l.conns}
+		if !l.conns.add(pc) {
+			c.Close()
+			return nil, net.ErrClosed
+		}
+		return pc, nil
 	}
+}
+
+// Close closes the listener, and ends an Accept that waits for room.
+func (l *peerListener) Close() error {
+	l.conns.close()
+	return l.Listener.Close()
+}
+
+// A connSet holds the connections a server's listener took, at most max
+// at once, with whether each is waiting for a request, as the HTTP server
+// says (http.Server.ConnState): idle between requests, or new, before its
+// first. Past max, a new connection closes the one that has waited longest,
+// rather than wait for one to close, so that connections that send nothing
+// can't keep a worker out; only when every one is handling a request does
+// it wait.
+type connSet struct {
+	max    int
+	mu     sync.Mutex
+	room   *sync.Cond
+	held   map[*peerConn]connState
+	closed bool
+}
+
+// connState is whether a connection is waiting for a request, and since
+// when.
+type connState struct {
+	waiting bool
+	since   time.Time
+}
+
+func newConnSet(maxConns int) *connSet {
+	cs := &connSet{max: maxConns, held: map[*peerConn]connState{}}
+	cs.room = sync.NewCond(&cs.mu)
+	return cs
+}
+
+// add adds c, once there is room for it, and reports whether it did: not
+// once the set is closed.
+func (cs *connSet) add(c *peerConn) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	for !cs.closed {
+		if len(cs.held) < cs.max {
+			cs.held[c] = connState{waiting: true, since: time.Now()}
+			return true
+		}
+		var oldest *peerConn
+		for held, st := range cs.held {
+			if st.waiting && (oldest == nil || st.since.Before(cs.held[oldest].since)) {
+				oldest = held
+			}
+		}
+		if oldest == nil {
+			cs.room.Wait()
+			continue
+		}
+		delete(cs.held, oldest)
+		// Closed outside the lock, which its Close takes.
+		cs.mu.Unlock()
+		oldest.Close()
+		cs.mu.Lock()
+	}
+	return false
+}
+
+// remove takes c out of the set, which makes room.
+func (cs *connSet) remove(c *peerConn) {
+	cs.mu.Lock()
+	delete(cs.held, c)
+	cs.mu.Unlock()
+	cs.room.Broadcast()
+}
+
+// setState records the state the HTTP server says c is in.
+func (cs *connSet) setState(c net.Conn, state http.ConnState) {
+	pc, ok := c.(*peerConn)
+	if !ok {
+		return
+	}
+	switch state {
+	case http.StateActive:
+		cs.mu.Lock()
+		if _, ok := cs.held[pc]; ok {
+			cs.held[pc] = connState{}
+		}
+		cs.mu.Unlock()
+	case http.StateIdle:
+		cs.mu.Lock()
+		if _, ok := cs.held[pc]; ok {
+			cs.held[pc] = connState{waiting: true, since: time.Now()}
+		}
+		cs.mu.Unlock()
+		cs.room.Broadcast()
+	case http.StateHijacked, http.StateClosed:
+		cs.remove(pc)
+	}
+}
+
+// close ends an add that waits for room, and every add after.
+func (cs *connSet) close() {
+	cs.mu.Lock()
+	cs.closed = true
+	cs.mu.Unlock()
+	cs.room.Broadcast()
 }
 
 // Peers says whom a server takes requests from. A coordinator that runs as

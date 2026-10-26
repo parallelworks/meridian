@@ -284,8 +284,9 @@ func TestSuperseded(t *testing.T) {
 	}
 }
 
-// An end with private outputs stores them only in the run's secret record,
-// sealed again with the next generation, and the rest with the attempt.
+// An end with private outputs stores them only as its job's part of the
+// run's secret record, sealed under the run's data key, and the rest with
+// the attempt: the run's record itself isn't sealed again.
 func TestCompletePrivate(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
@@ -304,31 +305,109 @@ func TestCompletePrivate(t *testing.T) {
 	if bytes.Contains(got.End.Report, []byte("s3cr3t-v4lue")) || !bytes.Contains(got.End.Report, []byte(`"plain":"1"`)) {
 		t.Errorf("the attempt's report is %s", got.End.Report)
 	}
-	var stored *store.Record
-	r.inTx(func(tx *store.Tx) error {
-		stored, err = tx.Record(run)
-		return err
-	})
-	if stored.Generation != 2 {
-		t.Errorf("the record's generation is %d, not 2", stored.Generation)
+	check := func(when string) {
+		t.Helper()
+		if gen := r.recordGeneration(run); gen != 1 {
+			t.Errorf("%s, the run's record is generation %d, not 1", when, gen)
+		}
+		part, gen := r.part(run, "build")
+		if gen != 1 || part.Outputs["token"] != "s3cr3t-v4lue" || part.Outputs["plain"] != "" {
+			t.Errorf("%s, the job's part is generation %d, %+v", when, gen, part)
+		}
 	}
-	rec, err := r.sealer.Open(t.Context(), run, stored.Generation, seal.Sealed{Key: stored.WrappedKey, Record: stored.Sealed})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.Jobs["build"].Outputs["token"] != "s3cr3t-v4lue" || rec.Jobs["build"].Outputs["plain"] != "" {
-		t.Errorf("the record holds %+v of the job", rec.Jobs["build"])
-	}
+	check("once the job ended")
 	// The same end again is answered as before, and changes nothing.
 	if status, answer, _ := c.send(http.MethodPost, workerapi.PathComplete, body, credential); status != http.StatusNoContent {
 		t.Errorf("the end again was answered %d: %s", status, answer)
 	}
+	check("once the end came again")
+}
+
+// recordGeneration returns the generation of the run's secret record.
+func (r *rig) recordGeneration(run string) uint64 {
+	r.t.Helper()
+	var gen uint64
 	r.inTx(func(tx *store.Tx) error {
-		stored, err = tx.Record(run)
+		stored, err := tx.Record(run)
+		if err == nil {
+			gen = stored.Generation
+		}
 		return err
 	})
-	if stored.Generation != 2 {
-		t.Errorf("the end again sealed the record again, to generation %d", stored.Generation)
+	return gen
+}
+
+// part returns the job's part of the run's secret record, opened, and its
+// generation, or 0 for none.
+func (r *rig) part(run, job string) (plan.JobRecord, uint64) {
+	r.t.Helper()
+	var (
+		key   []byte
+		parts map[string]store.JobRecord
+	)
+	r.inTx(func(tx *store.Tx) error {
+		var err error
+		if key, err = tx.WrappedKey(run); err != nil {
+			return err
+		}
+		parts, err = tx.JobRecords(run, []string{job})
+		return err
+	})
+	p, ok := parts[job]
+	if !ok {
+		return plan.JobRecord{}, 0
+	}
+	opened, err := r.sealer.OpenJobs(r.t.Context(), run, key, map[string]seal.JobPart{job: {Generation: p.Generation, Sealed: p.Sealed}})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return opened[job], p.Generation
+}
+
+// Of an attempt whose placement is private, the problem it ends with,
+// which can name the member, is stored masked, with its report, and so is
+// a refusal of its claim; what the worker is answered isn't.
+func TestPrivatePlacementMasked(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	c := newClient(t, r.socket)
+	a, _, credential := r.claimed(c, placed{private: true})
+	setup := problems.MemberInvalid.Problem(problems.Params{"group": "secret-group", "key": "cpu", "value": "secret-member"})
+	end, err := workerapi.Marshal(workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: setup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, answer, _ := c.send(http.MethodPost, workerapi.PathComplete, end, credential); status != http.StatusNoContent {
+		t.Fatalf("the end was answered %d: %s", status, answer)
+	}
+	// The same end again is answered as before.
+	if status, answer, _ := c.send(http.MethodPost, workerapi.PathComplete, end, credential); status != http.StatusNoContent {
+		t.Errorf("the end again was answered %d: %s", status, answer)
+	}
+	stored := func(id string) string {
+		t.Helper()
+		var report, prob []byte
+		r.inTx(func(tx *store.Tx) error {
+			return tx.SQL().QueryRowContext(t.Context(), "SELECT coalesce(report, x''), coalesce(problem, x'') FROM meridian_attempts WHERE id = ?", id).Scan(&report, &prob)
+		})
+		return string(report) + string(prob)
+	}
+	if got := stored(a.ID); strings.Contains(got, "secret-") || !strings.Contains(got, problems.Masked) {
+		t.Errorf("the private attempt's end is stored as %s", got)
+	}
+	if got := r.attempt(a.ID); got.End.Problem == nil || got.End.Problem.Code != problems.MemberInvalid.Code() || got.End.Problem.Params["key"] != "cpu" {
+		t.Errorf("the attempt's problem is %+v", got.End.Problem)
+	}
+
+	run := r.newRun(nil)
+	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
+	placedDigest := "sha256:" + strings.Repeat("a", 64)
+	b, token := r.newAttempt(run, "build", placed{digest: placedDigest, private: true})
+	status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+	if p := wantProblem(t, "a claim of another binary", status, body, workerapi.WorkerDigestMismatch); p.Params[workerapi.ParamPlaced] != placedDigest {
+		t.Errorf("the worker was answered %v", p.Params)
+	}
+	if got := stored(b.ID); strings.Contains(got, placedDigest[7:]) || !strings.Contains(got, problems.Masked) {
+		t.Errorf("the private attempt's refusal is stored as %s", got)
 	}
 }
 

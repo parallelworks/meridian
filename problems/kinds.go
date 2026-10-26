@@ -356,8 +356,9 @@ var (
 	RunMalformed = define(Error, "run_malformed", "Run that can't be read", "run")
 	// RunNotStarted is a run whose Start the coordinator gave up on.
 	RunNotStarted = define(Error, "run_not_started", "Run that ended without starting", "run")
-	// LogTruncated is a log the coordinator kept only the first limit
-	// bytes of: the line that ends it says so.
+	// LogTruncated is a log the coordinator kept only the first bytes of,
+	// as its attempt's logs reached limit bytes in all: the line that ends
+	// it says so.
 	LogTruncated = define(Warning, "log_truncated", "Log the coordinator didn't keep whole", "limit")
 )
 

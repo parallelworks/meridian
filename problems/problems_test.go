@@ -624,3 +624,39 @@ func TestKindProblem(t *testing.T) {
 		t.Errorf("a workflow kind's problem has type %s", p.Type)
 	}
 }
+
+// A masked problem shows nothing of a value: its params and its field
+// errors' are masked, its detail is its message with them, and it has no
+// instance; one of a kind this release doesn't know shows its title.
+func TestMaskProblem(t *testing.T) {
+	p := MemberInvalid.Problem(Params{"group": "gpu-secret", "key": "cpu", "value": "lots"})
+	p.Instance = "/members/gpu-secret"
+	p.Errors = []*problem.FieldError{{Code: MemberInvalid.Code(), Detail: "gpu-secret", Pointer: "#/member", Params: map[string]any{"group": "gpu-secret", "key": "cpu"}}}
+	masked := MaskProblem(p)
+	data, err := jsonv2.Marshal(masked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "gpu-secret") || strings.Contains(string(data), "lots") {
+		t.Errorf("the masked problem shows a value: %s", data)
+	}
+	if masked.Code != p.Code || masked.Type != p.Type || masked.Status != p.Status || masked.Title != p.Title {
+		t.Errorf("the masked problem is another kind: %+v", masked)
+	}
+	if want := `A member of the group "***" has cpu: ***, which isn't valid.`; masked.Detail != want {
+		t.Errorf("Detail = %q, want %q", masked.Detail, want)
+	}
+	if fe := masked.Errors[0]; fe.Pointer != "#/member" || fe.Params["key"] != "cpu" || fe.Params["group"] != Masked {
+		t.Errorf("the field error is masked as %+v", fe)
+	}
+	if p.Params["group"] != "gpu-secret" {
+		t.Error("MaskProblem changed the problem it masked")
+	}
+	unknown := MaskProblem(&problem.Problem{Code: "not_a_kind", Title: "Something", Detail: "gpu-secret", Params: map[string]any{"member": "gpu-secret"}})
+	if unknown.Detail != "Something" || unknown.Params["member"] != Masked {
+		t.Errorf("a problem of a kind this release doesn't know is masked as %+v", unknown)
+	}
+	if MaskProblem(nil) != nil {
+		t.Error("MaskProblem(nil) isn't nil")
+	}
+}

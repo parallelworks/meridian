@@ -35,6 +35,23 @@
 // chance that two of the nonces under its data key are the same below
 // 2^-48, far inside what GCM's random nonces allow (NIST SP 800-38D).
 //
+// A run's secrets can also be kept in parts apart from its record, so that
+// writing one seals only that one, as each job's end stores what the record
+// holds of the job (SealJob, OpenJobs). A part is sealed (SealPart,
+// OpenParts) with AES-256-GCM and a random nonce under a key of its own,
+// which HKDF-SHA256 derives from the run's data key, with no salt and the
+// info
+//
+//	purpose NUL storeID NUL runID NUL partID NUL generation
+//
+// which is the part's associated data too: its purpose a versioned label,
+// as meridian/job-record/1 (PurposeJobRecord), and its ID its own among
+// the run's parts of that purpose, as a job's key. So a part opens only as
+// the latest generation of its own purpose, ID, run and store, which the
+// caller keeps apart from it, as it keeps the record's; and since each
+// derived key seals one generation of one part, the parts take nothing
+// from the bound on the nonces under the data key.
+//
 // # Errors
 //
 // A caller tells what went wrong from the error alone:
@@ -204,12 +221,8 @@ func (s *Sealer) Open(ctx context.Context, runID string, gen uint64, sealed Seal
 		return nil, err
 	}
 	// What the record's first byte says is read before Keys is asked.
-	switch {
-	case len(sealed.Record) == 0 || sealed.Record[0] == 0:
-		return nil, unreadable(runID)
-	case sealed.Record[0] != version:
-		return nil, fmt.Errorf("%w: run %s's secret record is sealed in version %d, and this release seals in version %d",
-			plan.ErrVersion, runID, sealed.Record[0], version)
+	if err := checkVersion(runID, sealed.Record); err != nil {
+		return nil, err
 	}
 	key, err := s.unwrap(ctx, runID, sealed.Key)
 	if err != nil {

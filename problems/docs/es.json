@@ -1244,7 +1244,7 @@
   },
   "log_truncated": {
     "title": "Log que el coordinador no guardó entero",
-    "why": "El coordinador guarda el log de un paso a medida que el worker lo sube. Para que un paso que imprime sin fin no llene el disco del coordinador, este guarda los primeros bytes de cada log, hasta un límite, luego esta línea, y nada más de él. El paso sigue, y al worker se le dice que el resto está guardado.",
+    "why": "El coordinador guarda el log de un paso a medida que el worker lo sube. Para que un trabajo que imprime sin fin no llene el disco del coordinador, este guarda los bytes de los logs de un intento hasta un límite para todos ellos juntos. Un log que lo pasa guarda sus bytes hasta ahí, luego esta línea, y nada más de él, y los logs posteriores del intento guardan solo esta línea. Los pasos siguen, y al worker se le dice que el resto está guardado.",
     "fix": [
       "Haz que el paso imprima menos, o que escriba lo que produce en un archivo propio, en el directorio de la ejecución, en lugar de en su salida."
     ]

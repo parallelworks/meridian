@@ -32,7 +32,9 @@ type Readied struct {
 // A PlanReadier is the coordinator's Readier: it readies an attempt's job
 // from the run's plan, the run's values and its needs' results, each
 // joined from what run state holds of it and what the run's secret record
-// holds, and what the coordinator kept of how it readied the job.
+// holds, a need's in its job's part of the record (store.Tx.JobRecords,
+// seal.Sealer.OpenJobs), and what the coordinator kept of how it readied
+// the job.
 type PlanReadier struct {
 	Store  *store.Store
 	Sealer Sealer
@@ -63,6 +65,7 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 		readied *Readied
 		stored  *store.Record
 		deps    = map[string]*store.Job{}
+		parts   map[string]store.JobRecord
 	)
 	err = pr.Store.View(ctx, func(tx *store.Tx) error {
 		var err error
@@ -94,12 +97,25 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 			}
 			deps[n.Job] = dep
 		}
-		return nil
+		keys := make([]string, 0, len(deps))
+		for _, dep := range deps {
+			keys = append(keys, dep.Key)
+		}
+		parts, err = tx.JobRecords(run.ID, keys)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	rec, err := pr.Sealer.Open(ctx, run.ID, stored.Generation, seal.Sealed{Key: stored.WrappedKey, Record: stored.Sealed})
+	if err != nil {
+		return nil, err
+	}
+	sealedParts := make(map[string]seal.JobPart, len(parts))
+	for key, p := range parts {
+		sealedParts[key] = seal.JobPart{Generation: p.Generation, Sealed: p.Sealed}
+	}
+	jobs, err := pr.Sealer.OpenJobs(ctx, run.ID, stored.WrappedKey, sealedParts)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +130,13 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 	values := plan.JoinRunValues(private, state)
 	needs := make(map[string]plan.JobResult, len(deps))
 	for name, dep := range deps {
-		needs[name] = plan.JoinJobResult(rec.Jobs[dep.Key], *dep.Result)
+		// The job's part of the record, which its attempt's end stored, or
+		// else what the record itself holds of the job.
+		private, ok := jobs[dep.Key]
+		if !ok {
+			private = rec.Jobs[dep.Key]
+		}
+		needs[name] = plan.JoinJobResult(private, *dep.Result)
 	}
 	instance, err := wholeInstance(readied.Instance, rec, job.Name)
 	if err != nil {

@@ -12,15 +12,27 @@ import (
 
 // PlanReadier readies an attempt's job from the plan, with the run's
 // values and its needs' results each joined from run state and the secret
-// record, and gives the job only the part of them it reads; and says how
-// many steps the job has.
+// record, a need's from its job's part of the record, and gives the job
+// only the part of them it reads; and says how many steps the job has.
 func TestPlanReadier(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	rec := created(t).Record
 	rec.Run = &plan.RunValues{Format: 1, Vars: map[string]string{"TOKEN": "t0k3n"}, Secrets: []string{"vars.TOKEN"}}
-	rec.Jobs = map[string]plan.JobRecord{"prep": {Outputs: map[string]string{"x": "private-x"}}}
+	// What the record itself holds of a job gives way to the job's part.
+	rec.Jobs = map[string]plan.JobRecord{"prep": {Outputs: map[string]string{"x": "record-x"}}}
 	run := r.newRun(&rec)
 	r.inTx(func(tx *store.Tx) error {
+		key, err := tx.WrappedKey(run)
+		if err != nil {
+			return err
+		}
+		part, err := r.sealer.SealJob(t.Context(), run, "prep", 1, key, plan.JobRecord{Outputs: map[string]string{"x": "private-x"}})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutJobRecord(run, "prep", 1, part); err != nil {
+			return err
+		}
 		return tx.EndJob(run, "prep", store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeSuccess, Private: []string{"x"}}})
 	})
 	a, _ := r.newAttempt(run, "build", placed{})

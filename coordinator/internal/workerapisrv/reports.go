@@ -13,7 +13,6 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/coordinator/internal/runlog"
-	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -129,9 +128,10 @@ var errTooMuch = errors.New("workerapisrv: more of an attempt's reports than the
 var logParts = []workerapi.LogPart{workerapi.LogSetup, workerapi.LogStep, workerapi.LogCleanup}
 
 // serveLogs stores part of one of the attempt's logs, and answers with the
-// log's length and whether it has ended. A log keeps its first bytes, to
-// the server's limit, then a line that says the rest wasn't kept, and the
-// worker is told the rest is stored, so that it goes on.
+// log's length and whether it has ended. The attempt's logs keep their
+// bytes to the server's limit on them all (appendLog), and those of a
+// step's try past MaxLogTry keep none; the worker is told the rest is
+// stored, so that it goes on.
 func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
 	ctx := r.Context()
 	q := r.URL.Query()
@@ -180,7 +180,11 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 		s.writeError(w, r, err)
 		return
 	}
-	length, ended, err := s.appendLog(ctx, key, offset, data, end)
+	if key.Try > MaxLogTry {
+		writeJSON(w, &workerapi.LogAck{Length: offset + int64(len(data)), Ended: end})
+		return
+	}
+	length, ended, err := s.appendLog(ctx, a.ID, key, offset, data, end)
 	switch {
 	case errors.Is(err, runlog.ErrGap):
 		problem.Write(w, outOfOrder(length))
@@ -199,36 +203,87 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 	writeJSON(w, &workerapi.LogAck{Length: length, Ended: ended})
 }
 
-// appendLog appends data, the part of the log key that starts at offset,
-// as Logs.Append does, but for the part past the server's limit on a log:
-// the log keeps its first bytes to the limit, and then a line that says the
-// rest wasn't kept, and ends there; the rest is answered as stored.
-func (s *Server) appendLog(ctx context.Context, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
-	limit := s.maxLogBytes
-	past := offset+int64(len(data)) > limit
-	if !past {
+// appendLog appends data, the part of the log key of the attempt that
+// starts at offset, as Logs.Append does, within the server's limit on the
+// bytes of the attempt's logs, all of them together. The bytes an upload
+// adds to its log are counted against the limit
+// (store.Tx.AddLogBytes) before they are appended. The log that reaches
+// the limit keeps its bytes to there, then a line that says the rest wasn't
+// kept, and ends; each of the attempt's logs after it keeps only that line;
+// and the rest of each is answered as stored. An upload counts the bytes
+// past its log's length as it read it, so uploads of the same bytes at once
+// each count them: the count errs only high, and the attempt's logs never
+// keep more than the limit, beside the line that ends each.
+func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
+	// The log's length: an append of nothing changes nothing.
+	length, ended, err := s.logs.Append(ctx, key, 0, nil, false)
+	if err != nil {
+		return length, ended, err
+	}
+	var counted int64
+	if err := s.store.View(ctx, func(tx *store.Tx) error {
+		counted, err = tx.LogBytes(attempt)
+		return err
+	}); err != nil {
+		return 0, false, err
+	}
+	if counted >= s.maxLogBytes {
+		return s.truncateLog(ctx, key, length, ended, offset+int64(len(data)), end)
+	}
+	fresh := offset + int64(len(data)) - length
+	if offset > length || ended || fresh <= 0 {
+		// Past the log's end, after it, or nothing the log hasn't: as
+		// Logs.Append answers it.
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
-	if offset < limit {
-		if length, ended, err := s.logs.Append(ctx, key, offset, data[:limit-offset], false); err != nil {
+	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		counted, err = tx.AddLogBytes(attempt, fresh)
+		return err
+	}); err != nil {
+		return 0, false, err
+	}
+	keep := min(fresh, max(0, s.maxLogBytes-(counted-fresh)))
+	if keep == fresh {
+		return s.logs.Append(ctx, key, offset, data, end)
+	}
+	if keep > 0 {
+		if length, ended, err = s.logs.Append(ctx, key, length, data[length-offset:][:keep], false); err != nil {
 			return length, ended, err
 		}
 	}
-	line := []byte("\n" + problems.LogTruncated.Message(problems.Params{"limit": limit}) + "\n")
-	if length, ended, err := s.logs.Append(ctx, key, limit, line, true); err != nil {
-		return length, ended, err
-	}
-	return offset + int64(len(data)), end, nil
+	return s.truncateLog(ctx, key, length, false, offset+int64(len(data)), end)
 }
 
-// resealTries is how many times serveComplete stores an end whose run's
-// secret record another store sealed again as it did, as one on another
-// database than SQLite, whose transactions run side by side, can.
-const resealTries = 8
+// truncateLog ends the log key, whose length is length, and which has ended
+// if ended, once the attempt's logs have reached the server's limit on
+// them: with a line that says the rest of it wasn't kept, unless it has
+// ended. It answers the worker's upload, which ends at upTo, and ends the
+// log if end, as stored.
+func (s *Server) truncateLog(ctx context.Context, key runlog.Key, length int64, ended bool, upTo int64, end bool) (int64, bool, error) {
+	if !ended {
+		line := problems.LogTruncated.Message(problems.Params{"limit": s.maxLogBytes}) + "\n"
+		if length > 0 {
+			line = "\n" + line
+		}
+		if length, ended, err := s.logs.Append(ctx, key, length, []byte(line), true); err != nil {
+			return length, ended, err
+		}
+	}
+	return upTo, end, nil
+}
+
+// partTries is how many times serveComplete stores an end whose job's part
+// of the run's secret record another end stored as it sealed it, as an end
+// of the job's attempt that raced another's can.
+const partTries = 8
 
 // serveComplete stores the attempt's end, once its events are stored: its
-// result's private part in the run's secret record, sealed again, and the
-// rest with the attempt, in one transaction.
+// result's private part as its job's part of the run's secret record,
+// sealed (seal.Sealer.SealJob) before the transaction that stores it,
+// and the rest with the attempt, in that one transaction. Of an attempt
+// whose placement is private (store.Attempt.Private), the problem it
+// reports, which can name the member, is masked before anything of it is
+// stored, as the store masks the problem it keeps.
 func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
 	ctx := r.Context()
 	body, ok := s.readBody(w, r, MaxCompleteBody)
@@ -239,6 +294,9 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	if err := workerapi.Unmarshal(body, end); err != nil {
 		s.badRequest(w, r, "an end that isn't one")
 		return
+	}
+	if a.Private {
+		end.Problem = problems.MaskProblem(end.Problem)
 	}
 	// The end as the API writes it, which a repeat must match.
 	canonical, err := workerapi.Marshal(end)
@@ -279,6 +337,18 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	}
 	hasPrivate := len(private.Outputs) > 0 || len(private.Steps) > 0
 	for try := 1; ; try++ {
+		// The part is sealed outside the transaction that stores it, which
+		// holds the database's lock only for its writes, and stores it only
+		// at the generation it was sealed with.
+		var (
+			gen  uint64
+			part []byte
+		)
+		if hasPrivate {
+			if gen, part, err = s.sealPart(ctx, run.ID, a.Job, private); err != nil {
+				break
+			}
+		}
 		err = s.store.Tx(ctx, func(tx *store.Tx) error {
 			if _, err := tx.Authorize(bearer(r)); err != nil {
 				return err
@@ -288,17 +358,14 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 			} else if last != end.Seq {
 				return errSeqChanged
 			}
-			// The record is opened and sealed again in the transaction
-			// that stores it, which holds the database's lock, so that
-			// ends of a run's jobs at once each add to the last.
 			if hasPrivate {
-				if err := s.addJob(ctx, tx, run.ID, a.Job, private); err != nil {
+				if err := tx.PutJobRecord(run.ID, a.Job, gen, part); err != nil {
 					return err
 				}
 			}
 			return tx.EndAttempt(a.ID, stored)
 		})
-		if !errors.Is(err, store.ErrRecordChanged) || try == resealTries {
+		if !errors.Is(err, store.ErrRecordChanged) || try == partTries {
 			break
 		}
 	}
@@ -371,27 +438,28 @@ func (s *Server) repeatedEnd(w http.ResponseWriter, a *store.Attempt, sum []byte
 	problem.Write(w, fenced())
 }
 
-// addJob adds job's private result, rec, as End gave it, to the run's
-// secret record, in tx: its private outputs, and its steps' that hold a
-// secret (plan.JobResult.Split). It opens the record and seals it again
-// under the run's data key, which Keys unwraps, with the next generation.
-func (s *Server) addJob(ctx context.Context, tx *store.Tx, run, job string, rec plan.JobRecord) error {
-	stored, err := tx.Record(run)
-	if err != nil {
+// sealPart seals rec, job's private result, as End gave it (its private
+// outputs, and its steps' that hold a secret: plan.JobResult.Split), as
+// job's part of the run's secret record (seal.Sealer.SealJob), under a key
+// that the run's data key derives, with the generation after the part's, which it returns:
+// what a transaction stores (store.Tx.PutJobRecord) only at that
+// generation. Neither the run's record nor another job's part is opened.
+func (s *Server) sealPart(ctx context.Context, run, job string, rec plan.JobRecord) (uint64, []byte, error) {
+	var (
+		key   []byte
+		parts map[string]store.JobRecord
+	)
+	if err := s.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		if key, err = tx.WrappedKey(run); err != nil {
+			return err
+		}
+		parts, err = tx.JobRecords(run, []string{job})
 		return err
+	}); err != nil {
+		return 0, nil, err
 	}
-	sealed := seal.Sealed{Key: stored.WrappedKey, Record: stored.Sealed}
-	record, err := s.sealer.Open(ctx, run, stored.Generation, sealed)
-	if err != nil {
-		return err
-	}
-	if record.Jobs == nil {
-		record.Jobs = map[string]plan.JobRecord{}
-	}
-	record.Jobs[job] = rec
-	resealed, gen, err := s.sealer.Reseal(ctx, run, stored.Generation, sealed, record)
-	if err != nil {
-		return err
-	}
-	return tx.Reseal(run, gen, resealed.Record)
+	gen := parts[job].Generation + 1
+	sealed, err := s.sealer.SealJob(ctx, run, job, gen, key, rec)
+	return gen, sealed, err
 }

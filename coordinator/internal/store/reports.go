@@ -14,15 +14,15 @@ import (
 // A Placement is where an attempt was placed: what its backend placed, and
 // the worker binary it started.
 type Placement struct {
-	// Group and Member are the group and the member it was placed on, or
-	// "" where the job's target is private (plan.ReadyJob.PrivateFields),
-	// which the store never holds.
-	Group  string
-	Member string
-	// Backend is the member's backend, and ID the backend's own name for
-	// the placement (backend.Placement.ID).
+	// Group and Member are the group and the member it was placed on, and
+	// Backend the member's backend, or "" where the attempt's placement is
+	// private (Attempt.Private), which the store holds only sealed.
+	Group   string
+	Member  string
 	Backend string
-	ID      string
+	// ID is the backend's own name for the placement (backend.Placement.ID),
+	// which shows nothing of where it is.
+	ID string
 	// WorkerDigest is sha256: and the hex of the SHA-256 digest of the
 	// worker binary the placement started, which the worker's claim must
 	// give (workerapi.Worker.Digest), or "" where its backend can't say.
@@ -37,12 +37,14 @@ var workerDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // claim waits for (ErrNotPlaced). A placement without its backend's ID for
 // it, or without the digest of the worker binary it started, is refused:
 // every backend says which binary it started, so that no claim is taken
-// from another. An attempt that no longer holds its job is ErrFenced, and
-// one that has been claimed ErrState.
+// from another. So is one without its backend, unless the attempt's
+// placement is private, and one of those with its group, member or
+// backend, which are held only sealed. An attempt that no longer holds its
+// job is ErrFenced, and one that has been claimed ErrState.
 func (tx *Tx) RecordPlacement(id string, p Placement) error {
 	switch {
-	case p.ID == "" || p.Backend == "":
-		return fmt.Errorf("store: attempt %s placed without its backend or the backend's ID for it", id)
+	case p.ID == "":
+		return fmt.Errorf("store: attempt %s placed without the backend's ID for it", id)
 	case !workerDigest.MatchString(p.WorkerDigest):
 		return fmt.Errorf("store: attempt %s placed without the digest of the worker binary it started", id)
 	}
@@ -55,6 +57,10 @@ func (tx *Tx) RecordPlacement(id string, p Placement) error {
 		return ErrFenced
 	case a.State != AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
+	case a.Private && (p.Group != "" || p.Member != "" || p.Backend != ""):
+		return fmt.Errorf("store: attempt %s's placement is private, and its group, member and backend are held only sealed", id)
+	case !a.Private && p.Backend == "":
+		return fmt.Errorf("store: attempt %s placed without its backend", id)
 	}
 	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
 		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest), id)
@@ -166,6 +172,7 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	var size int64
 	for _, e := range fresh {
 		body, err := workerapi.Marshal(e)
 		if err != nil {
@@ -175,6 +182,11 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 			id, e.Seq, body, now); err != nil {
 			return 0, err
 		}
+		size += int64(len(body))
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET events_count = events_count + ?, events_bytes = events_bytes + ? WHERE id = ?",
+		len(fresh), size, id); err != nil {
+		return 0, err
 	}
 	if started {
 		if err := tx.StepStarted(id); err != nil {
@@ -185,10 +197,38 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 }
 
 // EventsStored returns how many events the attempt has, and how many bytes
-// they take.
+// they take, as AppendEvents counts them as it stores them.
 func (tx *Tx) EventsStored(id string) (count, size int64, err error) {
-	err = tx.tx.QueryRowContext(tx.ctx, "SELECT count(*), coalesce(sum(length(body)), 0) FROM meridian_events WHERE attempt_id = ?", id).Scan(&count, &size)
+	err = tx.tx.QueryRowContext(tx.ctx, "SELECT events_count, events_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&count, &size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrNotFound
+	}
 	return count, size, err
+}
+
+// LogBytes returns how many bytes of logs the attempt has, as AddLogBytes
+// counted them.
+func (tx *Tx) LogBytes(id string) (int64, error) {
+	var n int64
+	err := tx.tx.QueryRowContext(tx.ctx, "SELECT log_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return n, err
+}
+
+// AddLogBytes counts n more bytes of the attempt's logs, which the store
+// doesn't hold, and returns how many it has counted in all.
+func (tx *Tx) AddLogBytes(id string, n int64) (int64, error) {
+	if n < 0 {
+		return 0, fmt.Errorf("store: %d bytes of logs", n)
+	}
+	var all int64
+	err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_attempts SET log_bytes = log_bytes + ? WHERE id = ? RETURNING log_bytes", n, id).Scan(&all)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return all, err
 }
 
 // ControlVersions returns the version of the control of each of the

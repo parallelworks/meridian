@@ -386,6 +386,9 @@ type placed struct {
 	// unplaced leaves the attempt without a placement recorded, and
 	// digest "" is conformanceDigest.
 	unplaced bool
+	// private places the attempt where its job runs is private: its
+	// group, member and backend sealed, as the coordinator records them.
+	private bool
 }
 
 // newAttempt starts an attempt of run's job, placed with p, and returns it
@@ -405,6 +408,12 @@ func (r *rig) newAttempt(run, job string, p placed) (*store.Attempt, string) {
 		}
 		if p.digest == "" {
 			p.digest = conformanceDigest
+		}
+		if p.private {
+			if _, err := tx.SQL().ExecContext(r.t.Context(), "UPDATE meridian_attempts SET private_placement = x'01' WHERE id = ?", a.ID); err != nil {
+				return err
+			}
+			return tx.RecordPlacement(a.ID, store.Placement{ID: "1:2", WorkerDigest: p.digest})
 		}
 		return tx.RecordPlacement(a.ID, store.Placement{Group: p.group, Member: p.member, Backend: "local", ID: "1:2", WorkerDigest: p.digest})
 	})

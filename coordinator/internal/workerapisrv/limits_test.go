@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/compile"
-	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/plan"
@@ -69,29 +68,68 @@ func TestSlowBody(t *testing.T) {
 	}
 }
 
-// The server holds at most MaxConnections connections at once: another
-// waits until one closes.
+// The server holds at most MaxConnections connections at once. Past it, a
+// new one closes the one that has waited longest for a request, so that
+// connections that send nothing, however many, keep no worker out; while
+// every one is handling a request, it waits until one is done.
 func TestConnectionLimit(t *testing.T) {
-	r := newRig(t, rigOptions{maxConns: 2})
+	r := newRig(t, rigOptions{maxConns: 4, hold: 1500 * time.Millisecond})
+	a, _, credential := r.claimed(newClient(t, r.socket), placed{})
 	var held []net.Conn
-	for range 2 {
+	defer func() {
+		for _, conn := range held {
+			conn.Close()
+		}
+	}()
+	for range 8 {
 		conn, err := new(net.Dialer).DialContext(t.Context(), "unix", r.socket)
 		if err != nil {
 			t.Fatal(err)
 		}
 		held = append(held, conn)
 	}
-	c := newClient(t, r.socket)
-	c.http.Timeout = 700 * time.Millisecond
-	if status, _, err := c.send(http.MethodPost, workerapi.PathHeartbeat, nil, "x"); err == nil {
-		t.Errorf("a third connection was served, %d, while two were held", status)
+	start := time.Now()
+	if status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathHeartbeat, nil, credential); err != nil || status != http.StatusNoContent {
+		t.Errorf("a heartbeat while connections that send nothing were held was answered %d, %v: %s", status, err, body)
 	}
-	for _, conn := range held {
-		conn.Close()
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("a heartbeat while connections that send nothing were held took %v", took)
 	}
-	c = newClient(t, r.socket)
-	if status, body, err := c.send(http.MethodPost, workerapi.PathHeartbeat, nil, "x"); err != nil || status != http.StatusUnauthorized {
-		t.Errorf("once the two closed, a connection was answered %d, %v: %s", status, err, body)
+	// The oldest of those were closed.
+	if err := held[0].SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := held[0].Read(make([]byte, 1)); err == nil {
+		t.Error("the oldest connection that sent nothing is still open")
+	}
+
+	// Every connection handling a request: control polls, which the server
+	// holds.
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			_, _, _ = newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, credential)
+		})
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for workerapisrv.HeldPolls(r.server, a.ID) < 4 {
+		select {
+		case <-tick.C:
+		case <-t.Context().Done():
+			t.Fatal("the polls weren't held")
+		}
+	}
+	start = time.Now()
+	status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathHeartbeat, nil, credential)
+	took := time.Since(start)
+	wg.Wait()
+	if err != nil || status != http.StatusNoContent {
+		t.Errorf("a heartbeat once the polls were answered was answered %d, %v: %s", status, err, body)
+	}
+	// The polls are held for 1.5s from their start.
+	if took < 500*time.Millisecond {
+		t.Errorf("a heartbeat was answered after %v, while every connection handled a poll held", took)
 	}
 }
 
@@ -141,8 +179,7 @@ func manyJobs(n int) string {
 }
 
 // Ends of a run's jobs at once, each with a private output, are each
-// stored, and the run's secret record holds every one: each seals the
-// record again in the transaction that stores it.
+// stored, each as its job's part of the run's secret record.
 func TestConcurrentEnds(t *testing.T) {
 	const n = 16
 	r := newRig(t, rigOptions{})
@@ -177,21 +214,12 @@ func TestConcurrentEnds(t *testing.T) {
 			t.Errorf("end %d was answered %d", i, status)
 		}
 	}
-	var stored *store.Record
-	r.inTx(func(tx *store.Tx) error {
-		stored, err = tx.Record(run)
-		return err
-	})
-	if stored.Generation != n+1 {
-		t.Errorf("the record's generation is %d, not %d", stored.Generation, n+1)
-	}
-	rec, err := r.sealer.Open(t.Context(), run, stored.Generation, seal.Sealed{Key: stored.WrappedKey, Record: stored.Sealed})
-	if err != nil {
-		t.Fatal(err)
+	if gen := r.recordGeneration(run); gen != 1 {
+		t.Errorf("the run's record is generation %d, not 1", gen)
 	}
 	for i := range n {
-		if got := rec.Jobs[fmt.Sprintf("j%02d", i)].Outputs["token"]; got != "secret-"+strconv.Itoa(i) {
-			t.Errorf("the record holds %q of job %d", got, i)
+		if part, gen := r.part(run, fmt.Sprintf("j%02d", i)); gen != 1 || part.Outputs["token"] != "secret-"+strconv.Itoa(i) {
+			t.Errorf("job %d's part is generation %d, %+v", i, gen, part)
 		}
 	}
 }
@@ -309,6 +337,101 @@ func TestLogTruncated(t *testing.T) {
 	if got := logs[workerapitest.LogKey{Part: workerapi.LogSetup}]; string(got.Data) != want || !got.Ended {
 		t.Errorf("the log kept is %q, ended %v; want %q", got.Data, got.Ended, want)
 	}
+}
+
+// The limit on logs is on all of an attempt's together: the log that
+// reaches it keeps its bytes to there, each log after keeps only the line
+// that says the rest wasn't kept, and a try past MaxLogTry keeps no log;
+// each upload is answered as stored. Uploads to a log that ended before
+// the limit was reached are checked as ever.
+func TestLogQuotaPerAttempt(t *testing.T) {
+	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
+		workerapisrv.SetLimits(s, 1024, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
+	}})
+	c := newClient(t, r.socket)
+	a, _, credential := r.claimed(c, placed{})
+	upload := func(part workerapi.LogPart, try, offset int, data string, end bool) (int, workerapi.LogAck) {
+		t.Helper()
+		path := fmt.Sprintf("%s?%s=%s&%s=0&%s=%d&%s=%d&%s=%v", workerapi.PathLogs, workerapi.QueryPart, part, workerapi.QueryStep,
+			workerapi.QueryTry, try, workerapi.QueryOffset, offset, workerapi.QueryEnd, end)
+		status, body, err := c.send(http.MethodPost, path, []byte(data), credential)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ack workerapi.LogAck
+		if status == http.StatusOK {
+			if err := workerapi.Unmarshal(body, &ack); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return status, ack
+	}
+	kilobyte := strings.Repeat("x", 1000)
+	if status, ack := upload(workerapi.LogSetup, 0, 0, "ready\n", true); status != http.StatusOK || ack.Length != 6 || !ack.Ended {
+		t.Fatalf("the setup log was answered %d, %+v", status, ack)
+	}
+	for try := range 50 {
+		if status, ack := upload(workerapi.LogStep, try, 0, kilobyte, true); status != http.StatusOK || ack.Length != 1000 || !ack.Ended {
+			t.Fatalf("try %d's log was answered %d, %+v", try, status, ack)
+		}
+	}
+	for _, try := range []int{workerapisrv.MaxLogTry, workerapisrv.MaxLogTry + 1} {
+		if status, ack := upload(workerapi.LogStep, try, 0, kilobyte, false); status != http.StatusOK || ack.Length != 1000 || ack.Ended {
+			t.Errorf("try %d's log was answered %d, %+v", try, status, ack)
+		}
+	}
+	// Past the limit, a log that ended keeps what it has, and is answered
+	// as stored.
+	if status, ack := upload(workerapi.LogStep, 0, 1000, "more", false); status != http.StatusOK || ack.Length != 1004 {
+		t.Errorf("more of a log that ended, past the limit, was answered %d, %+v", status, ack)
+	}
+
+	logs := r.logs.of(a.Run, a.Job, a.Number)
+	message := problems.LogTruncated.Message(problems.Params{"limit": int64(1024)}) + "\n"
+	want := map[workerapitest.LogKey]string{
+		{Part: workerapi.LogSetup}:                             "ready\n",
+		{Part: workerapi.LogStep, Try: 0}:                      kilobyte,
+		{Part: workerapi.LogStep, Try: 1}:                      kilobyte[:18] + "\n" + message,
+		{Part: workerapi.LogStep, Try: 2}:                      message,
+		{Part: workerapi.LogStep, Try: 49}:                     message,
+		{Part: workerapi.LogStep, Try: workerapisrv.MaxLogTry}: message,
+	}
+	for key, data := range want {
+		if got := logs[key]; string(got.Data) != data || !got.Ended {
+			t.Errorf("the %+v log kept is %q, ended %v; want %q", key, got.Data, got.Ended, data)
+		}
+	}
+	if got, ok := logs[workerapitest.LogKey{Part: workerapi.LogStep, Try: workerapisrv.MaxLogTry + 1}]; ok {
+		t.Errorf("a try past MaxLogTry kept a log: %q", got.Data)
+	}
+	kept := 0
+	for _, l := range logs {
+		kept += len(l.Data)
+	}
+	if most := 1024 + len(logs)*(len(message)+1); kept > most {
+		t.Errorf("the attempt's logs kept %d bytes, more than %d", kept, most)
+	}
+
+	// Before the limit, an upload after a log's end is out of order.
+	_, _, other := r.claimed(c, placed{})
+	if status, _ := uploadAs(t, c, other, workerapi.LogSetup, 0, "done", true); status != http.StatusOK {
+		t.Fatalf("the setup log was answered %d", status)
+	}
+	if status, body := uploadAs(t, c, other, workerapi.LogSetup, 4, "!", false); status != http.StatusConflict {
+		t.Errorf("an upload after the log's end was answered %d: %s", status, body)
+	}
+}
+
+// uploadAs uploads data to the log part of the attempt whose credential is
+// credential, at offset, and returns the answer.
+func uploadAs(t *testing.T, c *client, credential string, part workerapi.LogPart, offset int, data string, end bool) (int, []byte) {
+	t.Helper()
+	path := fmt.Sprintf("%s?%s=%s&%s=%d&%s=%v", workerapi.PathLogs, workerapi.QueryPart, part, workerapi.QueryOffset, offset, workerapi.QueryEnd, end)
+	status, body, err := c.send(http.MethodPost, path, []byte(data), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, body
 }
 
 // Events past what the server keeps of an attempt's are refused, 413, and

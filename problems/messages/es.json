@@ -178,7 +178,7 @@
   "run_malformed": "El plan o el registro secreto almacenado de la ejecución {run} no es uno que esta versión lea: no nombra ninguna versión, o no se decodifica como la versión que nombra, así que la ejecución no puede seguir.",
   "run_not_started": "La ejecución {run} terminó sin empezar: el coordinador no pudo empezarla.",
   "run_plan_newer": "El plan de la ejecución {run}, de la versión {version}, contiene lo que solo lee una versión más reciente de Meridian (esta lee la versión {latest} y anteriores), así que la empieza una versión que lo lea.",
-  "log_truncated": "El coordinador guarda como mucho {limit} bytes de un log, así que no guardó el resto de este.",
+  "log_truncated": "El coordinador guarda como mucho {limit} bytes de los logs de un intento, así que no guardó el resto de este.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",

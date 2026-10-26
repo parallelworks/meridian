@@ -241,6 +241,36 @@ func MaskValues(params Params) Params {
 	return out
 }
 
+// MaskProblem returns a copy of p, a problem that can show a value that
+// read a variable or a password, with what it shows of the value masked:
+// its params and its field errors' as MaskValues masks them, its detail
+// and theirs the kind's message with those, or its title for a kind this
+// release doesn't know, and no instance. Its type, title, status and code
+// are kept, which show only what kind of problem it is.
+func MaskProblem(p *problem.Problem) *problem.Problem {
+	if p == nil {
+		return nil
+	}
+	out := &problem.Problem{Type: p.Type, Title: p.Title, Status: p.Status, Code: p.Code, Detail: p.Title}
+	if p.Params != nil {
+		out.Params = MaskValues(p.Params)
+	}
+	if k, ok := Lookup(p.Code); ok {
+		out.Detail = k.Message(out.Params)
+	}
+	for _, fe := range p.Errors {
+		masked := &problem.FieldError{Type: fe.Type, Code: fe.Code, Pointer: fe.Pointer, Parameter: fe.Parameter, In: fe.In}
+		if fe.Params != nil {
+			masked.Params = MaskValues(fe.Params)
+		}
+		if k, ok := Lookup(fe.Code); ok {
+			masked.Detail = k.Message(masked.Params)
+		}
+		out.Errors = append(out.Errors, masked)
+	}
+	return out
+}
+
 // shown is how Show encodes a value: as encoding/json always has, with
 // mappings in the order of their keys, a nil list or mapping as null, U+2028
 // and U+2029 escaped and invalid UTF-8 replaced, but without escaping <, >
