@@ -7,9 +7,14 @@ import (
 	"encoding/hex"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
+	ossignal "os/signal"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/safepath"
@@ -115,6 +120,7 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 	if err := protect(); err != nil {
 		return err
 	}
+	inheritNothing()
 	environ := cfg.Environ
 	if environ == nil {
 		environ = os.Environ()
@@ -186,19 +192,40 @@ type endpoint struct {
 
 func (e endpoint) socket() bool { return strings.HasPrefix(e.address, "/") }
 
+// inheritNothing keeps what the worker inherited from reaching its steps,
+// which the process that started it can't control: every file it was
+// given but standard input, output and error is closed when a step starts
+// (closeOnExec), and a signal it was started ignoring, as nohup ignores
+// SIGHUP, is one a step gets its default handling of again. The worker
+// itself still takes no action on SIGHUP, and its command handles SIGINT
+// and SIGTERM.
+func inheritNothing() {
+	closeOnExec()
+	for _, sig := range []os.Signal{syscall.SIGHUP, os.Interrupt} {
+		if ossignal.Ignored(sig) {
+			// Go keeps a signal ignored at start ignored, in the worker and
+			// so in what it starts, until a handler is installed; a step
+			// starts with a handled signal's default.
+			ossignal.Notify(make(chan os.Signal, 1), sig)
+		}
+	}
+}
+
 // readEnv reads how to reach the coordinator, and the bootstrap token, from
 // environ, and returns the rest of it, which the job's steps get. It reads
 // the token from the file EnvBootstrapTokenFile names, if it does, and
-// removes the file; it refuses one that other users can read. Where the
-// user's other processes can read the worker's environment, as readable
-// says (environReadable), it refuses a token in EnvBootstrapToken.
+// removes the file; it refuses one that other users can read. It reads it
+// from the socket EnvBootstrapTokenFD numbers, if it does, once it has
+// said on it that it is ready (readTokenSocket). Where the user's other
+// processes can read the worker's environment, as readable says
+// (environReadable), it refuses a token in EnvBootstrapToken.
 func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 	vars := map[string]string{}
 	var rest []string
 	for _, kv := range environ {
 		name, value, _ := strings.Cut(kv, "=")
 		switch name {
-		case workerapi.EnvCoordinator, workerapi.EnvKeySHA256, workerapi.EnvBootstrapToken, workerapi.EnvBootstrapTokenFile:
+		case workerapi.EnvCoordinator, workerapi.EnvKeySHA256, workerapi.EnvBootstrapToken, workerapi.EnvBootstrapTokenFile, workerapi.EnvBootstrapTokenFD:
 			vars[name] = value
 		default:
 			rest = append(rest, kv)
@@ -228,10 +255,12 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 		}
 		ep.keyHash = hash
 	}
-	token, file := vars[workerapi.EnvBootstrapToken], vars[workerapi.EnvBootstrapTokenFile]
+	token, file, fd := vars[workerapi.EnvBootstrapToken], vars[workerapi.EnvBootstrapTokenFile], vars[workerapi.EnvBootstrapTokenFD]
 	switch {
 	case token != "" && file != "":
 		return ep, nil, invalid(workerapi.EnvBootstrapTokenFile)
+	case fd != "" && (token != "" || file != ""):
+		return ep, nil, invalid(workerapi.EnvBootstrapTokenFD)
 	case token != "" && readable:
 		return ep, nil, problems.BootstrapTokenInEnvironment.Problem(nil)
 	case file != "":
@@ -241,6 +270,11 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 		}
 		// The token is good for one claim, which the worker makes at once.
 		ep.keptTokenFile = os.Remove(file)
+	case fd != "":
+		var ok bool
+		if token, ok = readTokenSocket(fd); !ok {
+			return ep, nil, invalid(workerapi.EnvBootstrapTokenFD)
+		}
 	}
 	if token == "" {
 		return ep, nil, missing(workerapi.EnvBootstrapToken)
@@ -274,6 +308,49 @@ func readTokenFile(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// tokenSocketWait is how long the worker waits for its token on the
+// socket that gives it.
+const tokenSocketWait = time.Minute
+
+// readTokenSocket reads the bootstrap token from the stream Unix socket
+// whose descriptor fd numbers, as the local backend gives it: it writes a
+// byte, which says that it is ready, its memory kept from the user's other
+// processes, then reads the token, to the socket's end, and closes it. It
+// reports false for a descriptor that isn't such a socket, or a token that
+// doesn't come.
+func readTokenSocket(fd string) (string, bool) {
+	n, err := strconv.Atoi(fd)
+	if err != nil || n < 3 {
+		return "", false
+	}
+	f := os.NewFile(uintptr(n), "bootstrap token")
+	if f == nil {
+		return "", false
+	}
+	// FileConn takes a duplicate of the descriptor, and refuses one that
+	// isn't a socket.
+	conn, err := net.FileConn(f)
+	f.Close()
+	if err != nil {
+		return "", false
+	}
+	defer conn.Close()
+	if _, ok := conn.(*net.UnixConn); !ok {
+		return "", false
+	}
+	if err := conn.SetDeadline(time.Now().Add(tokenSocketWait)); err != nil {
+		return "", false
+	}
+	if _, err := conn.Write([]byte{'1'}); err != nil {
+		return "", false
+	}
+	data, err := io.ReadAll(io.LimitReader(conn, maxTokenFile+1))
+	if err != nil || len(data) > maxTokenFile {
+		return "", false
+	}
+	return strings.TrimSpace(string(data)), true
+}
+
 // newCredential makes the attempt's credential: 32 bytes from crypto/rand,
 // as hex.
 func newCredential() string {
@@ -283,9 +360,10 @@ func newCredential() string {
 }
 
 // executableDigest returns sha256: and the hex of the running executable's
-// SHA-256 digest.
+// SHA-256 digest: the file it runs, which on Linux is what /proc/self/exe
+// opens, even if another has taken its path since (runningExecutable).
 func executableDigest() (string, error) {
-	path, err := os.Executable()
+	path, err := runningExecutable()
 	if err != nil {
 		return "", problems.FileUnreadable.Problem(problems.Params{"path": os.Args[0], "reason": err.Error()})
 	}

@@ -1680,5 +1680,29 @@
     "fix": [
       "Build meridian with GOFIPS140=certified: with make build in its repository, with GOFIPS140=certified go install github.com/parallelworks/meridian/cmd/meridian@ and the version, or once for every build with go env -w GOFIPS140=certified."
     ]
+  },
+  "isolation_not_built": {
+    "why": "A member names how it isolates the jobs placed on it: a container runtime, such as podman, docker or apptainer, or host, which runs a job's steps on the host, as you. A member that names none isolates them in a rootless container. The local backend runs jobs on the host only, today, and Meridian never runs a job with weaker isolation than its member names, so placement leaves the member out, and places the job on another member of its group if there is one.",
+    "fix": [
+      "Name host isolation for the member in groups.yaml, if running its jobs' steps on the host, as you, is what you want."
+    ]
+  },
+  "resources_exceed_member": {
+    "why": "A member offers the resources it declares in groups.yaml or, for one of the local backend that declares none, the host's CPUs and memory, and no GPU unless it declares some. A job whose resources: asks for more than that can never run there, so placement leaves the member out, and places the job on another member of its group if one offers enough.",
+    "fix": [
+      "Ask for less in the job's resources:, declare what the member offers in groups.yaml, or run the job in a group with a member that offers enough."
+    ]
+  },
+  "backend_not_built": {
+    "why": "A member names the backend that starts workers on it: local, ssh, kubernetes, slurm or pbs. This release of Meridian has only the local backend, so placement leaves a member of another backend out, and places the job on another member of its group if there is one.",
+    "fix": [
+      "Run the job in a group with a member of the local backend, until a release has the member's backend."
+    ]
+  },
+  "worker_binary_unsafe": {
+    "why": "The local backend starts each worker from the meridian binary that places it, and the worker holds the attempt's credential once it runs. So the binary must be a regular file of yours or root's that no other user can change, nor any directory on the way to it: otherwise another user could replace it with a program that reads what the worker is given. The code is the problem with it, and its page says why.",
+    "fix": [
+      "Fix what the code's page says, for the binary the message names, or install meridian where only you or root can change it, such as /usr/local/bin."
+    ]
   }
 }

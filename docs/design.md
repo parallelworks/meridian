@@ -2417,11 +2417,15 @@ with three things:
   goes over TLS;
 - a bootstrap token: random and single-use, valid for this one attempt until
   the attempt is claimed or its placement withdrawn, however long a
-  scheduler's queue holds the job, and stored only as a hash. It travels in
-  the job's environment or in a file only the user can read, on a path no
-  other user can change, never on a command line, where other users could
-  see it in `ps`. On macOS it travels only in a file, which the worker
-  removes as soon as it has read it: any process of the user can read the
+  scheduler's queue holds the job, and stored only as a hash. It travels on
+  a socket the worker inherits, in the job's environment, or in a file only
+  the user can read, on a path no other user can change, never on a command
+  line, where other users could see it in `ps`. The local backend gives it
+  on the socket, where no other process of the user's can read it first,
+  as one could a file: the worker says there that it has kept the user's
+  other processes out of its memory, and only then is the token written to
+  it. On macOS it never travels in the environment, and a file is removed
+  as soon as the worker has read it: any process of the user can read the
   environment of any other of theirs there, as `ps -E` does
   (`bootstrap_token_in_environment`). Wherever it travels, the user's own
   processes can read it until it is claimed, from the file until the
@@ -2698,6 +2702,48 @@ a step's outputs, which are capped.
 A member can choose stronger isolation, such as a microVM, or name host
 isolation explicitly. It never gets weaker isolation than it asked for: when
 a member's runtime is missing, jobs fail there with an error that says so.
+
+Today only the `local` backend is built (`backend/local`), and it runs a
+member's jobs on the host only. A member of it names `isolation: host`, as
+the built-in `local` group's member does. One that names a runtime, or
+none, which is a rootless container, has `isolation_not_built`, so
+placement leaves it out rather than run its jobs on the host. A member of
+another backend has `backend_not_built` (`backend.NotBuilt`).
+
+The `local` backend starts `meridian worker` from the binary that places
+it, once it has checked that no other user can change that binary, or the
+way to it (`worker_binary_unsafe`). The worker starts in `/`, in a session
+of its own, so that the terminal's Ctrl-C and SIGHUP don't reach it, with
+the user's environment but its `MERIDIAN_` variables. It gets its
+bootstrap token on a socket it inherits, once it has said there that it
+is hardened (`workerapi.EnvBootstrapTokenFD`), and the token is in no
+file. One window is known, and left: from `exec` until the worker hardens
+itself, which it does as soon as Go's runtime has started, about 300 µs
+on Linux, the new process is dumpable, so a process of the same user that
+already knows its ID, where `kernel.yama.ptrace_scope` is 1 or less, could
+copy its descriptor 3 with `pidfd_getfd` and race it for the token. A file
+was readable for the whole of the worker's start. Closing the window would
+need the child made non-dumpable before `exec`, which takes cgo, and
+Meridian builds without it. On Linux the backend starts the file it runs itself, and reports
+that file's digest, which the worker reports too, even if an upgrade has
+taken its path since. A placement's file in the state directory says
+which process the worker is, by its ID, its start time and the boot it
+started in, which no change to the clock moves (Linux's
+`/proc/<pid>/stat` and `boot_id`, macOS's `p_starttime` and
+`kern.bootsessionuuid`, FreeBSD's `ki_start` less `kern.boottime`, and
+`kern.boot_id`), so that any process of the user's finds, checks and
+cancels it, and none takes a later process with the same ID for it. One
+process at a time places an attempt. Cancel sends SIGTERM, and SIGKILL if
+the worker still runs 60 seconds later, to that process only, through a
+pidfd on Linux; a worker killed so can't stop its steps' process groups.
+The coordinator has the backend forget a placement once it has recorded
+how it ended (`Driver.Forget`). A member offers what it declares, or else
+the host's CPUs and memory, and no GPU.
+
+A worker passes its steps nothing it inherited but its standard input,
+output and error: it marks every other descriptor close-on-exec as it
+starts, and a signal it was started ignoring, as `nohup` ignores SIGHUP,
+is one its steps get the default handling of.
 
 ### Container runtimes
 
