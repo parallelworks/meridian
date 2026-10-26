@@ -240,8 +240,10 @@ expect:
   `if:`, or a matrix job one of whose instances was; and `cancelled`, set
   for a matrix job one of whose instances was cancelled. A job's own
   `cancelled` says the run is being cancelled, or is past its timeout, so
-  a job that hadn't started takes the path its `if:` gives it. A matrix
-  job's `index` and `matrix` are those of the instance evaluated.
+  a job that hadn't started takes the path its `if:` gives it, and the
+  steps of one that runs read it, but those of one whose `if:` can be true
+  once the run is cancelled, which it doesn't reach. A matrix job's
+  `index` and `matrix` are those of the instance evaluated.
   `attempt`, from 1, `group` and `member` are the job context's. `steps`
   are how the job's steps ended, in order, each with its `outcome` and the
   `outputs` it wrote: a step that ended `cancelled` cancels the rest of the

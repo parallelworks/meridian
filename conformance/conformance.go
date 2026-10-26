@@ -141,7 +141,9 @@ type JobState struct {
 	// Needs are the results of the jobs it needs, by name.
 	Needs map[string]NeedResult `yaml:"needs,omitempty"`
 	// Cancelled says the run is being cancelled, or is past its timeout:,
-	// so a job that hadn't started takes the path its if: gives it.
+	// so a job that hadn't started takes the path its if: gives it, and
+	// the steps of one that runs read it, but those of one whose if: can
+	// be true once the run is cancelled, which it doesn't reach.
 	Cancelled bool `yaml:"cancelled,omitempty"`
 	// Index and Matrix are the matrix instance's index, from 0, and its
 	// values, for a job with a matrix.

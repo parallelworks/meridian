@@ -463,10 +463,20 @@ type ReadyResult struct {
 	Job *ReadyJob
 }
 
-// A CancelPath is what becomes of a job that hasn't started when its run
-// is cancelled, or passes its own timeout:, as ACTIVATE has it. It follows
-// from the job's if: alone, so the coordinator knows it before the jobs
-// the job needs have finished (Job.CancelPath).
+// A CancelPath is what becomes of a job when its run is cancelled, or
+// passes its own timeout:, as ACTIVATE has it: of one that hasn't
+// started, and of one placed or running. It follows from the job's if:
+// alone, so the coordinator knows it before the jobs the job needs have
+// finished (Job.CancelPath).
+//
+// A job placed or running on CancelPathOutlive runs on: ACTIVATE runs it
+// on a context the run's cancellation and timeout don't reach, so the
+// coordinator neither asks its attempt to stop (workerapi.Control.Cancel)
+// nor withdraws its placement, and its steps don't read the run as
+// cancelled (JobState.Cancelled). The coordinator asks any other job's
+// attempt to stop, and withdraws its placement. What stops one job of
+// the run, as fail-fast: stops a matrix's other instances, stops it
+// whatever its path.
 type CancelPath int
 
 const (
@@ -484,13 +494,15 @@ const (
 	// CancelPathOutlive is the path of a job whose if: can be true once the
 	// run is cancelled: the word always, or one that calls always() or
 	// cancelled(), or negates success() or failure(). It waits for the jobs
-	// it needs, and then is readied as ever. Once it runs, the run's
-	// cancellation doesn't stop it, nor does the run's timeout:.
+	// it needs, and then is readied as ever, and runs on: the run's
+	// cancellation doesn't stop it, before or after it starts, nor does
+	// the run's timeout:.
 	CancelPathOutlive
 )
 
-// CancelPath returns the path the job takes when its run is cancelled
-// before it has started (CancelPath), and each of its instances. ACTIVATE
+// CancelPath returns the path the job takes when its run is cancelled, or
+// passes its timeout:, whether it has started or not (CancelPath), and
+// each of its instances. ACTIVATE
 // leaves an if: that reads a job's or a step's outputs or env, or calls a
 // status function, to its executor, which evaluates it once the job's
 // needs have finished; Meridian's needs.<job>.result is read so too. It
@@ -714,7 +726,8 @@ type ReadyJobRetry struct {
 // cancelled at once instead, whatever its if:, as ACTIVATE's instances
 // wait for their turn before they wait for their needs: while the jobs a
 // matrix job needs haven't finished, its first max-parallel: instances, by
-// index, have their turns.
+// index, have their turns. Whether the cancellation stops a job already
+// placed or running, CancelPath says too.
 //
 // An if: is true when its value is: its truthiness, unless it is the word
 // always, which is always(); and, unless it calls a status function, it

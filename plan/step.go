@@ -27,11 +27,14 @@ type JobState struct {
 	// step, for End.
 	Steps []StepResult
 	// Cancelled is set once the job is being cancelled, for cancelled():
-	// once the run is. A step of the job that ended cancelled cancels the
-	// job too, as format 1 has it, which Step and End read from Steps. A
-	// job that runs past its timeout isn't cancelled: the step it was
-	// running fails, so failure() is true and cancelled() false after it,
-	// as in format 1.
+	// once the run is, but for a job whose if: can be true once it is
+	// (CancelPathOutlive), which the run's cancellation doesn't reach, as
+	// ACTIVATE runs such a job on, its steps as if the run weren't being
+	// cancelled. A step of the job that ended cancelled cancels the job
+	// too, as format 1 has it, which Step and End read from Steps. A job
+	// that runs past its timeout isn't cancelled: the step it was running
+	// fails, so failure() is true and cancelled() false after it, as in
+	// format 1.
 	Cancelled bool
 	// Try is the step's try, from 0, for Step: the worker has Step evaluate
 	// the step again for each try, as format 1 does, so that what reads

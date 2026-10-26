@@ -220,8 +220,10 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 	if attempt == 0 {
 		attempt = 1
 	}
+	// The run's cancellation doesn't reach a job whose if: outlives it.
+	cancelled := state.Cancelled && job.CancelPath() != plan.CancelPathOutlive
 	js := plan.JobState{
-		Run: job.Reads(r.run), Needs: job.ReadsNeeds(in.Needs), Cancelled: state.Cancelled, Try: state.Try, Env: state.Env,
+		Run: job.Reads(r.run), Needs: job.ReadsNeeds(in.Needs), Cancelled: cancelled, Try: state.Try, Env: state.Env,
 		Job: plan.JobContext{Name: job.Name, Key: rj.Key, Attempt: attempt, Group: state.Group, Member: state.Member},
 	}
 	js.Masked = append(js.Run.Masked(), rj.Masked...)
