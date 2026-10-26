@@ -116,14 +116,14 @@ jobs:
 		t.Errorf("the cleanup's event shows its outputs as %v, want %v", got, want)
 	}
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if want := map[string]string{"token": "s3cr3t-token", "plain": "yes", "cleaned": "1", "try": "1"}; !maps.Equal(end.Outputs, want) {
-		t.Errorf("the job's outputs are %v, want %v", end.Outputs, want)
+	if want := map[string]string{"token": "s3cr3t-token", "plain": "yes", "cleaned": "1", "try": "1"}; !maps.Equal(end.Result.Outputs, want) {
+		t.Errorf("the job's outputs are %v, want %v", end.Result.Outputs, want)
 	}
-	if want := map[string]map[string]string{"flaky": {"try": "1"}}; !reflect.DeepEqual(end.StepOutputs, want) {
-		t.Errorf("the steps' outputs are %v, want %v", end.StepOutputs, want)
+	if want := map[string]map[string]string{"flaky": {"try": "1"}}; !reflect.DeepEqual(end.Result.Steps, want) {
+		t.Errorf("the steps' outputs are %v, want %v", end.Result.Steps, want)
 	}
-	if !slices.Equal(end.PrivateOutputs, []string{"token"}) || !slices.Equal(end.SecretOutputs, []string{"token"}) || len(end.DerivedOutputs) > 0 {
-		t.Errorf("the job's outputs are private %v, secret %v and derived %v", end.PrivateOutputs, end.SecretOutputs, end.DerivedOutputs)
+	if !slices.Equal(end.Result.Private, []string{"token"}) || !slices.Equal(end.Result.Secrets, []string{"token"}) || len(end.Result.Derived) > 0 {
+		t.Errorf("the job's outputs are private %v, secret %v and derived %v", end.Result.Private, end.Result.Secrets, end.Result.Derived)
 	}
 	if len(end.Diagnostics) > 0 {
 		t.Errorf("the job's end has problems: %v", end.Diagnostics)
@@ -298,8 +298,8 @@ func TestPlatformSecretFields(t *testing.T) {
 		t.Errorf("the step's event shows its outputs as %v", got)
 	}
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if end.Outputs["pw"] != "hunt3r2" || !slices.Equal(end.SecretOutputs, []string{"pw"}) || len(end.DerivedOutputs) > 0 {
-		t.Errorf("the job's outputs are %v, secret %v and derived %v", end.Outputs, end.SecretOutputs, end.DerivedOutputs)
+	if end.Result.Outputs["pw"] != "hunt3r2" || !slices.Equal(end.Result.Secrets, []string{"pw"}) || len(end.Result.Derived) > 0 {
+		t.Errorf("the job's outputs are %v, secret %v and derived %v", end.Result.Outputs, end.Result.Secrets, end.Result.Derived)
 	}
 }
 

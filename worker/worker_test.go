@@ -63,8 +63,8 @@ func checkEnd(t *testing.T, f *fakeCoordinator, outcome plan.Outcome, reason pla
 	if end == nil {
 		t.Fatal("the attempt didn't complete")
 	}
-	if end.Outcome != outcome || end.Reason != reason {
-		t.Errorf("the attempt ended %s (%s), want %s (%s)", end.Outcome, end.Reason, outcome, reason)
+	if end.Result.Outcome != outcome || end.Reason != reason {
+		t.Errorf("the attempt ended %s (%s), want %s (%s)", end.Result.Outcome, end.Reason, outcome, reason)
 	}
 	if want := int64(len(f.stepEvents())); end.Seq != want {
 		t.Errorf("Complete's seq is %d, want %d", end.Seq, want)
@@ -105,8 +105,8 @@ env | grep -c '^MERIDIAN_' || true`), Env: map[string]plan.Value{"STEP": plan.Li
 		"started 2.0", "finished 2.0 success 0",
 	)
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if want := map[string]string{"a": "3", "multi": "x\ny", "b": "2"}; !reflect.DeepEqual(end.Outputs, want) {
-		t.Errorf("the job's outputs are %v, want %v", end.Outputs, want)
+	if want := map[string]string{"a": "3", "multi": "x\ny", "b": "2"}; !reflect.DeepEqual(end.Result.Outputs, want) {
+		t.Errorf("the job's outputs are %v, want %v", end.Result.Outputs, want)
 	}
 	for _, tc := range []struct {
 		step int
@@ -491,11 +491,11 @@ echo "t=$TOKEN" >> $OUTPUTS; echo "m=$MADE" >> $OUTPUTS; echo "p=plain" >> $OUTP
 		t.Errorf("the step's event shows its outputs as %v, want %v", got, want)
 	}
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if want := map[string]string{"t": "hunter2", "m": "swordfish-made", "p": "plain"}; !reflect.DeepEqual(end.Outputs, want) {
-		t.Errorf("the job's outputs are %v, want %v", end.Outputs, want)
+	if want := map[string]string{"t": "hunter2", "m": "swordfish-made", "p": "plain"}; !reflect.DeepEqual(end.Result.Outputs, want) {
+		t.Errorf("the job's outputs are %v, want %v", end.Result.Outputs, want)
 	}
-	if !slices.Equal(end.PrivateOutputs, []string{"m", "t"}) || !slices.Equal(end.SecretOutputs, []string{"m", "t"}) || !slices.Equal(end.DerivedOutputs, []string{"m"}) {
-		t.Errorf("the job's outputs are private %v, secret %v and derived %v", end.PrivateOutputs, end.SecretOutputs, end.DerivedOutputs)
+	if !slices.Equal(end.Result.Private, []string{"m", "t"}) || !slices.Equal(end.Result.Secrets, []string{"m", "t"}) || !slices.Equal(end.Result.Derived, []string{"m"}) {
+		t.Errorf("the job's outputs are private %v, secret %v and derived %v", end.Result.Private, end.Result.Secrets, end.Result.Derived)
 	}
 }
 
@@ -829,8 +829,8 @@ func TestOutputsLineTooLong(t *testing.T) {
 	if len(e.Outputs) != 0 || !slices.Equal(codes(e.Diagnostics), []string{"outputs_line_too_long"}) {
 		t.Errorf("the step's outputs are %v, and its diagnostics %v", e.Outputs, codes(e.Diagnostics))
 	}
-	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); len(end.Outputs) != 0 {
-		t.Errorf("the job's outputs are %v", end.Outputs)
+	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); len(end.Result.Outputs) != 0 {
+		t.Errorf("the job's outputs are %v", end.Result.Outputs)
 	}
 }
 
@@ -884,11 +884,11 @@ printf 'bin=a\377b\376\376c\nna\351me=ok\nplain=1\n' >> "$OUTPUTS"`)}
 		}
 	}
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if want := map[string]string{"before": "\uFFFD", "shared": "x\uFFFD\uFFFD", "clean": "\uFFFD", "bin": bin}; !reflect.DeepEqual(end.Outputs, want) {
-		t.Errorf("the job's outputs are %q, want %q", end.Outputs, want)
+	if want := map[string]string{"before": "\uFFFD", "shared": "x\uFFFD\uFFFD", "clean": "\uFFFD", "bin": bin}; !reflect.DeepEqual(end.Result.Outputs, want) {
+		t.Errorf("the job's outputs are %q, want %q", end.Result.Outputs, want)
 	}
-	if want := map[string]map[string]string{"s": {"bin": bin, "na\uFFFDme": "ok", "plain": "1"}}; !reflect.DeepEqual(end.StepOutputs, want) {
-		t.Errorf("the job's step outputs are %q, want %q", end.StepOutputs, want)
+	if want := map[string]map[string]string{"s": {"bin": bin, "na\uFFFDme": "ok", "plain": "1"}}; !reflect.DeepEqual(end.Result.Steps, want) {
+		t.Errorf("the job's step outputs are %q, want %q", end.Result.Steps, want)
 	}
 	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "out \xff\xfe\nerr \xc3(\n")
 	checkLog(t, f, logKey{workerapi.LogCleanup, 0, 0}, "cleaning \xff\n")
@@ -976,7 +976,7 @@ func TestReportNotEncoded(t *testing.T) {
 			start()
 			a.events.add(workerapi.Event{Time: now(), Step: 0})
 			a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 0, Outcome: plan.OutcomeSuccess, Outputs: tc.event})
-			end := &workerapi.Complete{Outcome: plan.OutcomeSuccess, Outputs: tc.end, StepOutputs: map[string]map[string]string{"s": tc.end}}
+			end := &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: tc.end, Steps: map[string]map[string]string{"s": tc.end}}}
 			if err := a.deliver(ctx, end); err != nil {
 				t.Fatal(err)
 			}
@@ -990,15 +990,15 @@ func TestReportNotEncoded(t *testing.T) {
 				if e.Outputs != nil || !slices.Equal(codes(e.Diagnostics), []string{"report_not_encoded"}) || e.Diagnostics[0].Pointer != "#/jobs/build/steps/0" {
 					t.Errorf("the event has the outputs %q and the diagnostics %v", e.Outputs, e.Diagnostics)
 				}
-				if !reflect.DeepEqual(got.Outputs, tc.end) || !reflect.DeepEqual(got.StepOutputs, end.StepOutputs) {
-					t.Errorf("the end has the outputs %q and %q", got.Outputs, got.StepOutputs)
+				if !reflect.DeepEqual(got.Result.Outputs, tc.end) || !reflect.DeepEqual(got.Result.Steps, end.Result.Steps) {
+					t.Errorf("the end has the outputs %q and %q", got.Result.Outputs, got.Result.Steps)
 				}
 			} else {
 				if !reflect.DeepEqual(e.Outputs, tc.event) || len(e.Diagnostics) != 0 {
 					t.Errorf("the event has the outputs %q and the diagnostics %v", e.Outputs, e.Diagnostics)
 				}
-				if got.Outputs != nil || got.StepOutputs != nil {
-					t.Errorf("the end has the outputs %q and %q", got.Outputs, got.StepOutputs)
+				if got.Result.Outputs != nil || got.Result.Steps != nil {
+					t.Errorf("the end has the outputs %q and %q", got.Result.Outputs, got.Result.Steps)
 				}
 			}
 		})
@@ -1022,8 +1022,8 @@ func TestReportNotEncodedBatch(t *testing.T) {
 	a.events.add(workerapi.Event{Time: now(), Finished: true, Step: 1, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"good": "ok"}})
 	start()
 	end := &workerapi.Complete{
-		Outcome: plan.OutcomeCancelled, Reason: plan.ReasonCancelled,
-		Outputs: map[string]string{"x": "\xff", "s": "secret"}, PrivateOutputs: []string{"s"}, SecretOutputs: []string{"s"},
+		Reason: plan.ReasonCancelled,
+		Result: plan.JobResult{Outcome: plan.OutcomeCancelled, Outputs: map[string]string{"x": "\xff", "s": "secret"}, Private: []string{"s"}, Secrets: []string{"s"}},
 	}
 	if err := a.deliver(ctx, end); err != nil {
 		t.Fatal(err)
@@ -1036,8 +1036,8 @@ func TestReportNotEncodedBatch(t *testing.T) {
 		t.Errorf("the event after it has the outputs %q and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
 	}
 	got := checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
-	if got.Outputs != nil || got.PrivateOutputs != nil || got.SecretOutputs != nil {
-		t.Errorf("the end has the outputs %q, private %v and secret %v", got.Outputs, got.PrivateOutputs, got.SecretOutputs)
+	if got.Result.Outputs != nil || got.Result.Private != nil || got.Result.Secrets != nil {
+		t.Errorf("the end has the outputs %q, private %v and secret %v", got.Result.Outputs, got.Result.Private, got.Result.Secrets)
 	}
 	if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) {
 		t.Errorf("the end has the diagnostics %v", codes(got.Diagnostics))
@@ -1054,7 +1054,7 @@ func TestReportNotEncodedProblem(t *testing.T) {
 	a, ctx, start := sendingAttempt(t, f, job)
 	start()
 	p := problems.RunDirUnusable.Problem(problems.Params{"path": "/run", "reason": math.NaN()})
-	if err := a.deliver(ctx, &workerapi.Complete{Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
+	if err := a.deliver(ctx, &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
 		t.Fatal(err)
 	}
 	got := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
@@ -1356,8 +1356,8 @@ func TestCleanupRemovesRunDir(t *testing.T) {
 		"cleanup started 0.0", "cleanup finished 0.0 success 0",
 	)
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if end.Outputs["two"] != "2" {
-		t.Errorf("the job's outputs are %v", end.Outputs)
+	if end.Result.Outputs["two"] != "2" {
+		t.Errorf("the job's outputs are %v", end.Result.Outputs)
 	}
 }
 

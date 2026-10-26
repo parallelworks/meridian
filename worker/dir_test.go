@@ -120,8 +120,8 @@ func TestOutputsRemoved(t *testing.T) {
 	if e := f.finishedEvent(2, 0, false); e.Outputs["b"] != "2" || len(e.Diagnostics) != 0 {
 		t.Errorf("the step after has the outputs %v, and the diagnostics %v", e.Outputs, codes(e.Diagnostics))
 	}
-	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Outputs["token"] != "" {
-		t.Errorf("the worker read the outputs at the remade path: %v", end.Outputs)
+	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Result.Outputs["token"] != "" {
+		t.Errorf("the worker read the outputs at the remade path: %v", end.Result.Outputs)
 	}
 }
 

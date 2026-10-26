@@ -97,9 +97,12 @@ func (r *RunValues) stringContexts() map[string]*map[string]string {
 	}
 }
 
-// privatePaths returns the paths of what of r is private: org, vars, and
-// what Secrets and Private name, sorted, without a path under another.
-func (r RunValues) privatePaths() [][]string {
+// PrivatePaths returns the paths of what of r is private, which the
+// coordinator keeps only in the run's secret record and never shows: org,
+// vars, and what Secrets and Private name, sorted, without a path under
+// another. It is what tells whether one of the run's values is private:
+// Private alone leaves out the secrets, unlike a JobResult's Private.
+func (r RunValues) PrivatePaths() [][]string {
 	paths := [][]string{{"org"}, {"vars"}}
 	for _, names := range [][]string{r.Secrets, r.Private} {
 		for _, name := range names {

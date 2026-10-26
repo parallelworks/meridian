@@ -42,7 +42,7 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		return nil
 	}
 	if problem != nil {
-		return &workerapi.Complete{Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: problem}
+		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: problem}
 	}
 	if a.job.TimeoutSeconds > 0 {
 		t := time.AfterFunc(seconds(a.job.TimeoutSeconds)-time.Since(a.claimed), func() { a.fire(a.timedOut, nil) })
@@ -61,7 +61,7 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		jobDiags = append(jobDiags, a.at(problems.EvaluationFailed, a.job.Path, nil))
 	}
 	if jobDiags.HasErrors() {
-		return &workerapi.Complete{Outcome: plan.OutcomeFailure, Diagnostics: a.maskDiagnostics(jobDiags)}
+		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: a.maskDiagnostics(jobDiags)}
 	}
 	a.jobEnv = jobEnv
 	a.addMasked(jobEnv.Masked...)
@@ -159,20 +159,21 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	skipped := len(results) > 0 && !slices.ContainsFunc(results, func(r plan.StepResult) bool {
 		return r.Outcome != plan.OutcomeSkipped
 	})
-	end := &workerapi.Complete{Outcome: plan.OutcomeSuccess}
+	end := &workerapi.Complete{}
+	outcome := plan.OutcomeSuccess
 	switch {
 	case why == stopJobTimeout:
-		end.Outcome, end.Reason = plan.OutcomeFailure, plan.ReasonTimeout
+		outcome, end.Reason = plan.OutcomeFailure, plan.ReasonTimeout
 	case failed:
-		end.Outcome = plan.OutcomeFailure
+		outcome = plan.OutcomeFailure
 	case why == stopCancelled || why == stopEarlyCancel:
-		end.Outcome = plan.OutcomeCancelled
+		outcome = plan.OutcomeCancelled
 		if cancelled {
 			end.Reason = a.cancelReason
 		}
 	case skipped:
 		// As in format 1, a job whose steps were all skipped is.
-		end.Outcome = plan.OutcomeSkipped
+		outcome = plan.OutcomeSkipped
 	}
 	// Once the job's steps have ended, its outputs are evaluated, and its
 	// end sent, even if the worker is being stopped from outside, as at
@@ -185,29 +186,21 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		a.log.Error("evaluating the job's outputs failed", "error", a.mask.Mask(err.Error()))
 		diags = append(diags, a.at(problems.EvaluationFailed, a.job.Path, nil))
 	}
-	if diags.HasErrors() && end.Outcome != plan.OutcomeCancelled {
-		end.Outcome = plan.OutcomeFailure
+	if diags.HasErrors() && outcome != plan.OutcomeCancelled {
+		outcome = plan.OutcomeFailure
 	}
 	end.Diagnostics = a.maskDiagnostics(append(jobDiags, diags...))
 	if res == nil {
 		// Without End's word on which outputs hold a secret, none is
 		// reported, lest one reach run state.
+		end.Result.Outcome = outcome
 		return end
 	}
-	// The outputs are as the steps wrote them and End made them, none of
-	// them masked, as format 1 passes them to the jobs that need the job:
-	// End says which are private and which hold a secret, which the
-	// coordinator keeps out of run state.
-	end.Outputs, end.PrivateOutputs, end.SecretOutputs, end.DerivedOutputs = res.Outputs, res.Private, res.Secrets, res.Derived
-	end.SecretStepOutputs, end.DerivedStepOutputs = res.SecretSteps, res.DerivedSteps
-	for k, r := range results {
-		if id := a.job.Steps[k].ID; id != "" && len(r.Outputs) > 0 {
-			if end.StepOutputs == nil {
-				end.StepOutputs = map[string]map[string]string{}
-			}
-			end.StepOutputs[id] = r.Outputs
-		}
-	}
+	// The outputs, the job's and its steps', are as the steps wrote them
+	// and End made them, none of them masked, as format 1 passes them to
+	// the jobs that need the job: End says which are private and which
+	// hold a secret, which the coordinator keeps out of run state.
+	end.Result = res.Result(outcome)
 	return end
 }
 

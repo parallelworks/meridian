@@ -124,10 +124,11 @@ type RunValues struct {
 	// variable or a password, such as inputs.region or env.TOKEN, and the
 	// values the run was given in the place of what is made from a variable
 	// (plan.Run.Private), besides what is private whole: org, vars, and the
-	// passwords, which Secrets names. The coordinator keeps what is private
-	// only in the run's secret record, never shows it, and keeps the rest as
-	// run state too (Split). What is private and not a secret is never
-	// masked.
+	// passwords, which Secrets names. So Private alone doesn't say what is
+	// private, and code never reads it so: PrivatePaths does. The
+	// coordinator keeps what is private only in the run's secret record,
+	// never shows it, and keeps the rest as run state too (Split). What is
+	// private and not a secret is never masked.
 	Private []string `json:"private,omitempty"`
 	// Secrets names each value above that is a secret or was made from one:
 	// a secret variable, as in vars.token; a password, as in
@@ -142,6 +143,13 @@ type RunValues struct {
 	// so they are masked as what is made from a secret is, a string of at
 	// least 8 bytes or a credential field of a structured secret, and not
 	// as a secret's own text, which is masked however short (Masked).
+	//
+	// So, as for a JobResult and an EndResult, what is private is what
+	// Private or Secrets names, with org and vars, and a secret what Secrets
+	// names. Unlike theirs, Private here doesn't name what Secrets alone
+	// does: a secret variable, or a password, is private whole, as org and
+	// vars are, and Private names what was made from one. PrivatePaths
+	// gives the lot, which Split keeps in the secret record.
 	Derived []string `json:"derived,omitempty"`
 }
 
@@ -157,7 +165,7 @@ type RunValues struct {
 // index. Neither shares a list or mapping with r.
 func (r RunValues) Split() (record, state RunValues) {
 	all, rec := r.tree(), map[string]any{}
-	for _, path := range r.privatePaths() {
+	for _, path := range r.PrivatePaths() {
 		v, ok := jsonptr.Lookup(all, path)
 		if !ok {
 			continue
@@ -175,7 +183,7 @@ func (r RunValues) Split() (record, state RunValues) {
 // It shares no list or mapping with either.
 func JoinRunValues(record, state RunValues) RunValues {
 	all, rec := state.tree(), record.tree()
-	for _, path := range state.privatePaths() {
+	for _, path := range state.PrivatePaths() {
 		if v, ok := jsonptr.Lookup(rec, path); ok {
 			setPath(all, path, v)
 		}

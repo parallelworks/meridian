@@ -55,7 +55,16 @@ const (
 )
 
 // A JobResult is how a job ended, as the jobs that need it read it: its
-// outcome, which needs.<job>.result reads, and its outputs.
+// outcome, which needs.<job>.result reads, and its outputs. A worker
+// reports its job's, as End gave it (EndResult.Result), and the coordinator
+// keeps it: what Private and Secrets name only in the run's secret record.
+//
+// What is private is what Private or Secrets names, and a secret what
+// Secrets names, of which Derived names those only made from one, as for
+// RunValues: so Derived is within Secrets. Here Private also names each
+// output Secrets does, and SecretSteps' outputs are private, where
+// RunValues' Private leaves out what Secrets alone names, as a secret
+// variable, since org, vars and the passwords are private whole.
 type JobResult struct {
 	Outcome Outcome `json:"outcome"`
 	// Outputs are the job's outputs, by name, as End gave them: as they
@@ -249,6 +258,112 @@ func (j *Job) Reads(run RunValues) RunValues {
 	return out
 }
 
+// ReadsNeeds returns the part of needs, the results of the jobs this one
+// needs, by job name, that the job reads, which is what an attempt of it
+// receives of them when it is claimed (workerapi.Claim.Needs): what the
+// expressions that its worker evaluates read, as for Reads. Format 1 reads
+// a job it needs only as needs.<job>.outputs.<name> and
+// needs.<job>.steps.<id>.outputs.<name>, and Meridian as needs.<job>.result
+// too; any other reference to needs reads as its own text (ReadsAsText),
+// so what the job reads is known exactly. Each job keeps its outcome, and
+// whether its needs failed or it was cancelled, and of its outputs and its
+// steps' only those a reference names: all of a job's or a step's where a
+// reference reads them with a *, and every job's where it names the job
+// so. An [index], a list row's index, is taken to name any. Private,
+// Secrets, Derived, SecretSteps and DerivedSteps name only those, so the
+// worker masks only the needs' secrets the job reads. The coordinator
+// never gives an attempt more.
+func (j *Job) ReadsNeeds(needs map[string]JobResult) map[string]JobResult {
+	if needs == nil {
+		return nil
+	}
+	var paths [][]string
+	for _, v := range j.workerValues() {
+		for _, e := range v.Exprs() {
+			for _, r := range e.Refs() {
+				if r.Context == "needs" {
+					paths = append(paths, r.Path)
+				}
+			}
+		}
+	}
+	out := make(map[string]JobResult, len(needs))
+	for name, r := range needs {
+		res := JobResult{Outcome: r.Outcome, NeedsFailed: r.NeedsFailed, Cancelled: r.Cancelled}
+		for output, v := range r.Outputs {
+			if slices.ContainsFunc(paths, func(p []string) bool { return readsOutput(p, name, output) }) {
+				if res.Outputs == nil {
+					res.Outputs = map[string]string{}
+				}
+				res.Outputs[output] = v
+			}
+		}
+		for id, outputs := range r.Steps {
+			for output, v := range outputs {
+				if slices.ContainsFunc(paths, func(p []string) bool { return readsStepOutput(p, name, id, output) }) {
+					if res.Steps == nil {
+						res.Steps = map[string]map[string]string{}
+					}
+					if res.Steps[id] == nil {
+						res.Steps[id] = map[string]string{}
+					}
+					res.Steps[id][output] = v
+				}
+			}
+		}
+		given := func(names []string) []string {
+			var kept []string
+			for _, n := range names {
+				if _, ok := res.Outputs[n]; ok {
+					kept = append(kept, n)
+				}
+			}
+			return kept
+		}
+		res.Private, res.Secrets, res.Derived = given(r.Private), given(r.Secrets), given(r.Derived)
+		givenSteps := func(names map[string][]string) map[string][]string {
+			var kept map[string][]string
+			for id, ns := range names {
+				for _, n := range ns {
+					if _, ok := res.Steps[id][n]; ok {
+						if kept == nil {
+							kept = map[string][]string{}
+						}
+						kept[id] = append(kept[id], n)
+					}
+				}
+			}
+			return kept
+		}
+		res.SecretSteps, res.DerivedSteps = givenSteps(r.SecretSteps), givenSteps(r.DerivedSteps)
+		out[name] = res
+	}
+	return out
+}
+
+// readsOutput reports whether a reference to needs that follows path can
+// read the output of the job job named output: as needs.<job>.outputs.<name>,
+// or with a * or an [index] in the place of the job's name or the
+// output's, which can name it. Anything else in the place of outputs, a *
+// or an [index] too, reads as its own text (ReadsAsText).
+func readsOutput(path []string, job, output string) bool {
+	return len(path) >= 3 && names(path[0], job) && path[1] == "outputs" && names(path[2], output)
+}
+
+// readsStepOutput reports whether a reference to needs that follows path
+// can read the output named output of the step id of the job job, as
+// needs.<job>.steps.<id>.outputs.<name>, as readsOutput does.
+func readsStepOutput(path []string, job, id, output string) bool {
+	return len(path) >= 5 && names(path[0], job) && path[1] == "steps" && names(path[2], id) && path[3] == "outputs" && names(path[4], output)
+}
+
+// names reports whether a key of a reference's path, key, can name name:
+// it is name, or a *, which names each, or an [index], a list row's index,
+// which could be name.
+func names(key, name string) bool {
+	return key == name || key == "*" || key == "[index]"
+}
+
 // granted returns the path, inputs first, of what a reference to the
 // inputs that follows path reads of all, the run's values: each key of a
 // mapping and index of a list it names, up to what it reads all of, as a *,
@@ -283,7 +398,8 @@ func granted(all map[string]any, path []string) []string {
 }
 
 // workerValues returns the values of the job that its worker evaluates:
-// its env: and working-directory:, each of its steps' and its outputs:.
+// its env: and working-directory:, each of its steps' and its outputs:,
+// every Value a ReadyJob holds (TestWorkerValues).
 func (j *Job) workerValues() []Value {
 	var out []Value
 	out = slices.AppendSeq(out, maps.Values(j.Env))
@@ -292,7 +408,7 @@ func (j *Job) workerValues() []Value {
 		out = append(out, s.Name, s.If, s.Run, s.With, s.WorkingDirectory, s.SSH, s.Timeout, s.IgnoreErrors, s.Cleanup)
 		out = slices.AppendSeq(out, maps.Values(s.Env))
 		if r := s.Retry; r != nil {
-			out = append(out, r.MaxRetries, r.Interval, r.Timeout)
+			out = append(out, r.MaxRetries, r.Interval, r.Timeout, r.CleanOnRetry)
 		}
 	}
 	return slices.AppendSeq(out, maps.Values(j.Outputs))

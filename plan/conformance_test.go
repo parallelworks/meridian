@@ -214,7 +214,7 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 		attempt = 1
 	}
 	js := plan.JobState{
-		Run: job.Reads(r.run), Needs: in.Needs, Cancelled: state.Cancelled, Try: state.Try, Env: state.Env,
+		Run: job.Reads(r.run), Needs: job.ReadsNeeds(in.Needs), Cancelled: state.Cancelled, Try: state.Try, Env: state.Env,
 		Job: plan.JobContext{Name: job.Name, Key: rj.Key, Attempt: attempt, Group: state.Group, Member: state.Member},
 	}
 	js.Masked = append(js.Run.Masked(), rj.Masked...)

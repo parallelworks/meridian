@@ -205,8 +205,8 @@ func TestStoppedAfterJob(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkEvents(t, f, tc.events...)
-			if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Outputs["done"] != "1" {
-				t.Errorf("the job's outputs are %v", end.Outputs)
+			if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Result.Outputs["done"] != "1" {
+				t.Errorf("the job's outputs are %v", end.Result.Outputs)
 			}
 		})
 	}

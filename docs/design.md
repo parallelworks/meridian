@@ -1165,8 +1165,10 @@ platform's resolver changed as they were submitted, where the shape's
 decisions are, a job's `needs:` expression, `remote`, `sessions` and the
 names a session provider gave them, the limits, the digest of the run's own
 text, and the pinned workflow a step's `uses:` names, with the reference it
-was resolved by. The first release freezes it, with its schema, and every
-change after that gets a version.
+was resolved by; and in the worker API, a job's result as End gives it
+(`workerapi.Complete.Result`, a `plan.JobResult`), in place of the lists
+of outputs the end had. The first release freezes it, with its schema, and
+every change after that gets a version.
 
 ## Expressions
 
@@ -1672,7 +1674,14 @@ secret record ([Run data](#run-data)).
   finds from the expressions its worker evaluates: its `env:`, its steps
   and its `outputs:`. A read of each variable of a context, as `vars.*` is,
   gives all of them. Every attempt receives the workflow's `env:`, which
-  every step's environment holds.
+  every step's environment holds. Of the jobs it needs, it receives each
+  one's outcome, and only the outputs, and steps' outputs, that the same
+  expressions read, which `plan.Job.ReadsNeeds` finds: format 1 reads a
+  job only as `needs.<job>.outputs.<name>` and
+  `needs.<job>.steps.<id>.outputs.<name>`, and Meridian as
+  `needs.<job>.result` too, and any other reference as its own text, so
+  the grant is exact; a `*` in the place of a name gives each. So its
+  worker masks only those of the needs' secrets that the job reads.
 - **Declared variables.** Format 1's `needs.organizationVariables` lists
   the organization variables a workflow requires: as in ACTIVATE, a run
   fails when it is created if the Variables interface doesn't have one,
@@ -2101,7 +2110,8 @@ that embeds Meridian serve the same API.
 - **Claim:** present the bootstrap token and the worker's credential, and
   receive the job as Ready evaluated it, encoded as its plan is; the values
   of its own job's secrets and variables, and of the inputs Start completed
-  that it reads; and its dependencies' outcomes and outputs.
+  that it reads; and its dependencies' outcomes, and the outputs of theirs
+  that it reads.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
 - **Step events:** a step started, or finished with its exit code.
@@ -2110,7 +2120,9 @@ that embeds Meridian serve the same API.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
   ([Workflows a step calls](#workflows-a-step-calls)).
-- **Complete:** the outcome and the job's outputs.
+- **Complete:** the job's result, as End gave it: its outcome, its outputs
+  and its steps', and which of them are private or hold a secret
+  (`plan.JobResult`).
 
 Every write is idempotent and carries a sequence number, so a worker
 retrying after a dropped connection can't apply a report twice. A write

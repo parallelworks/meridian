@@ -44,7 +44,7 @@ func TestBodiesRoundTrip(t *testing.T) {
 		&workerapi.EventsAck{Seq: 1},
 		&workerapi.LogAck{Length: 10, Ended: true},
 		&workerapi.Complete{
-			Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed,
+			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed,
 			Problem: &problem.Problem{Type: "/problems/worker/image_pull_failed", Title: "Image not pulled", Status: 422, Code: "image_pull_failed", Params: map[string]any{"image": "x"}},
 		},
 	}
