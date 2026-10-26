@@ -12,6 +12,7 @@ import (
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
@@ -47,7 +48,7 @@ func TestPasswordsNeverInPlans(t *testing.T) {
 				continue
 			}
 			defs, _ := jsonptr.Lookup(doc.Value, []string{"on", "execute", "inputs"})
-			opts := compile.Options{Contexts: contexts(c)}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}

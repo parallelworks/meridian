@@ -345,7 +345,24 @@ var (
 	// RecordResealLimit is a run's secret record that has been encrypted
 	// again limit times, as many as its data key is used for.
 	RecordResealLimit = define(Error, "record_reseal_limit", "Secret record encrypted too many times", "run", "limit")
+	// RunRecordMismatch is a run whose secret record doesn't fit its plan
+	// (compile.ErrMismatch).
+	RunRecordMismatch = define(Error, "run_record_mismatch", "Secret record that doesn't fit the run's plan", "run")
+	// RunStartUnanswered is a run whose Start couldn't read what it reads,
+	// a variable or a platform's answer, in tries tries.
+	RunStartUnanswered = define(Error, "run_start_unanswered", "Run that couldn't start", "run", "tries")
+	// RunMalformed is a run whose stored plan or secret record names no
+	// version, or doesn't decode as the version it names.
+	RunMalformed = define(Error, "run_malformed", "Run that can't be read", "run")
+	// RunNotStarted is a run whose Start the coordinator gave up on.
+	RunNotStarted = define(Error, "run_not_started", "Run that ended without starting", "run")
 )
+
+// RunPlanNewer is a run whose plan is of version, newer than latest, the
+// latest this release reads, or holds what only a newer release reads. It
+// doesn't fail the run: the coordinator leaves it to a release that reads
+// its plan, and says so.
+var RunPlanNewer = define(Warning, "run_plan_newer", "Run newer than this release starts", "run", "version", "latest")
 
 // The meridian command's own problems, in CommandRegistry. A path, an
 // environment variable's name or value, or what the operating system said,

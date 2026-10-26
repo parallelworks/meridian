@@ -15,50 +15,16 @@ import (
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
-// testVariables are variables a test gives Create and Start, by their names
-// as the Variables interface reads them: a context, a dot and the name as
-// it is, as in vars.TOKEN or vars.my.token.
-type testVariables map[string]compile.Variable
-
-// Read gives the variables names name, as the interface says, and counts
-// in reads each time it is asked, and what it is asked for.
-func (v testVariables) Read(_ context.Context, names []string, secrets bool) (map[string]compile.Variable, error) {
-	out := map[string]compile.Variable{}
-	for _, name := range names {
-		_, _, one := strings.Cut(name, ".")
-		for k, x := range v {
-			if one && k != name || !one && !strings.HasPrefix(k, name+".") {
-				continue
-			}
-			if x.Secret && !secrets {
-				x.Value = ""
-			}
-			out[k] = x
-		}
-	}
-	return out, nil
-}
-
-// contexts gives the variables as Options.Contexts takes them when the run
-// is created: each plain one's value, and each secret one unknown.
-func (v testVariables) contexts() map[string]any {
-	out := map[string]any{"org": map[string]any{}, "vars": map[string]any{}}
-	for k, x := range v {
-		context, name, _ := strings.Cut(k, ".")
-		var value any = x.Value
-		if x.Secret {
-			value = expr.Unknown{Name: context}
-		}
-		out[context].(map[string]any)[name] = value
-	}
-	return out
-}
+// testVariables are variables a test gives Create and Start, as
+// conformancetest.Variables are.
+type testVariables = conformancetest.Variables
 
 // caseVariables gives a conformance case's variables, its contexts' org
 // and vars, with each secret one secret, and each value as value gives it.
@@ -98,7 +64,7 @@ func (v *countingVariables) Read(ctx context.Context, names []string, secrets bo
 // plan as a coordinator stores it and reads it back.
 func createRun(t testing.TB, src string, submitted map[string]any, vars testVariables) *compile.Created {
 	t.Helper()
-	return createWith(t, src, submitted, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts()})
+	return createWith(t, src, submitted, compile.Options{Inputs: passThrough{}, Contexts: vars.Contexts()})
 }
 
 // createWith creates a run of src with submitted and opts, as createRun
@@ -622,7 +588,7 @@ func TestStartSessions(t *testing.T) {
 	src := workflow(`n: {type: number, default: '${{ vars.N }}'}`, "sessions:\n  desktop:\n    useTLS: false\n    redirect: ${{ inputs.n == 2 }}\n")
 	vars := testVariables{"vars.N": {Value: "2"}}
 	s := &testSessions{}
-	c := createWith(t, src, nil, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts(), Sessions: s})
+	c := createWith(t, src, nil, compile.Options{Inputs: passThrough{}, Contexts: vars.Contexts(), Sessions: s})
 	if !maps.Equal(c.Plan.Run.SessionNames, map[string]string{"desktop": "desktop-checked"}) {
 		t.Errorf("the session provider's names %v", c.Plan.Run.SessionNames)
 	}
@@ -664,7 +630,7 @@ func TestStartEvaluatesSessions(t *testing.T) {
 		t.Errorf("made %q", s.made)
 	}
 	src = workflow("a: {type: string, optional: true}", "sessions:\n  desktop:\n    redirect: ${{ fromJSON(vars.S) }}\n")
-	c = createWith(t, src, nil, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts(), Sessions: s})
+	c = createWith(t, src, nil, compile.Options{Inputs: passThrough{}, Contexts: vars.Contexts(), Sessions: s})
 	res, diags := startRun(t, c, vars, compile.StartInput{RunID: "r2", Sessions: s})
 	if res != nil || len(s.made) != 1 {
 		t.Fatalf("a run whose sessions fail started, or made sessions: %q", s.made)
@@ -960,7 +926,7 @@ func TestInputResolverUnanswered(t *testing.T) {
 				asked = append(asked, v)
 				return nil, unreachable(v)
 			})
-			_, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), tc.submitted, compile.Options{Inputs: inputs, Contexts: vars.contexts()})
+			_, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), tc.submitted, compile.Options{Inputs: inputs, Contexts: vars.Contexts()})
 			if !errors.Is(err, compile.ErrUnanswered) || len(asked) != 1 {
 				t.Fatalf("Create: %v, asked for %v", err, asked)
 			}
@@ -983,7 +949,7 @@ func TestInputResolverUnanswered(t *testing.T) {
 	// At Start too, where what a form made from a variable is what the
 	// variable gives as the run starts.
 	src := workflow("c: {type: compute-clusters, default: '${{ org.V }}'}")
-	c := createWith(t, src, map[string]any{"c": "VARIABLE"}, compile.Options{Inputs: passThrough{}, Contexts: vars.contexts()})
+	c := createWith(t, src, map[string]any{"c": "VARIABLE"}, compile.Options{Inputs: passThrough{}, Contexts: vars.Contexts()})
 	in := compile.StartInput{RunID: "r", Record: c.Record, Variables: testVariables{"org.V": {Value: "NEW"}}, Inputs: rejects{unreachable("NEW")}}
 	if _, _, err := compile.Start(t.Context(), c.Plan, in); !errors.Is(err, compile.ErrUnanswered) || strings.Contains(err.Error(), "NEW") || strings.Contains(err.Error(), "VARIABLE") {
 		t.Errorf("Start: %v", err)
@@ -1052,7 +1018,7 @@ func TestPasswordsNeverInRunState(t *testing.T) {
 				continue
 			}
 			defs, _ := jsonptr.Lookup(doc.Value, []string{"on", "execute", "inputs"})
-			opts := compile.Options{Contexts: contexts(c), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
 			submitted := jsonvalue.CloneMap(c.Inputs)
 			if !withPassword(defs, submitted, sentinel) {
 				continue
@@ -1122,7 +1088,7 @@ func TestVariablesNeverInRunState(t *testing.T) {
 			if diags.HasErrors() {
 				continue
 			}
-			opts := compile.Options{Contexts: vars.contexts(), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
+			opts := compile.Options{Contexts: vars.Contexts(), Inputs: passThrough{}, Sessions: &testSessions{}, Sources: anySources{}, Groups: anyGroups{}}
 			for _, submitted := range append([]map[string]any{c.Inputs}, formShapes(compile.FormValues(t.Context(), doc, c.Inputs, opts))...) {
 				created, _, err := compile.Create(t.Context(), "workflow.yaml", data, submitted, opts)
 				if err != nil {
