@@ -89,6 +89,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		}
 		var created *compile.Created
 		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
+			Source: plan.Source{Location: workflowLocation(positional[0])},
 			Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
 		})
 		if err != nil {
