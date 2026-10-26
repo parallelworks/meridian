@@ -89,7 +89,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -110,9 +109,20 @@ const version = 1
 // store's ID, the run's and the generation follow.
 const associatedPrefix = "meridian/record/1\x00"
 
+// Keys wraps runs' data keys: the coordinator's Keys (coordinator.Keys),
+// whose methods and rules these are. The package names them itself, since
+// the coordinator, which seals its runs' records here, imports it.
+type Keys interface {
+	// Wrap encrypts key, the data key of the secret record of the run
+	// runID, bound to runID.
+	Wrap(ctx context.Context, runID string, key []byte) ([]byte, error)
+	// Unwrap decrypts a data key that Wrap wrapped for runID.
+	Unwrap(ctx context.Context, runID string, wrapped []byte) ([]byte, error)
+}
+
 // A Sealer seals the secret records of a store's runs.
 type Sealer struct {
-	keys  coordinator.Keys
+	keys  Keys
 	store string
 }
 
@@ -120,7 +130,7 @@ type Sealer struct {
 // keys with keys. A store makes its ID once, at random; it is UTF-8, never
 // empty, and holds neither a NUL nor a slash, which separate it from a
 // run's ID.
-func New(keys coordinator.Keys, storeID string) (*Sealer, error) {
+func New(keys Keys, storeID string) (*Sealer, error) {
 	if keys == nil {
 		return nil, errors.New("seal: no Keys")
 	}
