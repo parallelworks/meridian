@@ -1,0 +1,19 @@
+description: >-
+  A default that reads a group whole reads the values its inputs have,
+  without the inputs that have none, as the jobs read the group: a launch
+  form sends an untouched group's booleans as false and leaves out an
+  optional input with no default. An input in it read alone with no value
+  still reads null.
+source: ACTIVATE
+inputs:
+  g:
+    b: false
+expect:
+  inputs:
+    g:
+      b: false
+    whole: |-
+      {
+        "b": false
+      }
+    alone: none

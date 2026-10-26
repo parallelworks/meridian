@@ -479,6 +479,83 @@ func BenchmarkMarked(b *testing.B) {
 	}
 }
 
+// A Placeholder reads as its value when a reference reads it, a path
+// through a lambda's parameter, or get, and what reads a list or a mapping
+// that holds one whole leaves it out, as an input with no value is left
+// out of its group read whole: toJSON, a template's text, length,
+// contains, ==, join, keys and values, a * and map() and filter() over a
+// mapping, and what an evaluation gives. What a lambda gives of a row read
+// whole leaves it out too.
+func TestPlaceholders(t *testing.T) {
+	scope := expr.Scope{Contexts: map[string]any{"inputs": map[string]any{
+		"g":    map[string]any{"a": expr.Placeholder{}, "b": expr.Placeholder{Value: false}, "c": "x"},
+		"h":    map[string]any{"a": expr.Placeholder{}},
+		"rows": []any{map[string]any{"n": expr.Placeholder{}, "m": "y"}},
+	}}}
+	for src, want := range map[string]any{
+		"inputs.g.a":               nil,
+		"inputs.g.b":               false,
+		"inputs.g.a.x":             nil,
+		"inputs.g.c":               "x",
+		"toJSON(inputs.g)":         "{\n  \"c\": \"x\"\n}",
+		"toJSON(inputs.h)":         "{}",
+		"toJSON(inputs.g.*)":       "[\n  \"x\"\n]",
+		"length(inputs.g)":         1.0,
+		"toJSON(inputs.rows)":      "[\n  {\n    \"m\": \"y\"\n  }\n]",
+		"toJSON(inputs.rows[0])":   "{\n  \"m\": \"y\"\n}",
+		"toJSON(inputs.rows.*.n)":  "[\n  null\n]",
+		"inputs.rows[0].n == null": true,
+		"length(inputs.h)":         0.0,
+
+		"toJSON(map(inputs.rows, r => r.n))":            "[\n  null\n]",
+		"length(filter(inputs.rows, r => r.n == null))": 1.0,
+		"toJSON(map(inputs.rows, r => r))":              "[\n  {\n    \"m\": \"y\"\n  }\n]",
+		"map(inputs.rows, r => toJSON(r))[0]":           "{\n  \"m\": \"y\"\n}",
+		"toJSON(map(inputs.g, (v, k) => k))":            "[\n  \"c\"\n]",
+		"length(map(inputs.h, v => v))":                 0.0,
+		"contains(inputs.g, 'a')":                       false,
+		"contains(inputs.g, 'c')":                       true,
+		"inputs.h == fromJSON('{}')":                    true,
+		"inputs.g == fromJSON('{\"c\": \"x\"}')":        true,
+		"join(inputs.rows.*.m, ',')":                    "y",
+		"'g: ' + inputs.h":                              "g: {}",
+
+		"(inputs.g get 'a') == null":                      true,
+		"(inputs.g get 'b') || 'd'":                       "d",
+		"toJSON(inputs.rows[0] get 'n')":                  "null",
+		"toJSON(keys inputs.g)":                           "[\n  \"c\"\n]",
+		"toJSON(values inputs.g)":                         "[\n  \"x\"\n]",
+		"length(keys inputs.h)":                           0.0,
+		"toJSON(map(values inputs.g, x => x))":            "[\n  \"x\"\n]",
+		"length(filter(values inputs.g, x => x == null))": 0.0,
+		"toJSON(map(inputs.rows, r => keys r))":           "[\n  [\n    \"m\"\n  ]\n]",
+		"toJSON(inputs.rows.*.*)":                         "[\n  \"y\"\n]",
+		"'a' in inputs.g":                                 false,
+		"inputs.g includes 'c'":                           true,
+		"format('{0}', inputs.h)":                         "{}",
+		"upper(inputs.h)":                                 "{}",
+	} {
+		got, err := mustParse(t, src).Eval(scope)
+		if err != nil || got != want {
+			t.Errorf("%s = %#v, %v; want %#v", src, got, err, want)
+		}
+	}
+	// What an evaluation gives holds no Placeholder, whole or in part.
+	for _, src := range []string{"inputs.g", "inputs.rows", "inputs.rows[0]", "inputs.g ?? 1", "map(inputs.rows, r => r)", "case(true, inputs.h, 1)"} {
+		got, err := mustParse(t, src).Eval(scope)
+		if err != nil || strings.Contains(fmt.Sprintf("%#v", got), "Placeholder") {
+			t.Errorf("%s = %#v, %v; want no Placeholder in it", src, got, err)
+		}
+	}
+	tmpl, err := expr.ParseTemplate("${{ inputs.g }} and ${{ inputs.rows }}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := tmpl.Eval(scope); err != nil || strings.Contains(fmt.Sprint(got), "Placeholder") || strings.Contains(fmt.Sprint(got), "\"a\"") {
+		t.Errorf("a template's text = %#v, %v", got, err)
+	}
+}
+
 // A value that isn't known yet, such as a secret's, makes what reads it
 // unknown, and leaves the rest of the context readable. A slice or a .*
 // holds it only if it reads it, and reading the same parts again in a

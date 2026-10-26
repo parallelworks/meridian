@@ -1,0 +1,18 @@
+description: >-
+  The workflow's env: reads a group whole as the values its inputs have.
+source: ACTIVATE
+inputs:
+  g:
+    a: x
+    b: false
+expect:
+  inputs:
+    g:
+      a: x
+      b: false
+  env:
+    G: |-
+      {
+        "a": "x",
+        "b": false
+      }

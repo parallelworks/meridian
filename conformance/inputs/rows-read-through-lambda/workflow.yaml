@@ -1,0 +1,25 @@
+on:
+  execute:
+    inputs:
+      l:
+        type: list
+        template:
+          u:
+            type: string
+            optional: true
+          b:
+            type: boolean
+            optional: true
+      flags:
+        type: string
+        default: ${{ toJSON(map(inputs.l, r => r.b)) }}
+      unset:
+        type: number
+        default: ${{ length(filter(inputs.l, r => r.b == false)) }}
+      first:
+        type: string
+        default: ${{ map(inputs.l, r => toJSON(r))[0] }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

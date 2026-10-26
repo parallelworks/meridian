@@ -315,6 +315,84 @@ type Unknown struct {
 	Name string
 }
 
+// A Placeholder stands in a context for a value that isn't there, as an
+// input with no value has none: a reference to it, a path that reaches it
+// through a lambda's parameter, and get, read Value, as an input's
+// definitions read such an input as null, or a boolean as false. What
+// reads a list or a mapping that holds it whole leaves it out, as if it
+// weren't there, as the run's values do: toJSON, the text a template
+// makes, length, contains, ==, join, keys and values, a * and map() and
+// filter() over a mapping, and what an evaluation gives. So a group read
+// whole leaves out the inputs that have no value, while each of them read
+// alone reads its Value. A list or a mapping that holds one isn't copied
+// to leave it out until what it gives is.
+//
+// A Placeholder is only ever in a context, and never written: what an
+// evaluation gives holds none, so neither does a plan, a record or a run's
+// values, and JSON, which has no Placeholder, decodes to none.
+type Placeholder struct {
+	Value any
+}
+
+// errPlaceholderJSON is what encoding a Placeholder returns.
+var errPlaceholderJSON = errors.New("expr: a Placeholder stands in a context for a value that isn't there, and isn't written")
+
+// MarshalJSON fails: a Placeholder that reached what is written, such as a
+// plan, would be written as a mapping no one gave, so it fails instead.
+func (Placeholder) MarshalJSON() ([]byte, error) { return nil, errPlaceholderJSON }
+
+// isPlaceholder reports whether v is a Placeholder.
+func isPlaceholder(v any) bool {
+	_, ok := v.(Placeholder)
+	return ok
+}
+
+// withoutPlaceholders returns v without the Placeholders it holds, as an
+// evaluation gives it: v itself if it holds none, or else a copy of it.
+func withoutPlaceholders(v any) any {
+	if !holdsPlaceholder(v) {
+		return v
+	}
+	switch v := v.(type) {
+	case Placeholder:
+		return v.Value
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			if _, ok := item.(Placeholder); !ok {
+				out = append(out, withoutPlaceholders(item))
+			}
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			if _, ok := item.(Placeholder); !ok {
+				out[k] = withoutPlaceholders(item)
+			}
+		}
+		return out
+	}
+	return v
+}
+
+// holdsPlaceholder reports whether v is or holds a Placeholder.
+func holdsPlaceholder(v any) bool {
+	switch v := v.(type) {
+	case Placeholder:
+		return true
+	case []any:
+		return slices.ContainsFunc(v, holdsPlaceholder)
+	case map[string]any:
+		for _, item := range v {
+			if holdsPlaceholder(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // An EvalError is an expression that can't be evaluated with the values it
 // was given, such as fromJSON of text that isn't JSON.
 type EvalError struct {
@@ -370,7 +448,11 @@ func (e *Expr) Eval(scope Scope) (any, error) {
 		return nil, err
 	}
 	defer ev.stop()
-	return ev.eval(e.root)
+	v, err := ev.eval(e.root)
+	if err != nil {
+		return nil, err
+	}
+	return withoutPlaceholders(v), nil
 }
 
 // An evaluator evaluates one template: a ${{ }} alone, or the expressions
@@ -737,6 +819,10 @@ func (e *evaluator) binary(n *binary) (any, error) {
 		}
 		f := follower{e: e, at: n.at}
 		v, _, err := f.lookup(a, k)
+		if p, ok := v.(Placeholder); ok {
+			// What has no value reads as its Value, as a path to it does.
+			v = p.Value
+		}
 		return v, err
 	case "range":
 		// range reads text it converts to a number.
@@ -875,9 +961,11 @@ func (e *evaluator) each(n *call, fn function) (any, error) {
 				return nil, err
 			}
 		}
-		keys, items = make([]any, len(sorted)), make([]any, len(sorted))
-		for i, k := range sorted {
-			keys[i], items[i] = k, c[k]
+		keys, items = make([]any, 0, len(sorted)), make([]any, 0, len(sorted))
+		for _, k := range sorted {
+			if !isPlaceholder(c[k]) {
+				keys, items = append(keys, k), append(items, c[k])
+			}
 		}
 	default:
 		if c != nil {
@@ -1467,6 +1555,9 @@ func walk(v any, path []string, charge func(n int, done bool) error) (any, bool,
 // next *.
 func (f *follower) walk(v any, path []string) (any, bool, error) {
 	for i, name := range path {
+		if p, ok := v.(Placeholder); ok {
+			v = p.Value
+		}
 		if _, ok := v.(Unknown); ok {
 			return v, true, nil
 		}
@@ -1522,6 +1613,10 @@ func (f *follower) walk(v any, path []string) (any, bool, error) {
 		out, flatten := make([]any, 0, len(items)), slices.Contains(rest, "*")
 		fromText, allText := f.throughText, true
 		for _, item := range items {
+			if _, ok := item.(Placeholder); ok {
+				// What has no value isn't among what a * reads.
+				continue
+			}
 			f.throughText = fromText
 			w, ok, err := f.walk(item, rest)
 			if err != nil {
@@ -1539,6 +1634,9 @@ func (f *follower) walk(v any, path []string) (any, bool, error) {
 		}
 		f.throughText = allText
 		return out, true, nil
+	}
+	if p, ok := v.(Placeholder); ok {
+		return p.Value, true, nil
 	}
 	return v, true, nil
 }

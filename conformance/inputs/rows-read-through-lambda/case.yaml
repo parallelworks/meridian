@@ -1,0 +1,25 @@
+description: >-
+  map() and filter() over a list's rows read each row's inputs as the
+  rows' fields read alone do: one with no value is null, or false for a
+  boolean. A row read whole, as toJSON(r) reads it, leaves them out, as a
+  group read whole does.
+source: Meridian
+inputs:
+  l:
+    - u: x
+    - u: y
+expect:
+  inputs:
+    l:
+      - u: x
+      - u: y
+    flags: |-
+      [
+        false,
+        false
+      ]
+    unset: 2
+    first: |-
+      {
+        "u": "x"
+      }

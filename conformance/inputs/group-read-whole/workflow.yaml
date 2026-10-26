@@ -1,0 +1,21 @@
+on:
+  execute:
+    inputs:
+      g:
+        type: group
+        items:
+          a:
+            type: string
+            optional: true
+          b:
+            type: boolean
+      whole:
+        type: string
+        default: ${{ toJSON(inputs.g) }}
+      alone:
+        type: string
+        default: ${{ inputs.g.a == null && 'none' || 'some' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok

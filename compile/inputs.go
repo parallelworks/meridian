@@ -269,9 +269,38 @@ func newInputResolver(doc *format.Document, submitted map[string]any, opts Optio
 func (r *inputResolver) resolve() {
 	r.fill()
 	r.applyConditions()
+	r.fillGroups()
 	r.checkValues()
 	r.keepHeld()
 	r.diags.Sort()
+}
+
+// fillGroups gives each group, and each wizard step whose inputs' values
+// are under its own key, that has no value, or null, an empty mapping, as
+// ACTIVATE fills in a run's values: a group's value is a mapping, though
+// none of its inputs has a value. One that is ignored, or in one that is,
+// gets none, and so does one in a list's rows, as ACTIVATE fills in a
+// row's group only when one of its inputs has a value. The expressions
+// Create and Start evaluate read the inputs' view, which this doesn't
+// change: what reads the run's values, the jobs, reads the mapping, as
+// ACTIVATE's do.
+func (r *inputResolver) fillGroups() {
+	for _, f := range r.fields {
+		if !f.container || f.flatten || f.repeats() || f.in != nil || f.ignored {
+			continue
+		}
+		if v, ok := jsonptr.Lookup(r.values, f.path); ok && v != nil {
+			continue
+		}
+		// One in a group that has no mapping, as one that is ignored, has
+		// none either. The fields are in order, a group's before its own.
+		if parent := f.path[:len(f.path)-1]; len(parent) > 0 {
+			if _, ok := lookup(r.values, parent).(map[string]any); !ok {
+				continue
+			}
+		}
+		r.set(f.path, map[string]any{})
+	}
 }
 
 // fill finds the inputs' fields, checks the syntax of their definitions

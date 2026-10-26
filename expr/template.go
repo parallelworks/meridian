@@ -195,6 +195,7 @@ func (t *Template) eval(scope Scope, part func(v any, read Read)) (any, error) {
 			outer = ev.scope.budget.noting()
 		}
 		v, err := ev.eval(p.expr.root)
+		v = withoutPlaceholders(v)
 		if part != nil {
 			if read := ev.scope.budget.done(outer); err == nil {
 				part(v, read)
