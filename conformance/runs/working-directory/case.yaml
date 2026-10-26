@@ -1,0 +1,14 @@
+description: >-
+  A job's working-directory: can read the run's directory, which only the
+  host it runs on knows, in env.PW_PARENT_JOB_DIR: its steps run there, made
+  if it isn't there, unless a step names its own.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, text: "in work\n"}
+          - {step: 1, text: "other\n"}

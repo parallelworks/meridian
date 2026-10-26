@@ -14,17 +14,24 @@ import (
 // before it asked the member's backend: a member of a group, and its
 // backend; or, when where the job runs is private, the same sealed under
 // the run's data key (Private), which only the coordinator opens, and
-// Group, Member and Backend "".
+// Group, Member and Backend "". Generation is the generation a private
+// place was sealed with: 1 as it is chosen, and the next each time it is
+// sealed again (ResealPlace), as with the backend's ID for the placement;
+// and 0 for a place in the clear.
 type Place struct {
 	Group, Member, Backend string
 	Private                []byte
+	Generation             uint64
 }
 
-// check checks that p is one or the other, whole.
+// check checks that p is one or the other, whole, as it is chosen.
 func (p Place) check() error {
 	inClear := p.Group != "" && p.Member != "" && p.Backend != ""
-	if inClear == (p.Private != nil) || !inClear && (p.Group != "" || p.Member != "" || p.Backend != "") {
+	switch {
+	case inClear == (p.Private != nil) || !inClear && (p.Group != "" || p.Member != "" || p.Backend != ""):
 		return errors.New("store: an attempt's place is its group, member and backend, or those sealed, and not both")
+	case p.Private != nil && p.Generation != 1 || p.Private == nil && p.Generation != 0:
+		return fmt.Errorf("store: an attempt's place chosen with generation %d, where a private one's is 1 and one in the clear has none", p.Generation)
 	}
 	return nil
 }
@@ -49,9 +56,9 @@ func (tx *Tx) ChoosePlace(id string, p Place) error {
 	case a.State != AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, private_placement = ?
+	res, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, private_placement = ?, placement_gen = ?
 WHERE id = ? AND grp IS NULL AND private_placement IS NULL`,
-		nullString(p.Group), nullString(p.Member), nullString(p.Backend), p.Private, id)
+		nullString(p.Group), nullString(p.Member), nullString(p.Backend), p.Private, p.Generation, id)
 	if err != nil {
 		return err
 	}
@@ -70,8 +77,8 @@ func (tx *Tx) ChosenPlace(id string) (Place, bool, error) {
 		p                      Place
 		group, member, backend sql.NullString
 	)
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT grp, member, backend, private_placement FROM meridian_attempts WHERE id = ?", id).
-		Scan(&group, &member, &backend, &p.Private)
+	err := tx.tx.QueryRowContext(tx.ctx, "SELECT grp, member, backend, private_placement, placement_gen FROM meridian_attempts WHERE id = ?", id).
+		Scan(&group, &member, &backend, &p.Private, &p.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Place{}, false, ErrNotFound
 	}
@@ -80,6 +87,45 @@ func (tx *Tx) ChosenPlace(id string) (Place, bool, error) {
 	}
 	p.Group, p.Member, p.Backend = group.String, member.String, backend.String
 	return p, p.Group != "" || p.Private != nil, nil
+}
+
+// ResealPlace stores sealed as the attempt's private place in place of its
+// last, sealed with generation, which is one more than the last's: as once
+// its backend has placed it, with the backend's ID for the placement,
+// which of a private placement the store holds only sealed
+// (RecordPlacement). The place and its generation change together, or
+// neither does: a generation that isn't the next is ErrState and
+// ErrRecordChanged, as a write that raced another's is. An attempt that no
+// longer holds its job is ErrFenced, and one that has been claimed, or
+// whose place isn't private, ErrState.
+func (tx *Tx) ResealPlace(id string, generation uint64, sealed []byte) error {
+	if len(sealed) == 0 {
+		return errors.New("store: an attempt's private place without its bytes")
+	}
+	a, err := tx.Attempt(id)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !a.Holds:
+		return ErrFenced
+	case a.State != AttemptPlacing:
+		return fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
+	case !a.Private:
+		return fmt.Errorf("%w: attempt %s's place isn't private", ErrState, id)
+	}
+	stale := fmt.Errorf("%w: %w: generation %d isn't the next of attempt %s's place", ErrState, ErrRecordChanged, generation, id)
+	if generation < 2 {
+		return stale
+	}
+	// Only from the generation before, so that a write that raced this one
+	// fails, where the database runs transactions side by side.
+	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET private_placement = ?, placement_gen = ? WHERE id = ? AND placement_gen = ?",
+		sealed, generation, id, generation-1)
+	if err != nil {
+		return err
+	}
+	return oneRow(res, stale)
 }
 
 // LatestAttempt returns the run's job's latest attempt, whose fence is its
@@ -154,7 +200,7 @@ func (tx *Tx) Unplaced(id string) error {
 		return err
 	case !a.Holds:
 		return ErrFenced
-	case a.State != AttemptPlacing || a.Placement.ID != "":
+	case a.State != AttemptPlacing || a.Placed():
 		return fmt.Errorf("%w: attempt %s has been placed", ErrState, id)
 	}
 	return nil

@@ -1,0 +1,16 @@
+jobs:
+  main:
+    env:
+      TOKEN: ${{ vars.token }}
+    steps:
+      - id: login
+        run: |
+          echo "token ${{ vars.token }} in ${{ vars.region }}"
+          echo "env $TOKEN"
+          echo "KEY=$TOKEN" >> $OUTPUTS
+    outputs:
+      key: ${{ steps.login.outputs.KEY }}
+  use:
+    needs: [main]
+    steps:
+      - run: echo "key ${{ needs.main.outputs.key }}"

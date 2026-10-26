@@ -94,7 +94,7 @@ func (tg *target) Stored(t *testing.T, id string) workerapitest.Stored {
 		s.Events, err = tx.Events(id)
 		return err
 	})
-	s.Logs = tg.logs.of(a.Run, a.Job, a.Number)
+	s.Logs = tg.logs.Of(a.Run, a.Job, a.Number)
 	end, err := a.Complete()
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ These cases pin what workflows mean, in areas:
 | `start` | A run's values as it starts: the inputs resolved again from what was submitted, the workflow's `env:` and `timeout:`, the matrices expanded then, and the run's shape decided again |
 | `matrices` | How a job's `strategy:` expands into its instances |
 | `contexts` | What each context holds in each phase after the run starts, and what a job's and a step's values evaluate to |
+| `runs` | How a run ends once its jobs have run, their steps on a host: each job's outcome, and what its steps print |
 
 ## Format
 
@@ -286,6 +287,39 @@ expect:
   names.
 - `expect.diagnostics` are those of compiling the workflow and of each
   phase together.
+
+## Runs
+
+Each case is a directory like a compile case, whose run is created with
+its `inputs` and `contexts`, started, and run to its end: each of its jobs
+runs on a host, as the user, without a container, and its steps print to
+their logs.
+
+```yaml
+description: >-
+  A step's retry: tries it again once it fails.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, try: 0, text: "try 0\n"}
+          - {step: 0, try: 1, text: "try 1\n"}
+```
+
+- `expect.run.outcome` is the run's outcome, and `expect.run.jobs` how
+  each of its jobs ends, by name: every one of them, with its `outcome`.
+- A job's `logs` are some of its logs, each exactly: the log of the try
+  `try`, from 0, of the step `step`, from 0, or of its `cleanup:` with
+  `cleanup: true`, which is what the command printed, its standard output
+  and its standard error together, masked, as the run keeps it: a secret's
+  text is `***`. The job's other logs aren't checked.
+- A job's directory, and so what a step prints of a path in it, differs
+  from one run to the next: a case prints what it checks of one, such as
+  its last name, rather than the path.
 
 ## Expressions
 

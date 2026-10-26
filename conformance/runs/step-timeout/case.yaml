@@ -1,0 +1,12 @@
+description: >-
+  A step that runs past its timeout: is stopped, and fails, and its job
+  with it.
+source: Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      main:
+        outcome: failure
+        logs:
+          - {step: 0, text: "started\n"}

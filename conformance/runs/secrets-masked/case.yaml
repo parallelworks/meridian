@@ -1,0 +1,21 @@
+description: >-
+  A secret's text is masked wherever a step prints it, as the run keeps
+  its logs: a secret variable's, read in a step or in the job's env, and an
+  output that holds one, in the job that needs the job that wrote it. A
+  plain variable's isn't.
+source: Meridian
+contexts:
+  vars: {token: s3cret, region: eu}
+secret-variables: [token]
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, text: "token *** in eu\nenv ***\n"}
+      use:
+        outcome: success
+        logs:
+          - {step: 0, text: "key ***\n"}

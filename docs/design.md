@@ -66,13 +66,15 @@ Meridian is a set of Go packages:
 
 The backends that start workers (`local`, `ssh`, `kubernetes`, `slurm`,
 `pbs`) and the drivers of container runtimes (Podman, Docker, Apptainer,
-Apple's `container`) will be packages of their own; none is built yet
+Apple's `container`) will be packages of their own; only `local`, which
+runs workers on this machine, is built yet
 ([Backends and isolation](#backends-and-isolation)).
 
 The `meridian` command wires the packages together with local resolvers.
-It will run a coordinator in its own process, with a SQLite store; today
-it validates a workflow (`meridian validate`) and runs one attempt of a
-job as a worker (`meridian worker`), and its other commands say they
+It runs a coordinator in its own process, with a SQLite store: today it
+validates a workflow (`meridian validate`), runs one, its jobs on this
+machine with the `local` backend (`meridian run`), and runs one attempt of
+a job as a worker (`meridian worker`), and its other commands say they
 aren't built yet ([The `meridian` command](#the-meridian-command)). A
 platform wires them with its own resolvers, Postgres and as many
 coordinator replicas as it needs. Nothing in the packages knows which of
@@ -1463,7 +1465,10 @@ the secret record whenever the coordinator needs them, as the record holds
 the run's timeout when that reads one, and the placement made from them,
 the member chosen and why each other wasn't, and the backend's own name for
 the placement, which can say where it is, as a pod's name can, is in the
-attempt's row, sealed as the secret record's parts are. Run state holds
+attempt's row, sealed as the secret record's parts are: the member, before
+its backend is asked, so that a coordinator that stops then finds the
+placement again, and then the backend's name too, sealed again as the
+part's next generation once the backend answers. Run state holds
 only the digest of the worker binary the
 placement started, which says the attempt is placed. What such an attempt
 reports that can name the member, the problem it ends with and the

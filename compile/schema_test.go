@@ -29,7 +29,7 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 	jobs := schematest.Schema(t, "plan/schema/1/readyjob.schema.json")
 	expansions := schematest.Schema(t, "plan/schema/1/plan.schema.json#/$defs/Expansion")
 	checked, started, readied := 0, 0, 0
-	for _, area := range []string{"compile", "contexts", "format", "inputs", "start"} {
+	for _, area := range []string{"compile", "contexts", "format", "inputs", "runs", "start"} {
 		cases, err := conformance.Cases(area)
 		if err != nil {
 			t.Fatal(err)

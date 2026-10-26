@@ -1,0 +1,14 @@
+description: >-
+  A job's outputs, and its steps' outputs, which a step writes to $OUTPUTS,
+  reach the jobs that need it, which run once it has ended.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      build:
+        outcome: success
+      test:
+        outcome: success
+        logs:
+          - {step: 0, text: "app app success\n"}

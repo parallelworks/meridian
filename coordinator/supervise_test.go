@@ -16,8 +16,10 @@ import (
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -106,7 +108,7 @@ func TestJobPlaced(t *testing.T) {
 		t.Errorf("the job is %+v", j)
 	}
 	a := latestAttempt(t, c, r.ID, "main")
-	want := store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "test-" + a.ID, WorkerDigest: "sha256:" + hex.EncodeToString(make([]byte, 32))}
+	want := store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "test-" + a.ID, WorkerDigest: testDigest}
 	if a.Placement != want || a.End.Kind != store.EndCompleted || a.SelfFencing {
 		t.Errorf("the attempt is %+v", a)
 	}
@@ -151,6 +153,41 @@ jobs:
 	d.mu.Unlock()
 	if connects != 1 {
 		t.Errorf("the member's connection was made %d times", connects)
+	}
+}
+
+// TestPrivateNeeds checks that a job reads the private outputs of the job
+// it needs, which the worker API stores apart from run state, as the
+// needed job's part of the run's secret record.
+func TestPrivateNeeds(t *testing.T) {
+	c := open(t, Options{})
+	driverOf(c).set(func(d *testDriver) {
+		d.worker = func(req backend.PlaceRequest) testEnd {
+			if !strings.HasSuffix(req.Name, "-a") {
+				return testEnd{result: plan.JobResult{Outcome: plan.OutcomeSuccess}}
+			}
+			return testEnd{result: plan.JobResult{
+				Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"token": "s3cret", "shown": "yes"}, Private: []string{"token"},
+			}}
+		}
+	})
+	r := runToEnd(t, c, `
+jobs:
+  b:
+    needs: [a]
+    if: ${{ needs.a.outputs.token == 's3cret' && needs.a.outputs.shown == 'yes' }}
+    steps:
+      - run: echo b
+  a:
+    steps:
+      - run: echo a
+`, nil)
+	a, b := storedJob(t, c, r.ID, "a"), storedJob(t, c, r.ID, "b")
+	if r.Outcome != plan.OutcomeSuccess || b.Outcome != plan.OutcomeSuccess || b.Attempts != 1 {
+		t.Fatalf("the run ended with %s, and b is %+v", r.Outcome, b)
+	}
+	if _, ok := a.Result.Outputs["token"]; ok || a.Result.Outputs["shown"] != "yes" {
+		t.Errorf("run state holds a's outputs %v", a.Result.Outputs)
 	}
 }
 
@@ -417,7 +454,7 @@ func TestResumePlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The placement the supervisor didn't record, whose worker runs.
-	p := backend.Placement{Attempt: a.ID, ID: "test-" + a.ID}
+	p := backend.Placement{Attempt: a.ID, ID: "test-" + a.ID, WorkerDigest: testDigest}
 	d.set(func(d *testDriver) { d.placements[a.ID] = p })
 	ctx := context.WithoutCancel(t.Context())
 	d.workers.Go(func() {
@@ -461,8 +498,8 @@ func TestPrivatePlacement(t *testing.T) {
 			t.Fatalf("the run ended with %s", r.Outcome)
 		}
 		a := latestAttempt(t, c, r.ID, "main")
-		if a.Placement.Group != "" || a.Placement.Member != "" || a.Placement.Backend != "" || a.Placement.ID != "test-"+a.ID {
-			t.Errorf("a private placement is %+v", a.Placement)
+		if a.Placement != (store.Placement{WorkerDigest: testDigest}) {
+			t.Errorf("a private placement is %+v in the clear", a.Placement)
 		}
 		if place := chosenPlace(t, c, a.ID); place.Group != "" || place.Member != "" || place.Private == nil {
 			t.Fatalf("a private place is %+v", place)
@@ -472,7 +509,9 @@ func TestPrivatePlacement(t *testing.T) {
 		}
 	})
 	t.Run("sealed", func(t *testing.T) {
-		// While the run runs, its place opens as the attempt's alone.
+		// While the run runs, its place opens as the attempt's alone: its
+		// member, as it is chosen, and then the backend's ID for the
+		// placement too, which the store holds only sealed.
 		d := newTestDriver()
 		d.worker = func(backend.PlaceRequest) testEnd { return testEnd{never: true} }
 		c := open(t, Options{Variables: hostVars, Drivers: map[string]backend.Driver{"ssh": d}})
@@ -484,18 +523,34 @@ func TestPrivatePlacement(t *testing.T) {
 			t.Fatal(err)
 		}
 		a := latestAttempt(t, c, id, "main")
-		var stored *store.Record
+		if !a.Private || !a.Placed() || a.Placement != (store.Placement{WorkerDigest: a.Placement.WorkerDigest}) {
+			t.Errorf("the private attempt's placement is %+v in the clear", a.Placement)
+		}
+		var wrapped []byte
 		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
 			var err error
-			stored, err = tx.Record(id)
+			wrapped, err = tx.WrappedKey(id)
 			return err
 		}); err != nil {
 			t.Fatal(err)
 		}
-		data, err := c.sealer.OpenPlacement(t.Context(), id, a.ID, stored.WrappedKey, chosenPlace(t, c, a.ID).Private)
-		if err != nil || string(data) != `{"group":"ssh","member":"ssh","backend":"ssh"}` {
-			t.Errorf("the sealed place is %s, %v", data, err)
+		place := chosenPlace(t, c, a.ID)
+		open := func(p store.Place) (sealedPlace, error) {
+			sp, err := c.openPlaces(t.Context(), id, wrapped, map[string]store.Place{a.ID: p})
+			return sp[a.ID], err
 		}
+		want := sealedPlace{Group: "ssh", Member: "ssh", Backend: "ssh", ID: "test-" + a.ID}
+		if sp, err := open(place); err != nil || place.Generation != 2 || sp != want {
+			t.Errorf("the sealed place of generation %d is %+v, %v; want %+v", place.Generation, sp, err, want)
+		}
+		for _, gen := range []uint64{1, 3} {
+			_, err := open(store.Place{Private: place.Private, Generation: gen})
+			kindtest.Want(t, err, problems.RecordUnreadable)
+		}
+		_, err := c.sealer.OpenParts(t.Context(), id, wrapped, []seal.SealedPart{{
+			Purpose: seal.PurposeJobRecord, ID: a.ID, Generation: place.Generation, Sealed: place.Private,
+		}})
+		kindtest.Want(t, err, problems.RecordUnreadable)
 	})
 	t.Run("masked", func(t *testing.T) {
 		log := &logRecords{}
@@ -547,7 +602,7 @@ func TestStaleSupervisor(t *testing.T) {
 		return storedRun(t, c, id), id
 	}
 	place := store.Place{Group: "local", Member: "m1", Backend: testBackend}
-	placement := store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "test-other"}
+	placement := store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "test-other", WorkerDigest: testDigest}
 
 	// The other supervisor's attempt runs a step.
 	run, id := started()
@@ -565,7 +620,7 @@ func TestStaleSupervisor(t *testing.T) {
 		if err := tx.RecordPlacement(a.ID, placement); err != nil {
 			return err
 		}
-		if _, err := tx.Claim(token, hex.EncodeToString(make([]byte, 32)), workerapi.Worker{Version: "test"}); err != nil {
+		if _, err := tx.Claim(token, hex.EncodeToString(make([]byte, 32)), workerapi.Worker{Version: "test", Digest: testDigest}); err != nil {
 			return err
 		}
 		return tx.StepStarted(a.ID)

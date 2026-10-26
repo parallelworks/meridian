@@ -179,7 +179,7 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 		return c.placeJob(ctx, run, job, done)
 	case a.State == store.AttemptEnded:
 		return c.attemptEnded(ctx, run, job, a, done)
-	case a.State == store.AttemptPlacing && a.Placement.ID == "":
+	case a.State == store.AttemptPlacing && !a.Placed():
 		// Placed by a supervisor that ended before it recorded where.
 		return c.resumePlace(ctx, run, job, a)
 	default:
@@ -221,18 +221,12 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 	var (
 		failures []*store.Attempt
 		now      time.Time
-		private  bool
 	)
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
 		if failures, err = tx.SetupFailures(run.ID, job.Key); err != nil {
 			return err
 		}
-		place, _, err := tx.ChosenPlace(a.ID)
-		if err != nil {
-			return err
-		}
-		private = place.Private != nil
 		now, err = tx.Now()
 		return err
 	})
@@ -250,7 +244,9 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 	if n > len(c.supervision.setup) || same {
 		diags := problems.Diagnostics{diagnostic(problems.SetupFailed, problems.Params{"job": job.Key, "tries": n})}
 		if last != nil {
-			diags = append(diags, maskedIf(private, problemDiagnostic(last)))
+			// Stored masked when where the job ran was private
+			// (store.Tx.EndAttempt).
+			diags = append(diags, problemDiagnostic(last))
 		}
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{
 			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Diagnostics: diags,

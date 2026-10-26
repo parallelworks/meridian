@@ -92,8 +92,11 @@ func TestChoosePlace(t *testing.T) {
 		for _, p := range []Place{
 			{},
 			{Group: "g"},
-			{Group: "g", Member: "m", Backend: "local", Private: []byte("sealed")},
-			{Member: "m", Private: []byte("sealed")},
+			{Group: "g", Member: "m", Backend: "local", Private: []byte("sealed"), Generation: 1},
+			{Member: "m", Private: []byte("sealed"), Generation: 1},
+			{Group: "g", Member: "m", Backend: "local", Generation: 1},
+			{Private: []byte("sealed")},
+			{Private: []byte("sealed"), Generation: 2},
 		} {
 			if err := tx.ChoosePlace(a.ID, p); err == nil {
 				t.Errorf("ChoosePlace(%+v) succeeded", p)
@@ -112,11 +115,14 @@ func TestChoosePlace(t *testing.T) {
 			t.Errorf("once a place is chosen, the job is %+v, %v", j, err)
 		}
 		// The placement, once recorded, is where the place said.
-		if err := tx.RecordPlacement(a.ID, Placement{Group: "g", Member: "m", Backend: "local", ID: "1:2"}); err != nil {
+		if err := tx.RecordPlacement(a.ID, Placement{Group: "g", Member: "m", Backend: "local", ID: "1:2", WorkerDigest: testPlacement.WorkerDigest}); err != nil {
 			return err
 		}
 		if p, _, err := tx.ChosenPlace(a.ID); err != nil || !reflect.DeepEqual(p, testPlace) {
 			t.Errorf("once placed, ChosenPlace = %+v, %v", p, err)
+		}
+		if err := tx.ResealPlace(a.ID, 2, []byte("sealed")); !errors.Is(err, ErrState) {
+			t.Errorf("ResealPlace of a place in the clear = %v, want ErrState", err)
 		}
 		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
 			return err
@@ -125,8 +131,9 @@ func TestChoosePlace(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// A private place is sealed whole.
-		private := Place{Private: []byte("sealed place")}
+		// A private place is sealed whole, and sealed again only as its
+		// next generation.
+		private := Place{Private: []byte("sealed place"), Generation: 1}
 		if err := tx.ChoosePlace(b.ID, private); err != nil {
 			return err
 		}
@@ -137,8 +144,26 @@ func TestChoosePlace(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if got.Placement.Group != "" || got.Placement.Member != "" || got.Placement.Backend != "" {
+		if !got.Private || got.Placement.Group != "" || got.Placement.Member != "" || got.Placement.Backend != "" {
 			t.Errorf("a private place is in the clear: %+v", got.Placement)
+		}
+		if err := tx.ResealPlace(b.ID, 2, nil); err == nil {
+			t.Error("ResealPlace without its bytes succeeded")
+		}
+		for _, gen := range []uint64{0, 1, 3} {
+			if err := tx.ResealPlace(b.ID, gen, []byte("stale")); !errors.Is(err, ErrState) || !errors.Is(err, ErrRecordChanged) {
+				t.Errorf("ResealPlace as generation %d = %v, want ErrState and ErrRecordChanged", gen, err)
+			}
+		}
+		if err := tx.ResealPlace(b.ID, 2, []byte("placed")); err != nil {
+			return err
+		}
+		resealed := Place{Private: []byte("placed"), Generation: 2}
+		if p, _, err := tx.ChosenPlace(b.ID); err != nil || !reflect.DeepEqual(p, resealed) {
+			t.Errorf("resealed, the place is %+v, %v", p, err)
+		}
+		if err := tx.ResealPlace(b.ID, 2, []byte("again")); !errors.Is(err, ErrRecordChanged) {
+			t.Errorf("ResealPlace as generation 2 again = %v, want ErrRecordChanged", err)
 		}
 		// A new attempt supersedes b, which no longer chooses.
 		c, _, err := tx.NewAttempt(NewAttempt{Run: id, Job: "test", LeaseSeconds: 60, HeartbeatSeconds: 10})
@@ -147,6 +172,9 @@ func TestChoosePlace(t *testing.T) {
 		}
 		if err := tx.ChoosePlace(b.ID, testPlace); !errors.Is(err, ErrFenced) {
 			t.Errorf("ChoosePlace of a superseded attempt = %v, want ErrFenced", err)
+		}
+		if err := tx.ResealPlace(b.ID, 3, []byte("sealed")); !errors.Is(err, ErrFenced) {
+			t.Errorf("ResealPlace of a superseded attempt = %v, want ErrFenced", err)
 		}
 		if err := tx.ChoosePlace(c.ID, testPlace); err != nil {
 			return err
@@ -268,7 +296,7 @@ func TestPlaceFailed(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := tx.RecordPlacement(c.ID, Placement{Group: "g", Member: "m", Backend: "local", ID: "1:2"}); err != nil {
+		if err := tx.RecordPlacement(c.ID, testPlacement); err != nil {
 			return err
 		}
 		if _, err := tx.PlaceFailed(n, 3, p); !errors.Is(err, ErrState) {
@@ -300,7 +328,7 @@ func TestNewAttemptAfter(t *testing.T) {
 		if err := tx.Unplaced(a.ID); err != nil {
 			t.Errorf("Unplaced of an attempt being placed = %v", err)
 		}
-		if err := tx.RecordPlacement(a.ID, Placement{Group: "g", Member: "m", Backend: "local", ID: "1:2"}); err != nil {
+		if err := tx.RecordPlacement(a.ID, testPlacement); err != nil {
 			return err
 		}
 		if err := tx.Unplaced(a.ID); !errors.Is(err, ErrState) {

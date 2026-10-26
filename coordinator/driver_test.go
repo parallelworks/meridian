@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,12 +16,16 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
 // testBackend is the backend of testGroups' members, which testDriver
 // places workers with.
 const testBackend = "test"
+
+// testDigest is the digest of the worker binary testDriver says it starts.
+var testDigest = "sha256:" + strings.Repeat("00", 32)
 
 // testGroups has the groups local, of the member m1, and pair, of m1 and
 // m2, each of testBackend.
@@ -122,7 +127,7 @@ func (d *testDriver) Place(ctx context.Context, m *backend.Member, req backend.P
 			return backend.Placement{}, err
 		}
 	}
-	p := backend.Placement{Attempt: req.Attempt, ID: "test-" + req.Attempt, WorkerDigest: "sha256:" + hex.EncodeToString(make([]byte, 32))}
+	p := backend.Placement{Attempt: req.Attempt, ID: "test-" + req.Attempt, WorkerDigest: testDigest}
 	d.mu.Lock()
 	d.placements[req.Attempt] = p
 	d.mu.Unlock()
@@ -162,6 +167,9 @@ func (d *testDriver) Forget(context.Context, *backend.Member, backend.Placement)
 // work is the worker of the attempt req is for, placed as p: once the
 // placement is recorded, as the worker API's claim waits for, it claims
 // the attempt and ends it as end says, and wakes the attempt's supervisor.
+// It stores the end as the worker API does: the part of its result that
+// run state holds with the attempt, and the private part as the job's part
+// of the run's secret record.
 func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backend.Placement, end testEnd) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -175,7 +183,7 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 		switch {
 		case err != nil:
 			return
-		case a.Placement.ID != "" || a.State != store.AttemptPlacing:
+		case a.Placed() || a.State != store.AttemptPlacing:
 		default:
 			select {
 			case <-ctx.Done():
@@ -192,6 +200,9 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	if end.problem != nil {
 		report = workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: end.problem}
 	}
+	private, state := report.Result.Split()
+	outcome := report.Result.Outcome
+	report.Result = state
 	err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
 		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
 		if err != nil {
@@ -202,17 +213,45 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 				return err
 			}
 		}
+		if len(private.Outputs) > 0 || len(private.Steps) > 0 {
+			if err := d.putJobRecord(ctx, tx, claimed, private); err != nil {
+				return err
+			}
+		}
+		if claimed.Private {
+			report.Problem, report.Diagnostics = problems.MaskProblem(report.Problem), problems.MaskDiagnostics(report.Diagnostics)
+		}
 		body, err := workerapi.Marshal(&report)
 		if err != nil {
 			return err
 		}
 		sum := sha256.Sum256(body)
 		return tx.EndAttempt(claimed.ID, store.AttemptEnd{
-			Kind: store.EndCompleted, Outcome: report.Result.Outcome, Reason: report.Reason, CompleteDigest: sum[:], Report: body, Problem: report.Problem,
+			Kind: store.EndCompleted, Outcome: outcome, Reason: report.Reason, CompleteDigest: sum[:], Report: body, Problem: report.Problem,
 		})
 	})
 	if err != nil {
 		return
 	}
 	d.c.wakeJob(ctx, a.Run, a.Job)
+}
+
+// putJobRecord stores private, the private part of the result the attempt
+// a completed with, as its job's part of its run's secret record, at the
+// part's next generation.
+func (d *testDriver) putJobRecord(ctx context.Context, tx *store.Tx, a *store.Attempt, private plan.JobRecord) error {
+	wrapped, err := tx.WrappedKey(a.Run)
+	if err != nil {
+		return err
+	}
+	parts, err := tx.JobRecords(a.Run, []string{a.Job})
+	if err != nil {
+		return err
+	}
+	gen := parts[a.Job].Generation + 1
+	sealed, err := d.c.sealer.SealJob(ctx, a.Run, a.Job, gen, wrapped, private)
+	if err != nil {
+		return err
+	}
+	return tx.PutJobRecord(a.Run, a.Job, gen, sealed)
 }

@@ -1,0 +1,21 @@
+description: >-
+  An if: decides whether a job or a step runs: a step after one that failed
+  runs only when its if: reads failure() or is always, and a job whose if:
+  is false is skipped, as is one whose needs failed, unless its if: reads
+  failure().
+source: Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      main:
+        outcome: failure
+        logs:
+          - {step: 2, text: "on failure\n"}
+          - {step: 3, text: "always\n"}
+      never:
+        outcome: skipped
+      on-failure:
+        outcome: success
+        logs:
+          - {step: 0, text: "failure\n"}

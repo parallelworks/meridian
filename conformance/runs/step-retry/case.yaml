@@ -1,0 +1,15 @@
+description: >-
+  A step that fails is tried again, as many times as its retry: says, and
+  succeeds once a try does: each try has its own log, and reads its number
+  in PW_WORKFLOW_STEP_CURRENT_RETRY, from 0.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, try: 0, text: "try 0\n"}
+          - {step: 0, try: 1, text: "try 1\n"}
+          - {step: 0, try: 2, text: "try 2\n"}

@@ -360,7 +360,7 @@ func TestLogTruncated(t *testing.T) {
 	if ack := upload(14, "more", true); ack.Length != 18 || !ack.Ended {
 		t.Errorf("the last upload is acknowledged %+v", ack)
 	}
-	logs := r.logs.of(a.Run, a.Job, a.Number)
+	logs := r.logs.Of(a.Run, a.Job, a.Number)
 	want := "0123456789\n" + problems.LogTruncated.Message(problems.Params{"limit": int64(10)}) + "\n"
 	if got := logs[workerapitest.LogKey{Part: workerapi.LogSetup}]; string(got.Data) != want || !got.Ended {
 		t.Errorf("the log kept is %q, ended %v; want %q", got.Data, got.Ended, want)
@@ -414,7 +414,7 @@ func TestLogQuotaPerAttempt(t *testing.T) {
 		t.Errorf("more of a log that ended, past the limit, was answered %d, %+v", status, ack)
 	}
 
-	logs := r.logs.of(a.Run, a.Job, a.Number)
+	logs := r.logs.Of(a.Run, a.Job, a.Number)
 	message := problems.LogTruncated.Message(problems.Params{"limit": int64(1024)}) + "\n"
 	want := map[workerapitest.LogKey]string{
 		{Part: workerapi.LogSetup}:                             "ready\n",

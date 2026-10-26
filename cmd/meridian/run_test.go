@@ -19,11 +19,22 @@ import (
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
-// helloWorkflow is a workflow of one job, which a run, with no placement
-// yet, ends once it has started.
+// helloWorkflow is a workflow of one job, which the built-in local group
+// runs on this machine.
 const helloWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo hello\n"
+
+// TestMain runs the test binary as meridian worker when the local backend
+// starts it so, as it starts the binary that placed a job, for a job of a
+// run that a test's meridian run coordinates.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "worker" {
+		main()
+	}
+	os.Exit(m.Run())
+}
 
 // runEnv is an environment with directories of a test's own: an empty
 // config directory, a state directory and a temporary directory.
@@ -55,11 +66,39 @@ func runTest(t *testing.T, vars map[string]string, setUp func(*cli), args ...str
 
 var startedRE = regexp.MustCompile(`^run (\d+) started \(run directory (.+)\)\n`)
 
+// stepLog returns the log of the first step of the job main of the run id,
+// in the store of the state directory env names, as its first attempt's
+// worker uploaded it.
+func stepLog(t *testing.T, env map[string]string, id string) string {
+	t.Helper()
+	dirs := local.Dirs{State: env[local.EnvStateDir]}
+	db, err := dirs.Database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dirs.State)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coord.Close()
+	logs, err := local.NewLogs(dirs.State, coord.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	data, ended, err := logs.Read(t.Context(), coordinator.LogKey{Run: id, Job: "main", Attempt: 1, Part: workerapi.LogStep}, 0, 1<<10)
+	if err != nil || !ended {
+		t.Fatalf("the step's log is %q, ended %v: %v", data, ended, err)
+	}
+	return string(data)
+}
+
 // TestRunEnds checks a run from start to end: meridian run says which it
 // is and where its directory is, which it made new and private, named
-// after the store's ID as well as the run's, and exits 0 once the run has
-// ended, as one does once it has started while nothing places its jobs,
-// having let the coordinator's socket go.
+// after the store's ID as well as the run's, runs its job on this machine,
+// with a worker the local backend starts, which stores the step's log,
+// and exits 0 once the run has ended, having let the coordinator's socket
+// go.
 func TestRunEnds(t *testing.T) {
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
@@ -75,6 +114,9 @@ func TestRunEnds(t *testing.T) {
 		}
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 			t.Errorf("the run's directory is %v, %v", info, err)
+		}
+		if log := stepLog(t, env, want); log != "hello\n" {
+			t.Errorf("the step's log is %q", log)
 		}
 	}
 	state := env[local.EnvStateDir]
@@ -271,15 +313,20 @@ func TestHoldSocket(t *testing.T) {
 	left.Close()
 
 	first, second := open(), open()
+	logs, err := local.NewLogs(dir, first.StoreID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logs.Close() })
 	ctx1, stop1 := context.WithCancel(t.Context())
-	s1 := holdSocket(ctx1, first, path, workerAPIUnavailable())
+	s1 := holdSocket(ctx1, first, path, logs)
 	waitServed(t, path)
 	if info, err := os.Lstat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("the socket is %v, %v, not only its user's", info, err)
 	}
 	ctx2, stop2 := context.WithCancel(t.Context())
 	defer stop2()
-	s2 := holdSocket(ctx2, second, path, workerAPIUnavailable())
+	s2 := holdSocket(ctx2, second, path, logs)
 	select {
 	case <-s2.done:
 		t.Fatal("a second coordinator took the socket that another holds")
@@ -303,7 +350,7 @@ func TestHoldSocket(t *testing.T) {
 }
 
 // waitServed waits for the socket at path to answer, as the worker API's
-// placeholder does, 503.
+// server does a request without a credential: 401.
 func waitServed(t *testing.T, path string) {
 	t.Helper()
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -315,7 +362,7 @@ func waitServed(t *testing.T, path string) {
 		resp, err := client.Get("http://coordinator/v1/control")
 		if err == nil {
 			resp.Body.Close()
-			if resp.StatusCode != http.StatusServiceUnavailable {
+			if resp.StatusCode != http.StatusUnauthorized {
 				t.Fatalf("the socket answered %s", resp.Status)
 			}
 			return

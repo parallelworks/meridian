@@ -16,6 +16,8 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/backend"
+	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/plan"
@@ -74,6 +76,10 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: local.NewKeys(w.dirs.State),
 		Variables: w.cfg, Inputs: w.cfg, Groups: w.cfg,
+		// The local backend runs each job's worker as a process of the
+		// user's, which reaches the coordinator on its socket.
+		Drivers:  map[string]backend.Driver{"local": &localbackend.Driver{State: w.dirs.State}},
+		Endpoint: backend.Endpoint{Address: w.dirs.Socket()},
 		// The run's Start reads its variables from this process's
 		// environment, the shell that ran it.
 		StartQueue: func(id string) string { return "meridian.start." + id },
@@ -85,6 +91,13 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	// The coordinator is closed once it has stopped serving.
 	defer func() { _ = coord.Close() }()
 	storeID := coord.StoreID()
+	logs, err := local.NewLogs(w.dirs.State, storeID)
+	if err != nil {
+		return c.fail(err)
+	}
+	// Closed once the socket's server, which stores workers' logs, has
+	// stopped.
+	defer func() { _ = logs.Close() }()
 	id, err := coord.CreateRun(ctx, w.created, coordinator.RunOptions{
 		DefaultGroup: *group, RunDir: func(id string) string { return dirOf(storeID, id) },
 	})
@@ -106,7 +119,7 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		return c.fail(p)
 	}
 	fmt.Fprintf(c.stdout, "run %s started (run directory %s)\n", id, dir)
-	return supervise(ctx, c, coord, w, id, interrupts)
+	return supervise(ctx, c, coord, w, logs, id, interrupts)
 }
 
 // runDirs returns where runs' directories are, by the store's ID and the
@@ -140,13 +153,13 @@ func runDirs(c *cli, named string) (func(storeID, id string) string, error) {
 // and holds the coordinator's socket when no other process does, until the
 // run ends or an interrupt leaves it running. It returns the command's
 // exit status.
-func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *compiled, id string, interrupts <-chan os.Signal) int {
+func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *compiled, logs coordinator.Logs, id string, interrupts <-chan os.Signal) int {
 	// What coordinates the run goes on through an interrupt, which only
 	// asks what to do, until it stops.
 	work, stop := context.WithCancel(context.WithoutCancel(ctx))
 	served := make(chan error, 1)
 	go func() { served <- coord.Serve(work) }()
-	sock := holdSocket(work, coord, w.dirs.Socket(), workerAPIUnavailable())
+	sock := holdSocket(work, coord, w.dirs.Socket(), logs)
 	defer func() {
 		stop()
 		<-sock.done

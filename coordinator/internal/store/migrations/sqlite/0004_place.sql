@@ -18,10 +18,11 @@ ALTER TABLE meridian_jobs ADD COLUMN wake INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE meridian_jobs ADD COLUMN place_tries INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE meridian_jobs ADD COLUMN diagnostics BLOB;
 
--- Where an attempt is placed when where its job runs is private: its
--- group, member and backend, and then the backend's placement, sealed under
--- the run's data key, which only the coordinator opens. Where it isn't
--- private, grp, member and backend hold them. Either is recorded before the
--- backend is asked, so that a supervisor that ends before it records the
--- placement finds it again.
-ALTER TABLE meridian_attempts ADD COLUMN private_placement BLOB;
+-- The generation of an attempt's private place (private_placement, which
+-- 0003 adds), from 1, kept apart from it, as a job's record_gen is from
+-- its part: its group, member and backend are sealed as the first, before
+-- the backend is asked, so that a supervisor that ends before it records
+-- the placement finds the member again, and the next adds the backend's ID
+-- for the placement, as the placement is recorded. 0 for a place in the
+-- clear.
+ALTER TABLE meridian_attempts ADD COLUMN placement_gen INTEGER NOT NULL DEFAULT 0;

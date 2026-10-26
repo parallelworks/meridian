@@ -1,0 +1,11 @@
+jobs:
+  test:
+    needs: [build]
+    steps:
+      - run: echo ${{ needs.build.outputs.binary }} ${{ needs.build.steps.compile.outputs.binary }} ${{ needs.build.result }}
+  build:
+    steps:
+      - id: compile
+        run: echo binary=app >> $OUTPUTS
+    outputs:
+      binary: ${{ steps.compile.outputs.binary }}

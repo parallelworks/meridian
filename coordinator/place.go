@@ -14,6 +14,7 @@ import (
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -112,8 +113,8 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 // started, as long as one is left; and the first of them otherwise.
 func (c *Coordinator) choose(ctx context.Context, run *store.Run, key string, fits []candidate) (*candidate, error) {
 	var (
-		places = map[string]store.Place{} // by attempt
-		stored *store.Record
+		places  = map[string]store.Place{} // by attempt
+		wrapped []byte
 	)
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		failures, err := tx.SetupFailures(run.ID, key)
@@ -128,8 +129,8 @@ func (c *Coordinator) choose(ctx context.Context, run *store.Run, key string, fi
 			case !chosen:
 				// Made for the record of a placement that failed.
 				continue
-			case p.Private != nil && stored == nil:
-				if stored, err = tx.Record(run.ID); err != nil {
+			case p.Private != nil && wrapped == nil:
+				if wrapped, err = tx.WrappedKey(run.ID); err != nil {
 					return err
 				}
 			}
@@ -140,12 +141,13 @@ func (c *Coordinator) choose(ctx context.Context, run *store.Run, key string, fi
 	if err != nil {
 		return nil, err
 	}
+	opened, err := c.openPlaces(ctx, run.ID, wrapped, places)
+	if err != nil {
+		return nil, err
+	}
 	failed := map[[3]string]bool{}
-	for id, p := range places {
-		if p, err = c.openPlace(ctx, run.ID, id, stored, p); err != nil {
-			return nil, err
-		}
-		failed[[3]string{p.Group, p.Member, p.Backend}] = true
+	for _, at := range opened {
+		failed[[3]string{at.Group, at.Member, at.Backend}] = true
 	}
 	for i := range fits {
 		if !failed[[3]string{fits[i].group, fits[i].member.Name, fits[i].member.Backend}] {
@@ -156,51 +158,80 @@ func (c *Coordinator) choose(ctx context.Context, run *store.Run, key string, fi
 }
 
 // A sealedPlace is what an attempt whose place is private keeps of it,
-// sealed under the run's data key.
+// sealed under the run's data key (seal.PurposePlacement): where it is to
+// be placed, and, once its backend has placed it, the backend's ID for the
+// placement, which can say where it is, as a pod's name can.
 type sealedPlace struct {
 	Group   string `json:"group"`
 	Member  string `json:"member"`
 	Backend string `json:"backend"`
+	ID      string `json:"id,omitzero"`
 }
 
 // placeOf is where the attempt id of the run runID is placed, on chosen:
 // in the clear, or sealed under the data key of the run's record, as tx
-// reads it, when where its job runs is private.
+// reads it, as the place's first generation, when where its job runs is
+// private.
 func (c *Coordinator) placeOf(ctx context.Context, tx *store.Tx, runID, id string, chosen *candidate, private bool) (store.Place, error) {
 	if !private {
 		return store.Place{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend}, nil
 	}
-	data, err := jsonv2.Marshal(sealedPlace{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend}, jsonv2.Deterministic(true))
+	sealed, err := c.sealPlace(ctx, tx, runID, id, 1, sealedPlace{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend})
 	if err != nil {
 		return store.Place{}, err
 	}
-	stored, err := tx.Record(runID)
-	if err != nil {
-		return store.Place{}, err
-	}
-	sealed, err := c.sealer.SealPlacement(ctx, runID, id, stored.WrappedKey, data)
-	if err != nil {
-		return store.Place{}, err
-	}
-	return store.Place{Private: sealed}, nil
+	return store.Place{Private: sealed, Generation: 1}, nil
 }
 
-// openPlace returns the place of the attempt id of the run runID in the
-// clear: p, or what it holds sealed, opened with the data key of stored,
-// the run's record.
-func (c *Coordinator) openPlace(ctx context.Context, runID, id string, stored *store.Record, p store.Place) (store.Place, error) {
-	if p.Private == nil {
-		return p, nil
-	}
-	data, err := c.sealer.OpenPlacement(ctx, runID, id, stored.WrappedKey, p.Private)
+// sealPlace seals sp, the private place of the attempt id of the run
+// runID, as generation gen, under the data key of the run's record, as tx
+// reads it.
+func (c *Coordinator) sealPlace(ctx context.Context, tx *store.Tx, runID, id string, gen uint64, sp sealedPlace) ([]byte, error) {
+	data, err := jsonv2.Marshal(sp, jsonv2.Deterministic(true))
 	if err != nil {
-		return store.Place{}, err
+		return nil, err
 	}
-	var sp sealedPlace
-	if err := jsonv2.Unmarshal(data, &sp, jsonv2.RejectUnknownMembers(true)); err != nil {
-		return store.Place{}, fmt.Errorf("coordinator: attempt %s's sealed place: %w", id, err)
+	defer clear(data)
+	wrapped, err := tx.WrappedKey(runID)
+	if err != nil {
+		return nil, err
 	}
-	return store.Place{Group: sp.Group, Member: sp.Member, Backend: sp.Backend}, nil
+	return c.sealer.SealPart(ctx, runID, wrapped, seal.PartID{Purpose: seal.PurposePlacement, ID: id, Generation: gen}, data)
+}
+
+// openPlaces returns places, those of attempts of the run runID by their
+// IDs, in the clear: each in the clear as it is, or, for a private one,
+// what it holds sealed, with the backend's ID for the placement once that
+// is recorded, opened with the run's data key, which Keys wrapped as
+// wrapped and unwraps once for all of them.
+func (c *Coordinator) openPlaces(ctx context.Context, runID string, wrapped []byte, places map[string]store.Place) (map[string]sealedPlace, error) {
+	out := make(map[string]sealedPlace, len(places))
+	var sealed []seal.SealedPart
+	for id, p := range places {
+		if p.Private == nil {
+			out[id] = sealedPlace{Group: p.Group, Member: p.Member, Backend: p.Backend}
+			continue
+		}
+		sealed = append(sealed, seal.SealedPart{Purpose: seal.PurposePlacement, ID: id, Generation: p.Generation, Sealed: p.Private})
+	}
+	opened, err := c.sealer.OpenParts(ctx, runID, wrapped, sealed)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, data := range opened {
+			clear(data)
+		}
+	}()
+	for i, part := range sealed {
+		var sp sealedPlace
+		if err := jsonv2.Unmarshal(opened[i], &sp, jsonv2.RejectUnknownMembers(true)); err != nil {
+			// What the decoder says can quote what the place holds.
+			return nil, fmt.Errorf("%w: attempt %s's sealed place doesn't decode", plan.ErrMalformed, part.ID)
+		}
+		out[part.ID] = sp
+	}
+	return out, nil
 }
 
 // placeAttempt asks chosen's driver to place the attempt id of the run's
@@ -218,31 +249,46 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *sto
 		})
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
-		return 0, c.attemptSetupFailed(ctx, id, maskedProblemIf(private, prob))
+		return 0, c.attemptSetupFailed(ctx, id, prob)
 	}
 	if err != nil {
 		return c.unanswered(ctx, run, job, private, err)
 	}
-	return c.recordPlacement(ctx, id, chosen, p, private)
+	return c.recordPlacement(ctx, run.ID, id, chosen, p, private)
 }
 
-// recordPlacement records the attempt id's placement p, on chosen, and
-// returns how long to wait for its worker.
-func (c *Coordinator) recordPlacement(ctx context.Context, id string, chosen *candidate, p backend.Placement, private bool) (time.Duration, error) {
-	placement := store.Placement{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID, WorkerDigest: p.WorkerDigest}
-	if private {
-		// The placement's ID is its backend's own name for it, which names
-		// no member; the rest is sealed (store.Place).
-		placement.Group, placement.Member, placement.Backend = "", "", ""
-	}
-	err := c.store.Tx(ctx, func(tx *store.Tx) error { return tx.RecordPlacement(id, placement) })
+// recordPlacement records the placement p of the attempt id of the run
+// runID, on chosen, and returns how long to wait for its worker. Of a
+// private placement, the store holds the worker's digest in the clear, and
+// the backend's ID for it sealed, with the rest of its place, as the
+// place's next generation, which the same transaction stores.
+func (c *Coordinator) recordPlacement(ctx context.Context, runID, id string, chosen *candidate, p backend.Placement, private bool) (time.Duration, error) {
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		if !private {
+			return tx.RecordPlacement(id, store.Placement{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID, WorkerDigest: p.WorkerDigest})
+		}
+		place, _, err := tx.ChosenPlace(id)
+		if err != nil {
+			return err
+		}
+		sealed, err := c.sealPlace(ctx, tx, runID, id, place.Generation+1,
+			sealedPlace{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID})
+		if err != nil {
+			return err
+		}
+		if err := tx.ResealPlace(id, place.Generation+1, sealed); err != nil {
+			return err
+		}
+		return tx.RecordPlacement(id, store.Placement{WorkerDigest: p.WorkerDigest})
+	})
 	switch {
 	case errors.Is(err, store.ErrFenced):
 		// Superseded meanwhile, as by another attempt of the supervisor:
 		// its worker's claim is refused.
 		return 0, errAgain
 	case errors.Is(err, store.ErrState):
-		// Claimed already: its worker was quicker than the record.
+		// Claimed already, as when its worker was quicker than the record,
+		// or recorded by another supervisor.
 		return c.supervision.wait, nil
 	case err != nil:
 		return 0, err
@@ -274,16 +320,17 @@ func (c *Coordinator) attemptSetupFailed(ctx context.Context, id string, p *prob
 // group fails the attempt before its first step.
 func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, error) {
 	var (
-		place  store.Place
-		chosen bool
-		stored *store.Record
+		place   store.Place
+		chosen  bool
+		wrapped []byte
+		private = a.Private
 	)
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
-		if place, chosen, err = tx.ChosenPlace(a.ID); err != nil {
+		if place, chosen, err = tx.ChosenPlace(a.ID); err != nil || !private {
 			return err
 		}
-		stored, err = tx.Record(run.ID)
+		wrapped, err = tx.WrappedKey(run.ID)
 		return err
 	})
 	switch {
@@ -292,10 +339,11 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	case !chosen:
 		return 0, fmt.Errorf("coordinator: attempt %s has no place", a.ID)
 	}
-	private := place.Private != nil
-	if place, err = c.openPlace(ctx, run.ID, a.ID, stored, place); err != nil {
+	opened, err := c.openPlaces(ctx, run.ID, wrapped, map[string]store.Place{a.ID: place})
+	if err != nil {
 		return 0, err
 	}
+	at := opened[a.ID]
 	r, err := c.readyJob(ctx, run, job.Key)
 	switch {
 	case err != nil:
@@ -310,29 +358,29 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	}
 	var m *backend.Member
 	if d == nil {
-		if i := slices.IndexFunc(g.Members, func(m backend.Member) bool { return m.Name == place.Member && m.Backend == place.Backend }); i >= 0 {
+		if i := slices.IndexFunc(g.Members, func(m backend.Member) bool { return m.Name == at.Member && m.Backend == at.Backend }); i >= 0 {
 			m = &g.Members[i]
 		}
 	}
-	if m == nil || g.Name != place.Group {
+	if m == nil || g.Name != at.Group {
 		return 0, c.attemptSetupFailed(ctx, a.ID, nil)
 	}
 	cand := &candidate{group: g.Name, member: m, driver: c.driver(m)}
 	p, found, err := cand.driver.Find(ctx, m, a.ID)
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
-		return 0, c.attemptSetupFailed(ctx, a.ID, maskedProblemIf(private, prob))
+		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
 	}
 	if err != nil {
 		return c.unanswered(ctx, run, job, private, err)
 	}
 	if found {
-		return c.recordPlacement(ctx, a.ID, cand, p, private)
+		return c.recordPlacement(ctx, run.ID, a.ID, cand, p, private)
 	}
 	if cand.fit, err = cand.driver.Probe(ctx, m, demandOf(rj)); err == nil && cand.fit.Problem != nil {
 		err = cand.fit.Problem
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
-		return 0, c.attemptSetupFailed(ctx, a.ID, maskedProblemIf(private, prob))
+		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
 	}
 	if err != nil {
 		return c.unanswered(ctx, run, job, private, err)
@@ -534,34 +582,13 @@ func (c *Coordinator) connect(ctx context.Context, d backend.Driver, m *backend.
 }
 
 // maskedIf returns d, with what its params show of a value masked when
-// masked is set, as when where a job runs is private: a member's or a
-// group's name can come from a variable or a password.
+// masked is set (problems.MaskDiagnostics), as when where a job runs is
+// private: a member's or a group's name can come from a variable or a
+// password. A problem an attempt ends with the store masks itself
+// (store.Tx.EndAttempt).
 func maskedIf(masked bool, d problems.Diagnostic) problems.Diagnostic {
 	if !masked {
 		return d
 	}
-	params := problems.MaskValues(d.Params)
-	// Where in a file it is, At gives again.
-	for _, name := range []string{problems.ParamFile, problems.ParamLine, problems.ParamColumn} {
-		delete(params, name)
-	}
-	if k, ok := problems.Lookup(d.Code); ok {
-		return k.At(d.File(), d.Position(), d.Path(), params)
-	}
-	return problems.Diagnostic{Type: d.Type, Code: d.Code, Pointer: d.Pointer, Params: params}
-}
-
-// maskedProblemIf returns p, with what its params show of a value masked
-// when masked is set, as maskedIf does.
-func maskedProblemIf(masked bool, p *problem.Problem) *problem.Problem {
-	if !masked {
-		return p
-	}
-	params := problems.MaskValues(p.Params)
-	if k, ok := problems.Lookup(p.Code); ok {
-		return k.Problem(params)
-	}
-	q := *p
-	q.Params, q.Detail = params, ""
-	return &q
+	return problems.MaskDiagnostics(problems.Diagnostics{d})[0]
 }

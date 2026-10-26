@@ -1,0 +1,9 @@
+jobs:
+  main:
+    steps:
+      - run: echo before; exit 3
+      - run: echo never
+  after:
+    needs: [main]
+    steps:
+      - run: echo after
