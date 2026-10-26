@@ -229,7 +229,7 @@ func runChildren(t *testing.T, path string, roles ...string) [][]string {
 // migrate it once, and agree on its ID.
 func TestConcurrentOpen(t *testing.T) {
 	path := filepath.Join(privateDir(t), "meridian.db")
-	outs := runChildren(t, path, "open", "open", "open")
+	outs := runChildren(t, path, slices.Repeat([]string{"open"}, 12)...)
 	for _, out := range outs[1:] {
 		if !slices.Equal(out, outs[0]) || len(out) != 1 || !hexID.MatchString(out[0]) {
 			t.Errorf("the processes gave the IDs %v", outs)

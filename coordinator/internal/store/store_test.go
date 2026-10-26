@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/foundation/problem"
 	"github.com/parallelworks/hopper"
@@ -206,6 +208,61 @@ func TestOpen(t *testing.T) {
 	if other := open(t); other.ID() == id {
 		t.Error("two stores have one ID")
 	}
+}
+
+// TestOpenWhileBusy checks that Open tries again while SQLite reports the
+// database busy as it opens it, as it does when another process holds it
+// to turn its write-ahead log on, and gives up once its context ends.
+func TestOpenWhileBusy(t *testing.T) {
+	// lock holds the database at path exclusively until the function it
+	// returns is called.
+	lock := func(t *testing.T, path string) func() {
+		t.Helper()
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := db.Conn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(t.Context(), "BEGIN EXCLUSIVE"); err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			_, _ = conn.ExecContext(context.WithoutCancel(t.Context()), "ROLLBACK")
+			_ = conn.Close()
+			_ = db.Close()
+		}
+	}
+	t.Run("waits", func(t *testing.T) {
+		path := filepath.Join(privateDir(t), "meridian.db")
+		writeFile(t, path, 0o600)
+		unlock := lock(t, path)
+		const held = 300 * time.Millisecond
+		start := time.Now()
+		timer := time.AfterFunc(held, unlock)
+		defer timer.Stop()
+		openAt(t, path)
+		if took := time.Since(start); took < held {
+			t.Errorf("Open returned after %v, before the lock was let go", took)
+		}
+	})
+	t.Run("gives up", func(t *testing.T) {
+		path := filepath.Join(privateDir(t), "meridian.db")
+		writeFile(t, path, 0o600)
+		defer lock(t, path)()
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		defer cancel()
+		s, err := Open(ctx, path, nil)
+		if err == nil {
+			_ = s.Close()
+			t.Fatal("Open opened a database another connection held")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) || !busy(err) {
+			t.Errorf("Open gave %v, not its context's end and SQLite's busy", err)
+		}
+	})
 }
 
 // TestOpenRefuses checks that Open trusts nothing at the database's path
