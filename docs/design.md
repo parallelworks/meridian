@@ -2717,7 +2717,14 @@ of its own, so that the terminal's Ctrl-C and SIGHUP don't reach it, with
 the user's environment but its `MERIDIAN_` variables. It gets its
 bootstrap token on a socket it inherits, once it has said there that it
 is hardened (`workerapi.EnvBootstrapTokenFD`), and the token is in no
-file. On Linux the backend starts the file it runs itself, and reports
+file. One window is known, and left: from `exec` until the worker hardens
+itself, which it does as soon as Go's runtime has started, about 300 µs
+on Linux, the new process is dumpable, so a process of the same user that
+already knows its ID, where `kernel.yama.ptrace_scope` is 1 or less, could
+copy its descriptor 3 with `pidfd_getfd` and race it for the token. A file
+was readable for the whole of the worker's start. Closing the window would
+need the child made non-dumpable before `exec`, which takes cgo, and
+Meridian builds without it. On Linux the backend starts the file it runs itself, and reports
 that file's digest, which the worker reports too, even if an upgrade has
 taken its path since. A placement's file in the state directory says
 which process the worker is, by its ID, its start time and the boot it
