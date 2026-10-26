@@ -191,7 +191,8 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	st, err := store.Open(ctx, opts.Database, &store.Options{Log: log})
+	c := &Coordinator{}
+	st, err := store.Open(ctx, opts.Database, &store.Options{Log: log, LastTry: c.lastTry})
 	if err != nil {
 		return nil, err
 	}
@@ -207,12 +208,42 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	if err != nil {
 		return nil, errors.Join(err, st.Close())
 	}
-	return &Coordinator{
+	*c = Coordinator{
 		opts: opts, log: log, store: st, sealer: sealer, plans: newPlanCache(planCacheCount, planCacheBytes), inserter: inserter,
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]bool{}, connections: map[string]connection{},
-	}, nil
+	}
+	return c, nil
+}
+
+// lastTry reports, in tx, whether try of the step whose index is step is
+// surely the last of the attempt's job's step, as the run's plan holds its
+// retry: written out (plan.Step.LastTry): what the store asks as it stores
+// a failed step's events, so that the step marks the run at once.
+func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool {
+	a, err := tx.Attempt(attempt)
+	if err != nil {
+		return false
+	}
+	run, err := tx.Run(a.Run)
+	if err != nil {
+		return false
+	}
+	job, err := tx.Job(a.Run, a.Job)
+	if err != nil {
+		return false
+	}
+	p, err := c.plans.get(run)
+	if err != nil {
+		return false
+	}
+	pj := planJob(p, job.Name)
+	if pj == nil || step < 0 || step >= len(pj.Steps) {
+		return false
+	}
+	last, known := pj.Steps[step].LastTry(try)
+	return known && last
 }
 
 // Close closes what members' drivers set up for their workers to reach the

@@ -110,13 +110,14 @@ func (tx *Tx) UpdateControl(id string, change func(c *workerapi.Control) bool) (
 
 // markFailedStep marks the attempt id's run as one a job of which failed
 // (MarkJobFailed) once fresh, the attempt's events AppendEvents has just
-// stored, show that a step of it failed: a step's try that finished
-// failed, and that the step didn't try again, as the next event, which
-// isn't its next try, says. A try that is tried again isn't the step's
-// failure, nor is a cleanup's, nor a step that ignores its errors, which
-// reports success; a failed step with no event after it is marked as its
-// job ends. So the run is marked as format 1 marks it, as a step fails,
-// but for the next event's coming.
+// stored, show that a step of it failed, as format 1 marks it, as the step
+// fails: a cleanup that finished failed, which is never tried again; or a
+// step's try that finished failed, and that the step doesn't try again,
+// as the store's Options.LastTry says when the step's retry: is written
+// out, or else as the next event, which isn't its next try, shows. A try
+// that is tried again isn't the step's failure, nor is a step that ignores
+// its errors, which reports success; a failed step with no event after it
+// is marked as its job ends.
 func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
 	if len(fresh) == 0 {
 		return nil
@@ -129,13 +130,17 @@ func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
 		}
 		events = append([]workerapi.Event{prev}, fresh...)
 	}
-	for k := 1; k < len(events); k++ {
-		failed, next := events[k-1], events[k]
-		if !failed.Finished || failed.Cleanup || failed.Outcome != plan.OutcomeFailure {
+	for k, e := range events {
+		if !e.Finished || e.Outcome != plan.OutcomeFailure {
 			continue
 		}
-		if !next.Cleanup && next.Step == failed.Step && next.Try == failed.Try+1 {
-			continue // tried again
+		final := e.Cleanup || tx.s.lastTry != nil && tx.s.lastTry(tx, id, e.Step, e.Try)
+		if !final && k+1 < len(events) {
+			next := events[k+1]
+			final = next.Cleanup || next.Step != e.Step || next.Try != e.Try+1
+		}
+		if !final {
+			continue
 		}
 		var run int64
 		if err := tx.tx.QueryRowContext(tx.ctx, "SELECT run_id FROM meridian_attempts WHERE id = ?", id).Scan(&run); err != nil {

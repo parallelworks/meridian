@@ -2510,11 +2510,14 @@ for any other only once they have (`plan.Plan.CancelPath`).
   setup or its outputs fail. The coordinator tells the step's worker so:
   the first failure marks the run, in the transaction that stores it, and
   every running attempt's control poll then says so, as a new attempt's
-  first one does. A failed step's events mark it once the next event shows
-  the step wasn't tried again, and a job that ends failed marks it as it
-  ends. Format 1 doesn't count the one failure it doesn't announce: a job
-  whose `if:`'s value is a word other than `always`, which it fails, where
-  Meridian reads such a value by its truthiness. The step ends cancelled,
+  first one does. A failed step's events mark it as they are stored: at
+  once for a cleanup, which is never tried again, and for a try that the
+  step's `retry:`, written out, says is its last; and otherwise once the
+  next event shows the step wasn't tried again. A job that ends failed
+  marks it as it ends. Format 1 doesn't count one failure: a job whose
+  `if:` fails to evaluate, which it fails without saying so, where
+  Meridian fails it through Ready's diagnostics, and marks the run. The
+  step ends cancelled,
   which cancels the rest of its job, as in format 1: a later step runs only
   if it outlives a cancel, and the job ends cancelled unless a step of it
   failed (`plan.JobState.Cancelled`). It doesn't cut short the wait between

@@ -255,6 +255,45 @@ func TestReadyEnds(t *testing.T) {
 	}
 }
 
+// TestLastTry checks what the coordinator tells the store of a step's try,
+// as its events are stored: whether it is surely the step's last, from the
+// run's plan.
+func TestLastTry(t *testing.T) {
+	c := open(t, Options{})
+	id, _ := create(t, c, `
+jobs:
+  main:
+    steps:
+      - run: echo once
+      - run: echo again
+        retry:
+          max-retries: 2
+      - run: echo maybe
+        retry:
+          max-retries: ${{ inputs.n }}
+`, nil, nil)
+	if _, err := c.startRun(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		a, _, err := tx.NewAttempt(c.newAttempt(id, "main", false))
+		if err != nil {
+			return err
+		}
+		for _, tc := range []struct {
+			step, try int
+			last      bool
+		}{{0, 0, true}, {1, 1, false}, {1, 2, true}, {2, 5, false}, {3, 0, false}} {
+			if got := c.lastTry(tx, a.ID, tc.step, tc.try); got != tc.last {
+				t.Errorf("lastTry(step %d, try %d) = %v", tc.step, tc.try, got)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // countNotifier counts what it hears.
 type countNotifier struct{ n atomic.Int64 }
 

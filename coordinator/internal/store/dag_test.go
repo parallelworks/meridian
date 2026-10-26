@@ -16,67 +16,83 @@ func stepEvent(seq int64, step, try int, outcome plan.Outcome) workerapi.Event {
 }
 
 // TestFailedStepMarks checks that a step that fails marks its run, in the
-// transaction that stores its events, once the next event shows it wasn't
-// tried again; and that neither a try that is tried again, nor a cleanup
-// that fails, does.
+// transaction that stores its events: a cleanup at once; a step's try once
+// it is surely the step's last, as the store's LastTry says, or else once
+// the next event shows the step didn't try again; and that a try that is
+// tried again doesn't.
 func TestFailedStepMarks(t *testing.T) {
-	s := open(t)
-	id := createRun(t, s)
-	n := func(job string) NewAttempt {
-		return NewAttempt{Run: id, Job: job, LeaseSeconds: 60, HeartbeatSeconds: 10}
-	}
-	var a, b *Attempt
-	inTx(t, s, func(tx *Tx) error {
-		var token string
-		var err error
-		if a, token, err = tx.NewAttempt(n("build")); err != nil {
-			return err
-		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
-			return err
-		}
-		if b, token, err = tx.NewAttempt(n("test")); err != nil {
-			return err
-		}
-		_, err = tx.Claim(token, credential('b'), testWorker)
-		return err
-	})
-	cleanupFailed := workerapi.Event{Seq: 3, Time: time.Unix(3, 0).UTC(), Step: 0, Cleanup: true, Finished: true, Outcome: plan.OutcomeFailure}
-	for _, batch := range []struct {
+	type batch struct {
 		events []workerapi.Event
 		marked bool
+	}
+	cleanupFailed := workerapi.Event{Seq: 3, Time: time.Unix(3, 0).UTC(), Step: 0, Cleanup: true, Finished: true, Outcome: plan.OutcomeFailure}
+	for _, tc := range []struct {
+		name    string
+		lastTry func(tx *Tx, attempt string, step, try int) bool
+		batches []batch
 	}{
-		{[]workerapi.Event{stepEvent(1, 0, 0, ""), stepEvent(2, 0, 0, plan.OutcomeSuccess)}, false},
-		// A cleanup that fails, and then a step, marks nothing.
-		{[]workerapi.Event{cleanupFailed, stepEvent(4, 1, 0, "")}, false},
-		// A try that fails, which the step tries again.
-		{[]workerapi.Event{stepEvent(5, 1, 0, plan.OutcomeFailure)}, false},
-		{[]workerapi.Event{stepEvent(6, 1, 1, "")}, false},
-		// The step's last try fails, which the next event, of a batch of
-		// its own, shows.
-		{[]workerapi.Event{stepEvent(7, 1, 1, plan.OutcomeFailure)}, false},
-		{[]workerapi.Event{stepEvent(8, 2, 0, plan.OutcomeSkipped)}, true},
+		{"a cleanup fails", nil, []batch{
+			{[]workerapi.Event{stepEvent(1, 0, 0, ""), stepEvent(2, 0, 0, plan.OutcomeSuccess)}, false},
+			{[]workerapi.Event{cleanupFailed}, true},
+		}},
+		{"tried again, then its last try", nil, []batch{
+			{[]workerapi.Event{stepEvent(1, 1, 0, ""), stepEvent(2, 1, 0, plan.OutcomeFailure)}, false},
+			{[]workerapi.Event{stepEvent(3, 1, 1, "")}, false},
+			{[]workerapi.Event{stepEvent(4, 1, 1, plan.OutcomeFailure)}, false},
+			// The next event, of a batch of its own, shows it was the last.
+			{[]workerapi.Event{stepEvent(5, 2, 0, plan.OutcomeSkipped)}, true},
+		}},
+		{"its last try, known", func(_ *Tx, _ string, _, try int) bool { return try == 1 }, []batch{
+			{[]workerapi.Event{stepEvent(1, 0, 0, ""), stepEvent(2, 0, 0, plan.OutcomeFailure)}, false},
+			{[]workerapi.Event{stepEvent(3, 0, 1, ""), stepEvent(4, 0, 1, plan.OutcomeFailure)}, true},
+		}},
 	} {
-		inTx(t, s, func(tx *Tx) error {
-			if _, err := tx.AppendEvents(a.ID, batch.events); err != nil {
+		t.Run(tc.name, func(t *testing.T) {
+			s := open(t)
+			s.lastTry = tc.lastTry
+			id := createRun(t, s)
+			n := func(job string) NewAttempt {
+				return NewAttempt{Run: id, Job: job, LeaseSeconds: 60, HeartbeatSeconds: 10}
+			}
+			var a, b *Attempt
+			inTx(t, s, func(tx *Tx) error {
+				var token string
+				var err error
+				if a, token, err = tx.NewAttempt(n("build")); err != nil {
+					return err
+				}
+				if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+					return err
+				}
+				if b, token, err = tx.NewAttempt(n("test")); err != nil {
+					return err
+				}
+				_, err = tx.Claim(token, credential('b'), testWorker)
 				return err
+			})
+			for _, batch := range tc.batches {
+				inTx(t, s, func(tx *Tx) error {
+					if _, err := tx.AppendEvents(a.ID, batch.events); err != nil {
+						return err
+					}
+					r, err := tx.Run(id)
+					if err != nil {
+						return err
+					}
+					if marked := !r.AnyJobFailedAt.IsZero(); marked != batch.marked || tx.ControlsChanged() != batch.marked {
+						t.Errorf("after event %d, the run is marked: %v, and controls changed: %v", batch.events[0].Seq, marked, tx.ControlsChanged())
+					}
+					return nil
+				})
 			}
-			r, err := tx.Run(id)
-			if err != nil {
-				return err
-			}
-			if marked := !r.AnyJobFailedAt.IsZero(); marked != batch.marked || tx.ControlsChanged() != batch.marked {
-				t.Errorf("after event %d, the run is marked: %v, and controls changed: %v", batch.events[0].Seq, marked, tx.ControlsChanged())
-			}
-			return nil
+			inTx(t, s, func(tx *Tx) error {
+				if c, err := tx.Control(b.ID); err != nil || !c.AnyJobFailed {
+					t.Errorf("the other job's attempt is told %+v, %v", c, err)
+				}
+				return nil
+			})
 		})
 	}
-	inTx(t, s, func(tx *Tx) error {
-		if c, err := tx.Control(b.ID); err != nil || !c.AnyJobFailed {
-			t.Errorf("the other job's attempt is told %+v, %v", c, err)
-		}
-		return nil
-	})
 }
 
 // TestUpdateControl checks that a control is changed with what it asked

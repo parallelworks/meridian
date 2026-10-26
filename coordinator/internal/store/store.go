@@ -90,6 +90,12 @@ type Options struct {
 	// migrations Open applies, and a checkpoint of the write-ahead log
 	// that couldn't finish. Nil means none.
 	Log *slog.Logger
+	// LastTry reports, in tx, whether try, from 0, of step, its index, is
+	// surely its last, for the attempt's job: as its plan says when it holds
+	// the step's retry: written out (plan.Step.LastTry), so that a step
+	// that failed marks its run as soon as its event is stored. Nil, or
+	// false, has the store wait for the next event, which shows it.
+	LastTry func(tx *Tx, attempt string, step, try int) bool
 }
 
 // A Store is the coordinator's store, open. Its methods are safe for
@@ -98,6 +104,8 @@ type Store struct {
 	driver *hoppersqlite.Driver
 	db     *sql.DB
 	log    *slog.Logger
+	// lastTry is Options.LastTry, or nil.
+	lastTry func(tx *Tx, attempt string, step, try int) bool
 	// file is the database's file, as SQLite opened it, its links
 	// resolved: the same for every process that opens the database.
 	file string
@@ -200,6 +208,9 @@ func openOnce(ctx context.Context, path string, log *slog.Logger) (*Store, error
 		return nil, err
 	}
 	s := &Store{driver: d, db: d.DB(), log: log}
+	if opts != nil {
+		s.lastTry = opts.LastTry
+	}
 	if err := s.setUp(ctx, log); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}

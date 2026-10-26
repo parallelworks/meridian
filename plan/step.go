@@ -485,6 +485,30 @@ const (
 	defaultStepTryTimeout = 30
 )
 
+// LastTry reports whether try, from 0, is the step's last, as its retry:
+// says when the plan holds it written out: its first, for a step without a
+// retry:, and its max-retries:-th, or the default's, for one with one, as
+// Step reads it. known is false for a max-retries: that is an expression,
+// or not a count, which only Step evaluates, or reports.
+func (s *Step) LastTry(try int) (last, known bool) {
+	if s.Retry == nil {
+		return true, true
+	}
+	n := defaultStepRetries
+	if v := s.Retry.MaxRetries; !v.IsZero() {
+		lit, ok := v.Literal()
+		if !ok {
+			return false, false
+		}
+		if lit != nil && lit != "" {
+			if n, ok = readCount(lit); !ok {
+				return false, false
+			}
+		}
+	}
+	return try >= n, true
+}
+
 // EndResult is what End gives of a job: its outputs, and its steps', and
 // which of them are private, or hold a secret. Result makes the job's
 // JobResult of it, which the worker reports, and the jobs that need the
