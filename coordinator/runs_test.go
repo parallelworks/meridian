@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/worker"
 	"github.com/parallelworks/meridian/workerapi"
 	"github.com/parallelworks/meridian/workerapi/workerapitest"
@@ -43,8 +45,8 @@ func TestRunsConformance(t *testing.T) {
 			if want == nil {
 				t.Fatal("the case says nothing of how the run ends")
 			}
-			r, logs := runCase(t, cs)
-			c, id := r.c, r.id
+			r, id := runCase(t, cs)
+			c, logs := r.c, r.logs
 			run := storedRun(t, c, id)
 			if string(run.Outcome) != want.Outcome {
 				t.Errorf("the run ended with %s, want %s", run.Outcome, want.Outcome)
@@ -97,16 +99,19 @@ func keysOf(logs map[workerapitest.LogKey]workerapitest.Log) []string {
 	return out
 }
 
-// A caseRun is a case's run, as runCase ran it.
-type caseRun struct {
-	c  *Coordinator
-	id string
+// A workerRig is a coordinator whose jobs' workers are meridian's: it
+// places each attempt with a workerDriver, and serves the worker API to
+// the workers on a Unix socket, storing their logs in logs.
+type workerRig struct {
+	c    *Coordinator
+	d    *workerDriver
+	logs *runlogtest.Logs
+	// runs is where runs' directories are.
+	runs string
 }
 
-// runCase runs the case's workflow from its start to its end, as
-// TestRunsConformance says, and returns the run, with the logs its
-// workers uploaded.
-func runCase(t *testing.T, cs conformance.Case) (caseRun, *runlogtest.Logs) {
+// newWorkerRig returns a workerRig whose runs read vars as they start.
+func newWorkerRig(t *testing.T, vars compile.Variables) *workerRig {
 	t.Helper()
 	// A Unix socket's path is short: the test's own temporary directory
 	// can be too long for one.
@@ -118,7 +123,7 @@ func runCase(t *testing.T, cs conformance.Case) (caseRun, *runlogtest.Logs) {
 	socket := filepath.Join(dir, "s")
 	d := &workerDriver{dir: dir, log: t.Logf, placements: map[string]backend.Placement{}, cancels: map[string]context.CancelFunc{}}
 	c := open(t, Options{
-		Variables: conformancetest.StartVariables(cs),
+		Variables: vars,
 		Drivers:   map[string]backend.Driver{testBackend: d},
 		Endpoint:  backend.Endpoint{Address: socket},
 	})
@@ -132,7 +137,7 @@ func runCase(t *testing.T, cs conformance.Case) (caseRun, *runlogtest.Logs) {
 	go func() { served <- c.ServeWorkers(ctx, ln, logs) }()
 	t.Cleanup(func() {
 		// The workers end before the server they report to stops: each
-		// has once the run has ended, but in a test that failed.
+		// has once its run has ended, but in a test that failed.
 		d.mu.Lock()
 		for _, cancel := range d.cancels {
 			cancel()
@@ -144,27 +149,98 @@ func runCase(t *testing.T, cs conformance.Case) (caseRun, *runlogtest.Logs) {
 			t.Error(err)
 		}
 	})
+	return &workerRig{c: c, d: d, logs: logs, runs: filepath.Join(dir, "runs")}
+}
 
-	data, err := cs.Workflow()
-	if err != nil {
-		t.Fatal(err)
-	}
-	created, diags, err := compile.Create(t.Context(), "workflow.yaml", data, cs.Inputs,
-		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: conformancetest.CreateContexts(cs)})
+// create stores a run of workflow, as Create compiles it with inputs and
+// contexts, and returns its ID.
+func (r *workerRig) create(t *testing.T, workflow []byte, inputs, contexts map[string]any) string {
+	t.Helper()
+	created, diags, err := compile.Create(t.Context(), "workflow.yaml", workflow, inputs,
+		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: contexts})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if diags.HasErrors() || created == nil {
 		t.Fatalf("the workflow has errors: %v", diags)
 	}
-	runs := filepath.Join(dir, "runs")
-	id, err := c.CreateRun(t.Context(), created, RunOptions{DefaultGroup: "local", RunDir: func(id string) string { return filepath.Join(runs, id) }})
+	id, err := r.c.CreateRun(t.Context(), created, RunOptions{DefaultGroup: "local", RunDir: func(id string) string { return filepath.Join(r.runs, id) }})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return id
+}
+
+// runCase runs the case's workflow from its start to its end, as
+// TestRunsConformance says, and returns the rig that ran it, and the
+// run's ID.
+func runCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
+	t.Helper()
+	data, err := cs.Workflow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newWorkerRig(t, conformancetest.StartVariables(cs))
+	id := r.create(t, data, cs.Inputs, conformancetest.CreateContexts(cs))
+	serve(t, r.c)
+	waitEnded(t, r.c, id)
+	return r, id
+}
+
+// TestNeedNeverEnded checks that a job a job needs that never ended, as
+// one whose supervisor hopper gave up on, fails as the job is readied,
+// with coordinator_job_failed: its attempt is withdrawn, and its
+// placement cancelled; and the job, whose if: is always(), is placed, and
+// its attempt claimed, the server readying it with the need ended, as the
+// coordinator did.
+func TestNeedNeverEnded(t *testing.T) {
+	r := newWorkerRig(t, nil)
+	c := r.c
+	// a's worker never claims its attempt, which would wake its
+	// supervisor, and so have hopper run it again.
+	r.d.idle = func(req backend.PlaceRequest) bool { return strings.HasSuffix(req.Name, "-a") }
+	id := r.create(t, []byte(`
+jobs:
+  a:
+    steps:
+      - run: sleep 600
+  b:
+    needs: [a]
+    if: ${{ always() }}
+    steps:
+      - run: echo b ${{ needs.a.result }}
+`), nil, nil)
+	if _, err := c.startRun(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	// a is placed, and then hopper gives up on its supervisor.
+	if _, err := c.supervise(t.Context(), id, "a", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.inserter.JobCancel(t.Context(), storedJob(t, c, id, "a").SupervisorID); err != nil {
+		t.Fatal(err)
+	}
 	serve(t, c)
-	waitEnded(t, c, id)
-	return caseRun{c: c, id: id}, logs
+	run := waitEnded(t, c, id)
+	a, b := storedJob(t, c, id, "a"), storedJob(t, c, id, "b")
+	attempt := latestAttempt(t, c, id, "a")
+	switch {
+	case run.Outcome != plan.OutcomeFailure:
+		t.Errorf("the run ended with %s", run.Outcome)
+	case a.Outcome != plan.OutcomeFailure || !hasCode(a.Diagnostics, problems.CoordinatorJobFailed) || attempt.End.Kind != store.EndWithdrawn:
+		t.Errorf("a ended with %s, %v, and its attempt %s", a.Outcome, a.Diagnostics, attempt.End.Kind)
+	case b.Outcome != plan.OutcomeSuccess:
+		t.Errorf("b ended with %s, %v", b.Outcome, b.Diagnostics)
+	}
+	if log := r.logs.Of(id, "b", 1)[workerapitest.LogKey{Part: workerapi.LogStep}]; string(log.Data) != "b failure\n" {
+		t.Errorf("b's step's log is %q", log.Data)
+	}
+	r.d.mu.Lock()
+	cancelled := r.d.cancelled
+	r.d.mu.Unlock()
+	if !slices.Equal(cancelled, []string{"worker-" + attempt.ID}) {
+		t.Errorf("the placements cancelled are %v", cancelled)
+	}
 }
 
 // workerDriver is a backend.Driver in process, for tests, whose members
@@ -172,13 +248,17 @@ func runCase(t *testing.T, cs conformance.Case) (caseRun, *runlogtest.Logs) {
 // in a goroutine of its own, with the bootstrap token in a file of its
 // own, under dir. log hears of a worker that ended with an error.
 type workerDriver struct {
-	dir     string
-	log     func(format string, args ...any)
+	dir string
+	log func(format string, args ...any)
+	// idle, if it is set, says which placements start no worker.
+	idle    func(req backend.PlaceRequest) bool
 	workers sync.WaitGroup
 
 	mu         sync.Mutex
 	placements map[string]backend.Placement
 	cancels    map[string]context.CancelFunc
+	// cancelled are the IDs of the placements Cancel cancelled.
+	cancelled []string
 }
 
 var _ backend.Driver = (*workerDriver)(nil)
@@ -214,6 +294,9 @@ func (d *workerDriver) Place(ctx context.Context, _ *backend.Member, req backend
 	d.placements[req.Attempt] = p
 	d.cancels[req.Attempt] = cancel
 	d.mu.Unlock()
+	if d.idle != nil && d.idle(req) {
+		return p, nil
+	}
 	d.workers.Go(func() {
 		defer cancel()
 		err := worker.Run(ctx, worker.Config{Worker: workerapi.Worker{Version: "test", Digest: testDigest}, Environ: environ, Dir: dir})
@@ -238,6 +321,7 @@ func (d *workerDriver) Check(context.Context, *backend.Member, backend.Placement
 func (d *workerDriver) Cancel(_ context.Context, _ *backend.Member, p backend.Placement) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.cancelled = append(d.cancelled, p.ID)
 	if cancel := d.cancels[p.Attempt]; cancel != nil {
 		cancel()
 	}

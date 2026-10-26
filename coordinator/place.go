@@ -319,53 +319,18 @@ func (c *Coordinator) attemptSetupFailed(ctx context.Context, id string, p *prob
 // so that no attempt is placed twice. A member that is no longer in its
 // group fails the attempt before its first step.
 func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, error) {
-	var (
-		place   store.Place
-		chosen  bool
-		wrapped []byte
-		private = a.Private
-	)
-	err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		if place, chosen, err = tx.ChosenPlace(a.ID); err != nil || !private {
-			return err
-		}
-		wrapped, err = tx.WrappedKey(run.ID)
-		return err
-	})
+	private := a.Private
+	cand, _, rj, err := c.placedOn(ctx, run, job, a)
+	var groups *groupsError
 	switch {
-	case err != nil:
-		return 0, err
-	case !chosen:
-		return 0, fmt.Errorf("coordinator: attempt %s has no place", a.ID)
-	}
-	opened, err := c.openPlaces(ctx, run.ID, wrapped, map[string]store.Place{a.ID: place})
-	if err != nil {
-		return 0, err
-	}
-	at := opened[a.ID]
-	r, err := c.readyJob(ctx, run, job.Key)
-	switch {
-	case err != nil:
-		return 0, err
-	case r.result.Job == nil:
-		return 0, fmt.Errorf("coordinator: run %s's job %q has an attempt, but Ready gives no job", run.ID, job.Key)
-	}
-	rj := r.result.Job
-	g, d, err := c.group(ctx, run, rj, private)
-	if err != nil {
-		return c.unanswered(ctx, run, job, private, err)
-	}
-	var m *backend.Member
-	if d == nil {
-		if i := slices.IndexFunc(g.Members, func(m backend.Member) bool { return m.Name == at.Member && m.Backend == at.Backend }); i >= 0 {
-			m = &g.Members[i]
-		}
-	}
-	if m == nil || g.Name != at.Group {
+	case errors.As(err, &groups):
+		return c.unanswered(ctx, run, job, private, groups.err)
+	case errors.Is(err, errMemberGone):
 		return 0, c.attemptSetupFailed(ctx, a.ID, nil)
+	case err != nil:
+		return 0, err
 	}
-	cand := &candidate{group: g.Name, member: m, driver: c.driver(m)}
+	m := cand.member
 	p, found, err := cand.driver.Find(ctx, m, a.ID)
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
 		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
@@ -403,6 +368,161 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		return 0, err
 	}
 	return c.placeAttempt(ctx, run, job, a.ID, token, rj, cand, private)
+}
+
+// errMemberGone is a member an attempt was to be placed on that is no
+// longer in its group.
+var errMemberGone = errors.New("coordinator: the member an attempt was placed on is no longer in its group")
+
+// A groupsError is Groups' error, which couldn't answer for the group a job
+// runs in.
+type groupsError struct{ err error }
+
+func (e *groupsError) Error() string { return e.err.Error() }
+func (e *groupsError) Unwrap() error { return e.err }
+
+// placedOn returns the member the attempt a of the run's job was to be
+// placed on, as its supervisor chose it, with its driver; its place,
+// opened, with the backend's ID for the placement once that is recorded of
+// a private one; and the job, as Ready gives it. errMemberGone is a member
+// no longer in its group, and a *groupsError Groups' error.
+func (c *Coordinator) placedOn(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (*candidate, sealedPlace, *plan.ReadyJob, error) {
+	var (
+		place   store.Place
+		chosen  bool
+		wrapped []byte
+	)
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		if place, chosen, err = tx.ChosenPlace(a.ID); err != nil || !a.Private {
+			return err
+		}
+		wrapped, err = tx.WrappedKey(run.ID)
+		return err
+	})
+	switch {
+	case err != nil:
+		return nil, sealedPlace{}, nil, err
+	case !chosen:
+		return nil, sealedPlace{}, nil, fmt.Errorf("coordinator: attempt %s has no place", a.ID)
+	}
+	opened, err := c.openPlaces(ctx, run.ID, wrapped, map[string]store.Place{a.ID: place})
+	if err != nil {
+		return nil, sealedPlace{}, nil, err
+	}
+	at := opened[a.ID]
+	r, err := c.readyJob(ctx, run, job.Key)
+	switch {
+	case err != nil:
+		return nil, at, nil, err
+	case r.result.Job == nil:
+		return nil, at, nil, fmt.Errorf("coordinator: run %s's job %q has an attempt, but Ready gives no job", run.ID, job.Key)
+	}
+	rj := r.result.Job
+	g, d, err := c.group(ctx, run, rj, a.Private)
+	if err != nil {
+		return nil, at, rj, &groupsError{err}
+	}
+	var m *backend.Member
+	if d == nil {
+		if i := slices.IndexFunc(g.Members, func(m backend.Member) bool { return m.Name == at.Member && m.Backend == at.Backend }); i >= 0 {
+			m = &g.Members[i]
+		}
+	}
+	if m == nil || g.Name != at.Group {
+		return nil, at, rj, errMemberGone
+	}
+	return &candidate{group: g.Name, member: m, driver: c.driver(m)}, at, rj, nil
+}
+
+// A withdrawal is the placement of an attempt being withdrawn, which its
+// driver cancels once the transaction that withdraws the attempt commits:
+// its member, with its driver, and the placement, whose ID is "" when it
+// wasn't recorded, which the driver then finds by the attempt.
+type withdrawal struct {
+	cand      *candidate
+	placement backend.Placement
+	private   bool
+}
+
+// withdrawals returns the placements of the attempts that haven't ended of
+// the run's jobs keys that haven't, by attempt, which failJob withdraws:
+// each found now, while the job readies again and the run's secret record
+// opens, as neither does once the job, or the run, has ended. One whose
+// member can't be found is left out, with the reason in the log, unless
+// where it runs is private: its worker's reports are refused all the same.
+func (c *Coordinator) withdrawals(ctx context.Context, run *store.Run, keys []string) (map[string]*withdrawal, error) {
+	type live struct {
+		job *store.Job
+		a   *store.Attempt
+	}
+	var lives []live
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		for _, key := range keys {
+			j, err := tx.Job(run.ID, key)
+			if err != nil {
+				return err
+			}
+			if j.Outcome != "" {
+				continue
+			}
+			switch a, err := tx.LatestAttempt(run.ID, key); {
+			case errors.Is(err, store.ErrNotFound):
+			case err != nil:
+				return err
+			case a.State != store.AttemptEnded:
+				lives = append(lives, live{j, a})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*withdrawal, len(lives))
+	for _, l := range lives {
+		cand, at, _, err := c.placedOn(ctx, run, l.job, l.a)
+		if err != nil {
+			if !l.a.Private {
+				c.log.WarnContext(ctx, "coordinator: couldn't find where an attempt it withdraws was placed, to cancel it; its worker's reports are refused", "run", run.ID, "job", l.job.Key, "error", err)
+			}
+			continue
+		}
+		p := backend.Placement{Attempt: l.a.ID, ID: l.a.Placement.ID, WorkerDigest: l.a.Placement.WorkerDigest}
+		if l.a.Private {
+			p.ID = at.ID
+		}
+		out[l.a.ID] = &withdrawal{cand: cand, placement: p, private: l.a.Private}
+	}
+	return out, nil
+}
+
+// cancelPlacements has the drivers of ws, placements by attempt, cancel
+// those of the attempts withdrawn, as far as they can: a placement that
+// wasn't recorded is found by its attempt first. One a driver couldn't
+// cancel is in the log, unless where it runs is private; its worker's
+// reports are refused all the same.
+func (c *Coordinator) cancelPlacements(ctx context.Context, run string, ws map[string]*withdrawal, withdrawn []string) {
+	for _, id := range withdrawn {
+		w := ws[id]
+		if w == nil {
+			continue
+		}
+		m, d, p := w.cand.member, w.cand.driver, w.placement
+		var err error
+		if p.ID == "" {
+			var found bool
+			if p, found, err = d.Find(ctx, m, id); err == nil && !found {
+				continue
+			}
+		}
+		if err == nil {
+			err = d.Cancel(ctx, m, p)
+		}
+		if err != nil && !w.private {
+			c.log.WarnContext(ctx, "coordinator: couldn't cancel the placement of an attempt it withdrew; its worker's reports are refused", "run", run, "attempt", id, "error", err)
+		}
+	}
 }
 
 // unanswered handles cause, a backend's, or Groups', that couldn't answer

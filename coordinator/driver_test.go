@@ -75,7 +75,9 @@ type testDriver struct {
 	members    []string
 	placements map[string]backend.Placement
 	connects   int
-	workers    sync.WaitGroup
+	// cancelled are the placements Cancel cancelled.
+	cancelled []backend.Placement
+	workers   sync.WaitGroup
 }
 
 var _ backend.Driver = (*testDriver)(nil)
@@ -160,7 +162,12 @@ func (d *testDriver) Check(context.Context, *backend.Member, backend.Placement) 
 	return backend.Status{State: backend.Unknown}, nil
 }
 
-func (d *testDriver) Cancel(context.Context, *backend.Member, backend.Placement) error { return nil }
+func (d *testDriver) Cancel(_ context.Context, _ *backend.Member, p backend.Placement) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cancelled = append(d.cancelled, p)
+	return nil
+}
 
 func (d *testDriver) Forget(context.Context, *backend.Member, backend.Placement) error { return nil }
 

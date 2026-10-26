@@ -48,11 +48,18 @@ func (w *finishWorker) Work(ctx context.Context, job *hopper.Job[finishArgs]) er
 // ends failed, with run_not_started. A run that has started ends failed if
 // one of its jobs failed, or was skipped because a job it needs failed,
 // and with success otherwise; a job that never ended, as one whose
-// supervisor hopper gave up on, fails first (failUnended). A run of a plan only a newer release reads
-// is left to one, as Start leaves it, and finishRun returns how long to
-// wait before trying again.
+// supervisor hopper gave up on, fails first (failUnended), and the
+// placement of its attempt it withdraws is cancelled once the transaction
+// commits. A run of a plan only a newer release reads is left to one, as
+// Start leaves it, and finishRun returns how long to wait before trying
+// again.
 func (c *Coordinator) finishRun(ctx context.Context, id string, done func(context.Context, *store.Tx) error) (time.Duration, error) {
-	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+	ws, err := c.unendedWithdrawals(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	var withdrawn []string
+	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		// A newer run's start state, of a newer version, doesn't decode:
 		// plan.ErrVersion, as its plan's version says.
 		r, err := tx.Run(id)
@@ -71,7 +78,7 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 				return err
 			}
 		case store.RunRunning:
-			if err := failUnended(tx, id); err != nil {
+			if withdrawn, err = failUnended(tx, id); err != nil {
 				return err
 			}
 			outcome, err := runOutcome(tx, id)
@@ -88,39 +95,93 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		c.log.WarnContext(ctx, "coordinator: a run's plan is newer than this release reads, so a release that reads it ends the run", "run", id, "code", problems.RunPlanNewer.Code())
 		return c.retry.newer, nil
 	}
+	if err == nil {
+		c.cancelPlacements(ctx, id, ws, withdrawn)
+	}
 	return 0, err
 }
 
-// failUnended fails each job of the run id that hasn't ended, with
-// coordinator_job_failed: one whose supervisor hopper gave up on, as after
-// the coordinator itself failed again and again. Its attempt that hasn't
-// ended is withdrawn, so that its worker's reports are refused.
-func failUnended(tx *store.Tx, id string) error {
-	jobs, err := tx.Jobs(id)
-	if err != nil {
-		return err
-	}
-	for _, j := range jobs {
-		if j.Outcome != "" {
-			continue
+// unendedWithdrawals returns the placements of the attempts that haven't
+// ended of the run id's jobs that haven't, which failUnended withdraws,
+// as withdrawals finds them: none for a run that isn't running, or whose
+// plan only a newer release reads.
+func (c *Coordinator) unendedWithdrawals(ctx context.Context, id string) (map[string]*withdrawal, error) {
+	var (
+		run  *store.Run
+		keys []string
+	)
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		r, err := tx.Run(id)
+		if errors.Is(err, plan.ErrVersion) {
+			return nil
 		}
-		switch a, err := tx.LatestAttempt(id, j.Key); {
-		case errors.Is(err, store.ErrNotFound):
-		case err != nil:
+		if err != nil || r.State != store.RunRunning || r.PlanVersion != plan.Version {
 			return err
-		case a.State != store.AttemptEnded:
-			if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn}); err != nil {
-				return err
+		}
+		jobs, err := tx.Jobs(id)
+		if err != nil {
+			return err
+		}
+		run = r
+		for _, j := range jobs {
+			if j.Outcome == "" {
+				keys = append(keys, j.Key)
 			}
 		}
-		if err := tx.EndJob(id, j.Key, store.JobEnd{
-			Result:      plan.JobResult{Outcome: plan.OutcomeFailure},
-			Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": j.Key})},
-		}); err != nil {
-			return err
+		return nil
+	})
+	if err != nil || len(keys) == 0 {
+		return nil, err
+	}
+	return c.withdrawals(ctx, run, keys)
+}
+
+// failUnended fails each job of the run id that hasn't ended (failJob),
+// and returns the attempts it withdrew.
+func failUnended(tx *store.Tx, id string) ([]string, error) {
+	jobs, err := tx.Jobs(id)
+	if err != nil {
+		return nil, err
+	}
+	var withdrawn []string
+	for _, j := range jobs {
+		a, err := failJob(tx, id, j.Key)
+		if err != nil {
+			return nil, err
+		}
+		if a != "" {
+			withdrawn = append(withdrawn, a)
 		}
 	}
-	return nil
+	return withdrawn, nil
+}
+
+// failJob fails the run's job key, unless it has ended, with
+// coordinator_job_failed: one whose supervisor hopper gave up on, as after
+// the coordinator itself failed again and again. Its attempt that hasn't
+// ended is withdrawn, so that its worker's reports are refused, and its ID
+// returned, so that its placement is cancelled once the transaction
+// commits (cancelPlacements).
+func failJob(tx *store.Tx, run, key string) (string, error) {
+	j, err := tx.Job(run, key)
+	if err != nil || j.Outcome != "" {
+		return "", err
+	}
+	var withdrawn string
+	switch a, err := tx.LatestAttempt(run, key); {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return "", err
+	case a.State != store.AttemptEnded:
+		if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn}); err != nil {
+			return "", err
+		}
+		withdrawn = a.ID
+	}
+	return withdrawn, tx.EndJob(run, key, store.JobEnd{
+		Result:      plan.JobResult{Outcome: plan.OutcomeFailure},
+		Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": key})},
+	})
 }
 
 // runOutcome is how the run id ended, from how its jobs did: failure if one

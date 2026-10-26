@@ -21,11 +21,16 @@ type readied struct {
 
 // readyJob readies the run's job key, as plan.Ready does, with the run's
 // values and the results of the jobs it needs, each joined from run state
-// and the secret record, with each job's part of it, which it opens; and
-// with what the job was first
-// readied with, which it pins the first time (store.Tx.PinReady), so that
-// each time it is readied, as at its placement and at each claim of an
-// attempt of it, Ready gives the same job, byte for byte.
+// and the job's part of the secret record, which it opens; and with what
+// the job was first readied with, which it pins the first time
+// (store.Tx.PinReady), so that each time it is readied, as at its
+// placement and at each claim of an attempt of it, Ready gives the same
+// job, byte for byte. A job it needs that hasn't ended, as one whose
+// supervisor hopper gave up on, it fails first, as the finisher does
+// (failJob), in the transaction that pins it, and has the placement of its
+// attempt it withdraws cancelled once that commits: so that the job, and
+// the server of the worker API as an attempt of it is claimed, read it as
+// ended.
 //
 // Its error is what kept it from readying the job: what the plan cache
 // gives (plan.ErrVersion, plan.ErrMalformed), what opening the record
@@ -38,12 +43,41 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 	if err != nil {
 		return nil, err
 	}
+	var unended []string
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		j, err := tx.Job(run.ID, key)
+		if err != nil {
+			return err
+		}
+		pj := planJob(p, j.Name)
+		if pj == nil {
+			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, j.Name)
+		}
+		for _, need := range pj.Needs {
+			n, err := tx.Job(run.ID, need.Job)
+			if err != nil {
+				return err
+			}
+			if n.Outcome == "" {
+				unended = append(unended, n.Key)
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	var ws map[string]*withdrawal
+	if len(unended) > 0 {
+		if ws, err = c.withdrawals(ctx, run, unended); err != nil {
+			return nil, err
+		}
+	}
 	var (
-		stored *store.Record
-		job    *store.Job
-		pj     *plan.Job
-		needed = map[string]*store.Job{}
-		parts  map[string]store.JobRecord
+		stored    *store.Record
+		job       *store.Job
+		needed    = map[string]*store.Job{}
+		parts     map[string]store.JobRecord
+		withdrawn []string
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
@@ -55,11 +89,20 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 		if job, err = tx.PinReady(run.ID, key, false, nil); err != nil {
 			return err
 		}
-		if pj = planJob(p, job.Name); pj == nil {
+		pj := planJob(p, job.Name)
+		if pj == nil {
 			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
 		}
+		withdrawn = withdrawn[:0]
 		keys := make([]string, 0, len(pj.Needs))
 		for _, need := range pj.Needs {
+			a, err := failJob(tx, run.ID, need.Job)
+			if err != nil {
+				return err
+			}
+			if a != "" {
+				withdrawn = append(withdrawn, a)
+			}
 			if needed[need.Job], err = tx.Job(run.ID, need.Job); err != nil {
 				return err
 			}
@@ -71,15 +114,15 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 	if err != nil {
 		return nil, err
 	}
+	if len(unended) > 0 {
+		c.log.WarnContext(ctx, "coordinator: jobs a job needs never ended, as when hopper gave up on their supervisors, so they failed as it was readied", "run", run.ID, "job", key, "needs", unended)
+		c.cancelPlacements(ctx, run.ID, ws, withdrawn)
+	}
 	rec, err := c.sealer.Open(ctx, run.ID, stored.Generation, sealedOf(stored))
 	if err != nil {
 		return nil, err
 	}
-	sealedParts := make(map[string]seal.JobPart, len(parts))
-	for key, part := range parts {
-		sealedParts[key] = seal.JobPart{Generation: part.Generation, Sealed: part.Sealed}
-	}
-	jobs, err := c.sealer.OpenJobs(ctx, run.ID, stored.WrappedKey, sealedParts)
+	jobs, err := c.openJobRecords(ctx, run.ID, stored.WrappedKey, parts)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +131,7 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 		in.Run = plan.JoinRunValues(*rec.Run, run.StartState.Run)
 	}
 	for name, j := range needed {
-		in.Needs[name] = neededResult(j, rec, jobs)
+		in.Needs[name] = neededResult(j, jobs)
 	}
 	result, diags, err := p.Ready(ctx, job.Name, in)
 	if err != nil {
@@ -97,21 +140,24 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 	return &readied{result: result, diags: diags}, nil
 }
 
-// neededResult is the result of j, a job another needs, as the jobs that
-// need it read it: run state's, joined with what the secret record holds
-// of it, its part of the record, jobs[j.Key], which its attempt's end
-// stored, or else what rec, the record itself, holds of it. A job that
-// hasn't ended, as one whose supervisor hopper gave up on, reads as
-// failed. It is the coordinator's one read of a job's private half.
-func neededResult(j *store.Job, rec *plan.Record, jobs map[string]plan.JobRecord) plan.JobResult {
-	if j.Result == nil {
-		return plan.JobResult{Outcome: plan.OutcomeFailure}
+// openJobRecords opens parts, the parts of the run runID's secret record of
+// the jobs they are by key (store.Tx.JobRecords), with the run's data key,
+// which Keys wrapped as wrapped.
+func (c *Coordinator) openJobRecords(ctx context.Context, runID string, wrapped []byte, parts map[string]store.JobRecord) (map[string]plan.JobRecord, error) {
+	sealed := make(map[string]seal.JobPart, len(parts))
+	for key, part := range parts {
+		sealed[key] = seal.JobPart{Generation: part.Generation, Sealed: part.Sealed}
 	}
-	private, ok := jobs[j.Key]
-	if !ok {
-		private = rec.Jobs[j.Key]
-	}
-	return plan.JoinJobResult(private, *j.Result)
+	return c.sealer.OpenJobs(ctx, runID, wrapped, sealed)
+}
+
+// neededResult is the result of j, a job another needs, which has ended,
+// as the jobs that need it read it: run state's, joined with its part of
+// the secret record, jobs[j.Key], which its attempt's end stored, if it
+// ended with private outputs. It is the coordinator's one read of a job's
+// private half.
+func neededResult(j *store.Job, jobs map[string]plan.JobRecord) plan.JobResult {
+	return plan.JoinJobResult(jobs[j.Key], *j.Result)
 }
 
 // planJob returns the job of p named name, or nil.

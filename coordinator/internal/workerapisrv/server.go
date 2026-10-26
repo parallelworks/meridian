@@ -103,7 +103,13 @@ const DefaultMaxConnections = 1024
 const idleTime = 30 * time.Second
 
 // shutdownTime is how long Serve waits, once its context is done, for the
-// requests it is handling to end.
+// requests it is handling to end. A handler that outlives it, as one
+// waiting for the database's lock, goes on after Serve returns, and can
+// meet the logs or the store that Serve's caller closes then. That is
+// safe: what a request stores, it stores in one transaction, which then
+// fails whole, and a log's part is answered only once it is stored; the
+// worker, whose request fails, sends it again, to whichever coordinator
+// serves the API next.
 const shutdownTime = 5 * time.Second
 
 // Sealer opens a run's secret record, and seals and opens its jobs' parts

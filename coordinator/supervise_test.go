@@ -669,7 +669,8 @@ func TestStaleSupervisor(t *testing.T) {
 }
 
 // TestFinisherWithdraws checks that the finisher fails a job that never
-// ended, and withdraws its attempt, whose worker's reports are refused.
+// ended, and withdraws its attempt, whose worker's reports are refused, and
+// whose placement its driver cancels.
 func TestFinisherWithdraws(t *testing.T) {
 	c := open(t, Options{Variables: regionVars})
 	driverOf(c).set(func(d *testDriver) {
@@ -690,6 +691,13 @@ func TestFinisherWithdraws(t *testing.T) {
 	j := storedJob(t, c, id, "main")
 	if a.End.Kind != store.EndWithdrawn || j.Outcome != plan.OutcomeFailure || !hasCode(j.Diagnostics, problems.CoordinatorJobFailed) {
 		t.Errorf("the attempt ended %s, and the job %s, with %v", a.End.Kind, j.Outcome, j.Diagnostics)
+	}
+	d := driverOf(c)
+	d.mu.Lock()
+	cancelled := d.cancelled
+	d.mu.Unlock()
+	if len(cancelled) != 1 || cancelled[0].Attempt != a.ID || cancelled[0].ID != a.Placement.ID {
+		t.Errorf("the placements cancelled are %+v", cancelled)
 	}
 }
 

@@ -1846,7 +1846,10 @@ attempt, and jobs that complete in their caller's transaction.
   another kind.
 - **A supervisor's own error**, a store's or a bug of the coordinator's,
   hopper retries, with backoff and a bound. A job whose supervisor hopper
-  gives up on fails, and the run goes on to its end.
+  gives up on fails, with `coordinator_job_failed`, and the run goes on to
+  its end: the first job that needs it fails it as that job is readied, or
+  else the finisher does. Either withdraws its attempt that hadn't ended,
+  and has the attempt's driver cancel its placement.
 
 ### A job's lifecycle
 
