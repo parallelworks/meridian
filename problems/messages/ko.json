@@ -216,6 +216,7 @@
   "variable_file_unreadable": "{variable} 변수는 {file} 파일에서 값을 가져오는데, 그 파일을 읽을 수 없습니다: {reason}",
   "variable_file_home": "{variable} 변수는 {file}에서 값을 가져오는데, 그 ~/를 위한 HOME이 절대 경로로 설정되어 있지 않습니다.",
   "key_file_invalid": "키 파일 {path}이(가) 키의 32바이트가 아니라 {size}바이트입니다.",
+  "key_file_missing": "키 파일 {path}이(가) 없어서, 그것이 감싼 데이터 키를 풀 수 없습니다.",
   "key_unwrap_failed": "실행 {run}의 데이터 키를 키 파일 {path}로 풀 수 없습니다. 다른 키로 또는 다른 실행을 위해 감쌌거나, 바뀌었습니다.",
   "key_wrapping_unknown": "실행 {run}의 데이터 키는 이 버전의 Meridian이 모르는 방식으로 감싸져 있습니다.",
   "git_unavailable": "Meridian이 git을 실행할 수 없습니다: {reason}",

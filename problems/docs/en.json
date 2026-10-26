@@ -1299,6 +1299,13 @@
       "Otherwise remove it: Meridian creates another, and the runs whose data keys the old one wrapped can't be resumed."
     ]
   },
+  "key_file_missing": {
+    "why": "The key file holds the 32-byte AES-256 key that wraps the data keys of your runs' secret records. Meridian creates it when it first wraps a key, and never makes another in its place to unwrap one: a new key file can't unwrap what the old one wrapped. The key file, or the state directory, has been moved or removed, so the runs whose data keys it wrapped can't read their secret records.",
+    "fix": [
+      "If you have a copy of the key file, or of the state directory, put it back.",
+      "Otherwise rerun the runs, whose new data keys a new key file wraps."
+    ]
+  },
   "key_unwrap_failed": {
     "why": "Each run's secret record is encrypted under a data key of its own, which the key file's key wraps with AES-256-GCM, bound to the run's ID. A wrapped key that doesn't open was made under another key, moved from another run, or changed.",
     "fix": [

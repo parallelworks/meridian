@@ -1512,6 +1512,14 @@
       "Si no, quítalo: Meridian crea otro, y las ejecuciones cuyas claves de datos envolvió el anterior no se pueden reanudar."
     ]
   },
+  "key_file_missing": {
+    "title": "Archivo de clave que no está",
+    "why": "El archivo de clave guarda la clave AES-256 de 32 bytes que envuelve las claves de datos de los registros secretos de tus ejecuciones. Meridian lo crea cuando envuelve una clave por primera vez, y nunca crea otro en su lugar para desenvolver una: un archivo de clave nuevo no puede desenvolver lo que envolvió el anterior. El archivo de clave, o el directorio de estado, se ha movido o eliminado, así que las ejecuciones cuyas claves de datos envolvió no pueden leer sus registros secretos.",
+    "fix": [
+      "Si tienes una copia del archivo de clave, o del directorio de estado, restáurala.",
+      "Si no, repite las ejecuciones, cuyas nuevas claves de datos envuelve un archivo de clave nuevo."
+    ]
+  },
   "key_unwrap_failed": {
     "title": "Clave de datos que no se puede desenvolver",
     "why": "El registro secreto de cada ejecución se cifra con una clave de datos propia, que la clave del archivo de clave envuelve con AES-256-GCM, ligada al ID de la ejecución. Una clave envuelta que no se abre se hizo con otra clave, se trajo de otra ejecución o se cambió.",

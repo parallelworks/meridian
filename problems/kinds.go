@@ -410,6 +410,7 @@ var (
 // uses: names.
 var (
 	KeyFileInvalid     = defineCommand("key_file_invalid", "Key file that isn't a key", "path", "size")
+	KeyFileMissing     = defineCommand("key_file_missing", "Key file that isn't there", "path")
 	KeyUnwrapFailed    = defineCommand("key_unwrap_failed", "Data key that can't be unwrapped", "run", "path")
 	KeyWrappingUnknown = defineCommand("key_wrapping_unknown", "Data key wrapped an unknown way", "run")
 	GitUnavailable     = defineCommand("git_unavailable", "git can't be run", "reason")

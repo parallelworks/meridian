@@ -216,6 +216,7 @@
   "variable_file_unreadable": "変数 {variable} はファイル {file} から値を取りますが、そのファイルを読み込めません: {reason}",
   "variable_file_home": "変数 {variable} は {file} から値を取りますが、その ~/ のための HOME が絶対パスに設定されていません。",
   "key_file_invalid": "鍵ファイル {path} は {size} バイトで、鍵の 32 バイトではありません。",
+  "key_file_missing": "鍵ファイル {path} が存在しないため、それがラップしたデータ鍵をアンラップできません。",
   "key_unwrap_failed": "実行 {run} のデータ鍵を鍵ファイル {path} でアンラップできません。別の鍵や別の実行のためにラップされたか、変更されています。",
   "key_wrapping_unknown": "実行 {run} のデータ鍵は、このバージョンの Meridian が知らない方法でラップされています。",
   "git_unavailable": "Meridian は git を実行できません: {reason}",

@@ -216,6 +216,7 @@
   "variable_file_unreadable": "变量 {variable} 从文件 {file} 获取其值，但无法读取该文件：{reason}",
   "variable_file_home": "变量 {variable} 从 {file} 获取其值，但 HOME 未设置为绝对路径，无法解析其中的 ~/。",
   "key_file_invalid": "密钥文件 {path} 有 {size} 字节，而不是密钥的 32 字节。",
+  "key_file_missing": "密钥文件 {path} 不存在，因此无法解包它所包装的数据密钥。",
   "key_unwrap_failed": "无法用密钥文件 {path} 解包运行 {run} 的数据密钥：它是用其他密钥或为其他运行包装的，或者已被更改。",
   "key_wrapping_unknown": "运行 {run} 的数据密钥是以此版本的 Meridian 不了解的方式包装的。",
   "git_unavailable": "Meridian 无法运行 git：{reason}",

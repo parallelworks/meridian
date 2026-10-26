@@ -222,6 +222,7 @@
   "variable_file_unreadable": "The variable {variable} takes its value from the file {file}, which can't be read: {reason}.",
   "variable_file_home": "The variable {variable} takes its value from {file}, and HOME isn't set to an absolute path for its ~/.",
   "key_file_invalid": "The key file {path} has {size} bytes, not the 32 of a key.",
+  "key_file_missing": "The key file {path} isn't there, so the data keys it wrapped can't be unwrapped.",
   "key_unwrap_failed": "Run {run}'s data key can't be unwrapped with the key file {path}: it was wrapped under another key or for another run, or has been changed.",
   "key_wrapping_unknown": "Run {run}'s data key was wrapped in a way this version of Meridian doesn't know.",
   "git_unavailable": "Meridian can't run git: {reason}.",
