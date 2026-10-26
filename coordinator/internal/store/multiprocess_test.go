@@ -137,6 +137,9 @@ func child(ctx context.Context, s *Store, role string) error {
 			return die()
 		})
 
+	case "stress":
+		return stressRun(ctx, s)
+
 	case "hold":
 		// The process holds the endpoint until its standard input closes,
 		// or it is killed.
@@ -293,7 +296,11 @@ func TestTwoProcesses(t *testing.T) {
 			turns++
 		}
 	}
-	t.Logf("the processes took turns %d times", turns)
+	// Each pauses between its transactions, so they take turns, and the
+	// fences, and the numbers, were each given while the other wanted one.
+	if turns < 2 {
+		t.Errorf("the processes took turns %d times; the test needs them to share the database at once", turns)
+	}
 	for i, r := range runs {
 		if r != i+2 {
 			t.Fatalf("the runs made are %v, want 2 to %d once each", runs, 2*childRuns+1)
