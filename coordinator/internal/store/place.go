@@ -127,24 +127,63 @@ func (tx *Tx) SetupFailures(run, key string) ([]*Attempt, error) {
 	return out, nil
 }
 
+// NewAttemptAfter starts a new attempt as NewAttempt does, but only of a
+// job whose fence is still fence, as the caller saw it, which is 0 before
+// its first attempt: a job another attempt was made of meanwhile, as by
+// another supervisor of it, is ErrFenced, and none ends superseded.
+func (tx *Tx) NewAttemptAfter(n NewAttempt, fence int64) (*Attempt, string, error) {
+	j, err := tx.Job(n.Run, n.Job)
+	if err != nil {
+		return nil, "", err
+	}
+	if j.Fence != fence {
+		return nil, "", fmt.Errorf("%w: run %s's job %q has had another attempt since", ErrFenced, n.Run, n.Job)
+	}
+	return tx.NewAttempt(n)
+}
+
+// Unplaced checks that the attempt id still holds its job, and is being
+// placed, its placement not yet recorded: what a supervisor checks before
+// it ends such an attempt, or gives it a new token, so that one that
+// another supervisor has placed meanwhile is left as it is. An attempt that
+// no longer holds its job is ErrFenced, and one placed or claimed ErrState.
+func (tx *Tx) Unplaced(id string) error {
+	a, err := tx.Attempt(id)
+	switch {
+	case err != nil:
+		return err
+	case !a.Holds:
+		return ErrFenced
+	case a.State != AttemptPlacing || a.Placement.ID != "":
+		return fmt.Errorf("%w: attempt %s has been placed", ErrState, id)
+	}
+	return nil
+}
+
 // PlaceFailed records that the run's job couldn't be placed, with p, as
 // after its backend couldn't answer as many times as it may: it ends the
-// job's attempt that hasn't ended, or, when it has none, a new one, made
-// for the record, as one that failed before its first step; and starts the
-// count of the job's tries at placing again from 0. newAttempt is what a
-// new one is made with. It returns the attempt.
-func (tx *Tx) PlaceFailed(newAttempt NewAttempt, p *problem.Problem) (*Attempt, error) {
+// job's attempt that hasn't ended, as long as its placement isn't
+// recorded (Unplaced), or, when it has none, a new one, made for the
+// record, as one that failed before its first step; and starts the count
+// of the job's tries at placing again from 0. newAttempt is what a new one
+// is made with, and fence the job's fence as the caller saw it, as
+// NewAttemptAfter takes it. It returns the attempt.
+func (tx *Tx) PlaceFailed(newAttempt NewAttempt, fence int64, p *problem.Problem) (*Attempt, error) {
 	run, key := newAttempt.Run, newAttempt.Job
 	a, err := tx.LatestAttempt(run, key)
 	switch {
 	case errors.Is(err, ErrNotFound) || err == nil && a.State == AttemptEnded:
-		if a, _, err = tx.NewAttempt(newAttempt); err != nil {
+		if a, _, err = tx.NewAttemptAfter(newAttempt, fence); err != nil {
 			return nil, err
 		}
 	case err != nil:
 		return nil, err
-	case a.State != AttemptPlacing:
-		return nil, fmt.Errorf("%w: attempt %s has been claimed", ErrState, a.ID)
+	case a.Fence != fence:
+		return nil, fmt.Errorf("%w: run %s's job %q has had another attempt since", ErrFenced, run, key)
+	default:
+		if err := tx.Unplaced(a.ID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
 		return nil, err

@@ -183,6 +183,8 @@
   "placement_unanswered": "无法放置作业 {job}：其组的后端经过 {tries} 次尝试仍未应答。",
   "setup_failed": "作业 {job} 无法开始：它的尝试在任何步骤运行之前失败了 {tries} 次。",
   "coordinator_job_failed": "协调器无法将作业 {job} 运行到结束。",
+  "matrix_not_built": "作业 {job} 有 strategy: 矩阵，而此版本的 Meridian 尚不运行矩阵作业。",
+  "any_not_built": "作业 {job} 需要 {needed} 的任意一个实例（{needed}:any），而此版本的 Meridian 尚不运行这种依赖。",
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",

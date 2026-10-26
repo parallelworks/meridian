@@ -1277,6 +1277,20 @@
       "Mira en el registro del coordinador qué le impidió ejecutar el trabajo, y después repite la ejecución."
     ]
   },
+  "matrix_not_built": {
+    "title": "Trabajo con matriz que esta versión aún no ejecuta",
+    "why": "La matriz en strategy: de un trabajo lo ejecuta una vez por cada combinación de los valores de la matriz. Esta versión de Meridian ejecuta trabajos sin matriz, y aún no un trabajo que la tenga, así que no crea la ejecución.",
+    "fix": [
+      "Ejecuta el flujo de trabajo con una versión de Meridian que ejecute trabajos con matriz, o sin el strategy: del trabajo."
+    ]
+  },
+  "any_not_built": {
+    "title": "Dependencia de cualquier instancia que esta versión aún no ejecuta",
+    "why": "Una dependencia escrita como trabajo:any espera a cualquier instancia de un trabajo con matriz, en lugar de a todas. Esta versión de Meridian aún no ejecuta una dependencia así, así que no crea la ejecución.",
+    "fix": [
+      "Ejecuta el flujo de trabajo con una versión de Meridian que ejecute esas dependencias, o escribe la dependencia sin :any, para que el trabajo espere a todas las instancias."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",

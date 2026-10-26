@@ -183,6 +183,8 @@
   "placement_unanswered": "ジョブ {job} を配置できませんでした。グループのバックエンドが {tries} 回の試行で応答しませんでした。",
   "setup_failed": "ジョブ {job} を開始できませんでした。その試行はステップが実行される前に {tries} 回失敗しました。",
   "coordinator_job_failed": "コーディネーターはジョブ {job} を最後まで実行できませんでした。",
+  "matrix_not_built": "ジョブ {job} には strategy: のマトリックスがありますが、このリリースの Meridian はまだそれを実行しません。",
+  "any_not_built": "ジョブ {job} は {needed} のいずれかのインスタンス（{needed}:any）を必要としますが、このリリースの Meridian はまだそれを実行しません。",
 
   "workflow_too_large": "ワークフローが {limit} バイトを超えており、サイズの上限を超えています。",
   "execution_group_unknown": "入力「{input}」が指定している実行グループ {value} は、グループ {groups} のいずれでもありません。",

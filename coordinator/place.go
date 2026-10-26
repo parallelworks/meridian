@@ -59,14 +59,14 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 	g, d, err := c.group(ctx, run, rj, private)
 	switch {
 	case err != nil:
-		return c.unanswered(ctx, run, job.Key, private, err)
+		return c.unanswered(ctx, run, job, private, err)
 	case d != nil:
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: problems.Diagnostics{*d}}, done)
 	}
 	fits, reasons, unanswered := c.rank(ctx, g, demandOf(rj), private)
 	if len(fits) == 0 {
 		if unanswered {
-			return c.unanswered(ctx, run, job.Key, private, errors.New("a member's backend couldn't say whether it can run the job"))
+			return c.unanswered(ctx, run, job, private, errors.New("a member's backend couldn't say whether it can run the job"))
 		}
 		diags := append(problems.Diagnostics{diagnostic(problems.PlacementImpossible, problems.Params{"job": job.Key})}, reasons...)
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: diags}, done)
@@ -80,7 +80,10 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 		selfFence = rj.Retry != nil && slices.Contains(rj.Retry.Reasons, plan.ReasonWorkerLost)
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
-		a, t, err := tx.NewAttempt(c.newAttempt(run.ID, job.Key, selfFence))
+		// Only of the job as the look saw it: a supervisor rescued from a
+		// replica still running it doesn't supersede the attempt the other
+		// made meanwhile.
+		a, t, err := tx.NewAttemptAfter(c.newAttempt(run.ID, job.Key, selfFence), job.Fence)
 		if err != nil {
 			return err
 		}
@@ -95,13 +98,13 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 		}
 		return tx.ChoosePlace(a.ID, place)
 	})
-	if errors.Is(err, store.ErrState) {
+	if errors.Is(err, store.ErrState) || errors.Is(err, store.ErrFenced) {
 		return 0, errAgain
 	}
 	if err != nil {
 		return 0, err
 	}
-	return c.placeAttempt(ctx, run, job.Key, id, token, rj, chosen, private)
+	return c.placeAttempt(ctx, run, job, id, token, rj, chosen, private)
 }
 
 // choose returns the first of fits, members of a group ranked to run the
@@ -201,15 +204,15 @@ func (c *Coordinator) openPlace(ctx context.Context, runID, id string, stored *s
 }
 
 // placeAttempt asks chosen's driver to place the attempt id of the run's
-// job key, with its bootstrap token, and records the placement it gives.
+// job, with its bootstrap token, and records the placement it gives.
 // A problem from the driver fails the attempt before its first step, and
 // any other error is a backend that couldn't answer.
-func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, key, id, token string, rj *plan.ReadyJob, chosen *candidate, private bool) (time.Duration, error) {
+func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *store.Job, id, token string, rj *plan.ReadyJob, chosen *candidate, private bool) (time.Duration, error) {
 	endpoint, err := c.connect(ctx, chosen.driver, chosen.member)
 	var p backend.Placement
 	if err == nil {
 		p, err = chosen.driver.Place(ctx, chosen.member, backend.PlaceRequest{
-			Attempt: id, Name: "meridian-" + run.ID + "-" + key, Coordinator: endpoint, BootstrapToken: token,
+			Attempt: id, Name: "meridian-" + run.ID + "-" + job.Key, Coordinator: endpoint, BootstrapToken: token,
 			TimeoutSeconds: cmp.Or(rj.TimeoutSeconds, chosen.fit.DefaultTimeoutSeconds),
 			Resources:      backend.Resources(rj.Resources), RunDir: run.RunDir,
 		})
@@ -218,7 +221,7 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, key, id,
 		return 0, c.attemptSetupFailed(ctx, id, maskedProblemIf(private, prob))
 	}
 	if err != nil {
-		return c.unanswered(ctx, run, key, private, err)
+		return c.unanswered(ctx, run, job, private, err)
 	}
 	return c.recordPlacement(ctx, id, chosen, p, private)
 }
@@ -248,13 +251,16 @@ func (c *Coordinator) recordPlacement(ctx context.Context, id string, chosen *ca
 }
 
 // attemptSetupFailed ends the attempt id as one that failed before its
-// first step, with p, and has the supervisor look again, to place the job
-// again or fail it.
+// first step, with p, unless another supervisor placed it meanwhile, and
+// has the supervisor look again, to place the job again or fail it.
 func (c *Coordinator) attemptSetupFailed(ctx context.Context, id string, p *problem.Problem) error {
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		if err := tx.Unplaced(id); err != nil {
+			return err
+		}
 		return tx.EndAttempt(id, store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p})
 	})
-	if err != nil && !errors.Is(err, store.ErrFenced) {
+	if err != nil && !errors.Is(err, store.ErrFenced) && !errors.Is(err, store.ErrState) {
 		return err
 	}
 	return errAgain
@@ -300,7 +306,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	rj := r.result.Job
 	g, d, err := c.group(ctx, run, rj, private)
 	if err != nil {
-		return c.unanswered(ctx, run, job.Key, private, err)
+		return c.unanswered(ctx, run, job, private, err)
 	}
 	var m *backend.Member
 	if d == nil {
@@ -317,7 +323,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		return 0, c.attemptSetupFailed(ctx, a.ID, maskedProblemIf(private, prob))
 	}
 	if err != nil {
-		return c.unanswered(ctx, run, job.Key, private, err)
+		return c.unanswered(ctx, run, job, private, err)
 	}
 	if found {
 		return c.recordPlacement(ctx, a.ID, cand, p, private)
@@ -329,10 +335,15 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		return 0, c.attemptSetupFailed(ctx, a.ID, maskedProblemIf(private, prob))
 	}
 	if err != nil {
-		return c.unanswered(ctx, run, job.Key, private, err)
+		return c.unanswered(ctx, run, job, private, err)
 	}
 	var token string
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
+		// Not one another supervisor placed meanwhile, whose worker
+		// claims it with its token.
+		if err := tx.Unplaced(a.ID); err != nil {
+			return err
+		}
 		var err error
 		token, err = tx.NewToken(a.ID)
 		return err
@@ -343,17 +354,18 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	if err != nil {
 		return 0, err
 	}
-	return c.placeAttempt(ctx, run, job.Key, a.ID, token, rj, cand, private)
+	return c.placeAttempt(ctx, run, job, a.ID, token, rj, cand, private)
 }
 
 // unanswered handles cause, a backend's, or Groups', that couldn't answer
-// as the run's job key was placed: it is asked again, after a while, until
-// it has been as many times in a row as it may be, which then counts as a
-// failure before the job's first step, with placement_unanswered, of its
-// attempt that wasn't placed, or of one made for the record. The log says
-// what cause says, unless where the job runs is private, when what it
-// says can name the member.
-func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, key string, private bool, cause error) (time.Duration, error) {
+// as the run's job, as the look saw it, was placed: it is asked again,
+// after a while, until it has been as many times in a row as it may be,
+// which then counts as a failure before the job's first step, with
+// placement_unanswered, of its attempt that wasn't placed, or of one made
+// for the record. The log says what cause says, unless where the job runs
+// is private, when what it says can name the member.
+func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, job *store.Job, private bool, cause error) (time.Duration, error) {
+	key := job.Key
 	if private {
 		c.log.WarnContext(ctx, "coordinator: a backend couldn't answer as a job was placed, and is asked again later", "run", run.ID, "job", key)
 	} else {
@@ -375,7 +387,7 @@ func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, key string
 	}
 	p := problems.PlacementUnanswered.Problem(problems.Params{"job": key, "tries": tries})
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
-		_, err := tx.PlaceFailed(c.newAttempt(run.ID, key, false), p)
+		_, err := tx.PlaceFailed(c.newAttempt(run.ID, key, false), job.Fence, p)
 		return err
 	})
 	switch {

@@ -384,6 +384,13 @@ var (
 	// CoordinatorJobFailed is a job the coordinator couldn't see to its
 	// end, as one whose supervisor failed again and again.
 	CoordinatorJobFailed = define(Error, "coordinator_job_failed", "Job the coordinator couldn't run", "job")
+	// MatrixNotBuilt is a job with a strategy: matrix, which the
+	// coordinator doesn't run yet: the run isn't created.
+	MatrixNotBuilt = define(Error, "matrix_not_built", "Matrix job this release doesn't run yet", "job")
+	// AnyNotBuilt is a job that needs any instance of the job needed
+	// (needed:any), which the coordinator doesn't run yet: the run isn't
+	// created.
+	AnyNotBuilt = define(Error, "any_not_built", "Need on any instance this release doesn't run yet", "job", "needed")
 )
 
 // The meridian command's own problems, in CommandRegistry. A path, an

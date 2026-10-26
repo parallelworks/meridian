@@ -239,7 +239,7 @@ func TestPlaceFailed(t *testing.T) {
 		if _, err := tx.PlaceTried(id, "build"); err != nil {
 			return err
 		}
-		a, err := tx.PlaceFailed(n, p)
+		a, err := tx.PlaceFailed(n, 0, p)
 		if err != nil {
 			return err
 		}
@@ -249,22 +249,85 @@ func TestPlaceFailed(t *testing.T) {
 		if j, err := tx.Job(id, "build"); err != nil || j.PlaceTries != 0 {
 			t.Errorf("once placing failed, the job is %+v, %v", j, err)
 		}
-		b, _, err := tx.NewAttempt(n)
+		// One that saw the job before that attempt makes none.
+		if _, err := tx.PlaceFailed(n, 0, p); !errors.Is(err, ErrFenced) {
+			t.Errorf("PlaceFailed of a job as it was = %v, want ErrFenced", err)
+		}
+		b, _, err := tx.NewAttemptAfter(n, 1)
 		if err != nil {
 			return err
 		}
-		if a, err := tx.PlaceFailed(n, p); err != nil || a.ID != b.ID || a.End.Kind != EndSetupFailed {
+		if _, err := tx.PlaceFailed(n, 1, p); !errors.Is(err, ErrFenced) {
+			t.Errorf("PlaceFailed of an attempt it didn't see = %v, want ErrFenced", err)
+		}
+		if a, err := tx.PlaceFailed(n, 2, p); err != nil || a.ID != b.ID || a.End.Kind != EndSetupFailed {
 			t.Errorf("PlaceFailed of an attempt being placed = %+v, %v", a, err)
 		}
-		_, token, err := tx.NewAttempt(n)
+		// One placed meanwhile, as by another supervisor, isn't ended.
+		c, token, err := tx.NewAttempt(n)
 		if err != nil {
 			return err
+		}
+		if err := tx.RecordPlacement(c.ID, Placement{Group: "g", Member: "m", Backend: "local", ID: "1:2"}); err != nil {
+			return err
+		}
+		if _, err := tx.PlaceFailed(n, 3, p); !errors.Is(err, ErrState) {
+			t.Errorf("PlaceFailed of a placed attempt = %v, want ErrState", err)
 		}
 		if _, err := tx.Claim(token, credential('p'), testWorker); err != nil {
 			return err
 		}
-		if _, err := tx.PlaceFailed(n, p); !errors.Is(err, ErrState) {
+		if _, err := tx.PlaceFailed(n, 3, p); !errors.Is(err, ErrState) {
 			t.Errorf("PlaceFailed of a claimed attempt = %v, want ErrState", err)
+		}
+		return nil
+	})
+}
+
+// TestNewAttemptAfter checks that a new attempt is made only of a job as
+// its maker saw it, so that one another made meanwhile, which may be
+// running, isn't superseded; and that Unplaced tells an attempt whose
+// placement isn't recorded from one whose is.
+func TestNewAttemptAfter(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	n := NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10}
+	inTx(t, s, func(tx *Tx) error {
+		a, token, err := tx.NewAttemptAfter(n, 0)
+		if err != nil {
+			return err
+		}
+		if err := tx.Unplaced(a.ID); err != nil {
+			t.Errorf("Unplaced of an attempt being placed = %v", err)
+		}
+		if err := tx.RecordPlacement(a.ID, Placement{Group: "g", Member: "m", Backend: "local", ID: "1:2"}); err != nil {
+			return err
+		}
+		if err := tx.Unplaced(a.ID); !errors.Is(err, ErrState) {
+			t.Errorf("Unplaced of a placed attempt = %v, want ErrState", err)
+		}
+		if _, err := tx.Claim(token, credential('n'), testWorker); err != nil {
+			return err
+		}
+		if err := tx.StepStarted(a.ID); err != nil {
+			return err
+		}
+		// A supervisor that saw the job before a was made makes none.
+		if _, _, err := tx.NewAttemptAfter(n, 0); !errors.Is(err, ErrFenced) {
+			t.Errorf("NewAttemptAfter the job as it was = %v, want ErrFenced", err)
+		}
+		if got, err := tx.Attempt(a.ID); err != nil || !got.Holds || got.State != AttemptRunning {
+			t.Errorf("the running attempt is %+v, %v", got, err)
+		}
+		b, _, err := tx.NewAttemptAfter(n, 1)
+		if err != nil {
+			return err
+		}
+		if err := tx.Unplaced(a.ID); !errors.Is(err, ErrFenced) {
+			t.Errorf("Unplaced of a superseded attempt = %v, want ErrFenced", err)
+		}
+		if b.Fence != 2 {
+			t.Errorf("the new attempt is %+v", b)
 		}
 		return nil
 	})

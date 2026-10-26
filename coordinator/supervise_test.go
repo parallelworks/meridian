@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // oneJob is a workflow of one job, which reads nothing.
@@ -528,6 +530,89 @@ func TestPrivatePlacement(t *testing.T) {
 	})
 }
 
+// TestStaleSupervisor checks that a supervisor whose look went stale, as
+// one hopper rescued from a replica still running it, changes nothing
+// another supervisor of the job did meanwhile: it neither supersedes the
+// attempt the other made, whose worker runs a step, nor counts a placement
+// failure of it; and it neither ends an attempt the other placed, nor
+// gives it a new token.
+func TestStaleSupervisor(t *testing.T) {
+	c := open(t, Options{Variables: regionVars})
+	c.supervision.tries = 1
+	started := func() (*store.Run, string) {
+		id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
+		if _, err := c.startRun(t.Context(), id, nil); err != nil {
+			t.Fatal(err)
+		}
+		return storedRun(t, c, id), id
+	}
+	place := store.Place{Group: "local", Member: "m1", Backend: testBackend}
+	placement := store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "test-other"}
+
+	// The other supervisor's attempt runs a step.
+	run, id := started()
+	seen := storedJob(t, c, id, "main")
+	var running *store.Attempt
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		a, token, err := tx.NewAttempt(c.newAttempt(id, "main", false))
+		if err != nil {
+			return err
+		}
+		running = a
+		if err := tx.ChoosePlace(a.ID, place); err != nil {
+			return err
+		}
+		if err := tx.RecordPlacement(a.ID, placement); err != nil {
+			return err
+		}
+		if _, err := tx.Claim(token, hex.EncodeToString(make([]byte, 32)), workerapi.Worker{Version: "test"}); err != nil {
+			return err
+		}
+		return tx.StepStarted(a.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.placeJob(t.Context(), run, seen, nil); !errors.Is(err, errAgain) {
+		t.Errorf("placeJob of the job as it was = %v, want errAgain", err)
+	}
+	if _, err := c.unanswered(t.Context(), run, seen, false, errors.New("no answer")); !errors.Is(err, errAgain) {
+		t.Errorf("unanswered of the job as it was = %v, want errAgain", err)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.ID != running.ID || a.State != store.AttemptRunning || !a.Holds {
+		t.Errorf("the running attempt is %+v", a)
+	}
+	if reqs, _ := driverOf(c).requests(); len(reqs) != 0 {
+		t.Errorf("the stale supervisor placed %+v", reqs)
+	}
+
+	// The other supervisor placed the attempt both were placing.
+	run, id = started()
+	var placing *store.Attempt
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		a, _, err := tx.NewAttempt(c.newAttempt(id, "main", false))
+		if err != nil {
+			return err
+		}
+		placing = a
+		return tx.ChoosePlace(a.ID, place)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seen = storedJob(t, c, id, "main")
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { return tx.RecordPlacement(placing.ID, placement) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.resumePlace(t.Context(), run, seen, placing); !errors.Is(err, errAgain) {
+		t.Errorf("resumePlace of an attempt placed meanwhile = %v, want errAgain", err)
+	}
+	if err := c.attemptSetupFailed(t.Context(), placing.ID, setupProblems[0]); !errors.Is(err, errAgain) {
+		t.Errorf("attemptSetupFailed of an attempt placed meanwhile = %v, want errAgain", err)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.ID != placing.ID || a.State != store.AttemptPlacing || a.Placement.ID != placement.ID {
+		t.Errorf("the placed attempt is %+v", a)
+	}
+}
+
 // TestFinisherWithdraws checks that the finisher fails a job that never
 // ended, and withdraws its attempt, whose worker's reports are refused.
 func TestFinisherWithdraws(t *testing.T) {
@@ -573,7 +658,12 @@ func TestWakeEnded(t *testing.T) {
 // any instance of one, which the coordinator doesn't run yet.
 func TestNotRunYet(t *testing.T) {
 	c := open(t, Options{})
-	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(`
+	for _, tc := range []struct {
+		workflow string
+		kind     *problems.Kind
+		params   problems.Params
+	}{
+		{`
 jobs:
   main:
     strategy:
@@ -581,12 +671,30 @@ jobs:
         n: [1, 2]
     steps:
       - run: echo ${{ matrix.n }}
-`), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.CreateRun(t.Context(), created, runOptions); !errors.Is(err, errNotRun) {
-		t.Errorf("CreateRun of a matrix job = %v, want errNotRun", err)
+  after:
+    needs: [main:any]
+    steps:
+      - run: echo after
+`, problems.MatrixNotBuilt, problems.Params{"job": "main"}},
+		{`
+jobs:
+  main:
+    steps:
+      - run: echo main
+  after:
+    needs: [main:any]
+    steps:
+      - run: echo after
+`, problems.AnyNotBuilt, problems.Params{"job": "after", "needed": "main"}},
+	} {
+		created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(tc.workflow), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.CreateRun(t.Context(), created, runOptions)
+		if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != tc.kind.Code() || !maps.Equal(p.Params, tc.params) {
+			t.Errorf("CreateRun = %v, want %s with %v", err, tc.kind.Code(), tc.params)
+		}
 	}
 }
 

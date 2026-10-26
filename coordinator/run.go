@@ -230,8 +230,9 @@ func (c *Coordinator) Close() error {
 // job's supervisor, after Start and its needs' supervisors; and the
 // finisher, which ends the run. A default group that Groups doesn't have
 // is a problem of kind group_unknown. A plan with a matrix job, or a need
-// on any instance of one, which the coordinator doesn't run yet, is
-// refused. An error once the run is stored, as one that keeps the
+// on any instance of a job, which the coordinator doesn't run yet, is a
+// problem of kind matrix_not_built or any_not_built. An error once the run
+// is stored, as one that keeps the
 // coordinator from working its start queue, comes with the run's ID.
 func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, opts RunOptions) (string, error) {
 	switch {

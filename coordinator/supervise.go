@@ -101,9 +101,12 @@ var errAgain = errors.New("coordinator: the job changed meanwhile")
 // which hopper tries again.
 //
 // Each step can run twice, as a supervisor that hopper rescued from a
-// replica still running it does: each acts only on the job and the
-// attempt as the store holds them when it acts, and a new attempt fences
-// any other, as the job's fence says.
+// replica still running it does, with what its look saw gone stale: each
+// transaction that changes the job's attempts checks first that the job is
+// as the look saw it. A new attempt is made only while the job's fence is
+// the one the look saw, and an attempt is ended, or given a new token, only
+// while its placement isn't recorded; otherwise the supervisor looks again
+// (errAgain).
 func (c *Coordinator) supervise(ctx context.Context, runID, key string, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	for look := 0; ; look++ {
 		var (

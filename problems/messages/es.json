@@ -183,6 +183,8 @@
   "placement_unanswered": "No se pudo asignar el trabajo {job}: los backends de su grupo no respondieron en {tries} intentos.",
   "setup_failed": "El trabajo {job} no pudo empezar: sus intentos fallaron antes de que se ejecutara un paso, {tries} veces.",
   "coordinator_job_failed": "El coordinador no pudo llevar el trabajo {job} hasta su fin.",
+  "matrix_not_built": "El trabajo {job} tiene una matriz en strategy:, que esta versión de Meridian aún no ejecuta.",
+  "any_not_built": "El trabajo {job} necesita cualquier instancia de {needed} ({needed}:any), lo que esta versión de Meridian aún no ejecuta.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",

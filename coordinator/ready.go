@@ -104,17 +104,18 @@ func planJob(p *plan.Plan, name string) *plan.Job {
 	return &p.Jobs[i]
 }
 
-// errNotRun is what CreateRun returns for a plan with what the coordinator
-// doesn't run yet.
-var errNotRun = errors.New("coordinator: a matrix job, or a need on any instance of one, isn't run yet")
-
-// checkRunnable refuses, with errNotRun, a plan with a job the coordinator
-// doesn't run yet: one with a strategy:, or that needs any instance of
-// one.
+// checkRunnable refuses a plan with a job the coordinator doesn't run yet:
+// one with a strategy:, a problem of kind matrix_not_built, or one that
+// needs any instance of another, any_not_built.
 func checkRunnable(p *plan.Plan) error {
 	for _, j := range p.Jobs {
-		if j.Strategy != nil || slices.ContainsFunc(j.Needs, func(n plan.Need) bool { return n.Any }) {
-			return fmt.Errorf("%w: job %q", errNotRun, j.Name)
+		if j.Strategy != nil {
+			return problems.MatrixNotBuilt.Problem(problems.Params{"job": j.Name})
+		}
+	}
+	for _, j := range p.Jobs {
+		if i := slices.IndexFunc(j.Needs, func(n plan.Need) bool { return n.Any }); i >= 0 {
+			return problems.AnyNotBuilt.Problem(problems.Params{"job": j.Name, "needed": j.Needs[i].Job})
 		}
 	}
 	return nil
