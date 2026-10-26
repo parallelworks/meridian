@@ -443,10 +443,13 @@ func startStress(t *testing.T, path string, seed uint64, iters int) *exec.Cmd {
 }
 
 // seed is a random seed for a stress test, which it logs, so that a
-// failure can be run again.
+// failure can be run again: MERIDIAN_STORE_STRESS_SEED sets it.
 func seed(t *testing.T) uint64 {
 	t.Helper()
 	s := uint64(time.Now().UnixNano()) //nolint:gosec // the time is after 1970
+	if v, err := strconv.ParseUint(os.Getenv("MERIDIAN_STORE_STRESS_SEED"), 10, 64); err == nil {
+		s = v
+	}
 	t.Logf("seed %d", s)
 	return s
 }
@@ -501,14 +504,35 @@ func TestStressProcesses(t *testing.T) {
 	stressCheck(t, s)
 }
 
+// stressKilledKinds are what TestStressKilled's processes must have done
+// before it stops killing them, stressKilledEach times each: each of what
+// an attempt goes through, so that stressCheck checks each against the
+// kills.
+var stressKilledKinds = []string{"new", "claim", "renew", "step", "end"}
+
+const (
+	stressKilledEach = 3
+	// stressKilledFor is how long TestStressKilled goes on killing
+	// processes for want of stressKilledKinds, at most.
+	stressKilledFor = 2 * time.Minute
+)
+
 // TestStressKilled kills processes that run stressLoop at random moments,
-// mid-transaction as often as not, and checks what they leave. Set
-// MERIDIAN_STORE_STRESS_CYCLES to kill more than 20.
+// mid-transaction as often as not, and checks what they leave. It kills
+// them 20 times, or MERIDIAN_STORE_STRESS_CYCLES, and then until the log
+// has stressKilledEach of each of stressKilledKinds, for stressKilledFor
+// at most, as on a slow machine a process may be killed before it does
+// much. It fails if the log has none of one of them.
 func TestStressKilled(t *testing.T) {
 	path, s := stressSetUp(t)
 	cycles := 20
 	if v, err := strconv.Atoi(os.Getenv("MERIDIAN_STORE_STRESS_CYCLES")); err == nil {
 		cycles = v
+	}
+	start := time.Now()
+	until := start.Add(stressKilledFor)
+	if d, ok := t.Deadline(); ok && d.Add(-time.Minute).Before(until) {
+		until = d.Add(-time.Minute)
 	}
 	base := seed(t)
 	rng := rand.New(rand.NewPCG(base, 1)) //nolint:gosec // a test's random choices
@@ -518,7 +542,11 @@ func TestStressKilled(t *testing.T) {
 		next++
 		live[i] = startStress(t, path, next, 0)
 	}
-	for c := range cycles {
+	enough := func() bool {
+		return len(fewer(stressCounts(t, s), stressKilledKinds, stressKilledEach)) == 0
+	}
+	c := 0
+	for ; c < cycles || !enough() && time.Now().Before(until); c++ {
 		// The moment of the kill is the test.
 		time.Sleep(time.Duration(30+rng.IntN(250)) * time.Millisecond) //nolint:forbidigo // see above
 		k := rng.IntN(3)
@@ -533,10 +561,48 @@ func TestStressKilled(t *testing.T) {
 		_ = c.Process.Kill()
 		_ = c.Wait()
 	}
+	t.Logf("%d kills in %v", c, time.Since(start).Round(time.Millisecond))
 	counts := stressCheck(t, s)
-	if counts["new"] == 0 || counts["claim"] == 0 || counts["renew"] == 0 {
-		t.Errorf("too little happened: %v", counts)
+	if lack := fewer(counts, stressKilledKinds, 1); len(lack) > 0 {
+		t.Errorf("after %d kills in %v, the log has no %v: %v", c, time.Since(start).Round(time.Millisecond), lack, counts)
 	}
+}
+
+// stressCounts returns how many of each kind the stress log holds.
+func stressCounts(t *testing.T, s *Store) map[string]int {
+	t.Helper()
+	counts := map[string]int{}
+	err := s.View(t.Context(), func(tx *Tx) error {
+		rows, err := tx.tx.QueryContext(tx.ctx, "SELECT kind, count(*) FROM stress_log GROUP BY kind")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var kind string
+			var n int
+			if err := rows.Scan(&kind, &n); err != nil {
+				return err
+			}
+			counts[kind] = n
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counts
+}
+
+// fewer returns those of kinds that counts has fewer than n of.
+func fewer(counts map[string]int, kinds []string, n int) []string {
+	var lack []string
+	for _, k := range kinds {
+		if counts[k] < n {
+			lack = append(lack, k)
+		}
+	}
+	return lack
 }
 
 // TestWriteLockAfterKill checks that a process killed with a transaction
