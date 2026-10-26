@@ -46,7 +46,7 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	}
 	if a.job.TimeoutSeconds > 0 {
 		t := time.AfterFunc(seconds(a.job.TimeoutSeconds)-time.Since(a.claimed), func() {
-			a.fire(a.timedOut, func() { a.timeoutKill = time.Now().Add(a.tm.grace) })
+			a.timeOut(time.Now().Add(a.tm.grace), "the job ran past its timeout")
 		})
 		defer t.Stop()
 	}
@@ -91,22 +91,23 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		if a.halted.fired() {
 			return nil
 		}
-		if a.cancelled.fired() {
-			cancelled = true
-		}
 		if !stopped {
-			switch {
-			case cancelled:
-				stopped, why = true, stopCancelled
-			case a.timedOut.fired():
-				stopped, why = true, stopJobTimeout
+			// The first of the job's stops to fire says why it stops, as
+			// format 1's context keeps the reason it ended with first.
+			switch cause := a.stopCauseOf(stops{cancellable: true}); cause {
+			case stopCancelled, stopJobTimeout:
+				stopped, why = true, cause
 			}
 		}
 		// As in format 1, a job past its timeout isn't cancelled, nor is
 		// one whose run is past the run's: the step it was running failed,
-		// so its steps' failure() is true, and cancelled() false. A step that ended cancelled, as early-cancel:
-		// stops one, makes cancelled() true for those after it, as the
-		// Step phase reads from their results.
+		// so its steps' failure() is true, and cancelled() false, even if
+		// the coordinator cancels it after. A step that ended cancelled, as
+		// early-cancel: stops one, makes cancelled() true for those after
+		// it, as the Step phase reads from their results.
+		if a.cancelled.fired() && why != stopJobTimeout {
+			cancelled = true
+		}
 		end := a.runStep(ctx, i, a.state(results, cancelled, nil), stopped, why)
 		if a.stepEnded != nil {
 			a.stepEnded(a, i, false)

@@ -2212,8 +2212,13 @@ waking up or `meridian run` restarting must not make them all look lost.
   true after it and `cancelled()` false, as in format 1. Nor is a job whose
   run runs past the run's timeout: the coordinator asks its worker to stop
   with the reason `timeout`, which the worker takes as the job's own
-  timeout, so the job ends failure, with the reason `timeout`, as format 1
-  fails the step its run's deadline stops.
+  timeout, so the job ends failure, with the reason `timeout`, when the
+  deadline stops a step, or one is still to run, as format 1 fails the step
+  its run's deadline stops. A deadline that comes once no such step is
+  left, as during a last step that outlives a cancel, or the cleanups,
+  leaves the job ending as its steps did. A cancellation after either
+  deadline leaves `cancelled()` false, as in format 1, whose context keeps
+  the reason it ended with first.
 - **A step whose `if:` is cancel-aware**, one that calls `always()` or
   `cancelled()`, negates `success()` or `failure()`, or is the word
   `always`, outlives its job's cancellation and timeout, as in format 1: it

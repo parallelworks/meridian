@@ -390,7 +390,11 @@ type Control struct {
 	// fails the step it stops. So a Cancel whose Reason is timeout stops
 	// the job as the job's own timeout: does: the step it stops ends
 	// failure, so failure() is true for the steps after it and cancelled()
-	// false, and the job ends failure, with the reason timeout.
+	// false, even if a cancellation follows, and the job ends failure,
+	// with the reason timeout, when it stops a step, or one is still to
+	// run. One that comes when the job has no step left that it stops, as
+	// during a last step that outlives a cancel, or the cleanups, leaves
+	// the job ending as its steps did.
 	//
 	// As in format 1, a step whose if: is cancel-aware, as always() is
 	// (plan.ReadyStep.OutlivesCancel), still runs after a cancellation,
@@ -477,8 +481,9 @@ type Complete struct {
 	Result plan.JobResult `json:"result"`
 	// Reason is why the job ended other than as its steps did, or "":
 	// timeout for a job past its timeout:, or whose run is past the run's,
-	// with the outcome failure; the Control's reason for a job cancelled,
-	// with the outcome cancelled; or setup-failed.
+	// with the outcome failure, when the deadline stopped a step, or one
+	// was still to run; the Control's reason for a job cancelled, with the
+	// outcome cancelled; or setup-failed.
 	Reason plan.Reason `json:"reason,omitempty"`
 	// Problem is what failed before the first step started, with the
 	// outcome failure and the reason setup-failed: an image that couldn't
