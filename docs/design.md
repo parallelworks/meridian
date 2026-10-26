@@ -955,9 +955,12 @@ made from one, it doesn't hold in another form either.
    variable that was plain as the run was created and is a secret as it
    starts makes every private value the plan names masked from then on as
    made from a secret, since the plan doesn't say which variable each was
-   given in the place of. `StartResult.Keep` puts what the secret record
-   holds of Start in it: the private half of `RunValues.Split`, the timeout
-   when it is private, and the matrices whose instances are.
+   given in the place of. `StartResult.Keep` is the one place that splits
+   what Start gives: it puts what the secret record holds in it, the
+   private half of `RunValues.Split`, the timeout when it is private, and
+   the matrices whose instances are, whole; and returns what run state
+   holds (`StartState`): the rest, with a private matrix's instances by key
+   and index alone.
 
 Start's problems are the run's, at the JSON Pointer of what they are about,
 with no file position, as Ready's are. Given the same plan, secret record

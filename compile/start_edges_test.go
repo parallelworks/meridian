@@ -653,6 +653,48 @@ func TestStartKeepsHeldNulls(t *testing.T) {
 	}
 }
 
+// Keep splits all of what Start gives: run state holds no password, no
+// variable's value and nothing made from one, a private matrix's instances
+// by key and index alone, and no private timeout; the secret record holds
+// those, and nothing that isn't.
+func TestKeepSplitsWhatStartGives(t *testing.T) {
+	src := workflow("pw: {type: password}\nv: {type: string, default: plain}", "timeout: ${{ org.T }}\njobs:\n  a:\n    strategy:\n      matrix:\n        x: ['${{ inputs.pw }}', '${{ org.V }}']\n    steps:\n      - run: echo\n  b:\n    strategy:\n      matrix:\n        y: [one, two]\n    steps:\n      - run: echo\n")
+	vars := testVariables{"org.V": {Value: "VARSENT-1"}, "org.T": {Value: "1h"}}
+	_, res, diags := started(t, src, map[string]any{"pw": "PWSENT-1"}, vars)
+	if res == nil {
+		t.Fatal(diags)
+	}
+	var record plan.Record
+	state := res.Keep(&record)
+	shown := canonical(t, state)
+	for _, s := range []string{"PWSENT", "VARSENT", "3600"} {
+		if strings.Contains(shown, s) {
+			t.Errorf("run state holds %s: %s", s, shown)
+		}
+	}
+	if !state.TimeoutPrivate || state.TimeoutSeconds != 0 || record.TimeoutSeconds == nil || *record.TimeoutSeconds != 3600 {
+		t.Errorf("the timeout: state %d (private %v), record %v", state.TimeoutSeconds, state.TimeoutPrivate, record.TimeoutSeconds)
+	}
+	a, b := state.Expansions["a"], state.Expansions["b"]
+	if a == nil || len(a.Instances) != 2 || a.Instances[1].Key != "a#1" || !a.Instances[1].Matrix.IsZero() {
+		t.Errorf("run state's private matrix: %s", canonical(t, a))
+	}
+	if b == nil || canonical(t, b.Instances[1].Matrix.Get()) != `{"y":"two"}` || record.Expansions["b"] != nil {
+		t.Errorf("a matrix that isn't private: state %s, record %s", canonical(t, b), canonical(t, record.Expansions["b"]))
+	}
+	if x := record.Expansions["a"]; x == nil || !strings.Contains(canonical(t, x), "PWSENT-1") || !strings.Contains(canonical(t, x), "VARSENT-1") {
+		t.Errorf("the record's private matrix: %s", canonical(t, x))
+	}
+	if record.Run == nil || !strings.Contains(canonical(t, record.Run), "PWSENT-1") {
+		t.Errorf("the record's values: %s", canonical(t, record.Run))
+	}
+	// Neither shares what res holds.
+	record.Expansions["a"].Instances[0].Matrix = plan.DataOf(map[string]any{"x": "changed"})
+	if strings.Contains(canonical(t, res.Expansions["a"]), "changed") {
+		t.Error("the record shares the result's expansion")
+	}
+}
+
 // An input whose ignore read a variable or a password is held out of the
 // plan whatever it decided: as private when the ignore can read only
 // variables that aren't secrets, directly or through an input made from

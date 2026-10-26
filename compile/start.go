@@ -40,11 +40,10 @@ type StartInput struct {
 	Sessions Sessions
 }
 
-// StartResult is what Start gives: the run's values, complete.
-//
-// What goes in the run's secret record of it is what is private (Keep):
-// the record half of Run.Split, and the timeout and the expansions when
-// they are private. The rest is run state.
+// StartResult is what Start gives: the run's values, complete. It holds
+// what is private beside what isn't, so the coordinator stores none of it
+// as it is: Keep splits it into what the run's secret record holds and
+// what run state holds (StartState).
 type StartResult struct {
 	// Run is what the phases after Start read of the run, whole: the input
 	// values, each password and private value among them, the workflow's
@@ -66,23 +65,63 @@ type StartResult struct {
 	Expansions map[string]*plan.Expansion
 }
 
-// Keep puts in record what the run's secret record holds of res: the
-// private half of its values (plan.RunValues.Split), the timeout if it is
-// private, and each expansion whose instances are private. It returns what
-// run state holds of res's values, the other half.
-func (res *StartResult) Keep(record *plan.Record) (state plan.RunValues) {
-	private, state := res.Run.Split()
+// StartState is what run state holds of what Start gives, which whoever
+// can see the run can read: all of a StartResult but what Keep puts in the
+// run's secret record.
+type StartState struct {
+	// Run is the run's values but for those that are private (the state
+	// half of plan.RunValues.Split), with the names of those that are.
+	Run plan.RunValues
+	// TimeoutSeconds is the run's timeout, in seconds, or 0 for none; and
+	// when evaluating it read a variable or a password, TimeoutPrivate is
+	// set, and the secret record holds the timeout instead.
+	TimeoutSeconds int64
+	TimeoutPrivate bool
+	// Expansions are the matrices Start expanded, by job name, with each
+	// private instance's matrix values left out (plan.Instance.Private):
+	// its key and index are run state, and the secret record holds the
+	// expansion whole.
+	Expansions map[string]*plan.Expansion
+}
+
+// Keep splits what Start gave into what the run's secret record holds and
+// what run state holds, which it returns: the one place that says which is
+// which, for each of res's members. The record gets the private half of
+// the run's values (plan.RunValues.Split), the timeout if it is private,
+// and each expansion with an instance whose matrix values are private,
+// whole. Neither shares a mapping or a list with res.
+func (res *StartResult) Keep(record *plan.Record) StartState {
+	private, values := res.Run.Split()
 	record.Run = &private
+	state := StartState{Run: values, TimeoutPrivate: res.TimeoutPrivate}
 	if res.TimeoutPrivate {
 		seconds := res.TimeoutSeconds
 		record.TimeoutSeconds = &seconds
+	} else {
+		state.TimeoutSeconds = res.TimeoutSeconds
 	}
 	for job, x := range jsonvalue.Sorted(res.Expansions) {
-		if slices.ContainsFunc(x.Instances, func(i plan.Instance) bool { return i.Private }) {
+		shown := &plan.Expansion{FailFast: x.FailFast, MaxParallel: x.MaxParallel, Instances: make([]plan.Instance, len(x.Instances))}
+		whole := &plan.Expansion{FailFast: x.FailFast, MaxParallel: x.MaxParallel, Instances: make([]plan.Instance, len(x.Instances))}
+		private := false
+		for i, instance := range x.Instances {
+			instance.Matrix = plan.DataOf(jsonvalue.Clone(instance.Matrix.Get()))
+			whole.Instances[i] = instance
+			if instance.Private {
+				private = true
+				instance.Matrix = plan.Data{}
+			}
+			shown.Instances[i] = instance
+		}
+		if state.Expansions == nil {
+			state.Expansions = map[string]*plan.Expansion{}
+		}
+		state.Expansions[job] = shown
+		if private {
 			if record.Expansions == nil {
 				record.Expansions = map[string]*plan.Expansion{}
 			}
-			record.Expansions[job] = x
+			record.Expansions[job] = whole
 		}
 	}
 	return state
