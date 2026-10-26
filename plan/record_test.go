@@ -26,14 +26,20 @@ func sampleRecord() *plan.Record {
 		Decisions: map[string]bool{"/on/execute/inputs/x/hidden": true, "/on/execute/inputs/y/ignore": false},
 		Means:     map[string]string{"inputs.region": "/on/execute/inputs/region/default"},
 		Run: &plan.RunValues{
-			Format: 1,
-			Inputs: plan.DataOf(map[string]any{"pw": "hunter2"}),
-			Vars:   map[string]string{"TOKEN": "t0k3n"},
-			Org:    map[string]string{"REGION": "east"},
+			Format:   1,
+			Inputs:   plan.DataOf(map[string]any{"pw": "hunter2", "region": "east"}),
+			Env:      map[string]string{"TOKEN": "t0k3n"},
+			Vars:     map[string]string{"TOKEN": "t0k3n"},
+			Org:      map[string]string{"REGION": "east"},
+			Remote:   map[string]string{"repo": "r"},
+			Sessions: map[string]string{"desktop": "desktop-1"},
+			Private:  []string{"env.TOKEN", "inputs.region"},
+			Secrets:  []string{"env.TOKEN", "inputs.pw", "vars.TOKEN"},
+			Derived:  []string{"env.TOKEN"},
 		},
 		TimeoutSeconds: &seconds,
-		Expansions: map[string]*plan.Expansion{"build": {Instances: []plan.Instance{
-			{Key: "build#0", Index: 0, Matrix: plan.DataOf(map[string]any{"region": "east"}), Private: true},
+		Expansions: map[string]*plan.Expansion{"build": {FailFast: true, MaxParallel: 2, Instances: []plan.Instance{
+			{Key: "build#0", Index: 0, Matrix: plan.DataOf(map[string]any{"region": "east"}), Private: true, Secret: true},
 		}}},
 		Jobs: map[string]plan.JobRecord{"test": {
 			Outputs: map[string]string{"dsn": "postgres://u:hunter2@db"},

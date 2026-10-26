@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian job result, version 1",
+  "description": "How a job ended (plan.JobResult), as the worker API carries it.",
+  "$ref": "plan.schema.json#/$defs/JobResult"
+}

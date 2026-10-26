@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian ready job, version 1",
+  "description": "A job as Plan.Ready evaluated it, as plan.EncodeReadyJob writes it, which a worker API Claim carries as its job.",
+  "$ref": "plan.schema.json#/$defs/ReadyJob"
+}
