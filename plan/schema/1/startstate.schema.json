@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian start state, version 1",
+  "description": "What run state holds of what a run's Start gave, as compile.EncodeStartState writes it: the run's values but for those that are private, the run's timeout unless it is private, and the matrices Start expanded, each private instance without its matrix values.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "description": "The version of the plan the run was started from.",
+      "const": 1
+    },
+    "run": {
+      "$ref": "plan.schema.json#/$defs/RunValues"
+    },
+    "timeoutSeconds": {
+      "description": "The run's timeout, in seconds, unless evaluating it read a variable or a password.",
+      "type": "integer",
+      "minimum": -9223372036854775808,
+      "maximum": 9223372036854775807
+    },
+    "timeoutPrivate": {
+      "description": "Set when evaluating the run's timeout read a variable or a password: the secret record holds it.",
+      "type": "boolean"
+    },
+    "expansions": {
+      "description": "The matrices Start expanded, by job name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "plan.schema.json#/$defs/Expansion"
+      }
+    }
+  },
+  "required": ["version", "run"],
+  "additionalProperties": false
+}

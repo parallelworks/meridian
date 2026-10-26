@@ -1,12 +1,17 @@
 package compile_test
 
 import (
+	"encoding/json/v2"
 	"errors"
+	"io/fs"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -91,4 +96,37 @@ func TestStartStateStrict(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "HUNTER2") {
 		t.Errorf("DecodeStartState = %v", err)
 	}
+}
+
+// The start state's schema (plan.Schemas) describes its encoding, and
+// DecodeStartState takes exactly what the schema takes: each member left
+// out, an unknown member added, and each value replaced with another
+// kind's, or a number at and past an integer's bounds.
+func TestStartStateSchema(t *testing.T) {
+	data, err := fs.ReadFile(plan.Schemas, "schema/1/startstate.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Properties map[string]any `json:"properties"`
+		Required   []string       `json:"required"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := slices.Sorted(maps.Keys(doc.Properties)), []string{"expansions", "run", "timeoutPrivate", "timeoutSeconds", "version"}; !slices.Equal(got, want) {
+		t.Errorf("the schema describes %v, where the encoding has %v", got, want)
+	}
+	if want := []string{"version", "run"}; !slices.Equal(doc.Required, want) {
+		t.Errorf("the schema requires %v, where the encoding always writes %v", doc.Required, want)
+	}
+	encoded, err := compile.EncodeStartState(testStartState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := func(data []byte) error {
+		_, err := compile.DecodeStartState(data)
+		return err
+	}
+	schematest.Agree(t, "plan/schema/1/startstate.schema.json", "a start state", encoded, decode, func(string) bool { return false })
 }

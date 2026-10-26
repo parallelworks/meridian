@@ -10,10 +10,12 @@ import "embed"
 // ReadyJob, a Record, RunValues and a JobResult, which refer to them; and
 // workerapi.schema.json, the worker API's bodies, which are versioned with
 // the plan, one definition for each body by its type's name, which refers
-// to them for what a body carries of a run. A platform that reads a plan,
-// or writes what Meridian reads, can check it against them. A version's
-// schemas refer to each other by their names, as they are in one
-// directory, so they resolve wherever the directory is.
+// to them for what a body carries of a run; and startstate.schema.json,
+// what run state holds of Start's result, as compile.EncodeStartState
+// writes it. A platform that reads a plan, or writes what Meridian reads,
+// can check it against them. A version's schemas refer to each other by
+// their names, as they are in one directory, so they resolve wherever the
+// directory is.
 //
 //go:embed schema
 var Schemas embed.FS

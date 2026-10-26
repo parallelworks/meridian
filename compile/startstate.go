@@ -21,11 +21,16 @@ type startStateJSON struct {
 	Expansions     map[string]*plan.Expansion `json:"expansions,omitempty"`
 }
 
-// startStateShape is how EncodeStartState writes a state, which
-// DecodeStartState checks it against: a nil list or mapping left out or
-// written as an empty one, and data as plan.Data writes it, which holds
-// nothing where it is null.
-var startStateShape = &jsonshape.Options{Zero: []reflect.Type{reflect.TypeFor[plan.Data]()}}
+// startStateShape is how EncodeStartState writes a state, as a plan's
+// encoding writes the types it holds, which DecodeStartState checks it
+// against: a nil list or mapping as null, and data as plan.Data writes it,
+// which holds nothing where it is null.
+var startStateShape = &jsonshape.Options{NilAsNull: true, Zero: []reflect.Type{reflect.TypeFor[plan.Data]()}}
+
+// startStateEncoding writes a state as a plan's encoding writes the types
+// it holds: mappings in the order of their keys, and a nil list or mapping
+// as null.
+var startStateEncoding = jsonv2.JoinOptions(jsonv2.Deterministic(true), jsonv2.FormatNilMapAsNull(true), jsonv2.FormatNilSliceAsNull(true))
 
 // EncodeStartState encodes what run state holds of what Start gave, as the
 // coordinator stores it: JSON, of this release's plan version, which the
@@ -34,7 +39,7 @@ func EncodeStartState(s *StartState) ([]byte, error) {
 	return jsonv2.Marshal(startStateJSON{
 		Version: plan.Version, Run: s.Run,
 		TimeoutSeconds: s.TimeoutSeconds, TimeoutPrivate: s.TimeoutPrivate, Expansions: s.Expansions,
-	}, jsonv2.Deterministic(true))
+	}, startStateEncoding)
 }
 
 // DecodeStartState decodes a state that EncodeStartState encoded, as

@@ -15,15 +15,17 @@ import (
 
 // What Meridian encodes of each conformance case's run fits the plan's
 // schemas (plan.Schemas): the plan Create gives, and its secret record;
-// once the run starts, the record with what Start keeps in it, and the
-// run's values, whole and as run state; and each job Ready gives,
-// instance by instance, as if what it needs succeeded, with each
-// expansion Ready makes. And the plan, the record and the run's values
-// name each value by its path, with its context (plan.JoinPath).
+// once the run starts, the record with what Start keeps in it, the run's
+// values, whole and as run state, and what run state holds of Start's
+// result; and each job Ready gives, instance by instance, as if what it
+// needs succeeded, with each expansion Ready makes. And the plan, the
+// record and the run's values name each value by its path, with its
+// context (plan.JoinPath).
 func TestEncodingsFitTheSchemas(t *testing.T) {
 	plans := schematest.Schema(t, "plan/schema/1/plan.schema.json")
 	records := schematest.Schema(t, "plan/schema/1/record.schema.json")
 	runValues := schematest.Schema(t, "plan/schema/1/runvalues.schema.json")
+	startStates := schematest.Schema(t, "plan/schema/1/startstate.schema.json")
 	jobs := schematest.Schema(t, "plan/schema/1/readyjob.schema.json")
 	expansions := schematest.Schema(t, "plan/schema/1/plan.schema.json#/$defs/Expansion")
 	checked, started, readied := 0, 0, 0
@@ -71,6 +73,7 @@ func TestEncodingsFitTheSchemas(t *testing.T) {
 			schematest.Validate(t, runValues, c.Name+"'s run values", encoded(t, marshal, &res.Run))
 			namedByPath(t, c.Name+"'s run values", slices.Concat(res.Run.Private, res.Run.Secrets, res.Run.Derived))
 			schematest.Validate(t, runValues, c.Name+"'s run values in run state", encoded(t, marshal, &state.Run))
+			schematest.Validate(t, startStates, c.Name+"'s start state", encoded(t, compile.EncodeStartState, &state))
 			for _, j := range created.Plan.Jobs {
 				needs := map[string]plan.JobResult{}
 				for _, n := range j.Needs {
