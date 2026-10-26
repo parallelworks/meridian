@@ -250,6 +250,7 @@
   "directory_replaced": "The directory {path} was replaced as the worker made it, so the worker doesn't use it.",
   "path_links_too_many": "The path {path} goes through more than {max} symbolic links.",
   "mount_not_found": "Meridian can't find the mount that holds {path} in /proc/self/mountinfo.",
+  "database_too_new": "A newer release of Meridian brought the {schema} schema of the database {path} to version {version}, and this release reads version {latest} and earlier. Use that release, or set MERIDIAN_STATE_DIR to another directory.",
   "member_settings_not_json": "A member of the group \"{group}\" has settings that JSON can't hold, such as .nan or .inf.",
 
   "worker_environment_missing": "The environment meridian worker was started with doesn't set {variable}, which the backend that starts it sets.",

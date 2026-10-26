@@ -370,6 +370,14 @@ var (
 	MountNotFound             = defineCommand("mount_not_found", "Mount not found", "path")
 )
 
+// The coordinator's store, a database in the state directory: path is its
+// file; schema is which of its schemas, hopper's (hopper) or Meridian's own
+// (meridian); and version and latest the version that schema is at, and
+// the latest this release knows.
+var (
+	DatabaseTooNew = defineCommand("database_too_new", "Database newer than this release reads", "path", "schema", "version", "latest")
+)
+
 // The files the meridian command reads: its config, its key, a variable's
 // value, a file of inputs and a workflow.
 var (

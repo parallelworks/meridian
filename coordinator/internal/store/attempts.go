@@ -1,0 +1,410 @@
+package store
+
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
+)
+
+// An AttemptState is where an attempt is in its life.
+type AttemptState string
+
+// The states of an attempt.
+const (
+	// AttemptPlacing is an attempt whose worker is being placed, with its
+	// bootstrap token, and hasn't claimed it.
+	AttemptPlacing AttemptState = "placing"
+	// AttemptClaimed is an attempt its worker claimed, with its own
+	// credential: its lease runs from the claim.
+	AttemptClaimed AttemptState = "claimed"
+	// AttemptRunning is an attempt one of whose steps started.
+	AttemptRunning AttemptState = "running"
+	// AttemptEnded is an attempt that has ended (AttemptEnd).
+	AttemptEnded AttemptState = "ended"
+)
+
+// An EndKind is how an attempt ended.
+type EndKind string
+
+// The ways an attempt ends.
+const (
+	// EndCompleted is an attempt its worker completed.
+	EndCompleted EndKind = "completed"
+	// EndSetupFailed is an attempt that failed before a step started.
+	EndSetupFailed EndKind = "setup-failed"
+	// EndLost is an attempt whose worker was lost.
+	EndLost EndKind = "lost"
+	// EndSuperseded is an attempt a newer attempt of its job replaced.
+	EndSuperseded EndKind = "superseded"
+	// EndWithdrawn is an attempt whose placement was withdrawn.
+	EndWithdrawn EndKind = "withdrawn"
+)
+
+// An Attempt is an attempt of a job, as the store holds it: the record of
+// where its job ran, and the lease, the fence and the credentials it
+// holds its job with.
+type Attempt struct {
+	// ID is the attempt's: 32 hex digits, random.
+	ID string
+	// Run and Job are its job's run and key; Number is its number, from 1,
+	// among its job's attempts, and Fence its fence, which is its job's
+	// while it holds the job.
+	Run    string
+	Job    string
+	Number int
+	Fence  int64
+	State  AttemptState
+	// SelfFencing is set for an attempt whose job fences itself: its
+	// credential lapses with its lease. LeaseSeconds is how long its lease
+	// lasts after its claim or a heartbeat, and HeartbeatSeconds how often
+	// its worker sends one.
+	SelfFencing      bool
+	LeaseSeconds     int64
+	HeartbeatSeconds int64
+	// Worker is the worker that claimed it.
+	Worker    workerapi.Worker
+	CreatedAt time.Time
+	// ClaimedAt is when its worker claimed it, RenewedAt when its lease was
+	// last renewed, by the claim or a heartbeat, and StepStartedAt when a
+	// step of it first started: each the zero time until then.
+	ClaimedAt     time.Time
+	RenewedAt     time.Time
+	StepStartedAt time.Time
+	// End is how it ended, once it has.
+	End     AttemptEnd
+	EndedAt time.Time
+	// Holds reports whether the attempt held its job when the transaction
+	// read it: whether neither it nor its job had ended, and no newer
+	// attempt had superseded it. Only an attempt that holds its job is
+	// stored what it reports.
+	Holds bool
+
+	tokenHash, credentialHash []byte
+}
+
+// LeaseLapses returns when the attempt's lease lapses unless it is renewed,
+// by the store's clock: LeaseSeconds after RenewedAt, or the zero time
+// before its claim.
+func (a *Attempt) LeaseLapses() time.Time {
+	if a.RenewedAt.IsZero() {
+		return time.Time{}
+	}
+	return a.RenewedAt.Add(time.Duration(a.LeaseSeconds) * time.Second)
+}
+
+// An AttemptEnd is how an attempt ended.
+type AttemptEnd struct {
+	Kind EndKind
+	// Outcome is how the attempt's job ended, for one that completed, and
+	// Reason why it ended other than as its steps did, or "".
+	Outcome plan.Outcome
+	Reason  plan.Reason
+	// CompleteDigest is the SHA-256 digest of the worker's report that
+	// completed it, so that the same report repeated is known.
+	CompleteDigest []byte
+}
+
+// A NewAttempt is an attempt to start.
+type NewAttempt struct {
+	Run string
+	Job string
+	// SelfFencing is set for a job that fences itself. HeartbeatSeconds is
+	// then a fifth of LeaseSeconds at most, as the worker API asks.
+	SelfFencing      bool
+	LeaseSeconds     int64
+	HeartbeatSeconds int64
+}
+
+// NewAttempt starts a new attempt of a job that hasn't ended, of a run that
+// hasn't, and returns it and its bootstrap token, which the store keeps
+// only the SHA-256 digest of. The attempt's fence is one more than its
+// job's last, and its job's from now: an attempt of the job that hadn't
+// ended ends, superseded. A job that has ended, or whose run has, is
+// ErrState.
+func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
+	switch {
+	case n.LeaseSeconds <= 0 || n.HeartbeatSeconds <= 0 || n.HeartbeatSeconds > n.LeaseSeconds:
+		return nil, "", fmt.Errorf("store: a lease of %ds with heartbeats every %ds", n.LeaseSeconds, n.HeartbeatSeconds)
+	case n.SelfFencing && 5*n.HeartbeatSeconds > n.LeaseSeconds:
+		return nil, "", fmt.Errorf("store: heartbeats every %ds are more than a fifth of a lease of %ds, which a job that fences itself needs", n.HeartbeatSeconds, n.LeaseSeconds)
+	}
+	run, err := tx.liveRun(n.Run)
+	if err != nil {
+		return nil, "", err
+	}
+	j, err := tx.Job(n.Run, n.Job)
+	if err != nil {
+		return nil, "", err
+	}
+	if j.Outcome != "" {
+		return nil, "", fmt.Errorf("%w: run %s's job %q has ended", ErrState, n.Run, n.Job)
+	}
+	now, err := tx.now()
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, end_kind = ?, ended_at = ? WHERE run_id = ? AND job_key = ? AND state <> ?",
+		AttemptEnded, EndSuperseded, now, run, n.Job, AttemptEnded); err != nil {
+		return nil, "", err
+	}
+	var fence, number int64
+	if err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_jobs SET fence = fence + 1, attempts = attempts + 1 WHERE run_id = ? AND key = ? RETURNING fence, attempts",
+		run, n.Job).Scan(&fence, &number); err != nil {
+		return nil, "", err
+	}
+	id, token := newID(16), newID(32)
+	if _, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_attempts (id, run_id, job_key, number, fence, state, token_hash,
+  self_fencing, lease_seconds, heartbeat_seconds, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, run, n.Job, number, fence, AttemptPlacing, digest(token), n.SelfFencing, n.LeaseSeconds, n.HeartbeatSeconds, now); err != nil {
+		return nil, "", err
+	}
+	a, err := tx.Attempt(id)
+	return a, token, err
+}
+
+// NewToken gives an attempt that hasn't been claimed a new bootstrap token
+// in place of its last, which no longer claims it, as for an attempt
+// placed again after the coordinator lost what it placed it with. An
+// attempt that has been claimed is ErrState, and one that no longer holds
+// its job ErrFenced.
+func (tx *Tx) NewToken(id string) (string, error) {
+	a, err := tx.Attempt(id)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case !a.Holds:
+		return "", ErrFenced
+	case a.State != AttemptPlacing:
+		return "", fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
+	}
+	token := newID(32)
+	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET token_hash = ? WHERE id = ?", digest(token), id)
+	return token, err
+}
+
+const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a.token_hash, a.credential_hash,
+  a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest,
+  a.created_at, a.claimed_at, a.renewed_at, a.step_started_at,
+  a.end_kind, a.outcome, a.reason, a.complete_digest, a.ended_at,
+  a.state <> 'ended' AND a.fence = j.fence AND j.outcome IS NULL`
+
+// attemptWhere returns the attempt where is true of: ErrNotFound if it is
+// true of none.
+func (tx *Tx) attemptWhere(where string, args ...any) (*Attempt, error) {
+	var (
+		a                                       Attempt
+		run, created                            int64
+		state                                   string
+		version, wdigest, kind, outcome, reason sql.NullString
+		claimed, renewed, started, ended        sql.NullInt64
+	)
+	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+attemptColumns+`
+FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
+WHERE `+where, args...).Scan(
+		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
+		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest,
+		&created, &claimed, &renewed, &started,
+		&kind, &outcome, &reason, &a.End.CompleteDigest, &ended, &a.Holds)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	a.Run, a.State = runID(run), AttemptState(state)
+	a.Worker = workerapi.Worker{Version: version.String, Digest: wdigest.String}
+	a.CreatedAt, a.ClaimedAt, a.RenewedAt, a.StepStartedAt = time.UnixMicro(created).UTC(), timeOf(claimed), timeOf(renewed), timeOf(started)
+	a.End.Kind, a.End.Outcome, a.End.Reason = EndKind(kind.String), plan.Outcome(outcome.String), plan.Reason(reason.String)
+	a.EndedAt = timeOf(ended)
+	return &a, nil
+}
+
+// Attempt returns the attempt with the ID id.
+func (tx *Tx) Attempt(id string) (*Attempt, error) {
+	return tx.attemptWhere("a.id = ?", id)
+}
+
+// AttemptByCredential returns the attempt claimed with credential,
+// whatever its state: ErrNotFound if none was.
+func (tx *Tx) AttemptByCredential(credential string) (*Attempt, error) {
+	return tx.attemptWhere("a.credential_hash = ?", digest(credential))
+}
+
+// Claim records that a worker claimed the attempt whose bootstrap token is
+// token, with credential, which its later calls give, and returns the
+// attempt, its lease running from now. A claim repeated with the same
+// credential changes nothing. A token that is no attempt's is ErrNotFound,
+// one of an attempt claimed with another credential ErrCredential, and one
+// of an attempt that no longer holds its job ErrFenced.
+func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, error) {
+	if len(credential) < 32 {
+		return nil, errors.New("store: a credential shorter than 32 bytes")
+	}
+	a, err := tx.attemptWhere("a.token_hash = ?", digest(token))
+	if err != nil {
+		return nil, err
+	}
+	cred := digest(credential)
+	now, err := tx.now()
+	if err != nil {
+		return nil, err
+	}
+	if a.credentialHash != nil {
+		if subtle.ConstantTimeCompare(a.credentialHash, cred) != 1 {
+			return nil, ErrCredential
+		}
+		if err := usable(a, now); err != nil {
+			return nil, err
+		}
+		return a, nil
+	}
+	if !a.Holds {
+		return nil, ErrFenced
+	}
+	var taken bool
+	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE credential_hash = ?)", cred).Scan(&taken); err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, ErrCredential
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET state = ?, credential_hash = ?, worker_version = ?, worker_digest = ?,
+  claimed_at = ?, renewed_at = ? WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, now, now, a.ID); err != nil {
+		return nil, err
+	}
+	return tx.Attempt(a.ID)
+}
+
+// usable returns nil if the attempt a can report, at now by the store's
+// clock: ErrFenced if it no longer holds its job, and ErrLapsed if its job
+// fences itself and its lease has lapsed.
+func usable(a *Attempt, now int64) error {
+	switch {
+	case !a.Holds:
+		return ErrFenced
+	case a.SelfFencing && !a.RenewedAt.IsZero() && now >= a.LeaseLapses().UnixMicro():
+		return ErrLapsed
+	}
+	return nil
+}
+
+// Authorize returns the attempt claimed with credential, if it may report
+// now: ErrNotFound if no attempt was claimed with it, ErrFenced if the
+// attempt no longer holds its job, and ErrLapsed if its job fences itself
+// and its lease has lapsed. Check it in the transaction that stores what
+// the attempt reports.
+func (tx *Tx) Authorize(credential string) (*Attempt, error) {
+	a, err := tx.AttemptByCredential(credential)
+	if err != nil {
+		return nil, err
+	}
+	now, err := tx.now()
+	if err != nil {
+		return nil, err
+	}
+	if err := usable(a, now); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// Renew renews the lease of the attempt claimed with credential, from now,
+// as a heartbeat does, and returns the attempt: Authorize's errors if it
+// may not report.
+func (tx *Tx) Renew(credential string) (*Attempt, error) {
+	a, err := tx.Authorize(credential)
+	if err != nil {
+		return nil, err
+	}
+	now, err := tx.now()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET renewed_at = ? WHERE id = ?", now, a.ID); err != nil {
+		return nil, err
+	}
+	a.RenewedAt = time.UnixMicro(now).UTC()
+	return a, nil
+}
+
+// StepStarted records that a step of the attempt started: the attempt is
+// running, and counts among those of its job that started a step. Once is
+// enough: a repeat changes nothing. An attempt that hasn't been claimed is
+// ErrState, and one that no longer holds its job ErrFenced.
+func (tx *Tx) StepStarted(id string) error {
+	a, err := tx.Attempt(id)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !a.Holds:
+		return ErrFenced
+	case a.State == AttemptRunning:
+		return nil
+	case a.State != AttemptClaimed:
+		return fmt.Errorf("%w: attempt %s hasn't been claimed", ErrState, id)
+	}
+	now, err := tx.now()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, step_started_at = ? WHERE id = ?", AttemptRunning, now, id); err != nil {
+		return err
+	}
+	n, _ := runNumber(a.Run)
+	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET attempts_started = attempts_started + 1 WHERE run_id = ? AND key = ?", n, a.Job)
+	return err
+}
+
+// EndAttempt records how the attempt ended. An attempt that no longer
+// holds its job, as one that has ended doesn't, is ErrFenced.
+func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
+	switch end.Kind {
+	case EndCompleted:
+		switch end.Outcome {
+		case plan.OutcomeSuccess, plan.OutcomeFailure, plan.OutcomeCancelled, plan.OutcomeSkipped:
+		default:
+			return fmt.Errorf("store: an attempt completed with the outcome %q", end.Outcome)
+		}
+		if len(end.CompleteDigest) != sha256.Size {
+			return errors.New("store: an attempt completed without the digest of its report")
+		}
+	case EndSetupFailed, EndLost, EndSuperseded, EndWithdrawn:
+		if len(end.CompleteDigest) != 0 {
+			return fmt.Errorf("store: an attempt that ended %s with the digest of a report", end.Kind)
+		}
+	default:
+		return fmt.Errorf("store: %q isn't how an attempt ends", end.Kind)
+	}
+	a, err := tx.Attempt(id)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !a.Holds:
+		return ErrFenced
+	case end.Kind == EndCompleted && a.State == AttemptPlacing:
+		return fmt.Errorf("%w: attempt %s completed before it was claimed", ErrState, id)
+	}
+	now, err := tx.now()
+	if err != nil {
+		return err
+	}
+	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, complete_digest = ?, ended_at = ? WHERE id = ?",
+		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)), end.CompleteDigest, now, id)
+	return err
+}
+
+// digest returns the SHA-256 digest of a secret, as the store keeps a
+// bootstrap token or a credential.
+func digest(secret string) []byte {
+	sum := sha256.Sum256([]byte(secret))
+	return sum[:]
+}

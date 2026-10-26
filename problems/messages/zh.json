@@ -244,6 +244,7 @@
   "directory_replaced": "目录 {path} 在工作进程创建它时被替换了，因此工作进程不使用它。",
   "path_links_too_many": "路径 {path} 经过了超过 {max} 个符号链接。",
   "mount_not_found": "Meridian 在 /proc/self/mountinfo 中找不到包含 {path} 的挂载。",
+  "database_too_new": "更新发行版本的 Meridian 已将数据库 {path} 的 {schema} 架构升级到版本 {version}，而此发行版本只能读取版本 {latest} 及更早的版本。请使用那个发行版本，或将 MERIDIAN_STATE_DIR 设置为其他目录。",
   "member_settings_not_json": "组“{group}”的一个成员的 settings 中包含 JSON 无法容纳的值，例如 .nan 或 .inf。",
 
   "worker_environment_missing": "启动 meridian worker 的环境没有设置 {variable}，它应由启动 meridian worker 的后端设置。",

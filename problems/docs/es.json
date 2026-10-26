@@ -1713,6 +1713,14 @@
       "Elige para MERIDIAN_STATE_DIR un directorio en un sistema de archivos que no sea FUSE."
     ]
   },
+  "database_too_new": {
+    "title": "Base de datos más reciente de lo que lee esta versión",
+    "why": "Meridian guarda las ejecuciones en una base de datos de su directorio de estado, en dos esquemas: el de hopper, que las planifica, y el propio de Meridian. Cada versión, al abrir la base de datos, lleva cada esquema a la versión que conoce. Una versión de Meridian más reciente que esta ha abierto esta base de datos, y esta versión no puede saber qué cambió aquella, así que no abre la base de datos, en lugar de poner en riesgo las ejecuciones que contiene.",
+    "fix": [
+      "Ejecuta la versión de Meridian que abrió la base de datos por última vez, o una posterior.",
+      "O asigna a MERIDIAN_STATE_DIR otro directorio, lo que deja las ejecuciones de este donde están."
+    ]
+  },
   "member_settings_not_json": {
     "title": "Configuración de miembro que JSON no puede contener",
     "why": "La configuración de un miembro se da al controlador de su backend como JSON, que no tiene números que no sean números ni infinitos.",

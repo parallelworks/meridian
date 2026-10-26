@@ -1472,6 +1472,13 @@
       "Choose a directory for MERIDIAN_STATE_DIR on a filesystem that isn't FUSE."
     ]
   },
+  "database_too_new": {
+    "why": "Meridian keeps runs in a database in its state directory, in two schemas: hopper's, which schedules them, and Meridian's own. Each release, as it opens the database, brings each schema up to the version it knows. A release of Meridian newer than this one has opened this database, and this release can't tell what that release changed, so it doesn't open the database, rather than risk the runs in it.",
+    "fix": [
+      "Run the release of Meridian that last opened the database, or a later one.",
+      "Or set MERIDIAN_STATE_DIR to another directory, which leaves the runs in this one where they are."
+    ]
+  },
   "member_settings_not_json": {
     "why": "A member's settings are given to its backend's driver as JSON, which has no not-a-number or infinite numbers.",
     "fix": [

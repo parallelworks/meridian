@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events. The coordinator itself isn't built yet ([The coordinator](#the-coordinator)), but for how it encrypts a run's secret record ([The secret record](#the-secret-record)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); and its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases and fences, and the endpoints workers reach it through. The rest of the coordinator isn't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -1361,6 +1361,19 @@ The coordinator encrypts and stores it.
   the record's parts is either what a person or a form gives, the
   workflow's own text (`Withheld`, which the pinned workflow holds), or
   what Create and Start make again from them.
+
+  Deleted means erased from the store's files, not only from its tables,
+  so that someone who later has both a copy of the database and the key
+  that wrapped the record's data key can't open it. On SQLite, the store
+  writes with `secure_delete` on, which overwrites with zeros what it
+  deletes or replaces, the sealed record and its wrapped key among it,
+  rather than leave it in free space. Once the transaction that ends the
+  run commits, the store checkpoints the write-ahead log into the
+  database and truncates it, so the log keeps no copy either. If a reader
+  or a writer in another process holds the log, that checkpoint can't
+  truncate it, and the next one does: when the next run ends, when the
+  store is next opened, or in hopper's maintenance. A backup of the database taken
+  before the run ended holds the record, sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
   calls, and `meridian resume` picks a run up in another process, so a run's
   secrets live where its state does, and the store holds them only
@@ -2917,6 +2930,17 @@ that maps root. A worker in one can't use its cache directory or
 directory, as it does wherever neither is safe, with a warning in its log
 that says why, and refuses a bootstrap token's file, which its backend can
 give it in its environment instead.
+
+Whoever can write the coordinator's database can claim an attempt, and
+with it the private values its job reads, so the coordinator's store
+checks the database's path itself as it opens it, whoever chose the path,
+before SQLite opens anything. The way to the database's directory is
+checked as above, and the directory must be the user's, with no access
+for others. The database, and each file SQLite keeps beside it (its
+write-ahead log, the log's index and a rollback journal), must be, where
+it is there, a regular file of the user's, not a link, with no access for
+others. The store makes the database readable and writable only by its
+user, so the files SQLite makes beside it are too.
 
 The command's Sources, which reads the workflows that `uses:` names, runs
 the `git` command on `PATH`, with the user's own Git configuration and
