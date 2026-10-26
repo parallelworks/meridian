@@ -19,7 +19,7 @@ pull request that makes any part of it wrong updates it.
 | Member | One place a group can run jobs: a backend, its settings and the resources it offers. |
 | Backend | How a member starts work: `local`, `ssh`, `kubernetes`, `slurm` or `pbs`. |
 | Plan | The compiled form of a run: typed, checked, holding no secret, and stored with the run. |
-| Secret record | A run's passwords and the variables it read, encrypted and kept only until the run ends. |
+| Secret record | What a run needs that its plan can't hold: what was submitted, passwords among it, what the plan withholds of the input definitions and what Create decided of them, and what Start read and made that is private, the variables among it; encrypted and kept only until the run ends (`plan.Record`). |
 | Coordinator | The part of Meridian that schedules jobs, places them on groups and hears from workers. |
 | Worker | The process that runs one attempt's steps and reports on them: the `meridian` binary itself. |
 
@@ -37,13 +37,13 @@ its own.
    compile: Create ◀──── resolvers: inputs, variables, groups, sources, …
           │
           ▼
-  plan + passwords ───▶ store (hopper, on SQLite or Postgres)
-                            ▲
-                            │
-                       coordinator ──── backend ────▶ starts a worker
-                            ▲                              │
-                            └──────── worker API ◀─────────┘
-                                                    runs the steps
+  plan + secret record ───▶ store (hopper, on SQLite or Postgres)
+                                ▲
+                                │
+                           coordinator ──── backend ────▶ starts a worker
+                                ▲                              │
+                                └──────── worker API ◀─────────┘
+                                                        runs the steps
 ```
 
 The compiler creates a run's plan, the coordinator starts the run and
@@ -58,18 +58,25 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | Stores runs, schedules and places jobs, and serves the worker API. |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events. The coordinator itself isn't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
-| `backend` | Execution groups and their members, and the interface that starts workers on a member. |
-| `backend/…` | Start workers: `local`, `ssh`, `kubernetes`, `slurm`, `pbs`. |
-| `runtime/…` | Drive container runtimes: Podman, Docker, Apptainer, Apple's `container`. |
+| `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
 | `cmd/meridian` | The command. |
 
-The `meridian` command wires the packages together with local resolvers, a
-SQLite store and a coordinator in its own process. A platform wires them
-with its own resolvers, Postgres and as many coordinator replicas as it
-needs. Nothing in the packages knows which of the two it is running in.
+The backends that start workers (`local`, `ssh`, `kubernetes`, `slurm`,
+`pbs`) and the drivers of container runtimes (Podman, Docker, Apptainer,
+Apple's `container`) will be packages of their own; none is built yet
+([Backends and isolation](#backends-and-isolation)).
+
+The `meridian` command wires the packages together with local resolvers.
+It will run a coordinator in its own process, with a SQLite store; today
+it validates a workflow (`meridian validate`) and runs one attempt of a
+job as a worker (`meridian worker`), and its other commands say they
+aren't built yet ([The `meridian` command](#the-meridian-command)). A
+platform wires them with its own resolvers, Postgres and as many
+coordinator replicas as it needs. Nothing in the packages knows which of
+the two it is running in.
 
 ## The workflow format
 
@@ -348,8 +355,8 @@ phase's inputs and keep what it gives, so every implementation, whether
 | --- | --- | --- | --- | --- |
 | Create | The run is created | `compile.Create`, wherever the run is created | `inputs`; `org` and `vars`, for the run's shape; `remote`; `sessions` | The input values it can, and what decides the run's shape: an input's `hidden`, `ignore` and `optional`, and a job's `needs` |
 | Start | The run starts | `compile.Start`, in the coordinator | `org` and `vars`, read once for the run, secret ones included; passwords; the workflow's `env` | The input values again, from what was submitted, with everything known; the workflow's `env:`, `timeout:` and `sessions:`, and matrices whose values are known; the run's shape again |
-| Ready | A job's dependencies have finished | `plan.Plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:`, `working-directory:` and `ssh:` |
-| Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then a step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
+| Ready | A job's dependencies have finished | `plan.Plan.Ready`, in the coordinator | `needs` and the status functions, then `matrix` | A matrix that reads `needs`, then a job's `if:`, `runs-on:`, `resources:`, `retry:`, `timeout:` and `ssh:` |
+| Step | A job starts on its worker, for its `env:`, each of its steps is about to run, and each step's `cleanup:` once they have | `plan.ReadyJob.JobEnv`, once, then `plan.ReadyJob.Step` and `plan.ReadyJob.Cleanup`, in the worker | `job`; the job's and the step's `env`; `steps` | The job's `env:`, then, for each step, the job's `working-directory:`, where the run's directory is known (`env.PW_PARENT_JOB_DIR`), and the step's `if:`, `run:`, `with:`, `env:` and the rest of the step, or its `cleanup:` |
 | End | A job's steps have run | `plan.ReadyJob.End`, in the worker | | The job's `outputs:` |
 
 Each phase reads the contexts of the phases before it too.
@@ -471,12 +478,17 @@ its resolvers into a plan, in order:
 4. **Resolve** through the resolver interfaces: check input values against
    their declarations and apply defaults, look up execution groups, check
    the workflow's sessions, and resolve, pin and load the workflows that
-   `uses:` names, with cycle detection and a depth limit
+   the run's own steps' `uses:` name. A child run pins the workflows its
+   own steps name as it is created; pinning a run's descendants all at
+   once, with cycle detection and a depth limit, isn't built yet
    ([Workflows a step calls](#workflows-a-step-calls)).
-5. **Check matrices** with the function that expands them, without
-   expanding them: their keys, the shape of `include` and `exclude`, and
-   their size where their values are known ([Matrices](#matrices)). Link
-   each step's `cleanup:` command to the end of its job.
+5. **Read matrices**, without expanding them: the keys a job's matrix
+   writes out, which what reads `matrix` must name, and the jobs and
+   outputs it reads. The compiler doesn't check a matrix's `include`,
+   `exclude` or size: Start expands a matrix whose values are known by
+   then, and fails the run if it can't be expanded, and Ready the rest
+   ([Matrices](#matrices)). Compile each step's `cleanup:`, which runs at
+   the end of its job.
 6. **Check expressions.** Parse every `${{ }}`, evaluate what is already
    known, and check every reference that is left, with its position:
    - Reading a context where it isn't known yet is an error, such as `steps`
@@ -1483,7 +1495,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Keys | The key that wraps each run's secret record's data key | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
 | Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
-| Actions | Built-in actions | `parallelworks/checkout`, and those that need no platform |
+| Actions | Built-in actions, which no interface provides yet: the worker refuses a step that `uses:` one (`uses_not_supported`) | `parallelworks/checkout`, and those that need no platform, once built |
 | Sessions | Interactive sessions a workflow serves | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 | Events | Run, job and step events as they happen | The command's progress display |
@@ -1657,12 +1669,12 @@ name, `#` and its index from 0, as in `build#2`.
 
 - **Where.** The coordinator expands every matrix: at Start, one whose
   values are known by then, written out or read from inputs or variables,
-  and at Ready, one that reads `needs`. The compiler expands none. It checks
-  each with the same function where its values are known, and checks that
-  the jobs and outputs a matrix reads exist; only the values wait. Today the
-  compiler keeps every `strategy:` in the plan and checks none with
-  `plan.Expand`; Start expands those whose values are known by then, and
-  Ready the rest.
+  and at Ready, one that reads `needs`. The compiler expands none, and
+  checks only that the jobs and outputs a matrix reads exist, and that
+  what reads `matrix` names a key a matrix written out has; it keeps every
+  `strategy:` in the plan. Checking a matrix whose values are known with
+  `plan.Expand` as the run is created, which would refuse such a run
+  rather than fail it as it starts, isn't built.
 - **A matrix job's `if:`** that doesn't read `matrix` is evaluated before
   the matrix is expanded, so a job it skips has no instances. One that
   reads `matrix` is evaluated for each instance: format 1 allows it, as
@@ -1699,7 +1711,8 @@ name, `#` and its index from 0, as in `build#2`.
 - **Size.** A matrix has at least one instance and at most 256 by default,
   a limit of Meridian's ([Compiling](#compiling)), not the format's. A
   matrix with no instance, or more than the limit, fails where it is
-  expanded, or when the run is created if its values are known then.
+  expanded: at Start, which fails the run, for one whose values are known
+  by then, and at Ready, which fails the job, for the rest.
 
 ### Workflows a step calls
 
@@ -1710,21 +1723,20 @@ a workflow when it starts with `github/`, `gitlab/`, `marketplace/` or
 refuses any other prefix, where Meridian's schema refuses a URL and takes
 any other `uses:` for a built-in action; no known workflow has either.
 
-- **Pinned when the run is created.** The compiler resolves the workflow
-  through the Sources interface, pins it to a commit and the SHA-256 digest
-  of its text, and loads and validates it, and the workflows it calls in
-  turn, with cycle detection and a depth limit. The plan holds every pinned
-  reference, not a compiled workflow, so the run and its reruns run the same
-  code throughout, even where a reference names a branch. Its `with:`
+- **Pinned when the run is created.** The compiler resolves each workflow
+  the run's own steps name through the Sources interface, each reference
+  once, pins it to a commit and the SHA-256 digest of its text
+  (`Step.Source`), and loads and validates it. The plan holds every pinned
+  reference, not a compiled workflow, so the run and its reruns run the
+  same code throughout, even where a reference names a branch. Its `with:`
   `$yaml` and `$host`, which say where the workflow is, must be written out
-  (`source_not_known`); an empty `$yaml` means `workflow.yaml`. Today the
-  compiler pins and loads the workflows a run's own steps name
-  (`Step.Source`), each reference once, but not the workflows they call in
-  turn: a child run's Create pins its own, as it is created. Pinning them
-  all at once needs the plan to hold its descendants' pins, by the pinned
-  workflow and the step that names each, for each child run's Create to read
-  rather than resolve; with it come the cycle detection and the depth limit
-  (`Options.Limits`).
+  (`source_not_known`); an empty `$yaml` means `workflow.yaml`. The
+  workflows a pinned workflow calls in turn are pinned by the child run's
+  own Create, as it is created, so a cycle, or calls nested too deep, is
+  found only then. Pinning a run's descendants all at once, with cycle
+  detection and a depth limit (`Options.Limits`), needs the plan to hold
+  their pins, by the pinned workflow and the step that names each, for
+  each child run's Create to read rather than resolve; it isn't built.
 - **Compiled when the step runs.** The worker evaluates the step's `with:`,
   and the coordinator creates the child run from the pinned workflow with
   those values, through Create and Start, linked to the step. The step ends

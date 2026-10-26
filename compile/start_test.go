@@ -865,9 +865,10 @@ func TestStartCallerMistakes(t *testing.T) {
 	}
 	// A resolver that couldn't answer is its error, which starting again
 	// can get past.
-	vars := failingVariables{errors.New("down")}
+	storeDown := errors.New("the variables store is down")
+	vars := failingVariables{storeDown}
 	v := createRun(t, workflow(`a: {type: string, default: '${{ vars.A }}'}`), nil, testVariables{"vars.A": {Value: "a"}})
-	if _, _, err := compile.Start(t.Context(), v.Plan, compile.StartInput{Variables: vars, Record: v.Record}); err == nil || errors.Is(err, compile.ErrMismatch) {
+	if _, _, err := compile.Start(t.Context(), v.Plan, compile.StartInput{Variables: vars, Record: v.Record}); !errors.Is(err, storeDown) || errors.Is(err, compile.ErrMismatch) {
 		t.Errorf("a resolver that couldn't answer: %v", err)
 	}
 	// So is an Inputs resolver that couldn't answer, at Start as at Create:
@@ -1166,8 +1167,8 @@ func TestStartRestoresWithheldDefinitions(t *testing.T) {
 	}
 	without := c.Record
 	without.Withheld = nil
-	if _, _, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: vars, Record: without, Inputs: passThrough{}}); err == nil {
-		t.Error("no error without the withheld definitions")
+	if _, _, err := compile.Start(t.Context(), c.Plan, compile.StartInput{Variables: vars, Record: without, Inputs: passThrough{}}); !errors.Is(err, compile.ErrMismatch) {
+		t.Errorf("without the withheld definitions: %v, want ErrMismatch", err)
 	}
 }
 

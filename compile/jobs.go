@@ -16,8 +16,10 @@ import (
 // The compiler checks each expression in the phase that evaluates it
 // (plan.Phase), which decides what it can read (plan.Phase.Knows): a job's
 // needs: in Create, its strategy: in Strategy, its if:, runs-on:,
-// resources:, retry:, timeout:, ssh: and working-directory: in Ready, its
-// env: in JobEnv, its steps in Step, and its outputs: in End. What it
+// resources:, retry:, timeout: and ssh: in Ready, its env: in JobEnv, its
+// steps in Step, and its outputs: in End. Its working-directory:, which
+// Step evaluates, where the run's directory is known, is checked in Ready,
+// so it reads no more than Ready knows. What it
 // checks of the run as a whole is in run.
 
 // jobInfo is what the checks of a job's expressions need to know about it.

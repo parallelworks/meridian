@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -68,6 +71,36 @@ func TestNotBuilt(t *testing.T) {
 		if r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, cmd.name+" isn't built yet") {
 			t.Errorf("meridian %s = %+v", cmd.name, r)
 		}
+	}
+}
+
+// TestFail checks how the command writes an error that isn't a problem: a
+// cancelled context is interrupted, which only an interrupt causes, and
+// any other is unexpected_error, with its text as the reason, as text and
+// as problem details.
+func TestFail(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		json bool
+		want string
+	}{
+		{errors.New("the disk is gone"), false, "meridian: error: "},
+		{errors.New("the disk is gone"), true, `"code":"unexpected_error"`},
+		{fmt.Errorf("reading: %w", context.Canceled), false, "(interrupted)"},
+	} {
+		var stderr strings.Builder
+		c := &cli{stderr: &stderr, json: tc.json}
+		if code := c.fail(tc.err); code != exitError || !strings.Contains(stderr.String(), tc.want) {
+			t.Errorf("fail(%v) = %d, %q, want %q in it", tc.err, code, stderr.String(), tc.want)
+		}
+		if !errors.Is(tc.err, context.Canceled) && !strings.Contains(stderr.String(), "the disk is gone") {
+			t.Errorf("fail(%v) wrote %q, without the reason", tc.err, stderr.String())
+		}
+	}
+	var stderr strings.Builder
+	(&cli{stderr: &stderr}).fail(errors.New("the disk is gone"))
+	if !strings.Contains(stderr.String(), "(unexpected_error)") {
+		t.Errorf("fail wrote %q, want unexpected_error", stderr.String())
 	}
 }
 
