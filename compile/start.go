@@ -136,8 +136,9 @@ func (res *StartResult) Keep(record *plan.Record) StartState {
 //     password input never is; and that what was submitted, resolved
 //     again, gives the values the plan holds (Run.Inputs), and none for an
 //     input the workflow doesn't define that the plan doesn't hold, but
-//     for what Create keeps out of the plan and the inputs of a platform's
-//     type, which the Inputs resolver gives again (checkPlanned).
+//     for what Create keeps out of the plan, the inputs of a platform's
+//     type, which the Inputs resolver gives again, and those whose
+//     definitions read what it gives (checkPlanned).
 //
 // So the digest binds a record to its plan, and these checks, what was
 // submitted to what the plan holds; neither binds it to its run. What the

@@ -949,19 +949,19 @@ made from one, it doesn't hold in another form either.
    the plan doesn't hold: each is an error (`compile.ErrMismatch`). A
    password input's value is one the plan names whenever the run has it.
    Start checks these once it has checked the shape, as a run whose shape
-   changed gives other values, and fails as it is. Before it reads
-   anything, it checks that the record names the plan, by its digest
-   (`plan.Record.PlanDigest`, `plan.Digest`), and that the record's
-   withheld parts and decisions are those the plan names, no more and no
-   fewer. What the plan doesn't hold isn't checked: an input of a
-   platform's type, which the resolver gives again, a password, a value
-   given in place of a default that reads a variable, and which values
-   mean their expressions. So the digest binds a record to its plan, and
-   not to its run: a record of another run of the same plan starts with
-   what it gives, and the coordinator keeps each run's record with its
-   plan. A value the plan names that the record doesn't hold, as a
-   password, is the run's problem, `input_required`, as it is when a run
-   is created without it.
+   changed gives other values, and fails as it is. Before it reads anything,
+   it checks that the record names the plan, by its digest
+   (`plan.Record.PlanDigest`, `plan.Digest`), and that the record's withheld
+   parts and decisions are those the plan names, no more and no fewer. What
+   the plan doesn't hold isn't checked: an input of a platform's type, which
+   the resolver gives again and can give otherwise, and one whose definition
+   reads what it gives, a password, a value given in place of a default that
+   reads a variable, and which values mean their expressions. So the digest
+   binds a record to its plan, and not to its run: a record of another run
+   of the same plan starts with what it gives, and the coordinator keeps
+   each run's record with its plan. A value the plan names that the record
+   doesn't hold, as a password, is the run's problem, `input_required`, as
+   it is when a run is created without it.
 5. **Check the shape.** Compare each decision of the run's shape that read
    a variable or a password as the run was created, an input's `hidden`,
    `ignore` and `optional` (`Run.Decisions`), with what the secret record
