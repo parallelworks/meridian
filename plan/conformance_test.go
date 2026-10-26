@@ -85,7 +85,7 @@ func TestContextsConformance(t *testing.T) {
 			if diags.HasErrors() {
 				t.Fatalf("the workflow doesn't compile: %v", diags)
 			}
-			r := &contextsRun{t: t, run: startedRun(t, c, p), got: map[string]any{}, diags: diags}
+			r := &contextsRun{t: t, p: p, run: startedRun(t, c, p), got: map[string]any{}, diags: diags}
 			for i := range p.Jobs {
 				r.job(&p.Jobs[i], c.Jobs[p.Jobs[i].Name])
 			}
@@ -160,6 +160,7 @@ func startedRun(t *testing.T, c conformance.Case, p *plan.Plan) plan.RunValues {
 // give.
 type contextsRun struct {
 	t   *testing.T
+	p   *plan.Plan
 	run plan.RunValues
 	// got holds the values evaluated, by their JSON Pointers, and skipped
 	// the JSON Pointers of the jobs and steps skipped.
@@ -183,7 +184,7 @@ func (r *contextsRun) job(job *plan.Job, state conformance.JobState) {
 			Key: job.Name + "#" + strconv.Itoa(*state.Index), Index: *state.Index, Matrix: plan.DataOf(state.Matrix),
 		}
 	}
-	ready, diags, err := job.Ready(ctx, in)
+	ready, diags, err := r.p.Ready(ctx, job.Name, in)
 	r.diags = append(r.diags, diags...)
 	switch {
 	case err != nil:

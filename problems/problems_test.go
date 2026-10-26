@@ -27,7 +27,7 @@ import (
 var languages = []string{"en", "es", "ja", "ko", "zh"}
 
 func TestCatalog(t *testing.T) {
-	problemtest.CheckGoCatalog(t, Catalog, Registry, CommandRegistry)
+	problemtest.CheckGoCatalog(t, Catalog, Registry, CommandRegistry, WorkerRegistry)
 	if got := Catalog.Languages(); !slices.Equal(got, languages) {
 		t.Errorf("the catalog is in %v, want %v", got, languages)
 	}
@@ -46,7 +46,7 @@ func TestCatalog(t *testing.T) {
 		}
 		// The localizer falls back to English for a code a language
 		// lacks, so a missing translation renders without an error.
-		for _, typ := range slices.Concat(Registry.Types(), CommandRegistry.Types()) {
+		for _, typ := range slices.Concat(Registry.Types(), CommandRegistry.Types(), WorkerRegistry.Types()) {
 			if _, ok := msgs[typ.Code]; !ok {
 				t.Errorf("%s catalog has no message for %s", lang, typ.Code)
 			}
@@ -115,8 +115,21 @@ func TestEveryKindIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The worker API's kinds are the coordinator's to report, as it
+	// refuses a worker's request, and no coordinator reports them yet:
+	// workerapi names them by their codes, which its TestCodesAreKinds
+	// checks. Once something reports one, it comes off this list.
+	awaitingCoordinator := map[string]bool{"Fenced": true, "OutOfOrder": true, "PlanTooNew": true}
+	for name := range awaitingCoordinator {
+		if _, ok := defined[name]; !ok {
+			t.Errorf("awaitingCoordinator names %s, which kinds.go doesn't define", name)
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(defined)) {
-		if !defined[name] {
+		switch {
+		case awaitingCoordinator[name] && defined[name]:
+			t.Errorf("something reports problems.%s now: take it off awaitingCoordinator", name)
+		case !awaitingCoordinator[name] && !defined[name]:
 			t.Errorf("nothing reports problems.%s", name)
 		}
 	}
@@ -143,7 +156,8 @@ func TestDocs(t *testing.T) {
 		for _, k := range Kinds() {
 			_, workflow := Registry.Lookup(k.Code())
 			_, command := CommandRegistry.Lookup(k.Code())
-			if !workflow && !command {
+			_, worker := WorkerRegistry.Lookup(k.Code())
+			if !workflow && !command && !worker {
 				continue // foundation documents its rules
 			}
 			d, ok := docs[k.Code()]

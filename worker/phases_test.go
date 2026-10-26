@@ -47,7 +47,7 @@ func readied(t *testing.T, workflow, name string, vars map[string]string, secret
 		if p.Jobs[i].Name != name {
 			continue
 		}
-		r, diags, err := p.Jobs[i].Ready(t.Context(), plan.ReadyInput{Run: run})
+		r, diags, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run})
 		if err != nil || diags.HasErrors() || r.Job == nil {
 			t.Fatalf("readying %s: %v, %v", name, diags, err)
 		}

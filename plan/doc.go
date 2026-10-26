@@ -7,7 +7,7 @@
 // meant when it was compiled.
 //
 // The package also holds the phases after Start, each one function that
-// reaches nothing: Job.Ready, in the coordinator, and ReadyJob.Step and
+// reaches nothing: Plan.Ready, in the coordinator, and ReadyJob.Step and
 // ReadyJob.End, in the worker; Expand, which expands a matrix, and
 // Combine, which combines its instances' results; NewScope, which builds
 // the contexts an expression reads in each phase; and the values they

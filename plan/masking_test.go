@@ -44,7 +44,7 @@ jobs:
 	} {
 		run := runValues(t, p, map[string]string{"token": secret})
 		run.Secrets = []string{"vars.token"}
-		ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+		ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,7 +91,7 @@ jobs:
       has: ${{ env.HAS_TOKEN }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": "s3cret-value"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ jobs:
       z_zone: ${{ vars.zone }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "zone": "us-6"}})
 	run := runValues(t, p, map[string]string{"token": "s3cret", "zone": "us-6"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ jobs:
       note: ${{ needs.main.outputs.note }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}, "creds": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": "s3cret-value", "creds": `{"user":"svc","pass":"hunter2-pass"}`})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +518,7 @@ jobs:
       kind: ${{ steps.a.outputs.kind }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": secret})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ jobs:
       six: ${{ 'us-6' }}
 `, map[string]any{"vars": map[string]any{"token": expr.Unknown{Name: "vars"}}})
 	run := runValues(t, p, map[string]string{"token": "s3cret"})
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +625,7 @@ jobs:
       k: ${{ env.PW_API_KEY }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +682,7 @@ func readyMain(t testing.TB, workflow string, vars map[string]string, secret ...
 	}
 	p := compiled(t, workflow, map[string]any{"vars": ctxVars})
 	run := runValues(t, p, vars)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil || ready.Job == nil {
 		t.Fatal(err)
 	}
@@ -1044,7 +1044,7 @@ jobs:
       typed: ${{ inputs.typed_short }}
       region: ${{ inputs.region }}
 `, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1102,7 +1102,7 @@ jobs:
 `, nil)
 	run := runValues(t, p, nil)
 	needs := map[string]plan.JobResult{"a": resA}
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run, Needs: needs})
 	if err != nil || ready.Job == nil {
 		t.Fatal(err)
 	}
@@ -1220,7 +1220,7 @@ jobs:
 `, nil)
 	run := runValues(t, p, nil)
 	runJob := func(name string, needs map[string]plan.JobResult, outputs map[string]string) (*plan.EndResult, []string) {
-		ready, _, err := job(t, p, name).Ready(t.Context(), plan.ReadyInput{Run: run, Needs: needs})
+		ready, _, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run, Needs: needs})
 		if err != nil || ready.Job == nil {
 			t.Fatal(err)
 		}
@@ -1351,7 +1351,7 @@ jobs:
       shown: ${{ fromJSON(needs.main.outputs.key) }}
 `, nil)
 	run := runValues(t, p, nil)
-	ready, _, err := job(t, p, "main").Ready(t.Context(), plan.ReadyInput{Run: run})
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
 	if err != nil {
 		t.Fatal(err)
 	}

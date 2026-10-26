@@ -461,3 +461,13 @@ var (
 	WorkerHardenFailed          = defineCommand("worker_harden_failed", "Worker's memory can't be protected", "reason")
 	WorkerSystemUnsupported     = defineCommand("worker_system_unsupported", "System where the worker can't protect its memory", "os")
 )
+
+// The worker API's own problems, in WorkerRegistry, with which a coordinator
+// refuses a worker's request, each 409 Conflict (workerapi): expected is the
+// sequence number of the event, or the byte offset in a log, it expects
+// next.
+var (
+	Fenced     = defineWorker("fenced", "Report from a superseded attempt")
+	OutOfOrder = defineWorker("out_of_order", "Report out of order", "expected")
+	PlanTooNew = defineWorker("plan_too_new", "Plan newer than the worker reads")
+)

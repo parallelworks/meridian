@@ -210,7 +210,7 @@ func (e *evaluation) duration(v Value, pointer, key string, def int64) int64 {
 
 // RunTimeout evaluates the workflow's timeout:, v, in scope, as Start
 // does: in seconds, or 0 for none, read as a job's timeout: is
-// (Job.Ready), with what evaluating it read, and its problems, at
+// (Plan.Ready), with what evaluating it read, and its problems, at
 // /timeout, which show no value made from a private one.
 func RunTimeout(v Value, scope expr.Scope) (int64, expr.Read, problems.Diagnostics) {
 	e := &evaluation{phase: PhaseStart, scope: scope}

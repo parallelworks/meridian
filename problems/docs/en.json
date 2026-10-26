@@ -1621,5 +1621,23 @@
     "fix": [
       "Name the input by its own name, or set the list whole, as JSON."
     ]
+  },
+  "fenced": {
+    "why": "The coordinator checks every write against the attempt's fencing number, so that an attempt another of its job has superseded, as when its lease lapsed and the job ran again, can't change what the run records. A report from an attempt that has completed, other than one repeated as it was, is refused the same way. The worker stops its job's steps, as a cancellation does, and exits.",
+    "fix": [
+      "Nothing to fix: the coordinator decides how the attempt ended, and whether the job runs again."
+    ]
+  },
+  "out_of_order": {
+    "why": "A worker numbers its events and sends a log's bytes from an offset, so that a report repeated after a dropped connection is stored once, and in order. This one skipped some, started past the end of the log or after it had ended, or ended the attempt before the coordinator had every event it counts. The worker sends again from where the coordinator expects.",
+    "fix": [
+      "Nothing to fix: the worker sends again from where the coordinator expects."
+    ]
+  },
+  "plan_too_new": {
+    "why": "A run's plan, and the worker API's bodies, are versioned, and a worker says the newest version it reads as it claims an attempt. The coordinator refuses one that doesn't read the run's, before it sends anything of the run, so that no worker runs a job with a part it doesn't understand. The worker exits, and the attempt, which failed before its first step, is placed again.",
+    "fix": [
+      "Start workers of the same release of Meridian as the coordinator."
+    ]
   }
 }
