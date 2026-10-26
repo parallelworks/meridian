@@ -26,7 +26,13 @@ type appendCall struct {
 
 func newLogs(t *testing.T, dir string) *Logs {
 	t.Helper()
-	l, err := NewLogs(dir)
+	return newStoreLogs(t, dir, "store-a")
+}
+
+// newStoreLogs returns the Logs of the store storeID in dir.
+func newStoreLogs(t *testing.T, dir, storeID string) *Logs {
+	t.Helper()
+	l, err := NewLogs(dir, storeID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +166,31 @@ func TestLogsKeys(t *testing.T) {
 		if _, _, err := l.Append(t.Context(), bad, 0, nil, false); err == nil {
 			t.Errorf("Append(%+v) succeeded", bad)
 		}
+	}
+}
+
+// TestLogsStores checks that two stores' logs of runs of the same number
+// are apart, as of a store made again, whose runs are numbered from 1
+// again, and that a store's ID can name no other directory.
+func TestLogsStores(t *testing.T) {
+	dir := t.TempDir()
+	for i, store := range []string{"store-a", "store-b", "../store-a", "STORE-A"} {
+		if _, _, err := newStoreLogs(t, dir, store).Append(t.Context(), stepLog, 0, []byte{byte('a' + i)}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, store := range []string{"store-a", "store-b", "../store-a", "STORE-A"} {
+		data, _, err := newStoreLogs(t, dir, store).Read(t.Context(), stepLog, 0, 10)
+		if err != nil || string(data) != string(rune('a'+i)) {
+			t.Errorf("the store %s's log is %q, %v: stores share a log", store, data, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != LogsDir {
+		t.Errorf("the state directory holds %v, %v", entries, err)
+	}
+	if _, err := NewLogs(dir, ""); err == nil {
+		t.Error("NewLogs without a store's ID succeeded")
 	}
 }
 

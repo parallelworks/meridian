@@ -39,12 +39,7 @@ var formats = []string{"text", "json"}
 // evaluates what waits for the start and checks it, and reports what would
 // fail the run as it starts.
 func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
-	var set []string
-	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name, converted by its input's type: true or false for a boolean, a JSON number for a number, JSON for a list, a group or another structure, and the text as it is for text; it can be given again", func(s string) error {
-		set = append(set, s)
-		return nil
-	})
-	inputsFile := fs.String("inputs", "", "reads input values from the JSON `file`, an object of them by name, as it writes them; -input sets values over them")
+	inputs := inputFlags(fs)
 	out := fs.String("format", "text", "writes errors and warnings as `text`, one a line as compilers write them, or as json, an RFC 9457 validation problem")
 	start := fs.Bool("start", false, "starts the run too, without running it: reads every variable it reads, secret ones too, and checks what waits for the run's start")
 	positional, err := parseFlags(fs, args)
@@ -59,52 +54,20 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	}
 	// From here, the command's own problems are JSON too.
 	c.json = *out == "json"
-	sets, err := parseInputSets(set)
+	w, err := compileWorkflow(ctx, c, inputs, positional[0])
 	if err != nil {
 		return c.fail(err)
 	}
-
-	dirs, err := local.Locate(c.getenv)
-	if err != nil {
-		return c.fail(err)
-	}
-	cfg, err := local.LoadConfig(dirs.Config, c.lookupEnv)
-	if err != nil {
-		return c.fail(err)
-	}
-	submitted, err := submittedInputs(ctx, c, *inputsFile)
-	if err != nil {
-		return c.fail(err)
-	}
-	name, data, tooLarge, err := readWorkflow(ctx, c, positional[0])
-	if err != nil {
-		return c.fail(err)
-	}
-	diags := tooLarge
-	if diags == nil {
-		// Each -input is converted by the type the workflow gives its
-		// input, as the workflow is read to compile it.
-		if err := setInputs(submitted, inputDefinitions(name, data), sets); err != nil {
-			return c.fail(err)
-		}
-		var created *compile.Created
-		created, diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
-			Source: plan.Source{Location: workflowLocation(positional[0])},
-			Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
+	diags := w.diags
+	if *start && w.created != nil {
+		_, started, err := compile.Start(ctx, w.created.Plan, compile.StartInput{
+			Variables: w.cfg, Record: w.created.Record, Inputs: w.cfg,
 		})
 		if err != nil {
 			return c.fail(err)
 		}
-		if *start && created != nil {
-			_, started, err := compile.Start(ctx, created.Plan, compile.StartInput{
-				Variables: cfg, Record: created.Record, Inputs: cfg,
-			})
-			if err != nil {
-				return c.fail(err)
-			}
-			diags = append(diags, located(name, data, started)...)
-			diags.Sort()
-		}
+		diags = append(diags, located(w.name, w.data, started)...)
+		diags.Sort()
 	}
 	if *out == "json" {
 		err = writeProblemJSON(c.stdout, diags)
@@ -118,6 +81,80 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 		return exitInvalid
 	}
 	return exitOK
+}
+
+// The options of the run's input values, which validate and run share.
+type inputOptions struct {
+	set  []string
+	file *string
+}
+
+// inputFlags defines the options of the run's input values on fs.
+func inputFlags(fs *flag.FlagSet) *inputOptions {
+	o := &inputOptions{}
+	fs.Func("input", "sets the input at `path` to value, as path=value, where a path is an input's name, or a group's and its input's, as group.name, converted by its input's type: true or false for a boolean, a JSON number for a number, JSON for a list, a group or another structure, and the text as it is for text; it can be given again", func(s string) error {
+		o.set = append(o.set, s)
+		return nil
+	})
+	o.file = fs.String("inputs", "", "reads input values from the JSON `file`, an object of them by name, as it writes them; -input sets values over them")
+	return o
+}
+
+// A compiled workflow is what compileWorkflow gave: the workflow's name for
+// diagnostics, its text, and what Create gave of it, with the
+// directories and config it was compiled with.
+type compiled struct {
+	name    string
+	data    []byte
+	created *compile.Created
+	diags   problems.Diagnostics
+	dirs    local.Dirs
+	cfg     *local.Config
+}
+
+// compileWorkflow creates a run of the workflow at path, or standard input
+// for -, without storing it, as validate and run do: with the user's
+// variables and groups, the workflows its steps' uses: name, and the input
+// values inputs gives. A workflow too large to read has no run, only its
+// diagnostic; one with errors may have none.
+func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path string) (*compiled, error) {
+	sets, err := parseInputSets(inputs.set)
+	if err != nil {
+		return nil, err
+	}
+	dirs, err := local.Locate(c.getenv)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := local.LoadConfig(dirs.Config, c.lookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	submitted, err := submittedInputs(ctx, c, *inputs.file)
+	if err != nil {
+		return nil, err
+	}
+	name, data, tooLarge, err := readWorkflow(ctx, c, path)
+	if err != nil {
+		return nil, err
+	}
+	w := &compiled{name: name, data: data, diags: tooLarge, dirs: dirs, cfg: cfg}
+	if len(tooLarge) > 0 {
+		return w, nil
+	}
+	// Each -input is converted by the type the workflow gives its input, as
+	// the workflow is read to compile it.
+	if err := setInputs(submitted, inputDefinitions(name, data), sets); err != nil {
+		return nil, err
+	}
+	w.created, w.diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
+		Source: plan.Source{Location: workflowLocation(path)},
+		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
 }
 
 // cacheSources is the local Sources, whose copies of repositories are in

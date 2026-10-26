@@ -7,9 +7,10 @@
 //	meridian <command> [arguments]
 //
 // Run meridian help for its commands. Its exit status is 0 when it did
-// what it was asked, 1 when a workflow it was given has errors, and 2 when
-// it couldn't do what it was asked, such as for a command it doesn't know,
-// or when it was interrupted. Every problem it reports is one of the
+// what it was asked, 1 when a workflow it was given has errors, or a run it
+// ran failed or was cancelled, and 2 when it couldn't do what it was asked,
+// such as for a command it doesn't know, or when it was interrupted, which
+// leaves a run it ran running. Every problem it reports is one of the
 // problems package's kinds, with its code.
 package main
 
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -38,7 +40,8 @@ import (
 const (
 	// exitOK is a command that did what it was asked.
 	exitOK = 0
-	// exitInvalid is a workflow with errors.
+	// exitInvalid is a workflow with errors, or a run that failed or was
+	// cancelled.
 	exitInvalid = 1
 	// exitError is a command that couldn't do what it was asked.
 	exitError = 2
@@ -69,6 +72,14 @@ type cli struct {
 	// module's version, which a test gives in place of the process's
 	// (fipsmode.Mode and Module) for nil.
 	fips func() (mode, module string)
+	// signals, interactive and poll are what a test gives meridian run in
+	// place of the process's: the interrupts it gets, nil for the
+	// process's (notify); whether a person can answer it, nil for whether
+	// its standard input and error are a terminal; and how often it reads
+	// where its run is, 0 for runPoll.
+	signals     chan os.Signal
+	interactive *bool
+	poll        time.Duration
 }
 
 // getenv reads an environment variable, or "" if it isn't set.
@@ -130,7 +141,7 @@ var commands []command
 func init() {
 	commands = []command{
 		{name: "init", summary: "Writes a new workflow in the latest format."},
-		{name: "run", args: "<workflow>", summary: "Compiles and runs a workflow, coordinating it in the foreground."},
+		{name: "run", args: "<workflow>", summary: "Compiles and runs a workflow, coordinating it in the foreground.", run: runRun},
 		{name: "validate", args: "<workflow>", summary: "Compiles without running, and reports every error.", run: runValidate},
 		{name: "migrate", args: "<workflow>", summary: "Rewrites a workflow in the latest format."},
 		{name: "status", args: "[run]", summary: "Shows runs, or one run's jobs."},

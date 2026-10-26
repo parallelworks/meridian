@@ -204,11 +204,3 @@ func TestEnsureStateInStickyDirectory(t *testing.T) {
 		t.Errorf("EnsureState in a sticky directory: %v", err)
 	}
 }
-
-func TestDatabaseMountNotFound(t *testing.T) {
-	detect := detectNetworkFS
-	t.Cleanup(func() { detectNetworkFS = detect })
-	detectNetworkFS = func(string) (string, bool, error) { return "", false, errNoMount }
-	_, err := (Dirs{State: filepath.Join(t.TempDir(), "state")}).Database()
-	kindtest.Want(t, err, problems.MountNotFound)
-}

@@ -23,10 +23,13 @@ import (
 const LogsDir = "logs"
 
 // Logs keeps logs as files in the state directory: one directory for each
-// run, holding one for each attempt of each job instance, holding a file
-// for each of the attempt's logs. A log that has ended has a file beside
-// it, its end marker, which is written once the log's bytes are on disk,
-// so a log whose marker is there has every byte it will have.
+// store, named after its ID, holding one for each run, holding one for
+// each attempt of each job instance, holding a file for each of the
+// attempt's logs. The store's ID keeps a run's logs apart from those of a
+// run of the same number that an earlier store, since removed, gave. A
+// log that has ended has a file beside it, its end marker, which is
+// written once the log's bytes are on disk, so a log whose marker is there
+// has every byte it will have.
 //
 // Every append is on disk before Append returns, so a worker that heard
 // that a part was stored never needs to send it again. Logs serializes the
@@ -41,11 +44,14 @@ type Logs struct {
 
 var _ coordinator.Logs = (*Logs)(nil)
 
-// NewLogs returns the Logs in dir, the state directory, which must be
-// readable only by its user, as Dirs.EnsureState makes it. Close closes
-// it.
-func NewLogs(dir string) (*Logs, error) {
-	logs := filepath.Join(dir, LogsDir)
+// NewLogs returns the Logs of the store storeID in dir, the state
+// directory, which must be readable only by its user, as Dirs.EnsureState
+// makes it. Close closes it.
+func NewLogs(dir, storeID string) (*Logs, error) {
+	if storeID == "" {
+		return nil, errors.New("local: logs without a store's ID")
+	}
+	logs := filepath.Join(dir, LogsDir, escapeName(storeID))
 	if err := os.MkdirAll(logs, 0o700); err != nil {
 		return nil, err
 	}

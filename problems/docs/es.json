@@ -1362,12 +1362,13 @@
     "why": "Un usuario que puede cambiar un directorio en el camino hacia uno de los de Meridian podría sustituir lo que hay en él por algo suyo después de que Meridian lo comprobara. Como hace OpenSSH, Meridian acepta un directorio del camino solo si es tuyo o de root y solo tú o root podéis cambiarlo, o si su bit sticky impide a otros usuarios quitar lo que no es suyo, como el de /tmp, y lo que le sigue es tuyo.",
     "fix": [
       "Elige un directorio cuyos padres solo tú o root podáis cambiar, como uno dentro de tu directorio personal, o uno que cree mktemp -d -p /var/tmp.",
-      "O pide al propietario del directorio que ejecute chmod go-w sobre él."
+      "O pide al propietario del directorio que ejecute chmod go-w sobre él.",
+      "Si es el directorio en el que meridian run crea los directorios de las ejecuciones, bajo el directorio temporal del sistema, que otro usuario puede crear antes, asigna a TMPDIR un directorio tuyo, o indica el directorio de la ejecución con --run-dir."
     ]
   },
   "network_filesystem": {
     "title": "Base de datos en un sistema de archivos de red",
-    "why": "Los bloqueos de SQLite no funcionan de forma fiable en sistemas de archivos de red, que es donde suelen estar los directorios personales en los clústeres, así que Meridian no guarda allí su base de datos.",
+    "why": "Los bloqueos de SQLite no funcionan de forma fiable en sistemas de archivos de red, que es donde suelen estar los directorios personales en los clústeres, así que Meridian no guarda allí su base de datos. Toma también por uno todo sistema de archivos FUSE y toda carpeta que una máquina virtual comparte con su host, como los montajes de Docker Desktop, porque no se puede saber si sus bloqueos se cumplen.",
     "fix": [
       "Asigna a MERIDIAN_STATE_DIR un directorio en un disco local que solo tú puedas cambiar y que perdure: guarda la base de datos y la clave que envuelve los secretos de tus ejecuciones, que se pierden con él. Sirve uno que cree mktemp -d -p /var/tmp, o uno en el disco local persistente del nodo, pero no uno en /tmp, que un reinicio puede vaciar."
     ]
@@ -1699,6 +1700,36 @@
       "Si parece un fallo de Meridian, infórmalo junto con el comando que ejecutaste."
     ]
   },
+  "run_dir_exists": {
+    "title": "Directorio de la ejecución que ya existe",
+    "why": "Cada ejecución tiene su propio directorio, PW_JOB_DIR, donde se ejecutan sus pasos, que Meridian crea nuevo una vez guardada la ejecución, para que ninguna encuentre en él los archivos de otra, ni un enlace que lleve a otra parte. Ya hay algo en la ruta que crearía: un directorio indicado con --run-dir que existe, o uno bajo el directorio temporal del sistema que creó otra cosa.",
+    "fix": [
+      "Indica con --run-dir un directorio que aún no exista, que Meridian crea.",
+      "O, tras comprobar que no hay en él nada que necesites, elimina lo que hay en la ruta y vuelve a ejecutar el workflow."
+    ]
+  },
+  "run_dir_not_made": {
+    "title": "Directorio de la ejecución que no se puede crear",
+    "why": "Cada ejecución tiene su propio directorio, PW_JOB_DIR, donde se ejecutan sus pasos, que Meridian crea una vez guardada la ejecución, o comprueba antes que puede crear. El sistema operativo lo rechazó, por el motivo indicado.",
+    "fix": [
+      "Comprueba que el directorio en el que se crearía existe y que puedes escribir en él, o indica otro con --run-dir."
+    ]
+  },
+  "socket_path_too_long": {
+    "title": "Ruta de socket demasiado larga",
+    "why": "Los workers de esta máquina llegan al coordinador por un socket Unix en el directorio de estado de Meridian, y el sistema limita lo larga que puede ser la ruta de un socket. La ruta del directorio de estado deja demasiado poco espacio para él.",
+    "fix": [
+      "Asigna a MERIDIAN_STATE_DIR un directorio con una ruta más corta, en un disco local, que solo tú puedas cambiar y que perdure. Guarda la base de datos y la clave que envuelve los secretos de tus ejecuciones, así que mueve allí también lo que hay en el anterior."
+    ]
+  },
+  "socket_unusable": {
+    "title": "Socket del coordinador en el que no se puede escuchar",
+    "why": "Los workers de esta máquina llegan al coordinador por un socket Unix en el directorio de estado de Meridian, que un meridian run a la vez tiene, bajo un bloqueo junto a la base de datos. Este tiene el bloqueo, y elimina el socket que dejó uno que terminó, pero el sistema operativo rechazó escuchar allí, por el motivo indicado.",
+    "fix": [
+      "Comprueba qué hay en la ruta: Meridian solo reemplaza un socket, y deja cualquier otra cosa para que la elimines tú.",
+      "Después vuelve a ejecutar el workflow."
+    ]
+  },
   "source_access_denied": {
     "title": "Acceso denegado al repositorio",
     "why": "El repositorio pidió credenciales que git no tiene, o rechazó las que dio, o no se pudo comprobar la clave de su host. Un repositorio que no existe parece lo mismo cuando el servidor pide credenciales en vez de decirlo. Meridian nunca responde a una petición de contraseña o de frase de paso.",
@@ -1740,13 +1771,6 @@
     "why": "Meridian sigue los enlaces simbólicos del camino hacia sus directorios, como hace el núcleo, y se detiene tras tantos como se detendría el núcleo, lo que muy probablemente es un enlace que lleva de vuelta a sí mismo.",
     "fix": [
       "Busca el enlace que lleva de vuelta a sí mismo y corrígelo, o elige otro directorio."
-    ]
-  },
-  "mount_not_found": {
-    "title": "No se encuentra el montaje",
-    "why": "El directorio está en un sistema de archivos FUSE, que puede ser local o de red, y Meridian los distingue por el tipo del montaje en /proc/self/mountinfo, que no tiene ningún montaje para él.",
-    "fix": [
-      "Elige para MERIDIAN_STATE_DIR un directorio en un sistema de archivos que no sea FUSE."
     ]
   },
   "database_too_new": {

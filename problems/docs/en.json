@@ -1170,11 +1170,12 @@
     "why": "A user who can change a directory on the way to one of Meridian's could replace what is in it with their own after Meridian checked it. As OpenSSH does, Meridian accepts a directory on the way only if it belongs to you or to root and only you or root can change it, or if its sticky bit stops other users removing what isn't theirs, as /tmp's does, and what follows it is yours.",
     "fix": [
       "Choose a directory whose parents only you or root can change, such as one in your home directory, or one that mktemp -d -p /var/tmp makes.",
-      "Or have the directory's owner run chmod go-w on it."
+      "Or have the directory's owner run chmod go-w on it.",
+      "If it is the directory meridian run makes runs' directories in, under the system's temporary directory, which another user can make first, set TMPDIR to a directory of your own, or name the run's directory with --run-dir."
     ]
   },
   "network_filesystem": {
-    "why": "SQLite's locks don't work reliably on network filesystems, which is where home directories on clusters often are, so Meridian won't keep its database there.",
+    "why": "SQLite's locks don't work reliably on network filesystems, which is where home directories on clusters often are, so Meridian won't keep its database there. It takes every FUSE filesystem, and every folder a virtual machine shares with its host, as Docker Desktop's bind mounts are, for one too, since whether their locks hold can't be told.",
     "fix": [
       "Set MERIDIAN_STATE_DIR to a directory on a local disk that only you can change, and that lasts: it holds the database and the key that wraps your runs' secrets, which are lost with it. One that mktemp -d -p /var/tmp makes will do, or one on the node's persistent local disk, but not one in /tmp, which a reboot can empty."
     ]
@@ -1460,6 +1461,32 @@
       "If it looks like a bug in Meridian, report it with the command you ran."
     ]
   },
+  "run_dir_exists": {
+    "why": "Each run has a directory of its own, PW_JOB_DIR, where its steps run, which Meridian makes new once the run is stored, so that no run finds another's files in it, or a link that leads elsewhere. Something is already at the path it would make: a directory named with --run-dir that is there, or one under the system's temporary directory that something else made.",
+    "fix": [
+      "Name a directory that isn't there yet with --run-dir, which Meridian makes.",
+      "Or, once you've checked that nothing you need is in it, remove what is at the path, and run the workflow again."
+    ]
+  },
+  "run_dir_not_made": {
+    "why": "Each run has a directory of its own, PW_JOB_DIR, where its steps run, which Meridian makes once the run is stored, or checks it can make before. The operating system refused, for the reason given.",
+    "fix": [
+      "Check that the directory it would be made in is there, and that you can write to it, or name another with --run-dir."
+    ]
+  },
+  "socket_path_too_long": {
+    "why": "Workers on this machine reach the coordinator at a Unix socket in Meridian's state directory, and the system limits how long a socket's path can be. The state directory's path leaves too little room for it.",
+    "fix": [
+      "Set MERIDIAN_STATE_DIR to a directory with a shorter path, on a local disk, which only you can change, and that lasts. It holds the database and the key that wraps your runs' secrets, so move what is in the old one there too."
+    ]
+  },
+  "socket_unusable": {
+    "why": "Workers on this machine reach the coordinator at a Unix socket in Meridian's state directory, which one meridian run at a time holds, under a lock beside the database. This one holds the lock, and removes a socket that one that ended left, but the operating system refused to listen there, for the reason given.",
+    "fix": [
+      "Check what is at the path: Meridian replaces only a socket, and leaves anything else for you to remove.",
+      "Then run the workflow again."
+    ]
+  },
   "source_access_denied": {
     "why": "The repository asked for credentials git doesn't have, or refused the ones it gave, or its host's key couldn't be checked. A repository that doesn't exist looks the same when the server asks for credentials rather than say so. Meridian never answers a prompt for a password or a passphrase.",
     "fix": [
@@ -1495,12 +1522,6 @@
     "why": "Meridian follows the symbolic links on the way to its directories, as the kernel does, and stops after as many as the kernel would, which is most likely a link that leads back to itself.",
     "fix": [
       "Find the link that leads back to itself, and fix it, or choose another directory."
-    ]
-  },
-  "mount_not_found": {
-    "why": "The directory is on a FUSE filesystem, which can be a local one or a network one, and Meridian tells them apart by the mount's type in /proc/self/mountinfo, which has no mount for it.",
-    "fix": [
-      "Choose a directory for MERIDIAN_STATE_DIR on a filesystem that isn't FUSE."
     ]
   },
   "database_too_new": {

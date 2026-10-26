@@ -1,0 +1,8 @@
+//go:build darwin || freebsd || netbsd || openbsd || dragonfly
+
+package main
+
+import "golang.org/x/sys/unix"
+
+// getTermios is the ioctl that reads a terminal's settings.
+const getTermios = unix.TIOCGETA
