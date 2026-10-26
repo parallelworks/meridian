@@ -101,10 +101,11 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		}
 		// As in format 1, a job past its timeout isn't cancelled, nor is
 		// one whose run is past the run's: the step it was running failed,
-		// so its steps' failure() is true, and cancelled() false, even if
-		// the coordinator cancels it after. A step that ended cancelled, as
-		// early-cancel: stops one, makes cancelled() true for those after
-		// it, as the Step phase reads from their results.
+		// or succeeded if it ignores its errors, and cancelled() is false
+		// for the steps after it, even if the coordinator cancels it
+		// after. A step that ended cancelled, as early-cancel: stops one,
+		// makes cancelled() true for those after it, as the Step phase
+		// reads from their results.
 		if a.cancelled.fired() && why != stopJobTimeout {
 			cancelled = true
 		}
@@ -165,7 +166,11 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	end := &workerapi.Complete{}
 	outcome := plan.OutcomeSuccess
 	switch {
-	case why == stopJobTimeout:
+	case why == stopJobTimeout && failed:
+		// As in format 1, a job past its timeout, or whose run is, ends
+		// as its steps did: failed when one of them failed, which a
+		// deadline does, but for a step that ignores its errors, after
+		// which the job succeeds if no other fails.
 		outcome, end.Reason = plan.OutcomeFailure, plan.ReasonTimeout
 	case failed:
 		outcome = plan.OutcomeFailure
@@ -343,7 +348,9 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			cause := a.await(stops{cancellable: !first.OutlivesCancel}, ready)
 			stop()
 			if cause != noStop {
-				return a.notRun(i, try, end, cause, nil)
+				// As in format 1, a deadline that passes as a step waits to
+				// try again fails it, whatever its ignore-errors: says.
+				return a.notRun(i, try, end, cause, nil, false)
 			}
 		}
 		rs, vars, diags, err := a.readyTry(ctx, i, state, try, first, out.path)
@@ -378,7 +385,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 				// The job stopped as the step was readied: as in format
 				// 1, it ends cancelled, or failed past the job's timeout,
 				// unless it outlives that.
-				return a.notRun(i, try, end, why, diags)
+				return a.notRun(i, try, end, why, diags, rs.IgnoreErrors && (rs.Retry == nil || rs.Retry.MaxRetries == 0))
 			}
 		}
 		note, refused := a.runnable(rs, path)
@@ -409,7 +416,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			last = try >= first.Retry.MaxRetries
 		}
 		if cause := a.stopCauseOf(s); cause != noStop {
-			return a.notRun(i, try, end, cause, diags)
+			return a.notRun(i, try, end, cause, diags, rs.IgnoreErrors && last)
 		}
 		seq := a.events.add(workerapi.Event{Time: now(), Step: i, Try: try})
 		if !a.firstStarted {
@@ -417,7 +424,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			// known: the coordinator stores that the first step is
 			// starting before it starts.
 			if cause := a.await(s, func() (bool, <-chan struct{}) { return a.events.isStored(seq) }); cause != noStop {
-				return a.notRun(i, try, end, cause, diags)
+				return a.notRun(i, try, end, cause, diags, rs.IgnoreErrors && last)
 			}
 			a.firstStarted = true
 		}
@@ -435,13 +442,16 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		switch {
 		case cause == stopCancelled || cause == stopEarlyCancel:
 			outcome = plan.OutcomeCancelled
-		case cause == stopJobTimeout || tryDiags.HasErrors():
+		case tryDiags.HasErrors():
 		case cause == noStop && exit == 0:
 			outcome = plan.OutcomeSuccess
 		case rs.IgnoreErrors && last:
-			// As format 1: a step whose last try fails, even past its
-			// timeout, succeeds.
+			// As format 1: a step whose last try fails succeeds, even one
+			// a deadline stopped: its own timeout:, the job's or the
+			// run's.
 			outcome = plan.OutcomeSuccess
+		case cause == stopJobTimeout:
+			// Nor is a step a deadline stopped tried again.
 		case cause == stopStepTimeout:
 			// A step past its own timeout: isn't tried again.
 			tryDiags = append(tryDiags, a.at(problems.StepTimedOut, path, problems.Params{"limit": rs.TimeoutSeconds}))
@@ -491,16 +501,22 @@ func (a *attempt) readyTry(ctx context.Context, i int, state plan.JobState, try 
 }
 
 // notRun reports the try of a step that didn't start, because the job is
-// stopping for cause, with diags, Step's, and returns how the step ended:
-// cancelled, or failed for the job's timeout, as in format 1, with the
-// outputs its earlier tries wrote.
-func (a *attempt) notRun(i, try int, end stepEnd, cause stopCause, diags problems.Diagnostics) stepEnd {
+// stopping for cause, with diags, Step's, and returns how the step ended,
+// as in format 1, with the outputs its earlier tries wrote: cancelled; or,
+// for the job's timeout or the run's, failed, as format 1 fails a step it
+// starts once their deadline has passed, unless ignored is set, for a try
+// that is its step's last of a step whose ignore-errors: is true, which
+// succeeds, as format 1's does.
+func (a *attempt) notRun(i, try int, end stepEnd, cause stopCause, diags problems.Diagnostics, ignored bool) stepEnd {
 	if cause == stopHalted {
 		end.cut = true
 		return end
 	}
 	outcome := plan.OutcomeCancelled
-	if cause == stopJobTimeout {
+	switch {
+	case cause == stopJobTimeout && ignored:
+		outcome = plan.OutcomeSuccess
+	case cause == stopJobTimeout:
 		outcome = plan.OutcomeFailure
 	}
 	a.finished(workerapi.Event{Step: i, Try: try, Outcome: outcome, ExitCode: -1, Diagnostics: diags})

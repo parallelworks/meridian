@@ -2390,7 +2390,11 @@ is, or evaluates to, the word `always`, as a step's can be (below).
   ended with first. That is so when the timeout stops a step, or one is
   still to run: one that comes once no such step is left, as during a
   last step that outlives a cancel, or the cleanups, leaves the job
-  ending as its steps did. The run goes on: the jobs that need it
+  ending as its steps did. A step with `ignore-errors:` whose last try a
+  deadline stops, its own, the job's or the run's, succeeds, as in format
+  1, and so does one that comes to run after the job's or the run's
+  deadline has passed, which fails otherwise: a job whose steps all end
+  so ends as they did, as success, with no reason. The run goes on: the jobs that need it
   are skipped because their needs failed, and those whose `if:` calls
   `failure()` run. The coordinator enforces it too, as a backstop for a
   worker that doesn't: once the job's timeout, the worker's own time to
