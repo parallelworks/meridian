@@ -2,6 +2,7 @@ package plan_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -754,7 +755,9 @@ func hasKind(err error, k *problems.Kind) bool {
 // passThrough is a platform that takes every value it's given as it is.
 type passThrough struct{}
 
-func (passThrough) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
+func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+	return v, nil
+}
 
 // benchmarkPlans returns plans to encode and decode: a public workflow's;
 // one from a workflow as large as a file can be whose expressions each nest

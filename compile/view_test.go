@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"math"
@@ -117,7 +118,9 @@ jobs:
 
 type passThrough struct{}
 
-func (passThrough) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
+func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+	return v, nil
+}
 
 // sameJSON reports whether a and b are the same values, a NaN the same as
 // another, which a default can give.

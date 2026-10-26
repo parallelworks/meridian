@@ -26,7 +26,10 @@ import (
 // workflow as it is written: it reaches none of the resolvers that take a
 // context, Options.Variables, Groups, Sources and Sessions, as if they
 // weren't there, and so checks no execution group, uses: or sessions:,
-// and reads the variables, remote and sessions from Options.Contexts.
+// and reads the variables, remote and sessions from Options.Contexts; and
+// it asks Options.Inputs nothing, so an input of a platform's type is as
+// it was given, and isn't checked, but where there is no Inputs resolver
+// at all (platform_input).
 func Compile(name string, data []byte, submitted map[string]any, opts Options) (*plan.Plan, problems.Diagnostics) {
 	// Without a context, it reaches no resolver that could fail.
 	created, diags, _ := create(nil, name, data, submitted, opts)
@@ -56,7 +59,8 @@ type Created struct {
 // workflow that needs one of them that isn't there fails
 // (resolver_missing). It reports every problem it finds, and gives nothing
 // if any is an error. It returns an error, and nothing else, when a
-// resolver couldn't answer, or ctx is done, with ctx.Err().
+// resolver couldn't answer, which for the Inputs resolver wraps
+// ErrUnanswered, or ctx is done, with ctx.Err().
 func Create(ctx context.Context, name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -96,7 +100,14 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 		}
 		diags = append(diags, resolved...)
 	}
-	inputs := resolveInputs(doc, submitted, opts)
+	var ctx context.Context
+	if r != nil {
+		ctx = r.ctx
+	}
+	inputs := resolveInputs(ctx, doc, submitted, opts)
+	if err := inputs.unansweredErr(); err != nil {
+		return nil, nil, err
+	}
 	c := &compiler{doc: doc, opts: opts, inputs: inputs, secrets: map[string]bool{}}
 	c.diags = append(c.diags, diags...)
 	c.diags = append(c.diags, inputs.diags...)

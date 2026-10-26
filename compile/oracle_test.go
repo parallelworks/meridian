@@ -17,7 +17,9 @@ import (
 // givenAsIs is a platform that takes each value it's given as it is.
 type givenAsIs struct{}
 
-func (givenAsIs) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
+func (givenAsIs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+	return v, nil
+}
 
 // caseVariables gives what Start reads of a case's variables: each by
 // name, those the case names secret secret.
@@ -134,9 +136,10 @@ func TestStartAgreesWithCreate(t *testing.T) {
 			createOpts := Options{Inputs: inputs, Contexts: created}
 			for kind, submitted := range map[string]map[string]any{
 				"submitted": c.Inputs,
-				"form":      FormValues(doc, c.Inputs, createOpts),
+				"form":      FormValues(t.Context(), doc, c.Inputs, createOpts),
 			} {
 				oracle := newInputResolver(doc, submitted, Options{Inputs: inputs, Contexts: maps.Clone(known)})
+				oracle.ctx = t.Context()
 				oracle.resolve()
 				if oracle.diags.HasErrors() || slices.ContainsFunc(oracle.fields, func(f *field) bool { return f.deferred && !f.ignored }) {
 					// It has no values to compare, or doesn't know them, as

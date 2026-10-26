@@ -1,6 +1,8 @@
 package compile
 
 import (
+	"context"
+
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
@@ -28,12 +30,13 @@ var NamesSecret = namesSecret
 // form reads the resource a person picks, but the input's own value is the
 // one opts.Inputs was given, as a form sends a resource's name, as
 // pw://user/name, rather than its details.
-func FormValues(doc *format.Document, submitted map[string]any, opts Options) map[string]any {
+func FormValues(ctx context.Context, doc *format.Document, submitted map[string]any, opts Options) map[string]any {
 	plain := *doc
 	plain.Value = jsonvalue.CloneMap(doc.Value)
 	// A form evaluates a password input's value as it does a text input's.
 	asText(lookup(plain.Value, definitionsPath))
 	r := newInputResolver(&plain, submitted, opts)
+	r.ctx = ctx
 	r.marks = expr.Marks{}
 	r.fill()
 	// What the form sends is the values before the compiler compares them,

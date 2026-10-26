@@ -511,7 +511,10 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 // name a scheduler's partitions, accounts and queues come later. A value
 // that names none of them is problems.ExecutionGroupUnknown, which the
 // compiler reports with the input's name.
-func (c *Config) ResolveInput(typ string, _ map[string]any, value any) (any, error) {
+func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any, value any) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if typ != "execution-groups" {
 		return nil, compile.ErrInputType
 	}

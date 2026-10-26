@@ -1,7 +1,9 @@
 package compile
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/parallelworks/meridian/expr"
@@ -29,14 +31,69 @@ type InputResolver interface {
 	// fails the run all the same. A resolver that runs format 1 as ACTIVATE
 	// does gives a compute-clusters or a bucket input's details, and every
 	// other type's value as it is. It returns ErrInputType for a type it
-	// doesn't provide. An error that is, or wraps, a *problem.Problem of one
-	// of the problems package's kinds of error, foundation's shared rules
-	// among them, but not the command's, is reported as that kind, with its
-	// params and the input's name as input; any other error, a problem of a
-	// warning's kind or of the command's among them, is input_rejected, with
-	// the error's text as its reason, so that an error never becomes a
-	// warning that lets the value through.
-	ResolveInput(typ string, definition map[string]any, value any) (any, error)
+	// doesn't provide. It refuses a value with an error that is, or wraps, a
+	// *problem.Problem: one of the problems package's kinds of error,
+	// foundation's shared rules among them, but not the command's, is
+	// reported as that kind, with its params and the input's name as input,
+	// and any other, as one of a warning's kind, is input_rejected with the
+	// problem's text as its reason, as is input_rejected with a reason, for
+	// a refusal that has no kind of its own. What a refusal shows is masked
+	// where the value can be private. Any other error says it couldn't
+	// answer, as when ctx is done or the platform can't be reached: the run
+	// isn't created, or doesn't start, and Create or Start returns an error
+	// that wraps ErrUnanswered, so that it can be tried again. That error
+	// names the input, and has the resolver's error's text only where the
+	// value can't be private; all the same, an error that says it couldn't
+	// answer never quotes the value, as a URL it couldn't reach can.
+	ResolveInput(ctx context.Context, typ string, definition map[string]any, value any) (any, error)
+}
+
+// ErrUnanswered is what the error Create, Start and ResolveInputs return
+// wraps when the Inputs resolver couldn't answer for an input's value
+// (InputResolver): the run can be created, or started, again.
+var ErrUnanswered = errors.New("compile: the Inputs resolver couldn't answer")
+
+// An unansweredError is the error of the Inputs resolver that couldn't
+// answer for input's value. It has reason, the resolver's error's text,
+// only where the value can't be private, as the value of a password, or
+// one a form made from a variable or a password, or that reads one, can
+// be: the resolver's error can quote it. It wraps ErrUnanswered and, where
+// ctx was done, ctx's error, and nothing else of the resolver's error, so
+// that one that happens to wrap ErrMismatch, plan.ErrMalformed or
+// plan.ErrVersion isn't taken for a run that can't be started again.
+type unansweredError struct {
+	input, reason string
+	ctx           error
+}
+
+func (e *unansweredError) Error() string {
+	msg := fmt.Sprintf("%v for the input %s", ErrUnanswered, e.input)
+	if e.reason != "" {
+		msg += ": " + e.reason
+	}
+	return msg
+}
+
+func (e *unansweredError) Unwrap() []error {
+	if e.ctx != nil {
+		return []error{ErrUnanswered, e.ctx}
+	}
+	return []error{ErrUnanswered}
+}
+
+// unansweredFor returns the error of the Inputs resolver that couldn't answer
+// for f's value with err (unansweredError).
+func (r *inputResolver) unansweredFor(f *field, err error) error {
+	e := &unansweredError{input: f.label()}
+	if !r.mayBePrivate(f) {
+		e.reason = err.Error()
+	}
+	for _, done := range []error{context.Canceled, context.DeadlineExceeded} {
+		if errors.Is(err, done) {
+			e.ctx = done
+		}
+	}
+	return e
 }
 
 // platformTypes are the input types whose values name a platform's
@@ -132,10 +189,15 @@ var definitionsPath = []string{"on", "execute", "inputs"}
 
 // ResolveInputs checks a run's submitted input values against the workflow's
 // input definitions, applies defaults, and drops ignored inputs, as
-// docs/design.md describes. It reports every problem it finds.
-func ResolveInputs(doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics) {
-	r := resolveInputs(doc, submitted, opts)
-	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets, Private: r.private}, listed(r.diags)
+// docs/design.md describes. It reports every problem it finds. It returns
+// an error, and nothing else, when opts' Inputs resolver couldn't answer,
+// which wraps ErrUnanswered, or ctx is done, with ctx.Err().
+func ResolveInputs(ctx context.Context, doc *format.Document, submitted map[string]any, opts Options) (*Inputs, problems.Diagnostics, error) {
+	r := resolveInputs(ctx, doc, submitted, opts)
+	if err := r.unansweredErr(); err != nil {
+		return nil, nil, err
+	}
+	return &Inputs{Values: r.kept(), Deferred: r.deferred(), Secrets: r.secrets, Private: r.private}, listed(r.diags), nil
 }
 
 // deferred returns the inputs whose values Start resolves, each with its
@@ -155,11 +217,26 @@ func (r *inputResolver) deferred() map[string]plan.Value {
 }
 
 // resolveInputs resolves the inputs, keeping their definitions for the
-// compiler's checks of what reads them.
-func resolveInputs(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
+// compiler's checks of what reads them. With a nil ctx, as Compile has, it
+// asks no Inputs resolver, which takes one: the value of an input of a
+// platform's type is as it was given, and isn't checked, but where opts has
+// no Inputs resolver at all (platform_input).
+func resolveInputs(ctx context.Context, doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
 	r := newInputResolver(doc, submitted, opts)
+	r.ctx = ctx
 	r.resolve()
 	return r
+}
+
+// unansweredErr returns the error of the Inputs resolver that couldn't
+// answer, or ctx's if it is done, or nil.
+func (r *inputResolver) unansweredErr() error {
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return r.unanswered
 }
 
 func newInputResolver(doc *format.Document, submitted map[string]any, opts Options) *inputResolver {
@@ -224,8 +301,13 @@ func (r *inputResolver) fill() {
 // compareState (compare.go) and viewState (view.go).
 type inputResolver struct {
 	reporter
-	opts     Options
-	workflow *expr.Workflow
+	opts Options
+	// ctx is what the Inputs resolver is asked with, or nil, for Compile,
+	// which asks none; unanswered is the error of one that couldn't answer,
+	// once one couldn't, after which none is asked (askPlatform).
+	ctx        context.Context
+	unanswered error
+	workflow   *expr.Workflow
 	// budget is Create's scope (viewState.created) with the one budget that
 	// every evaluation of the inputs' expressions shares, and the jobs'
 	// needs, made with the view: what decides the run's shape is one group,

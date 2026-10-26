@@ -1,6 +1,7 @@
 package compile_test
 
 import (
+	"context"
 	"encoding/json/v2"
 	"maps"
 	"slices"
@@ -19,7 +20,9 @@ import (
 // passThrough is a platform that takes every value it's given as it is.
 type passThrough struct{}
 
-func (passThrough) ResolveInput(_ string, _ map[string]any, v any) (any, error) { return v, nil }
+func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+	return v, nil
+}
 
 func TestInputsConformance(t *testing.T) {
 	cases, err := conformance.Cases("inputs")
@@ -41,7 +44,7 @@ func TestInputsConformance(t *testing.T) {
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}
-			inputs, diags := compile.ResolveInputs(doc, c.Inputs, opts)
+			inputs, diags := resolveInputs(t, doc, c.Inputs, opts)
 			conformancetest.CheckDiagnostics(t, c.Expect.Diagnostics, diags)
 			check := func(what string, got, want map[string]any) {
 				t.Helper()

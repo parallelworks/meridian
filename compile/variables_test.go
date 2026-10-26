@@ -102,8 +102,12 @@ func TestDiagnosticsHideVariables(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// Create, as Compile asks the Inputs resolver nothing.
 			opts := compile.Options{Inputs: platform{}, Contexts: map[string]any{"vars": map[string]any{"X": tc.value}}}
-			_, diags := compile.Compile("workflow.yaml", []byte(tc.workflow), nil, opts)
+			_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(tc.workflow), nil, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
 			i := slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == tc.kind.Code() })
 			if i < 0 {
 				t.Fatalf("diagnostics %v, want %s", diags, tc.kind.Code())
@@ -128,7 +132,9 @@ func TestDiagnosticsHideVariables(t *testing.T) {
 			} else {
 				workflow = strings.Replace(workflow, "    inputs:\n", "    inputs:\n      x: {type: string}\n", 1)
 			}
-			_, diags = compile.Compile("workflow.yaml", []byte(workflow), map[string]any{"x": tc.value}, compile.Options{Inputs: platform{}})
+			if _, diags, err = compile.Create(t.Context(), "workflow.yaml", []byte(workflow), map[string]any{"x": tc.value}, compile.Options{Inputs: platform{}}); err != nil {
+				t.Fatal(err)
+			}
 			i = slices.IndexFunc(diags, func(d problems.Diagnostic) bool { return d.Code == tc.kind.Code() })
 			if i < 0 || slices.ContainsFunc(tc.masked, func(name string) bool { return diags[i].Params[name] == problems.Masked }) {
 				t.Errorf("from an input: %v, want %s showing the value", diags, tc.kind.Code())
@@ -255,7 +261,7 @@ jobs:
 		"org":  map[string]any{"AFTER": "build"},
 		"vars": map[string]any{"KEY": "s3cr3t", "N": "5"},
 	}}
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"skipped": "x"}, opts)
+	inputs, diags := resolveInputs(t, load(t, src), map[string]any{"skipped": "x"}, opts)
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
@@ -354,7 +360,7 @@ func TestVariablesNeverInPlans(t *testing.T) {
 			if !changed || diags.HasErrors() {
 				continue
 			}
-			form := compile.FormValues(doc, c.Inputs, opts)
+			form := compile.FormValues(t.Context(), doc, c.Inputs, opts)
 			forms += strings.Count(fmt.Sprint(form), variableSentinel)
 			// A form sends what the person typed, which the compiler
 			// compares with what its default gives.

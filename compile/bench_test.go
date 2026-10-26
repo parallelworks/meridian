@@ -29,7 +29,7 @@ func benchmarkResolve(b *testing.B, data []byte, submitted map[string]any) {
 		b.Fatal(diags)
 	}
 	for b.Loop() {
-		_, _ = compile.ResolveInputs(doc, submitted, compile.Options{})
+		_, _ = resolveInputs(b, doc, submitted, compile.Options{})
 	}
 }
 

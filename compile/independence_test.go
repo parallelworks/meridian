@@ -107,7 +107,7 @@ func TestPlansDontDependOnVariables(t *testing.T) {
 			}
 			for name, submitted := range map[string]map[string]any{
 				"submitted": c.Inputs,
-				"form":      compile.FormValues(doc, c.Inputs, before),
+				"form":      compile.FormValues(t.Context(), doc, c.Inputs, before),
 			} {
 				a, _ := compile.Compile("workflow.yaml", data, submitted, before)
 				b, _ := compile.Compile("workflow.yaml", data, submitted, after)

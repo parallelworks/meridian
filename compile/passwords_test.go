@@ -61,7 +61,7 @@ func TestPasswordsNeverInPlans(t *testing.T) {
 				if password == sentinel {
 					// forms counts those that send what a default made from
 					// the password, beside the password.
-					form := compile.FormValues(doc, submitted, opts)
+					form := compile.FormValues(t.Context(), doc, submitted, opts)
 					if sentinels(t, form) > sentinels(t, submitted) {
 						forms++
 					}
@@ -90,7 +90,7 @@ func TestPasswordsNeverInPlans(t *testing.T) {
 						t.Errorf("%s: the plan holds the password: %s", c.Name, encoded)
 					}
 				}
-				inputs, _ := compile.ResolveInputs(doc, submitted, opts)
+				inputs, _ := resolveInputs(t, doc, submitted, opts)
 				if holdsSentinel(t, inputs.Values) || holdsSentinel(t, inputs.Deferred) {
 					t.Errorf("%s: the values %v or the deferred defaults hold the password", c.Name, inputs.Values)
 				}
@@ -252,7 +252,7 @@ func TestPasswordsInTheWrongShape(t *testing.T) {
 			if !slices.Contains(p.Run.Secrets, "inputs."+tc.secret) {
 				t.Errorf("the run's secrets %v, want inputs.%s", p.Run.Secrets, tc.secret)
 			}
-			inputs, _ := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+			inputs, _ := resolveInputs(t, load(t, src), submitted, compile.Options{})
 			if holdsSentinel(t, inputs.Values) || holdsSentinel(t, inputs.Deferred) {
 				t.Errorf("values %v or deferred %v hold the password", inputs.Values, inputs.Deferred)
 			}
@@ -470,7 +470,7 @@ func TestHeldValuesKeepTheirExpressions(t *testing.T) {
 		"org":  map[string]any{"ROWS": `[{"x": "a", "y": "b"}]`},
 		"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}},
 	}}
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"l": []any{map[string]any{"x": "${{ vars.SECRET }}", "y": "typed"}}}, opts)
+	inputs, diags := resolveInputs(t, load(t, src), map[string]any{"l": []any{map[string]any{"x": "${{ vars.SECRET }}", "y": "typed"}}}, opts)
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
@@ -528,7 +528,7 @@ func TestRelativeReferencesReadWhatTheyReach(t *testing.T) {
 		"b: {type: string, default: '${{ ..region.default }}'}",
 	)
 	opts := compile.Options{Contexts: map[string]any{"org": map[string]any{"REGION": "us-east"}}}
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"a": "typed", "b": "typed"}, opts)
+	inputs, diags := resolveInputs(t, load(t, src), map[string]any{"a": "typed", "b": "typed"}, opts)
 	if len(diags) != 0 || inputs.Values["a"] != "typed" || inputs.Private["b"] != "typed" {
 		t.Errorf("values %v, private %v, %v; want a typed and b private", inputs.Values, inputs.Private, diags)
 	}
@@ -554,7 +554,7 @@ func TestUnknownRowPasswordsAreSecrets(t *testing.T) {
 		},
 		"hosts": []any{map[string]any{"host": "h", "top": sentinel}},
 	}
-	in, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	in, diags := resolveInputs(t, load(t, src), submitted, compile.Options{})
 	var listed []string
 	for _, d := range diags {
 		if d.Code != problems.UnknownInput.Code() {
@@ -593,7 +593,7 @@ func TestUnknownRowPasswordsAreSecrets(t *testing.T) {
 	held := inputs("creds: {type: list, template: {user: {type: string}, password: {type: password, optional: true}, " +
 		"hint: {type: string, default: '${{ inputs.creds.[index].password }}'}}}")
 	submitted = map[string]any{"creds": []any{map[string]any{"user": "a", "pasword": sentinel}}}
-	in, _ = compile.ResolveInputs(load(t, held), submitted, compile.Options{})
+	in, _ = resolveInputs(t, load(t, held), submitted, compile.Options{})
 	if in.Secrets["creds.0.pasword"] != sentinel || in.Deferred["creds"].IsZero() {
 		t.Errorf("secrets %v, deferred %v", in.Secrets, in.Deferred)
 	}
@@ -623,7 +623,7 @@ func TestUnknownSecretNamesAreSecrets(t *testing.T) {
 	submitted := row()
 	submitted["g"] = row()
 	submitted["l"] = []any{row()}
-	in, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	in, diags := resolveInputs(t, load(t, src), submitted, compile.Options{})
 	if len(diags) != 12 {
 		t.Errorf("diagnostics %v, want 12 unknown inputs", diags)
 	}
@@ -645,7 +645,7 @@ func TestUnknownSecretNamesAreSecrets(t *testing.T) {
 // written in the workflow is that option: neither is kept as a secret.
 func TestTextItemsAreNotCompared(t *testing.T) {
 	src := inputs("pw: {type: password}", "m: {type: multi-dropdown, options: ['${{ inputs.pw }}', plain]}")
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "m": []any{"${{ inputs.pw }}", "plain"}}, compile.Options{})
+	inputs, diags := resolveInputs(t, load(t, src), map[string]any{"pw": sentinel, "m": []any{"${{ inputs.pw }}", "plain"}}, compile.Options{})
 	if len(diags) != 0 || len(inputs.Secrets) != 1 {
 		t.Errorf("secrets %v, %v; want pw's alone", inputs.Secrets, diags)
 	}
@@ -660,7 +660,7 @@ func TestFormValuesAreReadAsPasswords(t *testing.T) {
 		"copy: {type: string, default: '${{ inputs.pw }}'}",
 		"n: {type: number, default: '${{ length(inputs.copy) }}'}",
 	)
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "copy": sentinel}, compile.Options{})
+	inputs, diags := resolveInputs(t, load(t, src), map[string]any{"pw": sentinel, "copy": sentinel}, compile.Options{})
 	if len(diags) != 0 || len(inputs.Values) != 0 {
 		t.Errorf("values %v, %v; want none", inputs.Values, diags)
 	}
@@ -674,7 +674,7 @@ func TestFormValuesAreReadAsPasswords(t *testing.T) {
 // kept as a secret.
 func TestTypedValuesStayData(t *testing.T) {
 	src := inputs("b: {type: string, default: x}", "a: {type: string, default: '${{ inputs.b }}-a'}")
-	inputs, diags := compile.ResolveInputs(load(t, src), map[string]any{"a": "typed"}, compile.Options{})
+	inputs, diags := resolveInputs(t, load(t, src), map[string]any{"a": "typed"}, compile.Options{})
 	if len(diags) != 0 || inputs.Values["a"] != "typed" || len(inputs.Secrets) != 0 {
 		t.Errorf("values %v, secrets %v, %v", inputs.Values, inputs.Secrets, diags)
 	}
@@ -691,7 +691,7 @@ func TestDefaultsReadEachOtherListsOnlyThem(t *testing.T) {
 		"e: {type: string, default: '${{ inputs.f }}'}",
 		"f: {type: string, default: '${{ inputs.e }}'}",
 	)
-	_, diags := compile.ResolveInputs(load(t, src), map[string]any{"pw": sentinel, "c": "typed"}, compile.Options{})
+	_, diags := resolveInputs(t, load(t, src), map[string]any{"pw": sentinel, "c": "typed"}, compile.Options{})
 	if len(diags) != 1 || diags[0].Code != problems.DefaultsReadEachOther.Code() || diags[0].Params["inputs"] != `"e", "f"` {
 		t.Errorf("diagnostics %v, want %s for e and f", diags, problems.DefaultsReadEachOther.Code())
 	}
@@ -707,7 +707,7 @@ func TestPasswordsInDefaultsThatReadEachOther(t *testing.T) {
 		"l: {type: list, template: {p: {type: password}, q: {type: string}}, default: [{q: '${{ fromJSON(inputs.b) }}'}]}",
 	)
 	submitted := map[string]any{"l": []any{map[string]any{"p": sentinel, "q": "${{ fromJSON(inputs.b) }}"}}}
-	inputs, diags := compile.ResolveInputs(load(t, src), submitted, compile.Options{})
+	inputs, diags := resolveInputs(t, load(t, src), submitted, compile.Options{})
 	if !slices.ContainsFunc(diags, func(d problems.Diagnostic) bool { return d.Code == problems.DefaultsReadEachOther.Code() }) {
 		t.Errorf("diagnostics %v, want %s", diags, problems.DefaultsReadEachOther.Code())
 	}
@@ -880,7 +880,7 @@ jobs:
 		"org":  map[string]any{"OWNER": "research", "a.b": "plain"},
 		"vars": map[string]any{"SECRET": expr.Unknown{Name: "vars"}, "my.token": expr.Unknown{Name: "vars"}},
 	}}
-	in, _ := compile.ResolveInputs(load(t, src), submitted, opts)
+	in, _ := resolveInputs(t, load(t, src), submitted, opts)
 	p, diags := compile.Compile("workflow.yaml", []byte(src), submitted, opts)
 	if p == nil {
 		t.Fatal(diags)
