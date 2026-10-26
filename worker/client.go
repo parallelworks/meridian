@@ -481,14 +481,18 @@ type timing struct {
 	// flush bounds how long a worker stopped from outside spends sending
 	// what it has.
 	flush time.Duration
+	// firstControl bounds how long the job's first step waits for the
+	// worker's first control (attempt.awaitFirstControl).
+	firstControl time.Duration
 }
 
 var defaultTiming = timing{
-	grace:      30 * time.Second,
-	afterKill:  5 * time.Second,
-	backoffMin: 250 * time.Millisecond,
-	backoffMax: 30 * time.Second,
-	flush:      10 * time.Second,
+	grace:        30 * time.Second,
+	afterKill:    5 * time.Second,
+	backoffMin:   250 * time.Millisecond,
+	backoffMax:   30 * time.Second,
+	flush:        10 * time.Second,
+	firstControl: 5 * time.Second,
 }
 
 // backoff returns how long to wait before trying a request again after

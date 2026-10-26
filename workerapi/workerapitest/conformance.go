@@ -112,6 +112,7 @@ func Conformance(t *testing.T, target Target) {
 	t.Run("lease", func(t *testing.T) { checkLapse(t, target) })
 	t.Run("self-fencing lease", func(t *testing.T) { checkSelfFencingLapse(t, target) })
 	t.Run("control", func(t *testing.T) { checkControl(t, target) })
+	t.Run("control before the claim", func(t *testing.T) { checkControlBeforeClaim(t, target) })
 	t.Run("events", func(t *testing.T) { checkEvents(t, target) })
 	t.Run("logs", func(t *testing.T) { checkLogs(t, target) })
 	t.Run("complete", func(t *testing.T) { checkComplete(t, target) })
@@ -632,6 +633,23 @@ func checkControl(t *testing.T, target Target) {
 	}
 	if !slices.IsSorted(versions) {
 		t.Errorf("the control's version went back: %v", versions)
+	}
+}
+
+// What the coordinator asked of an attempt before its claim reaches the
+// worker's first poll, for any version, at once: the worker reads it
+// before the job's first step (workerapi.Control).
+func checkControlBeforeClaim(t *testing.T, target Target) {
+	hold := target.ControlHold()
+	w := newWorker(t, target, newAttempt())
+	target.Control(t, w.attemptID, workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout})
+	w.claimed()
+	c, took := w.poll(-1)
+	if took > hold/2 {
+		t.Errorf("the first poll took %v", took)
+	}
+	if c.Version <= 0 || !c.Cancel || c.Reason != plan.ReasonTimeout {
+		t.Errorf("the first control is %+v, without what the coordinator asked before the claim", c)
 	}
 }
 

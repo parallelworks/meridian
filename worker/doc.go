@@ -56,7 +56,10 @@
 // the workflow's code may have run is always known.
 //
 // The worker renews the attempt's lease with heartbeats, and polls for
-// what the coordinator asks of it. When the coordinator says that the
+// what the coordinator asks of it, from the claim: what it asked before
+// the claim, as a cancel of the run, applies from the first step, which
+// waits a few seconds at most for the first answer
+// (workerapi.Control). When the coordinator says that the
 // attempt has ended without it, superseded by another, or no longer
 // accepts its credential, it stops every process group the attempt
 // started, without running the steps' cleanup: commands, and exits. Once

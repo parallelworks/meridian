@@ -63,11 +63,12 @@ func sendingAttempt(t *testing.T, f *workerapitest.Fake, job *plan.ReadyJob) (*a
 
 // testTiming is the worker's timing, shortened for tests.
 var testTiming = timing{
-	grace:      2 * time.Second,
-	afterKill:  time.Second,
-	backoffMin: 5 * time.Millisecond,
-	backoffMax: 50 * time.Millisecond,
-	flush:      time.Second,
+	grace:        2 * time.Second,
+	afterKill:    time.Second,
+	backoffMin:   5 * time.Millisecond,
+	backoffMax:   50 * time.Millisecond,
+	flush:        time.Second,
+	firstControl: 500 * time.Millisecond,
 }
 
 // runWorker runs a worker against f, served on a Unix socket unless
