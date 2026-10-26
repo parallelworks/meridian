@@ -32,9 +32,9 @@ func schemaDefs(t *testing.T) map[string]any {
 
 // The schema describes each encoded type, by its name, as the type is: a
 // property for each of its JSON members, and no other; each member it
-// always writes required; and no member it doesn't have. A diagnostic's
-// definition is foundation's problem.FieldError's members, as it writes
-// them.
+// always writes required; no member it doesn't have; and each integer
+// bounded as its Go type is (schematest.Bounds). A diagnostic's definition
+// is foundation's problem.FieldError's members, as it writes them.
 func TestSchemaDescribesTheTypes(t *testing.T) {
 	defs := schemaDefs(t)
 	check := func(typ reflect.Type, name string) {
@@ -58,6 +58,7 @@ func TestSchemaDescribesTheTypes(t *testing.T) {
 			if _, options, _ := strings.Cut(f.Tag.Get("json"), ","); !strings.Contains(options, "omitempty") && !strings.Contains(options, "omitzero") {
 				always = append(always, member)
 			}
+			schematest.Bounds(t, name+"."+member, f.Type, props[member])
 		}
 		slices.Sort(members)
 		slices.Sort(always)
@@ -126,37 +127,6 @@ var writtenDefs = []string{
 func asList(v any) []any {
 	l, _ := v.([]any)
 	return l
-}
-
-// The schemas refuse what the encodings never hold.
-func TestSchemasRefuse(t *testing.T) {
-	good := string(encoded(t, plan.Encode, fullPlan(t)))
-	s := schematest.Schema(t, "plan/schema/1/plan.schema.json")
-	for name, data := range map[string]string{
-		"another version":        strings.Replace(good, `"version":1`, `"version":2`, 1),
-		"an unknown member":      strings.Replace(good, `"release":"v1.0.0"`, `"release":"v1.0.0","later":true`, 1),
-		"a job without its path": strings.Replace(good, `,"path":"/jobs/build"}]`, `}]`, 1),
-		"an unknown node":        strings.Replace(good, `{"word":"debug"}`, `{"words":"debug"}`, 1),
-		"a node of two kinds":    strings.Replace(good, `{"word":"debug"}`, `{"word":"debug","lit":1}`, 1),
-		"a template of text":     strings.Replace(good, `{"${{":["hello ",{"src":" inputs.name ","tree":{"path":["name"],"ref":"inputs"}}]}`, `{"${{":["hello "]}`, 1),
-		"an unmarked $ key":      strings.Replace(good, `"$":{"$wizard":"x"}`, `"$wizard":"x"`, 1),
-		"a segment of two kinds": strings.Replace(good, `{"each":true}`, `{"each":true,"index":true}`, 1),
-		"a number as text":       strings.Replace(good, `"format":1`, `"format":"1"`, 1),
-		"a name that's empty":    strings.Replace(good, `"private":["inputs.region"]`, `"private":[""]`, 1),
-		"a diagnostic's extra":   strings.Replace(good, `"code":"unknown_key"`, `"code":"unknown_key","severity":"warning"`, 1),
-	} {
-		if data == good {
-			t.Fatalf("%s: the golden plan changed", name)
-		}
-		if err := schematest.Check(s, []byte(data)); err == nil {
-			t.Errorf("%s: fits the schema", name)
-		}
-	}
-	jobs := schematest.Schema(t, "plan/schema/1/readyjob.schema.json")
-	job := string(encoded(t, plan.EncodeReadyJob, readyJobs(t)[1]))
-	if err := schematest.Check(jobs, []byte(strings.Replace(job, `"target":{"group":"gpu"}`, `"target":{"group":"gpu","inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":null}}`, 1))); err == nil {
-		t.Error("a target of two kinds fits the schema")
-	}
 }
 
 // The schema checks an expression's tree in time linear in its size, each

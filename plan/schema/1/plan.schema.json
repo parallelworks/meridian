@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Meridian plan, version 1",
-  "description": "A compiled run, as plan.Encode writes it: everything a coordinator needs to schedule the run, and a worker to run its jobs. Its $defs describe the plan's other types too, which readyjob.schema.json, record.schema.json, runvalues.schema.json and jobresult.schema.json name, and the stored values and expressions every one of them holds. Every member is described; a member this version doesn't have is refused, as plan.Decode refuses it.",
+  "description": "A compiled run, as plan.Encode writes it: everything a coordinator needs to schedule the run, and a worker to run its jobs. Its $defs describe the plan's other types too, which readyjob.schema.json, record.schema.json, runvalues.schema.json and jobresult.schema.json name, and the stored values and expressions every one of them holds. Every member is described; a member this version doesn't have is refused, as plan.Decode refuses it. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0 or 2e0, which decoding refuses though JSON Schema counts them as integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
   "$ref": "#/$defs/Plan",
   "$defs": {
     "Plan": {
@@ -42,7 +42,8 @@
         "format": {
           "description": "The workflow's format.",
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 2147483647
         },
         "release": {
           "description": "The Meridian release that compiled the plan, as v1.2.3, or (devel) for a build of Meridian that isn't one.",
@@ -62,7 +63,10 @@
         },
         "inputs": {
           "description": "The run's input values that read no variable and no password, with defaults applied and ignored inputs left out: a mapping.",
-          "$ref": "#/$defs/Data"
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
         },
         "definitions": {
           "description": "The workflow's input definitions, on.execute.inputs, with their expressions parsed, but for what withheld names.",
@@ -132,7 +136,9 @@
       "properties": {
         "maxInstances": {
           "description": "How many instances a matrix can have.",
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         }
       },
       "additionalProperties": false
@@ -399,7 +405,10 @@
         },
         "matrix": {
           "description": "The instance's matrix values, a mapping.",
-          "$ref": "#/$defs/Data"
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
         },
         "target": {
           "$ref": "#/$defs/Target"
@@ -411,7 +420,9 @@
           "$ref": "#/$defs/ReadyJobRetry"
         },
         "timeoutSeconds": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "workingDirectory": {
           "$ref": "#/$defs/Value"
@@ -511,14 +522,20 @@
       "properties": {
         "milliCPU": {
           "description": "In thousandths of a core.",
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "memory": {
           "description": "In bytes.",
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "gpu": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         }
       },
       "additionalProperties": false
@@ -535,7 +552,10 @@
         },
         "params": {
           "description": "Its runs-on: params:, a mapping.",
-          "$ref": "#/$defs/Data"
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
         }
       },
       "required": ["cluster", "name"],
@@ -556,7 +576,10 @@
           "type": "string"
         },
         "schedulingParams": {
-          "$ref": "#/$defs/Data"
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
         },
         "newWorker": {
           "type": "boolean"
@@ -579,10 +602,14 @@
           }
         },
         "maxRetries": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "intervalSeconds": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         }
       },
       "required": ["reasons", "maxRetries", "intervalSeconds"],
@@ -610,7 +637,7 @@
         },
         "submitted": {
           "description": "What the run was submitted, a mapping, as it was given.",
-          "$ref": "#/$defs/Data"
+          "type": "object"
         },
         "withheld": {
           "description": "The parts of the input definitions the plan withholds, by their JSON Pointers.",
@@ -639,7 +666,9 @@
         },
         "timeoutSeconds": {
           "description": "The run's timeout, when evaluating it read a variable or a password.",
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "expansions": {
           "description": "The matrices whose instances are private, whole, by job name.",
@@ -689,7 +718,9 @@
           "type": "boolean"
         },
         "maxParallel": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         }
       },
       "required": ["instances"],
@@ -704,7 +735,8 @@
         },
         "index": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 2147483647
         },
         "matrix": {
           "description": "Its matrix values, a mapping, or null where run state leaves out a private instance's.",
@@ -725,10 +757,15 @@
       "type": "object",
       "properties": {
         "format": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
         },
         "inputs": {
-          "$ref": "#/$defs/Data"
+          "$ref": "#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
         },
         "env": {
           "$ref": "#/$defs/Strings"
@@ -879,7 +916,7 @@
       }
     },
     "Data": {
-      "description": "JSON that is never evaluated, such as what a run was given: any JSON value, written as it is, a string with ${{ }} in it among them."
+      "description": "JSON that is never evaluated, such as what a run was given: any JSON value, written as it is, a string with ${{ }} in it among them. Data that holds nothing is null where it is written: as a member that is always written, or an item; a member that is left out when it holds nothing is never null."
     },
     "Value": {
       "description": "Part of a workflow that may hold expressions: JSON values, in which each string with a ${{ }} in it is a template, an object whose one member is ${{. A mapping whose only key starts with $ is written inside an object whose one member is $, so that it is never taken for a template. So an object whose only key starts with $ is one of the two, and checked as it is, and any other value is checked as JSON values are, each value in it once.",
@@ -979,7 +1016,8 @@
         },
         "up": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 2147483647
         },
         "op": {
           "type": "string"

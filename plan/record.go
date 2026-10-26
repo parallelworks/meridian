@@ -225,7 +225,8 @@ func EncodeRecord(r *Record) ([]byte, error) {
 // DecodeRecord decodes a secret record that EncodeRecord encoded. As
 // Decode does a plan, it fails on a record of another version, with
 // ErrVersion, and with ErrMalformed on what isn't a record of this one: a
-// key it doesn't know, or what was submitted that isn't a mapping.
+// key it doesn't know, what was submitted that isn't a mapping, null among
+// it, and whatever else the version's schema refuses (Schemas).
 func DecodeRecord(data []byte) (*Record, error) {
 	r := new(Record)
 	if err := decodeVersioned(data, r, func() int { return r.Version }, "the secret record"); err != nil {

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -27,9 +28,12 @@ var sources = map[string]fs.FS{
 
 var (
 	compileOnce sync.Once
-	compiler    *jsonschema.Compiler
 	compileErr  error
-	compiled    sync.Map
+	// mu guards compiler, which one goroutine uses at a time, and
+	// compiled, the schemas it compiled by URL.
+	mu       sync.Mutex
+	compiler *jsonschema.Compiler
+	compiled = map[string]*jsonschema.Schema{}
 )
 
 // noLoader refuses to load a schema: every schema is added to the compiler.
@@ -44,19 +48,49 @@ func (noLoader) Load(url string) (any, error) {
 // plan/schema/1/plan.schema.json#/$defs/Expansion.
 func Schema(t testing.TB, path string) *jsonschema.Schema {
 	t.Helper()
+	s, err := compile("file:///"+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// probe returns a schema that what fits the schema at path fits, and
+// nothing else, which says only whether a document fits: the library then
+// skips making the errors that say why one doesn't, which take most of its
+// time for such a document, as package format does.
+func probe(t testing.TB, path string) *jsonschema.Schema {
+	t.Helper()
+	s, err := compile("urn:schematest:probe:"+url.PathEscape(path), map[string]any{"if": map[string]any{"$ref": "file:///" + path}, "else": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// compile returns the schema at the URL id, which it adds as doc first if
+// doc isn't nil.
+func compile(id string, doc any) (*jsonschema.Schema, error) {
 	compileOnce.Do(load)
 	if compileErr != nil {
-		t.Fatal(compileErr)
+		return nil, compileErr
 	}
-	if s, ok := compiled.Load(path); ok {
-		return s.(*jsonschema.Schema)
+	mu.Lock()
+	defer mu.Unlock()
+	if s, ok := compiled[id]; ok {
+		return s, nil
 	}
-	s, err := compiler.Compile("file:///" + path)
+	if doc != nil {
+		if err := compiler.AddResource(id, doc); err != nil {
+			return nil, err
+		}
+	}
+	s, err := compiler.Compile(id)
 	if err != nil {
-		t.Fatalf("schematest: %s: %v", path, err)
+		return nil, fmt.Errorf("schematest: %s: %w", id, err)
 	}
-	compiled.Store(path, s)
-	return s
+	compiled[id] = s
+	return s, nil
 }
 
 // Paths returns the paths, in the repository, of every schema.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Meridian worker API bodies, version 1",
-  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 1: each is one of the $defs, which the API's path says. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to.",
+  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 1: each is one of the $defs, which the API's path says. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0 or 2e0, which decoding refuses though JSON Schema counts them as integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
   "anyOf": [
     {
       "$ref": "#/$defs/ClaimRequest"
@@ -37,7 +37,8 @@
         "planVersion": {
           "description": "The newest plan version the worker reads.",
           "type": "integer",
-          "minimum": 1
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "worker": {
           "$ref": "#/$defs/Worker"
@@ -73,16 +74,17 @@
           "type": "string"
         },
         "planVersion": {
-          "description": "The version of the run's plan, which job is encoded in.",
-          "type": "integer",
-          "minimum": 1
+          "description": "The version of the run's plan, which job is encoded in: this one's.",
+          "const": 1
         },
         "job": {
           "description": "The job as Ready evaluated it, as plan.EncodeReadyJob writes it.",
           "$ref": "../../../plan/schema/1/readyjob.schema.json"
         },
         "attempt": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "group": {
           "type": "string"
@@ -91,10 +93,14 @@
           "type": "string"
         },
         "leaseSeconds": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "heartbeatSeconds": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "selfFencing": {
           "type": "boolean"
@@ -120,7 +126,9 @@
           }
         },
         "retry": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "container": {
           "$ref": "#/$defs/Container"
@@ -165,7 +173,9 @@
       "type": "object",
       "properties": {
         "version": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "cancel": {
           "type": "boolean"
@@ -174,7 +184,9 @@
           "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Reason"
         },
         "graceSeconds": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "anyJobFailed": {
           "type": "boolean"
@@ -203,7 +215,8 @@
       "properties": {
         "seq": {
           "type": "integer",
-          "minimum": 1
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "time": {
           "type": "string",
@@ -214,10 +227,13 @@
         },
         "step": {
           "type": "integer",
-          "minimum": 0
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "try": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "cleanup": {
           "type": "boolean"
@@ -226,7 +242,9 @@
           "$ref": "../../../plan/schema/1/plan.schema.json#/$defs/Outcome"
         },
         "exitCode": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "outputs": {
           "type": "object",
@@ -246,7 +264,9 @@
       "type": "object",
       "properties": {
         "seq": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         }
       },
       "required": ["seq"],
@@ -257,7 +277,9 @@
       "type": "object",
       "properties": {
         "length": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "ended": {
           "type": "boolean"
@@ -271,7 +293,9 @@
       "type": "object",
       "properties": {
         "seq": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
         },
         "result": {
           "$ref": "../../../plan/schema/1/jobresult.schema.json"
@@ -307,7 +331,9 @@
           "type": "string"
         },
         "status": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "detail": {
           "type": "string"

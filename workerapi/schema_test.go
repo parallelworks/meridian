@@ -10,13 +10,15 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
 // The API's schema describes each body's type, and each type of the
 // package's in one, by its name, as the type is: a property for each of
 // its JSON members, and no other; each member it always writes required;
-// and no member it doesn't have. What a body holds of package plan's, or
+// no member it doesn't have; and each integer bounded as its Go type is
+// (schematest.Bounds). What a body holds of package plan's, or
 // of foundation's, the schema refers to the plan's schema for, but a
 // problem, which it describes as foundation's problem.Problem writes it.
 func TestSchemaDescribesTheBodies(t *testing.T) {
@@ -52,6 +54,7 @@ func TestSchemaDescribesTheBodies(t *testing.T) {
 			if !strings.Contains(options, "omitempty") && !strings.Contains(options, "omitzero") {
 				always = append(always, member)
 			}
+			schematest.Bounds(t, name+"."+member, f.Type, props[member])
 		}
 		for _, l := range [][]string{described, required, members, always} {
 			slices.Sort(l)

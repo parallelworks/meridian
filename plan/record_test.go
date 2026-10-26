@@ -94,6 +94,7 @@ func TestDecodeRecordRefuses(t *testing.T) {
 		"submitted values, a list":  `{"version":1,"submitted":[]}`,
 		"submitted values, a text":  `{"version":1,"submitted":"x"}`,
 		"submitted values, a value": `{"version":1,"submitted":1}`,
+		"submitted values, null":    `{"version":1,"submitted":null}`,
 	} {
 		r, err := plan.DecodeRecord([]byte(data))
 		if err == nil {
@@ -104,7 +105,7 @@ func TestDecodeRecordRefuses(t *testing.T) {
 			t.Errorf("%s: %v, want ErrVersion %v and ErrMalformed %v", name, err, version, !version)
 		}
 	}
-	if r, err := plan.DecodeRecord([]byte(`{"version":1,"submitted":null}`)); err != nil || !r.Submitted.IsZero() {
+	if r, err := plan.DecodeRecord([]byte(`{"version":1}`)); err != nil || !r.Submitted.IsZero() {
 		t.Errorf("a record that holds nothing submitted: %+v, %v", r, err)
 	}
 }

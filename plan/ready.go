@@ -783,15 +783,20 @@ func EncodeReadyJob(j *ReadyJob) ([]byte, error) {
 
 // DecodeReadyJob decodes a ready job that EncodeReadyJob encoded, from a run
 // whose plan is of version. It is as strict as Decode: it fails on a
-// version this release doesn't read, with ErrVersion, and on a key it
-// doesn't know, or one given twice.
+// version this release doesn't read, with ErrVersion, and with
+// ErrMalformed on what the version's schema refuses, a key it doesn't
+// know, or one given twice, among it.
 func DecodeReadyJob(version int, data []byte) (*ReadyJob, error) {
 	if version != Version {
 		return nil, fmt.Errorf("%w %d; this release reads version %d", ErrVersion, version, Version)
 	}
 	j := new(ReadyJob)
-	if err := jsonv2.Unmarshal(data, j, decoding, jsonv2.RejectUnknownMembers(true)); err != nil {
-		return nil, fmt.Errorf("plan: %w", err)
+	err := jsonv2.Unmarshal(data, j, decoding, jsonv2.RejectUnknownMembers(true))
+	if err == nil {
+		err = checkShape(data, j)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: the ready job: %w", ErrMalformed, err)
 	}
 	return j, nil
 }

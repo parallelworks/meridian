@@ -469,20 +469,23 @@ func (p *Plan) checkJobOrder() error {
 // doesn't read, such as one a newer release wrote.
 var ErrVersion = errors.New("plan: unsupported version")
 
-// ErrMalformed is what Decode and DecodeRecord return for what isn't a
-// plan, or a secret record, that this release reads: what isn't JSON, or
-// isn't a mapping, or names no release's version, as one without a version
-// does, or that doesn't decode as this release reads its version, as one
-// with a key it doesn't know does. Decoding it again gives the same error,
-// so a coordinator fails the run rather than read it again.
+// ErrMalformed is what Decode, DecodeRecord and DecodeReadyJob return for
+// what isn't a plan, a secret record or a ready job that this release
+// reads: what isn't JSON, or isn't a mapping, or names no release's
+// version, as one without a version does, or that doesn't decode as this
+// release reads its version, as one with a key it doesn't know does, or
+// what its version's schema refuses (Schemas). Decoding it again gives the
+// same error, so a coordinator fails the run rather than read it again.
 var ErrMalformed = errors.New("plan: malformed")
 
 // Decode decodes a plan that Encode encoded. It fails on a plan of another
 // version, with ErrVersion, and on what isn't a plan of this one, with
 // ErrMalformed: keys it doesn't know, which a newer release wrote, among
-// them. Keys match exactly, and no key can be given twice. It fails too,
-// with ErrMalformed, on jobs that aren't in the order of their names, each
-// once, as Jobs is, since Ready finds a job by its name in that order.
+// them, a member that is always written that is missing, null where a
+// member is never null, and whatever else the version's schema refuses
+// (Schemas). Keys match exactly, and no key can be given twice. It fails
+// too, with ErrMalformed, on jobs that aren't in the order of their names,
+// each once, as Jobs is, since Ready finds a job by its name in that order.
 func Decode(data []byte) (*Plan, error) {
 	p := new(Plan)
 	if err := decodeVersioned(data, p, func() int { return p.Version }, "the plan"); err != nil {
@@ -501,6 +504,9 @@ func Decode(data []byte) (*Plan, error) {
 func decodeVersioned(data []byte, v any, version func() int, of string) error {
 	err := jsonv2.Unmarshal(data, v, decoding, jsonv2.RejectUnknownMembers(true))
 	if err == nil && version() == Version {
+		if err := checkShape(data, v); err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
+		}
 		return nil
 	}
 	// One of another version need not decode as this one, so its version

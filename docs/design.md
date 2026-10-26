@@ -1335,6 +1335,15 @@ sees one version.
   that part, and one that names no version, which is no release's
   (`plan.ErrMalformed`). Keys match exactly, and a key given twice is
   refused.
+- **Decoding is as strict as the schema.** What the schema refuses,
+  decoding refuses, a plan's, a ready job's, a secret record's and the
+  worker API's bodies' alike, as a job's result a worker reports: a member
+  that is always written missing, null where none is written, an integer
+  past the bounds its Go type has in every build, and what a member holds
+  that the schema says it can't, such as an empty name or an outcome that
+  isn't one. Decoding refuses more only where a schema can't say it, as of
+  which contexts, operators and functions a tree names, and which job
+  comes before another.
 - **What an expression means is its format's.** A stored tree is read the
   same in every version, and evaluated by the rules of the format the plan
   records.
@@ -1353,9 +1362,11 @@ bodies' in `workerapi/schema/1`, which refer to the plan's
 (`plan.Schemas`, `workerapi.Schemas`). Tests check that every encoded
 type's members are what its schema describes, that golden files setting
 every member, and what Meridian encodes for every conformance case, fit
-the schemas, and that every member has the version that gave it, in plan's
-and the worker API's since tables, so that a member added later can't go in
-without a version. A value is named one way throughout, by its path with
+the schemas, that decoding agrees with the schemas on each member of the
+goldens and the bodies left out, null, or a number past its bounds, and
+that every member has the version that gave it, in plan's and the worker
+API's since tables, so that a member added later can't go in without a
+version. A value is named one way throughout, by its path with
 its context (`plan.JoinPath`), as in `inputs.region`, in the plan, the
 secret record and a run's values.
 

@@ -405,7 +405,7 @@ func TestDecodeJobOrder(t *testing.T) {
 // A plan's keys can come in any order.
 func TestDecodeKeyOrder(t *testing.T) {
 	data := `{"jobs":[{"steps":[{"path":"/jobs/a/steps/0","run":{"${{":[{"tree":{"ref":"inputs","path":["x"]},"src":" inputs.x "}]}}],` +
-		`"path":"/jobs/a","name":"a","key":"a"}],"run":{"format":1,"source":{"revision":"r","location":"w"}},"version":1}`
+		`"path":"/jobs/a","name":"a","key":"a"}],"run":{"release":"v1.0.0","format":1,"source":{"revision":"r","location":"w"}},"version":1}`
 	p, err := plan.Decode([]byte(data))
 	if err != nil {
 		t.Fatal(err)
@@ -506,7 +506,7 @@ func TestDecodeNestedMarks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := &plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: value}}}}}
+		p := &plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1}, Jobs: []plan.Job{{Steps: []plan.Step{{With: value}}}}}
 		data, err := plan.Encode(p)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -573,13 +573,13 @@ func TestDepth(t *testing.T) {
 		if 5+at.Depth() > plan.MaxDepth || 5+past.Depth() <= plan.MaxDepth || past.Depth()-at.Depth() != tc.step {
 			t.Fatalf("%s: depths %d and %d", name, at.Depth(), past.Depth())
 		}
-		data, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: at}}}}})
+		data, err := plan.Encode(&plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1}, Jobs: []plan.Job{{Steps: []plan.Step{{With: at}}}}})
 		if err != nil {
 			t.Errorf("%s: a plan as deep as MaxDepth: %v", name, err)
 		} else if _, err := plan.Decode(data); err != nil {
 			t.Errorf("%s: a plan as deep as MaxDepth doesn't decode: %v", name, err)
 		}
-		if _, err := plan.Encode(&plan.Plan{Version: plan.Version, Jobs: []plan.Job{{Steps: []plan.Step{{With: past}}}}}); err == nil {
+		if _, err := plan.Encode(&plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1}, Jobs: []plan.Job{{Steps: []plan.Step{{With: past}}}}}); err == nil {
 			t.Errorf("%s: a plan deeper than MaxDepth encoded", name)
 		}
 	}
@@ -917,7 +917,7 @@ func FuzzDecode(f *testing.F) {
 		}
 		f.Add(data)
 	}
-	f.Add([]byte(`{"version":1,"run":{"source":{"location":"w","revision":"r"},"format":1,"timeout":{"$":{"$a":1}}},"jobs":[]}`))
+	f.Add([]byte(`{"version":1,"run":{"source":{"location":"w","revision":"r"},"format":1,"release":"v1.0.0","timeout":{"$":{"$a":1}}},"jobs":[]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p, err := plan.Decode(data)
 		if err != nil {

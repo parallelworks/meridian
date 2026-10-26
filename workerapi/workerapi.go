@@ -7,9 +7,11 @@
 // which is the log's bytes, and both sides encode and decode them with
 // Marshal and Unmarshal, which refuse a member the type doesn't have: a
 // worker never runs a job without a part it doesn't understand, such as
-// the container its steps run in. A duration is in whole seconds and a
-// time is RFC 3339. An error is an RFC 9457 problem, a foundation
-// problem.Problem: one of foundation's for its status, such as
+// the container its steps run in. Unmarshal refuses what the bodies'
+// schema refuses, so the coordinator reads a worker's report, such as how
+// its job ended, only as the schema has it. A duration is in whole
+// seconds and a time is RFC 3339. An error is an RFC 9457 problem, a
+// foundation problem.Problem: one of foundation's for its status, such as
 // unauthenticated for a 401, or one of the codes below.
 //
 // # Versions
@@ -84,10 +86,12 @@ package workerapi
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"reflect"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/jsonshape"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -99,11 +103,23 @@ func Marshal(v any) ([]byte, error) {
 	return jsonv2.Marshal(v, jsonv2.Deterministic(true))
 }
 
-// Unmarshal decodes a body as the API reads it: a member the type doesn't
-// have, or one given twice, is an error.
+// Unmarshal decodes a body as the API reads it, as strictly as its schema
+// (Schemas): a member the type doesn't have, or one given twice, is an
+// error, and so is one that Marshal always writes that is missing, null,
+// which Marshal never writes but for data that holds nothing, and what a
+// package plan type the body holds refuses, such as an outcome that isn't
+// one (plan.Outcome).
 func Unmarshal(data []byte, v any) error {
-	return jsonv2.Unmarshal(data, v, jsonv2.RejectUnknownMembers(true))
+	if err := jsonv2.Unmarshal(data, v, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return err
+	}
+	return jsonshape.Check(data, reflect.TypeOf(v).Elem(), bodies)
 }
+
+// bodies is how Marshal writes the bodies, which Unmarshal checks them
+// against: a nil list or mapping as an empty one, and data as plan.Data
+// does, which holds nothing where it is null.
+var bodies = &jsonshape.Options{Zero: []reflect.Type{reflect.TypeFor[plan.Data]()}}
 
 // The API's paths. Control is a GET; the others are POSTs.
 const (
