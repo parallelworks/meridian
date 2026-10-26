@@ -59,7 +59,9 @@
 // what the coordinator asks of it. When the coordinator says that the
 // attempt has ended without it, superseded by another, or no longer
 // accepts its credential, it stops every process group the attempt
-// started, without running the steps' cleanup: commands, and exits. A job
+// started, without running the steps' cleanup: commands, and exits. Once
+// it has sent the attempt's end, the answer to that end says so, rather
+// than a heartbeat's, which fails as well once the end is stored. A job
 // whose retry: lists worker-lost can have a new attempt while this one
 // still runs, cut off, so its worker fences itself: it stops the job before
 // its lease lapses, counted on the monotonic and the wall clock

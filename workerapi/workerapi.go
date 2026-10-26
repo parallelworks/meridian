@@ -61,7 +61,10 @@
 // nothing, 401. A worker whose request fails with 401 Unauthorized after
 // its claim, or with Fenced, stops its job's steps as a cancellation does,
 // and exits: its attempt has ended without it, and nothing it sends is
-// stored.
+// stored. Once it has sent Complete, though, a heartbeat or a control poll
+// that fails so may only say that its end was stored, though the answer
+// was lost: it repeats Complete, whose answer says whether the attempt
+// ended with its end or without it.
 //
 // # Retries and idempotency
 //
