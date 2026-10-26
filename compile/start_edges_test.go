@@ -652,3 +652,47 @@ func TestStartKeepsHeldNulls(t *testing.T) {
 		})
 	}
 }
+
+// An input whose ignore read a variable or a password is held out of the
+// plan whatever it decided: as private when the ignore can read only
+// variables that aren't secrets, directly or through an input made from
+// one, as a variable's value is; and as derived, masked as what is made
+// from a secret, when it can read a password, or an input held so because
+// its own ignore can. Create and Start name it alike.
+func TestIgnoredInputsHeldByWhatTheIgnoreReads(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs    string
+		private bool
+	}{
+		"a variable": {
+			defs: `e: {type: string, ignore: '${{ org.V == ''zzz'' }}'}`, private: true,
+		},
+		"an input made from a variable": {
+			defs:    "c: {type: string, default: '${{ org.V }}'}\ne: {type: string, ignore: '${{ inputs.c == ''zzz'' }}'}",
+			private: true,
+		},
+		"a password": {
+			defs: "pw: {type: password}\ne: {type: string, ignore: '${{ inputs.pw == ''zzz'' }}'}",
+		},
+		"an input held as derived": {
+			defs: "pw: {type: password}\nd: {type: string, ignore: '${{ inputs.pw == ''zzz'' }}'}\ne: {type: string, ignore: '${{ inputs.d == ''zzz'' }}'}",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vars := testVariables{"org.V": {Value: "v"}}
+			c, res, diags := started(t, workflow(tc.defs), map[string]any{"pw": "p", "d": "dd", "e": "kept"}, vars)
+			if res == nil {
+				t.Fatal(diags)
+			}
+			for what, names := range map[string][3][]string{
+				"plan": {c.Plan.Run.Private, c.Plan.Run.Secrets, c.Plan.Run.Derived},
+				"run":  {res.Run.Private, res.Run.Secrets, res.Run.Derived},
+			} {
+				private, secret, derived := slices.Contains(names[0], "inputs.e"), slices.Contains(names[1], "inputs.e"), slices.Contains(names[2], "inputs.e")
+				if private != tc.private || secret == tc.private || derived == tc.private {
+					t.Errorf("%s: inputs.e private %v, secret %v, derived %v; want private %v", what, private, secret, derived, tc.private)
+				}
+			}
+		})
+	}
+}

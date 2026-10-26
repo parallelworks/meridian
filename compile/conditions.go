@@ -9,6 +9,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/reach"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -241,12 +242,17 @@ func (r *inputResolver) markFields(f *field) {
 
 // holdShaped keeps the value of f, an input whose ignore read a variable
 // or a password, out of the plan, whatever the ignore decided: as derived,
-// as a secret's would be, if the ignore read an input, which can be a
-// password, and as private if it read only variables.
+// as a secret's would be, if the ignore can read a password or a secret
+// variable, through an input whose value can be made from one (taint), or
+// an input held so because its own ignore can, or through a definition, as
+// a relative reference reads one; and as private if it can read only
+// variables that aren't secrets, directly or through an input made from
+// one, as a variable's value is.
 func (r *inputResolver) holdShaped(f *field) {
 	kind := heldPrivate
-	if exprs, err := r.workflow.Exprs(appendPath(f.loc, "ignore")); err == nil && slices.ContainsFunc(exprs, func(e *expr.Expr) bool {
-		return slices.ContainsFunc(e.Refs(), func(ref expr.Ref) bool { return ref.Context == "inputs" })
+	exprs, err := r.workflow.Exprs(appendPath(f.loc, "ignore"))
+	if err != nil || slices.ContainsFunc(exprs, func(e *expr.Expr) bool {
+		return e.Relative() || r.readsRefs(e.Refs(), true) || r.readsHeldDerived(e.Refs())
 	}) {
 		kind = heldDerived
 	}
@@ -262,6 +268,34 @@ func (r *inputResolver) holdShaped(f *field) {
 		}
 	}
 	hold(f)
+}
+
+// readsHeldDerived reports whether refs, for any list row, can read a value
+// held as derived (holdPath): one whose own ignore can read a password or a
+// secret variable, which taint doesn't see.
+func (r *inputResolver) readsHeldDerived(refs []expr.Ref) bool {
+	var held patterns
+	found := false
+	for _, p := range r.held {
+		if p.kind == heldDerived {
+			held.add(p.path)
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+	for _, ref := range refs {
+		if ref.Context != "inputs" {
+			continue
+		}
+		for p := range reach.Patterns(anyRow(ref.Path)) {
+			if held.overlaps(p) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // shapeDecided reports whether Start decides whether f is required:

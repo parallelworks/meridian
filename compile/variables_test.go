@@ -259,10 +259,11 @@ jobs:
 	if len(diags) != 0 {
 		t.Fatal(diags)
 	}
-	// skipped's ignore read after, which reads a variable, so its value is
-	// held, out of the plan, whatever the ignore decided.
-	if len(inputs.Values) != 0 || len(inputs.Secrets) != 1 || inputs.Secrets["skipped"] != "x" {
-		t.Errorf("values %v and secrets %v, want skipped's alone", inputs.Values, inputs.Secrets)
+	// skipped's ignore read after, which reads a variable that isn't a
+	// secret, so its value is held, out of the plan, whatever the ignore
+	// decided, as private, as the variable's value is.
+	if len(inputs.Values) != 0 || len(inputs.Secrets) != 0 || len(inputs.Private) != 1 || inputs.Private["skipped"] != "x" {
+		t.Errorf("values %v, secrets %v and private %v, want skipped's alone, private", inputs.Values, inputs.Secrets, inputs.Private)
 	}
 	if got := slices.Sorted(maps.Keys(inputs.Deferred)); !slices.Equal(got, []string{"after", "key", "n"}) {
 		t.Errorf("deferred %v, want after, key and n", got)
