@@ -1777,11 +1777,15 @@ func TestAPIVersion(t *testing.T) {
 }
 
 // TestLastTry checks that a worker of version 2 of the API says, of a
-// failed try, whether it was its step's last: so of a step without a
-// retry:, of a retry:'s last try but not the ones before it, and of a step
-// past its timeout:, which isn't tried again; not of a step that fails and
-// succeeds, with ignore-errors:, or of a cleanup. A worker served at version
-// 1 says it of none, which version 1 doesn't have.
+// failed try, whether it was its step's last, wherever the try fails: so
+// of a step without a retry:, of a retry:'s last try but not the ones
+// before it, of a step past its timeout:, which isn't tried again, of a
+// step whose if: fails to evaluate, which can't start, and of steps the
+// job's deadline fails, the one it stops and one that comes to run after
+// it; not of a step that fails and succeeds, with ignore-errors:, or of a
+// cleanup. A worker served at version 1 says it of none, which version 1
+// doesn't have. A try that failed and doesn't say so would mark its run
+// for early-cancel: any-job-failed only as its job ends.
 func TestLastTry(t *testing.T) {
 	t.Parallel()
 	once := command("exit 1")
@@ -1794,28 +1798,46 @@ func TestLastTry(t *testing.T) {
 	timedOut.If, timedOut.Timeout = cond("failure()"), number(1)
 	cleanup := command("true")
 	cleanup.If, cleanup.Cleanup = cond("failure()"), plan.Literal("exit 1")
-	for _, version := range []int{1, workerapi.Version2} {
-		t.Run("version "+strconv.Itoa(version), func(t *testing.T) {
-			t.Parallel()
-			f := workerapitest.NewFake(t, newJob(once, retried, ignored, timedOut, cleanup))
-			f.Speaks = version
-			if err := runWorker(t, f, t.Context(), Config{}); err != nil {
-				t.Fatal(err)
-			}
-			var got []string
-			for _, e := range f.Events() {
-				if e.LastTry {
-					got = append(got, fmt.Sprintf("%d.%d", e.Step, e.Try))
+	badIf := command("true")
+	badIf.If = cond("fromJSON('not json')")
+	// Past the job's deadline: the step it stops, and one after it whose
+	// if: is true, but that doesn't outlive the deadline, so never starts.
+	stopped := command("sleep 30")
+	afterDeadline := command("true")
+	afterDeadline.If = cond("failure()")
+	deadline := newJob(stopped, afterDeadline)
+	deadline.TimeoutSeconds = 1
+	for _, tc := range []struct {
+		name string
+		job  *plan.ReadyJob
+		want []string
+	}{
+		{"steps", newJob(once, retried, ignored, timedOut, cleanup, badIf), []string{"0.0", "1.1", "3.0", "5.0"}},
+		{"the job's deadline", deadline, []string{"0.0", "1.0"}},
+	} {
+		for _, version := range []int{1, workerapi.Version2} {
+			t.Run(tc.name+", version "+strconv.Itoa(version), func(t *testing.T) {
+				t.Parallel()
+				f := workerapitest.NewFake(t, tc.job)
+				f.Speaks = version
+				if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+					t.Fatal(err)
 				}
-			}
-			want := []string{"0.0", "1.1", "3.0"}
-			if version < workerapi.Version2 {
-				want = nil
-			}
-			if !slices.Equal(got, want) {
-				t.Errorf("the events of the tries %v say they were their steps' last, not %v:\n%s", got, want, strings.Join(stepEvents(t, f), "\n"))
-			}
-		})
+				var got []string
+				for _, e := range f.Events() {
+					if e.LastTry {
+						got = append(got, fmt.Sprintf("%d.%d", e.Step, e.Try))
+					}
+				}
+				want := tc.want
+				if version < workerapi.Version2 {
+					want = nil
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("the events of the tries %v say they were their steps' last, not %v:\n%s", got, want, strings.Join(stepEvents(t, f), "\n"))
+				}
+			})
+		}
 	}
 }
 

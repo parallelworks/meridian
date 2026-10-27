@@ -115,6 +115,42 @@ func TestGatePinned(t *testing.T) {
 	}
 }
 
+// TestClaimWithoutControl checks that a claim of version 2 or later that
+// doesn't hold the attempt's control, which every such claim does, is an
+// answer the worker can't read, at /control: the worker would otherwise
+// start the job without what the coordinator asked before the claim, and
+// poll for none of it. The version 2 claim that holds one is read.
+func TestClaimWithoutControl(t *testing.T) {
+	t.Parallel()
+	for _, control := range []*workerapi.Control{nil, {Version: 1}} {
+		claim, err := workerapi.Marshal(&workerapi.Claim{
+			RunID: "run1", AttemptID: "attempt1", APIVersion: workerapi.Version2, PlanVersion: plan.Version, Job: []byte(`{}`),
+			Attempt: 1, LeaseSeconds: 60, HeartbeatSeconds: 1, Run: plan.RunValues{Format: 1}, RunDir: "/runs/run1", Control: control,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		socket := serveUnix(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(claim)
+		}))
+		c := newClient(endpoint{address: socket}, testTiming, testLogger(t))
+		t.Cleanup(c.close)
+		c.peer = func(*net.UnixConn, string) error { return nil }
+		_, _, err = c.claim(t.Context(), "token", workerapi.ClaimRequest{Credential: strings.Repeat("ab", 32), APIVersion: workerapi.Version2, PlanVersion: plan.Version})
+		if control != nil {
+			if err != nil || c.apiVersion != workerapi.Version2 {
+				t.Errorf("a claim of version 2 with its control: %v, and the client speaks %d", err, c.apiVersion)
+			}
+			continue
+		}
+		p, ok := errors.AsType[*problem.Problem](err)
+		if !ok || p.Code != problems.CoordinatorAnswerInvalid.Code() || p.Params["at"] != "/control" || c.apiVersion != 0 {
+			t.Errorf("a claim of version 2 without its control: %v, and the client speaks %d", err, c.apiVersion)
+		}
+	}
+}
+
 // isProblem reports whether err is a problem of the kind k.
 func isProblem(err error, k *problems.Kind) bool {
 	p, ok := errors.AsType[*problem.Problem](err)
