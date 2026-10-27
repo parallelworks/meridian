@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,17 +141,28 @@ func TestRunShows(t *testing.T) {
 	if r.code != exitOK || r.stderr != "" {
 		t.Fatalf("meridian run = %+v", r)
 	}
+	// The step's log line is shown once, after the step's start and before
+	// the run's end. Follow holds the step's end back until the log has
+	// ended, as TestFollowHoldsStepEnd checks, but only so long, which a
+	// loaded runner can outlast, so where it falls among the events after
+	// the step's start isn't checked here.
+	lines := strings.Split(strings.TrimSuffix(timeOfDay.ReplaceAllString(r.stdout, ""), "\n"), "\n")
+	logAt := slices.Index(lines, "main step 0| hello")
+	started := slices.Index(lines, "main step 0 started")
+	if logAt < 0 || logAt < started || logAt == len(lines)-1 {
+		t.Errorf("meridian run showed the step's log out of place\n%s", r.stdout)
+	} else {
+		lines = slices.Delete(lines, logAt, logAt+1)
+	}
 	want := regexp.MustCompile(`^run 1 started \(run directory [^)]+\)
 main ready
 main attempt 1 placing on local/\S+
 main attempt 1 running on local/\S+
 main step 0 started
-main step 0\| hello
 main step 0 finished: success \(exit status 0\)
 main finished: success
-run 1 finished: success
-$`)
-	if got := timeOfDay.ReplaceAllString(r.stdout, ""); !want.MatchString(got) || strings.Count(r.stdout, ":") < 6 {
+run 1 finished: success$`)
+	if !want.MatchString(strings.Join(lines, "\n")) || strings.Count(r.stdout, ":") < 6 {
 		t.Errorf("meridian run showed\n%s", r.stdout)
 	}
 
