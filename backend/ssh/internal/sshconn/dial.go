@@ -1,6 +1,7 @@
 package sshconn
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,8 +32,10 @@ const maxHops = 8
 // known_hosts, their agent and their key files.
 type Dialer struct {
 	// SSH is the ssh client that resolves the user's config, as ssh -G:
-	// ssh, found on PATH, for "". Without one, OpenSSH's defaults apply,
-	// and each connection has a problems.SSHConfigNotRead among its notes.
+	// ssh, found on PATH, for "", checked before it runs, as ssh-keygen
+	// beside it and the user's shell are (command). Without one, and with
+	// no config for one to read, OpenSSH's defaults apply, and each
+	// connection has a problems.SSHConfigNotRead among its notes.
 	SSH string
 	// ConfigFile is the config ssh reads in place of the user's and the
 	// system's, as ssh -F, or "" for those.
@@ -41,7 +44,8 @@ type Dialer struct {
 	// process's, os.UserHomeDir's and os/user's, for "".
 	Home string
 	User string
-	// Getenv reads the environment, SSH_AUTH_SOCK: os.Getenv for nil.
+	// Getenv reads the environment, SSH_AUTH_SOCK and SHELL, which runs a
+	// ProxyCommand, or else /bin/sh: os.Getenv for nil.
 	Getenv func(string) string
 	// ConnectTimeout bounds connecting, and the handshake, where a host's
 	// config's ConnectTimeout doesn't: DefaultConnectTimeout for 0.
@@ -96,22 +100,20 @@ func (d *Dialer) Dial(ctx context.Context, t Target) (*Conn, error) {
 	if given {
 		host, port = h, p
 	}
-	jump := t.JumpHost
-	if jump != "" && t.JumpUser != "" {
-		jump = t.JumpUser + "@" + jump
-	}
-	c, err := d.resolve(ctx, host, t.User, port, jump)
+	c, err := d.resolve(ctx, host, port, t.User)
 	if err != nil {
 		return nil, err
 	}
 	if given {
 		// host:port is where to connect, as format 1 takes it: not the
-		// config's HostName, nor its ProxyJump or ProxyCommand, but a jump
-		// host the target names.
-		c.alias, c.hostname, c.proxyCommand = t.Host, host, ""
-		if jump == "" {
-			c.proxyJump = nil
-		}
+		// config's HostName, nor its ProxyJump or ProxyCommand.
+		c.alias, c.hostname, c.proxyCommand, c.proxyJump = t.Host, host, "", nil
+	}
+	if t.JumpHost != "" {
+		// A jump host the target names is over the config's ProxyJump and
+		// ProxyCommand, as ssh -J is.
+		c.proxyCommand, c.proxyJump = "", nil
+		c.jumpHost, c.jumpUser = t.JumpHost, t.JumpUser
 	}
 	client, closers, err := d.connect(ctx, c, 0)
 	if err != nil {
@@ -171,16 +173,15 @@ func (d *Dialer) connect(ctx context.Context, c *hostConfig, depth int) (_ *ssh.
 		if err != nil {
 			return nil, nil, err
 		}
-		if conn, err = startProxy(cmd); err != nil {
+		shell, err := command(cmp.Or(d.getenv("SHELL"), "/bin/sh"))
+		if err != nil {
+			return nil, nil, err
+		}
+		if conn, err = startProxy(shell, cmd); err != nil {
 			return nil, nil, fmt.Errorf("sshconn: %s: ProxyCommand: %w", c.alias, err)
 		}
-	case len(c.proxyJump) > 0:
-		last := c.proxyJump[len(c.proxyJump)-1]
-		host, user, port, ok := hop(last)
-		if !ok {
-			return nil, nil, problems.SSHProxyJumpInvalid.Problem(problems.Params{"host": c.alias, "hop": last})
-		}
-		hc, err := d.resolve(ctx, host, user, port, strings.Join(c.proxyJump[:len(c.proxyJump)-1], ","))
+	case c.jumpHost != "" || len(c.proxyJump) > 0:
+		hc, err := d.through(ctx, c)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -205,6 +206,34 @@ func (d *Dialer) connect(ctx context.Context, c *hostConfig, depth int) (_ *ssh.
 		return nil, closers, err
 	}
 	return client, closers, nil
+}
+
+// through returns the config of the host c connects through: the jump
+// host its target names, as the config has it, as jumpUser where that
+// isn't ""; or else the last host of its ProxyJump, which connects
+// through the others, as ssh -J has it. Neither user is given ssh
+// (Dialer.resolve).
+func (d *Dialer) through(ctx context.Context, c *hostConfig) (*hostConfig, error) {
+	if c.jumpHost != "" {
+		host, port, ok := hostPort(c.jumpHost)
+		if !ok {
+			host = strings.TrimSuffix(strings.TrimPrefix(c.jumpHost, "["), "]")
+		}
+		return d.resolve(ctx, host, port, c.jumpUser)
+	}
+	last := c.proxyJump[len(c.proxyJump)-1]
+	host, user, port, ok := hop(last)
+	if !ok {
+		return nil, problems.SSHProxyJumpInvalid.Problem(problems.Params{"host": c.alias, "hop": last})
+	}
+	hc, err := d.resolve(ctx, host, port, user)
+	if err != nil {
+		return nil, err
+	}
+	if rest := c.proxyJump[:len(c.proxyJump)-1]; len(rest) > 0 {
+		hc.proxyJump, hc.proxyCommand = rest, ""
+	}
+	return hc, nil
 }
 
 func (d *Dialer) connectTimeout(c *hostConfig) time.Duration {
@@ -306,11 +335,11 @@ func closeAll(closers []func()) {
 	}
 }
 
-// startProxy starts a ProxyCommand, cmd, as OpenSSH does, through sh -c,
-// and returns a connection over its standard input and output. Closing it
-// ends the command.
-func startProxy(cmd string) (net.Conn, error) {
-	c := exec.Command("sh", "-c", cmd) //nolint:gosec,noctx // the user's own ProxyCommand, run as ssh runs it, for as long as the connection lasts
+// startProxy starts a ProxyCommand, cmd, as OpenSSH does, with the user's
+// shell, as shell -c "exec cmd", and returns a connection over its
+// standard input and output. Closing it ends the command.
+func startProxy(shell, cmd string) (net.Conn, error) {
+	c := exec.Command(shell, "-c", "exec "+cmd) //nolint:gosec,noctx // the user's own ProxyCommand, run as ssh runs it, with a checked shell, for as long as the connection lasts
 	stdin, err := c.StdinPipe()
 	if err != nil {
 		return nil, err

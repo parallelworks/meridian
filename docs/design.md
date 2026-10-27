@@ -3399,25 +3399,43 @@ nodes' backends build on:
   `ProxyCommand`, which a shell runs with `%h`, `%n` and `%r` in it. So
   before any of them runs, Meridian refuses a host or a user that could
   be read as more than a name (`ssh_target_unsafe`), by the rules
-  OpenSSH 9.6 and later checks its own command line with
+  OpenSSH 10.1 and later checks its own command line with
   (`valid_hostname`, `valid_ruser`), whichever `ssh` is installed: an
-  older one doesn't check.
+  older one doesn't check, or, before 10.1, takes a user's control
+  characters, so a newline in one starts a line of `ssh -G`'s output of
+  its own. The message shows the value with its control characters
+  escaped. `ssh -G` is never given a user, nor a jump host, only the host
+  and its port; a user is applied over what it prints.
+- **The commands Meridian runs to connect**, `ssh`, `ssh-keygen` and the
+  shell a `ProxyCommand` runs in, are checked as the local backend checks
+  a command it runs: a regular file of the user's or root's that no other
+  user can change, nor any directory on the way to it, since a directory
+  another user can change can come first on `PATH`. One that isn't safe
+  doesn't run (`ssh_command_unsafe`).
 - **The user's ssh_config**, as `ssh -G` resolves it, with `Match`,
   `Include` and its defaults: the host's `HostName`, `Port`, `User`,
   `IdentityFile`, `IdentitiesOnly`, `IdentityAgent`, `ProxyJump` (any
-  chain of hosts, each one's key checked) and `ProxyCommand` (run
-  through `sh -c`, its `%h %p %r %n %u %d` expanded), its known_hosts
-  files and `HostKeyAlias`, `ConnectTimeout` and `ServerAliveInterval`.
-  A format 1 `ssh:`'s `remoteUser` is over its `User`, and its
-  `jumpNodeHost` over its `ProxyJump` and `ProxyCommand`. A `remoteHost`
-  of the form `host:port` is where to connect, as format 1 takes it,
-  without the config's `HostName`, `ProxyJump` or `ProxyCommand`. A
-  config `ssh` can't read is `ssh_config_unreadable`; a `ProxyCommand`
+  chain of hosts, each one's key checked) and `ProxyCommand` (run as
+  OpenSSH runs it, `$SHELL -c "exec <command>"`, or `/bin/sh` without
+  `SHELL`, its `%h %p %r %n %u %d` expanded), its known_hosts files,
+  `HostKeyAlias` and `RevokedHostKeys`, `ConnectTimeout` and
+  `ServerAliveInterval`. A format 1 `ssh:`'s `remoteUser` is over its
+  `User`, and its `jumpNodeHost` over its `ProxyJump` and `ProxyCommand`;
+  since `ssh -G` isn't given them, a `Match user`, and a `%r` that `ssh`
+  expands itself, as in `UserKnownHostsFile`, see the config's `User`. A
+  `remoteHost` of the form `host:port` is where to connect, as format 1
+  takes it, without the config's `HostName`, `ProxyJump` or
+  `ProxyCommand`. A config `ssh` can't read is `ssh_config_unreadable`,
+  and output of `ssh -G`'s that prints a keyword Meridian reads more than
+  once, but `IdentityFile`, or for another host or port than it asked
+  for, isn't trusted (`ssh_config_output_unexpected`); a `ProxyCommand`
   with another token isn't run (`ssh_proxy_command_token`), and
   `ProxyJump`s nested more than 8 deep, as those that lead back to
-  themselves are, aren't followed (`ssh_proxy_jump_too_deep`). Without
-  an `ssh` client, OpenSSH's defaults apply, with a note
-  (`ssh_config_not_read`).
+  themselves are, aren't followed (`ssh_proxy_jump_too_deep`). Without an
+  `ssh` client, OpenSSH's defaults apply, with a note
+  (`ssh_config_not_read`), but only where there is no config for one to
+  read, neither the user's nor the system's: what one says can't be
+  ignored (`ssh_client_missing`).
 - **Logging in**, with the keys of the user's agent, then the key files
   the config names, then the user's other key pairs in `~/.ssh`, a
   private key beside its `.pub`, as format 1 finds them, unless
@@ -4009,7 +4027,16 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   until the user accepts it explicitly, as `ssh` offers to; Meridian never
   accepts a key on first use by itself, whatever `StrictHostKeyChecking`
   says. A key that differs from the one of its type that known_hosts has
-  is `ssh_host_key_changed`, and one it revokes `ssh_host_key_revoked`.
+  is `ssh_host_key_changed`, and one it revokes `ssh_host_key_revoked`,
+  as is one that the file the config's `RevokedHostKeys` names revokes, a
+  list of keys or a KRL, which `ssh-keygen -Q` checks, or, for a
+  certificate, whose key or authority it revokes. Where that file can't
+  be read, or a KRL checked, no key of the host's is trusted
+  (`ssh_revoked_host_keys_unreadable`), as OpenSSH trusts none. A config
+  with a `KnownHostsCommand` for the host is refused
+  (`ssh_known_hosts_command`): Meridian doesn't run it, and what it
+  prints could revoke the host's key, so Meridian fails closed rather than
+  check the key against part of what the user trusts.
   The host is asked first for a key of a type known_hosts has for it, as
   OpenSSH asks, so a host with keys of several types presents one the
   user has. A host certificate passes only if an authority known_hosts

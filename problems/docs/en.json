@@ -1932,7 +1932,7 @@
     ]
   },
   "ssh_host_key_revoked": {
-    "why": "Your known_hosts marks the key @revoked: whoever manages it has said not to trust it, for any host.",
+    "why": "Your known_hosts marks the key @revoked, or the file your SSH configuration's RevokedHostKeys names lists it, or, for a host certificate, its key or its authority's: whoever manages them has said not to trust it, for any host.",
     "fix": [
       "Ask the host's administrator for its current key, and add it to known_hosts once you have checked its fingerprint."
     ]
@@ -1958,13 +1958,46 @@
     ]
   },
   "ssh_config_not_read": {
-    "why": "Meridian reads your SSH configuration through ssh, by running ssh -G. Without an ssh client on PATH, it uses OpenSSH's defaults: the host as it is named, port 22, your own user name, the key files in ~/.ssh with OpenSSH's default names, your agent, and the known_hosts files in ~/.ssh and /etc/ssh. Your configuration's aliases, users, ProxyJump and the rest don't apply.",
+    "why": "Meridian reads your SSH configuration through ssh, by running ssh -G. Without an ssh client on PATH, and with no configuration for one to read, neither yours (~/.ssh/config) nor the system's (/etc/ssh/ssh_config), it uses OpenSSH's defaults: the host as it is named, port 22, your own user name, the key files in ~/.ssh with OpenSSH's default names, your agent, and the known_hosts files in ~/.ssh and /etc/ssh.",
     "fix": [
       "Install OpenSSH's client, or put it on PATH, if your configuration says how to reach the host."
     ]
   },
+  "ssh_config_output_unexpected": {
+    "why": "Meridian reads your SSH configuration for each host by running ssh -G, which prints a keyword and its value on each line, and takes that only as OpenSSH's ssh prints it: each keyword it reads on one line, but IdentityFile, which ssh prints for each key file, and the host and the port as Meridian asked for them. Output otherwise could hold lines that aren't your configuration's: an ssh before OpenSSH 10.1 prints a user it is given as it is, so a newline in one starts a line of its own, which could pass for a ProxyCommand. Meridian never gives ssh a user, so the ssh client on PATH, or something that wraps it, printed this itself.",
+    "fix": [
+      "Run ssh -G <host> and look at the keyword the message names: OpenSSH's own client prints it once.",
+      "Put OpenSSH's own client first on PATH, if the ssh there wraps it."
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "why": "Your SSH configuration's RevokedHostKeys names a file of host keys that are revoked: a list of public keys, one to a line, or a KRL, OpenSSH's binary list, which Meridian checks a key against with ssh-keygen -Q. Where the file isn't there, can't be read, or is a KRL that ssh-keygen can't check, as where there is no ssh-keygen beside ssh, Meridian can't tell whether it revokes the host's key, or its certificate's authority, so it trusts no key of the host's, as OpenSSH trusts none.",
+    "fix": [
+      "Check that the file is there, and that you can read it, or remove RevokedHostKeys from your configuration if it shouldn't apply to the host.",
+      "For a KRL, install OpenSSH's ssh-keygen beside ssh."
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "why": "KnownHostsCommand runs a command that prints more known_hosts lines for a host, which can revoke a key as well as name one. Meridian checks host keys itself, against the known_hosts files your configuration names, and doesn't run the command, so it can't know what the command would revoke; it doesn't connect, rather than check the host's key against part of what you've said of it.",
+    "fix": [
+      "Put the host's keys, and any that are revoked, in a known_hosts file your configuration names, and set KnownHostsCommand none for the host, in a Host or Match block."
+    ]
+  },
+  "ssh_client_missing": {
+    "why": "Meridian reads your SSH configuration through ssh, by running ssh -G, which applies Match, Include and the rest as ssh would. Without an ssh client on PATH, Meridian can use OpenSSH's defaults only where there is no configuration to read, neither yours (~/.ssh/config) nor the system's (/etc/ssh/ssh_config): what one says, as how to reach the host, or a host key it revokes, can't be ignored.",
+    "fix": [
+      "Install OpenSSH's client, or put it on PATH."
+    ]
+  },
+  "ssh_command_unsafe": {
+    "why": "Meridian runs ssh to read your SSH configuration, ssh-keygen to match hashed known_hosts lines and to check a KRL, and your shell, SHELL, or else /bin/sh, to run a ProxyCommand, with your agent, your keys and your connections to hosts at hand. So before it runs one, it checks that it is a regular file of yours or root's that no other user can change, nor any directory on the way to it, as the local backend checks a command it runs. A directory another user can change can come first on PATH, as a shared bin/ that a cluster's startup files add, and a command they put there would run as you. The code in the message is the problem with the command, whose own page says more.",
+    "fix": [
+      "Take away the write permission other users have on the command, or on the directory on the way to it, as the code's page says, or put a directory only you and root can change first on PATH.",
+      "Set SHELL to a shell that is safe to run, if the command is your shell."
+    ]
+  },
   "ssh_target_unsafe": {
-    "why": "A format 1 ssh:'s remoteHost, remoteUser, jumpNodeHost and jumpNodeUser often come from a workflow's inputs, and Meridian gives them to ssh to read your configuration, and they can reach a ProxyCommand there, which a shell runs with the host and the user in it. So, as OpenSSH 9.6 and later checks its own command line, Meridian refuses a host that starts with -, or holds white space, a control character, or any of ' ` \" $ \\ ; & < > | ( ) { }, and a user that starts with -, holds any of ' ` \" ; & < > | ( ) { }, has - after white space, or ends with \\, whatever ssh is installed.",
+    "why": "A format 1 ssh:'s remoteHost, remoteUser, jumpNodeHost and jumpNodeUser often come from a workflow's inputs. Meridian gives ssh the host, to read your configuration for, and the host and the user can reach a ProxyCommand there, which a shell runs with them in it. So, as OpenSSH 10.1 and later checks its own command line, Meridian refuses a host that starts with -, or holds white space, a control character, or any of ' ` \" $ \\ ; & < > | ( ) { }, and a user that starts with -, holds a control character, as a newline, or any of ' ` \" ; & < > | ( ) { }, has - after white space, or ends with \\, whatever ssh is installed. The message shows the value with its control characters escaped, as \\n.",
     "fix": [
       "Give the input a host's name or address, or a user's name, as the workflow expects."
     ]

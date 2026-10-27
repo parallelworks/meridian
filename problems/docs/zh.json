@@ -2246,8 +2246,8 @@
     ]
   },
   "ssh_host_key_revoked": {
-    "title": "被 known_hosts 吊销的主机密钥",
-    "why": "你的 known_hosts 把该密钥标记为 @revoked：管理它的人已声明不要对任何主机信任它。",
+    "title": "已被吊销的主机密钥",
+    "why": "你的 known_hosts 把该密钥标记为 @revoked，或者你的 SSH 配置中 RevokedHostKeys 指定的文件列出了它，或者对于主机证书，其密钥或颁发机构的密钥被如此处理：管理它们的人已声明不要对任何主机信任它。",
     "fix": [
       "向主机管理员索取它当前的密钥，核对指纹后再加入 known_hosts。"
     ]
@@ -2277,14 +2277,52 @@
   },
   "ssh_config_not_read": {
     "title": "因没有 ssh 客户端而未读取的 SSH 配置",
-    "why": "Meridian 通过运行 ssh -G，借助 ssh 读取你的 SSH 配置。PATH 中没有 ssh 客户端时，它使用 OpenSSH 的默认值：按名称使用主机、端口 22、你自己的用户名、~/.ssh 中 OpenSSH 默认名称的密钥文件、你的代理，以及 ~/.ssh 和 /etc/ssh 中的 known_hosts 文件。你配置中的别名、用户、ProxyJump 等都不适用。",
+    "why": "Meridian 通过运行 ssh -G，借助 ssh 读取你的 SSH 配置。PATH 中没有 ssh 客户端，且既没有你的配置（~/.ssh/config）也没有系统的配置（/etc/ssh/ssh_config）可读时，它使用 OpenSSH 的默认值：按名称使用主机、端口 22、你自己的用户名、~/.ssh 中 OpenSSH 默认名称的密钥文件、你的代理，以及 ~/.ssh 和 /etc/ssh 中的 known_hosts 文件。",
     "fix": [
       "如果你的配置写明了如何到达该主机，请安装 OpenSSH 客户端，或把它加入 PATH。"
     ]
   },
+  "ssh_config_output_unexpected": {
+    "title": "Meridian 不信任的 ssh -G 输出",
+    "why": "Meridian 通过运行 ssh -G 读取每台主机的 SSH 配置。ssh -G 每行打印一个关键字及其值，Meridian 只按 OpenSSH 的 ssh 打印它的方式接受：它读取的每个关键字只占一行，但 ssh 为每个密钥文件各打印一次的 IdentityFile 除外，主机和端口也必须是 Meridian 所要求的。其他形式的输出可能含有不属于你配置的行：OpenSSH 10.1 之前的 ssh 会原样打印传给它的用户，因此用户中的换行会另起一行，这一行可能被当作 ProxyCommand。Meridian 从不把用户交给 ssh，所以这是 PATH 上的 ssh 客户端，或包装它的程序，自己打印的。",
+    "fix": [
+      "运行 ssh -G <host>，查看消息指出的关键字：OpenSSH 自己的客户端只打印它一次。",
+      "如果 PATH 上的 ssh 包装了 OpenSSH 的客户端，请把 OpenSSH 自己的客户端放在 PATH 的最前面。"
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "title": "无法读取的已吊销主机密钥",
+    "why": "你的 SSH 配置中的 RevokedHostKeys 指定一个已吊销主机密钥的文件：每行一个公钥的列表，或者 OpenSSH 的二进制列表 KRL，Meridian 用 ssh-keygen -Q 拿密钥与 KRL 核对。如果该文件不存在、无法读取，或者是 ssh-keygen 无法核对的 KRL（例如 ssh 旁边没有 ssh-keygen），Meridian 就无法判断它是否吊销了该主机的密钥或其证书的颁发机构，因此像 OpenSSH 一样，不信任该主机的任何密钥。",
+    "fix": [
+      "确认该文件存在且你能读取它；如果它不应适用于该主机，请从配置中删除 RevokedHostKeys。",
+      "对于 KRL，请在 ssh 旁边安装 OpenSSH 的 ssh-keygen。"
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "title": "Meridian 不运行的 KnownHostsCommand",
+    "why": "KnownHostsCommand 运行一个为主机打印更多 known_hosts 行的命令，这些行既可以指定密钥，也可以吊销密钥。Meridian 自己对照你的配置指定的 known_hosts 文件检查主机密钥，并不运行该命令，因此无法知道它会吊销什么；它选择不连接，而不是只凭你对该主机所做声明的一部分来检查密钥。",
+    "fix": [
+      "把该主机的密钥以及已吊销的密钥放进你的配置指定的 known_hosts 文件，并在 Host 或 Match 块中为该主机设置 KnownHostsCommand none。"
+    ]
+  },
+  "ssh_client_missing": {
+    "title": "没有 ssh 客户端可读取的 SSH 配置",
+    "why": "Meridian 通过运行 ssh -G，借助 ssh 读取你的 SSH 配置，ssh -G 会像 ssh 一样应用 Match、Include 等。PATH 中没有 ssh 客户端时，只有在既没有你的配置（~/.ssh/config）也没有系统的配置（/etc/ssh/ssh_config）可读时，Meridian 才能使用 OpenSSH 的默认值：配置中写明的内容，例如如何到达主机，或它吊销的主机密钥，不能被忽略。",
+    "fix": [
+      "安装 OpenSSH 客户端，或把它加入 PATH。"
+    ]
+  },
+  "ssh_command_unsafe": {
+    "title": "为连接而运行时不安全的命令",
+    "why": "Meridian 运行 ssh 读取你的 SSH 配置，运行 ssh-keygen 匹配哈希过的 known_hosts 行并核对 KRL，运行你的 shell（SHELL，否则 /bin/sh）来执行 ProxyCommand，而此时你的代理、密钥和到各主机的连接都在手边。因此，就像本地后端检查它运行的命令一样，Meridian 在运行之前会检查它是你或 root 的普通文件，其他用户无法更改，通往它的任何目录也都无法被其他用户更改。其他用户可以更改的目录可能排在 PATH 的最前面，例如集群启动文件添加的共享 bin/，他们放在那里的命令会以你的身份运行。消息中的代码是该命令的问题，其页面有更多说明。",
+    "fix": [
+      "按代码页面所说，去掉其他用户对该命令或通往它的目录的写权限，或者把只有你和 root 能更改的目录放在 PATH 的最前面。",
+      "如果该命令是你的 shell，请把 SHELL 设为可以安全运行的 shell。"
+    ]
+  },
   "ssh_target_unsafe": {
     "title": "交给 ssh 不安全的主机或用户",
-    "why": "格式 1 的 ssh: 中的 remoteHost、remoteUser、jumpNodeHost 和 jumpNodeUser 常常来自工作流的输入。Meridian 把它们交给 ssh 以读取你的配置，它们在那里可能到达 ProxyCommand，而 shell 会带着主机和用户运行 ProxyCommand。因此，就像 OpenSSH 9.6 及更高版本检查它自己的命令行一样，无论安装的是哪个 ssh，Meridian 都拒绝以 - 开头、或含有空白、控制字符或 ' ` \" $ \\ ; & < > | ( ) { } 中任一字符的主机，以及以 - 开头、含有 ' ` \" ; & < > | ( ) { } 中任一字符、空白后跟 -、或以 \\ 结尾的用户。",
+    "why": "格式 1 的 ssh: 中的 remoteHost、remoteUser、jumpNodeHost 和 jumpNodeUser 常常来自工作流的输入。Meridian 把主机交给 ssh 以读取你的配置，主机和用户在那里可能到达 ProxyCommand，而 shell 会带着它们运行 ProxyCommand。因此，就像 OpenSSH 10.1 及更高版本检查它自己的命令行一样，无论安装的是哪个 ssh，Meridian 都拒绝以 - 开头、或含有空白、控制字符或 ' ` \" $ \\ ; & < > | ( ) { } 中任一字符的主机，以及以 - 开头、含有换行等控制字符或 ' ` \" ; & < > | ( ) { } 中任一字符、空白后跟 -、或以 \\ 结尾的用户。消息会把值中的控制字符转义显示，例如 \\n。",
     "fix": [
       "按工作流的预期，给该输入一个主机的名称或地址，或一个用户的名称。"
     ]

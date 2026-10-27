@@ -23,6 +23,12 @@ type hostKeyCheck struct {
 	name  string
 	addr  string
 	known knownHosts
+	// revocations are what the config's RevokedHostKeys revokes, or nil
+	// for none, which ctx bounds checking a key against, and dialer runs
+	// ssh-keygen for. The callback has no context of its own.
+	revocations *revocations
+	ctx         context.Context //nolint:containedctx // the dial's, for the host key callback, which runs within it
+	dialer      *Dialer
 	// key is the key the host presented, and err what the check said of
 	// it; revoked is set once it found the key, or its certificate's
 	// authority, revoked.
@@ -44,8 +50,18 @@ func (*keyMismatch) Error() string { return "sshconn: the host's key isn't in kn
 // system's, whichever exist, for c's host. It is looked up by its
 // HostKeyAlias, or else its hostname and port, as OpenSSH looks it up,
 // never by its address, as CheckHostIP, which OpenSSH no longer does by
-// default, would.
+// default, would. It reads the keys the config's RevokedHostKeys revokes
+// too (readRevocations). A config with a KnownHostsCommand is refused
+// (problems.SSHKnownHostsCommand): Meridian doesn't run it, and what it
+// prints could revoke the host's key.
 func (d *Dialer) newHostKeyCheck(ctx context.Context, c *hostConfig) (*hostKeyCheck, error) {
+	if c.knownHostsCommand {
+		return nil, problems.SSHKnownHostsCommand.Problem(problems.Params{"host": c.alias})
+	}
+	revocations, err := readRevocations(c)
+	if err != nil {
+		return nil, err
+	}
 	host := c.hostname
 	if c.hostKeyAlias != "" {
 		host = c.hostKeyAlias
@@ -58,7 +74,10 @@ func (d *Dialer) newHostKeyCheck(ctx context.Context, c *hostConfig) (*hostKeyCh
 	if err != nil {
 		return nil, err
 	}
-	return &hostKeyCheck{host: c.alias, name: name, addr: net.JoinHostPort(host, c.port), known: known}, nil
+	return &hostKeyCheck{
+		host: c.alias, name: name, addr: net.JoinHostPort(host, c.port), known: known,
+		revocations: revocations, ctx: ctx, dialer: d,
+	}, nil
 }
 
 // callback checks the key the host presents: a host certificate that an
@@ -67,9 +86,22 @@ func (d *Dialer) newHostKeyCheck(ctx context.Context, c *hostConfig) (*hostKeyCh
 // known_hosts has for the host, as a certificate's key is checked when no
 // authority it names signed it, as OpenSSH falls back to it. A
 // certificate an authority it names signed, but that fails, as one that
-// has expired, falls back to nothing.
+// has expired, falls back to nothing. A key the config's RevokedHostKeys
+// revokes, or a certificate whose key or authority it revokes, fails
+// first, as does one it can't be checked against.
 func (h *hostKeyCheck) callback(_ string, remote net.Addr, key ssh.PublicKey) error {
 	h.key = key
+	if h.revocations != nil {
+		revoked, err := h.revocations.revokes(h.ctx, h.dialer, key)
+		switch {
+		case err != nil:
+			h.err = err
+			return err
+		case revoked:
+			h.err = errRevoked
+			return h.err
+		}
+	}
 	if cert, ok := key.(*ssh.Certificate); ok && !h.known.authority(cert.SignatureKey, h.name) {
 		if h.known.revoked(cert.SignatureKey, h.name) {
 			h.err = errRevoked
@@ -149,6 +181,9 @@ func algorithmsOf(keyType string) []string {
 func (h *hostKeyCheck) problem() error {
 	if h.err == nil || h.key == nil {
 		return nil
+	}
+	if p := asProblem(h.err); p != nil {
+		return p
 	}
 	fingerprint := ssh.FingerprintSHA256(h.key)
 	if errors.Is(h.err, errRevoked) || h.revoked {

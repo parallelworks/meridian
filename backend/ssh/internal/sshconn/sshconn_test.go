@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/parallelworks/foundation/problem"
 	"golang.org/x/crypto/ssh"
@@ -566,6 +567,14 @@ func TestConfig(t *testing.T) {
 		h.knownHosts(s.KnownHosts(""))
 		d := h.dialer()
 		d.SSH = filepath.Join(h.dir, "no-ssh")
+		// A config that there is no ssh client to read isn't ignored: it
+		// could revoke the host's key.
+		_, err := d.Dial(t.Context(), sshconn.Target{Host: s.Addr()})
+		if p := paramsOf(t, err, problems.SSHClientMissing); p["path"] != d.ConfigFile || p["host"] != s.Host() {
+			t.Errorf("the problem's params are %v", p)
+		}
+		// Without one, OpenSSH's defaults apply, with a note.
+		d.ConfigFile = h.path("no-config")
 		c := dial(t, d, sshconn.Target{Host: s.Addr()})
 		notes := c.Notes()
 		if len(notes) != 1 || notes[0].Code != problems.SSHConfigNotRead.Code() {
@@ -574,6 +583,15 @@ func TestConfig(t *testing.T) {
 		if got := s.Logins(); !slices.Equal(got, []string{"tester"}) {
 			t.Errorf("the logins were %v, want the local user's", got)
 		}
+	})
+	t.Run("KnownHostsCommand", func(t *testing.T) {
+		requireSSH(t)
+		h := newHome(t)
+		s := h.server(sshtest.Options{})
+		h.knownHosts(s.KnownHosts(""))
+		h.config = []string{"Host *\n  KnownHostsCommand /bin/true %H"}
+		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: s.Addr()})
+		paramsOf(t, err, problems.SSHKnownHostsCommand)
 	})
 }
 
@@ -638,10 +656,33 @@ Host j2
 		if err != nil {
 			t.Fatal(err)
 		}
-		h.config = []string{fmt.Sprintf("Host proxied\n  HostName 127.0.0.1\n  Port %s\n  ProxyCommand %s=1 exec '%s' %%h %%p", s.Port(), proxyEnv, self)}
-		c := dial(t, h.dialer(), sshconn.Target{Host: "proxied"})
+		h.config = []string{fmt.Sprintf("Host proxied\n  HostName 127.0.0.1\n  Port %s\n  ProxyCommand env %s=1 '%s' %%h %%p", s.Port(), proxyEnv, self)}
+		// It runs in the user's shell, as $SHELL -c "exec <command>".
+		shell, ran := h.path("shell"), h.path("shell-ran")
+		if err := os.WriteFile(shell, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+ran+"'\nexec /bin/sh \"$@\"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		d := h.dialer()
+		d.Getenv = func(name string) string {
+			if name == "SHELL" {
+				return shell
+			}
+			return ""
+		}
+		c := dial(t, d, sshconn.Target{Host: "proxied"})
 		if out := run(t, c, "echo ok"); out != "ok\n" {
 			t.Errorf("the command wrote %q", out)
+		}
+		if got, err := os.ReadFile(ran); err != nil || !strings.HasPrefix(string(got), "-c\nexec env ") {
+			t.Errorf("the shell was given %q, %v", got, err)
+		}
+		// A shell another user could change isn't run.
+		if err := os.Chmod(shell, 0o777); err != nil { //nolint:gosec // a shell that isn't safe to run, which the test checks isn't run
+			t.Fatal(err)
+		}
+		_, err = d.Dial(t.Context(), sshconn.Target{Host: "proxied"})
+		if p := paramsOf(t, err, problems.SSHCommandUnsafe); p["path"] != shell {
+			t.Errorf("the problem's params are %v", p)
 		}
 	})
 }
@@ -806,22 +847,50 @@ func TestListenUnix(t *testing.T) {
 	}
 }
 
-// TestTargetUnsafe checks that a host or a user a workflow names that
-// could be read as more than a name is refused before anything runs with
-// it, whatever ssh is installed: here one that, as OpenSSH before 9.6
-// did, prints what it is given, into the user's ProxyCommand, whose %n a
-// shell runs.
-func TestTargetUnsafe(t *testing.T) {
-	dir := t.TempDir()
-	ran := filepath.Join(dir, "ran")
-	pwned := filepath.Join(dir, "pwned")
+// fakeSSH writes an ssh client to dir that answers -G as OpenSSH before
+// 10.1 can: with the host it is given, and the user -l gives, as they are,
+// a newline among them, and then extra, lines of its own. It appends its
+// arguments, one to a line, to dir's args, and returns its path.
+func fakeSSH(t *testing.T, dir, extra string) string {
+	t.Helper()
 	fake := filepath.Join(dir, "ssh")
-	script := "#!/bin/sh\n: > '" + ran + "'\nfor a; do host=\"$a\"; done\n" +
-		"printf 'hostname %s\\nport 22\\nuser tester\\nproxycommand true %%n\\nuserknownhostsfile /dev/null\\nidentityagent none\\n' \"$host\"\n"
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> '` + filepath.Join(dir, "args") + `'
+user=tester
+port=22
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-l) user="$2"; shift ;;
+	-p) port="$2"; shift ;;
+	-F|-J) shift ;;
+	-G|--) ;;
+	*) host="$1" ;;
+	esac
+	shift
+done
+printf 'host %s\nuser %s\nhostname %s\nport %s\nuserknownhostsfile /dev/null\nglobalknownhostsfile /dev/null\nidentityagent none\n' "$host" "$user" "$host" "$port"
+cat <<'EXTRA'
+` + extra + `EXTRA
+`
 	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	return fake
+}
+
+// TestTargetUnsafe checks that a host or a user a workflow names that
+// could be read as more than a name is refused before anything runs with
+// it, whatever ssh is installed: here one that, as OpenSSH before 10.1
+// can, prints what it is given as it is, a user's newline among it, which
+// would start a line of the config's, and the host into the user's
+// ProxyCommand, whose %n a shell runs. The value is in the problem with
+// its control characters escaped, which a terminal would act on.
+func TestTargetUnsafe(t *testing.T) {
+	dir := t.TempDir()
+	pwned := filepath.Join(dir, "pwned")
+	fake := fakeSSH(t, dir, "proxycommand true %n\n")
 	d := &sshconn.Dialer{SSH: fake, Home: dir, User: "tester", Getenv: func(string) string { return "" }, ConnectTimeout: 2 * time.Second}
+	injected := "x\nproxycommand touch " + pwned
 	for _, tc := range []struct {
 		key    string
 		target sshconn.Target
@@ -829,20 +898,69 @@ func TestTargetUnsafe(t *testing.T) {
 		{"remoteHost", sshconn.Target{Host: "a;touch " + pwned}},
 		{"remoteHost", sshconn.Target{Host: "$(touch " + pwned + ")"}},
 		{"remoteHost", sshconn.Target{Host: "-oProxyCommand=touch " + pwned}},
+		{"remoteHost", sshconn.Target{Host: injected}},
+		{"remoteHost", sshconn.Target{Host: "farm\x1b]0;x\a"}},
 		{"remoteUser", sshconn.Target{Host: "farm", User: "a`touch " + pwned + "`"}},
+		{"remoteUser", sshconn.Target{Host: "farm", User: injected}},
+		{"remoteUser", sshconn.Target{Host: "farm", User: "x\rproxycommand touch " + pwned}},
+		{"remoteUser", sshconn.Target{Host: "farm", User: "x\x1b[2J"}},
 		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: "j|touch " + pwned}},
+		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: injected}},
 		{"jumpNodeUser", sshconn.Target{Host: "farm", JumpHost: "j", JumpUser: "u -oProxyCommand=x"}},
+		{"jumpNodeUser", sshconn.Target{Host: "farm", JumpHost: "j", JumpUser: injected}},
+		{"jumpNodeUser", sshconn.Target{Host: "farm", JumpHost: "j", JumpUser: "u\x00"}},
 	} {
 		_, err := d.Dial(t.Context(), tc.target)
 		p := paramsOf(t, err, problems.SSHTargetUnsafe)
-		if p["key"] != tc.key {
-			t.Errorf("%+v is refused for %v, want %s", tc.target, p["key"], tc.key)
+		value := fmt.Sprint(p["value"])
+		if p["key"] != tc.key || strings.ContainsFunc(value, unicode.IsControl) {
+			t.Errorf("%+v is refused for %v, with the value %q, want %s, its control characters escaped", tc.target, p["key"], value, tc.key)
 		}
 	}
-	for _, f := range []string{ran, pwned} {
+	if _, err := d.Dial(t.Context(), sshconn.Target{Host: "farm", User: injected}); err == nil {
+		t.Fatal("a user with a newline was taken")
+	} else if p := paramsOf(t, err, problems.SSHTargetUnsafe); p["value"] != `x\nproxycommand touch `+pwned {
+		t.Errorf("the value is %q", p["value"])
+	}
+	for _, f := range []string{filepath.Join(dir, "args"), pwned} {
 		if _, err := os.Stat(f); err == nil {
 			t.Errorf("an unsafe target ran something: %s exists", f)
 		}
+	}
+}
+
+// TestUsersNotGivenSSH checks that ssh is given a target's host and port,
+// and never its users, nor its jump host with one: what ssh prints of
+// them is what an ssh before 10.1 could print as it was given. A user
+// over the config's applies all the same, and a jump host's user to it.
+func TestUsersNotGivenSSH(t *testing.T) {
+	h := newHome(t)
+	j, s := h.server(sshtest.Options{}), h.server(sshtest.Options{})
+	h.knownHosts(j.KnownHosts(""), s.KnownHosts(""))
+	dir := t.TempDir()
+	d := h.dialer()
+	d.SSH = fakeSSH(t, dir, "userknownhostsfile "+h.path(".ssh", "known_hosts")+"\n")
+	_, err := d.Dial(t.Context(), sshconn.Target{Host: s.Addr(), User: "alice", JumpHost: j.Addr(), JumpUser: "carol"})
+	// The fake prints userknownhostsfile twice, which isn't taken.
+	if p := paramsOf(t, err, problems.SSHConfigOutputUnexpected); p["keyword"] != "userknownhostsfile" {
+		t.Errorf("the problem's params are %v", p)
+	}
+	d.SSH = fakeSSH(t, dir, "")
+	_, err = d.Dial(t.Context(), sshconn.Target{Host: s.Addr(), User: "alice", JumpHost: j.Addr(), JumpUser: "carol"})
+	// The fake's known_hosts are /dev/null, which knows no host.
+	paramsOf(t, err, problems.SSHHostKeyUnknown)
+	data, err := os.ReadFile(filepath.Join(dir, "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Fields(string(data))
+	for _, unwanted := range []string{"-l", "-J", "alice", "carol"} {
+		if slices.Contains(args, unwanted) {
+			t.Errorf("ssh was given %q: %q", unwanted, args)
+		}
+	}
+	if !slices.Contains(args, j.Host()) || !slices.Contains(args, j.Port()) {
+		t.Errorf("ssh wasn't asked for the jump host: %q", args)
 	}
 }
 
@@ -916,8 +1034,8 @@ func TestHashedUnmatched(t *testing.T) {
 	}
 	h.knownHosts(string(hashed), s.KnownHosts(""))
 	d := h.dialer()
-	// No ssh, and so no ssh-keygen beside it.
-	d.SSH = filepath.Join(h.dir, "no-ssh")
+	// No ssh, and so no ssh-keygen beside it, nor a config to read.
+	d.SSH, d.ConfigFile = filepath.Join(h.dir, "no-ssh"), h.path("no-config")
 	_, err = d.Dial(t.Context(), sshconn.Target{Host: s.Addr()})
 	if p := paramsOf(t, err, problems.SSHKnownHostsUnmatched); p["file"] != h.path(".ssh", "known_hosts") {
 		t.Errorf("the problem's params are %v", p)
@@ -948,5 +1066,123 @@ func TestPoolClosedWhileDialing(t *testing.T) {
 	}
 	if _, err := p.Get(t.Context(), sshconn.Target{Host: s.Addr()}); !errors.Is(err, sshconn.ErrClosed) {
 		t.Errorf("a Get after the pool closed gave %v, want ErrClosed", err)
+	}
+}
+
+// TestRevokedHostKeys checks the config's RevokedHostKeys, as OpenSSH
+// reads it: a list of keys, or a KRL, which ssh-keygen -Q checks a key
+// against, revoking a host's key, or a certificate's authority; and a
+// file that isn't there, or a KRL there is no ssh-keygen to check, which
+// revokes every key, since what it revokes can't be known.
+func TestRevokedHostKeys(t *testing.T) {
+	requireSSH(t)
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("no ssh-keygen to write a KRL with")
+	}
+	h := newHome(t)
+	hostKey, ca, other := sshtest.NewKey(t), sshtest.NewKey(t), sshtest.NewKey(t)
+	s := h.server(sshtest.Options{HostKeys: []ssh.Signer{hostKey}})
+	cert := &ssh.Certificate{Key: hostKey.PublicKey(), CertType: ssh.HostCert, ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: ssh.CertTimeInfinity}
+	if err := cert.SignCert(rand.Reader, ca); err != nil {
+		t.Fatal(err)
+	}
+	certSigner, err := ssh.NewCertSigner(cert, hostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certified := h.server(sshtest.Options{HostKeys: []ssh.Signer{certSigner}})
+	h.knownHosts(s.KnownHosts(""), "@cert-authority * "+string(ssh.MarshalAuthorizedKey(ca.PublicKey())))
+	revoked := h.path(".ssh", "revoked")
+	h.config = []string{"Host *\n  RevokedHostKeys " + revoked}
+	list := func(keys ...ssh.Signer) {
+		data := []byte("# revoked\n\n")
+		for _, k := range keys {
+			data = append(data, ssh.MarshalAuthorizedKey(k.PublicKey())...)
+		}
+		h.write(revoked, data)
+	}
+	krl := func(k ssh.Signer) {
+		pub := h.path("revoke.pub")
+		h.write(pub, ssh.MarshalAuthorizedKey(k.PublicKey()))
+		_ = os.Remove(revoked)
+		if out, err := exec.Command("ssh-keygen", "-k", "-f", revoked, pub).CombinedOutput(); err != nil {
+			t.Fatalf("ssh-keygen -k: %v: %s", err, out)
+		}
+	}
+	target, certTarget := sshconn.Target{Host: s.Addr()}, sshconn.Target{Host: certified.Addr()}
+
+	_, err = h.dialer().Dial(t.Context(), target)
+	if p := paramsOf(t, err, problems.SSHRevokedHostKeysUnreadable); p["file"] != revoked || p["host"] != s.Addr() {
+		t.Errorf("a revoked keys file that isn't there gives %v", p)
+	}
+	list(other)
+	dial(t, h.dialer(), target)
+	dial(t, h.dialer(), certTarget)
+	list(other, hostKey)
+	_, err = h.dialer().Dial(t.Context(), target)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	_, err = h.dialer().Dial(t.Context(), certTarget)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	list(ca)
+	dial(t, h.dialer(), target)
+	_, err = h.dialer().Dial(t.Context(), certTarget)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+
+	krl(other)
+	dial(t, h.dialer(), target)
+	krl(hostKey)
+	_, err = h.dialer().Dial(t.Context(), target)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	krl(ca)
+	dial(t, h.dialer(), target)
+	_, err = h.dialer().Dial(t.Context(), certTarget)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+
+	// An ssh with no ssh-keygen beside it.
+	sshPath, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alone := filepath.Join(t.TempDir(), "ssh")
+	if err := os.Symlink(sshPath, alone); err != nil {
+		t.Fatal(err)
+	}
+	d := h.dialer()
+	d.SSH = alone
+	_, err = d.Dial(t.Context(), target)
+	if p := paramsOf(t, err, problems.SSHRevokedHostKeysUnreadable); p["file"] != revoked {
+		t.Errorf("a KRL there is no ssh-keygen to check gives %v", p)
+	}
+}
+
+// TestCommandUnsafe checks that an ssh client another user could change,
+// or that is in a directory another user could change, isn't run, and
+// that one a PATH finds is checked as one named is.
+func TestCommandUnsafe(t *testing.T) {
+	dir := t.TempDir()
+	fake := fakeSSH(t, dir, "")
+	if err := os.Chmod(fake, 0o722); err != nil { //nolint:gosec // an ssh client that isn't safe to run, which the test checks isn't run
+		t.Fatal(err)
+	}
+	d := &sshconn.Dialer{SSH: fake, Home: dir, User: "tester", Getenv: func(string) string { return "" }}
+	_, err := d.Dial(t.Context(), sshconn.Target{Host: "farm"})
+	if p := paramsOf(t, err, problems.SSHCommandUnsafe); p["path"] != fake || p["code"] != string(problems.FileChangeable.Code()) {
+		t.Errorf("the problem's params are %v", p)
+	}
+	if err := os.Chmod(fake, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // a directory another user could change, which the test checks isn't run from
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Setenv("PATH", dir)
+	d.SSH = ""
+	_, err = d.Dial(t.Context(), sshconn.Target{Host: "farm"})
+	if p := paramsOf(t, err, problems.SSHCommandUnsafe); p["path"] != fake {
+		t.Errorf("the problem's params are %v", p)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "args")); err == nil {
+		t.Error("an ssh client that isn't safe to run ran")
 	}
 }

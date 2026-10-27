@@ -2246,8 +2246,8 @@
     ]
   },
   "ssh_host_key_revoked": {
-    "title": "known_hosts가 폐기한 호스트 키",
-    "why": "known_hosts가 그 키에 @revoked를 표시했습니다. 관리자가 어느 호스트에 대해서도 그 키를 신뢰하지 말라고 지정한 것입니다.",
+    "title": "폐기된 호스트 키",
+    "why": "known_hosts가 그 키에 @revoked를 표시했거나, SSH 설정의 RevokedHostKeys가 지정한 파일이 그 키를 나열했거나, 호스트 인증서라면 그 키나 인증 기관의 키가 그렇습니다. 관리자가 어느 호스트에 대해서도 그 키를 신뢰하지 말라고 지정한 것입니다.",
     "fix": [
       "호스트 관리자에게 현재 키를 요청하고, 지문을 확인한 뒤 known_hosts에 추가하세요."
     ]
@@ -2277,14 +2277,52 @@
   },
   "ssh_config_not_read": {
     "title": "ssh 클라이언트가 없어 읽지 않은 SSH 설정",
-    "why": "Meridian은 ssh -G를 실행해 ssh를 통해 SSH 설정을 읽습니다. PATH에 ssh 클라이언트가 없으면 OpenSSH의 기본값을 씁니다. 이름 그대로의 호스트, 포트 22, 본인의 사용자 이름, ~/.ssh에 있는 OpenSSH 기본 이름의 키 파일, 에이전트, 그리고 ~/.ssh와 /etc/ssh의 known_hosts 파일입니다. 설정의 별칭, 사용자, ProxyJump 등은 적용되지 않습니다.",
+    "why": "Meridian은 ssh -G를 실행해 ssh를 통해 SSH 설정을 읽습니다. PATH에 ssh 클라이언트가 없고, 읽을 설정도 본인의 것(~/.ssh/config)과 시스템의 것(/etc/ssh/ssh_config) 모두 없으면, OpenSSH의 기본값을 씁니다. 이름 그대로의 호스트, 포트 22, 본인의 사용자 이름, ~/.ssh에 있는 OpenSSH 기본 이름의 키 파일, 에이전트, 그리고 ~/.ssh와 /etc/ssh의 known_hosts 파일입니다.",
     "fix": [
       "설정에 호스트에 닿는 방법이 적혀 있다면, OpenSSH 클라이언트를 설치하거나 PATH에 추가하세요."
     ]
   },
+  "ssh_config_output_unexpected": {
+    "title": "Meridian이 신뢰하지 않는 ssh -G 출력",
+    "why": "Meridian은 ssh -G를 실행해 각 호스트의 SSH 설정을 읽습니다. ssh -G는 각 줄에 키워드와 그 값을 출력하며, Meridian은 OpenSSH의 ssh가 출력하는 그대로만 받아들입니다. 읽는 각 키워드는 한 줄에 있어야 하고, ssh가 키 파일마다 출력하는 IdentityFile만 예외이며, 호스트와 포트는 Meridian이 요청한 그대로여야 합니다. 그렇지 않은 출력에는 설정의 것이 아닌 줄이 있을 수 있습니다. OpenSSH 10.1 이전의 ssh는 받은 사용자를 그대로 출력하므로, 사용자 안의 줄바꿈이 독립된 줄을 시작하고, 그 줄이 ProxyCommand로 보일 수 있습니다. Meridian은 ssh에 사용자를 넘기지 않으므로, PATH의 ssh 클라이언트나 그것을 감싸는 무언가가 이를 스스로 출력한 것입니다.",
+    "fix": [
+      "ssh -G <host>를 실행해 메시지가 가리키는 키워드를 확인하세요. OpenSSH 자체 클라이언트는 그것을 한 번 출력합니다.",
+      "PATH의 ssh가 OpenSSH 클라이언트를 감싸는 것이라면, OpenSSH 자체 클라이언트를 PATH 맨 앞에 두세요."
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "title": "읽을 수 없는 폐기된 호스트 키",
+    "why": "SSH 설정의 RevokedHostKeys는 폐기된 호스트 키 파일을 지정합니다. 한 줄에 공개 키 하나씩 적은 목록이거나, OpenSSH의 이진 목록인 KRL이며, Meridian은 KRL에 대해서는 ssh-keygen -Q로 키를 확인합니다. 파일이 없거나, 읽을 수 없거나, ssh 옆에 ssh-keygen이 없는 경우처럼 ssh-keygen이 확인할 수 없는 KRL이면, Meridian은 그것이 호스트의 키나 인증서의 인증 기관을 폐기하는지 알 수 없으므로, OpenSSH처럼 그 호스트의 어떤 키도 신뢰하지 않습니다.",
+    "fix": [
+      "파일이 있고 읽을 수 있는지 확인하세요. 그 호스트에 적용되면 안 된다면 설정에서 RevokedHostKeys를 지우세요.",
+      "KRL이라면 ssh 옆에 OpenSSH의 ssh-keygen을 설치하세요."
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "title": "Meridian이 실행하지 않는 KnownHostsCommand",
+    "why": "KnownHostsCommand는 호스트에 대한 known_hosts 줄을 더 출력하는 명령을 실행하며, 그 줄은 키를 지정할 뿐 아니라 폐기할 수도 있습니다. Meridian은 설정이 지정한 known_hosts 파일로 호스트 키를 직접 확인하고 그 명령은 실행하지 않으므로, 그 명령이 무엇을 폐기할지 알 수 없습니다. 그래서 호스트에 대해 지정된 내용의 일부만으로 키를 확인하는 대신 연결하지 않습니다.",
+    "fix": [
+      "호스트의 키와 폐기된 키를 설정이 지정하는 known_hosts 파일에 넣고, Host나 Match 블록에서 그 호스트에 KnownHostsCommand none을 설정하세요."
+    ]
+  },
+  "ssh_client_missing": {
+    "title": "읽을 ssh 클라이언트가 없는 SSH 설정",
+    "why": "Meridian은 ssh -G를 실행해 ssh를 통해 SSH 설정을 읽으며, ssh -G는 Match, Include 등을 ssh처럼 적용합니다. PATH에 ssh 클라이언트가 없을 때 Meridian이 OpenSSH의 기본값을 쓸 수 있는 것은 읽을 설정이 본인의 것(~/.ssh/config)도 시스템의 것(/etc/ssh/ssh_config)도 없을 때뿐입니다. 설정에 적힌 내용, 예를 들어 호스트에 닿는 방법이나 폐기한 호스트 키는 무시할 수 없습니다.",
+    "fix": [
+      "OpenSSH 클라이언트를 설치하거나 PATH에 추가하세요."
+    ]
+  },
+  "ssh_command_unsafe": {
+    "title": "연결하려고 실행하기에 안전하지 않은 명령",
+    "why": "Meridian은 SSH 설정을 읽으려고 ssh를, 해시된 known_hosts 줄을 맞춰 보고 KRL을 확인하려고 ssh-keygen을, ProxyCommand를 실행하려고 셸(SHELL, 없으면 /bin/sh)을 실행하며, 그때 에이전트, 키, 호스트 연결을 가지고 있습니다. 그래서 로컬 백엔드가 실행하는 명령을 확인하듯이, 실행하기 전에 그것이 본인이나 root의 일반 파일이고 다른 사용자가 바꿀 수 없으며, 그곳에 이르는 어떤 디렉터리도 다른 사용자가 바꿀 수 없는지 확인합니다. 다른 사용자가 바꿀 수 있는 디렉터리가 PATH 맨 앞에 올 수 있는데, 클러스터의 시작 파일이 추가하는 공유 bin/ 같은 것이며, 그곳에 놓인 명령은 본인으로 실행됩니다. 메시지의 코드는 그 명령의 문제이며, 그 페이지에 자세히 나와 있습니다.",
+    "fix": [
+      "코드의 페이지가 말하는 대로, 다른 사용자가 그 명령이나 그곳에 이르는 디렉터리에 가진 쓰기 권한을 없애거나, 본인과 root만 바꿀 수 있는 디렉터리를 PATH 맨 앞에 두세요.",
+      "그 명령이 셸이라면, 실행하기에 안전한 셸을 SHELL에 설정하세요."
+    ]
+  },
   "ssh_target_unsafe": {
     "title": "ssh에 넘기기에 안전하지 않은 호스트나 사용자",
-    "why": "형식 1 ssh:의 remoteHost, remoteUser, jumpNodeHost, jumpNodeUser는 흔히 워크플로의 입력에서 옵니다. Meridian은 설정을 읽으려고 이것들을 ssh에 넘기며, 거기서 ProxyCommand에 닿을 수 있는데, ProxyCommand는 셸이 호스트와 사용자를 넣어 실행합니다. 그래서 OpenSSH 9.6 이상이 자기 명령줄을 확인하듯이, 설치된 ssh와 관계없이 Meridian은 -로 시작하거나, 공백, 제어 문자, ' ` \" $ \\ ; & < > | ( ) { } 중 하나가 있는 호스트와, -로 시작하거나, ' ` \" ; & < > | ( ) { } 중 하나가 있거나, 공백 뒤에 -가 있거나, \\로 끝나는 사용자를 거부합니다.",
+    "why": "형식 1 ssh:의 remoteHost, remoteUser, jumpNodeHost, jumpNodeUser는 흔히 워크플로의 입력에서 옵니다. Meridian은 설정을 읽으려고 호스트를 ssh에 넘기며, 호스트와 사용자는 거기서 ProxyCommand에 닿을 수 있는데, ProxyCommand는 셸이 그것들을 넣어 실행합니다. 그래서 OpenSSH 10.1 이상이 자기 명령줄을 확인하듯이, 설치된 ssh와 관계없이 Meridian은 -로 시작하거나, 공백, 제어 문자, ' ` \" $ \\ ; & < > | ( ) { } 중 하나가 있는 호스트와, -로 시작하거나, 줄바꿈 같은 제어 문자나 ' ` \" ; & < > | ( ) { } 중 하나가 있거나, 공백 뒤에 -가 있거나, \\로 끝나는 사용자를 거부합니다. 메시지는 값의 제어 문자를 \\n처럼 이스케이프해 보여 줍니다.",
     "fix": [
       "워크플로가 기대하는 대로 입력에 호스트의 이름이나 주소, 또는 사용자의 이름을 주세요."
     ]

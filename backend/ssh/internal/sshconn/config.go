@@ -1,11 +1,11 @@
 package sshconn
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -33,15 +33,22 @@ type hostConfig struct {
 	identityAgent  string
 	// proxyJump are the hosts to connect through, each [user@]host[:port],
 	// the first first; proxyCommand a command whose standard input and
-	// output carry the connection, its tokens not yet expanded. At most
+	// output carry the connection, its tokens not yet expanded; and
+	// jumpHost, with jumpUser, a target's jump host, over both. At most
 	// one is set.
 	proxyJump    []string
 	proxyCommand string
+	jumpHost     string
+	jumpUser     string
 	// knownHosts are the files the host's key is checked against, the
 	// user's then the system's, and hostKeyAlias the name it is looked up
-	// by there, or "" for its hostname and port.
-	knownHosts   []string
-	hostKeyAlias string
+	// by there, or "" for its hostname and port. revokedHostKeys is the
+	// file of keys that are revoked, RevokedHostKeys, or "" for none; and
+	// knownHostsCommand whether KnownHostsCommand names a command.
+	knownHosts        []string
+	hostKeyAlias      string
+	revokedHostKeys   string
+	knownHostsCommand bool
 	// connectTimeout bounds connecting and the handshake, or 0 for the
 	// Dialer's; aliveInterval and aliveCountMax are ServerAliveInterval and
 	// ServerAliveCountMax, aliveInterval 0 for none set.
@@ -57,39 +64,77 @@ type hostConfig struct {
 // names none, in its order.
 var defaultIdentityFiles = []string{"id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk", "id_xmss"}
 
-// resolve returns the config of host, as ssh -G gives it: with user, port
-// and jump, ProxyJump's [user@]host[:port], over the config's where they
-// aren't "". Without an ssh client, it gives OpenSSH's defaults, with
-// read false. A config ssh can't read is problems.SSHConfigUnreadable.
-func (d *Dialer) resolve(ctx context.Context, host, user, port, jump string) (*hostConfig, error) {
+// systemConfig is the system's ssh_config, which ssh reads after the
+// user's.
+const systemConfig = "/etc/ssh/ssh_config"
+
+// resolve returns the config of host, on port where it isn't "", as
+// ssh -G gives it, with user over the config's User where it isn't "".
+// ssh is given the host alone, which Target.check has checked, and the
+// port: never a user, nor a jump host, which come from a workflow, and
+// which an ssh before 10.1 prints as they are, a newline among them, which
+// would start a line of its own that parse would take for the config's
+// (CVE-2025-61984). So a Match on the user, and a %r in what ssh expands
+// itself, UserKnownHostsFile and RevokedHostKeys, see the config's User,
+// or else the local user, not user. Without an ssh client, OpenSSH's
+// defaults apply (defaults). A config ssh can't read is
+// problems.SSHConfigUnreadable.
+func (d *Dialer) resolve(ctx context.Context, host, port, user string) (*hostConfig, error) {
+	client, err := command(d.sshClient())
+	var c *hostConfig
+	switch {
+	case errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist):
+		c, err = d.defaults(host, port)
+	case err == nil:
+		c, err = d.readConfig(ctx, client, host, port)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if user != "" {
+		c.user = user
+	}
+	d.expandPaths(c)
+	return c, nil
+}
+
+// expandPaths expands the paths of c's files (expand), once its user is
+// known.
+func (d *Dialer) expandPaths(c *hostConfig) {
+	for i, f := range c.identityFiles {
+		c.identityFiles[i] = d.expand(f, c)
+	}
+	for i, f := range c.knownHosts {
+		c.knownHosts[i] = d.expand(f, c)
+	}
+	if c.revokedHostKeys != "" {
+		c.revokedHostKeys = d.expand(c.revokedHostKeys, c)
+	}
+}
+
+// readConfig runs the ssh client at client as ssh -G, for host, on port
+// where it isn't "", and reads what it prints.
+func (d *Dialer) readConfig(ctx context.Context, client, host, port string) (*hostConfig, error) {
 	args := []string{"-G"}
 	if d.ConfigFile != "" {
 		args = append(args, "-F", d.ConfigFile)
 	}
-	if user != "" {
-		args = append(args, "-l", user)
-	}
 	if port != "" {
 		args = append(args, "-p", port)
 	}
-	if jump != "" {
-		args = append(args, "-J", jump)
-	}
 	// What follows -- is the host, whatever it starts with.
 	args = append(args, "--", host)
-	cmd := exec.CommandContext(ctx, d.sshClient(), args...) //nolint:gosec // ssh -G, with what a target names as its arguments, the host after --, and no shell
+	cmd := exec.CommandContext(ctx, client, args...) //nolint:gosec // ssh -G, a checked command, with a checked host after --, and no shell
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
-		return d.parse(host, stdout.Bytes()), nil
-	case errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist):
-		return d.defaults(host, user, port, jump), nil
+		return d.parse(host, port, stdout.String())
 	case ctx.Err() != nil:
 		return nil, ctx.Err()
-	case errors.As(err, &exitErr):
+	}
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
 		return nil, problems.SSHConfigUnreadable.Problem(problems.Params{"host": host, "reason": said(stderr.String(), err)})
 	}
 	return nil, problems.SSHConfigUnreadable.Problem(problems.Params{"host": host, "reason": err.Error()})
@@ -118,23 +163,42 @@ func said(stderr string, err error) string {
 	return strings.Join(lines, "; ")
 }
 
-// parse reads ssh -G's output, a keyword and its value on each line.
-func (d *Dialer) parse(alias string, out []byte) *hostConfig {
+// parse reads ssh -G's output, a keyword and its value on each line, for
+// alias, asked for on port where it isn't "". It takes the output only as
+// ssh prints it: each keyword Meridian reads on one line, but
+// IdentityFile, which ssh prints for each file; host, which ssh prints
+// first, alias, in any case; and port, where one was asked for, it.
+// Otherwise it is problems.SSHConfigOutputUnexpected, which names the
+// keyword, rather than a config that something other than the user's
+// could have written.
+func (d *Dialer) parse(alias, port, out string) (*hostConfig, error) {
 	c := &hostConfig{alias: alias, port: "22", aliveCountMax: 3, read: true}
+	unexpected := func(keyword string) error {
+		return problems.SSHConfigOutputUnexpected.Problem(problems.Params{"host": alias, "keyword": keyword})
+	}
 	agentSet := false
-	s := bufio.NewScanner(bytes.NewReader(out))
-	for s.Scan() {
-		key, value, _ := strings.Cut(s.Text(), " ")
-		value = strings.TrimSpace(value)
-		switch strings.ToLower(key) {
+	seen := map[string]bool{}
+	for line := range strings.Lines(out) {
+		key, value, _ := strings.Cut(strings.TrimRight(line, "\r\n"), " ")
+		key, value = strings.ToLower(key), strings.TrimSpace(value)
+		read := true
+		switch key {
+		case "host":
+			if !strings.EqualFold(value, alias) {
+				return nil, unexpected(key)
+			}
 		case "hostname":
 			c.hostname = value
 		case "port":
+			if port != "" && !samePort(value, port) {
+				return nil, unexpected(key)
+			}
 			c.port = value
 		case "user":
 			c.user = value
 		case "identityfile":
 			c.identityFiles = append(c.identityFiles, value)
+			continue
 		case "identitiesonly":
 			c.identitiesOnly = value == "yes"
 		case "identityagent":
@@ -160,6 +224,12 @@ func (d *Dialer) parse(alias string, out []byte) *hostConfig {
 			if value != "none" {
 				c.hostKeyAlias = value
 			}
+		case "revokedhostkeys":
+			if value != "none" {
+				c.revokedHostKeys = value
+			}
+		case "knownhostscommand":
+			c.knownHostsCommand = value != "none"
 		case "connecttimeout":
 			if n, err := strconv.Atoi(value); err == nil && n > 0 {
 				c.connectTimeout = time.Duration(n) * time.Second
@@ -172,6 +242,14 @@ func (d *Dialer) parse(alias string, out []byte) *hostConfig {
 			if n, err := strconv.Atoi(value); err == nil && n > 0 {
 				c.aliveCountMax = n
 			}
+		default:
+			read = false
+		}
+		if read {
+			if seen[key] {
+				return nil, unexpected(key)
+			}
+			seen[key] = true
 		}
 	}
 	if c.hostname == "" {
@@ -180,29 +258,37 @@ func (d *Dialer) parse(alias string, out []byte) *hostConfig {
 	if !agentSet {
 		c.identityAgent = d.getenv("SSH_AUTH_SOCK")
 	}
-	for i, f := range c.identityFiles {
-		c.identityFiles[i] = d.expand(f, c)
-	}
-	for i, f := range c.knownHosts {
-		c.knownHosts[i] = d.expand(f, c)
-	}
-	return c
+	return c, nil
+}
+
+// samePort reports whether two ports, as ssh and a target write them, are
+// the same number.
+func samePort(a, b string) bool {
+	x, errX := strconv.Atoi(a)
+	y, errY := strconv.Atoi(b)
+	return errX == nil && errY == nil && x == y
 }
 
 // defaults is the config OpenSSH gives a host when the user's says
-// nothing: what an ssh client would read, where there is none to read it.
-func (d *Dialer) defaults(host, user, port, jump string) *hostConfig {
-	c := &hostConfig{alias: host, hostname: host, port: "22", user: user, aliveCountMax: 3, identityAgent: d.getenv("SSH_AUTH_SOCK")}
+// nothing: what an ssh client would read, where there is none to read it,
+// with read false. Where there is a config for one to read, ConfigFile, or
+// else the user's or the system's, it isn't ignored, as it could revoke a
+// host's key: that is problems.SSHClientMissing.
+func (d *Dialer) defaults(host, port string) (*hostConfig, error) {
+	home := d.home()
+	files := []string{filepath.Join(home, ".ssh", "config"), systemConfig}
+	if d.ConfigFile != "" {
+		files = []string{d.ConfigFile}
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); !errors.Is(err, fs.ErrNotExist) {
+			return nil, problems.SSHClientMissing.Problem(problems.Params{"host": host, "path": f})
+		}
+	}
+	c := &hostConfig{alias: host, hostname: host, port: "22", user: d.localUser(), aliveCountMax: 3, identityAgent: d.getenv("SSH_AUTH_SOCK")}
 	if port != "" {
 		c.port = port
 	}
-	if c.user == "" {
-		c.user = d.localUser()
-	}
-	if jump != "" {
-		c.proxyJump = strings.Split(jump, ",")
-	}
-	home := d.home()
 	for _, f := range defaultIdentityFiles {
 		c.identityFiles = append(c.identityFiles, filepath.Join(home, ".ssh", f))
 	}
@@ -210,7 +296,7 @@ func (d *Dialer) defaults(host, user, port, jump string) *hostConfig {
 		filepath.Join(home, ".ssh", "known_hosts"), filepath.Join(home, ".ssh", "known_hosts2"),
 		"/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_known_hosts2",
 	}
-	return c
+	return c, nil
 }
 
 // expand expands what a path in the config can hold, as OpenSSH does: ~

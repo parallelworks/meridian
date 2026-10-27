@@ -221,10 +221,16 @@ func (s *Server) config() *ssh.ServerConfig {
 			if !authorized[string(key.Marshal())] {
 				return nil, errors.New("sshtest: key not authorized")
 			}
-			// Recorded here, before the server says the login succeeded,
-			// so that a client whose Dial has returned finds it.
-			s.login(meta)
 			return nil, nil
+		},
+		// A login is recorded once the server has checked the key's
+		// signature, which the key's callback, asked first whether the
+		// key would do, comes before; and before it says the login
+		// succeeded, so that a client whose Dial has returned finds it.
+		AuthLogCallback: func(meta ssh.ConnMetadata, _ string, err error) {
+			if err == nil {
+				s.login(meta)
+			}
 		},
 	}
 	c.KeyExchanges, c.Ciphers, c.MACs = s.opts.KeyExchanges, s.opts.Ciphers, s.opts.MACs

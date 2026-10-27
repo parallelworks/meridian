@@ -471,23 +471,30 @@ var (
 // host-key, cipher or mac, and offered what it offers; user is who logs
 // in, and keys how many keys were offered; reason is what ssh, or the
 // system, said; key and value are a format 1 ssh: key and what it gives;
-// file is a known_hosts file; token is a ProxyCommand's, as %x, and hop
-// one of a ProxyJump's hosts, as it writes it; and limit how deep
-// ProxyJumps may nest.
+// file is a known_hosts file, or a RevokedHostKeys file; token is a
+// ProxyCommand's, as %x, and hop one of a ProxyJump's hosts, as it writes
+// it; limit is how deep ProxyJumps may nest; keyword is a keyword of
+// ssh -G's output, as it prints it; path is an ssh_config, or a command
+// Meridian runs to connect; and code is the code of the problem with it.
 var (
-	SSHTargetUnsafe           = define(Error, "ssh_target_unsafe", "Host or user that isn't safe to give ssh", "key", "value")
-	SSHKnownHostsUnmatched    = define(Error, "ssh_known_hosts_unmatched", "known_hosts with hashed lines that can't be matched", "host", "file", "reason")
-	SSHHostCertificateInvalid = define(Error, "ssh_host_certificate_invalid", "Host certificate that its authority's signature doesn't make valid", "host", "fingerprint", "reason")
-	SSHProxyCommandToken      = define(Error, "ssh_proxy_command_token", "ProxyCommand with a token Meridian doesn't expand", "host", "token")
-	SSHProxyJumpTooDeep       = define(Error, "ssh_proxy_jump_too_deep", "ProxyJumps that nest too deep", "host", "limit")
-	SSHProxyJumpInvalid       = define(Error, "ssh_proxy_jump_invalid", "ProxyJump host that names no host", "host", "hop")
-	SSHHostKeyUnknown         = define(Error, "ssh_host_key_unknown", "Host key that known_hosts doesn't have", "host", "type", "fingerprint")
-	SSHHostKeyChanged         = define(Error, "ssh_host_key_changed", "Host key that isn't the one known_hosts has", "host", "type", "fingerprint", "file", "line")
-	SSHHostKeyRevoked         = define(Error, "ssh_host_key_revoked", "Host key that known_hosts revokes", "host", "fingerprint")
-	SSHAlgorithmsUnapproved   = define(Error, "ssh_algorithms_unapproved", "Host that offers no algorithm FIPS 140-3 approves", "host", "category", "offered")
-	SSHAuthFailed             = define(Error, "ssh_auth_failed", "Login to a host refused", "host", "user", "keys")
-	SSHConfigUnreadable       = define(Error, "ssh_config_unreadable", "SSH configuration that can't be read", "host", "reason")
-	SSHConfigNotRead          = define(Warning, "ssh_config_not_read", "SSH configuration not read, with no ssh client", "host")
+	SSHTargetUnsafe              = define(Error, "ssh_target_unsafe", "Host or user that isn't safe to give ssh", "key", "value")
+	SSHKnownHostsUnmatched       = define(Error, "ssh_known_hosts_unmatched", "known_hosts with hashed lines that can't be matched", "host", "file", "reason")
+	SSHHostCertificateInvalid    = define(Error, "ssh_host_certificate_invalid", "Host certificate that its authority's signature doesn't make valid", "host", "fingerprint", "reason")
+	SSHProxyCommandToken         = define(Error, "ssh_proxy_command_token", "ProxyCommand with a token Meridian doesn't expand", "host", "token")
+	SSHProxyJumpTooDeep          = define(Error, "ssh_proxy_jump_too_deep", "ProxyJumps that nest too deep", "host", "limit")
+	SSHProxyJumpInvalid          = define(Error, "ssh_proxy_jump_invalid", "ProxyJump host that names no host", "host", "hop")
+	SSHHostKeyUnknown            = define(Error, "ssh_host_key_unknown", "Host key that known_hosts doesn't have", "host", "type", "fingerprint")
+	SSHHostKeyChanged            = define(Error, "ssh_host_key_changed", "Host key that isn't the one known_hosts has", "host", "type", "fingerprint", "file", "line")
+	SSHHostKeyRevoked            = define(Error, "ssh_host_key_revoked", "Host key that is revoked", "host", "fingerprint")
+	SSHAlgorithmsUnapproved      = define(Error, "ssh_algorithms_unapproved", "Host that offers no algorithm FIPS 140-3 approves", "host", "category", "offered")
+	SSHAuthFailed                = define(Error, "ssh_auth_failed", "Login to a host refused", "host", "user", "keys")
+	SSHConfigUnreadable          = define(Error, "ssh_config_unreadable", "SSH configuration that can't be read", "host", "reason")
+	SSHConfigNotRead             = define(Warning, "ssh_config_not_read", "SSH configuration not read, with no ssh client", "host")
+	SSHConfigOutputUnexpected    = define(Error, "ssh_config_output_unexpected", "ssh -G output that Meridian doesn't trust", "host", "keyword")
+	SSHRevokedHostKeysUnreadable = define(Error, "ssh_revoked_host_keys_unreadable", "Revoked host keys that can't be read", "host", "file", "reason")
+	SSHKnownHostsCommand         = define(Error, "ssh_known_hosts_command", "KnownHostsCommand, which Meridian doesn't run", "host")
+	SSHClientMissing             = define(Error, "ssh_client_missing", "SSH configuration without an ssh client to read it", "host", "path")
+	SSHCommandUnsafe             = define(Error, "ssh_command_unsafe", "Command to connect with that isn't safe to run", "path", "code")
 )
 
 // The meridian command's directories. mode is a file's or directory's

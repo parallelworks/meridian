@@ -66,6 +66,9 @@ func (d *Dialer) readKnownHosts(ctx context.Context, files []string, name, alias
 			if isHashed {
 				if hashed == nil {
 					if hashed, err = d.keygenFind(ctx, f, name); err != nil {
+						if p := asProblem(err); p != nil {
+							return nil, p
+						}
 						return nil, problems.SSHKnownHostsUnmatched.Problem(problems.Params{"host": alias, "file": f, "reason": err.Error()})
 					}
 				}
@@ -113,9 +116,14 @@ var foundLine = regexp.MustCompile(`^# Host .* found: line (\d+)`)
 
 // keygenFind returns the lines of file that ssh-keygen -F finds for name,
 // by their numbers, and an error if it can't say: there is no ssh-keygen,
-// or it failed. It exits 0 when it found lines, and 1 when it found none.
+// one that isn't safe to run (command), or it failed. It exits 0 when it
+// found lines, and 1 when it found none.
 func (d *Dialer) keygenFind(ctx context.Context, file, name string) (map[int]bool, error) {
-	cmd := exec.CommandContext(ctx, d.keygen(), "-F", name, "-f", file) //nolint:gosec // ssh-keygen, with a host's name and a known_hosts file as its arguments, and no shell
+	keygen, err := command(d.keygen())
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, keygen, "-F", name, "-f", file) //nolint:gosec // ssh-keygen, a checked command, with a host's name and a known_hosts file as its arguments, and no shell
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
