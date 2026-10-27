@@ -1911,5 +1911,19 @@
       "Ask the host's administrators to give it a machine ID: on Linux, with systemd-machine-id-setup, or dbus-uuidgen --ensure where there is no systemd.",
       "If hostname says no name on the host, ask them to give it one."
     ]
+  },
+  "ssh_loginctl_missing": {
+    "why": "On a host, each worker must outlive the session the coordinator opens there to start it. Where logind runs, it ends a session's processes as the session ends if it is set to (KillUserProcesses=yes), so Meridian asks it, with loginctl, which it finds on the PATH. logind runs on this host, but the PATH there finds no loginctl, so Meridian can't tell whether a worker would end with its session, and starts none, rather than one that might.",
+    "fix": [
+      "Put the directory that holds loginctl, usually /usr/bin, on your PATH on the host, where your shell's startup files set it.",
+      "Or ask the host's administrators to install it, with systemd."
+    ]
+  },
+  "ssh_systemd_too_old": {
+    "why": "On a host whose logind ends a session's processes as the session ends, and where you linger, Meridian starts each worker in a scope of your service manager, with systemd-run --user --scope --collect, so that it outlives the session that starts it. --collect, with which a scope that failed goes once it has ended, rather than stay loaded until someone resets it, came with systemd 236. This host's systemd-run is older, so Meridian starts no worker there, rather than one whose scope a failure would leave behind.",
+    "fix": [
+      "Ask the host's administrators to set KillUserProcesses=no in logind.conf, as most systems have it: Meridian then starts workers in a session of their own, without systemd-run.",
+      "Or run the job on a host with systemd 236 or later."
+    ]
   }
 }

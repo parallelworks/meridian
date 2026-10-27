@@ -2222,5 +2222,21 @@
       "Pide a los administradores del host que le den un ID de máquina: en Linux, con systemd-machine-id-setup, o dbus-uuidgen --ensure donde no hay systemd.",
       "Si hostname no dice ningún nombre en el host, pídeles que le den uno."
     ]
+  },
+  "ssh_loginctl_missing": {
+    "title": "Host a cuyo logind no se le puede preguntar",
+    "why": "En un host, cada worker debe sobrevivir a la sesión que el coordinador abre allí para iniciarlo. Donde se ejecuta logind, este termina los procesos de una sesión al terminar la sesión si está configurado para ello (KillUserProcesses=yes), así que Meridian se lo pregunta con loginctl, que encuentra en el PATH. En este host se ejecuta logind, pero el PATH de allí no encuentra ningún loginctl, así que Meridian no puede saber si un worker terminaría con su sesión, y no inicia ninguno, en lugar de uno que podría terminar.",
+    "fix": [
+      "Pon en tu PATH del host el directorio que contiene loginctl, normalmente /usr/bin, donde lo definen los archivos de inicio de tu shell.",
+      "O pide a los administradores del host que lo instalen, con systemd."
+    ]
+  },
+  "ssh_systemd_too_old": {
+    "title": "Host cuyo systemd no puede iniciar el scope de un worker",
+    "why": "En un host cuyo logind termina los procesos de una sesión al terminar la sesión, y donde tienes lingering, Meridian inicia cada worker en un scope de tu gestor de servicios, con systemd-run --user --scope --collect, para que sobreviva a la sesión que lo inicia. --collect, con el que un scope que falló desaparece una vez terminado, en lugar de quedarse cargado hasta que alguien lo restablezca, llegó con systemd 236. El systemd-run de este host es más antiguo, así que Meridian no inicia ningún worker allí, en lugar de uno cuyo scope dejaría atrás un fallo.",
+    "fix": [
+      "Pide a los administradores del host que definan KillUserProcesses=no en logind.conf, como lo tienen la mayoría de los sistemas: Meridian inicia entonces los workers en una sesión propia, sin systemd-run.",
+      "O ejecuta el trabajo en un host con systemd 236 o posterior."
+    ]
   }
 }

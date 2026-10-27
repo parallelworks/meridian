@@ -60,9 +60,9 @@ import (
 // with their grace, and send what it has.
 const DefaultKillAfter = 60 * time.Second
 
-// tokenWait is how long Place's process waits for a worker to say it is
-// ready for its token, before it gives up, and the worker gets none.
-const tokenWait = time.Minute
+// DefaultTokenWait is how long Place's process waits for a worker to say
+// it is ready for its token, before it gives up, and the worker gets none.
+const DefaultTokenWait = time.Minute
 
 // A Driver is the local backend's backend.Driver.
 type Driver struct {
@@ -85,7 +85,8 @@ type Driver struct {
 	// Launcher is a command that starts the worker, which it runs as the
 	// process the placement records, as systemd-run --user --scope does:
 	// the worker's arguments follow it. Its first is the command's
-	// absolute path, which whoever sets it has checked (CheckCommand): it
+	// absolute path, which whoever sets it has checked
+	// (safepath.CheckExecutable): it
 	// gets the worker's token's socket. It is empty to start the worker
 	// itself, as on the coordinator's own host.
 	Launcher []string
@@ -96,6 +97,9 @@ type Driver struct {
 	// had its token. A worker that ends first, or doesn't ask for it in
 	// time, is stopped, and its placement is worker_token_not_taken.
 	AwaitToken bool
+	// TokenWait is how long a worker has to say it is ready for its
+	// token: DefaultTokenWait for 0.
+	TokenWait time.Duration
 
 	// swept is done once the driver has looked through what State holds,
 	// the first time it places a worker or probes a member (sweep).
@@ -462,8 +466,8 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		return backend.Placement{}, err
 	}
 	if !d.AwaitToken {
-		go func() { _ = giveToken(ours, req.BootstrapToken) }()
-	} else if err := giveToken(ours, req.BootstrapToken); err != nil {
+		go func() { _ = giveToken(ours, req.BootstrapToken, d.tokenWait()) }()
+	} else if err := giveToken(ours, req.BootstrapToken, d.tokenWait()); err != nil {
 		// A worker that didn't take its token runs no job: one that
 		// hasn't ended is stopped, and the placement goes, but for what
 		// the worker wrote, which says why.
@@ -509,6 +513,14 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	return backend.Placement{Attempt: req.Attempt, ID: r.id(), WorkerDigest: r.Digest}, nil
 }
 
+// tokenWait is how long a worker has to say it is ready for its token.
+func (d *Driver) tokenWait() time.Duration {
+	if d.TokenWait > 0 {
+		return d.TokenWait
+	}
+	return DefaultTokenWait
+}
+
 // socketPair returns the two ends of a new stream Unix socket: the
 // worker's, which it inherits, and this process's, neither of which any
 // other process gets.
@@ -522,16 +534,16 @@ func socketPair() (worker, ours *os.File, err error) {
 
 // giveToken writes token to ours, once the worker has written that it is
 // ready on its end, and closes it. A worker that doesn't say so within
-// tokenWait, which is os.ErrDeadlineExceeded, or ends first, gets no
+// wait, which is os.ErrDeadlineExceeded, or ends first, gets no
 // token.
-func giveToken(ours *os.File, token string) error {
+func giveToken(ours *os.File, token string, wait time.Duration) error {
 	conn, err := net.FileConn(ours)
 	ours.Close()
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(tokenWait)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(wait)); err != nil {
 		return err
 	}
 	ready := make([]byte, 1)
@@ -619,9 +631,9 @@ var hashFile = func(r io.Reader) (string, error) {
 // differs. Elsewhere the file at path is hashed at each placement
 // (identity).
 func checkExecutable(path, open string) (string, error) {
-	f, info, code, err := openRunnable(path, open)
-	if code != "" {
-		return "", problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
+	f, info, err := safepath.OpenExecutable(path, open)
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		return "", problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(p.Code)})
 	}
 	if err != nil {
 		return "", err
@@ -647,62 +659,6 @@ func checkExecutable(path, open string) (string, error) {
 		digests.Unlock()
 	}
 	return digest, nil
-}
-
-// openRunnable checks that no other user can change the way to path, and
-// opens open, the file at path or the one the process runs, once it has
-// checked that it is a regular file of the user's or root's that no other
-// user can change, and returns it with what fstat says of it. What is
-// wrong is the code of the problem that says so, whose page says why, and
-// any other error the system's.
-func openRunnable(path, open string) (*os.File, fs.FileInfo, problem.Code, error) {
-	if err := safepath.Check(path, false); err != nil {
-		if p, ok := errors.AsType[*problem.Problem](err); ok {
-			return nil, nil, p.Code, nil
-		}
-		return nil, nil, "", err
-	}
-	f, err := os.Open(open) //nolint:gosec // a file to run, whose way safepath checked
-	if err != nil {
-		return nil, nil, "", err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, nil, "", err
-	}
-	owner, known := safepath.Owner(info)
-	var code problem.Code
-	switch {
-	case !info.Mode().IsRegular():
-		code = problems.FileNotRegular.Code()
-	case !known:
-		code = problems.OwnerUnknown.Code()
-	case owner != os.Getuid() && owner != 0:
-		code = problems.FileNotOwned.Code()
-	case info.Mode().Perm()&0o022 != 0:
-		code = problems.FileChangeable.Code()
-	default:
-		return f, info, "", nil
-	}
-	f.Close()
-	return nil, nil, code, nil
-}
-
-// CheckCommand checks the command at path, an absolute path without
-// symbolic links, as Executable checks the file this process runs: that no
-// other user can change the way to it, and that it is a regular file of
-// the user's or root's that no other user can change. It is for a command
-// a process that holds what other users mustn't have runs, as a Launcher
-// is, which gets what it gives a worker, its token's socket among it.
-// What is wrong is the code of the problem that says so, whose page says
-// why, and any other error the system's.
-func CheckCommand(path string) (problem.Code, error) {
-	f, _, code, err := openRunnable(path, path)
-	if f != nil {
-		f.Close()
-	}
-	return code, err
 }
 
 // environ returns a worker's environment: d's, but its MERIDIAN_

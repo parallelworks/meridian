@@ -122,6 +122,7 @@ func testHost(t *testing.T) *hostSystem {
 		logind:    func() bool { return true },
 		loginctl:  loginctlSays(nil, map[string]string{"KillUserProcesses": "KillUserProcesses=no\n"}),
 		command:   func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		version:   func(context.Context, string) (string, error) { return "systemd 252\n", nil },
 		tmp:       t.TempDir(),
 	}
 }
@@ -523,20 +524,24 @@ func (n *noticedWriter) Write(p []byte) (int, error) {
 // TestHostDetach checks how meridian host starts a worker detached, as
 // logind's settings say, from what loginctl says on systems of each kind:
 // a session of its own where logind keeps a user's processes after their
-// session, or there is no logind, or no loginctl; a scope of the user's
-// service manager, with the systemd-run hostCommand found, where it
-// doesn't, and they linger; and nowhere where they don't, or there is no
-// systemd-run, ssh_worker_would_be_killed. A loginctl that fails
-// otherwise, as one that can't reach logind, or times out, is an error, and
-// a command that isn't safe its problem: what logind would do isn't known.
+// session, or there is no logind; a scope of the user's service manager,
+// with the systemd-run hostCommand found, where it doesn't, and they
+// linger, as loginctl says, or fails for a user who neither lingers nor is
+// logged in; and nowhere where they don't, or there is no systemd-run,
+// ssh_worker_would_be_killed. A systemd-run too old for --collect is
+// ssh_systemd_too_old, and logind without loginctl ssh_loginctl_missing.
+// A loginctl that fails otherwise, as one that can't reach logind, or
+// times out, is an error, and a command that isn't safe its problem: what
+// logind would do isn't known.
 func TestHostDetach(t *testing.T) {
 	t.Parallel()
 	const systemdRun = "/usr/bin/systemd-run"
 	notFound := &exec.Error{Name: "loginctl", Err: exec.ErrNotFound}
-	noBus := errors.New("exit status 1: Failed to connect to bus: No such file or directory")
-	notLingering := errors.New("exit status 1: Failed to get user: User ID 1000 is not logged in or lingering")
+	noBus := &exec.ExitError{Stderr: []byte("Failed to connect to bus: No such file or directory\n")}
+	notLingering := &exec.ExitError{Stderr: []byte("Failed to get user: User ID 1000 is not logged in or lingering\n")}
 	unsafe := problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": "h", "path": "/shared/bin/x", "code": "path_unsafe"})
 	killed := map[string]string{"KillUserProcesses": "KillUserProcesses=yes\n", "Linger": "Linger=yes\n"}
+	const current = "systemd 252 (252.32-1.el9)\n+PAM +AUDIT +SELINUX\n"
 	for _, tc := range []struct {
 		name    string
 		logind  bool
@@ -544,21 +549,25 @@ func TestHostDetach(t *testing.T) {
 		err     error
 		linger  error
 		command error
+		version string
 		want    string
 		problem *problems.Kind
 	}{
-		{"no logind", false, nil, noBus, nil, nil, hostproto.DetachSession, nil},
-		{"kept", true, map[string]string{"KillUserProcesses": "KillUserProcesses=no\n"}, nil, nil, nil, hostproto.DetachSession, nil},
-		{"no loginctl", true, nil, notFound, nil, nil, hostproto.DetachSession, nil},
-		{"not said", true, map[string]string{"KillUserProcesses": ""}, nil, nil, nil, hostproto.DetachSession, nil},
-		{"no bus", true, nil, noBus, nil, nil, "", nil},
-		{"loginctl timed out", true, nil, context.DeadlineExceeded, nil, nil, "", nil},
-		{"loginctl unsafe", true, nil, unsafe, nil, nil, "", problems.SSHHostCommandUnsafe},
-		{"killed, lingering", true, killed, nil, nil, nil, hostproto.DetachScope, nil},
-		{"killed", true, map[string]string{"KillUserProcesses": "KillUserProcesses=yes\n", "Linger": "Linger=no\n"}, nil, nil, nil, "", problems.SSHWorkerWouldBeKilled},
-		{"killed, not lingering", true, killed, nil, notLingering, nil, "", problems.SSHWorkerWouldBeKilled},
-		{"killed, lingering, no systemd-run", true, killed, nil, nil, notFound, "", problems.SSHWorkerWouldBeKilled},
-		{"killed, lingering, systemd-run unsafe", true, killed, nil, nil, unsafe, "", problems.SSHHostCommandUnsafe},
+		{"no logind", false, nil, noBus, nil, nil, current, hostproto.DetachSession, nil},
+		{"kept", true, map[string]string{"KillUserProcesses": "KillUserProcesses=no\n"}, nil, nil, nil, current, hostproto.DetachSession, nil},
+		{"not said", true, map[string]string{"KillUserProcesses": ""}, nil, nil, nil, current, hostproto.DetachSession, nil},
+		{"no loginctl", true, nil, notFound, nil, nil, current, "", problems.SSHLoginctlMissing},
+		{"no bus", true, nil, noBus, nil, nil, current, "", nil},
+		{"loginctl timed out", true, nil, context.DeadlineExceeded, nil, nil, current, "", nil},
+		{"loginctl unsafe", true, nil, unsafe, nil, nil, current, "", problems.SSHHostCommandUnsafe},
+		{"killed, lingering", true, killed, nil, nil, nil, current, hostproto.DetachScope, nil},
+		{"killed", true, map[string]string{"KillUserProcesses": "KillUserProcesses=yes\n", "Linger": "Linger=no\n"}, nil, nil, nil, current, "", problems.SSHWorkerWouldBeKilled},
+		{"killed, not lingering", true, killed, nil, notLingering, nil, current, "", problems.SSHWorkerWouldBeKilled},
+		{"killed, lingering unknown", true, killed, nil, noBus, nil, current, "", nil},
+		{"killed, lingering, no systemd-run", true, killed, nil, nil, notFound, current, "", problems.SSHWorkerWouldBeKilled},
+		{"killed, lingering, systemd-run unsafe", true, killed, nil, nil, unsafe, current, "", problems.SSHHostCommandUnsafe},
+		{"killed, lingering, systemd too old", true, killed, nil, nil, nil, "systemd 219\n+PAM\n", "", problems.SSHSystemdTooOld},
+		{"killed, lingering, systemd's version unknown", true, killed, nil, nil, nil, "", "", nil},
 	} {
 		sys := hostSystem{
 			logind: func() bool { return tc.logind },
@@ -574,6 +583,7 @@ func TestHostDetach(t *testing.T) {
 				}
 				return "/usr/bin/" + name, nil
 			},
+			version: func(context.Context, string) (string, error) { return tc.version, nil },
 		}
 		mode, path, err := decideDetach(t.Context(), sys)
 		switch p := problemOf(err); {
@@ -587,6 +597,38 @@ func TestHostDetach(t *testing.T) {
 			}
 		case err == nil || p != nil:
 			t.Errorf("%s: %q, %v; want an error that isn't a problem", tc.name, mode, err)
+		}
+	}
+	// The scope's systemd is old by the first that takes --collect.
+	sys := hostSystem{
+		logind:   func() bool { return true },
+		loginctl: loginctlSays(nil, killed),
+		command:  func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		version:  func(context.Context, string) (string, error) { return "systemd 235\n", nil },
+	}
+	if _, _, err := decideDetach(t.Context(), sys); problemOf(err) == nil || problemOf(err).Params["version"] != "235" || problemOf(err).Params["minimum"] != systemdCollect {
+		t.Errorf("systemd 235: %v", err)
+	}
+}
+
+// TestHostRunsDir checks where runs' directories are on a host: the state
+// directory's runs/ that MERIDIAN_STATE_DIR names, and otherwise
+// ${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs on every system,
+// macOS among them, whose own state directory's name holds a space; a
+// relative XDG_STATE_HOME is ignored, as XDG says.
+func TestHostRunsDir(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{local.EnvStateDir: "/state/", "XDG_STATE_HOME": "/xdg"}, "/state/runs"},
+		{map[string]string{"XDG_STATE_HOME": "/xdg"}, "/xdg/meridian/runs"},
+		{map[string]string{"XDG_STATE_HOME": "xdg"}, "/home/u/.local/state/meridian/runs"},
+		{nil, "/home/u/.local/state/meridian/runs"},
+	} {
+		if got := hostRunsDir(func(name string) string { return tc.env[name] }, "/home/u"); got != tc.want {
+			t.Errorf("hostRunsDir(%v) = %s, want %s", tc.env, got, tc.want)
 		}
 	}
 }

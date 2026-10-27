@@ -314,5 +314,7 @@
   "ssh_worker_would_be_killed": "Meridian 不会在 {host} 上启动工作进程：该系统会在用户会话结束时结束其进程，并且在你的最后一个会话之后不保留你的任何进程，因此工作进程会随启动它的会话一起结束。请在那里运行 loginctl enable-linger。",
   "ssh_host_dir_unusable": "Meridian 无法使用 {host} 上的目录 {path}：在 {at} 处 {reason}",
   "ssh_host_command_unsafe": "Meridian 不会在 {host} 上运行那里的 PATH 找到的 {path}，因为运行它并不安全（{code}）。",
-  "ssh_host_id_unknown": "Meridian 无法把 {host} 与可能共享其主目录的其他主机区分开：它没有 Meridian 能读取的机器 ID，或者没有名称。"
+  "ssh_host_id_unknown": "Meridian 无法把 {host} 与可能共享其主目录的其他主机区分开：它没有 Meridian 能读取的机器 ID，或者没有名称。",
+  "ssh_loginctl_missing": "Meridian 无法判断 {host} 是否会随启动工作进程的会话结束该工作进程：那里运行着 logind，但那里的 PATH 找不到用于询问它的 loginctl。",
+  "ssh_systemd_too_old": "Meridian 不会在 {host} 上于你的服务管理器的 scope 中启动工作进程：那里的 systemd-run 来自 systemd {version}，而 scope 的 --collect 需要 systemd {minimum} 或更高版本。"
 }

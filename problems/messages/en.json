@@ -320,5 +320,7 @@
   "ssh_worker_would_be_killed": "Meridian won't start a worker on {host}: its system ends a user's processes as their session ends, and keeps none of yours running after your last session, so the worker would end with the session that started it. Run loginctl enable-linger there.",
   "ssh_host_dir_unusable": "Meridian can't use the directory {path} on {host}: {reason}, at {at}.",
   "ssh_host_command_unsafe": "Meridian won't run {path} on {host}, which the PATH there finds, since it isn't safe to run ({code}).",
-  "ssh_host_id_unknown": "Meridian can't tell {host} from other hosts that may share its home: it has no machine ID that Meridian can read, or no name."
+  "ssh_host_id_unknown": "Meridian can't tell {host} from other hosts that may share its home: it has no machine ID that Meridian can read, or no name.",
+  "ssh_loginctl_missing": "Meridian can't tell whether {host} would end a worker with the session that starts it: logind runs there, but the PATH there finds no loginctl to ask it.",
+  "ssh_systemd_too_old": "Meridian won't start a worker on {host} in a scope of your service manager: its systemd-run is of systemd {version}, and a scope's --collect needs systemd {minimum} or later."
 }

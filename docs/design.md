@@ -3274,13 +3274,16 @@ it within a minute, is stopped, and isn't placed
   every `hello` gives the same one while it is the user's own. A name in
   `/tmp` that another user could know, as `/tmp/meridian-<uid>`, is one
   they could make first, and keep the user out of.
-- **A run's directory** is the state directory's `runs/<run>-<store>`,
-  outside `hosts/`: normally
-  `${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs/<run>-<store>`.
-  On a cluster that is in the home its nodes share, so the compute nodes
-  that a step's `sbatch`, `qsub` or `srun` sends work to see it, and so do
-  the cluster's other login nodes, which a reconnect to the same host name
-  can reach. The temporary directory, where a run's directory is on the
+- **A run's directory** is
+  `${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs/<run>-<store>`, on
+  every system, outside `hosts/`, or the `runs/` of the state directory
+  that `MERIDIAN_STATE_DIR` names. On macOS too: Meridian's own state
+  directory there, `~/Library/Application Support/Meridian`, holds a
+  space, which `make`, autotools and an unquoted `$PWD` break on, as a
+  run's steps would in it. On a cluster it is in the home its nodes
+  share, so the compute nodes that a step's `sbatch`, `qsub` or `srun`
+  sends work to see it, and so do the cluster's other login nodes, which a
+  reconnect to the same host name can reach. The temporary directory, where a run's directory is on the
   coordinator's own host, is each node's own. `place` chooses it, and
   returns it.
 - **A worker starts detached**: in a session of its own, unless logind runs,
@@ -3290,10 +3293,15 @@ it within a minute, is stopped, and isn't placed
   scope whose name is new each time), which keeps the session's
   environment, as a service of the manager wouldn't, if the user lingers;
   and otherwise not at all (`ssh_worker_would_be_killed`, whose page says
-  `loginctl enable-linger`), rather than to end with the session. Only
-  logind's absence, or `loginctl`'s, means a session of its own: a
-  `loginctl` that fails otherwise, as one that can't reach logind over
-  D-Bus or times out, is an error, which the coordinator tries again. It
+  `loginctl enable-linger`), rather than to end with the session. A
+  `systemd-run` older than systemd 236, whose scopes don't take
+  `--collect`, which lets a scope that failed go, is
+  `ssh_systemd_too_old`. Only logind's absence means a session of its
+  own: where logind runs, but the `PATH` finds no `loginctl`, the host is
+  `ssh_loginctl_missing`, and a `loginctl` that fails otherwise, as one
+  that can't reach logind over D-Bus or times out, is an error, which the
+  coordinator tries again, but for `show-user`'s failure for a user who
+  neither lingers nor is logged in, which says they don't linger. It
   reads logind's setting, not whether `meridian host`'s own session is
   one of logind's, so where sshd doesn't register its sessions with logind
   (`UsePAM no`) it decides as if it did, at the cost of a scope or a
@@ -3305,7 +3313,17 @@ it within a minute, is stopped, and isn't placed
   way to it. `systemd-run` gets what the worker is given, the socket its
   token comes on among it, and a directory another user can change can
   come first on a `PATH`, as a shared `bin/` a cluster's startup files add
-  can; one that isn't safe is `ssh_host_command_unsafe`.
+  can; one that isn't safe is `ssh_host_command_unsafe`. The check is
+  `safepath.CheckExecutable`, which the `ssh` backend's own commands take
+  too. The token's socket so passes through `systemd-run`, which execs
+  the worker, before the worker has hardened itself; the token is written
+  only once the worker says it is ready, which it says only once
+  hardened, so what could read it before is `systemd-run`, which is the
+  system's or the user's, as checked. Another process of the same user
+  that may trace theirs, as where Yama's `ptrace_scope` is 0, could copy
+  the socket out of `systemd-run`, or out of the worker before it hardens,
+  and race the worker for the token, as it could with the `local`
+  backend's worker.
 - **Its environment** is the session's, without `GODEBUG`, which could turn
   off what the worker requires of its cryptography.
 

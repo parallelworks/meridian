@@ -2222,5 +2222,21 @@
       "请主机的管理员为它设置机器 ID：在 Linux 上使用 systemd-machine-id-setup，没有 systemd 时使用 dbus-uuidgen --ensure。",
       "如果在该主机上 hostname 没有给出名称，请他们为它设置一个。"
     ]
+  },
+  "ssh_loginctl_missing": {
+    "title": "无法询问其 logind 的主机",
+    "why": "在主机上，每个工作进程都必须比协调器在那里为启动它而打开的会话存活得更久。在运行 logind 的地方，如果它被设置为这样（KillUserProcesses=yes），它会在会话结束时结束该会话的进程，因此 Meridian 用它在 PATH 中找到的 loginctl 询问它。这台主机上运行着 logind，但那里的 PATH 找不到 loginctl，因此 Meridian 无法判断工作进程是否会随其会话结束，于是一个也不启动，而不是启动一个可能会结束的工作进程。",
+    "fix": [
+      "在该主机上，在你的 shell 启动文件设置 PATH 的地方，把包含 loginctl 的目录（通常是 /usr/bin）加入 PATH。",
+      "或者请主机的管理员随 systemd 一起安装它。"
+    ]
+  },
+  "ssh_systemd_too_old": {
+    "title": "其 systemd 无法启动工作进程 scope 的主机",
+    "why": "在 logind 会在会话结束时结束其进程、且你启用了 lingering 的主机上，Meridian 用 systemd-run --user --scope --collect 在你的服务管理器的 scope 中启动每个工作进程，使其比启动它的会话存活得更久。--collect 让失败的 scope 在结束后消失，而不是一直保持加载直到有人重置它，它随 systemd 236 引入。这台主机的 systemd-run 更旧，因此 Meridian 不在那里启动工作进程，而不是启动一个失败后会留下 scope 的工作进程。",
+    "fix": [
+      "请主机的管理员像大多数系统那样在 logind.conf 中设置 KillUserProcesses=no：这样 Meridian 会在工作进程自己的会话中启动它们，无需 systemd-run。",
+      "或者在 systemd 236 或更高版本的主机上运行该作业。"
+    ]
   }
 }

@@ -443,13 +443,16 @@ var (
 // error the attempt records: host is the host's name, as it says it; path
 // a directory there, or a command; at the path where its check failed, the
 // directory or one on the way to it; reason what is wrong with it, a
-// problem's code, whose page says why, or the system's error; and code a
-// problem's code.
+// problem's code, whose page says why, or the system's error; code a
+// problem's code; and version a systemd's version, minimum the first that
+// will do.
 var (
 	SSHWorkerWouldBeKilled = define(Error, "ssh_worker_would_be_killed", "Host that would kill a worker as its session ends", "host")
 	SSHHostDirUnusable     = define(Error, "ssh_host_dir_unusable", "Directory on a host that Meridian can't use", "host", "path", "at", "reason")
 	SSHHostCommandUnsafe   = define(Error, "ssh_host_command_unsafe", "Command on a host that isn't safe to run", "host", "path", "code")
 	SSHHostIDUnknown       = define(Error, "ssh_host_id_unknown", "Host without an ID of its own", "host")
+	SSHLoginctlMissing     = define(Error, "ssh_loginctl_missing", "Host whose logind can't be asked", "host")
+	SSHSystemdTooOld       = define(Error, "ssh_systemd_too_old", "Host whose systemd can't start a worker's scope", "host", "version", "minimum")
 )
 
 // The meridian command's directories. mode is a file's or directory's

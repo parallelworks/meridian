@@ -2222,5 +2222,21 @@
       "ホストの管理者にマシン ID を付けるよう依頼してください。Linux では systemd-machine-id-setup で、systemd がなければ dbus-uuidgen --ensure で付けられます。",
       "ホストで hostname が名前を示さない場合は、名前を付けるよう依頼してください。"
     ]
+  },
+  "ssh_loginctl_missing": {
+    "title": "logind に問い合わせられないホスト",
+    "why": "ホストでは、各ワーカーは、コーディネーターがそれを起動するためにそこで開くセッションより長く動き続ける必要があります。logind が動いている場合、そう設定されていれば（KillUserProcesses=yes）セッションの終了とともにそのプロセスを終了させるため、Meridian は PATH で見つけた loginctl で logind に問い合わせます。このホストでは logind が動いていますが、そこの PATH には loginctl が見つからないため、Meridian はワーカーがセッションとともに終了するかどうかを判断できず、終了するかもしれないワーカーを起動するかわりに、何も起動しません。",
+    "fix": [
+      "ホストで、シェルの起動ファイルが PATH を設定している箇所に、loginctl を含むディレクトリ（通常は /usr/bin）を加えてください。",
+      "またはホストの管理者に、systemd とともにそれをインストールするよう依頼してください。"
+    ]
+  },
+  "ssh_systemd_too_old": {
+    "title": "systemd がワーカーのスコープを起動できないホスト",
+    "why": "logind がセッションの終了とともにそのプロセスを終了させ、あなたが lingering しているホストでは、Meridian は各ワーカーを、起動したセッションより長く動き続けるよう、systemd-run --user --scope --collect でサービスマネージャーのスコープに起動します。失敗したスコープを、誰かがリセットするまで読み込まれたまま残すのではなく、終了したら消えるようにする --collect は systemd 236 で導入されました。このホストの systemd-run はそれより古いため、Meridian は失敗するとスコープが残ってしまうワーカーを起動するかわりに、そこでは何も起動しません。",
+    "fix": [
+      "ホストの管理者に、多くのシステムと同じく logind.conf で KillUserProcesses=no を設定するよう依頼してください。そうすると Meridian は systemd-run を使わず、ワーカーを独自のセッションで起動します。",
+      "または systemd 236 以降のホストでジョブを実行してください。"
+    ]
   }
 }

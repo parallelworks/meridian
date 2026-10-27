@@ -59,6 +59,9 @@ type hostSystem struct {
 	loginctl func(ctx context.Context, args ...string) (string, error)
 	// command returns the path of a command, as hostCommand does.
 	command func(name string) (string, error)
+	// version runs the command at path with --version, and returns what
+	// it wrote.
+	version func(ctx context.Context, path string) (string, error)
 	// tmp is the directory a sockets' directory of a random name is made
 	// in, where the user's runtime directory won't do: /tmp, whose short
 	// path leaves room in a socket's for its name.
@@ -88,12 +91,18 @@ var systemHost = hostSystem{
 		return string(out), err
 	},
 	command: hostCommand,
-	tmp:     "/tmp",
+	version: func(ctx context.Context, path string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, path, "--version").Output() //nolint:gosec // a command hostCommand checked, asked its version
+		return string(out), err
+	},
+	tmp: "/tmp",
 }
 
 // hostCommand returns the path of the command name, as the PATH finds it,
 // absolute and without symbolic links, once it has checked it as the
-// worker's binary is checked (localbackend.CheckCommand): a regular file of
+// worker's binary is checked (safepath.CheckExecutable): a regular file of
 // the user's or root's that no other user can change, nor any directory on
 // the way to it. meridian host runs it with what the user's other
 // processes mustn't have, systemd-run a worker's token's socket, and a
@@ -114,9 +123,9 @@ func hostCommand(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	code, err := localbackend.CheckCommand(path)
-	if code != "" {
-		return "", problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": hostName(), "path": path, "code": string(code)})
+	err = safepath.CheckExecutable(path)
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		return "", problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": hostName(), "path": path, "code": string(p.Code)})
 	}
 	return path, err
 }
@@ -336,7 +345,7 @@ func (h *hostOp) paths(ctx context.Context) (hostproto.Paths, string, string, er
 	return hostproto.Paths{
 		State: filepath.Join(dirs.State, "hosts", key),
 		Cache: filepath.Join(dirs.Cache, "bin"),
-		Runs:  hostRunsDir(dirs.State),
+		Runs:  hostRunsDir(h.c.getenv, home),
 	}, filepath.Clean(home), id, nil
 }
 
@@ -433,19 +442,31 @@ func writeHostFile(path string, data []byte) error {
 	return err
 }
 
-// hostRunsDir is where runs' directories are on a host whose state
-// directory is state, as meridian finds its own (local.Locate), as
-// ${XDG_STATE_HOME:-$HOME/.local/state}/meridian: its runs/, outside any
-// one host's hosts/<ID>. On a cluster, that is in the home its nodes
-// share, so a run's directory is shared with the compute nodes its steps
-// submit work to, as steps that call sbatch, qsub or srun from it need,
-// and with the cluster's other login nodes, which a connection to the same
-// host name can reach after a reconnect. The system's temporary directory,
-// where a run's directory is on the coordinator's own host, is each node's
-// own. It is Meridian's own directory, apart from where anything else
-// keeps its runs. Each run's is hostRunDir.
-func hostRunsDir(state string) string {
-	return filepath.Join(state, "runs")
+// hostRunsDir is where runs' directories are on a host whose environment
+// getenv reads, and whose user's home is home, an absolute path: the state
+// directory's runs/ where MERIDIAN_STATE_DIR names it, which local.Locate
+// checked, and otherwise ${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs
+// on every system, outside any one host's hosts/<key>. macOS's own state
+// directory, ~/Library/Application Support/Meridian, holds a space, which
+// make, autotools and an unquoted $PWD break on, as a run's steps would
+// in its directory. On a cluster, it is in the home its nodes share, so a
+// run's directory is shared with the compute nodes its steps submit work
+// to, as steps that call sbatch, qsub or srun from it need, and with the
+// cluster's other login nodes, which a connection to the same host name
+// can reach after a reconnect. The system's temporary directory, where a
+// run's directory is on the coordinator's own host, is each node's own. It
+// is Meridian's own directory, apart from where anything else keeps its
+// runs. Each run's is hostRunDir.
+func hostRunsDir(getenv func(string) string, home string) string {
+	if state := getenv(local.EnvStateDir); state != "" {
+		return filepath.Join(filepath.Clean(state), "runs")
+	}
+	// The XDG specification says a relative path is invalid, and is
+	// ignored.
+	if state := getenv("XDG_STATE_HOME"); filepath.IsAbs(state) {
+		return filepath.Join(state, "meridian", "runs")
+	}
+	return filepath.Join(home, ".local", "state", "meridian", "runs")
 }
 
 // hostRunDir is the directory of the run run of the store store, in runs,
