@@ -168,7 +168,11 @@ const cacheScript = `s=$(uname -s); x=; case "$XDG_CACHE_HOME" in /*) x=1;; esac
 // user can change, sticky or not. Otherwise it says why, as path_unsafe or
 // directory_not_private, and ends the script. Another user who could
 // change one could swap the binary for one of theirs, which the user's
-// workers would run, with their tokens.
+// workers would run, with their tokens. It defines held too, which checks
+// a binary in the cache, the file it is given, in the directory it is
+// given: a regular file, not a link, of the user's, which no other user
+// can change; otherwise it says why, as file_not_regular, file_not_owned
+// or file_changeable, and ends the script.
 const wayScript = `ok() { test -n "$(find "$1" -prune \( -user "$u" -o -user 0 \) \( -perm -1000 -o \( ! -perm -g=w ! -perm -o=w \) \) -print)"; }; ` +
 	`own() { test -n "$(find "$1" -prune -user "$u" ! -perm -g=w ! -perm -o=w -print)"; }; ` +
 	`way() { p=$(cd "$1" && pwd -P) || no directory_unavailable "$1" "$1"; q=; ` +
@@ -176,7 +180,9 @@ const wayScript = `ok() { test -n "$(find "$1" -prune \( -user "$u" -o -user 0 \
 	`ok / || no path_unsafe "$1" /; x=; r="${p#/}"; ` +
 	`while [ -n "$r" ]; do n="${r%%/*}"; if [ "$n" = "$r" ]; then r=; else r="${r#*/}"; fi; x="$x/$n"; ` +
 	`m=; if [ -n "$q" ]; then case "$x/" in "$q"/*) m=1;; esac; fi; ` +
-	`if [ -n "$m" ]; then own "$x" || no directory_not_private "$1" "$x"; else ok "$x" || no path_unsafe "$1" "$x"; fi; done; }; `
+	`if [ -n "$m" ]; then own "$x" || no directory_not_private "$1" "$x"; else ok "$x" || no path_unsafe "$1" "$x"; fi; done; }; ` +
+	`held() { if [ -L "$1" ] || [ ! -f "$1" ]; then no file_not_regular "$2" "$1"; fi; ` +
+	`test -n "$(find "$1" -prune -user "$u" -print)" || no file_not_owned "$2" "$1"; own "$1" || no file_changeable "$2" "$1"; }; `
 
 // hashScript sets h to the SHA-256 of the file "$f", in hex, with the
 // first of the tools that the systems the worker runs on have, or to
@@ -228,12 +234,11 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 	}
 	// Already there, whole: as a host that shares its home with another
 	// that got it has it.
+	// The binary is checked, and hashed, at the physical path the way to
+	// which way checked, which is where it is said to be.
 	out, err := run(ctx, conn, prelude()+cacheScript+wayScript+`d="$c/`+hexDigest+`"; f="$d/meridian"; `+
-		`if [ -e "$f" ] || [ -L "$f" ]; then way "$d"; `+
-		`if [ -L "$f" ] || [ ! -f "$f" ]; then no file_not_regular "$d" "$f"; fi; `+
-		`test -n "$(find "$f" -prune -user "$u" -print)" || no file_not_owned "$d" "$f"; `+
-		`own "$f" || no file_changeable "$d" "$f"; `+
-		hashScript+`printf "MERIDIAN-DIGEST %s %s\n" "$h" "$(hx "$p/meridian")"; fi`, nil)
+		`if [ -e "$f" ] || [ -L "$f" ]; then way "$d"; f="$p/meridian"; held "$f" "$d"; `+
+		hashScript+`printf "MERIDIAN-DIGEST %s %s\n" "$h" "$(hx "$f")"; fi`, nil)
 	if err != nil {
 		return Binary{}, h, err
 	}

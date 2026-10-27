@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -344,6 +345,96 @@ func TestInstallUnsafeCache(t *testing.T) {
 	_, _, err = Install(t.Context(), r.conn, "farm", b)
 	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "file_changeable" {
 		t.Errorf("a binary others can write gives %v", p)
+	}
+}
+
+// TestInstallOwners checks the owners Install's scripts require: with an
+// id that says the user is another, a directory on the way to the cache
+// that the test's user owns is path_unsafe, which it would be had another
+// user made it; and a directory that mkdir made that others can change,
+// as a default ACL can have it, is directory_not_private, found by the
+// check after mkdir.
+func TestInstallOwners(t *testing.T) {
+	b := binary(t, "a meridian binary\n", "")
+	other := strconv.Itoa(os.Getuid() + 1)
+	withHostPath(t, tools(t, map[string]string{"id": "#!/bin/sh\necho " + other + "\n"}, "uname", "od", "find", "mkdir", "cat", "chmod", "mv", "rm", "sha256sum"))
+	r := newRig(t)
+	_, _, err := Install(t.Context(), r.conn, "farm", b)
+	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "path_unsafe" {
+		t.Errorf("a way through the directories of another user gives %v", p)
+	}
+
+	mkdir, err := exec.LookPath("mkdir")
+	if err != nil {
+		t.Skip("no mkdir")
+	}
+	withHostPath(t, tools(t, map[string]string{"mkdir": "#!/bin/sh\n" + mkdir + ` "$@" || exit; for a; do :; done; chmod 770 "$a"` + "\n"}, "uname", "id", "od", "find", "cat", "chmod", "mv", "rm", "sha256sum"))
+	r = newRig(t)
+	_, _, err = Install(t.Context(), r.conn, "farm", b)
+	hexDigest := strings.TrimPrefix(digestOf("a meridian binary\n"), "sha256:")
+	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "directory_not_private" || p["at"] != filepath.Join(physical(t, r.home), ".cache", "meridian", "bin", hexDigest) {
+		t.Errorf("a directory mkdir made that others can change gives %v", p)
+	}
+}
+
+// TestInstallLinkedCache checks that a binary found in a cache reached
+// through a symbolic link is checked, and said to be, where it is: at the
+// physical path whose way was checked, as one copied there is.
+func TestInstallLinkedCache(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "cache")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	r := newRig(t, "MERIDIAN_CACHE_DIR="+link)
+	b := binary(t, "a meridian binary\n", "")
+	copied, _, err := Install(t.Context(), r.conn, "farm", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, _, err := Install(t.Context(), r.conn, "farm", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(physical(t, target), "bin", strings.TrimPrefix(digestOf("a meridian binary\n"), "sha256:"), "meridian"); copied.Path != want || found.Path != want {
+		t.Errorf("through a link, the binary copied is at %s, and found at %s, want %s", copied.Path, found.Path, want)
+	}
+}
+
+// TestScriptOwners checks the scripts' checks of who owns what, run on the
+// test's machine as a user that owns nothing there: ok takes a directory
+// of the user's or root's, own only the user's, and held only a binary of
+// the user's.
+func TestScriptOwners(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "meridian")
+	write(t, file, []byte("a meridian binary\n"))
+	if err := os.Chmod(file, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	say := func(u, check string) string {
+		t.Helper()
+		out, err := exec.Command("sh", "-c", prelude()+wayScript+"u="+u+"; "+check+"; exit 0", "sh", dir, file).Output() //nolint:noctx // a script of the test's, which ends
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	me, other := strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getuid()+1)
+	for _, tc := range []struct{ u, check, want string }{
+		{me, `ok "$1" && echo yes`, "yes"},
+		{other, `ok "$1" && echo yes`, ""},
+		{other, `ok / && echo yes`, "yes"},
+		{me, `own "$1" && echo yes`, "yes"},
+		{other, `own "$1" && echo yes`, ""},
+		{me, `held "$2" "$1"; echo held`, "held"},
+	} {
+		if got := say(tc.u, tc.check); got != tc.want {
+			t.Errorf("as %s, %s says %q, want %q", tc.u, tc.check, got, tc.want)
+		}
+	}
+	if got, _ := marked(say(other, `held "$2" "$1"; echo held`), "MERIDIAN-UNUSABLE"); !strings.HasPrefix(got, "file_not_owned ") {
+		t.Errorf("as another user, held says %q", got)
 	}
 }
 
