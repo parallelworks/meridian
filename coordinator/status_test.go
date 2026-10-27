@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -83,7 +85,7 @@ func TestFailRun(t *testing.T) {
 // an endpoint: another waits for it, and takes it once the first releases
 // it.
 func TestHoldEndpoint(t *testing.T) {
-	db := filepath.Join(privateDir(t), "meridian.db")
+	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	first := open(t, Options{Database: db})
 	second := open(t, Options{Database: db})
 	h, err := first.HoldEndpoint(t.Context(), "socket", "first")
@@ -168,8 +170,8 @@ func TestRunsAndJobs(t *testing.T) {
 // that a check that refuses it leaves it as it is; and that a run of a
 // newer plan, or one the store hasn't, is refused.
 func TestResume(t *testing.T) {
-	db := filepath.Join(privateDir(t), "meridian.db")
-	keys := newTestKeys(t)
+	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	keys := coordtest.NewKeys(t)
 	queue := func(id string) string { return "meridian.start." + id }
 	creator := open(t, Options{Database: db, Keys: keys, Variables: regionVars, StartQueue: queue})
 	id, _ := create(t, creator, regionWorkflow, regionSubmitted, regionVars)
@@ -231,7 +233,7 @@ func TestResume(t *testing.T) {
 // removes the file of a hold on its Start that a coordinator that ended
 // without letting it go left, as one killed does.
 func TestResumeLetsStaleHoldGo(t *testing.T) {
-	db := filepath.Join(privateDir(t), "meridian.db")
+	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	queue := func(id string) string { return "meridian.start." + id }
 	c := open(t, Options{Database: db, Variables: regionVars, StartQueue: queue})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
@@ -253,7 +255,7 @@ func TestResumeLetsStaleHoldGo(t *testing.T) {
 // Keys: it reports runs, and refuses every call that would change one, or
 // serve.
 func TestReadOnly(t *testing.T) {
-	db := filepath.Join(privateDir(t), "meridian.db")
+	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	c := open(t, Options{Database: db})
 	ended := runToEnd(t, c, oneJob, nil)
 	// A run whose Start is in a queue of its own, which its creator, which

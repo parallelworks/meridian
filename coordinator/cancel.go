@@ -112,7 +112,6 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	}
 	var (
 		stopped bool
-		changed []string
 		readied []string
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
@@ -144,7 +143,6 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 				readied = append(readied, j.Key)
 			}
 		}
-		changed = tx.ControlsChanged()
 		return nil
 	})
 	switch {
@@ -153,7 +151,6 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	case err != nil || !stopped:
 		return err
 	}
-	c.controlsChanged(changed)
 	c.log.InfoContext(ctx, "coordinator: a run was stopped", "run", run.ID, "reason", reason)
 	// A supervisor waiting for the jobs its job needs isn't woken: it
 	// readies its job once they have finished, as stopped. One of an
@@ -220,7 +217,7 @@ func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelP
 		case path == plan.CancelPathOutlive:
 			out.outlives[j.Key] = true
 		case j.ReadyAt.IsZero():
-			if pj := planJob(p, j.Name); path == plan.CancelPathSkip && pj != nil && len(pj.Needs) > 0 {
+			if pj := p.Job(j.Name); path == plan.CancelPathSkip && pj != nil && len(pj.Needs) > 0 {
 				out.skipNow = append(out.skipNow, j.Key)
 			}
 		default:
@@ -408,16 +405,7 @@ func tellStop(tx *store.Tx, id string, reason plan.Reason) error {
 // tell asks the worker of the attempt id to stop its job, for reason, as
 // tellStop does, in a transaction of its own.
 func (c *Coordinator) tell(ctx context.Context, id string, reason plan.Reason) error {
-	var changed []string
-	err := c.store.Tx(ctx, func(tx *store.Tx) error {
-		if err := tellStop(tx, id, reason); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
-	})
-	c.controlsChanged(changed)
-	return err
+	return c.store.Tx(ctx, func(tx *store.Tx) error { return tellStop(tx, id, reason) })
 }
 
 // liveAttempt looks at the job's live attempt a, placed, claimed or

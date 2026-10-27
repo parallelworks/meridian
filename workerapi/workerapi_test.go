@@ -1,6 +1,8 @@
 package workerapi_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -14,6 +16,28 @@ import (
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
+
+// TestWriteBody checks that a body is answered as Marshal encodes it, as
+// JSON, with 200; and that one Marshal can't encode is its error, with
+// nothing written.
+func TestWriteBody(t *testing.T) {
+	v := workerapi.EventsAck{Seq: 3}
+	want, err := workerapi.Marshal(&v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	if err := workerapi.WriteBody(rec, &v); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != string(want) {
+		t.Errorf("WriteBody answered %d, %q: %s", rec.Code, rec.Header().Get("Content-Type"), rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	if err := workerapi.WriteBody(rec, make(chan int)); err == nil || rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
+		t.Errorf("WriteBody of what Marshal can't encode = %v, and wrote %q", err, rec.Body)
+	}
+}
 
 // TestCodesAreKinds checks that each of the API's codes is the code of its
 // kind, in problems.WorkerRegistry, and that ParamExpected is OutOfOrder's

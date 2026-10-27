@@ -113,6 +113,7 @@ package workerapi
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"net/http"
 	"reflect"
 	"time"
 
@@ -128,6 +129,20 @@ import (
 // mapping is written as an empty one.
 func Marshal(v any) ([]byte, error) {
 	return jsonv2.Marshal(v, jsonv2.Deterministic(true))
+}
+
+// WriteBody answers 200 with v, encoded as the API writes a body
+// (Marshal), as both the coordinator's server and a test's Fake answer. It
+// returns Marshal's error before it writes anything, for the caller to
+// answer otherwise.
+func WriteBody(w http.ResponseWriter, v any) error {
+	data, err := Marshal(v)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+	return nil
 }
 
 // Unmarshal decodes a body as the API reads it, as strictly as its schema

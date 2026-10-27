@@ -3,10 +3,6 @@ package workerapisrv_test
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,8 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 
 	"github.com/parallelworks/hopper"
 
@@ -74,21 +73,11 @@ func created(t testing.TB) *compile.Created {
 	return c
 }
 
-// privateDir returns a directory of the test's that only its user can use.
-func privateDir(t testing.TB) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 // openStore opens a new store with opts, which the test closes, and
 // returns it and its database's path.
 func openStore(t testing.TB, opts *store.Options) (*store.Store, string) {
 	t.Helper()
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	s, err := store.Open(t.Context(), path, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -110,35 +99,6 @@ func fakeJobID() hopper.JobID {
 	var id hopper.JobID
 	id[15], id[14], id[13] = byte(jobIDs.next), byte(jobIDs.next>>8), 0xfe
 	return id
-}
-
-// testKeys wraps data keys with AES-256-GCM under a key of its own, bound
-// to the run, as the local Keys does.
-type testKeys struct{ aead cipher.AEAD }
-
-func newKeys(t testing.TB) *testKeys {
-	t.Helper()
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aead, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &testKeys{aead}
-}
-
-func (k *testKeys) Wrap(_ context.Context, runID string, key []byte) ([]byte, error) {
-	return k.aead.Seal(nil, nil, key, []byte(runID)), nil
-}
-
-func (k *testKeys) Unwrap(_ context.Context, runID string, wrapped []byte) ([]byte, error) {
-	return k.aead.Open(nil, nil, wrapped, []byte(runID))
 }
 
 // fakeReadier gives each run's attempts the job, the run's values and the
@@ -210,13 +170,28 @@ type rigOptions struct {
 
 func newRig(t *testing.T, opts rigOptions) *rig {
 	t.Helper()
-	s, path := openStore(t, opts.store)
-	sealer, err := seal.New(newKeys(t), s.ID())
+	// A change to attempts' controls answers the polls the rig's first
+	// server holds of them, as a coordinator has its own server's answered
+	// (store.Options.OnControlsChanged); another replica's read them again
+	// at their recheck, as another process's do.
+	var storeOpts store.Options
+	if opts.store != nil {
+		storeOpts = *opts.store
+	}
+	var first atomic.Pointer[workerapisrv.Server]
+	storeOpts.OnControlsChanged = func(_ context.Context, ids []string) {
+		if srv := first.Load(); srv != nil {
+			srv.Notify(ids...)
+		}
+	}
+	s, path := openStore(t, &storeOpts)
+	sealer, err := seal.New(coordtest.NewKeys(t), s.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: &fakeReadier{}, logs: &runlogtest.Logs{}}
 	r.server = r.serve(opts)
+	first.Store(r.server)
 	return r
 }
 
@@ -453,14 +428,4 @@ func claimRequest(t *testing.T, credential, digest string) []byte {
 		t.Fatal(err)
 	}
 	return data
-}
-
-// newCredential returns a credential as a worker makes one.
-func newCredential(t *testing.T) string {
-	t.Helper()
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	return hex.EncodeToString(b)
 }

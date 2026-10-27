@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	jsonv2 "encoding/json/v2"
 
 	"github.com/parallelworks/foundation/problem"
@@ -74,7 +76,7 @@ func (r *rig) claimed(c *client, p placed) (*store.Attempt, string, string) {
 func (r *rig) claimedIn(c *client, run, key string, p placed) (*store.Attempt, string) {
 	r.t.Helper()
 	a, token := r.newAttempt(run, key, p)
-	credential := newCredential(r.t)
+	credential := coordtest.Credential(r.t)
 	status, body, err := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(r.t, credential, conformanceDigest), token)
 	if err != nil || status != http.StatusOK {
 		r.t.Fatalf("the claim was answered %d, %v: %s", status, err, body)
@@ -163,7 +165,7 @@ func TestPeers(t *testing.T) {
 
 	r := newRig(t, rigOptions{peers: refusingPeers{connections: true}})
 	a, token := r.newAttempt(r.newRun(nil), "build", placed{})
-	status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+	status, body, err := newClient(t, r.socket).send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), conformanceDigest), token)
 	if err == nil {
 		t.Errorf("a connection of another user was answered %d: %s", status, body)
 	}
@@ -173,7 +175,7 @@ func TestPeers(t *testing.T) {
 
 	r = newRig(t, rigOptions{peers: refusingPeers{}})
 	a, token = r.newAttempt(r.newRun(nil), "build", placed{})
-	status, body, err = newClient(t, r.socket).send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+	status, body, err = newClient(t, r.socket).send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), conformanceDigest), token)
 	if err != nil || status != http.StatusUnauthorized {
 		t.Errorf("a claim of a run the peer may not report on was answered %d, %v: %s", status, err, body)
 	}
@@ -188,7 +190,7 @@ func TestBodyLimits(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	_, token := r.newAttempt(r.newRun(nil), "build", placed{})
-	claim := claimRequest(t, newCredential(t), conformanceDigest)
+	claim := claimRequest(t, coordtest.Credential(t), conformanceDigest)
 	padded := append(bytes.Repeat([]byte(" "), workerapisrv.MaxClaimBody), claim...)
 	if status, body, err := c.send(http.MethodPost, workerapi.PathClaim, padded, token); err != nil || status != http.StatusRequestEntityTooLarge {
 		t.Errorf("a claim of %d bytes was answered %d, %v: %s", len(padded), status, err, body)
@@ -217,7 +219,7 @@ func TestDigestMismatch(t *testing.T) {
 	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
 	placedDigest := "sha256:" + strings.Repeat("a", 64)
 	a, token := r.newAttempt(run, "build", placed{digest: placedDigest})
-	status, body, err := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+	status, body, err := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), conformanceDigest), token)
 	if err != nil || status != http.StatusConflict {
 		t.Fatalf("a claim of another binary was answered %d, %v: %s", status, err, body)
 	}
@@ -237,13 +239,13 @@ func TestDigestMismatch(t *testing.T) {
 		t.Errorf("the job's supervisor wasn't woken: %v", woken)
 	}
 	// The token claims nothing once the attempt has ended.
-	if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), placedDigest), token); status != http.StatusUnauthorized {
+	if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), placedDigest), token); status != http.StatusUnauthorized {
 		t.Errorf("a claim once the attempt ended was answered %d: %s", status, body)
 	}
 
 	// The binary the placement started claims it.
 	a, token = r.newAttempt(run, "build", placed{digest: placedDigest})
-	if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), placedDigest), token); status != http.StatusOK {
+	if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), placedDigest), token); status != http.StatusOK {
 		t.Errorf("a claim of the binary placed was answered %d: %s", status, body)
 	}
 	if got := r.attempt(a.ID); got.Worker.Digest != placedDigest || got.ClaimedAt.IsZero() {
@@ -280,7 +282,7 @@ func TestSuperseded(t *testing.T) {
 	if got := r.attempt(a.ID); got.End.Kind != store.EndSuperseded || got.StepStartedAt.IsZero() == false {
 		t.Errorf("the superseded attempt is %+v", got)
 	}
-	newer := newCredential(t)
+	newer := coordtest.Credential(t)
 	if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newer, conformanceDigest), token); status != http.StatusOK {
 		t.Fatalf("the newer attempt's claim was answered %d: %s", status, body)
 	}
@@ -419,7 +421,7 @@ func TestPrivatePlacementMasked(t *testing.T) {
 	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
 	placedDigest := "sha256:" + strings.Repeat("a", 64)
 	b, token := r.newAttempt(run, "build", placed{digest: placedDigest, private: true})
-	status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+	status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), conformanceDigest), token)
 	if p := wantProblem(t, "a claim of another binary", status, body, workerapi.WorkerDigestMismatch); p.Params[workerapi.ParamPlaced] != placedDigest {
 		t.Errorf("the worker was answered %v", p.Params)
 	}

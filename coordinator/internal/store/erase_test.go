@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -48,7 +50,7 @@ func TestSecureDelete(t *testing.T) {
 // are in neither the database's file nor its write-ahead log once the run
 // has ended, as the earlier generations of the record aren't.
 func TestRecordErased(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	s := openAt(t, path)
 	p := testPlan(t)
 	// Large enough for SQLite to keep on overflow pages of their own, which

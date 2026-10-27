@@ -707,14 +707,22 @@ func (p *Plan) Ready(ctx context.Context, job string, in ReadyInput) (*ReadyResu
 	return p.ready(ctx, j, in)
 }
 
+// Job returns the plan's job named name, or nil if it has none.
+func (p *Plan) Job(name string) *Job {
+	i, ok := slices.BinarySearchFunc(p.Jobs, name, func(j Job, name string) int { return strings.Compare(j.Name, name) })
+	if !ok {
+		return nil
+	}
+	return &p.Jobs[i]
+}
+
 // job returns the plan's job named name. A job the plan doesn't have is
 // the caller's mistake, and an error.
 func (p *Plan) job(name string) (*Job, error) {
-	i, ok := slices.BinarySearchFunc(p.Jobs, name, func(j Job, name string) int { return strings.Compare(j.Name, name) })
-	if !ok {
-		return nil, fmt.Errorf("plan: the plan has no job %s", name)
+	if j := p.Job(name); j != nil {
+		return j, nil
 	}
-	return &p.Jobs[i], nil
+	return nil, fmt.Errorf("plan: the plan has no job %s", name)
 }
 
 // ready is Ready for the plan's job j.

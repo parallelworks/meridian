@@ -52,17 +52,12 @@ func (c *Coordinator) matrixStep(ctx context.Context, run *store.Run, job *store
 	// As format 1, an instance whose steps failed, or were cancelled,
 	// stops the rest: each that hasn't ended, its supervisor ends.
 	if x.FailFast && stopped && job.FailFastAt.IsZero() && len(unfinished) > 0 {
-		var changed []string
 		if err := c.store.Tx(ctx, func(tx *store.Tx) error {
-			if _, err := tx.MarkFailFast(run.ID, job.Key); err != nil {
-				return err
-			}
-			changed = tx.ControlsChanged()
-			return nil
+			_, err := tx.MarkFailFast(run.ID, job.Key)
+			return err
 		}); err != nil {
 			return 0, err
 		}
-		c.controlsChanged(changed)
 		for _, j := range unfinished {
 			c.wakeJob(ctx, run.ID, j.Key)
 		}
@@ -289,17 +284,14 @@ func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *sto
 	if parent.FailFastAt.IsZero() {
 		return 0, false, nil
 	}
-	var changed []string
 	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.TellFailFast(a.ID); err != nil && !errors.Is(err, store.ErrState) {
 			return err
 		}
-		changed = tx.ControlsChanged()
 		return nil
 	}); err != nil {
 		return 0, true, err
 	}
-	c.controlsChanged(changed)
 	return 0, false, nil
 }
 

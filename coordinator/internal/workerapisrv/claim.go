@@ -17,7 +17,8 @@ import (
 // A Readier gives the job an attempt claims: plan.Plan.Ready run again, as
 // the coordinator runs it whenever it needs a ready job, with what it kept
 // of how it readied the job, so that every claim of an attempt gives the
-// same, byte for byte (PlanReadier).
+// job its supervisor placed, byte for byte. The coordinator gives the
+// one it serves with, from the same code its supervisors ready a job with.
 type Readier interface {
 	// ReadyAttempt returns the job of the attempt a, of run, as Ready gives
 	// it, with the part of the run's values, and of its needs' results,
@@ -111,7 +112,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 			refusal = problems.WorkerDigestMismatch.Problem(problems.Params{workerapi.ParamPlaced: placed, workerapi.ParamClaimed: req.Worker.Digest})
 		}
 		if refusal != nil {
-			s.setupFailed(ctx, a, refusal)
+			s.endRefused(ctx, a, refusal)
 			problem.Write(w, refusal)
 			return
 		}
@@ -160,10 +161,10 @@ func credentialForm(credential string) bool {
 	return err == nil && len(b) == 32
 }
 
-// setupFailed ends the attempt a, which failed before its first step with
-// p, unless something ended it meanwhile, and wakes its job's supervisor,
-// which places the job again.
-func (s *Server) setupFailed(ctx context.Context, a *store.Attempt, p *problem.Problem) {
+// endRefused ends the attempt a, whose claim the server refused, as one
+// that failed before its first step, with p, unless something ended it
+// meanwhile, and wakes its job's supervisor, which places the job again.
+func (s *Server) endRefused(ctx context.Context, a *store.Attempt, p *problem.Problem) {
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p})
 	})

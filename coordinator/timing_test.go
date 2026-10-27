@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/meridian/internal/testtiming"
 )
 
@@ -65,7 +67,7 @@ func TestTimingScaled(t *testing.T) {
 		}
 	}
 	testtiming.Scale = 0.1
-	c, err := Open(t.Context(), Options{Database: filepath.Join(privateDir(t), "meridian.db"), Keys: newTestKeys(t)})
+	c, err := Open(t.Context(), Options{Database: filepath.Join(coordtest.PrivateDir(t), "meridian.db"), Keys: coordtest.NewKeys(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +77,7 @@ func TestTimingScaled(t *testing.T) {
 	}
 	for _, s := range []float64{0.05, 2, -1} {
 		testtiming.Scale = s
-		if _, err := Open(t.Context(), Options{Database: filepath.Join(privateDir(t), "meridian.db"), Keys: newTestKeys(t)}); err == nil {
+		if _, err := Open(t.Context(), Options{Database: filepath.Join(coordtest.PrivateDir(t), "meridian.db"), Keys: coordtest.NewKeys(t)}); err == nil {
 			t.Errorf("a coordinator opened with a scale of %v", s)
 		}
 	}

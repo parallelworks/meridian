@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/foundation/problem"
 	"github.com/parallelworks/hopper"
 	"github.com/parallelworks/hopper/driver/hoppersqlite"
@@ -35,7 +37,7 @@ func TestMain(m *testing.M) {
 // open opens a new store in a directory of the test's.
 func open(t *testing.T) *Store {
 	t.Helper()
-	return openAt(t, filepath.Join(privateDir(t), "meridian.db"))
+	return openAt(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"))
 }
 
 // openAt opens the store at path, which the test closes.
@@ -172,7 +174,7 @@ func checkIntegrity(t *testing.T, s *Store) {
 var hexID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func TestOpen(t *testing.T) {
-	dir := privateDir(t)
+	dir := coordtest.PrivateDir(t)
 	path := filepath.Join(dir, "meridian.db")
 	s, err := Open(t.Context(), path, nil)
 	if err != nil {
@@ -236,7 +238,7 @@ func TestOpenWhileBusy(t *testing.T) {
 		}
 	}
 	t.Run("waits", func(t *testing.T) {
-		path := filepath.Join(privateDir(t), "meridian.db")
+		path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 		writeFile(t, path, 0o600)
 		unlock := lock(t, path)
 		const held = 300 * time.Millisecond
@@ -249,7 +251,7 @@ func TestOpenWhileBusy(t *testing.T) {
 		}
 	})
 	t.Run("gives up", func(t *testing.T) {
-		path := filepath.Join(privateDir(t), "meridian.db")
+		path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 		writeFile(t, path, 0o600)
 		defer lock(t, path)()
 		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
@@ -328,7 +330,7 @@ func TestOpenRefuses(t *testing.T) {
 		}, problems.DirectoryNotPrivate, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := privateDir(t)
+			dir := coordtest.PrivateDir(t)
 			path := filepath.Join(dir, "meridian.db")
 			made := tc.setUp(t, dir, path)
 			s, err := Open(t.Context(), path, nil)
@@ -350,16 +352,6 @@ func TestOpenRefuses(t *testing.T) {
 			}
 		})
 	}
-}
-
-// privateDir returns a directory of the test's that only its user can
-// use, as Open asks of the database's: t.TempDir makes it as the umask
-// allows.
-func privateDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	chmod(t, dir, 0o700)
-	return dir
 }
 
 // writeFile makes an empty file at path with the mode perm.
@@ -388,7 +380,7 @@ func symlink(t *testing.T, target, path string) {
 // TestMigrations checks that Open migrates an empty database, and that
 // opening it again changes nothing.
 func TestMigrations(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	applied := func() map[int]int64 {
 		s := openAt(t, path)
 		out := map[int]int64{}
@@ -440,7 +432,7 @@ func TestDatabaseTooNew(t *testing.T) {
 		{"hopper", "hopper_schema", hoppermigrate.Latest() + 1, hoppermigrate.Latest()},
 	} {
 		t.Run(tc.schema, func(t *testing.T) {
-			path := filepath.Join(privateDir(t), "meridian.db")
+			path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 			s, err := Open(t.Context(), path, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -486,7 +478,7 @@ func TestNetworkFilesystem(t *testing.T) {
 			was := openSQLite
 			t.Cleanup(func() { openSQLite = was })
 			openSQLite = func(context.Context, string, *hoppersqlite.Config) (*hoppersqlite.Driver, error) { return nil, tc.err }
-			path := filepath.Join(privateDir(t), "meridian.db")
+			path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 			_, err := Open(t.Context(), path, nil)
 			p, ok := errors.AsType[*problem.Problem](err)
 			if !ok || p.Code != problems.NetworkFilesystem.Code() {
@@ -508,7 +500,7 @@ func TestNetworkFilesystem(t *testing.T) {
 	openSQLite = func(context.Context, string, *hoppersqlite.Config) (*hoppersqlite.Driver, error) {
 		return nil, fmt.Errorf("%w, somehow", hoppersqlite.ErrNetworkFilesystem)
 	}
-	dir := privateDir(t)
+	dir := coordtest.PrivateDir(t)
 	_, err := Open(t.Context(), filepath.Join(dir, "meridian.db"), nil)
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Params["path"] != dir || p.Params["type"] != hoppersqlite.ErrNetworkFilesystem.Error()+", somehow" {
 		t.Errorf("Open = %v", err)

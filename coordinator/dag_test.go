@@ -3,6 +3,7 @@ package coordinator
 import (
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -320,10 +321,27 @@ jobs:
 	}
 }
 
-// countNotifier counts what it hears.
-type countNotifier struct{ n atomic.Int64 }
+// countNotifier counts what it hears, and records the attempts it hears
+// of.
+type countNotifier struct {
+	n   atomic.Int64
+	mu  sync.Mutex
+	ids []string
+}
 
-func (n *countNotifier) Notify(...string) { n.n.Add(1) }
+func (n *countNotifier) Notify(ids ...string) {
+	n.n.Add(1)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.ids = append(n.ids, ids...)
+}
+
+// heard reports whether n heard of the attempt id.
+func (n *countNotifier) heard(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Contains(n.ids, id)
+}
 
 // TestAnyJobFailed checks early-cancel: any-job-failed's part on the
 // coordinator: the first job of the run to fail marks the run, which the
@@ -382,7 +400,9 @@ jobs:
 	if ctl := control("a"); ctl.AnyJobFailed {
 		t.Errorf("the job that failed tells its worker %+v", ctl)
 	}
-	if n := notifier.n.Load(); n != 1 {
-		t.Errorf("the worker API heard of %d changes", n)
+	// It hears of the running job's attempt, but not of the attempt of
+	// the job that failed.
+	if b, a := latestAttempt(t, c, id, "b"), latestAttempt(t, c, id, "a"); !notifier.heard(b.ID) || notifier.heard(a.ID) {
+		t.Errorf("the worker API heard of b's attempt: %v, and of a's: %v", notifier.heard(b.ID), notifier.heard(a.ID))
 	}
 }

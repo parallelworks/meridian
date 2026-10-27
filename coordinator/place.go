@@ -250,6 +250,9 @@ func (c *Coordinator) openPlaces(ctx context.Context, runID string, wrapped []by
 // A problem from the driver fails the attempt before its first step, and
 // any other error is a backend that couldn't answer.
 func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *store.Job, id, token string, rj *plan.ReadyJob, chosen *candidate, private bool) (time.Duration, error) {
+	if c.placed != nil {
+		c.placed(run, id, rj)
+	}
 	endpoint, err := c.connect(ctx, chosen.driver, chosen.member)
 	var p backend.Placement
 	if err == nil {
@@ -333,9 +336,9 @@ func (c *Coordinator) attemptSetupFailed(ctx context.Context, id string, p *prob
 func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, error) {
 	private := a.Private
 	cand, _, rj, err := c.placedOn(ctx, run, job, a)
-	var groups *groupsError
+	groups, unanswered := errors.AsType[*groupsError](err)
 	switch {
-	case errors.As(err, &groups):
+	case unanswered:
 		return c.unanswered(ctx, run, job, private, groups.err)
 	case errors.Is(err, errMemberGone):
 		return 0, c.attemptSetupFailed(ctx, a.ID, nil)

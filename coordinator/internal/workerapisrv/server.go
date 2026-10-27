@@ -24,7 +24,7 @@
 // What it needs of the rest of the coordinator comes through narrow
 // interfaces: the store; where logs go (runlog.Logs); the run's secret
 // record, opened and sealed again (Sealer); the job an attempt claims, as
-// Ready gives it again (Readier, which PlanReadier is from the plan); and
+// Ready gives it again (Readier, which the coordinator gives); and
 // whom to wake once an attempt changes (Options.Wake).
 package workerapisrv
 
@@ -208,10 +208,12 @@ func New(opts Options) (*Server, error) {
 }
 
 // Notify wakes the control polls the server holds for the attempts ids, or
-// for every attempt for none, to read the store again: call it once a
-// control stored in this process has committed. The server reads the
-// controls of the attempts it holds polls for again every second besides,
-// for one another process stored.
+// for every attempt for none, to read the store again. Whoever opened the
+// store calls it once a transaction of this process's that changed
+// controls has committed, its own and the server's alike
+// (store.Options.OnControlsChanged). The server reads the controls of the
+// attempts it holds polls for again every second besides, for one another
+// process stored.
 func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
 
 // Serve serves the worker API on l, a Unix socket's listener, until ctx is
@@ -653,13 +655,9 @@ func writeStatus(w http.ResponseWriter, status int) {
 
 // writeJSON answers 200 with v, as the API encodes a body.
 func writeJSON(w http.ResponseWriter, v any) {
-	data, err := workerapi.Marshal(v)
-	if err != nil {
+	if err := workerapi.WriteBody(w, v); err != nil {
 		writeStatus(w, http.StatusInternalServerError)
-		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
 }
 
 // wakeJob calls Options.Wake, if there is one.

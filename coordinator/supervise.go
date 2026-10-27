@@ -186,7 +186,7 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 		if err != nil {
 			return 0, err
 		}
-		if pj := planJob(p, job.Name); pj != nil && pj.Strategy != nil {
+		if pj := p.Job(job.Name); pj != nil && pj.Strategy != nil {
 			return c.matrixStep(ctx, run, job, done)
 		}
 	}
@@ -230,8 +230,11 @@ func (c *Coordinator) attemptEnded(ctx context.Context, run *store.Run, job *sto
 	case a.End.Kind == store.EndLost:
 		return c.workerLost(ctx, run, job, a, done)
 	default:
-		// A placement withdrawn: what follows it is a cancellation's,
-		// which isn't built yet, and until it is the job fails.
+		// Withdrawn, or superseded: the coordinator ends the job in the
+		// transaction that withdraws its attempt (withdraw, failJob), and
+		// supersedes one only with another, so a job whose latest attempt
+		// ended so, and which hasn't ended, is one nothing will run, and
+		// fails, as a job the coordinator couldn't run does.
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{
 			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason,
 			Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": job.Key})},
@@ -306,7 +309,6 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 // waits for the job to end: for an instance of a matrix job, the matrix
 // job's supervisor; and the marker of a need on any instance of it.
 func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end store.JobEnd, before, done func(context.Context, *store.Tx) error) error {
-	var changed []string
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if before != nil {
 			if err := before(ctx, tx); err != nil {
@@ -330,15 +332,8 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 				return err
 			}
 		}
-		if err := done(ctx, tx); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
+		return done(ctx, tx)
 	})
-	if err == nil {
-		c.controlsChanged(changed)
-	}
 	if err == nil {
 		// The hopper job done completed is over, and its context with it.
 		ctx := context.WithoutCancel(ctx)
@@ -358,7 +353,9 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 type controlNotifier interface{ Notify(ids ...string) }
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,
-// that the controls of the attempts ids changed, if any did.
+// that the controls of the attempts ids changed, if any did: the store
+// calls it once each transaction that changed them commits
+// (store.Options.OnControlsChanged).
 func (c *Coordinator) controlsChanged(ids []string) {
 	if len(ids) == 0 {
 		return
@@ -386,12 +383,19 @@ func (c *Coordinator) wakeJob(ctx context.Context, run, key string) {
 		c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
 		return
 	}
-	if j.Outcome != "" {
-		// Its supervisor completed as it ended the job, and JobRetry would
-		// run it again.
-		return
+	if j.Outcome == "" {
+		c.wake(ctx, j.SupervisorID, run, key, wakeTries, unended(run, key))
 	}
-	c.wake(ctx, j.SupervisorID, run, key)
+}
+
+// unended reports, in a transaction, whether the run's job key hasn't
+// ended: whether its supervisor waits, rather than completed as it ended
+// the job.
+func unended(run, key string) func(*store.Tx) (bool, error) {
+	return func(tx *store.Tx) (bool, error) {
+		j, err := tx.Job(run, key)
+		return err == nil && j.Outcome == "", err
+	}
 }
 
 // wakeAny wakes the marker of a need on any instance of the run's job
@@ -409,31 +413,40 @@ func (c *Coordinator) wakeAny(ctx context.Context, run, name string) {
 	case err != nil:
 		c.log.DebugContext(ctx, "coordinator: wake a need on any instance", "run", run, "job", name, "error", err)
 	case a.ChosenAt.IsZero():
-		c.wake(ctx, a.MarkerID, run, name)
+		c.wake(ctx, a.MarkerID, run, name, wakeTries, func(tx *store.Tx) (bool, error) {
+			a, err := tx.Any(run, name)
+			return err == nil && a.ChosenAt.IsZero(), err
+		})
 	}
 }
 
 // wake has hopper run the job id, which waits, as the run's job key's
-// supervisor or marker, at once. A supervisor that is running reads what
-// woke it before it waits, unless it read last just before the wake, and
-// is about to wait: so it is woken again, a few times, briefly, in case it
-// was.
-func (c *Coordinator) wake(ctx context.Context, id hopper.JobID, run, key string) {
-	c.mu.Lock()
-	client := c.served
-	c.mu.Unlock()
-	if client == nil {
-		client = c.inserter
-	}
+// supervisor or marker, at once, in a transaction that reads first, with
+// waits, whether it still waits: a supervisor completes in the transaction
+// that ends its job, and a marker in the one that chooses, and hopper's
+// JobRetry would run either again once it has. A supervisor that is
+// running reads what woke it before it waits, unless it read last just
+// before the wake, and is about to wait: so it is woken again, tries times
+// in all, briefly apart, in case it was.
+func (c *Coordinator) wake(ctx context.Context, id hopper.JobID, run, key string, tries int, waits func(*store.Tx) (bool, error)) {
 	for try := 0; ; try++ {
-		_, err := client.JobRetry(ctx, id)
+		err := c.store.Tx(ctx, func(tx *store.Tx) error {
+			ok, err := waits(tx)
+			if err != nil || !ok {
+				return err
+			}
+			// hopper wakes the job's queue in this process once the
+			// transaction commits.
+			_, err = c.inserter.JobRetryTx(ctx, tx.SQL(), id)
+			return err
+		})
 		switch {
 		case err == nil:
 			return
 		case !errors.Is(err, hopper.ErrJobRunning):
 			c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
 			return
-		case try == wakeTries-1:
+		case try == tries-1:
 			return
 		}
 		select {

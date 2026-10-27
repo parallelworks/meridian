@@ -130,6 +130,13 @@ type Options struct {
 	// that the coordinator wakes what waits on hopper's schedule, which a
 	// clock that was ahead may have put far off. Nil means nothing is.
 	OnClockReset func(ctx context.Context)
+	// OnControlsChanged is called once a transaction that changed
+	// attempts' controls (Tx.UpdateControl) has committed, with the
+	// transaction's context and the attempts' IDs, in order (Tx.
+	// ControlsChanged), so that whoever holds their control polls in this
+	// process answers them at once (workerapisrv.Server.Notify); those of
+	// other processes read them again every second. Nil means nothing is.
+	OnControlsChanged func(ctx context.Context, ids []string)
 }
 
 // hostClock is the host's clock, which the store reads, unless
@@ -160,7 +167,10 @@ type Store struct {
 	// Options.MaxLead.
 	clock   func() time.Time
 	maxLead time.Duration
-	onReset func(ctx context.Context)
+	// onReset is Options.OnClockReset, and onControls
+	// Options.OnControlsChanged, or nil.
+	onReset    func(ctx context.Context)
+	onControls func(ctx context.Context, ids []string)
 	// migrated is set once Meridian's schema, which keeps the clock's
 	// mark, is there: Open sets it before it returns the store.
 	migrated bool
@@ -270,7 +280,8 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 	s := &Store{driver: d, db: d.DB(), log: log, readOnly: readOnly}
 	s.maxLead = DefaultMaxLead
 	if opts != nil {
-		s.lastTry, s.retriesFor, s.clock, s.onReset = opts.LastTry, opts.RetriesFor, opts.Now, opts.OnClockReset
+		s.lastTry, s.retriesFor, s.clock = opts.LastTry, opts.RetriesFor, opts.Now
+		s.onReset, s.onControls = opts.OnClockReset, opts.OnControlsChanged
 		if opts.MaxLead > 0 {
 			s.maxLead = opts.MaxLead
 		}
@@ -389,7 +400,7 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	}
 	// A process that ended between a run's end and the checkpoint after it
 	// left the log holding the run's secret record.
-	s.truncateLog(ctx)
+	s.truncateWAL(ctx)
 	return nil
 }
 
@@ -516,8 +527,8 @@ type Tx struct {
 }
 
 // ControlsChanged returns the attempts whose controls the transaction has
-// changed (UpdateControl), in order, so that, once it commits, whoever
-// holds their control polls answers them (workerapisrv.Server.Notify).
+// changed (UpdateControl), in order, which Options.OnControlsChanged is
+// given once it commits.
 func (tx *Tx) ControlsChanged() []string { return slices.Sorted(maps.Keys(tx.controls)) }
 
 // Tx runs fn in a transaction, which it commits if fn returns nil and
@@ -572,8 +583,11 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	if tx.reset && s.onReset != nil {
 		s.onReset(context.WithoutCancel(ctx))
 	}
+	if len(tx.controls) > 0 && s.onControls != nil {
+		s.onControls(context.WithoutCancel(ctx), tx.ControlsChanged())
+	}
 	if tx.erased {
-		s.truncateLog(context.WithoutCancel(ctx))
+		s.truncateWAL(context.WithoutCancel(ctx))
 	}
 	if tx.events {
 		s.changedMu.Lock()
@@ -600,14 +614,14 @@ func (s *Store) Changes() <-chan struct{} {
 	return s.changed
 }
 
-// truncateLog checkpoints the write-ahead log into the database and
+// truncateWAL checkpoints the write-ahead log into the database and
 // truncates it, so that what a transaction deleted, which secure_delete
 // overwrote with zeros in the pages the checkpoint writes, is in neither
 // any more. A reader in another process that still reads from the log, or
 // a writer, keeps the checkpoint from finishing, and the next one, of the
 // next run to end, of the next Open, or of hopper's maintenance, truncates
 // it: the store says so in its log.
-func (s *Store) truncateLog(ctx context.Context) {
+func (s *Store) truncateWAL(ctx context.Context) {
 	var busy, logPages, checkpointed int64
 	err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &checkpointed)
 	switch {

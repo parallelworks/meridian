@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -72,6 +71,7 @@ func (c *Coordinator) readyEarly(ctx context.Context, run *store.Run, key string
 
 // ready is readyJob, and readyEarly when early is set.
 func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, early bool) (*readied, error) {
+	// Before anything is pinned or failed: readyInput checks it too.
 	if run.StartState == nil {
 		return nil, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
 	}
@@ -92,115 +92,186 @@ func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, ear
 		}
 	}
 	var (
-		stored    *store.Record
-		job       *store.Job
-		parent    *store.Job
-		needed    = map[string]*store.Job{}
-		parts     map[string]store.JobRecord
+		from      *readyFrom
 		withdrawn []string
-		changed   []string
-		// merged are, for a need on any instance, the instances that had
-		// ended as it was chosen, whose outputs are read.
-		merged = map[string][]*store.Job{}
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
-		var err error
-		if stored, err = tx.Record(run.ID); err != nil {
-			return err
-		}
-		if job, err = tx.Job(run.ID, key); err != nil {
-			return err
-		}
-		pj := planJob(p, job.Name)
-		if pj == nil {
-			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
-		}
-		withdrawn = withdrawn[:0]
-		var (
-			choices map[string]string
-			keys    []string
-		)
-		for _, need := range pj.Needs {
-			k := need.Job
-			if need.Any {
-				a, err := tx.Any(run.ID, need.Job)
-				switch {
-				case err != nil:
-					return err
-				case a.ChosenAt.IsZero():
-					return fmt.Errorf("coordinator: run %s's job %q is readied before any instance of %q was chosen", run.ID, key, need.Job)
-				}
-				if choices == nil {
-					choices = map[string]string{}
-				}
-				choices[need.Job] = a.Instance
-				k = cmp.Or(a.Instance, need.Job)
-				for _, key := range a.Ended {
-					j, err := tx.Job(run.ID, key)
-					if err != nil {
-						return err
-					}
-					merged[need.Job] = append(merged[need.Job], j)
-					keys = append(keys, key)
-				}
-			} else if slices.Contains(unended, need.Job) {
-				ids, err := failNeed(tx, run.ID, need.Job)
-				if err != nil {
-					return err
-				}
-				withdrawn = append(withdrawn, ids...)
-			}
-			if needed[need.Job], err = tx.Job(run.ID, k); err != nil {
-				return err
-			}
-			if needed[need.Job].Result == nil && !early {
-				return fmt.Errorf("coordinator: run %s's job %q needs %q, which hasn't ended", run.ID, key, k)
-			}
-			keys = append(keys, k)
-		}
-		// A job readied once its run is stopped takes the path its if:
-		// gives it (plan.CancelPath), as the run's stop record says now.
-		now, err := tx.Run(run.ID)
+		job, err := tx.Job(run.ID, key)
 		if err != nil {
 			return err
 		}
-		if job, err = tx.PinReady(run.ID, key, !now.StoppedAt.IsZero(), choices); err != nil {
+		pj := p.Job(job.Name)
+		if pj == nil {
+			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
+		}
+		if job, withdrawn, err = pinReady(tx, run, pj, job, unended); err != nil {
 			return err
 		}
-		if job.Instance >= 0 {
-			if parent, err = tx.Job(run.ID, job.Name); err != nil {
-				return err
-			}
-		}
-		if parts, err = tx.JobRecords(run.ID, keys); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
+		from, err = readReadyFrom(tx, run, pj, job, early)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(unended) > 0 {
 		c.log.WarnContext(ctx, "coordinator: jobs a job needs never ended, as when hopper gave up on their supervisors, so they failed as it was readied", "run", run.ID, "job", key, "needs", unended)
-		c.controlsChanged(changed)
 		c.cancelPlacements(ctx, run.ID, ws, withdrawn)
 	}
-	rec, err := c.sealer.Open(ctx, run.ID, stored.Generation, sealedOf(stored))
+	in, err := c.readyInput(ctx, run, from)
 	if err != nil {
 		return nil, err
 	}
-	jobs, err := c.openJobRecords(ctx, run.ID, stored.WrappedKey, parts)
+	result, diags, err := p.Ready(ctx, from.job.Name, in)
 	if err != nil {
 		return nil, err
 	}
-	in := plan.ReadyInput{Run: run.StartState.Run, Needs: map[string]plan.JobResult{}, Cancelled: job.ReadiedStopped}
+	return &readied{result: result, diags: diags}, nil
+}
+
+// pinReady pins, in tx, what the run's job, whose plan job is pj, is
+// readied with, the first time it is (store.Tx.PinReady): whether the run
+// had been stopped, by the stop record as tx reads it, since a job readied
+// once its run is stopped takes the path its if: gives it
+// (plan.CancelPath); and, for each need on any instance, the instance its
+// marker chose. It first fails the needs, not on any instance, among
+// unended (failNeed), and returns the job as pinned, with the attempts it
+// withdrew.
+func pinReady(tx *store.Tx, run *store.Run, pj *plan.Job, job *store.Job, unended []string) (*store.Job, []string, error) {
+	var (
+		choices   map[string]string
+		withdrawn []string
+	)
+	for _, need := range pj.Needs {
+		switch {
+		case need.Any:
+			a, err := tx.Any(run.ID, need.Job)
+			switch {
+			case err != nil:
+				return nil, nil, err
+			case a.ChosenAt.IsZero():
+				return nil, nil, fmt.Errorf("coordinator: run %s's job %q is readied before any instance of %q was chosen", run.ID, job.Key, need.Job)
+			}
+			if choices == nil {
+				choices = map[string]string{}
+			}
+			choices[need.Job] = a.Instance
+		case slices.Contains(unended, need.Job):
+			ids, err := failNeed(tx, run.ID, need.Job)
+			if err != nil {
+				return nil, nil, err
+			}
+			withdrawn = append(withdrawn, ids...)
+		}
+	}
+	now, err := tx.Run(run.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	pinned, err := tx.PinReady(run.ID, job.Key, !now.StoppedAt.IsZero(), choices)
+	return pinned, withdrawn, err
+}
+
+// A readyFrom is what the store holds of what a job is readied with, as
+// readReadyFrom reads it: the job, as pinned when it was first readied,
+// with its matrix job for an instance; the run's secret record, sealed;
+// the jobs it needs, by name, each the job, or the instance, it reads,
+// with, for a need on any instance, the instances that had ended as its
+// marker chose (plan.AnyResult); and their parts of the record, sealed.
+type readyFrom struct {
+	job    *store.Job
+	parent *store.Job
+	stored *store.Record
+	needed map[string]*store.Job
+	merged map[string][]*store.Job
+	parts  map[string]store.JobRecord
+}
+
+// readReadyFrom reads, in tx, what the run's job, whose plan job is pj, is
+// readied with, by what it was pinned with as it was first readied
+// (pinReady): the supervisor reads it so as it readies the job, and the
+// server of the worker API as an attempt of it is claimed (claimReadier),
+// so that both give the same job, byte for byte. A job it needs that
+// hasn't ended is an error, unless early, for a job its run's stop ends
+// before its needs have (readyEarly), which reads it as failed.
+func readReadyFrom(tx *store.Tx, run *store.Run, pj *plan.Job, job *store.Job, early bool) (*readyFrom, error) {
+	if job.ReadyAt.IsZero() {
+		return nil, fmt.Errorf("coordinator: run %s's job %q hasn't been readied", run.ID, job.Key)
+	}
+	from := &readyFrom{job: job, needed: map[string]*store.Job{}, merged: map[string][]*store.Job{}}
+	var (
+		keys []string
+		err  error
+	)
+	if from.stored, err = tx.Record(run.ID); err != nil {
+		return nil, err
+	}
+	for _, need := range pj.Needs {
+		k := need.Job
+		if need.Any {
+			chosen, ok := job.AnyChoices[need.Job]
+			if !ok {
+				return nil, fmt.Errorf("coordinator: run %s's job %q was readied without an instance of %q", run.ID, job.Key, need.Job)
+			}
+			k = cmp.Or(chosen, need.Job)
+			a, err := tx.Any(run.ID, need.Job)
+			if err != nil {
+				return nil, err
+			}
+			for _, key := range a.Ended {
+				j, err := tx.Job(run.ID, key)
+				if err != nil {
+					return nil, err
+				}
+				from.merged[need.Job] = append(from.merged[need.Job], j)
+				keys = append(keys, key)
+			}
+		}
+		n, err := tx.Job(run.ID, k)
+		switch {
+		case err != nil:
+			return nil, err
+		case n.Result == nil && !early:
+			return nil, fmt.Errorf("coordinator: run %s's job %q needs %q, which hasn't ended", run.ID, job.Key, k)
+		}
+		from.needed[need.Job] = n
+		keys = append(keys, k)
+	}
+	if job.Instance >= 0 {
+		if from.parent, err = tx.Job(run.ID, job.Name); err != nil {
+			return nil, err
+		}
+	}
+	if from.parts, err = tx.JobRecords(run.ID, keys); err != nil {
+		return nil, err
+	}
+	return from, nil
+}
+
+// readyInput returns Ready's input for the job from holds what it is
+// readied with of: the run's values and the results of the jobs it needs,
+// each joined from run state and the run's secret record, which it opens,
+// a need's from its job's part of the record; for a matrix instance, its
+// matrix values (expansionOf); and whether the run had been stopped as it
+// was first readied.
+func (c *Coordinator) readyInput(ctx context.Context, run *store.Run, from *readyFrom) (plan.ReadyInput, error) {
+	if run.StartState == nil {
+		return plan.ReadyInput{}, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
+	}
+	rec, err := c.sealer.Open(ctx, run.ID, from.stored.Generation, sealedOf(from.stored))
+	if err != nil {
+		return plan.ReadyInput{}, err
+	}
+	jobs, err := c.openJobRecords(ctx, run.ID, from.stored.WrappedKey, from.parts)
+	if err != nil {
+		return plan.ReadyInput{}, err
+	}
+	in := plan.ReadyInput{Run: run.StartState.Run, Needs: map[string]plan.JobResult{}, Cancelled: from.job.ReadiedStopped}
 	if rec.Run != nil {
 		in.Run = plan.JoinRunValues(*rec.Run, run.StartState.Run)
 	}
-	for name, j := range needed {
+	for name, j := range from.needed {
 		in.Needs[name] = neededResult(j, jobs)
-		if ended := merged[name]; len(ended) > 0 {
+		if ended := from.merged[name]; len(ended) > 0 {
 			results := make([]plan.JobResult, len(ended))
 			for i, e := range ended {
 				results[i] = neededResult(e, jobs)
@@ -208,19 +279,16 @@ func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, ear
 			in.Needs[name] = plan.AnyResult(in.Needs[name], results)
 		}
 	}
-	if parent != nil {
-		x := expansionOf(run, parent, rec)
+	if from.parent != nil {
+		job := from.job
+		x := expansionOf(run, from.parent, rec)
 		if x == nil || job.Instance >= len(x.Instances) {
-			return nil, fmt.Errorf("coordinator: run %s's job %q has no instance %d", run.ID, job.Name, job.Instance)
+			return plan.ReadyInput{}, fmt.Errorf("coordinator: run %s's job %q has no instance %d", run.ID, job.Name, job.Instance)
 		}
 		instance := x.Instances[job.Instance]
 		in.Instance = &instance
 	}
-	result, diags, err := p.Ready(ctx, job.Name, in)
-	if err != nil {
-		return nil, err
-	}
-	return &readied{result: result, diags: diags}, nil
+	return in, nil
 }
 
 // unendedNeeds returns the keys of the jobs the run's job key needs, but
@@ -233,7 +301,7 @@ func (c *Coordinator) unendedNeeds(ctx context.Context, run *store.Run, p *plan.
 		if err != nil {
 			return err
 		}
-		pj := planJob(p, j.Name)
+		pj := p.Job(j.Name)
 		if pj == nil {
 			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, j.Name)
 		}
@@ -372,15 +440,6 @@ func expansionOf(run *store.Run, parent *store.Job, rec *plan.Record) *plan.Expa
 		return x
 	}
 	return parent.Expansion
-}
-
-// planJob returns the job of p named name, or nil.
-func planJob(p *plan.Plan, name string) *plan.Job {
-	i, ok := slices.BinarySearchFunc(p.Jobs, name, func(j plan.Job, name string) int { return strings.Compare(j.Name, name) })
-	if !ok {
-		return nil
-	}
-	return &p.Jobs[i]
 }
 
 // anyNeeded returns the names of the jobs of jobs that another needs any

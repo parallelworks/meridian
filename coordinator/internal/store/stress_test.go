@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/plan"
@@ -253,7 +255,7 @@ func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters 
 // stressSetUp makes a store for the stress tests, with run 1 and the log.
 func stressSetUp(t *testing.T) (string, *Store) {
 	t.Helper()
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	s := openAt(t, path)
 	createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {

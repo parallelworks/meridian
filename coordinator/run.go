@@ -192,6 +192,9 @@ type Coordinator struct {
 	stopTimeout  time.Duration
 	followEvery  time.Duration
 	followHold   time.Duration
+	// placed, if it is set, hears of each job a supervisor places, as it
+	// readied it, before the attempt's driver places it.
+	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
 
 	mu      sync.Mutex
 	serving bool
@@ -252,8 +255,10 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	}
 	// The store asks c, as it stores a failed step's events, whether the
 	// try was the step's last (lastTry), and whether the job's retry: lists
-	// a reason (retriesFor), once c is filled in below; and a reset of the
-	// store's clock wakes the supervisors c knows of, once it is open.
+	// a reason (retriesFor), once c is filled in below; a reset of the
+	// store's clock wakes the supervisors c knows of, once it is open;
+	// and a change to attempts' controls answers the polls c's server of
+	// the worker API holds of them (controlsChanged).
 	c := &Coordinator{}
 	var opened atomic.Pointer[Coordinator]
 	st, err := store.Open(ctx, opts.Database, &store.Options{
@@ -261,6 +266,11 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		OnClockReset: func(ctx context.Context) {
 			if c := opened.Load(); c != nil {
 				c.wakeReadied(ctx)
+			}
+		},
+		OnControlsChanged: func(_ context.Context, ids []string) {
+			if c := opened.Load(); c != nil {
+				c.controlsChanged(ids)
 			}
 		},
 	})
@@ -309,7 +319,7 @@ func (c *Coordinator) retriesFor(tx *store.Tx, attempt string, reason plan.Reaso
 	if err != nil {
 		return false
 	}
-	pj := planJob(p, job.Name)
+	pj := p.Job(job.Name)
 	return pj != nil && pj.RetriesFor(reason)
 }
 
@@ -334,7 +344,7 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 	if err != nil {
 		return false
 	}
-	pj := planJob(p, job.Name)
+	pj := p.Job(job.Name)
 	if pj == nil || step < 0 || step >= len(pj.Steps) {
 		return false
 	}

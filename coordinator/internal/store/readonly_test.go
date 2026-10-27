@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/problems"
@@ -35,7 +37,7 @@ func schemaOf(t *testing.T, path string) int {
 // as it is.
 func TestOpenReadOnly(t *testing.T) {
 	ro := &Options{ReadOnly: true}
-	missing := filepath.Join(privateDir(t), "meridian.db")
+	missing := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	if _, err := Open(t.Context(), missing, ro); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Open read-only of a database that isn't there = %v", err)
 	}
@@ -43,7 +45,7 @@ func TestOpenReadOnly(t *testing.T) {
 		t.Errorf("Open read-only made the database: %v", err)
 	}
 
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	s := openAt(t, path)
 	id := createRun(t, s)
 	r, err := Open(t.Context(), path, ro)

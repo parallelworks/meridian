@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
@@ -62,6 +64,9 @@ func TestRunsConformance(t *testing.T) {
 			if len(jobs) != len(want.Jobs) {
 				t.Errorf("the run has %d jobs, want %d", len(jobs), len(want.Jobs))
 			}
+			if slices.ContainsFunc(jobs, func(j *store.Job) bool { return j.Attempts > 0 }) && r.claims.Load() == 0 {
+				t.Error("no job placed was checked against its claim")
+			}
 			for _, j := range jobs {
 				w, ok := want.Jobs[j.Key]
 				switch {
@@ -101,13 +106,16 @@ func logKeys(logs map[workerapitest.LogKey]workerapitest.Log) []string {
 
 // A workerRig is a coordinator whose jobs' workers are meridian's: it
 // places each attempt with a workerDriver, and serves the worker API to
-// the workers on a Unix socket, storing their logs in logs.
+// the workers on a Unix socket, storing their logs in logs. It checks that
+// the claim of each attempt it places gives the job its supervisor placed,
+// byte for byte, and counts those it checked in claims.
 type workerRig struct {
 	c    *Coordinator
 	d    *workerDriver
 	logs *runlogtest.Logs
 	// runs is where runs' directories are.
-	runs string
+	runs   string
+	claims atomic.Int64
 }
 
 // newWorkerRig returns a workerRig whose runs read vars as they start.
@@ -132,6 +140,12 @@ func newWorkerRig(t *testing.T, vars compile.Variables) *workerRig {
 		t.Fatal(err)
 	}
 	logs := &runlogtest.Logs{}
+	r := &workerRig{c: c, d: d, logs: logs, runs: filepath.Join(dir, "runs")}
+	c.placed = func(run *store.Run, attempt string, job *plan.ReadyJob) {
+		if checkClaimed(t, c, run, attempt, job) {
+			r.claims.Add(1)
+		}
+	}
 	ctx, stop := context.WithCancel(context.WithoutCancel(t.Context()))
 	served := make(chan error, 1)
 	go func() { served <- c.ServeWorkers(ctx, ln, logs) }()
@@ -149,7 +163,42 @@ func newWorkerRig(t *testing.T, vars compile.Variables) *workerRig {
 			t.Error(err)
 		}
 	})
-	return &workerRig{c: c, d: d, logs: logs, runs: filepath.Join(dir, "runs")}
+	return r
+}
+
+// checkClaimed checks that a claim of the attempt of run gives job, which
+// its supervisor placed, byte for byte, as the worker API's server readies
+// it (claimReadier), and reports whether it could.
+func checkClaimed(t *testing.T, c *Coordinator, run *store.Run, attempt string, job *plan.ReadyJob) bool {
+	ctx := context.WithoutCancel(t.Context())
+	var a *store.Attempt
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		a, err = tx.Attempt(attempt)
+		return err
+	}); err != nil {
+		t.Error(err)
+		return false
+	}
+	claimed, err := claimReadier{c}.ReadyAttempt(ctx, run, a)
+	if err != nil {
+		t.Errorf("the claim of attempt %s of run %s's job %s: %v", attempt, run.ID, a.Job, err)
+		return false
+	}
+	placed, err := plan.EncodeReadyJob(job)
+	if err != nil {
+		t.Error(err)
+		return false
+	}
+	got, err := plan.EncodeReadyJob(claimed.Job)
+	if err != nil {
+		t.Error(err)
+		return false
+	}
+	if !bytes.Equal(placed, got) {
+		t.Errorf("run %s's job %s was placed as\n%s\nand its claim gives\n%s", run.ID, a.Job, placed, got)
+	}
+	return true
 }
 
 // create stores a run of workflow, as Create compiles it with inputs and

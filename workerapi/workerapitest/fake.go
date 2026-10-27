@@ -683,14 +683,11 @@ func writeStatus(w http.ResponseWriter, status int) {
 	problem.Write(w, problem.Status(status, ""))
 }
 
+// writeJSON answers 200 with v, as the API encodes a body.
 func writeJSON(w http.ResponseWriter, v any) {
-	data, err := workerapi.Marshal(v)
-	if err != nil {
+	if err := workerapi.WriteBody(w, v); err != nil {
 		writeStatus(w, http.StatusInternalServerError)
-		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
 }
 
 // String writes a log's key as the worker's log does.
