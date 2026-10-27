@@ -75,6 +75,15 @@ const (
 // evaluates it, to see whether its value is the word always; one that
 // reads matrix, asked about without an instance, and one that fails to
 // evaluate, isn't.
+//
+// Where ACTIVATE takes another path, docs/design.md says, under
+// Cancellation, timeouts and cleanup: it finds the if:s it leaves to its
+// executor by their text, where CancelPath reads the expression; it leaves
+// one that reads an input made from env only when evaluating it reaches
+// that input as an operand that is text, where CancelPath counts every
+// reference to it; a password input's default, which the plan doesn't
+// hold, isn't followed to env; and a matrix job not yet expanded meets no
+// case of ACTIVATE's.
 func (p *Plan) CancelPath(job string, run RunValues, instance *Instance) (CancelPath, error) {
 	j, err := p.job(job)
 	if err != nil {

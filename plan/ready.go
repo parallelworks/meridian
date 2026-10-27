@@ -117,9 +117,10 @@ type JobResult struct {
 // was, and Cancelled if one was cancelled, as format 1 reads each instance
 // of a job its dependents need.
 //
-// Which instance's output a job gives is a bug fix to format 1, in which
-// it is the last to finish's: no workflow can rely on which that is, and
-// none of those we know of reads a matrix job's outputs.
+// Which instance's output a job gives, the highest index's, is a bug fix
+// to format 1, which ACTIVATE takes too: format 1 gave the last to
+// finish's, on which no workflow could rely, and none of those we know of
+// reads a matrix job's outputs.
 func Combine(instances []JobResult) JobResult {
 	var out JobResult
 	failed, cancelled, skipped, needsFailed := false, false, true, false
