@@ -26,7 +26,7 @@ func (tx *Tx) SetExpansion(run, key string, x *plan.Expansion) error {
 	if !ok {
 		return ErrNotFound
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET expansion = ? WHERE run_id = ? AND key = ? AND outcome IS NULL AND expansion IS NULL",
+	res, err := tx.exec("UPDATE meridian_jobs SET expansion = ? WHERE run_id = ? AND key = ? AND outcome IS NULL AND expansion IS NULL",
 		body, n, key)
 	if err != nil {
 		return err
@@ -47,7 +47,7 @@ func (tx *Tx) Instances(run, name string) ([]*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT "+jobColumns+" FROM meridian_jobs WHERE run_id = ? AND name = ? AND instance IS NOT NULL ORDER BY instance",
+	rows, err := tx.query("SELECT "+jobColumns+" FROM meridian_jobs WHERE run_id = ? AND name = ? AND instance IS NOT NULL ORDER BY instance",
 		n, name)
 	if err != nil {
 		return nil, err
@@ -64,6 +64,19 @@ func (tx *Tx) Instances(run, name string) ([]*Job, error) {
 	return out, rows.Err()
 }
 
+// InstancesLeft returns how many of the instances of the run's matrix job
+// named name haven't ended, and how many of those haven't had their turn
+// to be placed yet (GrantTurns).
+func (tx *Tx) InstancesLeft(run, name string) (unended, unturned int, err error) {
+	n, err := tx.runNumberOf(run)
+	if err != nil {
+		return 0, 0, err
+	}
+	err = tx.queryRow(`SELECT count(*), coalesce(sum(turn_at IS NULL), 0) FROM meridian_jobs
+WHERE run_id = ? AND name = ? AND instance IS NOT NULL AND outcome IS NULL`, n, name).Scan(&unended, &unturned)
+	return unended, unturned, err
+}
+
 // GrantTurns gives each of the run's jobs keys that hasn't one its turn to
 // be placed, as its matrix's max-parallel: allows, and returns the keys of
 // those it gave one now.
@@ -78,7 +91,7 @@ func (tx *Tx) GrantTurns(run string, keys []string) ([]string, error) {
 	}
 	var granted []string
 	for _, key := range keys {
-		res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET turn_at = ? WHERE run_id = ? AND key = ? AND turn_at IS NULL", now, n, key)
+		res, err := tx.exec("UPDATE meridian_jobs SET turn_at = ? WHERE run_id = ? AND key = ? AND turn_at IS NULL", now, n, key)
 		if err != nil {
 			return nil, err
 		}
@@ -107,14 +120,14 @@ func (tx *Tx) MarkFailFast(run, key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET fail_fast_at = ? WHERE run_id = ? AND key = ? AND fail_fast_at IS NULL", now, n, key)
+	res, err := tx.exec("UPDATE meridian_jobs SET fail_fast_at = ? WHERE run_id = ? AND key = ? AND fail_fast_at IS NULL", now, n, key)
 	if err != nil {
 		return false, err
 	}
 	if marked, err := res.RowsAffected(); err != nil || marked == 0 {
 		return false, err
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, `SELECT a.id FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
+	rows, err := tx.query(`SELECT a.id FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
 WHERE a.run_id = ? AND j.name = ? AND j.instance IS NOT NULL AND a.state <> ? ORDER BY a.id`, n, key, AttemptEnded)
 	if err != nil {
 		return false, err
@@ -185,7 +198,7 @@ func (tx *Tx) InsertAny(run, job string, marker hopper.JobID) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "INSERT INTO meridian_anys (run_id, job_key, marker_id) VALUES (?, ?, ?)", n, job, marker)
+	_, err = tx.exec("INSERT INTO meridian_anys (run_id, job_key, marker_id) VALUES (?, ?, ?)", n, job, marker)
 	return err
 }
 
@@ -202,7 +215,7 @@ func (tx *Tx) Any(run, job string) (*Any, error) {
 		instance sql.NullString
 		ended    []byte
 	)
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT marker_id, chosen_at, instance_key, ended_keys FROM meridian_anys WHERE run_id = ? AND job_key = ?", n, job).
+	err := tx.queryRow("SELECT marker_id, chosen_at, instance_key, ended_keys FROM meridian_anys WHERE run_id = ? AND job_key = ?", n, job).
 		Scan(&a.MarkerID, &chosen, &instance, &ended)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -240,7 +253,7 @@ func (tx *Tx) ChooseAny(run, job, instance string, ended []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_anys SET chosen_at = ?, instance_key = ?, ended_keys = ? WHERE run_id = ? AND job_key = ? AND chosen_at IS NULL",
+	res, err := tx.exec("UPDATE meridian_anys SET chosen_at = ?, instance_key = ?, ended_keys = ? WHERE run_id = ? AND job_key = ? AND chosen_at IS NULL",
 		now, nullString(instance), keys, n, job)
 	if err != nil {
 		return err

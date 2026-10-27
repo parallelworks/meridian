@@ -72,10 +72,10 @@ func (tx *Tx) addEvent(n int64, kind, job, attempt string, step int64) error {
 		return err
 	}
 	var seq int64
-	if err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_runs SET events_seq = events_seq + 1 WHERE id = ? RETURNING events_seq", n).Scan(&seq); err != nil {
+	if err := tx.queryRow("UPDATE meridian_runs SET events_seq = events_seq + 1 WHERE id = ? RETURNING events_seq", n).Scan(&seq); err != nil {
 		return err
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "INSERT INTO meridian_run_events (run_id, seq, kind, job_key, attempt_id, step_seq, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+	if _, err := tx.exec("INSERT INTO meridian_run_events (run_id, seq, kind, job_key, attempt_id, step_seq, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		n, seq, kind, nullString(job), nullString(attempt), sql.NullInt64{Int64: step, Valid: step > 0}, now); err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func (tx *Tx) RunEvents(run string, after int64, limit int) ([]RunEvent, error) 
 	if limit <= 0 {
 		return nil, fmt.Errorf("store: %d of a run's events", limit)
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, `SELECT e.seq, e.kind, e.job_key, e.attempt_id, e.at, s.body
+	rows, err := tx.query(`SELECT e.seq, e.kind, e.job_key, e.attempt_id, e.at, s.body
 FROM meridian_run_events e LEFT JOIN meridian_events s ON s.attempt_id = e.attempt_id AND s.seq = e.step_seq
 WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 	if err != nil {

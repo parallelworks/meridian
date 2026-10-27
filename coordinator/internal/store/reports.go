@@ -61,7 +61,7 @@ func (tx *Tx) RecordPlacement(id string, p Placement) error {
 	case !a.Private && (p.Backend == "" || p.ID == ""):
 		return fmt.Errorf("store: attempt %s placed without its backend or the backend's ID for it", id)
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
+	if _, err := tx.exec("UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
 		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest), id); err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func (tx *Tx) setControl(id string, c workerapi.Control) (int64, error) {
 		return 0, fmt.Errorf("%w: attempt %s has ended", ErrState, id)
 	}
 	var version int64
-	if err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_attempts SET control_version = control_version + 1 WHERE id = ? RETURNING control_version",
+	if err := tx.queryRow("UPDATE meridian_attempts SET control_version = control_version + 1 WHERE id = ? RETURNING control_version",
 		id).Scan(&version); err != nil {
 		return 0, err
 	}
@@ -130,7 +130,7 @@ func (tx *Tx) setControl(id string, c workerapi.Control) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET control = ? WHERE id = ?", body, id)
+	_, err = tx.exec("UPDATE meridian_attempts SET control = ? WHERE id = ?", body, id)
 	return version, err
 }
 
@@ -141,7 +141,7 @@ func (tx *Tx) Control(id string) (workerapi.Control, error) {
 		version int64
 		body    []byte
 	)
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT control_version, control FROM meridian_attempts WHERE id = ?", id).Scan(&version, &body)
+	err := tx.queryRow("SELECT control_version, control FROM meridian_attempts WHERE id = ?", id).Scan(&version, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return workerapi.Control{}, ErrNotFound
 	}
@@ -203,7 +203,7 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 		run int64
 		job string
 	)
-	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT run_id, job_key FROM meridian_attempts WHERE id = ?", id).Scan(&run, &job); err != nil {
+	if err := tx.queryRow("SELECT run_id, job_key FROM meridian_attempts WHERE id = ?", id).Scan(&run, &job); err != nil {
 		return 0, err
 	}
 	var size int64
@@ -212,7 +212,7 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.tx.ExecContext(tx.ctx, "INSERT INTO meridian_events (attempt_id, seq, body, stored_at) VALUES (?, ?, ?, ?)",
+		if _, err := tx.exec("INSERT INTO meridian_events (attempt_id, seq, body, stored_at) VALUES (?, ?, ?, ?)",
 			id, e.Seq, body, now); err != nil {
 			return 0, err
 		}
@@ -225,7 +225,7 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 			return 0, err
 		}
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET events_count = events_count + ?, events_bytes = events_bytes + ? WHERE id = ?",
+	if _, err := tx.exec("UPDATE meridian_attempts SET events_count = events_count + ?, events_bytes = events_bytes + ? WHERE id = ?",
 		len(fresh), size, id); err != nil {
 		return 0, err
 	}
@@ -244,7 +244,7 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 // EventsStored returns how many events the attempt has, and how many bytes
 // they take, as AppendEvents counts them as it stores them.
 func (tx *Tx) EventsStored(id string) (count, size int64, err error) {
-	err = tx.tx.QueryRowContext(tx.ctx, "SELECT events_count, events_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&count, &size)
+	err = tx.queryRow("SELECT events_count, events_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&count, &size)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, ErrNotFound
 	}
@@ -255,7 +255,7 @@ func (tx *Tx) EventsStored(id string) (count, size int64, err error) {
 // counted them.
 func (tx *Tx) LogBytes(id string) (int64, error) {
 	var n int64
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT log_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&n)
+	err := tx.queryRow("SELECT log_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&n)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -269,7 +269,7 @@ func (tx *Tx) AddLogBytes(id string, n int64) (int64, error) {
 		return 0, fmt.Errorf("store: %d bytes of logs", n)
 	}
 	var all int64
-	err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_attempts SET log_bytes = log_bytes + ? WHERE id = ? RETURNING log_bytes", n, id).Scan(&all)
+	err := tx.queryRow("UPDATE meridian_attempts SET log_bytes = log_bytes + ? WHERE id = ? RETURNING log_bytes", n, id).Scan(&all)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -315,13 +315,13 @@ func (tx *Tx) ControlVersions(ids []string) (map[string]int64, error) {
 // before its first.
 func (tx *Tx) LastEvent(id string) (int64, error) {
 	var last int64
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT coalesce(max(seq), 0) FROM meridian_events WHERE attempt_id = ?", id).Scan(&last)
+	err := tx.queryRow("SELECT coalesce(max(seq), 0) FROM meridian_events WHERE attempt_id = ?", id).Scan(&last)
 	return last, err
 }
 
 // Events returns the attempt's events, in order.
 func (tx *Tx) Events(id string) ([]workerapi.Event, error) {
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT body FROM meridian_events WHERE attempt_id = ? ORDER BY seq", id)
+	rows, err := tx.query("SELECT body FROM meridian_events WHERE attempt_id = ? ORDER BY seq", id)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +350,7 @@ func (tx *Tx) StartedBefore(a *Attempt) (int, error) {
 		return 0, ErrNotFound
 	}
 	var started int
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT count(*) FROM meridian_attempts WHERE run_id = ? AND job_key = ? AND number < ? AND step_started_at IS NOT NULL",
+	err := tx.queryRow("SELECT count(*) FROM meridian_attempts WHERE run_id = ? AND job_key = ? AND number < ? AND step_started_at IS NOT NULL",
 		n, a.Job, a.Number).Scan(&started)
 	return started, err
 }

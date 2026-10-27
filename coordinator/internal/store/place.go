@@ -56,7 +56,7 @@ func (tx *Tx) ChoosePlace(id string, p Place) error {
 	case a.State != AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, private_placement = ?, placement_gen = ?
+	res, err := tx.exec(`UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, private_placement = ?, placement_gen = ?
 WHERE id = ? AND grp IS NULL AND private_placement IS NULL`,
 		nullString(p.Group), nullString(p.Member), nullString(p.Backend), p.Private, p.Generation, id)
 	if err != nil {
@@ -66,7 +66,7 @@ WHERE id = ? AND grp IS NULL AND private_placement IS NULL`,
 		return err
 	}
 	n, _ := runNumber(a.Run)
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET place_tries = 0 WHERE run_id = ? AND key = ?", n, a.Job); err != nil {
+	if _, err := tx.exec("UPDATE meridian_jobs SET place_tries = 0 WHERE run_id = ? AND key = ?", n, a.Job); err != nil {
 		return err
 	}
 	return tx.addEvent(n, EventJobPlacing, a.Job, id, 0)
@@ -79,7 +79,7 @@ func (tx *Tx) ChosenPlace(id string) (Place, bool, error) {
 		p                      Place
 		group, member, backend sql.NullString
 	)
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT grp, member, backend, private_placement, placement_gen FROM meridian_attempts WHERE id = ?", id).
+	err := tx.queryRow("SELECT grp, member, backend, private_placement, placement_gen FROM meridian_attempts WHERE id = ?", id).
 		Scan(&group, &member, &backend, &p.Private, &p.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Place{}, false, ErrNotFound
@@ -122,7 +122,7 @@ func (tx *Tx) ResealPlace(id string, generation uint64, sealed []byte) error {
 	}
 	// Only from the generation before, so that a write that raced this one
 	// fails, where the database runs transactions side by side.
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET private_placement = ?, placement_gen = ? WHERE id = ? AND placement_gen = ?",
+	res, err := tx.exec("UPDATE meridian_attempts SET private_placement = ?, placement_gen = ? WHERE id = ? AND placement_gen = ?",
 		sealed, generation, id, generation-1)
 	if err != nil {
 		return err
@@ -148,7 +148,7 @@ func (tx *Tx) SetupFailures(run, key string) ([]*Attempt, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT id FROM meridian_attempts WHERE run_id = ? AND job_key = ? AND reason = ? ORDER BY number",
+	rows, err := tx.query("SELECT id FROM meridian_attempts WHERE run_id = ? AND job_key = ? AND reason = ? ORDER BY number",
 		n, key, plan.ReasonSetupFailed)
 	if err != nil {
 		return nil, err
@@ -237,7 +237,7 @@ func (tx *Tx) PlaceFailed(newAttempt NewAttempt, fence int64, p *problem.Problem
 		return nil, err
 	}
 	n, _ := runNumber(run)
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET place_tries = 0 WHERE run_id = ? AND key = ?", n, key); err != nil {
+	if _, err := tx.exec("UPDATE meridian_jobs SET place_tries = 0 WHERE run_id = ? AND key = ?", n, key); err != nil {
 		return nil, err
 	}
 	return tx.Attempt(a.ID)

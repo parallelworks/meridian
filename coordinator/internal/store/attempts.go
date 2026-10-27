@@ -174,7 +174,7 @@ func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	superseded, err := tx.tx.QueryContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, end_kind = ?, ended_at = ? WHERE run_id = ? AND job_key = ? AND state <> ? RETURNING id",
+	superseded, err := tx.query("UPDATE meridian_attempts SET state = ?, end_kind = ?, ended_at = ? WHERE run_id = ? AND job_key = ? AND state <> ? RETURNING id",
 		AttemptEnded, EndSuperseded, now, run, n.Job, AttemptEnded)
 	if err != nil {
 		return nil, "", err
@@ -200,12 +200,12 @@ func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
 		}
 	}
 	var fence, number int64
-	if err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_jobs SET fence = fence + 1, attempts = attempts + 1 WHERE run_id = ? AND key = ? RETURNING fence, attempts",
+	if err := tx.queryRow("UPDATE meridian_jobs SET fence = fence + 1, attempts = attempts + 1 WHERE run_id = ? AND key = ? RETURNING fence, attempts",
 		run, n.Job).Scan(&fence, &number); err != nil {
 		return nil, "", err
 	}
 	id, token := newID(16), newID(32)
-	if _, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_attempts (id, run_id, job_key, number, fence, state, token_hash,
+	if _, err := tx.exec(`INSERT INTO meridian_attempts (id, run_id, job_key, number, fence, state, token_hash,
   self_fencing, lease_seconds, heartbeat_seconds, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, run, n.Job, number, fence, AttemptPlacing, digest(token), n.SelfFencing, n.LeaseSeconds, n.HeartbeatSeconds, now); err != nil {
 		return nil, "", err
@@ -236,7 +236,7 @@ func (tx *Tx) NewToken(id string) (string, error) {
 		return "", fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
 	}
 	token := newID(32)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET token_hash = ? WHERE id = ?", digest(token), id)
+	_, err = tx.exec("UPDATE meridian_attempts SET token_hash = ? WHERE id = ?", digest(token), id)
 	return token, err
 }
 
@@ -259,7 +259,7 @@ func (tx *Tx) attemptWhere(where string, args ...any) (*Attempt, error) {
 		claimed, renewed, started, ended        sql.NullInt64
 		prob                                    []byte
 	)
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+attemptColumns+`
+	err := tx.queryRow("SELECT "+attemptColumns+`
 FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
 WHERE `+where, args...).Scan(
 		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
@@ -342,13 +342,13 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
 		return nil, ErrNotPlaced
 	}
 	var taken bool
-	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE credential_hash = ?)", cred).Scan(&taken); err != nil {
+	if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE credential_hash = ?)", cred).Scan(&taken); err != nil {
 		return nil, err
 	}
 	if taken {
 		return nil, ErrCredential
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET state = ?, credential_hash = ?, worker_version = ?, worker_digest = ?,
+	if _, err := tx.exec(`UPDATE meridian_attempts SET state = ?, credential_hash = ?, worker_version = ?, worker_digest = ?,
   claimed_at = ?, renewed_at = ? WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, now, now, a.ID); err != nil {
 		return nil, err
 	}
@@ -404,7 +404,7 @@ func (tx *Tx) Renew(credential string) (*Attempt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET renewed_at = ? WHERE id = ?", now, a.ID); err != nil {
+	if _, err := tx.exec("UPDATE meridian_attempts SET renewed_at = ? WHERE id = ?", now, a.ID); err != nil {
 		return nil, err
 	}
 	a.RenewedAt = time.UnixMicro(now).UTC()
@@ -432,11 +432,11 @@ func (tx *Tx) StepStarted(id string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, step_started_at = ? WHERE id = ?", AttemptRunning, now, id); err != nil {
+	if _, err := tx.exec("UPDATE meridian_attempts SET state = ?, step_started_at = ? WHERE id = ?", AttemptRunning, now, id); err != nil {
 		return err
 	}
 	n, _ := runNumber(a.Run)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET attempts_started = attempts_started + 1 WHERE run_id = ? AND key = ?", n, a.Job)
+	_, err = tx.exec("UPDATE meridian_jobs SET attempts_started = attempts_started + 1 WHERE run_id = ? AND key = ?", n, a.Job)
 	return err
 }
 
@@ -490,7 +490,7 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, `UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, complete_digest = ?,
+	_, err = tx.exec(`UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, complete_digest = ?,
   report = ?, problem = ?, ended_at = ? WHERE id = ?`,
 		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)), end.CompleteDigest,
 		end.Report, prob, now, id)

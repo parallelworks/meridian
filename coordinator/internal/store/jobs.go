@@ -98,7 +98,7 @@ func (tx *Tx) InsertJob(j NewJob) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "INSERT INTO meridian_jobs (run_id, key, name, instance, supervisor_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+	_, err = tx.exec("INSERT INTO meridian_jobs (run_id, key, name, instance, supervisor_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 		n, j.Key, j.Name, sql.NullInt64{Int64: int64(instance), Valid: instance >= 0}, j.SupervisorID, now)
 	return err
 }
@@ -131,7 +131,7 @@ func (tx *Tx) Job(run, key string) (*Job, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	j, err := scanJob(tx.tx.QueryRowContext(tx.ctx, "SELECT "+jobColumns+" FROM meridian_jobs WHERE run_id = ? AND key = ?", n, key))
+	j, err := scanJob(tx.queryRow("SELECT "+jobColumns+" FROM meridian_jobs WHERE run_id = ? AND key = ?", n, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -145,7 +145,7 @@ func (tx *Tx) Jobs(run string) ([]*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT "+jobColumns+" FROM meridian_jobs WHERE run_id = ? ORDER BY key", n)
+	rows, err := tx.query("SELECT "+jobColumns+" FROM meridian_jobs WHERE run_id = ? ORDER BY key", n)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (tx *Tx) EndJob(run, key string, end JobEnd) error {
 		return err
 	}
 	n, _ := runNumber(run)
-	if _, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET outcome = ?, reason = ?, result = ?, diagnostics = ?, ended_at = ? WHERE run_id = ? AND key = ?",
+	if _, err = tx.exec("UPDATE meridian_jobs SET outcome = ?, reason = ?, result = ?, diagnostics = ?, ended_at = ? WHERE run_id = ? AND key = ?",
 		end.Result.Outcome, nullString(string(end.Reason)), result, diags, now, n, key); err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func (tx *Tx) PinReady(run, key string, stopped bool, anyChoices map[string]stri
 		return nil, err
 	}
 	n, _ := runNumber(run)
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET ready_at = ?, readied_stopped = ?, any_choices = ? WHERE run_id = ? AND key = ?",
+	if _, err := tx.exec("UPDATE meridian_jobs SET ready_at = ?, readied_stopped = ?, any_choices = ? WHERE run_id = ? AND key = ?",
 		now, stopped, choices, n, key); err != nil {
 		return nil, err
 	}
@@ -309,7 +309,7 @@ func (tx *Tx) PinReady(run, key string, stopped bool, anyChoices map[string]stri
 // of the runs that are running, in order: those whose supervisors wait on
 // hopper's schedule, as for a live attempt.
 func (tx *Tx) ReadiedJobs() ([]*Job, error) {
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT "+jobColumns+` FROM meridian_jobs
+	rows, err := tx.query("SELECT "+jobColumns+` FROM meridian_jobs
 WHERE outcome IS NULL AND ready_at IS NOT NULL AND run_id IN (SELECT id FROM meridian_runs WHERE state = ?) ORDER BY run_id, key`, RunRunning)
 	if err != nil {
 		return nil, err
@@ -336,7 +336,7 @@ func (tx *Tx) Wake(run, key string) (*Job, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET wake = wake + 1 WHERE run_id = ? AND key = ?", n, key)
+	res, err := tx.exec("UPDATE meridian_jobs SET wake = wake + 1 WHERE run_id = ? AND key = ?", n, key)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +357,7 @@ func (tx *Tx) PlaceTried(run, key string) (int, error) {
 		return 0, ErrNotFound
 	}
 	var tries int
-	err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_jobs SET place_tries = place_tries + 1 WHERE run_id = ? AND key = ? AND outcome IS NULL RETURNING place_tries",
+	err := tx.queryRow("UPDATE meridian_jobs SET place_tries = place_tries + 1 WHERE run_id = ? AND key = ? AND outcome IS NULL RETURNING place_tries",
 		n, key).Scan(&tries)
 	if errors.Is(err, sql.ErrNoRows) {
 		if _, err := tx.Job(run, key); err != nil {
@@ -372,7 +372,7 @@ func (tx *Tx) PlaceTried(run, key string) (int, error) {
 func (tx *Tx) liveAttempt(j *Job) (bool, error) {
 	n, _ := runNumber(j.Run)
 	var live bool
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE run_id = ? AND job_key = ? AND state <> ?)",
+	err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE run_id = ? AND job_key = ? AND state <> ?)",
 		n, j.Key, AttemptEnded).Scan(&live)
 	return live, err
 }

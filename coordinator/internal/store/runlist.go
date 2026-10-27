@@ -59,7 +59,7 @@ func (tx *Tx) RunSummary(id string) (*RunSummary, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	r, err := scanSummary(tx.tx.QueryRowContext(tx.ctx, "SELECT "+summaryColumns+" FROM meridian_runs WHERE id = ?", n))
+	r, err := scanSummary(tx.queryRow("SELECT "+summaryColumns+" FROM meridian_runs WHERE id = ?", n))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -74,7 +74,7 @@ func (tx *Tx) RecentRuns(limit int) ([]RunSummary, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("store: %d runs", limit)
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT "+summaryColumns+" FROM meridian_runs ORDER BY id DESC LIMIT ?", limit)
+	rows, err := tx.query("SELECT "+summaryColumns+" FROM meridian_runs ORDER BY id DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
