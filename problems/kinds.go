@@ -126,6 +126,13 @@ var (
 	// value is the input's value, as Show writes it, and groups the groups
 	// there are, as QuoteAll writes them.
 	ExecutionGroupUnknown = define(Error, "execution_group_unknown", "No such execution group", "input", "value", "groups")
+	// ClusterUnknown is what the meridian command's Inputs gives for a
+	// compute-clusters input whose value names neither the workspace nor
+	// one of the user's clusters, and ClustersNone when the user has none:
+	// value is the name, as Show writes it, and clusters the clusters there
+	// are, as QuoteAll writes them.
+	ClusterUnknown = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
+	ClustersNone   = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
 )
 
 // The workflows a step's uses: names, as a Sources resolver reports them.
@@ -494,12 +501,12 @@ var (
 	FileOverLimit  = defineCommand("file_over_limit", "File larger than Meridian reads", "path", "limit")
 )
 
-// The meridian command's config, groups.yaml, variables.yaml and
-// sources.yaml, whose problems say where they are with ParamFile and
+// The meridian command's config, groups.yaml, variables.yaml, sources.yaml
+// and clusters.yaml, whose problems say where they are with ParamFile and
 // ParamLine. want is mapping, list, number, boolean or text; keys are the
 // keys allowed, as QuoteAll writes them; variable is a variable's name as
-// the plan writes it, as org.region; and server a GitLab server's host
-// name and port.
+// the plan writes it, as org.region; server a GitLab server's host name
+// and port; and cluster a cluster's name.
 var (
 	ConfigYAMLSyntax       = defineCommand("config_yaml_syntax", "Config file isn't valid YAML", "reason")
 	ConfigExtraDocument    = defineCommand("config_extra_document", "Config file with more than one YAML document")
@@ -521,6 +528,8 @@ var (
 	VariableEnvUnset       = defineCommand("variable_env_unset", "Variable's environment variable isn't set", "variable", "env")
 	VariableFileUnreadable = defineCommand("variable_file_unreadable", "Variable's file can't be read", "variable", "file", "reason")
 	VariableFileHome       = defineCommand("variable_file_home", "Variable's file in an unknown home directory", "variable", "file")
+	ClusterNameInvalid     = defineCommand("cluster_name_invalid", "Invalid cluster name", "cluster")
+	ClusterInvalid         = defineCommand("cluster_invalid", "Invalid cluster", "cluster", "key", "value")
 )
 
 // The key that wraps runs' data keys, and git, which reads the workflows

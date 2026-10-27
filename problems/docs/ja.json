@@ -1353,6 +1353,22 @@
       "または、Meridian の設定ディレクトリにある groups.yaml でそのグループを定義してください。"
     ]
   },
+  "cluster_unknown": {
+    "title": "不明なクラスター",
+    "why": "compute-clusters 入力の値はクラスターを指定し、実行はそのクラスターの詳細（ip や schedulerType など）を参照します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかです。入力の include-workspace、provider、csp はフォームが一覧に出すものを選ぶだけで、ここでは関係しません。",
+    "fix": [
+      "メッセージに挙げられたクラスターのいずれか、または workspace を選んでください。",
+      "または、Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。"
+    ]
+  },
+  "clusters_none": {
+    "title": "選べるクラスターがない",
+    "why": "compute-clusters 入力の値はクラスターを指定します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかですが、clusters.yaml がないか、クラスターを定義していません。",
+    "fix": [
+      "Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。",
+      "または、入力のクラスターを提供するプラットフォームでワークフローを実行してください。"
+    ]
+  },
   "source_ref_invalid": {
     "title": "Git のワークフローへの参照ではない",
     "why": "Meridian は、ステップの uses: が指定するワークフローを、ACTIVATE と同じように Git リポジトリから読み込みます。参照は github/ とリポジトリのオーナーと名前、または gitlab/ とグループ名を含むプロジェクトのパスに、@ とブランチ・タグ・コミット（指定がなければデフォルトブランチ）が続くものです。リポジトリ内のワークフローのファイルはステップの with: $yaml（指定がなければ workflow.yaml）で、with: $host は GitLab サーバーを指定し、gitlab/ でのみ使えます。パス中の .. や - で始まるリビジョンなど、別のものとして読まれうる部分や、.git や .lock で終わるグループ名は使えません。",
@@ -1642,6 +1658,21 @@
     "why": "~/ で始まるファイルのパスはホームディレクトリ内にあり、Meridian は HOME でホームディレクトリを見つけます。",
     "fix": [
       "HOME をホームディレクトリに設定するか、ファイルのパスを省略せずに書いてください。"
+    ]
+  },
+  "cluster_name_invalid": {
+    "title": "無効なクラスター名",
+    "why": "クラスターの名前は、compute-clusters 入力の値が指定するものです。workspace と user-workspace は、フォーマット 1 が workspace を指す名前と同じく、このマシンを指します。",
+    "fix": [
+      "クラスターの名前を変えてください。"
+    ]
+  },
+  "cluster_invalid": {
+    "title": "無効なクラスター",
+    "why": "クラスターには host が必要です。ssh が解決するエイリアス（ssh_config のものなど）か、ホスト名またはアドレスで、ポートは付けません。フォーマット 1 は既存のクラスターの ip をこの形で与え、ワークフローはそれをそのまま ssh や scp に渡します。scheduler を書く場合は slurm か pbs です。いずれも - で始めたり空白を含めたりできません。",
+    "fix": [
+      "キーに合わせて値を修正してください。",
+      "ポート、ログインするユーザー、踏み台ホスト、IPv6 アドレスなど、それ以上が必要なホストには、ssh_config で定義したエイリアスを指定してください。"
     ]
   },
   "key_file_invalid": {

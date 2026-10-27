@@ -1162,6 +1162,20 @@
       "Or define the group in groups.yaml in Meridian's config directory."
     ]
   },
+  "cluster_unknown": {
+    "why": "A compute-clusters input's value names a cluster, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, whatever the input's include-workspace, provider and csp say, which only choose what a form lists.",
+    "fix": [
+      "Choose one of the clusters the message lists, or the workspace.",
+      "Or define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it."
+    ]
+  },
+  "clusters_none": {
+    "why": "A compute-clusters input's value names a cluster. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, and there is no clusters.yaml, or it defines no cluster.",
+    "fix": [
+      "Define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
+      "Or run the workflow on a platform that provides the input's clusters."
+    ]
+  },
   "source_ref_invalid": {
     "why": "Meridian reads a workflow that a step's uses: names from a Git repository, as ACTIVATE does: github/ and the repository's owner and name, or gitlab/ and a project's path, its groups' names among it, and then @ and a branch, tag or commit, the default branch unless it names one. The workflow's file in the repository is the step's with: $yaml, workflow.yaml unless it names another, and with: $host names a GitLab server, only for gitlab/. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed, nor is a group's name that ends in .git or .lock.",
     "fix": [
@@ -1411,6 +1425,19 @@
     "why": "A file's path that starts with ~/ is in your home directory, which Meridian finds with HOME.",
     "fix": [
       "Set HOME to your home directory, or write the file's path in full."
+    ]
+  },
+  "cluster_name_invalid": {
+    "why": "A cluster's name is what a compute-clusters input's value names. workspace and user-workspace name this machine, as format 1 names the workspace.",
+    "fix": [
+      "Rename the cluster."
+    ]
+  },
+  "cluster_invalid": {
+    "why": "A cluster needs its host: an alias that ssh resolves, as one in ssh_config, or a host name or an address, without a port, as format 1 gives an existing cluster's ip, which workflows pass to ssh and scp as it is. Its scheduler, if it gives one, is slurm or pbs. Neither can start with - or hold a space.",
+    "fix": [
+      "Correct the value as its key needs.",
+      "For a host that needs more, such as a port, a user to log in as, a jump host or an IPv6 address, name an alias that your ssh_config defines."
     ]
   },
   "key_file_invalid": {

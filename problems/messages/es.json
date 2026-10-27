@@ -194,6 +194,8 @@
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",
+  "cluster_unknown": "La entrada “{input}” nombra el clúster {value}, que no es el workspace ni uno de los clústeres: {clusters}.",
+  "clusters_none": "La entrada “{input}” nombra el clúster {value}, que no es el workspace, y aquí no hay otros clústeres.",
   "source_ref_invalid": "El uses: “{ref}” no es una referencia a un flujo de trabajo en un repositorio Git, como github/propietario/repositorio@revisión.",
   "source_on_platform": "El uses: “{ref}” nombra un flujo de trabajo que guarda una plataforma, y solo esa plataforma puede leerlo.",
   "source_revision_not_found": "Git no encontró la revisión “{revision}” del repositorio {repo}: {reason}. Una confirmación se nombra por su SHA completo.",
@@ -234,6 +236,8 @@
   "variable_env_unset": "La variable {variable} toma su valor de la variable de entorno {env}, que no está definida.",
   "variable_file_unreadable": "La variable {variable} toma su valor del archivo {file}, que no se puede leer: {reason}.",
   "variable_file_home": "La variable {variable} toma su valor de {file}, y HOME no tiene una ruta absoluta para su ~/.",
+  "cluster_name_invalid": "El nombre de clúster “{cluster}” no es válido: un nombre tiene letras, dígitos, _, - y ., empieza por una letra o un dígito, y no es workspace ni user-workspace.",
+  "cluster_invalid": "El clúster “{cluster}” tiene {key}: {value}, que no es válido.",
   "key_file_invalid": "El archivo de clave {path} tiene {size} bytes, no los 32 de una clave.",
   "key_file_missing": "El archivo de clave {path} no está, así que las claves de datos que envolvió no se pueden desenvolver.",
   "key_unwrap_failed": "La clave de datos de la ejecución {run} no se puede desenvolver con el archivo de clave {path}: se envolvió con otra clave o para otra ejecución, o ha cambiado.",

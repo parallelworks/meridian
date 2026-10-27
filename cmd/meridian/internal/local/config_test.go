@@ -205,6 +205,9 @@ func TestConfigFilesOthersCanChange(t *testing.T) {
 		{VariablesFile, 0o604, problems.FileNotPrivate},
 		{SourcesFile, 0o644, nil},
 		{SourcesFile, 0o664, problems.FileChangeable},
+		{ClustersFile, 0o644, nil},
+		{ClustersFile, 0o664, problems.FileChangeable},
+		{ClustersFile, 0o646, problems.FileChangeable},
 	} {
 		dir := configDir(t, map[string]string{tc.file: "{}\n"})
 		path := filepath.Join(dir, tc.file)
@@ -240,7 +243,7 @@ func TestConfigDirOthersCanChange(t *testing.T) {
 // symbolic link at its path, while the config directory can be a link.
 func TestConfigFileLink(t *testing.T) {
 	var target string
-	for _, name := range []string{GroupsFile, SourcesFile} {
+	for _, name := range []string{GroupsFile, SourcesFile, ClustersFile} {
 		target = configDir(t, map[string]string{name: "{}\n"})
 		dir := t.TempDir()
 		if err := os.Symlink(filepath.Join(target, name), filepath.Join(dir, name)); err != nil {
