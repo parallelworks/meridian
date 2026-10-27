@@ -361,17 +361,14 @@ func slept(wall, mono, jump time.Duration) bool {
 // looks again now. One that is running as it is woken looks before it
 // waits, by the right clock.
 func (c *Coordinator) wakeReadied(ctx context.Context) {
-	var jobs []*store.Job
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		jobs, err = tx.ReadiedJobs()
+	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		jobs, err := tx.ReadiedJobs()
+		for _, j := range jobs {
+			c.retryTx(ctx, tx, &waking{id: j.SupervisorID, run: j.Run, key: j.Key})
+		}
 		return err
 	}); err != nil {
-		c.log.WarnContext(ctx, "coordinator: the store's clock was reset, but the supervisors to wake couldn't be read", "error", err)
-		return
-	}
-	for _, j := range jobs {
-		c.wake(ctx, j.SupervisorID, j.Run, j.Key, 1, unended(j.Run, j.Key))
+		c.log.WarnContext(ctx, "coordinator: the store's clock was reset, but its readied supervisors couldn't be woken", "error", err)
 	}
 }
 

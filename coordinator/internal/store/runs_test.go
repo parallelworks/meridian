@@ -20,6 +20,110 @@ func testState() *compile.StartState {
 	}
 }
 
+// TestStartStateKept checks that the start state Run reads is decoded once
+// a run, and kept, while the bytes the run holds are the ones it was
+// decoded from: a Start whose transaction rolled back, and the next whose
+// start state differs, has the next decoded.
+func TestStartStateKept(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	read := func() *compile.StartState {
+		t.Helper()
+		var r *Run
+		if err := s.View(t.Context(), func(tx *Tx) error {
+			var err error
+			r, err = tx.Run(id)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return r.StartState
+	}
+	rolledBack := errors.New("rolled back")
+	if err := s.Tx(t.Context(), func(tx *Tx) error {
+		if err := tx.StartRun(id, testState(), nil); err != nil {
+			return err
+		}
+		if r, err := tx.Run(id); err != nil || r.StartState.TimeoutSeconds != 60 {
+			t.Errorf("the run started in the transaction is %+v, %v", r, err)
+		}
+		return rolledBack
+	}); !errors.Is(err, rolledBack) {
+		t.Fatal(err)
+	}
+	if st := read(); st != nil {
+		t.Fatalf("a Start that rolled back left the start state %+v", st)
+	}
+	started := testState()
+	started.TimeoutSeconds = 90
+	inTx(t, s, func(tx *Tx) error { return tx.StartRun(id, started, nil) })
+	first := read()
+	if first == nil || first.TimeoutSeconds != 90 {
+		t.Fatalf("the start state is %+v", first)
+	}
+	if again := read(); again != first {
+		t.Error("the start state was decoded again")
+	}
+}
+
+// TestStartsForgotten checks that the store keeps maxStarts runs' start
+// states at most, forgetting the one it decoded first to keep another.
+func TestStartsForgotten(t *testing.T) {
+	raw, err := compile.EncodeStartState(testState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c startCache
+	first, err := c.decode(1, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := range int64(maxStarts - 1) {
+		if _, err := c.decode(n+2, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if again, _ := c.decode(1, raw); again != first {
+		t.Fatal("a start state was forgotten before the store kept maxStarts")
+	}
+	if _, err := c.decode(maxStarts+1, raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.decoded) != maxStarts || len(c.order) != maxStarts {
+		t.Errorf("the store keeps %d start states, in an order of %d", len(c.decoded), len(c.order))
+	}
+	if again, _ := c.decode(1, raw); again == first {
+		t.Error("the start state decoded first wasn't forgotten")
+	}
+}
+
+// TestStatementsKept checks that a statement the store runs is prepared
+// once, and kept for the transactions after, read-only or not.
+func TestStatementsKept(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	kept := func() int {
+		s.stmtsMu.Lock()
+		defer s.stmtsMu.Unlock()
+		return len(s.stmts)
+	}
+	readRun := func(tx *Tx) error { _, err := tx.Run(id); return err }
+	if err := s.View(t.Context(), readRun); err != nil {
+		t.Fatal(err)
+	}
+	n := kept()
+	if n == 0 {
+		t.Fatal("no statement was kept")
+	}
+	if err := s.View(t.Context(), readRun); err != nil {
+		t.Fatal(err)
+	}
+	inTx(t, s, readRun)
+	if kept() != n {
+		t.Errorf("reading the run again kept %d statements, then %d", n, kept())
+	}
+}
+
 func TestRun(t *testing.T) {
 	s := open(t)
 	p := testPlan(t)

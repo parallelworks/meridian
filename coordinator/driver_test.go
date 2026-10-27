@@ -259,6 +259,7 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	private, state := report.Result.Split()
 	outcome := report.Result.Outcome
 	report.Result = state
+	var after func()
 	err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
 		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
 		if err != nil {
@@ -290,10 +291,15 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 				return err
 			}
 		}
-		return nil
+		// As the worker API wakes the supervisor, in the transaction
+		// that stores the attempt's end.
+		after, err = d.c.wakeWorkerJob(ctx, tx, claimed.Run, claimed.Job)
+		return err
 	})
 	if err != nil {
 		return
 	}
-	d.c.wakeJob(ctx, a.Run, a.Job)
+	if after != nil {
+		after()
+	}
 }

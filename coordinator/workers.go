@@ -26,7 +26,7 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: logs, Sealer: c.sealer,
 		Readier: claimReadier{c},
-		Wake:    c.wakeJob,
+		Wake:    c.wakeWorkerJob,
 		Log:     c.log,
 	})
 	if err != nil {
@@ -43,6 +43,18 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 		c.mu.Unlock()
 	}()
 	return srv.Serve(ctx, l)
+}
+
+// wakeWorkerJob wakes, in tx, the supervisor of the run's job, once the
+// worker API stores a change to its attempt that the supervisor acts on
+// (workerapisrv.Options.Wake), in the transaction that stores it, and
+// returns what wakes it again once that commits, if hopper runs it.
+func (c *Coordinator) wakeWorkerJob(ctx context.Context, tx *store.Tx, run, job string) (func(), error) {
+	w, err := c.wakeJobTx(ctx, tx, run, job)
+	if w == nil || err != nil {
+		return nil, err
+	}
+	return func() { c.wakeAgain(context.WithoutCancel(ctx), w) }, nil
 }
 
 // claimReadier is the coordinator's workerapisrv.Readier: it readies the

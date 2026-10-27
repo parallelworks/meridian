@@ -112,9 +112,10 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	}
 	var (
 		stopped bool
-		readied []string
+		woken   []*waking
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
+		woken = woken[:0]
 		var err error
 		if stopped, err = tx.StopRun(run.ID, reason); err != nil || !stopped {
 			return err
@@ -136,11 +137,17 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 		if err != nil {
 			return err
 		}
+		// A supervisor waiting for the jobs its job needs isn't woken: it
+		// readies its job once they have finished, as stopped. One of an
+		// instance waiting for its turn under max-parallel: is, and ends
+		// it at once (instanceStep).
 		for _, j := range jobs {
-			// An instance waiting for its turn under max-parallel: ends
-			// at once (instanceStep).
 			if j.Outcome == "" && (!j.ReadyAt.IsZero() || j.Instance >= 0) {
-				readied = append(readied, j.Key)
+				w, err := c.wakeJobTx(ctx, tx, run.ID, j.Key)
+				if err != nil {
+					return err
+				}
+				woken = append(woken, w)
 			}
 		}
 		return nil
@@ -152,12 +159,7 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 		return err
 	}
 	c.log.InfoContext(ctx, "coordinator: a run was stopped", "run", run.ID, "reason", reason)
-	// A supervisor waiting for the jobs its job needs isn't woken: it
-	// readies its job once they have finished, as stopped. One of an
-	// instance waiting for its turn is.
-	for _, key := range readied {
-		c.wakeJob(ctx, run.ID, key)
-	}
+	c.wakeAgain(ctx, woken...)
 	// The stop is stored: a job that can't be ended now, its supervisor
 	// ends once its needs have, as stopped.
 	run.StoppedAt, run.StopReason = time.Now(), reason

@@ -1,10 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/parallelworks/hopper"
@@ -98,7 +100,7 @@ type NewRun struct {
 // transaction commits, and a transaction rolled back gives it back.
 func (tx *Tx) NewRunID() (string, error) {
 	var last string
-	err := tx.tx.QueryRowContext(tx.ctx, `UPDATE meridian_store SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+	err := tx.queryRow(`UPDATE meridian_store SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
 WHERE key = 'last_run' RETURNING value`).Scan(&last)
 	if err != nil {
 		return "", err
@@ -139,7 +141,7 @@ func (tx *Tx) InsertRun(r NewRun) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_runs (id, created_at, plan_version, plan_digest, plan,
+	res, err := tx.exec(`INSERT INTO meridian_runs (id, created_at, plan_version, plan_digest, plan,
   name, location, release, default_group, run_dir, workflow_id, state)
 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_run')`,
@@ -174,7 +176,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		startState      []byte
 		diags           []byte
 	)
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+runColumns+" FROM meridian_runs WHERE id = ?", n).Scan(
+	err := tx.queryRow("SELECT "+runColumns+" FROM meridian_runs WHERE id = ?", n).Scan(
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
 		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
 		&startState, &r.StartTries, &diags, &jobFailed, &stopped, &stopReason)
@@ -189,7 +191,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	r.StartedAt, r.EndedAt, r.AnyJobFailedAt = timeOf(started), timeOf(ended), timeOf(jobFailed)
 	r.StoppedAt, r.StopReason = timeOf(stopped), plan.Reason(stopReason.String)
 	if startState != nil {
-		if r.StartState, err = compile.DecodeStartState(startState); err != nil {
+		if r.StartState, err = tx.s.starts.decode(number, startState); err != nil {
 			// One of a newer version is a newer release's to read, and is
 			// plan.ErrVersion, not malformed.
 			if errors.Is(err, plan.ErrVersion) {
@@ -202,6 +204,63 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		return nil, fmt.Errorf("%w: run %s's diagnostics: %w", ErrMalformed, id, err)
 	}
 	return &r, nil
+}
+
+// A startCache keeps the start states Tx.Run decoded, by run, each with
+// the bytes it was decoded from. A run's start state is written once, as
+// the run starts, and holds every matrix instance of the run: decoded on
+// every read of the run, as each supervisor's look and each request of the
+// worker API reads it, it would cost each of them as much as the run is
+// large. A kept start state is shared by whoever reads the run, which
+// mustn't change it, as a plan from the coordinator's cache of plans is.
+//
+// It keeps maxStarts runs' at most, and forgets the one it decoded first to
+// keep another: a process that reads more runs than that in rotation
+// decodes each start state at each read, as it did before any was kept.
+type startCache struct {
+	mu      sync.Mutex
+	decoded map[int64]keptStart
+	order   []int64
+}
+
+// A keptStart is a start state, decoded, with the bytes it was decoded
+// from.
+type keptStart struct {
+	raw   []byte
+	state *compile.StartState
+}
+
+// maxStarts is how many runs' start states a store keeps decoded at most.
+const maxStarts = 64
+
+// decode returns raw, run n's start state, decoded: the one kept of the run
+// when it was decoded from the same bytes, as one a transaction that rolled
+// back may not have been.
+func (c *startCache) decode(n int64, raw []byte) (*compile.StartState, error) {
+	c.mu.Lock()
+	kept, ok := c.decoded[n]
+	c.mu.Unlock()
+	if ok && bytes.Equal(kept.raw, raw) {
+		return kept.state, nil
+	}
+	state, err := compile.DecodeStartState(raw)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.decoded == nil {
+		c.decoded = map[int64]keptStart{}
+	}
+	if _, ok := c.decoded[n]; !ok {
+		if len(c.order) >= maxStarts {
+			delete(c.decoded, c.order[0])
+			c.order = c.order[1:]
+		}
+		c.order = append(c.order, n)
+	}
+	c.decoded[n] = keptStart{raw: raw, state: state}
+	return state, nil
 }
 
 // decodeDiagnostics decodes a list of diagnostics as encodeDiagnostics
@@ -241,7 +300,7 @@ func (tx *Tx) AddDiagnostics(id string, diags problems.Diagnostics) error {
 		return err
 	}
 	n, _ := runNumber(id)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET diagnostics = ? WHERE id = ?", data, n)
+	_, err = tx.exec("UPDATE meridian_runs SET diagnostics = ? WHERE id = ?", data, n)
 	return err
 }
 
@@ -254,7 +313,7 @@ func (tx *Tx) StartTried(id string) (int, error) {
 		return 0, err
 	}
 	var tries int
-	err = tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_runs SET start_tries = start_tries + 1 WHERE id = ? AND state = ? RETURNING start_tries",
+	err = tx.queryRow("UPDATE meridian_runs SET start_tries = start_tries + 1 WHERE id = ? AND state = ? RETURNING start_tries",
 		n, RunCreated).Scan(&tries)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("%w: run %s isn't %s", ErrState, id, RunCreated)
@@ -282,7 +341,7 @@ func (tx *Tx) StartRun(id string, state *compile.StartState, diags problems.Diag
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET state = ?, started_at = ?, start_state = ? WHERE id = ? AND state = ?",
+	res, err := tx.exec("UPDATE meridian_runs SET state = ?, started_at = ?, start_state = ? WHERE id = ? AND state = ?",
 		RunRunning, now, data, n, RunCreated)
 	if err != nil {
 		return err
@@ -314,7 +373,7 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 		return err
 	}
 	var live bool
-	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE run_id = ? AND state <> ?)", n, AttemptEnded).Scan(&live); err != nil {
+	if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE run_id = ? AND state <> ?)", n, AttemptEnded).Scan(&live); err != nil {
 		return err
 	}
 	if live {
@@ -324,7 +383,7 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET state = ?, outcome = ?, reason = ?, ended_at = ? WHERE id = ? AND state <> ?",
+	res, err := tx.exec("UPDATE meridian_runs SET state = ?, outcome = ?, reason = ?, ended_at = ? WHERE id = ? AND state <> ?",
 		RunEnded, outcome, nullString(string(reason)), now, n, RunEnded)
 	if err != nil {
 		return err
@@ -335,10 +394,10 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err := tx.addEvent(n, EventRunFinished, "", "", 0); err != nil {
 		return err
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
+	if _, err := tx.exec("DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
 		return err
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_job_records WHERE run_id = ?", n); err != nil {
+	if _, err := tx.exec("DELETE FROM meridian_job_records WHERE run_id = ?", n); err != nil {
 		return err
 	}
 	tx.erased = true
@@ -367,7 +426,7 @@ func (tx *Tx) StopRun(id string, reason plan.Reason) (bool, error) {
 		return false, err
 	}
 	n, _ := runNumber(id)
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET stopped_at = ?, stop_reason = ? WHERE id = ?", now, reason, n); err != nil {
+	if _, err := tx.exec("UPDATE meridian_runs SET stopped_at = ?, stop_reason = ? WHERE id = ?", now, reason, n); err != nil {
 		return false, err
 	}
 	return true, tx.addEvent(n, EventRunStopping, "", "", 0)
@@ -380,7 +439,7 @@ func (tx *Tx) LiveAttempts(run string) ([]*Attempt, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT id FROM meridian_attempts WHERE run_id = ? AND state <> ? ORDER BY id", n, AttemptEnded)
+	rows, err := tx.query("SELECT id FROM meridian_attempts WHERE run_id = ? AND state <> ? ORDER BY id", n, AttemptEnded)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +475,7 @@ func (tx *Tx) runNumberOf(id string) (int64, error) {
 		return 0, ErrNotFound
 	}
 	var exists bool
-	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM meridian_runs WHERE id = ?)", n).Scan(&exists); err != nil {
+	if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_runs WHERE id = ?)", n).Scan(&exists); err != nil {
 		return 0, err
 	}
 	if !exists {
@@ -434,7 +493,7 @@ func (tx *Tx) liveRun(id string) (int64, error) {
 		return 0, ErrNotFound
 	}
 	var state string
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT state FROM meridian_runs WHERE id = ?", n).Scan(&state)
+	err := tx.queryRow("SELECT state FROM meridian_runs WHERE id = ?", n).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -477,7 +536,7 @@ func (tx *Tx) InsertRecord(run string, generation uint64, wrappedKey, sealed []b
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET record_gen = 1 WHERE id = ? AND record_gen = 0", n)
+	res, err := tx.exec("UPDATE meridian_runs SET record_gen = 1 WHERE id = ? AND record_gen = 0", n)
 	if err != nil {
 		return err
 	}
@@ -488,7 +547,7 @@ func (tx *Tx) InsertRecord(run string, generation uint64, wrappedKey, sealed []b
 	if err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "INSERT INTO meridian_records (run_id, wrapped_key, sealed, updated_at) VALUES (?, ?, ?, ?)",
+	_, err = tx.exec("INSERT INTO meridian_records (run_id, wrapped_key, sealed, updated_at) VALUES (?, ?, ?, ?)",
 		n, wrappedKey, sealed, now)
 	return err
 }
@@ -502,7 +561,7 @@ func (tx *Tx) Record(run string) (*Record, error) {
 	}
 	r := Record{Run: run}
 	var updated int64
-	err := tx.tx.QueryRowContext(tx.ctx, `SELECT r.record_gen, s.wrapped_key, s.sealed, s.updated_at
+	err := tx.queryRow(`SELECT r.record_gen, s.wrapped_key, s.sealed, s.updated_at
 FROM meridian_records s JOIN meridian_runs r ON r.id = s.run_id WHERE s.run_id = ?`, n).Scan(
 		&r.Generation, &r.WrappedKey, &r.Sealed, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -539,14 +598,14 @@ func (tx *Tx) Reseal(run string, generation uint64, sealed []byte) error {
 	}
 	// Only from the generation read, so that a reseal that raced this one
 	// fails, where the database runs transactions side by side.
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET record_gen = ? WHERE id = ? AND record_gen = ?", generation, n, current.Generation)
+	res, err := tx.exec("UPDATE meridian_runs SET record_gen = ? WHERE id = ? AND record_gen = ?", generation, n, current.Generation)
 	if err != nil {
 		return err
 	}
 	if err := oneRow(res, fmt.Errorf("%w: %w: run %s", ErrState, ErrRecordChanged, run)); err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_records SET sealed = ?, updated_at = ? WHERE run_id = ?", sealed, now, n)
+	_, err = tx.exec("UPDATE meridian_records SET sealed = ?, updated_at = ? WHERE run_id = ?", sealed, now, n)
 	return err
 }
 
@@ -574,7 +633,7 @@ func (tx *Tx) WrappedKey(run string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 	var key []byte
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT wrapped_key FROM meridian_records WHERE run_id = ?", n).Scan(&key)
+	err := tx.queryRow("SELECT wrapped_key FROM meridian_records WHERE run_id = ?", n).Scan(&key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -600,7 +659,7 @@ func (tx *Tx) JobRecords(run string, keys []string) (map[string]JobRecord, error
 	out := make(map[string]JobRecord, len(keys))
 	for _, key := range keys {
 		var r JobRecord
-		err := tx.tx.QueryRowContext(tx.ctx, `SELECT j.record_gen, p.sealed FROM meridian_job_records p
+		err := tx.queryRow(`SELECT j.record_gen, p.sealed FROM meridian_job_records p
 JOIN meridian_jobs j ON j.run_id = p.run_id AND j.key = p.job_key WHERE p.run_id = ? AND p.job_key = ?`, n, key).Scan(&r.Generation, &r.Sealed)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
@@ -628,7 +687,7 @@ func (tx *Tx) PutJobRecord(run, job string, generation uint64, sealed []byte) er
 		return err
 	}
 	var current uint64
-	err = tx.tx.QueryRowContext(tx.ctx, "SELECT record_gen FROM meridian_jobs WHERE run_id = ? AND key = ?", n, job).Scan(&current)
+	err = tx.queryRow("SELECT record_gen FROM meridian_jobs WHERE run_id = ? AND key = ?", n, job).Scan(&current)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -644,14 +703,14 @@ func (tx *Tx) PutJobRecord(run, job string, generation uint64, sealed []byte) er
 	}
 	// Only from the generation read, so that a write that raced this one
 	// fails, where the database runs transactions side by side.
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET record_gen = ? WHERE run_id = ? AND key = ? AND record_gen = ?", generation, n, job, current)
+	res, err := tx.exec("UPDATE meridian_jobs SET record_gen = ? WHERE run_id = ? AND key = ? AND record_gen = ?", generation, n, job, current)
 	if err != nil {
 		return err
 	}
 	if err := oneRow(res, fmt.Errorf("%w: %w: run %s's part of job %q", ErrState, ErrRecordChanged, run, job)); err != nil {
 		return err
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_job_records (run_id, job_key, sealed, updated_at) VALUES (?, ?, ?, ?)
+	_, err = tx.exec(`INSERT INTO meridian_job_records (run_id, job_key, sealed, updated_at) VALUES (?, ?, ?, ?)
 ON CONFLICT (run_id, job_key) DO UPDATE SET sealed = excluded.sealed, updated_at = excluded.updated_at`, n, job, sealed, now)
 	return err
 }

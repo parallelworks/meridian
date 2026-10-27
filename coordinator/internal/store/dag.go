@@ -24,14 +24,14 @@ func (tx *Tx) MarkJobFailed(run string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET any_job_failed_at = ? WHERE id = ? AND any_job_failed_at IS NULL", now, n)
+	res, err := tx.exec("UPDATE meridian_runs SET any_job_failed_at = ? WHERE id = ? AND any_job_failed_at IS NULL", now, n)
 	if err != nil {
 		return false, err
 	}
 	if marked, err := res.RowsAffected(); err != nil || marked == 0 {
 		return false, err
 	}
-	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT id FROM meridian_attempts WHERE run_id = ? AND state <> ? ORDER BY id", n, AttemptEnded)
+	rows, err := tx.query("SELECT id FROM meridian_attempts WHERE run_id = ? AND state <> ? ORDER BY id", n, AttemptEnded)
 	if err != nil {
 		return false, err
 	}
@@ -64,7 +64,7 @@ func (tx *Tx) MarkJobFailed(run string) (bool, error) {
 // they are marked.
 func (tx *Tx) StartControl(id string) error {
 	var failed, failFast sql.NullInt64
-	err := tx.tx.QueryRowContext(tx.ctx, `SELECT r.any_job_failed_at, p.fail_fast_at FROM meridian_attempts a
+	err := tx.queryRow(`SELECT r.any_job_failed_at, p.fail_fast_at FROM meridian_attempts a
 JOIN meridian_runs r ON r.id = a.run_id
 JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
 LEFT JOIN meridian_jobs p ON p.run_id = j.run_id AND p.key = j.name AND j.instance IS NOT NULL
@@ -149,7 +149,7 @@ func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
 			continue
 		}
 		var run int64
-		if err := tx.tx.QueryRowContext(tx.ctx, "SELECT run_id FROM meridian_attempts WHERE id = ?", id).Scan(&run); err != nil {
+		if err := tx.queryRow("SELECT run_id FROM meridian_attempts WHERE id = ?", id).Scan(&run); err != nil {
 			return err
 		}
 		_, err := tx.MarkJobFailed(runID(run))
@@ -161,7 +161,7 @@ func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
 // event returns the attempt id's event with the sequence number seq.
 func (tx *Tx) event(id string, seq int64) (workerapi.Event, error) {
 	var body []byte
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT body FROM meridian_events WHERE attempt_id = ? AND seq = ?", id, seq).Scan(&body)
+	err := tx.queryRow("SELECT body FROM meridian_events WHERE attempt_id = ? AND seq = ?", id, seq).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return workerapi.Event{}, ErrNotFound
 	}

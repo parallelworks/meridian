@@ -35,7 +35,7 @@ var endpointName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 func (tx *Tx) Endpoint(name string) (*Endpoint, error) {
 	e := Endpoint{Name: name}
 	var taken, grace int64
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT holder, taken_at, grace_from FROM meridian_endpoints WHERE name = ?", name).Scan(&e.Holder, &taken, &grace)
+	err := tx.queryRow("SELECT holder, taken_at, grace_from FROM meridian_endpoints WHERE name = ?", name).Scan(&e.Holder, &taken, &grace)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -55,7 +55,7 @@ func (tx *Tx) RestartGrace(name string) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_endpoints SET grace_from = ? WHERE name = ?", now, name)
+	res, err := tx.exec("UPDATE meridian_endpoints SET grace_from = ? WHERE name = ?", now, name)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (tx *Tx) RestartGrace(name string) error {
 // started (StartGrace); or the zero time if none is recorded.
 func (tx *Tx) GraceFrom() (time.Time, error) {
 	var from sql.NullInt64
-	err := tx.tx.QueryRowContext(tx.ctx, `SELECT max(t) FROM (SELECT max(grace_from) AS t FROM meridian_endpoints
+	err := tx.queryRow(`SELECT max(t) FROM (SELECT max(grace_from) AS t FROM meridian_endpoints
 UNION ALL SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'grace')`).Scan(&from)
 	return timeOf(from), err
 }
@@ -158,7 +158,7 @@ func (h *Hold) Release(ctx context.Context) error {
 	h.s.holdsMu.Unlock()
 	defer h.unlock()
 	return h.s.Tx(context.WithoutCancel(ctx), func(tx *Tx) error {
-		_, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_endpoints WHERE name = ? AND holder = ? AND taken_at = ?",
+		_, err := tx.exec("DELETE FROM meridian_endpoints WHERE name = ? AND holder = ? AND taken_at = ?",
 			h.endpoint.Name, h.endpoint.Holder, h.endpoint.TakenAt.UnixMicro())
 		return err
 	})

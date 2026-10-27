@@ -98,6 +98,23 @@ func open(t testing.TB, opts Options) *Coordinator {
 	return c
 }
 
+// wakeJob wakes the supervisor of the run's job key in a transaction of
+// its own, as a test wakes it, and again while hopper runs it, as the
+// coordinator wakes one in the transaction that changes what it waits for
+// (wakeJobTx).
+func (c *Coordinator) wakeJob(ctx context.Context, run, key string) {
+	var w *waking
+	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		w, err = c.wakeJobTx(ctx, tx, run, key)
+		return err
+	}); err != nil {
+		c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
+		return
+	}
+	c.wakeAgain(ctx, w)
+}
+
 // driverOf returns c's testDriver.
 func driverOf(c *Coordinator) *testDriver {
 	return c.opts.Drivers[testBackend].(*testDriver)

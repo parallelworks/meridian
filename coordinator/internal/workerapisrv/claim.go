@@ -120,10 +120,16 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 			return
 		}
 	}
-	var claimed *store.Attempt
+	var (
+		claimed *store.Attempt
+		after   func()
+	)
 	err = s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		claimed, err = tx.Claim(token, req.Credential, req.Worker)
+		if claimed, err = tx.Claim(token, req.Credential, req.Worker); err != nil || !a.ClaimedAt.IsZero() {
+			return err
+		}
+		after, err = s.wakeJob(ctx, tx, run.ID, a.Job)
 		return err
 	})
 	switch {
@@ -139,9 +145,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		s.writeError(w, r, err)
 		return
 	}
-	if a.ClaimedAt.IsZero() {
-		s.wakeJob(ctx, run.ID, a.Job)
-	}
+	committed(after)
 	c, err := s.claim(ctx, run, claimed)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -250,15 +254,21 @@ func credentialForm(credential string) bool {
 // that failed before its first step, with p, unless something ended it
 // meanwhile, and wakes its job's supervisor, which places the job again.
 func (s *Server) endRefused(ctx context.Context, a *store.Attempt, p *problem.Problem) {
+	var after func()
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p})
+		if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
+			return err
+		}
+		var err error
+		after, err = s.wakeJob(ctx, tx, a.Run, a.Job)
+		return err
 	})
 	switch {
 	case errors.Is(err, store.ErrFenced):
 	case err != nil:
 		s.log.ErrorContext(ctx, "workerapisrv: end an attempt that failed before its first step", "attempt", a.ID, "error", err)
 	default:
-		s.wakeJob(ctx, a.Run, a.Job)
+		committed(after)
 	}
 }
 

@@ -194,6 +194,14 @@ type Store struct {
 	// that added a run's events commits (Changes).
 	changedMu sync.Mutex
 	changed   chan struct{}
+
+	// starts are the start states Tx.Run decoded.
+	starts startCache
+
+	// stmts are the statements the store's transactions run, by their SQL,
+	// each prepared once on the database (Tx.stmt).
+	stmtsMu sync.Mutex
+	stmts   map[string]*sql.Stmt
 }
 
 // openSQLite is hoppersqlite.OpenContext, which tests replace.
@@ -446,7 +454,7 @@ func (s *Store) readFile(tx *Tx) error {
 
 // readID reads the store's ID.
 func (s *Store) readID(tx *Tx) error {
-	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT value FROM meridian_store WHERE key = 'store_id'").Scan(&s.id); err != nil {
+	if err := tx.queryRow("SELECT value FROM meridian_store WHERE key = 'store_id'").Scan(&s.id); err != nil {
 		return fmt.Errorf("store: read the store's ID: %w", err)
 	}
 	return nil
@@ -495,6 +503,15 @@ func (s *Store) Close() error {
 	}
 	s.holds = nil
 	s.holdsMu.Unlock()
+	// The statements are closed outside their lock: closing one locks the
+	// connections it was prepared on.
+	s.stmtsMu.Lock()
+	stmts := s.stmts
+	s.stmts = nil
+	s.stmtsMu.Unlock()
+	for _, st := range stmts {
+		_ = st.Close()
+	}
 	return s.driver.Close()
 }
 
@@ -536,6 +553,83 @@ type Tx struct {
 	// placed are the attempts whose placements the transaction has
 	// recorded (RecordPlacement), in order.
 	placed []string
+}
+
+// stmt returns the statement of query for the transaction: the store's,
+// prepared on the database the first time a transaction runs it, which
+// database/sql keeps prepared on each connection that has run it, so that
+// SQLite parses a statement once a connection rather than at each call. A
+// query is one of the store's own: SQL whose text doesn't change from call
+// to call, so that the store keeps a statement of each.
+//
+// A transaction runs the same statement on its connection each time, so
+// it mustn't run a query again while rows that query returned are open:
+// SQLite refuses (SQLITE_MISUSE, 21). Each caller closes its rows before
+// it runs another query.
+//
+// It prepares a statement holding the store's lock of them, so that no
+// statement is prepared twice: a transaction mustn't close one, as the
+// one of two prepared at once that isn't kept, since closing it locks
+// each connection it was prepared on, which another transaction may hold
+// as it waits for this one's write lock. Preparing takes a connection no
+// transaction holds, which database/sql opens when none is idle, as long
+// as nothing bounds how many it opens: hoppersqlite sets no
+// SetMaxOpenConns. And it takes no lock of SQLite's.
+func (tx *Tx) stmt(query string) (*sql.Stmt, error) {
+	st, err := tx.s.prepared(tx.ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return tx.tx.StmtContext(tx.ctx, st), nil
+}
+
+// prepared returns the store's statement of query, which it prepares on the
+// database the first time, holding the lock of its statements (Tx.stmt).
+func (s *Store) prepared(ctx context.Context, query string) (*sql.Stmt, error) {
+	s.stmtsMu.Lock()
+	defer s.stmtsMu.Unlock()
+	if st := s.stmts[query]; st != nil {
+		return st, nil
+	}
+	st, err := s.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if s.stmts == nil {
+		s.stmts = map[string]*sql.Stmt{}
+	}
+	s.stmts[query] = st
+	return st, nil
+}
+
+// exec runs query, which writes, in the transaction, with args (stmt).
+func (tx *Tx) exec(query string, args ...any) (sql.Result, error) {
+	st, err := tx.stmt(query)
+	if err != nil {
+		return nil, err
+	}
+	return st.ExecContext(tx.ctx, args...)
+}
+
+// query runs query in the transaction, with args, and returns its rows,
+// which the caller closes before it runs the query again (stmt).
+func (tx *Tx) query(query string, args ...any) (*sql.Rows, error) {
+	st, err := tx.stmt(query)
+	if err != nil {
+		return nil, err
+	}
+	return st.QueryContext(tx.ctx, args...)
+}
+
+// queryRow runs query in the transaction, with args, and returns its first
+// row (stmt). A statement that can't be prepared is run unprepared, whose
+// row gives the error.
+func (tx *Tx) queryRow(query string, args ...any) *sql.Row {
+	st, err := tx.stmt(query)
+	if err != nil {
+		return tx.tx.QueryRowContext(tx.ctx, query, args...)
+	}
+	return st.QueryRowContext(tx.ctx, args...)
 }
 
 // ControlsChanged returns the attempts whose controls the transaction has
@@ -690,7 +784,7 @@ func (tx *Tx) SQL() *sql.Tx { return tx.tx }
 // as with a row per process, read with max().
 func (tx *Tx) Now() (time.Time, error) {
 	if !tx.begun {
-		if _, err := tx.tx.ExecContext(tx.ctx, "SELECT 1"); err != nil {
+		if _, err := tx.exec("SELECT 1"); err != nil {
 			return time.Time{}, err
 		}
 		tx.begun = true
@@ -704,7 +798,7 @@ func (tx *Tx) Now() (time.Time, error) {
 		return now, nil
 	}
 	var mark sql.NullString
-	err := tx.tx.QueryRowContext(tx.ctx, "SELECT value FROM meridian_store WHERE key = 'clock'").Scan(&mark)
+	err := tx.queryRow("SELECT value FROM meridian_store WHERE key = 'clock'").Scan(&mark)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, err
 	}
@@ -722,7 +816,7 @@ func (tx *Tx) Now() (time.Time, error) {
 		return now, nil
 	}
 	if tx.writes {
-		if _, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_store (key, value) VALUES ('clock', ?)
+		if _, err := tx.exec(`INSERT INTO meridian_store (key, value) VALUES ('clock', ?)
 ON CONFLICT (key) DO UPDATE SET value = excluded.value`, strconv.FormatInt(now.UnixMicro(), 10)); err != nil {
 			return time.Time{}, err
 		}
@@ -768,7 +862,7 @@ func (tx *Tx) StartGrace() error {
 
 // startGrace records at, in microseconds, as the latest start of a grace.
 func (tx *Tx) startGrace(at int64) error {
-	_, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_store (key, value) VALUES ('grace', ?)
+	_, err := tx.exec(`INSERT INTO meridian_store (key, value) VALUES ('grace', ?)
 ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE CAST(meridian_store.value AS INTEGER) < CAST(excluded.value AS INTEGER)`,
 		strconv.FormatInt(at, 10))
 	return err

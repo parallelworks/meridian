@@ -74,6 +74,26 @@ jobs:
 	}
 }
 
+// TestMatrixWokenToEnd checks that the supervisor of a matrix job whose
+// instances all succeed, with no max-parallel:, is woken by the last of
+// them to end, which leaves it the job to end, and by none before it.
+func TestMatrixWokenToEnd(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	r := runToEnd(t, c, `
+jobs:
+  main:
+    strategy:
+      matrix:
+        n: [0, 1, 2, 3, 4]
+    steps:
+      - run: echo ${{ matrix.n }}
+`, nil)
+	if j := storedJob(t, c, r.ID, "main"); r.Outcome != plan.OutcomeSuccess || j.Outcome != plan.OutcomeSuccess || j.Wake != 1 {
+		t.Errorf("the run ended with %s, and its job is %+v", r.Outcome, j)
+	}
+}
+
 // TestMatrixOutputs checks a matrix job's result: its instances' outputs,
 // each from the instance with the highest index that set it, whatever
 // order they ended in.
