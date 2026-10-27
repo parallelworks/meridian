@@ -35,6 +35,7 @@ var succeeds = testEnd{result: plan.JobResult{Outcome: plan.OutcomeSuccess}}
 // expands: its exclude and include entries give its instances, each of
 // which is placed and run, and the job ends as they did.
 func TestMatrixIncludeExclude(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	r := runToEnd(t, c, `
 jobs:
@@ -77,6 +78,7 @@ jobs:
 // each from the instance with the highest index that set it, whatever
 // order they ended in.
 func TestMatrixOutputs(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	byJob(c, map[string]testEnd{
 		"main#0": {result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "0", "first": "only 0"}}, delay: 60 * time.Millisecond},
@@ -102,6 +104,7 @@ jobs:
 // which its supervisor expands once that job has ended, as Ready does, and
 // keeps as run state.
 func TestMatrixFromNeeds(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	byJob(c, map[string]testEnd{
 		"first": {result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"parts": `["p", "q"]`}}},
@@ -135,6 +138,7 @@ jobs:
 // its instances' keys alone, the run's secret record their values, and
 // each instance is readied with its own.
 func TestPrivateMatrix(t *testing.T) {
+	parallel(t)
 	vars := conformancetest.Variables{"vars.SITES": {Value: `["a", "b"]`}}
 	c := open(t, Options{Variables: vars})
 	release := make(chan struct{})
@@ -192,6 +196,7 @@ jobs:
 // job that needs it is readied once one instance succeeds, with that one's
 // result, which it pins, while the rest still run.
 func TestAnyFirstSuccess(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	release := make(chan struct{})
 	byJob(c, map[string]testEnd{
@@ -219,6 +224,7 @@ func TestAnyFirstSuccess(t *testing.T) {
 // whose instances succeeded: once all have ended, the job that needs it
 // reads the first to fail, and is skipped because it failed.
 func TestAnyFailure(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	// They fail in the order 1, 2, 0, each once the one before has ended.
 	second, third := make(chan struct{}), make(chan struct{})
@@ -252,6 +258,7 @@ func TestAnyFailure(t *testing.T) {
 // waiting for its turn under max-parallel: is placed in its turn, as format
 // 1 starts it, told to cancel from its first control.
 func TestFailFast(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	running := make(chan struct{})
 	byJob(c, map[string]testEnd{
@@ -304,6 +311,7 @@ jobs:
 // made and ended say, and they have their turns in the order of their
 // indexes.
 func TestMaxParallel(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	driverOf(c).set(func(d *testDriver) {
 		d.worker = func(req backend.PlaceRequest) testEnd {
@@ -373,6 +381,7 @@ jobs:
 
 // TestPickAny checks which instance a need on any instance reads.
 func TestPickAny(t *testing.T) {
+	parallel(t)
 	at := func(s int) time.Time { return time.Unix(int64(s), 0) }
 	job := func(key string, outcome plan.Outcome, ended int, needsFailed bool) *store.Job {
 		j := &store.Job{Key: key, Outcome: outcome, EndedAt: at(ended)}

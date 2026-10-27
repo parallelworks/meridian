@@ -230,6 +230,7 @@ func jobCodes(j *store.Job) []string {
 // its backend says it has ended, and that a job whose retry: doesn't list
 // worker-lost then fails, with the reason worker-lost.
 func TestWorkerLost(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true}, []bool{true})
 	id, a := startJob(t, c, oneJob, store.AttemptRunning)
@@ -259,6 +260,7 @@ func TestWorkerLost(t *testing.T) {
 // it runs, or says it runs, is never lost: it is asked again every
 // heartbeat period, however long ago the lease lapsed.
 func TestCheckUnknown(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true}, []bool{true})
 	id, _ := startJob(t, c, oneJob, store.AttemptRunning)
@@ -300,6 +302,7 @@ jobs:
 // which isn't asked; then it waits its retry:'s interval, and its next
 // attempt runs, counting the lost one, whose writes are refused.
 func TestSelfFenceRetry(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true}, []bool{true})
 	id, first := startJob(t, c, retryJob, store.AttemptRunning)
@@ -361,6 +364,7 @@ func TestSelfFenceRetry(t *testing.T) {
 // TestRetriesSpent checks that a job whose worker is lost once more than
 // its retry: allows fails, with the reason worker-lost.
 func TestRetriesSpent(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, _ := openLease(t, clock, []bool{true, true}, []bool{true, true})
 	id, _ := startJob(t, c, retryJob, store.AttemptRunning)
@@ -386,6 +390,7 @@ func TestRetriesSpent(t *testing.T) {
 // workers reach it through, or its host wakes, no lapsed lease counts until
 // the grace has passed: a worker cut off for less than that isn't lost.
 func TestRestartGrace(t *testing.T) {
+	parallel(t)
 	for _, how := range []string{"endpoint", "wake"} {
 		t.Run(how, func(t *testing.T) {
 			clock := newFakeClock()
@@ -426,6 +431,7 @@ func TestRestartGrace(t *testing.T) {
 // period after the reset, with the grace, not a year after: the store
 // takes the reset, and brings the renewal back to it.
 func TestClockReset(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	right := clock.Now()
 	clock.Advance(365 * 24 * time.Hour)
@@ -468,6 +474,7 @@ func TestClockReset(t *testing.T) {
 // since its lease lapsed: a failure before its first step, which places
 // the job again on a member the group has.
 func TestMemberGone(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	group := &backend.Group{Name: "local", Members: []backend.Member{{Name: "m1", Backend: testBackend}, {Name: "m2", Backend: testBackend}}}
 	c, d := openLeaseWith(t, Options{now: clock.Now, Groups: groupsOf{"local": group}}, []bool{true}, []bool{false})
@@ -505,6 +512,7 @@ func TestMemberGone(t *testing.T) {
 // which places the job again; and that one its scheduler ended at its time
 // limit fails the job with the reason timeout.
 func TestLostBeforeStep(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name    string
 		claimed bool
@@ -564,6 +572,7 @@ func TestLostBeforeStep(t *testing.T) {
 // lease, or claimed it, after the supervisor looked at it isn't lost on
 // what it saw.
 func TestRenewedMeanwhile(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true}, []bool{true})
 	id, a := startJob(t, c, oneJob, store.AttemptRunning)
@@ -583,6 +592,7 @@ func TestRenewedMeanwhile(t *testing.T) {
 }
 
 func TestSlept(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		wall, mono time.Duration
 		want       bool
@@ -623,6 +633,7 @@ jobs:
 // early-cancel: is any-job-failed runs on. The job's next attempt, its
 // last, which fails, marks it, as the job fails.
 func TestLostNotMarked(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true, true}, []bool{true, true})
 	d.fails = map[string]bool{"main": true}
@@ -706,6 +717,7 @@ func toldFailed(t *testing.T, c *Coordinator, id string) bool {
 // backend's ID for it that the sealed place holds, once its placement is
 // recorded, and that the attempt is lost as any other is.
 func TestPrivateLost(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLeaseWith(t, Options{now: clock.Now, Variables: hostVars}, []bool{true}, []bool{true})
 	id, a := startJobWith(t, c, privateTarget, hostVars, store.AttemptRunning)
@@ -732,6 +744,7 @@ func TestPrivateLost(t *testing.T) {
 // reason it lists, fewer times than its max-retries, counting the
 // attempts that started a step but the first.
 func TestRetriesAgain(t *testing.T) {
+	parallel(t)
 	r := &plan.ReadyJobRetry{Reasons: []plan.Reason{plan.ReasonWorkerLost}, MaxRetries: 2}
 	for _, tc := range []struct {
 		r       *plan.ReadyJobRetry
@@ -754,6 +767,7 @@ func TestRetriesAgain(t *testing.T) {
 }
 
 func TestRetryWait(t *testing.T) {
+	parallel(t)
 	r := &plan.ReadyJobRetry{IntervalSeconds: 60}
 	for n, want := range map[int]time.Duration{1: time.Minute, 2: 2 * time.Minute, 3: 4 * time.Minute, 7: time.Hour, 20: time.Hour} {
 		if got := retryWait(r, n); got != want {

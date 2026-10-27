@@ -53,6 +53,7 @@ func placedJobs(c *Coordinator) []string {
 // read as failed by the jobs that need it (NeedsFailed), and never placed;
 // and that a run with a job skipped so ends failed, as format 1's does.
 func TestNeedsFailed(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	byJob(c, map[string]testEnd{"a": failed})
 	r := runToEnd(t, c, `
@@ -89,6 +90,7 @@ jobs:
 // one of which was skipped because a job it needs did, as only an
 // always() job after it, ends failed.
 func TestNeedsFailedEndsRun(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	byJob(c, map[string]testEnd{"a": failed})
 	r := runToEnd(t, c, `
@@ -117,6 +119,7 @@ jobs:
 // TestAlwaysAfterFailure checks that a job whose if: is always() runs
 // after one it needs failed, and the run still fails.
 func TestAlwaysAfterFailure(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	byJob(c, map[string]testEnd{"a": failed})
 	r := runToEnd(t, c, `
@@ -153,6 +156,7 @@ jobs:
 // primary failed, and is skipped, as a success its dependents read, when
 // it succeeded.
 func TestPrimarySecondary(t *testing.T) {
+	parallel(t)
 	t.Run("primary fails", func(t *testing.T) {
 		c := open(t, Options{})
 		byJob(c, map[string]testEnd{"primary": failed})
@@ -179,6 +183,7 @@ func TestPrimarySecondary(t *testing.T) {
 // is readied with it joined from there, still marked as a secret, which
 // the worker masks.
 func TestPrivateOutputDownstream(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	release := make(chan struct{})
 	byJob(c, map[string]testEnd{
@@ -261,6 +266,7 @@ func needed(t *testing.T, c *Coordinator, id string, j *store.Job) plan.JobResul
 // as Ready gives it, or cancelled, as a job of a run stopped before it was
 // readied whose if: gives it that path; and that a job Ready gives runs.
 func TestReadyEnds(t *testing.T) {
+	parallel(t)
 	broken := problems.Diagnostics{diagnostic(problems.RunMalformed, problems.Params{"run": "1"})}
 	for _, tc := range []struct {
 		r    readied
@@ -286,6 +292,7 @@ func TestReadyEnds(t *testing.T) {
 // as its events are stored: whether it is surely the step's last, from the
 // run's plan.
 func TestLastTry(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	id, _ := create(t, c, `
 jobs:
@@ -348,6 +355,7 @@ func (n *countNotifier) heard(id string) bool {
 // attempt of a job then running tells its worker, and an attempt made after
 // it does from its first control; and the worker API hears of it.
 func TestAnyJobFailed(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	notifier := &countNotifier{}
 	c.controls = notifier

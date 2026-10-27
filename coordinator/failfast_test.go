@@ -14,6 +14,7 @@ import (
 // worker claimed it, its control is made to ask it to cancel at the next
 // look, and the worker API hears of it.
 func TestFailFastMissed(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	notifier := &countNotifier{}
 	c.controls = notifier
@@ -69,6 +70,7 @@ jobs:
 // first step, as one whose setup failed, doesn't stop the rest, as format
 // 1's doesn't.
 func TestFailFastAfterSteps(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	release := make(chan struct{})
 	byJob(c, map[string]testEnd{
@@ -105,6 +107,7 @@ jobs:
 // an output more than one set the highest index's, as format 1 merges
 // them, with the chosen instance's outcome.
 func TestAnyOutputs(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	firstEnded, release := make(chan struct{}), make(chan struct{})
 	byJob(c, map[string]testEnd{

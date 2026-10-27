@@ -16,6 +16,7 @@ import (
 // stopping it once six tenths of the lease have passed without a renewal,
 // and has stopped it by nine tenths.
 func TestDefaultTiming(t *testing.T) {
+	parallel(t)
 	tm := DefaultTiming()
 	if tm.Heartbeat > tm.Lease/5 {
 		t.Errorf("Heartbeat %v is more than a fifth of Lease %v", tm.Heartbeat, tm.Lease)

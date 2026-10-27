@@ -28,6 +28,7 @@ func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v
 // gives in memory: run state, the secret record, and the diagnostics, byte
 // for byte.
 func TestStartConformance(t *testing.T) {
+	t.Parallel()
 	cases, err := conformance.Cases("start")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +44,7 @@ func TestStartConformance(t *testing.T) {
 	})
 	for _, cs := range cases {
 		t.Run(strings.TrimPrefix(cs.Name, "start/"), func(t *testing.T) {
-			t.Parallel()
+			parallel(t)
 			data, err := cs.Workflow()
 			if err != nil {
 				t.Fatal(err)

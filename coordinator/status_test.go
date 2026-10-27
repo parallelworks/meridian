@@ -20,6 +20,7 @@ import (
 // TestStatus checks a run's status through its life: created, then ended
 // with its outcome, and a run the store doesn't have.
 func TestStatus(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	if len(c.StoreID()) == 0 {
 		t.Error("the store has no ID")
@@ -51,6 +52,7 @@ func TestStatus(t *testing.T) {
 // with a problem, as one whose directory couldn't be made is, and that no
 // other can.
 func TestFailRun(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	p := problems.RunDirExists.Problem(problems.Params{"path": "/runs/" + id})
@@ -85,6 +87,7 @@ func TestFailRun(t *testing.T) {
 // an endpoint: another waits for it, and takes it once the first releases
 // it.
 func TestHoldEndpoint(t *testing.T) {
+	parallel(t)
 	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	first := open(t, Options{Database: db})
 	second := open(t, Options{Database: db})
@@ -122,6 +125,7 @@ func TestHoldEndpoint(t *testing.T) {
 // a list shows, and a run's jobs in each state: waiting, running where its
 // attempt was placed, and ended.
 func TestRunsAndJobs(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	first, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	second, _ := create(t, c, oneJob, nil, nil)
@@ -170,6 +174,7 @@ func TestRunsAndJobs(t *testing.T) {
 // that a check that refuses it leaves it as it is; and that a run of a
 // newer plan, or one the store hasn't, is refused.
 func TestResume(t *testing.T) {
+	parallel(t)
 	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	keys := coordtest.NewKeys(t)
 	queue := func(id string) string { return "meridian.start." + id }
@@ -233,6 +238,7 @@ func TestResume(t *testing.T) {
 // removes the file of a hold on its Start that a coordinator that ended
 // without letting it go left, as one killed does.
 func TestResumeLetsStaleHoldGo(t *testing.T) {
+	parallel(t)
 	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	queue := func(id string) string { return "meridian.start." + id }
 	c := open(t, Options{Database: db, Variables: regionVars, StartQueue: queue})
@@ -255,6 +261,7 @@ func TestResumeLetsStaleHoldGo(t *testing.T) {
 // Keys: it reports runs, and refuses every call that would change one, or
 // serve.
 func TestReadOnly(t *testing.T) {
+	parallel(t)
 	db := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	c := open(t, Options{Database: db})
 	ended := runToEnd(t, c, oneJob, nil)

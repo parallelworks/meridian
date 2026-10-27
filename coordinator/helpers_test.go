@@ -22,6 +22,27 @@ import (
 	"github.com/parallelworks/meridian/plan"
 )
 
+// parallelTests bounds how many of the package's tests that run in
+// parallel run at once, beside go test's -parallel. Each has a store of its
+// own, but every write to one is synced to disk, which they all share:
+// under the race detector, four at a time run the package in under two
+// thirds of the time one at a time does, on 4 cores as on 30, while thirty
+// at a time ran it no faster, and each test so much slower that its waits
+// for what it expects ran out.
+var parallelTests = make(chan struct{}, 4)
+
+// parallel has the test t run in parallel with the package's other tests
+// that do, as many at a time as parallelTests allows. A test whose subtests
+// run in parallel calls t.Parallel itself, and has its subtests call this:
+// a test that held a place while its subtests waited for theirs would hold
+// one they need.
+func parallel(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	parallelTests <- struct{}{}
+	t.Cleanup(func() { <-parallelTests })
+}
+
 // fastStart is how tests try again to start a run: soon, and few times.
 var fastStart = startRetry{tries: 3, first: 10 * time.Millisecond, most: 40 * time.Millisecond, newer: 50 * time.Millisecond, attempts: 2}
 
@@ -38,7 +59,7 @@ var fastSupervision = supervision{
 // with opts, Keys of the test's own unless opts has some, testGroups and a
 // testDriver of testBackend unless it has Groups and Drivers, and the
 // timing of a test.
-func open(t *testing.T, opts Options) *Coordinator {
+func open(t testing.TB, opts Options) *Coordinator {
 	t.Helper()
 	if opts.Database == "" {
 		opts.Database = filepath.Join(coordtest.PrivateDir(t), "meridian.db")
@@ -83,7 +104,7 @@ func driverOf(c *Coordinator) *testDriver {
 }
 
 // serve runs c.Serve until the test ends.
-func serve(t *testing.T, c *Coordinator) {
+func serve(t testing.TB, c *Coordinator) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	served := make(chan error, 1)
@@ -101,7 +122,7 @@ var runOptions = RunOptions{DefaultGroup: "local", RunDir: func(id string) strin
 
 // create compiles workflow with submitted, as Create does, reading vars,
 // and stores the run, whose ID it returns, with what Create gave.
-func create(t *testing.T, c *Coordinator, workflow string, submitted map[string]any, vars conformancetest.Variables) (string, *compile.Created) {
+func create(t testing.TB, c *Coordinator, workflow string, submitted map[string]any, vars conformancetest.Variables) (string, *compile.Created) {
 	t.Helper()
 	created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow), submitted,
 		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: vars.Contexts()})
@@ -120,7 +141,7 @@ func create(t *testing.T, c *Coordinator, workflow string, submitted map[string]
 
 // waitEnded waits for the run id's finisher to finish, as c serves, and
 // returns the run.
-func waitEnded(t *testing.T, c *Coordinator, id string) *store.Run {
+func waitEnded(t testing.TB, c *Coordinator, id string) *store.Run {
 	t.Helper()
 	r := storedRun(t, c, id)
 	wf, err := c.inserter.WorkflowGet(t.Context(), r.WorkflowID)
@@ -153,7 +174,7 @@ func waitEnded(t *testing.T, c *Coordinator, id string) *store.Run {
 }
 
 // storedRun returns the run id, as the store holds it.
-func storedRun(t *testing.T, c *Coordinator, id string) *store.Run {
+func storedRun(t testing.TB, c *Coordinator, id string) *store.Run {
 	t.Helper()
 	var r *store.Run
 	if err := c.store.View(t.Context(), func(tx *store.Tx) error {

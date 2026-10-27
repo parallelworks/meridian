@@ -33,6 +33,7 @@ import (
 // is meridian's, which runs the job's steps on this host and reports to
 // the coordinator's server of the worker API on a Unix socket.
 func TestRunsConformance(t *testing.T) {
+	t.Parallel()
 	cases, err := conformance.Cases("runs")
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +43,7 @@ func TestRunsConformance(t *testing.T) {
 	}
 	for _, cs := range cases {
 		t.Run(strings.TrimPrefix(cs.Name, "runs/"), func(t *testing.T) {
-			t.Parallel()
+			parallel(t)
 			want := cs.Expect.Run
 			if want == nil {
 				t.Fatal("the case says nothing of how the run ends")
@@ -251,6 +252,7 @@ func startCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
 // its attempt claimed, the server readying it with the need ended, as the
 // coordinator did.
 func TestNeedNeverEnded(t *testing.T) {
+	parallel(t)
 	r := newWorkerRig(t, nil)
 	c := r.c
 	// a's worker never claims its attempt, which would wake its
@@ -406,6 +408,7 @@ func (d *workerDriver) Forget(context.Context, *backend.Member, backend.Placemen
 // have started the job already, its plain step ends cancelled, with its
 // cleanup, and its always() step runs; and the job ends cancelled.
 func TestCancelUnclaimed(t *testing.T) {
+	parallel(t)
 	r := newWorkerRig(t, nil)
 	gate := make(chan struct{})
 	r.d.gate = gate

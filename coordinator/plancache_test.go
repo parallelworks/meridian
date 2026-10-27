@@ -37,6 +37,7 @@ func testPlans(t *testing.T) (a, b *plan.Plan) {
 }
 
 func TestPlanCache(t *testing.T) {
+	parallel(t)
 	a, b := testPlans(t)
 	runs := []*store.Run{storedPlan(t, "1", a), storedPlan(t, "2", a), storedPlan(t, "3", b)}
 

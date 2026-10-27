@@ -67,6 +67,7 @@ func serving(t *testing.T, c *Coordinator) (stop func() time.Duration) {
 // waits, and starts once a coordinator serves to the end. And that it
 // stops promptly.
 func TestStopDuringStart(t *testing.T) {
+	parallel(t)
 	vars := &blockingVariables{vars: regionVars, asked: make(chan struct{}, 1)}
 	vars.block.Store(true)
 	c := open(t, Options{Variables: vars})
@@ -105,6 +106,7 @@ func waitServed(t *testing.T, c *Coordinator) {
 
 // TestServeAgain checks that Serve, once it has returned, serves again.
 func TestServeAgain(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	stop := serving(t, c)
 	waitServed(t, c)
@@ -131,6 +133,7 @@ func (v erringVariables) Read(context.Context, []string, bool) (map[string]compi
 // which can quote a secret, never reaches the coordinator's log, which
 // says only which kind of try failed.
 func TestErrorsNotLogged(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name  string
 		vars  compile.Variables
@@ -177,6 +180,7 @@ func hasCode(diags problems.Diagnostics, k *problems.Kind) bool {
 // running it and its new attempt, settle the run one way: one of them
 // stores, and the other finds the run settled.
 func TestStartRacesEnd(t *testing.T) {
+	parallel(t)
 	for range 5 {
 		c := open(t, Options{Variables: regionVars})
 		id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
@@ -205,6 +209,7 @@ func TestStartRacesEnd(t *testing.T) {
 // TestDiscardedStartQueue checks that the start queue of a run whose Start
 // hopper gave up on stops being worked once the run's finisher ends it.
 func TestDiscardedStartQueue(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars, StartQueue: func(id string) string { return "meridian.start." + id }})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	exec(t, c, "DELETE FROM meridian_records")
@@ -245,6 +250,7 @@ func (v *slowVariables) Read(ctx context.Context, names []string, secrets bool) 
 // to stop as it would, as the race detector sees; and that a run created
 // as the coordinator stops is started by the next coordinator that serves.
 func TestRetireWhileStopping(t *testing.T) {
+	parallel(t)
 	vars := &slowVariables{vars: regionVars, delay: 50 * time.Millisecond, reading: make(chan struct{}, 64)}
 	c := open(t, Options{Variables: vars, StartQueue: func(id string) string { return "meridian.start." + id }})
 	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(regionWorkflow), regionSubmitted,
@@ -294,6 +300,7 @@ func TestRetireWhileStopping(t *testing.T) {
 // TestFinishNewer checks that the finisher leaves a run whose plan only a
 // newer release reads to one, as Start does.
 func TestFinishNewer(t *testing.T) {
+	parallel(t)
 	log := &logRecords{}
 	c := open(t, Options{Variables: regionVars, Log: slog.New(log)})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
