@@ -46,6 +46,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/parallelworks/meridian/internal/safepath"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -111,7 +112,33 @@ type Options struct {
 	// Only Meridian's tables are read, so only Meridian's schema is
 	// checked.
 	ReadOnly bool
+	// RetriesFor reports, in tx, whether the retry: of the attempt's job
+	// lists reason, so that an end of an attempt of it for that reason can
+	// be followed by another (plan.Job.RetriesFor): such an end marks the
+	// run only as the job ends, failed, once no attempt follows (Tx.
+	// RetriesFor). Nil reports false.
+	RetriesFor func(tx *Tx, attempt string, reason plan.Reason) bool
+	// Now is the clock the store reads in place of the host's, as a
+	// test's that it moves on itself. Nil means the host's.
+	Now func() time.Time
+	// MaxLead is how far the store's clock's mark may lead the host's
+	// clock before the store takes it that the host's clock was reset
+	// (Tx.Now): the coordinator's grace. Zero means DefaultMaxLead.
+	MaxLead time.Duration
+	// OnClockReset is called once a transaction that recorded a reset of
+	// the store's clock has committed, with the transaction's context, so
+	// that the coordinator wakes what waits on hopper's schedule, which a
+	// clock that was ahead may have put far off. Nil means nothing is.
+	OnClockReset func(ctx context.Context)
 }
+
+// hostClock is the host's clock, which the store reads, unless
+// Options.Now gives another: a test of the default path replaces it.
+var hostClock = time.Now
+
+// DefaultMaxLead is how far the clock's mark leads the host's clock, at
+// most, when Options doesn't say.
+const DefaultMaxLead = time.Minute
 
 // A Store is the coordinator's store, open. Its methods are safe for
 // concurrent use, and so is the database: several processes may open it.
@@ -119,14 +146,24 @@ type Store struct {
 	driver *hoppersqlite.Driver
 	db     *sql.DB
 	log    *slog.Logger
-	// lastTry is Options.LastTry, or nil.
-	lastTry func(tx *Tx, attempt string, step, try int) bool
+	// lastTry is Options.LastTry, and retriesFor Options.RetriesFor, or
+	// nil.
+	lastTry    func(tx *Tx, attempt string, step, try int) bool
+	retriesFor func(tx *Tx, attempt string, reason plan.Reason) bool
 	// file is the database's file, as SQLite opened it, its links
 	// resolved: the same for every process that opens the database.
 	file string
 	id   string
 	// readOnly says the store was opened only to read it.
 	readOnly bool
+	// clock is Options.Now, or nil for the host's, and maxLead
+	// Options.MaxLead.
+	clock   func() time.Time
+	maxLead time.Duration
+	onReset func(ctx context.Context)
+	// migrated is set once Meridian's schema, which keeps the clock's
+	// mark, is there: Open sets it before it returns the store.
+	migrated bool
 
 	// holds are the endpoints this store holds, kept here until they are
 	// released, or the store closed: a lock's file that nothing reaches
@@ -166,10 +203,6 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	if opts != nil && opts.Log != nil {
 		log = opts.Log
 	}
-	var lastTry func(tx *Tx, attempt string, step, try int) bool
-	if opts != nil {
-		lastTry = opts.LastTry
-	}
 	readOnly := opts != nil && opts.ReadOnly
 	path, err := filepath.Abs(path)
 	if err != nil {
@@ -189,7 +222,7 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	}
 	start, wait := time.Now(), openBusyFirstWait
 	for {
-		s, err := openOnce(ctx, path, log, lastTry, readOnly)
+		s, err := openOnce(ctx, path, log, opts, readOnly)
 		switch {
 		case errors.Is(err, hoppersqlite.ErrNetworkFilesystem):
 			if created {
@@ -227,14 +260,21 @@ const (
 	openBusyMaxWait   = time.Second
 )
 
-// openOnce opens the store at path once, and brings its schema up to this
-// release's, or, readOnly, checks that it is.
-func openOnce(ctx context.Context, path string, log *slog.Logger, lastTry func(tx *Tx, attempt string, step, try int) bool, readOnly bool) (*Store, error) {
+// openOnce opens the store at path once, with opts, and brings its schema
+// up to this release's, or, readOnly, checks that it is.
+func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options, readOnly bool) (*Store, error) {
 	d, err := openSQLite(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{driver: d, db: d.DB(), log: log, lastTry: lastTry, readOnly: readOnly}
+	s := &Store{driver: d, db: d.DB(), log: log, readOnly: readOnly}
+	s.maxLead = DefaultMaxLead
+	if opts != nil {
+		s.lastTry, s.retriesFor, s.clock, s.onReset = opts.LastTry, opts.RetriesFor, opts.Now, opts.OnClockReset
+		if opts.MaxLead > 0 {
+			s.maxLead = opts.MaxLead
+		}
+	}
 	setUp := s.setUp
 	if readOnly {
 		setUp = s.checkSchema
@@ -343,6 +383,7 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.migrate(ctx, log); err != nil {
 		return err
 	}
+	s.migrated = true
 	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
@@ -369,6 +410,7 @@ func (s *Store) checkSchema(ctx context.Context, _ *slog.Logger) error {
 		case version < len(migrations):
 			return problems.DatabaseTooOld.Problem(problems.Params{"path": s.file, "schema": "meridian", "version": version, "latest": len(migrations)})
 		}
+		s.migrated = true
 		return s.readID(tx)
 	})
 }
@@ -455,6 +497,10 @@ type Tx struct {
 	ctx context.Context
 	tx  *sql.Tx
 	s   *Store
+	// writes is set for a transaction that may write: Tx's, not View's;
+	// and reset once it has recorded a reset of the store's clock.
+	writes bool
+	reset  bool
 	// begun is set once a statement has run in the transaction, which,
 	// for one that may write, holds the write lock from then on.
 	begun bool
@@ -516,12 +562,15 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 			return err
 		}
 	}
-	tx := &Tx{ctx: ctx, tx: sqlTx, s: s, begun: opts == nil}
+	tx := &Tx{ctx: ctx, tx: sqlTx, s: s, begun: opts == nil, writes: opts == nil}
 	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := sqlTx.Commit(); err != nil {
 		return err
+	}
+	if tx.reset && s.onReset != nil {
+		s.onReset(context.WithoutCancel(ctx))
 	}
 	if tx.erased {
 		s.truncateLog(context.WithoutCancel(ctx))
@@ -573,13 +622,43 @@ func (s *Store) truncateLog(ctx context.Context) {
 // InsertWorkflowTx and CompleteTx.
 func (tx *Tx) SQL() *sql.Tx { return tx.tx }
 
-// Now returns the store's clock: hopper's. It reads it once the
-// transaction has run a statement, which takes the write lock in one that
-// may write, so that the times transactions record are in the order they
-// commit: one read before the lock could be earlier than a time another
-// transaction recorded, and committed, while this one waited for it.
-// Today a transaction's first statement is secure_delete's pragma; it
-// stays right once that moves to hoppersqlite's Config.
+// Now returns the store's clock: the host's, or the later time the store
+// last read from it, its high-water mark, which a transaction that may
+// write records. It reads it once the transaction has run a statement,
+// which takes the write lock in one that may write, so that the times
+// transactions record are in the order they commit: one read before the
+// lock could be earlier than a time another transaction recorded, and
+// committed, while this one waited for it. Today a transaction's first
+// statement is secure_delete's pragma; it stays right once that moves to
+// hoppersqlite's Config.
+//
+// It reads the host's wall clock itself, not hopper's, which never
+// returns less than it returned before in its process: a process that
+// read the host's clock far ahead once would keep that time, and set the
+// mark ahead again with each write, after the host's clock was set right.
+// The host's clock can step back, and a process that starts after it did
+// reads it behind another's. The mark keeps every process's store clock
+// past every time any of them recorded, so that a lease another process
+// renewed is never taken for older than it is, and a job that fences
+// itself never given a new attempt early: a clock stepped back a little
+// stops the store's until the host's catches up, which only puts off
+// what it times.
+//
+// A mark that leads the host's clock by more than Options.MaxLead is a
+// clock reset, as a host set back to an old date, or one bad reading
+// that set the mark ahead: the store's clock then takes the host's, rather
+// than stand still until it catches up. A transaction that may write says
+// so in the store's log, records the host's time as the mark, brings each
+// time a run, a job, an attempt or an endpoint recorded later than it
+// back to it, so that none is ahead of the clock (recordReset), and
+// starts a grace (StartGrace), in which no lapsed lease counts: a lease
+// renewed ahead of the clock is fresh, and lapses a lease period after
+// the reset, never early. Once it commits, Options.OnClockReset is
+// called.
+//
+// On Postgres, one row that every transaction that writes updates would
+// make them wait for each other: a store there keeps the mark otherwise,
+// as with a row per process, read with max().
 func (tx *Tx) Now() (time.Time, error) {
 	if !tx.begun {
 		if _, err := tx.tx.ExecContext(tx.ctx, "SELECT 1"); err != nil {
@@ -587,7 +666,83 @@ func (tx *Tx) Now() (time.Time, error) {
 		}
 		tx.begun = true
 	}
-	return tx.s.driver.UnwrapTx(tx.tx).Now(tx.ctx)
+	clock := hostClock
+	if tx.s.clock != nil {
+		clock = tx.s.clock
+	}
+	now := clock().UTC().Truncate(time.Microsecond)
+	if !tx.s.migrated {
+		return now, nil
+	}
+	var mark sql.NullString
+	err := tx.tx.QueryRowContext(tx.ctx, "SELECT value FROM meridian_store WHERE key = 'clock'").Scan(&mark)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, err
+	}
+	if m, err := strconv.ParseInt(mark.String, 10, 64); err == nil && m > now.UnixMicro() {
+		lead := time.Duration(m-now.UnixMicro()) * time.Microsecond
+		if lead <= tx.s.maxLead {
+			return time.UnixMicro(m).UTC(), nil
+		}
+		if tx.writes {
+			if err := tx.recordReset(now, lead); err != nil {
+				return time.Time{}, err
+			}
+			tx.reset = true
+		}
+		return now, nil
+	}
+	if tx.writes {
+		if _, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_store (key, value) VALUES ('clock', ?)
+ON CONFLICT (key) DO UPDATE SET value = excluded.value`, strconv.FormatInt(now.UnixMicro(), 10)); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return now, nil
+}
+
+// recordReset records a reset of the host's clock, which the clock's mark
+// led by lead, at now: the mark is now; every time a run, a job, an
+// attempt or an endpoint recorded later than now is now; and a grace
+// starts. A run's created_at stays, since a trigger keeps it from ever
+// changing, as do a secret record's updated_at, an attempt's event's
+// stored_at and a run's event's at, which say when they were written and
+// time nothing.
+func (tx *Tx) recordReset(now time.Time, lead time.Duration) error {
+	tx.s.log.WarnContext(tx.ctx, "store: the store's clock was ahead of the host's, as after the host's clock was set back, and takes the host's clock from now, with a grace in which no lapsed lease counts",
+		"ahead", lead)
+	at := now.UnixMicro()
+	for _, stmt := range []string{
+		"UPDATE meridian_runs SET started_at = min(started_at, ?1), ended_at = min(ended_at, ?1) WHERE started_at > ?1 OR ended_at > ?1",
+		"UPDATE meridian_jobs SET created_at = min(created_at, ?1), ready_at = min(ready_at, ?1), ended_at = min(ended_at, ?1) WHERE created_at > ?1 OR ready_at > ?1 OR ended_at > ?1",
+		"UPDATE meridian_attempts SET created_at = min(created_at, ?1), claimed_at = min(claimed_at, ?1), renewed_at = min(renewed_at, ?1), step_started_at = min(step_started_at, ?1), ended_at = min(ended_at, ?1)",
+		"UPDATE meridian_endpoints SET taken_at = min(taken_at, ?1), grace_from = min(grace_from, ?1)",
+		"INSERT INTO meridian_store (key, value) VALUES ('clock', ?1) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+	} {
+		if _, err := tx.tx.ExecContext(tx.ctx, stmt, at); err != nil {
+			return err
+		}
+	}
+	return tx.startGrace(at)
+}
+
+// StartGrace starts a grace for every coordinator of the store, from now,
+// in which no lapsed lease counts (GraceFrom), as after a host that slept
+// woke, or its clock was reset.
+func (tx *Tx) StartGrace() error {
+	now, err := tx.now()
+	if err != nil {
+		return err
+	}
+	return tx.startGrace(now)
+}
+
+// startGrace records at, in microseconds, as the latest start of a grace.
+func (tx *Tx) startGrace(at int64) error {
+	_, err := tx.tx.ExecContext(tx.ctx, `INSERT INTO meridian_store (key, value) VALUES ('grace', ?)
+ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE CAST(meridian_store.value AS INTEGER) < CAST(excluded.value AS INTEGER)`,
+		strconv.FormatInt(at, 10))
+	return err
 }
 
 // now returns the store's clock in microseconds since the Unix epoch, as

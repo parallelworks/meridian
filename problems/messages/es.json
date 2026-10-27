@@ -184,6 +184,11 @@
   "placement_unanswered": "No se pudo asignar el trabajo {job}: los backends de su grupo no respondieron en {tries} intentos.",
   "setup_failed": "El trabajo {job} no pudo empezar: sus intentos fallaron antes de que se ejecutara un paso, {tries} veces.",
   "coordinator_job_failed": "El coordinador no pudo llevar el trabajo {job} hasta su fin.",
+  "worker_lost": "Se perdió el worker del trabajo {job} después de que empezara un paso, y su retry: no lo vuelve a ejecutar.",
+  "worker_lost_again": "Se volvió a perder el worker del trabajo {job}, después de que su retry: lo ejecutara de nuevo {retries} veces, tantas como permite.",
+  "worker_ended_early": "El worker del trabajo {job} terminó antes del primer paso del trabajo.",
+  "worker_killed": "El worker del trabajo {job} fue terminado {reason, select, timeout {por su planificador, al llegar a su límite de tiempo} other {por usar más memoria de la que puede}}.",
+  "member_gone": "El intento del trabajo {job} se asignó a un miembro que su grupo ya no tiene, así que no se puede preguntar a su backend si su worker sigue en marcha.",
 
   "workflow_too_large": "El flujo de trabajo tiene más de {limit} bytes, el límite de su tamaño.",
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",

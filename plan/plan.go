@@ -321,6 +321,14 @@ type JobRetry struct {
 	Interval   Value    `json:"interval,omitzero"`
 }
 
+// RetriesFor reports whether the job's retry: lists reason: whether an
+// attempt of the job that ended for it can be followed by another, as its
+// max-retries allows, which Ready evaluates (ReadyJobRetry). Its reasons
+// are always written out, so the plan says.
+func (j *Job) RetriesFor(reason Reason) bool {
+	return j.Retry != nil && slices.Contains(j.Retry.Reasons, string(reason))
+}
+
 // A Step is one step of a job.
 type Step struct {
 	ID   string `json:"id,omitempty"`

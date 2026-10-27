@@ -84,12 +84,12 @@ func privateDir(t testing.TB) string {
 	return dir
 }
 
-// openStore opens a new store, which the test closes, and returns it and
-// its database's path.
-func openStore(t testing.TB) (*store.Store, string) {
+// openStore opens a new store with opts, which the test closes, and
+// returns it and its database's path.
+func openStore(t testing.TB, opts *store.Options) (*store.Store, string) {
 	t.Helper()
 	path := filepath.Join(privateDir(t), "meridian.db")
-	s, err := store.Open(t.Context(), path, nil)
+	s, err := store.Open(t.Context(), path, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,11 +204,13 @@ type rigOptions struct {
 	maxConns int
 	// configure, if it is set, changes the server before it serves.
 	configure func(*workerapisrv.Server)
+	// store, if it is set, is how the rig's store opens.
+	store *store.Options
 }
 
 func newRig(t *testing.T, opts rigOptions) *rig {
 	t.Helper()
-	s, path := openStore(t)
+	s, path := openStore(t, opts.store)
 	sealer, err := seal.New(newKeys(t), s.ID())
 	if err != nil {
 		t.Fatal(err)

@@ -190,6 +190,11 @@
   "placement_unanswered": "Job {job} couldn't be placed: its group's backends didn't answer in {tries} tries.",
   "setup_failed": "Job {job} failed to start: its attempts failed before a step ran, {tries} times.",
   "coordinator_job_failed": "The coordinator couldn't run job {job} to its end.",
+  "worker_lost": "Job {job}'s worker was lost after a step had started, and its retry: doesn't run it again.",
+  "worker_lost_again": "Job {job}'s worker was lost again, after its retry: had run it again {retries} times, as many as it allows.",
+  "worker_ended_early": "Job {job}'s worker ended before the job's first step.",
+  "worker_killed": "Job {job}'s worker was ended {reason, select, timeout {by its scheduler, at its time limit} other {for using more memory than it may}}.",
+  "member_gone": "Job {job}'s attempt was placed on a member that its group no longer has, so its backend can't be asked whether its worker runs.",
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",

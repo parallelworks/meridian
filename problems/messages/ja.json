@@ -184,6 +184,11 @@
   "placement_unanswered": "ジョブ {job} を配置できませんでした。グループのバックエンドが {tries} 回の試行で応答しませんでした。",
   "setup_failed": "ジョブ {job} を開始できませんでした。その試行はステップが実行される前に {tries} 回失敗しました。",
   "coordinator_job_failed": "コーディネーターはジョブ {job} を最後まで実行できませんでした。",
+  "worker_lost": "ジョブ {job} のワーカーはステップが始まった後に失われ、その retry: はジョブをもう一度実行しません。",
+  "worker_lost_again": "ジョブ {job} のワーカーがまた失われました。その retry: は、許す回数いっぱいの {retries} 回、ジョブをもう一度実行した後でした。",
+  "worker_ended_early": "ジョブ {job} のワーカーは、ジョブの最初のステップの前に終了しました。",
+  "worker_killed": "ジョブ {job} のワーカーは、{reason, select, timeout {制限時間に達したため、スケジューラーによって} other {許されるより多くのメモリーを使ったため}}終了させられました。",
+  "member_gone": "ジョブ {job} の試行は、そのグループにもういないメンバーに配置されたため、ワーカーが動いているかどうかをそのバックエンドに問い合わせられません。",
 
   "workflow_too_large": "ワークフローが {limit} バイトを超えており、サイズの上限を超えています。",
   "execution_group_unknown": "入力「{input}」が指定している実行グループ {value} は、グループ {groups} のいずれでもありません。",

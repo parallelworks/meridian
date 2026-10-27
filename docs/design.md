@@ -2352,7 +2352,19 @@ lease stops leading:
   it starts a new attempt: 21 seconds after the worker stopped waiting,
   which covers clocks that run at different rates, the second a resumed
   host's worker can take to notice, and the time a commit takes. Neither
-  side reads the other's clock; each only measures the period.
+  side reads the other's clock; each only measures the period. The
+  store's clock never goes back, for any of its coordinators: it is the
+  database host's, or the latest time one of them recorded, if that is
+  later, so a host clock stepped back stops it until it catches up,
+  rather than let a coordinator that started since take a lease another
+  renewed for older than it is. A clock stepped back further than the
+  grace, as a host set to an old date, or one bad reading, is a reset:
+  the store's clock takes the host's again, brings each time a run, a
+  job, an attempt or an endpoint recorded ahead of it back to it, so that
+  a lease renewed then lapses a lease period after the reset, starts the
+  grace for every coordinator, and wakes the supervisor of every readied
+  job of a running run, which may have been put off by the clock that was
+  ahead.
 - **The cost** is that such a job starts stopping when it is cut off from
   every coordinator replica for about six tenths of a lease period, 37
   seconds, even when its host is fine. Its new attempt resumes it, as its
@@ -2374,13 +2386,21 @@ with the reason `worker-lost` if a step had started, and otherwise as a
 failure before its first step, which is placed again
 ([Failures and retries](#failures-and-retries)); or with `timeout` when a
 scheduler ended it at its time limit, and `out-of-memory` when a scheduler
-or the kernel ended it for its memory.
+or the kernel ended it for its memory. The backend of an attempt whose
+member its group no longer has can't be asked: the attempt is lost once
+the grace has passed since its lease lapsed, or since it was placed if no
+worker claimed it, with `worker-lost` once a step has started and
+otherwise as a failure before its first step (`member_gone`). A
+coordinator keeps the member an attempt was placed on for a minute before
+it asks the group again, so a member removed from its group can be taken
+for one it has, or one added back for one it doesn't, for up to a minute.
 
 When a replica takes over what workers connect through
 ([Connections](#connections)), as `meridian run` or `resume` does after
 another stopped, and when a replica sees its wall clock jump more than 10
-seconds past its monotonic clock, as when a laptop wakes, it counts no
-lapsed lease until the grace has passed. Jobs keep running while Meridian
+seconds past its monotonic clock, as when a laptop wakes, no replica of
+the store counts a lapsed lease until the grace has passed: the store
+records when the grace began. Jobs keep running while Meridian
 is down, but for those that fence themselves, and a cut-off worker tries
 again at least every 30 seconds, so it reaches the replica at least twice
 within the grace: a laptop waking up or `meridian run` restarting doesn't
@@ -2533,7 +2553,12 @@ for any other only once they have (`plan.Plan.CancelPath`).
   once for a cleanup, which is never tried again, and for a try that the
   step's `retry:`, written out, says is its last; and otherwise once the
   next event shows the step wasn't tried again. A job that ends failed
-  marks it as it ends. Format 1 doesn't count one failure: a job whose
+  marks it as it ends. An attempt that ends for a reason its job's
+  `retry:` lists, as one whose worker was lost, which another attempt may
+  follow, doesn't mark it, nor does a failed step of a job whose `retry:`
+  lists `timeout`, which the job's deadline may have failed: the job marks
+  it once its last attempt has ended, failed. Format 1 doesn't count one
+  failure: a job whose
   `if:` fails to evaluate, which it fails without saying so, where
   Meridian fails it through Ready's diagnostics, and marks the run. The
   step ends cancelled,

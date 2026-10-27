@@ -62,6 +62,17 @@ func (tx *Tx) RestartGrace(name string) error {
 	return oneRow(res, ErrNotFound)
 }
 
+// GraceFrom returns when the latest grace began, in which no lapsed lease
+// counts: the latest time an endpoint of the store's was taken, or its
+// holder's host woke (RestartGrace), or a grace for the whole store
+// started (StartGrace); or the zero time if none is recorded.
+func (tx *Tx) GraceFrom() (time.Time, error) {
+	var from sql.NullInt64
+	err := tx.tx.QueryRowContext(tx.ctx, `SELECT max(t) FROM (SELECT max(grace_from) AS t FROM meridian_endpoints
+UNION ALL SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'grace')`).Scan(&from)
+	return timeOf(from), err
+}
+
 // A Hold is an endpoint that this process holds, until it releases it,
 // closes the store, or ends. The store keeps it, so that a Hold dropped
 // without Release keeps holding the endpoint.

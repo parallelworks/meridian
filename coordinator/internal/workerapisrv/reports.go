@@ -359,9 +359,11 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	}
 	hasPrivate := len(private.Outputs) > 0 || len(private.Steps) > 0
 	// An end that fails the job, rather than one before its first step,
-	// which is placed again, marks the run as one a job of which failed,
-	// for its other attempts' steps whose early-cancel: is any-job-failed,
-	// as format 1 tells them as the job fails.
+	// which is placed again, or one for a reason the job's retry: lists,
+	// which another attempt may follow, marks the run as one a job of
+	// which failed, for its other attempts' steps whose early-cancel: is
+	// any-job-failed, as format 1 tells them as the job fails. The job
+	// marks it as it ends otherwise.
 	jobFailed := result.Outcome == plan.OutcomeFailure && end.Reason != plan.ReasonSetupFailed
 	var changed []string
 	for try := 1; ; try++ {
@@ -394,7 +396,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 			if err := tx.EndAttempt(a.ID, stored); err != nil {
 				return err
 			}
-			if jobFailed {
+			if jobFailed && !tx.RetriesFor(a.ID, end.Reason) {
 				if _, err := tx.MarkJobFailed(run.ID); err != nil {
 					return err
 				}
