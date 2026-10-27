@@ -68,7 +68,9 @@ const (
 // a job the plan bounds sends them. The log that reaches MaxLogBytes keeps
 // its bytes to there, then a line that says the rest wasn't kept
 // (problems.LogTruncated), and each of the attempt's logs after it keeps
-// only that line; a try past MaxLogTry, which no workflow is likely to
+// only that line, but for what another replica reserved of the limit
+// before it ran out, which that replica still spends (spendLogBytes); a
+// try past MaxLogTry, which no workflow is likely to
 // retry to, keeps no log; and the worker is told the rest is stored, so
 // that it goes on. So the logs an attempt has are bounded too, by its job's
 // steps.
@@ -164,6 +166,9 @@ type Server struct {
 	wake     func(ctx context.Context, tx *store.Tx, run, job string) (func(), error)
 	log      *slog.Logger
 	polls    *polls
+	// budgets are what the server has reserved of attempts' limits on
+	// their logs (spendLogBytes).
+	budgets logBudgets
 	// placed are the first claims that wait for their placements to be
 	// recorded, by attempt (awaitPlaced).
 	placed struct {
@@ -173,12 +178,14 @@ type Server struct {
 
 	// What tests change: the newest plan version the server reads, how
 	// long it holds a control poll, how long it holds a first claim for
-	// its placement (awaitPlaced), and how many bytes of a log it keeps.
+	// its placement (awaitPlaced), how many bytes of a log it keeps, and
+	// how many of them it reserves at a time (spendLogBytes).
 	reads          int
 	hold           time.Duration
 	placedWait     time.Duration
 	placedRecheck  time.Duration
 	maxLogBytes    int64
+	logReserve     int64
 	maxEvents      int64
 	maxEventsBytes int64
 	headerTime     time.Duration
@@ -204,7 +211,7 @@ func New(opts Options) (*Server, error) {
 		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers,
 		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
 		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait, placedRecheck: placedRecheck,
-		maxLogBytes: MaxLogBytes, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
+		maxLogBytes: MaxLogBytes, logReserve: logReserve, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
 	}
 	if s.peers == nil {
 		s.peers = LocalPeers{}

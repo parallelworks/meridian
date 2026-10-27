@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,6 +140,119 @@ func TestSpoolLoseRace(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+// TestLogPace checks that a step that prints a line at a time has its lines
+// sent together, an upload at most each logPace, and that the end of its
+// log is sent at once, without waiting for the pace.
+func TestLogPace(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("true")))
+	s := newTestSpool(t, 1<<30)
+	key := logKey{workerapi.LogStep, 0, 0}
+	l := s.open(key)
+	pacedSend(t, f, s, 5*time.Second)
+	var want strings.Builder
+	for i := range 20 {
+		line := fmt.Sprintf("line %d\n", i)
+		want.WriteString(line)
+		if _, err := io.WriteString(l, line); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // a step that prints a line at a time
+	}
+	closed := time.Now()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.wait(t.Context().Done()); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(closed); took > 2*time.Second {
+		t.Errorf("the log's end was sent %s after it ended, as if it waited for the pace", took)
+	}
+	if got, ended := logOf(f, key); got != want.String() || !ended {
+		t.Errorf("the log stored is %q, ended %v; want %q", got, ended, want.String())
+	}
+	if n := f.Requests()[workerapi.PathLogs]; n > 3 {
+		t.Errorf("20 lines printed in a pace took %d uploads", n)
+	}
+}
+
+// TestLogPaceFullUploads checks that a log with more than an upload holds
+// is sent upload after upload, without waiting for the pace between them.
+func TestLogPaceFullUploads(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("true")))
+	s := newTestSpool(t, 1<<30)
+	key := logKey{workerapi.LogStep, 0, 0}
+	data := strings.Repeat("x", 2*workerapi.MaxLogUpload+10)
+	if _, err := io.WriteString(s.open(key), data); err != nil {
+		t.Fatal(err)
+	}
+	pacedSend(t, f, s, 5*time.Second)
+	waitFor(t, "the coordinator to have the whole log", func() bool {
+		got, _ := logOf(f, key)
+		return len(got) == len(data)
+	})
+	if n := f.Requests()[workerapi.PathLogs]; n != 3 {
+		t.Errorf("a log of two uploads and a bit took %d uploads", n)
+	}
+}
+
+// TestLogPaceEndPending checks that the pace after an upload of one log
+// doesn't hold back the end of another that has ended.
+func TestLogPaceEndPending(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("true")))
+	s := newTestSpool(t, 1<<30)
+	going, done := logKey{workerapi.LogStep, 0, 0}, logKey{workerapi.LogStep, 0, 1}
+	if _, err := io.WriteString(s.open(going), "going\n"); err != nil {
+		t.Fatal(err)
+	}
+	l := s.open(done)
+	if _, err := io.WriteString(l, "done\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pacedSend(t, f, s, 5*time.Second)
+	waitFor(t, "the ended log's end", func() bool {
+		got, ended := logOf(f, done)
+		return got == "done\n" && ended
+	})
+}
+
+// pacedSend sends s's logs to f, with uploads paced by pace, until the
+// test ends.
+func pacedSend(t *testing.T, f *workerapitest.Fake, s *spool, pace time.Duration) {
+	t.Helper()
+	tm := testTiming
+	tm.logPace = pace
+	c := claimedClientTimed(t, f, tm)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.send(ctx, c, func(err error) { t.Errorf("the worker stopped: %v", err) })
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
+// waitFor waits up to two seconds, well short of the 5 s pace the tests
+// set, for cond, and fails the test if it doesn't hold by then.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); !cond(); {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited 2 s for %s, as if the worker waited for the pace", what)
+		}
+		time.Sleep(5 * time.Millisecond) //nolint:forbidigo // polling the fake, which has no way to wait for a log
+	}
 }
 
 // TestCompactionLostLog checks that a log stays whole, at the right

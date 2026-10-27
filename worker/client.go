@@ -484,6 +484,10 @@ type timing struct {
 	// firstControl bounds how long the job's first step waits for the
 	// worker's first control (attempt.awaitFirstControl).
 	firstControl time.Duration
+	// logPace is how long the worker leaves, at least, from the start of
+	// an upload of a log that sent all the log had to the start of the
+	// next (spool.pace).
+	logPace time.Duration
 }
 
 var defaultTiming = timing{
@@ -493,6 +497,7 @@ var defaultTiming = timing{
 	backoffMax:   30 * time.Second,
 	flush:        10 * time.Second,
 	firstControl: 5 * time.Second,
+	logPace:      100 * time.Millisecond,
 }
 
 // backoff returns how long to wait before trying a request again after

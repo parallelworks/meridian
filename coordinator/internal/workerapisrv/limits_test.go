@@ -425,10 +425,13 @@ func TestLogTruncated(t *testing.T) {
 // reaches it keeps its bytes to there, each log after keeps only the line
 // that says the rest wasn't kept, and a try past MaxLogTry keeps no log;
 // each upload is answered as stored. Uploads to a log that ended before
-// the limit was reached are checked as ever.
+// the limit was all given out are checked as ever: the server reserves
+// less of it at a time than it is, as it does of MaxLogBytes, so that the
+// first upload doesn't give it all out.
 func TestLogQuotaPerAttempt(t *testing.T) {
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 1024, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
+		workerapisrv.SetLogReserve(s, 100)
 	}})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{})
@@ -502,6 +505,193 @@ func TestLogQuotaPerAttempt(t *testing.T) {
 	if status, body := uploadAs(t, c, other, workerapi.LogSetup, 4, "!", false); status != http.StatusConflict {
 		t.Errorf("an upload after the log's end was answered %d: %s", status, body)
 	}
+}
+
+// The limit on an attempt's logs holds over every replica that serves its
+// uploads, as after a takeover. Each reserves a part of the limit at a time,
+// which the store counts, and spends it as uploads come: what one reserved
+// is its own to spend, even once another has run the limit out, and the
+// others are given only what the limit has left past it. So the attempt's
+// logs keep the limit in all, and no more, beside the line that ends each.
+// Each replica answers an upload past the end of a log another ended at
+// the limit as stored, whether it holds some of the limit still or none:
+// the worker was told the bytes before it were stored.
+func TestLogLimitAcrossReplicas(t *testing.T) {
+	limits := func(s *workerapisrv.Server) {
+		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
+		workerapisrv.SetLogReserve(s, 30)
+	}
+	r := newRig(t, rigOptions{configure: limits})
+	first := r.socket
+	sockets := make([]string, 3)
+	for i := range sockets {
+		r.socket = ""
+		r.serve(rigOptions{configure: limits})
+		sockets[i] = r.socket
+	}
+	r.socket = first
+	one, other, third, fourth := newClient(t, first), newClient(t, sockets[0]), newClient(t, sockets[1]), newClient(t, sockets[2])
+	a, _, credential := r.claimed(one, placed{})
+	uploads := []struct {
+		c           *client
+		try, offset int
+		data        string
+		end         bool
+	}{
+		// One reserves 30, and spends 10.
+		{one, 0, 0, strings.Repeat("a", 10), false},
+		// The other reserves 50, and spends them; then of the 50 more
+		// it asks, it is given the 20 the limit has left past the 80
+		// reserved, and ends the log.
+		{other, 0, 10, strings.Repeat("b", 50), false},
+		{other, 0, 60, strings.Repeat("c", 50), false},
+		// More of that log, past what it stored, through the replica
+		// that still holds 20.
+		{one, 0, 110, strings.Repeat("g", 200), false},
+		// One spends 10 of its 20 on the next log; the third, which
+		// holds none, is given none, and ends that log; and one is
+		// answered more of it, past what it stored, as stored.
+		{one, 1, 0, strings.Repeat("d", 10), false},
+		{third, 1, 10, strings.Repeat("e", 5), false},
+		{one, 1, 15, strings.Repeat("f", 200), false},
+		// One spends the 10 it has left, and is given no more.
+		{one, 2, 0, strings.Repeat("h", 30), true},
+		{one, 3, 0, "i", true},
+		{other, 4, 0, "j", true},
+		{third, 5, 0, "k", true},
+		// More of the first log, past what it stored, through a replica
+		// that has served none of the attempt's uploads.
+		{fourth, 0, 310, strings.Repeat("l", 10), false},
+	}
+	for _, u := range uploads {
+		if ack := uploadTry(t, u.c, credential, u.try, u.offset, u.data, u.end); ack.Length != int64(u.offset+len(u.data)) || ack.Ended != u.end {
+			t.Errorf("an upload of try %d's log at %d was acknowledged %+v", u.try, u.offset, ack)
+		}
+	}
+	logs := r.logs.Of(a.Run, a.Job, a.Number)
+	message := problems.LogTruncated.Message(problems.Params{"limit": int64(100)}) + "\n"
+	want := []string{
+		strings.Repeat("a", 10) + strings.Repeat("b", 50) + strings.Repeat("c", 20) + "\n" + message,
+		strings.Repeat("d", 10) + "\n" + message,
+		strings.Repeat("h", 10) + "\n" + message,
+		message,
+		message,
+		message,
+	}
+	for try, data := range want {
+		if got := logs[workerapitest.LogKey{Part: workerapi.LogStep, Try: try}]; string(got.Data) != data || !got.Ended {
+			t.Errorf("try %d's log kept %q, ended %v; want %q", try, got.Data, got.Ended, data)
+		}
+	}
+}
+
+// A gap in a log that hasn't ended is answered out of order, so that the
+// worker sends the bytes again, even once the store has given out all of
+// the limit on the attempt's logs, while a replica still holds some of it:
+// only a truncation ends a log at the limit.
+func TestLogGapBeforeLimitSpent(t *testing.T) {
+	limits := func(s *workerapisrv.Server) {
+		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
+		workerapisrv.SetLogReserve(s, 30)
+	}
+	r := newRig(t, rigOptions{configure: limits})
+	first := r.socket
+	sockets := make([]string, 2)
+	for i := range sockets {
+		r.socket = ""
+		r.serve(rigOptions{configure: limits})
+		sockets[i] = r.socket
+	}
+	r.socket = first
+	one, other, third := newClient(t, first), newClient(t, sockets[0]), newClient(t, sockets[1])
+	a, _, credential := r.claimed(one, placed{})
+	// One holds 20 of the 30 it reserved; the other spends the 50 it
+	// reserved; and the third is given 20 of the 30 it asks, and holds 15:
+	// the store has given out 110.
+	uploadTry(t, one, credential, 0, 0, strings.Repeat("a", 10), false)
+	uploadTry(t, other, credential, 0, 10, strings.Repeat("b", 50), false)
+	uploadTry(t, third, credential, 1, 0, strings.Repeat("c", 5), false)
+	status, body, err := one.send(http.MethodPost, tryPath(0, 100, false), []byte(strings.Repeat("x", 10)), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := wantProblem(t, "an upload past a gap", status, body, workerapi.OutOfOrder)
+	if got := fmt.Sprint(p.Params[workerapi.ParamExpected]); got != "60" {
+		t.Errorf("an upload past a gap was answered out of order from %s, want 60", got)
+	}
+	// The worker sends the bytes again, from there, and one keeps the 20
+	// it holds.
+	if ack := uploadTry(t, one, credential, 0, 60, strings.Repeat("d", 20), false); ack.Length != 80 || ack.Ended {
+		t.Errorf("the bytes sent again were acknowledged %+v", ack)
+	}
+	logs := r.logs.Of(a.Run, a.Job, a.Number)
+	if got, want := string(logs[workerapitest.LogKey{Part: workerapi.LogStep}].Data), strings.Repeat("a", 10)+strings.Repeat("b", 50)+strings.Repeat("d", 20); got != want {
+		t.Errorf("try 0's log kept %q, want %q", got, want)
+	}
+}
+
+// A replica reserves the limit on an attempt's logs a part at a time, in
+// one write, and spends it as uploads come, with none: two hundred uploads
+// of 100 bytes, with 4,096 bytes reserved at a time, take five writes.
+func TestLogReservations(t *testing.T) {
+	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetLogReserve(s, 4096) }})
+	c := newClient(t, r.socket)
+	a, _, credential := r.claimed(c, placed{})
+	line := strings.Repeat("x", 99) + "\n"
+	for i := range 200 {
+		uploadTry(t, c, credential, 0, i*len(line), line, false)
+	}
+	var counted int64
+	r.inTx(func(tx *store.Tx) error {
+		var err error
+		counted, err = tx.AddLogBytes(a.ID, 0)
+		return err
+	})
+	if counted != 5*4096 {
+		t.Errorf("the store counted %d bytes reserved; want five reservations of 4,096", counted)
+	}
+	logs := r.logs.Of(a.Run, a.Job, a.Number)
+	if got := logs[workerapitest.LogKey{Part: workerapi.LogStep}]; string(got.Data) != strings.Repeat(line, 200) {
+		t.Errorf("the log kept %d bytes; want all 20,000", len(got.Data))
+	}
+}
+
+// BenchmarkLogUploads uploads a step's log as the worker does a chatty
+// step's, a line at a time, each once the last is answered, and reports
+// the time each upload takes.
+func BenchmarkLogUploads(b *testing.B) {
+	r := newRig(b, rigOptions{})
+	c := newClient(b, r.socket)
+	_, _, credential := r.claimed(c, placed{})
+	line := "a line of a chatty step's output\n"
+	offset := 0
+	for b.Loop() {
+		uploadTry(b, c, credential, 0, offset, line, false)
+		offset += len(line)
+	}
+}
+
+// uploadTry uploads data to the log of the try try of the first step of
+// the attempt whose credential is credential, at offset, through c, and
+// returns its acknowledgement.
+func uploadTry(t testing.TB, c *client, credential string, try, offset int, data string, end bool) workerapi.LogAck {
+	t.Helper()
+	status, body, err := c.send(http.MethodPost, tryPath(try, offset, end), []byte(data), credential)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("an upload of try %d's log at %d was answered %d, %v: %s", try, offset, status, err, body)
+	}
+	var ack workerapi.LogAck
+	if err := workerapi.Unmarshal(body, &ack); err != nil {
+		t.Fatal(err)
+	}
+	return ack
+}
+
+// tryPath is the path of an upload to the log of the try try of the first
+// step, at offset, which ends it if end.
+func tryPath(try, offset int, end bool) string {
+	return fmt.Sprintf("%s?%s=%s&%s=0&%s=%d&%s=%d&%s=%v", workerapi.PathLogs, workerapi.QueryPart, workerapi.LogStep, workerapi.QueryStep,
+		workerapi.QueryTry, try, workerapi.QueryOffset, offset, workerapi.QueryEnd, end)
 }
 
 // uploadAs uploads data to the log part of the attempt whose credential is

@@ -221,43 +221,53 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 // appendLog appends data, the part of the log key of the attempt that
 // starts at offset, as Logs.Append does, within the server's limit on the
 // bytes of the attempt's logs, all of them together. The bytes an upload
-// adds to its log are counted against the limit
-// (store.Tx.AddLogBytes) before they are appended. The log that reaches
-// the limit keeps its bytes to there, then a line that says the rest wasn't
-// kept, and ends; each of the attempt's logs after it keeps only that line;
-// and the rest of each is answered as stored. An upload counts the bytes
-// past its log's length as it read it, so uploads of the same bytes at once
-// each count them: the count errs only high, and the attempt's logs never
-// keep more than the limit, beside the line that ends each.
+// adds to its log are spent, before they are appended, from what the
+// server has reserved of the attempt's limit (spendLogBytes). The log that
+// reaches the limit keeps its bytes to there, then a line that says the
+// rest wasn't kept, and ends; each log after it keeps only that line, but
+// for what another server reserved of the limit before it ran out, which
+// that server still spends; and the rest of each is answered as stored.
+// An upload spends the bytes past its log's length as it read it, so
+// uploads of the same bytes at once each spend them: what is spent errs
+// only high, and the attempt's logs never keep more than the limit, beside
+// the line that ends each.
 func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
 	// The log's length: an append of nothing changes nothing.
 	length, ended, err := s.logs.Append(ctx, key, 0, nil, false)
 	if err != nil {
 		return length, ended, err
 	}
-	var counted int64
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		counted, err = tx.LogBytes(attempt)
-		return err
-	}); err != nil {
-		return 0, false, err
+	budget := s.budgets.of(attempt)
+	spent := budget.spent()
+	upTo := offset + int64(len(data))
+	if !spent && ended && upTo > length {
+		// Bytes past an ended log's end, which Logs.Append answers out
+		// of order, unless the limit has run out: another server may
+		// have run it out, and ended the log with the line that says
+		// so, while this one still holds some of it, or none. So the
+		// store says, whatever this one holds. It says so once it has
+		// given all of the limit out, which can be before the servers
+		// have spent what they hold: in between, such an upload is
+		// answered as stored, where it was answered out of order. A
+		// gap in a log that hasn't ended is answered out of order
+		// still, as only a truncation ends a log at the limit.
+		if spent, err = s.logLimitReached(ctx, budget, attempt); err != nil {
+			return 0, false, err
+		}
 	}
-	if counted >= s.maxLogBytes {
-		return s.truncateLog(ctx, key, length, ended, offset+int64(len(data)), end)
-	}
-	fresh := offset + int64(len(data)) - length
-	if offset > length || ended || fresh <= 0 {
+	fresh := upTo - length
+	switch {
+	case spent:
+		return s.truncateLog(ctx, key, length, ended, upTo, end)
+	case offset > length || ended || fresh <= 0:
 		// Past the log's end, after it, or nothing the log hasn't: as
 		// Logs.Append answers it.
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		counted, err = tx.AddLogBytes(attempt, fresh)
-		return err
-	}); err != nil {
+	keep, err := s.spendLogBytes(ctx, budget, attempt, fresh)
+	if err != nil {
 		return 0, false, err
 	}
-	keep := min(fresh, max(0, s.maxLogBytes-(counted-fresh)))
 	if keep == fresh {
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
@@ -266,7 +276,7 @@ func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, 
 			return length, ended, err
 		}
 	}
-	return s.truncateLog(ctx, key, length, false, offset+int64(len(data)), end)
+	return s.truncateLog(ctx, key, length, false, upTo, end)
 }
 
 // truncateLog ends the log key, whose length is length, and which has ended
@@ -430,6 +440,8 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		return
 	}
 	committed(after)
+	// The worker has ended the attempt's logs before its end.
+	s.budgets.drop(a.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

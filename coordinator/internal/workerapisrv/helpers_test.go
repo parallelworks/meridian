@@ -141,7 +141,7 @@ func (f *fakeReadier) Steps(_ context.Context, run *store.Run, _ *store.Attempt)
 
 // A rig is a store, and a server of it on a socket of its own.
 type rig struct {
-	t       *testing.T
+	t       testing.TB
 	store   *store.Store
 	path    string
 	sealer  *seal.Sealer
@@ -168,7 +168,7 @@ type rigOptions struct {
 	store *store.Options
 }
 
-func newRig(t *testing.T, opts rigOptions) *rig {
+func newRig(t testing.TB, opts rigOptions) *rig {
 	t.Helper()
 	// A change to attempts' controls answers the polls the rig's first
 	// server holds of them, as a coordinator has its own server's answered
@@ -232,7 +232,7 @@ func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 
 // listen serves srv on a new Unix socket until the test ends, and returns
 // the socket's path.
-func listen(t *testing.T, srv *workerapisrv.Server) string {
+func listen(t testing.TB, srv *workerapisrv.Server) string {
 	t.Helper()
 	// A socket's path is short: t.TempDir's can be too long.
 	dir, err := os.MkdirTemp("", "ws")
@@ -388,11 +388,11 @@ var conformanceDigest = "sha256:" + strings.Repeat("0", 64)
 
 // A client talks to a server on its socket, as a worker does.
 type client struct {
-	t    *testing.T
+	t    testing.TB
 	http *http.Client
 }
 
-func newClient(t *testing.T, socket string) *client {
+func newClient(t testing.TB, socket string) *client {
 	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return new(net.Dialer).DialContext(ctx, "unix", socket)
 	}}
@@ -423,7 +423,7 @@ func (c *client) send(method, path string, body []byte, bearer string) (int, []b
 
 // claimRequest returns a claim with credential, of the worker Conformance
 // plays but with digest.
-func claimRequest(t *testing.T, credential, digest string) []byte {
+func claimRequest(t testing.TB, credential, digest string) []byte {
 	t.Helper()
 	data, err := workerapi.Marshal(workerapi.ClaimRequest{Credential: credential, PlanVersion: plan.Version, Worker: workerapi.Worker{Version: "v0", Digest: digest}})
 	if err != nil {

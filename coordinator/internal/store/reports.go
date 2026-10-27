@@ -263,7 +263,8 @@ func (tx *Tx) LogBytes(id string) (int64, error) {
 }
 
 // AddLogBytes counts n more bytes of the attempt's logs, which the store
-// doesn't hold, and returns how many it has counted in all.
+// doesn't hold, as servers reserve them before their uploads keep them, and
+// returns how many it has counted in all.
 func (tx *Tx) AddLogBytes(id string, n int64) (int64, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("store: %d bytes of logs", n)
