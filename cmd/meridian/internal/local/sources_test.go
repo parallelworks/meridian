@@ -57,6 +57,8 @@ func sourcesFrom(t *testing.T, origins string) *Sources {
 	t.Helper()
 	s := NewSources(t.TempDir(), testServers)
 	s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
+	// The test's repositories are directories.
+	s.protocols = append(s.protocols, "file")
 	return s
 }
 
@@ -593,6 +595,8 @@ func TestSourcesAccessDenied(t *testing.T) {
 	}))
 	defer server.Close()
 	s.remote = func(_, repo string) string { return server.URL + "/" + repo + ".git" }
+	// The test's server has no TLS.
+	s.protocols = append(s.protocols, "http")
 	_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/private@main"})
 	p := kindtest.Want(t, err, problems.SourceAccessDenied)
 	if p.Params["location"] != "github.com/acme/private@main:workflow.yaml" || !strings.Contains(p.Params["reason"].(string), "terminal prompts disabled") {
@@ -643,6 +647,7 @@ func TestSourcesHungRemote(t *testing.T) {
 	_, s := newOrigins(t)
 	addr := hungRemote(t)
 	s.remote = func(_, repo string) string { return "http://" + addr + "/" + repo + ".git" }
+	s.protocols = append(s.protocols, "http")
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	start := time.Now()
@@ -661,6 +666,7 @@ func TestSourcesHungRemoteBlocksNoOther(t *testing.T) {
 	origins, s := newOrigins(t)
 	addr := hungRemote(t)
 	newOrigin(t, origins, "github.com", "good/flows").commit(map[string]string{"workflow.yaml": "ok\n"})
+	s.protocols = append(s.protocols, "http")
 	s.remote = func(host, repo string) string {
 		if repo == "acme/flows" {
 			return "http://" + addr + "/" + repo + ".git"
@@ -702,6 +708,7 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 		wg.Go(func() {
 			s := NewSources(cache, nil)
 			s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
+			s.protocols = append(s.protocols, "file")
 			var w *compile.Workflow
 			w, errs[i] = s.Resolve(t.Context(), plan.SourceRef{Uses: fmt.Sprintf("github/acme/flows@t%d", i)})
 			if errs[i] == nil && len(w.Text) != i+1 {
@@ -717,6 +724,7 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 	}
 	s := NewSources(cache, nil)
 	s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
+	s.protocols = append(s.protocols, "file")
 	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {
 		t.Errorf("Resolve after them: %v", err)
 	}

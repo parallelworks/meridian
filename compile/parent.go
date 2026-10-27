@@ -45,6 +45,12 @@ type Parent struct {
 	// workflows by it, with no Sources, as the root pinned its whole tree
 	// as it was created. Nil holds none.
 	Pin func(caller, step string) (plan.Source, bool)
+	// Checkout returns the pin that the run's root holds of the
+	// parallelworks/checkout step at the JSON Pointer step of the workflow
+	// of the digest caller (plan.Plan.FindCheckout): Create pins the run's
+	// own checkouts by it, with no Sources, as Pin pins its steps'
+	// workflows. Nil holds none.
+	Checkout func(caller, step string) (plan.Checkout, bool)
 }
 
 // sourceKeys are the keys of a step's with: that say where the workflow

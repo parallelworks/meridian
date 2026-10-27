@@ -119,6 +119,11 @@ func fullPlan(t testing.TB) *plan.Plan {
 				Uses:   "github/example/workflows@v1",
 				Source: &source,
 				Path:   "/jobs/build/steps/1",
+			}, {
+				Uses:     plan.CheckoutUses,
+				Checkout: &plan.Checkout{Repo: "https://github.com/example/app.git", Revision: "main", Commit: "fedcba9876543210fedcba9876543210fedcba98"},
+				With:     plan.Literal(map[string]any{"repo": "https://github.com/example/app.git", "branch": "main", "sparse_checkout": []any{"app"}}),
+				Path:     "/jobs/build/steps/2",
 			}},
 			Outputs: map[string]plan.Value{"out": mustValue(t, "${{ steps.greet.outputs.x }}")},
 			Path:    "/jobs/build",
@@ -130,6 +135,9 @@ func fullPlan(t testing.TB) *plan.Plan {
 		Calls: []plan.Call{
 			{Caller: "sha256:01", Step: "/jobs/deploy/steps/0", Source: source},
 			{Caller: "sha256:01", Step: "/jobs/deploy/steps/1", Source: plan.Source{Location: "github.com/example/workflows/next.yaml", Revision: "89abcdef0123456789abcdef0123456789abcdef", Digest: "sha256:02", Ref: plan.SourceRef{Uses: "github/example/workflows@v2", Path: "next.yaml"}}},
+		},
+		Checkouts: []plan.CheckoutPin{
+			{Caller: "sha256:01", Step: "/jobs/deploy/steps/2", Checkout: plan.Checkout{Repo: "user@example.com:tools.git", Revision: "v2", Commit: "0123456789abcdef0123456789abcdef01234567"}},
 		},
 	}
 }
