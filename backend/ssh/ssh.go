@@ -26,7 +26,8 @@
 // meridian host keeps each host's placements apart, under its machine ID
 // and its name. So a placement's ID holds a keyed hash of the host it was
 // made on, and the driver checks, cancels or forgets it only on that host:
-// on another, Check gives Unknown, so the attempt isn't lost, and the
+// on another, Check gives Unknown, with problems.SSHPlacementElsewhere,
+// which the coordinator takes for a worker that runs for a while, and the
 // others fail, to be tried again. Find trusts that a host has no
 // placement of an attempt only if it isn't another than the one this
 // driver last placed or found it on, which it keeps in memory: what it
@@ -35,6 +36,7 @@
 package ssh
 
 import (
+	"container/list"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -91,15 +93,62 @@ type Driver struct {
 	// hosts are what the driver learned of the host each connection
 	// reaches.
 	hosts map[*sshconn.Conn]*host
-	// placedOn is, for each attempt the driver placed or found, the tag of
-	// the host it is on (Driver.tag), until it forgets it.
-	placedOn map[string]string
+	// kept are the attempts the driver placed or found, each with the
+	// tag of the host it is on (Driver.tag), until it forgets it, the
+	// least recently placed or found first.
+	kept placedAttempts
 }
 
 var _ backend.Driver = (*Driver)(nil)
 
-// maxPlaced is how many attempts' hosts a Driver keeps (Driver.placedOn).
+// maxPlaced is how many attempts' hosts a Driver keeps (Driver.kept):
+// past it, it forgets the one it placed or found longest ago.
 const maxPlaced = 4096
+
+// placedAttempts are attempts, each with the tag of the host it is on,
+// in the order they were last kept.
+type placedAttempts struct {
+	order *list.List
+	by    map[string]*list.Element
+}
+
+// A placedAttempt is one of placedAttempts.
+type placedAttempt struct{ attempt, tag string }
+
+// keep keeps the attempt on the host tagged tag, as the last kept, and
+// forgets the one kept longest ago if there are more than most.
+func (pa *placedAttempts) keep(attempt, tag string, most int) {
+	if pa.by == nil {
+		pa.order, pa.by = list.New(), map[string]*list.Element{}
+	}
+	if e, ok := pa.by[attempt]; ok {
+		e.Value = placedAttempt{attempt, tag}
+		pa.order.MoveToBack(e)
+		return
+	}
+	pa.by[attempt] = pa.order.PushBack(placedAttempt{attempt, tag})
+	for pa.order.Len() > most {
+		oldest := pa.order.Front()
+		delete(pa.by, pa.order.Remove(oldest).(placedAttempt).attempt) //nolint:forcetypeassert // the list holds only placedAttempts
+	}
+}
+
+// tag returns the tag of the host the attempt is on, and false for one it
+// doesn't keep.
+func (pa *placedAttempts) tag(attempt string) (string, bool) {
+	if e, ok := pa.by[attempt]; ok {
+		return e.Value.(placedAttempt).tag, true //nolint:forcetypeassert // the list holds only placedAttempts
+	}
+	return "", false
+}
+
+// forget forgets the attempt.
+func (pa *placedAttempts) forget(attempt string) {
+	if e, ok := pa.by[attempt]; ok {
+		pa.order.Remove(e)
+		delete(pa.by, attempt)
+	}
+}
 
 // targetOf returns the host a member's settings, format 1's ssh: keys,
 // name, and the logins: each as text, as format 1 reads them, null and a
@@ -324,10 +373,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 func (d *Driver) placed(h *host, p backend.Placement) backend.Placement {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.placedOn == nil || len(d.placedOn) >= maxPlaced {
-		d.placedOn = map[string]string{}
-	}
-	d.placedOn[p.Attempt] = h.tag
+	d.kept.keep(p.Attempt, h.tag, maxPlaced)
 	p.ID = h.tag + "/" + p.ID
 	return p
 }
@@ -354,7 +400,7 @@ func (d *Driver) Find(ctx context.Context, m *backend.Member, attempt string) (b
 		return d.placed(h, *msg.Placement), true, nil
 	}
 	d.mu.Lock()
-	on, known := d.placedOn[attempt]
+	on, known := d.kept.tag(attempt)
 	d.mu.Unlock()
 	if known && on != h.tag {
 		return backend.Placement{}, false, d.elsewhere(m, attempt)
@@ -374,15 +420,18 @@ func (d *Driver) elsewhere(m *backend.Member, attempt string) error {
 
 // onHost returns the request of op for the placement p, the driver's, on
 // the host h, which must be the one it is on: with the host's own
-// placement, its ID without the host's tag.
-func (d *Driver) onHost(m *backend.Member, p backend.Placement) func(*host) (*hostproto.Request, error) {
+// placement, its ID without the host's tag. A connection to t that
+// reaches another host, which knows nothing of p, as another of a
+// cluster's login nodes, is problems.SSHPlacementElsewhere: a cause that
+// won't pass while the host it is on is out of the name's rotation.
+func (d *Driver) onHost(m *backend.Member, t sshconn.Target, p backend.Placement) func(*host) (*hostproto.Request, error) {
 	return func(h *host) (*hostproto.Request, error) {
 		on, id, ok := strings.Cut(p.ID, "/")
 		if !ok {
 			return nil, fmt.Errorf("ssh: %q isn't the ID of a placement on a host", p.ID)
 		}
 		if on != h.tag {
-			return nil, d.elsewhere(m, p.Attempt)
+			return nil, problems.SSHPlacementElsewhere.Problem(problems.Params{"host": t.Host})
 		}
 		// A request made again, over a connection made again, is made
 		// from p as it was.
@@ -393,16 +442,21 @@ func (d *Driver) onHost(m *backend.Member, p backend.Placement) func(*host) (*ho
 }
 
 // Check says what has become of a placement's worker, as the host's local
-// backend says. One it can't ask, as over a connection that is down, or
-// that reaches another host than the one it is on, is Unknown, with the
-// error that says why: a worker on a host is never lost to an outage.
+// backend says. One it can't ask is Unknown, with the error that says why:
+// for a cause that passes, as a connection that is down, stalls, or whose
+// sessions sshd refuses, an error that isn't a problem, so that a worker
+// on a host is never lost to an outage; and for one that won't pass by
+// itself, a problem, which the coordinator bounds (backend.Driver.Check):
+// a host key known_hosts doesn't have, or that has changed; a meridian
+// host that stops before it answers, or is of another release; or a
+// connection that reaches another host than the one the worker is on.
 func (d *Driver) Check(ctx context.Context, m *backend.Member, p backend.Placement) (backend.Status, error) {
 	unknown := backend.Status{State: backend.Unknown}
 	t, err := targetOf(m)
 	if err != nil {
 		return unknown, err
 	}
-	msg, _, err := d.run(ctx, t, nil, hostproto.OpCheck, d.onHost(m, p))
+	msg, _, err := d.run(ctx, t, nil, hostproto.OpCheck, d.onHost(m, t, p))
 	switch {
 	case err != nil:
 		return unknown, err
@@ -426,7 +480,7 @@ func (d *Driver) Forget(ctx context.Context, m *backend.Member, p backend.Placem
 		return err
 	}
 	d.mu.Lock()
-	delete(d.placedOn, p.Attempt)
+	d.kept.forget(p.Attempt)
 	d.mu.Unlock()
 	return nil
 }
@@ -437,7 +491,7 @@ func (d *Driver) end(ctx context.Context, m *backend.Member, p backend.Placement
 	if err != nil {
 		return err
 	}
-	_, _, err = d.run(ctx, t, nil, op, d.onHost(m, p))
+	_, _, err = d.run(ctx, t, nil, op, d.onHost(m, t, p))
 	return err
 }
 

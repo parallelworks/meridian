@@ -44,6 +44,13 @@ type Timing struct {
 	// clock, which stops while the host sleeps, for the coordinator to
 	// take it that its host slept.
 	WakeJump time.Duration
+	// CheckGrace is how long the coordinator takes the worker of an
+	// attempt to run while its backend's check of it gives a problem, a
+	// cause that won't pass by itself, as a host key known_hosts doesn't
+	// have, before it loses the attempt with the problem: time for a
+	// person to see it, and to fix it, as a host key can be, before the
+	// job is placed again, or fails.
+	CheckGrace time.Duration
 	// WorkerStop is how long a worker takes to stop its job's steps once
 	// told to: its grace between SIGTERM and SIGKILL, and the time it
 	// waits for their output after SIGKILL. The coordinator waits that,
@@ -60,6 +67,7 @@ func DefaultTiming() Timing {
 		FenceMargin: 15 * time.Second,
 		Grace:       60 * time.Second,
 		WakeJump:    10 * time.Second,
+		CheckGrace:  5 * time.Minute,
 		WorkerStop:  35 * time.Second,
 	}
 }
@@ -80,7 +88,7 @@ func openTiming() (Timing, error) {
 	case s < 0.1 || s > 1:
 		return Timing{}, fmt.Errorf("coordinator: a test's timing scale %v isn't from 0.1 to 1", s)
 	}
-	for _, d := range []*time.Duration{&tm.Lease, &tm.Heartbeat, &tm.FenceMargin, &tm.Grace, &tm.WakeJump} {
+	for _, d := range []*time.Duration{&tm.Lease, &tm.Heartbeat, &tm.FenceMargin, &tm.Grace, &tm.WakeJump, &tm.CheckGrace} {
 		*d = time.Duration(float64(*d) * s)
 	}
 	tm.Lease = tm.Lease.Truncate(time.Second)

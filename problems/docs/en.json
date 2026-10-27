@@ -2114,6 +2114,20 @@
       "Run the coordinator from a release of Meridian, built with the FIPS 140-3 module, so that the binary it copies to the host is one too."
     ]
   },
+  "ssh_host_release_mismatch": {
+    "why": "Meridian copies its own binary to a host, and drives meridian host there, which must be of the coordinator's release, as the binary it copied is. meridian host said another release: the binary in the host's cache of binaries isn't the one Meridian copied, or a binary fetched for the host's system is of another release.",
+    "fix": [
+      "Remove the host's cache of binaries, the bin/ of meridian's cache directory there, so that Meridian copies its binary again.",
+      "If the host is of another system than the coordinator's, fetch this release's binary for it again."
+    ]
+  },
+  "ssh_placement_elsewhere": {
+    "why": "A host's name can lead to more than one machine, as a cluster's login nodes behind one name do, each of which keeps its own workers. Meridian placed the worker on one of them, and connecting again reached another, which knows nothing of it. Meridian takes such a worker to run for a while, as it does over a connection that is down, and then to be lost, with this problem: the node it is on may be down, gone, or out of the name's rotation.",
+    "fix": [
+      "Check whether the node the job ran on is up, and in the name's rotation.",
+      "Where a cluster's login nodes share a name, and its jobs must reach the same one, name a node itself, in the workflow's ssh: or in the clusters file."
+    ]
+  },
   "worker_token_not_taken": {
     "why": "Where the process that places a worker ends once it has, as meridian host does on another host, it waits until the worker has taken its bootstrap token, which it hands over on a socket only the worker inherits. This worker didn't: it ended first, as one that systemd-run couldn't start does, where your service manager can't be reached or a scope of the same name is still there, or it didn't ask for its token within a minute. A worker without its token can't run the job, so Meridian stopped it, and placed nothing.",
     "fix": [

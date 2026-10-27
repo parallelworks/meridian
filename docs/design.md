@@ -2823,7 +2823,13 @@ fences itself, once its lease has lapsed and the margin passed. When the
 lease of an attempt that doesn't fence itself lapses, the coordinator asks
 the attempt's backend, and again every heartbeat period while the backend
 says the worker is running or queued, or can't decide, as over an SSH
-connection that is down, which counts as not lost. Once the backend says
+connection that is down, which counts as not lost. A backend that can't
+decide for a cause that won't pass by itself, as a host key that
+known_hosts doesn't have, or that has changed, says what it is, as a
+problem: that counts as not lost for five minutes from the first such
+check since the backend last decided, time for a person to see the
+problem and fix it, and then the attempt is lost, with the problem, which
+its end, its events and `meridian status` show. Once the backend says
 the worker has ended without completing its attempt, the attempt ends
 with the reason `worker-lost` if a step had started, and otherwise as a
 failure before its first step, which is placed again
@@ -3985,16 +3991,24 @@ backend there through `meridian host`
   placements of its own. So a placement's ID begins with a keyed hash of
   the host it was made on, its machine ID and its name, as `hello` says
   them, and it is checked, cancelled or forgotten only on that host: a
-  check of it over a connection to another is unknown, as over one that is
-  down, and a cancel waits. Nor is another host's having no placement of
+  check of it over a connection to another is unknown
+  (`ssh_placement_elsewhere`), for five minutes at most, as for any
+  problem a check gives ([Leases and fencing](#leases-and-fencing)), since
+  the node it is on may be gone, or out of the name's rotation, and a
+  cancel waits. Nor is another host's having no placement of
   an attempt taken for the attempt's having none, where the coordinator
   has placed or found it on another since it started.
 - **Outages.** A connection that drops is dialed again, and the socket
   forwarded again at the same path, so the host's workers reconnect
   without being told; meanwhile they run their steps and hold their
   reports, as any worker cut off does. A check of a placement over a
-  connection that is down is unknown, so a job on a host is never lost to
-  an outage, and a cancel waits for the connection too. A replica that
+  connection that is down, stalls, or whose sessions sshd refuses is
+  unknown, so a job on a host is never lost to an outage, and a cancel
+  waits for the connection too. A check that can't be made for a cause
+  that won't pass by itself, as a host key that known_hosts doesn't have
+  or that has changed, a `meridian host` that stops before it answers
+  (`ssh_host_helper_failed`), or one of another release
+  (`ssh_host_release_mismatch`), is unknown for five minutes at most. A replica that
   takes a host's connection over, as `meridian resume` does once the
   process that held it has stopped, wakes the supervisors of the attempts
   placed on it, which connect again; the grace after a takeover keeps

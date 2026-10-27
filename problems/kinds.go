@@ -526,6 +526,10 @@ var (
 	SSHHostMissing      = define(Error, "ssh_host_missing", "Member of the ssh backend that names no host", "member")
 	SSHUnreachable      = define(Error, "ssh_unreachable", "Host that can't be reached", "host", "reason")
 	SSHHostHelperFailed = define(Error, "ssh_host_helper_failed", "meridian host that stopped before it answered", "host", "op", "reason")
+	// release is the release meridian host says it is, and expected the
+	// coordinator's.
+	SSHHostReleaseMismatch = define(Error, "ssh_host_release_mismatch", "meridian host of another release", "host", "release", "expected")
+	SSHPlacementElsewhere  = define(Error, "ssh_placement_elsewhere", "Host whose connection reaches another node than a worker's", "host")
 )
 
 // The meridian command's directories. mode is a file's or directory's

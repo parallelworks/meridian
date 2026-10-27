@@ -340,6 +340,17 @@ func TestProbe(t *testing.T) {
 	if fit := r.probe(); fit.Problem != nil {
 		t.Errorf("with GODEBUG=fips140=off in the session, the fit is %+v", fit)
 	}
+	// A binary at a path that holds a space and a quote runs: the path is
+	// quoted for sh.
+	quoted := filepath.Join(t.TempDir(), "cache 'quoted'")
+	if err := os.Mkdir(quoted, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.server.SetEnv("MERIDIAN_CACHE_DIR=" + quoted)
+	r.server.Drop()
+	if fit := r.probe(); fit.Problem != nil {
+		t.Errorf("with the binary at a path that holds a space and a quote, the fit is %+v", fit)
+	}
 	// What hello says is wrong is the Fit's.
 	r.server.SetEnv("MERIDIAN_STATE_DIR=state")
 	r.server.Drop()
@@ -447,7 +458,8 @@ func TestUnreachable(t *testing.T) {
 }
 
 // TestHello checks that a host whose meridian host runs another binary
-// than the one put there, or says it is of another release, isn't driven.
+// than the one put there isn't driven, and is tried again; nor one that
+// says it is of another release, which is ssh_host_release_mismatch.
 func TestHello(t *testing.T) {
 	r := newRig(t)
 	r.probe()
@@ -461,8 +473,17 @@ func TestHello(t *testing.T) {
 		r.d.hello = tc.change
 		r.server.Drop()
 		fit, err := r.d.Probe(ctx(t, time.Minute), r.m, backend.Demand{})
-		if err == nil || fit.Problem != nil {
-			t.Errorf("a hello of another %s gives %+v, %v", tc.name, fit, err)
+		switch tc.name {
+		case "digest":
+			// Maybe a race with another that put a binary there: tried
+			// again.
+			if err == nil || fit.Problem != nil {
+				t.Errorf("a hello of another digest gives %+v, %v", fit, err)
+			}
+		default:
+			if err != nil || fit.Problem == nil || fit.Problem.Code != problems.SSHHostReleaseMismatch.Code() {
+				t.Errorf("a hello of another release gives %+v, %v", fit, err)
+			}
 		}
 	}
 	r.d.hello = nil
@@ -476,10 +497,11 @@ func TestHello(t *testing.T) {
 func TestOutage(t *testing.T) {
 	r := newRig(t)
 	p := r.place("attempt-1")
+	// Unknown, for a cause that passes: an error that isn't a problem.
 	unknown := func(what string) {
 		t.Helper()
 		st, err := r.d.Check(ctx(t, 5*time.Second), r.m, p)
-		if st.State != backend.Unknown || err == nil {
+		if _, isProblem := errors.AsType[*problem.Problem](err); st.State != backend.Unknown || err == nil || isProblem {
 			t.Errorf("%s: Check gives %+v, %v", what, st, err)
 		}
 	}
@@ -518,6 +540,15 @@ func TestOutage(t *testing.T) {
 	unknown("every session refused")
 	r.server.RefuseSessions(0)
 	r.check(p, backend.Running)
+
+	// A host key that changed won't pass by itself: Unknown, with the
+	// problem, which the coordinator bounds.
+	r.server.SetHostKeys(sshtest.NewKey(t))
+	r.server.Drop()
+	st, err := r.d.Check(ctx(t, 5*time.Second), r.m, p)
+	if pe, ok := errors.AsType[*problem.Problem](err); st.State != backend.Unknown || !ok || pe.Code != problems.SSHHostKeyChanged.Code() {
+		t.Errorf("with the host's key changed, Check gives %+v, %v", st, err)
+	}
 }
 
 // TestAnotherHost checks a connection made again that reaches another host
@@ -546,7 +577,7 @@ func TestAnotherHost(t *testing.T) {
 
 	reach("node2", "MERIDIAN_STATE_DIR="+t.TempDir())
 	st, err := r.d.Check(t.Context(), r.m, p)
-	if st.State != backend.Unknown || err == nil {
+	if pe, ok := errors.AsType[*problem.Problem](err); st.State != backend.Unknown || !ok || pe.Code != problems.SSHPlacementElsewhere.Code() {
 		t.Errorf("on another host, Check gives %+v, %v", st, err)
 	}
 	if err := r.d.Cancel(t.Context(), r.m, p); err == nil {
@@ -668,6 +699,16 @@ func TestCallOutsideProtocol(t *testing.T) {
 				}
 			},
 		},
+		// Nothing is written on its standard input before it says it is
+		// ready: a helper that finds something there fails.
+		{
+			"order", `early=$(timeout 1 head -c 1); if [ -n "$early" ]; then echo "meridian: error: a request before ready (early)" >&2; exit 2; fi; ` + ready + say(hello),
+			func(t *testing.T, m *hostproto.Message, err error) {
+				if err != nil || m.Hello == nil {
+					t.Errorf("a helper that checks that nothing comes before ready gives %+v, %v", m, err)
+				}
+			},
+		},
 		{
 			"error", ready + `printf '%s\n' '{"protocol":1,"error":"host: busy"}'; exit 2`,
 			func(t *testing.T, m *hostproto.Message, err error) {
@@ -728,7 +769,7 @@ func TestNames(t *testing.T) {
 	// made, as over a connection made again, and leaves the placement as
 	// it was.
 	p := backend.Placement{Attempt: "attempt-1", ID: "tag/123:456", WorkerDigest: "sha256:x"}
-	req := d.onHost(m, p)
+	req := d.onHost(m, sshconn.Target{Host: "farm.example.org"}, p)
 	for range 2 {
 		r, err := req(&host{tag: "tag"})
 		if err != nil || r.Placement.ID != "123:456" || r.Placement.Attempt != "attempt-1" || r.Member.Settings != nil {
@@ -737,6 +778,26 @@ func TestNames(t *testing.T) {
 	}
 	if _, err := req(&host{tag: "other"}); err == nil {
 		t.Error("a request for a placement on another host was made")
+	}
+
+	// Past as many attempts as it keeps, the driver forgets the one it
+	// kept longest ago, and only that one.
+	var pa placedAttempts
+	pa.keep("a1", "t1", 2)
+	pa.keep("a2", "t2", 2)
+	pa.keep("a1", "t1", 2)
+	pa.keep("a3", "t3", 2)
+	if _, ok := pa.tag("a2"); ok {
+		t.Error("the attempt kept longest ago is still kept")
+	}
+	for _, a := range []string{"a1", "a3"} {
+		if _, ok := pa.tag(a); !ok {
+			t.Errorf("%s was forgotten", a)
+		}
+	}
+	pa.forget("a1")
+	if _, ok := pa.tag("a1"); ok || pa.order.Len() != 1 {
+		t.Error("a forgotten attempt is still kept")
 	}
 
 	for _, ssh := range []map[string]any{{"remoteHost": ""}, {"remoteHost": nil}, {"remoteUser": "alice"}} {

@@ -2456,6 +2456,22 @@
       "Ejecuta el coordinador desde una versión publicada de Meridian, compilada con el módulo FIPS 140-3, para que el binario que copia al host también lo esté."
     ]
   },
+  "ssh_host_release_mismatch": {
+    "title": "meridian host de otra versión",
+    "why": "Meridian copia su propio binario a un host y maneja allí meridian host, que debe ser de la versión del coordinador, como lo es el binario que copió. meridian host dijo otra versión: el binario de la caché de binarios del host no es el que copió Meridian, o un binario descargado para el sistema del host es de otra versión.",
+    "fix": [
+      "Elimina la caché de binarios del host, el bin/ del directorio de caché de meridian allí, para que Meridian vuelva a copiar su binario.",
+      "Si el host es de otro sistema que el del coordinador, vuelve a descargar el binario de esta versión para él."
+    ]
+  },
+  "ssh_placement_elsewhere": {
+    "title": "Host cuya conexión llega a otro nodo que el de un worker",
+    "why": "El nombre de un host puede llevar a más de una máquina, como los nodos de acceso de un clúster tras un mismo nombre, cada uno con sus propios workers. Meridian colocó el worker en uno de ellos, y al volver a conectarse llegó a otro, que no sabe nada de él. Meridian da por hecho que ese worker sigue en ejecución durante un tiempo, como sobre una conexión caída, y después que se perdió, con este problema: el nodo en el que está puede estar caído, haber desaparecido o estar fuera de la rotación del nombre.",
+    "fix": [
+      "Comprueba si el nodo en el que se ejecutó el trabajo está activo y en la rotación del nombre.",
+      "Donde los nodos de acceso de un clúster comparten un nombre y sus trabajos deben llegar al mismo, nombra el propio nodo, en el ssh: del flujo de trabajo o en el archivo de clústeres."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "Worker que no tomó su token",
     "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",

@@ -106,6 +106,12 @@ func (c *Coordinator) waitFor(d time.Duration) time.Duration {
 // asked, is lost once the grace has passed since its lease lapsed, or
 // since it was placed, for one not claimed: a failure before its first
 // step, member_gone, which places the job again, when none had started.
+//
+// A check that gives a problem, a cause that won't pass by itself, as a
+// host key that known_hosts doesn't have, counts as running, as one that
+// can't decide does, but for CheckGrace at most, from the first such
+// check since the backend last decided: then the attempt is lost with the
+// problem.
 func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, now time.Time) (time.Duration, error) {
 	cand, p, err := c.placedMember(ctx, run, job, a)
 	switch {
@@ -124,6 +130,11 @@ func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *stor
 	st := backend.Status{State: backend.Unknown}
 	if err == nil {
 		st, err = cand.driver.Check(ctx, cand.member, p)
+		if prob, ok := errors.AsType[*problem.Problem](err); ok && c.uncheckable(a.ID, now, err == nil) {
+			return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, prob)
+		} else if err == nil {
+			c.uncheckable(a.ID, now, true)
+		}
 		if err != nil {
 			if a.Private {
 				c.log.InfoContext(ctx, "coordinator: a backend couldn't say whether an attempt's worker runs, which counts as running", "attempt", a.ID)
@@ -137,6 +148,28 @@ func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *stor
 		return c.waitFor(c.timing.Heartbeat), nil
 	}
 	return 0, c.lose(ctx, a, st, nil)
+}
+
+// uncheckable reports, for the attempt id whose backend's check of it
+// gave a problem at now, by the store's clock, whether CheckGrace has
+// passed since the first such check since its backend last decided; or,
+// with decided, forgets when that was, and reports false.
+func (c *Coordinator) uncheckable(id string, now time.Time, decided bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if decided {
+		delete(c.problemSince, id)
+		return false
+	}
+	since, ok := c.problemSince[id]
+	if !ok {
+		if len(c.problemSince) >= maxMembers {
+			clear(c.problemSince)
+		}
+		since = now
+		c.problemSince[id] = now
+	}
+	return !now.Before(since.Add(c.timing.CheckGrace))
 }
 
 // errUncheckable is what placedMember returns for an attempt whose
@@ -198,23 +231,27 @@ func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *sto
 // lose ends the attempt a, whose worker was lost, as st, its backend's
 // last word on it, says: with the reason timeout or out-of-memory when its
 // scheduler, or the kernel, ended it so; with worker-lost once a step has
-// started; and otherwise as a failure before the job's first step, with
-// early, or worker_ended_early for nil, which places the job again. The
+// started, with why, its problem, if it has one; and otherwise as a
+// failure before the job's first step, with why, or worker_ended_early
+// for nil, which places the job again. The
 // attempt must still be as a was, not claimed nor renewed meanwhile, as a
 // worker that reached the coordinator again would have it, or nothing is
 // ended. Either way, the supervisor looks again.
-func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, early *problem.Problem) error {
-	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost}
+func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, why *problem.Problem) error {
+	c.mu.Lock()
+	delete(c.problemSince, a.ID)
+	c.mu.Unlock()
+	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost, Problem: why}
 	switch {
 	case st.End == backend.EndTimedOut:
 		end.Reason = plan.ReasonTimeout
 	case st.End == backend.EndOutOfMemory:
 		end.Reason = plan.ReasonOutOfMemory
 	case a.State != store.AttemptRunning:
-		if early == nil {
-			early = problems.WorkerEndedEarly.Problem(problems.Params{"job": a.Job})
+		if why == nil {
+			why = problems.WorkerEndedEarly.Problem(problems.Params{"job": a.Job})
 		}
-		end = store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: early}
+		end = store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: why}
 	}
 	ended := false
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {

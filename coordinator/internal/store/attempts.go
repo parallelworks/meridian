@@ -134,7 +134,8 @@ type AttemptEnd struct {
 	// for one that didn't complete.
 	Report []byte
 	// Problem is what failed before a step started, for one that ended
-	// so, or nil.
+	// so; why its worker was lost, for one lost after, where that is
+	// known, as a problem its backend's check gave for long enough; or nil.
 	Problem *problem.Problem
 }
 
@@ -471,7 +472,7 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	default:
 		return fmt.Errorf("store: %q isn't how an attempt ends", end.Kind)
 	}
-	if end.Problem != nil && end.Kind != EndCompleted && end.Kind != EndSetupFailed {
+	if end.Problem != nil && end.Kind != EndCompleted && end.Kind != EndSetupFailed && end.Kind != EndLost {
 		return fmt.Errorf("store: an attempt that ended %s with a problem", end.Kind)
 	}
 	a, err := tx.Attempt(id)

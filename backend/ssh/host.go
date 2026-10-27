@@ -85,7 +85,10 @@ func (d *Driver) drop(conn *sshconn.Conn, h *host) {
 
 // learn puts the binary on the host conn reaches, and asks meridian host
 // what the host is: a host whose meridian host runs another binary than
-// the one put there, or is of another release, isn't driven.
+// the one put there isn't driven, which may be a race with another that
+// put a binary there, to be tried again; nor one of another release than
+// the binary's (problems.SSHHostReleaseMismatch), which trying again won't
+// change.
 func (d *Driver) learn(ctx context.Context, conn *sshconn.Conn, t sshconn.Target, h *host) error {
 	bin, _, err := hostbin.Install(ctx, conn, t.Host, d.Binaries)
 	if err != nil {
@@ -105,7 +108,7 @@ func (d *Driver) learn(ctx context.Context, conn *sshconn.Conn, t sshconn.Target
 	case m.Hello.Binary.Digest != bin.Digest:
 		return fmt.Errorf("ssh: meridian host runs a binary of the digest %s, not the one put there, %s", m.Hello.Binary.Digest, bin.Digest)
 	case d.Binaries.Version != "" && m.Hello.Version != d.Binaries.Version:
-		return fmt.Errorf("ssh: meridian host is of release %s, not %s", m.Hello.Version, d.Binaries.Version)
+		return problems.SSHHostReleaseMismatch.Problem(problems.Params{"host": t.Host, "release": m.Hello.Version, "expected": d.Binaries.Version})
 	}
 	if h.tag, err = d.tag(m.Hello); err != nil {
 		return err
