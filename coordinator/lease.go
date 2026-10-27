@@ -110,8 +110,9 @@ func (c *Coordinator) waitFor(d time.Duration) time.Duration {
 // A check that gives a problem, a cause that won't pass by itself, as a
 // host key that known_hosts doesn't have, counts as running, as one that
 // can't decide does, but for CheckGrace at most, from the first such
-// check since the backend last decided: then the attempt is lost with the
-// problem.
+// check since the backend last decided, or the attempt's lease was last
+// renewed, as the store records it (store.Tx.CheckProblem), whichever
+// replica checked: then the attempt is lost with the problem.
 func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, now time.Time) (time.Duration, error) {
 	cand, p, err := c.placedMember(ctx, run, job, a)
 	switch {
@@ -130,10 +131,28 @@ func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *stor
 	st := backend.Status{State: backend.Unknown}
 	if err == nil {
 		st, err = cand.driver.Check(ctx, cand.member, p)
-		if prob, ok := errors.AsType[*problem.Problem](err); ok && c.uncheckable(a.ID, now, err == nil) {
-			return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, prob)
-		} else if err == nil {
-			c.uncheckable(a.ID, now, true)
+		if prob, ok := errors.AsType[*problem.Problem](err); ok {
+			var since time.Time
+			err := c.store.Tx(ctx, func(tx *store.Tx) error {
+				var err error
+				since, err = tx.CheckProblem(a)
+				return err
+			})
+			switch {
+			case errors.Is(err, store.ErrState):
+				// A heartbeat overtook the check: the worker reached the
+				// coordinator since.
+				return c.waitFor(c.timing.Heartbeat), nil
+			case err != nil:
+				return 0, err
+			}
+			if !now.Before(since.Add(c.timing.CheckGrace)) {
+				return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, prob)
+			}
+		} else if err == nil && !a.ProblemSince.IsZero() {
+			if err := c.store.Tx(ctx, func(tx *store.Tx) error { return tx.CheckDecided(a.ID) }); err != nil {
+				return 0, err
+			}
 		}
 		if err != nil {
 			if a.Private {
@@ -148,28 +167,6 @@ func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *stor
 		return c.waitFor(c.timing.Heartbeat), nil
 	}
 	return 0, c.lose(ctx, a, st, nil)
-}
-
-// uncheckable reports, for the attempt id whose backend's check of it
-// gave a problem at now, by the store's clock, whether CheckGrace has
-// passed since the first such check since its backend last decided; or,
-// with decided, forgets when that was, and reports false.
-func (c *Coordinator) uncheckable(id string, now time.Time, decided bool) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if decided {
-		delete(c.problemSince, id)
-		return false
-	}
-	since, ok := c.problemSince[id]
-	if !ok {
-		if len(c.problemSince) >= maxMembers {
-			clear(c.problemSince)
-		}
-		since = now
-		c.problemSince[id] = now
-	}
-	return !now.Before(since.Add(c.timing.CheckGrace))
 }
 
 // errUncheckable is what placedMember returns for an attempt whose
@@ -238,9 +235,6 @@ func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *sto
 // worker that reached the coordinator again would have it, or nothing is
 // ended. Either way, the supervisor looks again.
 func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, why *problem.Problem) error {
-	c.mu.Lock()
-	delete(c.problemSince, a.ID)
-	c.mu.Unlock()
 	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost, Problem: why}
 	switch {
 	case st.End == backend.EndTimedOut:
@@ -281,13 +275,20 @@ func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Sta
 // interval, twice as long for each before it, up to an hour; and each
 // attempt that started a step counts, as the new attempt's claim says
 // (workerapi.Claim.Retry). An attempt its scheduler, or the kernel, ended,
-// at its time limit or for its memory, fails the job with that reason.
+// at its time limit or for its memory, fails the job with that reason. A
+// job that fails so has the problem the attempt was lost with, if it has
+// one, among its diagnostics, as why.
 func (c *Coordinator) workerLost(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	failed := func(k *problems.Kind, params problems.Params) error {
 		params["job"] = job.Key
+		diags := problems.Diagnostics{diagnostic(k, params)}
+		if p := a.End.Problem; p != nil {
+			// Stored masked when where the job ran was private
+			// (store.Tx.EndAttempt).
+			diags = append(diags, problemDiagnostic(p))
+		}
 		return c.endJob(ctx, run.ID, job.Key, store.JobEnd{
-			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason,
-			Diagnostics: problems.Diagnostics{diagnostic(k, params)},
+			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason, Diagnostics: diags,
 		}, done)
 	}
 	if a.End.Reason != plan.ReasonWorkerLost {

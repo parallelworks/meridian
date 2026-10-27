@@ -324,6 +324,44 @@ func TestCheckProblem(t *testing.T) {
 	if a.End.Kind != store.EndLost || a.End.Reason != plan.ReasonWorkerLost || a.End.Problem == nil || a.End.Problem.Code != problems.SSHPlacementElsewhere.Code() {
 		t.Errorf("the attempt ended %+v", a.End)
 	}
+	// The job that fails says why its worker was lost.
+	if j := storedJob(t, c, id, "main"); !slices.Equal(jobCodes(j), []string{"worker_lost", string(problems.SSHPlacementElsewhere.Code())}) {
+		t.Errorf("the job's diagnostics are %v", jobCodes(j))
+	}
+}
+
+// TestCheckProblemRenewed checks that a worker that comes back by itself,
+// renewing its lease, as one on a login node out of its name's rotation
+// for a while does, ends the grace of a problem its backend's check gave:
+// a problem at a later lapse starts a grace of its own.
+func TestCheckProblemRenewed(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	id, a := startJob(t, c, oneJob, store.AttemptRunning)
+	d.mu.Lock()
+	credential := d.credentials[a.ID]
+	d.mu.Unlock()
+	elsewhere := problems.SSHPlacementElsewhere.Problem(problems.Params{"host": "farm"})
+	d.says(backend.Status{State: backend.Unknown}, elsewhere)
+	clock.Advance(c.timing.Lease + time.Second)
+	if wait := look(t, c, id); wait != c.timing.Heartbeat {
+		t.Fatalf("at the first check that gives a problem, the supervisor waits %v", wait)
+	}
+	// An hour of heartbeats, as the worker reaches the coordinator again.
+	for range int(time.Hour / c.timing.Heartbeat) {
+		clock.Advance(c.timing.Heartbeat)
+		if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { _, err := tx.Renew(credential); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Advance(c.timing.Lease + time.Second)
+	if wait := look(t, c, id); wait != c.timing.Heartbeat {
+		t.Fatalf("at a later lapse, a check that gives a problem has the supervisor wait %v", wait)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.State != store.AttemptRunning {
+		t.Errorf("the attempt is %s, %+v", a.State, a.End)
+	}
 }
 
 // retryJob runs again once its worker is lost after a step starts.

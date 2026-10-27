@@ -221,10 +221,6 @@ type Coordinator struct {
 	// members are the members attempts were placed on, as placedMember
 	// found them, by attempt, for a while.
 	members map[string]memberEntry
-	// problemSince is, by attempt, when its backend's check of it first
-	// gave a problem since the backend last decided, by the store's clock
-	// (uncheckable).
-	problemSince map[string]time.Time
 	// timeouts are the jobs' timeouts by attempt, and private runs'
 	// timeouts by "run" and the run's ID, as the coordinator read them
 	// (jobTimeout, runTimeout).
@@ -299,7 +295,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
-		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, problemSince: map[string]time.Time{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
+		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
 		outlives: map[string]bool{},
 	}
 	if opts.ReadOnly {

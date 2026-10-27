@@ -2827,9 +2827,11 @@ connection that is down, which counts as not lost. A backend that can't
 decide for a cause that won't pass by itself, as a host key that
 known_hosts doesn't have, or that has changed, says what it is, as a
 problem: that counts as not lost for five minutes from the first such
-check since the backend last decided, time for a person to see the
-problem and fix it, and then the attempt is lost, with the problem, which
-its end, its events and `meridian status` show. Once the backend says
+check since the backend last decided, or the attempt's lease was last
+renewed, as the worker that comes back does, which the store records with
+the attempt, whichever replica checked, time for a person to see the
+problem and fix it; and then the attempt is lost, with the problem, which
+its end, its events, and its job's diagnostics in `meridian status`, show. Once the backend says
 the worker has ended without completing its attempt, the attempt ends
 with the reason `worker-lost` if a step had started, and otherwise as a
 failure before its first step, which is placed again

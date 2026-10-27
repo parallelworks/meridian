@@ -91,6 +91,10 @@ type Attempt struct {
 	ClaimedAt     time.Time
 	RenewedAt     time.Time
 	StepStartedAt time.Time
+	// ProblemSince is when its backend's check of its worker first gave a
+	// problem since the backend last decided, or its lease was last
+	// renewed (CheckProblem), or the zero time.
+	ProblemSince time.Time
 	// End is how it ended, once it has.
 	End     AttemptEnd
 	EndedAt time.Time
@@ -247,7 +251,7 @@ func (tx *Tx) NewToken(id string) (string, error) {
 const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a.token_hash, a.credential_hash,
   a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest, a.api_version,
   a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.private_placement IS NOT NULL,
-  a.created_at, a.claimed_at, a.renewed_at, a.step_started_at,
+  a.created_at, a.claimed_at, a.renewed_at, a.step_started_at, a.problem_since,
   a.end_kind, a.outcome, a.reason, a.complete_digest, a.report, a.problem, a.ended_at,
   a.state <> 'ended' AND a.fence = j.fence AND j.outcome IS NULL`
 
@@ -261,6 +265,7 @@ func (tx *Tx) attemptWhere(where string, args ...any) (*Attempt, error) {
 		version, wdigest, kind, outcome, reason sql.NullString
 		group, member, backend, pid, placed     sql.NullString
 		claimed, renewed, started, ended        sql.NullInt64
+		problemSince                            sql.NullInt64
 		api                                     sql.NullInt64
 		prob                                    []byte
 	)
@@ -270,7 +275,7 @@ WHERE `+where, args...).Scan(
 		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
 		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest, &api,
 		&group, &member, &backend, &pid, &placed, &a.Private,
-		&created, &claimed, &renewed, &started,
+		&created, &claimed, &renewed, &started, &problemSince,
 		&kind, &outcome, &reason, &a.End.CompleteDigest, &a.End.Report, &prob, &ended, &a.Holds)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -282,6 +287,7 @@ WHERE `+where, args...).Scan(
 	a.Worker, a.APIVersion = workerapi.Worker{Version: version.String, Digest: wdigest.String}, int(api.Int64)
 	a.Placement = Placement{Group: group.String, Member: member.String, Backend: backend.String, ID: pid.String, WorkerDigest: placed.String}
 	a.CreatedAt, a.ClaimedAt, a.RenewedAt, a.StepStartedAt = time.UnixMicro(created).UTC(), timeOf(claimed), timeOf(renewed), timeOf(started)
+	a.ProblemSince = timeOf(problemSince)
 	a.End.Kind, a.End.Outcome, a.End.Reason = EndKind(kind.String), plan.Outcome(outcome.String), plan.Reason(reason.String)
 	a.EndedAt = timeOf(ended)
 	if prob != nil {
@@ -358,7 +364,7 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker, apiVersion int
 		return nil, ErrCredential
 	}
 	if _, err := tx.exec(`UPDATE meridian_attempts SET state = ?, credential_hash = ?, worker_version = ?, worker_digest = ?, api_version = ?,
-  claimed_at = ?, renewed_at = ? WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, apiVersion, now, now, a.ID); err != nil {
+  claimed_at = ?, renewed_at = ?, problem_since = NULL WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, apiVersion, now, now, a.ID); err != nil {
 		return nil, err
 	}
 	n, _ := runNumber(a.Run)
@@ -413,11 +419,47 @@ func (tx *Tx) Renew(credential string) (*Attempt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.exec("UPDATE meridian_attempts SET renewed_at = ? WHERE id = ?", now, a.ID); err != nil {
+	if _, err := tx.exec("UPDATE meridian_attempts SET renewed_at = ?, problem_since = NULL WHERE id = ?", now, a.ID); err != nil {
 		return nil, err
 	}
-	a.RenewedAt = time.UnixMicro(now).UTC()
+	a.RenewedAt, a.ProblemSince = time.UnixMicro(now).UTC(), time.Time{}
 	return a, nil
+}
+
+// CheckProblem records that its backend's check of the attempt a's worker
+// gave a problem, a cause that won't pass by itself, and returns when the
+// first such check was since its backend last decided (CheckDecided), or
+// its lease was renewed, by its claim or a heartbeat: now, if this is the
+// first. A check of a as it was before its lease was renewed since, as one
+// a heartbeat overtook, records nothing, and is ErrState: the renewal says
+// more of the worker than the check did. ErrNotFound if there is no
+// attempt a.
+func (tx *Tx) CheckProblem(a *Attempt) (time.Time, error) {
+	now, err := tx.now()
+	if err != nil {
+		return time.Time{}, err
+	}
+	var renewed sql.NullInt64
+	if !a.RenewedAt.IsZero() {
+		renewed = sql.NullInt64{Int64: a.RenewedAt.UnixMicro(), Valid: true}
+	}
+	var since int64
+	err = tx.queryRow("UPDATE meridian_attempts SET problem_since = coalesce(problem_since, ?) WHERE id = ? AND renewed_at IS ? RETURNING problem_since",
+		now, a.ID, renewed).Scan(&since)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := tx.Attempt(a.ID); err != nil {
+			return time.Time{}, err
+		}
+		return time.Time{}, fmt.Errorf("%w: attempt %s's lease was renewed since it was checked", ErrState, a.ID)
+	}
+	return time.UnixMicro(since).UTC(), err
+}
+
+// CheckDecided records that its backend's check of the attempt's worker
+// decided, which ends what CheckProblem counts.
+func (tx *Tx) CheckDecided(id string) error {
+	_, err := tx.exec("UPDATE meridian_attempts SET problem_since = NULL WHERE id = ? AND problem_since IS NOT NULL", id)
+	return err
 }
 
 // StepStarted records that a step of the attempt started: the attempt is

@@ -840,7 +840,7 @@ func (tx *Tx) recordReset(now time.Time, lead time.Duration) error {
 	for _, stmt := range []string{
 		"UPDATE meridian_runs SET started_at = min(started_at, ?1), ended_at = min(ended_at, ?1) WHERE started_at > ?1 OR ended_at > ?1",
 		"UPDATE meridian_jobs SET created_at = min(created_at, ?1), ready_at = min(ready_at, ?1), ended_at = min(ended_at, ?1) WHERE created_at > ?1 OR ready_at > ?1 OR ended_at > ?1",
-		"UPDATE meridian_attempts SET created_at = min(created_at, ?1), claimed_at = min(claimed_at, ?1), renewed_at = min(renewed_at, ?1), step_started_at = min(step_started_at, ?1), ended_at = min(ended_at, ?1)",
+		"UPDATE meridian_attempts SET created_at = min(created_at, ?1), claimed_at = min(claimed_at, ?1), renewed_at = min(renewed_at, ?1), step_started_at = min(step_started_at, ?1), ended_at = min(ended_at, ?1), problem_since = min(problem_since, ?1)",
 		"UPDATE meridian_endpoints SET taken_at = min(taken_at, ?1), grace_from = min(grace_from, ?1)",
 		"INSERT INTO meridian_store (key, value) VALUES ('clock', ?1) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 	} {

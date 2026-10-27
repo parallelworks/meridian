@@ -3,9 +3,11 @@ package store
 import (
 	"crypto/sha256"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -336,6 +338,86 @@ func TestLapse(t *testing.T) {
 		}
 		if !a.LeaseLapses().After(now) {
 			t.Errorf("the lease renewed lapses at %v, by %v", a.LeaseLapses(), now)
+		}
+		return nil
+	})
+}
+
+// TestCheckProblem checks what the store keeps of the problems its
+// backend's checks of an attempt's worker gave: the time of the first
+// since the backend decided, or the attempt's lease was renewed, which a
+// decision, a renewal, and a claim forget; and that a check a renewal
+// overtook records nothing.
+func TestCheckProblem(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	s := openClock(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), func() time.Time { return now })
+	id := createRun(t, s)
+	var (
+		a     *Attempt
+		token string
+	)
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		a, token, err = placedAttempt(tx, NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	since := func(want time.Time) {
+		t.Helper()
+		inTx(t, s, func(tx *Tx) error {
+			cur, err := tx.Attempt(a.ID)
+			if err != nil {
+				return err
+			}
+			got, err := tx.CheckProblem(cur)
+			if err != nil || !got.Equal(want) {
+				t.Errorf("CheckProblem = %v, %v, want %v", got, err, want)
+			}
+			stored, err := tx.Attempt(a.ID)
+			if err == nil && !stored.ProblemSince.Equal(want) {
+				t.Errorf("the attempt's ProblemSince is %v, want %v", stored.ProblemSince, want)
+			}
+			return err
+		})
+	}
+	first := now
+	since(first)
+	now = now.Add(time.Minute)
+	since(first)
+	inTx(t, s, func(tx *Tx) error { return tx.CheckDecided(a.ID) })
+	since(now)
+	// A claim, and a heartbeat, forget it.
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version)
+		return err
+	})
+	now = now.Add(time.Minute)
+	since(now)
+	var before *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		if before, err = tx.Attempt(a.ID); err != nil {
+			return err
+		}
+		now = now.Add(time.Second)
+		_, err = tx.Renew(credential('a'))
+		return err
+	})
+	// A check of the attempt as it was before the heartbeat.
+	inTx(t, s, func(tx *Tx) error {
+		if _, err := tx.CheckProblem(before); !errors.Is(err, ErrState) {
+			t.Errorf("CheckProblem of the attempt before its heartbeat = %v, want ErrState", err)
+		}
+		stored, err := tx.Attempt(a.ID)
+		if err == nil && !stored.ProblemSince.IsZero() {
+			t.Errorf("a check a heartbeat overtook recorded %v", stored.ProblemSince)
+		}
+		return err
+	})
+	now = now.Add(time.Minute)
+	since(now)
+	inTx(t, s, func(tx *Tx) error {
+		if _, err := tx.CheckProblem(&Attempt{ID: "no-such-attempt"}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("CheckProblem of no attempt = %v", err)
 		}
 		return nil
 	})
