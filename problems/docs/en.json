@@ -2067,6 +2067,26 @@
       "Fix the ProxyJump in your configuration, as ssh -G <host> shows it."
     ]
   },
+  "ssh_host_unsupported": {
+    "why": "Meridian runs a job on a host with its worker, the meridian binary, which runs on Linux, macOS and FreeBSD, on amd64, arm64, 386 and arm. The host's uname says another system, which the worker can't protect its memory on, or isn't built for.",
+    "fix": [
+      "Run the job on a host of one of those systems, through its ssh:, or a group that names one."
+    ]
+  },
+  "ssh_worker_binary_missing": {
+    "why": "A host of the coordinator's own system runs the coordinator's binary, copied there. A host of another system, or another architecture, needs this release's binary built for it, which Meridian never fetches by itself: it runs one only once you have put it where it looks, checked against the release's checksums.",
+    "fix": [
+      "Download this release's meridian binary for the host's system, check it against the release's published checksums, and put it at the path, in directories only you can open.",
+      "Or run the job on a host of the coordinator's own system."
+    ]
+  },
+  "ssh_worker_binary_unverified": {
+    "why": "Meridian copies the worker's binary to a host into a file of its own in a directory only you can open, and keeps it only once its SHA-256 digest there is the binary's, computed with the host's sha256sum, shasum, sha256 or openssl. The copy isn't the binary, as when it was cut short or changed on the way, and was removed; or the host has none of those tools, so the copy can't be checked, and isn't run.",
+    "fix": [
+      "If the host has no tool to compute a SHA-256 digest, install one of them there: coreutils' sha256sum, Perl's shasum, FreeBSD's sha256 or OpenSSL.",
+      "If the digest differed, run the job again: Meridian copies the binary again. If it differs again, something on the host or on the way changes the file."
+    ]
+  },
   "worker_token_not_taken": {
     "why": "Where the process that places a worker ends once it has, as meridian host does on another host, it waits until the worker has taken its bootstrap token, which it hands over on a socket only the worker inherits. This worker didn't: it ended first, as one that systemd-run couldn't start does, where your service manager can't be reached or a scope of the same name is still there, or it didn't ask for its token within a minute. A worker without its token can't run the job, so Meridian stopped it, and placed nothing.",
     "fix": [

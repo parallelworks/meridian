@@ -506,6 +506,17 @@ var (
 	SSHCommandUnsafe             = define(Error, "ssh_command_unsafe", "Command to connect with that isn't safe to run", "path", "code")
 )
 
+// Putting the worker's binary on a host (backend/ssh): host is the host as
+// it was named; os and arch its system, as uname, or Go, names them;
+// version this release's; path where the binary is looked for, or was
+// copied to, and digest its digest; and found the digest of the copy on
+// the host, or none, when the host has no tool to compute one with.
+var (
+	SSHHostUnsupported        = define(Error, "ssh_host_unsupported", "Host of a system the worker doesn't run on", "host", "os", "arch")
+	SSHWorkerBinaryMissing    = define(Error, "ssh_worker_binary_missing", "No worker binary for a host's system", "host", "os", "arch", "version", "path")
+	SSHWorkerBinaryUnverified = define(Error, "ssh_worker_binary_unverified", "Worker binary on a host that isn't the one copied", "host", "path", "digest", "found")
+)
+
 // The meridian command's directories. mode is a file's or directory's
 // permissions in octal, as 0755.
 var (
