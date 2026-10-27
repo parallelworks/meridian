@@ -2402,6 +2402,29 @@
       "Corrige el ProxyJump de tu configuración, tal como lo muestra ssh -G <host>."
     ]
   },
+  "ssh_host_unsupported": {
+    "title": "Host de un sistema en el que el worker no funciona",
+    "why": "Meridian ejecuta un trabajo en un host con su worker, el binario meridian, que funciona en Linux, macOS y FreeBSD, sobre amd64, arm64, 386 y arm. El uname del host indica otro sistema, en el que el worker no puede proteger su memoria, o para el que no está compilado.",
+    "fix": [
+      "Ejecuta el trabajo en un host de uno de esos sistemas, mediante su ssh: o un grupo que lo nombre."
+    ]
+  },
+  "ssh_worker_binary_missing": {
+    "title": "Sin binario del worker para el sistema de un host",
+    "why": "Un host del mismo sistema que el coordinador ejecuta el binario del coordinador, copiado allí. Un host de otro sistema, u otra arquitectura, necesita el binario de esta versión compilado para él, que Meridian nunca descarga por su cuenta: solo ejecuta uno cuando lo has puesto donde lo busca, comprobado con las sumas de verificación de la versión.",
+    "fix": [
+      "Descarga el binario meridian de esta versión para el sistema del host, compruébalo con las sumas de verificación publicadas de la versión, y ponlo en la ruta, en directorios que solo tú puedas abrir.",
+      "O ejecuta el trabajo en un host del mismo sistema que el coordinador."
+    ]
+  },
+  "ssh_worker_binary_unverified": {
+    "title": "Binario del worker en un host que no es el copiado",
+    "why": "Meridian copia el binario del worker a un host en un archivo propio dentro de un directorio que solo tú puedes abrir, y solo lo conserva cuando su resumen SHA-256 allí es el del binario, calculado con sha256sum, shasum, sha256 u openssl del host. La copia no es el binario, como cuando se cortó o cambió por el camino, y se eliminó; o el host no tiene ninguna de esas herramientas, así que la copia no se puede comprobar y no se ejecuta.",
+    "fix": [
+      "Si el host no tiene ninguna herramienta para calcular un resumen SHA-256, instala una allí: sha256sum de coreutils, shasum de Perl, sha256 de FreeBSD u OpenSSL.",
+      "Si el resumen era distinto, ejecuta el trabajo de nuevo: Meridian vuelve a copiar el binario. Si vuelve a ser distinto, algo en el host o por el camino cambia el archivo."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "Worker que no tomó su token",
     "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",

@@ -190,6 +190,8 @@ func sampleParams(k *Kind) []Params {
 			branches[name] = []any{"key-exchange", "host-key", "cipher", "mac", "other"}
 		case "keys":
 			branches[name] = []any{0, 1, 2}
+		case "found":
+			branches[name] = []any{"none", "sha256:00"}
 		case "type1", "type2", "type3", "got":
 			branches[name] = []any{"string", "number", "integer", "boolean", "object", "array", "null"}
 		case "min", "max", "size", "limit", "length":

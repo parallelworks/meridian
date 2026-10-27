@@ -41,6 +41,9 @@ type Options struct {
 	KeyExchanges []string
 	Ciphers      []string
 	MACs         []string
+	// Env is added to the environment the server runs exec requests with,
+	// the test process's, as sshd sets a session's.
+	Env []string
 }
 
 // A Server is an SSH server on the loopback interface.
@@ -60,6 +63,8 @@ type Server struct {
 	// connection, which loggedIn holds by its session's ID.
 	logins   []string
 	loggedIn map[string]bool
+	// commands are the exec requests' commands, in order.
+	commands []string
 	wg       sync.WaitGroup
 }
 
@@ -135,6 +140,14 @@ func (s *Server) Logins() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.logins...)
+}
+
+// Commands are the commands of the exec requests the server has run, in
+// order.
+func (s *Server) Commands() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.commands...)
 }
 
 // Drop closes every connection, as a host that went away does.
@@ -266,7 +279,7 @@ func (s *Server) serve(c net.Conn) {
 			if err != nil {
 				continue
 			}
-			wg.Go(func() { session(ch, reqs) })
+			wg.Go(func() { s.session(ch, reqs) })
 		case "direct-tcpip":
 			var p struct {
 				Host       string
@@ -405,8 +418,9 @@ func (f *forwards) closeAll() {
 }
 
 // session serves a session: an exec request runs its command with sh -c,
-// as the test's user, and its exit status is sent. Others are refused.
-func session(ch ssh.Channel, reqs <-chan *ssh.Request) {
+// as the test's user, with the server's Env, and its exit status is sent.
+// Others are refused.
+func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
 	for req := range reqs {
 		if req.Type != "exec" {
@@ -421,7 +435,11 @@ func session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			continue
 		}
 		_ = req.Reply(true, nil)
+		s.mu.Lock()
+		s.commands = append(s.commands, p.Command)
+		s.mu.Unlock()
 		cmd := exec.Command("sh", "-c", p.Command) //nolint:gosec,noctx // a test's command, run as the test's user, as sshd runs it
+		cmd.Env = append(os.Environ(), s.opts.Env...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = ch, ch, ch.Stderr()
 		status := 0
 		if err := cmd.Run(); err != nil {
