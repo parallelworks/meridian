@@ -3824,6 +3824,11 @@ standard input and output, versioned (`backend/hostproto`): it hardens
 itself, as `meridian run` does, says it is ready, and only then reads the
 request, which for `place` carries the bootstrap token, so the token
 reaches only a hardened process, and never its arguments or environment.
+The coordinator runs it without the session's `GODEBUG`, as it runs a
+worker, and is given none of a member's settings, which name the host and
+its logins. One that stops before it answers, saying why on its standard
+error, as `meridian` says a problem before it runs a command, as a binary
+out of FIPS 140-only mode does, is `ssh_host_helper_failed`.
 `place` returns once the worker has taken its token, and a worker that
 ends first, as one `systemd-run` couldn't start does, or doesn't ask for
 it within a minute, is stopped, and isn't placed
@@ -3975,6 +3980,15 @@ backend there through `meridian host`
   at the path, over which sshd's default, `StreamLocalBindUnlink no`,
   won't listen. A host whose sshd forbids forwarding Unix sockets takes
   no workers (`ssh_forwarding_refused`); Meridian opens no port instead.
+- **Which host.** A connection made again can reach another host than the
+  last did, as a cluster's login nodes behind one name do, each with
+  placements of its own. So a placement's ID begins with a keyed hash of
+  the host it was made on, its machine ID and its name, as `hello` says
+  them, and it is checked, cancelled or forgotten only on that host: a
+  check of it over a connection to another is unknown, as over one that is
+  down, and a cancel waits. Nor is another host's having no placement of
+  an attempt taken for the attempt's having none, where the coordinator
+  has placed or found it on another since it started.
 - **Outages.** A connection that drops is dialed again, and the socket
   forwarded again at the same path, so the host's workers reconnect
   without being told; meanwhile they run their steps and hold their
@@ -4010,7 +4024,8 @@ backend there through `meridian host`
 - **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
   would without its `ssh:`, as format 1 runs it, and as a step's does
   ([Running steps](#running-steps)). Ready doesn't do that yet: it places
-  such a job on a member with no host, which can't run it.
+  such a job on a member with no host, which can't run it
+  (`ssh_host_missing`).
 - **A step whose `ssh:` names another host** fails
   (`step_ssh_not_supported`) until the worker can run a step on another
   host itself.

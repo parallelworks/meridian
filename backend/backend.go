@@ -218,6 +218,10 @@ type PlaceRequest struct {
 	// Image is the image the job's steps run in, as repository@sha256:
 	// and its digest, or "" for steps that run on the host.
 	Image string
+	// Run is the ID of the attempt's run, which, with the store's, names
+	// the run's directory on a member that chooses its own, as a host the
+	// ssh backend reaches does.
+	Run string
 	// RunDir is the run's directory on the member, where steps run by
 	// default.
 	RunDir string

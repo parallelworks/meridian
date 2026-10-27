@@ -2094,6 +2094,26 @@
       "If the digest differed, run the job again: Meridian copies the binary again. If it differs again, something on the host or on the way changes the file."
     ]
   },
+  "ssh_host_missing": {
+    "why": "A member of the ssh backend, as a format 1 job's ssh: makes, runs jobs on the host its remoteHost names. This member's remoteHost is empty or null, so there is no host to run the job on.",
+    "fix": [
+      "Give the job's ssh: a remoteHost, a host's name or address, or, where it reads one from an input, give the input one."
+    ]
+  },
+  "ssh_unreachable": {
+    "why": "Before a job is placed on a host, Meridian connects to it, and tries four times, as format 1 does, each try bounded by the host's ConnectTimeout, or 30 seconds. Format 1 waits 2, 4 and 8 seconds between its tries; Meridian waits about 1, 2 and 4, as it does before it dials any host again that it failed to reach. The host didn't answer, or the connection failed each time: its name doesn't resolve, nothing listens on its port, a jump host or a ProxyCommand on the way failed, or a network or a VPN between is down. The job isn't placed there, and fails, as format 1's step does.",
+    "fix": [
+      "Run ssh -v <host> from the same machine, as the same user, to see where the connection fails.",
+      "Check the host's name, its port and its jump host, in the workflow's ssh: and in your SSH configuration, and that the network to it is up."
+    ]
+  },
+  "ssh_host_helper_failed": {
+    "why": "Meridian runs a job on a host through meridian host, Meridian's own binary, which it copies there, and which answers it in a protocol of its own over SSH. This time meridian host stopped before it answered, and said why on its standard error, as meridian says a problem before it runs a command: as one does whose binary isn't built with the FIPS 140-3 module, or doesn't run in FIPS 140-only mode, which every meridian command requires.",
+    "fix": [
+      "Read the reason: it is meridian's own message, with its code, whose page says more.",
+      "Run the coordinator from a release of Meridian, built with the FIPS 140-3 module, so that the binary it copies to the host is one too."
+    ]
+  },
   "worker_token_not_taken": {
     "why": "Where the process that places a worker ends once it has, as meridian host does on another host, it waits until the worker has taken its bootstrap token, which it hands over on a socket only the worker inherits. This worker didn't: it ended first, as one that systemd-run couldn't start does, where your service manager can't be reached or a scope of the same name is still there, or it didn't ask for its token within a minute. A worker without its token can't run the job, so Meridian stopped it, and placed nothing.",
     "fix": [
