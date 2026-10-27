@@ -234,6 +234,11 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     that needs it when it runs: a whole checkout of a repository with
     submodules, and a cancel of another run's jobs
     ([Built-in actions](#built-in-actions));
+  - a workflow a step calls, which is a run of its own, can name groups
+    with `runs-on:`, and its caller's job too; and what isn't built yet of
+    one, which fails the step that calls it when it runs: a directory
+    outside its root's run directory
+    ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
   - how a job's `ssh:` reaches its host, where its run's directory is
@@ -571,10 +576,10 @@ its resolvers into a plan, in order:
 4. **Resolve** through the resolver interfaces: check input values against
    their declarations and apply defaults, look up execution groups, check
    the workflow's sessions, and resolve, pin and load the workflows that
-   the run's own steps' `uses:` name. A child run pins the workflows its
-   own steps name as it is created; pinning a run's descendants all at
-   once, with cycle detection and a depth limit, isn't built yet
-   ([Workflows a step calls](#workflows-a-step-calls)).
+   the run's own steps' `uses:` name, and those they call in turn: the
+   run's whole tree, checked for cycles, depth and size
+   ([Workflows a step calls](#workflows-a-step-calls)). Today only the
+   run's own steps' are pinned.
 5. **Read matrices**, without expanding them: the keys a job's matrix
    writes out, which what reads `matrix` must name, and the jobs and
    outputs it reads. The compiler doesn't check a matrix's `include`,
@@ -706,7 +711,10 @@ looked at for a suggestion either.
 Limits on a run's size are Meridian's own, which whoever runs it sets in
 the compiler's options (`Options.Limits`): the workflow file's size, 100 KiB
 by default, as in ACTIVATE; the number of jobs; a matrix's instances, 256 by
-default; how deep workflows that `uses:` calls nest; and the nets on what a
+default; the tree of workflows that `uses:` calls, as in ACTIVATE, in
+`Options.Calls`: how deep it nests, 4 levels below the run by default,
+how many distinct workflows it holds, 100, and calls, 1,000, and how much
+text, 1 MiB; and the nets on what a
 group of templates builds and does ([The language](#the-language)). The
 defaults are high enough for every workflow in the conformance suite. An
 expression's depth, `range`, and what one template builds and does are the
@@ -2049,38 +2057,205 @@ name, `#` and its index from 0, as in `build#2`.
 ### Workflows a step calls
 
 A step whose `uses:` names a workflow runs it as a run of its own, a child
-of the step's run, with its own plan, secret record and jobs. A `uses:` names
-a workflow when it starts with `github/`, `gitlab/`, `marketplace/` or
+of the step's run, with its own number, plan, secret record and jobs, which
+a coordinator places and follows as it does any run's, and a hopper
+workflow of its own. Format 1 runs it inside its caller's step, from a copy
+of it embedded in its root run as the root was created; what the workflow
+sees of that, its inputs, its environment, its identity, its directory and
+how its end becomes its step's, is format 1's, as below. A `uses:` names a
+workflow when it starts with `github/`, `gitlab/`, `marketplace/` or
 `workflow/`. ACTIVATE also runs a repository's URL as a workflow, and
 refuses any other prefix, where Meridian's schema refuses a URL and takes
-any other `uses:` for a built-in action; no known workflow has either.
+any other `uses:` for a built-in action; no known workflow has either. The
+known workflows make 270 calls, in 146 files, nested at most 3 levels
+below their root.
 
-- **Pinned when the run is created.** The compiler resolves each workflow
-  the run's own steps name through the Sources interface, each reference
-  once, pins it to a commit and the SHA-256 digest of its text
-  (`Step.Source`), and loads and validates it. The plan holds every pinned
-  reference, not a compiled workflow, so the run and its reruns run the
-  same code throughout, even where a reference names a branch. Its `with:`
-  `$yaml` and `$host`, which say where the workflow is, must be written out
-  (`source_not_known`); an empty `$yaml` means `workflow.yaml`. The
-  workflows a pinned workflow calls in turn are pinned by the child run's
-  own Create, as it is created, so a cycle, or calls nested too deep, is
-  found only then. Pinning a run's descendants all at once, with cycle
-  detection and a depth limit (`Options.Limits`), needs the plan to hold
-  their pins, by the pinned workflow and the step that names each, for
-  each child run's Create to read rather than resolve; it isn't built.
-- **Compiled when the step runs.** The worker evaluates the step's `with:`,
-  and the coordinator creates the child run from the pinned workflow with
-  those values, through Create and Start, linked to the step. The step ends
-  with the child run's outcome.
-- **Its own scope.** A child run reads its own inputs, and the variables its
-  own Start reads. A value the step passes that was made from a variable or
-  a password is kept out of the child's plan, in its secret record, as a
-  password is.
+None of this is built yet but the pinning of the run's own steps'
+workflows: the worker fails a step that uses a workflow
+(`uses_not_supported`).
+
+- **The whole tree is pinned when the root is created.** The compiler
+  resolves each workflow the run's own steps name through the Sources
+  interface, pins it to a commit and the SHA-256 digest of its text
+  (`Step.Source`), and loads and validates it; and then, for each pinned
+  workflow, the workflows its own steps name, and so on, breadth-first,
+  each reference once for the whole tree (`SourceRef.Normal`), whatever a
+  step's `if:`, as format 1 fetches and checks every called workflow as
+  its root is created. Each `with:`'s `$yaml` and `$host`, which say where
+  the workflow is, must be written out (`source_not_known`); an empty
+  `$yaml` means `workflow.yaml`. The root's plan holds every pin in the
+  tree (`Plan.Calls`), by the digest of the text that names it and the
+  step's place in that text, so that a child's Create reads its own steps'
+  pins rather than resolve them, and the store keeps each pinned text, by
+  its digest, so that a child is created from the text its root was
+  created with, as format 1's copy is, without a fetch, by any replica,
+  `resume` among them. A run and its reruns so run the same code
+  throughout, even where a reference names a branch.
+- **What fails the root's Create**, as it fails format 1's: a workflow that
+  can't be resolved, loaded or validated; one more than 4 levels below
+  the root (`workflow_nested_too_deep`); one already on its own path of
+  calls (`workflow_calls_itself`); more than 100 distinct workflows, or
+  1,000 calls, in the tree (`workflows_too_many`), or more than 1 MiB of
+  their text (`workflows_too_large`); and a required input of a called
+  workflow that its caller's `with:` leaves out (`child_input_missing`),
+  as far as `with:` is written out: what an expression in it gives is
+  checked as the child is created, when the step runs. Each is reported
+  at the `uses:` of the root's own step that the path of calls starts at,
+  in the root's file, since whoever runs the root may not own the
+  workflows it calls, and a cycle, once whatever paths reach it, and a
+  workflow too deep name the chain of calls from the root; what is wrong
+  with a called workflow's own step, as a reference that names no
+  workflow, is reported in that workflow's file, at the step. As in
+  format 1, a workflow called on two paths is walked on each, its calls
+  counted on each, and its text once, the root's own not counted. These
+  limits are format 1's, and Meridian's own (`Options.Calls`), as its
+  other limits are, so whoever runs a workflow can raise them; a child's
+  Create, which reads its pins from its root's plan, checks them no more,
+  so the plan doesn't record them.
+- **The worker runs the step, and waits for the child.** As for any step,
+  Step evaluates the step's `with:` on the worker, in the caller's scope,
+  on each try, as format 1 does; the worker asks the coordinator for the
+  child of the step's try, which creates and starts it, linked to the
+  step's try, and waits for it to end, heartbeating. While it waits, its
+  attempt is parked: it keeps its lease, but on a backend that counts
+  what its member runs, as `local` does, not its member's capacity, which
+  the child's jobs need. The worker API's paths for a child, to ask for
+  it, which a repeat answers with the same child, to wait for its end, and
+  to stop it, raise the API's own version, not the plan's: a coordinator
+  refuses a worker of an older one, at its claim, for a job that calls a
+  workflow (`worker_api_too_old`).
+- **Its inputs** are the step's `with:`, but its `$yaml`, `$host` and
+  `$thumbnail`, as what was submitted to it: defaults are filled in and
+  required inputs checked, as for any run, and, as in format 1, a value of
+  another type than its input's is read as it is given, as Create reads
+  any run's. A part of `with:` made from a variable or a password is kept
+  out of the child's plan, in its secret record, as a password is, and a
+  part that holds a secret is masked in the child's jobs, as in the
+  caller's. A child whose Create fails, as for
+  an input that a `with:` made of expressions leaves out, fails its step
+  (`child_not_created`), with the child's problems, masked as the step's
+  are.
+- **Its environment** is its calling step's, as in format 1: the caller's
+  workflow, job and step `env:` and the variables format 1 defines, under
+  the child's own `env:`, whose expressions read it, and its jobs' and
+  steps' over that. A private part of it is kept in the child's secret
+  record. The caller's `matrix` values and `app` aren't passed to it.
+- **Its identity** is its root's, as format 1 gives a child:
+  `PW_JOB_ID`, `PW_JOB_NUMBER`, `PW_RUN_SLUG` and `PW_PARENT_NAME` are the
+  root run's, and `PW_PARENT_JOB_DIR` is the root's run directory, which
+  the known workflows read 215 times; `PW_JOB_DIR` is the child's
+  directory, and `PW_MATRIX_INDEX` its caller's. `PW_WORKFLOW_NAME` is
+  format 1's name for the call, from its `uses:`: `github.`, the owner, a
+  dot and the repository, for one in a GitHub repository, which two of its
+  `$yaml` files share; `gitlab.`, the server and the project's path, with
+  dots for its slashes, for one in a GitLab project; the slug, for
+  `marketplace/`; and the saved workflow's name, for `workflow/`.
+- **Its directory** is the caller's run directory's (`PW_JOB_DIR`'s)
+  `subworkflows/<job>/step_<n>/`, as in format 1, whose workflows read
+  files their children leave there: `<job>` is the calling job's name, or,
+  for an instance of a matrix job, its name, a hyphen and the instance's
+  index, from 0, in the order the combinations are made (`build-0`), and
+  `<n>` the step's place in its job's `steps:` as written, from 0,
+  counting steps that are skipped. A step's `working-directory:` is the
+  child's directory instead, as in format 1: relative to the caller's run
+  directory, or, absolute, as it is. A child's directory outside its
+  root's run directory isn't built yet: a child's directory isn't made
+  private, as a root's is, since what holds it is, which one elsewhere
+  wouldn't be. The step fails when it runs, as its child would be created
+  (`child_dir_outside`), never as the root is created, since an `if:` may
+  skip it; none of the 270 known calls sets `working-directory:`. A step's
+  `clean-on-retry:` cleans it before the step's next try (below).
+- **Its variables** are its root's: the root's Start reads the variables
+  every workflow in the tree reads, once, into the root's secret record,
+  and a child's Start reads them from there, never from Variables, as
+  format 1 reads them once for the whole tree. So a child sees what its
+  root saw, and any replica can start it, `resume` among them. The root's
+  record is kept until every run in its tree has ended.
+- **Its groups.** A job of a child, and a job that calls one, may name
+  groups with `runs-on:`, which format 1 refuses in both as not supported
+  yet, so no workflow format 1 runs has either: a difference that takes
+  more. A child's job that names none runs in its caller's job's group,
+  on its member where it can, where its caller's files are.
+- **Its end is its step's**, as format 1 maps it, from the child's jobs
+  and its stop, rather than from its outcome:
+  - a child that was cancelled, or whose caller's step stopped it, ends
+    its step cancelled, whatever the step's `ignore-errors:`;
+  - one with a job that failed, or was skipped because a job it needs
+    failed, fails its step, which succeeds where its `ignore-errors:` is
+    true and no try is left; a job of it cancelled by itself, as by
+    `parallelworks/cancel-jobs`, doesn't count;
+  - any other succeeds.
+
+  A step whose child was cancelled from within it, or by a person's
+  `meridian cancel` of the child, while its job goes on, counts as a
+  success for its job: the job's later steps run, `success()` is true for
+  them and `cancelled()` and `failure()` false, the job and the jobs that
+  need it see a success, and its step's own end says cancelled, as in
+  format 1 ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)).
+  A child's own `timeout:` fails it, and its step.
+- **No outputs come back**, as in format 1: a calling step writes none,
+  and an expression that reads one fails as a read of an output that
+  isn't there does. Workflows pass what a child makes back through
+  files: no known workflow reads a child's output, nor gives a calling
+  step an `id`.
+- **Stopping it.** A calling step that is stopped stops its child, and
+  waits for the child to end, its cleanups among it, as format 1's call
+  returns only once its child has; the child's jobs end as any run's do
+  when it is stopped.
+  - A run's cancel stops a step that doesn't outlive it, and its child
+    with `cancelled`; the step ends cancelled.
+  - The cancel of the step's job, as by `parallelworks/cancel-jobs`, stops
+    it with `cancelled`; the step and its job end cancelled.
+  - `early-cancel: any-job-failed`, which 215 of the 270 known calls set,
+    stops it with `cancelled`; the step ends cancelled and, as in format 1,
+    its job goes on.
+  - The step's `timeout:`, and its `retry:`'s timeout for a try, stop it
+    with `timeout`, and, as in format 1, the step ends cancelled, not
+    failed, and its job goes on; a try's ends as a try that ran out of
+    time does, and the step is tried again.
+  - The job's timeout, or the run's, stops it with `timeout`, and, as in
+    format 1, the step and its job end cancelled, not failed, with the
+    reason `timeout`, without marking the run for
+    `early-cancel: any-job-failed`: the one place where a job's own
+    timeout doesn't fail it. A job that needs it is skipped as after one
+    that failed.
+  - An attempt that ends without its worker, lost, withdrawn or
+    superseded, stops the children of its steps with `cancelled`, in the
+    transaction that ends it; its job's next attempt runs its steps again,
+    with new children. A worker that is only cut off keeps its children:
+    asked again, the coordinator gives it the same.
+  - A root run doesn't end while a run of its tree hasn't, which it waits
+    for.
+- **Each try is a child of its own.** A step's `retry:` runs the whole
+  child again, evaluating its `with:` again, as in format 1: a child for
+  each try, linked to it. A rerun, which is Meridian's own, makes new
+  children from the plan's pins.
+- **What people see.** A child is a run, with its own number, shown under
+  the step that called it:
+  - `meridian run` follows the whole tree, a child's events and logs
+    under its caller's step, as `build step 0 › wait step 1| …`, and as
+    JSON lines with the child's `run`; the parent's events say when its
+    step's child was created and how it ended;
+  - `meridian status` lists root runs, each with how many children it
+    has, and `--all` every run; `meridian status <run>` shows the child
+    of each step that called one, and a child shows its parent, job, step
+    and try;
+  - `meridian logs <run>` shows a child's logs under its step, and those
+    of the child alone when it names the child;
+  - `meridian cancel <child>` stops that child only: its step ends
+    cancelled, and its job goes on.
 - **Without a Sources resolver**, a `uses:` that names a workflow fails to
   compile (`resolver_missing`, [The workflow format](#the-workflow-format)).
   A `uses:` names a workflow when it starts with `github/`, `gitlab/`,
   `marketplace/` or `workflow/`; any other names a built-in action.
+- **What a later format can change**, which format 1 fixes, and no
+  workflow format 1 runs can rely on otherwise: a calling step that gets
+  its child's outputs; a step `timeout:`, and a job's or a run's, that
+  fails a calling step, and its job, rather than cancelling them; a cancel
+  from within a child that stops its caller's job too; a type check of a
+  `with:` against its child's inputs, and a refusal of a key the child
+  doesn't define; and a name for a matrix instance's directory that can't
+  be a job's, as `build-0` can.
 
 ### Built-in actions
 
@@ -3085,10 +3260,14 @@ that embeds Meridian serve the same API.
   the limit: up to 1 MiB less for each replica that still holds some of
   it when the attempt's uploads stop, and for each time a replica lets go
   what it holds, after ten minutes without an upload.
-- **Child runs:** start the run of a workflow a step calls, with its
-  step's `with:`, and wait for its outcome
-  ([Workflows a step calls](#workflows-a-step-calls)). It isn't built yet:
-  the worker fails a step that uses a workflow (`uses_not_supported`).
+- **Child runs:** ask for the child run of a workflow a step's try calls,
+  with the step's `with:` and environment as Step evaluated them, and
+  which parts of them are private or hold a secret, which a repeat answers
+  with the same child; wait for its end, held as a control is, with the
+  outcome its step takes; and stop it, with why
+  ([Workflows a step calls](#workflows-a-step-calls)). These raise the
+  API's own version. They aren't built yet: the worker fails a step that
+  uses a workflow (`uses_not_supported`).
 - **Actions:** ask the coordinator to do a step's cancel-jobs or
   update-session, or for its checkout's tree
   ([Built-in actions](#built-in-actions)). They aren't built yet: the
@@ -3189,7 +3368,8 @@ own runs.
   as they count the run's (`plan.JobState.Secrets`): an output that holds
   one is a secret to the jobs that need the job. They go over the environment the workflow gives the step, as in
   format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
-  is the run's ID and `PW_PARENT_JOB_DIR` its directory.
+  is the run's ID and `PW_PARENT_JOB_DIR` its directory; a child run's are
+  its root's ([Workflows a step calls](#workflows-a-step-calls)).
 - **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.
 - **The env context on the worker.** As in format 1, `env` reads the
   workflow's `env:`, the job's over it, the step's over that, and the
@@ -4068,7 +4248,10 @@ their workers store them.
 
 - **`meridian status`** lists the store's last runs, the newest first, 20
   unless `-n` says: each one's state, created, running or ended, how it
-  ended, when it was created and its workflow's location. `meridian status
+  ended, when it was created and its workflow's location. Children of a
+  run, the runs of the workflows its steps call, are to be listed under
+  their root, as a count, and with `--all` as runs of their own
+  ([Workflows a step calls](#workflows-a-step-calls)). `meridian status
   <run>` shows one run, its directory and its times, a line for each of
   its jobs, waiting, ready, placing, running or ended, with how it ended,
   how many attempts it had and the member its last ran on, none for a
@@ -4162,11 +4345,13 @@ Larger features that aren't designed yet are proposed in
   hosts would still need `newuidmap`, a network helper and, on some
   distributions, an AppArmor profile. Revisit once driving Podman and Docker
   works.
-- **Steps that run a workflow.** A job made only of `uses:` steps could run
-  on the coordinator, with no worker. In a job that mixes them with `run:`
-  steps, the worker waits for the child run
-  ([Workflows a step calls](#workflows-a-step-calls)), holding capacity
-  while it does.
+- **Steps that run a workflow.** A job made only of calls to workflows
+  could run on the coordinator, with no worker; 28 known jobs are. The
+  worker runs every calling step, and waits for the child run, parked
+  ([Workflows a step calls](#workflows-a-step-calls)): on `local` it
+  holds its lease but not its member's capacity, but on a batch scheduler
+  a waiting job can't give back its allocation, which the child's jobs may
+  need. Decide before a scheduler backend runs children.
 - **The Kubernetes client.** `client-go` is a large dependency for a few API
   calls; plain HTTP against the API may be enough.
 - **How long a job may wait in a queue** before Meridian withdraws it and
