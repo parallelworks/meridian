@@ -54,6 +54,44 @@ func TestCancelFollowed(t *testing.T) {
 	}
 }
 
+// TestCancelRunEndingAtOnce checks meridian cancel of a started run that
+// has ended, and whose meridian run has exited, by the time meridian cancel
+// reads it back, as a run can as soon as its worker hears of the stop: it
+// says the run is stopping, as of one still running, rather than that the
+// stop ended it, and with -f shows the run to its end, rather than only
+// the end.
+func TestCancelRunEndingAtOnce(t *testing.T) {
+	env := runEnv(t)
+	for _, follow := range []bool{false, true} {
+		workflow, _ := waitingWorkflow(t)
+		running := startCommand(t, env, nil, "run", workflow)
+		waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+		id := startedRE.FindStringSubmatch(running.stdout.String())[1]
+		args := []string{"cancel", id}
+		if follow {
+			args = []string{"cancel", "-f", "--format", "json", id}
+		}
+		var ran result
+		r := <-startCommand(t, env, func(c *cli) { c.stopped = func() { ran = <-running.done } }, args...).done
+		switch {
+		case r.code != exitOK:
+			t.Errorf("meridian %s = %+v", strings.Join(args, " "), r)
+		case !follow && r.stdout != "run "+id+" stopping (cancelled)\n":
+			t.Errorf("meridian cancel %s wrote %q", id, r.stdout)
+		case follow:
+			lines := jsonLines(t, r.stdout)
+			first, last := lines[0], lines[len(lines)-1]
+			if first["kind"] != "run.stopping" || last["kind"] != "run.finished" || last["outcome"] != "cancelled" ||
+				!strings.Contains(r.stdout, `"kind":"step.started"`) {
+				t.Errorf("meridian cancel -f --format json %s wrote\n%s", id, r.stdout)
+			}
+		}
+		if ran.code != exitInvalid || !strings.HasSuffix(ran.stdout, "run "+id+" finished: cancelled (cancelled)\n") {
+			t.Errorf("meridian run of the run cancelled = %+v", ran)
+		}
+	}
+}
+
 // TestCancelUncoordinated checks meridian cancel of a run that no meridian
 // run or resume coordinates, as one whose meridian run left it running: it
 // coordinates the run itself until it has ended, so that its worker hears

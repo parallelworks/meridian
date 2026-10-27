@@ -84,6 +84,9 @@ type cli struct {
 	// standard input and error are a terminal.
 	signals     chan os.Signal
 	interactive *bool
+	// stopped is what a test has meridian cancel do once it has stored
+	// the run's stop, before it reads the run back; nil for nothing.
+	stopped func()
 }
 
 // getenv reads an environment variable, or "" if it isn't set.
