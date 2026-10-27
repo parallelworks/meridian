@@ -1944,6 +1944,129 @@
       "Fix what the code's page says, for the binary the message names, or install meridian where only you or root can change it, such as /usr/local/bin."
     ]
   },
+  "ssh_host_key_unknown": {
+    "why": "Meridian checks every host's key against your known_hosts files, those your SSH configuration names (UserKnownHostsFile and GlobalKnownHostsFile), as ssh does, by the host's HostKeyAlias, or else its name and port, and refuses a key it doesn't find there. It never adds one itself, whatever StrictHostKeyChecking says: a key taken on trust the first time is how a first connection is taken over. A key of a type known_hosts has none of for the host is unknown too.",
+    "fix": [
+      "Check the key's fingerprint with the host's administrator, or on the host, with ssh-keygen -lf on its key, then add the key to known_hosts, as ssh <host> offers to, answering yes only if the fingerprint matches.",
+      "If known_hosts has the host's key under another name, set HostKeyAlias for the host in your SSH configuration."
+    ]
+  },
+  "ssh_host_key_changed": {
+    "why": "The key the host presented differs from the key of the same type that your known_hosts has for it. Either the host's key was replaced, as when it was reinstalled, or another machine is answering for it, which is what the check is there to catch.",
+    "fix": [
+      "Ask the host's administrator whether its key changed, and check the new key's fingerprint.",
+      "If it did, remove the old key with ssh-keygen -R <host>, and add the new one, as for a host you connect to the first time."
+    ]
+  },
+  "ssh_host_key_revoked": {
+    "why": "Your known_hosts marks the key @revoked, or the file your SSH configuration's RevokedHostKeys names lists it, or, for a host certificate, its key or its authority's: whoever manages them has said not to trust it, for any host.",
+    "fix": [
+      "Ask the host's administrator for its current key, and add it to known_hosts once you have checked its fingerprint."
+    ]
+  },
+  "ssh_algorithms_unapproved": {
+    "why": "Meridian runs in FIPS 140-3 mode, which lets it use only the algorithms the standard approves. For SSH, those it can run are key exchange with ECDH on the NIST curves P-256, P-384 and P-521, the ciphers aes128-ctr, aes192-ctr and aes256-ctr, the MACs hmac-sha2-256 and hmac-sha2-512, and host keys of ECDSA, Ed25519, or RSA signing with SHA-2. AES-GCM and the hybrid ML-KEM key exchange are approved too, but the SSH library can't run them in this mode yet. A host that offers none of one of these, as one that offers only curve25519 or chacha20-poly1305 does, can't be used.",
+    "fix": [
+      "Ask the host's administrator to add the algorithms Meridian needs to the server's configuration: KexAlgorithms, Ciphers, MACs and HostKeyAlgorithms in sshd_config."
+    ]
+  },
+  "ssh_auth_failed": {
+    "why": "Meridian logs in with the keys of your SSH agent, then the key files your SSH configuration names for the host (IdentityFile), then your other key pairs in ~/.ssh, each a private key beside its .pub, unless IdentitiesOnly is set. It never asks for a passphrase, so a key file that needs one is offered only if your agent holds its key, and it never logs in with a password. It doesn't offer DSA keys, or RSA keys of fewer than 2048 bits, which FIPS 140-3 doesn't let it sign with. The host accepted none of the keys it offered, or it had none to offer.",
+    "fix": [
+      "Check that the key you log in to the host with is in your agent (ssh-add -l), or is a key file without a passphrase that your configuration names for the host.",
+      "Check that the user is the one you mean, remoteUser, or else User in your configuration, or else your own, and that the host has the key's public half in that user's authorized_keys.",
+      "Run ssh -v <host> to see which keys ssh offers, and which the host accepts."
+    ]
+  },
+  "ssh_config_unreadable": {
+    "why": "Meridian reads your SSH configuration for each host as ssh does, by running ssh -G, and connects as it says: its HostName, Port, User, IdentityFile, ProxyJump, ProxyCommand, known_hosts files and HostKeyAlias. ssh couldn't read the configuration, a file it names, such as a known_hosts file, couldn't be read, or what it says can't be used, as a ProxyCommand with a token Meridian doesn't know, or ProxyJumps that lead back to themselves.",
+    "fix": [
+      "Run ssh -G <host> to see what ssh says, and fix your configuration, or the file, where it points."
+    ]
+  },
+  "ssh_config_not_read": {
+    "why": "Meridian reads your SSH configuration through ssh, by running ssh -G. Without an ssh client on PATH, and with no configuration for one to read, neither yours (~/.ssh/config) nor the system's (/etc/ssh/ssh_config), it uses OpenSSH's defaults: the host as it is named, port 22, your own user name, the key files in ~/.ssh with OpenSSH's default names, your agent, and the known_hosts files in ~/.ssh and /etc/ssh.",
+    "fix": [
+      "Install OpenSSH's client, or put it on PATH, if your configuration says how to reach the host."
+    ]
+  },
+  "ssh_config_output_unexpected": {
+    "why": "Meridian reads your SSH configuration for each host by running ssh -G, which prints a keyword and its value on each line, and takes that only as OpenSSH's ssh prints it: each keyword it reads on one line, but IdentityFile, which ssh prints for each key file, and the host and the port as Meridian asked for them. Output otherwise could hold lines that aren't your configuration's: an ssh before OpenSSH 10.1 prints a user it is given as it is, so a newline in one starts a line of its own, which could pass for a ProxyCommand. Meridian gives ssh only a user that holds no control character, so the ssh client on PATH, or something that wraps it, printed this itself.",
+    "fix": [
+      "Run ssh -G <host> and look at the keyword the message names: OpenSSH's own client prints it once.",
+      "Put OpenSSH's own client first on PATH, if the ssh there wraps it."
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "why": "Your SSH configuration's RevokedHostKeys names a file of host keys that are revoked: a list of public keys, one to a line, or a KRL, OpenSSH's binary list, which Meridian checks a key against with ssh-keygen -Q. Where the file isn't there, can't be read, or is a KRL that ssh-keygen can't check, as where there is no ssh-keygen beside ssh, Meridian can't tell whether it revokes the host's key, or its certificate's authority, so it trusts no key of the host's, as OpenSSH trusts none.",
+    "fix": [
+      "Check that the file is there, and that you can read it, or remove RevokedHostKeys from your configuration if it shouldn't apply to the host.",
+      "For a KRL, install OpenSSH's ssh-keygen beside ssh."
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "why": "KnownHostsCommand runs a command that prints more known_hosts lines for a host, which can revoke a key as well as name one. Meridian checks host keys itself, against the known_hosts files your configuration names, and doesn't run the command, so it can't know what the command would revoke; it doesn't connect, rather than check the host's key against part of what you've said of it.",
+    "fix": [
+      "Put the host's keys, and any that are revoked, in a known_hosts file your configuration names, and set KnownHostsCommand none for the host, in a Host or Match block."
+    ]
+  },
+  "ssh_client_missing": {
+    "why": "Meridian reads your SSH configuration through ssh, by running ssh -G, which applies Match, Include and the rest as ssh would. Without an ssh client on PATH, Meridian can use OpenSSH's defaults only where there is no configuration to read, neither yours (~/.ssh/config) nor the system's (/etc/ssh/ssh_config): what one says, as how to reach the host, or a host key it revokes, can't be ignored.",
+    "fix": [
+      "Install OpenSSH's client, or put it on PATH."
+    ]
+  },
+  "ssh_command_unsafe": {
+    "why": "Meridian runs ssh to read your SSH configuration, ssh-keygen to match hashed known_hosts lines and to check a KRL, and your shell, SHELL, or else /bin/sh, to run a ProxyCommand, with your agent, your keys and your connections to hosts at hand. So before it runs one, it checks that it is a regular file of yours or root's that no other user can change, nor any directory on the way to it, as the local backend checks a command it runs. A directory another user can change can come first on PATH, as a shared bin/ that a cluster's startup files add, and a command they put there would run as you. The code in the message is the problem with the command, whose own page says more.",
+    "fix": [
+      "Take away the write permission other users have on the command, or on the directory on the way to it, as the code's page says, or put a directory only you and root can change first on PATH.",
+      "Set SHELL to a shell that is safe to run, if the command is your shell."
+    ]
+  },
+  "ssh_target_unsafe": {
+    "why": "A format 1 ssh:'s remoteHost, remoteUser, jumpNodeHost and jumpNodeUser often come from a workflow's inputs. Meridian gives ssh the host and the user, to read your configuration for, and both can reach a ProxyCommand there, which a shell runs with them in it. So, as OpenSSH 10.1 and later checks its own command line, Meridian refuses a host that starts with -, or holds white space, a control character, or any of ' ` \" $ \\ ; & < > | ( ) { }, and a user that starts with -, holds a control character, as a newline, or any of ' ` \" ; & < > | ( ) { }, has - after white space, or ends with \\, whatever ssh is installed. The message shows the value with its control characters escaped, as \\n.",
+    "fix": [
+      "Give the input a host's name or address, or a user's name, as the workflow expects."
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "why": "A format 1 ssh:'s remoteHost and jumpNodeHost each name one host: its name or address, as your SSH configuration may know it, or a host and its port, host:port. Its user is remoteUser or jumpNodeUser. ssh's own command line takes more: a user in the host, user@host, a URL, ssh://user@host:port, and for -J a list of hosts, a,b. Meridian reads your configuration for a host with ssh -G, which would take the user out of the host and print another host than Meridian asked for, and Meridian would dial a list as one host's name. So it refuses a host that holds @, :// or a comma, before it connects anywhere.",
+    "fix": [
+      "Give remoteHost or jumpNodeHost the host alone, or host:port, and its user in remoteUser or jumpNodeUser.",
+      "To connect through more than one jump host, name the last in jumpNodeHost, and the others in a ProxyJump for it in your SSH configuration."
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "why": "A hashed known_hosts line, which HashKnownHosts writes, keeps its host as an HMAC-SHA1 of it, which FIPS 140-3 doesn't let Meridian compute, so Meridian asks ssh-keygen -F which hashed lines are the host's. Without it, Meridian can't tell whether a hashed line revokes the host's key, so it doesn't check the key against the rest of the file: that could accept a key known_hosts revokes.",
+    "fix": [
+      "Install OpenSSH's ssh-keygen, or put it on PATH beside ssh.",
+      "Or keep the host's keys, and any @revoked lines, in a known_hosts file without hashed lines, which your configuration names."
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "why": "An authority that known_hosts names for the host (@cert-authority) signed the certificate, but it isn't valid for this connection: it has expired, isn't valid yet, isn't for this host's name, or isn't a host certificate. Meridian doesn't fall back to the certificate's key then, as OpenSSH falls back only when no authority it knows signed the certificate.",
+    "fix": [
+      "Ask the host's administrator to renew the host's certificate, or to sign it for the name you connect to."
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "why": "Meridian runs your configuration's ProxyCommand through sh -c, as ssh does, with the tokens %h, %p, %r, %n, %u, %d and %% expanded. It doesn't run one that holds another, which it would pass to the command as it is.",
+    "fix": [
+      "Write the ProxyCommand with the tokens Meridian expands, or with what the token stands for."
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "why": "Meridian follows your configuration's ProxyJump through each host it names, and each of those hosts' own ProxyJump, to at most this many hosts deep. Deeper, the ProxyJumps lead back to themselves, as a host whose ProxyJump names a host whose ProxyJump names it does.",
+    "fix": [
+      "Run ssh -G <host> for each host the ProxyJumps name, and break the loop in your configuration."
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "why": "Each of a ProxyJump's hosts is [user@]host[:port], or ssh://[user@]host[:port]. This one names no host, or its host or user holds what Meridian doesn't give ssh, as it doesn't a workflow's (ssh_target_unsafe): a control character, or a character a shell reads as more than a name. The message shows the hop with its control characters escaped.",
+    "fix": [
+      "Fix the ProxyJump in your configuration, as ssh -G <host> shows it."
+    ]
+  },
   "worker_token_not_taken": {
     "why": "Where the process that places a worker ends once it has, as meridian host does on another host, it waits until the worker has taken its bootstrap token, which it hands over on a socket only the worker inherits. This worker didn't: it ended first, as one that systemd-run couldn't start does, where your service manager can't be reached or a scope of the same name is still there, or it didn't ask for its token within a minute. A worker without its token can't run the job, so Meridian stopped it, and placed nothing.",
     "fix": [

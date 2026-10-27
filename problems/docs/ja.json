@@ -2260,6 +2260,148 @@
       "メッセージが示すバイナリについてコードのページに書かれていることを直すか、/usr/local/bin のようにあなたか root しか変更できない場所に meridian をインストールしてください。"
     ]
   },
+  "ssh_host_key_unknown": {
+    "title": "known_hosts にないホスト鍵",
+    "why": "Meridian は ssh と同じく、各ホストの鍵を SSH 設定が示す known_hosts ファイル（UserKnownHostsFile と GlobalKnownHostsFile）と、ホストの HostKeyAlias、なければ名前とポートで照合し、そこに見つからない鍵を拒否します。StrictHostKeyChecking の設定にかかわらず、自分で鍵を追加することはありません。初回に確かめずに受け入れた鍵は、最初の接続を乗っ取られる原因になります。known_hosts がそのホストについて一つも持たない種類の鍵も、未知の鍵として扱います。",
+    "fix": [
+      "鍵のフィンガープリントをホストの管理者に、またはホスト上で鍵に ssh-keygen -lf を実行して確かめ、ssh <host> が提案するように鍵を known_hosts に追加してください。フィンガープリントが一致するときだけ yes と答えてください。",
+      "known_hosts がそのホストの鍵を別の名前で持っている場合は、SSH 設定でそのホストに HostKeyAlias を設定してください。"
+    ]
+  },
+  "ssh_host_key_changed": {
+    "title": "known_hosts にある鍵と異なるホスト鍵",
+    "why": "ホストが提示した鍵が、known_hosts がそのホストについて持つ同じ種類の鍵と異なります。再インストールのときのようにホストの鍵が置き換えられたか、別のマシンがそのホストとして応答しています。後者を見つけることがこの照合の目的です。",
+    "fix": [
+      "ホストの管理者に鍵が変わったかを尋ね、新しい鍵のフィンガープリントを確かめてください。",
+      "変わっていた場合は、ssh-keygen -R <host> で古い鍵を削除し、初めて接続するホストと同じように新しい鍵を追加してください。"
+    ]
+  },
+  "ssh_host_key_revoked": {
+    "title": "失効したホスト鍵",
+    "why": "known_hosts がその鍵に @revoked を付けているか、SSH 設定の RevokedHostKeys が指定するファイルがその鍵を挙げているか、ホスト証明書の場合はその鍵か認証局の鍵がそうなっています。管理者が、どのホストについてもその鍵を信頼しないよう指定しています。",
+    "fix": [
+      "ホストの管理者に現在の鍵を尋ね、フィンガープリントを確かめてから known_hosts に追加してください。"
+    ]
+  },
+  "ssh_algorithms_unapproved": {
+    "title": "FIPS 140-3 が承認するアルゴリズムを一つも提示しないホスト",
+    "why": "Meridian は FIPS 140-3 モードで動作し、規格が承認するアルゴリズムしか使えません。SSH で使えるのは、NIST 曲線 P-256、P-384、P-521 上の ECDH による鍵交換、暗号 aes128-ctr、aes192-ctr、aes256-ctr、MAC hmac-sha2-256 と hmac-sha2-512、そして ECDSA、Ed25519、または SHA-2 で署名する RSA のホスト鍵です。AES-GCM と ML-KEM のハイブリッド鍵交換も承認されていますが、SSH ライブラリはまだこのモードでそれらを使えません。curve25519 や chacha20-poly1305 だけを提示するホストのように、これらのいずれかの一覧から一つも提示しないホストは使えません。",
+    "fix": [
+      "ホストの管理者に、Meridian が必要とするアルゴリズムをサーバーの設定（sshd_config の KexAlgorithms、Ciphers、MACs、HostKeyAlgorithms）に追加するよう依頼してください。"
+    ]
+  },
+  "ssh_auth_failed": {
+    "title": "ホストに拒否されたログイン",
+    "why": "Meridian は、SSH エージェントの鍵、次に SSH 設定がそのホストに指定する鍵ファイル（IdentityFile）、次に ~/.ssh にあるほかの鍵ペア（.pub の隣にある秘密鍵）の順にログインを試みます。IdentitiesOnly が設定されているときは最後のものは使いません。パスフレーズを尋ねることはないため、パスフレーズが必要な鍵ファイルは、その鍵をエージェントが持っているときだけ提示されます。パスワードでログインすることもありません。FIPS 140-3 が署名を許さない DSA 鍵と 2048 ビット未満の RSA 鍵は提示しません。ホストは提示されたどの鍵も受け入れなかったか、提示できる鍵がありませんでした。",
+    "fix": [
+      "ホストへのログインに使う鍵がエージェントにあるか（ssh-add -l）、または設定がそのホストに指定するパスフレーズのない鍵ファイルであるかを確かめてください。",
+      "ユーザーが意図したもの（remoteUser、なければ設定の User、なければあなた自身）であること、そしてホストのそのユーザーの authorized_keys に鍵の公開部分があることを確かめてください。",
+      "ssh -v <host> を実行して、ssh が提示する鍵とホストが受け入れる鍵を確かめてください。"
+    ]
+  },
+  "ssh_config_unreadable": {
+    "title": "読み取れない SSH 設定",
+    "why": "Meridian は ssh と同じく ssh -G を実行して各ホストの SSH 設定を読み取り、その HostName、Port、User、IdentityFile、ProxyJump、ProxyCommand、known_hosts ファイル、HostKeyAlias のとおりに接続します。ssh が設定を読み取れなかったか、known_hosts ファイルのように設定が示すファイルを読み取れなかったか、Meridian が知らないトークンを含む ProxyCommand や自分自身に戻る ProxyJump のように、設定の内容が使えません。",
+    "fix": [
+      "ssh -G <host> を実行して ssh の出力を確かめ、示された箇所の設定またはファイルを直してください。"
+    ]
+  },
+  "ssh_config_not_read": {
+    "title": "ssh クライアントがなく読み取られなかった SSH 設定",
+    "why": "Meridian は ssh -G を実行して、ssh を通じて SSH 設定を読み取ります。PATH に ssh クライアントがなく、読み取るべき設定もあなたのもの（~/.ssh/config）とシステムのもの（/etc/ssh/ssh_config）のどちらもないときは、OpenSSH の既定値を使います。名前どおりのホスト、ポート 22、あなた自身のユーザー名、~/.ssh にある OpenSSH の既定の名前の鍵ファイル、エージェント、そして ~/.ssh と /etc/ssh の known_hosts ファイルです。",
+    "fix": [
+      "設定にホストへの到達方法が書かれている場合は、OpenSSH のクライアントをインストールするか、PATH に追加してください。"
+    ]
+  },
+  "ssh_config_output_unexpected": {
+    "title": "Meridian が信頼しない ssh -G の出力",
+    "why": "Meridian は各ホストの SSH 設定を ssh -G を実行して読み取ります。ssh -G は各行にキーワードとその値を出力し、Meridian はそれを OpenSSH の ssh が出力するとおりにだけ受け取ります。読み取る各キーワードは 1 行で、ただし ssh が鍵ファイルごとに出力する IdentityFile は除きます。ホストとポートは Meridian が求めたとおりです。それ以外の出力には、設定のものではない行が含まれうります。OpenSSH 10.1 より前の ssh は渡されたユーザーをそのまま出力するため、ユーザーの中の改行は独立した行を始め、それが ProxyCommand に見えることがあります。Meridian は制御文字を含まないユーザーしか ssh に渡さないので、PATH にある ssh クライアント、またはそれを包むものが、これを自ら出力しました。",
+    "fix": [
+      "ssh -G <host> を実行し、メッセージが示すキーワードを確かめてください。OpenSSH 自身のクライアントはそれを 1 回出力します。",
+      "PATH にある ssh が OpenSSH のクライアントを包むものであれば、OpenSSH 自身のクライアントを PATH の先頭に置いてください。"
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "title": "読み取れない失効済みホスト鍵",
+    "why": "SSH 設定の RevokedHostKeys は、失効したホスト鍵のファイルを指定します。1 行に 1 つの公開鍵を並べたリストか、OpenSSH のバイナリ形式のリストである KRL で、Meridian は KRL に対しては ssh-keygen -Q で鍵を確かめます。ファイルがない、読み取れない、あるいは ssh の隣に ssh-keygen がないなどで ssh-keygen が確かめられない KRL であるときは、Meridian はそれがホストの鍵や証明書の認証局を失効させているかどうかがわからないため、OpenSSH と同じく、そのホストのどの鍵も信頼しません。",
+    "fix": [
+      "ファイルがあり、読み取れることを確かめてください。ホストに適用すべきでなければ、設定から RevokedHostKeys を削除してください。",
+      "KRL の場合は、ssh の隣に OpenSSH の ssh-keygen をインストールしてください。"
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "title": "Meridian が実行しない KnownHostsCommand",
+    "why": "KnownHostsCommand は、ホストについての known_hosts の行をさらに出力するコマンドを実行します。その行は鍵を示すだけでなく、失効させることもできます。Meridian はホスト鍵を自ら、設定が指定する known_hosts ファイルに対して確かめ、そのコマンドは実行しないため、それが何を失効させるかを知ることができません。ホストについて指定された内容の一部だけで鍵を確かめるのではなく、接続しません。",
+    "fix": [
+      "ホストの鍵と失効した鍵を設定が指定する known_hosts ファイルに入れ、Host または Match ブロックでそのホストに KnownHostsCommand none を設定してください。"
+    ]
+  },
+  "ssh_client_missing": {
+    "title": "読み取る ssh クライアントのない SSH 設定",
+    "why": "Meridian は ssh -G を実行して、ssh を通じて SSH 設定を読み取ります。ssh -G は Match や Include などを ssh と同じく適用します。PATH に ssh クライアントがないとき、Meridian が OpenSSH の既定値を使えるのは、読み取るべき設定が、あなたのもの（~/.ssh/config）もシステムのもの（/etc/ssh/ssh_config）もないときだけです。設定に書かれたこと、たとえばホストへの到達方法や、失効させたホスト鍵は無視できません。",
+    "fix": [
+      "OpenSSH のクライアントをインストールするか、PATH に追加してください。"
+    ]
+  },
+  "ssh_command_unsafe": {
+    "title": "接続のために実行するのが安全ではないコマンド",
+    "why": "Meridian は、SSH 設定を読み取るために ssh を、ハッシュ化された known_hosts の行を照合し KRL を確かめるために ssh-keygen を、ProxyCommand を実行するためにシェル（SHELL、なければ /bin/sh）を実行します。そのとき、エージェント、鍵、ホストへの接続を手元に持っています。そこで、ローカルバックエンドが実行するコマンドを確かめるのと同じく、実行する前に、それがあなたか root の通常ファイルであり、ほかのユーザーが変更できず、そこに至るどのディレクトリもほかのユーザーが変更できないことを確かめます。ほかのユーザーが変更できるディレクトリが PATH の先頭に来ることがあります。クラスターの起動ファイルが追加する共有の bin/ などで、そこに置かれたコマンドはあなたとして実行されます。メッセージのコードはそのコマンドの問題で、そのページに詳しく書かれています。",
+    "fix": [
+      "コードのページのとおり、そのコマンドか、そこに至るディレクトリについてほかのユーザーが持つ書き込み権限を外すか、あなたと root だけが変更できるディレクトリを PATH の先頭に置いてください。",
+      "そのコマンドがシェルであれば、安全に実行できるシェルを SHELL に設定してください。"
+    ]
+  },
+  "ssh_target_unsafe": {
+    "title": "ssh に渡すのが安全ではないホストまたはユーザー",
+    "why": "形式 1 の ssh: の remoteHost、remoteUser、jumpNodeHost、jumpNodeUser は、多くの場合ワークフローの入力から来ます。Meridian は設定を読み取るためにホストとユーザーを ssh に渡し、どちらもそこで ProxyCommand に届くことがあります。ProxyCommand はそれらを含めてシェルが実行します。そこで、OpenSSH 10.1 以降が自分のコマンドラインを確かめるのと同じく、インストールされている ssh にかかわらず、Meridian は - で始まるか、空白、制御文字、' ` \" $ \\ ; & < > | ( ) { } のいずれかを含むホストと、- で始まるか、改行などの制御文字や ' ` \" ; & < > | ( ) { } のいずれかを含むか、空白の後に - があるか、\\ で終わるユーザーを拒否します。メッセージは値の制御文字を \\n のようにエスケープして示します。",
+    "fix": [
+      "ワークフローが想定するとおり、入力にホストの名前かアドレス、またはユーザーの名前を与えてください。"
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Meridian が接続しない形のホスト",
+    "why": "形式 1 の ssh: の remoteHost と jumpNodeHost は、それぞれ 1 つのホストを示します。SSH 設定が知っている名前かアドレス、またはホストとポートの host:port です。そのユーザーは remoteUser か jumpNodeUser です。ssh 自身のコマンドラインはそれ以上を受け付けます。ホストの中のユーザー (user@host)、URL (ssh://user@host:port)、-J ではホストの並び (a,b) です。Meridian はホストの設定を ssh -G で読み取りますが、ssh -G はホストからユーザーを取り除き、Meridian が求めたものとは別のホストについて出力します。また Meridian は並びを 1 つのホストの名前として接続しようとします。そのため、どこかに接続する前に、@、://、コンマを含むホストを拒否します。",
+    "fix": [
+      "remoteHost か jumpNodeHost にはホストだけ、または host:port を指定し、ユーザーは remoteUser か jumpNodeUser に指定してください。",
+      "複数のジャンプホストを経由して接続するには、最後のものを jumpNodeHost に指定し、ほかのものは SSH 設定でそのホストの ProxyJump に指定してください。"
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "title": "照合できないハッシュ化された行がある known_hosts",
+    "why": "HashKnownHosts が書くハッシュ化された known_hosts の行は、ホストをその HMAC-SHA1 として保持しますが、FIPS 140-3 は Meridian にそれを計算させないため、Meridian はどのハッシュ化された行がそのホストのものかを ssh-keygen -F に尋ねます。それがなければ、ハッシュ化された行がホストの鍵を失効させているかどうかがわからないため、Meridian はファイルの残りで鍵を照合しません。照合すれば、known_hosts が失効させた鍵を受け入れてしまうおそれがあるからです。",
+    "fix": [
+      "OpenSSH の ssh-keygen をインストールするか、ssh と同じ場所で PATH に追加してください。",
+      "または、ホストの鍵と @revoked の行を、設定が示すハッシュ化されていない known_hosts ファイルに置いてください。"
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "title": "認証局の署名では有効にならないホスト証明書",
+    "why": "known_hosts がそのホストについて示す認証局（@cert-authority）が証明書に署名していますが、この接続には有効ではありません。期限が切れているか、まだ有効ではないか、このホストの名前のためのものではないか、ホスト証明書ではありません。OpenSSH が、知っている認証局のどれも証明書に署名していないときだけ証明書の鍵にフォールバックするのと同じく、Meridian はこのとき証明書の鍵にフォールバックしません。",
+    "fix": [
+      "ホストの管理者に、ホストの証明書を更新するか、接続に使う名前で署名するよう依頼してください。"
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "title": "Meridian が展開しないトークンを含む ProxyCommand",
+    "why": "Meridian は ssh と同じく、設定の ProxyCommand を sh -c で実行し、トークン %h、%p、%r、%n、%u、%d、%% を展開します。ほかのトークンを含むものは、そのままコマンドに渡してしまうため実行しません。",
+    "fix": [
+      "Meridian が展開するトークンか、トークンが表すものを使って ProxyCommand を書いてください。"
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "title": "深く入れ子になりすぎた ProxyJump",
+    "why": "Meridian は、設定の ProxyJump が示す各ホストと、そのホスト自身の ProxyJump をたどりますが、この深さまでです。それより深いのは、ProxyJump が自分自身に戻っているときです。たとえば、ProxyJump が示すホストの ProxyJump が元のホストを示している場合です。",
+    "fix": [
+      "ProxyJump が示す各ホストについて ssh -G <host> を実行し、設定のループを断ち切ってください。"
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "title": "どのホストも示さないか、ssh に渡すのが安全ではない ProxyJump のホスト",
+    "why": "ProxyJump の各ホストは [user@]host[:port] か ssh://[user@]host[:port] です。これはどのホストも示していないか、そのホストかユーザーに、ワークフローのものと同じく Meridian が ssh に渡さないもの (ssh_target_unsafe)、つまり制御文字や、シェルが名前以上のものとして読む文字が含まれています。メッセージは制御文字をエスケープしてホストを示します。",
+    "fix": [
+      "ssh -G <host> が示すとおりに、設定の ProxyJump を直してください。"
+    ]
+  },
   "worker_token_not_taken": {
     "title": "トークンを受け取らなかったワーカー",
     "why": "ワーカーを配置したら終了するプロセスは、別のホストでの meridian host のように、ワーカーがブートストラップトークンを受け取るまで待ちます。トークンはワーカーだけが継承するソケットで渡します。このワーカーは受け取りませんでした。サービスマネージャーに届かないときや同じ名前のスコープがまだあるときに systemd-run が起動できなかったワーカーのように先に終了したか、1 分以内にトークンを要求しませんでした。トークンのないワーカーはジョブを実行できないため、Meridian はそれを停止し、何も配置しませんでした。",

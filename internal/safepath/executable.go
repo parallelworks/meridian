@@ -1,8 +1,11 @@
 package safepath
 
 import (
+	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/parallelworks/meridian/problems"
 )
@@ -60,4 +63,29 @@ func CheckExecutable(path string) error {
 		f.Close()
 	}
 	return err
+}
+
+// LookExecutable returns the path of the command name, as exec.LookPath
+// finds it, on PATH where it has no /, absolute and without symbolic
+// links, once CheckExecutable has checked it: a command run with what the
+// user's other processes, or other users, mustn't have, as meridian host
+// runs systemd-run, or the coordinator runs ssh. A directory another user
+// can change can come first on a PATH, as a shared bin/ that a cluster's
+// startup files add. One CheckExecutable refuses is its problem, with the
+// path it checked; one that isn't there an error that is
+// exec.ErrNotFound, or fs.ErrNotExist for a name with a /.
+func LookExecutable(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil && !errors.Is(err, exec.ErrDot) {
+		return "", err
+	}
+	// One found in a directory the PATH names relative to the working
+	// directory is checked as any other, at its absolute path.
+	if path, err = filepath.Abs(path); err == nil {
+		path, err = filepath.EvalSymlinks(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	return path, CheckExecutable(path)
 }

@@ -109,21 +109,10 @@ var systemHost = hostSystem{
 // directory another user can change can come first on a PATH, as a shared
 // bin/ that a cluster's startup files add. One that isn't safe is
 // ssh_host_command_unsafe; one the PATH doesn't find, an error that is
-// exec.ErrNotFound.
+// exec.ErrNotFound. It is safepath.LookExecutable, as the coordinator
+// finds ssh.
 func hostCommand(name string) (string, error) {
-	path, err := exec.LookPath(name)
-	if err != nil && !errors.Is(err, exec.ErrDot) {
-		return "", err
-	}
-	// One found in a directory the PATH names relative to the working
-	// directory is checked as any other, at its absolute path.
-	if path, err = filepath.Abs(path); err == nil {
-		path, err = filepath.EvalSymlinks(path)
-	}
-	if err != nil {
-		return "", err
-	}
-	err = safepath.CheckExecutable(path)
+	path, err := safepath.LookExecutable(name)
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
 		return "", problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": hostName(), "path": path, "code": string(p.Code)})
 	}

@@ -3404,6 +3404,77 @@ coordinator's replicas share one key, so the hash a worker is started with
 holds whichever replica it reaches. Compute nodes reach the login node but
 not the coordinator's machine, and the coordinator's machine opens no port.
 
+The coordinator connects to a host over SSH as the user would with `ssh`
+(`backend/ssh/internal/sshconn`), which the `ssh` backend and the login
+nodes' backends build on:
+
+- **What a workflow names is checked first.** A format 1 `ssh:`'s
+  `remoteHost`, `remoteUser`, `jumpNodeHost` and `jumpNodeUser` usually
+  come from its inputs, and reach `ssh -G`, `ssh-keygen` and the user's
+  `ProxyCommand`, which a shell runs with `%h`, `%n` and `%r` in it. So
+  before any of them runs, Meridian refuses a host or a user that could
+  be read as more than a name (`ssh_target_unsafe`), by the rules
+  OpenSSH 10.1 and later checks its own command line with
+  (`valid_hostname`, `valid_ruser`), whichever `ssh` is installed: an
+  older one doesn't check, or, before 10.1, takes a user's control
+  characters, so a newline in one starts a line of `ssh -G`'s output of
+  its own. The message shows the value with its control characters
+  escaped. `ssh -G` is given the host, its port and its user, once they
+  are checked, never a jump host, which Meridian connects through itself,
+  resolving it with an `ssh -G` of its own, for its own user; a hop of
+  the config's `ProxyJump` whose host or user wouldn't pass the same check
+  is `ssh_proxy_jump_invalid`. A host that names a user (`user@host`), is
+  a URL (`ssh://…`) or a list of hosts (`a,b`), which `ssh`'s command
+  line takes but a format 1 `ssh:` doesn't mean, is
+  `ssh_host_form_unsupported`, rather than a host `ssh -G` would resolve
+  as another: none of the known workflows writes one.
+- **The commands Meridian runs to connect**, `ssh`, `ssh-keygen` and the
+  shell a `ProxyCommand` runs in, are checked as the local backend checks
+  a command it runs: a regular file of the user's or root's that no other
+  user can change, nor any directory on the way to it, since a directory
+  another user can change can come first on `PATH`. One that isn't safe
+  doesn't run (`ssh_command_unsafe`).
+- **The user's ssh_config**, as `ssh -G` resolves it, with `Match`,
+  `Include` and its defaults: the host's `HostName`, `Port`, `User`,
+  `IdentityFile`, `IdentitiesOnly`, `IdentityAgent`, `ProxyJump` (any
+  chain of hosts, each one's key checked) and `ProxyCommand` (run as
+  OpenSSH runs it, `$SHELL -c "exec <command>"`, or `/bin/sh` without
+  `SHELL`, its `%h %p %r %n %u %d` expanded), its known_hosts files,
+  `HostKeyAlias` and `RevokedHostKeys`, `ConnectTimeout` and
+  `ServerAliveInterval`. A format 1 `ssh:`'s `remoteUser` is over its
+  `User`, as `ssh -l` is, so a `Match user`, and `%r`, which `ssh`
+  expands in `UserKnownHostsFile` and Meridian in `IdentityFile`, see
+  `remoteUser`, as they would with `ssh`; and its `jumpNodeHost` is over
+  the config's `ProxyJump` and `ProxyCommand`, as `ssh -J` is. A
+  `remoteHost` of the form `host:port` is where to connect, as format 1
+  takes it, without the config's `HostName`, `ProxyJump` or
+  `ProxyCommand`. A config `ssh` can't read is `ssh_config_unreadable`,
+  and output of `ssh -G`'s that prints a keyword Meridian reads more than
+  once, but `IdentityFile`, or for another host or port than it asked
+  for, isn't trusted (`ssh_config_output_unexpected`); a `ProxyCommand`
+  with another token isn't run (`ssh_proxy_command_token`), and
+  `ProxyJump`s nested more than 8 deep, as those that lead back to
+  themselves are, aren't followed (`ssh_proxy_jump_too_deep`). Without an
+  `ssh` client, OpenSSH's defaults apply, with a note
+  (`ssh_config_not_read`), but only where there is no config for one to
+  read, neither the user's nor the system's: what one says can't be
+  ignored (`ssh_client_missing`).
+- **Logging in**, with the keys of the user's agent, then the key files
+  the config names, then the user's other key pairs in `~/.ssh`, a
+  private key beside its `.pub`, as format 1 finds them, unless
+  `IdentitiesOnly`. Meridian never asks for a passphrase, so a key file
+  that needs one counts only if the agent holds its key, and never logs
+  in with a password. A host that accepts none is `ssh_auth_failed`,
+  which names no key.
+- **One connection to each host**, which every use of it shares: a
+  keepalive every 15 seconds closes one whose host doesn't answer within
+  10, as a network that silently drops a connection leaves it, long
+  before TCP would notice. It is dialed again after a backoff, from a
+  second, doubling, up to 30, and at most 8 sessions run on it at once,
+  under sshd's default `MaxSessions`, 10. A session sshd refuses is
+  asked for again, since a refusal says nothing of whether the
+  connection is alive.
+
 One replica at a time holds what a member's workers connect through, such
 as the forwarded socket or the relay, under a lease in the store, and
 serves every attempt that reaches it there, of whichever job: any replica
@@ -3972,9 +4043,34 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   (`coordinator_harden_failed`, `coordinator_system_unsupported`); and a
   worker's environment, and so its steps', leaves out the environment
   variables that the user's secret variables are read from.
-- **SSH host keys are checked** against the user's `known_hosts`. An unknown
-  key is an error until the user accepts it explicitly; Meridian never
-  accepts a key on first use by itself.
+- **SSH host keys are checked** against the user's `known_hosts`, the
+  files their ssh_config names, by the host's `HostKeyAlias`, or else its
+  name and port, as OpenSSH looks them up, with `@cert-authority` and
+  `@revoked` lines. An unknown key is an error (`ssh_host_key_unknown`)
+  until the user accepts it explicitly, as `ssh` offers to; Meridian never
+  accepts a key on first use by itself, whatever `StrictHostKeyChecking`
+  says. A key that differs from the one of its type that known_hosts has
+  is `ssh_host_key_changed`, and one it revokes `ssh_host_key_revoked`,
+  as is one that the file the config's `RevokedHostKeys` names revokes, a
+  list of keys or a KRL, which `ssh-keygen -Q` checks, or, for a
+  certificate, whose key or authority it revokes. Where that file can't
+  be read, or a KRL checked, no key of the host's is trusted
+  (`ssh_revoked_host_keys_unreadable`), as OpenSSH trusts none. A config
+  with a `KnownHostsCommand` for the host is refused
+  (`ssh_known_hosts_command`): Meridian doesn't run it, and what it
+  prints could revoke the host's key, so Meridian fails closed rather than
+  check the key against part of what the user trusts.
+  The host is asked first for a key of a type known_hosts has for it, as
+  OpenSSH asks, so a host with keys of several types presents one the
+  user has. A host certificate passes only if an authority known_hosts
+  names for the host signed it, neither it nor its authority is revoked,
+  and it is valid for the host now (`ssh_host_certificate_invalid`); its
+  key is checked as a plain key only when no authority known_hosts names
+  signed it, as OpenSSH falls back. A hashed line, whose host is an
+  HMAC-SHA1 of it, is matched by OpenSSH's `ssh-keygen -F`, since FIPS
+  140-3 doesn't let Meridian compute HMAC-SHA1. Without `ssh-keygen`, or
+  when it fails, no key is checked against a file that has hashed lines
+  (`ssh_known_hosts_unmatched`): one of them could revoke it.
 - **Secrets** stay out of the plan and run state. A run's passwords and
   secret variables are in its secret record, encrypted under a data key of
   the run's own, until the run ends, and the record opens only as the
@@ -4007,8 +4103,18 @@ Meridian's must (`internal/fipsmode`).
 
 - **TLS 1.3**, through `crypto/tls`, with the algorithms FIPS mode allows.
   The coordinator's certificate uses an ECDSA P-256 key.
-- **SSH**, through `golang.org/x/crypto/ssh`, which negotiates only approved
-  algorithms in FIPS mode. A server that offers none of them can't be used.
+- **SSH**, through `golang.org/x/crypto/ssh`, with the algorithms it can run
+  in FIPS 140-only mode pinned: key exchange with ECDH on P-256, P-384 and
+  P-521; the ciphers aes128-ctr, aes192-ctr and aes256-ctr; the MACs
+  hmac-sha2-256 and hmac-sha2-512, and their encrypt-then-MAC forms; and
+  host keys and certificates of ECDSA, Ed25519 and RSA signing with
+  SHA-2. User keys are the same, RSA of 2048 bits or more. The library
+  drops what FIPS mode doesn't approve, but still offers AES-GCM, which it
+  builds with an arbitrary nonce, and the ML-KEM hybrid key exchange,
+  whose X25519 isn't approved, both of which fail in FIPS 140-only mode,
+  so its defaults aren't used. A server that offers none of a list's
+  can't be used (`ssh_algorithms_unapproved`), as one that offers only
+  curve25519, chacha20-poly1305 or the Diffie-Hellman groups can't.
 - **Secret records** are encrypted with AES-256-GCM, through `crypto/cipher`
   with random nonces (`cipher.NewGCMWithRandomNonce`), the way the module
   approves, each under a data key of its run's own from `crypto/rand`, and

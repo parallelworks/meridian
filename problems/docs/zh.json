@@ -2260,6 +2260,148 @@
       "针对消息指出的二进制文件，按代码页面所说的进行修复，或者把 meridian 安装在只有你或 root 能更改的位置，例如 /usr/local/bin。"
     ]
   },
+  "ssh_host_key_unknown": {
+    "title": "known_hosts 中没有的主机密钥",
+    "why": "Meridian 像 ssh 一样，用你的 SSH 配置指定的 known_hosts 文件（UserKnownHostsFile 和 GlobalKnownHostsFile），按主机的 HostKeyAlias，或者没有时按它的名称和端口，核对每台主机的密钥，并拒绝在其中找不到的密钥。无论 StrictHostKeyChecking 怎么设置，它都从不自行添加密钥：第一次未经核对就接受的密钥，正是第一次连接被劫持的方式。known_hosts 中没有该主机任何此类密钥的密钥类型，也视为未知。",
+    "fix": [
+      "向主机管理员核对密钥的指纹，或在主机上对它的密钥运行 ssh-keygen -lf，然后按 ssh <host> 的提示把密钥加入 known_hosts，只有指纹一致时才回答 yes。",
+      "如果 known_hosts 以另一个名称记录了该主机的密钥，请在 SSH 配置中为该主机设置 HostKeyAlias。"
+    ]
+  },
+  "ssh_host_key_changed": {
+    "title": "与 known_hosts 中记录的不同的主机密钥",
+    "why": "主机提供的密钥与你的 known_hosts 为它记录的同类型密钥不同。要么主机的密钥被替换了，例如重新安装后；要么另一台机器在冒充它应答，而发现后者正是这项核对的目的。",
+    "fix": [
+      "询问主机管理员它的密钥是否更改，并核对新密钥的指纹。",
+      "如果确实更改了，用 ssh-keygen -R <host> 删除旧密钥，再像第一次连接的主机那样加入新密钥。"
+    ]
+  },
+  "ssh_host_key_revoked": {
+    "title": "已被吊销的主机密钥",
+    "why": "你的 known_hosts 把该密钥标记为 @revoked，或者你的 SSH 配置中 RevokedHostKeys 指定的文件列出了它，或者对于主机证书，其密钥或颁发机构的密钥被如此处理：管理它们的人已声明不要对任何主机信任它。",
+    "fix": [
+      "向主机管理员索取它当前的密钥，核对指纹后再加入 known_hosts。"
+    ]
+  },
+  "ssh_algorithms_unapproved": {
+    "title": "没有提供任何 FIPS 140-3 批准算法的主机",
+    "why": "Meridian 在 FIPS 140-3 模式下运行，只能使用该标准批准的算法。对 SSH 而言，它能使用的是在 NIST 曲线 P-256、P-384 和 P-521 上的 ECDH 密钥交换，加密算法 aes128-ctr、aes192-ctr 和 aes256-ctr，MAC hmac-sha2-256 和 hmac-sha2-512，以及 ECDSA、Ed25519 或用 SHA-2 签名的 RSA 主机密钥。AES-GCM 和 ML-KEM 混合密钥交换也已获批准，但 SSH 库目前还不能在此模式下使用它们。某一类中一个都不提供的主机，例如只提供 curve25519 或 chacha20-poly1305 的主机，无法使用。",
+    "fix": [
+      "请主机管理员把 Meridian 所需的算法加入服务器配置：sshd_config 中的 KexAlgorithms、Ciphers、MACs 和 HostKeyAlgorithms。"
+    ]
+  },
+  "ssh_auth_failed": {
+    "title": "被主机拒绝的登录",
+    "why": "Meridian 依次用 SSH 代理中的密钥、SSH 配置为该主机指定的密钥文件（IdentityFile），以及 ~/.ssh 中你的其他密钥对（每个是 .pub 旁边的私钥）登录；设置了 IdentitiesOnly 时不用最后一种。它从不询问密码短语，因此需要密码短语的密钥文件只有在代理持有其密钥时才会提供；它也从不用密码登录。它不提供 FIPS 140-3 不允许其签名的 DSA 密钥和少于 2048 位的 RSA 密钥。主机没有接受它提供的任何密钥，或者它没有可提供的密钥。",
+    "fix": [
+      "确认你登录该主机用的密钥在代理中（ssh-add -l），或者是配置为该主机指定的、没有密码短语的密钥文件。",
+      "确认用户是你想要的那个（remoteUser，没有则为配置中的 User，再没有则为你自己），并且主机上该用户的 authorized_keys 中有该密钥的公钥部分。",
+      "运行 ssh -v <host>，查看 ssh 提供了哪些密钥、主机接受了哪些。"
+    ]
+  },
+  "ssh_config_unreadable": {
+    "title": "无法读取的 SSH 配置",
+    "why": "Meridian 像 ssh 一样，通过运行 ssh -G 读取每台主机的 SSH 配置，并按它所说的连接：HostName、Port、User、IdentityFile、ProxyJump、ProxyCommand、known_hosts 文件和 HostKeyAlias。ssh 无法读取该配置，或者无法读取它指定的文件（例如 known_hosts 文件），或者它的内容无法使用，例如含有 Meridian 不认识的标记的 ProxyCommand，或绕回自身的 ProxyJump。",
+    "fix": [
+      "运行 ssh -G <host> 查看 ssh 的输出，并修正它所指出的配置或文件。"
+    ]
+  },
+  "ssh_config_not_read": {
+    "title": "因没有 ssh 客户端而未读取的 SSH 配置",
+    "why": "Meridian 通过运行 ssh -G，借助 ssh 读取你的 SSH 配置。PATH 中没有 ssh 客户端，且既没有你的配置（~/.ssh/config）也没有系统的配置（/etc/ssh/ssh_config）可读时，它使用 OpenSSH 的默认值：按名称使用主机、端口 22、你自己的用户名、~/.ssh 中 OpenSSH 默认名称的密钥文件、你的代理，以及 ~/.ssh 和 /etc/ssh 中的 known_hosts 文件。",
+    "fix": [
+      "如果你的配置写明了如何到达该主机，请安装 OpenSSH 客户端，或把它加入 PATH。"
+    ]
+  },
+  "ssh_config_output_unexpected": {
+    "title": "Meridian 不信任的 ssh -G 输出",
+    "why": "Meridian 通过运行 ssh -G 读取每台主机的 SSH 配置。ssh -G 每行打印一个关键字及其值，Meridian 只按 OpenSSH 的 ssh 打印它的方式接受：它读取的每个关键字只占一行，但 ssh 为每个密钥文件各打印一次的 IdentityFile 除外，主机和端口也必须是 Meridian 所要求的。其他形式的输出可能含有不属于你配置的行：OpenSSH 10.1 之前的 ssh 会原样打印传给它的用户，因此用户中的换行会另起一行，这一行可能被当作 ProxyCommand。Meridian 只把不含控制字符的用户交给 ssh，所以这是 PATH 上的 ssh 客户端，或包装它的程序，自己打印的。",
+    "fix": [
+      "运行 ssh -G <host>，查看消息指出的关键字：OpenSSH 自己的客户端只打印它一次。",
+      "如果 PATH 上的 ssh 包装了 OpenSSH 的客户端，请把 OpenSSH 自己的客户端放在 PATH 的最前面。"
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "title": "无法读取的已吊销主机密钥",
+    "why": "你的 SSH 配置中的 RevokedHostKeys 指定一个已吊销主机密钥的文件：每行一个公钥的列表，或者 OpenSSH 的二进制列表 KRL，Meridian 用 ssh-keygen -Q 拿密钥与 KRL 核对。如果该文件不存在、无法读取，或者是 ssh-keygen 无法核对的 KRL（例如 ssh 旁边没有 ssh-keygen），Meridian 就无法判断它是否吊销了该主机的密钥或其证书的颁发机构，因此像 OpenSSH 一样，不信任该主机的任何密钥。",
+    "fix": [
+      "确认该文件存在且你能读取它；如果它不应适用于该主机，请从配置中删除 RevokedHostKeys。",
+      "对于 KRL，请在 ssh 旁边安装 OpenSSH 的 ssh-keygen。"
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "title": "Meridian 不运行的 KnownHostsCommand",
+    "why": "KnownHostsCommand 运行一个为主机打印更多 known_hosts 行的命令，这些行既可以指定密钥，也可以吊销密钥。Meridian 自己对照你的配置指定的 known_hosts 文件检查主机密钥，并不运行该命令，因此无法知道它会吊销什么；它选择不连接，而不是只凭你对该主机所做声明的一部分来检查密钥。",
+    "fix": [
+      "把该主机的密钥以及已吊销的密钥放进你的配置指定的 known_hosts 文件，并在 Host 或 Match 块中为该主机设置 KnownHostsCommand none。"
+    ]
+  },
+  "ssh_client_missing": {
+    "title": "没有 ssh 客户端可读取的 SSH 配置",
+    "why": "Meridian 通过运行 ssh -G，借助 ssh 读取你的 SSH 配置，ssh -G 会像 ssh 一样应用 Match、Include 等。PATH 中没有 ssh 客户端时，只有在既没有你的配置（~/.ssh/config）也没有系统的配置（/etc/ssh/ssh_config）可读时，Meridian 才能使用 OpenSSH 的默认值：配置中写明的内容，例如如何到达主机，或它吊销的主机密钥，不能被忽略。",
+    "fix": [
+      "安装 OpenSSH 客户端，或把它加入 PATH。"
+    ]
+  },
+  "ssh_command_unsafe": {
+    "title": "为连接而运行时不安全的命令",
+    "why": "Meridian 运行 ssh 读取你的 SSH 配置，运行 ssh-keygen 匹配哈希过的 known_hosts 行并核对 KRL，运行你的 shell（SHELL，否则 /bin/sh）来执行 ProxyCommand，而此时你的代理、密钥和到各主机的连接都在手边。因此，就像本地后端检查它运行的命令一样，Meridian 在运行之前会检查它是你或 root 的普通文件，其他用户无法更改，通往它的任何目录也都无法被其他用户更改。其他用户可以更改的目录可能排在 PATH 的最前面，例如集群启动文件添加的共享 bin/，他们放在那里的命令会以你的身份运行。消息中的代码是该命令的问题，其页面有更多说明。",
+    "fix": [
+      "按代码页面所说，去掉其他用户对该命令或通往它的目录的写权限，或者把只有你和 root 能更改的目录放在 PATH 的最前面。",
+      "如果该命令是你的 shell，请把 SHELL 设为可以安全运行的 shell。"
+    ]
+  },
+  "ssh_target_unsafe": {
+    "title": "交给 ssh 不安全的主机或用户",
+    "why": "格式 1 的 ssh: 中的 remoteHost、remoteUser、jumpNodeHost 和 jumpNodeUser 常常来自工作流的输入。Meridian 把主机和用户交给 ssh 以读取你的配置，两者在那里都可能到达 ProxyCommand，而 shell 会带着它们运行 ProxyCommand。因此，就像 OpenSSH 10.1 及更高版本检查它自己的命令行一样，无论安装的是哪个 ssh，Meridian 都拒绝以 - 开头、或含有空白、控制字符或 ' ` \" $ \\ ; & < > | ( ) { } 中任一字符的主机，以及以 - 开头、含有换行等控制字符或 ' ` \" ; & < > | ( ) { } 中任一字符、空白后跟 -、或以 \\ 结尾的用户。消息会把值中的控制字符转义显示，例如 \\n。",
+    "fix": [
+      "按工作流的预期，给该输入一个主机的名称或地址，或一个用户的名称。"
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Meridian 不连接的形式的主机",
+    "why": "格式 1 的 ssh: 中的 remoteHost 和 jumpNodeHost 各指定一台主机：你的 SSH 配置可能知道的名称或地址，或者主机和端口 host:port。它的用户是 remoteUser 或 jumpNodeUser。ssh 自己的命令行接受更多形式：主机中带用户的 user@host、URL ssh://user@host:port，以及 -J 的主机列表 a,b。Meridian 用 ssh -G 读取主机的配置，而 ssh -G 会把用户从主机中拿掉，打印的是 Meridian 所要求之外的主机；Meridian 还会把列表当作一台主机的名称去连接。因此在连接任何地方之前，Meridian 拒绝含有 @、:// 或逗号的主机。",
+    "fix": [
+      "给 remoteHost 或 jumpNodeHost 只写主机，或 host:port，把用户写在 remoteUser 或 jumpNodeUser 中。",
+      "要经过多台跳板主机连接，把最后一台写在 jumpNodeHost 中，其余的写在你 SSH 配置里该主机的 ProxyJump 中。"
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "title": "含有无法匹配的哈希行的 known_hosts",
+    "why": "HashKnownHosts 写入的哈希 known_hosts 行把主机保存为它的 HMAC-SHA1，而 FIPS 140-3 不允许 Meridian 计算它，因此 Meridian 请 ssh-keygen -F 找出哪些哈希行属于该主机。没有它，Meridian 无法判断某个哈希行是否吊销了该主机的密钥，因此不用文件的其余部分核对密钥：那样可能接受 known_hosts 已吊销的密钥。",
+    "fix": [
+      "安装 OpenSSH 的 ssh-keygen，或把它和 ssh 一起加入 PATH。",
+      "或者把该主机的密钥以及任何 @revoked 行，放在你的配置指定的、没有哈希行的 known_hosts 文件中。"
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "title": "其证书机构的签名不能使之有效的主机证书",
+    "why": "known_hosts 为该主机指定的证书机构（@cert-authority）签署了该证书，但它对这次连接无效：它已过期、尚未生效、不是为这台主机的名称签发的，或者不是主机证书。正如 OpenSSH 只在它知道的证书机构都没有签署证书时才退回到证书的密钥，Meridian 此时不退回到证书的密钥。",
+    "fix": [
+      "请主机管理员续期主机证书，或为你连接所用的名称签署证书。"
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "title": "含有 Meridian 不展开的标记的 ProxyCommand",
+    "why": "Meridian 像 ssh 一样用 sh -c 运行你配置中的 ProxyCommand，并展开标记 %h、%p、%r、%n、%u、%d 和 %%。含有其他标记的 ProxyCommand 会把该标记原样传给命令，因此它不运行。",
+    "fix": [
+      "用 Meridian 展开的标记，或用标记所代表的内容来写 ProxyCommand。"
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "title": "嵌套过深的 ProxyJump",
+    "why": "Meridian 沿着你配置中的 ProxyJump 指定的每台主机，以及这些主机各自的 ProxyJump 前进，最多到这个深度。更深就意味着 ProxyJump 绕回了自身，例如某主机的 ProxyJump 指定的主机，其 ProxyJump 又指定了它。",
+    "fix": [
+      "对 ProxyJump 指定的每台主机运行 ssh -G <host>，并在配置中打破循环。"
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "title": "没有指定主机或交给 ssh 不安全的 ProxyJump 主机",
+    "why": "ProxyJump 的每台主机是 [user@]host[:port] 或 ssh://[user@]host[:port]。这一项没有指定任何主机，或者它的主机或用户含有 Meridian 不交给 ssh 的内容，与工作流中的一样（ssh_target_unsafe）：控制字符，或 shell 会读成不只是名称的字符。消息会把其中的控制字符转义显示。",
+    "fix": [
+      "按 ssh -G <host> 所显示的，修正你配置中的 ProxyJump。"
+    ]
+  },
   "worker_token_not_taken": {
     "title": "没有取走令牌的工作进程",
     "why": "放置工作进程后就结束的进程，例如另一台主机上的 meridian host，会等到工作进程取走它的引导令牌；令牌通过只有工作进程继承的套接字交给它。这个工作进程没有取走：它先结束了，就像在无法连接到你的服务管理器、或同名的 scope 仍然存在时 systemd-run 无法启动的工作进程那样；或者它在一分钟内没有请求令牌。没有令牌的工作进程无法运行作业，因此 Meridian 停止了它，没有放置任何东西。",

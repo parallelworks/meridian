@@ -2260,6 +2260,148 @@
       "Corrige lo que dice la página del código, para el binario que nombra el mensaje, o instala meridian donde solo tú o root puedan cambiarlo, como /usr/local/bin."
     ]
   },
+  "ssh_host_key_unknown": {
+    "title": "Clave de host que known_hosts no tiene",
+    "why": "Meridian comprueba la clave de cada host con tus archivos known_hosts, los que nombra tu configuración de SSH (UserKnownHostsFile y GlobalKnownHostsFile), como hace ssh, por el HostKeyAlias del host, o si no por su nombre y puerto, y rechaza una clave que no encuentra allí. Nunca añade una por su cuenta, diga lo que diga StrictHostKeyChecking: una clave aceptada sin comprobar la primera vez es como se suplanta una primera conexión. Una clave de un tipo del que known_hosts no tiene ninguna para el host también es desconocida.",
+    "fix": [
+      "Comprueba la huella de la clave con quien administra el host, o en el host, con ssh-keygen -lf sobre su clave, y añade la clave a known_hosts, como ofrece ssh <host>, respondiendo que sí solo si la huella coincide.",
+      "Si known_hosts tiene la clave del host con otro nombre, define HostKeyAlias para el host en tu configuración de SSH."
+    ]
+  },
+  "ssh_host_key_changed": {
+    "title": "Clave de host que no es la que tiene known_hosts",
+    "why": "La clave que presentó el host difiere de la clave del mismo tipo que tu known_hosts tiene para él. O se sustituyó la clave del host, como cuando se reinstala, u otra máquina responde por él, que es lo que la comprobación está para detectar.",
+    "fix": [
+      "Pregunta a quien administra el host si su clave cambió, y comprueba la huella de la nueva.",
+      "Si cambió, quita la clave antigua con ssh-keygen -R <host> y añade la nueva, como para un host al que te conectas por primera vez."
+    ]
+  },
+  "ssh_host_key_revoked": {
+    "title": "Clave de host revocada",
+    "why": "Tu known_hosts marca la clave con @revoked, o el archivo que nombra el RevokedHostKeys de tu configuración de SSH la incluye, o, para un certificado de host, su clave o la de su autoridad: quien los administra ha dicho que no se confíe en ella, para ningún host.",
+    "fix": [
+      "Pide a quien administra el host su clave actual, y añádela a known_hosts una vez comprobada su huella."
+    ]
+  },
+  "ssh_algorithms_unapproved": {
+    "title": "Host que no ofrece ningún algoritmo que FIPS 140-3 apruebe",
+    "why": "Meridian se ejecuta en modo FIPS 140-3, que solo le deja usar los algoritmos que aprueba la norma. Para SSH, los que puede usar son el intercambio de claves con ECDH en las curvas NIST P-256, P-384 y P-521, los cifrados aes128-ctr, aes192-ctr y aes256-ctr, los MAC hmac-sha2-256 y hmac-sha2-512, y claves de host ECDSA, Ed25519 o RSA que firman con SHA-2. AES-GCM y el intercambio de claves híbrido con ML-KEM también están aprobados, pero la biblioteca de SSH aún no puede usarlos en este modo. Un host que no ofrece ninguno de una de estas listas, como uno que solo ofrece curve25519 o chacha20-poly1305, no se puede usar.",
+    "fix": [
+      "Pide a quien administra el host que añada los algoritmos que Meridian necesita a la configuración del servidor: KexAlgorithms, Ciphers, MACs y HostKeyAlgorithms en sshd_config."
+    ]
+  },
+  "ssh_auth_failed": {
+    "title": "Inicio de sesión rechazado por un host",
+    "why": "Meridian inicia sesión con las claves de tu agente de SSH, luego con los archivos de clave que tu configuración de SSH nombra para el host (IdentityFile), y luego con tus otros pares de claves en ~/.ssh, cada uno una clave privada junto a su .pub, salvo que esté IdentitiesOnly. Nunca pide una frase de contraseña, así que un archivo de clave que la necesita solo se ofrece si tu agente tiene su clave, y nunca inicia sesión con una contraseña. No ofrece claves DSA ni claves RSA de menos de 2048 bits, con las que FIPS 140-3 no le deja firmar. El host no aceptó ninguna de las claves que ofreció, o no tenía ninguna que ofrecer.",
+    "fix": [
+      "Comprueba que la clave con la que entras al host está en tu agente (ssh-add -l), o es un archivo de clave sin frase de contraseña que tu configuración nombra para el host.",
+      "Comprueba que el usuario es el que quieres, remoteUser, o si no User en tu configuración, o si no el tuyo, y que el host tiene la mitad pública de la clave en el authorized_keys de ese usuario.",
+      "Ejecuta ssh -v <host> para ver qué claves ofrece ssh y cuáles acepta el host."
+    ]
+  },
+  "ssh_config_unreadable": {
+    "title": "Configuración de SSH que no se puede leer",
+    "why": "Meridian lee tu configuración de SSH para cada host como lo hace ssh, ejecutando ssh -G, y se conecta como dice: su HostName, Port, User, IdentityFile, ProxyJump, ProxyCommand, archivos known_hosts y HostKeyAlias. ssh no pudo leer la configuración, no se pudo leer un archivo que nombra, como un archivo known_hosts, o lo que dice no se puede usar, como un ProxyCommand con un token que Meridian no conoce, o ProxyJumps que vuelven sobre sí mismos.",
+    "fix": [
+      "Ejecuta ssh -G <host> para ver qué dice ssh, y corrige tu configuración, o el archivo, donde señala."
+    ]
+  },
+  "ssh_config_not_read": {
+    "title": "Configuración de SSH no leída, sin cliente ssh",
+    "why": "Meridian lee tu configuración de SSH a través de ssh, ejecutando ssh -G. Sin un cliente ssh en PATH, y sin configuración que leer, ni la tuya (~/.ssh/config) ni la del sistema (/etc/ssh/ssh_config), usa los valores predeterminados de OpenSSH: el host tal como se nombra, el puerto 22, tu propio nombre de usuario, los archivos de clave de ~/.ssh con los nombres predeterminados de OpenSSH, tu agente, y los archivos known_hosts de ~/.ssh y /etc/ssh.",
+    "fix": [
+      "Instala el cliente de OpenSSH, o ponlo en PATH, si tu configuración dice cómo llegar al host."
+    ]
+  },
+  "ssh_config_output_unexpected": {
+    "title": "Salida de ssh -G en la que Meridian no confía",
+    "why": "Meridian lee tu configuración de SSH para cada host ejecutando ssh -G, que imprime una palabra clave y su valor en cada línea, y la toma solo tal como la imprime el ssh de OpenSSH: cada palabra clave que lee en una línea, salvo IdentityFile, que ssh imprime para cada archivo de clave, y el host y el puerto tal como Meridian los pidió. Una salida distinta podría contener líneas que no son de tu configuración: un ssh anterior a OpenSSH 10.1 imprime tal cual el usuario que se le da, así que un salto de línea en él empieza una línea propia, que podría pasar por un ProxyCommand. Meridian solo da a ssh un usuario sin caracteres de control, así que el cliente ssh del PATH, o algo que lo envuelve, imprimió esto por sí mismo.",
+    "fix": [
+      "Ejecuta ssh -G <host> y mira la palabra clave que nombra el mensaje: el cliente propio de OpenSSH la imprime una vez.",
+      "Pon el cliente propio de OpenSSH primero en PATH, si el ssh que hay ahí lo envuelve."
+    ]
+  },
+  "ssh_revoked_host_keys_unreadable": {
+    "title": "Claves de host revocadas que no se pueden leer",
+    "why": "El RevokedHostKeys de tu configuración de SSH nombra un archivo de claves de host revocadas: una lista de claves públicas, una por línea, o una KRL, la lista binaria de OpenSSH, con la que Meridian comprueba una clave mediante ssh-keygen -Q. Si el archivo no está, no se puede leer, o es una KRL que ssh-keygen no puede comprobar, como cuando no hay ssh-keygen junto a ssh, Meridian no puede saber si revoca la clave del host, o la autoridad de su certificado, así que no confía en ninguna clave del host, como tampoco OpenSSH.",
+    "fix": [
+      "Comprueba que el archivo está y que puedes leerlo, o quita RevokedHostKeys de tu configuración si no debe aplicarse al host.",
+      "Para una KRL, instala el ssh-keygen de OpenSSH junto a ssh."
+    ]
+  },
+  "ssh_known_hosts_command": {
+    "title": "KnownHostsCommand, que Meridian no ejecuta",
+    "why": "KnownHostsCommand ejecuta una orden que imprime más líneas de known_hosts para un host, que pueden revocar una clave además de nombrarla. Meridian comprueba las claves de host por sí mismo, con los archivos known_hosts que nombra tu configuración, y no ejecuta la orden, así que no puede saber qué revocaría; no se conecta, en lugar de comprobar la clave del host con solo parte de lo que has dicho de él.",
+    "fix": [
+      "Pon las claves del host, y las revocadas, en un archivo known_hosts que nombre tu configuración, y fija KnownHostsCommand none para el host, en un bloque Host o Match."
+    ]
+  },
+  "ssh_client_missing": {
+    "title": "Configuración de SSH sin cliente ssh que la lea",
+    "why": "Meridian lee tu configuración de SSH a través de ssh, ejecutando ssh -G, que aplica Match, Include y lo demás como lo haría ssh. Sin un cliente ssh en PATH, Meridian solo puede usar los valores predeterminados de OpenSSH donde no hay configuración que leer, ni la tuya (~/.ssh/config) ni la del sistema (/etc/ssh/ssh_config): lo que dice una, como cómo llegar al host o una clave de host que revoca, no se puede ignorar.",
+    "fix": [
+      "Instala el cliente de OpenSSH, o ponlo en PATH."
+    ]
+  },
+  "ssh_command_unsafe": {
+    "title": "Orden para conectarse que no es seguro ejecutar",
+    "why": "Meridian ejecuta ssh para leer tu configuración de SSH, ssh-keygen para emparejar las líneas con hash de known_hosts y comprobar una KRL, y tu shell, SHELL, o si no /bin/sh, para ejecutar un ProxyCommand, con tu agente, tus claves y tus conexiones a hosts a mano. Así que antes de ejecutar una, comprueba que es un archivo regular tuyo o de root que ningún otro usuario puede cambiar, ni ningún directorio del camino hasta él, como el backend local comprueba una orden que ejecuta. Un directorio que otro usuario puede cambiar puede ir primero en PATH, como un bin/ compartido que añaden los archivos de inicio de un clúster, y una orden que pusiera ahí se ejecutaría como tú. El código del mensaje es el problema con la orden, cuya página dice más.",
+    "fix": [
+      "Quita el permiso de escritura que tienen otros usuarios sobre la orden, o sobre el directorio del camino hasta ella, como dice la página del código, o pon primero en PATH un directorio que solo tú y root podáis cambiar.",
+      "Fija SHELL a un shell que sea seguro ejecutar, si la orden es tu shell."
+    ]
+  },
+  "ssh_target_unsafe": {
+    "title": "Host o usuario que no es seguro dar a ssh",
+    "why": "remoteHost, remoteUser, jumpNodeHost y jumpNodeUser de un ssh: de formato 1 suelen venir de las entradas de un flujo de trabajo. Meridian da a ssh el host y el usuario, para leer tu configuración, y ambos pueden llegar a un ProxyCommand de ella, que un shell ejecuta con ellos dentro. Así que, como OpenSSH 10.1 y posteriores comprueban su propia línea de comandos, Meridian rechaza un host que empieza por -, o contiene espacios, un carácter de control o alguno de ' ` \" $ \\ ; & < > | ( ) { }, y un usuario que empieza por -, contiene un carácter de control, como un salto de línea, o alguno de ' ` \" ; & < > | ( ) { }, tiene - tras un espacio o termina en \\, sea cual sea el ssh instalado. El mensaje muestra el valor con sus caracteres de control escapados, como \\n.",
+    "fix": [
+      "Da a la entrada el nombre o la dirección de un host, o el nombre de un usuario, como espera el flujo de trabajo."
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Host en una forma a la que Meridian no se conecta",
+    "why": "remoteHost y jumpNodeHost de un ssh: de formato 1 nombran cada uno un host: su nombre o su dirección, tal como tu configuración de SSH puede conocerlo, o un host y su puerto, host:puerto. Su usuario es remoteUser o jumpNodeUser. La línea de comandos de ssh acepta más: un usuario en el host, usuario@host, una URL, ssh://usuario@host:puerto, y para -J una lista de hosts, a,b. Meridian lee tu configuración para un host con ssh -G, que sacaría el usuario del host e imprimiría otro host que el que Meridian pidió, y Meridian se conectaría a una lista como si fuera el nombre de un solo host. Así que rechaza un host que contiene @, :// o una coma, antes de conectarse a ningún sitio.",
+    "fix": [
+      "Da a remoteHost o jumpNodeHost solo el host, o host:puerto, y su usuario en remoteUser o jumpNodeUser.",
+      "Para conectarte a través de más de un host de salto, nombra el último en jumpNodeHost y los demás en un ProxyJump para él en tu configuración de SSH."
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "title": "known_hosts con líneas con hash que no se pueden comparar",
+    "why": "Una línea de known_hosts con hash, que escribe HashKnownHosts, guarda su host como un HMAC-SHA1 de él, que FIPS 140-3 no deja calcular a Meridian, así que Meridian pregunta a ssh-keygen -F qué líneas con hash son del host. Sin él, Meridian no puede saber si una línea con hash revoca la clave del host, así que no comprueba la clave con el resto del archivo: eso podría aceptar una clave que known_hosts revoca.",
+    "fix": [
+      "Instala ssh-keygen de OpenSSH, o ponlo en PATH junto a ssh.",
+      "O guarda las claves del host, y cualquier línea @revoked, en un archivo known_hosts sin líneas con hash que nombre tu configuración."
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "title": "Certificado de host que la firma de su autoridad no hace válido",
+    "why": "Una autoridad que known_hosts nombra para el host (@cert-authority) firmó el certificado, pero no es válido para esta conexión: ha caducado, aún no es válido, no es para el nombre de este host, o no es un certificado de host. Meridian no recurre entonces a la clave del certificado, como OpenSSH solo recurre a ella cuando ninguna autoridad que conoce firmó el certificado.",
+    "fix": [
+      "Pide a quien administra el host que renueve su certificado, o que lo firme para el nombre al que te conectas."
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "title": "ProxyCommand con un token que Meridian no expande",
+    "why": "Meridian ejecuta el ProxyCommand de tu configuración con sh -c, como ssh, con los tokens %h, %p, %r, %n, %u, %d y %% expandidos. No ejecuta uno que contiene otro, que pasaría al comando tal cual.",
+    "fix": [
+      "Escribe el ProxyCommand con los tokens que Meridian expande, o con lo que representa el token."
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "title": "ProxyJumps que se anidan demasiado",
+    "why": "Meridian sigue el ProxyJump de tu configuración por cada host que nombra, y el ProxyJump propio de cada uno, hasta esta profundidad como mucho. Más allá, los ProxyJump vuelven sobre sí mismos, como un host cuyo ProxyJump nombra un host cuyo ProxyJump lo nombra a él.",
+    "fix": [
+      "Ejecuta ssh -G <host> para cada host que nombran los ProxyJump, y rompe el ciclo en tu configuración."
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "title": "Host de ProxyJump que no nombra ningún host, o que no es seguro dar a ssh",
+    "why": "Cada host de un ProxyJump es [usuario@]host[:puerto], o ssh://[usuario@]host[:puerto]. Este no nombra ningún host, o su host o su usuario contiene lo que Meridian no da a ssh, como no lo da de un flujo de trabajo (ssh_target_unsafe): un carácter de control, o un carácter que un shell lee como algo más que un nombre. El mensaje muestra el salto con sus caracteres de control escapados.",
+    "fix": [
+      "Corrige el ProxyJump de tu configuración, tal como lo muestra ssh -G <host>."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "Worker que no tomó su token",
     "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",
