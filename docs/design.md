@@ -399,6 +399,14 @@ the SHA-256 hash of its content: 218 files.
   keys the inner group dropped. None of the 218 known workflows has a group
   with `flatten`, which format 1 adds
   ([The workflow format](#the-workflow-format)).
+- **A `compute-clusters` input given a list keeps what in it isn't a
+  name**, where ACTIVATE made each item that isn't text, or is `""`, null:
+  so the details of clusters that a workflow passes to one it calls, which
+  it resolved already, reached the called workflow as `[null]`. Only a
+  name is resolved; the rest of a list is kept as it is, as a value that
+  isn't a list is. ACTIVATE takes the same fix. None of the 211
+  `compute-clusters` inputs of the known workflows is `multi`, the form
+  that takes a list.
 
 ## Phases
 
@@ -1736,7 +1744,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; a scheduler's partitions, accounts and queues come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts and queues come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -3568,12 +3576,16 @@ what it was asked, and when it leaves the run running, as when it is
 interrupted ([The coordinator](#the-coordinator)).
 
 
-Execution groups, variables and the GitLab servers a workflow can name
-live in Meridian's config directory, and `--group` picks a group. A
+Execution groups, variables, clusters and the GitLab servers a workflow can
+name live in Meridian's config directory, and `--group` picks a group. A
 built-in `local` group needs no config: one member, this machine, which
 names host isolation explicitly, and which a group of the same name in
-the config replaces. Groups are never read from the repository a workflow
-comes from, so cloning a workflow can't send its jobs to your SSH hosts.
+the config replaces. Groups and clusters are never read from the repository
+a workflow comes from, so cloning a workflow can't add a host to yours. It
+can still send its jobs to one you defined, by naming it: a `runs-on:` that
+names one of your groups, or a `compute-clusters` input whose default is
+`hpc`, names your own group or cluster. And a format 1 `ssh:` names its
+host itself.
 
 - **`groups.yaml`** holds each group by name, with its members in order:
   each one's backend, its settings, its isolation, the resources it offers
@@ -3591,6 +3603,52 @@ comes from, so cloning a workflow can't send its jobs to your SSH hosts.
   the user's credentials, so a workflow can't name a server of its own,
   and at HTTPS's port, or at another that Git's own `url.<base>.insteadOf`
   rewrites the server's address to.
+- **`clusters.yaml`** holds the clusters a `compute-clusters` input can
+  name, each by its name, with its `host`, and, if it gives one, its
+  `scheduler`, `slurm` or `pbs`
+  ([`docs/examples/clusters.yaml`](examples/clusters.yaml)). The host is
+  an alias that ssh resolves, as `ssh -G` does, or a host name or an
+  address, without a port: format 1 gives an existing cluster's `ip` so,
+  and 21 of the known workflows run `ssh` or `scp` with it in a script. A
+  host that needs more, such as a port, a user to log in as, a jump host
+  or an IPv6 address, is an alias the user's `ssh_config` defines, as
+  format 1 takes a login from the config's `User`. A host can't start
+  with `-` or hold a space, as a workflow's script can put it in a
+  command line. A name is letters, digits, `_`, `-` and `.`, as a group's.
+
+  An input that names a cluster sees what format 1 gives for an existing
+  cluster's details, for what a cluster here can know of them: `name`;
+  its host as `ip`, which 189 of the 196 workflows we know of that have
+  such an input read, as a job's `ssh:` `remoteHost` above all; its
+  scheduler as `schedulerType`, or `""` for none, as format 1 writes a
+  cluster's that has none; `existing` as its `type` and its `provider`, as
+  format 1 names a cluster that a platform reaches but didn't make, which
+  73 of those workflows read to decide what else to ask for; and `$type`
+  `computeResource`. What names a platform's own record of the cluster,
+  its `id` and its `pw://` `uri`, and its owner's platform account, its
+  `user` and its `namespace`, it leaves out: an existing cluster without
+  the account fields, a shape format 1 doesn't give, where the 5 reads of
+  them in the known workflows feed the platform's own CLI. The workspace,
+  `workspace` or `user-workspace`, is the machine a run starts on, this
+  one, and needs no config: `id` and `name` `user-workspace`, and `ip`
+  `""`, as format 1 gives it, without the person's platform account.
+
+  A name resolves whatever the input's definition says, as format 1
+  resolves it: `include-workspace`, `provider` and `csp` choose only what
+  a form lists, and a name given otherwise, or a default the form can't
+  list, is resolved all the same. Another name is `cluster_unknown`, which
+  lists the clusters, or `clusters_none` when there are none, as without
+  a clusters file. A list of names gives each one's details, and what in
+  it isn't a name, as the details a run passes to a workflow it calls, is
+  kept as it is ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+
+  A cluster's host is in the run's values in the clear, as the rest of an
+  input's value is, which whoever can see the run sees, as on a platform.
+  Where a variable or a password names the cluster, its details are
+  private, as what is made from one is: the plan doesn't hold them, the
+  run's secret record does, and the job whose `ssh:` reads them has a
+  private target, so its placement is private, and the problems of its
+  placement are masked.
 
 Meridian refuses any of these files if another user can change it, and the
 variables file if another user can read it, since people keep secrets in

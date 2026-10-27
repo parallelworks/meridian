@@ -579,6 +579,42 @@ jobs:
 	}
 }
 
+// TestValidateClusters checks that a compute-clusters input names one of
+// the clusters of the config's clusters.yaml, and that without the file a
+// name is refused, saying there are none.
+func TestValidateClusters(t *testing.T) {
+	env := emptyEnv(t)
+	workflow := writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+jobs:
+  main:
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    steps:
+      - run: echo
+`)
+	if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
+		t.Errorf("meridian validate without clusters.yaml = %+v", r)
+	}
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate with cluster hpc = %+v", r)
+	}
+	r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=cpu", workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"hpc"`) {
+		t.Errorf("meridian validate with cluster cpu = %+v", r)
+	}
+}
+
 // TestValidateDevZero checks that a stream that never ends is read only to
 // the limit.
 func TestValidateDevZero(t *testing.T) {

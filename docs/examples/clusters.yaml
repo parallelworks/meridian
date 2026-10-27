@@ -1,0 +1,29 @@
+# clusters.yaml, in Meridian's config directory (~/.config/meridian on
+# Linux, ~/Library/Application Support/Meridian on macOS): the clusters a
+# workflow's compute-clusters input can name when it runs with meridian.
+# Only you may change it.
+#
+# Each cluster is its name, with:
+#   host       required: an alias that ssh resolves, as in ~/.ssh/config, or
+#              a host name or an address, without a port. A workflow reads
+#              it as the cluster's ip, and passes it to ssh and scp as it is,
+#              so a host that needs a port, a user to log in as, a jump host
+#              or an IPv6 address is an alias your ssh_config defines.
+#   scheduler  optional: slurm or pbs, which a workflow reads as the
+#              cluster's schedulerType; without it, "".
+#
+# An input that names hpc sees name hpc, ip hpc-login, schedulerType slurm,
+# and type and provider existing. The name workspace needs no entry: it is
+# this machine.
+
+hpc:
+  host: hpc-login
+  scheduler: slurm
+
+# In ~/.ssh/config:
+#   Host lab-login
+#     HostName lab.example.com
+#     Port 2222
+#     User alice
+lab:
+  host: lab-login

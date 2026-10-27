@@ -1345,6 +1345,22 @@
       "或者在 Meridian 配置目录的 groups.yaml 中定义该组。"
     ]
   },
+  "cluster_unknown": {
+    "title": "未知的集群",
+    "why": "compute-clusters 输入的值指定一个集群，运行看到的是该集群的详细信息，如其 ip 和 schedulerType。在运行工作流的机器上，名称是 workspace（即本机，写作 workspace 或 user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群，与输入的 include-workspace、provider 和 csp 无关，这些只决定表单列出什么。",
+    "fix": [
+      "从消息列出的集群中选择一个，或选择 workspace。",
+      "或者在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。"
+    ]
+  },
+  "clusters_none": {
+    "title": "没有可选的集群",
+    "why": "compute-clusters 输入的值指定一个集群。在运行工作流的机器上，名称是 workspace（即本机，写作 workspace 或 user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群，而这里没有 clusters.yaml，或它未定义任何集群。",
+    "fix": [
+      "在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。",
+      "或者在提供该输入的集群的平台上运行工作流。"
+    ]
+  },
   "source_ref_invalid": {
     "title": "不是对 Git 中工作流的引用",
     "why": "Meridian 像 ACTIVATE 一样，从 Git 仓库读取步骤的 uses: 所指定的工作流：github/ 加上仓库的所有者和名称，或 gitlab/ 加上包含其组名的项目路径，然后是 @ 和分支、标签或提交（未指定时为默认分支）。仓库中的工作流文件是步骤的 with: $yaml（未指定时为 workflow.yaml），with: $host 指定 GitLab 服务器，且只用于 gitlab/。不允许可能被理解为其他内容的部分，例如路径中的 .. 或以 - 开头的修订，也不允许以 .git 或 .lock 结尾的组名。",
@@ -1634,6 +1650,21 @@
     "why": "以 ~/ 开头的文件路径位于您的主目录中，Meridian 通过 HOME 找到主目录。",
     "fix": [
       "将 HOME 设置为您的主目录，或写出文件的完整路径。"
+    ]
+  },
+  "cluster_name_invalid": {
+    "title": "无效的集群名",
+    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。",
+    "fix": [
+      "重命名该集群。"
+    ]
+  },
+  "cluster_invalid": {
+    "title": "无效的集群",
+    "why": "集群需要其 host：ssh 能解析的别名（如 ssh_config 中的），或主机名或地址，不带端口，与格式 1 给出已有集群的 ip 的方式相同，工作流会把它原样传给 ssh 和 scp。其 scheduler 若给出，为 slurm 或 pbs。都不能以 - 开头或包含空格。",
+    "fix": [
+      "按其键的要求更正该值。",
+      "对需要更多设置的主机，如端口、登录用户、跳板主机或 IPv6 地址，请指定你的 ssh_config 中定义的别名。"
     ]
   },
   "key_file_invalid": {

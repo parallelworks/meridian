@@ -193,6 +193,8 @@
 
   "workflow_too_large": "워크플로가 {limit}바이트를 넘어 크기 한도를 초과합니다.",
   "execution_group_unknown": "‘{input}’ 입력이 지정한 실행 그룹 {value}은(는) 그룹 {groups} 중 하나가 아닙니다.",
+  "cluster_unknown": "‘{input}’ 입력이 지정한 클러스터 {value}은(는) workspace도 아니고 클러스터 {clusters} 중 하나도 아닙니다.",
+  "clusters_none": "‘{input}’ 입력이 지정한 클러스터 {value}은(는) workspace가 아니며, 여기에는 다른 클러스터가 없습니다.",
   "source_ref_invalid": "uses: ‘{ref}’은(는) github/owner/repository@revision 같은 Git 저장소의 워크플로 참조가 아닙니다.",
   "source_on_platform": "uses: ‘{ref}’은(는) 플랫폼이 저장한 워크플로를 가리키므로 그 플랫폼만 읽을 수 있습니다.",
   "source_revision_not_found": "Git이 {repo} 저장소의 ‘{revision}’ 리비전을 찾지 못했습니다: {reason}. 커밋은 전체 SHA로 지정합니다.",
@@ -233,6 +235,8 @@
   "variable_env_unset": "{variable} 변수는 환경 변수 {env}에서 값을 가져오는데, 그 환경 변수가 설정되어 있지 않습니다.",
   "variable_file_unreadable": "{variable} 변수는 {file} 파일에서 값을 가져오는데, 그 파일을 읽을 수 없습니다: {reason}",
   "variable_file_home": "{variable} 변수는 {file}에서 값을 가져오는데, 그 ~/를 위한 HOME이 절대 경로로 설정되어 있지 않습니다.",
+  "cluster_name_invalid": "클러스터 이름 ‘{cluster}’은(는) 올바르지 않습니다. 이름에는 문자, 숫자, _, -, .를 쓰며 문자나 숫자로 시작하고, workspace나 user-workspace가 아니어야 합니다.",
+  "cluster_invalid": "‘{cluster}’ 클러스터의 {key} 값 {value}은(는) 올바르지 않습니다.",
   "key_file_invalid": "키 파일 {path}이(가) 키의 32바이트가 아니라 {size}바이트입니다.",
   "key_file_missing": "키 파일 {path}이(가) 없어서, 그것이 감싼 데이터 키를 풀 수 없습니다.",
   "key_unwrap_failed": "실행 {run}의 데이터 키를 키 파일 {path}로 풀 수 없습니다. 다른 키로 또는 다른 실행을 위해 감쌌거나, 바뀌었습니다.",

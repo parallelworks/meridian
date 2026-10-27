@@ -28,6 +28,7 @@ const (
 	GroupsFile    = "groups.yaml"
 	VariablesFile = "variables.yaml"
 	SourcesFile   = "sources.yaml"
+	ClustersFile  = "clusters.yaml"
 )
 
 // maxConfigSize is the largest config file, or file holding a variable's
@@ -52,13 +53,15 @@ func localGroup() *backend.Group {
 	}}}
 }
 
-// Config is the user's config: their execution groups and variables, from
-// the config directory. It provides the Variables and Groups the compiler
-// and the coordinator read, and the input types that name what it holds.
+// Config is the user's config: their execution groups, variables and
+// clusters, from the config directory. It provides the Variables and Groups
+// the compiler and the coordinator read, and the input types that name what
+// it holds.
 type Config struct {
 	groups    map[string]*backend.Group
 	variables map[string]variable
 	servers   []string
+	clusters  map[string]cluster
 	lookupEnv func(string) (string, bool)
 }
 
@@ -68,11 +71,11 @@ var (
 	_ compile.InputResolver = (*Config)(nil)
 )
 
-// LoadConfig reads the groups file, the variables file and the sources
-// file in dir, any of which can be missing, and checks them. lookupEnv
-// reads the environment variables that hold variables' values, when they
-// are read, and HOME, for a path that starts with ~/, and says whether
-// each is set, as os.LookupEnv does: one set to "" gives "".
+// LoadConfig reads the groups file, the variables file, the sources file
+// and the clusters file in dir, any of which can be missing, and checks
+// them. lookupEnv reads the environment variables that hold variables'
+// values, when they are read, and HOME, for a path that starts with ~/, and
+// says whether each is set, as os.LookupEnv does: one set to "" gives "".
 //
 // The directory, and every directory on the way to it, must belong to the
 // user or to root, and only they may change it. None of the files may be
@@ -83,7 +86,7 @@ var (
 // plain variables too. None is read through a symbolic link: the
 // directory can be one, and is checked through it (safepath.ReadFile).
 func LoadConfig(dir string, lookupEnv func(string) (string, bool)) (*Config, error) {
-	c := &Config{lookupEnv: lookupEnv, groups: map[string]*backend.Group{}, variables: map[string]variable{}}
+	c := &Config{lookupEnv: lookupEnv, groups: map[string]*backend.Group{}, variables: map[string]variable{}, clusters: map[string]cluster{}}
 	// A directory that isn't there holds no config, and nothing on the
 	// way to it is read.
 	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
@@ -97,6 +100,9 @@ func LoadConfig(dir string, lookupEnv func(string) (string, bool)) (*Config, err
 			return nil, err
 		}
 		if err := c.loadSources(filepath.Join(dir, SourcesFile)); err != nil {
+			return nil, err
+		}
+		if err := c.loadClusters(filepath.Join(dir, ClustersFile)); err != nil {
 			return nil, err
 		}
 	}
@@ -506,16 +512,26 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 	return nil, compile.ErrNotFound
 }
 
-// ResolveInput provides the execution-groups input type, whose value is the
-// name of one of the config's groups, and no other: the input types that
-// name a scheduler's partitions, accounts and queues come later. A value
-// that names none of them is problems.ExecutionGroupUnknown, which the
-// compiler reports with the input's name.
+// ResolveInput provides two input types, and no other: the input types
+// that name a scheduler's partitions, accounts and queues come later.
+//
+//   - execution-groups, whose value is the name of one of the config's
+//     groups. A value that names none of them is
+//     problems.ExecutionGroupUnknown.
+//   - compute-clusters, whose value names one of the clusters of the
+//     clusters file, or the workspace, and gives its details
+//     (resolveClusters).
+//
+// The compiler reports a problem with the input's name.
 func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any, value any) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if typ != "execution-groups" {
+	switch typ {
+	case "execution-groups":
+	case "compute-clusters":
+		return c.resolveClusters(value)
+	default:
 		return nil, compile.ErrInputType
 	}
 	name, ok := value.(string)
