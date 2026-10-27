@@ -2284,7 +2284,7 @@
   },
   "ssh_config_output_unexpected": {
     "title": "Meridian이 신뢰하지 않는 ssh -G 출력",
-    "why": "Meridian은 ssh -G를 실행해 각 호스트의 SSH 설정을 읽습니다. ssh -G는 각 줄에 키워드와 그 값을 출력하며, Meridian은 OpenSSH의 ssh가 출력하는 그대로만 받아들입니다. 읽는 각 키워드는 한 줄에 있어야 하고, ssh가 키 파일마다 출력하는 IdentityFile만 예외이며, 호스트와 포트는 Meridian이 요청한 그대로여야 합니다. 그렇지 않은 출력에는 설정의 것이 아닌 줄이 있을 수 있습니다. OpenSSH 10.1 이전의 ssh는 받은 사용자를 그대로 출력하므로, 사용자 안의 줄바꿈이 독립된 줄을 시작하고, 그 줄이 ProxyCommand로 보일 수 있습니다. Meridian은 ssh에 사용자를 넘기지 않으므로, PATH의 ssh 클라이언트나 그것을 감싸는 무언가가 이를 스스로 출력한 것입니다.",
+    "why": "Meridian은 ssh -G를 실행해 각 호스트의 SSH 설정을 읽습니다. ssh -G는 각 줄에 키워드와 그 값을 출력하며, Meridian은 OpenSSH의 ssh가 출력하는 그대로만 받아들입니다. 읽는 각 키워드는 한 줄에 있어야 하고, ssh가 키 파일마다 출력하는 IdentityFile만 예외이며, 호스트와 포트는 Meridian이 요청한 그대로여야 합니다. 그렇지 않은 출력에는 설정의 것이 아닌 줄이 있을 수 있습니다. OpenSSH 10.1 이전의 ssh는 받은 사용자를 그대로 출력하므로, 사용자 안의 줄바꿈이 독립된 줄을 시작하고, 그 줄이 ProxyCommand로 보일 수 있습니다. Meridian은 제어 문자가 없는 사용자만 ssh에 넘기므로, PATH의 ssh 클라이언트나 그것을 감싸는 무언가가 이를 스스로 출력한 것입니다.",
     "fix": [
       "ssh -G <host>를 실행해 메시지가 가리키는 키워드를 확인하세요. OpenSSH 자체 클라이언트는 그것을 한 번 출력합니다.",
       "PATH의 ssh가 OpenSSH 클라이언트를 감싸는 것이라면, OpenSSH 자체 클라이언트를 PATH 맨 앞에 두세요."
@@ -2322,9 +2322,17 @@
   },
   "ssh_target_unsafe": {
     "title": "ssh에 넘기기에 안전하지 않은 호스트나 사용자",
-    "why": "형식 1 ssh:의 remoteHost, remoteUser, jumpNodeHost, jumpNodeUser는 흔히 워크플로의 입력에서 옵니다. Meridian은 설정을 읽으려고 호스트를 ssh에 넘기며, 호스트와 사용자는 거기서 ProxyCommand에 닿을 수 있는데, ProxyCommand는 셸이 그것들을 넣어 실행합니다. 그래서 OpenSSH 10.1 이상이 자기 명령줄을 확인하듯이, 설치된 ssh와 관계없이 Meridian은 -로 시작하거나, 공백, 제어 문자, ' ` \" $ \\ ; & < > | ( ) { } 중 하나가 있는 호스트와, -로 시작하거나, 줄바꿈 같은 제어 문자나 ' ` \" ; & < > | ( ) { } 중 하나가 있거나, 공백 뒤에 -가 있거나, \\로 끝나는 사용자를 거부합니다. 메시지는 값의 제어 문자를 \\n처럼 이스케이프해 보여 줍니다.",
+    "why": "형식 1 ssh:의 remoteHost, remoteUser, jumpNodeHost, jumpNodeUser는 흔히 워크플로의 입력에서 옵니다. Meridian은 설정을 읽으려고 호스트와 사용자를 ssh에 넘기며, 둘 다 거기서 ProxyCommand에 닿을 수 있는데, ProxyCommand는 셸이 그것들을 넣어 실행합니다. 그래서 OpenSSH 10.1 이상이 자기 명령줄을 확인하듯이, 설치된 ssh와 관계없이 Meridian은 -로 시작하거나, 공백, 제어 문자, ' ` \" $ \\ ; & < > | ( ) { } 중 하나가 있는 호스트와, -로 시작하거나, 줄바꿈 같은 제어 문자나 ' ` \" ; & < > | ( ) { } 중 하나가 있거나, 공백 뒤에 -가 있거나, \\로 끝나는 사용자를 거부합니다. 메시지는 값의 제어 문자를 \\n처럼 이스케이프해 보여 줍니다.",
     "fix": [
       "워크플로가 기대하는 대로 입력에 호스트의 이름이나 주소, 또는 사용자의 이름을 주세요."
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Meridian이 연결하지 않는 형태의 호스트",
+    "why": "형식 1 ssh:의 remoteHost와 jumpNodeHost는 각각 호스트 하나를 가리킵니다. SSH 설정이 알 수 있는 이름이나 주소, 또는 호스트와 포트인 host:port입니다. 그 사용자는 remoteUser나 jumpNodeUser입니다. ssh 자체의 명령줄은 그 이상을 받습니다. 호스트 안의 사용자(user@host), URL(ssh://user@host:port), 그리고 -J에서는 호스트 목록(a,b)입니다. Meridian은 호스트의 설정을 ssh -G로 읽는데, ssh -G는 호스트에서 사용자를 떼어 내고 Meridian이 요청한 것과 다른 호스트에 대해 출력하며, Meridian은 목록을 호스트 하나의 이름으로 여겨 연결하려 합니다. 그래서 어디에든 연결하기 전에 @, :// 또는 쉼표가 있는 호스트를 거부합니다.",
+    "fix": [
+      "remoteHost나 jumpNodeHost에는 호스트만, 또는 host:port를 주고, 사용자는 remoteUser나 jumpNodeUser에 주세요.",
+      "점프 호스트 여러 개를 거쳐 연결하려면, 마지막 것을 jumpNodeHost에 쓰고 나머지는 SSH 설정에서 그 호스트의 ProxyJump에 쓰세요."
     ]
   },
   "ssh_known_hosts_unmatched": {
@@ -2357,8 +2365,8 @@
     ]
   },
   "ssh_proxy_jump_invalid": {
-    "title": "어떤 호스트도 가리키지 않는 ProxyJump 호스트",
-    "why": "ProxyJump의 각 호스트는 [user@]host[:port]이거나 ssh://[user@]host[:port]입니다. 이것은 어떤 호스트도 가리키지 않습니다.",
+    "title": "어떤 호스트도 가리키지 않거나 ssh에 넘기기에 안전하지 않은 ProxyJump 호스트",
+    "why": "ProxyJump의 각 호스트는 [user@]host[:port]이거나 ssh://[user@]host[:port]입니다. 이것은 어떤 호스트도 가리키지 않거나, 그 호스트나 사용자에 워크플로의 것처럼 Meridian이 ssh에 넘기지 않는 것(ssh_target_unsafe), 즉 제어 문자나 셸이 이름 이상으로 읽는 문자가 있습니다. 메시지는 제어 문자를 이스케이프해 보여 줍니다.",
     "fix": [
       "ssh -G <host>가 보여 주는 대로 설정의 ProxyJump를 고치세요."
     ]

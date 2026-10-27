@@ -209,10 +209,12 @@ func (d *Dialer) connect(ctx context.Context, c *hostConfig, depth int) (_ *ssh.
 }
 
 // through returns the config of the host c connects through: the jump
-// host its target names, as the config has it, as jumpUser where that
-// isn't ""; or else the last host of its ProxyJump, which connects
-// through the others, as ssh -J has it. Neither user is given ssh
-// (Dialer.resolve).
+// host its target names, as the config has it for jumpUser, which
+// Target.check checked; or else the last host of its ProxyJump, which
+// connects through the others, as ssh -J has it, for the hop's own user,
+// as OpenSSH's ssh -W for it is given. A hop whose host or user isn't safe
+// to give ssh, as Target.check says of a target's, which the user's config
+// would hardly hold, is problems.SSHProxyJumpInvalid.
 func (d *Dialer) through(ctx context.Context, c *hostConfig) (*hostConfig, error) {
 	if c.jumpHost != "" {
 		host, port, ok := hostPort(c.jumpHost)
@@ -223,8 +225,8 @@ func (d *Dialer) through(ctx context.Context, c *hostConfig) (*hostConfig, error
 	}
 	last := c.proxyJump[len(c.proxyJump)-1]
 	host, user, port, ok := hop(last)
-	if !ok {
-		return nil, problems.SSHProxyJumpInvalid.Problem(problems.Params{"host": c.alias, "hop": last})
+	if !ok || !validHostname(host) || !validUser(user) {
+		return nil, problems.SSHProxyJumpInvalid.Problem(problems.Params{"host": c.alias, "hop": escape(last)})
 	}
 	hc, err := d.resolve(ctx, host, port, user)
 	if err != nil {

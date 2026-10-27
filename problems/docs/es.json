@@ -2284,7 +2284,7 @@
   },
   "ssh_config_output_unexpected": {
     "title": "Salida de ssh -G en la que Meridian no confía",
-    "why": "Meridian lee tu configuración de SSH para cada host ejecutando ssh -G, que imprime una palabra clave y su valor en cada línea, y la toma solo tal como la imprime el ssh de OpenSSH: cada palabra clave que lee en una línea, salvo IdentityFile, que ssh imprime para cada archivo de clave, y el host y el puerto tal como Meridian los pidió. Una salida distinta podría contener líneas que no son de tu configuración: un ssh anterior a OpenSSH 10.1 imprime tal cual el usuario que se le da, así que un salto de línea en él empieza una línea propia, que podría pasar por un ProxyCommand. Meridian nunca da un usuario a ssh, así que el cliente ssh del PATH, o algo que lo envuelve, imprimió esto por sí mismo.",
+    "why": "Meridian lee tu configuración de SSH para cada host ejecutando ssh -G, que imprime una palabra clave y su valor en cada línea, y la toma solo tal como la imprime el ssh de OpenSSH: cada palabra clave que lee en una línea, salvo IdentityFile, que ssh imprime para cada archivo de clave, y el host y el puerto tal como Meridian los pidió. Una salida distinta podría contener líneas que no son de tu configuración: un ssh anterior a OpenSSH 10.1 imprime tal cual el usuario que se le da, así que un salto de línea en él empieza una línea propia, que podría pasar por un ProxyCommand. Meridian solo da a ssh un usuario sin caracteres de control, así que el cliente ssh del PATH, o algo que lo envuelve, imprimió esto por sí mismo.",
     "fix": [
       "Ejecuta ssh -G <host> y mira la palabra clave que nombra el mensaje: el cliente propio de OpenSSH la imprime una vez.",
       "Pon el cliente propio de OpenSSH primero en PATH, si el ssh que hay ahí lo envuelve."
@@ -2322,9 +2322,17 @@
   },
   "ssh_target_unsafe": {
     "title": "Host o usuario que no es seguro dar a ssh",
-    "why": "remoteHost, remoteUser, jumpNodeHost y jumpNodeUser de un ssh: de formato 1 suelen venir de las entradas de un flujo de trabajo. Meridian da a ssh el host, para leer tu configuración, y el host y el usuario pueden llegar a un ProxyCommand de ella, que un shell ejecuta con ellos dentro. Así que, como OpenSSH 10.1 y posteriores comprueban su propia línea de comandos, Meridian rechaza un host que empieza por -, o contiene espacios, un carácter de control o alguno de ' ` \" $ \\ ; & < > | ( ) { }, y un usuario que empieza por -, contiene un carácter de control, como un salto de línea, o alguno de ' ` \" ; & < > | ( ) { }, tiene - tras un espacio o termina en \\, sea cual sea el ssh instalado. El mensaje muestra el valor con sus caracteres de control escapados, como \\n.",
+    "why": "remoteHost, remoteUser, jumpNodeHost y jumpNodeUser de un ssh: de formato 1 suelen venir de las entradas de un flujo de trabajo. Meridian da a ssh el host y el usuario, para leer tu configuración, y ambos pueden llegar a un ProxyCommand de ella, que un shell ejecuta con ellos dentro. Así que, como OpenSSH 10.1 y posteriores comprueban su propia línea de comandos, Meridian rechaza un host que empieza por -, o contiene espacios, un carácter de control o alguno de ' ` \" $ \\ ; & < > | ( ) { }, y un usuario que empieza por -, contiene un carácter de control, como un salto de línea, o alguno de ' ` \" ; & < > | ( ) { }, tiene - tras un espacio o termina en \\, sea cual sea el ssh instalado. El mensaje muestra el valor con sus caracteres de control escapados, como \\n.",
     "fix": [
       "Da a la entrada el nombre o la dirección de un host, o el nombre de un usuario, como espera el flujo de trabajo."
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Host en una forma a la que Meridian no se conecta",
+    "why": "remoteHost y jumpNodeHost de un ssh: de formato 1 nombran cada uno un host: su nombre o su dirección, tal como tu configuración de SSH puede conocerlo, o un host y su puerto, host:puerto. Su usuario es remoteUser o jumpNodeUser. La línea de comandos de ssh acepta más: un usuario en el host, usuario@host, una URL, ssh://usuario@host:puerto, y para -J una lista de hosts, a,b. Meridian lee tu configuración para un host con ssh -G, que sacaría el usuario del host e imprimiría otro host que el que Meridian pidió, y Meridian se conectaría a una lista como si fuera el nombre de un solo host. Así que rechaza un host que contiene @, :// o una coma, antes de conectarse a ningún sitio.",
+    "fix": [
+      "Da a remoteHost o jumpNodeHost solo el host, o host:puerto, y su usuario en remoteUser o jumpNodeUser.",
+      "Para conectarte a través de más de un host de salto, nombra el último en jumpNodeHost y los demás en un ProxyJump para él en tu configuración de SSH."
     ]
   },
   "ssh_known_hosts_unmatched": {
@@ -2357,8 +2365,8 @@
     ]
   },
   "ssh_proxy_jump_invalid": {
-    "title": "Host de ProxyJump que no nombra ningún host",
-    "why": "Cada host de un ProxyJump es [usuario@]host[:puerto], o ssh://[usuario@]host[:puerto]. Este no nombra ningún host.",
+    "title": "Host de ProxyJump que no nombra ningún host, o que no es seguro dar a ssh",
+    "why": "Cada host de un ProxyJump es [usuario@]host[:puerto], o ssh://[usuario@]host[:puerto]. Este no nombra ningún host, o su host o su usuario contiene lo que Meridian no da a ssh, como no lo da de un flujo de trabajo (ssh_target_unsafe): un carácter de control, o un carácter que un shell lee como algo más que un nombre. El mensaje muestra el salto con sus caracteres de control escapados.",
     "fix": [
       "Corrige el ProxyJump de tu configuración, tal como lo muestra ssh -G <host>."
     ]

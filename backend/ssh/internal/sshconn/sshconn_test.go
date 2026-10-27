@@ -929,11 +929,54 @@ func TestTargetUnsafe(t *testing.T) {
 	}
 }
 
-// TestUsersNotGivenSSH checks that ssh is given a target's host and port,
-// and never its users, nor its jump host with one: what ssh prints of
-// them is what an ssh before 10.1 could print as it was given. A user
-// over the config's applies all the same, and a jump host's user to it.
-func TestUsersNotGivenSSH(t *testing.T) {
+// TestHostForms checks that a host given in a form ssh's command line
+// takes, but a format 1 ssh: doesn't mean, is refused before anything runs
+// with it: a user in it, which ssh -G would take out, and print another
+// host than it was asked for; a URL; and a list of jump hosts, which would
+// be dialed as one host's name. And that a hop of the config's ProxyJump
+// that isn't safe to give ssh, as a target's wouldn't be, is refused.
+func TestHostForms(t *testing.T) {
+	dir := t.TempDir()
+	d := &sshconn.Dialer{SSH: fakeSSH(t, dir, ""), Home: dir, User: "tester", Getenv: func(string) string { return "" }, ConnectTimeout: 2 * time.Second}
+	for _, tc := range []struct {
+		key    string
+		target sshconn.Target
+	}{
+		{"remoteHost", sshconn.Target{Host: "alice@farm"}},
+		{"remoteHost", sshconn.Target{Host: "ssh://alice@farm:2222"}},
+		{"remoteHost", sshconn.Target{Host: "ssh://farm"}},
+		{"remoteHost", sshconn.Target{Host: "farm,other"}},
+		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: "carol@login"}},
+		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: "login1,login2"}},
+		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: "ssh://login"}},
+	} {
+		_, err := d.Dial(t.Context(), tc.target)
+		if p := paramsOf(t, err, problems.SSHHostFormUnsupported); p["key"] != tc.key {
+			t.Errorf("%+v is refused for %v, want %s", tc.target, p["key"], tc.key)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "args")); err == nil {
+		t.Error("a host of a form Meridian doesn't take ran ssh")
+	}
+
+	d.SSH = fakeSSH(t, dir, "proxyjump ok@j1,a`touch x`@j2\n")
+	_, err := d.Dial(t.Context(), sshconn.Target{Host: "farm"})
+	if p := paramsOf(t, err, problems.SSHProxyJumpInvalid); p["hop"] != "a`touch x`@j2" {
+		t.Errorf("a hop whose user isn't safe gives %v", p)
+	}
+	d.SSH = fakeSSH(t, dir, "proxyjump j1\x1b[2J\n")
+	_, err = d.Dial(t.Context(), sshconn.Target{Host: "farm"})
+	if p := paramsOf(t, err, problems.SSHProxyJumpInvalid); p["hop"] != `j1\x1b[2J` {
+		t.Errorf("a hop whose host isn't safe gives %v, its control characters escaped", p)
+	}
+}
+
+// TestUsersGivenSSH checks that ssh -G is given a target's user, as -l,
+// once Target.check has checked it, so that ssh reads the config as that
+// user's, and its jump host's own resolve its jump user; never the jump
+// host as -J, which Meridian connects through itself; and that what it
+// prints is taken only as ssh prints it.
+func TestUsersGivenSSH(t *testing.T) {
 	h := newHome(t)
 	j, s := h.server(sshtest.Options{}), h.server(sshtest.Options{})
 	h.knownHosts(j.KnownHosts(""), s.KnownHosts(""))
@@ -945,6 +988,9 @@ func TestUsersNotGivenSSH(t *testing.T) {
 	if p := paramsOf(t, err, problems.SSHConfigOutputUnexpected); p["keyword"] != "userknownhostsfile" {
 		t.Errorf("the problem's params are %v", p)
 	}
+	if err := os.Remove(filepath.Join(dir, "args")); err != nil {
+		t.Fatal(err)
+	}
 	d.SSH = fakeSSH(t, dir, "")
 	_, err = d.Dial(t.Context(), sshconn.Target{Host: s.Addr(), User: "alice", JumpHost: j.Addr(), JumpUser: "carol"})
 	// The fake's known_hosts are /dev/null, which knows no host.
@@ -953,14 +999,13 @@ func TestUsersNotGivenSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := strings.Fields(string(data))
-	for _, unwanted := range []string{"-l", "-J", "alice", "carol"} {
-		if slices.Contains(args, unwanted) {
-			t.Errorf("ssh was given %q: %q", unwanted, args)
-		}
-	}
-	if !slices.Contains(args, j.Host()) || !slices.Contains(args, j.Port()) {
-		t.Errorf("ssh wasn't asked for the jump host: %q", args)
+	args := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := slices.Concat(
+		[]string{"-G", "-F", d.ConfigFile, "-l", "alice", "-p", s.Port(), "--", s.Host()},
+		[]string{"-G", "-F", d.ConfigFile, "-l", "carol", "-p", j.Port(), "--", j.Host()},
+	)
+	if !slices.Equal(args, want) {
+		t.Errorf("ssh was given %q, want %q", args, want)
 	}
 }
 

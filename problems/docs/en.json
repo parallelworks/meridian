@@ -1964,7 +1964,7 @@
     ]
   },
   "ssh_config_output_unexpected": {
-    "why": "Meridian reads your SSH configuration for each host by running ssh -G, which prints a keyword and its value on each line, and takes that only as OpenSSH's ssh prints it: each keyword it reads on one line, but IdentityFile, which ssh prints for each key file, and the host and the port as Meridian asked for them. Output otherwise could hold lines that aren't your configuration's: an ssh before OpenSSH 10.1 prints a user it is given as it is, so a newline in one starts a line of its own, which could pass for a ProxyCommand. Meridian never gives ssh a user, so the ssh client on PATH, or something that wraps it, printed this itself.",
+    "why": "Meridian reads your SSH configuration for each host by running ssh -G, which prints a keyword and its value on each line, and takes that only as OpenSSH's ssh prints it: each keyword it reads on one line, but IdentityFile, which ssh prints for each key file, and the host and the port as Meridian asked for them. Output otherwise could hold lines that aren't your configuration's: an ssh before OpenSSH 10.1 prints a user it is given as it is, so a newline in one starts a line of its own, which could pass for a ProxyCommand. Meridian gives ssh only a user that holds no control character, so the ssh client on PATH, or something that wraps it, printed this itself.",
     "fix": [
       "Run ssh -G <host> and look at the keyword the message names: OpenSSH's own client prints it once.",
       "Put OpenSSH's own client first on PATH, if the ssh there wraps it."
@@ -1997,9 +1997,16 @@
     ]
   },
   "ssh_target_unsafe": {
-    "why": "A format 1 ssh:'s remoteHost, remoteUser, jumpNodeHost and jumpNodeUser often come from a workflow's inputs. Meridian gives ssh the host, to read your configuration for, and the host and the user can reach a ProxyCommand there, which a shell runs with them in it. So, as OpenSSH 10.1 and later checks its own command line, Meridian refuses a host that starts with -, or holds white space, a control character, or any of ' ` \" $ \\ ; & < > | ( ) { }, and a user that starts with -, holds a control character, as a newline, or any of ' ` \" ; & < > | ( ) { }, has - after white space, or ends with \\, whatever ssh is installed. The message shows the value with its control characters escaped, as \\n.",
+    "why": "A format 1 ssh:'s remoteHost, remoteUser, jumpNodeHost and jumpNodeUser often come from a workflow's inputs. Meridian gives ssh the host and the user, to read your configuration for, and both can reach a ProxyCommand there, which a shell runs with them in it. So, as OpenSSH 10.1 and later checks its own command line, Meridian refuses a host that starts with -, or holds white space, a control character, or any of ' ` \" $ \\ ; & < > | ( ) { }, and a user that starts with -, holds a control character, as a newline, or any of ' ` \" ; & < > | ( ) { }, has - after white space, or ends with \\, whatever ssh is installed. The message shows the value with its control characters escaped, as \\n.",
     "fix": [
       "Give the input a host's name or address, or a user's name, as the workflow expects."
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "why": "A format 1 ssh:'s remoteHost and jumpNodeHost each name one host: its name or address, as your SSH configuration may know it, or a host and its port, host:port. Its user is remoteUser or jumpNodeUser. ssh's own command line takes more: a user in the host, user@host, a URL, ssh://user@host:port, and for -J a list of hosts, a,b. Meridian reads your configuration for a host with ssh -G, which would take the user out of the host and print another host than Meridian asked for, and Meridian would dial a list as one host's name. So it refuses a host that holds @, :// or a comma, before it connects anywhere.",
+    "fix": [
+      "Give remoteHost or jumpNodeHost the host alone, or host:port, and its user in remoteUser or jumpNodeUser.",
+      "To connect through more than one jump host, name the last in jumpNodeHost, and the others in a ProxyJump for it in your SSH configuration."
     ]
   },
   "ssh_known_hosts_unmatched": {
@@ -2028,7 +2035,7 @@
     ]
   },
   "ssh_proxy_jump_invalid": {
-    "why": "Each of a ProxyJump's hosts is [user@]host[:port], or ssh://[user@]host[:port]. This one names no host.",
+    "why": "Each of a ProxyJump's hosts is [user@]host[:port], or ssh://[user@]host[:port]. This one names no host, or its host or user holds what Meridian doesn't give ssh, as it doesn't a workflow's (ssh_target_unsafe): a control character, or a character a shell reads as more than a name. The message shows the hop with its control characters escaped.",
     "fix": [
       "Fix the ProxyJump in your configuration, as ssh -G <host> shows it."
     ]

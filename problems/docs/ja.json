@@ -2284,7 +2284,7 @@
   },
   "ssh_config_output_unexpected": {
     "title": "Meridian が信頼しない ssh -G の出力",
-    "why": "Meridian は各ホストの SSH 設定を ssh -G を実行して読み取ります。ssh -G は各行にキーワードとその値を出力し、Meridian はそれを OpenSSH の ssh が出力するとおりにだけ受け取ります。読み取る各キーワードは 1 行で、ただし ssh が鍵ファイルごとに出力する IdentityFile は除きます。ホストとポートは Meridian が求めたとおりです。それ以外の出力には、設定のものではない行が含まれうります。OpenSSH 10.1 より前の ssh は渡されたユーザーをそのまま出力するため、ユーザーの中の改行は独立した行を始め、それが ProxyCommand に見えることがあります。Meridian は ssh にユーザーを渡さないので、PATH にある ssh クライアント、またはそれを包むものが、これを自ら出力しました。",
+    "why": "Meridian は各ホストの SSH 設定を ssh -G を実行して読み取ります。ssh -G は各行にキーワードとその値を出力し、Meridian はそれを OpenSSH の ssh が出力するとおりにだけ受け取ります。読み取る各キーワードは 1 行で、ただし ssh が鍵ファイルごとに出力する IdentityFile は除きます。ホストとポートは Meridian が求めたとおりです。それ以外の出力には、設定のものではない行が含まれうります。OpenSSH 10.1 より前の ssh は渡されたユーザーをそのまま出力するため、ユーザーの中の改行は独立した行を始め、それが ProxyCommand に見えることがあります。Meridian は制御文字を含まないユーザーしか ssh に渡さないので、PATH にある ssh クライアント、またはそれを包むものが、これを自ら出力しました。",
     "fix": [
       "ssh -G <host> を実行し、メッセージが示すキーワードを確かめてください。OpenSSH 自身のクライアントはそれを 1 回出力します。",
       "PATH にある ssh が OpenSSH のクライアントを包むものであれば、OpenSSH 自身のクライアントを PATH の先頭に置いてください。"
@@ -2322,9 +2322,17 @@
   },
   "ssh_target_unsafe": {
     "title": "ssh に渡すのが安全ではないホストまたはユーザー",
-    "why": "形式 1 の ssh: の remoteHost、remoteUser、jumpNodeHost、jumpNodeUser は、多くの場合ワークフローの入力から来ます。Meridian は設定を読み取るためにホストを ssh に渡し、ホストとユーザーはそこで ProxyCommand に届くことがあります。ProxyCommand はそれらを含めてシェルが実行します。そこで、OpenSSH 10.1 以降が自分のコマンドラインを確かめるのと同じく、インストールされている ssh にかかわらず、Meridian は - で始まるか、空白、制御文字、' ` \" $ \\ ; & < > | ( ) { } のいずれかを含むホストと、- で始まるか、改行などの制御文字や ' ` \" ; & < > | ( ) { } のいずれかを含むか、空白の後に - があるか、\\ で終わるユーザーを拒否します。メッセージは値の制御文字を \\n のようにエスケープして示します。",
+    "why": "形式 1 の ssh: の remoteHost、remoteUser、jumpNodeHost、jumpNodeUser は、多くの場合ワークフローの入力から来ます。Meridian は設定を読み取るためにホストとユーザーを ssh に渡し、どちらもそこで ProxyCommand に届くことがあります。ProxyCommand はそれらを含めてシェルが実行します。そこで、OpenSSH 10.1 以降が自分のコマンドラインを確かめるのと同じく、インストールされている ssh にかかわらず、Meridian は - で始まるか、空白、制御文字、' ` \" $ \\ ; & < > | ( ) { } のいずれかを含むホストと、- で始まるか、改行などの制御文字や ' ` \" ; & < > | ( ) { } のいずれかを含むか、空白の後に - があるか、\\ で終わるユーザーを拒否します。メッセージは値の制御文字を \\n のようにエスケープして示します。",
     "fix": [
       "ワークフローが想定するとおり、入力にホストの名前かアドレス、またはユーザーの名前を与えてください。"
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Meridian が接続しない形のホスト",
+    "why": "形式 1 の ssh: の remoteHost と jumpNodeHost は、それぞれ 1 つのホストを示します。SSH 設定が知っている名前かアドレス、またはホストとポートの host:port です。そのユーザーは remoteUser か jumpNodeUser です。ssh 自身のコマンドラインはそれ以上を受け付けます。ホストの中のユーザー (user@host)、URL (ssh://user@host:port)、-J ではホストの並び (a,b) です。Meridian はホストの設定を ssh -G で読み取りますが、ssh -G はホストからユーザーを取り除き、Meridian が求めたものとは別のホストについて出力します。また Meridian は並びを 1 つのホストの名前として接続しようとします。そのため、どこかに接続する前に、@、://、コンマを含むホストを拒否します。",
+    "fix": [
+      "remoteHost か jumpNodeHost にはホストだけ、または host:port を指定し、ユーザーは remoteUser か jumpNodeUser に指定してください。",
+      "複数のジャンプホストを経由して接続するには、最後のものを jumpNodeHost に指定し、ほかのものは SSH 設定でそのホストの ProxyJump に指定してください。"
     ]
   },
   "ssh_known_hosts_unmatched": {
@@ -2357,8 +2365,8 @@
     ]
   },
   "ssh_proxy_jump_invalid": {
-    "title": "どのホストも示さない ProxyJump のホスト",
-    "why": "ProxyJump の各ホストは [user@]host[:port] か ssh://[user@]host[:port] です。これはどのホストも示していません。",
+    "title": "どのホストも示さないか、ssh に渡すのが安全ではない ProxyJump のホスト",
+    "why": "ProxyJump の各ホストは [user@]host[:port] か ssh://[user@]host[:port] です。これはどのホストも示していないか、そのホストかユーザーに、ワークフローのものと同じく Meridian が ssh に渡さないもの (ssh_target_unsafe)、つまり制御文字や、シェルが名前以上のものとして読む文字が含まれています。メッセージは制御文字をエスケープしてホストを示します。",
     "fix": [
       "ssh -G <host> が示すとおりに、設定の ProxyJump を直してください。"
     ]

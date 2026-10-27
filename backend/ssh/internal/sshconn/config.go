@@ -69,24 +69,28 @@ var defaultIdentityFiles = []string{"id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed2
 const systemConfig = "/etc/ssh/ssh_config"
 
 // resolve returns the config of host, on port where it isn't "", as
-// ssh -G gives it, with user over the config's User where it isn't "".
-// ssh is given the host alone, which Target.check has checked, and the
-// port: never a user, nor a jump host, which come from a workflow, and
-// which an ssh before 10.1 prints as they are, a newline among them, which
-// would start a line of its own that parse would take for the config's
-// (CVE-2025-61984). So a Match on the user, and a %r in what ssh expands
-// itself, UserKnownHostsFile and RevokedHostKeys, see the config's User,
-// or else the local user, not user. Without an ssh client, OpenSSH's
+// ssh -G gives it, as user where it isn't "", over the config's User, as
+// ssh -l gives it, so that a Match on the user, and a %r, whether ssh
+// expands it, as in UserKnownHostsFile and RevokedHostKeys, or expand
+// does, as in IdentityFile, see the same user, as with ssh. The host and
+// the user are ones their callers checked, as Target.check checks a
+// target's (validHostname, validUser): an ssh before 10.1 prints a user as
+// it is given, so a newline in one would start a line of its own, which
+// parse could take for the config's (CVE-2025-61984). It refuses others,
+// unchecked, before anything runs. Without an ssh client, OpenSSH's
 // defaults apply (defaults). A config ssh can't read is
 // problems.SSHConfigUnreadable.
 func (d *Dialer) resolve(ctx context.Context, host, port, user string) (*hostConfig, error) {
+	if !validHostname(host) || !validUser(user) {
+		return nil, errors.New("sshconn: a host or a user that wasn't checked")
+	}
 	client, err := command(d.sshClient())
 	var c *hostConfig
 	switch {
 	case errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist):
 		c, err = d.defaults(host, port)
 	case err == nil:
-		c, err = d.readConfig(ctx, client, host, port)
+		c, err = d.readConfig(ctx, client, host, port, user)
 	}
 	if err != nil {
 		return nil, err
@@ -113,18 +117,22 @@ func (d *Dialer) expandPaths(c *hostConfig) {
 }
 
 // readConfig runs the ssh client at client as ssh -G, for host, on port
-// where it isn't "", and reads what it prints.
-func (d *Dialer) readConfig(ctx context.Context, client, host, port string) (*hostConfig, error) {
+// where it isn't "", as user where it isn't "", and reads what it prints.
+func (d *Dialer) readConfig(ctx context.Context, client, host, port, user string) (*hostConfig, error) {
 	args := []string{"-G"}
 	if d.ConfigFile != "" {
 		args = append(args, "-F", d.ConfigFile)
+	}
+	// -l's value is the next argument, whatever it starts with.
+	if user != "" {
+		args = append(args, "-l", user)
 	}
 	if port != "" {
 		args = append(args, "-p", port)
 	}
 	// What follows -- is the host, whatever it starts with.
 	args = append(args, "--", host)
-	cmd := exec.CommandContext(ctx, client, args...) //nolint:gosec // ssh -G, a checked command, with a checked host after --, and no shell
+	cmd := exec.CommandContext(ctx, client, args...) //nolint:gosec // ssh -G, a checked command, with a checked user and host, and no shell
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

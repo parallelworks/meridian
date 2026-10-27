@@ -3404,8 +3404,15 @@ nodes' backends build on:
   older one doesn't check, or, before 10.1, takes a user's control
   characters, so a newline in one starts a line of `ssh -G`'s output of
   its own. The message shows the value with its control characters
-  escaped. `ssh -G` is never given a user, nor a jump host, only the host
-  and its port; a user is applied over what it prints.
+  escaped. `ssh -G` is given the host, its port and its user, once they
+  are checked, never a jump host, which Meridian connects through itself,
+  resolving it with an `ssh -G` of its own, for its own user; a hop of
+  the config's `ProxyJump` whose host or user wouldn't pass the same check
+  is `ssh_proxy_jump_invalid`. A host that names a user (`user@host`), is
+  a URL (`ssh://…`) or a list of hosts (`a,b`), which `ssh`'s command
+  line takes but a format 1 `ssh:` doesn't mean, is
+  `ssh_host_form_unsupported`, rather than a host `ssh -G` would resolve
+  as another: none of the known workflows writes one.
 - **The commands Meridian runs to connect**, `ssh`, `ssh-keygen` and the
   shell a `ProxyCommand` runs in, are checked as the local backend checks
   a command it runs: a regular file of the user's or root's that no other
@@ -3420,9 +3427,10 @@ nodes' backends build on:
   `SHELL`, its `%h %p %r %n %u %d` expanded), its known_hosts files,
   `HostKeyAlias` and `RevokedHostKeys`, `ConnectTimeout` and
   `ServerAliveInterval`. A format 1 `ssh:`'s `remoteUser` is over its
-  `User`, and its `jumpNodeHost` over its `ProxyJump` and `ProxyCommand`;
-  since `ssh -G` isn't given them, a `Match user`, and a `%r` that `ssh`
-  expands itself, as in `UserKnownHostsFile`, see the config's `User`. A
+  `User`, as `ssh -l` is, so a `Match user`, and `%r`, which `ssh`
+  expands in `UserKnownHostsFile` and Meridian in `IdentityFile`, see
+  `remoteUser`, as they would with `ssh`; and its `jumpNodeHost` is over
+  the config's `ProxyJump` and `ProxyCommand`, as `ssh -J` is. A
   `remoteHost` of the form `host:port` is where to connect, as format 1
   takes it, without the config's `HostName`, `ProxyJump` or
   `ProxyCommand`. A config `ssh` can't read is `ssh_config_unreadable`,

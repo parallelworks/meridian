@@ -478,11 +478,12 @@ var (
 // Meridian runs to connect; and code is the code of the problem with it.
 var (
 	SSHTargetUnsafe              = define(Error, "ssh_target_unsafe", "Host or user that isn't safe to give ssh", "key", "value")
+	SSHHostFormUnsupported       = define(Error, "ssh_host_form_unsupported", "Host in a form Meridian doesn't connect to", "key", "value")
 	SSHKnownHostsUnmatched       = define(Error, "ssh_known_hosts_unmatched", "known_hosts with hashed lines that can't be matched", "host", "file", "reason")
 	SSHHostCertificateInvalid    = define(Error, "ssh_host_certificate_invalid", "Host certificate that its authority's signature doesn't make valid", "host", "fingerprint", "reason")
 	SSHProxyCommandToken         = define(Error, "ssh_proxy_command_token", "ProxyCommand with a token Meridian doesn't expand", "host", "token")
 	SSHProxyJumpTooDeep          = define(Error, "ssh_proxy_jump_too_deep", "ProxyJumps that nest too deep", "host", "limit")
-	SSHProxyJumpInvalid          = define(Error, "ssh_proxy_jump_invalid", "ProxyJump host that names no host", "host", "hop")
+	SSHProxyJumpInvalid          = define(Error, "ssh_proxy_jump_invalid", "ProxyJump host that names no host, or isn't safe to give ssh", "host", "hop")
 	SSHHostKeyUnknown            = define(Error, "ssh_host_key_unknown", "Host key that known_hosts doesn't have", "host", "type", "fingerprint")
 	SSHHostKeyChanged            = define(Error, "ssh_host_key_changed", "Host key that isn't the one known_hosts has", "host", "type", "fingerprint", "file", "line")
 	SSHHostKeyRevoked            = define(Error, "ssh_host_key_revoked", "Host key that is revoked", "host", "fingerprint")

@@ -7,8 +7,10 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,23 +177,75 @@ func assertConfig(t *testing.T, got, want *hostConfig) {
 	}
 }
 
-// TestResolveUser checks that ssh is never given a user: one that an ssh
-// before 10.1 would print as it was given, a newline in it starting a
-// line of the config's own, is the host's user all the same, and its line
-// is never taken for the config's, whatever Target.check would say of it.
+// TestResolveUser checks that ssh -G is given the user, as ssh -l, so that
+// it reads the config as that user's, and that resolve gives it none it
+// wasn't given checked: one that an ssh before 10.1 would print as it was
+// given, a newline in it starting a line of the config's own, nor a host
+// that isn't safe, runs nothing.
 func TestResolveUser(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "ssh")
-	script := "#!/bin/sh\nuser=tester\nwhile [ $# -gt 0 ]; do\n\tcase \"$1\" in -l) user=\"$2\"; shift ;; esac\n\tshift\ndone\nprintf 'user %s\\n' \"$user\"\n"
+	args := filepath.Join(dir, "args")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '" + args + "'\nuser=tester\nwhile [ $# -gt 0 ]; do\n\tcase \"$1\" in -l) user=\"$2\"; shift ;; esac\n\tshift\ndone\nprintf 'user %s\\n' \"$user\"\n"
 	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	d := testDialer()
 	d.SSH = fake
-	user := "x\nproxycommand touch " + filepath.Join(dir, "pwned")
-	c, err := d.resolve(t.Context(), "farm", "", user)
-	if err != nil || c.proxyCommand != "" || c.user != user {
-		t.Errorf("resolve gives %+v, %v", c, err)
+	c, err := d.resolve(t.Context(), "farm", "", "alice")
+	if err != nil || c.user != "alice" {
+		t.Fatalf("resolve gives %+v, %v", c, err)
+	}
+	data, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimSpace(string(data)), "\n"); !slices.Equal(got, []string{"-G", "-F", d.ConfigFile, "-l", "alice", "--", "farm"}) {
+		t.Errorf("ssh was given %q", got)
+	}
+	if err := os.Remove(args); err != nil {
+		t.Fatal(err)
+	}
+	pwned := filepath.Join(dir, "pwned")
+	for _, tc := range []struct{ host, user string }{
+		{"farm", "x\nproxycommand touch " + pwned},
+		{"farm", "-oProxyCommand=touch " + pwned},
+		{"a;touch " + pwned, ""},
+	} {
+		if c, err := d.resolve(t.Context(), tc.host, "", tc.user); err == nil {
+			t.Errorf("resolve(%q, %q) gives %+v", tc.host, tc.user, c)
+		}
+	}
+	for _, f := range []string{args, pwned} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("an unchecked host or user ran something: %s exists", f)
+		}
+	}
+}
+
+// TestResolveUserTokens checks, with the ssh client on PATH, that %r means
+// the same user wherever the config has it, as with ssh: in the files ssh
+// expands it in itself, UserKnownHostsFile and RevokedHostKeys, in those
+// Meridian expands it in, IdentityFile, and to a Match on the user.
+func TestResolveUserTokens(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("no ssh client")
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	text := "Host farm\n  UserKnownHostsFile ~/.ssh/known_hosts_%r\n  RevokedHostKeys ~/.ssh/revoked_%r\n  IdentityFile ~/.ssh/id_%r\nMatch user alice\n  Port 2222\n"
+	if err := os.WriteFile(config, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := testDialer()
+	d.ConfigFile = config
+	c, err := d.resolve(t.Context(), "farm", "", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userFile := slices.ContainsFunc(c.knownHosts, func(f string) bool { return strings.HasSuffix(f, "/.ssh/known_hosts_alice") })
+	if c.user != "alice" || c.port != "2222" || !userFile ||
+		!strings.HasSuffix(c.revokedHostKeys, "/.ssh/revoked_alice") || !slices.Contains(c.identityFiles, "/home/tester/.ssh/id_alice") {
+		t.Errorf("as alice, the config is %+v", c)
 	}
 }
 
@@ -260,6 +314,14 @@ func TestValidNames(t *testing.T) {
 	} {
 		if got := validHostname(host); got != want {
 			t.Errorf("validHostname(%q) = %v, want %v", host, got, want)
+		}
+	}
+	for host, want := range map[string]bool{
+		"farm": true, "10.0.0.5:2222": true, "[::1]:22": true, "": true,
+		"alice@farm": false, "ssh://farm": false, "ssh://alice@farm:22": false, "a,b": false, "sftp://farm": false,
+	} {
+		if got := hostForm(host); got != want {
+			t.Errorf("hostForm(%q) = %v, want %v", host, got, want)
 		}
 	}
 	for user, want := range map[string]bool{

@@ -2284,7 +2284,7 @@
   },
   "ssh_config_output_unexpected": {
     "title": "Meridian 不信任的 ssh -G 输出",
-    "why": "Meridian 通过运行 ssh -G 读取每台主机的 SSH 配置。ssh -G 每行打印一个关键字及其值，Meridian 只按 OpenSSH 的 ssh 打印它的方式接受：它读取的每个关键字只占一行，但 ssh 为每个密钥文件各打印一次的 IdentityFile 除外，主机和端口也必须是 Meridian 所要求的。其他形式的输出可能含有不属于你配置的行：OpenSSH 10.1 之前的 ssh 会原样打印传给它的用户，因此用户中的换行会另起一行，这一行可能被当作 ProxyCommand。Meridian 从不把用户交给 ssh，所以这是 PATH 上的 ssh 客户端，或包装它的程序，自己打印的。",
+    "why": "Meridian 通过运行 ssh -G 读取每台主机的 SSH 配置。ssh -G 每行打印一个关键字及其值，Meridian 只按 OpenSSH 的 ssh 打印它的方式接受：它读取的每个关键字只占一行，但 ssh 为每个密钥文件各打印一次的 IdentityFile 除外，主机和端口也必须是 Meridian 所要求的。其他形式的输出可能含有不属于你配置的行：OpenSSH 10.1 之前的 ssh 会原样打印传给它的用户，因此用户中的换行会另起一行，这一行可能被当作 ProxyCommand。Meridian 只把不含控制字符的用户交给 ssh，所以这是 PATH 上的 ssh 客户端，或包装它的程序，自己打印的。",
     "fix": [
       "运行 ssh -G <host>，查看消息指出的关键字：OpenSSH 自己的客户端只打印它一次。",
       "如果 PATH 上的 ssh 包装了 OpenSSH 的客户端，请把 OpenSSH 自己的客户端放在 PATH 的最前面。"
@@ -2322,9 +2322,17 @@
   },
   "ssh_target_unsafe": {
     "title": "交给 ssh 不安全的主机或用户",
-    "why": "格式 1 的 ssh: 中的 remoteHost、remoteUser、jumpNodeHost 和 jumpNodeUser 常常来自工作流的输入。Meridian 把主机交给 ssh 以读取你的配置，主机和用户在那里可能到达 ProxyCommand，而 shell 会带着它们运行 ProxyCommand。因此，就像 OpenSSH 10.1 及更高版本检查它自己的命令行一样，无论安装的是哪个 ssh，Meridian 都拒绝以 - 开头、或含有空白、控制字符或 ' ` \" $ \\ ; & < > | ( ) { } 中任一字符的主机，以及以 - 开头、含有换行等控制字符或 ' ` \" ; & < > | ( ) { } 中任一字符、空白后跟 -、或以 \\ 结尾的用户。消息会把值中的控制字符转义显示，例如 \\n。",
+    "why": "格式 1 的 ssh: 中的 remoteHost、remoteUser、jumpNodeHost 和 jumpNodeUser 常常来自工作流的输入。Meridian 把主机和用户交给 ssh 以读取你的配置，两者在那里都可能到达 ProxyCommand，而 shell 会带着它们运行 ProxyCommand。因此，就像 OpenSSH 10.1 及更高版本检查它自己的命令行一样，无论安装的是哪个 ssh，Meridian 都拒绝以 - 开头、或含有空白、控制字符或 ' ` \" $ \\ ; & < > | ( ) { } 中任一字符的主机，以及以 - 开头、含有换行等控制字符或 ' ` \" ; & < > | ( ) { } 中任一字符、空白后跟 -、或以 \\ 结尾的用户。消息会把值中的控制字符转义显示，例如 \\n。",
     "fix": [
       "按工作流的预期，给该输入一个主机的名称或地址，或一个用户的名称。"
+    ]
+  },
+  "ssh_host_form_unsupported": {
+    "title": "Meridian 不连接的形式的主机",
+    "why": "格式 1 的 ssh: 中的 remoteHost 和 jumpNodeHost 各指定一台主机：你的 SSH 配置可能知道的名称或地址，或者主机和端口 host:port。它的用户是 remoteUser 或 jumpNodeUser。ssh 自己的命令行接受更多形式：主机中带用户的 user@host、URL ssh://user@host:port，以及 -J 的主机列表 a,b。Meridian 用 ssh -G 读取主机的配置，而 ssh -G 会把用户从主机中拿掉，打印的是 Meridian 所要求之外的主机；Meridian 还会把列表当作一台主机的名称去连接。因此在连接任何地方之前，Meridian 拒绝含有 @、:// 或逗号的主机。",
+    "fix": [
+      "给 remoteHost 或 jumpNodeHost 只写主机，或 host:port，把用户写在 remoteUser 或 jumpNodeUser 中。",
+      "要经过多台跳板主机连接，把最后一台写在 jumpNodeHost 中，其余的写在你 SSH 配置里该主机的 ProxyJump 中。"
     ]
   },
   "ssh_known_hosts_unmatched": {
@@ -2357,8 +2365,8 @@
     ]
   },
   "ssh_proxy_jump_invalid": {
-    "title": "没有指定主机的 ProxyJump 主机",
-    "why": "ProxyJump 的每台主机是 [user@]host[:port] 或 ssh://[user@]host[:port]。这一项没有指定任何主机。",
+    "title": "没有指定主机或交给 ssh 不安全的 ProxyJump 主机",
+    "why": "ProxyJump 的每台主机是 [user@]host[:port] 或 ssh://[user@]host[:port]。这一项没有指定任何主机，或者它的主机或用户含有 Meridian 不交给 ssh 的内容，与工作流中的一样（ssh_target_unsafe）：控制字符，或 shell 会读成不只是名称的字符。消息会把其中的控制字符转义显示。",
     "fix": [
       "按 ssh -G <host> 所显示的，修正你配置中的 ProxyJump。"
     ]
