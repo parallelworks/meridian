@@ -439,10 +439,10 @@ the SHA-256 hash of its content: 218 files.
   as cancelling as it would start it, or as it waits for its turn.
 - **`parallelworks/update-session` updates only the run's own sessions**,
   one of those the run's `sessions:` made, which `${{ sessions.<name> }}`
-  names, a fix for security that ACTIVATE takes too. All 15 known
+  names, a fix for security that ACTIVATE takes too. A step that names
+  another fails (`session_not_of_run`), and updates nothing. All 15 known
   update-session steps name one of their run's own sessions, as
-  `${{ sessions.<name> }}`. It is decided, and built with update-session
-  ([Built-in actions](#built-in-actions)).
+  `${{ sessions.<name> }}` ([Built-in actions](#built-in-actions)).
 - **`vars.*` and `org.*` read every variable of their context**, as
   `inputs.*` reads every input's value: a list of the variables' values, in
   the order of their names, with the rest of the path read from each, as in
@@ -2296,6 +2296,15 @@ a workflow (`uses_not_supported`).
   starts it, `resume` among them, its Start in the queue every coordinator
   works. The root's record is kept until every run in its tree has ended:
   the root's finisher waits for them, and the end of each wakes it.
+- **Its sessions** are its own. A child's `sessions:` makes its own
+  sessions, and its `parallelworks/update-session` updates only those, as
+  its run's own ([Built-in actions](#built-in-actions)), never its root's
+  or another run's in its tree. Format 1 makes a child's sessions with its
+  root's run, so there a step of a child that names one of its root's
+  sessions would count it as its run's own: a difference. No known
+  workflow has one: each of the 15 known update-session steps names a
+  session its own workflow's `sessions:` makes, and none of the 14
+  workflows that hold them is one a step calls.
 - **Its groups.** A job of a child, and a job that calls one, may name
   groups with `runs-on:`, which format 1 refuses in both as not supported
   yet, so no workflow format 1 runs has either: a difference that takes
@@ -2419,10 +2428,10 @@ of them leaves false. That differs from a feature whose interface is
 missing, which fails to compile ([Interfaces](#interfaces)): every run
 makes its `sessions:`, but a step may never run. The worker fails a step
 that uses scheduler-agent or wait-for-agent with `action_needs_platform`
-already, and the coordinator does cancel-jobs. Until checkout and
-update-session are built, a step that uses one fails with
-`uses_not_supported`; what this section says of them is decided, and
-built next, but for checkout's pins, which are built.
+already, and the coordinator does cancel-jobs and update-session. Until
+checkout is built, a step that uses it fails with `uses_not_supported`;
+what this section says of it is decided, and built next, but for its
+pins, which are built.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2540,9 +2549,17 @@ built next, but for checkout's pins, which are built.
     jobs that need it are skipped, which does, as a job they need that
     failed does.
 - **update-session** updates one of the run's own sessions, which its
-  `name` names, through Sessions, with the rest of its `with:` as it was
-  evaluated; a name that isn't one of the run's sessions' is refused, a
-  [bug fix](#bug-fixes-to-format-1). Where nothing provides Sessions, as
+  `name` names, as text, through Sessions (`Sessions.Update`), with the
+  rest of its `with:` as it was evaluated, and whether that read a
+  variable or a password, which the provider keeps private, or a secret,
+  which it masks; a name that isn't one of the run's sessions' is refused
+  (`session_not_of_run`), a [bug fix](#bug-fixes-to-format-1). The
+  coordinator asks the provider before it stores the step's answer, and
+  asks it nothing for a step that its job's cancel, or its
+  `early-cancel:`, stops. A refusal of the provider's fails the step, as
+  a command that fails does, so its `retry:` tries it again; a provider
+  that can't answer is asked again, as the worker repeats its request.
+  Where nothing provides Sessions, as
   with `meridian run`, the step fails when it runs (`resolver_missing`,
   with the interface Sessions), as a feature whose interface is missing
   fails, but when the step runs, not as the run is created; a run with
@@ -3485,11 +3502,11 @@ and a platform that embeds Meridian serve the same API.
   SIGKILL: the step ends as the answer says, and the stop applies from
   the step after; past it, the step ends as the stop has it, though
   the coordinator may have done the action. In an attempt of an earlier
-  version, the step fails as before (`uses_not_supported`). The
-  coordinator doesn't do update-session yet: it fails such a step with
-  `uses_not_supported`, as the worker did. The worker fails a
-  step that uses checkout (`uses_not_supported`), and one that uses an
-  action only a platform provides (`action_needs_platform`).
+  version, the step fails as before (`uses_not_supported`). The request
+  also says what evaluating `with:` read, which update-session's provider
+  is given. The worker fails a step that uses checkout
+  (`uses_not_supported`), and one that uses an action only a platform
+  provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
   (`plan.JobResult`). The same end again, as a worker sends after a
@@ -3525,10 +3542,14 @@ version says what a job means; the API's says what a worker and a
 coordinator say to each other.
 
 - **One number.** The API's version is one integer, and every change to
-  the API raises it: a path, a member of a body, or a kind of event,
-  added. Version 2 added a failed try's event saying whether it was its
-  step's last, and the attempt's control in the claim's answer; version 3,
-  the request for a built-in action the coordinator performs. Neither
+  the API after a release has written its version raises it: a path, a
+  member of a body, or a kind of event, added. A version no release has
+  written yet stays open, as a plan version does until a release writes
+  it: what is added before a release joins the newest version, and the
+  release that first writes it freezes it. Version 2 added a failed try's
+  event saying whether it was its step's last, and the attempt's control
+  in the claim's answer; version 3, the request for a built-in action the
+  coordinator performs, with what evaluating its `with:` read. Neither
   side reads a member it doesn't know, so a major and a minor number,
   which tell an addition a reader can skip from one it can't, would say
   nothing more. The paths stay under `/v1/`: a version is served beside

@@ -122,6 +122,13 @@ type workerRig struct {
 // newWorkerRig returns a workerRig whose runs read vars as they start.
 func newWorkerRig(t *testing.T, vars compile.Variables) *workerRig {
 	t.Helper()
+	return newWorkerRigWith(t, Options{Variables: vars})
+}
+
+// newWorkerRigWith returns a workerRig whose coordinator opens with opts,
+// but for its drivers and its endpoint, which are the rig's.
+func newWorkerRigWith(t *testing.T, opts Options) *workerRig {
+	t.Helper()
 	// A Unix socket's path is short: the test's own temporary directory
 	// can be too long for one.
 	dir, err := os.MkdirTemp("", "meridian-run-")
@@ -131,11 +138,9 @@ func newWorkerRig(t *testing.T, vars compile.Variables) *workerRig {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s")
 	d := &workerDriver{dir: dir, log: t.Logf, placements: map[string]backend.Placement{}, cancels: map[string]context.CancelFunc{}}
-	c := open(t, Options{
-		Variables: vars,
-		Drivers:   map[string]backend.Driver{testBackend: d},
-		Endpoint:  backend.Endpoint{Address: socket},
-	})
+	opts.Drivers = map[string]backend.Driver{testBackend: d}
+	opts.Endpoint = backend.Endpoint{Address: socket}
+	c := open(t, opts)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
 	if err != nil {
 		t.Fatal(err)

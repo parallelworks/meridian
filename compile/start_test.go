@@ -733,12 +733,32 @@ func TestStartSessionsErrorsMasked(t *testing.T) {
 }
 
 // testSessions is a session provider: it names each session as its key
-// and -checked, and records each run it makes the sessions of, unless it
-// gives checkErr or err.
+// and -checked, and records each run it makes the sessions of, and each
+// session it updates, unless it gives checkErr, err or updateErr.
 type testSessions struct {
-	made     []string
-	err      error
-	checkErr error
+	made, updated []string
+	err           error
+	checkErr      error
+	updateErr     error
+}
+
+func (s *testSessions) Update(_ context.Context, runID, name string, with map[string]any, read expr.Read) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	data, err := json.Marshal(with, json.Deterministic(true))
+	if err != nil {
+		return err
+	}
+	updated := runID + " " + name + " " + string(data)
+	if read.Private {
+		updated += " private"
+	}
+	if read.Marked {
+		updated += " secret"
+	}
+	s.updated = append(s.updated, updated)
+	return nil
 }
 
 func (s *testSessions) Check(_ context.Context, sessions map[string]any) (map[string]string, error) {

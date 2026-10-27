@@ -14,8 +14,10 @@ import (
 // and of the package's types in them, by its type and JSON name. What a
 // body carries of a run, of package plan's types, the plan versions, in
 // its own since table; foundation's problems and Meridian's diagnostics
-// are kept as they are. A member added later is in a later version, which
-// raises Version, and is left out when it is empty (TestBodiesAreVersioned).
+// are kept as they are. A member added later is in the newest version no
+// release has written, which is Version, or which raises Version if a
+// release has written it, and is left out when it is empty
+// (TestBodiesAreVersioned).
 var since = map[string]int{
 	"ClaimRequest.credential": 1, "ClaimRequest.apiVersion": 1, "ClaimRequest.planVersion": 1, "ClaimRequest.worker": 1,
 	"Worker.version": 1, "Worker.digest": 1,
@@ -44,6 +46,7 @@ var since = map[string]int{
 	"Complete.diagnostics": 1,
 
 	"ActionRequest.step": 3, "ActionRequest.try": 3, "ActionRequest.with": 3,
+	"ActionRequest.private": 3, "ActionRequest.secret": 3,
 	"ActionAnswer.outcome": 3, "ActionAnswer.reason": 3, "ActionAnswer.diagnostics": 3,
 
 	"ChildRequest.step": 3, "ChildRequest.try": 3, "ChildRequest.with": 3, "ChildRequest.env": 3,

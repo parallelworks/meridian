@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -135,4 +136,76 @@ type Sessions interface {
 	// starts the run again after another stopped does, makes nothing more;
 	// a rerun, whose sessions ended with the run, makes them again.
 	Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string, read expr.Read) error
+	// Update updates the session name, one of the run runID's own, as
+	// Check named it, as a step that uses parallelworks/update-session
+	// asks: with is the rest of the step's with:, as it was evaluated, as
+	// where the session points, url, or remoteHost and remotePort. read
+	// says what evaluating with: read, as for Make: Update mustn't log or
+	// quote what it gives where read.Private is set, and masks it as one of
+	// the run's secrets where read.Marked is. A refusal, a problem of one
+	// of a workflow's kinds of error, fails the step; any other error says
+	// it couldn't answer, and the step asks again. Updating it again with
+	// the same, as a worker that repeats its request does, changes nothing
+	// more (UpdateSession).
+	Update(ctx context.Context, runID, name string, with map[string]any, read expr.Read) error
 }
+
+// UpdateSession does what a step that uses parallelworks/update-session
+// asks of the run runID, whose plan is p, through s, which is nil where
+// nothing provides sessions: with is the step's with:, as it was
+// evaluated, which read says what evaluating read, and path the step's in
+// the workflow, at which its problems are. It returns them: none when the
+// session was updated; resolver_missing where s is nil, as a feature whose
+// interface is missing fails, but only as the step runs, which an if: may
+// skip; session_not_of_run where with:'s name, as text, isn't one of the
+// run's own sessions, as sessions.<name> reads them, which no step may
+// update; and a refusal of s's, as Update gives it, with its params
+// masked where with: is private: where it read a variable or a password
+// (read.Private), or a secret (read.Marked), which a secret variable is
+// too. It returns s's other errors, for the caller to ask again: where
+// with: is private, one that says only that s couldn't update the
+// session.
+func UpdateSession(ctx context.Context, s Sessions, runID string, p *plan.Plan, path string, with map[string]any, read expr.Read) (problems.Diagnostics, error) {
+	private := read.Private || read.Marked
+	at := func(k *problems.Kind, pointer string, params problems.Params) problems.Diagnostics {
+		if private {
+			params = mask(params)
+		}
+		return problems.Diagnostics{k.At("", problems.Position{}, pointer, params)}
+	}
+	if s == nil {
+		return problems.Diagnostics{problems.ResolverMissing.At("", problems.Position{}, path+"/uses", problems.Params{"key": "uses", "interface": "Sessions"})}, nil
+	}
+	name := expr.Text(with["name"])
+	if !slices.Contains(slices.Collect(maps.Values(p.Run.SessionNames)), name) {
+		return at(problems.SessionNotOfRun, path+"/with/name", problems.Params{"session": name}), nil
+	}
+	rest := maps.Clone(with)
+	delete(rest, "name")
+	err := s.Update(ctx, runID, name, rest, read)
+	switch {
+	case err == nil:
+		return nil, nil
+	case ctx.Err() != nil:
+		return nil, ctx.Err()
+	}
+	if k, params, ok := workflowProblem(err); ok {
+		return at(k, path, params), nil
+	}
+	if private {
+		return nil, &sessionNotUpdated{ctx: contextEnd(err)}
+	}
+	return nil, err
+}
+
+// sessionNotUpdated is the error of a session provider that couldn't
+// update a session as a with: that read a variable or a password asked. It
+// says nothing of the provider's error, which can quote what with: gave,
+// and wraps only the context's error, where the context was done.
+type sessionNotUpdated struct{ ctx error }
+
+func (e *sessionNotUpdated) Error() string {
+	return "compile: the session provider couldn't update the session"
+}
+
+func (e *sessionNotUpdated) Unwrap() error { return e.ctx }

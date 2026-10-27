@@ -182,14 +182,16 @@ const Version2 = 2
 
 // Version3 is the version of the API that added PathAction, through which
 // a step that uses a built-in action the coordinator performs asks it for
-// that action (ActionRequest, ActionAnswer); and child runs: PathChild,
-// PathChildEnd and PathChildStop, through which a step whose uses: names a
-// workflow asks for the run of it, waits for it and stops it (ChildRequest,
-// Child, ChildStop), and Claim.Tree, what a child run's attempt has of its
-// tree. A worker asks only in an attempt of version 3 or later, and the
-// coordinator answers the paths for another as ones the API doesn't have,
-// 404. An attempt whose job has a step whose uses: names a workflow, or of
-// a child run, needs version 3 (WorkerAPITooOld).
+// that action (ActionRequest, ActionAnswer), with what evaluating its
+// with: read; and child runs: PathChild, PathChildEnd and PathChildStop,
+// through which a step whose uses: names a workflow asks for the run of
+// it, waits for it and stops it (ChildRequest, Child, ChildStop), and
+// Claim.Tree, what a child run's attempt has of its tree. A worker asks
+// only in an attempt of version 3 or later, and the coordinator answers
+// the paths for another as ones the API doesn't have, 404. An attempt
+// whose job has a step whose uses: names a workflow, or of a child run,
+// needs version 3 (WorkerAPITooOld). No release has written it yet, so
+// what is added before one does joins it, as for a plan version.
 const Version3 = 3
 
 // Marshal encodes a body as the API writes it: encoding/json/v2's
@@ -742,6 +744,14 @@ type ActionRequest struct {
 	// With is the step's with:, as Step evaluated it for the try: a
 	// mapping, or nothing for a step without one.
 	With plan.Data `json:"with,omitzero"`
+	// Private and Secret say what evaluating With read, as Step decided it
+	// (plan.ReadyStep.WithRead): a variable or a password, which makes
+	// what it gives private, kept only where the run's secrets are and
+	// never quoted, and a secret, which makes it masked, as one of the
+	// run's secrets is. What performs the action keeps it so, as
+	// update-session's session provider does (compile.Sessions.Update).
+	Private bool `json:"private,omitzero"`
+	Secret  bool `json:"secret,omitzero"`
 }
 
 // An ActionAnswer is how the action an ActionRequest asked for ended, as

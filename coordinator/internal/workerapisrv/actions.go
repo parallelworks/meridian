@@ -100,12 +100,9 @@ func (c *ActionCall) Commit(ctx context.Context, step *plan.Step, act func(tx *s
 		if err != nil {
 			return err
 		}
-		switch cancel := cancelOf(ctl); {
-		case cancel != "" && !plan.OutlivesCancel(step.If):
-			answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: cancel}
-		case ctl.AnyJobFailed && step.EarlyCancel == plan.EarlyCancelAnyJobFailed:
-			answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled}
-		default:
+		var skipped bool
+		answer, skipped = c.skipped(ctl, step)
+		if !skipped {
 			if answer, err = act(tx); err != nil {
 				return err
 			}
@@ -124,6 +121,44 @@ func (c *ActionCall) Commit(ctx context.Context, step *plan.Step, act func(tx *s
 	}
 	c.committed = true
 	return answer, nil
+}
+
+// Cancelled reports whether Commit will answer the call of step, the
+// call's as the run's plan has it, cancelled, without calling its act, as
+// the attempt's control stands: for a step that doesn't outlive its job's
+// cancellation, of an attempt whose control asks to cancel its job, for
+// any reason but the run's timeout; and for one whose early-cancel: is
+// any-job-failed, once a job of the run has failed (skipped). A control
+// that asks either once always asks it. An action that does something
+// outside Commit's transaction, as asking a platform, asks it first, and
+// does nothing for a step that Commit answers cancelled.
+func (c *ActionCall) Cancelled(ctx context.Context, step *plan.Step) (bool, error) {
+	var ctl workerapi.Control
+	err := c.s.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		ctl, err = tx.Control(c.Attempt.ID)
+		return err
+	})
+	_, skipped := c.skipped(ctl, step)
+	return skipped && err == nil, err
+}
+
+// skipped returns the answer that Commit gives the call of step, under ctl,
+// the attempt's control, without calling its act, if it gives one:
+// cancelled, for the control's reason, for a step that doesn't outlive its
+// job's cancellation, as its if: says (plan.OutlivesCancel), of an attempt
+// whose control asks to cancel its job, for any reason but the run's
+// timeout (cancelOf); and cancelled, with no reason, for a step whose
+// early-cancel: is any-job-failed, once a job of the run has failed
+// (Control.AnyJobFailed).
+func (c *ActionCall) skipped(ctl workerapi.Control, step *plan.Step) (workerapi.ActionAnswer, bool) {
+	switch cancel := cancelOf(ctl); {
+	case cancel != "" && !plan.OutlivesCancel(step.If):
+		return workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: cancel}, true
+	case ctl.AnyJobFailed && step.EarlyCancel == plan.EarlyCancelAnyJobFailed:
+		return workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled}, true
+	}
+	return workerapi.ActionAnswer{}, false
 }
 
 // answered checks, in tx, that the attempt that made the call still holds

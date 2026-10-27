@@ -1259,6 +1259,13 @@
       "Informa del error, con el registro del worker."
     ]
   },
+  "session_not_of_run": {
+    "title": "Sesión que no es de la ejecución",
+    "why": "Un paso que usa parallelworks/update-session hace que una de las sesiones de su ejecución apunte a otro lugar, como un enlace a una URL o un túnel a un host y un puerto. Solo puede actualizar las sesiones que creó el sessions: de su propia ejecución, a las que una expresión nombra como ${{ sessions.<name> }}. La sesión que nombra este paso, tal como la da su with: name, no es una de ellas, así que no se actualiza y el paso falla.",
+    "fix": [
+      "Nombra en el with: name del paso una de las sesiones propias de la ejecución, como ${{ sessions.<name> }}, con el nombre que tiene bajo el sessions: del flujo de trabajo."
+    ]
+  },
   "record_unreadable": {
     "title": "Registro secreto que no se puede descifrar",
     "why": "El registro secreto de una ejecución guarda lo que se le dio a la ejecución y los secretos que leyó. Se cifra con AES-256-GCM con una clave de datos propia de la ejecución, ligada al ID de la ejecución, al de su almacén y a cuántas veces se ha vuelto a cifrar, para que no se pueda trasladar a otra ejecución, ni siquiera a una del mismo flujo de trabajo con las mismas entradas, ni a una ejecución con el mismo ID en otro almacén, ni volver a ponerse en lugar de un registro posterior de su ejecución. Este no se descifra como el más reciente de su ejecución: se trajo de otra ejecución o de otro almacén, se volvió a poner uno anterior, o se cambió. En lugar de ejecutarse con lo que se le dio a otra ejecución, o con lo que su propia ejecución tenía antes, la ejecución falla.",

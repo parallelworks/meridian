@@ -118,7 +118,7 @@ func bodies() []any {
 			},
 		},
 		&workerapi.ActionRequest{
-			Step: 1, Try: 2,
+			Step: 1, Try: 2, Private: true, Secret: true,
 			With: plan.DataOf(map[string]any{"jobs": []any{"a", "b"}, "n": int64(big), "none": nil, "map": map[string]any{}}),
 		},
 		&workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: plan.ReasonFailFast},

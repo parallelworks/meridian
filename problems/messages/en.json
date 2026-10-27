@@ -186,6 +186,7 @@
   "outputs_removed": "The worker's directory, which holds $OUTPUTS, was removed while the step ran, so what the step wrote to $OUTPUTS after that is lost.",
   "log_not_kept": "The worker didn't keep {size} bytes of the step's log: it keeps at most {limit} bytes of logs that the coordinator hasn't stored, while it can't reach it, and none once its disk is full.",
   "report_not_encoded": "The worker couldn't encode its report for the coordinator, so it sent it without the outputs and problems in it, and the job fails, unless it was cancelled.",
+  "session_not_of_run": "The step updates the session \"{session}\", which isn't one of its run's own sessions, so it isn't updated.",
   "record_unreadable": "Run {run}'s secret record can't be decrypted as the run's latest: it was encrypted for another run or another store, a later one has replaced it, or it has been changed.",
   "record_reseal_limit": "Run {run}'s secret record has been encrypted again {limit} times, as many as its data key is used for, so the run can't go on.",
   "run_record_mismatch": "Run {run}'s secret record doesn't fit its plan: it isn't the record that was created with the plan, so the run can't start.",

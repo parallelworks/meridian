@@ -172,9 +172,12 @@ type ReadyStep struct {
 	// Run is the command a run: step runs.
 	Run string `json:"run,omitempty"`
 	// Uses names the built-in action or the workflow a uses: step runs, as
-	// the plan holds it, and With is its with:, a mapping.
-	Uses string `json:"uses,omitempty"`
-	With Data   `json:"with,omitzero"`
+	// the plan holds it, and With is its with:, a mapping, and WithRead
+	// what evaluating it read: a variable or a password, which makes what
+	// it gives private, or a secret, which makes it masked.
+	Uses     string    `json:"uses,omitempty"`
+	With     Data      `json:"with,omitzero"`
+	WithRead expr.Read `json:"-"`
 	// Shell is the step's shell:, in which {0} is the script's path, or ""
 	// for the default, a bash that isn't a login shell.
 	Shell string `json:"shell,omitempty"`
@@ -438,6 +441,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 				if rs.With, ok = mappingData(out); !ok {
 					e.reportType(pointer, out, read, "object")
 				}
+				rs.WithRead = read
 			}
 		}
 		if s.Source != nil {

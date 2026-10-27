@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -26,9 +28,7 @@ type actions struct{ c *Coordinator }
 var _ workerapisrv.Actions = actions{}
 
 // Act performs the action the step of call's attempt uses: cancel-jobs
-// (cancelJobs). An action of the coordinator's that it doesn't perform
-// yet, update-session, fails the step, as the worker failed it before it
-// asked the coordinator.
+// (cancelJobs) or update-session (updateSession).
 func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {
 	step, err := r.c.actionStep(ctx, call)
 	if err != nil {
@@ -38,11 +38,43 @@ func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (worker
 	case actionCancelJobs:
 		return r.c.cancelJobs(ctx, call, step)
 	case actionUpdateSession:
-		return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) {
-			return actionFailed(problems.UsesNotSupported.At("", problems.Position{}, step.Path, problems.Params{"uses": step.Uses})), nil
-		})
+		return r.c.updateSession(ctx, call, step)
 	}
 	return workerapi.ActionAnswer{}, fmt.Errorf("%w: %q", workerapisrv.ErrNotAction, step.Uses)
+}
+
+// updateSession performs step's parallelworks/update-session, as call asks:
+// it updates one of the run's own sessions, which with:'s name names,
+// through Options.Sessions (compile.UpdateSession). The provider isn't the
+// store's, so it asks it before Commit stores the answer, and asks it
+// nothing for a step that its job's cancel or its early-cancel: stops,
+// which Commit answers cancelled (ActionCall.Cancelled). A refusal of the
+// provider's, a session that isn't the run's, and no provider fail the
+// step; a provider that can't answer is an error, which the worker asks
+// again after.
+func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.ActionCall, step *plan.Step) (workerapi.ActionAnswer, error) {
+	answer := workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}
+	cancelled, err := call.Cancelled(ctx, step)
+	if err != nil {
+		return workerapi.ActionAnswer{}, err
+	}
+	if !cancelled {
+		p, err := c.plans.get(call.Run)
+		if err != nil {
+			return workerapi.ActionAnswer{}, err
+		}
+		with, _ := call.Request.With.Get().(map[string]any)
+		read := expr.Read{Private: call.Request.Private, Marked: call.Request.Secret}
+		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, call.Run.ID, p, step.Path, with, read)
+		if err != nil {
+			return workerapi.ActionAnswer{}, err
+		}
+		answer.Diagnostics = diags
+		if diags.HasErrors() {
+			answer.Outcome = plan.OutcomeFailure
+		}
+	}
+	return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) { return answer, nil })
 }
 
 // actionStep returns the step of call's attempt's job that call names, as

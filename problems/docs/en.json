@@ -1081,6 +1081,12 @@
       "Report the bug, with the worker's log."
     ]
   },
+  "session_not_of_run": {
+    "why": "A step that uses parallelworks/update-session points one of its run's sessions somewhere else, as a link to a URL, or a tunnel to a host and port. It may update only the sessions its own run's sessions: made, which an expression names as ${{ sessions.<name> }}. The session this step names, as its with: name gives it, isn't one of those, so it isn't updated, and the step fails.",
+    "fix": [
+      "Name one of the run's own sessions in the step's with: name, as ${{ sessions.<name> }}, with the name under the workflow's sessions:."
+    ]
+  },
   "record_unreadable": {
     "why": "A run's secret record holds what the run was given and the secrets it read. It is encrypted with AES-256-GCM under a data key of the run's own, bound to the run's ID, to its store's, and to how many times it has been encrypted again, so that it can't be moved to another run, even one of the same workflow with the same inputs, nor to a run with the same ID in another store, nor be put back in the place of a later record of its run. This one doesn't decrypt as its run's latest: it was moved from another run or another store, an older one was put back, or it was changed. Rather than run with what another run was given, or with what its own run had before, the run fails.",
     "fix": [

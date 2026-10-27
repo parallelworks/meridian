@@ -375,6 +375,10 @@ var (
 	OutputsRemoved        = define(Warning, "outputs_removed", "$OUTPUTS removed as the step ran")
 	LogNotKept            = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")
 	ReportNotEncoded      = define(Error, "report_not_encoded", "Report the worker couldn't encode")
+	// SessionNotOfRun is a session that a step that uses
+	// parallelworks/update-session names, as text, that isn't one of its
+	// run's own: session is the name.
+	SessionNotOfRun = define(Error, "session_not_of_run", "Session that isn't the run's", "session")
 )
 
 // The coordinator's problems with a run, which fail it: run is the run's
