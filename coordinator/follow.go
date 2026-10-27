@@ -26,6 +26,16 @@ const (
 // those another process stores, and its logs, which aren't in the store.
 const defaultFollowEvery = 200 * time.Millisecond
 
+// defaultFollowHold is how long after a step's end is stored, by the
+// store's clock, Follow holds it back for the step's log to end: a worker
+// sends its events and its logs apart, so a step's end can be stored
+// before the last of its log. holdEvery is how often Follow reads the log
+// as it holds the end.
+const (
+	defaultFollowHold = 2 * time.Second
+	holdEvery         = 50 * time.Millisecond
+)
+
 // FollowOptions say what Follow reports of a run, and to what.
 type FollowOptions struct {
 	// Event hears each of the run's events, in order. It is required.
@@ -57,8 +67,11 @@ type LogPart struct {
 // then it returns how the run ended. Each event is reported once its
 // logs that are stored so far are, of a step's that finished, its step's,
 // and of an attempt's or a job's that ended, its attempt's or its job's;
-// the run's end, last, once every log is. A run the store doesn't have is
-// ErrRunNotFound.
+// the run's end, last, once every log is. A step's end is held back, and
+// the events after it, until the step's log has ended, for 2 seconds at
+// most after it was stored, since a worker sends its logs apart from its
+// events: then it is reported, and the log followed on. A run the store
+// doesn't have is ErrRunNotFound.
 //
 // Follow reads the run's events again as soon as a transaction of this
 // process's adds one, and every so often for those another process adds,
@@ -82,15 +95,21 @@ func (c *Coordinator) Follow(ctx context.Context, id string, opts FollowOptions)
 		var (
 			events []store.RunEvent
 			run    *store.Run
+			now    time.Time
 		)
 		err := c.store.View(ctx, func(tx *store.Tx) error {
 			var err error
-			if events, err = tx.RunEvents(id, after, followEvents); err != nil || len(events) > 0 {
+			if events, err = tx.RunEvents(id, after, followEvents); err != nil {
+				return err
+			}
+			if len(events) > 0 {
+				now, err = tx.Now()
 				return err
 			}
 			run, err = tx.Run(id)
 			return err
 		})
+		readAt := time.Now()
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, ErrRunNotFound
 		}
@@ -102,7 +121,10 @@ func (c *Coordinator) Follow(ctx context.Context, id string, opts FollowOptions)
 			if e.Kind == store.EventRunFinished {
 				return f.end(ctx, eventOf(id, e))
 			}
-			if err := f.event(ctx, eventOf(id, e)); err != nil {
+			// Held, if it is a step's end, until so long after it was
+			// stored, by the store's clock, which was now as the events
+			// were read.
+			if err := f.event(ctx, eventOf(id, e), readAt.Add(c.followHold-now.Sub(e.At))); err != nil {
 				return nil, err
 			}
 		}
@@ -150,15 +172,21 @@ type followedLog struct {
 }
 
 // event reports e, once the logs it ends are reported as far as they are
-// stored, and begins to follow the logs it begins.
-func (f *follower) event(ctx context.Context, e Event) error {
+// stored, a step's end once its log has ended, or once until has passed,
+// and begins to follow the logs it begins.
+func (f *follower) event(ctx context.Context, e Event, until time.Time) error {
 	if f.opts.Logs != nil {
 		var of func(LogKey) bool
 		switch e.Kind {
 		case StepFinished:
-			of = func(k LogKey) bool {
-				return k.Job == e.Job && k.Attempt == e.Attempt && k.Step == e.Step && k.Try == e.Try && (k.Part == workerapi.LogCleanup) == e.Cleanup
+			key := LogKey{Run: f.run, Job: e.Job, Attempt: e.Attempt, Part: workerapi.LogStep, Step: e.Step, Try: e.Try}
+			if e.Cleanup {
+				key.Part = workerapi.LogCleanup
 			}
+			if err := f.hold(ctx, key, until); err != nil {
+				return err
+			}
+			of = func(k LogKey) bool { return k == key }
 		case AttemptEnded:
 			f.ended[attemptKey{e.Job, e.Attempt}] = true
 			of = func(k LogKey) bool { return k.Job == e.Job && k.Attempt == e.Attempt }
@@ -191,6 +219,28 @@ func (f *follower) event(ctx context.Context, e Event) error {
 	}
 	if !slices.ContainsFunc(f.logs, func(l *followedLog) bool { return l.key == key }) {
 		f.logs = append(f.logs, &followedLog{key: key})
+	}
+	return nil
+}
+
+// hold reads the log key, if Follow follows it, until it has ended, or
+// until has passed.
+func (f *follower) hold(ctx context.Context, key LogKey, until time.Time) error {
+	following := func() bool { return slices.ContainsFunc(f.logs, func(l *followedLog) bool { return l.key == key }) }
+	tick := time.NewTicker(holdEvery)
+	defer tick.Stop()
+	for following() {
+		if _, err := f.readLogs(ctx, func(k LogKey) bool { return k == key }); err != nil {
+			return err
+		}
+		if !following() || !time.Now().Before(until) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
 	}
 	return nil
 }

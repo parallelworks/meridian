@@ -198,36 +198,17 @@ func TestFollow(t *testing.T) {
 // it can't follow with.
 func TestFollowCut(t *testing.T) {
 	c := open(t, Options{})
-	id, _ := create(t, c, oneJob, nil, nil)
+	id, attempt := claimedAttempt(t, c)
 	logs := &runlogtest.Logs{}
 	step := LogKey{Run: id, Job: "main", Attempt: 1, Part: workerapi.LogStep}
+	if _, _, err := logs.Append(t.Context(), step, 0, []byte("partial"), false); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		if err := tx.StartRun(id, &compile.StartState{Run: plan.RunValues{Format: 1}}, nil); err != nil {
+		if _, err := tx.AppendEvents(attempt, []workerapi.Event{stepEvent(1, 0, false)}); err != nil {
 			return err
 		}
-		if _, err := tx.PinReady(id, "main", false, nil); err != nil {
-			return err
-		}
-		a, token, err := tx.NewAttempt(store.NewAttempt{Run: id, Job: "main", LeaseSeconds: 60, HeartbeatSeconds: 10})
-		if err != nil {
-			return err
-		}
-		if err := tx.ChoosePlace(a.ID, store.Place{Group: "local", Member: "m1", Backend: testBackend}); err != nil {
-			return err
-		}
-		if err := tx.RecordPlacement(a.ID, store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "p", WorkerDigest: testDigest}); err != nil {
-			return err
-		}
-		if _, err := tx.Claim(token, strings.Repeat("c", 64), workerapi.Worker{Version: "test", Digest: testDigest}); err != nil {
-			return err
-		}
-		if _, err := tx.AppendEvents(a.ID, []workerapi.Event{{Seq: 1, Time: time.Unix(1, 0).UTC()}}); err != nil {
-			return err
-		}
-		if _, _, err := logs.Append(t.Context(), step, 0, []byte("partial"), false); err != nil {
-			return err
-		}
-		if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
+		if err := tx.EndAttempt(attempt, store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
 			return err
 		}
 		if err := tx.EndJob(id, "main", store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonWorkerLost}); err != nil {
@@ -266,5 +247,133 @@ func TestFollowCut(t *testing.T) {
 	cancel()
 	if _, err := c.Follow(ctx, id, f.options(nil)); !errors.Is(err, context.Canceled) {
 		t.Errorf("Follow with its context done = %v", err)
+	}
+}
+
+// claimedAttempt stores a run of oneJob, started, with its job's attempt
+// placed and claimed, as its worker claims it, and returns the run's ID
+// and the attempt's, without a coordinator that works the run.
+func claimedAttempt(t *testing.T, c *Coordinator) (string, string) {
+	t.Helper()
+	id, _ := create(t, c, oneJob, nil, nil)
+	var attempt string
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		if err := tx.StartRun(id, &compile.StartState{Run: plan.RunValues{Format: 1}}, nil); err != nil {
+			return err
+		}
+		if _, err := tx.PinReady(id, "main", false, nil); err != nil {
+			return err
+		}
+		a, token, err := tx.NewAttempt(store.NewAttempt{Run: id, Job: "main", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		if err != nil {
+			return err
+		}
+		attempt = a.ID
+		if err := tx.ChoosePlace(a.ID, store.Place{Group: "local", Member: "m1", Backend: testBackend}); err != nil {
+			return err
+		}
+		if err := tx.RecordPlacement(a.ID, store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "p", WorkerDigest: testDigest}); err != nil {
+			return err
+		}
+		_, err = tx.Claim(token, strings.Repeat("c", 64), workerapi.Worker{Version: "test", Digest: testDigest})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id, attempt
+}
+
+// stepEvent is the event seq of the step step, its start, or its end.
+func stepEvent(seq int64, step int, finished bool) workerapi.Event {
+	e := workerapi.Event{Seq: seq, Time: time.Unix(seq, 0).UTC(), Step: step, Finished: finished}
+	if finished {
+		e.Outcome = plan.OutcomeSuccess
+	}
+	return e
+}
+
+// A step's end, stored before the last of its log, as it is when its
+// worker sends its events and its logs apart, is reported once the log has
+// ended; one whose log doesn't end so soon is reported once it has been
+// held back long enough, and its log followed on.
+func TestFollowHoldsStepEnd(t *testing.T) {
+	c := open(t, Options{})
+	c.followHold = 500 * time.Millisecond
+	id, attempt := claimedAttempt(t, c)
+	logs := &runlogtest.Logs{}
+	key := func(step int) LogKey {
+		return LogKey{Run: id, Job: "main", Attempt: 1, Part: workerapi.LogStep, Step: step}
+	}
+	storeEvents := func(events ...workerapi.Event) {
+		t.Helper()
+		if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+			_, err := tx.AppendEvents(attempt, events)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendLog := func(k LogKey, offset int64, text string, end bool) {
+		t.Helper()
+		if _, _, err := logs.Append(t.Context(), k, offset, []byte(text), end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storeEvents(stepEvent(1, 0, false))
+	appendLog(key(0), 0, "first\n", false)
+	var f followed
+	followed := make(chan error, 1)
+	go func() {
+		_, err := c.Follow(t.Context(), id, f.options(logs))
+		followed <- err
+	}()
+	// Step 0's end is stored before the last of its log, which ends
+	// within the hold.
+	storeEvents(stepEvent(2, 0, true))
+	<-time.After(200 * time.Millisecond)
+	appendLog(key(0), 6, "last\n", true)
+	// Step 1's log doesn't end until after its hold.
+	storeEvents(stepEvent(3, 1, false), stepEvent(4, 1, true))
+	<-time.After(1500 * time.Millisecond)
+	appendLog(key(1), 0, "late\n", true)
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		if err := tx.EndAttempt(attempt, store.AttemptEnd{Kind: store.EndCompleted, Outcome: plan.OutcomeSuccess, CompleteDigest: make([]byte, 32)}); err != nil {
+			return err
+		}
+		if err := tx.EndJob(id, "main", store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeSuccess}}); err != nil {
+			return err
+		}
+		return tx.EndRun(id, plan.OutcomeSuccess, "")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-followed; err != nil {
+		t.Fatal(err)
+	}
+	// Where each thing was reported, in order.
+	at := map[string]int{}
+	for i, item := range f.items {
+		switch item := item.(type) {
+		case Event:
+			if item.Kind == StepFinished {
+				at[fmt.Sprintf("step %d finished", item.Step)] = i
+			}
+		case LogPart:
+			if len(item.Data) > 0 {
+				at[string(item.Data)] = i
+			}
+			if item.Ended {
+				at[fmt.Sprintf("step %d log ended", item.Key.Step)] = i
+			}
+		}
+	}
+	if at["last\n"] > at["step 0 log ended"] || at["step 0 log ended"] >= at["step 0 finished"] {
+		t.Errorf("step 0's end was reported before its log's: %v", at)
+	}
+	if at["step 1 finished"] >= at["late\n"] || at["late\n"] > at["step 1 log ended"] {
+		t.Errorf("step 1's end, held back as long as it may be, wasn't reported before the rest of its log: %v", at)
+	}
+	if got := f.logs(); got[logName(key(0))] != "first\nlast\n" || got[logName(key(1))] != "late\n" {
+		t.Errorf("the logs are %q", got)
 	}
 }

@@ -3412,7 +3412,12 @@ its steps' logs as their workers store them.
   shown as far as it was stored, and said to be cut short (`log_cut`).
 - **In order.** An event that ends a step, an attempt or a job is shown
   once its logs, as far as they are stored, are; and the run's end last,
-  once every log is.
+  once every log is. A worker sends its events and its logs apart, so a
+  step's end can be stored before the last of its log: it is held back,
+  with the events after it, until the step's log has ended, for 2 seconds
+  at most after it was stored, by the store's clock, and the log is then
+  followed on. The worker isn't made to wait for its logs, which would
+  count against a job's timeout, a round trip a step.
 - **Promptly.** It reads the run's events again as soon as a transaction
   of its own process adds one, and every 200 milliseconds for those
   another process adds, and for the logs, which aren't in the store.
