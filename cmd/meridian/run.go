@@ -210,9 +210,11 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 			}
 			switch ask(c, in, id, interrupts) {
 			case "cancel":
-				// Cancelling a run comes with meridian cancel: until
-				// then, the run goes on, and so does watching it.
-				_ = c.failf(problems.CommandNotBuilt, problems.Params{"command": "cancel"})
+				// The run stops, and watching it goes on until it has
+				// ended, cancelled.
+				if err := coord.Cancel(work, id); err != nil && !errors.Is(err, coordinator.ErrRunEnded) {
+					_ = c.fail(err)
+				}
 			case "leave":
 				quiet()
 				return detach(c, rs.progress, id)

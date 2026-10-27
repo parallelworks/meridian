@@ -178,7 +178,7 @@ func (c *Coordinator) newer(ctx context.Context, id string) time.Duration {
 // steps as any job does (instanceStep).
 func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	if job.Instance >= 0 {
-		if wait, handled, err := c.instanceStep(ctx, run, job, a); handled || err != nil {
+		if wait, handled, err := c.instanceStep(ctx, run, job, a, done); handled || err != nil {
 			return wait, err
 		}
 	} else {

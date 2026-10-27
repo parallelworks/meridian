@@ -346,9 +346,9 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 }
 
 // StopRun stores the run's stop record: that it is stopped early now, for
-// reason, cancelled or timeout. The first stop of a run is its record, and
-// a later one changes nothing: it reports whether this one stored it. A
-// run that has ended is ErrState.
+// reason, cancelled or timeout, with the run's run.stopping event. The
+// first stop of a run is its record, and a later one changes nothing: it
+// reports whether this one stored it. A run that has ended is ErrState.
 func (tx *Tx) StopRun(id string, reason plan.Reason) (bool, error) {
 	if reason != plan.ReasonCancelled && reason != plan.ReasonTimeout {
 		return false, fmt.Errorf("store: %q isn't why a run stops", reason)
@@ -367,8 +367,10 @@ func (tx *Tx) StopRun(id string, reason plan.Reason) (bool, error) {
 		return false, err
 	}
 	n, _ := runNumber(id)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET stopped_at = ?, stop_reason = ? WHERE id = ?", now, reason, n)
-	return err == nil, err
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET stopped_at = ?, stop_reason = ? WHERE id = ?", now, reason, n); err != nil {
+		return false, err
+	}
+	return true, tx.addEvent(n, EventRunStopping, "", "", 0)
 }
 
 // LiveAttempts returns the run's attempts that haven't ended, in the order

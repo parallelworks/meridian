@@ -107,7 +107,9 @@ type EventKind string
 // dependencies have finished, placing once a member is chosen for its
 // attempt, and running once the attempt's worker has claimed it; an
 // attempt ends, completed or otherwise, before its job ends, as one that
-// another supersedes does.
+// another supersedes does; and the run is stopping, with the reason
+// cancelled or timeout, once a person cancels it or it runs past its
+// timeout:, while what doesn't outlive the stop stops.
 const (
 	RunStarted   EventKind = store.EventRunStarted
 	JobReady     EventKind = store.EventJobReady
@@ -117,6 +119,7 @@ const (
 	StepFinished EventKind = store.EventStepFinished
 	AttemptEnded EventKind = store.EventAttemptEnded
 	JobFinished  EventKind = store.EventJobFinished
+	RunStopping  EventKind = store.EventRunStopping
 	RunFinished  EventKind = store.EventRunFinished
 )
 

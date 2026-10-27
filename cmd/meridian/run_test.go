@@ -414,6 +414,38 @@ func TestRunAsks(t *testing.T) {
 	}
 }
 
+// TestRunAsksCancel checks that an answer to cancel the run, interrupted as
+// its step runs, cancels it: the step stops, and meridian run watches the
+// run to its end, cancelled, and exits 1.
+func TestRunAsksCancel(t *testing.T) {
+	env := runEnv(t)
+	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    steps:\n      - run: sleep 60\n")
+	yes := true
+	signals := make(chan os.Signal, 1)
+	outs := make(chan *lockedBuffer, 1)
+	go func() {
+		out := <-outs
+		for !strings.Contains(out.String(), "main step 0 started") {
+			select {
+			case <-t.Context().Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		signals <- os.Interrupt
+	}()
+	r := runTest(t, env, func(c *cli) {
+		c.interactive = &yes
+		c.stdin = strings.NewReader("c\n")
+		c.signals = signals
+		outs <- c.stdout.(*lockedBuffer)
+	}, workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stderr, "Cancel it (c), leave it running (l), or keep watching (w)?") ||
+		!strings.Contains(r.stdout, "run 1 stopping (cancelled)\n") || !strings.HasSuffix(r.stdout, "run 1 finished: cancelled (cancelled)\n") {
+		t.Errorf("meridian run interrupted and told to cancel the run = %+v", r)
+	}
+}
+
 // TestAsk checks the answers to what to do about an interrupted run.
 func TestAsk(t *testing.T) {
 	for in, want := range map[string]string{

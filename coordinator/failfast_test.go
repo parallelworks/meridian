@@ -49,7 +49,7 @@ jobs:
 	exec(t, c, "UPDATE meridian_jobs SET fail_fast_at = 1 WHERE key = 'main'")
 	a := latestAttempt(t, c, id, "main#1")
 	// It is told, and then steps as any job does, waiting on its attempt.
-	if _, handled, err := c.instanceStep(t.Context(), storedRun(t, c, id), storedJob(t, c, id, "main#1"), a); err != nil || handled {
+	if _, handled, err := c.instanceStep(t.Context(), storedRun(t, c, id), storedJob(t, c, id, "main#1"), a, nil); err != nil || handled {
 		t.Fatalf("instanceStep = %v, %v", handled, err)
 	}
 	var ctl workerapi.Control

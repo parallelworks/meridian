@@ -59,6 +59,19 @@ func (r *readied) end() (store.JobEnd, bool) {
 // gives (plan.ErrVersion, plan.ErrMalformed), what opening the record
 // gives, or the store's.
 func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) (*readied, error) {
+	return c.ready(ctx, run, key, false)
+}
+
+// readyEarly readies the run's job key, which its run's stop ends before
+// the jobs it needs have all ended (endUnreadied), as readyJob does, but
+// for those jobs: one that hasn't ended reads as failed, as their stop
+// takes them, and nothing fails it.
+func (c *Coordinator) readyEarly(ctx context.Context, run *store.Run, key string) (*readied, error) {
+	return c.ready(ctx, run, key, true)
+}
+
+// ready is readyJob, and readyEarly when early is set.
+func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, early bool) (*readied, error) {
 	if run.StartState == nil {
 		return nil, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
 	}
@@ -66,9 +79,11 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 	if err != nil {
 		return nil, err
 	}
-	unended, err := c.unendedNeeds(ctx, run, p, key)
-	if err != nil {
-		return nil, err
+	var unended []string
+	if !early {
+		if unended, err = c.unendedNeeds(ctx, run, p, key); err != nil {
+			return nil, err
+		}
 	}
 	var ws map[string]*withdrawal
 	if len(unended) > 0 {
@@ -138,7 +153,7 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 			if needed[need.Job], err = tx.Job(run.ID, k); err != nil {
 				return err
 			}
-			if needed[need.Job].Result == nil {
+			if needed[need.Job].Result == nil && !early {
 				return fmt.Errorf("coordinator: run %s's job %q needs %q, which hasn't ended", run.ID, key, k)
 			}
 			keys = append(keys, k)
@@ -281,12 +296,16 @@ func (c *Coordinator) openJobRecords(ctx context.Context, runID string, wrapped 
 	return c.sealer.OpenJobs(ctx, runID, wrapped, sealed)
 }
 
-// neededResult is the result of j, a job another needs, which has ended,
-// as the jobs that need it read it: run state's, joined with its part of
-// the secret record, jobs[j.Key], which its end stored, if it ended with
-// private outputs. It is the coordinator's one read of a job's private
-// half, as putJobRecord is its one write.
+// neededResult is the result of j, a job another needs, as the jobs that
+// need it read it: run state's, joined with its part of the secret record,
+// jobs[j.Key], which its end stored, if it ended with private outputs. One
+// that hasn't ended, which only a job its run's stop ends early reads
+// (readyEarly), reads as failed. It is the coordinator's one read of a
+// job's private half, as putJobRecord is its one write.
 func neededResult(j *store.Job, jobs map[string]plan.JobRecord) plan.JobResult {
+	if j.Result == nil {
+		return plan.JobResult{Outcome: plan.OutcomeFailure}
+	}
 	return plan.JoinJobResult(jobs[j.Key], *j.Result)
 }
 

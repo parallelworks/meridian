@@ -42,7 +42,6 @@ const (
 // and which records the placements it was asked to cancel.
 type stopDriver struct {
 	*testDriver
-	ctx context.Context //nolint:containedctx // a test's, for the workers it starts
 
 	mu        sync.Mutex
 	ways      map[string]string
@@ -99,7 +98,7 @@ func (d *stopDriver) work(req backend.PlaceRequest, way string) {
 			a, err = tx.Attempt(req.Attempt)
 			return err
 		})
-		return err == nil && a.Placement.ID != ""
+		return err == nil && a.Placed()
 	}) || way == never {
 		return
 	}
@@ -117,7 +116,7 @@ func (d *stopDriver) work(req backend.PlaceRequest, way string) {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	if err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
-		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(b), workerapi.Worker{Version: "test"})
+		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(b), workerapi.Worker{Version: "test", Digest: testDigest})
 		if err != nil {
 			return err
 		}
@@ -170,9 +169,11 @@ func (d *stopDriver) work(req backend.PlaceRequest, way string) {
 // says, by job.
 func openStop(t *testing.T, ways map[string]string) (*Coordinator, *stopDriver) {
 	t.Helper()
-	d := &stopDriver{testDriver: newTestDriver(), ctx: context.WithoutCancel(t.Context()), ways: ways, release: make(chan struct{})}
+	d := &stopDriver{testDriver: newTestDriver(), ways: ways, release: make(chan struct{})}
 	c := open(t, Options{Drivers: map[string]backend.Driver{testBackend: d}})
-	d.c = c
+	// Its workers run with the test's context, as its testDriver's do,
+	// which open sets only for a testDriver of its own.
+	d.c, d.ctx = c, t.Context()
 	d.testDriver.worker = d.worker
 	t.Cleanup(d.workers.Wait)
 	return c, d
@@ -653,5 +654,66 @@ func TestCancelClaiming(t *testing.T) {
 	}
 	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled {
 		t.Errorf("the job is %+v", j)
+	}
+}
+
+// TestCancelFollowed checks that following a run that is cancelled reports
+// its stop, with the reason, before its end.
+func TestCancelFollowed(t *testing.T) {
+	c, _ := openStop(t, nil)
+	id, _ := create(t, c, oneJob, nil, nil)
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	var events []Event
+	status, err := c.Follow(t.Context(), id, FollowOptions{Event: func(e Event) error {
+		events = append(events, e)
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Kind != RunStopping || events[0].Reason != plan.ReasonCancelled || events[1].Kind != RunFinished ||
+		status.Outcome != plan.OutcomeCancelled {
+		t.Errorf("following the run gave %+v, and %+v", events, status)
+	}
+}
+
+// TestCancelMatrix checks a cancel of a run whose matrix job runs its
+// instances one at a time: the instance running is told to stop, and the
+// one waiting for its turn ends at once, cancelled, never placed, as
+// format 1 ends one; and the matrix job ends cancelled once they have.
+func TestCancelMatrix(t *testing.T) {
+	c, d := openStop(t, map[string]string{"main#0": hold})
+	id, _ := create(t, c, `
+jobs:
+  main:
+    strategy:
+      max-parallel: 1
+      matrix:
+        n: [0, 1]
+    steps:
+      - run: echo ${{ matrix.n }}
+`, nil, nil)
+	serve(t, c)
+	held := latestIs(t, c, id, "main#0", running)
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return storedJob(t, c, id, "main#1").Outcome != "" })
+	if j := storedJob(t, c, id, "main#1"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled || j.Attempts != 0 {
+		t.Errorf("the instance waiting for its turn is %+v", j)
+	}
+	if ctl := controlOf(t, c, held.ID); !ctl.Cancel || ctl.Reason != plan.ReasonCancelled {
+		t.Errorf("the running instance's worker is told %+v", ctl)
+	}
+	close(d.release)
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	for _, key := range []string{"main", "main#0"} {
+		if j := storedJob(t, c, id, key); j.Outcome != plan.OutcomeCancelled {
+			t.Errorf("%s is %+v", key, j)
+		}
 	}
 }

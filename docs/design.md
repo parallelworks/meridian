@@ -2479,8 +2479,8 @@ for any other only once they have (`plan.Plan.CancelPath`).
     needs none was readied when the run started, so it never takes this
     path.
 - **A matrix instance waiting for its turn** under `max-parallel` ends
-  cancelled, whatever its `if:`, as format 1 ends one waiting for its
-  turn.
+  cancelled at once, whatever its `if:`, as format 1 ends one waiting for
+  its turn, after the run's timeout too, with the reason `timeout`.
 - **The run's outcome after a cancel** is cancelled, whatever its jobs did
   after it, an `always()` job that succeeds among them. It comes from the
   stop record, as format 1's comes from its record of an external
@@ -3461,8 +3461,10 @@ value, which can be a password.
 ### Following a run
 
 `meridian run` shows its run as it goes, by following it
-(`Coordinator.Follow`): the run's events, from its first, in order, and
-its steps' logs as their workers store them.
+(`Coordinator.Follow`): the run's events, from its first, in order, among
+them its stop, `run.stopping`, with why, `cancelled` or `timeout`, once a
+person cancels it or it runs past its `timeout:`; and its steps' logs as
+their workers store them.
 
 - **Which logs there are.** A log that isn't there yet can't be told from
   one that never will be, so the events say which logs to read: an

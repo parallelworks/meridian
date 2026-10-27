@@ -14,7 +14,8 @@ import (
 // happen: it starts; a job is ready once its dependencies have finished,
 // placing once a member is chosen for its attempt, and running once the
 // attempt's worker has claimed it; its steps start and finish; the attempt
-// ends, and the job; and the run ends.
+// ends, and the job; the run is stopping, once a person cancels it or it
+// runs past its timeout:, if it does; and the run ends.
 const (
 	EventRunStarted   = "run.started"
 	EventJobReady     = "job.ready"
@@ -24,6 +25,7 @@ const (
 	EventStepFinished = "step.finished"
 	EventAttemptEnded = "attempt.ended"
 	EventJobFinished  = "job.finished"
+	EventRunStopping  = "run.stopping"
 	EventRunFinished  = "run.finished"
 )
 
@@ -54,7 +56,8 @@ type RunEvent struct {
 	End *AttemptEnd
 	// Outcome and Reason are how the job ended, of job.finished, or the
 	// run, of run.finished, and Diagnostics their problems: the job's, as
-	// Ready's or placement's, or the run's.
+	// Ready's or placement's, or the run's. Reason is why the run stopped,
+	// of run.stopping: cancelled or timeout.
 	Outcome     plan.Outcome
 	Reason      plan.Reason
 	Diagnostics problems.Diagnostics
@@ -155,6 +158,12 @@ WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 				return nil, err
 			}
 			e.Outcome, e.Reason, e.Diagnostics = j.Outcome, j.Reason, j.Diagnostics
+		case EventRunStopping:
+			r, err := tx.Run(run)
+			if err != nil {
+				return nil, err
+			}
+			e.Reason = r.StopReason
 		case EventRunFinished:
 			r, err := tx.Run(run)
 			if err != nil {

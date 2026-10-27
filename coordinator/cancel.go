@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/parallelworks/hopper"
 
-	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -32,14 +30,9 @@ type timeoutArgs struct {
 
 func (timeoutArgs) Kind() string { return "meridian.timeout" }
 
-// ErrRunEnded is what Cancel returns for a run that has ended, and
-// ErrRunNotFound for one the store doesn't have. (canary's status.go,
-// which the stack this is on doesn't have yet, has ErrRunNotFound too:
-// the rebase onto it keeps that one.)
-var (
-	ErrRunEnded    = errors.New("coordinator: the run has ended")
-	ErrRunNotFound = errors.New("coordinator: no such run")
-)
+// ErrRunEnded is what Cancel returns for a run that has ended; for one the
+// store doesn't have, it returns ErrRunNotFound, as Status does.
+var ErrRunEnded = errors.New("coordinator: the run has ended")
 
 // Cancel cancels the run id, as a person does: it stores the run's stop
 // record, with the reason cancelled, and tells the workers of the jobs
@@ -115,7 +108,7 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	}
 	var (
 		stopped bool
-		changed bool
+		changed []string
 		readied []string
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
@@ -141,7 +134,9 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 			return err
 		}
 		for _, j := range jobs {
-			if j.Outcome == "" && !j.ReadyAt.IsZero() {
+			// An instance waiting for its turn under max-parallel: ends
+			// at once (instanceStep).
+			if j.Outcome == "" && (!j.ReadyAt.IsZero() || j.Instance >= 0) {
 				readied = append(readied, j.Key)
 			}
 		}
@@ -154,12 +149,11 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	case err != nil || !stopped:
 		return err
 	}
-	if changed {
-		c.controlsChanged()
-	}
+	c.controlsChanged(changed)
 	c.log.InfoContext(ctx, "coordinator: a run was stopped", "run", run.ID, "reason", reason)
 	// A supervisor waiting for the jobs its job needs isn't woken: it
-	// readies its job once they have finished, as stopped.
+	// readies its job once they have finished, as stopped. One of an
+	// instance waiting for its turn is.
 	for _, key := range readied {
 		c.wakeJob(ctx, run.ID, key)
 	}
@@ -193,7 +187,7 @@ func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelP
 	if err != nil {
 		return nil, err
 	}
-	values, err := c.runValues(ctx, run)
+	values, err := c.wholeRunValues(ctx, run)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +254,7 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 	if err != nil {
 		return false, err
 	}
-	values, err := c.runValues(ctx, run)
+	values, err := c.wholeRunValues(ctx, run)
 	if err != nil {
 		return false, err
 	}
@@ -312,9 +306,9 @@ func stopEnd(reason plan.Reason) store.JobEnd {
 	return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}, Reason: plan.ReasonCancelled}
 }
 
-// runValues are run's values, the run's state's and its secret record's
+// wholeRunValues are run's values, the run's state's and its secret record's
 // joined, as Start gave them.
-func (c *Coordinator) runValues(ctx context.Context, run *store.Run) (plan.RunValues, error) {
+func (c *Coordinator) wholeRunValues(ctx context.Context, run *store.Run) (plan.RunValues, error) {
 	if run.StartState == nil {
 		return plan.RunValues{}, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
 	}
@@ -328,25 +322,12 @@ func (c *Coordinator) runValues(ctx context.Context, run *store.Run) (plan.RunVa
 	return plan.JoinRunValues(*rec.Run, run.StartState.Run), nil
 }
 
-// openRecord opens the secret record of the run id.
-func (c *Coordinator) openRecord(ctx context.Context, id string) (*plan.Record, error) {
-	var stored *store.Record
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		stored, err = tx.Record(id)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	return c.sealer.Open(ctx, id, stored.Generation, sealedOf(stored))
-}
-
 // endUnreadied ends the job key of run, stopped, which hasn't been readied
 // and whose path ends it at once: Ready, given the needs that have
 // finished, skips it because they failed, or fails it with its problems.
 // Its supervisor, which waits for the jobs it needs, then finds it ended.
 func (c *Coordinator) endUnreadied(ctx context.Context, run *store.Run, key string) error {
-	r, err := c.readyJob(ctx, run, key)
+	r, err := c.readyEarly(ctx, run, key)
 	if errors.Is(err, store.ErrState) {
 		// Ended meanwhile.
 		return nil
@@ -387,7 +368,7 @@ func tellStop(tx *store.Tx, id string, reason plan.Reason) error {
 // tell asks the worker of the attempt id to stop its job, for reason, as
 // tellStop does, in a transaction of its own.
 func (c *Coordinator) tell(ctx context.Context, id string, reason plan.Reason) error {
-	var changed bool
+	var changed []string
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tellStop(tx, id, reason); err != nil {
 			return err
@@ -395,9 +376,7 @@ func (c *Coordinator) tell(ctx context.Context, id string, reason plan.Reason) e
 		changed = tx.ControlsChanged()
 		return nil
 	})
-	if changed {
-		c.controlsChanged()
-	}
+	c.controlsChanged(changed)
 	return err
 }
 
@@ -535,15 +514,18 @@ func (c *Coordinator) leaseLapsed(ctx context.Context, a *store.Attempt) (bool, 
 }
 
 // withdraw ends the job's live attempt a, withdrawn, and the job as end
-// says, in one transaction, which done writes to as well, and then has
-// the attempt's backend withdraw its placement: its worker's reports are
-// refused from then on. An attempt changed since the supervisor looked at
-// it, claimed or renewed, is errAgain.
+// says, in one transaction, which done writes to as well, as endJobWith
+// ends a job, waking what waits for it; and then has the attempt's driver
+// cancel its placement (cancelPlacements): its worker's reports are
+// refused from then on. Where it was placed is found first, while its job
+// is as it was (withdrawals). An attempt changed since the supervisor
+// looked at it, claimed or renewed, is errAgain.
 func (c *Coordinator) withdraw(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	// Where it was placed is found while its job is as it was.
-	m, d, private, merr := c.attemptMember(ctx, run, a)
-	var changed bool
-	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+	ws, err := c.withdrawals(ctx, run, []string{job.Key})
+	if err != nil {
+		return err
+	}
+	err = c.endJobWith(ctx, run.ID, job.Key, end, func(_ context.Context, tx *store.Tx) error {
 		now, err := tx.Attempt(a.ID)
 		switch {
 		case err != nil:
@@ -551,91 +533,13 @@ func (c *Coordinator) withdraw(ctx context.Context, run *store.Run, job *store.J
 		case !now.Holds || now.State != a.State || !now.RenewedAt.Equal(a.RenewedAt):
 			return errAgain
 		}
-		if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn, Reason: end.Reason}); err != nil {
-			return err
-		}
-		if err := tx.EndJob(run.ID, job.Key, end); err != nil {
-			return err
-		}
-		if end.Result.Outcome == plan.OutcomeFailure {
-			if _, err := tx.MarkJobFailed(run.ID); err != nil {
-				return err
-			}
-		}
-		if err := done(ctx, tx); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
-	})
+		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn, Reason: end.Reason})
+	}, done)
 	if err != nil {
 		return err
 	}
-	if changed {
-		c.controlsChanged()
-	}
-	err = merr
-	if err == nil {
-		err = d.Cancel(ctx, m, backend.Placement{Attempt: a.ID, ID: a.Placement.ID, WorkerDigest: a.Placement.WorkerDigest})
-	}
-	switch {
-	case err == nil:
-	case private:
-		c.log.WarnContext(ctx, "coordinator: a placement withdrawn couldn't be cancelled with its backend", "attempt", a.ID)
-	default:
-		c.log.WarnContext(ctx, "coordinator: a placement withdrawn couldn't be cancelled with its backend", "attempt", a.ID, "error", err)
-	}
+	c.cancelPlacements(ctx, run.ID, ws, []string{a.ID})
 	return nil
-}
-
-// attemptMember returns the member of run's group the attempt a was placed
-// on, and its driver, and whether where its job runs is private; or an
-// error when the member can't be told, as when its group no longer has
-// it, or Groups can't answer.
-func (c *Coordinator) attemptMember(ctx context.Context, run *store.Run, a *store.Attempt) (*backend.Member, backend.Driver, bool, error) {
-	var (
-		place  store.Place
-		chosen bool
-		stored *store.Record
-	)
-	err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		if place, chosen, err = tx.ChosenPlace(a.ID); err != nil || !chosen {
-			return err
-		}
-		stored, err = tx.Record(run.ID)
-		return err
-	})
-	switch {
-	case err != nil:
-		return nil, nil, false, err
-	case !chosen:
-		return nil, nil, false, fmt.Errorf("coordinator: attempt %s has no place", a.ID)
-	}
-	private := place.Private != nil
-	if place, err = c.openPlace(ctx, run.ID, a.ID, stored, place); err != nil {
-		return nil, nil, private, err
-	}
-	r, err := c.readyJob(ctx, run, a.Job)
-	switch {
-	case err != nil:
-		return nil, nil, private, err
-	case r.result.Job == nil:
-		return nil, nil, private, fmt.Errorf("coordinator: run %s's job %q has an attempt, but Ready gives no job", run.ID, a.Job)
-	}
-	g, d, err := c.group(ctx, run, r.result.Job, private)
-	switch {
-	case err != nil:
-		return nil, nil, private, err
-	case d != nil || g.Name != place.Group:
-		return nil, nil, private, fmt.Errorf("coordinator: attempt %s's group is gone", a.ID)
-	}
-	i := slices.IndexFunc(g.Members, func(m backend.Member) bool { return m.Name == place.Member && m.Backend == place.Backend })
-	if i < 0 {
-		return nil, nil, private, fmt.Errorf("coordinator: attempt %s's member is gone", a.ID)
-	}
-	m := &g.Members[i]
-	return m, c.driver(m), private, nil
 }
 
 // timeoutWorker works runs' timeout watchers (timeoutArgs).
