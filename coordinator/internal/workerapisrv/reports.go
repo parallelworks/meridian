@@ -100,7 +100,13 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 			events.Events[i].Diagnostics = problems.MaskDiagnostics(events.Events[i].Diagnostics)
 		}
 	}
-	var last int64
+	// A step's first start makes the attempt running, which its job's
+	// supervisor counts.
+	started := a.State == store.AttemptClaimed && slices.ContainsFunc(events.Events, func(e workerapi.Event) bool { return !e.Finished })
+	var (
+		last  int64
+		after func()
+	)
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		if _, err := tx.Authorize(bearer(r)); err != nil {
 			return err
@@ -112,7 +118,10 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		if count+int64(len(events.Events)) > s.maxEvents || size+int64(len(body)) > s.maxEventsBytes {
 			return errTooMuch
 		}
-		last, err = tx.AppendEvents(a.ID, events.Events)
+		if last, err = tx.AppendEvents(a.ID, events.Events); err != nil || !started {
+			return err
+		}
+		after, err = s.wakeJob(ctx, tx, a.Run, a.Job)
 		return err
 	})
 	switch {
@@ -123,11 +132,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		s.writeError(w, r, err)
 		return
 	}
-	// A step's first start makes the attempt running, which its job's
-	// supervisor counts.
-	if a.State == store.AttemptClaimed && slices.ContainsFunc(events.Events, func(e workerapi.Event) bool { return !e.Finished }) {
-		s.wakeJob(ctx, a.Run, a.Job)
-	}
+	committed(after)
 	writeJSON(w, &workerapi.EventsAck{Seq: last})
 }
 
@@ -354,6 +359,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	// any-job-failed, as format 1 tells them as the job fails. The job
 	// marks it as it ends otherwise.
 	jobFailed := result.Outcome == plan.OutcomeFailure && end.Reason != plan.ReasonSetupFailed
+	var after func()
 	for try := 1; ; try++ {
 		// The part is sealed outside the transaction that stores it, which
 		// holds the database's lock only for its writes, and stores it only
@@ -389,7 +395,9 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 					return err
 				}
 			}
-			return nil
+			var err error
+			after, err = s.wakeJob(ctx, tx, a.Run, a.Job)
+			return err
 		})
 		if !errors.Is(err, store.ErrRecordChanged) || try == partTries {
 			break
@@ -421,7 +429,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		s.writeError(w, r, err)
 		return
 	}
-	s.wakeJob(ctx, a.Run, a.Job)
+	committed(after)
 	w.WriteHeader(http.StatusNoContent)
 }
 

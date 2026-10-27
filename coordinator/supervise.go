@@ -306,11 +306,14 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 
 // endJobWith ends the job as endJob does, once before, unless it is nil,
 // has written to the transaction too, as to keep the private half of the
-// job's result, or to withdraw its attempt. Once it commits, it wakes what
+// job's result, or to withdraw its attempt. The same transaction wakes what
 // waits for the job to end: for an instance of a matrix job, the matrix
-// job's supervisor; and the marker of a need on any instance of it.
+// job's supervisor, when it has something to do (parentActs); and the
+// marker of a need on any instance of it.
 func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end store.JobEnd, before, done func(context.Context, *store.Tx) error) error {
+	var woken []*waking
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		woken = woken[:0]
 		if before != nil {
 			if err := before(ctx, tx); err != nil {
 				return err
@@ -333,18 +336,47 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 				return err
 			}
 		}
-		return done(ctx, tx)
+		if err := done(ctx, tx); err != nil {
+			return err
+		}
+		name, _, instance := strings.Cut(key, "#")
+		if instance {
+			acts, err := parentActs(tx, runID, name, end.Result.Outcome)
+			if err != nil {
+				return err
+			}
+			if acts {
+				w, err := c.wakeJobTx(ctx, tx, runID, name)
+				if err != nil {
+					return err
+				}
+				woken = append(woken, w)
+			}
+		}
+		w, err := c.wakeAnyTx(ctx, tx, runID, name)
+		woken = append(woken, w)
+		return err
 	})
 	if err == nil {
 		// The hopper job done completed is over, and its context with it.
-		ctx := context.WithoutCancel(ctx)
-		name, _, instance := strings.Cut(key, "#")
-		if instance {
-			c.wakeJob(ctx, runID, name)
-		}
-		c.wakeAny(ctx, runID, name)
+		c.wakeAgain(context.WithoutCancel(ctx), woken...)
 	}
 	return err
+}
+
+// parentActs reports, in tx, whether the supervisor of the run's matrix
+// job name has something to do once one of its instances has ended with
+// outcome (matrixStep): stop the rest, after a failure or a cancel, as
+// fail-fast: may ask; give the next its turn, while one waits for it
+// under max-parallel:; or end the job, once none is left. Woken at each
+// end besides, as one instance after another succeeds, it would only
+// read its instances again, and be woken again as it read them.
+func parentActs(tx *store.Tx, run, name string, outcome plan.Outcome) (bool, error) {
+	if outcome == plan.OutcomeFailure || outcome == plan.OutcomeCancelled {
+		return true, nil
+	}
+	unended, unturned, err := tx.InstancesLeft(run, name)
+	return unended == 0 || unturned > 0, err
 }
 
 // A controlNotifier hears which attempts' controls changed, once the
@@ -385,99 +417,3 @@ func (c *Coordinator) placementsRecorded(ids []string) {
 		n.Placed(ids...)
 	}
 }
-
-// wakeJob wakes the supervisor of the run's job key, once something it
-// waits for has happened, as an attempt's claim or end: the worker API
-// calls it once it has stored the change. A supervisor that is looking
-// reads the job's wake again before it waits; one that waits looks at
-// once, as hopper's JobRetry makes it.
-func (c *Coordinator) wakeJob(ctx context.Context, run, key string) {
-	var j *store.Job
-	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
-		var err error
-		j, err = tx.Wake(run, key)
-		return err
-	}); err != nil {
-		c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
-		return
-	}
-	if j.Outcome == "" {
-		c.wake(ctx, j.SupervisorID, run, key, wakeTries, unended(run, key))
-	}
-}
-
-// unended reports, in a transaction, whether the run's job key hasn't
-// ended: whether its supervisor waits, rather than completed as it ended
-// the job.
-func unended(run, key string) func(*store.Tx) (bool, error) {
-	return func(tx *store.Tx) (bool, error) {
-		j, err := tx.Job(run, key)
-		return err == nil && j.Outcome == "", err
-	}
-}
-
-// wakeAny wakes the marker of a need on any instance of the run's job
-// name, if a job needs it so and it hasn't chosen, once one of the job's
-// instances, or the job, has ended.
-func (c *Coordinator) wakeAny(ctx context.Context, run, name string) {
-	var a *store.Any
-	err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		a, err = tx.Any(run, name)
-		return err
-	})
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-	case err != nil:
-		c.log.DebugContext(ctx, "coordinator: wake a need on any instance", "run", run, "job", name, "error", err)
-	case a.ChosenAt.IsZero():
-		c.wake(ctx, a.MarkerID, run, name, wakeTries, func(tx *store.Tx) (bool, error) {
-			a, err := tx.Any(run, name)
-			return err == nil && a.ChosenAt.IsZero(), err
-		})
-	}
-}
-
-// wake has hopper run the job id, which waits, as the run's job key's
-// supervisor or marker, at once, in a transaction that reads first, with
-// waits, whether it still waits: a supervisor completes in the transaction
-// that ends its job, and a marker in the one that chooses, and hopper's
-// JobRetry would run either again once it has. A supervisor that is
-// running reads what woke it before it waits, unless it read last just
-// before the wake, and is about to wait: so it is woken again, tries times
-// in all, briefly apart, in case it was.
-func (c *Coordinator) wake(ctx context.Context, id hopper.JobID, run, key string, tries int, waits func(*store.Tx) (bool, error)) {
-	for try := 0; ; try++ {
-		err := c.store.Tx(ctx, func(tx *store.Tx) error {
-			ok, err := waits(tx)
-			if err != nil || !ok {
-				return err
-			}
-			// hopper wakes the job's queue in this process once the
-			// transaction commits.
-			_, err = c.inserter.JobRetryTx(ctx, tx.SQL(), id)
-			return err
-		})
-		switch {
-		case err == nil:
-			return
-		case !errors.Is(err, hopper.ErrJobRunning):
-			c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
-			return
-		case try == tries-1:
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(wakeAgain):
-		}
-	}
-}
-
-// A supervisor that is running as it is woken is woken again wakeTries
-// times in all, wakeAgain apart.
-const (
-	wakeTries = 5
-	wakeAgain = 20 * time.Millisecond
-)

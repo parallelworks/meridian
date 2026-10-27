@@ -1872,8 +1872,11 @@ transaction.
   places its attempts and waits on them, and ends the job. It waits by
   snoozing until its next deadline, such as a lease's, and a worker's report
   that changes the job, stored by whichever replica the worker reached,
-  wakes it at once. Before it snoozes, it checks, in the transaction that
-  snoozes it, that nothing woke it meanwhile. Each instance of a matrix job
+  wakes it at once. Before it snoozes, it reads again whether anything
+  woke it meanwhile, and looks again if so; hopper applies the snooze once
+  it has returned, so a wake that commits in between finds it still
+  running, and is tried again, briefly apart, until hopper no longer runs
+  it. Each instance of a matrix job
   has a supervisor of its own, which the job's inserts
   ([Matrices](#matrices)).
 - **Meridian decides what a dependency's outcome means.** Its edges let a

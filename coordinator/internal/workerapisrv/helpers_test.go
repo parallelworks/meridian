@@ -201,10 +201,12 @@ func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 	r.t.Helper()
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Peers: opts.peers, MaxConnections: opts.maxConns,
-		Wake: func(_ context.Context, run, job string) {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			r.woken = append(r.woken, run+"/"+job)
+		Wake: func(_ context.Context, _ *store.Tx, run, job string) (func(), error) {
+			return func() {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				r.woken = append(r.woken, run+"/"+job)
+			}, nil
 		},
 	})
 	if err != nil {
