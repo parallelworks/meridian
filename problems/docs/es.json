@@ -1091,6 +1091,14 @@
       "Ejecuta el flujo de trabajo en la plataforma que proporciona la acción."
     ]
   },
+  "action_request_failed": {
+    "title": "Solicitud de una acción integrada al coordinador que falló",
+    "why": "Un paso que usa una acción integrada que realiza el coordinador, como parallelworks/cancel-jobs, se la pide al coordinador a través de la API de workers, y el coordinador responde cómo terminó la acción. Esa solicitud falló de forma definitiva: el coordinador la rechazó, o respondió con algo que el worker no puede leer, que la razón nombra por su código. Es un error del worker o del coordinador, o un worker y un coordinador de versiones que no coinciden en la API de workers, y no del flujo de trabajo. El paso falla y no se vuelve a intentar. Si el coordinador respondió, puede que haya realizado la acción, como dice su registro de la ejecución.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador.",
+      "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
   "step_ssh_not_supported": {
     "title": "Paso en otro host",
     "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Esta versión del worker de Meridian solo ejecuta pasos en el host donde se ejecuta, así que el paso falla en lugar de ejecutarse en el host equivocado.",

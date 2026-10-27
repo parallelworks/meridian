@@ -107,6 +107,8 @@ func TestSchemaDescribesTheBodies(t *testing.T) {
 		workerapi.EventsAck{},
 		workerapi.LogAck{},
 		workerapi.Complete{},
+		workerapi.ActionRequest{},
+		workerapi.ActionAnswer{},
 	}
 	for _, body := range bodies {
 		walk(reflect.TypeOf(body))

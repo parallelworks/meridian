@@ -936,6 +936,13 @@
       "Run the workflow on the platform that provides the action."
     ]
   },
+  "action_request_failed": {
+    "why": "A step that uses a built-in action the coordinator performs, such as parallelworks/cancel-jobs, asks the coordinator for it, through the worker API, and the coordinator answers how the action ended. That request failed for good: the coordinator refused it, or answered with what the worker can't read, which the reason names by its code. That is a bug in the worker or in the coordinator, or a worker and a coordinator of releases that don't agree on the worker API, and not the workflow's. The step fails, and isn't tried again. If the coordinator answered, it may have performed the action, as its record of the run says.",
+    "fix": [
+      "Start workers of the coordinator's own release of Meridian.",
+      "If they are of the same release, report the bug, with the reason and the worker's log."
+    ]
+  },
   "step_ssh_not_supported": {
     "why": "A format 1 step's ssh: runs the step on another host over SSH. This version of Meridian's worker runs steps only on the host it runs on, so the step fails rather than run on the wrong host.",
     "fix": [

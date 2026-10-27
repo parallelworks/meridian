@@ -101,8 +101,9 @@ func selfFencing() Attempt {
 // Conformance checks that target serves the worker API as package
 // workerapi says, playing a worker over HTTP on the target's Unix socket:
 // the claim and its credential, heartbeats, leases, control polls, events,
-// logs and the attempt's end, each with what a coordinator refuses, and
-// strict decoding, fencing, error bodies, unknown paths and wrong methods.
+// logs, actions and the attempt's end, each with what a coordinator
+// refuses, and strict decoding, fencing, error bodies, unknown paths and
+// wrong methods.
 func Conformance(t *testing.T, target Target) {
 	t.Run("claim", func(t *testing.T) { checkClaim(t, target) })
 	t.Run("claim again", func(t *testing.T) { checkClaimAgain(t, target) })
@@ -120,6 +121,7 @@ func Conformance(t *testing.T, target Target) {
 	t.Run("strict decoding", func(t *testing.T) { checkStrict(t, target) })
 	t.Run("superseded", func(t *testing.T) { checkSuperseded(t, target) })
 	t.Run("paths and methods", func(t *testing.T) { checkPaths(t, target) })
+	t.Run("actions", func(t *testing.T) { checkActions(t, target) })
 }
 
 // A worker is the suite's worker, for one attempt.
@@ -337,8 +339,8 @@ func wantError(t *testing.T, what string, a answer) *problem.Problem {
 		t.Errorf("%s was answered 401 with the code %s, not unauthenticated", what, p.Key())
 	}
 	if a.status == http.StatusMethodNotAllowed {
-		if allow := a.header.Get("Allow"); !slices.Contains(strings.Split(strings.ReplaceAll(allow, " ", ""), ","), methods[a.path]) {
-			t.Errorf("%s was answered 405, allowing %q, not %s", what, allow, methods[a.path])
+		if allow := a.header.Get("Allow"); !slices.Contains(strings.Split(strings.ReplaceAll(allow, " ", ""), ","), routes[a.path].method) {
+			t.Errorf("%s was answered 405, allowing %q, not %s", what, allow, routes[a.path].method)
 		}
 	}
 	return p
@@ -926,9 +928,133 @@ func checkPaths(t *testing.T, target Target) {
 		{http.MethodGet, workerapi.PathEvents},
 		{http.MethodPut, workerapi.PathLogs},
 		{http.MethodDelete, workerapi.PathComplete},
+		{http.MethodGet, workerapi.PathAction},
 	} {
 		wantStatus(t, fmt.Sprintf("%s %s", r.method, r.path), w.send(r.method, r.path, nil, nil, w.credential), http.StatusMethodNotAllowed)
 	}
+}
+
+// actionStep is the index of the step of actionAttempt's job that uses a
+// built-in action the coordinator performs, which has with: actionWith.
+const actionStep = 1
+
+// actionAttempt returns an attempt of a job whose step actionStep uses a
+// built-in action the coordinator performs, cancel-jobs, of a job its run
+// doesn't have, which the coordinator answers as it does, whatever that
+// is: none is cancelled.
+func actionAttempt() Attempt {
+	a := newAttempt()
+	job := *a.Job
+	job.Steps = slices.Clone(job.Steps)
+	job.Steps[actionStep] = plan.Step{
+		Uses: "parallelworks/cancel-jobs",
+		With: plan.Literal(map[string]any{"jobs": []any{marker}}),
+		Path: job.Steps[actionStep].Path,
+	}
+	a.Job = &job
+	return a
+}
+
+// actionWith is the with: of actionAttempt's action, as Step evaluates it.
+func actionWith() plan.Data {
+	return plan.DataOf(map[string]any{"jobs": []any{marker}})
+}
+
+// A step's try asks for its action at version 3 of the API, and is
+// answered with how it ended, once: a repeat, however its JSON is written,
+// is given the same answer, and another request for the same try is
+// fenced, as is any request once the attempt is superseded. Once the
+// attempt's control asks to cancel its job, a step that doesn't outlive
+// that is answered cancelled, for the control's reason; and so, with no
+// reason, is a step whose early-cancel: is any-job-failed, once a job of
+// the run has failed. A request of
+// a step that uses no action the coordinator performs, of a try that is
+// none, or one that isn't an ActionRequest, is 400; and the path is one
+// an attempt of version 2 doesn't have, 404.
+func checkActions(t *testing.T, target Target) {
+	old := newWorker(t, target, actionAttempt())
+	old.apiVersion = workerapi.Version2
+	old.claimed()
+	wantStatus(t, "an action of an attempt of version 2", old.post(workerapi.PathAction, workerapi.ActionRequest{Step: actionStep, With: actionWith()}), http.StatusNotFound)
+
+	w := newWorker(t, target, actionAttempt()).claimed()
+	req := workerapi.ActionRequest{Step: actionStep, With: actionWith()}
+	first := w.post(workerapi.PathAction, req)
+	if first.status != http.StatusOK {
+		t.Fatalf("an action was answered %d: %s", first.status, first.body)
+	}
+	var answer workerapi.ActionAnswer
+	if err := workerapi.UnmarshalAt(workerapi.Version3, first.body, &answer); err != nil {
+		t.Fatalf("an action was answered with %s, which isn't an ActionAnswer: %v", first.body, err)
+	}
+	if o := answer.Outcome; o != plan.OutcomeSuccess && o != plan.OutcomeFailure && o != plan.OutcomeCancelled {
+		t.Errorf("an action ended %q", o)
+	}
+	// The same request, its members in another order, as JSON allows.
+	again := w.send(http.MethodPost, workerapi.PathAction, nil, []byte(`{"with":{"jobs":["`+marker+`"]},"step":1}`), w.credential)
+	if again.status != http.StatusOK || !bytes.Equal(again.body, first.body) {
+		t.Errorf("an action asked for again was answered %d: %s, not as it was first: %s", again.status, again.body, first.body)
+	}
+	other := req
+	other.With = plan.DataOf(map[string]any{"jobs": []any{"another"}})
+	wantProblem(t, "another request for an action's try", w.post(workerapi.PathAction, other), workerapi.Fenced)
+	next := req
+	next.Try = 1
+	if a := w.post(workerapi.PathAction, next); a.status != http.StatusOK {
+		t.Errorf("an action's next try was answered %d: %s", a.status, a.body)
+	}
+
+	// Once the attempt's control asks to cancel its job, a step that
+	// doesn't outlive that is answered cancelled, for the control's
+	// reason, and one that does has its action performed; each answer says
+	// the cancel.
+	target.Control(t, w.attemptID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
+	for _, outlives := range []bool{false, true} {
+		next.Try++
+		next.OutlivesCancel = outlives
+		a := w.post(workerapi.PathAction, next)
+		var answer workerapi.ActionAnswer
+		if a.status != http.StatusOK || workerapi.UnmarshalAt(workerapi.Version3, a.body, &answer) != nil {
+			t.Errorf("an action of a cancelled job, of a step that outlives that %v, was answered %d: %s", outlives, a.status, a.body)
+			continue
+		}
+		if cancelled := answer.Outcome == plan.OutcomeCancelled; cancelled == outlives || answer.Reason != plan.ReasonCancelled {
+			t.Errorf("an action of a cancelled job, of a step that outlives that %v, was answered %s", outlives, a.body)
+		}
+	}
+
+	// A step whose early-cancel: is any-job-failed is answered cancelled,
+	// with no reason, once a job of the run has failed, though it outlives
+	// its job's cancellation.
+	early := actionAttempt()
+	early.Job.Steps[actionStep].EarlyCancel = plan.EarlyCancelAnyJobFailed
+	ew := newWorker(t, target, early).claimed()
+	target.Control(t, ew.attemptID, workerapi.Control{AnyJobFailed: true})
+	outlives := req
+	outlives.OutlivesCancel = true
+	if a := ew.post(workerapi.PathAction, outlives); a.status != http.StatusOK || string(a.body) != `{"outcome":"cancelled"}` {
+		t.Errorf("an action of a step that early-cancels, once a job failed, was answered %d: %s", a.status, a.body)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"an action of a step that runs a command", marshal(t, workerapi.ActionRequest{Step: 0})},
+		{"an action of a step the job doesn't have", marshal(t, workerapi.ActionRequest{Step: len(w.attempt.Job.Steps)})},
+		{"an action of a step before the first", []byte(`{"step":-1}`)},
+		{"an action of a try before the first", []byte(`{"step":1,"try":-1}`)},
+		{"an action's request with a member it doesn't have", []byte(`{"step":1,"uses":"parallelworks/checkout"}`)},
+		{"an action's request whose with: is null", []byte(`{"step":1,"with":null}`)},
+		{"an action's request that isn't JSON", []byte(`{"step":`)},
+	} {
+		wantStatus(t, tc.name, w.send(http.MethodPost, workerapi.PathAction, nil, tc.body, w.credential), http.StatusBadRequest)
+	}
+
+	target.Supersede(t, w.attemptID)
+	wantProblem(t, "an action asked for again once superseded", w.post(workerapi.PathAction, req), workerapi.Fenced)
+	next.Try = 2
+	wantProblem(t, "an action once superseded", w.post(workerapi.PathAction, next), workerapi.Fenced)
 }
 
 // A FakeTarget is a Target whose attempts are each a Fake, Lenient, served

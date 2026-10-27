@@ -26,6 +26,7 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: logs, Sealer: c.sealer,
 		Readier: claimReadier{c},
+		Actions: actions{c},
 		Wake:    c.wakeWorkerJob,
 		Log:     c.log,
 	})

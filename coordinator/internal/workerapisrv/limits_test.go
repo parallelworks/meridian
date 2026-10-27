@@ -336,7 +336,7 @@ func TestEndRacesEvents(t *testing.T) {
 // returns once its requests have ended.
 func TestShutdown(t *testing.T) {
 	r := newRig(t, rigOptions{hold: 20 * time.Second})
-	srv, err := workerapisrv.New(workerapisrv.Options{Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier})
+	srv, err := workerapisrv.New(workerapisrv.Options{Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Actions: r.actions})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3336,11 +3336,33 @@ and a platform that embeds Meridian serve the same API.
   API's own version. They aren't built yet: the worker fails a step that
   uses a workflow (`uses_not_supported`).
 - **Actions:** ask the coordinator to do a step's cancel-jobs or
-  update-session, or for its checkout's tree
-  ([Built-in actions](#built-in-actions)). They aren't built yet: the
-  worker fails a step that uses checkout, cancel-jobs or update-session
-  (`uses_not_supported`), and one that uses an action only a platform
-  provides (`action_needs_platform`).
+  update-session, from version 3, or for its checkout's tree
+  ([Built-in actions](#built-in-actions)). The request has the step's
+  `with:` as Step evaluated it, and its answer says how the action ended:
+  success or failure, with its problems. The coordinator reads which
+  action it is from the plan, never from the request. It does the action
+  once for a step's try, and keeps the answer, with a SHA-256 digest of
+  the whole request, never the `with:` itself, which can hold a secret: a
+  repeat is given the answer, and another request for the same try is
+  fenced. The answers outlive their attempt in the store, which enforces
+  no foreign keys, so nothing deletes them with it: whatever comes to
+  delete attempts, as a retention of runs, deletes their answers too. A
+  step that doesn't outlive its job's cancellation, of an attempt whose
+  control asks to cancel the job, is answered cancelled, without the
+  action, as though the worker had read the control first; so is a step
+  whose `early-cancel` is `any-job-failed`, once a job of the run has
+  failed, with no reason, as that stops it. Another's answer says the
+  job's cancel too, as one that cancelled the step's own job, so that the
+  worker heeds it before the next step. The worker waits for
+  the answer through a stop's grace period, as a command has until
+  SIGKILL: the step ends as the answer says, and the stop applies from
+  the step after; past it, the step ends as the stop has it, though
+  the coordinator may have done the action. In an attempt of an earlier
+  version, the step fails as before (`uses_not_supported`). The
+  coordinator doesn't do cancel-jobs or update-session yet: it fails such
+  a step with `uses_not_supported`, as the worker did. The worker fails a
+  step that uses checkout (`uses_not_supported`), and one that uses an
+  action only a platform provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
   (`plan.JobResult`).
@@ -3367,7 +3389,8 @@ coordinator say to each other.
 - **One number.** The API's version is one integer, and every change to
   the API raises it: a path, a member of a body, or a kind of event,
   added. Version 2 added a failed try's event saying whether it was its
-  step's last, and the attempt's control in the claim's answer. Neither
+  step's last, and the attempt's control in the claim's answer; version 3,
+  the request for a built-in action the coordinator performs. Neither
   side reads a member it doesn't know, so a major and a minor number,
   which tell an addition a reader can skip from one it can't, would say
   nothing more. The paths stay under `/v1/`: a version is served beside
@@ -3427,8 +3450,8 @@ coordinator say to each other.
 
 What the API means is pinned by a suite, `workerapitest.Conformance`, that
 plays a worker against a coordinator over its Unix socket: the claim and
-its credential, heartbeats, control polls, events, logs and the attempt's
-end, with each refusal, fencing, strict decoding, and unknown paths and
+its credential, heartbeats, control polls, events, logs, actions and the
+attempt's end, with each refusal, fencing, strict decoding, and unknown paths and
 methods. Every coordinator passes it, Meridian's and a platform's, and so
 does `workerapitest.Fake`, the coordinator the worker's own tests run
 against, so neither side can drift from the other.

@@ -1381,9 +1381,8 @@ func TestStepsRefused(t *testing.T) {
 // TestPlatformActions checks that a step that uses a built-in action only a
 // platform provides fails each try as it runs, with a problem that says
 // so, as a step whose command fails does: its retry: tries it again, and
-// its ignore-errors: lets its last try succeed; while the built-in actions
-// Meridian will run itself are still ones this worker can't run yet, and
-// a skipped step that uses one is skipped, with no problem.
+// its ignore-errors: lets its last try succeed; and a skipped step that
+// uses one is skipped, with no problem.
 func TestPlatformActions(t *testing.T) {
 	t.Parallel()
 	use := func(action string, with map[string]any) plan.Step {
@@ -1401,8 +1400,6 @@ func TestPlatformActions(t *testing.T) {
 		use("parallelworks/scheduler-agent", map[string]any{"scheduler": "slurm"}),
 		retried,
 		ignored,
-		use("parallelworks/update-session", map[string]any{"name": "s"}),
-		use("parallelworks/cancel-jobs", map[string]any{"jobs": []any{"other"}}),
 	}
 	f := workerapitest.NewFake(t, newJob(steps...))
 	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
@@ -1413,8 +1410,6 @@ func TestPlatformActions(t *testing.T) {
 		"started 1.0", "finished 1.0 failure -1",
 		"started 2.0", "finished 2.0 failure -1", "started 2.1", "finished 2.1 failure -1",
 		"started 3.0", "finished 3.0 failure -1", "started 3.1", "finished 3.1 success -1",
-		"finished 4.0 failure -1",
-		"finished 5.0 failure -1",
 	)
 	checkEnd(t, f, plan.OutcomeFailure, "")
 	for _, tc := range []struct {
@@ -1426,8 +1421,6 @@ func TestPlatformActions(t *testing.T) {
 		{2, 1, "action_needs_platform"},
 		{3, 0, "action_needs_platform"},
 		{3, 1, "action_needs_platform"},
-		{4, 0, "uses_not_supported"},
-		{5, 0, "uses_not_supported"},
 	} {
 		d := finishedEvent(t, f, tc.step, tc.try, false).Diagnostics
 		if got := codes(d); !slices.Equal(got, []string{tc.want}) {

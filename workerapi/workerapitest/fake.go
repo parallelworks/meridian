@@ -135,6 +135,12 @@ type Fake struct {
 	// it can't read, with its status alone. Otherwise such a request fails
 	// the test, since a worker sent it. Conformance sends them on purpose.
 	Lenient bool
+	// Act, if set, performs the built-in actions the worker asks for, and
+	// returns each one's answer; without it, every action succeeds. The
+	// Fake calls it once for a step's try, with its lock held, and answers
+	// a repeat of the request as it answered the first. An answer's Reason
+	// stands for a cancel of the step's job the action made.
+	Act func(req workerapi.ActionRequest) workerapi.ActionAnswer
 
 	t          testing.TB
 	mu         sync.Mutex
@@ -150,8 +156,18 @@ type Fake struct {
 	control    workerapi.Control
 	heartbeats int
 	requests   map[string]int
+	actions    []Action
 	// changed is closed, and replaced, on each change.
 	changed chan struct{}
+}
+
+// An Action is a built-in action a Fake performed: the request that asked
+// for it, as the worker sent it the first time, and its answer.
+type Action struct {
+	Request workerapi.ActionRequest
+	Answer  workerapi.ActionAnswer
+	// body is the request as the API writes it, which a repeat matches.
+	body []byte
 }
 
 // A LogKey names one of an attempt's logs: its part, and a step's index
@@ -313,6 +329,14 @@ func (f *Fake) Requests() map[string]int {
 	return maps.Clone(f.requests)
 }
 
+// Actions returns the actions f performed, in order: each once, however
+// often the worker asked.
+func (f *Fake) Actions() []Action {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.actions)
+}
+
 // Heartbeats returns how many heartbeats f has answered.
 func (f *Fake) Heartbeats() int {
 	f.mu.Lock()
@@ -425,14 +449,22 @@ func (f *Fake) forget(r *http.Request) {
 	}
 }
 
-// methods are the method of each of the API's paths.
-var methods = map[string]string{
-	workerapi.PathClaim:     http.MethodPost,
-	workerapi.PathHeartbeat: http.MethodPost,
-	workerapi.PathControl:   http.MethodGet,
-	workerapi.PathEvents:    http.MethodPost,
-	workerapi.PathLogs:      http.MethodPost,
-	workerapi.PathComplete:  http.MethodPost,
+// A route is one of the API's paths: its method, and the version of the
+// API that added it.
+type route struct {
+	method string
+	since  int
+}
+
+// routes are the API's paths.
+var routes = map[string]route{
+	workerapi.PathClaim:     {http.MethodPost, 1},
+	workerapi.PathHeartbeat: {http.MethodPost, 1},
+	workerapi.PathControl:   {http.MethodGet, 1},
+	workerapi.PathEvents:    {http.MethodPost, 1},
+	workerapi.PathLogs:      {http.MethodPost, 1},
+	workerapi.PathComplete:  {http.MethodPost, 1},
+	workerapi.PathAction:    {http.MethodPost, workerapi.Version3},
 }
 
 // handle handles a request, and returns the events it stored.
@@ -441,13 +473,13 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 	defer f.mu.Unlock()
 	defer f.notify()
 	f.requests[r.URL.Path]++
-	method, ok := methods[r.URL.Path]
+	rt, ok := routes[r.URL.Path]
 	switch {
 	case !ok:
 		writeStatus(w, http.StatusNotFound)
 		return nil
-	case r.Method != method:
-		w.Header().Set("Allow", method)
+	case r.Method != rt.method:
+		w.Header().Set("Allow", rt.method)
 		writeStatus(w, http.StatusMethodNotAllowed)
 		return nil
 	case f.Claim.PlanVersion > f.reads() && !f.AnyVersion:
@@ -461,6 +493,11 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 	}
 	if !f.claimed || f.lapsed && f.Claim.SelfFencing || sha256.Sum256([]byte(bearer)) != f.credential {
 		writeStatus(w, http.StatusUnauthorized)
+		return nil
+	}
+	if f.Claim.APIVersion < rt.since {
+		f.unexpected("a request of %s, of version %d of the API, in an attempt of version %d", r.URL.Path, rt.since, f.Claim.APIVersion)
+		writeStatus(w, http.StatusNotFound)
 		return nil
 	}
 	// A superseded attempt's writes are refused, and so is every write
@@ -481,6 +518,8 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		f.handleLogs(w, r, body)
 	case workerapi.PathComplete:
 		f.handleComplete(w, body)
+	case workerapi.PathAction:
+		f.handleAction(w, body)
 	}
 	return nil
 }
@@ -707,6 +746,64 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 	}
 	f.end, f.endBody = end, canonical
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAction performs the action a step's try asks for, once, and
+// answers a repeat as it answered the first: a request of a step that
+// uses no built-in action is one it can't read, and another request for
+// the same try is fenced. A step that doesn't outlive its job's
+// cancellation, of a job its control asks to cancel, for any reason but
+// the run's timeout, is answered cancelled, for that reason, without Act;
+// so is a step whose early-cancel: is any-job-failed, once a job of the
+// run failed, as the control says, with no reason; and another's answer
+// carries the cancel's reason too, unless Act gave one.
+func (f *Fake) handleAction(w http.ResponseWriter, body []byte) {
+	var req workerapi.ActionRequest
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &req); err != nil {
+		f.unexpected("an action's request the coordinator can't read: %v", err)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	job, err := plan.DecodeReadyJob(f.Claim.PlanVersion, f.Claim.Job)
+	if err != nil || req.Step < 0 || req.Try < 0 || req.Step >= len(job.Steps) || !strings.HasPrefix(job.Steps[req.Step].Uses, "parallelworks/") {
+		f.unexpected("a request for the action of step %d's try %d, which uses none", req.Step, req.Try)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	canonical, err := workerapi.Marshal(&req)
+	if err != nil {
+		writeStatus(w, http.StatusInternalServerError)
+		return
+	}
+	for _, a := range f.actions {
+		if a.Request.Step != req.Step || a.Request.Try != req.Try {
+			continue
+		}
+		if !bytes.Equal(a.body, canonical) {
+			problem.Write(w, problems.Fenced.Problem(nil))
+			return
+		}
+		writeJSON(w, f.Claim.APIVersion, &a.Answer)
+		return
+	}
+	answer := workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}
+	var cancel plan.Reason
+	if c := f.control; c.Cancel && c.Reason != plan.ReasonTimeout {
+		cancel = c.Reason
+	}
+	switch {
+	case cancel != "" && !req.OutlivesCancel:
+		answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: cancel}
+	case f.control.AnyJobFailed && job.Steps[req.Step].EarlyCancel == plan.EarlyCancelAnyJobFailed:
+		answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled}
+	case f.Act != nil:
+		answer = f.Act(req)
+	}
+	if answer.Reason == "" {
+		answer.Reason = cancel
+	}
+	f.actions = append(f.actions, Action{Request: req, Answer: answer, body: canonical})
+	writeJSON(w, f.Claim.APIVersion, &answer)
 }
 
 // hangUp closes the request's connection without answering it.

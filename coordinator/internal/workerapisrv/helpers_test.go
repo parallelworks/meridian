@@ -139,6 +139,67 @@ func (f *fakeReadier) Steps(_ context.Context, run *store.Run, _ *store.Attempt)
 	return len(r.Job.Steps), nil
 }
 
+// fakeActions performs the action of a step of a job the readier gives
+// whose uses: names a built-in action, as answer answers it, or with
+// success when answer is nil, in the transaction Commit gives it; and
+// counts the calls of answer, which it makes in that transaction. Once
+// uncommitted is set, it answers success without Commit, as Actions
+// mustn't.
+type fakeActions struct {
+	readier     *fakeReadier
+	mu          sync.Mutex
+	answer      func(tx *store.Tx, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error)
+	acted       int
+	uncommitted bool
+}
+
+func (f *fakeActions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {
+	ready, err := f.readier.get(call.Run.ID)
+	if err != nil {
+		return workerapi.ActionAnswer{}, err
+	}
+	steps := ready.Job.Steps
+	if call.Request.Step >= len(steps) || !strings.HasPrefix(steps[call.Request.Step].Uses, "parallelworks/") {
+		return workerapi.ActionAnswer{}, fmt.Errorf("%w: step %d", workerapisrv.ErrNotAction, call.Request.Step)
+	}
+	f.mu.Lock()
+	answer, uncommitted := f.answer, f.uncommitted
+	f.mu.Unlock()
+	if uncommitted {
+		return workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}, nil
+	}
+	return call.Commit(ctx, &steps[call.Request.Step], func(tx *store.Tx) (workerapi.ActionAnswer, error) {
+		f.mu.Lock()
+		f.acted++
+		f.mu.Unlock()
+		if answer != nil {
+			return answer(tx, call)
+		}
+		return workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}, nil
+	})
+}
+
+// setAnswer makes f answer as answer does.
+func (f *fakeActions) setAnswer(answer func(tx *store.Tx, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answer = answer
+}
+
+// setUncommitted makes f answer without Commit, or not.
+func (f *fakeActions) setUncommitted(uncommitted bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.uncommitted = uncommitted
+}
+
+// times returns how many times f has performed an action.
+func (f *fakeActions) times() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.acted
+}
+
 // A rig is a store, and a server of it on a socket of its own.
 type rig struct {
 	t       testing.TB
@@ -146,6 +207,7 @@ type rig struct {
 	path    string
 	sealer  *seal.Sealer
 	readier *fakeReadier
+	actions *fakeActions
 	logs    *runlogtest.Logs
 	server  *workerapisrv.Server
 	socket  string
@@ -189,7 +251,8 @@ func newRig(t testing.TB, opts rigOptions) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: &fakeReadier{}, logs: &runlogtest.Logs{}}
+	readier := &fakeReadier{}
+	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: readier, actions: &fakeActions{readier: readier}, logs: &runlogtest.Logs{}}
 	r.server = r.serve(opts)
 	first.Store(r.server)
 	return r
@@ -200,7 +263,7 @@ func newRig(t testing.TB, opts rigOptions) *rig {
 func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 	r.t.Helper()
 	srv, err := workerapisrv.New(workerapisrv.Options{
-		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Peers: opts.peers, MaxConnections: opts.maxConns,
+		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Actions: r.actions, Peers: opts.peers, MaxConnections: opts.maxConns,
 		Wake: func(_ context.Context, _ *store.Tx, run, job string) (func(), error) {
 			return func() {
 				r.mu.Lock()

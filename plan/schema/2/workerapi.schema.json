@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Meridian worker API bodies, for runs of plan version 2",
-  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 2: each is one of the $defs, which the API's path says. The API has a version of its own, apart from the plan's: these are the bodies of its newest version, 2, and a member a version after 1 adds says which version that is, so that a body of an earlier version is one without it. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
+  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 2: each is one of the $defs, which the API's path says. The API has a version of its own, apart from the plan's: these are the bodies of its newest version, 3, and a member a version after 1 adds says which version that is, so that a body of an earlier version is one without it. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
   "anyOf": [
     {
       "$ref": "#/$defs/ClaimRequest"
@@ -23,6 +23,12 @@
     },
     {
       "$ref": "#/$defs/Complete"
+    },
+    {
+      "$ref": "#/$defs/ActionRequest"
+    },
+    {
+      "$ref": "#/$defs/ActionAnswer"
     }
   ],
   "$defs": {
@@ -331,6 +337,57 @@
         }
       },
       "required": ["seq", "result"],
+      "additionalProperties": false
+    },
+    "ActionRequest": {
+      "description": "Added in worker API version 3. A step's try asks the coordinator for the built-in action it uses, which the coordinator reads from the run's plan, at the step. A repeat is given the same answer, and one with another with: is refused.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "description": "Added in worker API version 3. The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "Added in worker API version 3. The step's try: 0 for its first run.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "with": {
+          "description": "Added in worker API version 3. The step's with:, as Step evaluated it for the try: a mapping.",
+          "$ref": "plan.schema.json#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        },
+        "outlivesCancel": {
+          "description": "Added in worker API version 3. Set when the step outlives its job's cancellation, as Step decided it.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ActionAnswer": {
+      "description": "Added in worker API version 3. How the action an ActionRequest asked for ended, with its problems.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "description": "Added in worker API version 3. How the action ended: success or failure; or cancelled, for one the coordinator didn't perform.",
+          "$ref": "plan.schema.json#/$defs/Outcome"
+        },
+        "reason": {
+          "description": "Added in worker API version 3. Why the attempt's control asks to cancel its job as the action is answered, never for the run's timeout: with the outcome cancelled, why the action wasn't performed; with another, a cancel that came with it. The outcome cancelled without one is the step's early-cancel:, as a job of the run failed.",
+          "$ref": "plan.schema.json#/$defs/Reason"
+        },
+        "diagnostics": {
+          "description": "Added in worker API version 3. The action's problems.",
+          "$ref": "#/$defs/Diagnostics"
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "Diagnostics": {

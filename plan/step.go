@@ -203,7 +203,8 @@ type ReadyStep struct {
 	// IgnoreErrors is the step's ignore-errors:: a non-zero exit doesn't
 	// fail it.
 	IgnoreErrors bool `json:"ignoreErrors,omitzero"`
-	// EarlyCancel is the step's early-cancel:, any-job-failed or "".
+	// EarlyCancel is the step's early-cancel:, any-job-failed
+	// (EarlyCancelAnyJobFailed) or "".
 	EarlyCancel string `json:"earlyCancel,omitempty"`
 	// Masked are the strings Step made from a secret, as a Masker takes
 	// them: each string that a template of the job's env: or the step's
@@ -240,6 +241,11 @@ type ReadyStep struct {
 	EnvPrivate  []string `json:"envPrivate,omitempty"`
 	EnvSecrets  []string `json:"envSecrets,omitempty"`
 }
+
+// EarlyCancelAnyJobFailed is the early-cancel: of a step that stops once a
+// job of its run has failed, the only one format 1 has (Step.EarlyCancel,
+// ReadyStep.EarlyCancel).
+const EarlyCancelAnyJobFailed = "any-job-failed"
 
 // ReadyStepRetry is a step's retry: as Step evaluated it, which reruns the
 // step on the same worker when it fails: its max-retries:, its interval:

@@ -59,6 +59,8 @@ func TestBodiesAreVersioned(t *testing.T) {
 		workerapi.EventsAck{},
 		workerapi.LogAck{},
 		workerapi.Complete{},
+		workerapi.ActionRequest{},
+		workerapi.ActionAnswer{},
 	} {
 		walk(reflect.TypeOf(body))
 	}
