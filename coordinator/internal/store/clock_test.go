@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -180,6 +181,22 @@ func TestClockReset(t *testing.T) {
 	later := openClock(t, path, func() time.Time { return base.Add(time.Second) })
 	if got := clockOf(t, later, false); !got.Equal(base.Add(time.Second)) {
 		t.Errorf("after the reset, the clock moves on to %v", got)
+	}
+}
+
+// TestClockReadOnly checks that a store opened only to read it reads the
+// clock's mark, as a View does, and records nothing: neither the mark nor
+// a grace.
+func TestClockReadOnly(t *testing.T) {
+	path := filepath.Join(privateDir(t), "meridian.db")
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	clockOf(t, openClock(t, path, func() time.Time { return base.Add(30 * time.Second) }), false)
+	r := openWith(t, path, &Options{ReadOnly: true, Now: func() time.Time { return base }, MaxLead: time.Minute})
+	if got := clockOf(t, r, true); !got.Equal(base.Add(30 * time.Second)) {
+		t.Errorf("a store read-only reads the clock %v, not the mark", got)
+	}
+	if err := r.Tx(t.Context(), func(tx *Tx) error { return tx.StartGrace() }); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("a grace started in a store read-only = %v, want ErrReadOnly", err)
 	}
 }
 
