@@ -500,6 +500,11 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		if err := tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: opts.DefaultGroup, RunDir: opts.RunDir(id), WorkflowID: res.ID}); err != nil {
 			return err
 		}
+		// The texts of the workflows the run's tree pins are kept with
+		// it, which its child runs are created from.
+		if err := tx.KeepTexts(id, created.Texts); err != nil {
+			return err
+		}
 		// The workflow's jobs are in the order of its steps: Start, the
 		// markers, then the supervisors.
 		for i, name := range anys {

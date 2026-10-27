@@ -47,6 +47,19 @@ func Compile(name string, data []byte, submitted map[string]any, opts Options) (
 type Created struct {
 	Plan   *plan.Plan
 	Record plan.Record
+	// Texts are the texts of the workflows the run's tree pins, its own
+	// steps' among them, each once, in the order of their digests, which
+	// the coordinator keeps beside the run, so that a child run is created
+	// from the text its root was created with, without a fetch.
+	Texts []PinnedText
+}
+
+// A PinnedText is the text of a workflow a run pins, by its digest, as
+// its plan.Source has it. Where it was found is the plan's: the Source,
+// in a step or in Plan.Calls, which the digest names.
+type PinnedText struct {
+	Digest string
+	Text   []byte
 }
 
 // Create is the Create phase: it loads a workflow file and compiles it,
@@ -185,7 +198,7 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 		}
 		record.Withheld[pointer] = plan.DataOf(v)
 	}
-	return &Created{Plan: p, Record: record}, c.diags, nil
+	return &Created{Plan: p, Record: record, Texts: c.texts}, c.diags, nil
 }
 
 // textDigest is "sha256:" and the SHA-256 digest of text, as a plan's
@@ -280,6 +293,9 @@ type compiler struct {
 	jobNames     *nameList
 	names        *inputNames
 	sessionNames *nameList
+	// texts are the texts of the workflows the run's tree pins
+	// (Created.Texts).
+	texts []PinnedText
 }
 
 // A reporter collects the problems found in a workflow.

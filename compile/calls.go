@@ -63,6 +63,7 @@ func (l CallLimits) withDefaults() CallLimits {
 type pin struct {
 	source *plan.Source
 	doc    *format.Document
+	text   []byte
 }
 
 // A tree is the tree of workflows a run calls, as Create pins it: each
@@ -218,6 +219,22 @@ func (t *tree) once(key string) bool {
 	}
 	t.reported[key] = true
 	return true
+}
+
+// texts returns the texts of the workflows the tree pinned, in the order
+// of their digests (Created.Texts).
+func (t *tree) texts() []PinnedText {
+	byDigest := map[string]PinnedText{}
+	for _, p := range t.pins {
+		if p.source != nil {
+			byDigest[p.source.Digest] = PinnedText{Digest: p.source.Digest, Text: p.text}
+		}
+	}
+	var out []PinnedText
+	for _, d := range slices.Sorted(maps.Keys(byDigest)) {
+		out = append(out, byDigest[d])
+	}
+	return out
 }
 
 // planCalls returns the pins the tree found, in the plan's order: by

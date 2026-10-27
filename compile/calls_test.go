@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -73,8 +74,9 @@ func digestOf(s *treeSources, name string) string {
 // Create pins the whole tree of workflows the run calls: each reference
 // once, whatever path reaches it, the run's own steps' in their steps, and
 // the others in the plan's calls, by their caller's digest and the step's
-// place, which makes the plan, and its record, of version 2; and a plan
-// without calls is of version 1.
+// place, which makes the plan, and its record, of version 2; it gives the
+// texts of them all, for the coordinator to keep; and a plan without calls
+// is of version 1.
 func TestCreatePinsTheTree(t *testing.T) {
 	s := tree(map[string][]string{"a": {"b", "c"}, "b": {"c"}, "c": nil})
 	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(calling("a", "c")), nil, compile.Options{Sources: s})
@@ -123,6 +125,23 @@ func TestCreatePinsTheTree(t *testing.T) {
 	}
 	if source, ok := c.Plan.FindCall(b, "/jobs/j/steps/0"); !ok || source.Location != "github/t/c@main:w.yaml" {
 		t.Errorf("FindCall of b's step = %+v, %v", source, ok)
+	}
+	// The texts of every workflow the tree pins, the run's own steps'
+	// among them, each once, by their digests, for the coordinator to
+	// keep.
+	byDigest := map[string]string{}
+	for _, name := range []string{"a", "b", "c"} {
+		byDigest[digestOf(s, name)] = s.texts["github/t/"+name+"@main"]
+	}
+	var digests []string
+	for _, text := range c.Texts {
+		digests = append(digests, text.Digest)
+		if want, ok := byDigest[text.Digest]; !ok || string(text.Text) != want {
+			t.Errorf("the text by %s is %q", text.Digest, text.Text)
+		}
+	}
+	if want := slices.Sorted(maps.Keys(byDigest)); !slices.Equal(digests, want) {
+		t.Errorf("the texts are by %q, want each of a's, b's and c's once, in order: %q", digests, want)
 	}
 
 	// A run whose called workflows call none has no calls, and is of

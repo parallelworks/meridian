@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The coordinator, which stores runs, schedules and places their jobs, and serves the worker API, and the interfaces through which it reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, matrices among them, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)) ([The coordinator](#the-coordinator)). |
+| `coordinator` | The coordinator, which stores runs, schedules and places their jobs, and serves the worker API, and the interfaces through which it reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, the texts of the workflows they call, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, matrices among them, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)) ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -1917,20 +1917,32 @@ Meridian's own tables beside hopper's, in the same database and in the same
 transactions: SQLite, through hopper's pure-Go driver, for `meridian`, and
 Postgres for a platform, which isn't built yet. hopper holds a run's jobs,
 and schedules and retries them; Meridian's tables hold what hopper doesn't
-model, the plan, the secret record, and the state of each job and each
-attempt ([Run state](#run-state)). Meridian uses only what hopper has:
+model, the plan, the secret record, the texts of the workflows the run's
+tree pins, each once by its digest, whatever runs pin it, and the state of
+each job and each attempt ([Run state](#run-state)). Meridian uses only what hopper has:
 workflows of jobs with dependency edges, jobs that snooze until a time
 without using an attempt, and jobs that complete in their caller's
 transaction.
 
 - **A run is a hopper workflow.** One transaction gives the run its ID,
-  stores its plan, its secret record, sealed, and its state, and inserts
-  the workflow, so a run is stored before anything executes, and either all
-  of it is stored or none of it is. The workflow's first job is Start
+  stores its plan, its secret record, sealed, the texts of the workflows
+  its tree pins, and its state, and inserts the workflow, so a run is
+  stored before anything executes, and either all of it is stored or none
+  of it is. The workflow's first job is Start
   ([Starting a run](#starting-a-run)), which every other job waits for, and
   its last the run's finisher, which waits for every job, decides the
   run's outcome, and deletes the secret record in the transaction that
   ends the run.
+- **A pinned text is kept by its digest alone.** The store keeps each text
+  once, whatever runs pin it, and which runs pin it; where a run found it
+  is its plan's, so a run that pins the same bytes from elsewhere, as a
+  public copy of a private repository's workflow, learns nothing of where
+  another found them. The texts stay as long as their run does, as its
+  plan does, rather than end with it as the secret record does: they hold
+  no variable's or password's value, and a rerun, which runs the plan's
+  pins, can read them. Nothing deletes a run yet; what comes to will
+  delete the run's links to its texts with it, and then each text no run
+  pins.
 - **Each job has a supervisor**, a hopper job that waits for its needs'
   supervisors, so `needs:` becomes hopper's dependency edges. The
   supervisor drives its job from Ready to its end: it readies the job,
@@ -2088,10 +2100,10 @@ known workflows make 270 calls, in 146 files, nested at most 3 levels
 below their root.
 
 Of this, what is built is the whole tree's pinning as the root is
-created, with its limits and its pins in the plan (`Plan.Calls`), but for
-the check of the called workflows' required inputs, and for the store's
-copy of their texts. The rest isn't built yet: the worker fails a step
-that uses a workflow (`uses_not_supported`).
+created, with its limits, its pins in the plan (`Plan.Calls`) and its
+texts in the store, beside the run, but for the check of the called
+workflows' required inputs. The rest isn't built yet: the worker fails a
+step that uses a workflow (`uses_not_supported`).
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources

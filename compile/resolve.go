@@ -201,6 +201,7 @@ func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
 		return err
 	}
 	p.Calls = t.planCalls()
+	c.texts = t.texts()
 	return ctx.Err()
 }
 
@@ -425,7 +426,7 @@ func (c *compiler) pinRef(ctx context.Context, t *tree, rep *reporter, loc, root
 	// would run one that can't be isn't created.
 	doc, diags := format.Load(source.Location, w.Text)
 	c.diags = append(c.diags, diags.Errors()...)
-	p := &pin{source: &source, doc: doc}
+	p := &pin{source: &source, doc: doc, text: w.Text}
 	t.pins[key] = p
 	return p.as(ref), nil
 }
@@ -438,7 +439,7 @@ func (p *pin) as(ref plan.SourceRef) *pin {
 	}
 	source := *p.source
 	source.Ref = ref
-	return &pin{source: &source, doc: p.doc}
+	return &pin{source: &source, doc: p.doc, text: p.text}
 }
 
 // resolverError reports err, from a resolver asked about what is at loc in
