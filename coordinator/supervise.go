@@ -355,7 +355,7 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 // claims in other processes read the store again every so often.
 type controlNotifier interface {
 	Notify(ids ...string)
-	Placed(id string)
+	Placed(ids ...string)
 }
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,
@@ -374,14 +374,15 @@ func (c *Coordinator) controlsChanged(ids []string) {
 	}
 }
 
-// placementRecorded tells the coordinator's controlNotifier, if it has one,
-// that the placement of the attempt id was recorded.
-func (c *Coordinator) placementRecorded(id string) {
+// placementsRecorded tells the coordinator's controlNotifier, if it has
+// one, that the placements of the attempts ids were recorded
+// (store.Options.OnPlacementsRecorded).
+func (c *Coordinator) placementsRecorded(ids []string) {
 	c.mu.Lock()
 	n := c.controls
 	c.mu.Unlock()
 	if n != nil {
-		n.Placed(id)
+		n.Placed(ids...)
 	}
 }
 

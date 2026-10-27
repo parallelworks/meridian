@@ -298,9 +298,6 @@ func (c *Coordinator) recordPlacement(ctx context.Context, runID, id string, cho
 	if err == nil || errors.Is(err, store.ErrState) {
 		c.remember(id, chosen, p)
 	}
-	if err == nil {
-		c.placementRecorded(id)
-	}
 	switch {
 	case errors.Is(err, store.ErrFenced):
 		// Superseded meanwhile, as by another attempt of the supervisor:

@@ -225,16 +225,18 @@ func New(opts Options) (*Server, error) {
 // process stored.
 func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
 
-// Placed answers the first claims of the attempt id that s holds until
-// its placement is recorded, once it has been: the coordinator that
-// recorded it calls it, as the transaction that recorded it has committed
-// (awaitPlaced).
-func (s *Server) Placed(id string) {
+// Placed answers the first claims of the attempts ids that s holds until
+// their placements are recorded, once they have been: the coordinator that
+// recorded them calls it, once the transaction that recorded them has
+// committed (store.Options.OnPlacementsRecorded, awaitPlaced).
+func (s *Server) Placed(ids ...string) {
 	s.placed.Lock()
 	defer s.placed.Unlock()
-	if w := s.placed.waits[id]; w != nil {
-		close(w.ch)
-		delete(s.placed.waits, id)
+	for _, id := range ids {
+		if w := s.placed.waits[id]; w != nil {
+			close(w.ch)
+			delete(s.placed.waits, id)
+		}
 	}
 }
 

@@ -19,14 +19,14 @@ func TestRememberEvicts(t *testing.T) {
 	}
 	c.remember("1", cand, backend.Placement{Attempt: "1"})
 	kept := func(id string) bool {
-		_, ok := c.placed[id]
+		_, ok := c.kept[id]
 		return ok
 	}
-	if kept("0") || !kept("1") || !kept(strconv.Itoa(maxMembers)) || len(c.placed) != maxMembers || len(c.placedOrder) != maxMembers {
-		t.Errorf("past maxMembers, the coordinator keeps %d placements, in an order of %d", len(c.placed), len(c.placedOrder))
+	if kept("0") || !kept("1") || !kept(strconv.Itoa(maxMembers)) || len(c.kept) != maxMembers || len(c.keptOrder) != maxMembers {
+		t.Errorf("past maxMembers, the coordinator keeps %d placements, in an order of %d", len(c.kept), len(c.keptOrder))
 	}
 	c.forgetLater("1")
-	if kept("1") || len(c.placed) != maxMembers-1 || len(c.placedOrder) != maxMembers-1 {
-		t.Errorf("forgotten, the coordinator keeps %d placements, in an order of %d", len(c.placed), len(c.placedOrder))
+	if kept("1") || len(c.kept) != maxMembers-1 || len(c.keptOrder) != maxMembers-1 {
+		t.Errorf("forgotten, the coordinator keeps %d placements, in an order of %d", len(c.kept), len(c.keptOrder))
 	}
 }

@@ -8,10 +8,10 @@ import (
 	"github.com/parallelworks/meridian/backend"
 )
 
-// A placed is where an attempt was placed, as its supervisor recorded it:
-// what the coordinator keeps, until the attempt has ended, to have its
+// A keptPlace is where an attempt was placed, as its supervisor recorded
+// it: what the coordinator keeps, until the attempt has ended, to have its
 // backend forget the placement then (forgetLater).
-type placed struct {
+type keptPlace struct {
 	cand      *candidate
 	placement backend.Placement
 }
@@ -40,25 +40,25 @@ const forgetGrace = 2 * time.Second
 func (c *Coordinator) remember(id string, cand *candidate, p backend.Placement) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.placed[id]; !ok {
-		if len(c.placed) >= maxMembers {
-			delete(c.placed, c.placedOrder[0])
-			c.placedOrder = c.placedOrder[1:]
+	if _, ok := c.kept[id]; !ok {
+		if len(c.kept) >= maxMembers {
+			delete(c.kept, c.keptOrder[0])
+			c.keptOrder = c.keptOrder[1:]
 		}
-		c.placedOrder = append(c.placedOrder, id)
+		c.keptOrder = append(c.keptOrder, id)
 	}
-	c.placed[id] = placed{cand: cand, placement: p}
+	c.kept[id] = keptPlace{cand: cand, placement: p}
 }
 
 // unremember lets the coordinator's record of the attempt id's placement
 // go. Its caller holds c.mu.
 func (c *Coordinator) unremember(id string) {
-	if _, ok := c.placed[id]; !ok {
+	if _, ok := c.kept[id]; !ok {
 		return
 	}
-	delete(c.placed, id)
-	if i := slices.Index(c.placedOrder, id); i >= 0 {
-		c.placedOrder = slices.Delete(c.placedOrder, i, i+1)
+	delete(c.kept, id)
+	if i := slices.Index(c.keptOrder, id); i >= 0 {
+		c.keptOrder = slices.Delete(c.keptOrder, i, i+1)
 	}
 }
 
@@ -69,7 +69,7 @@ func (c *Coordinator) unremember(id string) {
 // ended, nor withdraws it.
 func (c *Coordinator) forgetLater(id string) {
 	c.mu.Lock()
-	pl, ok := c.placed[id]
+	pl, ok := c.kept[id]
 	c.unremember(id)
 	c.mu.Unlock()
 	if ok {

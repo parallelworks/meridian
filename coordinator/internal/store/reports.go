@@ -61,9 +61,12 @@ func (tx *Tx) RecordPlacement(id string, p Placement) error {
 	case !a.Private && (p.Backend == "" || p.ID == ""):
 		return fmt.Errorf("store: attempt %s placed without its backend or the backend's ID for it", id)
 	}
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
-		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest), id)
-	return err
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
+		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest), id); err != nil {
+		return err
+	}
+	tx.placed = append(tx.placed, id)
+	return nil
 }
 
 // Lapsed reports whether the credential of the attempt a has lapsed now,

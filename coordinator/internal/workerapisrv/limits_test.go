@@ -218,7 +218,7 @@ func TestPlacedWhileClaiming(t *testing.T) {
 		a, token := r.newAttempt(run, "build", placed{unplaced: true})
 		answered := make(chan int, 1)
 		go func() {
-			status, _, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+			status, _, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, coordtest.Credential(t), conformanceDigest), token)
 			answered <- status
 		}()
 		for deadline := time.Now().Add(10 * time.Second); workerapisrv.HeldClaims(r.server, a.ID) != 1; {
