@@ -251,19 +251,9 @@ func (tx *Tx) EventsStored(id string) (count, size int64, err error) {
 	return count, size, err
 }
 
-// LogBytes returns how many bytes of logs the attempt has, as AddLogBytes
-// counted them.
-func (tx *Tx) LogBytes(id string) (int64, error) {
-	var n int64
-	err := tx.queryRow("SELECT log_bytes FROM meridian_attempts WHERE id = ?", id).Scan(&n)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrNotFound
-	}
-	return n, err
-}
-
 // AddLogBytes counts n more bytes of the attempt's logs, which the store
-// doesn't hold, and returns how many it has counted in all.
+// doesn't hold, as servers reserve them before their uploads keep them, and
+// returns how many it has counted in all.
 func (tx *Tx) AddLogBytes(id string, n int64) (int64, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("store: %d bytes of logs", n)

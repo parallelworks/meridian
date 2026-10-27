@@ -34,6 +34,10 @@ func SetLimits(s *Server, logBytes, events, eventsBytes int64) {
 	s.maxLogBytes, s.maxEvents, s.maxEventsBytes = logBytes, events, eventsBytes
 }
 
+// SetLogReserve sets how many bytes of an attempt's limit on its logs s
+// reserves at a time.
+func SetLogReserve(s *Server, n int64) { s.logReserve = n }
+
 // SetTimes sets how long s gives a request's headers, and its body beside
 // what its size takes, to arrive in.
 func SetTimes(s *Server, header, body time.Duration) { s.headerTime, s.bodyTime = header, body }

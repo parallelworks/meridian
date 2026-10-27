@@ -221,28 +221,23 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 // appendLog appends data, the part of the log key of the attempt that
 // starts at offset, as Logs.Append does, within the server's limit on the
 // bytes of the attempt's logs, all of them together. The bytes an upload
-// adds to its log are counted against the limit
-// (store.Tx.AddLogBytes) before they are appended. The log that reaches
-// the limit keeps its bytes to there, then a line that says the rest wasn't
-// kept, and ends; each of the attempt's logs after it keeps only that line;
-// and the rest of each is answered as stored. An upload counts the bytes
-// past its log's length as it read it, so uploads of the same bytes at once
-// each count them: the count errs only high, and the attempt's logs never
-// keep more than the limit, beside the line that ends each.
+// adds to its log are spent, before they are appended, from what the
+// server has reserved of the attempt's limit (spendLogBytes). The log that
+// reaches the limit keeps its bytes to there, then a line that says the
+// rest wasn't kept, and ends; each of the attempt's logs after it keeps
+// only that line; and the rest of each is answered as stored. An upload
+// spends the bytes past its log's length as it read it, so uploads of the
+// same bytes at once each spend them: what is spent errs only high, and
+// the attempt's logs never keep more than the limit, beside the line that
+// ends each.
 func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
 	// The log's length: an append of nothing changes nothing.
 	length, ended, err := s.logs.Append(ctx, key, 0, nil, false)
 	if err != nil {
 		return length, ended, err
 	}
-	var counted int64
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		counted, err = tx.LogBytes(attempt)
-		return err
-	}); err != nil {
-		return 0, false, err
-	}
-	if counted >= s.maxLogBytes {
+	budget := s.budgets.of(attempt)
+	if budget.spent() {
 		return s.truncateLog(ctx, key, length, ended, offset+int64(len(data)), end)
 	}
 	fresh := offset + int64(len(data)) - length
@@ -251,13 +246,10 @@ func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, 
 		// Logs.Append answers it.
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		counted, err = tx.AddLogBytes(attempt, fresh)
-		return err
-	}); err != nil {
+	keep, err := s.spendLogBytes(ctx, budget, attempt, fresh)
+	if err != nil {
 		return 0, false, err
 	}
-	keep := min(fresh, max(0, s.maxLogBytes-(counted-fresh)))
 	if keep == fresh {
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
@@ -430,6 +422,8 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		return
 	}
 	committed(after)
+	// The worker has ended the attempt's logs before its end.
+	s.budgets.drop(a.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

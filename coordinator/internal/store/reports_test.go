@@ -237,21 +237,15 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// AddLogBytes counts an attempt's bytes of logs, which LogBytes gives.
-func TestLogBytes(t *testing.T) {
+// AddLogBytes counts an attempt's bytes of logs, and returns them all.
+func TestAddLogBytes(t *testing.T) {
 	s := open(t)
 	a := claimedAttempt(t, s, 'a')
 	inTx(t, s, func(tx *Tx) error {
-		if n, err := tx.LogBytes(a.ID); err != nil || n != 0 {
-			t.Errorf("LogBytes before any = %d, %v", n, err)
-		}
-		for _, add := range []struct{ n, all int64 }{{10, 10}, {0, 10}, {15, 25}} {
+		for _, add := range []struct{ n, all int64 }{{0, 0}, {10, 10}, {0, 10}, {15, 25}} {
 			if all, err := tx.AddLogBytes(a.ID, add.n); err != nil || all != add.all {
 				t.Errorf("AddLogBytes(%d) = %d, %v; want %d", add.n, all, err, add.all)
 			}
-		}
-		if n, err := tx.LogBytes(a.ID); err != nil || n != 25 {
-			t.Errorf("LogBytes = %d, %v; want 25", n, err)
 		}
 		if _, err := tx.AddLogBytes(a.ID, -1); err == nil {
 			t.Error("AddLogBytes counted -1 bytes")

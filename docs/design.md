@@ -2894,7 +2894,18 @@ that embeds Meridian serve the same API.
   doesn't answer within a few seconds leaves it to the polls after.
 - **Step events:** a step started, or finished with its exit code.
 - **Logs:** each step's output, uploaded as a stream with byte offsets, so
-  an interrupted upload resumes without duplicating or losing lines.
+  an interrupted upload resumes without duplicating or losing lines. An
+  attempt's logs keep 1 GiB at most, all of them together; the log that
+  reaches it keeps a line that says the rest wasn't kept
+  (`log_truncated`), and each log after it only that line. A replica
+  reserves the limit 1 MiB at a time, in one write, and spends it as
+  uploads come, so a chatty step doesn't take a write for each upload.
+  The store counts what every replica reserves, and gives each only what
+  the limit has left, so the logs never keep more than it, whichever
+  replicas serve the uploads. What a replica reserved and didn't spend
+  goes unused, so the logs can keep less: up to 1 MiB less for each
+  replica that stopped serving the attempt, as after a takeover, and for
+  each time its logs went ten minutes without an upload.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
   ([Workflows a step calls](#workflows-a-step-calls)). It isn't built yet:
