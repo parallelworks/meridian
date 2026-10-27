@@ -427,12 +427,32 @@ var (
 // has_isolation says it does; resource is cpu, memory or gpu, with asks
 // and offers in thousandths of a core, bytes or GPUs; backend is the
 // member's; path is the meridian binary's that would start the worker, and
-// code the problem with it, whose page says why.
+// code the problem with it, whose page says why; ended says whether a
+// worker that didn't take its token ended first, with the exit status
+// exit, or didn't ask for it in time, and log is the file its standard
+// error is in.
 var (
 	IsolationNotBuilt     = define(Error, "isolation_not_built", "Isolation its backend can't give yet", "member", "isolation", "has_isolation")
 	ResourcesExceedMember = define(Error, "resources_exceed_member", "Job asks for more than its member offers", "member", "resource", "asks", "offers")
 	BackendNotBuilt       = define(Error, "backend_not_built", "Backend this release doesn't have yet", "member", "backend")
 	WorkerBinaryUnsafe    = define(Error, "worker_binary_unsafe", "Meridian binary that isn't safe to start", "path", "code")
+	WorkerTokenNotTaken   = define(Error, "worker_token_not_taken", "Worker that didn't take its token", "ended", "exit", "log")
+)
+
+// The ssh backend's problems with a host (meridian host), whose Fit or
+// error the attempt records: host is the host's name, as it says it; path
+// a directory there, or a command; at the path where its check failed, the
+// directory or one on the way to it; reason what is wrong with it, a
+// problem's code, whose page says why, or the system's error; code a
+// problem's code; and version a systemd's version, minimum the first that
+// will do.
+var (
+	SSHWorkerWouldBeKilled = define(Error, "ssh_worker_would_be_killed", "Host that would kill a worker as its session ends", "host")
+	SSHHostDirUnusable     = define(Error, "ssh_host_dir_unusable", "Directory on a host that Meridian can't use", "host", "path", "at", "reason")
+	SSHHostCommandUnsafe   = define(Error, "ssh_host_command_unsafe", "Command on a host that isn't safe to run", "host", "path", "code")
+	SSHHostIDUnknown       = define(Error, "ssh_host_id_unknown", "Host without an ID of its own", "host")
+	SSHLoginctlMissing     = define(Error, "ssh_loginctl_missing", "Host whose logind can't be asked", "host")
+	SSHSystemdTooOld       = define(Error, "ssh_systemd_too_old", "Host whose systemd can't start a worker's scope", "host", "version", "minimum")
 )
 
 // The meridian command's directories. mode is a file's or directory's

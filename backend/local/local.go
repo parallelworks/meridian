@@ -60,9 +60,9 @@ import (
 // with their grace, and send what it has.
 const DefaultKillAfter = 60 * time.Second
 
-// tokenWait is how long Place's process waits for a worker to say it is
-// ready for its token, before it gives up, and the worker gets none.
-const tokenWait = time.Minute
+// DefaultTokenWait is how long Place's process waits for a worker to say
+// it is ready for its token, before it gives up, and the worker gets none.
+const DefaultTokenWait = time.Minute
 
 // A Driver is the local backend's backend.Driver.
 type Driver struct {
@@ -82,6 +82,24 @@ type Driver struct {
 	// KillAfter is how long Cancel waits after SIGTERM before SIGKILL:
 	// DefaultKillAfter for 0.
 	KillAfter time.Duration
+	// Launcher is a command that starts the worker, which it runs as the
+	// process the placement records, as systemd-run --user --scope does:
+	// the worker's arguments follow it. Its first is the command's
+	// absolute path, which whoever sets it has checked
+	// (safepath.CheckExecutable): it
+	// gets the worker's token's socket. It is empty to start the worker
+	// itself, as on the coordinator's own host.
+	Launcher []string
+	// AwaitToken has Place return only once the worker has taken its
+	// bootstrap token, rather than hand it over once it has returned: for
+	// a process that ends once it has placed a worker, as meridian host
+	// does on another host, which would otherwise end before the worker
+	// had its token. A worker that ends first, or doesn't ask for it in
+	// time, is stopped, and its placement is worker_token_not_taken.
+	AwaitToken bool
+	// TokenWait is how long a worker has to say it is ready for its
+	// token: DefaultTokenWait for 0.
+	TokenWait time.Duration
 
 	// swept is done once the driver has looked through what State holds,
 	// the first time it places a worker or probes a member (sweep).
@@ -389,9 +407,17 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		}
 		d.remove(req.Attempt)
 	}
-	exe, digest, err := executable()
+	path, exe, digest, err := executable()
 	if err != nil {
 		return backend.Placement{}, err
+	}
+	if len(d.Launcher) > 0 {
+		// The launcher runs the worker, as a process of its own, in which
+		// the file this one runs has no name but its path: one that took
+		// its path since was checked as this one was, and the worker's
+		// digest, which the coordinator compares with this one's, tells it
+		// apart.
+		exe = path
 	}
 	worker, ours, err := socketPair()
 	if err != nil {
@@ -405,7 +431,8 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	}
 	// The worker outlives this call, and the process that placed it: it
 	// isn't started with the call's context.
-	cmd := exec.Command(exe, "worker") //nolint:gosec,noctx // the file this process runs, which executable checked, and a worker that outlives the call
+	args := append(slices.Clone(d.Launcher), exe, "worker")
+	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec,noctx // the file this process runs, which Executable checked, behind the driver's launcher, and a worker that outlives the call
 	cmd.Dir = "/"
 	cmd.Env = d.environ(req.Coordinator)
 	cmd.Stderr = stderr
@@ -438,7 +465,26 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		stderr.Close()
 		return backend.Placement{}, err
 	}
-	go giveToken(ours, req.BootstrapToken)
+	if !d.AwaitToken {
+		go func() { _ = giveToken(ours, req.BootstrapToken, d.tokenWait()) }()
+	} else if err := giveToken(ours, req.BootstrapToken, d.tokenWait()); err != nil {
+		// A worker that didn't take its token runs no job: one that
+		// hasn't ended is stopped, and the placement goes, but for what
+		// the worker wrote, which says why.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		stderr.Close()
+		for _, path := range []string{d.livePath(req.Attempt), d.path(req.Attempt, ".json")} {
+			_ = os.Remove(path)
+		}
+		exit := -1
+		if cmd.ProcessState != nil {
+			exit = cmd.ProcessState.ExitCode()
+		}
+		return backend.Placement{}, problems.WorkerTokenNotTaken.Problem(problems.Params{
+			"ended": !errors.Is(err, os.ErrDeadlineExceeded), "exit": exit, "log": filepath.Join(d.State, workersDir, req.Attempt+".log"),
+		})
+	}
 	// The worker is reaped while this process runs, and its exit status
 	// kept beside its placement; after, the system reaps it.
 	reaped := make(chan struct{})
@@ -467,6 +513,14 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	return backend.Placement{Attempt: req.Attempt, ID: r.id(), WorkerDigest: r.Digest}, nil
 }
 
+// tokenWait is how long a worker has to say it is ready for its token.
+func (d *Driver) tokenWait() time.Duration {
+	if d.TokenWait > 0 {
+		return d.TokenWait
+	}
+	return DefaultTokenWait
+}
+
 // socketPair returns the two ends of a new stream Unix socket: the
 // worker's, which it inherits, and this process's, neither of which any
 // other process gets.
@@ -480,42 +534,53 @@ func socketPair() (worker, ours *os.File, err error) {
 
 // giveToken writes token to ours, once the worker has written that it is
 // ready on its end, and closes it. A worker that doesn't say so within
-// tokenWait, or ends first, gets no token.
-func giveToken(ours *os.File, token string) {
+// wait, which is os.ErrDeadlineExceeded, or ends first, gets no
+// token.
+func giveToken(ours *os.File, token string, wait time.Duration) error {
 	conn, err := net.FileConn(ours)
 	ours.Close()
 	if err != nil {
-		return
+		return err
 	}
 	defer conn.Close()
-	if conn.SetDeadline(time.Now().Add(tokenWait)) != nil {
-		return
+	if err := conn.SetDeadline(time.Now().Add(wait)); err != nil {
+		return err
 	}
 	ready := make([]byte, 1)
-	if _, err := io.ReadFull(conn, ready); err != nil || ready[0] != '1' {
-		return
+	if _, err := io.ReadFull(conn, ready); err != nil {
+		return err
 	}
-	_, _ = conn.Write([]byte(token))
+	if ready[0] != '1' {
+		return errors.New("local: the worker said other than that it was ready")
+	}
+	_, err = conn.Write([]byte(token))
+	return err
 }
 
-// executable returns the path to start the worker with, the file this
-// process runs, and its digest, once it has checked that the file is a
-// regular file of the user's or root's that no other user can change, nor
+// Executable returns the path of the file this process runs, a worker the
+// driver places runs, and its digest, once it has checked that the file is
+// a regular file of the user's or root's that no other user can change, nor
 // any directory on the way to it. Otherwise it is worker_binary_unsafe.
-func executable() (string, string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", "", err
+func Executable() (string, string, error) {
+	path, _, digest, err := executable()
+	return path, digest, err
+}
+
+// executable is Executable, with the path to start the worker with, the
+// file this process runs, even if another has taken its path since, where
+// the system names it (runningExecutable).
+func executable() (path, run, digest string, err error) {
+	if path, err = os.Executable(); err != nil {
+		return "", "", "", err
 	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		return "", "", err
+	if path, err = filepath.EvalSymlinks(path); err != nil {
+		return "", "", "", err
 	}
-	run, err := runningExecutable(exe)
-	if err != nil {
-		return "", "", err
+	if run, err = runningExecutable(path); err != nil {
+		return "", "", "", err
 	}
-	digest, err := checkExecutable(exe, run)
-	return run, digest, err
+	digest, err = checkExecutable(path, run)
+	return path, run, digest, err
 }
 
 // A fileIdentity is which file a file is, and what it holds, as far as
@@ -566,35 +631,14 @@ var hashFile = func(r io.Reader) (string, error) {
 // differs. Elsewhere the file at path is hashed at each placement
 // (identity).
 func checkExecutable(path, open string) (string, error) {
-	unsafe := func(code problem.Code) error {
-		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
+	f, info, err := safepath.OpenExecutable(path, open)
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		return "", problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(p.Code)})
 	}
-	if err := safepath.Check(path, false); err != nil {
-		if p, ok := errors.AsType[*problem.Problem](err); ok {
-			return "", unsafe(p.Code)
-		}
-		return "", err
-	}
-	f, err := os.Open(open) //nolint:gosec // this binary, whose way safepath checked
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	owner, known := safepath.Owner(info)
-	switch {
-	case !info.Mode().IsRegular():
-		return "", unsafe(problems.FileNotRegular.Code())
-	case !known:
-		return "", unsafe(problems.OwnerUnknown.Code())
-	case owner != os.Getuid() && owner != 0:
-		return "", unsafe(problems.FileNotOwned.Code())
-	case info.Mode().Perm()&0o022 != 0:
-		return "", unsafe(problems.FileChangeable.Code())
-	}
 	id, known := identity(info)
 	if known {
 		digests.Lock()

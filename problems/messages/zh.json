@@ -309,5 +309,12 @@
   "isolation_not_built": "成员“{member}”{has_isolation, select, true {用“{isolation}”} other {在容器中（与未指定隔离方式的成员一样）}}隔离其作业，而其后端尚不能做到。Meridian 也不会改为在主机上运行这些作业，因为那样隔离会更弱。",
   "resources_exceed_member": "作业请求{resource, select, cpu {以千分之一 CPU 核为单位的 {asks}} memory {{asks} 字节内存} other {{asks} 个 GPU}}，超过成员“{member}”提供的 {offers}。",
   "backend_not_built": "成员“{member}”使用 {backend} 后端运行作业，而此版本的 Meridian 尚无该后端。",
-  "worker_binary_unsafe": "{path} 运行起来并不安全（{code}），因此 Meridian 不会用它启动工作进程。"
+  "worker_binary_unsafe": "{path} 运行起来并不安全（{code}），因此 Meridian 不会用它启动工作进程。",
+  "worker_token_not_taken": "Meridian 启动的工作进程没有取走它的引导令牌：{ended, select, true {它先结束了，退出状态为 {exit}} other {它在一分钟内没有请求令牌，因此 Meridian 停止了它}}。它写到标准错误的内容在 {log} 中。",
+  "ssh_worker_would_be_killed": "Meridian 不会在 {host} 上启动工作进程：该系统会在用户会话结束时结束其进程，并且在你的最后一个会话之后不保留你的任何进程，因此工作进程会随启动它的会话一起结束。请在那里运行 loginctl enable-linger。",
+  "ssh_host_dir_unusable": "Meridian 无法使用 {host} 上的目录 {path}：在 {at} 处 {reason}",
+  "ssh_host_command_unsafe": "Meridian 不会在 {host} 上运行那里的 PATH 找到的 {path}，因为运行它并不安全（{code}）。",
+  "ssh_host_id_unknown": "Meridian 无法把 {host} 与可能共享其主目录的其他主机区分开：它没有 Meridian 能读取的机器 ID，或者没有名称。",
+  "ssh_loginctl_missing": "Meridian 无法判断 {host} 是否会随启动工作进程的会话结束该工作进程：那里运行着 logind，但那里的 PATH 找不到用于询问它的 loginctl。",
+  "ssh_systemd_too_old": "Meridian 不会在 {host} 上于你的服务管理器的 scope 中启动工作进程：那里的 systemd-run 来自 systemd {version}，而 scope 的 --collect 需要 systemd {minimum} 或更高版本。"
 }

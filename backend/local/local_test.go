@@ -60,13 +60,21 @@ type report struct {
 	Leaked []string `json:"leaked"`
 	// OwnSession says that it leads a session of its own.
 	OwnSession bool `json:"ownSession"`
+	// Launched is what launchedEnv was set to, as the test's launcher
+	// sets it.
+	Launched string `json:"launched"`
 }
+
+// launchedEnv is what the tests' launcher sets in the stub's environment.
+const launchedEnv = "LOCALTEST_LAUNCHED"
 
 // stub is a stub worker: for mode run, it takes its token as the worker
 // does, saying it is ready on the socket it inherits and reading the token
 // from it, and runs until SIGTERM; for ignore, it does too, but takes no
 // action on SIGTERM but to note it in its report's .signals, and runs
-// until it is killed; for exit, it exits at once, without its token.
+// until it is killed; for slow, it waits a second before it says it is
+// ready, and then runs as for run; for exit, it exits at once, without its
+// token.
 func stub(mode string) int {
 	out := os.Getenv(reportEnv)
 	terms := make(chan os.Signal, 4)
@@ -85,6 +93,10 @@ func stub(mode string) int {
 	}
 	sid, err := unix.Getsid(0)
 	r.OwnSession = err == nil && sid == os.Getpid()
+	r.Launched = os.Getenv(launchedEnv)
+	if mode == "slow" {
+		time.Sleep(time.Second) //nolint:forbidigo // a worker slow to say it is ready, as the test asks
+	}
 	if mode != "exit" {
 		token := os.NewFile(3, "token")
 		if _, err := token.Write([]byte{'1'}); err == nil {
@@ -419,6 +431,78 @@ func TestPlaceAgainAfterEnd(t *testing.T) {
 	})
 	if found, ok, err := d.Find(t.Context(), m, req.Attempt); err != nil || !ok || found != second {
 		t.Errorf("Find gave %+v, %v, %v; want %+v", found, ok, err, second)
+	}
+}
+
+// With a launcher, the driver starts the worker through it, with the
+// worker's arguments after it, and records the process the launcher runs
+// the worker as, as systemd-run --scope does.
+func TestLauncher(t *testing.T) {
+	t.Parallel()
+	d, out := newDriver(t, "run")
+	d.Launcher = []string{"env", launchedEnv + "=yes"}
+	p := place(t, d, host, backend.PlaceRequest{Attempt: "a1", BootstrapToken: "t"})
+	r := readReport(t, out)
+	if r.Launched != "yes" || !slices.Equal(r.Args, []string{"worker"}) || r.Token != "t" || p.ID != strconv.Itoa(r.PID)+":"+mustStart(t, r.PID) {
+		t.Errorf("the worker the launcher started reported %+v, placed as %+v", r, p)
+	}
+	if s := check(t, d, p); s.State != backend.Running {
+		t.Errorf("the worker is %+v", s)
+	}
+}
+
+// With AwaitToken, Place returns only once the worker has taken its
+// token, however long it takes to ask for it: a process that ends once it
+// has placed the worker, as meridian host does, has handed it over.
+func TestAwaitToken(t *testing.T) {
+	t.Parallel()
+	d, out := newDriver(t, "slow")
+	d.AwaitToken = true
+	start := time.Now()
+	p := place(t, d, host, backend.PlaceRequest{Attempt: "a1", BootstrapToken: "slow-token"})
+	if took := time.Since(start); took < time.Second {
+		t.Errorf("Place returned %v after it started a worker that asks for its token after a second", took)
+	}
+	if r := readReport(t, out); r.Token != "slow-token" || p.ID != strconv.Itoa(r.PID)+":"+mustStart(t, r.PID) {
+		t.Errorf("the worker reported %+v, placed as %+v", r, p)
+	}
+}
+
+// With AwaitToken, a worker that ends without taking its token, as one
+// that systemd-run couldn't start does, isn't placed: Place says so, with
+// its exit status and where what it wrote is, which it keeps, and the
+// attempt has no placement left.
+func TestTokenNotTaken(t *testing.T) {
+	t.Parallel()
+	d, out := newDriver(t, "exit")
+	d.AwaitToken = true
+	_, err := d.Place(t.Context(), host, backend.PlaceRequest{Attempt: "a1", BootstrapToken: "t", Coordinator: backend.Endpoint{Address: "/nowhere/c.sock"}})
+	p, _ := errors.AsType[*problem.Problem](err)
+	log := filepath.Join(d.State, workersDir, "a1.log")
+	wantProblem(t, "a worker that ended without its token", p, problems.WorkerTokenNotTaken, problems.Params{"ended": "true", "exit": 0, "log": log})
+	if r := readReport(t, out); r.Token != "" {
+		t.Errorf("the worker reported %+v", r)
+	}
+	if _, found, err := d.Find(t.Context(), host, "a1"); found || err != nil {
+		t.Errorf("Find found the placement of a worker without its token: %v", err)
+	}
+	if _, err := os.Stat(log); err != nil {
+		t.Errorf("what the worker wrote is gone: %v", err)
+	}
+}
+
+// With AwaitToken, a worker that doesn't ask for its token within
+// TokenWait is killed, and isn't placed: Place says it didn't end on its
+// own, and the attempt has no placement left.
+func TestTokenWaitPassed(t *testing.T) {
+	t.Parallel()
+	d, _ := newDriver(t, "slow")
+	d.AwaitToken, d.TokenWait = true, 100*time.Millisecond
+	_, err := d.Place(t.Context(), host, backend.PlaceRequest{Attempt: "a1", BootstrapToken: "t", Coordinator: backend.Endpoint{Address: "/nowhere/c.sock"}})
+	p, _ := errors.AsType[*problem.Problem](err)
+	wantProblem(t, "a worker that didn't ask for its token in time", p, problems.WorkerTokenNotTaken, problems.Params{"ended": "false", "exit": -1})
+	if _, found, err := d.Find(t.Context(), host, "a1"); found || err != nil {
+		t.Errorf("Find found the placement of a worker without its token: %v", err)
 	}
 }
 

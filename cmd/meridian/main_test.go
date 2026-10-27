@@ -73,8 +73,8 @@ func TestUsage(t *testing.T) {
 			t.Errorf("meridian %s = %+v", args, r)
 		}
 		for _, cmd := range commands {
-			if !strings.Contains(r.stdout, "\n  "+cmd.name) {
-				t.Errorf("meridian %s doesn't list %s:\n%s", args, cmd.name, r.stdout)
+			if listed := strings.Contains(r.stdout, "\n  "+cmd.name+" "); listed == cmd.hidden {
+				t.Errorf("meridian %s lists %s %v, hidden %v:\n%s", args, cmd.name, listed, cmd.hidden, r.stdout)
 			}
 		}
 	}
@@ -87,7 +87,7 @@ func TestCommandsAreTheDesigns(t *testing.T) {
 	for _, cmd := range commands {
 		names = append(names, cmd.name)
 	}
-	want := []string{"init", "run", "validate", "migrate", "status", "logs", "cancel", "resume", "rerun", "serve", "worker", "relay", "version"}
+	want := []string{"init", "run", "validate", "migrate", "status", "logs", "cancel", "resume", "rerun", "serve", "worker", "host", "relay", "version"}
 	if !slices.Equal(names, want) {
 		t.Errorf("the commands are %q, want %q", names, want)
 	}

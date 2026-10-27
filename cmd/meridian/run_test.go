@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 		}
 		testtiming.Scale = s
 	}
+	if len(os.Args) > 1 && os.Args[1] == "worker" && os.Getenv(hostStubEnv) != "" {
+		os.Exit(hostStub())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "worker" || os.Getenv(envMain) == "1" {
 		main()
 	}

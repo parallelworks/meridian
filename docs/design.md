@@ -3176,7 +3176,7 @@ a step's outputs, which are capped.
 | Backend | Starts a worker | Default isolation |
 | --- | --- | --- |
 | `local` | As a process detached from the terminal | A rootless container |
-| `ssh` | Over SSH, detached so it outlives the connection (`systemd-run --user` where there is one) | A rootless container |
+| `ssh` | Over SSH, detached so it outlives the connection: in a session of its own, or, where logind ends a session's processes with it and the user lingers, in a scope of their service manager (`systemd-run --user --scope`) | A rootless container |
 | `kubernetes` | As a pod, through the Kubernetes API | A rootless container: the pod, run as a non-root user |
 | `slurm`, `pbs` | As a batch job, submitted on the login node | The host |
 
@@ -3243,6 +3243,94 @@ once its worker ended more than a day before. Which placements' workers
 may still run, and asked for what, the backend reads from `live/`, a file
 for each, not from every placement kept. A member offers what it declares, or else
 the host's CPUs and memory, and no GPU.
+
+On another host, the `ssh` backend runs the same backend through `meridian
+host <operation>`, a hidden command of the same binary that does one of
+the Driver's calls, or `hello`, which says the host's system, its user's
+home, its machine ID, how it starts a worker detached, the binary it runs
+with its digest, and its directories. Its protocol is JSON lines on its
+standard input and output, versioned (`backend/hostproto`): it hardens
+itself, as `meridian run` does, says it is ready, and only then reads the
+request, which for `place` carries the bootstrap token, so the token
+reaches only a hardened process, and never its arguments or environment.
+`place` returns once the worker has taken its token, and a worker that
+ends first, as one `systemd-run` couldn't start does, or doesn't ask for
+it within a minute, is stopped, and isn't placed
+(`worker_token_not_taken`). On the host:
+- **Its state** is the state directory's
+  `hosts/<machine ID>-<host name>/`, the host's own where a cluster's
+  nodes share a home, so that no node takes another's live workers for
+  dead by their boot. The machine ID alone would do but where nodes were
+  made from one image that held it, as stateless or cloned nodes can be;
+  their names tell them apart. A host whose name changes starts afresh,
+  without the workers it placed before. On Linux the ID is systemd's, or
+  D-Bus's where systemd's file is empty or says `uninitialized`; a host
+  without one, or without a name, is `ssh_host_id_unknown`.
+- **Its directories**, the state's, the binaries' cache (the cache
+  directory's `bin/`) and the runs', are made the user's own, which only
+  they can use, and checked as Meridian's own are (`ssh_host_dir_unusable`,
+  which names the directory that failed, the one asked for or one on the
+  way to it).
+- **The sockets' directory**, where the coordinator listens for the host's
+  workers, is the runtime directory's `meridian/`, where `XDG_RUNTIME_DIR`
+  names one that is only the user's, and short enough for a socket's path
+  in it (`hostproto.MaxSocketsDir`); and otherwise one of a random name
+  that `meridian host` makes in `/tmp`, and records in its state, so that
+  every `hello` gives the same one while it is the user's own. A name in
+  `/tmp` that another user could know, as `/tmp/meridian-<uid>`, is one
+  they could make first, and keep the user out of.
+- **A run's directory** is
+  `${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs/<run>-<store>`, on
+  every system, outside `hosts/`, or the `runs/` of the state directory
+  that `MERIDIAN_STATE_DIR` names. On macOS too: Meridian's own state
+  directory there, `~/Library/Application Support/Meridian`, holds a
+  space, which `make`, autotools and an unquoted `$PWD` break on, as a
+  run's steps would in it. On a cluster it is in the home its nodes
+  share, so the compute nodes that a step's `sbatch`, `qsub` or `srun`
+  sends work to see it, and so do the cluster's other login nodes, which a
+  reconnect to the same host name can reach. The temporary directory, where a run's directory is on the
+  coordinator's own host, is each node's own. `place` chooses it, and
+  returns it.
+- **A worker starts detached**: in a session of its own, unless logind runs,
+  as its directory of seats says, and ends a session's processes as it
+  ends (`KillUserProcesses=yes`, as `loginctl` says). Then it starts in a
+  scope of the user's service manager (`systemd-run --user --scope`, in a
+  scope whose name is new each time), which keeps the session's
+  environment, as a service of the manager wouldn't, if the user lingers;
+  and otherwise not at all (`ssh_worker_would_be_killed`, whose page says
+  `loginctl enable-linger`), rather than to end with the session. A
+  `systemd-run` older than systemd 236, whose scopes don't take
+  `--collect`, which lets a scope that failed go, is
+  `ssh_systemd_too_old`. Only logind's absence means a session of its
+  own: where logind runs, but the `PATH` finds no `loginctl`, the host is
+  `ssh_loginctl_missing`, and a `loginctl` that fails otherwise, as one
+  that can't reach logind over D-Bus or times out, is an error, which the
+  coordinator tries again, but for `show-user`'s failure for a user who
+  neither lingers nor is logged in, which says they don't linger. It
+  reads logind's setting, not whether `meridian host`'s own session is
+  one of logind's, so where sshd doesn't register its sessions with logind
+  (`UsePAM no`) it decides as if it did, at the cost of a scope or a
+  refusal the host didn't need.
+- **The commands it runs**, `loginctl`, `systemd-run` and, on macOS,
+  `ioreg`, are found on the `PATH` and run by their absolute paths, once
+  they are checked as the worker's binary is: a regular file of the
+  user's or root's that no other user can change, nor any directory on the
+  way to it. `systemd-run` gets what the worker is given, the socket its
+  token comes on among it, and a directory another user can change can
+  come first on a `PATH`, as a shared `bin/` a cluster's startup files add
+  can; one that isn't safe is `ssh_host_command_unsafe`. The check is
+  `safepath.CheckExecutable`, which the `ssh` backend's own commands take
+  too. The token's socket so passes through `systemd-run`, which execs
+  the worker, before the worker has hardened itself; the token is written
+  only once the worker says it is ready, which it says only once
+  hardened, so what could read it before is `systemd-run`, which is the
+  system's or the user's, as checked. Another process of the same user
+  that may trace theirs, as where Yama's `ptrace_scope` is 0, could copy
+  the socket out of `systemd-run`, or out of the worker before it hardens,
+  and race the worker for the token, as it could with the `local`
+  backend's worker.
+- **Its environment** is the session's, without `GODEBUG`, which could turn
+  off what the worker requires of its cryptography.
 
 A worker passes its steps nothing it inherited but its standard input,
 output and error: it marks every other descriptor close-on-exec as it
@@ -3541,7 +3629,7 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian resume <run>` | Picks up a run whose coordinator stopped. |
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
-| `meridian worker`, `meridian relay` | Started by backends, not by people. |
+| `meridian worker`, `meridian host`, `meridian relay` | Started by backends, not by people. |
 
 `meridian init`, `migrate`, `rerun`, `serve` and `relay` aren't built yet,
 and each says so.

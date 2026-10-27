@@ -309,5 +309,12 @@
   "isolation_not_built": "El miembro “{member}” aísla sus trabajos {has_isolation, select, true {con “{isolation}”} other {en un contenedor, como hace un miembro que no nombra su aislamiento}}, lo que su backend aún no puede hacer. Meridian tampoco los ejecuta en el host, lo que los aislaría menos.",
   "resources_exceed_member": "El trabajo pide {asks} {resource, select, cpu {milésimas de núcleo de CPU} memory {bytes de memoria} other {GPU}}, más de lo que ofrece el miembro “{member}”, {offers}.",
   "backend_not_built": "El miembro “{member}” ejecuta trabajos con el backend {backend}, que esta versión de Meridian aún no tiene.",
-  "worker_binary_unsafe": "Meridian no inicia un worker desde {path}, que no es seguro ejecutar ({code})."
+  "worker_binary_unsafe": "Meridian no inicia un worker desde {path}, que no es seguro ejecutar ({code}).",
+  "worker_token_not_taken": "El worker que inició Meridian no tomó su token de arranque: {ended, select, true {terminó antes, con el estado de salida {exit}} other {no lo pidió en un minuto, así que Meridian lo detuvo}}. Lo que escribió en su salida de error estándar está en {log}.",
+  "ssh_worker_would_be_killed": "Meridian no inicia un worker en {host}: su sistema termina los procesos de un usuario al terminar su sesión y no mantiene ninguno de los tuyos tras tu última sesión, así que el worker terminaría con la sesión que lo inició. Ejecuta allí loginctl enable-linger.",
+  "ssh_host_dir_unusable": "Meridian no puede usar el directorio {path} en {host}: {reason}, en {at}.",
+  "ssh_host_command_unsafe": "Meridian no ejecutará {path} en {host}, que encuentra el PATH de allí, porque no es seguro ejecutarlo ({code}).",
+  "ssh_host_id_unknown": "Meridian no puede distinguir {host} de otros hosts que pueden compartir su home: no tiene un ID de máquina que Meridian pueda leer, o no tiene nombre.",
+  "ssh_loginctl_missing": "Meridian no puede saber si {host} terminaría un worker con la sesión que lo inicia: allí se ejecuta logind, pero el PATH de allí no encuentra ningún loginctl para preguntarle.",
+  "ssh_systemd_too_old": "Meridian no iniciará un worker en {host} en un scope de tu gestor de servicios: su systemd-run es de systemd {version}, y el --collect de un scope necesita systemd {minimum} o posterior."
 }
