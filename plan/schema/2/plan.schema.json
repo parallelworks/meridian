@@ -152,9 +152,66 @@
         },
         "limits": {
           "$ref": "#/$defs/Limits"
+        },
+        "parent": {
+          "description": "The step whose uses: names the run's workflow, for a child run, with what the run has of it that the plan holds. Version 2.",
+          "$ref": "#/$defs/ParentRun"
         }
       },
       "required": ["source", "format", "release"],
+      "additionalProperties": false
+    },
+    "ParentRun": {
+      "description": "The step a child run runs the workflow of: a try of a step of a job of the run that called it, and what the child has of the step that its plan holds.",
+      "type": "object",
+      "properties": {
+        "run": {
+          "description": "The ID of the run whose step calls this one.",
+          "type": "string",
+          "minLength": 1
+        },
+        "job": {
+          "description": "The key of the step's job, an instance's for a matrix job, as in build#2.",
+          "type": "string",
+          "minLength": 1
+        },
+        "step": {
+          "description": "The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "The step's try, from 0: each try of a step runs a child of its own.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "root": {
+          "description": "The ID of the run at the top of the tree, which no step called, whose identity the run has.",
+          "type": "string",
+          "minLength": 1
+        },
+        "depth": {
+          "description": "How far below its root the run is: 1 for a run that one of its root's own steps calls.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "env": {
+          "description": "The calling step's environment, which the run's env: is laid over, by name, but for the variables that private and secrets name, which the run's secret record holds.",
+          "$ref": "#/$defs/Strings"
+        },
+        "private": {
+          "description": "What the run was given of the step that the plan doesn't hold, made from an organization or user variable or a password, but no secret, in order: inputs. and a path for a part of the step's with:, and env. and a name for a variable of its environment.",
+          "$ref": "#/$defs/Names"
+        },
+        "secrets": {
+          "description": "What the run was given of the step that the plan doesn't hold, made from a secret, in order, named as private names it.",
+          "$ref": "#/$defs/Names"
+        }
+      },
+      "required": ["run", "job", "step", "root", "depth"],
       "additionalProperties": false
     },
     "Limits": {
@@ -710,9 +767,31 @@
           "additionalProperties": {
             "$ref": "#/$defs/JobRecord"
           }
+        },
+        "inherited": {
+          "description": "What a child run has of the step that calls it that its plan doesn't hold. Version 2.",
+          "$ref": "#/$defs/Inherited"
         }
       },
       "required": ["version"],
+      "additionalProperties": false
+    },
+    "Inherited": {
+      "description": "What a child run's secret record holds of the step that calls it.",
+      "type": "object",
+      "properties": {
+        "env": {
+          "description": "The variables of the step's environment that the plan doesn't hold, which the plan's parent names, by name.",
+          "$ref": "#/$defs/Strings"
+        },
+        "masked": {
+          "description": "The strings the step's worker masks, which the child's jobs mask too.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "JobRecord": {

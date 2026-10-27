@@ -25,7 +25,7 @@ import (
 // 2, which child runs add to, is once a release writes it. A plan is
 // written at the lowest version that holds what it uses (MinVersion), so
 // that a release that reads only an earlier one can run it. Version 2 adds
-// Plan.Calls.
+// what child runs need: Plan.Calls, Run.Parent and Record.Inherited.
 const Version = 2
 
 // modulePath is Meridian's module.
@@ -98,9 +98,9 @@ type Call struct {
 
 // MinVersion is the lowest version that holds what p uses, which a plan is
 // written at, and the run's secret record and start state with it: 2 for
-// one with Calls, and 1 otherwise.
+// one with Calls, or a child run's, with a Parent, and 1 otherwise.
 func (p *Plan) MinVersion() int {
-	if len(p.Calls) > 0 {
+	if len(p.Calls) > 0 || p.Run.Parent != nil {
 		return 2
 	}
 	return 1
@@ -207,6 +207,49 @@ type Run struct {
 	// Create apply, so that every replica, and every rerun, applies the
 	// same ones: those the compiler was given (compile.Options.Limits).
 	Limits Limits `json:"limits,omitzero"`
+	// Parent is the step whose uses: names the run's workflow, for a child
+	// run, with what the run has of it that the plan holds, or nil for a
+	// run no step called (docs/design.md, Workflows a step calls).
+	// Version 2.
+	Parent *ParentRun `json:"parent,omitzero"`
+}
+
+// A ParentRun is the step a child run runs the workflow of: a try of a
+// step of a job of the run that called it, and what the child has of the
+// step that its plan holds.
+type ParentRun struct {
+	// Run is the ID of the run whose step calls this one, Job the key of
+	// the step's job, an instance's for a matrix job, as in build#2, Step
+	// the step's index in its job, from 0, and Try the step's try, from 0:
+	// each try of a step runs a child of its own.
+	Run  string `json:"run"`
+	Job  string `json:"job"`
+	Step int    `json:"step"`
+	Try  int    `json:"try,omitzero"`
+	// Root is the ID of the run at the top of the tree, which no step
+	// called, whose identity the run has, as format 1 gives a child its
+	// root's PW_JOB_ID; and Depth is how far below it the run is: 1 for a
+	// run that one of its root's own steps calls.
+	Root  string `json:"root"`
+	Depth int    `json:"depth"`
+	// Env is the calling step's environment, which the run's env: is laid
+	// over: the workflow's, the job's and the step's env:, and the
+	// variables format 1 gives a step, by name, but for those that Private
+	// and Secrets name, which the run's secret record holds
+	// (Record.Inherited).
+	Env map[string]string `json:"env,omitempty"`
+	// Private and Secrets name what the run was given of the step that the
+	// plan doesn't hold, in order: what was made from an organization or
+	// user variable or a password, but no secret, and what was made from a
+	// secret. inputs. and a path name a part of the step's with:, which
+	// the run was submitted, and env. and a name a variable of the step's
+	// environment. The run's secret record holds them: what was submitted,
+	// as a password is (Record.Submitted), and the environment's in
+	// Record.Inherited. Of the run's values, what Private names is private
+	// (RunValues.Private), and what Secrets names a secret, masked as what
+	// is made from one is (RunValues.Derived).
+	Private []string `json:"private,omitempty"`
+	Secrets []string `json:"secrets,omitempty"`
 }
 
 // Limits are Meridian's limits on a run's size, which whoever runs the
@@ -296,6 +339,34 @@ func (r SourceRef) Normal() SourceRef {
 		out.Uses += "@" + rev
 	}
 	return out
+}
+
+// CallName returns format 1's name for a run of the workflow r names,
+// which its steps read as PW_WORKFLOW_NAME: github., the owner, a dot and
+// the repository, for a GitHub repository's, which two of its files
+// share; gitlab., the server, a dot and the project's path with dots for
+// its slashes, for a GitLab project's, as Normal reads r; and for any
+// other, as marketplace/<slug>/<version> and workflow/<name>, what follows
+// the first slash, up to the next one, or else up to an @.
+func (r SourceRef) CallName() string {
+	n := r.Normal()
+	if kind, rest, ok := strings.Cut(n.Uses, "/"); ok && (kind == "github" || kind == "gitlab") {
+		name, _, _ := strings.Cut(rest, "@")
+		parts := []string{kind}
+		if kind == "gitlab" {
+			parts = append(parts, n.Host)
+		}
+		return strings.Join(append(parts, strings.ReplaceAll(name, "/", ".")), ".")
+	}
+	_, rest, ok := strings.Cut(r.Uses, "/")
+	if !ok {
+		return r.Uses
+	}
+	if name, _, ok := strings.Cut(rest, "/"); ok {
+		return name
+	}
+	name, _, _ := strings.Cut(rest, "@")
+	return name
 }
 
 // A Job is one of the workflow's jobs. A matrix job is one Job, whose
@@ -560,7 +631,40 @@ func Decode(data []byte) (*Plan, error) {
 	if err := p.checkCalls(); err != nil {
 		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
 	}
+	if err := p.Run.Parent.check(); err != nil {
+		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
+	}
 	return p, nil
+}
+
+// check checks what a child run's plan holds of the step that calls it,
+// if it is one: Private and Secrets each in order, a name once in either,
+// and each inputs. and a path, or env. and the name of a variable of the
+// step's environment that Env doesn't hold.
+func (r *ParentRun) check() error {
+	if r == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, names := range [][]string{r.Private, r.Secrets} {
+		if !slices.IsSorted(names) {
+			return fmt.Errorf("what is private of the step that calls the run isn't in order: %q", names)
+		}
+		for _, name := range names {
+			path := SplitPath(name)
+			switch {
+			case seen[name]:
+				return fmt.Errorf("%s of the step that calls the run is named twice", name)
+			case len(path) < 2 || path[0] != "inputs" && path[0] != "env" || path[0] == "env" && len(path) != 2:
+				return fmt.Errorf("%s names neither a part of the with: of the step that calls the run nor a variable of its environment", name)
+			}
+			if _, ok := r.Env[path[1]]; ok && path[0] == "env" {
+				return fmt.Errorf("the environment of the step that calls the run holds %s, which is private", path[1])
+			}
+			seen[name] = true
+		}
+	}
+	return nil
 }
 
 // checkCalls checks that the plan's calls are in the order of their

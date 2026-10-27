@@ -41,7 +41,8 @@ type secretState struct {
 }
 
 // A heldPart is a part of the values, at path, in the value of the input
-// in, that the plan doesn't hold (holdPath), and how it is kept.
+// in, or nil for a value of an input the workflow doesn't define, that the
+// plan doesn't hold (holdPath), and how it is kept.
 type heldPart struct {
 	in   *field
 	path []string
@@ -142,6 +143,11 @@ func (r *inputResolver) heldParts() {
 	var out []heldPart
 	var split func(p heldPart, at []string)
 	split = func(p heldPart, at []string) {
+		if p.in == nil {
+			// No part of it is evaluated as the run starts.
+			out = append(out, p)
+			return
+		}
 		rel := at[len(p.in.path):]
 		in := false
 		for _, part := range p.in.partsAround(rel) {

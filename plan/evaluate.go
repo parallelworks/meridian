@@ -416,11 +416,17 @@ func jsonWord(s string) bool { return s == "true" || s == "false" || s == "null"
 // rest of v, nor the text of a boolean, a number or null (Masker). ok is
 // false, and the problem reported, if it fails.
 func (e *evaluation) value(v Value, pointer string) (out any, read expr.Read, ok bool) {
+	return e.valuePlaced(v, pointer, nil)
+}
+
+// valuePlaced evaluates v as value does, and calls placed, if it isn't
+// nil, with the path in v of each of its templates, and what it read.
+func (e *evaluation) valuePlaced(v Value, pointer string, placed func(path []string, read expr.Read)) (out any, read expr.Read, ok bool) {
 	out, read, err := v.evalLeaves(e.scope, func(out any, read expr.Read) {
 		if read.Marked {
 			maskedStrings(out, e.mask)
 		}
-	})
+	}, placed)
 	e.read = e.read.Or(read)
 	if err != nil {
 		e.reportError(pointer, err, read)

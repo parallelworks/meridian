@@ -237,8 +237,8 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   - a workflow a step calls, which is a run of its own, can name groups
     with `runs-on:`, and its caller's job too; and what isn't built yet of
     one, which fails the step that calls it when it runs: a directory
-    outside its root's run directory
-    ([Workflows a step calls](#workflows-a-step-calls));
+    outside its root's run directory, and a value of its `env:` that
+    reads its own name ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
   - how a job's `ssh:` reaches its host, where its run's directory is
@@ -1584,8 +1584,10 @@ sees one version.
   release that reads only an earlier version runs every run that version
   holds, and only a run that uses an addition needs a newer release, and
   newer workers. Version 2 adds the pins of a run's called workflows'
-  steps (`Plan.Calls`), so a run whose called workflows call none is of
-  version 1. A release reads every version up to its own, each by its
+  steps (`Plan.Calls`), and a child run's link to its step
+  (`Run.Parent`), with what its secret record holds of the step
+  (`Record.Inherited`), so a run no step calls whose called workflows
+  call none is of version 1. A release reads every version up to its own, each by its
   own schemas, under `plan/schema/<version>/`, and refuses what a later
   version added in an earlier one's plan (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
@@ -2099,11 +2101,16 @@ any other `uses:` for a built-in action; no known workflow has either. The
 known workflows make 270 calls, in 146 files, nested at most 3 levels
 below their root.
 
-Of this, what is built is the whole tree's pinning as the root is
-created, with its limits, its pins in the plan (`Plan.Calls`) and its
-texts in the store, beside the run, but for the check of the called
-workflows' required inputs. The rest isn't built yet: the worker fails a
-step that uses a workflow (`uses_not_supported`).
+Of this, what is built is the whole tree's pinning as the root is created,
+with its limits, its pins in the plan (`Plan.Calls`) and its texts in the
+store, beside the run, but for the check of the called workflows' required
+inputs; and what a child's Create and Start take from its step
+(`compile.Options.Parent`): its inputs, its environment, and its link to
+its step and to its root (`Run.Parent`), with what of them is private kept
+in its secret record (`Record.Inherited`), and what Step says of a calling
+step's `with:` and environment that is private (`ReadyStep.WithPrivate`
+and the rest). The rest isn't built yet: the worker fails a step that uses
+a workflow (`uses_not_supported`).
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2159,18 +2166,36 @@ step that uses a workflow (`uses_not_supported`).
   `$thumbnail`, as what was submitted to it: defaults are filled in and
   required inputs checked, as for any run, and, as in format 1, a value of
   another type than its input's is read as it is given, as Create reads
-  any run's. A part of `with:` made from a variable or a password is kept
-  out of the child's plan, in its secret record, as a password is, and a
-  part that holds a secret is masked in the child's jobs, as in the
-  caller's. A child whose Create fails, as for
-  an input that a `with:` made of expressions leaves out, fails its step
-  (`child_not_created`), with the child's problems, masked as the step's
-  are.
-- **Its environment** is its calling step's, as in format 1: the caller's
-  workflow, job and step `env:` and the variables format 1 defines, under
-  the child's own `env:`, whose expressions read it, and its jobs' and
-  steps' over that. A private part of it is kept in the child's secret
-  record. The caller's `matrix` values and `app` aren't passed to it.
+  any run's, and one for an input it doesn't define is kept. Step names
+  the parts of `with:` that a template made from a variable or a password,
+  and those it made from a secret, by their paths, all of a part a
+  template gives (`ReadyStep.WithPrivate`, `ReadyStep.WithSecrets`); the
+  child's plan holds none of them, nor what reads one, as an input's
+  default can: its secret record holds them, in what was submitted, as it
+  holds a password, and its values name them private, and those made from
+  a secret secrets, masked as what is made from one is
+  (`RunValues.Derived`), as in the caller's. The strings the caller's
+  worker masks are kept in the child's secret record too, for its jobs to
+  mask, as format 1 has a child mask its caller's secrets. A child whose
+  Create fails, as for an input that a `with:` made of expressions leaves
+  out, fails its step (`child_not_created`), with the child's problems,
+  masked as the step's are.
+- **Its environment** is its calling step's, as in format 1: the
+  caller's workflow, job and step `env:` and the variables format 1
+  defines, under the child's own `env:`, whose expressions read it, and
+  its own other values, in the order they read each other, and its jobs'
+  and steps' over that, the variables the child's worker defines over all;
+  so a variable the child's worker doesn't define, as `PW_MATRIX_INDEX`
+  for a job that isn't a matrix's, is its caller's. Step names the
+  variables of the step's environment made from a variable or a password,
+  and from a secret (`ReadyStep.EnvPrivate`, `ReadyStep.EnvSecrets`),
+  which the child's plan doesn't hold: its secret record does, and its
+  values name them private, or secrets, as for its inputs. A value of the
+  child's own `env:` that reads its own name, which reads the caller's in
+  format 1, isn't built yet: the child fails as it starts, as one whose
+  values read each other does (`values_read_each_other`); no known
+  workflow has one. The caller's `matrix` values and `app` aren't passed
+  to it.
 - **Its identity** is its root's, as format 1 gives a child:
   `PW_JOB_ID`, `PW_JOB_NUMBER`, `PW_RUN_SLUG` and `PW_PARENT_NAME` are the
   root run's, and `PW_PARENT_JOB_DIR` is the root's run directory, which
@@ -2180,7 +2205,10 @@ step that uses a workflow (`uses_not_supported`).
   dot and the repository, for one in a GitHub repository, which two of its
   `$yaml` files share; `gitlab.`, the server and the project's path, with
   dots for its slashes, for one in a GitLab project; the slug, for
-  `marketplace/`; and the saved workflow's name, for `workflow/`.
+  `marketplace/`; and the saved workflow's name, for `workflow/`
+  (`SourceRef.CallName`). The child's plan links it to its step's try,
+  and to its root, by run ID, with how far below the root it is
+  (`Run.Parent`), which its attempts' identity is given from.
 - **Its directory** is the caller's run directory's (`PW_JOB_DIR`'s)
   `subworkflows/<job>/step_<n>/`, as in format 1, whose workflows read
   files their children leave there: `<job>` is the calling job's name, or,

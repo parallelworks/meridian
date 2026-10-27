@@ -63,19 +63,25 @@ type PinnedText struct {
 }
 
 // Create is the Create phase: it loads a workflow file and compiles it,
-// with the input values submitted for a run, into the run's plan, and
-// gives beside it what the run's secret record holds from the start. It
-// reads the variables the workflow reads through opts.Variables, checks
-// its sessions: with opts.Sessions, the execution groups and environments
-// its jobs' runs-on: name, written out, with opts.Groups, and resolves,
-// pins and loads the workflows its steps' uses: name with opts.Sources; a
-// workflow that needs one of them that isn't there fails
-// (resolver_missing). It reports every problem it finds, and gives nothing
-// if any is an error. It returns an error, and nothing else, when a
-// resolver couldn't answer, which for the Inputs resolver wraps
-// ErrUnanswered, or ctx is done, with ctx.Err().
+// with the input values submitted for a run, into the run's plan, and gives
+// beside it what the run's secret record holds from the start. It reads the
+// variables the workflow reads through opts.Variables, checks its sessions:
+// with opts.Sessions, the execution groups and environments its jobs'
+// runs-on: name, written out, with opts.Groups, and resolves, pins and
+// loads the workflows its steps' uses: name with opts.Sources; a workflow
+// that needs one of them that isn't there fails (resolver_missing). A child
+// run's Create is given the step that calls it (opts.Parent), whose with:
+// it is submitted, and keeps out of the plan what of it is private. It
+// reports every problem it finds, and gives nothing if any is an error. It
+// returns an error, and nothing else, when a resolver couldn't answer,
+// which for the Inputs resolver wraps ErrUnanswered, or ctx is done, with
+// ctx.Err(), and for a Parent that names as private what a step can't give,
+// which is its caller's mistake.
 func Create(ctx context.Context, name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := opts.Parent.check(submitted); err != nil {
 		return nil, nil, err
 	}
 	created, diags, err := create(&resolving{ctx}, name, data, submitted, opts)
@@ -113,6 +119,7 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 		}
 		diags = append(diags, resolved...)
 	}
+	submitted = opts.Parent.submitted(submitted)
 	var ctx context.Context
 	if r != nil {
 		ctx = r.ctx
@@ -136,6 +143,9 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 		source.Revision = source.Digest
 	}
 	p := &plan.Plan{Version: plan.Version, Run: c.run(source), Jobs: c.jobs()}
+	if opts.Parent != nil {
+		p.Run.Parent = opts.Parent.link()
+	}
 	if r != nil {
 		if err := c.checkResolved(r.ctx, p); err != nil {
 			return nil, nil, err
@@ -167,7 +177,12 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 	}
 	slices.Sort(p.Run.Derived)
 	for k := range inputs.private {
-		p.Run.Private = append(p.Run.Private, "inputs."+k)
+		// One held as private that is a secret too, as a value for an
+		// input the workflow doesn't define that names a password, is a
+		// secret.
+		if !c.secrets["inputs."+k] {
+			p.Run.Private = append(p.Run.Private, "inputs."+k)
+		}
 	}
 	slices.Sort(p.Run.Private)
 	p.Run.Variables = slices.Sorted(maps.Keys(variables))
@@ -197,6 +212,9 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 			record.Withheld = map[string]plan.Data{}
 		}
 		record.Withheld[pointer] = plan.DataOf(v)
+	}
+	if opts.Parent != nil {
+		record.Inherited = opts.Parent.inherited()
 	}
 	return &Created{Plan: p, Record: record, Texts: c.texts}, c.diags, nil
 }
@@ -386,13 +404,20 @@ func maskedIf(marked bool, err error) error {
 // the run is created, and links: are only checked; but the workflow's env:
 // is what env holds, and format 1 never read env in the workflow's
 // timeout:, as ACTIVATE leaves an expression there that reads it as its
-// text, and so ignores the timeout. Input definitions, which
-// Start evaluates with the workflow's env (plan.PhaseStart), aren't
-// checked for what they read yet.
+// text, and so ignores the timeout. A child run's env: is laid over the
+// environment of the step that calls it, and reads it, as format 1's does
+// (Options.Parent), and so its own values, which Start evaluates in the
+// order they read each other: it is checked as Start evaluates it
+// (plan.PhaseStart). Input definitions, which Start evaluates with the
+// workflow's env (plan.PhaseStart), aren't checked for what they read yet.
 func (c *compiler) run(source plan.Source) plan.Run {
 	w := c.doc.Value
 	known := createContexts(c.opts, nil)
 	kept := c.inputs.kept()
+	envPhase := plan.PhaseCreate
+	if c.opts.Parent != nil {
+		envPhase = plan.PhaseStart
+	}
 	r := plan.Run{
 		Source:      source,
 		Format:      c.doc.Format,
@@ -402,7 +427,7 @@ func (c *compiler) run(source plan.Source) plan.Run {
 		Thumbnail:   str(w["thumbnail"]),
 		Inputs:      plan.DataOf(kept),
 		Definitions: c.definitions(),
-		Env:         c.values([]string{"env"}, plan.PhaseCreate, nil),
+		Env:         c.values([]string{"env"}, envPhase, nil),
 		Timeout:     c.value([]string{"timeout"}, plan.PhaseCreate, nil),
 		Remote:      known.Run.Remote,
 		// The session provider checked the sessions:, which Start makes.

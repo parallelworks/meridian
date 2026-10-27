@@ -437,10 +437,19 @@ func (c *compiler) checkNeedsRef(path []string, ph plan.Phase, job *jobInfo) fin
 // its steps and its outputs:, but for the variables format 1 defines for a
 // step alone, such as OUTPUTS, which only its steps read
 // (plan.IsFormatVariable, plan.IsJobStartVariable); and in a step, one its
-// own env: does. Any other reads as "", which is a warning.
+// own env: does. For a child run, so does each variable of the environment
+// of the step that calls it, which its env: is laid over (Options.Parent).
+// Any other reads as "", which is a warning.
 func (c *compiler) checkEnvRef(name string, ph plan.Phase, job *jobInfo, in *spot) finding {
 	env := func(loc ...string) map[string]any { return mapping(lookup(c.doc.Value, loc)) }
 	defined := []map[string]any{env("env")}
+	if p := c.opts.Parent; p != nil {
+		inherited := make(map[string]any, len(p.Env))
+		for k := range p.Env {
+			inherited[k] = nil
+		}
+		defined = append(defined, inherited)
+	}
 	if job != nil {
 		dir := slices.Equal(in.loc, appendPath(job.loc, "working-directory"))
 		if ph == plan.PhaseStep && plan.IsFormatVariable(name) || (ph >= plan.PhaseJobEnv || dir) && plan.IsJobStartVariable(name) {

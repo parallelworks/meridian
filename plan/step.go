@@ -228,6 +228,17 @@ type ReadyStep struct {
 	// reads an output that nothing wrote as "" in the step, rather than
 	// fail it (Contexts.StrictOutputs). A later try carries it over.
 	IfAlways bool `json:"ifAlways,omitzero"`
+	// WithPrivate and WithSecrets name, for a step that calls a workflow,
+	// the parts of With made from an organization or user variable or a
+	// password, but no secret, and those made from a secret, by their paths
+	// in it (JoinPath), in order; and EnvPrivate and EnvSecrets the
+	// variables of Env so made, by name. The run the step calls keeps them
+	// out of its plan, and masks those made from a secret as what is made
+	// from one is (docs/design.md, Workflows a step calls).
+	WithPrivate []string `json:"withPrivate,omitempty"`
+	WithSecrets []string `json:"withSecrets,omitempty"`
+	EnvPrivate  []string `json:"envPrivate,omitempty"`
+	EnvSecrets  []string `json:"envSecrets,omitempty"`
 }
 
 // ReadyStepRetry is a step's retry: as Step evaluated it, which reruns the
@@ -408,13 +419,24 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 		if !s.Run.IsZero() {
 			rs.Run, _, _ = e.text(s.Run, at(s.Path, "run"))
 		}
+		// What of the with: and the env of a step that calls a workflow
+		// is private, which its run keeps out of its plan.
+		var made madeParts
+		var placed func([]string, expr.Read)
+		if s.Source != nil {
+			placed = made.note
+		}
 		if !s.With.IsZero() {
 			pointer := at(s.Path, "with")
-			if out, read, ok := e.value(s.With, pointer); ok {
+			if out, read, ok := e.valuePlaced(s.With, pointer, placed); ok {
 				if rs.With, ok = mappingData(out); !ok {
 					e.reportType(pointer, out, read, "object")
 				}
 			}
+		}
+		if s.Source != nil {
+			rs.WithPrivate, rs.WithSecrets = made.names(rs.With)
+			rs.EnvPrivate, rs.EnvSecrets = c.envMarks(rs.Env)
 		}
 	}
 	dir := jobDir
@@ -458,6 +480,70 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	}
 	rs.Masked = e.masked
 	return rs, e.diags, nil
+}
+
+// madeParts are the paths of the parts of a value made from a private
+// value: from an organization or user variable or a password, but no
+// secret, and from a secret.
+type madeParts struct{ private, secrets [][]string }
+
+// note notes the part at path, which read read.
+func (m *madeParts) note(path []string, read expr.Read) {
+	switch {
+	case read.Marked:
+		m.secrets = append(m.secrets, path)
+	case read.Private:
+		m.private = append(m.private, path)
+	}
+}
+
+// names returns the paths m noted, in with, a step's with: as Step gave
+// it, as JoinPath writes them, in order: of a with: that is one template,
+// each of its keys.
+func (m *madeParts) names(with Data) (private, secrets []string) {
+	name := func(paths [][]string) []string {
+		var out []string
+		for _, path := range paths {
+			if len(path) == 0 {
+				keys, _ := with.Get().(map[string]any)
+				for k := range keys {
+					out = append(out, JoinPath(k))
+				}
+				continue
+			}
+			out = append(out, JoinPath(path...))
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	return name(m.private), name(m.secrets)
+}
+
+// envMarks returns the names of env, a step's environment as Step gives it
+// (ReadyStep.Env), made from an organization or user variable or a
+// password, but no secret, and those made from a secret: as the step's
+// env: made it, or else the job's, or else the workflow's, as the run's
+// values name them.
+func (c *stepContexts) envMarks(env map[string]string) (private, secrets []string) {
+	runPrivate, runSecrets := setOf(c.Run.Private), setOf(c.Run.Secrets)
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		var read expr.Read
+		if _, ok := c.StepEnv[name]; ok {
+			read = c.stepMarks[name]
+		} else if _, ok := c.JobEnv[name]; ok {
+			read = c.jobMarks[name]
+		} else {
+			path := JoinPath("env", name)
+			read = expr.Read{Private: runPrivate[path] || runPrivate["env"], Marked: runSecrets[path] || runSecrets["env"]}
+		}
+		switch {
+		case read.Marked:
+			secrets = append(secrets, name)
+		case read.Private:
+			private = append(private, name)
+		}
+	}
+	return private, secrets
 }
 
 // postName returns the name of the step that runs the cleanup: of the step
