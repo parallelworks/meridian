@@ -230,8 +230,11 @@ func (c *Coordinator) attemptEnded(ctx context.Context, run *store.Run, job *sto
 	case a.End.Kind == store.EndLost:
 		return c.workerLost(ctx, run, job, a, done)
 	default:
-		// A placement withdrawn: what follows it is a cancellation's,
-		// which isn't built yet, and until it is the job fails.
+		// Withdrawn, or superseded: the coordinator ends the job in the
+		// transaction that withdraws its attempt (withdraw, failJob), and
+		// supersedes one only with another, so a job whose latest attempt
+		// ended so, and which hasn't ended, is one nothing will run, and
+		// fails, as a job the coordinator couldn't run does.
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{
 			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason,
 			Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": job.Key})},

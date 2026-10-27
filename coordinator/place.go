@@ -336,9 +336,9 @@ func (c *Coordinator) attemptSetupFailed(ctx context.Context, id string, p *prob
 func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, error) {
 	private := a.Private
 	cand, _, rj, err := c.placedOn(ctx, run, job, a)
-	var groups *groupsError
+	groups, unanswered := errors.AsType[*groupsError](err)
 	switch {
-	case errors.As(err, &groups):
+	case unanswered:
 		return c.unanswered(ctx, run, job, private, groups.err)
 	case errors.Is(err, errMemberGone):
 		return 0, c.attemptSetupFailed(ctx, a.ID, nil)

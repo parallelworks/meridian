@@ -400,7 +400,7 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	}
 	// A process that ended between a run's end and the checkpoint after it
 	// left the log holding the run's secret record.
-	s.truncateLog(ctx)
+	s.truncateWAL(ctx)
 	return nil
 }
 
@@ -587,7 +587,7 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 		s.onControls(context.WithoutCancel(ctx), tx.ControlsChanged())
 	}
 	if tx.erased {
-		s.truncateLog(context.WithoutCancel(ctx))
+		s.truncateWAL(context.WithoutCancel(ctx))
 	}
 	if tx.events {
 		s.changedMu.Lock()
@@ -614,14 +614,14 @@ func (s *Store) Changes() <-chan struct{} {
 	return s.changed
 }
 
-// truncateLog checkpoints the write-ahead log into the database and
+// truncateWAL checkpoints the write-ahead log into the database and
 // truncates it, so that what a transaction deleted, which secure_delete
 // overwrote with zeros in the pages the checkpoint writes, is in neither
 // any more. A reader in another process that still reads from the log, or
 // a writer, keeps the checkpoint from finishing, and the next one, of the
 // next run to end, of the next Open, or of hopper's maintenance, truncates
 // it: the store says so in its log.
-func (s *Store) truncateLog(ctx context.Context) {
+func (s *Store) truncateWAL(ctx context.Context) {
 	var busy, logPages, checkpointed int64
 	err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &checkpointed)
 	switch {
