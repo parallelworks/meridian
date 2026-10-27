@@ -377,3 +377,44 @@ func TestFollowHoldsStepEnd(t *testing.T) {
 		t.Errorf("the logs are %q", got)
 	}
 }
+
+// Followed for what is stored, a run that hasn't ended has its events
+// reported, to its last, and its logs as far as they are stored, a step's
+// end not held back for its log; and Follow returns at once, with the
+// run's status.
+func TestFollowStored(t *testing.T) {
+	c := open(t, Options{})
+	id, attempt := claimedAttempt(t, c)
+	logs := &runlogtest.Logs{}
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.AppendEvents(attempt, []workerapi.Event{stepEvent(1, 0, false), stepEvent(2, 0, true), stepEvent(3, 1, false)})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := LogKey{Run: id, Job: "main", Attempt: 1, Part: workerapi.LogStep}
+	if _, _, err := logs.Append(t.Context(), key, 0, []byte("first\npart"), false); err != nil {
+		t.Fatal(err)
+	}
+	var f followed
+	opts := f.options(logs)
+	opts.Stored = true
+	status, err := c.Follow(t.Context(), id, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != RunRunning {
+		t.Errorf("Follow returned %+v", status)
+	}
+	var kinds []string
+	for _, e := range f.events() {
+		kinds = append(kinds, fmt.Sprintf("%s %d", e.Kind, e.Step))
+	}
+	want := []string{"run.started 0", "job.ready 0", "job.placing 0", "job.running 0", "step.started 0", "step.finished 0", "step.started 1"}
+	if !slices.Equal(kinds, want) {
+		t.Errorf("the events are %q, want %q", kinds, want)
+	}
+	if got := f.logs(); got[logName(key)] != "first\npart" || got[logName(key)+" end"] != "" {
+		t.Errorf("the logs are %q", got)
+	}
+}

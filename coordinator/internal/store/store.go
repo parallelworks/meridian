@@ -84,6 +84,9 @@ var (
 	// this release doesn't read as it would write it, such as a job's
 	// result with a member it doesn't know.
 	ErrMalformed = errors.New("store: malformed")
+	// ErrReadOnly is what a call that writes returns of a store opened
+	// only to read it (Options.ReadOnly).
+	ErrReadOnly = errors.New("store: opened only to read it")
 )
 
 // Options say how to open a store. A nil *Options means the defaults.
@@ -98,6 +101,16 @@ type Options struct {
 	// that failed marks its run as soon as its event is stored. Nil, or
 	// false, has the store wait for the next event, which shows it.
 	LastTry func(tx *Tx, attempt string, step, try int) bool
+	// ReadOnly opens the store only to read it, as a command that shows
+	// runs does, which mustn't change a store that an earlier release,
+	// still running a workflow, uses: Open neither makes the database, nor
+	// brings its schema up to this release's, nor checkpoints its
+	// write-ahead log, and refuses a database whose schema isn't this
+	// release's, whether newer (database_too_new) or older
+	// (database_too_old); and each call that writes returns ErrReadOnly.
+	// Only Meridian's tables are read, so only Meridian's schema is
+	// checked.
+	ReadOnly bool
 }
 
 // A Store is the coordinator's store, open. Its methods are safe for
@@ -112,6 +125,8 @@ type Store struct {
 	// resolved: the same for every process that opens the database.
 	file string
 	id   string
+	// readOnly says the store was opened only to read it.
+	readOnly bool
 
 	// holds are the endpoints this store holds, kept here until they are
 	// released, or the store closed: a lock's file that nothing reaches
@@ -155,6 +170,7 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	if opts != nil {
 		lastTry = opts.LastTry
 	}
+	readOnly := opts != nil && opts.ReadOnly
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -162,13 +178,18 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	if err := checkFiles(path); err != nil {
 		return nil, err
 	}
-	created, err := createPrivate(path)
-	if err != nil {
+	var created bool
+	if readOnly {
+		// SQLite would make a database that isn't there.
+		if _, err := os.Lstat(path); err != nil { //nolint:gosec // the database checkFiles checked
+			return nil, err
+		}
+	} else if created, err = createPrivate(path); err != nil {
 		return nil, err
 	}
 	start, wait := time.Now(), openBusyFirstWait
 	for {
-		s, err := openOnce(ctx, path, log, lastTry)
+		s, err := openOnce(ctx, path, log, lastTry, readOnly)
 		switch {
 		case errors.Is(err, hoppersqlite.ErrNetworkFilesystem):
 			if created {
@@ -207,14 +228,18 @@ const (
 )
 
 // openOnce opens the store at path once, and brings its schema up to this
-// release's.
-func openOnce(ctx context.Context, path string, log *slog.Logger, lastTry func(tx *Tx, attempt string, step, try int) bool) (*Store, error) {
+// release's, or, readOnly, checks that it is.
+func openOnce(ctx context.Context, path string, log *slog.Logger, lastTry func(tx *Tx, attempt string, step, try int) bool, readOnly bool) (*Store, error) {
 	d, err := openSQLite(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{driver: d, db: d.DB(), log: log, lastTry: lastTry}
-	if err := s.setUp(ctx, log); err != nil {
+	s := &Store{driver: d, db: d.DB(), log: log, lastTry: lastTry, readOnly: readOnly}
+	setUp := s.setUp
+	if readOnly {
+		setUp = s.checkSchema
+	}
+	if err := setUp(ctx, log); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
 	return s, nil
@@ -299,13 +324,7 @@ func networkFilesystem(path string, err error) error {
 
 // setUp migrates a store just opened, and reads its ID and its file.
 func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
-	if err := s.View(ctx, func(tx *Tx) error {
-		var err error
-		if s.file, err = tx.dbFile(); err == nil && !filepath.IsAbs(s.file) {
-			err = fmt.Errorf("store: SQLite opened %q, not a file", s.file)
-		}
-		return err
-	}); err != nil {
+	if err := s.View(ctx, s.readFile); err != nil {
 		return err
 	}
 	// hoppermigrate.Up leaves a schema a newer release of hopper brought
@@ -324,17 +343,50 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.migrate(ctx, log); err != nil {
 		return err
 	}
-	if err := s.View(ctx, func(tx *Tx) error {
-		if err := tx.tx.QueryRowContext(ctx, "SELECT value FROM meridian_store WHERE key = 'store_id'").Scan(&s.id); err != nil {
-			return fmt.Errorf("store: read the store's ID: %w", err)
-		}
-		return nil
-	}); err != nil {
+	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
 	// A process that ended between a run's end and the checkpoint after it
 	// left the log holding the run's secret record.
 	s.truncateLog(ctx)
+	return nil
+}
+
+// checkSchema checks that a store just opened only to read it has
+// Meridian's schema at this release's version, and reads its ID and its
+// file, changing nothing.
+func (s *Store) checkSchema(ctx context.Context, _ *slog.Logger) error {
+	return s.View(ctx, func(tx *Tx) error {
+		if err := s.readFile(tx); err != nil {
+			return err
+		}
+		version, err := tx.schemaVersion()
+		switch {
+		case err != nil:
+			return err
+		case version > len(migrations):
+			return s.tooNew("meridian", version, len(migrations))
+		case version < len(migrations):
+			return problems.DatabaseTooOld.Problem(problems.Params{"path": s.file, "schema": "meridian", "version": version, "latest": len(migrations)})
+		}
+		return s.readID(tx)
+	})
+}
+
+// readFile reads the database's file, as SQLite opened it.
+func (s *Store) readFile(tx *Tx) error {
+	var err error
+	if s.file, err = tx.dbFile(); err == nil && !filepath.IsAbs(s.file) {
+		err = fmt.Errorf("store: SQLite opened %q, not a file", s.file)
+	}
+	return err
+}
+
+// readID reads the store's ID.
+func (s *Store) readID(tx *Tx) error {
+	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT value FROM meridian_store WHERE key = 'store_id'").Scan(&s.id); err != nil {
+		return fmt.Errorf("store: read the store's ID: %w", err)
+	}
 	return nil
 }
 
@@ -444,6 +496,9 @@ func (s *Store) View(ctx context.Context, fn func(*Tx) error) error {
 }
 
 func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error) error {
+	if opts == nil && s.readOnly {
+		return ErrReadOnly
+	}
 	sqlTx, err := s.db.BeginTx(ctx, opts)
 	if err != nil {
 		return err

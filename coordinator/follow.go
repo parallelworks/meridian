@@ -46,6 +46,11 @@ type FollowOptions struct {
 	// and of each step's cleanup, that started.
 	Logs Logs
 	Log  func(LogPart) error
+	// Stored has Follow report only what is stored now, and return: the
+	// run's events, to its last, and its logs, as far as they are stored,
+	// whether or not the run has ended, without holding a step's end back
+	// for its log.
+	Stored bool
 }
 
 // A LogPart is part of one of a run's logs, as Follow reads it: its next
@@ -124,13 +129,30 @@ func (c *Coordinator) Follow(ctx context.Context, id string, opts FollowOptions)
 			// Held, if it is a step's end, until so long after it was
 			// stored, by the store's clock, which was now as the events
 			// were read.
-			if err := f.event(ctx, eventOf(id, e), readAt.Add(c.followHold-now.Sub(e.At))); err != nil {
+			until := readAt.Add(c.followHold - now.Sub(e.At))
+			if opts.Stored {
+				until = time.Time{}
+			}
+			if err := f.event(ctx, eventOf(id, e), until); err != nil {
 				return nil, err
 			}
 		}
 		if len(events) == 0 && run.State == store.RunEnded {
 			// A run that ended before its events were kept.
 			return f.end(ctx, Event{Kind: RunFinished, Run: id, Time: run.EndedAt, Outcome: run.Outcome, Reason: run.Reason, Diagnostics: run.Diagnostics})
+		}
+		if opts.Stored && len(events) < followEvents {
+			// Every event stored is reported: the logs are, as far as
+			// they are stored.
+			for {
+				read, err := f.readLogs(ctx, nil)
+				if err != nil {
+					return nil, err
+				}
+				if !read {
+					return c.Status(ctx, id)
+				}
+			}
 		}
 		read, err := f.readLogs(ctx, nil)
 		if err != nil {

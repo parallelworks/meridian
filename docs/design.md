@@ -73,9 +73,11 @@ runs workers on this machine, is built yet
 The `meridian` command wires the packages together with local resolvers.
 It runs a coordinator in its own process, with a SQLite store: today it
 validates a workflow (`meridian validate`), runs one, its jobs on this
-machine with the `local` backend (`meridian run`), and runs one attempt of
-a job as a worker (`meridian worker`), and its other commands say they
-aren't built yet ([The `meridian` command](#the-meridian-command)). A
+machine with the `local` backend (`meridian run`), shows runs and their
+logs (`meridian status` and `logs`), takes up a run whose command stopped
+(`meridian resume`), and runs one attempt of a job as a worker (`meridian
+worker`), and its other commands say they aren't built yet ([The
+`meridian` command](#the-meridian-command)). A
 platform wires them with its own resolvers, Postgres and as many
 coordinator replicas as it needs. Nothing in the packages knows which of
 the two it is running in.
@@ -1150,10 +1152,13 @@ its results once. A run's Start can be in a hopper queue of the run's
 own, which only the coordinator that created the run works, as `meridian
 run`'s is, so that Start reads a variable whose value comes from the
 environment from the one the command ran in; its job is then left to the
-next process that works that queue. Only `meridian resume` of the run
-works it, and that isn't built yet: until it is, a run whose creator
-ended before its Start stays created. A rerun runs Start again
-([Reruns](#reruns)).
+next process that works that queue. The coordinator that created the run
+holds its Start, under a lock on a file beside the store's database, named
+for the run, until the run has started, or the process ends: a run whose
+creator ended before its Start stays created until `meridian resume` of
+the run, which takes the hold over, works the queue, and one whose creator
+lives is left to it ([Status, logs and resume](#status-logs-and-resume)).
+A rerun runs Start again ([Reruns](#reruns)).
 
 ## Run data
 
@@ -3459,6 +3464,54 @@ its steps' logs as their workers store them.
   masked them, and an attempt's problems as the coordinator stored them,
   masked where it ran is private; a private placement's member is never
   shown, nor anything else only the run's secret record holds.
+
+### Status, logs and resume
+
+- **`meridian status`** lists the store's last runs, the newest first, 20
+  unless `-n` says: each one's state, created, running or ended, how it
+  ended, when it was created and its workflow's location. `meridian status
+  <run>` shows one run, its directory and its times, a line for each of
+  its jobs, waiting, ready, placing, running or ended, with how it ended,
+  how many attempts it had and the member its last ran on, none for a
+  private placement, and then the run's problems and its jobs'.
+  `--format json` writes a JSON object a line, of the same `version` as
+  `meridian run`'s: one for each run, or one for the run and one for each
+  job. A state directory without a store has no runs.
+- **`meridian logs <run> [job]`** shows the run's steps' logs as `meridian
+  run` does, the run's events saying which logs there are: as far as they
+  are stored, and with `-f` as they are stored, until the run ends. A
+  job's name shows each of its instances' logs, and an instance's key that
+  one's.
+- **Reading changes nothing.** `status` and `logs` read the store without
+  changing it, not even its schema, which every other command brings up to
+  its release's as it opens the store, so that a newer release's `status`
+  doesn't change a store that an earlier release, still running a
+  workflow, uses. They read a store whose schema is at their own release's
+  version only, and refuse an earlier one (`database_too_old`), which
+  `meridian run` or `resume` of their release brings up to date once the
+  earlier release is done with it, as a later one (`database_too_new`).
+- **`meridian resume <run>`** takes a run up again as one more replica,
+  as when the `meridian run` that coordinated it was killed, or left it
+  running: it works the run's Start if that hasn't run, and no process
+  that lives holds it, as the `meridian run` that created it does until
+  the run has started, reading variables from its own environment, and
+  holds the Start itself as it does; it holds the socket once no other
+  process does,
+  and shows the run, from its first event, until it ends, exiting as
+  `meridian run` does. What a killed process held of the run's work, its
+  jobs' supervision and its end, another replica takes over once its
+  lease, hopper's, lapses, in 15 seconds; the run's workers, cut off
+  meanwhile, hold their reports and logs and send them once a process
+  holds the socket again. Before it takes up a run that hasn't ended, it
+  checks the run's directory as `meridian run` did once it made it, as the
+  run's steps will run in it: one that is no longer the user's own private
+  directory refuses the run, and a run that hasn't started, so that nothing
+  has run in it, ends failed with what is wrong. A run that has started,
+  which it refuses, it doesn't stop: the store's other replicas, as the
+  `meridian run` that coordinated it, and the run's workers go on with it,
+  until `meridian cancel` stops it. A run whose plan only a newer release
+  reads is refused (`run_plan_newer`) and left as it is.
+- **`meridian cancel`** comes once the coordinator can cancel a run.
 
 ## Editors and web UIs
 

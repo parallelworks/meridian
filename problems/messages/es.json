@@ -252,6 +252,8 @@
   "run_dir_not_made": "Meridian no pudo crear el directorio de la ejecución {path}: {reason}.",
   "socket_path_too_long": "El socket del coordinador {path} es más largo que los {limit} bytes que puede tener la ruta de un socket en este sistema. Asigna a MERIDIAN_STATE_DIR un directorio con una ruta más corta.",
   "socket_unusable": "Meridian no pudo escuchar en el socket del coordinador {path}: {reason}.",
+  "run_not_found": "No hay ninguna ejecución {run} en el directorio de estado de Meridian.",
+  "job_not_found": "La ejecución {run} no tiene ningún trabajo {job}.",
   "source_access_denied": "Se denegó a Git el acceso a {location}: {reason}.",
   "source_objects_invalid": "Git rechazó lo que obtuvo para {location}, que no está bien formado: {reason}.",
   "owner_unmapped": "Meridian no puede comprobar {path}: un espacio de nombres de usuario oculta el propietario de {dir}, en el camino hacia él, así que Meridian no puede saber si otro usuario puede cambiarlo.",
@@ -259,6 +261,7 @@
   "directory_replaced": "El directorio {path} fue reemplazado mientras el worker lo creaba, así que el worker no lo usa.",
   "path_links_too_many": "La ruta {path} pasa por más de {max} enlaces simbólicos.",
   "database_too_new": "Una versión más reciente de Meridian llevó el esquema {schema} de la base de datos {path} a la versión {version}, y esta versión lee la versión {latest} y anteriores. Usa esa versión, o asigna a MERIDIAN_STATE_DIR otro directorio.",
+  "database_too_old": "La base de datos {path} es de una versión anterior de Meridian: su esquema {schema} está en la versión {version}, y esta versión lee la versión {latest}. Un comando que solo muestra ejecuciones no cambia la base de datos: usa aquella versión o, cuando ya no ejecute flujos de trabajo aquí, meridian run o meridian resume de esta versión, que actualiza la base de datos.",
   "member_settings_not_json": "Un miembro del grupo “{group}” tiene una configuración que JSON no puede contener, como .nan o .inf.",
 
   "worker_environment_missing": "El entorno con el que se inició meridian worker no define {variable}, que define el backend que lo inicia.",

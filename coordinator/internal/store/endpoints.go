@@ -80,6 +80,9 @@ type Hold struct {
 // is on a local disk, so is the lock, which every process that opens the
 // database shares. On a system without file locks, it fails.
 func (s *Store) HoldEndpoint(ctx context.Context, name, holder string) (*Hold, error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
 	if !endpointName.MatchString(name) {
 		return nil, fmt.Errorf("store: %q isn't an endpoint's name", name)
 	}

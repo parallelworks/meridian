@@ -73,9 +73,9 @@ func (s *Store) migrate(ctx context.Context, log *slog.Logger) error {
 ) STRICT`); err != nil {
 			return fmt.Errorf("store: create meridian_schema: %w", err)
 		}
-		var current int
-		if err := tx.tx.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM meridian_schema").Scan(&current); err != nil {
-			return fmt.Errorf("store: read the schema's version: %w", err)
+		current, err := tx.schemaVersion()
+		if err != nil {
+			return err
 		}
 		if current > len(migrations) {
 			return s.tooNew("meridian", current, len(migrations))
@@ -92,6 +92,20 @@ func (s *Store) migrate(ctx context.Context, log *slog.Logger) error {
 		_, err = tx.tx.ExecContext(ctx, "INSERT INTO meridian_store (key, value) VALUES ('store_id', ?) ON CONFLICT (key) DO NOTHING", newID(16))
 		return err
 	})
+}
+
+// schemaVersion returns the version of Meridian's schema: 0 for a
+// database without it.
+func (tx *Tx) schemaVersion() (int, error) {
+	var exists bool
+	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'meridian_schema')").Scan(&exists); err != nil || !exists {
+		return 0, err
+	}
+	var version int
+	if err := tx.tx.QueryRowContext(tx.ctx, "SELECT coalesce(max(version), 0) FROM meridian_schema").Scan(&version); err != nil {
+		return 0, fmt.Errorf("store: read the schema's version: %w", err)
+	}
+	return version, nil
 }
 
 // dbFile returns the database's file, as SQLite opened it: with its links

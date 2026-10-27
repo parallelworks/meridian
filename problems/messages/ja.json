@@ -252,6 +252,8 @@
   "run_dir_not_made": "Meridian は実行のディレクトリ {path} を作れませんでした: {reason}",
   "socket_path_too_long": "コーディネーターのソケット {path} は、このシステムでソケットのパスが持てる {limit} バイトより長くなっています。MERIDIAN_STATE_DIR をパスの短いディレクトリに設定してください。",
   "socket_unusable": "Meridian はコーディネーターのソケット {path} で待ち受けできませんでした: {reason}",
+  "run_not_found": "Meridian の状態ディレクトリに実行 {run} はありません。",
+  "job_not_found": "実行 {run} にジョブ {job} はありません。",
   "source_access_denied": "Git は {location} へのアクセスを拒否されました: {reason}",
   "source_objects_invalid": "Git は {location} のために取得したものを、形式が正しくないため拒否しました: {reason}",
   "owner_unmapped": "Meridian は {path} を確認できません。そこへ至る途中の {dir} の所有者がユーザー名前空間によって隠されているため、他のユーザーが変更できないことを確かめられません。",
@@ -259,6 +261,7 @@
   "directory_replaced": "ディレクトリ {path} はワーカーが作成している間に置き換えられたため、ワーカーはそれを使いません。",
   "path_links_too_many": "パス {path} は {max} 個を超えるシンボリックリンクを経由します。",
   "database_too_new": "より新しいリリースの Meridian が、データベース {path} のスキーマ {schema} をバージョン {version} にしました。このリリースが読み取れるのはバージョン {latest} 以前です。そのリリースを使うか、MERIDIAN_STATE_DIR を別のディレクトリに設定してください。",
+  "database_too_old": "データベース {path} は以前のリリースの Meridian のものです。スキーマ {schema} はバージョン {version} で、このリリースが読むのはバージョン {latest} です。実行を表示するだけのコマンドはデータベースを変更しません。そのリリースを使うか、そのリリースがここでワークフローを実行しなくなってから、このリリースの meridian run か meridian resume を使ってください。これらはデータベースを最新にします。",
   "member_settings_not_json": "グループ「{group}」のメンバーの settings に、.nan や .inf など JSON で表せない値があります。",
 
   "worker_environment_missing": "meridian worker が起動されたときの環境に {variable} が設定されていません。これは meridian worker を起動するバックエンドが設定するものです。",

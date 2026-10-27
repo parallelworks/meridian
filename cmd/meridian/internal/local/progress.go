@@ -2,9 +2,12 @@ package local
 
 import (
 	"bytes"
+	"cmp"
 	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +85,7 @@ type progressLine struct {
 // The kinds of JSON line Progress writes besides the events'.
 const (
 	kindRunCreated = "run.created"
+	kindRunResumed = "run.resumed"
 	kindRunLeft    = "run.left"
 	kindLog        = "log"
 )
@@ -93,6 +97,37 @@ func (p *Progress) Created(id, dir string) error {
 	}
 	_, err := fmt.Fprintf(p.out, "run %s started (run directory %s)\n", id, dir)
 	return err
+}
+
+// Resumed writes that the command has taken up the run id, whose directory
+// is dir, as meridian resume does.
+func (p *Progress) Resumed(id, dir string) error {
+	if p.json {
+		return p.writeJSON(progressLine{Kind: kindRunResumed, Run: id, RunDir: dir})
+	}
+	_, err := fmt.Fprintf(p.out, "run %s resumed (run directory %s)\n", id, dir)
+	return err
+}
+
+// Flush writes what Progress holds of each log's line that hasn't ended,
+// as the last of what meridian logs shows of a log that goes on.
+func (p *Progress) Flush() error {
+	for _, key := range slices.SortedFunc(maps.Keys(p.lines), compareKeys) {
+		if held := p.lines[key]; len(held) > 0 {
+			if err := p.writeLog(key, held, false, false); err != nil {
+				return err
+			}
+		}
+		delete(p.lines, key)
+	}
+	return nil
+}
+
+// compareKeys orders logs by their job, attempt, which of the attempt's
+// logs each is, step and try.
+func compareKeys(a, b coordinator.LogKey) int {
+	return cmp.Or(cmp.Compare(a.Job, b.Job), cmp.Compare(a.Attempt, b.Attempt), cmp.Compare(a.Part, b.Part),
+		cmp.Compare(a.Step, b.Step), cmp.Compare(a.Try, b.Try))
 }
 
 // Left writes that the command leaves the run id running, and how to pick

@@ -95,6 +95,27 @@ type Options struct {
 	// such as a run it couldn't start, which it tries again. Nil means
 	// none.
 	Log *slog.Logger
+	// ReadOnly opens the store only to read it, as a command that shows
+	// runs does (store.Options.ReadOnly): it changes nothing in the store,
+	// not even its schema, and refuses a store whose schema isn't this
+	// release's. The coordinator reports runs, as Status, Runs, Jobs and
+	// Follow do, and does nothing else: each call that would change a
+	// run, or serve, returns ErrReadOnly. It needs no Keys.
+	ReadOnly bool
+}
+
+// ErrReadOnly is what a coordinator opened only to read the store
+// (Options.ReadOnly) returns for a call that would change a run, or
+// serve.
+var ErrReadOnly = errors.New("coordinator: opened only to read the store")
+
+// writable returns ErrReadOnly for a coordinator opened only to read the
+// store.
+func (c *Coordinator) writable() error {
+	if c.opts.ReadOnly {
+		return ErrReadOnly
+	}
+	return nil
 }
 
 // RunOptions say how CreateRun stores a run.
@@ -172,8 +193,10 @@ type Coordinator struct {
 	// works no more queues and stops working none (retireQueue).
 	stopping bool
 	// queues are the start queues of the runs this coordinator created,
-	// which it works until their runs start.
-	queues map[string]bool
+	// or resumed, which it works until their runs start, each with the
+	// function that releases its hold on the run's Start
+	// (store.HoldStart), or nil for a run that has none.
+	queues map[string]func()
 	// retired counts the queues served is being made to stop working,
 	// each of which waits for the queue's jobs until retiring is done, as
 	// Serve stops.
@@ -190,35 +213,39 @@ type Coordinator struct {
 // Open opens a coordinator on the store at opts.Database. It works no
 // run's jobs until Serve.
 func Open(ctx context.Context, opts Options) (*Coordinator, error) {
-	if opts.Keys == nil {
+	if opts.Keys == nil && !opts.ReadOnly {
 		return nil, errors.New("coordinator: no Keys")
 	}
 	log := opts.Log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	// The store asks c, as it stores a step's events (lastTry), which is
+	// filled in once the store is open.
 	c := &Coordinator{}
-	st, err := store.Open(ctx, opts.Database, &store.Options{Log: log, LastTry: c.lastTry})
+	st, err := store.Open(ctx, opts.Database, &store.Options{Log: log, LastTry: c.lastTry, ReadOnly: opts.ReadOnly})
 	if err != nil {
 		return nil, err
-	}
-	sealer, err := seal.New(opts.Keys, st.ID())
-	if err != nil {
-		return nil, errors.Join(err, st.Close())
-	}
-	inserter, err := hopper.NewClient(st.Driver(), &hopper.Config{Logger: log})
-	if err != nil {
-		return nil, errors.Join(err, st.Close())
 	}
 	timing, err := openTiming()
 	if err != nil {
 		return nil, errors.Join(err, st.Close())
 	}
 	*c = Coordinator{
-		opts: opts, log: log, store: st, sealer: sealer, plans: newPlanCache(planCacheCount, planCacheBytes), inserter: inserter,
+		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
-		queues: map[string]bool{}, connections: map[string]connection{},
+		queues: map[string]func(){}, connections: map[string]connection{},
+	}
+	if opts.ReadOnly {
+		// Neither seals nor inserts anything.
+		return c, nil
+	}
+	if c.sealer, err = seal.New(opts.Keys, st.ID()); err != nil {
+		return nil, errors.Join(err, st.Close())
+	}
+	if c.inserter, err = hopper.NewClient(st.Driver(), &hopper.Config{Logger: log}); err != nil {
+		return nil, errors.Join(err, st.Close())
 	}
 	return c, nil
 }
@@ -253,7 +280,8 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 }
 
 // Close closes what members' drivers set up for their workers to reach the
-// coordinator, and the coordinator's store. Serve must have returned.
+// coordinator, releases its holds on runs' Starts, and closes the
+// coordinator's store. Serve must have returned.
 func (c *Coordinator) Close() error {
 	c.mu.Lock()
 	var errs []error
@@ -263,6 +291,12 @@ func (c *Coordinator) Close() error {
 		}
 	}
 	clear(c.connections)
+	for _, release := range c.queues {
+		if release != nil {
+			release()
+		}
+	}
+	clear(c.queues)
 	c.mu.Unlock()
 	return errors.Join(append(errs, c.store.Close())...)
 }
@@ -279,6 +313,9 @@ func (c *Coordinator) Close() error {
 // group_unknown. An error once the run is stored, as one that keeps the
 // coordinator from working its start queue, comes with the run's ID.
 func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, opts RunOptions) (string, error) {
+	if err := c.writable(); err != nil {
+		return "", err
+	}
 	switch {
 	case created == nil || created.Plan == nil:
 		return "", errors.New("coordinator: no plan to run")
@@ -300,11 +337,26 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 			return "", err
 		}
 	}
-	var id, queue string
+	var (
+		id, queue string
+		release   func()
+	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		if id, err = tx.NewRunID(); err != nil {
 			return err
+		}
+		if queue = c.startQueue(id); queue != sharedQueue {
+			// The run's Start is held as the run is stored, so that no
+			// other coordinator that takes the run up (Resume) works
+			// its start queue while this one lives. The number of a run
+			// that isn't stored, which the store gives again, is let go.
+			if release != nil {
+				release()
+			}
+			if release, err = c.store.HoldStart(id); err != nil {
+				return fmt.Errorf("coordinator: hold run %s's Start: %w", id, err)
+			}
 		}
 		// Keys wraps the record's data key while the transaction holds
 		// the store's write lock, so every other write waits for it,
@@ -314,7 +366,6 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		if err != nil {
 			return err
 		}
-		queue = c.startQueue(id)
 		wf := hopper.NewWorkflow("meridian run "+id, nil)
 		start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
 		// A job needed on any instance of it has a marker, which waits for
@@ -377,9 +428,12 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		return tx.InsertRecord(id, gen, sealed.Key, sealed.Record)
 	})
 	if err != nil {
+		if release != nil {
+			release()
+		}
 		return "", err
 	}
-	if err := c.workQueue(ctx, queue); err != nil {
+	if err := c.workQueue(ctx, queue, release); err != nil {
 		return id, fmt.Errorf("coordinator: work run %s's start queue: %w", id, err)
 	}
 	return id, nil
@@ -396,17 +450,22 @@ func (c *Coordinator) startQueue(id string) string {
 }
 
 // workQueue has the coordinator work the start queue q, from now if Serve
-// runs, and once it next does otherwise, as when it is stopping.
-func (c *Coordinator) workQueue(ctx context.Context, q string) error {
+// runs, and once it next does otherwise, as when it is stopping, holding
+// the run's Start, unless release, which lets the hold go, is nil, until it
+// stops working q (retireQueue), or closes.
+func (c *Coordinator) workQueue(ctx context.Context, q string, release func()) error {
 	if q == sharedQueue {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.queues[q] {
+	if _, ok := c.queues[q]; ok {
+		if release != nil {
+			release()
+		}
 		return nil
 	}
-	c.queues[q] = true
+	c.queues[q] = release
 	if c.served == nil || c.stopping {
 		return nil
 	}
@@ -426,10 +485,14 @@ func (c *Coordinator) retireQueue(ctx context.Context, q string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.queues[q] {
+	release, ok := c.queues[q]
+	if !ok {
 		return
 	}
 	delete(c.queues, q)
+	if release != nil {
+		release()
+	}
 	if c.served == nil || c.stopping {
 		return
 	}
@@ -449,6 +512,9 @@ func (c *Coordinator) retireQueue(ctx context.Context, q string) {
 // waits a few seconds for the jobs it is working, and then cuts them
 // short, to be done again. Serve can be called again once it returns.
 func (c *Coordinator) Serve(ctx context.Context) error {
+	if err := c.writable(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	if c.serving {
 		c.mu.Unlock()
