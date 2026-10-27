@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, matrices among them, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)) ([The coordinator](#the-coordinator)). |
+| `coordinator` | The coordinator, which stores runs, schedules and places their jobs, and serves the worker API, and the interfaces through which it reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, matrices among them, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)) ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -78,9 +78,9 @@ logs (`meridian status` and `logs`), takes up a run whose command stopped
 (`meridian resume`), cancels one (`meridian cancel`), and runs one attempt
 of a job as a worker (`meridian worker`), and its other commands say they
 aren't built yet ([The `meridian` command](#the-meridian-command)). A
-platform wires them with its own resolvers, Postgres and as many
-coordinator replicas as it needs. Nothing in the packages knows which of
-the two it is running in.
+platform wires them with its own resolvers, Postgres, whose store isn't
+built yet, and as many coordinator replicas as it needs. Nothing in the
+packages knows which of the two it is running in.
 
 ## The workflow format
 
@@ -211,6 +211,23 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   ([Bug fixes to format 1](#bug-fixes-to-format-1)) has one. Whether
   format 1 gains it as an addition, with ACTIVATE's meaning, or ACTIVATE
   drops it, is a decision for later.
+- **Where Meridian still runs format 1 otherwise than ACTIVATE**, besides
+  the additions, the stricter places and the keys ACTIVATE ignores above,
+  and the [bug fixes](#bug-fixes-to-format-1), each is described where it
+  applies:
+  - the path a job not yet readied takes as its run stops, where ACTIVATE
+    reads its `if:` by its text, or as far as it evaluates it, and a job
+    between attempts as its run stops
+    ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup));
+  - when `early-cancel: any-job-failed` hears of a step that failed on a
+    try that isn't known to be its last, and a job whose `if:` fails to
+    evaluate (the same);
+  - the order in which a matrix's instances take their turns under
+    `max-parallel` ([Matrices](#matrices));
+  - the `uses:` references ACTIVATE reads otherwise
+    ([Interfaces](#interfaces));
+  - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
+    ([Outputs](#outputs)).
 
 ### Conformance
 
@@ -420,9 +437,9 @@ Each phase reads the contexts of the phases before it too.
   outcome and outputs.
 
 The five phases are built, and so are matrix expansion, the scope builder
-and the masker. The worker calls Step and End; the coordinator, which calls
-Start and Ready, is designed here, and until it is built only
-`meridian validate --start` calls Start.
+and the masker. The worker calls Step and End, and the coordinator Start
+and Ready ([The coordinator](#the-coordinator)); `meridian validate
+--start` calls Start too.
 
 ### Contexts
 
@@ -1418,18 +1435,30 @@ The coordinator encrypts and stores it.
   workflow's own text (`Withheld`, which the pinned workflow holds), or
   what Create and Start make again from them.
 
-  Deleted means erased from the store's files, not only from its tables,
-  so that someone who later has both a copy of the database and the key
-  that wrapped the record's data key can't open it. On SQLite, the store
-  writes with `secure_delete` on, which overwrites with zeros what it
-  deletes or replaces, the sealed record, its jobs' parts and its wrapped
-  key among them, rather than leave it in free space. Once the transaction
-  that ends the run commits, the store checkpoints the write-ahead log
-  into the database and truncates it, so the log keeps no copy either. If
-  a reader or a writer in another process holds the log, that checkpoint
-  can't truncate it, and the next one does: when the next run ends, when the
-  store is next opened, or in hopper's maintenance. A backup of the database taken
-  before the run ended holds the record, sealed, as it was.
+  On any store, the record and its parts are sealed under the run's data
+  key, and the data key, wrapped by Keys, is deleted with them. Without
+  the key that wraps it, which Keys holds, a copy of the database can't
+  open what of them remains. That key outlives the run, so deleting the
+  wrapped data key isn't shredding: a copy of the database taken before
+  the run ended, or a store that kept the deleted rows, opens the record
+  with it. Locally the key is `secret-record.key`, in the state directory
+  beside the database, `meridian.db`, so back up the state directory
+  without the key file; while a run goes on, a step the `local` backend
+  runs can read both ([Security](#security)).
+
+  On SQLite, deleted means erased from the store's files too, not only
+  from its tables, so that someone who later has both a copy of the
+  database and the key that wrapped the record's data key can't open it:
+  the store writes with `secure_delete` on, which overwrites with zeros
+  what it deletes or replaces, the sealed record, its jobs' parts and its
+  wrapped key among them, rather than leave it in free space. Once the
+  transaction that ends the run commits, the store checkpoints the
+  write-ahead log into the database and truncates it, so the log keeps no
+  copy either. If a reader or a writer in another process holds the log,
+  that checkpoint can't truncate it, and the next one does: when the next
+  run ends, when the store is next opened, or in hopper's maintenance. A
+  backup of the database taken before the run ended holds the record,
+  sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
   calls, and `meridian resume` picks a run up in another process, so a run's
   secrets live where its state does, and the store holds them only
@@ -1460,8 +1489,9 @@ Run state is the store's: hopper's jobs, and Meridian's rows beside them
   that follows the run reads, whichever process made the change: its
   start; a job ready, placing, running and finished; each step's start and
   end, as the attempt's worker reported them; an attempt's end, however it
-  ended; and the run's end. Each is added in the transaction that makes
-  the change, numbered after the run's last, and names the row that
+  ended; the run's stop, once a cancel or its timeout stops it; and the
+  run's end. Each is added in the transaction that makes the change,
+  numbered after the run's last, and names the row that
   changed rather than copying it, so an event shows only what that row
   shows: never a private placement's member, which only the record holds
   ([Following a run](#following-a-run)).
@@ -1820,12 +1850,13 @@ Where ACTIVATE reads a `uses:` otherwise, no known workflow depends on it:
 Durable state is [hopper](https://github.com/parallelworks/hopper)'s, and
 Meridian's own tables beside hopper's, in the same database and in the same
 transactions: SQLite, through hopper's pure-Go driver, for `meridian`, and
-Postgres for a platform. hopper holds a run's jobs, and schedules and
-retries them; Meridian's tables hold what hopper doesn't model, the plan,
-the secret record, and the state of each job and each attempt
-([Run state](#run-state)). Meridian uses only what hopper has: workflows of
-jobs with dependency edges, jobs that snooze until a time without using an
-attempt, and jobs that complete in their caller's transaction.
+Postgres for a platform, which isn't built yet. hopper holds a run's jobs,
+and schedules and retries them; Meridian's tables hold what hopper doesn't
+model, the plan, the secret record, and the state of each job and each
+attempt ([Run state](#run-state)). Meridian uses only what hopper has:
+workflows of jobs with dependency edges, jobs that snooze until a time
+without using an attempt, and jobs that complete in their caller's
+transaction.
 
 - **A run is a hopper workflow.** One transaction gives the run its ID,
   stores its plan, its secret record, sealed, and its state, and inserts
@@ -1950,9 +1981,9 @@ name, `#` and its index from 0, as in `build#2`.
   `needs.<job>.result` gives it ([Contexts](#contexts)). Its outputs are
   its instances', by name, and an output that more than one instance sets
   has the value of the one with the highest index, so it doesn't depend on
-  which finished last, as it does in ACTIVATE and GitHub Actions. No
-  workflow can rely on which instance finishes last, so this is made as a
-  bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). In an
+  which finished last, as it does in GitHub Actions, and did in format 1.
+  No workflow can rely on which instance finishes last, so this is made as
+  a bug fix ([Bug fixes to format 1](#bug-fixes-to-format-1)). In an
   instance's own steps and outputs, `needs.<job>` is the instance, whose
   outputs are those its own steps wrote, another such fix. As format 1
   reads each instance of a job its dependents need, the job fails for them
@@ -2100,10 +2131,11 @@ jobs:
 There is no retry for a whole run. It would rerun jobs that had succeeded,
 and a failure that ends a run would usually happen again.
 
-A person reruns a run with `meridian rerun`, either all of it or only its
-failed jobs and the jobs that depend on them. A rerun uses the run's stored
-plan, so it runs the same revision, with the same workflows pinned, and the
-jobs it doesn't rerun keep their outcomes and outputs.
+A person reruns a run with `meridian rerun`, which isn't built yet, either
+all of it or only its failed jobs and the jobs that depend on them. A rerun
+uses the run's stored plan, so it runs the same revision, with the same
+workflows pinned, and the jobs it doesn't rerun keep their outcomes and
+outputs.
 
 A rerun is the stored plan and what is submitted again. The run's secret
 record was deleted when it ended ([The secret record](#the-secret-record)),
@@ -2419,8 +2451,10 @@ for any other only once they have (`plan.Plan.CancelPath`).
 
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
-  of a job whose `if:` isn't cancel-aware, through its control poll, and
-  wakes every job's supervisor. A placement of such a job that no worker
+  of a job whose `if:` isn't cancel-aware, through its control poll; then
+  the supervisor of every readied job, and of every matrix instance, is
+  woken, and one still waiting for its job's needs readies the job, as
+  stopped, once they have ended. A placement of such a job that no worker
   has claimed yet is told too, and isn't withdrawn: the job was readied,
   so its needs had all ended, and format 1 would be running it. Its worker
   reads the stop before its first step, so the job runs only its cleanups
@@ -2484,6 +2518,25 @@ for any other only once they have (`plan.Plan.CancelPath`).
     values, when it is cancel-aware, and takes the first path. A job that
     needs none was readied when the run started, so it never takes this
     path.
+  - **Where format 1 takes another path**, which a later format may
+    settle:
+    - ACTIVATE finds the `if:`s it leaves until the needs have ended by
+      matching their text, so text that reads like an output, as in
+      `contains('needs.dep.outputs.x', inputs.y)`, puts an `if:` on the
+      second path there. Meridian reads the expression, and keeps it on the
+      third.
+    - ACTIVATE leaves an `if:` that reads an input made from `env` until
+      the needs have ended only when evaluating it reaches that input as
+      an operand: `inputs.go || inputs.fromenv == 'x'`, with `go` true,
+      stops short of it, and a group read whole as an operand that isn't
+      text, as in `inputs.group && true`, doesn't count. Meridian reads the
+      expression, and puts both on the second path.
+    - A password input's default is in the run's secret record, not the
+      plan (`Run.Withheld`), so Meridian doesn't follow a reference through
+      one to `env`, and the `if:` keeps the path it has otherwise.
+    - An `if:` that reads `matrix`, of a matrix job Ready has yet to
+      expand, is taken as not evaluating to `always`. ACTIVATE expands
+      every matrix before the run starts, so it never meets this case.
 - **A matrix instance waiting for its turn** under `max-parallel` ends
   cancelled at once, whatever its `if:`, as format 1 ends one waiting for
   its turn, after the run's timeout too, with the reason `timeout`.
@@ -2540,11 +2593,12 @@ for any other only once they have (`plan.Plan.CancelPath`).
   it (`plan.ReadyStep.OutlivesCancel`). Format 1 dropping such a step's own
   `timeout:` is a candidate for a later fix.
 - **Once a job is stopping**, cancelled or past its timeout, its other
-  steps that haven't started don't run. A step whose `if:` isn't
-  cancel-aware is skipped then, as `success()` is false; one that comes to
-  run all the same, as when the cancellation arrives as it is readied, ends
-  cancelled, or failed after a timeout, without starting. Format 1 starts
-  such a step and stops it at once, so no workflow can rely on its running.
+  steps that haven't started don't run. The first of them that comes to
+  run whose `if:` isn't cancel-aware, as one whose `if:` passes with
+  `cancelled()` still false, ends cancelled, or failed after a timeout,
+  without starting, and its cleanup runs; those after it are skipped, as
+  `success()` is then false. Format 1 starts such a step and stops it at
+  once, so no workflow can rely on its running.
 - **A later cancellation that gives less time**, or the attempt ending
   without the worker, makes SIGKILL sooner. When an attempt ends without
   its worker, every process group the attempt started is stopped, those of
@@ -2568,10 +2622,8 @@ for any other only once they have (`plan.Plan.CancelPath`).
   next event shows the step wasn't tried again. A job that ends failed
   marks it as it ends. An attempt that ends for a reason its job's
   `retry:` lists, as one whose worker was lost, which another attempt may
-  follow, doesn't mark it, nor does a failed step of a job whose `retry:`
-  lists `timeout`, which the job's deadline may have failed: the job marks
-  it once its last attempt has ended, failed. Format 1 doesn't count one
-  failure: a job whose
+  follow, doesn't mark it: the job marks it once its last attempt has
+  ended, failed. Format 1 doesn't count one failure: a job whose
   `if:` fails to evaluate, which it fails without saying so, where
   Meridian fails it through Ready's diagnostics, and marks the run. The
   step ends cancelled,
@@ -2677,11 +2729,11 @@ replica keeps is a cache of the plans it has decoded, which never change.
   worker's report that changes a job, stored by the replica the worker
   reached, wakes the job's supervisor, wherever it runs.
 - **Placement is idempotent.** A placement carries its attempt's ID (in a
-  Slurm or PBS job name, a pod label, a process's arguments), and before
-  placing, the coordinator looks for one that already exists. A coordinator
-  that crashed between submitting and recording never submits twice: a
-  supervisor that another replica rescues finds the placement, and the
-  job's fencing number keeps a second one from reporting.
+  Slurm or PBS job name, a pod label, the local backend's placement file),
+  and before placing, the coordinator looks for one that already exists. A
+  coordinator that crashed between submitting and recording never submits
+  twice: a supervisor that another replica rescues finds the placement, and
+  the job's fencing number keeps a second one from reporting.
 - **It places jobs** on the members of their groups
   ([Placement](#placement)), within each member's capacity and priorities.
 - **It serves the worker API** (below).
@@ -2709,9 +2761,9 @@ with SQLite, and exits when the run ends.
   reports, and `meridian resume` picks the run back up. `meridian cancel`
   cancels.
 
-`meridian serve` is a coordinator that keeps running, for example on a
-cluster's login node, and `meridian run` hands its run to one if it finds
-one using the same store.
+`meridian serve`, which isn't built yet, is a coordinator that keeps
+running, for example on a cluster's login node, and `meridian run` hands
+its run to one if it finds one using the same store.
 
 ## Execution groups
 
@@ -2760,9 +2812,9 @@ A job moves to another member only when none of its code has run, or when
 the workflow asked for it:
 
 - **A failure before the first step starts** places the job again, on a
-  member it hasn't failed on when there is one. When two members have
-  failed a job for the same reason, the job fails: the job, not the
-  members, is then the likelier cause.
+  member it hasn't failed on when there is one. When two attempts have
+  failed for the same reason, on two members where its group has them,
+  the job fails: the job, not the members, is then the likelier cause.
 - **A step that fails** fails the job where it is. The failure is the
   workflow's own, and another member would only run its code again.
 - **After a lost worker**, the job runs again only if its `retry:` asks
@@ -2840,7 +2892,8 @@ that embeds Meridian serve the same API.
   an interrupted upload resumes without duplicating or losing lines.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
-  ([Workflows a step calls](#workflows-a-step-calls)).
+  ([Workflows a step calls](#workflows-a-step-calls)). It isn't built yet:
+  the worker refuses a `uses:` step (`uses_not_supported`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
   (`plan.JobResult`).
@@ -3341,6 +3394,9 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian serve` | Runs a coordinator that keeps running. |
 | `meridian worker`, `meridian relay` | Started by backends, not by people. |
 
+`meridian init`, `migrate`, `rerun`, `serve` and `relay` aren't built yet,
+and each says so.
+
 A run's ID is a number, one more than the last its store gave, which people
 type, as in `meridian logs 42`, and which the run's steps see as
 `PW_JOB_ID`. The store's own ID, which is random, keeps a number that a new
@@ -3649,3 +3705,9 @@ Larger features that aren't designed yet are proposed in
   ([Reruns](#reruns)). Should a platform keep what was submitted, so a rerun
   needn't ask again? It would keep the run's passwords past its end, in a
   store of its own, where Meridian keeps none.
+- **The worker API's own version.** The API's bodies are versioned with the
+  run's plan ([The worker API](#the-worker-api)), so an addition to one,
+  such as an event that says whether a try was its step's last, raises the
+  plan's version. A version of the API's own, which a worker gives as it
+  claims, would let a coordinator send a new member only to a worker that
+  reads it, and leave the plan's version to what a job means.
