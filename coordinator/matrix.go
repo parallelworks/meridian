@@ -9,7 +9,6 @@ import (
 
 	"github.com/parallelworks/hopper"
 
-	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 )
@@ -33,7 +32,7 @@ func (c *Coordinator) matrixStep(ctx context.Context, run *store.Run, job *store
 	if len(instances) == 0 {
 		return c.expand(ctx, run, job, done)
 	}
-	x, rec, err := c.expansion(ctx, run, job)
+	x, _, err := c.expansion(ctx, run, job)
 	if err != nil {
 		return 0, err
 	}
@@ -53,7 +52,7 @@ func (c *Coordinator) matrixStep(ctx context.Context, run *store.Run, job *store
 	// As format 1, an instance whose steps failed, or were cancelled,
 	// stops the rest: each that hasn't ended, its supervisor ends.
 	if x.FailFast && stopped && job.FailFastAt.IsZero() && len(unfinished) > 0 {
-		var changed bool
+		var changed []string
 		if err := c.store.Tx(ctx, func(tx *store.Tx) error {
 			if _, err := tx.MarkFailFast(run.ID, job.Key); err != nil {
 				return err
@@ -63,16 +62,14 @@ func (c *Coordinator) matrixStep(ctx context.Context, run *store.Run, job *store
 		}); err != nil {
 			return 0, err
 		}
-		if changed {
-			c.controlsChanged()
-		}
+		c.controlsChanged(changed)
 		for _, j := range unfinished {
 			c.wakeJob(ctx, run.ID, j.Key)
 		}
 		return 0, errAgain
 	}
 	if len(unfinished) == 0 {
-		return 0, c.endMatrix(ctx, run, job, instances, rec, done)
+		return 0, c.endMatrix(ctx, run, job, instances, done)
 	}
 	turns := len(unfinished)
 	if x.MaxParallel > 0 {
@@ -129,8 +126,10 @@ func (c *Coordinator) expand(ctx context.Context, run *store.Run, job *store.Job
 			if err := tx.SetExpansion(run.ID, job.Key, state); err != nil {
 				return err
 			}
-			if err := c.keepPrivate(ctx, tx, run.ID, "", nil, job.Name, private); err != nil {
-				return err
+			if private != nil {
+				if err := c.keepExpansion(ctx, tx, run.ID, job.Name, private); err != nil {
+					return err
+				}
 			}
 		}
 		res, err := c.inserter.InsertManyTx(ctx, tx.SQL(), params)
@@ -222,23 +221,35 @@ func keysOf(jobs []*store.Job) []string {
 }
 
 // endMatrix ends job, a matrix job all of whose instances have ended, with
-// their combined result, its private half kept in the run's secret record,
-// in the transaction that ends it. rec is the record, opened already, or
-// nil.
-func (c *Coordinator) endMatrix(ctx context.Context, run *store.Run, job *store.Job, instances []*store.Job, rec *plan.Record, done func(context.Context, *store.Tx) error) error {
-	if rec == nil {
+// their combined result, each joined from run state and the instance's
+// part of the run's secret record, whose private half is the job's own
+// part of the record, which the transaction that ends it stores.
+func (c *Coordinator) endMatrix(ctx context.Context, run *store.Run, job *store.Job, instances []*store.Job, done func(context.Context, *store.Tx) error) error {
+	var (
+		wrapped []byte
+		parts   map[string]store.JobRecord
+	)
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
-		if rec, err = c.openRecord(ctx, run.ID); err != nil {
+		if wrapped, err = tx.WrappedKey(run.ID); err != nil {
 			return err
 		}
+		parts, err = tx.JobRecords(run.ID, keysOf(instances))
+		return err
+	}); err != nil {
+		return err
+	}
+	jobs, err := c.openJobRecords(ctx, run.ID, wrapped, parts)
+	if err != nil {
+		return err
 	}
 	results := make([]plan.JobResult, len(instances))
 	for i, j := range instances {
-		results[i] = neededResult(j, rec)
+		results[i] = neededResult(j, jobs)
 	}
 	private, state := plan.Combine(results).Split()
 	return c.endJobWith(ctx, run.ID, job.Key, store.JobEnd{Result: state}, func(ctx context.Context, tx *store.Tx) error {
-		return c.keepPrivate(ctx, tx, run.ID, job.Key, &private, "", nil)
+		return c.putJobRecord(ctx, tx, run.ID, job.Key, private)
 	}, done)
 }
 
@@ -277,7 +288,7 @@ func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *sto
 		// The attempt's control has said so since it was made, or since
 		// the job was marked (store.Tx.StartControl, MarkFailFast); one
 		// that doesn't yet is told now.
-		var changed bool
+		var changed []string
 		if err := c.store.Tx(ctx, func(tx *store.Tx) error {
 			if err := tx.TellFailFast(a.ID); err != nil && !errors.Is(err, store.ErrState) {
 				return err
@@ -287,29 +298,22 @@ func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *sto
 		}); err != nil {
 			return 0, true, err
 		}
-		if changed {
-			c.controlsChanged()
-		}
+		c.controlsChanged(changed)
 		return c.supervision.wait, true, nil
 	}
 }
 
 // withdraw withdraws the attempt a of the run's job, which its worker
-// hasn't claimed, and ends the job as end says, in one transaction: its
-// placement, if it was recorded, its driver cancels first, as far as it
-// can, and a worker that claims it later is refused. One claimed meanwhile
-// is looked at again.
+// hasn't claimed, and ends the job as end says, in one transaction: a
+// worker that claims it later is refused, and its driver cancels its
+// placement once that commits, as far as it can (cancelPlacements). One
+// claimed meanwhile is looked at again.
 func (c *Coordinator) withdraw(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	if a.Placement.ID != "" {
-		cand, _, private, err := c.placedOn(ctx, run, job, a)
-		if err == nil {
-			err = cand.driver.Cancel(ctx, cand.member, backend.Placement{Attempt: a.ID, ID: a.Placement.ID, WorkerDigest: a.Placement.WorkerDigest})
-		}
-		if err != nil && !private {
-			c.log.WarnContext(ctx, "coordinator: couldn't cancel a placement it withdraws, whose worker is refused its claim", "run", run.ID, "job", job.Key, "error", err)
-		}
+	ws, err := c.withdrawals(ctx, run, []string{job.Key})
+	if err != nil {
+		return err
 	}
-	return c.endJobWith(ctx, run.ID, job.Key, end, func(_ context.Context, tx *store.Tx) error {
+	err = c.endJobWith(ctx, run.ID, job.Key, end, func(_ context.Context, tx *store.Tx) error {
 		now, err := tx.Attempt(a.ID)
 		switch {
 		case err != nil:
@@ -319,6 +323,10 @@ func (c *Coordinator) withdraw(ctx context.Context, run *store.Run, job *store.J
 		}
 		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn, Reason: end.Reason})
 	}, done)
+	if err == nil {
+		c.cancelPlacements(ctx, run.ID, ws, []string{a.ID})
+	}
+	return err
 }
 
 // anyWorker works the markers of runs' needs on any instance (anyArgs).

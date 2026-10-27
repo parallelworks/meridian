@@ -1,0 +1,13 @@
+jobs:
+  list:
+    steps:
+      - run: echo listed
+    outputs:
+      regions: ${{ vars.REGIONS }}
+  deploy:
+    needs: [list]
+    strategy:
+      matrix:
+        region: ${{ fromJSON(needs.list.outputs.regions) }}
+    steps:
+      - run: echo region=${{ matrix.region }}

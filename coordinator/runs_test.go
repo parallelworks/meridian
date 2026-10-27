@@ -63,13 +63,13 @@ func TestRunsConformance(t *testing.T) {
 				t.Errorf("the run has %d jobs, want %d", len(jobs), len(want.Jobs))
 			}
 			for _, j := range jobs {
-				w, ok := want.Jobs[j.Name]
+				w, ok := want.Jobs[j.Key]
 				switch {
 				case !ok:
-					t.Errorf("the run has the job %s, which the case doesn't", j.Name)
+					t.Errorf("the run has the job %s, which the case doesn't", j.Key)
 					continue
 				case string(j.Outcome) != w.Outcome:
-					t.Errorf("the job %s ended with %s, want %s (%v)", j.Name, j.Outcome, w.Outcome, j.Diagnostics)
+					t.Errorf("the job %s ended with %s, want %s (%v)", j.Key, j.Outcome, w.Outcome, j.Diagnostics)
 				}
 				got := logs.Of(id, j.Key, j.Attempts)
 				for _, l := range w.Logs {
@@ -80,7 +80,7 @@ func TestRunsConformance(t *testing.T) {
 					log, ok := got[key]
 					switch {
 					case !ok:
-						t.Errorf("the job %s has no log %+v: it has %v", j.Name, key, keysOf(got))
+						t.Errorf("the job %s has no log %+v: it has %v", j.Name, key, logKeys(got))
 					case string(log.Data) != l.Text || !log.Ended:
 						t.Errorf("the job %s's log %+v is %q, ended %v; want %q", j.Name, key, log.Data, log.Ended, l.Text)
 					}
@@ -90,8 +90,8 @@ func TestRunsConformance(t *testing.T) {
 	}
 }
 
-// keysOf returns which logs logs holds.
-func keysOf(logs map[workerapitest.LogKey]workerapitest.Log) []string {
+// logKeys returns which logs logs holds.
+func logKeys(logs map[workerapitest.LogKey]workerapitest.Log) []string {
 	var out []string
 	for k := range logs {
 		out = append(out, fmt.Sprintf("%+v", k))

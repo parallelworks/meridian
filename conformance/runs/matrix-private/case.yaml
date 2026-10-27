@@ -1,0 +1,23 @@
+description: >-
+  A matrix made from what a job it needs gave, which a variable made,
+  expands once that job has ended, its instances kept with the run's
+  secrets, and each instance reads its own values.
+source: Meridian
+contexts:
+  vars: {REGIONS: '["eu", "us"]'}
+expect:
+  run:
+    outcome: success
+    jobs:
+      list:
+        outcome: success
+      deploy:
+        outcome: success
+      deploy#0:
+        outcome: success
+        logs:
+          - {step: 0, text: "region=eu\n"}
+      deploy#1:
+        outcome: success
+        logs:
+          - {step: 0, text: "region=us\n"}

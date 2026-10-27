@@ -311,7 +311,9 @@ expect:
 ```
 
 - `expect.run.outcome` is the run's outcome, and `expect.run.jobs` how
-  each of its jobs ends, by name: every one of them, with its `outcome`.
+  each of its jobs ends, by name: every one of them, with its `outcome`,
+  and each instance of a matrix job, as its name, `#` and its index, from
+  0, as in `build#1`.
 - A job's `logs` are some of its logs, each exactly: the log of the try
   `try`, from 0, of the step `step`, from 0, or of its `cleanup:` with
   `cleanup: true`, which is what the command printed, its standard output

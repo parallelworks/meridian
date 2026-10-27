@@ -104,7 +104,7 @@ func TestMarkFailFast(t *testing.T) {
 			return err
 		}
 		var token string
-		if running, token, err = tx.NewAttempt(n("build#0")); err != nil {
+		if running, token, err = placedAttempt(tx, n("build#0")); err != nil {
 			return err
 		}
 		if _, err := tx.Claim(token, credential('f'), testWorker); err != nil {

@@ -33,11 +33,14 @@ jobs:
 		t.Fatal(err)
 	}
 	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		_, token, err := tx.NewAttempt(c.newAttempt(id, "main#1", false))
+		a, token, err := tx.NewAttempt(c.newAttempt(id, "main#1", false))
 		if err != nil {
 			return err
 		}
-		_, err = tx.Claim(token, "1111111111111111111111111111111111111111111111111111111111111111", workerapi.Worker{Version: "test"})
+		if err := tx.RecordPlacement(a.ID, store.Placement{Backend: testBackend, ID: "test-" + a.ID, WorkerDigest: testDigest}); err != nil {
+			return err
+		}
+		_, err = tx.Claim(token, "1111111111111111111111111111111111111111111111111111111111111111", workerapi.Worker{Version: "test", Digest: testDigest})
 		return err
 	}); err != nil {
 		t.Fatal(err)

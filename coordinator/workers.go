@@ -53,10 +53,39 @@ func runValues(run *store.Run) (plan.RunValues, error) {
 
 // readiedWith is what the job's supervisor readied it with, as it pinned
 // it the first time (store.Tx.PinReady), which readyJob readies it with
-// each time after.
-func readiedWith(_ context.Context, _ *store.Tx, run *store.Run, job *store.Job) (*workerapisrv.Readied, error) {
+// each time after, read in tx: with, for each need on any instance, the
+// instances that had ended as the instance was chosen; and for a matrix
+// instance, the instance, as run state holds it.
+func readiedWith(_ context.Context, tx *store.Tx, run *store.Run, job *store.Job) (*workerapisrv.Readied, error) {
 	if job.ReadyAt.IsZero() {
 		return nil, fmt.Errorf("coordinator: run %s's job %q hasn't been readied", run.ID, job.Key)
 	}
-	return &workerapisrv.Readied{Stopped: job.ReadiedStopped, Any: job.AnyChoices}, nil
+	r := &workerapisrv.Readied{Stopped: job.ReadiedStopped, Any: job.AnyChoices}
+	for name := range job.AnyChoices {
+		a, err := tx.Any(run.ID, name)
+		if err != nil {
+			return nil, err
+		}
+		if r.AnyEnded == nil {
+			r.AnyEnded = map[string][]string{}
+		}
+		r.AnyEnded[name] = a.Ended
+	}
+	if job.Instance < 0 {
+		return r, nil
+	}
+	parent, err := tx.Job(run.ID, job.Name)
+	if err != nil {
+		return nil, err
+	}
+	x := run.StartState.Expansions[job.Name]
+	if x == nil {
+		x = parent.Expansion
+	}
+	if x == nil || job.Instance >= len(x.Instances) {
+		return nil, fmt.Errorf("coordinator: run %s's job %q has no instance %d", run.ID, job.Name, job.Instance)
+	}
+	instance := x.Instances[job.Instance]
+	r.Instance = &instance
+	return r, nil
 }
