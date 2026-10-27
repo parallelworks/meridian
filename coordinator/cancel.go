@@ -187,7 +187,7 @@ func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelP
 	if err != nil {
 		return nil, err
 	}
-	values, err := c.wholeRunValues(ctx, run)
+	values, rec, err := c.openRunValues(ctx, run)
 	if err != nil {
 		return nil, err
 	}
@@ -199,12 +199,16 @@ func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelP
 	}); err != nil {
 		return nil, err
 	}
+	byKey := make(map[string]*store.Job, len(jobs))
+	for _, j := range jobs {
+		byKey[j.Key] = j
+	}
 	out := &cancelPaths{outlives: map[string]bool{}}
 	for _, j := range jobs {
 		if j.Outcome != "" {
 			continue
 		}
-		path, err := p.CancelPath(j.Name, values, nil)
+		path, err := cancelPathOf(p, run, values, rec, j, byKey[j.Name])
 		if err != nil {
 			return nil, err
 		}
@@ -254,11 +258,21 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 	if err != nil {
 		return false, err
 	}
-	values, err := c.wholeRunValues(ctx, run)
+	values, rec, err := c.openRunValues(ctx, run)
 	if err != nil {
 		return false, err
 	}
-	path, err := p.CancelPath(j.Name, values, nil)
+	var parent *store.Job
+	if j.Instance >= 0 {
+		if err := c.store.View(ctx, func(tx *store.Tx) error {
+			var err error
+			parent, err = tx.Job(run.ID, j.Name)
+			return err
+		}); err != nil {
+			return false, err
+		}
+	}
+	path, err := cancelPathOf(p, run, values, rec, j, parent)
 	if err != nil {
 		return false, err
 	}
@@ -306,20 +320,35 @@ func stopEnd(reason plan.Reason) store.JobEnd {
 	return store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}, Reason: plan.ReasonCancelled}
 }
 
-// wholeRunValues are run's values, the run's state's and its secret record's
-// joined, as Start gave them.
-func (c *Coordinator) wholeRunValues(ctx context.Context, run *store.Run) (plan.RunValues, error) {
+// openRunValues returns run's values, the run's state's and its secret
+// record's joined, as Start gave them, and the record, which it opens.
+func (c *Coordinator) openRunValues(ctx context.Context, run *store.Run) (plan.RunValues, *plan.Record, error) {
 	if run.StartState == nil {
-		return plan.RunValues{}, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
+		return plan.RunValues{}, nil, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
 	}
 	rec, err := c.openRecord(ctx, run.ID)
 	if err != nil {
-		return plan.RunValues{}, err
+		return plan.RunValues{}, nil, err
 	}
 	if rec.Run == nil {
-		return run.StartState.Run, nil
+		return run.StartState.Run, rec, nil
 	}
-	return plan.JoinRunValues(*rec.Run, run.StartState.Run), nil
+	return plan.JoinRunValues(*rec.Run, run.StartState.Run), rec, nil
+}
+
+// cancelPathOf returns the path the job j of run takes once run stops
+// (plan.Plan.CancelPath), with values, the run's values: for a matrix
+// instance, with its matrix values, from parent, its matrix job, whole
+// with rec, the run's secret record, where they are private.
+func cancelPathOf(p *plan.Plan, run *store.Run, values plan.RunValues, rec *plan.Record, j, parent *store.Job) (plan.CancelPath, error) {
+	var instance *plan.Instance
+	if j.Instance >= 0 && parent != nil {
+		if x := expansionOf(run, parent, rec); x != nil && j.Instance < len(x.Instances) {
+			i := x.Instances[j.Instance]
+			instance = &i
+		}
+	}
+	return p.CancelPath(j.Name, values, instance)
 }
 
 // endUnreadied ends the job key of run, stopped, which hasn't been readied

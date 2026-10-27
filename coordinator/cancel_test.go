@@ -717,3 +717,42 @@ jobs:
 		}
 	}
 }
+
+// TestCancelInstanceAlways checks that an instance whose if: is the word
+// always with its own matrix values outlives a cancel, while its sibling,
+// whose if: isn't, is told to stop: what outlives a stop is decided with
+// each instance's values.
+func TestCancelInstanceAlways(t *testing.T) {
+	c, d := openStop(t, map[string]string{"main#0": hold, "main#1": outlive})
+	id, _ := create(t, c, `
+jobs:
+  main:
+    if: ${{ matrix.n == 1 && 'always' || 'true' }}
+    strategy:
+      matrix:
+        n: [0, 1]
+    steps:
+      - run: echo ${{ matrix.n }}
+`, nil, nil)
+	serve(t, c)
+	stopped := latestIs(t, c, id, "main#0", running)
+	outlived := latestIs(t, c, id, "main#1", running)
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if ctl := controlOf(t, c, stopped.ID); !ctl.Cancel || ctl.Reason != plan.ReasonCancelled {
+		t.Errorf("the instance that doesn't outlive the cancel is told %+v", ctl)
+	}
+	if ctl := controlOf(t, c, outlived.ID); ctl.Cancel {
+		t.Errorf("the instance that outlives the cancel is told %+v", ctl)
+	}
+	close(d.release)
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	for key, want := range map[string]plan.Outcome{"main#0": plan.OutcomeCancelled, "main#1": plan.OutcomeSuccess} {
+		if j := storedJob(t, c, id, key); j.Outcome != want {
+			t.Errorf("%s is %+v, want %s", key, j, want)
+		}
+	}
+}
