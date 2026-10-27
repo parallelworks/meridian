@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -187,6 +188,13 @@ func waitEnded(t *testing.T, c *Coordinator, id string) *store.Run {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The finisher, by its kind: a job of the workflow that a wake has
+	// hopper run again, as a supervisor or a marker of a need on any
+	// instance, comes after it in the workflow's order.
+	i := slices.IndexFunc(wf.Jobs, func(j *hopper.JobRow) bool { return j.Kind == finishArgs{}.Kind() })
+	if i < 0 {
+		t.Fatalf("run %s's workflow has no finisher", id)
+	}
 	// The serving client hears the finisher finish at once, where the
 	// inserter, which isn't started, polls.
 	waitFor(t, func() bool {
@@ -199,7 +207,7 @@ func waitEnded(t *testing.T, c *Coordinator, id string) *store.Run {
 	c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	if _, err := hopper.Await[any](ctx, served, wf.Jobs[len(wf.Jobs)-1].ID); err != nil {
+	if _, err := hopper.Await[any](ctx, served, wf.Jobs[i].ID); err != nil {
 		t.Fatal(err)
 	}
 	return storedRun(t, c, id)
