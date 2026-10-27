@@ -152,7 +152,6 @@ type Fake struct {
 	events     []workerapi.Event
 	logs       map[LogKey]*Log
 	end        *workerapi.Complete
-	endBody    []byte
 	control    workerapi.Control
 	heartbeats int
 	requests   map[string]int
@@ -501,7 +500,7 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		return nil
 	}
 	// A superseded attempt's writes are refused, and so is every write
-	// once the attempt has ended, but its end again.
+	// once the attempt has ended, but an end, answered as the first was.
 	if r.URL.Path != workerapi.PathControl && (f.superseded || f.end != nil && r.URL.Path != workerapi.PathComplete) {
 		problem.Write(w, problems.Fenced.Problem(nil))
 		return nil
@@ -715,12 +714,6 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 		writeStatus(w, http.StatusBadRequest)
 		return
 	}
-	// The end as the API writes it, which a repeat must match.
-	canonical, err := workerapi.Marshal(end)
-	if err != nil {
-		writeStatus(w, http.StatusInternalServerError)
-		return
-	}
 	result := end.Result
 	switch {
 	case result.NeedsFailed || result.Cancelled,
@@ -735,8 +728,10 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 		f.unexpected("a Complete after event %d, of the %d stored", end.Seq, len(f.events))
 		writeStatus(w, http.StatusBadRequest)
 		return
-	case f.end != nil && !bytes.Equal(f.endBody, canonical):
-		problem.Write(w, problems.Fenced.Problem(nil))
+	case f.end != nil:
+		// The end stored first is the attempt's, whatever a later one
+		// holds.
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	for key, l := range f.logs {
@@ -744,7 +739,7 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 			f.unexpected("the attempt completed before its log %v ended", key)
 		}
 	}
-	f.end, f.endBody = end, canonical
+	f.end = end
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -801,9 +801,12 @@ func checkLogs(t *testing.T, target Target) {
 }
 
 // The attempt's end is stored once its events are: the same end again is
-// answered as before, and another is fenced, as is every write after it.
-// An end that says what only the coordinator says, a problem but a
-// setup's, or a last event behind those stored, is 400.
+// answered as before; another changes nothing, since the end stored first
+// is the attempt's, and is answered as the first, or fenced, as by a
+// coordinator that keeps what tells it from the first; and every other
+// write after it is fenced. An end that says what only the coordinator
+// says, a problem but a setup's, or a last event behind those stored, is
+// 400.
 func checkComplete(t *testing.T, target Target) {
 	w := newWorker(t, target, newAttempt()).claimed()
 	w.sendEvents(1, 2, 2)
@@ -824,7 +827,9 @@ func checkComplete(t *testing.T, target Target) {
 	wantStatus(t, "the attempt's end again", w.post(workerapi.PathComplete, end), http.StatusNoContent)
 	other := end
 	other.Result.Outcome = plan.OutcomeFailure
-	wantProblem(t, "another end", w.post(workerapi.PathComplete, other), workerapi.Fenced)
+	if another := w.post(workerapi.PathComplete, other); another.status != http.StatusNoContent {
+		wantProblem(t, "another end", another, workerapi.Fenced)
+	}
 	wantProblem(t, "events after the end", w.post(workerapi.PathEvents, events(3, 3)), workerapi.Fenced)
 	wantProblem(t, "a log after the end", w.upload(LogKey{Part: workerapi.LogSetup}, 0, []byte("late"), true), workerapi.Fenced)
 	wantProblem(t, "a heartbeat after the end", w.send(http.MethodPost, workerapi.PathHeartbeat, nil, nil, w.credential), workerapi.Fenced)

@@ -1,9 +1,7 @@
 package workerapisrv
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"net/http"
 	"slices"
@@ -326,15 +324,8 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		end.Problem = problems.MaskProblem(end.Problem)
 		end.Diagnostics = problems.MaskDiagnostics(end.Diagnostics)
 	}
-	// The end as the API writes it, which a repeat must match.
-	canonical, err := workerapi.Marshal(end)
-	if err != nil {
-		writeStatus(w, http.StatusBadRequest)
-		return
-	}
-	sum := sha256.Sum256(canonical)
 	if !a.Holds {
-		s.repeatedEnd(w, a, sum[:])
+		repeatedEnd(w, a)
 		return
 	}
 	result := end.Result
@@ -361,7 +352,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		return
 	}
 	stored := store.AttemptEnd{
-		Kind: store.EndCompleted, Outcome: result.Outcome, Reason: end.Reason, CompleteDigest: sum[:], Report: reportBody, Problem: end.Problem,
+		Kind: store.EndCompleted, Outcome: result.Outcome, Reason: end.Reason, Report: reportBody, Problem: end.Problem,
 	}
 	hasPrivate := len(private.Outputs) > 0 || len(private.Steps) > 0
 	// An end that fails the job, rather than one before its first step,
@@ -435,7 +426,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 			s.writeError(w, r, err)
 			return
 		}
-		s.repeatedEnd(w, now, sum[:])
+		repeatedEnd(w, now)
 		return
 	case err != nil:
 		s.writeError(w, r, err)
@@ -476,10 +467,15 @@ func (s *Server) checkSeq(w http.ResponseWriter, r *http.Request, a *store.Attem
 }
 
 // repeatedEnd answers an end of the attempt a, which no longer holds its
-// job, whose report's digest is sum: as the first time, for the end that
-// completed it, and Fenced for any other.
-func (s *Server) repeatedEnd(w http.ResponseWriter, a *store.Attempt, sum []byte) {
-	if a.End.Kind == store.EndCompleted && bytes.Equal(a.End.CompleteDigest, sum) {
+// job: as the first time, for an attempt that completed, whatever this end
+// holds, since the end stored first is the attempt's; and Fenced for one
+// that ended otherwise, as withdrawn, lost or superseded. The store keeps
+// nothing made from an end to tell a repeat of it from another end: an end
+// can hold a secret, as an output, which a digest of it would let whoever
+// holds the store test a guess at. Nor does it need to: the attempt's
+// worker, which alone holds the attempt's credential, sends one end.
+func repeatedEnd(w http.ResponseWriter, a *store.Attempt) {
+	if a.End.Kind == store.EndCompleted {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

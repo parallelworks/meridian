@@ -1475,6 +1475,34 @@ The coordinator encrypts and stores it.
   write that raced another, so the parts, however many a run's jobs and
   attempts make, take nothing from the bound on the data key's nonces
   (`seal.Sealer.SealPart`).
+- **Digests keyed, or none.** The store keeps nothing made from what can
+  hold a secret where it needn't: of an attempt's end, which holds the
+  job's outputs, it keeps no digest ([The worker API](#the-worker-api)).
+  Where it must know a value again, as a request for an action, which
+  holds a step's `with:`, is answered once, it keeps an HMAC-SHA256 of
+  it, never a plain SHA-256, against which whoever holds the store's file
+  could test a guess at a short secret. The HMAC's key is one that
+  HKDF-SHA256 derives from the run's data key, with no salt and the info
+  of the digest's purpose, a versioned label, as
+  `meridian/action-digest/1`, the store's ID, the run's, and the digest's
+  own ID among the run's of that purpose, as an action's attempt, step and
+  try, joined with NUL bytes (`seal.Sealer.Digest`). So the key is never
+  in the store, only the data key wrapped, and every replica derives it
+  again through Keys, after a restart and in `meridian resume` too. It
+  goes with the data key as the run ends, after which no one can check a
+  digest of the run, the coordinator included, and nothing needs to: a
+  request that a digest answers once is one of an attempt that still
+  holds its job. A key of the store's own, which Keys would wrap once,
+  would outlive every run, and so let a copy of the database, with that
+  key, test guesses at what runs long ended held, which the record's
+  erasure is there to prevent. Earlier releases kept plain SHA-256
+  digests of both, of ends and of actions' requests. The store erases
+  them as it is migrated, each time a process opens it, and each time a
+  run ends, so that those an earlier release still running on the
+  database goes on writing don't stay; an index of the rows that hold one
+  keeps each erase to them. An action whose digest an earlier release
+  kept can't be checked, and takes any request for its try as a repeat:
+  the attempt's worker, which alone holds its credential, sends one.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
@@ -3385,10 +3413,11 @@ and a platform that embeds Meridian serve the same API.
   `with:` as Step evaluated it, and its answer says how the action ended:
   success or failure, with its problems. The coordinator reads which
   action it is from the plan, never from the request. It does the action
-  once for a step's try, and keeps the answer, with a SHA-256 digest of
-  the whole request, never the `with:` itself, which can hold a secret: a
-  repeat is given the answer, and another request for the same try is
-  fenced. The answers outlive their attempt in the store, which enforces
+  once for a step's try, and keeps the answer, with a keyed digest of the
+  whole request, an HMAC-SHA256 ([The secret record](#the-secret-record)),
+  never the `with:` itself, which can hold a secret, nor a plain digest of
+  it: a repeat is given the answer, and another request for the same try
+  is fenced. The answers outlive their attempt in the store, which enforces
   no foreign keys, so nothing deletes them with it: whatever comes to
   delete attempts, as a retention of runs, deletes their answers too. A
   step whose `if:` doesn't outlive its job's cancellation, as the
@@ -3411,7 +3440,18 @@ and a platform that embeds Meridian serve the same API.
   action only a platform provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
-  (`plan.JobResult`).
+  (`plan.JobResult`). The same end again, as a worker sends after a
+  dropped connection, is answered as the first was, and so is any other
+  end of an attempt that completed, which changes nothing: the end stored
+  first is the attempt's. The coordinator keeps nothing made from an end
+  to tell a repeat from another end, since an end can hold a secret, as
+  an output, which a digest of it would let whoever holds the store test
+  a guess at ([The secret record](#the-secret-record)); and it needn't,
+  since the attempt's worker, which alone holds its credential, sends one
+  end. Another coordinator that keeps what tells them apart may fence
+  another end instead, as the conformance suite allows. An end of an
+  attempt that ended otherwise, as withdrawn, lost or superseded, is
+  fenced.
 
 Every write is idempotent and carries a sequence number, so a worker
 retrying after a dropped connection can't apply a report twice. A write
@@ -4262,7 +4302,9 @@ Meridian's must (`internal/fipsmode`).
   A platform's Keys interface wraps the data keys with its own key
   management, and the local one with AES-256-GCM under a key in a file.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
-  digests are SHA-256.
+  digests are SHA-256, and a digest of what can hold a secret, as an
+  action's request, is an HMAC-SHA256 under a key that HKDF-SHA256
+  derives from its run's data key ([The secret record](#the-secret-record)).
 - **External tools** that Meridian runs (`git`, container runtimes,
   schedulers) run in processes of their own, outside Meridian's module.
   Their TLS and SSH are the host's cryptography, which a FIPS host

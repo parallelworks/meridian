@@ -122,6 +122,7 @@ type Sealer interface {
 	Open(ctx context.Context, runID string, gen uint64, sealed seal.Sealed) (*plan.Record, error)
 	SealJob(ctx context.Context, runID, job string, gen uint64, wrapped []byte, rec plan.JobRecord) ([]byte, error)
 	OpenJobs(ctx context.Context, runID string, wrapped []byte, parts map[string]seal.JobPart) (map[string]plan.JobRecord, error)
+	Digest(ctx context.Context, runID string, wrapped []byte, purpose seal.Purpose, id string, data []byte) ([]byte, error)
 }
 
 var _ Sealer = (*seal.Sealer)(nil)
@@ -132,8 +133,10 @@ type Options struct {
 	Store *store.Store
 	// Logs stores the logs workers upload: the coordinator's Logs.
 	Logs runlog.Logs
-	// Sealer opens runs' secret records, and seals each job's part of its
-	// run's, as an attempt's end stores its private outputs.
+	// Sealer opens runs' secret records, seals each job's part of its
+	// run's, as an attempt's end stores its private outputs, and gives the
+	// keyed digests the server keeps of what can hold a secret, as an
+	// action's request.
 	Sealer Sealer
 	// Readier gives the job an attempt claims, as Ready gives it again.
 	Readier Readier
