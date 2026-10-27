@@ -394,6 +394,16 @@ func (r *rig) wokenJobs() []string {
 	return append([]string(nil), r.woken...)
 }
 
+// askControl asks c of the attempt id's worker in place of what it asked,
+// at its control's next version.
+func askControl(tx *store.Tx, id string, c workerapi.Control) error {
+	_, err := tx.UpdateControl(id, func(cur *workerapi.Control) bool {
+		*cur = c
+		return true
+	})
+	return err
+}
+
 // conformanceDigest is the digest of the worker Conformance plays.
 var conformanceDigest = "sha256:" + strings.Repeat("0", 64)
 

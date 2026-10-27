@@ -81,10 +81,35 @@ func (tx *Tx) Lapsed(a *Attempt) (bool, error) {
 	return now >= a.LeaseLapses().UnixMicro(), nil
 }
 
-// SetControl asks something more of the attempt's worker: c, at the next
-// version, which it returns. The version only grows. An attempt that has
-// ended is ErrState.
-func (tx *Tx) SetControl(id string, c workerapi.Control) (int64, error) {
+// UpdateControl changes what the attempt id's control asks, as change says,
+// keeping what it asked already, at the next version, which it returns: or
+// leaves it as it is, at its version, when change reports it changed
+// nothing. Every writer of a control goes through it, so that none drops
+// what another asked, as a cancel AnyJobFailed. An attempt that has ended
+// is ErrState.
+func (tx *Tx) UpdateControl(id string, change func(c *workerapi.Control) bool) (int64, error) {
+	c, err := tx.Control(id)
+	if err != nil {
+		return 0, err
+	}
+	if !change(&c) {
+		return c.Version, nil
+	}
+	version, err := tx.setControl(id, c)
+	if err != nil {
+		return 0, err
+	}
+	if tx.controls == nil {
+		tx.controls = map[string]bool{}
+	}
+	tx.controls[id] = true
+	return version, nil
+}
+
+// setControl asks c of the attempt's worker in place of what it asked, at
+// the next version, which it returns: UpdateControl's write. The version
+// only grows. An attempt that has ended is ErrState.
+func (tx *Tx) setControl(id string, c workerapi.Control) (int64, error) {
 	a, err := tx.Attempt(id)
 	if err != nil {
 		return 0, err
@@ -107,7 +132,7 @@ func (tx *Tx) SetControl(id string, c workerapi.Control) (int64, error) {
 }
 
 // Control returns what the coordinator asks of the attempt's worker, at
-// its latest version: version 0, which asks nothing, until SetControl.
+// its latest version: version 0, which asks nothing, until UpdateControl.
 func (tx *Tx) Control(id string) (workerapi.Control, error) {
 	var (
 		version int64

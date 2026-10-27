@@ -97,6 +97,7 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 		needed    = map[string]*store.Job{}
 		parts     map[string]store.JobRecord
 		withdrawn []string
+		changed   []string
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
@@ -127,14 +128,18 @@ func (c *Coordinator) readyJob(ctx context.Context, run *store.Run, key string) 
 			}
 			keys = append(keys, needed[need.Job].Key)
 		}
-		parts, err = tx.JobRecords(run.ID, keys)
-		return err
+		if parts, err = tx.JobRecords(run.ID, keys); err != nil {
+			return err
+		}
+		changed = tx.ControlsChanged()
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(unended) > 0 {
 		c.log.WarnContext(ctx, "coordinator: jobs a job needs never ended, as when hopper gave up on their supervisors, so they failed as it was readied", "run", run.ID, "job", key, "needs", unended)
+		c.controlsChanged(changed)
 		c.cancelPlacements(ctx, run.ID, ws, withdrawn)
 	}
 	rec, err := c.sealer.Open(ctx, run.ID, stored.Generation, sealedOf(stored))

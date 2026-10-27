@@ -92,8 +92,9 @@ func TestAppendEvents(t *testing.T) {
 	})
 }
 
-// SetControl asks more at a version that only grows, which Control gives;
-// an attempt that has ended is asked nothing more.
+// UpdateControl asks more at a version that only grows, whatever the
+// control it is given says, which Control gives; an attempt that has ended
+// is asked nothing more.
 func TestControl(t *testing.T) {
 	s := open(t)
 	a := claimedAttempt(t, s, 'a')
@@ -102,9 +103,12 @@ func TestControl(t *testing.T) {
 			t.Errorf("Control before any = %+v, %v", c, err)
 		}
 		for want := int64(1); want <= 2; want++ {
-			v, err := tx.SetControl(a.ID, workerapi.Control{Version: 99, Cancel: true, Reason: plan.ReasonCancelled})
+			v, err := tx.UpdateControl(a.ID, func(c *workerapi.Control) bool {
+				*c = workerapi.Control{Version: 99, Cancel: true, Reason: plan.ReasonCancelled}
+				return true
+			})
 			if err != nil || v != want {
-				t.Errorf("SetControl = %d, %v; want %d", v, err, want)
+				t.Errorf("UpdateControl = %d, %v; want %d", v, err, want)
 			}
 		}
 		if c, err := tx.Control(a.ID); err != nil || c.Version != 2 || !c.Cancel || c.Reason != plan.ReasonCancelled {
@@ -116,8 +120,8 @@ func TestControl(t *testing.T) {
 		if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
 			return err
 		}
-		if _, err := tx.SetControl(a.ID, workerapi.Control{Cancel: true}); !errors.Is(err, ErrState) {
-			t.Errorf("SetControl of an attempt that ended = %v, want ErrState", err)
+		if _, err := tx.UpdateControl(a.ID, func(c *workerapi.Control) bool { c.Cancel = true; return true }); !errors.Is(err, ErrState) {
+			t.Errorf("UpdateControl of an attempt that ended = %v, want ErrState", err)
 		}
 		return nil
 	})

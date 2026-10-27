@@ -82,8 +82,9 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 // placement is private, the diagnostics of each event, which can name the
 // member, are masked before they are stored, as its end's are. Once the
 // events are stored, the polls held here of the attempts whose controls
-// storing them changed are woken (Server.controlsChanged); another
-// process's polls read them at their recheck.
+// storing them changed, as a step that failed changes its run's other
+// attempts' (store.Tx.ControlsChanged), are woken; another process's polls
+// read them at their recheck.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.Attempt) {
 	ctx := r.Context()
 	body, ok := s.readBody(w, r, MaxEventsBody)
@@ -118,10 +119,8 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		if last, err = tx.AppendEvents(a.ID, events.Events); err != nil {
 			return err
 		}
-		if s.controlsChanged != nil {
-			changed, err = s.controlsChanged(tx)
-		}
-		return err
+		changed = tx.ControlsChanged()
+		return nil
 	})
 	switch {
 	case errors.Is(err, errTooMuch):
@@ -359,6 +358,12 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		Kind: store.EndCompleted, Outcome: result.Outcome, Reason: end.Reason, CompleteDigest: sum[:], Report: reportBody, Problem: end.Problem,
 	}
 	hasPrivate := len(private.Outputs) > 0 || len(private.Steps) > 0
+	// An end that fails the job, rather than one before its first step,
+	// which is placed again, marks the run as one a job of which failed,
+	// for its other attempts' steps whose early-cancel: is any-job-failed,
+	// as format 1 tells them as the job fails.
+	jobFailed := result.Outcome == plan.OutcomeFailure && end.Reason != plan.ReasonSetupFailed
+	var changed []string
 	for try := 1; ; try++ {
 		// The part is sealed outside the transaction that stores it, which
 		// holds the database's lock only for its writes, and stores it only
@@ -386,7 +391,16 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 					return err
 				}
 			}
-			return tx.EndAttempt(a.ID, stored)
+			if err := tx.EndAttempt(a.ID, stored); err != nil {
+				return err
+			}
+			if jobFailed {
+				if _, err := tx.MarkJobFailed(run.ID); err != nil {
+					return err
+				}
+			}
+			changed = tx.ControlsChanged()
+			return nil
 		})
 		if !errors.Is(err, store.ErrRecordChanged) || try == partTries {
 			break
@@ -417,6 +431,9 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	case err != nil:
 		s.writeError(w, r, err)
 		return
+	}
+	if len(changed) > 0 {
+		s.Notify(changed...)
 	}
 	s.wakeJob(ctx, a.Run, a.Job)
 	w.WriteHeader(http.StatusNoContent)

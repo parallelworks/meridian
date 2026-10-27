@@ -86,28 +86,6 @@ func (tx *Tx) tellJobFailed(id string) error {
 	return err
 }
 
-// UpdateControl changes what the attempt id's control asks, as change says,
-// keeping what it asked already, at the next version, which it returns: or
-// leaves it as it is, at its version, when change reports it changed
-// nothing. Every writer of a control goes through it, so that none drops
-// what another asked, as a cancel AnyJobFailed. An attempt that has ended
-// is ErrState.
-func (tx *Tx) UpdateControl(id string, change func(c *workerapi.Control) bool) (int64, error) {
-	c, err := tx.Control(id)
-	if err != nil {
-		return 0, err
-	}
-	if !change(&c) {
-		return c.Version, nil
-	}
-	version, err := tx.SetControl(id, c)
-	if err != nil {
-		return 0, err
-	}
-	tx.controls = true
-	return version, nil
-}
-
 // markFailedStep marks the attempt id's run as one a job of which failed
 // (MarkJobFailed) once fresh, the attempt's events AppendEvents has just
 // stored, show that a step of it failed, as format 1 marks it, as the step

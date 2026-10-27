@@ -174,11 +174,6 @@ type Server struct {
 	// beforeEnd, if it is set, is called as an end is stored, between its
 	// checks and its transaction.
 	beforeEnd func()
-
-	// controlsChanged, if it is set, returns the attempts whose controls
-	// the transaction tx, which stored events, changed, as storing a failed
-	// step can: their polls held here are woken once it commits (Notify).
-	controlsChanged func(tx *store.Tx) ([]string, error)
 }
 
 // New returns a Server that serves from opts.

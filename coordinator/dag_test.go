@@ -202,8 +202,8 @@ jobs:
 	if a.Result == nil || a.Result.Outputs["token"] != "" || !strings.Contains(strings.Join(a.Result.Secrets, " "), "token") {
 		t.Errorf("run state holds a's result as %+v", a.Result)
 	}
-	rec := storedRecord(t, c, id)
-	if got := neededResult(a, rec); got.Outputs["token"] != "tok-SECRET-456" || len(got.Secrets) != 1 {
+	got := needed(t, c, id, a)
+	if got.Outputs["token"] != "tok-SECRET-456" || len(got.Secrets) != 1 {
 		t.Errorf("b reads a's result as %+v", got)
 	}
 	// The job placed, with the needs it is readied with, as its claim
@@ -215,7 +215,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	needs := map[string]plan.JobResult{"a": neededResult(a, rec)}
+	needs := map[string]plan.JobResult{"a": got}
 	step, _, err := r.result.Job.Step(t.Context(), 0, plan.JobState{Run: run.StartState.Run, Needs: needs})
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +227,32 @@ jobs:
 	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeSuccess {
 		t.Errorf("the run ended with %s", r.Outcome)
 	}
+}
+
+// needed returns the result of the run id's job j as the jobs that need
+// it read it (neededResult): from run state and j's part of the run's
+// secret record.
+func needed(t *testing.T, c *Coordinator, id string, j *store.Job) plan.JobResult {
+	t.Helper()
+	var (
+		wrapped []byte
+		parts   map[string]store.JobRecord
+	)
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		if wrapped, err = tx.WrappedKey(id); err != nil {
+			return err
+		}
+		parts, err = tx.JobRecords(id, []string{j.Key})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := c.openJobRecords(t.Context(), id, wrapped, parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return neededResult(j, jobs)
 }
 
 // TestReadyEnds checks how a job ends when Ready ends it without running
@@ -297,7 +323,7 @@ jobs:
 // countNotifier counts what it hears.
 type countNotifier struct{ n atomic.Int64 }
 
-func (n *countNotifier) Notify() { n.n.Add(1) }
+func (n *countNotifier) Notify(...string) { n.n.Add(1) }
 
 // TestAnyJobFailed checks early-cancel: any-job-failed's part on the
 // coordinator: the first job of the run to fail marks the run, which the

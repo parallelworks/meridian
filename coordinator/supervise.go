@@ -267,7 +267,7 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 // job that has ended meanwhile is errSettled, and one that has an attempt
 // that hasn't, as one another supervisor placed, errAgain.
 func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	var changed bool
+	var changed []string
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.EndJob(runID, key, end); errors.Is(err, store.ErrState) {
 			j, jerr := tx.Job(runID, key)
@@ -292,26 +292,29 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 		changed = tx.ControlsChanged()
 		return nil
 	})
-	if err == nil && changed {
-		c.controlsChanged()
+	if err == nil {
+		c.controlsChanged(changed)
 	}
 	return err
 }
 
-// A controlNotifier hears that attempts' controls changed, so that it
-// answers the control polls it holds: the worker API's server
-// (workerapisrv.Server.Notify), which polls in other processes read again
-// every second.
-type controlNotifier interface{ Notify() }
+// A controlNotifier hears which attempts' controls changed, once the
+// change has committed, so that it answers the control polls it holds of
+// them: the worker API's server (workerapisrv.Server.Notify), whose polls
+// in other processes read them again every second.
+type controlNotifier interface{ Notify(ids ...string) }
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,
-// that attempts' controls changed.
-func (c *Coordinator) controlsChanged() {
+// that the controls of the attempts ids changed, if any did.
+func (c *Coordinator) controlsChanged(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
 	c.mu.Lock()
 	n := c.controls
 	c.mu.Unlock()
 	if n != nil {
-		n.Notify()
+		n.Notify(ids...)
 	}
 }
 

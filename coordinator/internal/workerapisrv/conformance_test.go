@@ -76,11 +76,8 @@ func (tg *target) Lapse(t *testing.T, id string) {
 }
 
 func (tg *target) Control(t *testing.T, id string, c workerapi.Control) {
-	tg.inTx(func(tx *store.Tx) error {
-		_, err := tx.SetControl(id, c)
-		return err
-	})
-	tg.server.Notify()
+	tg.inTx(func(tx *store.Tx) error { return askControl(tx, id, c) })
+	tg.server.Notify(id)
 }
 
 func (tg *target) ControlHold() time.Duration { return 2 * time.Second }

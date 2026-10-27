@@ -136,8 +136,7 @@ func TestConnectionLimit(t *testing.T) {
 	// Answered, the polls' connections wait for a request, and the
 	// heartbeat's takes one's place.
 	r.inTx(func(tx *store.Tx) error {
-		_, err := tx.SetControl(a.ID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
-		return err
+		return askControl(tx, a.ID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
 	})
 	r.server.Notify(a.ID)
 	deadline := time.After(10 * time.Second)

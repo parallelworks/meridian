@@ -177,7 +177,8 @@ type Coordinator struct {
 	// connections are where members' workers reach the coordinator, as
 	// their drivers' Connect gave it, by member.
 	connections map[string]connection
-	// controls hears that attempts' controls changed, or is nil.
+	// controls hears which attempts' controls changed: the worker API's
+	// server while ServeWorkers serves it, or nil.
 	controls controlNotifier
 }
 

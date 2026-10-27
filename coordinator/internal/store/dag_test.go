@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -58,13 +59,13 @@ func TestFailedStepMarks(t *testing.T) {
 			inTx(t, s, func(tx *Tx) error {
 				var token string
 				var err error
-				if a, token, err = tx.NewAttempt(n("build")); err != nil {
+				if a, token, err = placedAttempt(tx, n("build")); err != nil {
 					return err
 				}
 				if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
 					return err
 				}
-				if b, token, err = tx.NewAttempt(n("test")); err != nil {
+				if b, token, err = placedAttempt(tx, n("test")); err != nil {
 					return err
 				}
 				_, err = tx.Claim(token, credential('b'), testWorker)
@@ -79,8 +80,14 @@ func TestFailedStepMarks(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					if marked := !r.AnyJobFailedAt.IsZero(); marked != batch.marked || tx.ControlsChanged() != batch.marked {
-						t.Errorf("after event %d, the run is marked: %v, and controls changed: %v", batch.events[0].Seq, marked, tx.ControlsChanged())
+					// Every attempt of the run that hasn't ended is told, the
+					// one whose step failed among them.
+					var want []string
+					if batch.marked {
+						want = slices.Sorted(slices.Values([]string{a.ID, b.ID}))
+					}
+					if marked := !r.AnyJobFailedAt.IsZero(); marked != batch.marked || !slices.Equal(tx.ControlsChanged(), want) {
+						t.Errorf("after event %d, the run is marked: %v, and the controls changed are %v", batch.events[0].Seq, marked, tx.ControlsChanged())
 					}
 					return nil
 				})
@@ -109,8 +116,8 @@ func TestUpdateControl(t *testing.T) {
 			c.Cancel, c.Reason = true, plan.ReasonCancelled
 			return true
 		}
-		if v, err := tx.UpdateControl(a.ID, cancel); err != nil || v != 1 || !tx.ControlsChanged() {
-			t.Errorf("UpdateControl = %d, %v", v, err)
+		if v, err := tx.UpdateControl(a.ID, cancel); err != nil || v != 1 || !slices.Equal(tx.ControlsChanged(), []string{a.ID}) {
+			t.Errorf("UpdateControl = %d, %v, and the controls changed are %v", v, err, tx.ControlsChanged())
 		}
 		if err := tx.tellJobFailed(a.ID); err != nil {
 			return err
@@ -151,11 +158,14 @@ func TestMarkJobFailed(t *testing.T) {
 		if placing, _, err = tx.NewAttempt(n("build")); err != nil {
 			return err
 		}
-		if _, err := tx.SetControl(placing.ID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled}); err != nil {
+		if _, err := tx.UpdateControl(placing.ID, func(c *workerapi.Control) bool {
+			c.Cancel, c.Reason = true, plan.ReasonCancelled
+			return true
+		}); err != nil {
 			return err
 		}
 		var token string
-		if claimed, token, err = tx.NewAttempt(n("test")); err != nil {
+		if claimed, token, err = placedAttempt(tx, n("test")); err != nil {
 			return err
 		}
 		_, err = tx.Claim(token, credential('m'), testWorker)
