@@ -135,7 +135,7 @@ func (c *Coordinator) supervise(ctx context.Context, runID, key string, done fun
 			return 0, err
 		case run.State != store.RunRunning || job.Outcome != "":
 			return 0, errSettled
-		case run.PlanVersion != plan.Version:
+		case run.PlanVersion > plan.Version:
 			return c.newer(ctx, runID), nil
 		}
 		wait, err := c.step(ctx, run, job, a, done)

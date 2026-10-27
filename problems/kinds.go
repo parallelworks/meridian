@@ -155,6 +155,14 @@ var (
 	SourceServerUnknown  = define(Error, "source_server_unknown", "GitLab server not registered", "server")
 	SourceAccessDenied   = define(Error, "source_access_denied", "Access to a repository denied", "location", "reason")
 	SourceObjectsInvalid = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
+	// The tree of workflows a run calls, as Create pins it: max is a
+	// limit, chain the locations of the workflows on a path of calls, as
+	// QuoteAll writes them, from the run's own, and what what was counted,
+	// calls or workflows.
+	WorkflowCallsItself   = define(Error, "workflow_calls_itself", "Workflow that calls itself", "chain")
+	WorkflowNestedTooDeep = define(Error, "workflow_nested_too_deep", "Workflows called too deep", "max", "chain")
+	WorkflowsTooMany      = define(Error, "workflows_too_many", "Too many workflows called", "max", "what")
+	WorkflowsTooLarge     = define(Error, "workflows_too_large", "Workflows called too large", "max")
 )
 
 // A workflow's jobs.

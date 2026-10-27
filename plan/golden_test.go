@@ -119,6 +119,10 @@ func fullPlan(t testing.TB) *plan.Plan {
 			"workflow.yaml", problems.Position{Line: 3, Column: 9}, "/jobs/build/x",
 			problems.Params{"key": "x", "suggested": "false", "suggestion": ""},
 		))},
+		Calls: []plan.Call{
+			{Caller: "sha256:01", Step: "/jobs/deploy/steps/0", Source: source},
+			{Caller: "sha256:01", Step: "/jobs/deploy/steps/1", Source: plan.Source{Location: "github.com/example/workflows/next.yaml", Revision: "89abcdef0123456789abcdef0123456789abcdef", Digest: "sha256:02", Ref: plan.SourceRef{Uses: "github/example/workflows@v2", Path: "next.yaml"}}},
+		},
 	}
 }
 
@@ -187,20 +191,22 @@ type golden struct {
 }
 
 var goldens = []golden{
-	{"plan.json", reflect.TypeFor[plan.Plan](), "plan/schema/1/plan.schema.json", func(t testing.TB) [][]byte {
+	{"plan.json", reflect.TypeFor[plan.Plan](), "plan/schema/2/plan.schema.json", func(t testing.TB) [][]byte {
 		return [][]byte{encoded(t, plan.Encode, fullPlan(t))}
 	}},
-	{"readyjobs.json", reflect.TypeFor[plan.ReadyJob](), "plan/schema/1/readyjob.schema.json", func(t testing.TB) [][]byte {
+	{"readyjobs.json", reflect.TypeFor[plan.ReadyJob](), "plan/schema/2/readyjob.schema.json", func(t testing.TB) [][]byte {
 		var out [][]byte
 		for _, j := range readyJobs(t) {
 			out = append(out, encoded(t, plan.EncodeReadyJob, j))
 		}
 		return out
 	}},
-	{"record.json", reflect.TypeFor[plan.Record](), "plan/schema/1/record.schema.json", func(t testing.TB) [][]byte {
-		return [][]byte{encoded(t, plan.EncodeRecord, sampleRecord())}
+	{"record.json", reflect.TypeFor[plan.Record](), "plan/schema/2/record.schema.json", func(t testing.TB) [][]byte {
+		r := sampleRecord()
+		r.Version = plan.Version
+		return [][]byte{encoded(t, plan.EncodeRecord, r)}
 	}},
-	{"jobresult.json", reflect.TypeFor[plan.JobResult](), "plan/schema/1/jobresult.schema.json", func(t testing.TB) [][]byte {
+	{"jobresult.json", reflect.TypeFor[plan.JobResult](), "plan/schema/2/jobresult.schema.json", func(t testing.TB) [][]byte {
 		return [][]byte{encoded(t, marshalResult, fullJobResult())}
 	}},
 }
@@ -380,6 +386,57 @@ func jsonName(f reflect.StructField) string {
 		return f.Name
 	}
 	return name
+}
+
+// The goldens of version 1, as testdata/1 holds them, which version 1's
+// release wrote, decode, as the plan, ready job, record and job result of a
+// run of that version, and encode the same again, and fit version 1's
+// schemas: each version is frozen, and read as it was written.
+func TestGoldensOfVersion1(t *testing.T) {
+	for _, g := range goldens {
+		data, err := os.ReadFile("testdata/1/" + g.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := [][]byte{data}
+		if list, ok := bytes.CutPrefix(data, []byte("[\n")); ok {
+			values = bytes.Split(bytes.TrimSuffix(list, []byte("\n]")), []byte(",\n"))
+		}
+		s := schematest.Schema(t, strings.Replace(g.schema, "/schema/2/", "/schema/1/", 1))
+		for i, data := range values {
+			schematest.Validate(t, s, "1/"+g.file, data)
+			var again []byte
+			switch g.typ {
+			case reflect.TypeFor[plan.Plan]():
+				p, err := plan.Decode(data)
+				if err != nil || p.Version != 1 {
+					t.Fatalf("1/%s: %v, version %v", g.file, err, p)
+				}
+				again = encoded(t, plan.Encode, p)
+			case reflect.TypeFor[plan.ReadyJob]():
+				j, err := plan.DecodeReadyJob(1, data)
+				if err != nil {
+					t.Fatalf("1/%s %d: %v", g.file, i, err)
+				}
+				again = encoded(t, plan.EncodeReadyJob, j)
+			case reflect.TypeFor[plan.Record]():
+				r, err := plan.DecodeRecord(data)
+				if err != nil || r.Version != 1 {
+					t.Fatalf("1/%s: %v, %v", g.file, err, r)
+				}
+				again = encoded(t, plan.EncodeRecord, r)
+			default:
+				var r plan.JobResult
+				if err := json.Unmarshal(data, &r, json.RejectUnknownMembers(true)); err != nil {
+					t.Fatalf("1/%s: %v", g.file, err)
+				}
+				again = encoded(t, marshalResult, &r)
+			}
+			if !bytes.Equal(again, data) {
+				t.Errorf("1/%s: decoding and encoding changed it:\n%s\n%s", g.file, data, again)
+			}
+		}
+	}
 }
 
 // The goldens fit their schemas, and so do the plans testdata held before.

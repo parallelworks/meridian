@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -276,7 +277,7 @@ func TestPlanNewer(t *testing.T) {
 	c := open(t, Options{Variables: regionVars, Log: slog.New(log)})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	exec(t, c, "DROP TRIGGER meridian_runs_plan_fixed")
-	exec(t, c, "UPDATE meridian_runs SET plan_version = 2")
+	exec(t, c, fmt.Sprintf("UPDATE meridian_runs SET plan_version = %d", plan.Version+1))
 	serve(t, c)
 	waitFor(t, func() bool { return log.has(string(problems.RunPlanNewer.Code())) })
 	// Long enough for a few more tries, which leave it as it is too.

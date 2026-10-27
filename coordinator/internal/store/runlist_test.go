@@ -36,7 +36,7 @@ func TestRecentRuns(t *testing.T) {
 		if ended.State != RunEnded || ended.Outcome != plan.OutcomeFailure || ended.Reason != plan.ReasonTimeout || ended.StartedAt.IsZero() || ended.EndedAt.Before(ended.StartedAt) {
 			t.Errorf("a run ended is %+v", ended)
 		}
-		if ended.Name != p.Run.Name || ended.Location != "w.yaml" || ended.PlanVersion != plan.Version || ended.RunDir != "/runs/2" {
+		if ended.Name != p.Run.Name || ended.Location != "w.yaml" || ended.PlanVersion != 1 || ended.RunDir != "/runs/2" {
 			t.Errorf("a run's name, location, plan version and directory are %+v", ended)
 		}
 		if all, err := tx.RecentRuns(10); err != nil || len(all) != 3 || all[2].ID != "1" {

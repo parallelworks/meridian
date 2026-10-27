@@ -1,0 +1,1 @@
+{"outcome":"failure","outputs":{"count":"3","dsn":"postgres://u:hunter2@db"},"private":["dsn"],"secrets":["dsn"],"derived":["dsn"],"steps":{"login":{"token":"t0k3n","user":"a"}},"secretSteps":{"login":["token"]},"derivedSteps":{"login":["token"]},"needsFailed":true,"cancelled":true}

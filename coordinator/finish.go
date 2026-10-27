@@ -66,7 +66,7 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		if err != nil {
 			return err
 		}
-		if r.PlanVersion != plan.Version {
+		if r.PlanVersion > plan.Version {
 			return fmt.Errorf("%w %d of run %s's plan", plan.ErrVersion, r.PlanVersion, id)
 		}
 		switch r.State {
@@ -124,7 +124,7 @@ func (c *Coordinator) unendedWithdrawals(ctx context.Context, id string) (map[st
 		if errors.Is(err, plan.ErrVersion) {
 			return nil
 		}
-		if err != nil || r.State != store.RunRunning || r.PlanVersion != plan.Version {
+		if err != nil || r.State != store.RunRunning || r.PlanVersion > plan.Version {
 			return err
 		}
 		jobs, err := tx.Jobs(id)

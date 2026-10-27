@@ -557,7 +557,7 @@ func TestUndecodable(t *testing.T) {
 		`{"version":1,"submitted":"` + secret + `"}`:       plan.ErrMalformed,
 		`{"version":1,"` + secret + `":true}`:              plan.ErrMalformed,
 		`not JSON ` + secret:                               plan.ErrMalformed,
-		`{"version":2,"secret":"` + secret + `"}`:          plan.ErrVersion,
+		`{"version":3,"secret":"` + secret + `"}`:          plan.ErrVersion,
 	} {
 		sealed := seal.Sealed{Record: sealData(t, key, "store-1", "42", []byte(data))}
 		_, err := s.Open(t.Context(), "42", 1, sealed)

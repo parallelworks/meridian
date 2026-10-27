@@ -257,6 +257,16 @@ func listen(t testing.TB, srv *workerapisrv.Server) string {
 	return socket
 }
 
+// newestRun stores a run of testWorkflow as newRun does, but of this
+// release's newest plan version (plan.Version), which a replica of an
+// older release doesn't read, and returns its ID.
+func (r *rig) newestRun() string {
+	r.t.Helper()
+	c := created(r.t)
+	c.Plan.Version, c.Record.Version = plan.Version, plan.Version
+	return r.newRunOf(c)
+}
+
 // newRun stores a run of testWorkflow, with its jobs and a secret record,
 // and returns its ID.
 func (r *rig) newRun(rec *plan.Record) string {

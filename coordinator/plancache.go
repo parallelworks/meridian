@@ -49,8 +49,8 @@ func newPlanCache(maxCount int, maxBytes int64) *planCache {
 // without decoding it, and one that doesn't decode is what plan.Decode
 // says.
 func (c *planCache) get(run *store.Run) (*plan.Plan, error) {
-	if run.PlanVersion != plan.Version {
-		return nil, fmt.Errorf("%w %d of run %s's plan; this release reads version %d", plan.ErrVersion, run.PlanVersion, run.ID, plan.Version)
+	if run.PlanVersion > plan.Version {
+		return nil, fmt.Errorf("%w %d of run %s's plan; this release reads versions up to %d", plan.ErrVersion, run.PlanVersion, run.ID, plan.Version)
 	}
 	c.mu.Lock()
 	if e, ok := c.runs[run.ID]; ok {

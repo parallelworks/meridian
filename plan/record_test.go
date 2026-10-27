@@ -12,11 +12,12 @@ import (
 	"github.com/parallelworks/meridian/plan"
 )
 
-// sampleRecord is a secret record with each of its members set.
+// sampleRecord is a secret record with each of its members set, of a plan
+// of version 1, which holds what every version's does.
 func sampleRecord() *plan.Record {
 	seconds := int64(3600)
 	return &plan.Record{
-		Version:    plan.Version,
+		Version:    1,
 		PlanDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Submitted: plan.DataOf(map[string]any{
 			"name": "Alice", "n": int64(3), "pw": "hunter2", "note": "${{ not.parsed }}",
@@ -49,9 +50,10 @@ func sampleRecord() *plan.Record {
 }
 
 // A secret record encodes to the same bytes each time, as a plan does,
-// which testdata/record.json holds, and decodes to what was encoded.
+// which testdata/1/record.json holds for the sample, of version 1, and
+// decodes to what was encoded.
 func TestRecordEncodingIsStable(t *testing.T) {
-	want, err := os.ReadFile("testdata/record.json")
+	want, err := os.ReadFile("testdata/1/record.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func TestDecodeRecordRefuses(t *testing.T) {
 		t.Fatalf("the sample record changed: %s", good)
 	}
 	for name, data := range map[string]string{
-		"another version":           strings.Replace(string(good), `"version":1`, `"version":2`, 1),
+		"another version":           strings.Replace(string(good), `"version":1`, `"version":3`, 1),
 		"an unknown key":            strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
 		"a key twice":               strings.Replace(string(good), `"version":1`, `"version":1,"version":1`, 1),
 		"not JSON":                  "{",

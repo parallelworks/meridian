@@ -183,9 +183,12 @@ type Options struct {
 	// written out, fails to create a run (resolver_missing).
 	Groups Groups
 	// Sources provides the workflows a step's uses: names, which Create
-	// pins. Nil means there are none: a uses: that names a workflow fails
-	// to create a run (resolver_missing).
+	// pins, and those they call in turn, down the tree. Nil means there
+	// are none: a uses: that names a workflow fails to create a run
+	// (resolver_missing).
 	Sources Sources
+	// Calls are the limits on that tree, which Create checks.
+	Calls CallLimits
 	// Sessions checks the workflow's sessions: and gives the sessions
 	// context. Nil means there is no session provider: a workflow with
 	// sessions fails to create a run (resolver_missing), unless Contexts

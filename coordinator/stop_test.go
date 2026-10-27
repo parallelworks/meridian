@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -308,7 +309,7 @@ func TestFinishNewer(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec(t, c, "DROP TRIGGER meridian_runs_plan_fixed")
-	exec(t, c, "UPDATE meridian_runs SET plan_version = 2")
+	exec(t, c, fmt.Sprintf("UPDATE meridian_runs SET plan_version = %d", plan.Version+1))
 	noop := func(context.Context, *store.Tx) error { return errors.New("the job isn't completed") }
 	snooze, err := c.finishRun(t.Context(), id, noop)
 	if err != nil || snooze != fastStart.newer {
@@ -318,7 +319,7 @@ func TestFinishNewer(t *testing.T) {
 		t.Errorf("the log doesn't say so: %v", log.records)
 	}
 	// A start state of a newer version is a newer release's too.
-	exec(t, c, `UPDATE meridian_runs SET plan_version = 1, start_state = CAST('{"version":2,"run":{"format":1}}' AS BLOB)`)
+	exec(t, c, fmt.Sprintf(`UPDATE meridian_runs SET plan_version = 1, start_state = CAST('{"version":%d,"run":{"format":1}}' AS BLOB)`, plan.Version+1))
 	if snooze, err := c.finishRun(t.Context(), id, noop); err != nil || snooze != fastStart.newer {
 		t.Errorf("finishRun of a newer start state = %v, %v", snooze, err)
 	}

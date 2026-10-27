@@ -16,7 +16,8 @@ import (
 // plan.Version, as the worker API's since table does for its bodies'
 // own types, with the API's version.
 var since = map[string]int{
-	"Plan.version": 1, "Plan.run": 1, "Plan.jobs": 1, "Plan.warnings": 1,
+	"Plan.version": 1, "Plan.run": 1, "Plan.jobs": 1, "Plan.warnings": 1, "Plan.calls": 2,
+	"Call.caller": 2, "Call.step": 2, "Call.source": 2,
 
 	"Run.source": 1, "Run.format": 1, "Run.release": 1, "Run.name": 1, "Run.description": 1, "Run.icon": 1,
 	"Run.thumbnail": 1, "Run.inputs": 1, "Run.definitions": 1, "Run.withheld": 1, "Run.decisions": 1, "Run.env": 1,
@@ -68,12 +69,15 @@ var since = map[string]int{
 // of every encoded type has the version that gave it, none later than
 // plan.Version; and a member added after version 1 is left out when it is
 // empty, so that a plan of an earlier version, upgraded as it decodes,
-// encodes as it did. A member added without an entry fails it, as does an
+// encodes as it did; but for the members of a type a later version added,
+// which are written where the member that holds it is, and are of its
+// version, or later. A member added without an entry fails it, as does an
 // entry for a member that is gone.
 func TestMembersAreVersioned(t *testing.T) {
 	seen := map[string]bool{}
-	var walk func(typ reflect.Type)
-	walk = func(typ reflect.Type) {
+	// holder is the version of the member that holds typ: 1 for a root.
+	var walk func(typ reflect.Type, holder int)
+	walk = func(typ reflect.Type, holder int) {
 		for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Map {
 			typ = typ.Elem()
 		}
@@ -94,15 +98,17 @@ func TestMembersAreVersioned(t *testing.T) {
 				t.Errorf("%s has no version: give it the next plan version, and raise plan.Version", member)
 			case version > plan.Version:
 				t.Errorf("%s is from version %d, after plan.Version %d", member, version, plan.Version)
-			case version > 1 && !strings.Contains(options, "omitzero") && !strings.Contains(options, "omitempty"):
+			case version < holder:
+				t.Errorf("%s is from version %d, before the member that holds it, of version %d", member, version, holder)
+			case version > holder && !strings.Contains(options, "omitzero") && !strings.Contains(options, "omitempty"):
 				t.Errorf("%s is from version %d, and isn't left out when empty", member, version)
 			}
 			seen[member] = true
-			walk(f.Type)
+			walk(f.Type, version)
 		}
 	}
 	for _, root := range encodedRoots {
-		walk(root)
+		walk(root, 1)
 	}
 	for member := range since {
 		if !seen[member] {

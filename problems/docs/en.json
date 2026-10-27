@@ -1640,6 +1640,33 @@
       "Find out why the repository has malformed objects, or use another revision."
     ]
   },
+  "workflow_calls_itself": {
+    "why": "A step whose uses: names a workflow runs it as a child run, and Meridian pins every workflow the run calls, and those they call, down the tree, as the run is created, as format 1 does. A workflow that is already on its own path of calls would call itself without end, so the run isn't created. The message names the workflows on the path, from the one that calls itself back to it.",
+    "fix": [
+      "Break the cycle: have one of the workflows the message names do the work itself, rather than call the workflow that called it."
+    ]
+  },
+  "workflow_nested_too_deep": {
+    "why": "A step whose uses: names a workflow runs it as a child run, and a child can call workflows too. Meridian pins the whole tree as the run is created, and, as format 1 does, refuses a workflow called more than 4 levels below the run, or as many as whoever runs it allows. The message names the path of calls, from the run's own workflow.",
+    "fix": [
+      "Call fewer workflows deep: have one of the workflows on the path do its callee's work itself.",
+      "Or have whoever runs the workflow raise the limit, as Meridian's own limits can be raised."
+    ]
+  },
+  "workflows_too_many": {
+    "why": "Meridian pins every workflow a run calls, and those they call, down the tree, as the run is created. As format 1 does, it allows a tree of at most 100 distinct workflows, and of at most 1,000 calls, each path of calls from the run counted, so that a workflow called from two places counts its own calls twice; or as many as whoever runs it allows. This run's tree has more.",
+    "fix": [
+      "Call fewer workflows, or call the same ones from fewer places.",
+      "Or have whoever runs the workflow raise the limit."
+    ]
+  },
+  "workflows_too_large": {
+    "why": "Meridian pins every workflow a run calls, and those they call, down the tree, as the run is created, and keeps their text with the run. As format 1 does, it allows at most 1 MiB of text in all, each distinct workflow counted once, or as much as whoever runs it allows. This run's workflows hold more.",
+    "fix": [
+      "Call fewer, or smaller, workflows.",
+      "Or have whoever runs the workflow raise the limit."
+    ]
+  },
   "owner_unmapped": {
     "why": "Meridian checks that every directory on the way to its own belongs to you or to root, as OpenSSH checks the way to a user's keys. In a user namespace that doesn't map root, as unshare --user, Apptainer, bubblewrap and some CI sandboxes make, a directory whose owner isn't mapped shows as owned by nobody, so Meridian can't tell who could change it, and refuses it rather than assume.",
     "fix": [

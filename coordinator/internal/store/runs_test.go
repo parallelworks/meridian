@@ -15,6 +15,7 @@ import (
 // testState is what a run's Start keeps as run state, for a test.
 func testState() *compile.StartState {
 	return &compile.StartState{
+		Version:        1,
 		Run:            plan.RunValues{Format: 1, Inputs: plan.DataOf(map[string]any{"region": "us"}), Secrets: []string{"inputs.pw"}},
 		TimeoutSeconds: 60,
 	}
@@ -156,8 +157,8 @@ func TestRun(t *testing.T) {
 		switch {
 		case r.ID != id || r.State != RunCreated || r.Outcome != "" || !r.StartedAt.IsZero() || !r.EndedAt.IsZero():
 			t.Errorf("run = %+v", r)
-		case !bytes.Equal(r.Plan, wantPlan) || r.PlanVersion != plan.Version || r.PlanDigest != wantDigest:
-			t.Errorf("the run's plan is version %d, digest %s, %d bytes; want %d, %s, %d", r.PlanVersion, r.PlanDigest, len(r.Plan), plan.Version, wantDigest, len(wantPlan))
+		case !bytes.Equal(r.Plan, wantPlan) || r.PlanVersion != 1 || r.PlanDigest != wantDigest:
+			t.Errorf("the run's plan is version %d, digest %s, %d bytes; want 1, %s, %d", r.PlanVersion, r.PlanDigest, len(r.Plan), wantDigest, len(wantPlan))
 		case r.Name != p.Run.Name || r.Location != "w.yaml" || r.Release != p.Run.Release:
 			t.Errorf("the run's name, location and release are %q, %q, %q", r.Name, r.Location, r.Release)
 		case r.DefaultGroup != "local" || r.RunDir != "/runs/1" || r.WorkflowID != fakeJobID(0) || r.RecordGeneration != 1:
@@ -436,12 +437,12 @@ func TestMalformedRun(t *testing.T) {
 	// A start state of a version a newer release writes is that release's,
 	// not malformed.
 	inTx(t, s, func(tx *Tx) error {
-		_, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_runs SET diagnostics = NULL, start_state = CAST('{"version":2,"later":1}' AS BLOB)`)
+		_, err := tx.tx.ExecContext(tx.ctx, `UPDATE meridian_runs SET diagnostics = NULL, start_state = CAST('{"version":3,"later":1}' AS BLOB)`)
 		return err
 	})
 	inTx(t, s, func(tx *Tx) error {
 		if _, err := tx.Run(id); !errors.Is(err, plan.ErrVersion) || errors.Is(err, ErrMalformed) {
-			t.Errorf("Run with a start state of version 2 = %v, want plan.ErrVersion", err)
+			t.Errorf("Run with a start state of version 3 = %v, want plan.ErrVersion", err)
 		}
 		return nil
 	})

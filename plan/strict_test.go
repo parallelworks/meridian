@@ -50,8 +50,8 @@ func TestDecodingRefusesWhatTheSchemasRefuse(t *testing.T) {
 		good    []byte
 		refuses []refusal
 	}{
-		{reflect.TypeFor[plan.Plan](), "plan/schema/1/plan.schema.json", encoded(t, plan.Encode, fullPlan(t)), []refusal{
-			{name: "another version", old: `"version":1`, new: `"version":2`},
+		{reflect.TypeFor[plan.Plan](), "plan/schema/2/plan.schema.json", encoded(t, plan.Encode, fullPlan(t)), []refusal{
+			{name: "another version", old: `"version":2`, new: `"version":3`},
 			{name: "an unknown member", old: `"release":"v1.0.0"`, new: `"release":"v1.0.0","later":true`},
 			{name: "a number as text", old: `"format":1`, new: `"format":"1"`},
 			// A member that is always written, missing.
@@ -87,7 +87,7 @@ func TestDecodingRefusesWhatTheSchemasRefuse(t *testing.T) {
 			{name: "a diagnostic's extra", old: `"code":"unknown_key"`, new: `"code":"unknown_key","severity":"warning"`},
 			{name: "a diagnostic's in that isn't one", old: `"code":"unknown_key"`, new: `"code":"unknown_key","in":"body"`},
 		}},
-		{reflect.TypeFor[plan.ReadyJob](), "plan/schema/1/readyjob.schema.json", encoded(t, plan.EncodeReadyJob, jobs[0]), []refusal{
+		{reflect.TypeFor[plan.ReadyJob](), "plan/schema/2/readyjob.schema.json", encoded(t, plan.EncodeReadyJob, jobs[0]), []refusal{
 			{name: "a ready job without its key", old: `{"key":"build#1",`, new: `{`},
 			{name: "a ready job without its steps", at: "/steps", v: schematest.Removed},
 			{name: "a ready job's step without its path", old: `,"path":"/jobs/build/steps/1"}`, new: `}`},
@@ -96,7 +96,7 @@ func TestDecodingRefusesWhatTheSchemasRefuse(t *testing.T) {
 			{name: "a matrix that is null", old: `"matrix":{"os":"linux"}`, new: `"matrix":null`},
 			{name: "a retry's reasons left out", at: "/retry/reasons", v: schematest.Removed},
 		}},
-		{reflect.TypeFor[plan.ReadyJob](), "plan/schema/1/readyjob.schema.json", encoded(t, plan.EncodeReadyJob, jobs[1]), []refusal{
+		{reflect.TypeFor[plan.ReadyJob](), "plan/schema/2/readyjob.schema.json", encoded(t, plan.EncodeReadyJob, jobs[1]), []refusal{
 			{name: "a target of two kinds", old: `"target":{"group":"gpu"}`, new: `"target":{"group":"gpu","inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":null}}`},
 		}},
 		{reflect.TypeFor[plan.Record](), "plan/schema/1/record.schema.json", encoded(t, plan.EncodeRecord, sampleRecord()), []refusal{
@@ -110,7 +110,7 @@ func TestDecodingRefusesWhatTheSchemasRefuse(t *testing.T) {
 			{name: "an index before the first", old: `"index":0`, new: `"index":-1`},
 			{name: "an index past 32 bits", old: `"index":0`, new: `"index":2147483648`},
 		}},
-		{reflect.TypeFor[plan.JobResult](), "plan/schema/1/jobresult.schema.json", encoded(t, marshalResult, fullJobResult()), []refusal{
+		{reflect.TypeFor[plan.JobResult](), "plan/schema/2/jobresult.schema.json", encoded(t, marshalResult, fullJobResult()), []refusal{
 			{name: "an outcome that isn't one", old: `"outcome":"failure"`, new: `"outcome":"failed"`},
 			{name: "an empty outcome", old: `"outcome":"failure"`, new: `"outcome":""`},
 		}},
@@ -190,8 +190,8 @@ func TestDecodingANewerReleasesNames(t *testing.T) {
 			good         []byte
 			decode       func([]byte) error
 		}{
-			{"plan", "plan/schema/1/plan.schema.json", plans, decoders[reflect.TypeFor[plan.Plan]()]},
-			{"ready job", "plan/schema/1/readyjob.schema.json", job, decoders[reflect.TypeFor[plan.ReadyJob]()]},
+			{"plan", "plan/schema/2/plan.schema.json", plans, decoders[reflect.TypeFor[plan.Plan]()]},
+			{"ready job", "plan/schema/2/readyjob.schema.json", job, decoders[reflect.TypeFor[plan.ReadyJob]()]},
 		} {
 			data := strings.Replace(string(kind.good), tc.old, tc.new, 1)
 			if data == string(kind.good) {
@@ -215,8 +215,8 @@ func TestDecodingRefusesIntegersWrittenAsFractions(t *testing.T) {
 		name, good, old, new, schema string
 		decode                       func([]byte) error
 	}{
-		{"a format of 1.0", plans, `"format":1`, `"format":1.0`, "plan/schema/1/plan.schema.json", decoders[reflect.TypeFor[plan.Plan]()]},
-		{"a format of 1e0", plans, `"format":1`, `"format":1e0`, "plan/schema/1/plan.schema.json", decoders[reflect.TypeFor[plan.Plan]()]},
+		{"a format of 1.0", plans, `"format":1`, `"format":1.0`, "plan/schema/2/plan.schema.json", decoders[reflect.TypeFor[plan.Plan]()]},
+		{"a format of 1e0", plans, `"format":1`, `"format":1e0`, "plan/schema/2/plan.schema.json", decoders[reflect.TypeFor[plan.Plan]()]},
 		{"an index of -0.0", record, `"index":0`, `"index":-0.0`, "plan/schema/1/record.schema.json", decoders[reflect.TypeFor[plan.Record]()]},
 	} {
 		data := strings.Replace(tc.good, tc.old, tc.new, 1)
