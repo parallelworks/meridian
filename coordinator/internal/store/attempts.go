@@ -71,8 +71,11 @@ type Attempt struct {
 	SelfFencing      bool
 	LeaseSeconds     int64
 	HeartbeatSeconds int64
-	// Worker is the worker that claimed it.
-	Worker workerapi.Worker
+	// Worker is the worker that claimed it, and APIVersion the version of
+	// the worker API it was claimed at (workerapi.Claim.APIVersion), or 0
+	// before its claim.
+	Worker     workerapi.Worker
+	APIVersion int
 	// Placement is where it was placed, once it has been (RecordPlacement,
 	// Placed).
 	Placement Placement
@@ -241,7 +244,7 @@ func (tx *Tx) NewToken(id string) (string, error) {
 }
 
 const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a.token_hash, a.credential_hash,
-  a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest,
+  a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest, a.api_version,
   a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.private_placement IS NOT NULL,
   a.created_at, a.claimed_at, a.renewed_at, a.step_started_at,
   a.end_kind, a.outcome, a.reason, a.complete_digest, a.report, a.problem, a.ended_at,
@@ -257,13 +260,14 @@ func (tx *Tx) attemptWhere(where string, args ...any) (*Attempt, error) {
 		version, wdigest, kind, outcome, reason sql.NullString
 		group, member, backend, pid, placed     sql.NullString
 		claimed, renewed, started, ended        sql.NullInt64
+		api                                     sql.NullInt64
 		prob                                    []byte
 	)
 	err := tx.queryRow("SELECT "+attemptColumns+`
 FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
 WHERE `+where, args...).Scan(
 		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
-		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest,
+		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest, &api,
 		&group, &member, &backend, &pid, &placed, &a.Private,
 		&created, &claimed, &renewed, &started,
 		&kind, &outcome, &reason, &a.End.CompleteDigest, &a.End.Report, &prob, &ended, &a.Holds)
@@ -274,7 +278,7 @@ WHERE `+where, args...).Scan(
 		return nil, err
 	}
 	a.Run, a.State = runID(run), AttemptState(state)
-	a.Worker = workerapi.Worker{Version: version.String, Digest: wdigest.String}
+	a.Worker, a.APIVersion = workerapi.Worker{Version: version.String, Digest: wdigest.String}, int(api.Int64)
 	a.Placement = Placement{Group: group.String, Member: member.String, Backend: backend.String, ID: pid.String, WorkerDigest: placed.String}
 	a.CreatedAt, a.ClaimedAt, a.RenewedAt, a.StepStartedAt = time.UnixMicro(created).UTC(), timeOf(claimed), timeOf(renewed), timeOf(started)
 	a.End.Kind, a.End.Outcome, a.End.Reason = EndKind(kind.String), plan.Outcome(outcome.String), plan.Reason(reason.String)
@@ -306,14 +310,16 @@ func (tx *Tx) AttemptByCredential(credential string) (*Attempt, error) {
 	return tx.attemptWhere("a.credential_hash = ?", digest(credential))
 }
 
-// Claim records that a worker claimed the attempt whose bootstrap token is
-// token, with credential, which its later calls give, and returns the
-// attempt, its lease running from now. A claim repeated with the same
-// credential changes nothing. A token that is no attempt's is ErrNotFound,
-// one of an attempt claimed with another credential ErrCredential, one of
-// an attempt that no longer holds its job ErrFenced, and a first claim of
-// one whose placement isn't recorded yet ErrNotPlaced.
-func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, error) {
+// Claim records that a worker, w, claimed the attempt whose bootstrap
+// token is token, with credential, which its later calls give, at the
+// version of the worker API apiVersion, and returns the attempt, its lease
+// running from now. A claim repeated with the same credential changes
+// nothing: the attempt keeps the version of its first. A token that is no
+// attempt's is ErrNotFound, one of an attempt claimed with another
+// credential ErrCredential, one of an attempt that no longer holds its job
+// ErrFenced, and a first claim of one whose placement isn't recorded yet
+// ErrNotPlaced.
+func (tx *Tx) Claim(token, credential string, w workerapi.Worker, apiVersion int) (*Attempt, error) {
 	if len(credential) < 32 {
 		return nil, errors.New("store: a credential shorter than 32 bytes")
 	}
@@ -340,6 +346,8 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
 		return nil, ErrFenced
 	case !a.Placed():
 		return nil, ErrNotPlaced
+	case apiVersion < 1:
+		return nil, fmt.Errorf("store: a claim at version %d of the worker API, which has none before 1", apiVersion)
 	}
 	var taken bool
 	if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE credential_hash = ?)", cred).Scan(&taken); err != nil {
@@ -348,8 +356,8 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
 	if taken {
 		return nil, ErrCredential
 	}
-	if _, err := tx.exec(`UPDATE meridian_attempts SET state = ?, credential_hash = ?, worker_version = ?, worker_digest = ?,
-  claimed_at = ?, renewed_at = ? WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, now, now, a.ID); err != nil {
+	if _, err := tx.exec(`UPDATE meridian_attempts SET state = ?, credential_hash = ?, worker_version = ?, worker_digest = ?, api_version = ?,
+  claimed_at = ?, renewed_at = ? WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, apiVersion, now, now, a.ID); err != nil {
 		return nil, err
 	}
 	n, _ := runNumber(a.Run)

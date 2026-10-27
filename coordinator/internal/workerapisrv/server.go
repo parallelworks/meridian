@@ -176,11 +176,16 @@ type Server struct {
 		waits map[string]*placedWaits
 	}
 
-	// What tests change: the newest plan version the server reads, how
-	// long it holds a control poll, how long it holds a first claim for
-	// its placement (awaitPlaced), how many bytes of a log it keeps, and
-	// how many of them it reserves at a time (spendLogBytes).
+	// What tests change: the newest plan version the server reads, the
+	// newest version of the worker API it speaks, and the oldest an
+	// attempt needs its worker to speak, which every attempt needs alike so
+	// far (workerapi.WorkerAPITooOld), how long it holds a control poll,
+	// how long it holds a first claim for its placement (awaitPlaced), how
+	// many bytes of a log it keeps, and how many of them it reserves at a
+	// time (spendLogBytes).
 	reads          int
+	speaks         int
+	needs          int
 	hold           time.Duration
 	placedWait     time.Duration
 	placedRecheck  time.Duration
@@ -191,8 +196,9 @@ type Server struct {
 	headerTime     time.Duration
 	bodyTime       time.Duration
 	// beforeEnd, if it is set, is called as an end is stored, between its
-	// checks and its transaction.
-	beforeEnd func()
+	// checks and its transaction; and beforeClaim as a claim is, between
+	// its refusals and its transaction.
+	beforeEnd, beforeClaim func()
 }
 
 // New returns a Server that serves from opts.
@@ -210,7 +216,7 @@ func New(opts Options) (*Server, error) {
 	s := &Server{
 		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers,
 		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
-		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait, placedRecheck: placedRecheck,
+		reads: plan.Version, speaks: workerapi.Version, needs: 1, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait, placedRecheck: placedRecheck,
 		maxLogBytes: MaxLogBytes, logReserve: logReserve, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
 	}
 	if s.peers == nil {
@@ -547,14 +553,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The answer is written in time, or not at all: a worker that reads it
 	// slowly holds nothing past it.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.hold + writeTime))
-	method, ok := methods[r.URL.Path]
-	switch {
-	case !ok:
-		writeStatus(w, http.StatusNotFound)
-		return
-	case r.Method != method:
-		w.Header().Set("Allow", method)
-		writeStatus(w, http.StatusMethodNotAllowed)
+	method, known := methods[r.URL.Path]
+	if !known || r.Method != method {
+		s.serveUnknown(w, r, method, known)
 		return
 	}
 	uid, ok := peerOf(r)
@@ -586,6 +587,49 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// serveUnknown answers a request of a path the API doesn't have, 404, or
+// of one of its paths, which takes method, with another method, 405: but
+// one of a path under /v1/ with the credential of an attempt claimed at a
+// later version of the API than the server speaks, which may have that
+// path, or that method, is another replica's, 503, which the worker tries
+// again.
+func (s *Server) serveUnknown(w http.ResponseWriter, r *http.Request, method string, known bool) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && s.ofLaterVersion(r) {
+		writeStatus(w, http.StatusServiceUnavailable)
+		return
+	}
+	if !known {
+		writeStatus(w, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Allow", method)
+	writeStatus(w, http.StatusMethodNotAllowed)
+}
+
+// ofLaterVersion reports whether the request bears the credential of an
+// attempt, of a run its peer may report on, that was claimed at a later
+// version of the worker API than the server speaks.
+func (s *Server) ofLaterVersion(r *http.Request) bool {
+	uid, ok := peerOf(r)
+	credential := bearer(r)
+	if !ok || credential == "" {
+		return false
+	}
+	var (
+		a   *store.Attempt
+		run *store.Run
+	)
+	err := s.store.View(r.Context(), func(tx *store.Tx) error {
+		var err error
+		if a, err = tx.AttemptByCredential(credential); err != nil {
+			return err
+		}
+		run, err = tx.Run(a.Run)
+		return err
+	})
+	return err == nil && a.APIVersion > s.speaks && s.peers.Allows(r.Context(), uid, run)
+}
+
 // bearer returns the request's bearer token, or "".
 func bearer(r *http.Request) string {
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -595,10 +639,14 @@ func bearer(r *http.Request) string {
 // attempt returns the attempt whose credential the request bears, and its
 // run, once it has answered a request it refuses: 401 for a credential
 // that is no attempt's, of a run the peer may not report on, or that has
-// lapsed with a lease, and 503 for a run whose plan is of a version the
-// server doesn't read. Whether the attempt still holds its job, its write
-// checks in its own transaction. Nothing of the request's body is read
-// before.
+// lapsed with a lease; and 503 for a run whose plan is of a version the
+// server doesn't read, or an attempt claimed at a version of the worker
+// API it doesn't speak, but a heartbeat, events or a log upload of such
+// an attempt that no longer holds its job, which is fenced, as it would
+// be by a replica that serves it: so an attempt superseded meanwhile
+// hears so from every replica, whatever versions they read. Whether an
+// attempt it serves still holds its job, its write checks in its own
+// transaction. Nothing of the request's body is read before.
 func (s *Server) attempt(w http.ResponseWriter, r *http.Request, uid int) (*store.Attempt, *store.Run, bool) {
 	ctx := r.Context()
 	credential := bearer(r)
@@ -626,15 +674,24 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, uid int) (*stor
 	case err != nil:
 		s.writeError(w, r, err)
 		return nil, nil, false
-	case run.PlanVersion > s.reads:
-		writeStatus(w, http.StatusServiceUnavailable)
-		return nil, nil, false
 	case !s.peers.Allows(ctx, uid, run), lapsed:
 		writeStatus(w, http.StatusUnauthorized)
 		return nil, nil, false
+	case run.PlanVersion <= s.reads && a.APIVersion <= s.speaks:
+		return a, run, true
+	case !a.Holds && fencedUnread[r.URL.Path]:
+		problem.Write(w, fenced())
+	default:
+		writeStatus(w, http.StatusServiceUnavailable)
 	}
-	return a, run, true
+	return nil, nil, false
 }
+
+// fencedUnread are the paths whose requests are fenced, of an attempt
+// that no longer holds its job, whatever their bodies hold: a control
+// poll's answer doesn't say so, and an end's says whether it is the end
+// that was stored.
+var fencedUnread = map[string]bool{workerapi.PathHeartbeat: true, workerapi.PathEvents: true, workerapi.PathLogs: true}
 
 // readBody reads the request's body, at most limit bytes, in the time a
 // body of limit bytes takes at minRate, once it has answered one larger,
@@ -687,9 +744,11 @@ func writeStatus(w http.ResponseWriter, status int) {
 	problem.Write(w, problem.Status(status, ""))
 }
 
-// writeJSON answers 200 with v, as the API encodes a body.
-func writeJSON(w http.ResponseWriter, v any) {
-	if err := workerapi.WriteBody(w, v); err != nil {
+// writeBody answers 200 with v, as the API encodes a body of an attempt of
+// version of the worker API (workerapi.WriteBody), or 500 for one that
+// holds what that version doesn't have, or can't be encoded.
+func writeBody(w http.ResponseWriter, version int, v any) {
+	if err := workerapi.WriteBody(w, version, v); err != nil {
 		writeStatus(w, http.StatusInternalServerError)
 	}
 }

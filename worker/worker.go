@@ -153,7 +153,7 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 	c := newClient(ep, tm, log)
 	defer c.close()
 	credential := newCredential()
-	claim, claimed, err := c.claim(ctx, ep.token, workerapi.ClaimRequest{Credential: credential, PlanVersion: plan.Version, Worker: worker})
+	claim, claimed, err := c.claim(ctx, ep.token, workerapi.ClaimRequest{Credential: credential, APIVersion: workerapi.Version, PlanVersion: plan.Version, Worker: worker})
 	if err != nil {
 		return err
 	}

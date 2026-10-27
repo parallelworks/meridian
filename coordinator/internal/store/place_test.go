@@ -7,6 +7,7 @@ import (
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // TestPinReady checks that what a job is first readied with is pinned:
@@ -124,7 +125,7 @@ func TestChoosePlace(t *testing.T) {
 		if err := tx.ResealPlace(a.ID, 2, []byte("sealed")); !errors.Is(err, ErrState) {
 			t.Errorf("ResealPlace of a place in the clear = %v, want ErrState", err)
 		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		b, _, err := tx.NewAttempt(NewAttempt{Run: id, Job: "test", LeaseSeconds: 60, HeartbeatSeconds: 10})
@@ -302,7 +303,7 @@ func TestPlaceFailed(t *testing.T) {
 		if _, err := tx.PlaceFailed(n, 3, p); !errors.Is(err, ErrState) {
 			t.Errorf("PlaceFailed of a placed attempt = %v, want ErrState", err)
 		}
-		if _, err := tx.Claim(token, credential('p'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('p'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		if _, err := tx.PlaceFailed(n, 3, p); !errors.Is(err, ErrState) {
@@ -334,7 +335,7 @@ func TestNewAttemptAfter(t *testing.T) {
 		if err := tx.Unplaced(a.ID); !errors.Is(err, ErrState) {
 			t.Errorf("Unplaced of a placed attempt = %v, want ErrState", err)
 		}
-		if _, err := tx.Claim(token, credential('n'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('n'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		if err := tx.StepStarted(a.ID); err != nil {

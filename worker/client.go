@@ -83,6 +83,11 @@ type client struct {
 	// after the claim. It is set once the claim succeeds, before anything
 	// else uses the client.
 	credential string
+	// apiVersion is the version of the API the attempt is served at,
+	// which the client sends and reads every body after the claim at
+	// (workerapi.MarshalAt, UnmarshalAt). The claim sets it, once it
+	// succeeds.
+	apiVersion int
 	timing     timing
 	log        *slog.Logger
 	// peer checks who serves a Unix socket (checkPeer).
@@ -273,7 +278,7 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		if out == nil {
 			return nil
 		}
-		if err := workerapi.Unmarshal(data, out); err != nil {
+		if err := c.unmarshal(data, out); err != nil {
 			return answerInvalid(cl.path, status, err)
 		}
 		return nil
@@ -397,7 +402,11 @@ const (
 
 // claim claims the attempt token is for, as req, and returns the claim and
 // when the worker sent the request the coordinator answered, from which
-// the attempt's lease counts.
+// the attempt's lease counts, and sets the version of the API the client
+// speaks from then on. A claim served at a version of the API that req
+// doesn't speak, from 1 to its own, is an answer the worker can't read,
+// and so is one with what its version doesn't have
+// (workerapi.CheckVersion).
 func (c *client) claim(ctx context.Context, token string, req workerapi.ClaimRequest) (*workerapi.Claim, time.Time, error) {
 	var sent time.Time
 	body, err := workerapi.Marshal(&req)
@@ -406,10 +415,28 @@ func (c *client) claim(ctx context.Context, token string, req workerapi.ClaimReq
 	}
 	claim := new(workerapi.Claim)
 	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathClaim, body: body, bearer: token, timeout: requestTimeout, sent: &sent}, claim)
-	if errors.Is(err, errUnauthorized) {
+	switch {
+	case errors.Is(err, errUnauthorized):
 		err = problems.BootstrapTokenRefused.Problem(nil)
+	case err != nil:
+	case claim.APIVersion < 1 || claim.APIVersion > req.Speaks():
+		err = answerInvalidAt(workerapi.PathClaim, http.StatusOK, "/apiVersion")
+	case workerapi.CheckVersion(claim.APIVersion, claim) != nil:
+		err = answerInvalid(workerapi.PathClaim, http.StatusOK, nil)
+	default:
+		c.apiVersion = claim.APIVersion
 	}
 	return claim, sent, err
+}
+
+// unmarshal reads an answer: one after the claim as a body of the
+// attempt's version of the API, and the claim, whose version isn't known
+// until it is read, as Unmarshal does, which claim checks against it.
+func (c *client) unmarshal(data []byte, out any) error {
+	if c.apiVersion == 0 {
+		return workerapi.Unmarshal(data, out)
+	}
+	return workerapi.UnmarshalAt(c.apiVersion, data, out)
 }
 
 // heartbeat renews the attempt's lease, once.
@@ -429,7 +456,7 @@ func (c *client) control(ctx context.Context, version int64) (*workerapi.Control
 // encode.
 func (c *client) events(ctx context.Context, events []workerapi.Event) (workerapi.EventsAck, error) {
 	var ack workerapi.EventsAck
-	body, err := workerapi.Marshal(&workerapi.Events{Events: events})
+	body, err := workerapi.MarshalAt(c.apiVersion, &workerapi.Events{Events: events})
 	if err != nil {
 		return ack, &encodeError{err}
 	}
@@ -459,7 +486,7 @@ func (c *client) upload(ctx context.Context, key logKey, offset int64, data []by
 // complete reports the attempt's end. It returns an *encodeError for an
 // end it can't encode.
 func (c *client) complete(ctx context.Context, end *workerapi.Complete) error {
-	body, err := workerapi.Marshal(end)
+	body, err := workerapi.MarshalAt(c.apiVersion, end)
 	if err != nil {
 		return &encodeError{err}
 	}

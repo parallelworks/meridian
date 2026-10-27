@@ -136,7 +136,7 @@ func (d *leaseDriver) claim(req backend.PlaceRequest, started bool) {
 	_, _ = rand.Read(b)
 	credential := hex.EncodeToString(b)
 	err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
-		a, err := tx.Claim(req.BootstrapToken, credential, workerapi.Worker{Version: "test"})
+		a, err := tx.Claim(req.BootstrapToken, credential, workerapi.Worker{Version: "test"}, workerapi.Version)
 		if err != nil || !started {
 			return err
 		}

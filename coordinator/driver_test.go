@@ -242,7 +242,7 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	_, _ = rand.Read(credential)
 	if end.running {
 		if err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
-			claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
+			claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest}, workerapi.Version)
 			if err != nil {
 				return err
 			}
@@ -261,7 +261,7 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	report.Result = state
 	var after func()
 	err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
-		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
+		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest}, workerapi.Version)
 		if err != nil {
 			return err
 		}

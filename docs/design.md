@@ -1541,9 +1541,10 @@ sees one version.
   to its encoding, an addition among them; an addition's upgrade changes
   nothing. Each version's encoding is described by a JSON Schema, kept in
   this repository, so the plan is a contract a platform can read too. The
-  trees of stored expressions are part of it, and so are the worker API's
-  bodies, which carry a run's values and the job Ready evaluated
-  ([The worker API](#the-worker-api)).
+  trees of stored expressions are part of it, and so are the types the
+  worker API's bodies carry of a run: its values, the job Ready
+  evaluated, and the results of the jobs it needs. The API's own bodies
+  have a version of their own ([The worker API](#the-worker-api)).
 - **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -1581,19 +1582,22 @@ A run's secret record is versioned with its plan, and encoded as it is
 (`plan.Record`): a release reads the records of the plans it reads, and the
 rules above are the record's too.
 
-Version 1 is frozen: every change to the plan's encoding, or to the worker
-API's bodies, from here on raises the version, an addition among them. Its
-schemas are in `plan/schema/1` (`plan.Schemas`): a plan's
-(`plan.schema.json`), whose definitions hold the other types'; a ready
-job's, a secret record's, a run's values' and a job's result's, which name
-them; and the worker API's bodies' (`workerapi.schema.json`), which refer
-to them. They refer to each other by their names, so they resolve wherever
-the directory is. Tests check that every encoded type's members are what
-its schema describes, that golden files setting every member, and what
-Meridian encodes for every conformance case, fit the schemas, that
-decoding agrees with the schemas on each member of the goldens and the
-bodies left out, null, or a number past its bounds, and that every member
-has the version that gave it, in plan's and the worker API's since tables,
+Version 1 is frozen: every change to the plan's encoding from here on
+raises the version, an addition among them. Its schemas are in
+`plan/schema/1` (`plan.Schemas`): a plan's (`plan.schema.json`), whose
+definitions hold the other types'; a ready job's, a secret record's, a
+run's values' and a job's result's, which name them; and the worker API's
+bodies' for runs of the version (`workerapi.schema.json`), which refer to
+them. They refer to each other by their names, so they resolve wherever
+the directory is. The bodies' schema follows the API's own version rather
+than the plan's: it describes the bodies of the API's newest version, and
+says of a member a later API version adds which version that is. Tests
+check that every encoded type's members are what its schema describes,
+that golden files setting every member, and what Meridian encodes for
+every conformance case, fit the schemas, that decoding agrees with the
+schemas on each member of the goldens and the bodies left out, null, or a
+number past its bounds, and that every member has the version that gave
+it, the plan's in plan's since table and the API's in the worker API's,
 so that a member added later can't go in without a version. A value is
 named one way throughout, by its path with its context (`plan.JoinPath`),
 as in `inputs.region`, in the plan, the secret record and a run's values.
@@ -2890,15 +2894,17 @@ whoever holds the token can say any digest.
 
 ### The worker API
 
-The API is HTTP with JSON bodies, versioned in its path (`/v1/`), with
-errors as RFC 9457 problem details. Meridian's coordinator and a platform
-that embeds Meridian serve the same API.
+The API is HTTP with JSON bodies, under `/v1/`, with errors as RFC 9457
+problem details, and a version of its own (below). Meridian's coordinator
+and a platform that embeds Meridian serve the same API.
 
-- **Claim:** present the bootstrap token and the worker's credential, and
-  receive the job as Ready evaluated it, encoded as its plan is; the values
-  of its own job's secrets and variables, and of the inputs Start completed
-  that it reads; and its dependencies' outcomes, and the outputs of theirs
-  that it reads.
+- **Claim:** present the bootstrap token, the worker's credential, and the
+  newest versions of the API and of the plan the worker speaks and reads,
+  and receive the version of the API the attempt is served at, and the job
+  as Ready evaluated it, encoded as its plan is; the values of its own
+  job's secrets and variables, and of the inputs Start completed that it
+  reads; and its dependencies' outcomes, and the outputs of theirs that it
+  reads.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
   The worker reads it once, answered at once, before the job's first step,
@@ -2947,18 +2953,68 @@ user's own files and processes allow: with the `local` backend, a step
 is the user, and can read everything the user can, other runs' secrets
 among them ([Security](#security)).
 
-The API's bodies are versioned by the run's plan version: a change to a
-body is a change to the plan's encoding, and raises the plan's version, as
-any other does ([Plans across versions](#plans-across-versions)). A field
-added in a later version is left out when it is empty, and each side sends
-it only for a run whose version has it, so each side reads the other's
-bodies strictly, refusing a field it doesn't know. A worker says, as it
-claims, the newest plan version it reads, and the coordinator refuses one
-that doesn't read the run's before it sends anything of the run. A replica
-answers a worker only for a run whose version it reads, as it claims only
-such runs, and otherwise asks it to try again, which reaches another. The
-claim's request comes before the worker knows the run's version, so it
-never changes.
+The API has a version of its own, apart from the plan's. The plan's
+version says what a job means; the API's says what a worker and a
+coordinator say to each other.
+
+- **One number.** The API's version is one integer, 1 so far, and every
+  change to the API raises it: a path, a member of a body, or a kind of
+  event, added. Neither side reads a member it doesn't know, so a major
+  and a minor number, which tell an addition a reader can skip from one it
+  can't, would say nothing more. The paths stay under `/v1/`: a version is
+  served beside every version before it, not in place of them.
+- **Each side speaks every version up to its own.** A worker says, as it
+  claims, the newest version it speaks; a worker of a release from before
+  the API had a version says none, and speaks version 1. The coordinator
+  serves the attempt at the lower of that and its own, says which in the
+  claim's answer, and keeps it with the attempt, and both sides speak
+  that version until the attempt ends: a worker newer than the
+  coordinator speaks the coordinator's version, and an older one its own.
+  A member a later version adds is left out when it is empty, and each
+  side sends it only in an attempt whose version has it, so each reads
+  the other's bodies strictly, refusing a member it doesn't know. Each
+  side sends and reads every body of an attempt through one check, which
+  refuses a member later than the attempt's version
+  (`workerapi.CheckVersion`), from a table of the version that added each
+  member. A path a later version adds, a worker calls only in such an
+  attempt, and the coordinator answers it in another as one the API
+  doesn't have.
+- **Never a silent downgrade.** An attempt needs the oldest version that
+  has everything its job uses, and the coordinator refuses a worker whose
+  version is older before it sends anything of the run
+  (`worker_api_too_old`), rather than run the job without that part. The
+  attempt fails before its first step, and is placed again, as for
+  `plan_too_new`. Every job so far needs version 1.
+- **What a body carries of a run is the plan's.** The run's values, the
+  job Ready evaluated and the results of the jobs it needs are encoded at
+  the run's plan version, and a change to one of their types raises the
+  plan's version, not the API's
+  ([Plans across versions](#plans-across-versions)). A worker says, as it
+  claims, the newest plan version it reads too, and the coordinator
+  refuses one that doesn't read the run's before it sends anything of the
+  run (`plan_too_new`).
+- **Replicas.** A replica answers a worker only for a run whose plan
+  version it reads, as it claims only such runs, and only for an attempt
+  whose API version it speaks; otherwise it asks the worker to try again,
+  which reaches another. So it does for a path or a method under `/v1/`
+  that it doesn't have, of an attempt claimed at a later version, which
+  may have it, where it answers another's as one the API doesn't have.
+  What needs neither version it answers first: a credential it doesn't
+  take, or that has lapsed, and a heartbeat, events, a log upload or a
+  claim of an attempt that no longer holds its job, which is fenced. So a
+  worker superseded during a rolling upgrade, or after one is rolled
+  back, stops, whichever replicas are left. The claim's request comes
+  before the worker knows either version, so it never changes.
+- **The schema.** The bodies' JSON Schema is beside each plan version's
+  schemas (`plan/schema/<version>/workerapi.schema.json`), since it refers
+  to them for what a body carries of a run. It describes the bodies of the
+  API's newest version, and says of a member a later version adds which
+  version that is, so a body of an earlier version is one without it. Its
+  cost is that an addition to the API changes each plan version's copy
+  alike. A test gives every member of every body the API version that
+  added it, and fails for a member without one, one added after the
+  first that isn't left out when empty, or one added to the claim's
+  request.
 
 What the API means is pinned by a suite, `workerapitest.Conformance`, that
 plays a worker against a coordinator over its Unix socket: the claim and
@@ -4000,9 +4056,3 @@ Larger features that aren't designed yet are proposed in
   ([Reruns](#reruns)). Should a platform keep what was submitted, so a rerun
   needn't ask again? It would keep the run's passwords past its end, in a
   store of its own, where Meridian keeps none.
-- **The worker API's own version.** The API's bodies are versioned with the
-  run's plan ([The worker API](#the-worker-api)), so an addition to one,
-  such as an event that says whether a try was its step's last, raises the
-  plan's version. A version of the API's own, which a worker gives as it
-  claims, would let a coordinator send a new member only to a worker that
-  reads it, and leave the plan's version to what a job means.

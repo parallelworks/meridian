@@ -13,7 +13,8 @@ import (
 // encoded types, by its type and JSON name: a Plan, a ReadyJob, a secret
 // Record, RunValues and a JobResult, and the types they hold. Version 1 is
 // frozen, so a member added later is in a later version, which raises
-// plan.Version, as the worker API's since table does for its bodies.
+// plan.Version, as the worker API's since table does for its bodies'
+// own types, with the API's version.
 var since = map[string]int{
 	"Plan.version": 1, "Plan.run": 1, "Plan.jobs": 1, "Plan.warnings": 1,
 

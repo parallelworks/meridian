@@ -107,6 +107,7 @@ func Conformance(t *testing.T, target Target) {
 	t.Run("claim", func(t *testing.T) { checkClaim(t, target) })
 	t.Run("claim again", func(t *testing.T) { checkClaimAgain(t, target) })
 	t.Run("plan versions", func(t *testing.T) { checkPlanVersions(t, target) })
+	t.Run("API versions", func(t *testing.T) { checkAPIVersions(t, target) })
 	t.Run("authorization", func(t *testing.T) { checkAuthorization(t, target) })
 	t.Run("heartbeat", func(t *testing.T) { checkHeartbeat(t, target) })
 	t.Run("lease", func(t *testing.T) { checkLapse(t, target) })
@@ -224,10 +225,17 @@ func marshal(t *testing.T, v any) []byte {
 	return data
 }
 
-// claimRequest returns the worker's claim, as one that reads planVersion.
+// claimRequest returns the worker's claim, as one that reads planVersion,
+// and speaks this version of the API (workerapi.Version).
 func (w *worker) claimRequest(planVersion int) []byte {
+	return w.claimRequestAt(workerapi.Version, planVersion)
+}
+
+// claimRequestAt returns the worker's claim, as one that speaks apiVersion
+// of the API and reads planVersion.
+func (w *worker) claimRequestAt(apiVersion, planVersion int) []byte {
 	return marshal(w.t, workerapi.ClaimRequest{
-		Credential: w.credential, PlanVersion: planVersion,
+		Credential: w.credential, APIVersion: apiVersion, PlanVersion: planVersion,
 		Worker: workerapi.Worker{Version: "v0.0.0-conformance", Digest: "sha256:" + strings.Repeat("0", 64)},
 	})
 }
@@ -260,6 +268,8 @@ func (w *worker) claimed() *worker {
 		w.t.Errorf("the claim's job is %s, of %d steps, not the attempt's", job.Key, len(job.Steps))
 	case c.PlanVersion != planVersion(w.attempt):
 		w.t.Errorf("the claim's plan version is %d, not the run's %d", c.PlanVersion, planVersion(w.attempt))
+	case c.APIVersion != workerapi.Version:
+		w.t.Errorf("a worker of version %d of the API was served at %d", workerapi.Version, c.APIVersion)
 	case c.SelfFencing != w.attempt.SelfFencing || c.LeaseSeconds != w.attempt.LeaseSeconds || c.HeartbeatSeconds != w.attempt.HeartbeatSeconds:
 		w.t.Errorf("the claim's lease is %v, %d s, every %d s; the attempt's is %v, %d s, every %d s",
 			c.SelfFencing, c.LeaseSeconds, c.HeartbeatSeconds, w.attempt.SelfFencing, w.attempt.LeaseSeconds, w.attempt.HeartbeatSeconds)
@@ -493,6 +503,37 @@ func checkPlanVersions(t *testing.T, target Target) {
 	newer.PlanVersion = plan.Version + 1
 	w = newWorker(t, target, newer)
 	wantStatus(t, "a claim of a run of a newer version", w.send(http.MethodPost, workerapi.PathClaim, nil, w.claimRequest(plan.Version+1), w.token), http.StatusServiceUnavailable)
+}
+
+// A worker of a later version of the API than the coordinator's is served
+// at the coordinator's, and one of a release from before the API had a
+// version, whose claim says none, at version 1; and so is each one's claim
+// repeated.
+func checkAPIVersions(t *testing.T, target Target) {
+	for _, tc := range []struct {
+		name          string
+		speaks, serve int
+	}{
+		{"a worker of a later version", workerapi.Version + 1, workerapi.Version},
+		{"a worker without a version", 0, 1},
+	} {
+		w := newWorker(t, target, newAttempt())
+		claim := w.claimRequestAt(tc.speaks, plan.Version)
+		for _, again := range []string{"", ", repeated"} {
+			what := "the claim of " + tc.name + again
+			a := w.send(http.MethodPost, workerapi.PathClaim, nil, claim, w.token)
+			if a.status != http.StatusOK {
+				t.Fatalf("%s was answered %d: %s", what, a.status, a.body)
+			}
+			var c workerapi.Claim
+			if err := workerapi.Unmarshal(a.body, &c); err != nil {
+				t.Fatalf("%s was answered with a claim that isn't one: %v: %s", what, err, a.body)
+			}
+			if c.APIVersion != tc.serve {
+				t.Errorf("%s was served at version %d, not %d", what, c.APIVersion, tc.serve)
+			}
+		}
+	}
 }
 
 // A request is what a worker sends after its claim.
@@ -773,6 +814,8 @@ func checkStrict(t *testing.T, target Target) {
 		"a claim without its plan version":       changed(t, claim, `,"planVersion":`+strconv.Itoa(plan.Version), ``),
 		"a claim whose plan version is null":     changed(t, claim, `"planVersion":`+strconv.Itoa(plan.Version), `"planVersion":null`),
 		"a claim whose plan version is text":     changed(t, claim, `"planVersion":`+strconv.Itoa(plan.Version), `"planVersion":"1"`),
+		"a claim whose API version is null":      changed(t, claim, `"apiVersion":`+strconv.Itoa(workerapi.Version), `"apiVersion":null`),
+		"a claim whose API version is text":      changed(t, claim, `"apiVersion":`+strconv.Itoa(workerapi.Version), `"apiVersion":"1"`),
 		"a claim that isn't JSON":                []byte("{"),
 		"a claim of two JSON values":             append(slices.Clone(claim), claim...),
 		"a claim whose worker's version is null": changed(t, claim, `"version":"v0.0.0-conformance"`, `"version":null`),

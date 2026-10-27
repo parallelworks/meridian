@@ -39,7 +39,7 @@ func claimedClientTimed(t *testing.T, f *workerapitest.Fake, tm timing) *client 
 	c := newClient(endpoint{address: f.Serve(), token: f.Token}, tm, testLogger(t))
 	t.Cleanup(c.close)
 	credential := newCredential()
-	if _, _, err := c.claim(t.Context(), f.Token, workerapi.ClaimRequest{Credential: credential, PlanVersion: plan.Version}); err != nil {
+	if _, _, err := c.claim(t.Context(), f.Token, workerapi.ClaimRequest{Credential: credential, APIVersion: workerapi.Version, PlanVersion: plan.Version}); err != nil {
 		t.Fatal(err)
 	}
 	c.credential = credential

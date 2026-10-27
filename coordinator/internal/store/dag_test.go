@@ -37,7 +37,7 @@ func TestFailedStepMarks(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+			if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 				return err
 			}
 			events := []workerapi.Event{stepEvent(1, 0, 0, ""), stepEvent(2, 0, 0, plan.OutcomeFailure), stepEvent(3, 1, 0, plan.OutcomeSkipped)}
@@ -90,13 +90,13 @@ func TestFailedStepMarks(t *testing.T) {
 				if a, token, err = placedAttempt(tx, n("build")); err != nil {
 					return err
 				}
-				if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+				if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 					return err
 				}
 				if b, token, err = placedAttempt(tx, n("test")); err != nil {
 					return err
 				}
-				_, err = tx.Claim(token, credential('b'), testWorker)
+				_, err = tx.Claim(token, credential('b'), testWorker, workerapi.Version)
 				return err
 			})
 			for _, batch := range tc.batches {
@@ -289,7 +289,7 @@ func TestMarkJobFailed(t *testing.T) {
 		if claimed, token, err = placedAttempt(tx, n("test")); err != nil {
 			return err
 		}
-		_, err = tx.Claim(token, credential('m'), testWorker)
+		_, err = tx.Claim(token, credential('m'), testWorker, workerapi.Version)
 		return err
 	})
 	control := func(tx *Tx, id string) workerapi.Control {

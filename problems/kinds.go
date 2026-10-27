@@ -633,10 +633,12 @@ var (
 // sequence number of the event, or the byte offset in a log, it expects
 // next; placed and claimed are the digests, as sha256: and hex, of the
 // worker binary an attempt's placement started and of the one that
-// claimed it.
+// claimed it; version is the newest version of the worker API a worker
+// speaks, and needed the one an attempt needs.
 var (
 	Fenced               = defineWorker("fenced", "Report from a superseded attempt")
 	OutOfOrder           = defineWorker("out_of_order", "Report out of order", "expected")
 	PlanTooNew           = defineWorker("plan_too_new", "Plan newer than the worker reads")
+	WorkerAPITooOld      = defineWorker("worker_api_too_old", "Worker API older than the attempt needs", "version", "needed")
 	WorkerDigestMismatch = defineWorker("worker_digest_mismatch", "Worker that isn't the binary placed", "placed", "claimed")
 )

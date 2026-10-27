@@ -702,7 +702,7 @@ func TestStaleSupervisor(t *testing.T) {
 		if err := tx.RecordPlacement(a.ID, placement); err != nil {
 			return err
 		}
-		if _, err := tx.Claim(token, hex.EncodeToString(make([]byte, 32)), workerapi.Worker{Version: "test", Digest: testDigest}); err != nil {
+		if _, err := tx.Claim(token, hex.EncodeToString(make([]byte, 32)), workerapi.Worker{Version: "test", Digest: testDigest}, workerapi.Version); err != nil {
 			return err
 		}
 		return tx.StepStarted(a.ID)

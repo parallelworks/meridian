@@ -47,7 +47,8 @@ type Ready struct {
 }
 
 // serveClaim claims the attempt the bootstrap token is for, and answers
-// with its Claim.
+// with its Claim, at the lower of the worker's version of the API and the
+// server's.
 func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 	ctx := r.Context()
 	token := bearer(r)
@@ -73,11 +74,23 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 	case err != nil:
 		s.writeError(w, r, err)
 		return
-	case run.PlanVersion > s.reads:
-		writeStatus(w, http.StatusServiceUnavailable)
-		return
 	case !s.peers.Allows(ctx, uid, run):
 		writeStatus(w, http.StatusUnauthorized)
+		return
+	case run.PlanVersion > s.reads, a.APIVersion > s.speaks:
+		// A run of a plan this replica doesn't read, or an attempt claimed
+		// at a version of the API it doesn't speak, is another replica's,
+		// but for what needs neither: that the token claims nothing, of an
+		// attempt withdrawn or superseded before its claim, and that a
+		// claim repeated of one that no longer holds its job is fenced.
+		switch {
+		case !a.Holds && a.ClaimedAt.IsZero():
+			writeStatus(w, http.StatusUnauthorized)
+		case !a.Holds:
+			problem.Write(w, fenced())
+		default:
+			writeStatus(w, http.StatusServiceUnavailable)
+		}
 		return
 	}
 	body, ok := s.readBody(w, r, MaxClaimBody)
@@ -93,12 +106,16 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		s.badRequest(w, r, "a credential that isn't 32 bytes as hex")
 		return
 	}
+	// The attempt is served at the lower of the worker's version of the
+	// API and the server's, which a claim repeated keeps.
+	version := min(req.Speaks(), s.speaks)
 	// A first claim, of an attempt that holds its job: until its placement
 	// is recorded, as when the worker the call that places it started
 	// claims before the call returns, it is answered 503, which the
 	// worker tries again; then it is refused, before anything of the run
-	// is sent, for a worker that doesn't read the run's plan, or that
-	// isn't the binary its placement started, which ends the attempt,
+	// is sent, for a worker that doesn't read the run's plan, that doesn't
+	// speak a version of the API that has everything the attempt needs, or
+	// that isn't the binary its placement started, which ends the attempt,
 	// failed before its first step.
 	if a.Holds && a.ClaimedAt.IsZero() {
 		if !a.Placed() {
@@ -111,6 +128,8 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		switch placed := a.Placement.WorkerDigest; {
 		case req.PlanVersion < run.PlanVersion:
 			refusal = problems.PlanTooNew.Problem(nil)
+		case version < s.needs:
+			refusal = problems.WorkerAPITooOld.Problem(problems.Params{workerapi.ParamVersion: req.Speaks(), workerapi.ParamNeeded: s.needs})
 		case placed != req.Worker.Digest:
 			refusal = problems.WorkerDigestMismatch.Problem(problems.Params{workerapi.ParamPlaced: placed, workerapi.ParamClaimed: req.Worker.Digest})
 		}
@@ -124,9 +143,12 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		claimed *store.Attempt
 		after   func()
 	)
+	if s.beforeClaim != nil {
+		s.beforeClaim()
+	}
 	err = s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		if claimed, err = tx.Claim(token, req.Credential, req.Worker); err != nil || !a.ClaimedAt.IsZero() {
+		if claimed, err = tx.Claim(token, req.Credential, req.Worker, version); err != nil || !a.ClaimedAt.IsZero() {
 			return err
 		}
 		after, err = s.wakeJob(ctx, tx, run.ID, a.Job)
@@ -146,12 +168,18 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		return
 	}
 	committed(after)
+	if claimed.APIVersion > s.speaks {
+		// Claimed meanwhile, through a replica that speaks a later version
+		// of the API than this one.
+		writeStatus(w, http.StatusServiceUnavailable)
+		return
+	}
 	c, err := s.claim(ctx, run, claimed)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, c)
+	writeBody(w, claimed.APIVersion, c)
 }
 
 // placedWait is how long a first claim waits for its placement to be
@@ -291,7 +319,7 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 		return nil, err
 	}
 	return &workerapi.Claim{
-		RunID: run.ID, AttemptID: a.ID, PlanVersion: run.PlanVersion, Job: job,
+		RunID: run.ID, AttemptID: a.ID, APIVersion: a.APIVersion, PlanVersion: run.PlanVersion, Job: job,
 		Attempt: a.Number, Group: a.Placement.Group, Member: a.Placement.Member,
 		LeaseSeconds: a.LeaseSeconds, HeartbeatSeconds: a.HeartbeatSeconds, SelfFencing: a.SelfFencing,
 		Run: ready.Run, Needs: ready.Needs, RunDir: run.RunDir, Env: ready.Env, Retry: retry, Container: ready.Container,

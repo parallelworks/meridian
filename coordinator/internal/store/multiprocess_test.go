@@ -18,6 +18,8 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 
 	"github.com/parallelworks/hopper"
+
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // The environment of a test's process of its own: what it does, and the
@@ -129,7 +131,7 @@ func child(ctx context.Context, s *Store, role string) error {
 		}
 		fmt.Println(token)
 		return s.Tx(ctx, func(tx *Tx) error {
-			a, err := tx.Claim(token, credential('c'), testWorker)
+			a, err := tx.Claim(token, credential('c'), testWorker, workerapi.Version)
 			if err != nil {
 				return err
 			}
@@ -387,7 +389,7 @@ func TestCrashBetweenSteps(t *testing.T) {
 		if _, err := tx.AttemptByCredential(credential('c')); !errors.Is(err, ErrNotFound) {
 			t.Errorf("the claim that didn't commit is there: %v", err)
 		}
-		a, err := tx.Claim(token, credential('d'), testWorker)
+		a, err := tx.Claim(token, credential('d'), testWorker, workerapi.Version)
 		if err != nil {
 			return err
 		}
