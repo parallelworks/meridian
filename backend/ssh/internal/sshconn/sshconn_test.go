@@ -807,6 +807,41 @@ func TestSessions(t *testing.T) {
 	}
 }
 
+// TestSessionUnanswered checks that a session the host doesn't answer is
+// waited for only until ctx is done, or the connection closes, however
+// long the keepalives give it: x/crypto/ssh waits for the answer with no
+// bound.
+func TestSessionUnanswered(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	d := h.dialer()
+	d.KeepAlive, d.KeepAliveTimeout = time.Hour, time.Hour
+	c := dial(t, d, sshconn.Target{Host: s.Addr()})
+	s.Stall()
+	defer s.Resume()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 10*time.Second {
+		t.Errorf("a session the host doesn't answer gave %v after %v", err, time.Since(start))
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.NewSession(context.WithoutCancel(t.Context()))
+		done <- err
+	}()
+	_ = c.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, sshconn.ErrClosed) {
+			t.Errorf("a session on a connection that closed as it waited gave %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a session on a connection that closed as it waited was waited for still")
+	}
+}
+
 // TestListenUnix checks that a host forwards a Unix socket's connections
 // over the connection.
 func TestListenUnix(t *testing.T) {
