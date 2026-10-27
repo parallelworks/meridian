@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -101,8 +102,10 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 	// failed before its first step.
 	if a.Holds && a.ClaimedAt.IsZero() {
 		if !a.Placed() {
-			notPlaced(w)
-			return
+			if a, ok = s.awaitPlaced(ctx, token, a); !ok {
+				notPlaced(w)
+				return
+			}
 		}
 		var refusal *problem.Problem
 		switch placed := a.Placement.WorkerDigest; {
@@ -145,6 +148,45 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 		return
 	}
 	writeJSON(w, c)
+}
+
+// placedWait is how long a first claim waits for its placement to be
+// recorded, and placedPoll how often it looks, before it is answered 503:
+// a worker usually claims while the call that started it records where,
+// and a 503 has it wait a quarter of a second or more before it claims
+// again.
+const (
+	placedWait = 2 * time.Second
+	placedPoll = 10 * time.Millisecond
+)
+
+// awaitPlaced waits for the placement of a, which the bootstrap token is
+// for, to be recorded, for s.placedWait at most, and returns the attempt
+// as it is then, and whether it has been: a placement that another process
+// records is seen as soon as one placed in this one.
+func (s *Server) awaitPlaced(ctx context.Context, token string, a *store.Attempt) (*store.Attempt, bool) {
+	deadline := time.Now().Add(s.placedWait)
+	tick := time.NewTicker(placedPoll)
+	defer tick.Stop()
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return a, false
+		case <-tick.C:
+		}
+		var now *store.Attempt
+		if err := s.store.View(ctx, func(tx *store.Tx) error {
+			var err error
+			now, err = tx.AttemptByToken(token)
+			return err
+		}); err != nil {
+			return a, false
+		}
+		if a = now; !a.Holds || a.Placed() {
+			return a, a.Placed()
+		}
+	}
+	return a, false
 }
 
 // notPlaced answers a first claim of an attempt whose placement isn't

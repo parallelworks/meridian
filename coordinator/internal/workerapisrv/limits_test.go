@@ -163,11 +163,12 @@ func TestConnectionLimit(t *testing.T) {
 }
 
 // A first claim of an attempt whose placement isn't recorded yet, as when
-// its worker claims before the call that placed it returns, is answered
-// 503, which the worker tries again, and claims nothing, whatever binary
-// claims; once the placement is recorded, the binary it started claims it.
+// its worker claims before the call that placed it returns, waits a while
+// for it; one that isn't recorded by then is answered 503, which the
+// worker tries again, and claims nothing, whatever binary claims; once the
+// placement is recorded, the binary it started claims it.
 func TestNotPlaced(t *testing.T) {
-	r := newRig(t, rigOptions{})
+	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetPlacedWait(s, 50*time.Millisecond) }})
 	c := newClient(t, r.socket)
 	run := r.newRun(nil)
 	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
@@ -194,6 +195,33 @@ func TestNotPlaced(t *testing.T) {
 	})
 	if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, credential, conformanceDigest), token); status != http.StatusOK {
 		t.Errorf("the claim once placed was answered %d: %s", status, body)
+	}
+}
+
+// A first claim that comes before its placement is recorded, which is
+// recorded while it waits, as the call that placed the worker records it,
+// is answered with the claim, rather than 503 and a wait of a quarter of a
+// second or more before the worker claims again.
+func TestPlacedWhileClaiming(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	c := newClient(t, r.socket)
+	run := r.newRun(nil)
+	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
+	a, token := r.newAttempt(run, "build", placed{unplaced: true})
+	answered := make(chan int, 1)
+	go func() {
+		status, _, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+		answered <- status
+	}()
+	time.Sleep(50 * time.Millisecond) //nolint:forbidigo // the claim is let wait, as a worker's that comes before its placement is recorded does
+	r.inTx(func(tx *store.Tx) error {
+		return tx.RecordPlacement(a.ID, store.Placement{Backend: "local", ID: "1:2", WorkerDigest: conformanceDigest})
+	})
+	if status := <-answered; status != http.StatusOK {
+		t.Errorf("a claim whose placement was recorded as it waited was answered %d", status)
+	}
+	if got := r.attempt(a.ID); got.ClaimedAt.IsZero() {
+		t.Errorf("the attempt is %+v", got)
 	}
 }
 

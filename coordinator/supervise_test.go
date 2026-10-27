@@ -41,6 +41,32 @@ func runToEnd(t *testing.T, c *Coordinator, workflow string, vars conformancetes
 	return waitEnded(t, c, id)
 }
 
+// TestForgets checks that the coordinator has the backend forget the
+// placement of each attempt once it has ended, a failure before the first
+// step among them, which its job is placed again after.
+func TestForgets(t *testing.T) {
+	c := open(t, Options{})
+	failSetup(c, setupProblems[0])
+	r := runToEnd(t, c, oneJob, nil)
+	if j := storedJob(t, c, r.ID, "main"); j.Outcome != plan.OutcomeSuccess || j.Attempts != 2 {
+		t.Fatalf("the job is %+v", j)
+	}
+	d := driverOf(c)
+	waitFor(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return len(d.forgotten) == 2
+	})
+	d.mu.Lock()
+	forgotten := slices.Clone(d.forgotten)
+	d.mu.Unlock()
+	for _, p := range forgotten {
+		if p.ID != "test-"+p.Attempt || p.WorkerDigest != testDigest {
+			t.Errorf("the backend was told to forget %+v", p)
+		}
+	}
+}
+
 // latestAttempt returns the latest attempt of the run id's job key.
 func latestAttempt(t *testing.T, c *Coordinator, id, key string) *store.Attempt {
 	t.Helper()

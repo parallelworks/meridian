@@ -229,6 +229,13 @@ type Coordinator struct {
 	// stopped run outlives the stop, as the coordinator read it
 	// (jobOutlives).
 	outlives map[string]bool
+	// placed are where the attempts this coordinator recorded the
+	// placements of were placed, by attempt, until they end; forgetting
+	// counts the calls that have their backends forget them, which run
+	// with forgetCtx, while Serve runs (forgetLater).
+	placed     map[string]placed
+	forgetting sync.WaitGroup
+	forgetCtx  context.Context
 }
 
 // checkFIPS is fipsmode.CheckProcess, which a test replaces.
@@ -281,7 +288,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
-		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, timeouts: map[string]time.Duration{},
+		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, placed: map[string]placed{}, timeouts: map[string]time.Duration{},
 		outlives: map[string]bool{},
 	}
 	if opts.ReadOnly {
@@ -616,7 +623,8 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 		return err
 	}
 	retiring, stopRetiring := context.WithCancel(context.WithoutCancel(ctx))
-	c.served, c.retiring = served, retiring
+	forgetCtx, stopForget := context.WithCancel(context.WithoutCancel(ctx))
+	c.served, c.retiring, c.forgetCtx = served, retiring, forgetCtx
 	c.mu.Unlock()
 	watched := make(chan struct{})
 	go func() {
@@ -649,6 +657,10 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 	c.mu.Lock()
 	c.served, c.serving, c.stopping, c.retiring = nil, false, false, nil
 	c.mu.Unlock()
+	// The workers of the attempts that ended last exit soon after.
+	grace, cancelGrace := context.WithTimeout(context.WithoutCancel(ctx), forgetGrace)
+	c.stopForgetting(grace, stopForget)
+	cancelGrace()
 	return err
 }
 

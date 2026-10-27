@@ -40,7 +40,7 @@ func runningExecutable(string) (string, error) { return "", unsupported() }
 
 func processStart(int) (string, error) { return "", unsupported() }
 
-func bootID() (string, error) { return "", unsupported() }
+func readBootID() (string, error) { return "", unsupported() }
 
 func hostMemory() (int64, error) { return 0, unsupported() }
 

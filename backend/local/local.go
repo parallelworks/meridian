@@ -13,12 +13,13 @@
 // another job's step among them, can read it first, as one could a file.
 //
 // The driver keeps its files in the state directory, in directories only
-// the user can use: the worker's standard error in workers/, and its
-// placement in placements/, which says which process it is by its ID, its
-// start time and the boot it started in, so that any process of the
-// user's, a coordinator that restarted among them, can find, check and
-// cancel it, and none takes another process that has the same ID later for
-// it. A clock set back or forward changes none of them.
+// the user can use: the worker's standard error in workers/; that it may
+// still run in live/, which Probe reads; and its placement in placements/,
+// which says which process it is by its ID, its start time and the boot it
+// started in, so that any process of the user's, a coordinator that
+// restarted among them, can find, check and cancel it, and none takes
+// another process that has the same ID later for it. A clock set back or
+// forward changes none of them.
 //
 // It runs where the worker does: Linux, macOS and FreeBSD. Elsewhere its
 // Probe gives every member worker_system_unsupported, and every other call
@@ -42,6 +43,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -80,15 +82,38 @@ type Driver struct {
 	// KillAfter is how long Cancel waits after SIGTERM before SIGKILL:
 	// DefaultKillAfter for 0.
 	KillAfter time.Duration
+
+	// swept is done once the driver has looked through what State holds,
+	// the first time it places a worker or probes a member (sweep).
+	swept sync.Once
+	// reaping are the workers this process placed that it hasn't reaped
+	// yet, and recorded the exit status of, by attempt: each closed once
+	// it has, which Forget waits for, so that the status isn't written
+	// after the placement is gone.
+	reapMu  sync.Mutex
+	reaping map[string]chan struct{}
 }
 
 var _ backend.Driver = (*Driver)(nil)
 
-// The directories in State that the driver keeps its files in.
+// The directories in State that the driver keeps its files in: a worker's
+// standard error in workers/; its placement in placements/; and, in live/,
+// a file named for each attempt whose worker may still run, which is what
+// Probe looks through, rather than every placement ever kept.
 const (
 	workersDir    = "workers"
 	placementsDir = "placements"
+	liveDir       = "live"
 )
+
+// staleAfter is how long the placement of a worker that has ended is kept,
+// unless the coordinator has the driver forget it sooner (Forget): one
+// whose coordinator stopped before it did is removed once it is this old,
+// by the next process that places a worker or probes a member.
+const staleAfter = 24 * time.Hour
+
+// bootID returns the boot's ID, which a process reads once.
+var bootID = sync.OnceValues(readBootID)
 
 // attemptPattern is an attempt's ID, which names its files.
 var attemptPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -178,6 +203,7 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 			return fit, nil
 		}
 	}
+	d.sweep()
 	used, err := d.used(ctx)
 	if err != nil {
 		return backend.Fit{}, err
@@ -191,39 +217,119 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 	return fit, nil
 }
 
-// used returns what the live workers the driver placed asked for, together.
+// used returns what the live workers the driver placed asked for, together:
+// those live/ names. One that has ended, or whose placement is gone, it
+// takes out of live/, under the attempt's lock, which Place holds as it
+// places it again.
 func (d *Driver) used(ctx context.Context) (backend.Resources, error) {
 	var used backend.Resources
-	entries, err := os.ReadDir(filepath.Join(d.State, placementsDir))
+	entries, err := os.ReadDir(filepath.Join(d.State, liveDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return used, nil
 	} else if err != nil {
 		return used, err
 	}
 	for _, e := range entries {
-		attempt, ok := strings.CutSuffix(e.Name(), ".json")
-		if !ok || !attemptPattern.MatchString(attempt) {
+		attempt := e.Name()
+		if !attemptPattern.MatchString(attempt) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
 			return used, err
 		}
-		r, ok, err := d.read(attempt)
+		r, live, err := d.live(attempt)
 		if err != nil {
 			return used, err
 		}
-		if !ok {
+		if !live {
+			if err := d.unlive(ctx, attempt); err != nil {
+				return used, err
+			}
 			continue
 		}
-		if alive, err := r.alive(); err != nil {
-			return used, err
-		} else if alive {
-			used.MilliCPU += r.Resources.MilliCPU
-			used.Memory += r.Resources.Memory
-			used.GPU += r.Resources.GPU
-		}
+		used.MilliCPU += r.Resources.MilliCPU
+		used.Memory += r.Resources.Memory
+		used.GPU += r.Resources.GPU
 	}
 	return used, nil
+}
+
+// live returns the attempt's record, and whether its worker still runs.
+func (d *Driver) live(attempt string) (*record, bool, error) {
+	r, ok, err := d.read(attempt)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	alive, err := r.alive()
+	return r, alive, err
+}
+
+// unlive takes the attempt out of live/ once its worker has ended, or its
+// placement is gone: under the attempt's lock, so that a Place of it again
+// meanwhile, which marks it live once it has started its worker, isn't
+// undone.
+func (d *Driver) unlive(ctx context.Context, attempt string) error {
+	unlock, err := flock.Lock(ctx, d.path(attempt, ".lock"))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, live, err := d.live(attempt); err != nil || live {
+		return err
+	}
+	if err := os.Remove(d.livePath(attempt)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// livePath returns the path of the attempt's file in live/.
+func (d *Driver) livePath(attempt string) string {
+	return filepath.Join(d.State, liveDir, attempt)
+}
+
+// sweep looks through placements/, once a driver, the first time it places
+// a worker or probes a member: a placement whose worker runs, as one that a
+// release before live/ placed, it marks live; one whose worker ended more
+// than staleAfter ago, which no coordinator had the driver forget, it
+// removes, with its worker's log. What it can't do, the next process does.
+func (d *Driver) sweep() {
+	d.swept.Do(func() {
+		if safepath.EnsureDir(filepath.Join(d.State, liveDir), safepath.Private) != nil {
+			return
+		}
+		entries, err := os.ReadDir(filepath.Join(d.State, placementsDir))
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			attempt, ok := strings.CutSuffix(e.Name(), ".json")
+			if !ok || !attemptPattern.MatchString(attempt) {
+				continue
+			}
+			_, live, err := d.live(attempt)
+			switch {
+			case err != nil:
+			case live:
+				_ = d.markLive(attempt)
+			default:
+				if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > staleAfter {
+					d.forget(attempt)
+				}
+			}
+		}
+	})
+}
+
+// markLive puts the attempt in live/, as one whose worker runs. Nothing
+// is synced: a worker doesn't outlive the host's crash, and a later boot
+// takes none for live.
+func (d *Driver) markLive(attempt string) error {
+	f, err := os.OpenFile(d.livePath(attempt), os.O_WRONLY|os.O_CREATE|openNoFollow, 0o600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // Connect returns coordinator itself: a local worker reaches the
@@ -258,11 +364,12 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	if !attemptPattern.MatchString(req.Attempt) {
 		return backend.Placement{}, fmt.Errorf("local: an attempt's ID that can't name a file: %q", req.Attempt)
 	}
-	for _, dir := range []string{workersDir, placementsDir} {
+	for _, dir := range []string{workersDir, placementsDir, liveDir} {
 		if err := safepath.EnsureDir(filepath.Join(d.State, dir), safepath.Private); err != nil {
 			return backend.Placement{}, err
 		}
 	}
+	d.sweep()
 	// One process at a time places an attempt, from finding its placement
 	// to recording a new one.
 	unlock, err := flock.Lock(ctx, d.path(req.Attempt, ".lock"))
@@ -319,6 +426,9 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	if err == nil {
 		err = d.writeFile(d.path(req.Attempt, ".json"), mustMarshal(r))
 	}
+	if err == nil {
+		err = d.markLive(req.Attempt)
+	}
 	if err != nil {
 		// Without its record, the worker couldn't be found again: it
 		// doesn't run, and gets no token.
@@ -331,7 +441,22 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	go giveToken(ours, req.BootstrapToken)
 	// The worker is reaped while this process runs, and its exit status
 	// kept beside its placement; after, the system reaps it.
+	reaped := make(chan struct{})
+	d.reapMu.Lock()
+	if d.reaping == nil {
+		d.reaping = map[string]chan struct{}{}
+	}
+	d.reaping[req.Attempt] = reaped
+	d.reapMu.Unlock()
 	go func() {
+		defer func() {
+			d.reapMu.Lock()
+			if d.reaping[req.Attempt] == reaped {
+				delete(d.reaping, req.Attempt)
+			}
+			d.reapMu.Unlock()
+			close(reaped)
+		}()
 		_ = cmd.Wait()
 		stderr.Close()
 		if cmd.ProcessState != nil {
@@ -393,10 +518,54 @@ func executable() (string, string, error) {
 	return run, digest, err
 }
 
+// A fileIdentity is which file a file is, and what it holds, as far as
+// fstat says: its device and inode, its size, and when its data and its
+// status last changed, in nanoseconds.
+type fileIdentity struct {
+	dev, ino           uint64
+	size, mtime, ctime int64
+}
+
+// digests keeps the digest of the file this process runs, the last time
+// checkExecutable hashed it, by the file's identity, so that a placement
+// doesn't hash the binary, tens of megabytes, again unless it changed.
+var digests struct {
+	sync.Mutex
+	id     fileIdentity
+	digest string
+}
+
+// settled is how long ago a file's status must have last changed for its
+// digest to be kept (digests): a variable a test sets.
+var settled = time.Second
+
+// hashFile returns the digest of what r holds, as sha256: and the hex of
+// its SHA-256 digest: a variable a test counts calls of.
+var hashFile = func(r io.Reader) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // checkExecutable checks that no other user can change the way to path,
 // and that the file open opens, the file at path or the one the process
 // runs, is a regular file of the user's or root's that no other user can
 // change, and returns its digest.
+//
+// The checks run every time; the digest is kept, and given again, while
+// the file open opens has the identity it had when it was hashed: the same
+// device, inode and size, and the same times its data and its status last
+// changed. Writing a file changes both times, and a process can set its
+// data's back (utimes), but not its status's, which any change sets to the
+// time it happens, utimes among them. A digest is kept only once its
+// file's status last changed a second or more before it was hashed, far
+// longer than the clock's tick, so a later change, which the user, or
+// another process of the user's, can make, gives a status time that
+// differs, and the file is hashed again. Another file at path, as an
+// upgrade puts there, is another inode. And on Linux and FreeBSD the file
+// a process runs can't be written while it runs at all.
 func checkExecutable(path, open string) (string, error) {
 	unsafe := func(code problem.Code) error {
 		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
@@ -427,11 +596,26 @@ func checkExecutable(path, open string) (string, error) {
 	case info.Mode().Perm()&0o022 != 0:
 		return "", unsafe(problems.FileChangeable.Code())
 	}
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	id, known := identity(info)
+	if known {
+		digests.Lock()
+		digest := digests.digest
+		hit := digest != "" && digests.id == id
+		digests.Unlock()
+		if hit {
+			return digest, nil
+		}
+	}
+	digest, err := hashFile(f)
+	if err != nil {
 		return "", err
 	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+	if known && time.Since(time.Unix(0, id.ctime)) >= settled {
+		digests.Lock()
+		digests.id, digests.digest = id, digest
+		digests.Unlock()
+	}
+	return digest, nil
 }
 
 // environ returns a worker's environment: d's, but its MERIDIAN_
@@ -573,8 +757,10 @@ func (d *Driver) terminate(attempt string, r *record) (time.Time, error) {
 // Forget removes what the driver keeps of a placement whose worker has
 // ended, once the coordinator has recorded how it ended: its file, its
 // exit status, when Cancel stopped it, and the worker's log. A placement
-// whose worker still runs is kept, and an error.
-func (d *Driver) Forget(_ context.Context, _ *backend.Member, p backend.Placement) error {
+// whose worker still runs is kept, and an error. One whose worker this
+// process placed it waits to have reaped, as it does at once once the
+// worker has ended.
+func (d *Driver) Forget(ctx context.Context, _ *backend.Member, p backend.Placement) error {
 	if pr := unsupported(); pr != nil {
 		return pr
 	}
@@ -587,9 +773,24 @@ func (d *Driver) Forget(_ context.Context, _ *backend.Member, p backend.Placemen
 	} else if alive {
 		return fmt.Errorf("local: the worker of %s still runs", p.Attempt)
 	}
-	d.remove(p.Attempt)
-	_ = os.Remove(d.path(p.Attempt, ".lock"))
+	d.reapMu.Lock()
+	reaped := d.reaping[p.Attempt]
+	d.reapMu.Unlock()
+	if reaped != nil {
+		select {
+		case <-reaped:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	d.forget(p.Attempt)
 	return nil
+}
+
+// forget removes the attempt's files, its lock among them.
+func (d *Driver) forget(attempt string) {
+	d.remove(attempt)
+	_ = os.Remove(d.path(attempt, ".lock"))
 }
 
 func (d *Driver) killAfter() time.Duration {
@@ -671,7 +872,7 @@ func syncDir(dir string) error {
 // remove removes an attempt's files, but its lock.
 func (d *Driver) remove(attempt string) {
 	for _, path := range []string{
-		d.path(attempt, ".term"), d.path(attempt, ".exit"), d.path(attempt, ".json"),
+		d.livePath(attempt), d.path(attempt, ".term"), d.path(attempt, ".exit"), d.path(attempt, ".json"),
 		filepath.Join(d.State, workersDir, attempt+".log"),
 	} {
 		_ = os.Remove(path)

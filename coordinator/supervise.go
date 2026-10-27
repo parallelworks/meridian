@@ -218,6 +218,7 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 // attemptEnded ends the job as its latest attempt, a, ended, or places it
 // again after a setup failure.
 func (c *Coordinator) attemptEnded(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
+	c.forgetLater(a.ID)
 	switch {
 	case a.End.Reason == plan.ReasonSetupFailed:
 		return c.setupFailed(ctx, run, job, a, done)

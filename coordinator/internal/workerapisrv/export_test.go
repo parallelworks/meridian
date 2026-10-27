@@ -8,6 +8,10 @@ import (
 // release reads fewer.
 func SetReads(s *Server, version int) { s.reads = version }
 
+// SetPlacedWait sets how long a first claim waits for its placement to be
+// recorded.
+func SetPlacedWait(s *Server, d time.Duration) { s.placedWait = d }
+
 // SetHold sets how long s holds a control poll.
 func SetHold(s *Server, d time.Duration) { s.hold = d }
 

@@ -2866,8 +2866,9 @@ placement, and the coordinator refuses a claim from a worker whose digest
 is another, before it sends anything of the run
 (`worker_digest_mismatch`): the attempt fails before its first step, and
 is placed again. A first claim before the placement is recorded, as from
-a worker that claims before the call that started it returns, is asked to
-come again (503), never taken. The digest catches a binary replaced
+a worker that claims before the call that started it returns, waits up to
+two seconds for it to be recorded, and is then asked to come again (503),
+never taken. The digest catches a binary replaced
 between the placement and the claim; it isn't authentication, since
 whoever holds the token can say any digest.
 
@@ -3186,7 +3187,14 @@ was readable for the whole of the worker's start. Closing the window would
 need the child made non-dumpable before `exec`, which takes cgo, and
 Meridian builds without it. On Linux the backend starts the file it runs itself, and reports
 that file's digest, which the worker reports too, even if an upgrade has
-taken its path since. A placement's file in the state directory says
+taken its path since. It checks the file, and the way to it, at every
+placement, but hashes it again only once it has changed: the digest is
+kept by the file's device, inode, size and the times its data and its
+status last changed, as `fstat` gives them on the file it opened, and only
+once its status last changed a second before. A process can set back the
+time a file's data changed, but not its status's, which any change sets to
+the time it happens, so a change after the digest was kept is seen; and on
+Linux and FreeBSD the file a process runs can't be written while it runs. A placement's file in the state directory says
 which process the worker is, by its ID, its start time and the boot it
 started in, which no change to the clock moves (Linux's
 `/proc/<pid>/stat` and `boot_id`, macOS's `p_starttime` and
@@ -3197,7 +3205,13 @@ process at a time places an attempt. Cancel sends SIGTERM, and SIGKILL if
 the worker still runs 60 seconds later, to that process only, through a
 pidfd on Linux; a worker killed so can't stop its steps' process groups.
 The coordinator has the backend forget a placement once it has recorded
-how it ended (`Driver.Forget`). A member offers what it declares, or else
+how its attempt ended, and its worker has exited, which it does soon after
+(`Driver.Forget`): the placement's files and the worker's log go. A
+placement no coordinator had the backend forget, as when the one that
+placed it stopped first, the next process that places a worker removes
+once its worker ended more than a day before. Which placements' workers
+may still run, and asked for what, the backend reads from `live/`, a file
+for each, not from every placement kept. A member offers what it declares, or else
 the host's CPUs and memory, and no GPU.
 
 A worker passes its steps nothing it inherited but its standard input,

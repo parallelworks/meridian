@@ -164,8 +164,11 @@ type Server struct {
 
 	// What tests change: the newest plan version the server reads, how
 	// long it holds a control poll, and how many bytes of a log it keeps.
-	reads          int
-	hold           time.Duration
+	reads int
+	hold  time.Duration
+	// placedWait is how long a first claim waits for its placement to be
+	// recorded before it is answered 503 (awaitPlaced).
+	placedWait     time.Duration
 	maxLogBytes    int64
 	maxEvents      int64
 	maxEventsBytes int64
@@ -191,7 +194,7 @@ func New(opts Options) (*Server, error) {
 	s := &Server{
 		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers,
 		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
-		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second,
+		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait,
 		maxLogBytes: MaxLogBytes, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
 	}
 	if s.peers == nil {
