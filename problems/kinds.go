@@ -551,14 +551,18 @@ var (
 	UnexpectedError          = defineCommand("unexpected_error", "Unexpected error", "reason")
 )
 
-// meridian run's own: path is a run's directory, or the coordinator's
-// socket; reason what the operating system said; and limit the most bytes
-// a socket's path can have on the system.
+// meridian run's own, and resume's: path is a run's directory, or the
+// coordinator's socket; reason what the operating system said; limit the
+// most bytes a socket's path can have on the system; and os the operating
+// system's name, as Go's GOOS has it.
 var (
-	RunDirExists      = defineCommand("run_dir_exists", "Run directory already there", "path")
-	RunDirNotMade     = defineCommand("run_dir_not_made", "Run directory that can't be made", "path", "reason")
-	SocketPathTooLong = defineCommand("socket_path_too_long", "Socket path too long", "path", "limit")
-	SocketUnusable    = defineCommand("socket_unusable", "Coordinator socket that can't be listened on", "path", "reason")
+	RunDirExists                 = defineCommand("run_dir_exists", "Run directory already there", "path")
+	RunDirNotMade                = defineCommand("run_dir_not_made", "Run directory that can't be made", "path", "reason")
+	SocketPathTooLong            = defineCommand("socket_path_too_long", "Socket path too long", "path", "limit")
+	SocketUnusable               = defineCommand("socket_unusable", "Coordinator socket that can't be listened on", "path", "reason")
+	SocketServerStopped          = defineCommand("socket_server_stopped", "Coordinator socket whose server stopped", "path")
+	CoordinatorHardenFailed      = defineCommand("coordinator_harden_failed", "Coordinator's memory can't be protected", "reason")
+	CoordinatorSystemUnsupported = defineCommand("coordinator_system_unsupported", "System where the coordinator can't protect its memory", "os")
 )
 
 // The problems of the commands that take a run that is stored, as

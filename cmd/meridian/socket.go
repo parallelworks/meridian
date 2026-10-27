@@ -83,7 +83,7 @@ func serveSocket(ctx context.Context, coord *coordinator.Coordinator, path strin
 		return nil
 	}
 	if err == nil {
-		err = errors.New("the worker API's server stopped")
+		return problems.SocketServerStopped.Problem(problems.Params{"path": path})
 	}
 	return problems.SocketUnusable.Problem(problems.Params{"path": path, "reason": err.Error()})
 }

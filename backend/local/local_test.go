@@ -127,6 +127,21 @@ func newDriver(t *testing.T, mode string) (*Driver, string) {
 	return &Driver{State: filepath.Join(t.TempDir(), "state"), Environ: env}, out
 }
 
+// TestEnviron checks a worker's environment: its driver's, but the
+// MERIDIAN_ variables and those it withholds, which hold secrets' values,
+// with where the coordinator is and the token's descriptor.
+func TestEnviron(t *testing.T) {
+	d := &Driver{
+		Environ:  []string{"PATH=/bin", "HF_TOKEN=secret", "HF_TOKEN_NOT=kept", "BUILD=42", "MERIDIAN_LEAK=yes", "A_TOKEN="},
+		Withhold: []string{"HF_TOKEN", "A_TOKEN"},
+	}
+	got := d.environ(backend.Endpoint{Address: "/c.sock"})
+	want := []string{"PATH=/bin", "HF_TOKEN_NOT=kept", "BUILD=42", workerapi.EnvCoordinator + "=/c.sock", workerapi.EnvBootstrapTokenFD + "=3"}
+	if !slices.Equal(got, want) {
+		t.Errorf("environ = %q, want %q", got, want)
+	}
+}
+
 // host is a member of the local backend that runs jobs on the host.
 var host = &backend.Member{Name: "laptop", Backend: "local", Isolation: "host"}
 

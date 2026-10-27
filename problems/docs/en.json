@@ -1575,6 +1575,24 @@
       "Then run the workflow again."
     ]
   },
+  "socket_server_stopped": {
+    "why": "Workers on this machine reach the coordinator at a Unix socket in Meridian's state directory, which meridian run serves until the run ends. Its server stopped while the run went on, without saying why, so the run's workers can no longer report to it.",
+    "fix": [
+      "Check meridian run's other messages for what went wrong, then pick the run up with meridian resume."
+    ]
+  },
+  "coordinator_harden_failed": {
+    "why": "meridian run and meridian resume hold the secret records of the runs they coordinate in their memory: passwords, secret variables and private outputs. Before they open them, they keep your other processes, your runs' steps among them, from reading their memory or attaching to them as a debugger does: on Linux they make themselves not dumpable, on macOS they refuse debuggers (PT_DENY_ATTACH) and set the size of their core file to 0, and on FreeBSD they turn off tracing of themselves (procctl). The operating system refused or failed.",
+    "fix": [
+      "Fix what the reason names, such as a security policy that forbids the call, and run the command again."
+    ]
+  },
+  "coordinator_system_unsupported": {
+    "why": "meridian run and meridian resume hold the secret records of the runs they coordinate in their memory, and keep your other processes, your runs' steps among them, from reading it there. They can on Linux, macOS and FreeBSD. Other systems, such as NetBSD and OpenBSD, give a process no way to keep the user's other processes from tracing it, so Meridian refuses to coordinate a run there, rather than hold its secrets with less protection.",
+    "fix": [
+      "Run the workflow on a machine that runs Linux, macOS or FreeBSD."
+    ]
+  },
   "source_access_denied": {
     "why": "The repository asked for credentials git doesn't have, or refused the ones it gave, or its host's key couldn't be checked. A repository that doesn't exist looks the same when the server asks for credentials rather than say so. Meridian never answers a prompt for a password or a passphrase.",
     "fix": [

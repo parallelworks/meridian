@@ -17,8 +17,6 @@ import (
 // process it traces writes, the worker's requests among them, whatever
 // kern.global_ptrace says.
 
-func harden() error { return systemUnsupported() }
-
 func systemUnsupported() error {
 	return problems.WorkerSystemUnsupported.Problem(problems.Params{"os": runtime.GOOS})
 }

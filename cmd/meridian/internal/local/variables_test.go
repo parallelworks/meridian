@@ -94,6 +94,23 @@ func TestReadVariables(t *testing.T) {
 	}
 }
 
+// TestSecretEnv checks which environment variables a worker's environment
+// leaves out: those secret variables are read from, each once, and not a
+// plain variable's, nor a secret's file.
+func TestSecretEnv(t *testing.T) {
+	dir := configDir(t, map[string]string{VariablesFile: variables + `
+  again: {secret: true, env: HF_TOKEN}
+  other: {secret: true, env: A_TOKEN}
+`, "key.txt": "s3cret\n"})
+	c, err := LoadConfig(dir, lookup(map[string]string{"HOME": t.TempDir()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := c.SecretEnv(), []string{"A_TOKEN", "HF_TOKEN"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("SecretEnv() = %q, want %q", got, want)
+	}
+}
+
 // TestReadSecretsLazily checks that a secret's value is read only when it is
 // asked for: until then, where it is can be missing.
 func TestReadSecretsLazily(t *testing.T) {

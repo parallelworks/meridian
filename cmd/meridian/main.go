@@ -71,6 +71,10 @@ type cli struct {
 	// module's version, which a test gives in place of the process's
 	// (fipsmode.Mode and Module) for nil.
 	fips func() (mode, module string)
+	// harden keeps the user's other processes out of the process's memory
+	// before it coordinates runs, which a test gives in place of
+	// harden.Process for nil.
+	harden func() error
 	// signals and interactive are what a test gives meridian run in place
 	// of the process's: the interrupts it gets, nil for the process's
 	// (notify); and whether a person can answer it, nil for whether its

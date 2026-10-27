@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -194,6 +195,22 @@ func (c *Config) Read(ctx context.Context, names []string, secrets bool) (map[st
 		}
 	}
 	return out, nil
+}
+
+// SecretEnv returns the environment variables that secret variables'
+// values are read from, sorted, each once: what the workers of the local
+// backend, and so their jobs' steps, don't get of the environment
+// (localbackend.Driver.Withhold), since a job reads a secret, if it does,
+// only as its run gives it, masked in its logs.
+func (c *Config) SecretEnv() []string {
+	var out []string
+	for _, v := range c.variables {
+		if v.secret && v.env != "" && !slices.Contains(out, v.env) {
+			out = append(out, v.env)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // resolve returns v's value: the file's, or the environment variable's or

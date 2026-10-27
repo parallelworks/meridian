@@ -1832,6 +1832,27 @@
       "然后重新运行工作流。"
     ]
   },
+  "socket_server_stopped": {
+    "title": "服务器已停止的协调器套接字",
+    "why": "这台机器上的工作进程通过 Meridian 状态目录中的 Unix 套接字连接协调器，meridian run 在运行结束前一直在该套接字上提供服务。该服务器在运行仍在进行时停止了，且没有说明原因，因此该运行的工作进程无法再向它报告。",
+    "fix": [
+      "查看 meridian run 的其他消息，了解出了什么问题，然后用 meridian resume 继续该运行。"
+    ]
+  },
+  "coordinator_harden_failed": {
+    "title": "无法保护协调器的内存",
+    "why": "meridian run 和 meridian resume 在内存中保存它们所协调的运行的机密记录：密码、机密变量和私有输出。在打开这些记录之前，它们会阻止你的其他进程（包括你的运行的步骤）读取它们的内存，或像调试器那样附加到它们：在 Linux 上它们使自己不可转储，在 macOS 上它们拒绝调试器（PT_DENY_ATTACH）并把其 core 文件的大小设为 0，在 FreeBSD 上它们关闭对自身的跟踪（procctl）。操作系统拒绝了或失败了。",
+    "fix": [
+      "修复原因所指出的问题，例如禁止该调用的安全策略，然后重新运行该命令。"
+    ]
+  },
+  "coordinator_system_unsupported": {
+    "title": "协调器无法保护其内存的系统",
+    "why": "meridian run 和 meridian resume 在内存中保存它们所协调的运行的机密记录，并阻止你的其他进程（包括你的运行的步骤）从内存中读取它们。它们在 Linux、macOS 和 FreeBSD 上能做到这一点。其他系统（例如 NetBSD 和 OpenBSD）没有给进程任何阻止该用户的其他进程跟踪它的方法，因此 Meridian 会拒绝在那里协调运行，而不是以较弱的保护保存其机密。",
+    "fix": [
+      "在运行 Linux、macOS 或 FreeBSD 的机器上运行该工作流。"
+    ]
+  },
   "source_access_denied": {
     "title": "仓库访问被拒绝",
     "why": "仓库要求 git 所没有的凭据，或拒绝了它提供的凭据，或者无法验证其主机的密钥。当服务器要求凭据而不是说明仓库不存在时，不存在的仓库看起来也是这样。Meridian 从不回答密码或口令的提示。",

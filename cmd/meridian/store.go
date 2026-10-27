@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/parallelworks/meridian/backend"
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/internal/harden"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -27,17 +29,45 @@ func startQueue(id string) string { return "meridian.start." + id }
 // directory dirs names, that works its runs as meridian run and resume do:
 // with the user's variables and groups, cfg, and the local backend, which
 // runs each job's worker as a process of the user's, which reaches the
-// coordinator on its socket. It logs what no answer says to c's standard
-// error.
+// coordinator on its socket, with the environment of the command but the
+// variables that hold secret variables' values (local.Config.SecretEnv).
+// It logs what no answer says to c's standard error.
+//
+// First it keeps the user's other processes, the steps of its runs' jobs
+// among them, out of the process's memory, where it holds the runs' secret
+// records, as a worker does (internal/harden): it refuses to coordinate
+// where it can't.
 func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config, db string) (*coordinator.Coordinator, error) {
+	if err := c.hardenProcess(); err != nil {
+		return nil, err
+	}
 	return coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: local.NewKeys(dirs.State),
 		Variables: cfg, Inputs: cfg, Groups: cfg,
-		Drivers:    map[string]backend.Driver{"local": &localbackend.Driver{State: dirs.State}},
+		Drivers:    map[string]backend.Driver{"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()}},
 		Endpoint:   backend.Endpoint{Address: dirs.Socket()},
 		StartQueue: startQueue,
 		Log:        slog.New(slog.NewTextHandler(c.stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	})
+}
+
+// hardenProcess keeps the user's other processes out of the process's
+// memory (internal/harden), as c.harden does, which a test gives:
+// coordinator_harden_failed when the system refuses, and
+// coordinator_system_unsupported on a system that gives a process no way
+// to.
+func (c *cli) hardenProcess() error {
+	h := c.harden
+	if h == nil {
+		h = harden.Process
+	}
+	switch err := h(); {
+	case errors.Is(err, harden.ErrUnsupported):
+		return problems.CoordinatorSystemUnsupported.Problem(problems.Params{"os": runtime.GOOS})
+	case err != nil:
+		return problems.CoordinatorHardenFailed.Problem(problems.Params{"reason": err.Error()})
+	}
+	return nil
 }
 
 // errNoStore is what storeOf returns for a state directory without a

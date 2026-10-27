@@ -39,6 +39,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -67,8 +68,15 @@ type Driver struct {
 	// command's state directory, never a run's directory.
 	State string
 	// Environ is the environment a worker starts with, but its MERIDIAN_
-	// variables, which the driver sets itself: os.Environ() for nil.
+	// variables, which the driver sets itself, and those Withhold names:
+	// os.Environ() for nil. The worker gives it to its job's steps.
 	Environ []string
+	// Withhold names the environment variables that a worker's
+	// environment, and so its steps', leaves out: those that hold the
+	// values of the user's secret variables, which a job reads, if it
+	// does, only as the run gives them, masked in its logs. A step that
+	// printed its environment would show them in the clear.
+	Withhold []string
 	// KillAfter is how long Cancel waits after SIGTERM before SIGKILL:
 	// DefaultKillAfter for 0.
 	KillAfter time.Duration
@@ -427,8 +435,8 @@ func checkExecutable(path, open string) (string, error) {
 }
 
 // environ returns a worker's environment: d's, but its MERIDIAN_
-// variables, and where the coordinator is and the token's socket, which
-// the worker inherits as its descriptor 3.
+// variables and those d withholds, and where the coordinator is and the
+// token's socket, which the worker inherits as its descriptor 3.
 func (d *Driver) environ(coordinator backend.Endpoint) []string {
 	base := d.Environ
 	if base == nil {
@@ -436,7 +444,8 @@ func (d *Driver) environ(coordinator backend.Endpoint) []string {
 	}
 	out := make([]string, 0, len(base)+3)
 	for _, kv := range base {
-		if !strings.HasPrefix(kv, "MERIDIAN_") {
+		name, _, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, "MERIDIAN_") && !slices.Contains(d.Withhold, name) {
 			out = append(out, kv)
 		}
 	}
