@@ -69,6 +69,10 @@ type StartResult struct {
 // can see the run can read: all of a StartResult but what Keep puts in the
 // run's secret record.
 type StartState struct {
+	// Version is the version of the plan the run was started from, which
+	// the state is encoded at, so that a release reads only the states of
+	// the plans it reads.
+	Version int
 	// Run is the run's values but for those that are private (the state
 	// half of plan.RunValues.Split), with the names of those that are.
 	Run plan.RunValues
@@ -90,11 +94,12 @@ type StartState struct {
 // which, for each of res's members. The record gets the private half of
 // the run's values (plan.RunValues.Split), the timeout if it is private,
 // and each expansion whose instances are private, whole
-// (plan.Expansion.Split). Neither shares a mapping or a list with res.
+// (plan.Expansion.Split). Neither shares a mapping or a list with res. The
+// state is of the record's version, its plan's.
 func (res *StartResult) Keep(record *plan.Record) StartState {
 	private, values := res.Run.Split()
 	record.Run = &private
-	state := StartState{Run: values, TimeoutPrivate: res.TimeoutPrivate}
+	state := StartState{Version: record.Version, Run: values, TimeoutPrivate: res.TimeoutPrivate}
 	if res.TimeoutPrivate {
 		seconds := res.TimeoutSeconds
 		record.TimeoutSeconds = &seconds
@@ -218,8 +223,10 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	switch {
 	case p == nil:
 		return nil, nil, mismatch("no plan")
-	case p.Version != plan.Version:
-		return nil, nil, fmt.Errorf("compile: %w %d; this release starts plans of version %d", plan.ErrVersion, p.Version, plan.Version)
+	case p.Version > plan.Version:
+		return nil, nil, fmt.Errorf("compile: %w %d; this release starts plans of versions up to %d", plan.ErrVersion, p.Version, plan.Version)
+	case p.Version < 1:
+		return nil, nil, mismatch("a plan of no version")
 	}
 	switch ok, err := plan.HasDigest(p, in.Record.PlanDigest); {
 	case err != nil:

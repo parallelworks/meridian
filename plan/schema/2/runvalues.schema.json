@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian run values, version 2",
+  "description": "The run's values as Start completed them (plan.RunValues), as the worker API carries them and the secret record holds their private half.",
+  "$ref": "plan.schema.json#/$defs/RunValues"
+}

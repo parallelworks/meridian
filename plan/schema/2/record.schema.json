@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meridian secret record, version 2",
+  "description": "A run's secret record, as plan.EncodeRecord writes it.",
+  "$ref": "plan.schema.json#/$defs/Record"
+}

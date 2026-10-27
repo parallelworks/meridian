@@ -1,6 +1,7 @@
 package workerapisrv_test
 
 import (
+	"cmp"
 	"testing"
 	"time"
 
@@ -41,7 +42,12 @@ func newTarget(t *testing.T) *target {
 
 func (tg *target) NewAttempt(t *testing.T, a workerapitest.Attempt) (string, string, string) {
 	t.Helper()
-	run := tg.newRun(nil)
+	// The run is of the attempt's plan version, or this release's newest,
+	// which an older replica serves as one of a newer version.
+	c := created(t)
+	c.Plan.Version = min(cmp.Or(a.PlanVersion, plan.Version), plan.Version)
+	c.Record.Version = c.Plan.Version
+	run := tg.newRunOf(c)
 	tg.readier.set(run, &workerapisrv.Ready{Job: a.Job, Run: a.Run, Needs: a.Needs})
 	at, token := tg.newAttempt(run, "build", placed{
 		selfFencing: a.SelfFencing, lease: a.LeaseSeconds, heartbeat: a.HeartbeatSeconds, digest: conformanceDigest,

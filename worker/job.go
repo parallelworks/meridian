@@ -307,7 +307,7 @@ func (a *attempt) setUp() *problem.Problem {
 // reads that names what it doesn't know, as a function a newer release's
 // format has, is one it can't read, as one encoded otherwise is.
 func decodeFailure(version int, err error) (*problems.Kind, problems.Params) {
-	if errors.Is(err, plan.ErrVersion) && version != plan.Version {
+	if errors.Is(err, plan.ErrVersion) && version > plan.Version {
 		return problems.JobVersionUnsupported, problems.Params{"version": version, "supported": plan.Version}
 	}
 	return problems.JobUnreadable, nil

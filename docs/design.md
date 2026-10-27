@@ -578,8 +578,7 @@ its resolvers into a plan, in order:
    the workflow's sessions, and resolve, pin and load the workflows that
    the run's own steps' `uses:` name, and those they call in turn: the
    run's whole tree, checked for cycles, depth and size
-   ([Workflows a step calls](#workflows-a-step-calls)). Today only the
-   run's own steps' are pinned.
+   ([Workflows a step calls](#workflows-a-step-calls)).
 5. **Read matrices**, without expanding them: the keys a job's matrix
    writes out, which what reads `matrix` must name, and the jobs and
    outputs it reads. The compiler doesn't check a matrix's `include`,
@@ -724,7 +723,7 @@ is an error. The plan records the limits that the phases after Create
 apply, such as a matrix's instances, so every coordinator replica, and
 every rerun, applies the same ones (`Run.Limits`). Today the file's size
 and the nets are fixed, and of the others `Options.Limits` has only a
-matrix's instances.
+matrix's instances, and `Options.Calls` the tree's.
 
 ### Inputs
 
@@ -1579,6 +1578,16 @@ sees one version.
   worker API's bodies carry of a run: its values, the job Ready
   evaluated, and the results of the jobs it needs. The API's own bodies
   have a version of their own ([The worker API](#the-worker-api)).
+- **A plan is of the lowest version that holds it.** Create writes a plan
+  at the lowest version that has what it uses (`Plan.MinVersion`), and
+  the run's secret record and start state at its plan's, so that a
+  release that reads only an earlier version runs every run that version
+  holds, and only a run that uses an addition needs a newer release, and
+  newer workers. Version 2 adds the pins of a run's called workflows'
+  steps (`Plan.Calls`), so a run whose called workflows call none is of
+  version 1. A release reads every version up to its own, each by its
+  own schemas, under `plan/schema/<version>/`, and refuses what a later
+  version added in an earlier one's plan (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -1623,18 +1632,22 @@ definitions hold the other types'; a ready job's, a secret record's, a
 run's values' and a job's result's, which name them; and the worker API's
 bodies' for runs of the version (`workerapi.schema.json`), which refer to
 them. They refer to each other by their names, so they resolve wherever
-the directory is. The bodies' schema follows the API's own version rather
-than the plan's: it describes the bodies of the API's newest version, and
-says of a member a later API version adds which version that is. Tests
-check that every encoded type's members are what its schema describes,
-that golden files setting every member, and what Meridian encodes for
-every conformance case, fit the schemas, that decoding agrees with the
-schemas on each member of the goldens and the bodies left out, null, or a
-number past its bounds, and that every member has the version that gave
-it, the plan's in plan's since table and the API's in the worker API's,
-so that a member added later can't go in without a version. A value is
-named one way throughout, by its path with its context (`plan.JoinPath`),
-as in `inputs.region`, in the plan, the secret record and a run's values.
+the directory is. Version 2's are in `plan/schema/2`: it holds what child
+runs add ([Workflows a step calls](#workflows-a-step-calls)), which goes
+on adding to it until a release writes it, which freezes it as version 1
+is. The bodies' schema follows the API's own version rather than the
+plan's: each plan version's describes the bodies of the API's newest
+version alike, and says of a member a later API version adds which version
+that is. Tests check that every encoded type's members are what its schema
+describes, that golden files setting every member, and what Meridian
+encodes for every conformance case, fit the schemas, that decoding agrees
+with the schemas on each member of the goldens and the bodies left out,
+null, or a number past its bounds, and that every member has the version
+that gave it, the plan's in plan's since table and the API's in the worker
+API's, so that a member added later can't go in without a version. A value
+is named one way throughout, by its path with its context
+(`plan.JoinPath`), as in `inputs.region`, in the plan, the secret record
+and a run's values.
 
 ## Expressions
 
@@ -2074,9 +2087,11 @@ any other `uses:` for a built-in action; no known workflow has either. The
 known workflows make 270 calls, in 146 files, nested at most 3 levels
 below their root.
 
-None of this is built yet but the pinning of the run's own steps'
-workflows: the worker fails a step that uses a workflow
-(`uses_not_supported`).
+Of this, what is built is the whole tree's pinning as the root is
+created, with its limits and its pins in the plan (`Plan.Calls`), but for
+the check of the called workflows' required inputs, and for the store's
+copy of their texts. The rest isn't built yet: the worker fails a step
+that uses a workflow (`uses_not_supported`).
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources

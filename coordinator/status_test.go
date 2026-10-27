@@ -137,7 +137,7 @@ func TestRunsAndJobs(t *testing.T) {
 		t.Fatalf("the runs are %+v", runs)
 	}
 	for _, r := range runs {
-		if r.State != RunCreated || r.Location != "workflow.yaml" || r.PlanVersion != plan.Version || r.CreatedAt.IsZero() || r.RunDir != "/runs/"+r.ID {
+		if r.State != RunCreated || r.Location != "workflow.yaml" || r.PlanVersion != 1 || r.CreatedAt.IsZero() || r.RunDir != "/runs/"+r.ID {
 			t.Errorf("a run listed is %+v", r)
 		}
 	}

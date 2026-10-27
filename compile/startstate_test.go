@@ -18,6 +18,7 @@ import (
 // testStartState is a state with each of its members set.
 func testStartState() *compile.StartState {
 	return &compile.StartState{
+		Version: 1,
 		Run: plan.RunValues{
 			Format:  1,
 			Inputs:  plan.DataOf(map[string]any{"region": "us", "count": 2.0, "creds": []any{nil, map[string]any{"user": "b"}}}),
@@ -74,7 +75,7 @@ func TestStartStateStrict(t *testing.T) {
 		data string
 		want error
 	}{
-		{`{"version":2,"run":{"format":1},"later":true}`, plan.ErrVersion},
+		{`{"version":3,"run":{"format":1},"later":true}`, plan.ErrVersion},
 		{`{"version":1,"run":{"format":1},"later":true}`, plan.ErrMalformed},
 		{`{"version":1}`, plan.ErrMalformed},
 		{`{"version":1,"run":null}`, plan.ErrMalformed},

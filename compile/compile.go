@@ -171,7 +171,11 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 		d.Detail = ""
 		p.Warnings = append(p.Warnings, d)
 	}
-	record := plan.Record{Version: plan.Version, Decisions: inputs.decided, Means: inputs.means}
+	// The plan is of the lowest version that holds what it uses, so that a
+	// release that reads only an earlier one can run it, and its record is
+	// of its version.
+	p.Version = p.MinVersion()
+	record := plan.Record{Version: p.Version, Decisions: inputs.decided, Means: inputs.means}
 	if submitted != nil {
 		record.Submitted = plan.DataOf(jsonvalue.CloneMap(submitted))
 	}
