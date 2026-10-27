@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
-	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -362,25 +361,17 @@ func slept(wall, mono, jump time.Duration) bool {
 // looks again now. One that is running as it is woken looks before it
 // waits, by the right clock.
 func (c *Coordinator) wakeReadied(ctx context.Context) {
-	var ids []hopper.JobID
+	var jobs []*store.Job
 	if err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
-		ids, err = tx.ReadiedSupervisors()
+		jobs, err = tx.ReadiedJobs()
 		return err
 	}); err != nil {
 		c.log.WarnContext(ctx, "coordinator: the store's clock was reset, but the supervisors to wake couldn't be read", "error", err)
 		return
 	}
-	c.mu.Lock()
-	client := c.served
-	c.mu.Unlock()
-	if client == nil {
-		client = c.inserter
-	}
-	for _, id := range ids {
-		if _, err := client.JobRetry(ctx, id); err != nil && !errors.Is(err, hopper.ErrJobRunning) {
-			c.log.DebugContext(ctx, "coordinator: wake a supervisor after the store's clock was reset", "supervisor", id, "error", err)
-		}
+	for _, j := range jobs {
+		c.wake(ctx, j.SupervisorID, j.Run, j.Key, 1, unended(j.Run, j.Key))
 	}
 }
 

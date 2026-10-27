@@ -380,12 +380,19 @@ func (c *Coordinator) wakeJob(ctx context.Context, run, key string) {
 		c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
 		return
 	}
-	if j.Outcome != "" {
-		// Its supervisor completed as it ended the job, and JobRetry would
-		// run it again.
-		return
+	if j.Outcome == "" {
+		c.wake(ctx, j.SupervisorID, run, key, wakeTries, unended(run, key))
 	}
-	c.wake(ctx, j.SupervisorID, run, key)
+}
+
+// unended reports, in a transaction, whether the run's job key hasn't
+// ended: whether its supervisor waits, rather than completed as it ended
+// the job.
+func unended(run, key string) func(*store.Tx) (bool, error) {
+	return func(tx *store.Tx) (bool, error) {
+		j, err := tx.Job(run, key)
+		return err == nil && j.Outcome == "", err
+	}
 }
 
 // wakeAny wakes the marker of a need on any instance of the run's job
@@ -403,31 +410,40 @@ func (c *Coordinator) wakeAny(ctx context.Context, run, name string) {
 	case err != nil:
 		c.log.DebugContext(ctx, "coordinator: wake a need on any instance", "run", run, "job", name, "error", err)
 	case a.ChosenAt.IsZero():
-		c.wake(ctx, a.MarkerID, run, name)
+		c.wake(ctx, a.MarkerID, run, name, wakeTries, func(tx *store.Tx) (bool, error) {
+			a, err := tx.Any(run, name)
+			return err == nil && a.ChosenAt.IsZero(), err
+		})
 	}
 }
 
 // wake has hopper run the job id, which waits, as the run's job key's
-// supervisor or marker, at once. A supervisor that is running reads what
-// woke it before it waits, unless it read last just before the wake, and
-// is about to wait: so it is woken again, a few times, briefly, in case it
-// was.
-func (c *Coordinator) wake(ctx context.Context, id hopper.JobID, run, key string) {
-	c.mu.Lock()
-	client := c.served
-	c.mu.Unlock()
-	if client == nil {
-		client = c.inserter
-	}
+// supervisor or marker, at once, in a transaction that reads first, with
+// waits, whether it still waits: a supervisor completes in the transaction
+// that ends its job, and a marker in the one that chooses, and hopper's
+// JobRetry would run either again once it has. A supervisor that is
+// running reads what woke it before it waits, unless it read last just
+// before the wake, and is about to wait: so it is woken again, tries times
+// in all, briefly apart, in case it was.
+func (c *Coordinator) wake(ctx context.Context, id hopper.JobID, run, key string, tries int, waits func(*store.Tx) (bool, error)) {
 	for try := 0; ; try++ {
-		_, err := client.JobRetry(ctx, id)
+		err := c.store.Tx(ctx, func(tx *store.Tx) error {
+			ok, err := waits(tx)
+			if err != nil || !ok {
+				return err
+			}
+			// hopper wakes the job's queue in this process once the
+			// transaction commits.
+			_, err = c.inserter.JobRetryTx(ctx, tx.SQL(), id)
+			return err
+		})
 		switch {
 		case err == nil:
 			return
 		case !errors.Is(err, hopper.ErrJobRunning):
 			c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", run, "job", key, "error", err)
 			return
-		case try == wakeTries-1:
+		case try == tries-1:
 			return
 		}
 		select {

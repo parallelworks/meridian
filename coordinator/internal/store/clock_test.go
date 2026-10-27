@@ -227,18 +227,20 @@ func TestClockHost(t *testing.T) {
 	}
 }
 
-// TestReadiedSupervisors checks that the supervisors a reset of the clock
-// wakes are those of the readied jobs that haven't ended of the runs that
-// are running.
-func TestReadiedSupervisors(t *testing.T) {
+// TestReadiedJobs checks that the supervisors a reset of the clock wakes
+// are those of the readied jobs that haven't ended of the runs that are
+// running.
+func TestReadiedJobs(t *testing.T) {
 	s := open(t)
 	id := createRun(t, s)
 	readied := func() []hopper.JobID {
 		t.Helper()
 		var ids []hopper.JobID
 		if err := s.View(t.Context(), func(tx *Tx) error {
-			var err error
-			ids, err = tx.ReadiedSupervisors()
+			jobs, err := tx.ReadiedJobs()
+			for _, j := range jobs {
+				ids = append(ids, j.SupervisorID)
+			}
 			return err
 		}); err != nil {
 			t.Fatal(err)
