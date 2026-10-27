@@ -489,8 +489,10 @@ func TestWake(t *testing.T) {
 // event is stored, the polls held of them are answered, without waiting
 // for the recheck, which the test puts off; and so does an end that fails
 // the job, but not one before its first step, after which the job is
-// placed again.
+// placed again, nor one for a reason the job's retry: lists, after which
+// it may be.
 func TestFailureNotifies(t *testing.T) {
+	retriesTimeout := &store.Options{RetriesFor: func(_ *store.Tx, _ string, reason plan.Reason) bool { return reason == plan.ReasonTimeout }}
 	failed := time.Unix(1, 0).UTC()
 	for _, tc := range []struct {
 		name string
@@ -499,6 +501,7 @@ func TestFailureNotifies(t *testing.T) {
 		path   string
 		body   any
 		marked bool
+		store  *store.Options
 	}{
 		{name: "failed cleanup", path: workerapi.PathEvents, marked: true, body: workerapi.Events{Events: []workerapi.Event{
 			{Seq: 1, Time: failed, Cleanup: true},
@@ -508,9 +511,15 @@ func TestFailureNotifies(t *testing.T) {
 		{name: "setup failed", path: workerapi.PathComplete, body: workerapi.Complete{
 			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: problems.JobUnreadable.Problem(nil),
 		}},
+		{name: "failed end, retried", path: workerapi.PathComplete, store: retriesTimeout, body: workerapi.Complete{
+			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonTimeout,
+		}},
+		{name: "failed end, its reason not retried", path: workerapi.PathComplete, store: retriesTimeout, marked: true, body: workerapi.Complete{
+			Result: plan.JobResult{Outcome: plan.OutcomeFailure},
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newRig(t, rigOptions{hold: 2 * time.Second, configure: func(s *workerapisrv.Server) { workerapisrv.SetRecheck(s, time.Hour) }})
+			r := newRig(t, rigOptions{hold: 2 * time.Second, configure: func(s *workerapisrv.Server) { workerapisrv.SetRecheck(s, time.Hour) }, store: tc.store})
 			c := newClient(t, r.socket)
 			run := r.newRun(nil)
 			job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"}}}

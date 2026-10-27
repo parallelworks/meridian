@@ -59,8 +59,10 @@ type leaseDriver struct {
 	asked []backend.Placement
 	// silent says, for each attempt by its number, whether its worker
 	// claims it and goes silent, and started whether it then starts a
-	// step; an attempt beyond them completes with success.
+	// step; an attempt beyond them completes with success, or with failure
+	// for a job fails names.
 	silent, started []bool
+	fails           map[string]bool
 	placed          int
 	// credentials are those of the silent workers, by attempt.
 	credentials map[string]string
@@ -95,8 +97,12 @@ func (d *leaseDriver) worker(req backend.PlaceRequest) testEnd {
 	d.placed++
 	silent := n < len(d.silent) && d.silent[n]
 	started := n < len(d.started) && d.started[n]
+	fails := d.fails[jobOf(req)]
 	d.mu.Unlock()
-	if !silent {
+	switch {
+	case !silent && fails:
+		return testEnd{result: plan.JobResult{Outcome: plan.OutcomeFailure}}
+	case !silent:
 		return testEnd{result: plan.JobResult{Outcome: plan.OutcomeSuccess}}
 	}
 	d.workers.Go(func() { d.claim(req, started) })
@@ -592,6 +598,107 @@ func TestSlept(t *testing.T) {
 			t.Errorf("slept(%v on the wall clock, %v on the monotonic clock) = %t", tc.wall, tc.mono, got)
 		}
 	}
+}
+
+// retriedBeside is retryJob, beside a job whose step's early-cancel: is
+// any-job-failed.
+const retriedBeside = `
+jobs:
+  main:
+    retry:
+      reasons: [worker-lost]
+      max-retries: 1
+      interval: 1m
+    steps:
+      - run: echo main
+  beside:
+    steps:
+      - run: sleep 60
+        early-cancel: any-job-failed
+`
+
+// TestLostNotMarked checks that an attempt lost of a job whose retry:
+// runs it again doesn't mark the run as one a job of which failed: the
+// attempt of the job beside it isn't told, and its step whose
+// early-cancel: is any-job-failed runs on. The job's next attempt, its
+// last, which fails, marks it, as the job fails.
+func TestLostNotMarked(t *testing.T) {
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true, true}, []bool{true, true})
+	d.fails = map[string]bool{"main": true}
+	id, _ := create(t, c, retriedBeside, nil, nil)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	served := make(chan error, 1)
+	go func() { served <- c.Serve(ctx) }()
+	var beside, main *store.Attempt
+	waitFor(t, func() bool {
+		err := c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			if beside, err = tx.LatestAttempt(id, "beside"); err != nil {
+				return err
+			}
+			main, err = tx.LatestAttempt(id, "main")
+			return err
+		})
+		return err == nil && beside.State == store.AttemptRunning && main.State == store.AttemptRunning
+	})
+	cancel()
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	marked := func() bool {
+		t.Helper()
+		return !storedRun(t, c, id).AnyJobFailedAt.IsZero()
+	}
+
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	if wait := look(t, c, id); wait != time.Minute {
+		t.Fatalf("once main's attempt was lost, its supervisor waits %v", wait)
+	}
+	if lost := latestAttempt(t, c, id, "main"); lost.End.Kind != store.EndLost {
+		t.Fatalf("main's attempt is %+v", lost)
+	}
+	if marked() || toldFailed(t, c, beside.ID) {
+		t.Fatal("an attempt lost of a job its retry: runs again marked the run")
+	}
+	// What the store asks of an end, as the worker API stores it.
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		if !tx.RetriesFor(main.ID, plan.ReasonWorkerLost) || tx.RetriesFor(main.ID, plan.ReasonTimeout) || tx.RetriesFor(beside.ID, plan.ReasonWorkerLost) {
+			t.Error("the store's RetriesFor doesn't go by the jobs' retry:")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.Advance(time.Minute)
+	look(t, c, id)
+	waitFor(t, func() bool {
+		a := latestAttempt(t, c, id, "main")
+		return a.Number == 2 && a.State == store.AttemptEnded
+	})
+	look(t, c, id)
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeFailure {
+		t.Fatalf("main is %+v", j)
+	}
+	if !marked() || !toldFailed(t, c, beside.ID) {
+		t.Error("main's last attempt, which failed, didn't mark the run")
+	}
+}
+
+// toldFailed reports whether the attempt id's control tells its worker
+// that a job of its run failed.
+func toldFailed(t *testing.T, c *Coordinator, id string) bool {
+	t.Helper()
+	var ctl workerapi.Control
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		ctl, err = tx.Control(id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return ctl.AnyJobFailed
 }
 
 // TestPrivateLost checks that the backend of a private attempt, whose

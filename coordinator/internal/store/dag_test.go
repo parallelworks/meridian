@@ -22,6 +22,30 @@ func stepEvent(seq int64, step, try int, outcome plan.Outcome) workerapi.Event {
 // the next event shows the step didn't try again; and that a try that is
 // tried again doesn't.
 func TestFailedStepMarks(t *testing.T) {
+	t.Run("its job's retry: lists timeout", func(t *testing.T) {
+		// Its job's deadline may have failed it, and another attempt may
+		// follow: the job marks the run as it ends.
+		s := open(t)
+		s.retriesFor = func(_ *Tx, _ string, reason plan.Reason) bool { return reason == plan.ReasonTimeout }
+		id := createRun(t, s)
+		inTx(t, s, func(tx *Tx) error {
+			a, token, err := placedAttempt(tx, NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+				return err
+			}
+			events := []workerapi.Event{stepEvent(1, 0, 0, ""), stepEvent(2, 0, 0, plan.OutcomeFailure), stepEvent(3, 1, 0, plan.OutcomeSkipped)}
+			if _, err := tx.AppendEvents(a.ID, events); err != nil {
+				return err
+			}
+			if r, err := tx.Run(id); err != nil || !r.AnyJobFailedAt.IsZero() {
+				t.Errorf("the run is %+v, %v", r, err)
+			}
+			return nil
+		})
+	})
 	type batch struct {
 		events []workerapi.Event
 		marked bool

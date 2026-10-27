@@ -2553,7 +2553,12 @@ for any other only once they have (`plan.Plan.CancelPath`).
   once for a cleanup, which is never tried again, and for a try that the
   step's `retry:`, written out, says is its last; and otherwise once the
   next event shows the step wasn't tried again. A job that ends failed
-  marks it as it ends. Format 1 doesn't count one failure: a job whose
+  marks it as it ends. An attempt that ends for a reason its job's
+  `retry:` lists, as one whose worker was lost, which another attempt may
+  follow, doesn't mark it, nor does a failed step of a job whose `retry:`
+  lists `timeout`, which the job's deadline may have failed: the job marks
+  it once its last attempt has ended, failed. Format 1 doesn't count one
+  failure: a job whose
   `if:` fails to evaluate, which it fails without saying so, where
   Meridian fails it through Ready's diagnostics, and marks the run. The
   step ends cancelled,

@@ -40,3 +40,23 @@ func TestLastTry(t *testing.T) {
 		}
 	}
 }
+
+// TestRetriesFor checks whether a job's retry: may run it again after an
+// attempt ends for a reason: whether it lists the reason.
+func TestRetriesFor(t *testing.T) {
+	lost := &plan.JobRetry{Reasons: []string{string(plan.ReasonWorkerLost)}}
+	for _, tc := range []struct {
+		retry  *plan.JobRetry
+		reason plan.Reason
+		want   bool
+	}{
+		{lost, plan.ReasonWorkerLost, true},
+		{lost, plan.ReasonTimeout, false},
+		{nil, plan.ReasonWorkerLost, false},
+	} {
+		j := plan.Job{Retry: tc.retry}
+		if got := j.RetriesFor(tc.reason); got != tc.want {
+			t.Errorf("a job whose retry: is %+v runs again after %s: %v, want %v", tc.retry, tc.reason, got, tc.want)
+		}
+	}
+}
