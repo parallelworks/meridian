@@ -16,7 +16,9 @@ import (
 // connections only from the process's own user, or root, and stores the
 // logs they upload with logs. A claim readies the attempt's job again as
 // its supervisor readied it, and each change to an attempt that its
-// supervisor acts on, as its claim or its end, wakes the supervisor.
+// supervisor acts on, as its claim or its end, wakes the supervisor. The
+// polls it holds of attempts' controls are answered as soon as the
+// coordinator changes them, rather than at the server's next read of them.
 func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Logs) error {
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: logs, Sealer: c.sealer,
@@ -27,6 +29,16 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
+	c.controls = srv
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.controls == srv {
+			c.controls = nil
+		}
+		c.mu.Unlock()
+	}()
 	return srv.Serve(ctx, l)
 }
 

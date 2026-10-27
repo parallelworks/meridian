@@ -161,7 +161,9 @@ func failUnended(tx *store.Tx, id string) ([]string, error) {
 // the coordinator itself failed again and again. Its attempt that hasn't
 // ended is withdrawn, so that its worker's reports are refused, and its ID
 // returned, so that its placement is cancelled once the transaction
-// commits (cancelPlacements).
+// commits (cancelPlacements). It marks the run as one a job of which
+// failed, whose attempts' controls that changes the caller notifies of
+// once the transaction commits (store.Tx.ControlsChanged).
 func failJob(tx *store.Tx, run, key string) (string, error) {
 	j, err := tx.Job(run, key)
 	if err != nil || j.Outcome != "" {
@@ -178,10 +180,15 @@ func failJob(tx *store.Tx, run, key string) (string, error) {
 		}
 		withdrawn = a.ID
 	}
-	return withdrawn, tx.EndJob(run, key, store.JobEnd{
+	if err := tx.EndJob(run, key, store.JobEnd{
 		Result:      plan.JobResult{Outcome: plan.OutcomeFailure},
 		Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": key})},
-	})
+	}); err != nil {
+		return "", err
+	}
+	// As any job that fails does (endJob).
+	_, err = tx.MarkJobFailed(run)
+	return withdrawn, err
 }
 
 // runOutcome is how the run id ended, from how its jobs did: failure if one

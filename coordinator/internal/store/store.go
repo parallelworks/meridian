@@ -31,8 +31,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +92,12 @@ type Options struct {
 	// migrations Open applies, and a checkpoint of the write-ahead log
 	// that couldn't finish. Nil means none.
 	Log *slog.Logger
+	// LastTry reports, in tx, whether try, from 0, of step, its index, is
+	// surely its last, for the attempt's job: as its plan says when it holds
+	// the step's retry: written out (plan.Step.LastTry), so that a step
+	// that failed marks its run as soon as its event is stored. Nil, or
+	// false, has the store wait for the next event, which shows it.
+	LastTry func(tx *Tx, attempt string, step, try int) bool
 }
 
 // A Store is the coordinator's store, open. Its methods are safe for
@@ -98,6 +106,8 @@ type Store struct {
 	driver *hoppersqlite.Driver
 	db     *sql.DB
 	log    *slog.Logger
+	// lastTry is Options.LastTry, or nil.
+	lastTry func(tx *Tx, attempt string, step, try int) bool
 	// file is the database's file, as SQLite opened it, its links
 	// resolved: the same for every process that opens the database.
 	file string
@@ -141,6 +151,10 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	if opts != nil && opts.Log != nil {
 		log = opts.Log
 	}
+	var lastTry func(tx *Tx, attempt string, step, try int) bool
+	if opts != nil {
+		lastTry = opts.LastTry
+	}
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -154,7 +168,7 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 	}
 	start, wait := time.Now(), openBusyFirstWait
 	for {
-		s, err := openOnce(ctx, path, log)
+		s, err := openOnce(ctx, path, log, lastTry)
 		switch {
 		case errors.Is(err, hoppersqlite.ErrNetworkFilesystem):
 			if created {
@@ -194,12 +208,12 @@ const (
 
 // openOnce opens the store at path once, and brings its schema up to this
 // release's.
-func openOnce(ctx context.Context, path string, log *slog.Logger) (*Store, error) {
+func openOnce(ctx context.Context, path string, log *slog.Logger, lastTry func(tx *Tx, attempt string, step, try int) bool) (*Store, error) {
 	d, err := openSQLite(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{driver: d, db: d.DB(), log: log}
+	s := &Store{driver: d, db: d.DB(), log: log, lastTry: lastTry}
 	if err := s.setUp(ctx, log); err != nil {
 		return nil, errors.Join(err, d.Close())
 	}
@@ -398,7 +412,15 @@ type Tx struct {
 	// events is set once the transaction has added a run's event, which
 	// Changes says once it commits.
 	events bool
+	// controls are the attempts whose controls the transaction has
+	// changed (UpdateControl).
+	controls map[string]bool
 }
+
+// ControlsChanged returns the attempts whose controls the transaction has
+// changed (UpdateControl), in order, so that, once it commits, whoever
+// holds their control polls answers them (workerapisrv.Server.Notify).
+func (tx *Tx) ControlsChanged() []string { return slices.Sorted(maps.Keys(tx.controls)) }
 
 // Tx runs fn in a transaction, which it commits if fn returns nil and
 // rolls back otherwise, returning fn's error. Everything fn does through

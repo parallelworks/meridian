@@ -51,11 +51,16 @@ func (testGroups) ComputeTarget(context.Context, plan.ComputeTarget) (*backend.G
 
 // A testEnd is what the worker of an attempt testDriver placed does: it
 // completes the attempt with result; or, with problem, ends it as one that
-// failed before its first step; or, with never, never claims it.
+// failed before its first step; or, with never, never claims it; or, with
+// running, claims it, starts a step, and leaves it running, closing
+// started then. It waits for wait first, unless it is nil.
 type testEnd struct {
 	result  plan.JobResult
 	problem *problem.Problem
 	never   bool
+	running bool
+	started chan<- struct{}
+	wait    <-chan struct{}
 }
 
 // testDriver is a backend.Driver in process, for tests. Its members can run
@@ -184,7 +189,8 @@ func (d *testDriver) Forget(context.Context, *backend.Member, backend.Placement)
 // the attempt and ends it as end says, and wakes the attempt's supervisor.
 // It stores the end as the worker API does: the part of its result that
 // run state holds with the attempt, and the private part as the job's part
-// of the run's secret record.
+// of the run's secret record; and an end that fails the job marks the run,
+// and has the controls it changes notified.
 func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backend.Placement, end testEnd) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -209,8 +215,27 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 		}
 		break
 	}
+	if end.wait != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-end.wait:
+		}
+	}
 	credential := make([]byte, 32)
 	_, _ = rand.Read(credential)
+	if end.running {
+		if err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
+			claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
+			if err != nil {
+				return err
+			}
+			return tx.StepStarted(claimed.ID)
+		}); err == nil && end.started != nil {
+			close(end.started)
+		}
+		return
+	}
 	report := workerapi.Complete{Result: end.result}
 	if end.problem != nil {
 		report = workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: end.problem}
@@ -218,6 +243,7 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	private, state := report.Result.Split()
 	outcome := report.Result.Outcome
 	report.Result = state
+	var changed []string
 	err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
 		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
 		if err != nil {
@@ -241,13 +267,23 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 			return err
 		}
 		sum := sha256.Sum256(body)
-		return tx.EndAttempt(claimed.ID, store.AttemptEnd{
+		if err := tx.EndAttempt(claimed.ID, store.AttemptEnd{
 			Kind: store.EndCompleted, Outcome: outcome, Reason: report.Reason, CompleteDigest: sum[:], Report: body, Problem: report.Problem,
-		})
+		}); err != nil {
+			return err
+		}
+		if outcome == plan.OutcomeFailure && report.Reason != plan.ReasonSetupFailed {
+			if _, err := tx.MarkJobFailed(claimed.Run); err != nil {
+				return err
+			}
+		}
+		changed = tx.ControlsChanged()
+		return nil
 	})
 	if err != nil {
 		return
 	}
+	d.c.controlsChanged(changed)
 	d.c.wakeJob(ctx, a.Run, a.Job)
 }
 

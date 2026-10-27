@@ -69,6 +69,9 @@ type Run struct {
 	StartTries int
 	// Diagnostics are the run's problems: Start's, and the coordinator's.
 	Diagnostics problems.Diagnostics
+	// AnyJobFailedAt is when the first job of the run to fail ended, or the
+	// zero time before (MarkJobFailed).
+	AnyJobFailedAt time.Time
 }
 
 // A NewRun is a run to store.
@@ -145,7 +148,7 @@ WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_
 
 const runColumns = `id, created_at, plan, plan_version, plan_digest, name, location, release,
   default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at,
-  start_state, start_tries, diagnostics`
+  start_state, start_tries, diagnostics, any_job_failed_at`
 
 // Run returns the run with the ID id.
 func (tx *Tx) Run(id string) (*Run, error) {
@@ -159,6 +162,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		created         int64
 		outcome, reason sql.NullString
 		started, ended  sql.NullInt64
+		jobFailed       sql.NullInt64
 		state           string
 		startState      []byte
 		diags           []byte
@@ -166,7 +170,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+runColumns+" FROM meridian_runs WHERE id = ?", n).Scan(
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
 		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
-		&startState, &r.StartTries, &diags)
+		&startState, &r.StartTries, &diags, &jobFailed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -175,7 +179,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	}
 	r.ID, r.CreatedAt, r.State = runID(number), time.UnixMicro(created).UTC(), RunState(state)
 	r.Outcome, r.Reason = plan.Outcome(outcome.String), plan.Reason(reason.String)
-	r.StartedAt, r.EndedAt = timeOf(started), timeOf(ended)
+	r.StartedAt, r.EndedAt, r.AnyJobFailedAt = timeOf(started), timeOf(ended), timeOf(jobFailed)
 	if startState != nil {
 		if r.StartState, err = compile.DecodeStartState(startState); err != nil {
 			// One of a newer version is a newer release's to read, and is

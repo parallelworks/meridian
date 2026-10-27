@@ -239,6 +239,8 @@ jobs:
 		t.Errorf("a ended with %s, %v, and its attempt %s", a.Outcome, a.Diagnostics, attempt.End.Kind)
 	case b.Outcome != plan.OutcomeSuccess:
 		t.Errorf("b ended with %s, %v", b.Outcome, b.Diagnostics)
+	case run.AnyJobFailedAt.IsZero():
+		t.Error("the run isn't marked as one a job of which failed")
 	}
 	if log := r.logs.Of(id, "b", 1)[workerapitest.LogKey{Part: workerapi.LogStep}]; string(log.Data) != "b failure\n" {
 		t.Errorf("b's step's log is %q", log.Data)

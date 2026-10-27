@@ -259,11 +259,16 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 }
 
 // endJob ends the run's job key as end says, in a transaction that done
-// writes to as well. A job that has ended meanwhile is errSettled, and one
-// that has an attempt that hasn't, as one another supervisor placed,
-// errAgain.
+// writes to as well. A job that fails marks the run in it, unless a failed
+// step of the run did already, as the worker API stored it, or another job
+// that failed: every attempt of the run then tells its worker, for its
+// steps whose early-cancel: is any-job-failed. That covers a job that
+// fails without a failed step, as when Ready fails or its setup does. A
+// job that has ended meanwhile is errSettled, and one that has an attempt
+// that hasn't, as one another supervisor placed, errAgain.
 func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	return c.store.Tx(ctx, func(tx *store.Tx) error {
+	var changed []string
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.EndJob(runID, key, end); errors.Is(err, store.ErrState) {
 			j, jerr := tx.Job(runID, key)
 			switch {
@@ -276,8 +281,41 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 		} else if err != nil {
 			return err
 		}
-		return done(ctx, tx)
+		if end.Result.Outcome == plan.OutcomeFailure {
+			if _, err := tx.MarkJobFailed(runID); err != nil {
+				return err
+			}
+		}
+		if err := done(ctx, tx); err != nil {
+			return err
+		}
+		changed = tx.ControlsChanged()
+		return nil
 	})
+	if err == nil {
+		c.controlsChanged(changed)
+	}
+	return err
+}
+
+// A controlNotifier hears which attempts' controls changed, once the
+// change has committed, so that it answers the control polls it holds of
+// them: the worker API's server (workerapisrv.Server.Notify), whose polls
+// in other processes read them again every second.
+type controlNotifier interface{ Notify(ids ...string) }
+
+// controlsChanged tells the coordinator's controlNotifier, if it has one,
+// that the controls of the attempts ids changed, if any did.
+func (c *Coordinator) controlsChanged(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	c.mu.Lock()
+	n := c.controls
+	c.mu.Unlock()
+	if n != nil {
+		n.Notify(ids...)
+	}
 }
 
 // wakeJob wakes the supervisor of the run's job key, once something it

@@ -2503,11 +2503,21 @@ for any other only once they have (`plan.Plan.CancelPath`).
   process ID succeeds, until the processes the step left behind have ended
   or the attempt ends.
 - **`early-cancel: any-job-failed`** stops a step when another job of the run
-  fails, or a step of its own job did, as in format 1. The coordinator
-  tells the step's worker when another job fails: the first job of the run
-  to fail marks the run, in the transaction that ends it, and every running
-  attempt's control poll then says so, as a new attempt's first one does.
-  The step ends cancelled,
+  fails, or a step of its own job did, as in format 1. Format 1 counts a
+  job as failed from the moment one of its steps fails, after its last
+  try, while the job's later steps that outlive it and its cleanups still
+  run; and from the moment the job fails otherwise, as when its `if:`, its
+  setup or its outputs fail. The coordinator tells the step's worker so:
+  the first failure marks the run, in the transaction that stores it, and
+  every running attempt's control poll then says so, as a new attempt's
+  first one does. A failed step's events mark it as they are stored: at
+  once for a cleanup, which is never tried again, and for a try that the
+  step's `retry:`, written out, says is its last; and otherwise once the
+  next event shows the step wasn't tried again. A job that ends failed
+  marks it as it ends. Format 1 doesn't count one failure: a job whose
+  `if:` fails to evaluate, which it fails without saying so, where
+  Meridian fails it through Ready's diagnostics, and marks the run. The
+  step ends cancelled,
   which cancels the rest of its job, as in format 1: a later step runs only
   if it outlives a cancel, and the job ends cancelled unless a step of it
   failed (`plan.JobState.Cancelled`). It doesn't cut short the wait between

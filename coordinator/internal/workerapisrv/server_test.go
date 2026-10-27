@@ -43,8 +43,7 @@ func runChild(role string) int {
 		switch role {
 		case "control":
 			err = s.Tx(ctx, func(tx *store.Tx) error {
-				_, err := tx.SetControl(os.Getenv(envAttempt), workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
-				return err
+				return askControl(tx, os.Getenv(envAttempt), workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
 			})
 		default:
 			err = fmt.Errorf("no role %q", role)
@@ -65,13 +64,22 @@ func (r *rig) claimed(c *client, p placed) (*store.Attempt, string, string) {
 	run := r.newRun(nil)
 	job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"}}}
 	r.readier.set(run, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}})
-	a, token := r.newAttempt(run, "build", p)
+	a, credential := r.claimedIn(c, run, "build", p)
+	return a, run, credential
+}
+
+// claimedIn claims, through c, an attempt of the run's job key, placed
+// with p, whose job the readier gives already, and returns it and its
+// credential.
+func (r *rig) claimedIn(c *client, run, key string, p placed) (*store.Attempt, string) {
+	r.t.Helper()
+	a, token := r.newAttempt(run, key, p)
 	credential := newCredential(r.t)
 	status, body, err := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(r.t, credential, conformanceDigest), token)
 	if err != nil || status != http.StatusOK {
 		r.t.Fatalf("the claim was answered %d, %v: %s", status, err, body)
 	}
-	return a, run, credential
+	return a, credential
 }
 
 // wantProblem fails the test unless an answer is a problem of code, and
@@ -476,41 +484,58 @@ func TestWake(t *testing.T) {
 	}
 }
 
-// Once events are stored, the polls held of the attempts whose controls
-// storing them changed are answered, without waiting for the recheck,
-// which the test puts off.
-func TestEventsNotify(t *testing.T) {
-	var target string
-	r := newRig(t, rigOptions{hold: time.Minute, configure: func(s *workerapisrv.Server) {
-		workerapisrv.SetRecheck(s, time.Hour)
-		workerapisrv.SetControlsChanged(s, func(tx *store.Tx) ([]string, error) {
-			// As a failed step that stops the run would.
-			_, err := tx.SetControl(target, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
-			return []string{target}, err
+// A step that fails tells the run's other attempts that a job of the run
+// failed, for their steps whose early-cancel: is any-job-failed: once its
+// event is stored, the polls held of them are answered, without waiting
+// for the recheck, which the test puts off; and so does an end that fails
+// the job, but not one before its first step, after which the job is
+// placed again.
+func TestFailureNotifies(t *testing.T) {
+	failed := time.Unix(1, 0).UTC()
+	for _, tc := range []struct {
+		name string
+		// path and body are what one attempt reports, and marked whether
+		// that fails its job, as the other's control then says.
+		path   string
+		body   any
+		marked bool
+	}{
+		{name: "failed cleanup", path: workerapi.PathEvents, marked: true, body: workerapi.Events{Events: []workerapi.Event{
+			{Seq: 1, Time: failed, Cleanup: true},
+			{Seq: 2, Time: failed, Cleanup: true, Finished: true, Outcome: plan.OutcomeFailure, ExitCode: 1},
+		}}},
+		{name: "failed end", path: workerapi.PathComplete, marked: true, body: workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}}},
+		{name: "setup failed", path: workerapi.PathComplete, body: workerapi.Complete{
+			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: problems.JobUnreadable.Problem(nil),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, rigOptions{hold: 2 * time.Second, configure: func(s *workerapisrv.Server) { workerapisrv.SetRecheck(s, time.Hour) }})
+			c := newClient(t, r.socket)
+			run := r.newRun(nil)
+			job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"}}}
+			r.readier.set(run, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}})
+			_, reporter := r.claimedIn(c, run, "prep", placed{})
+			b, polling := r.claimedIn(c, run, "build", placed{})
+			answered := make(chan []byte, 1)
+			go func() {
+				_, body, _ := newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, polling)
+				answered <- body
+			}()
+			waitHeld(t, r.server, b.ID, 1)
+			body, err := workerapi.Marshal(tc.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status, body, _ := c.send(http.MethodPost, tc.path, body, reporter); status/100 != 2 {
+				t.Fatalf("the report was answered %d: %s", status, body)
+			}
+			body = <-answered
+			var got workerapi.Control
+			if err := workerapi.Unmarshal(body, &got); err != nil || got.AnyJobFailed != tc.marked || got.Cancel {
+				t.Errorf("the poll was answered %s, %v", body, err)
+			}
 		})
-	}})
-	c := newClient(t, r.socket)
-	_, _, reporter := r.claimed(c, placed{})
-	b, _, polling := r.claimed(c, placed{})
-	target = b.ID
-	answered := make(chan []byte, 1)
-	go func() {
-		_, body, _ := newClient(t, r.socket).send(http.MethodGet, workerapi.PathControl+"?"+workerapi.QueryVersion+"=0", nil, polling)
-		answered <- body
-	}()
-	waitHeld(t, r.server, b.ID, 1)
-	events, _ := workerapi.Marshal(workerapi.Events{Events: []workerapi.Event{{Seq: 1, Time: time.Unix(1, 0).UTC()}}})
-	if status, body, _ := c.send(http.MethodPost, workerapi.PathEvents, events, reporter); status != http.StatusOK {
-		t.Fatalf("events were answered %d: %s", status, body)
-	}
-	select {
-	case body := <-answered:
-		var got workerapi.Control
-		if err := workerapi.Unmarshal(body, &got); err != nil || !got.Cancel || got.Version != 1 {
-			t.Errorf("the poll was answered %s, %v", body, err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the poll wasn't answered")
 	}
 }
 
