@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -50,11 +51,14 @@ type Binaries struct {
 	// user fetched: Dir/<version>/<os>-<arch>/meridian. A host of another
 	// system needs it.
 	Dir string
+	// Self returns the binary for this process's own system, and its
+	// digest: local.Executable, the file this process runs, for nil, which
+	// it checks as the local backend checks the binary it starts. A
+	// process that isn't meridian, as a test, names meridian's.
+	Self func() (path, digest string, err error)
 
-	// self returns the file this process runs, and its digest, and goos
-	// and goarch are its system: local.Executable's, runtime's, for "".
-	// Tests change them.
-	self         func() (string, string, error)
+	// goos and goarch are this process's system: runtime's, for "". Tests
+	// change them.
 	goos, goarch string
 }
 
@@ -69,38 +73,43 @@ type Binaries struct {
 func (b *Binaries) For(host, goos, goarch string) (Binary, error) {
 	ownOS, ownArch := cmpOr(b.goos, runtime.GOOS), cmpOr(b.goarch, runtime.GOARCH)
 	if goos == ownOS && goarch == ownArch {
-		self := b.self
+		self := b.Self
 		if self == nil {
 			self = local.Executable
 		}
-		path, digest, err := self()
-		return Binary{Path: path, Digest: digest}, err
+		file, digest, err := self()
+		return Binary{Path: file, Digest: digest}, err
 	}
 	if b.Dir == "" {
 		return Binary{}, errors.New("hostbin: no directory of binaries for other systems")
 	}
-	path := filepath.Join(b.Dir, b.Version, goos+"-"+goarch, "meridian")
-	info, err := os.Lstat(path)
+	file := filepath.Join(b.Dir, b.Version, goos+"-"+goarch, "meridian")
+	info, err := os.Lstat(file)
 	if errors.Is(err, os.ErrNotExist) {
-		return Binary{}, problems.SSHWorkerBinaryMissing.Problem(problems.Params{"host": host, "os": goos, "arch": goarch, "version": b.Version, "path": path})
+		return Binary{}, problems.SSHWorkerBinaryMissing.Problem(problems.Params{"host": host, "os": goos, "arch": goarch, "version": b.Version, "path": file})
 	}
 	if err != nil {
 		return Binary{}, err
 	}
 	unsafe := func(code problem.Code) error {
-		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
+		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": file, "code": string(code)})
 	}
 	if !info.Mode().IsRegular() {
 		return Binary{}, unsafe(problems.FileNotRegular.Code())
 	}
-	if err := safepath.CheckExecutable(path); err != nil {
+	f, _, err := safepath.OpenExecutable(file, file)
+	if err != nil {
 		if p, ok := errors.AsType[*problem.Problem](err); ok {
 			return Binary{}, unsafe(p.Code)
 		}
 		return Binary{}, err
 	}
-	digest, err := fileDigest(path)
-	return Binary{Path: path, Digest: digest}, err
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return Binary{}, err
+	}
+	return Binary{Path: file, Digest: "sha256:" + hex.EncodeToString(h.Sum(nil))}, nil
 }
 
 func cmpOr(a, b string) string {
@@ -108,20 +117,6 @@ func cmpOr(a, b string) string {
 		return a
 	}
 	return b
-}
-
-// fileDigest returns a file's digest, as sha256: and hex.
-func fileDigest(path string) (string, error) {
-	f, err := os.Open(path) //nolint:gosec // a binary in Dir, which For checked
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // A Host is what Install found of a host: its system, as uname -s and -m
@@ -245,11 +240,11 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 	if err := saidUnusable(out, host); err != nil {
 		return Binary{}, h, err
 	}
-	if found, path, err := digestSaid(out); err != nil {
+	if found, at, err := digestSaid(out); err != nil {
 		return Binary{}, h, err
 	} else if found == hexDigest {
-		h.Cache = filepath.Dir(filepath.Dir(path))
-		return Binary{Path: path, Digest: local.Digest}, h, nil
+		h.Cache = path.Dir(path.Dir(at))
+		return Binary{Path: at, Digest: local.Digest}, h, nil
 	}
 	f, err := os.Open(local.Path) //nolint:gosec // the binary For found, which it checked
 	if err != nil {
@@ -282,12 +277,12 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 			"host": host, "path": h.Cache + "/" + hexDigest + "/meridian", "digest": local.Digest, "found": found,
 		})
 	}
-	path, err := unhex(installed)
+	at, err := unhex(installed)
 	if err != nil {
 		return Binary{}, h, err
 	}
-	h.Cache = filepath.Dir(filepath.Dir(path))
-	return Binary{Path: path, Digest: local.Digest}, h, nil
+	h.Cache = path.Dir(path.Dir(at))
+	return Binary{Path: at, Digest: local.Digest}, h, nil
 }
 
 // probe asks the host its system and its cache of binaries. A cache
@@ -317,6 +312,9 @@ func probe(ctx context.Context, conn *sshconn.Conn, host string) (*Host, error) 
 	if h.Cache, err = unhex(fields[2]); err != nil || !strings.HasPrefix(h.Cache, "/") {
 		return nil, fmt.Errorf("hostbin: %s didn't say its cache: %q", host, out)
 	}
+	// Cleaned, as meridian's own is. The host's paths are a POSIX
+	// system's, whatever this one's are.
+	h.Cache = path.Clean(h.Cache)
 	var ok bool
 	if h.GOOS, h.GOARCH, ok = system(h.OS, h.Arch); !ok {
 		return nil, problems.SSHHostUnsupported.Problem(problems.Params{"host": host, "os": h.OS, "arch": h.Arch})
@@ -335,7 +333,7 @@ func saidUnusable(out, host string) error {
 	if len(fields) != 3 {
 		return fmt.Errorf("hostbin: %s said a directory can't be used, but not which: %q", host, said)
 	}
-	path, err := unhex(fields[1])
+	dir, err := unhex(fields[1])
 	if err != nil {
 		return err
 	}
@@ -343,19 +341,19 @@ func saidUnusable(out, host string) error {
 	if err != nil {
 		return err
 	}
-	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": host, "path": path, "at": at, "reason": fields[0]})
+	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": host, "path": dir, "at": at, "reason": fields[0]})
 }
 
 // digestSaid returns the digest the script said the binary in the cache
 // has, and where it is, or "" if it said none.
-func digestSaid(out string) (digest, path string, err error) {
+func digestSaid(out string) (digest, at string, err error) {
 	said, ok := marked(out, "MERIDIAN-DIGEST")
 	if !ok {
 		return "", "", nil
 	}
 	digest, rest, _ := strings.Cut(said, " ")
-	path, err = unhex(rest)
-	return digest, path, err
+	at, err = unhex(rest)
+	return digest, at, err
 }
 
 // unhex reads what hx wrote: bytes in hex, with spaces between them.

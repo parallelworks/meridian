@@ -84,7 +84,7 @@ func binary(t *testing.T, content, digest string) *Binaries {
 		digest = digestOf(content)
 	}
 	goos, goarch := machine(t)
-	return &Binaries{Version: "v1.2.3", self: func() (string, string, error) { return path, digest, nil }, goos: goos, goarch: goarch}
+	return &Binaries{Version: "v1.2.3", Self: func() (string, string, error) { return path, digest, nil }, goos: goos, goarch: goarch}
 }
 
 // machine returns the test machine's system, as Go names it, from uname.
@@ -479,7 +479,15 @@ func TestCacheVariables(t *testing.T) {
 		}
 	}
 
-	r := newRig(t, "MERIDIAN_CACHE_DIR=cache")
+	// Cleaned before anything is there, as meridian's own is: a host
+	// whose binary is missing says this cache.
+	dir := t.TempDir()
+	r := newRig(t, "MERIDIAN_CACHE_DIR="+dir+"/./x/..//")
+	if h, err := probe(t.Context(), r.conn, "farm"); err != nil || h.Cache != dir+"/bin" {
+		t.Errorf("the cache said is %+v, %v, want %s/bin", h, err, dir)
+	}
+
+	r = newRig(t, "MERIDIAN_CACHE_DIR=cache")
 	_, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
 	if p := paramsOf(t, err, problems.DirectoryVariableRelative); p["variable"] != "MERIDIAN_CACHE_DIR" || p["value"] != "cache" {
 		t.Errorf("a relative MERIDIAN_CACHE_DIR gives %v", p)
