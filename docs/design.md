@@ -142,7 +142,7 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   - a group's `flatten: true`, which puts its inputs' values beside its own
     ([Inputs](#inputs)), as ACTIVATE runs it, though ACTIVATE's schema
     doesn't allow the key: Meridian's format dropped it, with a warning, as
-    a key the schema doesn't define, and none of the 221 known workflows
+    a key the schema doesn't define, and none of the 218 known workflows
     has it.
 - **Stricter than ACTIVATE.** Where ACTIVATE runs a workflow whose meaning
   would depend on something it shouldn't, Meridian refuses it rather than
@@ -159,7 +159,7 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     value from both definitions in the order the file writes them, and an
     ignored group drops the other's value with its own, which a workflow's
     meaning shouldn't depend on. Wizard steps whose inputs share a key are
-    run as they were. None of the 221 known workflows has a group with
+    run as they were. None of the 218 known workflows has a group with
     `flatten`, so none has either;
   - an expression in `sessions:` or `links:` that reads an input whose
     value reads `env`, `needs`, `steps`, `job` or `matrix`, as its default
@@ -207,7 +207,7 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   job's steps ran, where a copy runs only if its step did. Meridian warns
   of it as an unknown key and ignores it, as it does every key the schema
   doesn't define, so a workflow that has one runs without its cleanup.
-  None of the 221 known workflows
+  None of the 218 known workflows
   ([Bug fixes to format 1](#bug-fixes-to-format-1)) has one. Whether
   format 1 gains it as an addition, with ACTIVATE's meaning, or ACTIVATE
   drops it, is a decision for later.
@@ -227,7 +227,10 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   - the `uses:` references ACTIVATE reads otherwise
     ([Interfaces](#interfaces));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
-    ([Outputs](#outputs)).
+    ([Outputs](#outputs));
+  - how a job's `ssh:` reaches its host, where its run's directory is
+    there, and what an outage or a cancel does to its steps
+    ([The `ssh` backend](#the-ssh-backend)).
 
 ### Conformance
 
@@ -256,8 +259,10 @@ ACTIVATE takes the same fix. Each counts the same workflows, as every
 count of the known workflows in this document does: each YAML file of the
 known repositories that holds `jobs:` and parses to a mapping whose `jobs`
 is a mapping, but for Meridian's own copies of them and the files under
-`.git` and `.github`, counted once by the SHA-256 hash of its content: 221
-files.
+`.git` and `.github`, and for other CI systems' configs, which hold
+`jobs:` too but no `on:` with `execute`, as CircleCI's
+`.circleci/config.yml` and Travis CI's `.travis.yml` do, counted once by
+the SHA-256 hash of its content: 218 files.
 
 - **A matrix job's output** is the instance's with the highest index, not
   the last to finish's. None of the 14 matrix jobs has `outputs:`, and
@@ -326,7 +331,7 @@ files.
   `env:`, and for a step's, the job's over that, where format 1 recursed
   until it failed. Values that read others of the same `env:` are
   evaluated in the order they read each other, as in format 1. None of the
-  124 `env:` blocks has a value that reads another of its own block.
+  122 `env:` blocks has a value that reads another of its own block.
 - **A step's `cleanup:` reads `steps.<its own id>` as its step wrote it,
   and so do the cleanups after it and the job's `outputs:`, for a step
   with an `id` and a `cleanup:`**, where ACTIVATE's copy of the step that
@@ -356,7 +361,7 @@ files.
   that a session or a link read an input given no value as null, and an
   ignored input's value. Meridian checks `links:` but doesn't make them
   yet; it will read them so. ACTIVATE takes the same fix by evaluating
-  both with the values it fills in. Of the 221 known workflows, 16 have
+  both with the values it fills in. Of the 218 known workflows, 16 have
   `sessions:`, none writes an expression in them, and none has `links:`.
 - **An expression in `sessions:` or `links:` can't read `env`, `needs`,
   `steps`, `job` or `matrix`**, directly or through an input whose value
@@ -377,8 +382,8 @@ files.
   that an expression could read null or a number where the step's process
   read `""` or the number's text. ACTIVATE takes the same fix by keeping
   an `env:` value's text, as it exports it, in the env map its parser
-  reads. Of the 221 values of the 124 `env:` blocks, 2 are written as other
-  than text and 139 are an expression whole, which can give other than
+  reads. Of the 219 values of the 122 `env:` blocks, none is written as
+  other than text, 139 are an expression whole, which can give other than
   text, and no expression reads a value any of them defines: the known
   workflows read them in the shell. A job's `runs-on:` that is an `env:`
   value holding a mapping names the group its JSON text names, where
@@ -391,7 +396,7 @@ files.
   dropped stayed in them, and its form, which drops them the same way,
   sends them, their defaults when untouched. An ignored group's inputs reaching the run is plainly a
   bug. ACTIVATE takes the same fix by dropping, from the outer values, the
-  keys the inner group dropped. None of the 221 known workflows has a group
+  keys the inner group dropped. None of the 218 known workflows has a group
   with `flatten`, which format 1 adds
   ([The workflow format](#the-workflow-format)).
 
@@ -567,7 +572,7 @@ its resolvers into a plan, in order:
      `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
      step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
      and reads as its own text, as format 1 reads a word it doesn't know.
-     No known workflow has one: of the 221 that
+     No known workflow has one: of the 218 that
      [Bug fixes to format 1](#bug-fixes-to-format-1) counts, one reads
      `steps` other than through `needs.<job>.steps`, as
      `steps.<id>.outputs.<name>` in a job's `outputs:`, of a step that
@@ -841,7 +846,7 @@ ACTIVATE's launch form and its backend do together:
   every input, and doesn't ask the resolver for it, and asks the resolver
   for any other value as it was given, as `5`. ACTIVATE asks for a default
   that is an expression unevaluated, which names no resource and fails the
-  run, where Meridian asks for what the default gives. None of the 221 known
+  run, where Meridian asks for what the default gives. None of the 218 known
   workflows has a `compute-clusters` or `bucket` input whose default is an
   expression. Start asks the resolver again ([Starting a
   run](#starting-a-run)). What the resolver gives can't be split by the
@@ -1937,7 +1942,7 @@ it fits none, is a combination of its own, as in GitHub Actions. ACTIVATE
 differs for an `include` entry that names no matrix key: it makes it a
 combination of its own, where GitHub Actions adds it to every combination.
 Format 1 keeps ACTIVATE's for now. Whether to take GitHub Actions' as a bug
-fix ([The workflow format](#the-workflow-format)) is open: of the 221
+fix ([The workflow format](#the-workflow-format)) is open: of the 218
 known workflows ([Bug fixes to format 1](#bug-fixes-to-format-1)), none
 has an `include` entry that names no matrix key, nor any `include` at all. An entry also matches the combinations earlier entries made, and
 two values match when they are equal, or a string and a number or a
@@ -3279,6 +3284,110 @@ fall back between. So `ssh:` is deprecated in favor of execution groups:
   host's files and tools. To Meridian it is an inline execution group with
   the `ssh` backend and host isolation.
 - A later format number can remove it.
+
+### The `ssh` backend
+
+A format 1 `ssh:` makes a group of one member of the `ssh` backend, and a
+configured group can name hosts too. It isn't built yet: a member of it
+has `backend_not_built`. The coordinator connects to a host as the
+user's `ssh` would ([Connections](#connections)), and runs the local
+backend there through `meridian host`
+([Backends and isolation](#backends-and-isolation)). Besides those:
+
+- **The binary on the host.** A host of the coordinator's system and
+  architecture runs the coordinator's own binary. It is copied over the
+  connection, once, into the host's cache of binaries by its digest,
+  checked against it there before it is kept, and run from there, so a
+  cluster whose nodes share a home gets it once. A host of another system
+  or architecture runs the same release's binary for it, which the
+  coordinator's machine holds only once the user has asked `meridian` to
+  fetch it, checked against the release's checksums; Meridian fetches
+  nothing by itself, and without it a job there fails, saying how
+  (`ssh_worker_binary_missing`). A host where the worker doesn't run, as
+  one that isn't Linux, macOS or FreeBSD, is `ssh_host_unsupported`.
+- **Reaching the coordinator.** One replica at a time holds a host's
+  connection, under a lease in the store named by a keyed hash of the
+  host and its login, so the store never holds in the clear a host that
+  came from a variable or a password. It asks the host to listen on a
+  socket in the host's sockets directory, named by the same hash, and
+  serves the worker API on what the host forwards, to the attempts placed
+  on that member only, since a forwarded connection has no user the
+  system can name. It first removes a socket that an earlier holder left
+  at the path, over which sshd's default, `StreamLocalBindUnlink no`,
+  won't listen. A host whose sshd forbids forwarding Unix sockets takes
+  no workers (`ssh_forwarding_refused`); Meridian opens no port instead.
+- **Outages.** A connection that drops is dialed again, and the socket
+  forwarded again at the same path, so the host's workers reconnect
+  without being told; meanwhile they run their steps and hold their
+  reports, as any worker cut off does. A check of a placement over a
+  connection that is down is unknown, so a job on a host is never lost to
+  an outage, and a cancel waits for the connection too. A replica that
+  takes a host's connection over, as `meridian resume` does once the
+  process that held it has stopped, wakes the supervisors of the attempts
+  placed on it, which connect again; the grace after a takeover keeps
+  their leases from counting as lapsed meanwhile
+  ([Leases and fencing](#leases-and-fencing)).
+- **A host that can't be reached** as a job is placed is tried four times,
+  as format 1 tries it, each try bounded by the host's `ConnectTimeout`,
+  or 30 seconds, as in format 1. Format 1 waits 2, 4 and 8 seconds
+  between the tries; Meridian waits about 1, 2 and 4, as it does before
+  it dials any host again that it failed to reach. Then its member can't
+  run the job (`ssh_unreachable`), and the job fails
+  (`placement_impossible`), as format 1's step does.
+- **Format 1's keys.** `remoteUser` and `jumpNodeUser` are the user's
+  config's `User` for the host where they're empty, or else the local
+  user; format 1's "your pw username" is the local user here. A
+  `remoteHost` of the form `host:port` is where to connect, as format 1
+  takes it, and `jumpNodeHost` is a host to connect through, its key
+  checked against its own entries in known_hosts. `remoteHost:
+  localhost` is SSH to this machine, like any host's, which needs an sshd
+  here, as ACTIVATE's workspace has one.
+- **`disconnect-timeout`**, how long format 1 lets a step's connection be
+  lost before it fails the step, 300 seconds by default, isn't honoured:
+  a step keeps running through an outage, which is what a worker on the
+  host is for, and a laptop that sleeps through it fails no remote step.
+  The compiler will warn of the key (`ssh_disconnect_timeout_ignored`);
+  none of the known workflows sets it.
+- **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
+  would without its `ssh:`, as format 1 runs it, and as a step's does
+  ([Running steps](#running-steps)). Ready doesn't do that yet: it places
+  such a job on a member with no host, which can't run it.
+- **A step whose `ssh:` names another host** fails
+  (`step_ssh_not_supported`) until the worker can run a step on another
+  host itself.
+
+Where format 1, as ACTIVATE runs it, does otherwise:
+
+- **Host keys.** Meridian checks every host's key against known_hosts,
+  `localhost`'s too, and an unknown key fails: it never trusts one on
+  first use. So `remoteHost: localhost` needs this machine's key in
+  known_hosts, as `ssh localhost` does. ACTIVATE checks host keys as its
+  platform's host-key policy says, against the keys the platform keeps.
+- **Logging in.** Meridian logs in with the user's agent and the key files
+  their config names too, so a key with a passphrase works through the
+  agent. ACTIVATE offers only key files beside a `.pub` that need no
+  passphrase.
+- **Algorithms.** Only those FIPS 140-3 approves
+  ([FIPS 140-3](#fips-140-3)), so a host that offers none of them can't
+  be used.
+- **The user's config** is read whole, through `ssh -G`, so `Match`,
+  `Include` and `ProxyJump` apply, as with `ssh`. ACTIVATE reads part of
+  it, and for a jump host only its name and port.
+- **A run's directory on a host** is in Meridian's state directory there,
+  `~/.local/state/meridian/runs` by default, `localhost`'s too, not
+  ACTIVATE's `~/pw/jobs/<workflow>/<number>`, or for `localhost` the same
+  under `~/remote_pw`, which a few known workflows derive paths from.
+- **Outages.** Steps run through one, and their reports arrive after it.
+  ACTIVATE fails a step once its connection has been lost for
+  `disconnect-timeout`, and leaves its process running.
+- **Cancelling during an outage** reaches the worker once the connection
+  is back. ACTIVATE tries for 10 seconds, and leaves the process running.
+- **One worker runs a job's steps**, so they share its session, and a
+  background process a step leaves is stopped with the step, as on a
+  local member. ACTIVATE starts each step in a session of its own.
+- **A host that kills a session's processes as it ends** takes no workers
+  unless the user lingers (`ssh_worker_would_be_killed`). ACTIVATE's steps
+  there end with their session.
 
 ### Images
 
