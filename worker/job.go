@@ -378,7 +378,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		// A try that can't start fails its step, which isn't tried again:
 		// what stopped it would stop the next.
 		fail := func(more ...problems.Diagnostic) stepEnd {
-			a.finished(workerapi.Event{Step: i, Try: try, Outcome: plan.OutcomeFailure, ExitCode: -1, Diagnostics: append(diags, more...)})
+			a.finished(workerapi.Event{Step: i, Try: try, LastTry: true, Outcome: plan.OutcomeFailure, ExitCode: -1, Diagnostics: append(diags, more...)})
 			end.result.Outcome = plan.OutcomeFailure
 			return end
 		}
@@ -500,7 +500,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		default:
 			retry = !last
 		}
-		a.finished(workerapi.Event{Step: i, Try: try, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(diags, failed, tryDiags)})
+		a.finished(workerapi.Event{Step: i, Try: try, LastTry: outcome == plan.OutcomeFailure && !retry, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(diags, failed, tryDiags)})
 		end.result = plan.StepResult{Outcome: outcome, Outputs: outputs}
 		end.cause = cause
 		if !retry {
@@ -558,7 +558,7 @@ func (a *attempt) notRun(i, try int, end stepEnd, cause stopCause, diags problem
 	case cause == stopJobTimeout:
 		outcome = plan.OutcomeFailure
 	}
-	a.finished(workerapi.Event{Step: i, Try: try, Outcome: outcome, ExitCode: -1, Diagnostics: diags})
+	a.finished(workerapi.Event{Step: i, Try: try, LastTry: outcome == plan.OutcomeFailure, Outcome: outcome, ExitCode: -1, Diagnostics: diags})
 	end.result.Outcome, end.cause = outcome, cause
 	return end
 }
@@ -994,9 +994,11 @@ func (a *attempt) stepEnv(rs *plan.ReadyStep, vars map[string]string) []string {
 }
 
 // finished reports a step's, or its cleanup's, finished event, with its
-// outputs and its problems masked.
+// outputs and its problems masked, and without LastTry in an attempt of a
+// version of the API that doesn't have it.
 func (a *attempt) finished(e workerapi.Event) {
 	e.Time, e.Finished = now(), true
+	e.LastTry = e.LastTry && a.claim.APIVersion >= workerapi.Version2
 	if e.Outputs != nil {
 		masked := make(map[string]string, len(e.Outputs))
 		for name, value := range e.Outputs {

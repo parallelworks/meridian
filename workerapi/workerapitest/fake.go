@@ -105,7 +105,8 @@ type Fake struct {
 	// Claim is what the Fake answers a claim with. Its PlanVersion is the
 	// run's. Its APIVersion, unless a test sets it, is what the Fake
 	// serves the attempt at, as its first claim decides it: the lower of
-	// the worker's and Speaks.
+	// the worker's and Speaks. Its Control, unless a test sets it, is the
+	// Fake's control as of each claim, in an attempt of version 2 or later.
 	Claim workerapi.Claim
 	// Reads is the newest plan version the Fake reads, as a replica's
 	// release does, or plan.Version for 0. It answers 503 for a run of a
@@ -540,9 +541,16 @@ func (f *Fake) handleClaim(w http.ResponseWriter, bearer string, body []byte) {
 		f.Claim.APIVersion = min(req.Speaks(), f.speaks())
 	}
 	f.claimed, f.credential = true, cred
-	// A claim a test sets to a version that isn't one is written as
-	// version 1's, for the worker to refuse.
-	writeJSON(w, max(f.Claim.APIVersion, 1), &f.Claim)
+	// An attempt of version 2 or later is given its control as it is now,
+	// unless a test set the claim's.
+	c := f.Claim
+	if c.APIVersion >= workerapi.Version2 && c.Control == nil {
+		control := f.control
+		c.Control = &control
+	}
+	// What a test sets of the claim is written as it is, for the worker to
+	// refuse what its version doesn't have.
+	writeJSON(w, workerapi.Version, &c)
 }
 
 // speaks returns the newest version of the API f speaks.

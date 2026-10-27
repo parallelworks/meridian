@@ -100,7 +100,9 @@ type Options struct {
 	// surely its last, for the attempt's job: as its plan says when it holds
 	// the step's retry: written out (plan.Step.LastTry), so that a step
 	// that failed marks its run as soon as its event is stored. Nil, or
-	// false, has the store wait for the next event, which shows it.
+	// false, has the store wait for the next event, which shows it. It is
+	// asked of an attempt claimed at version 1 of the worker API only: a
+	// later version's worker says so in the event (workerapi.Event.LastTry).
 	LastTry func(tx *Tx, attempt string, step, try int) bool
 	// ReadOnly opens the store only to read it, as a command that shows
 	// runs does, which mustn't change a store that an earlier release,

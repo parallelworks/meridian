@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Meridian worker API bodies, for runs of plan version 2",
-  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 2: each is one of the $defs, which the API's path says. The API has a version of its own, apart from the plan's: these are the bodies of its newest version, 1, and a member a later version adds says which version that is, so that a body of an earlier version is one without it. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
+  "description": "The bodies of the worker API, as workerapi.Marshal writes them, for runs of plan version 2: each is one of the $defs, which the API's path says. The API has a version of its own, apart from the plan's: these are the bodies of its newest version, 2, and a member a version after 1 adds says which version that is, so that a body of an earlier version is one without it. What they carry of a run, its values, a ready job and the results of the jobs it needs, the plan's schemas describe, which these refer to. Whole numbers are written without a fraction or an exponent, as 2 and never 2.0, 2e0 or -0.0, which decoding refuses though JSON Schema can't tell them from integers; each integer's bounds are its Go type's, as a Go int has 32 bits on some systems.",
   "anyOf": [
     {
       "$ref": "#/$defs/ClaimRequest"
@@ -147,6 +147,10 @@
         },
         "traceParent": {
           "type": "string"
+        },
+        "control": {
+          "description": "Added in worker API version 2. What the coordinator asks of the worker as of the claim, which the worker does as it asks before anything of the job runs. A claim of version 1 has none.",
+          "$ref": "#/$defs/Control"
         }
       },
       "required": ["runID", "attemptID", "apiVersion", "planVersion", "job", "attempt", "leaseSeconds", "heartbeatSeconds", "run", "runDir"],
@@ -248,6 +252,10 @@
           "maximum": 2147483647
         },
         "cleanup": {
+          "type": "boolean"
+        },
+        "lastTry": {
+          "description": "Added in worker API version 2. Set on the finished event of a step's try that failed, when the step won't be tried again. An event of version 1 has none.",
           "type": "boolean"
         },
         "outcome": {

@@ -3001,13 +3001,15 @@ for any other only once they have (`plan.Plan.CancelPath`).
   the first failure marks the run, in the transaction that stores it, and
   every running attempt's control poll then says so, as a new attempt's
   first one does. A failed step's events mark it as they are stored: at
-  once for a cleanup, which is never tried again, and for a try that the
-  step's `retry:`, written out, says is its last; and otherwise once the
-  next event shows the step wasn't tried again. A job that ends failed
-  marks it as it ends. An attempt that ends for a reason its job's
-  `retry:` lists, as one whose worker was lost, which another attempt may
-  follow, doesn't mark it: the job marks it once its last attempt has
-  ended, failed. Format 1 doesn't count one failure: a job whose
+  once for a cleanup, which is never tried again, and for a try its
+  worker says was its step's last, as a worker of the worker API's
+  version 2 does. Of a worker of version 1, which doesn't say, a try that
+  the step's `retry:`, written out, says is its last marks it at once,
+  and another once the next event shows the step wasn't tried again. A
+  job that ends failed marks it as it ends. An attempt that ends for a
+  reason its job's `retry:` lists, as one whose worker was lost, which
+  another attempt may follow, doesn't mark it: the job marks it once its
+  last attempt has ended, failed. Format 1 doesn't count one failure: a job whose
   `if:` fails to evaluate, which it fails without saying so, where
   Meridian fails it through Ready's diagnostics, and marks the run. The
   step ends cancelled,
@@ -3270,10 +3272,14 @@ and a platform that embeds Meridian serve the same API.
   reads.
 - **Heartbeat:** renew the lease.
 - **Control:** a long poll that delivers cancellation and `early-cancel`.
-  The worker reads it once, answered at once, before the job's first step,
-  so that a stop asked before the claim applies from that step, as format
-  1 starts a job whose context has already ended; a coordinator that
-  doesn't answer within a few seconds leaves it to the polls after.
+  A stop asked before the claim applies from the job's first step, as
+  format 1 starts a job whose context has already ended. From version 2,
+  the claim's answer holds the control as it is then, which the worker
+  does as it asks before anything of the job runs, and its polls go on
+  from it, so a slow coordinator can't let the first step start. A worker
+  of version 1 reads it with a first poll, answered at once, before the
+  job's first step, and a coordinator that doesn't answer that poll
+  within a few seconds leaves the stop to the polls after.
 - **Step events:** a step started, or finished with its exit code.
 - **Logs:** each step's output, uploaded as a stream with byte offsets, so
   an interrupted upload resumes without duplicating or losing lines. An
@@ -3330,12 +3336,14 @@ The API has a version of its own, apart from the plan's. The plan's
 version says what a job means; the API's says what a worker and a
 coordinator say to each other.
 
-- **One number.** The API's version is one integer, 1 so far, and every
-  change to the API raises it: a path, a member of a body, or a kind of
-  event, added. Neither side reads a member it doesn't know, so a major
-  and a minor number, which tell an addition a reader can skip from one it
-  can't, would say nothing more. The paths stay under `/v1/`: a version is
-  served beside every version before it, not in place of them.
+- **One number.** The API's version is one integer, and every change to
+  the API raises it: a path, a member of a body, or a kind of event,
+  added. Version 2 added a failed try's event saying whether it was its
+  step's last, and the attempt's control in the claim's answer. Neither
+  side reads a member it doesn't know, so a major and a minor number,
+  which tell an addition a reader can skip from one it can't, would say
+  nothing more. The paths stay under `/v1/`: a version is served beside
+  every version before it, not in place of them.
 - **Each side speaks every version up to its own.** A worker says, as it
   claims, the newest version it speaks; a worker of a release from before
   the API had a version says none, and speaks version 1. The coordinator

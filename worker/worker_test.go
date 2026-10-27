@@ -792,6 +792,9 @@ func TestEarlyCancel(t *testing.T) {
 // step that comes to run past a deadline does, so its cleanup runs, and
 // the job ends failure, with the reason timeout; and after a job of the
 // run failed, a step whose early-cancel: is any-job-failed doesn't run.
+// It is so for a coordinator of each version of the API: of version 2,
+// which gives the control in the claim, and of version 1, whose first
+// control poll the worker waits for.
 func TestFirstControl(t *testing.T) {
 	t.Parallel()
 	plain := command("touch $PW_JOB_DIR/ran")
@@ -837,40 +840,71 @@ func TestFirstControl(t *testing.T) {
 			plan.OutcomeCancelled, "",
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			f := workerapitest.NewFake(t, tc.job)
-			f.SetControl(tc.control)
-			// The first poll is answered after the first step would have
-			// started, were it not waiting for it.
-			var requests counter
-			f.Fault = func(r *http.Request) workerapitest.Fault {
-				if r.URL.Path == workerapi.PathControl && requests.next(r.URL.Path) == 1 {
-					// The delay is the test: a coordinator that answers a
-					// little late, well within the worker's wait.
-					time.Sleep(testTiming.firstControl / 5) //nolint:forbidigo // the delay is the test
+		for _, version := range []int{1, workerapi.Version2} {
+			t.Run(tc.name+", version "+strconv.Itoa(version), func(t *testing.T) {
+				t.Parallel()
+				f := workerapitest.NewFake(t, tc.job)
+				f.Speaks = version
+				f.SetControl(tc.control)
+				// The first poll is answered after the first step would
+				// have started, were it not waiting for it.
+				var requests counter
+				f.Fault = func(r *http.Request) workerapitest.Fault {
+					if r.URL.Path == workerapi.PathControl && requests.next(r.URL.Path) == 1 {
+						// The delay is the test: a coordinator that answers
+						// a little late, well within the worker's wait.
+						time.Sleep(testTiming.firstControl / 5) //nolint:forbidigo // the delay is the test
+					}
+					return workerapitest.Answer
 				}
-				return workerapitest.Answer
-			}
-			if err := runWorker(t, f, t.Context(), Config{}); err != nil {
-				t.Fatal(err)
-			}
-			checkEvents(t, f, tc.events...)
-			checkEnd(t, f, tc.outcome, tc.reason)
-			if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "ran")); err == nil {
-				t.Error("the first step ran")
-			}
-		})
+				if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+					t.Fatal(err)
+				}
+				checkEvents(t, f, tc.events...)
+				checkEnd(t, f, tc.outcome, tc.reason)
+				if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "ran")); err == nil {
+					t.Error("the first step ran")
+				}
+			})
+		}
 	}
 }
 
-// TestFirstControlHangs checks that a first control poll the coordinator
-// doesn't answer, as a connection that is half open would hold it,
-// doesn't hold the job: its first step starts once the worker has waited
-// a while for it.
+// TestClaimControl checks that what the coordinator asked before the
+// claim, given in the claim in an attempt of version 2 of the API, applies
+// from the job's first step however slowly the coordinator answers its
+// control polls: a stopped job's first step never starts, as a step of a
+// job whose context has already ended doesn't in format 1. A worker of
+// version 1, which waits for its first poll only a while, starts it, as
+// TestFirstControlHangs shows.
+func TestClaimControl(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("touch $PW_JOB_DIR/ran")))
+	f.SetControl(workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		if r.URL.Path == workerapi.PathControl {
+			return workerapitest.Hang
+		}
+		return workerapitest.Answer
+	}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "finished 0.0 cancelled -1")
+	checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
+	if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "ran")); err == nil {
+		t.Error("the first step of a stopped job ran")
+	}
+}
+
+// TestFirstControlHangs checks that a first control poll that a
+// coordinator of version 1 of the API doesn't answer, as a connection that
+// is half open would hold it, doesn't hold the job: its first step starts
+// once the worker has waited a while for it.
 func TestFirstControlHangs(t *testing.T) {
 	t.Parallel()
 	f := workerapitest.NewFake(t, newJob(command("echo ran")))
+	f.Speaks = 1
 	var requests counter
 	f.Fault = func(r *http.Request) workerapitest.Fault {
 		if r.URL.Path == workerapi.PathControl && requests.next(r.URL.Path) == 1 {
@@ -1727,6 +1761,82 @@ func TestAPIVersion(t *testing.T) {
 		}
 		if requests := f.Requests(); len(requests) > 1 {
 			t.Errorf("a claim served at version %d: the worker made the requests %v", served, requests)
+		}
+	}
+
+	// A claim of version 1 with a control, which version 1 doesn't have.
+	f = workerapitest.NewFake(t, newJob(command("true")))
+	f.Claim.APIVersion, f.Claim.Control = 1, &workerapi.Control{Version: 1}
+	err = runWorker(t, f, t.Context(), Config{})
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.CoordinatorAnswerInvalid.Code() {
+		t.Errorf("a claim of version 1 with a control got %v", err)
+	}
+	if requests := f.Requests(); len(requests) > 1 {
+		t.Errorf("a claim of version 1 with a control: the worker made the requests %v", requests)
+	}
+}
+
+// TestLastTry checks that a worker of version 2 of the API says, of a
+// failed try, whether it was its step's last, wherever the try fails: so
+// of a step without a retry:, of a retry:'s last try but not the ones
+// before it, of a step past its timeout:, which isn't tried again, of a
+// step whose if: fails to evaluate, which can't start, and of steps the
+// job's deadline fails, the one it stops and one that comes to run after
+// it; not of a step that fails and succeeds, with ignore-errors:, or of a
+// cleanup. A worker served at version 1 says it of none, which version 1
+// doesn't have. A try that failed and doesn't say so would mark its run
+// for early-cancel: any-job-failed only as its job ends.
+func TestLastTry(t *testing.T) {
+	t.Parallel()
+	once := command("exit 1")
+	retried := command("exit 1")
+	retried.If = cond("failure()")
+	retried.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
+	ignored := command("exit 1")
+	ignored.If, ignored.IgnoreErrors = cond("failure()"), plan.Literal(true)
+	timedOut := command("sleep 10")
+	timedOut.If, timedOut.Timeout = cond("failure()"), number(1)
+	cleanup := command("true")
+	cleanup.If, cleanup.Cleanup = cond("failure()"), plan.Literal("exit 1")
+	badIf := command("true")
+	badIf.If = cond("fromJSON('not json')")
+	// Past the job's deadline: the step it stops, and one after it whose
+	// if: is true, but that doesn't outlive the deadline, so never starts.
+	stopped := command("sleep 30")
+	afterDeadline := command("true")
+	afterDeadline.If = cond("failure()")
+	deadline := newJob(stopped, afterDeadline)
+	deadline.TimeoutSeconds = 1
+	for _, tc := range []struct {
+		name string
+		job  *plan.ReadyJob
+		want []string
+	}{
+		{"steps", newJob(once, retried, ignored, timedOut, cleanup, badIf), []string{"0.0", "1.1", "3.0", "5.0"}},
+		{"the job's deadline", deadline, []string{"0.0", "1.0"}},
+	} {
+		for _, version := range []int{1, workerapi.Version2} {
+			t.Run(tc.name+", version "+strconv.Itoa(version), func(t *testing.T) {
+				t.Parallel()
+				f := workerapitest.NewFake(t, tc.job)
+				f.Speaks = version
+				if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+					t.Fatal(err)
+				}
+				var got []string
+				for _, e := range f.Events() {
+					if e.LastTry {
+						got = append(got, fmt.Sprintf("%d.%d", e.Step, e.Try))
+					}
+				}
+				want := tc.want
+				if version < workerapi.Version2 {
+					want = nil
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("the events of the tries %v say they were their steps' last, not %v:\n%s", got, want, strings.Join(stepEvents(t, f), "\n"))
+				}
+			})
 		}
 	}
 }

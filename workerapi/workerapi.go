@@ -106,7 +106,8 @@
 // Every request is safe to repeat, so a worker repeats one that failed
 // without an answer, or with a 5xx or 429 status, with backoff, and a
 // report is never stored twice. A claim repeated with the same bootstrap
-// token and credential is given the same Claim. Events carry sequence
+// token and credential is given the same Claim, but for its Control, which
+// is the attempt's as of each claim. Events carry sequence
 // numbers, from 1 for an attempt's first, and the coordinator stores each
 // once, in order: of events that skip one, it stores those before the gap,
 // or none of them, and says which by the sequence number it expects
@@ -123,11 +124,12 @@
 // upload of a step the attempt's job doesn't have, and a Complete that
 // says what only the coordinator says (plan.JobResult's NeedsFailed and
 // Cancelled), that has a Problem but with the outcome failure and the
-// reason setup-failed, or whose Seq is behind the events stored. A log
-// upload of more than MaxLogUpload bytes is 413 Content Too Large. A path
-// the API doesn't have is 404, and one of its paths with another method
-// 405, with an Allow header. The suite in package workerapitest checks a
-// coordinator against all of this.
+// reason setup-failed, or whose Seq is behind the events stored; and so
+// are events with a member the attempt's version doesn't have, as LastTry
+// in an attempt of version 1. A log upload of more than MaxLogUpload bytes
+// is 413 Content Too Large. A path the API doesn't have is 404, and one of
+// its paths with another method 405, with an Allow header. The suite in
+// package workerapitest checks a coordinator against all of this.
 //
 // While the coordinator can't be reached, a worker keeps running its
 // steps, spools its logs to disk up to a limit, keeps its events in
@@ -158,7 +160,13 @@ import (
 
 // Version is the newest version of the API this release speaks: it speaks
 // every version from 1 to it.
-const Version = 1
+const Version = Version2
+
+// Version2 is the version of the API that added Event.LastTry, which says
+// whether a failed try was its step's last, and Claim.Control, the
+// attempt's control as of its claim. Each side sends them only in an
+// attempt of version 2 or later.
+const Version2 = 2
 
 // Marshal encodes a body as the API writes it: encoding/json/v2's
 // defaults, with mappings in the order of their keys. A nil list or
@@ -198,9 +206,11 @@ const (
 	// worker, answered with a Control. Its query names the last version
 	// the worker has seen (QueryVersion), and the coordinator answers once
 	// it has a newer one, or after ControlWaitSeconds with the same one.
-	// The worker polls again at once. Its first poll names -1, for none,
-	// which the coordinator answers at once, with the control as it is:
-	// the worker reads its first control so before the job's first step
+	// The worker polls again at once. In an attempt of version 2 or later,
+	// its first poll names the version of the claim's control
+	// (Claim.Control). In one of version 1, it names -1, for none, which
+	// the coordinator answers at once, with the control as it is: the
+	// worker reads its first control so before the job's first step
 	// (Control).
 	PathControl = "/v1/control"
 	// PathEvents reports step events: Events, answered with an EventsAck.
@@ -455,6 +465,11 @@ type Claim struct {
 	// TraceParent is the W3C traceparent of the attempt's span, which the
 	// worker continues, or "".
 	TraceParent string `json:"traceParent,omitempty"`
+	// Control is what the coordinator asks of the worker as of this claim,
+	// in an attempt of version 2 or later, and nil in one of version 1: the
+	// worker does as it asks before anything of the job runs, and polls
+	// for what comes after it (PathControl).
+	Control *Control `json:"control,omitzero"`
 }
 
 // An EnvVar is a variable a platform gives a job's steps (Claim.Env).
@@ -478,16 +493,18 @@ type Container struct {
 
 // Control is what the coordinator asks of a worker.
 //
-// What it asked before the claim applies from the job's first step: once
-// it has claimed the attempt, the worker reads its first control, which
-// the coordinator answers at once (PathControl), and does as it asks
-// before the first step starts, as format 1 starts a job whose context
-// has already ended, as when the run was cancelled, or its timeout
-// passed, or a job of it failed, before the attempt was placed. A
-// coordinator puts what it has asked of the attempt's run in the control
-// as it makes the attempt. The worker waits a few seconds at most for
-// that first answer, and then starts the job's steps without it, and does
-// as the control asks once a poll has it.
+// What it asked before the claim applies from the job's first step, as
+// format 1 starts a job whose context has already ended, as when the run
+// was cancelled, or its timeout passed, or a job of it failed, before the
+// attempt was placed. A coordinator puts what it has asked of the
+// attempt's run in the control as it makes the attempt. In an attempt of
+// version 2 or later, the claim holds the control (Claim.Control), and
+// the worker does as it asks before the first step starts. In one of
+// version 1, once it has claimed the attempt, the worker reads its first
+// control with a poll the coordinator answers at once (PathControl), and
+// does as it asks before the first step starts. It waits a few seconds at
+// most for that first answer, and then starts the job's steps without it,
+// and does as the control asks once a poll has it.
 type Control struct {
 	// Version grows each time the coordinator asks something more.
 	Version int64 `json:"version"`
@@ -551,6 +568,13 @@ type Event struct {
 	Step    int  `json:"step"`
 	Try     int  `json:"try,omitzero"`
 	Cleanup bool `json:"cleanup,omitzero"`
+	// LastTry is set on the finished event of a step's try that failed,
+	// when the step won't be tried again, in an attempt of version 2 or
+	// later: so the coordinator knows at once that the step has failed,
+	// whatever its retry: says, as format 1 counts its job failed from
+	// then. A try the step tries again has it unset, and so has every
+	// event of an attempt of version 1.
+	LastTry bool `json:"lastTry,omitzero"`
 	// Outcome, ExitCode, Outputs and Diagnostics are a finished event's:
 	// the step's outcome as its job counts it; its command's exit status,
 	// or -1 if it has none, as for a command a signal ended or a uses:

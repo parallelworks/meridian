@@ -24,7 +24,7 @@ var since = map[string]int{
 	"Claim.attempt": 1, "Claim.group": 1, "Claim.member": 1,
 	"Claim.leaseSeconds": 1, "Claim.heartbeatSeconds": 1, "Claim.selfFencing": 1,
 	"Claim.run": 1, "Claim.needs": 1, "Claim.runDir": 1, "Claim.env": 1, "Claim.retry": 1,
-	"Claim.container": 1, "Claim.traceParent": 1,
+	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2,
 	"EnvVar.value": 1, "EnvVar.secret": 1,
 	"Container.runtime": 1, "Container.image": 1,
 
@@ -33,7 +33,7 @@ var since = map[string]int{
 
 	"Events.events": 1,
 	"Event.seq":     1, "Event.time": 1, "Event.finished": 1, "Event.step": 1, "Event.try": 1,
-	"Event.cleanup": 1, "Event.outcome": 1, "Event.exitCode": 1, "Event.outputs": 1,
+	"Event.cleanup": 1, "Event.lastTry": 2, "Event.outcome": 1, "Event.exitCode": 1, "Event.outputs": 1,
 	"Event.diagnostics": 1,
 	"EventsAck.seq":     1,
 
