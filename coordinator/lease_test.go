@@ -62,8 +62,6 @@ type leaseDriver struct {
 	// step; an attempt beyond them completes with success.
 	silent, started []bool
 	placed          int
-	// ctx is the test's, which its workers outlive.
-	ctx context.Context //nolint:containedctx // a test's, for the workers it starts
 	// credentials are those of the silent workers, by attempt.
 	credentials map[string]string
 }
@@ -157,10 +155,10 @@ func openLease(t *testing.T, clock *fakeClock, silent, started []bool) (*Coordin
 // workers do as silent and started say.
 func openLeaseWith(t *testing.T, opts Options, silent, started []bool) (*Coordinator, *leaseDriver) {
 	t.Helper()
-	d := &leaseDriver{
-		testDriver: newTestDriver(), silent: silent, started: started, credentials: map[string]string{},
-		ctx: context.WithoutCancel(t.Context()),
-	}
+	d := &leaseDriver{testDriver: newTestDriver(), silent: silent, started: started, credentials: map[string]string{}}
+	// Its workers, silent or not, run with the test's context, as open
+	// gives a testDriver's.
+	d.ctx = context.WithoutCancel(t.Context())
 	opts.Drivers = map[string]backend.Driver{testBackend: d, "ssh": d}
 	c := open(t, opts)
 	d.c = c
