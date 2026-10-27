@@ -178,7 +178,11 @@ func mismatch(format string, args ...any) error {
 // variable can have changed since, which Start evaluates in the part's
 // place, in the order the values read each other, so that what reads the
 // part reads what it is; and an env: value that a value reads it evaluates
-// before the value, in that order too.
+// before the value, in that order too. A child run's env: is laid over the
+// environment of the step that calls it (plan.ParentRun.Env), whose
+// variables the plan doesn't hold it reads from the secret record
+// (plan.Record.Inherited), and what of the step is private is so in the
+// values it gives, a secret derived (plan.ParentRun.Private and Secrets).
 //
 // It then checks the run's shape against what Create decided: each input's
 // condition that read a variable or a password (plan.Run.Decisions), with
@@ -247,6 +251,9 @@ func Start(ctx context.Context, p *plan.Plan, in StartInput) (*StartResult, prob
 	}
 	decided, err := recordFor(p.Run.Decisions, in.Record.Decisions, "decision")
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := st.inheritedEnv(); err != nil {
 		return nil, nil, err
 	}
 	if err := st.resolve(defs); err != nil {
@@ -326,6 +333,12 @@ type starter struct {
 	secretVariables map[string]bool
 	// envKeys are the workflow's env: names, in order.
 	envKeys []string
+	// inherited is the environment of the step that calls a child run,
+	// which its env: is laid over (plan.ParentRun.Env), with what the
+	// secret record holds of it, and heldEnv names the variables the
+	// record holds, and whether each is a secret.
+	inherited map[string]string
+	heldEnv   map[string]bool
 	// diags are the problems Start found of its own, beside those the
 	// input resolver reports.
 	diags problems.Diagnostics
@@ -546,7 +559,7 @@ func (st *starter) resolve(defs map[string]any) error {
 		}
 		contexts[name] = m
 	}
-	opts := Options{Inputs: st.in.Inputs, Contexts: contexts}
+	opts := Options{Inputs: st.in.Inputs, Contexts: contexts, Parent: startParent(p.Run.Parent)}
 	st.envKeys = slices.Sorted(maps.Keys(p.Run.Env))
 	var envReads [][]string
 	for _, k := range st.envKeys {
@@ -579,7 +592,7 @@ func (st *starter) resolve(defs map[string]any) error {
 		st.demanded, st.envPatterns = map[string]demandedEnv{}, map[string][][]string{}
 		st.s.settle, st.s.envReadsOf = st.settle, st.envReadsOf
 		st.s.run = plan.RunValues{
-			Format: p.Run.Format, Org: st.org, Vars: st.vars, Env: maps.Clone(env),
+			Format: p.Run.Format, Org: st.org, Vars: st.vars, Env: st.envOver(env),
 			Remote: maps.Clone(p.Run.Remote), Sessions: maps.Clone(p.Run.SessionNames),
 		}
 		for _, k := range st.envKeys {
@@ -592,6 +605,20 @@ func (st *starter) resolve(defs map[string]any) error {
 		}
 		st.r = newInputResolver(doc, submitted, opts)
 		st.r.ctx, st.r.start, st.r.final, st.r.means = st.ctx, st.s, true, st.in.Record.Means
+		// What the step that calls a child run gave it that is private is
+		// so, as long as the workflow's env: doesn't lay its own over it.
+		for k, secret := range st.heldEnv {
+			if _, ok := p.Run.Env[k]; ok {
+				continue
+			}
+			st.r.marks.Add([]string{"env", k})
+			if name := plan.JoinPath("env", k); secret {
+				st.s.secrets.Add([]string{"env", k})
+				st.s.madeSecret[name] = true
+			} else {
+				st.s.madePrivate[name] = true
+			}
+		}
 		// What a round evaluated of env: before reads as it did.
 		for k := range envPrivate {
 			st.r.marks.Add([]string{"env", k})
@@ -669,6 +696,53 @@ func (st *starter) resolve(defs map[string]any) error {
 		}
 		return nil
 	}
+}
+
+// inheritedEnv reads the environment of the step that calls a child run,
+// which its env: is laid over: what the plan holds of it, and the rest,
+// which the plan names, from the secret record (plan.Record.Inherited).
+// It returns an error (ErrMismatch) for a record that doesn't hold what
+// the plan names, or holds another, and for one that holds what a step
+// gave a run that no step calls.
+func (st *starter) inheritedEnv() error {
+	parent := st.p.Run.Parent
+	if parent == nil {
+		if st.in.Record.Inherited != nil {
+			return mismatch("the secret record holds what a step gave the run, which no step calls")
+		}
+		return nil
+	}
+	var given map[string]string
+	if in := st.in.Record.Inherited; in != nil {
+		given = in.Env
+	}
+	st.heldEnv = startParent(parent).held()
+	held, err := recordFor(slices.Sorted(maps.Keys(st.heldEnv)), given, "variable of the environment of the step that calls the run")
+	if err != nil {
+		return err
+	}
+	st.inherited = maps.Clone(parent.Env)
+	if st.inherited == nil {
+		st.inherited = map[string]string{}
+	}
+	maps.Copy(st.inherited, held)
+	return nil
+}
+
+// envOver returns the run's env as a round of Start starts: the workflow's
+// env: values evaluated so far, env, over the environment of the step that
+// calls a child run, but for the variables the env: lays its own over,
+// which read as not evaluated until they are.
+func (st *starter) envOver(env map[string]string) map[string]string {
+	out := maps.Clone(st.inherited)
+	if out == nil {
+		out = map[string]string{}
+	}
+	for _, k := range st.envKeys {
+		delete(out, k)
+	}
+	maps.Copy(out, env)
+	return out
 }
 
 // reportLeft reports what is left once Start can evaluate nothing more:

@@ -63,6 +63,22 @@ type Record struct {
 	// Jobs are what each job ended with that is private, by the key of
 	// the job or of its matrix instance (JobResult.Split).
 	Jobs map[string]JobRecord `json:"jobs,omitempty"`
+	// Inherited is what a child run has of the step that calls it that its
+	// plan doesn't hold (Run.Parent), or nil. Version 2.
+	Inherited *Inherited `json:"inherited,omitzero"`
+}
+
+// Inherited is what a child run's secret record holds of the step that
+// calls it.
+type Inherited struct {
+	// Env holds the variables of the step's environment that the plan
+	// doesn't hold, which ParentRun.Private and Secrets name, by name.
+	Env map[string]string `json:"env,omitempty"`
+	// Masked are the strings the step's worker masks, as a Masker takes
+	// them: the texts of the secrets of the run that calls it, and what its
+	// job and step made from one, which the child's jobs mask too, as
+	// format 1 has a child mask its caller's secrets.
+	Masked []string `json:"masked,omitempty"`
 }
 
 // A JobRecord is what the secret record holds of how a job ended: the
@@ -251,6 +267,11 @@ func DecodeRecord(data []byte) (*Record, error) {
 	}
 	if _, ok := r.Submitted.Get().(map[string]any); !ok && !r.Submitted.IsZero() {
 		return nil, fmt.Errorf("%w: the secret record: what was submitted isn't a mapping", ErrMalformed)
+	}
+	if r.Inherited != nil && r.Version < 2 {
+		// What a later version added isn't its earlier versions', which
+		// their schemas refuse.
+		return nil, fmt.Errorf("%w: the secret record of version %d has what version 2 adds", ErrMalformed, r.Version)
 	}
 	return r, nil
 }

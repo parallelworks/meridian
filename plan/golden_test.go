@@ -69,6 +69,12 @@ func fullPlan(t testing.TB) *plan.Plan {
 			Variables:    []string{"org.NAME", "vars.H"},
 			Permissions:  []string{"*"},
 			Limits:       plan.Limits{MaxInstances: 10},
+			Parent: &plan.ParentRun{
+				Run: "7", Job: "deploy#1", Step: 2, Try: 1, Root: "3", Depth: 2,
+				Env:     map[string]string{"STAGE": "prod", "PW_MATRIX_INDEX": "1"},
+				Private: []string{"env.REGION", "inputs.region"},
+				Secrets: []string{"env.TOKEN", "inputs.creds.key"},
+			},
 		},
 		Jobs: []plan.Job{{
 			Key:  "build",
@@ -204,6 +210,10 @@ var goldens = []golden{
 	{"record.json", reflect.TypeFor[plan.Record](), "plan/schema/2/record.schema.json", func(t testing.TB) [][]byte {
 		r := sampleRecord()
 		r.Version = plan.Version
+		r.Inherited = &plan.Inherited{
+			Env:    map[string]string{"REGION": "east", "TOKEN": "t0k3n"},
+			Masked: []string{"t0k3n", "hunter2"},
+		}
 		return [][]byte{encoded(t, plan.EncodeRecord, r)}
 	}},
 	{"jobresult.json", reflect.TypeFor[plan.JobResult](), "plan/schema/2/jobresult.schema.json", func(t testing.TB) [][]byte {

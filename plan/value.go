@@ -217,36 +217,51 @@ func (v Value) EvalMarked(scope expr.Scope) (out any, marked bool, err error) {
 // read of the values scope marks, as expr.Template.EvalRead does: whether
 // what it gives is to be masked, and whether it is private.
 func (v Value) EvalRead(scope expr.Scope) (out any, read expr.Read, err error) {
-	return v.evalLeaves(scope, nil)
+	return v.evalLeaves(scope, nil, nil)
 }
 
 // evalLeaves evaluates the Value as EvalRead does, and calls leaf, if it
 // isn't nil, with what each of its templates gives and read, and what each
 // expression in one gives and read (expr.Template.EvalParts), so that what
 // a template, or an expression in it, that read a secret gave can be told
-// from what the rest did.
-func (v Value) evalLeaves(scope expr.Scope, leaf func(out any, read expr.Read)) (out any, read expr.Read, err error) {
-	out, err = evalValue(v.v, scope.Budgeted(), &read, leaf)
+// from what the rest did; and placed, if it isn't nil, with each
+// template's path in the Value, the keys and the indexes that lead to it,
+// and what it read.
+func (v Value) evalLeaves(scope expr.Scope, leaf func(out any, read expr.Read), placed func(path []string, read expr.Read)) (out any, read expr.Read, err error) {
+	e := valueEval{scope: scope.Budgeted(), read: &read, leaf: leaf, placed: placed}
+	out, err = e.eval(v.v, nil)
 	return out, read, err
 }
 
-// evalValue evaluates the templates in v, notes in read what they read of
-// the values scope marks, and calls leaf, if it isn't nil, for each, and
-// for each expression of a template of text and expressions.
-func evalValue(v any, scope expr.Scope, read *expr.Read, leaf func(any, expr.Read)) (any, error) {
+// A valueEval evaluates the templates in a Value (evalLeaves).
+type valueEval struct {
+	scope  expr.Scope
+	read   *expr.Read
+	leaf   func(any, expr.Read)
+	placed func([]string, expr.Read)
+}
+
+// eval evaluates the templates in v, at path in the Value, notes in read
+// what they read of the values scope marks, and calls leaf, if it isn't
+// nil, for each, and for each expression of a template of text and
+// expressions, and placed, if it isn't nil, for each, with its path.
+func (e *valueEval) eval(v any, path []string) (any, error) {
 	switch v := v.(type) {
 	case *expr.Template:
-		out, r, err := v.EvalParts(scope, leaf)
-		*read = read.Or(r)
-		if _, alone := v.Expr(); err == nil && leaf != nil && !alone {
-			leaf(out, r)
+		out, r, err := v.EvalParts(e.scope, e.leaf)
+		*e.read = e.read.Or(r)
+		if _, alone := v.Expr(); err == nil && e.leaf != nil && !alone {
+			e.leaf(out, r)
+		}
+		if err == nil && e.placed != nil {
+			e.placed(path, r)
 		}
 		return out, err
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
 			var err error
-			if out[i], err = evalValue(item, scope, read, leaf); err != nil {
+			if out[i], err = e.eval(item, e.at(path, strconv.Itoa(i))); err != nil {
 				return nil, err
 			}
 		}
@@ -255,13 +270,22 @@ func evalValue(v any, scope expr.Scope, read *expr.Read, leaf func(any, expr.Rea
 		out := make(map[string]any, len(v))
 		for k, item := range jsonvalue.Sorted(v) {
 			var err error
-			if out[k], err = evalValue(item, scope, read, leaf); err != nil {
+			if out[k], err = e.eval(item, e.at(path, k)); err != nil {
 				return nil, err
 			}
 		}
 		return out, nil
 	}
 	return v, nil
+}
+
+// at returns path with key after it, when something notes the templates'
+// paths, and nil otherwise.
+func (e *valueEval) at(path []string, key string) []string {
+	if e.placed == nil {
+		return nil
+	}
+	return append(slices.Clip(path), key)
 }
 
 // Exprs returns every expression in the Value.

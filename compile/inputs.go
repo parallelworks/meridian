@@ -194,6 +194,10 @@ type Options struct {
 	// sessions fails to create a run (resolver_missing), unless Contexts
 	// gives the sessions context, as a caller that knows it does.
 	Sessions Sessions
+	// Parent is the step that calls the workflow, for a child run's
+	// Create, or nil for a run no step calls. What the run is submitted is
+	// the step's with:, but for its $yaml, $host and $thumbnail.
+	Parent *Parent
 }
 
 // definitionsPath is where a workflow defines its inputs.
@@ -326,6 +330,7 @@ func (r *inputResolver) fill() {
 	for _, f := range r.fields {
 		r.markPassword(f)
 	}
+	r.holdGiven()
 	r.checkJSON(r.values)
 	r.checkUnknownInputs()
 	for _, f := range r.fields {

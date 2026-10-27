@@ -69,6 +69,14 @@ func (r *inputResolver) taintInputs() {
 		r.taint.add(path)
 		r.secretTaint.add(path)
 	}
+	// What is held already: what the step that calls the run gave it that
+	// is private (holdGiven).
+	for _, p := range r.held {
+		r.taint.add(p.path)
+		if p.kind != heldPrivate {
+			r.secretTaint.add(p.path)
+		}
+	}
 	// Each string's relative references, as it is found, which can find
 	// more.
 	for i := 0; i < len(r.taintOrder); i++ {
