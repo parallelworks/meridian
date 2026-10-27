@@ -1,7 +1,8 @@
 description: >-
   A need on any instance of a matrix job is met once one instance
   succeeds, and the job that needs it reads that instance's result; the
-  matrix job fails, as one of its instances did, and the run with it.
+  matrix job, which doesn't fail fast, fails, as one of its instances did,
+  and the run with it.
 source: Meridian
 expect:
   run:
