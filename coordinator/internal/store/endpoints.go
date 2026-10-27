@@ -73,6 +73,16 @@ UNION ALL SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'grace')
 	return timeOf(from), err
 }
 
+// EndpointHeld reports whether a process holds the endpoint named name now
+// (HoldEndpoint), as the lock on its file says, without taking it for
+// longer than it takes to ask. On a system without file locks, it fails.
+func (s *Store) EndpointHeld(name string) (bool, error) {
+	if !endpointName.MatchString(name) {
+		return false, fmt.Errorf("store: %q isn't an endpoint's name", name)
+	}
+	return flock.Held(s.file + "." + name + ".lock")
+}
+
 // A Hold is an endpoint that this process holds, until it releases it,
 // closes the store, or ends. The store keeps it, so that a Hold dropped
 // without Release keeps holding the endpoint.

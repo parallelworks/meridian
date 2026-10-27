@@ -55,6 +55,11 @@ type RunStatus struct {
 	CreatedAt time.Time
 	StartedAt time.Time
 	EndedAt   time.Time
+	// StoppedAt is when the run was stopped early, as by Cancel, and
+	// StopReason why, cancelled or timeout, or the zero time and "" for
+	// one that hasn't been.
+	StoppedAt  time.Time
+	StopReason plan.Reason
 	// Diagnostics are the run's problems: Start's, and the coordinator's.
 	// Runs gives none.
 	Diagnostics problems.Diagnostics
@@ -65,7 +70,8 @@ func statusOf(r *store.Run) *RunStatus {
 	return &RunStatus{
 		ID: r.ID, State: RunState(r.State), Outcome: r.Outcome, Reason: r.Reason, RunDir: r.RunDir,
 		Name: r.Name, Location: r.Location, PlanVersion: r.PlanVersion,
-		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, EndedAt: r.EndedAt, Diagnostics: r.Diagnostics,
+		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
+		StoppedAt: r.StoppedAt, StopReason: r.StopReason, Diagnostics: r.Diagnostics,
 	}
 }
 
@@ -104,6 +110,7 @@ func (c *Coordinator) Runs(ctx context.Context, limit int) ([]RunStatus, error) 
 			ID: r.ID, State: RunState(r.State), Outcome: r.Outcome, Reason: r.Reason, RunDir: r.RunDir,
 			Name: r.Name, Location: r.Location, PlanVersion: r.PlanVersion,
 			CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
+			StoppedAt: r.StoppedAt, StopReason: r.StopReason,
 		}
 	}
 	return out, nil
@@ -315,6 +322,13 @@ func (c *Coordinator) HoldEndpoint(ctx context.Context, name, holder string) (*E
 		return nil, err
 	}
 	return &EndpointHold{h: h}, nil
+}
+
+// EndpointHeld reports whether a process, this one or another, holds the
+// endpoint named name now (HoldEndpoint), without taking it: as whether a
+// coordinator of the store that serves its workers lives.
+func (c *Coordinator) EndpointHeld(name string) (bool, error) {
+	return c.store.EndpointHeld(name)
 }
 
 // Release stops holding the endpoint, even if ctx has ended.

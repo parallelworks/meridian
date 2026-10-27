@@ -145,3 +145,29 @@ func TestHoldDropped(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestEndpointHeld checks that EndpointHeld says whether a process holds an
+// endpoint, without taking it.
+func TestEndpointHeld(t *testing.T) {
+	skipWithoutFileLocks(t)
+	s := open(t)
+	if held, err := s.EndpointHeld("socket"); err != nil || held {
+		t.Errorf("EndpointHeld of an endpoint never held = %v, %v", held, err)
+	}
+	h, err := s.HoldEndpoint(t.Context(), "socket", "pid 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, err := s.EndpointHeld("socket"); err != nil || !held {
+		t.Errorf("EndpointHeld of an endpoint held = %v, %v", held, err)
+	}
+	if err := h.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := s.EndpointHeld("socket"); err != nil || held {
+		t.Errorf("EndpointHeld of an endpoint released = %v, %v", held, err)
+	}
+	if _, err := s.EndpointHeld("../socket"); err == nil {
+		t.Error("EndpointHeld of a name that isn't an endpoint's succeeded")
+	}
+}

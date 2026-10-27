@@ -75,9 +75,9 @@ It runs a coordinator in its own process, with a SQLite store: today it
 validates a workflow (`meridian validate`), runs one, its jobs on this
 machine with the `local` backend (`meridian run`), shows runs and their
 logs (`meridian status` and `logs`), takes up a run whose command stopped
-(`meridian resume`), and runs one attempt of a job as a worker (`meridian
-worker`), and its other commands say they aren't built yet ([The
-`meridian` command](#the-meridian-command)). A
+(`meridian resume`), cancels one (`meridian cancel`), and runs one attempt
+of a job as a worker (`meridian worker`), and its other commands say they
+aren't built yet ([The `meridian` command](#the-meridian-command)). A
 platform wires them with its own resolvers, Postgres and as many
 coordinator replicas as it needs. Nothing in the packages knows which of
 the two it is running in.
@@ -1157,7 +1157,7 @@ holds its Start, under a lock on a file beside the store's database, named
 for the run, until the run has started, or the process ends: a run whose
 creator ended before its Start stays created until `meridian resume` of
 the run, which takes the hold over, works the queue, and one whose creator
-lives is left to it ([Status, logs and resume](#status-logs-and-resume)).
+lives is left to it ([Status, logs, resume and cancel](#status-logs-resume-and-cancel)).
 A rerun runs Start again ([Reruns](#reruns)).
 
 ## Run data
@@ -2444,7 +2444,9 @@ for any other only once they have (`plan.Plan.CancelPath`).
   that outlive a cancel; here they don't run. No attempt is made once the
   run has stopped since the job's supervisor looked: it looks again.
   `meridian cancel` stores the record whether or not a coordinator is
-  running, and withdraws placements itself when none is.
+  running, and when none is, it coordinates the run itself until it has
+  ended, so that the placements the stop tells are told, or withdrawn
+  ([Status, logs, resume and cancel](#status-logs-resume-and-cancel)).
 - **A running job, when a person cancels the run**, has the step it is
   running stopped, if its `if:` isn't cancel-aware: SIGTERM, then SIGKILL
   after a grace period. The step and the job end cancelled, and the job's
@@ -3527,7 +3529,7 @@ their workers store them.
   masked where it ran is private; a private placement's member is never
   shown, nor anything else only the run's secret record holds.
 
-### Status, logs and resume
+### Status, logs, resume and cancel
 
 - **`meridian status`** lists the store's last runs, the newest first, 20
   unless `-n` says: each one's state, created, running or ended, how it
@@ -3573,7 +3575,31 @@ their workers store them.
   `meridian run` that coordinated it, and the run's workers go on with it,
   until `meridian cancel` stops it. A run whose plan only a newer release
   reads is refused (`run_plan_newer`) and left as it is.
-- **`meridian cancel`** comes once the coordinator can cancel a run.
+- **`meridian cancel <run>`** stores the run's stop, as Ctrl-C's cancel in
+  `meridian run` does (above, under Cancellation, timeouts and cleanup),
+  and says so: `run 1 stopping (cancelled)`, or, as JSON, a `run.stopping`
+  line. Every `meridian run` and `resume` of the store works its runs, and
+  holds the socket or waits for it, so one that holds it sees the run to
+  its end, and `meridian cancel` exits at once. When none does, as when the
+  run's `meridian run` was killed, or left it running, `meridian cancel`
+  coordinates the run itself, as `resume` does, once it has checked the
+  run's directory as `resume` does, until it has ended, and says how it
+  ended, so that its workers hear of the stop, and the
+  placements of those that don't are withdrawn once their leases lapse.
+  `-f` shows the run, as `meridian run` does, until it ends, either way.
+  When the process that coordinates the run exits before it has ended,
+  with no other waiting to take its place, the run waits, stopped, for a
+  coordinator: `meridian resume <run>` sees such a cancel through. A run
+  that hadn't started ends cancelled at once; one that had ended already is
+  said to have, as JSON with its `run.finished` line. It exits 0 once the
+  run is stopped, or has ended cancelled, or had ended already. A run it
+  coordinates whose first stop was its timeout, which the cancel changes
+  nothing of, ends as that has it, and it exits as `meridian run` would. It
+  exits 2 for a run the store hasn't (`run_not_found`), or whose directory
+  is no longer private, which it leaves stopped without coordinating it,
+  as for any problem of its own, and when an interrupt leaves the run it
+  coordinates running. `meridian status` shows a run
+  that has been stopped, and hasn't ended, as `stopping`, with why.
 
 ## Editors and web UIs
 

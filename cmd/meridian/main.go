@@ -150,7 +150,7 @@ func init() {
 		{name: "migrate", args: "<workflow>", summary: "Rewrites a workflow in the latest format."},
 		{name: "status", args: "[run]", summary: "Shows runs, or one run's jobs.", run: runStatus},
 		{name: "logs", args: "<run> [job]", summary: "Shows or follows logs.", run: runLogs},
-		{name: "cancel", args: "<run>", summary: "Cancels a run."},
+		{name: "cancel", args: "<run>", summary: "Cancels a run.", about: cancelAbout, run: runCancel},
 		{name: "resume", args: "<run>", summary: "Picks up a run whose coordinator stopped.", about: resumeAbout, run: runResume},
 		{name: "rerun", args: "<run>", summary: "Runs a run again, or only its failed jobs."},
 		{name: "serve", summary: "Runs a coordinator that keeps running."},

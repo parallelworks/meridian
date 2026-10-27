@@ -90,6 +90,8 @@ type statusLine struct {
 	Created     time.Time            `json:"created,omitzero"`
 	Started     time.Time            `json:"started,omitzero"`
 	Ended       time.Time            `json:"ended,omitzero"`
+	Stopped     time.Time            `json:"stopped,omitzero"`
+	StopReason  string               `json:"stopReason,omitempty"`
 	Attempts    int                  `json:"attempts,omitzero"`
 	Member      string               `json:"member,omitempty"`
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
@@ -99,8 +101,18 @@ func runStatusLine(s *coordinator.RunStatus) statusLine {
 	return statusLine{
 		Kind: "run", Run: s.ID, Name: s.Name, Location: s.Location, RunDir: s.RunDir, State: string(s.State),
 		Outcome: string(s.Outcome), Reason: string(s.Reason), Created: s.CreatedAt, Started: s.StartedAt, Ended: s.EndedAt,
-		Diagnostics: s.Diagnostics,
+		Stopped: s.StoppedAt, StopReason: string(s.StopReason), Diagnostics: s.Diagnostics,
 	}
+}
+
+// stateOf is the run's state as a person reads it: stopping for one that
+// runs on once it was stopped, as by meridian cancel, until its jobs have
+// ended.
+func stateOf(s *coordinator.RunStatus) string {
+	if s.State == coordinator.RunRunning && !s.StoppedAt.IsZero() {
+		return "stopping"
+	}
+	return string(s.State)
 }
 
 func writeStatusJSON(w io.Writer, l statusLine) error {
@@ -131,7 +143,7 @@ func writeRuns(c *cli, runs []coordinator.RunStatus) int {
 	tw := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "RUN\tSTATE\tOUTCOME\tCREATED\tWORKFLOW")
 	for _, r := range runs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, r.State, outcomeOf(r.Outcome, r.Reason), timeOf(r.CreatedAt), r.Location)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), timeOf(r.CreatedAt), r.Location)
 	}
 	if err := tw.Flush(); err != nil {
 		return c.fail(err)
@@ -158,9 +170,12 @@ func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus) in
 		}
 		return exitOK
 	}
-	line := fmt.Sprintf("run %s: %s", s.ID, s.State)
-	if s.Outcome != "" {
+	line := fmt.Sprintf("run %s: %s", s.ID, stateOf(s))
+	switch {
+	case s.Outcome != "":
 		line += ", " + outcomeOf(s.Outcome, s.Reason)
+	case s.StopReason != "":
+		line += " (" + string(s.StopReason) + ")"
 	}
 	fmt.Fprintln(c.stdout, line)
 	fmt.Fprintf(c.stdout, "workflow: %s\n", s.Location)

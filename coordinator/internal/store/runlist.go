@@ -25,24 +25,29 @@ type RunSummary struct {
 	CreatedAt   time.Time
 	StartedAt   time.Time
 	EndedAt     time.Time
+	// StoppedAt is when the run was stopped early, and StopReason why, as
+	// its stop record has it (StopRun), or the zero time and "".
+	StoppedAt  time.Time
+	StopReason plan.Reason
 }
 
 // summaryColumns are what scanSummary reads of a run.
-const summaryColumns = "id, name, location, plan_version, run_dir, state, outcome, reason, created_at, started_at, ended_at"
+const summaryColumns = "id, name, location, plan_version, run_dir, state, outcome, reason, created_at, started_at, ended_at, stopped_at, stop_reason"
 
 func scanSummary(row scanner) (RunSummary, error) {
 	var (
-		r               RunSummary
-		number, created int64
-		state           string
-		outcome, reason sql.NullString
-		started, ended  sql.NullInt64
+		r                           RunSummary
+		number, created             int64
+		state                       string
+		outcome, reason, stopReason sql.NullString
+		started, ended, stopped     sql.NullInt64
 	)
-	if err := row.Scan(&number, &r.Name, &r.Location, &r.PlanVersion, &r.RunDir, &state, &outcome, &reason, &created, &started, &ended); err != nil {
+	if err := row.Scan(&number, &r.Name, &r.Location, &r.PlanVersion, &r.RunDir, &state, &outcome, &reason, &created, &started, &ended, &stopped, &stopReason); err != nil {
 		return RunSummary{}, err
 	}
 	r.ID, r.State, r.Outcome, r.Reason = runID(number), RunState(state), plan.Outcome(outcome.String), plan.Reason(reason.String)
 	r.CreatedAt, r.StartedAt, r.EndedAt = time.UnixMicro(created).UTC(), timeOf(started), timeOf(ended)
+	r.StoppedAt, r.StopReason = timeOf(stopped), plan.Reason(stopReason.String)
 	return r, nil
 }
 

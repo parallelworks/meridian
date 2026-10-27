@@ -23,7 +23,7 @@ until it ends, exiting as meridian run does.
 A run it refuses, as one whose directory is no longer the user's own
 private directory, ends failed if it hasn't started; one that has isn't
 stopped by it: another meridian run or resume of the store, and the run's
-workers, go on with it. meridian cancel, once it is built, stops a run.`
+workers, go on with it. meridian cancel stops a run.`
 
 // runResume takes up a run whose meridian run died, or left it running, as
 // one of its store's coordinators, and coordinates it in the foreground

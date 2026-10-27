@@ -5,6 +5,7 @@ package flock
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"syscall"
 	"time"
@@ -80,6 +81,32 @@ func TryLock(path string) (release func(), err error) {
 		f.Close()
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
+		}
+	}
+}
+
+// Held reports whether another holds the lock on the file at path, as Lock
+// or TryLock takes it, without making the file, or holding the lock for
+// longer than it takes to ask: a file that isn't there is held by no one.
+func Held(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0) //nolint:gosec // a lock file in one of Meridian's own directories
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	// Closing the file releases the lock, if this took it.
+	defer f.Close()
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) //nolint:gosec // a file descriptor fits an int
+		switch {
+		case err == nil:
+			return false, nil
+		case errors.Is(err, syscall.EWOULDBLOCK):
+			return true, nil
+		case !errors.Is(err, syscall.EINTR):
+			return false, err
 		}
 	}
 }
