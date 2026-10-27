@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -48,6 +49,19 @@ func TestTimingScaled(t *testing.T) {
 		}
 		if want := time.Duration(float64(DefaultTiming().Grace) * s); tm.Grace != want {
 			t.Errorf("scaled by %v, Grace is %v, want %v", s, tm.Grace, want)
+		}
+		// The worker's own time to stop isn't scaled, since the worker
+		// doesn't scale it.
+		if tm.WorkerStop != DefaultTiming().WorkerStop {
+			t.Errorf("scaled by %v, WorkerStop is %v", s, tm.WorkerStop)
+		}
+		// No period is left out, as one added to Timing would be by a
+		// scaling that lists them.
+		v := reflect.ValueOf(tm)
+		for i := range v.NumField() {
+			if v.Field(i).IsZero() {
+				t.Errorf("scaled by %v, %s is zero", s, v.Type().Field(i).Name)
+			}
 		}
 	}
 	testtiming.Scale = 0.1

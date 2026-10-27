@@ -472,6 +472,47 @@ func TestResumePlace(t *testing.T) {
 	}
 }
 
+// TestResumeStopped checks that an attempt a supervisor chose a place for,
+// but ended before it placed it, isn't placed once the run has stopped: as
+// a job between attempts, the job ends cancelled, after its one attempt,
+// which failed before its first step.
+func TestResumeStopped(t *testing.T) {
+	c := open(t, Options{Variables: regionVars})
+	d := driverOf(c)
+	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
+	if _, err := c.startRun(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		if _, err := tx.PinReady(id, "main", false, nil); err != nil {
+			return err
+		}
+		a, _, err := tx.NewAttempt(store.NewAttempt{Run: id, Job: "main", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		if err != nil {
+			return err
+		}
+		return tx.ChoosePlace(a.ID, store.Place{Group: "local", Member: "m1", Backend: testBackend})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	serve(t, c)
+	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the run ended %s", r.Outcome)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Attempts != 1 {
+		t.Errorf("the job is %+v", j)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.End.Kind != store.EndSetupFailed {
+		t.Errorf("the attempt ended %+v", a.End)
+	}
+	if reqs, _ := d.requests(); len(reqs) != 0 {
+		t.Errorf("an attempt was placed after the run stopped: %+v", reqs)
+	}
+}
+
 // privateTarget is a workflow whose job runs where a variable says.
 const privateTarget = `
 jobs:

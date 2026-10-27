@@ -294,20 +294,27 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 
 // placesNoMore reports whether the job, whose latest attempt is a, or nil
 // before its first, has no attempt that runs, nor one whose worker's end
-// is the job's, and was readied before its run stopped, which it doesn't
-// outlive: its supervisor
-// places no attempt of it again, as after a failure before its first step,
-// or once a backend answers, and ends it as the stop says (stopEnd).
+// is the job's, and the stop ends it (stopEnds): its supervisor places no
+// attempt of it again, as after a failure before its first step, or once a
+// backend answers, and ends it as the stop says (stopEnd).
 func (c *Coordinator) placesNoMore(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (bool, error) {
 	switch {
-	case run.StoppedAt.IsZero(), job.ReadyAt.IsZero(), job.ReadiedStopped:
-		// A job readied once the run had stopped is as Ready gave it.
-		return false, nil
 	case a == nil:
 	case a.State != store.AttemptEnded:
 		return false, nil
 	case a.End.Kind == store.EndCompleted && a.End.Reason != plan.ReasonSetupFailed:
 		// Its worker's end is the job's.
+		return false, nil
+	}
+	return c.stopEnds(ctx, run, job)
+}
+
+// stopEnds reports whether the job's run has stopped, and the job, readied
+// before it stopped, doesn't outlive the stop: without an attempt that
+// runs, it is placed no more.
+func (c *Coordinator) stopEnds(ctx context.Context, run *store.Run, job *store.Job) (bool, error) {
+	if run.StoppedAt.IsZero() || job.ReadyAt.IsZero() || job.ReadiedStopped {
+		// A job readied once the run had stopped is as Ready gave it.
 		return false, nil
 	}
 	outlives, err := c.jobOutlives(ctx, run, job)

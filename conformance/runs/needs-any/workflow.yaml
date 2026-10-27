@@ -1,6 +1,9 @@
 jobs:
   probe:
     strategy:
+      # Not fail-fast, so that the instance that fails first cancels
+      # none: the one that succeeds runs to its end, however they race.
+      fail-fast: false
       matrix:
         n: [0, 1]
     steps:

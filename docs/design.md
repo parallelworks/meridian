@@ -2471,7 +2471,8 @@ for any other only once they have (`plan.Plan.CancelPath`).
   counts has passed. A job between attempts when the run stops, readied
   before the stop, as one waiting to be placed again after a failure
   before its first step, or after its worker was lost, or for a backend
-  to answer, isn't placed again, unless it outlives the
+  to answer, or one whose attempt a supervisor that ended chose a place
+  for but never placed, isn't placed again, unless it outlives the
   stop: it has no placement, so it ends cancelled after a cancel, and
   failed, with the reason `timeout`, after the run's timeout. Format 1
   would start it under the passed deadline, which would run its steps
