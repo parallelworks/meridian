@@ -929,6 +929,13 @@
       "Do the step's work with a run: command instead."
     ]
   },
+  "action_needs_platform": {
+    "why": "parallelworks/scheduler-agent starts a platform's agent on a cluster's compute node, through the cluster's scheduler, with the platform's command-line tool and credentials, and parallelworks/wait-for-agent waits for it. Each needs the platform that provides it, which Meridian, run on its own, doesn't have, so a step that uses one fails when it runs, as a step whose command fails does: its retry: tries it again, its ignore-errors: lets its last try succeed, and its cleanup: runs. It fails only then: a step that its if: skips, or that is in a job its if: skips, never runs, and the run doesn't fail for it, so Meridian doesn't refuse such a workflow when it creates its run.",
+    "fix": [
+      "Skip the step, or its job, where no platform provides the action, with an if: that reads an input, such as one that says whether to use the scheduler's agent.",
+      "Run the workflow on the platform that provides the action."
+    ]
+  },
   "step_ssh_not_supported": {
     "why": "A format 1 step's ssh: runs the step on another host over SSH. This version of Meridian's worker runs steps only on the host it runs on, so the step fails rather than run on the wrong host.",
     "fix": [

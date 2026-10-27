@@ -1083,6 +1083,14 @@
       "Haz el trabajo del paso con un comando run: en su lugar."
     ]
   },
+  "action_needs_platform": {
+    "title": "Acción integrada que solo proporciona una plataforma",
+    "why": "parallelworks/scheduler-agent inicia un agente de una plataforma en un nodo de cómputo de un clúster, a través del planificador del clúster, con la herramienta de línea de comandos y las credenciales de la plataforma, y parallelworks/wait-for-agent lo espera. Cada una necesita la plataforma que la proporciona, que Meridian, ejecutado por sí solo, no tiene, así que un paso que usa una de ellas falla cuando se ejecuta, como falla un paso cuyo comando falla: su retry: lo vuelve a intentar, su ignore-errors: permite que su último intento tenga éxito y su cleanup: se ejecuta. Solo falla entonces: un paso que su if: omite, o que está en un trabajo que su if: omite, nunca se ejecuta, y la ejecución no falla por él, así que Meridian no rechaza un flujo de trabajo así cuando crea su ejecución.",
+    "fix": [
+      "Omite el paso, o su trabajo, donde ninguna plataforma proporciona la acción, con un if: que lea una entrada, como una que diga si usar el agente del planificador.",
+      "Ejecuta el flujo de trabajo en la plataforma que proporciona la acción."
+    ]
+  },
   "step_ssh_not_supported": {
     "title": "Paso en otro host",
     "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Esta versión del worker de Meridian solo ejecuta pasos en el host donde se ejecuta, así que el paso falla en lugar de ejecutarse en el host equivocado.",

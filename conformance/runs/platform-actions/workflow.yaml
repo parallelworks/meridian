@@ -1,0 +1,38 @@
+on:
+  execute:
+    inputs:
+      use_agent:
+        type: boolean
+        default: false
+jobs:
+  agent:
+    if: ${{ inputs.use_agent }}
+    steps:
+      - uses: parallelworks/scheduler-agent
+        with:
+          scheduler: slurm
+      - uses: parallelworks/wait-for-agent
+        with:
+          agentId: agent
+  main:
+    steps:
+      - if: ${{ inputs.use_agent }}
+        uses: parallelworks/scheduler-agent
+        with:
+          scheduler: slurm
+      - run: echo ran
+  forced:
+    needs: [main]
+    steps:
+      - uses: parallelworks/wait-for-agent
+        with:
+          agentId: agent
+      - if: ${{ failure() }}
+        run: echo on failure
+  ignored:
+    steps:
+      - uses: parallelworks/wait-for-agent
+        ignore-errors: true
+        with:
+          agentId: agent
+      - run: echo carried on
