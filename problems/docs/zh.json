@@ -2282,6 +2282,49 @@
       "如果你的配置写明了如何到达该主机，请安装 OpenSSH 客户端，或把它加入 PATH。"
     ]
   },
+  "ssh_target_unsafe": {
+    "title": "交给 ssh 不安全的主机或用户",
+    "why": "格式 1 的 ssh: 中的 remoteHost、remoteUser、jumpNodeHost 和 jumpNodeUser 常常来自工作流的输入。Meridian 把它们交给 ssh 以读取你的配置，它们在那里可能到达 ProxyCommand，而 shell 会带着主机和用户运行 ProxyCommand。因此，就像 OpenSSH 9.6 及更高版本检查它自己的命令行一样，无论安装的是哪个 ssh，Meridian 都拒绝以 - 开头、或含有空白、控制字符或 ' ` \" $ \\ ; & < > | ( ) { } 中任一字符的主机，以及以 - 开头、含有 ' ` \" ; & < > | ( ) { } 中任一字符、空白后跟 -、或以 \\ 结尾的用户。",
+    "fix": [
+      "按工作流的预期，给该输入一个主机的名称或地址，或一个用户的名称。"
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "title": "含有无法匹配的哈希行的 known_hosts",
+    "why": "HashKnownHosts 写入的哈希 known_hosts 行把主机保存为它的 HMAC-SHA1，而 FIPS 140-3 不允许 Meridian 计算它，因此 Meridian 请 ssh-keygen -F 找出哪些哈希行属于该主机。没有它，Meridian 无法判断某个哈希行是否吊销了该主机的密钥，因此不用文件的其余部分核对密钥：那样可能接受 known_hosts 已吊销的密钥。",
+    "fix": [
+      "安装 OpenSSH 的 ssh-keygen，或把它和 ssh 一起加入 PATH。",
+      "或者把该主机的密钥以及任何 @revoked 行，放在你的配置指定的、没有哈希行的 known_hosts 文件中。"
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "title": "其证书机构的签名不能使之有效的主机证书",
+    "why": "known_hosts 为该主机指定的证书机构（@cert-authority）签署了该证书，但它对这次连接无效：它已过期、尚未生效、不是为这台主机的名称签发的，或者不是主机证书。正如 OpenSSH 只在它知道的证书机构都没有签署证书时才退回到证书的密钥，Meridian 此时不退回到证书的密钥。",
+    "fix": [
+      "请主机管理员续期主机证书，或为你连接所用的名称签署证书。"
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "title": "含有 Meridian 不展开的标记的 ProxyCommand",
+    "why": "Meridian 像 ssh 一样用 sh -c 运行你配置中的 ProxyCommand，并展开标记 %h、%p、%r、%n、%u、%d 和 %%。含有其他标记的 ProxyCommand 会把该标记原样传给命令，因此它不运行。",
+    "fix": [
+      "用 Meridian 展开的标记，或用标记所代表的内容来写 ProxyCommand。"
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "title": "嵌套过深的 ProxyJump",
+    "why": "Meridian 沿着你配置中的 ProxyJump 指定的每台主机，以及这些主机各自的 ProxyJump 前进，最多到这个深度。更深就意味着 ProxyJump 绕回了自身，例如某主机的 ProxyJump 指定的主机，其 ProxyJump 又指定了它。",
+    "fix": [
+      "对 ProxyJump 指定的每台主机运行 ssh -G <host>，并在配置中打破循环。"
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "title": "没有指定主机的 ProxyJump 主机",
+    "why": "ProxyJump 的每台主机是 [user@]host[:port] 或 ssh://[user@]host[:port]。这一项没有指定任何主机。",
+    "fix": [
+      "按 ssh -G <host> 所显示的，修正你配置中的 ProxyJump。"
+    ]
+  },
   "worker_token_not_taken": {
     "title": "没有取走令牌的工作进程",
     "why": "放置工作进程后就结束的进程，例如另一台主机上的 meridian host，会等到工作进程取走它的引导令牌；令牌通过只有工作进程继承的套接字交给它。这个工作进程没有取走：它先结束了，就像在无法连接到你的服务管理器、或同名的 scope 仍然存在时 systemd-run 无法启动的工作进程那样；或者它在一分钟内没有请求令牌。没有令牌的工作进程无法运行作业，因此 Meridian 停止了它，没有放置任何东西。",

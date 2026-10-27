@@ -23,9 +23,12 @@ type hostKeyCheck struct {
 	name  string
 	addr  string
 	known knownHosts
-	// key is the key the host presented, and err what the check said of it.
-	key ssh.PublicKey
-	err error
+	// key is the key the host presented, and err what the check said of
+	// it; revoked is set once it found the key, or its certificate's
+	// authority, revoked.
+	key     ssh.PublicKey
+	err     error
+	revoked bool
 }
 
 // errRevoked is the check's error for a key known_hosts revokes.
@@ -58,25 +61,34 @@ func (d *Dialer) newHostKeyCheck(ctx context.Context, c *hostConfig) (*hostKeyCh
 	return &hostKeyCheck{host: c.alias, name: name, addr: net.JoinHostPort(host, c.port), known: known}, nil
 }
 
-// callback checks the key the host presents: a host certificate, signed
-// by an authority known_hosts names for the host, for the host, and
-// valid, or else its key, as OpenSSH falls back to it; or a key
-// known_hosts has for it. A revoked key is refused either way.
+// callback checks the key the host presents: a host certificate that an
+// authority known_hosts names for the host signed, which must be for the
+// host, valid now, and revoked neither itself nor its authority; or a key
+// known_hosts has for the host, as a certificate's key is checked when no
+// authority it names signed it, as OpenSSH falls back to it. A
+// certificate an authority it names signed, but that fails, as one that
+// has expired, falls back to nothing.
 func (h *hostKeyCheck) callback(_ string, remote net.Addr, key ssh.PublicKey) error {
 	h.key = key
+	if cert, ok := key.(*ssh.Certificate); ok && !h.known.authority(cert.SignatureKey, h.name) {
+		if h.known.revoked(cert.SignatureKey, h.name) {
+			h.err = errRevoked
+		} else {
+			h.err = h.plain(h.addr, remote, cert.Key)
+		}
+		return h.err
+	}
 	checker := &ssh.CertChecker{
 		IsHostAuthority: func(auth ssh.PublicKey, _ string) bool { return h.known.authority(auth, h.name) },
 		IsRevoked: func(cert *ssh.Certificate) bool {
-			return h.known.revoked(cert.SignatureKey, h.name) || h.known.revoked(cert.Key, h.name)
+			if h.known.revoked(cert.SignatureKey, h.name) || h.known.revoked(cert.Key, h.name) {
+				h.revoked = true
+			}
+			return h.revoked
 		},
 		HostKeyFallback: h.plain,
 	}
 	h.err = checker.CheckHostKey(h.addr, remote, key)
-	if cert, ok := key.(*ssh.Certificate); ok && h.err != nil && !errors.Is(h.err, errRevoked) {
-		if err := h.plain(h.addr, remote, cert.Key); err == nil || errors.Is(err, errRevoked) {
-			h.err = err
-		}
-	}
 	return h.err
 }
 
@@ -139,12 +151,15 @@ func (h *hostKeyCheck) problem() error {
 		return nil
 	}
 	fingerprint := ssh.FingerprintSHA256(h.key)
-	if errors.Is(h.err, errRevoked) {
+	if errors.Is(h.err, errRevoked) || h.revoked {
 		return problems.SSHHostKeyRevoked.Problem(problems.Params{"host": h.host, "fingerprint": fingerprint})
 	}
 	keyType := h.key.Type()
 	if cert, ok := h.key.(*ssh.Certificate); ok {
 		keyType = cert.Key.Type()
+		if h.known.authority(cert.SignatureKey, h.name) {
+			return problems.SSHHostCertificateInvalid.Problem(problems.Params{"host": h.host, "fingerprint": fingerprint, "reason": h.err.Error()})
+		}
 	}
 	if mismatch, ok := errors.AsType[*keyMismatch](h.err); ok {
 		for _, k := range mismatch.want {

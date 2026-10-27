@@ -2282,6 +2282,49 @@
       "Instala el cliente de OpenSSH, o ponlo en PATH, si tu configuración dice cómo llegar al host."
     ]
   },
+  "ssh_target_unsafe": {
+    "title": "Host o usuario que no es seguro dar a ssh",
+    "why": "remoteHost, remoteUser, jumpNodeHost y jumpNodeUser de un ssh: de formato 1 suelen venir de las entradas de un flujo de trabajo, y Meridian se los da a ssh para leer tu configuración, donde pueden llegar a un ProxyCommand, que un shell ejecuta con el host y el usuario dentro. Así que, como OpenSSH 9.6 y posteriores comprueban su propia línea de comandos, Meridian rechaza un host que empieza por -, o contiene espacios, un carácter de control o alguno de ' ` \" $ \\ ; & < > | ( ) { }, y un usuario que empieza por -, contiene alguno de ' ` \" ; & < > | ( ) { }, tiene - tras un espacio o termina en \\, sea cual sea el ssh instalado.",
+    "fix": [
+      "Da a la entrada el nombre o la dirección de un host, o el nombre de un usuario, como espera el flujo de trabajo."
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "title": "known_hosts con líneas con hash que no se pueden comparar",
+    "why": "Una línea de known_hosts con hash, que escribe HashKnownHosts, guarda su host como un HMAC-SHA1 de él, que FIPS 140-3 no deja calcular a Meridian, así que Meridian pregunta a ssh-keygen -F qué líneas con hash son del host. Sin él, Meridian no puede saber si una línea con hash revoca la clave del host, así que no comprueba la clave con el resto del archivo: eso podría aceptar una clave que known_hosts revoca.",
+    "fix": [
+      "Instala ssh-keygen de OpenSSH, o ponlo en PATH junto a ssh.",
+      "O guarda las claves del host, y cualquier línea @revoked, en un archivo known_hosts sin líneas con hash que nombre tu configuración."
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "title": "Certificado de host que la firma de su autoridad no hace válido",
+    "why": "Una autoridad que known_hosts nombra para el host (@cert-authority) firmó el certificado, pero no es válido para esta conexión: ha caducado, aún no es válido, no es para el nombre de este host, o no es un certificado de host. Meridian no recurre entonces a la clave del certificado, como OpenSSH solo recurre a ella cuando ninguna autoridad que conoce firmó el certificado.",
+    "fix": [
+      "Pide a quien administra el host que renueve su certificado, o que lo firme para el nombre al que te conectas."
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "title": "ProxyCommand con un token que Meridian no expande",
+    "why": "Meridian ejecuta el ProxyCommand de tu configuración con sh -c, como ssh, con los tokens %h, %p, %r, %n, %u, %d y %% expandidos. No ejecuta uno que contiene otro, que pasaría al comando tal cual.",
+    "fix": [
+      "Escribe el ProxyCommand con los tokens que Meridian expande, o con lo que representa el token."
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "title": "ProxyJumps que se anidan demasiado",
+    "why": "Meridian sigue el ProxyJump de tu configuración por cada host que nombra, y el ProxyJump propio de cada uno, hasta esta profundidad como mucho. Más allá, los ProxyJump vuelven sobre sí mismos, como un host cuyo ProxyJump nombra un host cuyo ProxyJump lo nombra a él.",
+    "fix": [
+      "Ejecuta ssh -G <host> para cada host que nombran los ProxyJump, y rompe el ciclo en tu configuración."
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "title": "Host de ProxyJump que no nombra ningún host",
+    "why": "Cada host de un ProxyJump es [usuario@]host[:puerto], o ssh://[usuario@]host[:puerto]. Este no nombra ningún host.",
+    "fix": [
+      "Corrige el ProxyJump de tu configuración, tal como lo muestra ssh -G <host>."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "Worker que no tomó su token",
     "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",

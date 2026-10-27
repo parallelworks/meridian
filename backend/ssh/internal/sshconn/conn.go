@@ -197,6 +197,7 @@ type Pool struct {
 
 	mu      sync.Mutex
 	entries map[string]*entry
+	closed  bool
 }
 
 // An entry is a pool's connection to a target, or how it last failed to
@@ -224,6 +225,10 @@ func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 	key := t.key()
 	for {
 		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return nil, ErrClosed
+		}
 		if p.entries == nil {
 			p.entries = map[string]*entry{}
 		}
@@ -253,6 +258,12 @@ func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 		close(e.dialing)
 		e.dialing = nil
 		switch {
+		case p.closed:
+			// Closed while it dialed: what it dialed is closed too.
+			if conn != nil {
+				_ = conn.Close()
+			}
+			conn, err = nil, ErrClosed
 		case err == nil:
 			e.conn, e.failures, e.retryAt = conn, 0, time.Time{}
 		case ctx.Err() == nil:
@@ -295,15 +306,16 @@ func redialAfter(failures int) time.Duration {
 	return d - rand.N(d/4+1) //nolint:gosec // jitter, not a secret
 }
 
-// Close closes every connection of the pool's.
+// Close closes every connection of the pool's, and those it is dialing
+// once they are made. It gets none after.
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	for _, e := range p.entries {
 		if e.conn != nil {
 			_ = e.conn.Close()
 		}
 	}
-	p.entries = nil
 	return nil
 }

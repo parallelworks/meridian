@@ -82,13 +82,15 @@ func (d *Dialer) localUser() string {
 	return ""
 }
 
-// Dial connects to t. A problem with the config, the host's key, the
-// algorithms the host offers, or the login is a *problem.Problem, of
-// problems.SSHConfigUnreadable, SSHHostKeyUnknown, SSHHostKeyChanged,
-// SSHHostKeyRevoked, SSHAlgorithmsUnapproved or SSHAuthFailed: trying
-// again won't help until the user changes something. Any other error, as
-// a host that doesn't answer, may pass.
+// Dial connects to t. A problem with the target, the config, the host's
+// key, the algorithms the host offers, or the login is a
+// *problem.Problem, of one of the kinds this package reports: trying again
+// won't help until the user changes something. Any other error, as a host
+// that doesn't answer, may pass.
 func (d *Dialer) Dial(ctx context.Context, t Target) (*Conn, error) {
+	if err := t.check(); err != nil {
+		return nil, err
+	}
 	host, port := t.Host, ""
 	h, p, given := hostPort(t.Host)
 	if given {
@@ -154,7 +156,7 @@ func (d *Dialer) sessions() int {
 // connecting through.
 func (d *Dialer) connect(ctx context.Context, c *hostConfig, depth int) (_ *ssh.Client, closers []func(), err error) {
 	if depth > maxHops {
-		return nil, nil, problems.SSHConfigUnreadable.Problem(problems.Params{"host": c.alias, "reason": "ProxyJump " + strings.Join(c.proxyJump, ",")})
+		return nil, nil, problems.SSHProxyJumpTooDeep.Problem(problems.Params{"host": c.alias, "limit": maxHops})
 	}
 	defer func() {
 		if err != nil {
@@ -176,7 +178,7 @@ func (d *Dialer) connect(ctx context.Context, c *hostConfig, depth int) (_ *ssh.
 		last := c.proxyJump[len(c.proxyJump)-1]
 		host, user, port, ok := hop(last)
 		if !ok {
-			return nil, nil, problems.SSHConfigUnreadable.Problem(problems.Params{"host": c.alias, "reason": "ProxyJump " + strings.Join(c.proxyJump, ",")})
+			return nil, nil, problems.SSHProxyJumpInvalid.Problem(problems.Params{"host": c.alias, "hop": last})
 		}
 		hc, err := d.resolve(ctx, host, user, port, strings.Join(c.proxyJump[:len(c.proxyJump)-1], ","))
 		if err != nil {

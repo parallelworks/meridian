@@ -627,7 +627,7 @@ Host j2
 		h := newHome(t)
 		h.config = []string{"Host a\n  ProxyJump b\nHost b\n  ProxyJump a"}
 		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: "a"})
-		paramsOf(t, err, problems.SSHConfigUnreadable)
+		paramsOf(t, err, problems.SSHProxyJumpTooDeep)
 	})
 	t.Run("ProxyCommand", func(t *testing.T) {
 		requireSSH(t)
@@ -803,5 +803,150 @@ func TestListenUnix(t *testing.T) {
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ping" {
 		t.Errorf("the forwarded connection echoed %q, %v", buf, err)
+	}
+}
+
+// TestTargetUnsafe checks that a host or a user a workflow names that
+// could be read as more than a name is refused before anything runs with
+// it, whatever ssh is installed: here one that, as OpenSSH before 9.6
+// did, prints what it is given, into the user's ProxyCommand, whose %n a
+// shell runs.
+func TestTargetUnsafe(t *testing.T) {
+	dir := t.TempDir()
+	ran := filepath.Join(dir, "ran")
+	pwned := filepath.Join(dir, "pwned")
+	fake := filepath.Join(dir, "ssh")
+	script := "#!/bin/sh\n: > '" + ran + "'\nfor a; do host=\"$a\"; done\n" +
+		"printf 'hostname %s\\nport 22\\nuser tester\\nproxycommand true %%n\\nuserknownhostsfile /dev/null\\nidentityagent none\\n' \"$host\"\n"
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := &sshconn.Dialer{SSH: fake, Home: dir, User: "tester", Getenv: func(string) string { return "" }, ConnectTimeout: 2 * time.Second}
+	for _, tc := range []struct {
+		key    string
+		target sshconn.Target
+	}{
+		{"remoteHost", sshconn.Target{Host: "a;touch " + pwned}},
+		{"remoteHost", sshconn.Target{Host: "$(touch " + pwned + ")"}},
+		{"remoteHost", sshconn.Target{Host: "-oProxyCommand=touch " + pwned}},
+		{"remoteUser", sshconn.Target{Host: "farm", User: "a`touch " + pwned + "`"}},
+		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: "j|touch " + pwned}},
+		{"jumpNodeUser", sshconn.Target{Host: "farm", JumpHost: "j", JumpUser: "u -oProxyCommand=x"}},
+	} {
+		_, err := d.Dial(t.Context(), tc.target)
+		p := paramsOf(t, err, problems.SSHTargetUnsafe)
+		if p["key"] != tc.key {
+			t.Errorf("%+v is refused for %v, want %s", tc.target, p["key"], tc.key)
+		}
+	}
+	for _, f := range []string{ran, pwned} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("an unsafe target ran something: %s exists", f)
+		}
+	}
+}
+
+// TestCertificates checks host certificates: one an authority known_hosts
+// doesn't name is checked as its key, and refused if known_hosts doesn't
+// have it; one whose authority known_hosts revokes is refused, named or
+// not; and one an authority it names signed, but that has expired, is
+// refused, never checked as its key instead, which known_hosts has.
+func TestCertificates(t *testing.T) {
+	h := newHome(t)
+	ca, other := sshtest.NewKey(t), sshtest.NewKey(t)
+	hostKey := sshtest.NewKey(t)
+	certify := func(before uint64) ssh.Signer {
+		cert := &ssh.Certificate{Key: hostKey.PublicKey(), CertType: ssh.HostCert, ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: before}
+		if err := cert.SignCert(rand.Reader, ca); err != nil {
+			t.Fatal(err)
+		}
+		s, err := ssh.NewCertSigner(cert, hostKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	authority := func(k ssh.Signer) string {
+		return "@cert-authority * " + string(ssh.MarshalAuthorizedKey(k.PublicKey()))
+	}
+	revoked := func(k ssh.Signer) string { return "@revoked * " + string(ssh.MarshalAuthorizedKey(k.PublicKey())) }
+
+	s := h.server(sshtest.Options{HostKeys: []ssh.Signer{certify(ssh.CertTimeInfinity)}})
+	target := sshconn.Target{Host: s.Addr()}
+	plain := knownhosts.Line([]string{knownhosts.Normalize(s.Addr())}, hostKey.PublicKey()) + "\n"
+
+	h.knownHosts(authority(other))
+	_, err := h.dialer().Dial(t.Context(), target)
+	paramsOf(t, err, problems.SSHHostKeyUnknown)
+
+	// Signed by an authority known_hosts doesn't name, a certificate is
+	// checked as its key, as OpenSSH falls back to it.
+	h.knownHosts(authority(other), plain)
+	dial(t, h.dialer(), target)
+
+	h.knownHosts(authority(ca), revoked(ca))
+	_, err = h.dialer().Dial(t.Context(), target)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	h.knownHosts(plain, revoked(ca))
+	_, err = h.dialer().Dial(t.Context(), target)
+	paramsOf(t, err, problems.SSHHostKeyRevoked)
+
+	expired := h.server(sshtest.Options{HostKeys: []ssh.Signer{certify(uint64(time.Now().Add(-time.Hour).Unix()))}})
+	h.knownHosts(authority(ca), knownhosts.Line([]string{knownhosts.Normalize(expired.Addr())}, hostKey.PublicKey())+"\n")
+	_, err = h.dialer().Dial(t.Context(), sshconn.Target{Host: expired.Addr()})
+	paramsOf(t, err, problems.SSHHostCertificateInvalid)
+}
+
+// TestHashedUnmatched checks that, where known_hosts has hashed lines and
+// no ssh-keygen can match them, no key is checked against the rest: a
+// hashed line could revoke the key a plain line has.
+func TestHashedUnmatched(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("no ssh-keygen to hash a line with")
+	}
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts("hashed.invalid"))
+	if out, err := exec.Command("ssh-keygen", "-H", "-f", h.path(".ssh", "known_hosts")).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen -H: %v: %s", err, out)
+	}
+	hashed, err := os.ReadFile(h.path(".ssh", "known_hosts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.knownHosts(string(hashed), s.KnownHosts(""))
+	d := h.dialer()
+	// No ssh, and so no ssh-keygen beside it.
+	d.SSH = filepath.Join(h.dir, "no-ssh")
+	_, err = d.Dial(t.Context(), sshconn.Target{Host: s.Addr()})
+	if p := paramsOf(t, err, problems.SSHKnownHostsUnmatched); p["file"] != h.path(".ssh", "known_hosts") {
+		t.Errorf("the problem's params are %v", p)
+	}
+}
+
+// TestPoolClosedWhileDialing checks that a pool closed while it dials
+// closes what it dialed, and gets nothing after.
+func TestPoolClosedWhileDialing(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	p := &sshconn.Pool{Dialer: h.dialer()}
+	s.Stall()
+	got := make(chan error, 1)
+	go func() {
+		c, err := p.Get(t.Context(), sshconn.Target{Host: s.Addr()})
+		if c != nil {
+			err = errors.New("a closed pool gave a connection")
+		}
+		got <- err
+	}()
+	time.Sleep(200 * time.Millisecond) //nolint:forbidigo // the dial is held meanwhile
+	_ = p.Close()
+	s.Resume()
+	if err := <-got; !errors.Is(err, sshconn.ErrClosed) {
+		t.Errorf("a Get while the pool closed gave %v, want ErrClosed", err)
+	}
+	if _, err := p.Get(t.Context(), sshconn.Target{Host: s.Addr()}); !errors.Is(err, sshconn.ErrClosed) {
+		t.Errorf("a Get after the pool closed gave %v, want ErrClosed", err)
 	}
 }

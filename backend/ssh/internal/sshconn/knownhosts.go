@@ -38,7 +38,10 @@ type knownHosts []knownHost
 // named name, as known_hosts names it: host, or [host]:port for a port
 // other than 22. A line that can't be read is skipped, as OpenSSH skips
 // it. A file that can't be read is problems.SSHConfigUnreadable, of the
-// host alias.
+// host alias; and one with hashed lines that ssh-keygen can't match,
+// there being none, problems.SSHKnownHostsUnmatched, since one of them
+// could revoke the host's key: Meridian doesn't check a key against part
+// of known_hosts.
 func (d *Dialer) readKnownHosts(ctx context.Context, files []string, name, alias string) (knownHosts, error) {
 	var out knownHosts
 	for _, f := range files {
@@ -62,7 +65,9 @@ func (d *Dialer) readKnownHosts(ctx context.Context, files []string, name, alias
 			kh.file, kh.line = f, n
 			if isHashed {
 				if hashed == nil {
-					hashed = d.keygenFind(ctx, f, name)
+					if hashed, err = d.keygenFind(ctx, f, name); err != nil {
+						return nil, problems.SSHKnownHostsUnmatched.Problem(problems.Params{"host": alias, "file": f, "reason": err.Error()})
+					}
 				}
 				if !hashed[n] {
 					continue
@@ -107,9 +112,19 @@ func parseKnownHost(line string) (kh knownHost, hashed, ok bool) {
 var foundLine = regexp.MustCompile(`^# Host .* found: line (\d+)`)
 
 // keygenFind returns the lines of file that ssh-keygen -F finds for name,
-// by their numbers, or none, if there is no ssh-keygen.
-func (d *Dialer) keygenFind(ctx context.Context, file, name string) map[int]bool {
-	out, _ := exec.CommandContext(ctx, d.keygen(), "-F", name, "-f", file).Output() //nolint:gosec // ssh-keygen, with a host's name and a known_hosts file as its arguments, and no shell
+// by their numbers, and an error if it can't say: there is no ssh-keygen,
+// or it failed. It exits 0 when it found lines, and 1 when it found none.
+func (d *Dialer) keygenFind(ctx context.Context, file, name string) (map[int]bool, error) {
+	cmd := exec.CommandContext(ctx, d.keygen(), "-F", name, "-f", file) //nolint:gosec // ssh-keygen, with a host's name and a known_hosts file as its arguments, and no shell
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 {
+		err = nil
+	}
+	if err != nil {
+		return nil, errors.New(said(stderr.String(), err))
+	}
 	lines := map[int]bool{}
 	for line := range strings.Lines(string(out)) {
 		if m := foundLine.FindStringSubmatch(line); m != nil {
@@ -118,7 +133,7 @@ func (d *Dialer) keygenFind(ctx context.Context, file, name string) map[int]bool
 			}
 		}
 	}
-	return lines
+	return lines, nil
 }
 
 // keygen is ssh-keygen, beside the ssh client where one is named.

@@ -273,8 +273,10 @@ func expandTokens(s string, value func(byte) (string, bool)) (string, bool) {
 // proxyCommand expands c's ProxyCommand's tokens, as OpenSSH does: %h the
 // host's name, %p its port, %r the remote user, %n the host as it was
 // named, %u the local user, %d the home directory, and %%. Another is
-// problems.SSHConfigUnreadable.
+// problems.SSHProxyCommandToken, which names the token, not the command,
+// which can hold a secret.
 func (d *Dialer) proxyCommand(c *hostConfig) (string, error) {
+	var unknown byte
 	cmd, ok := expandTokens(c.proxyCommand, func(t byte) (string, bool) {
 		switch t {
 		case 'h':
@@ -290,18 +292,21 @@ func (d *Dialer) proxyCommand(c *hostConfig) (string, error) {
 		case 'd':
 			return d.home(), true
 		}
+		if unknown == 0 {
+			unknown = t
+		}
 		return "", false
 	})
 	if !ok {
-		return "", problems.SSHConfigUnreadable.Problem(problems.Params{"host": c.alias, "reason": "ProxyCommand " + c.proxyCommand})
+		return "", problems.SSHProxyCommandToken.Problem(problems.Params{"host": c.alias, "token": "%" + string(unknown)})
 	}
 	return cmd, nil
 }
 
-// hop reads one of ProxyJump's hosts, [user@]host[:port], and reports
-// false for one that names no host.
+// hop reads one of ProxyJump's hosts, [user@]host[:port], or
+// ssh://[user@]host[:port], and reports false for one that names no host.
 func hop(spec string) (host, user, port string, ok bool) {
-	spec = strings.TrimSpace(spec)
+	spec = strings.TrimPrefix(strings.TrimSpace(spec), "ssh://")
 	if at := strings.LastIndexByte(spec, '@'); at >= 0 {
 		user, spec = spec[:at], spec[at+1:]
 	}

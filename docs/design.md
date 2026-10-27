@@ -3393,6 +3393,15 @@ The coordinator connects to a host over SSH as the user would with `ssh`
 (`backend/ssh/internal/sshconn`), which the `ssh` backend and the login
 nodes' backends build on:
 
+- **What a workflow names is checked first.** A format 1 `ssh:`'s
+  `remoteHost`, `remoteUser`, `jumpNodeHost` and `jumpNodeUser` usually
+  come from its inputs, and reach `ssh -G`, `ssh-keygen` and the user's
+  `ProxyCommand`, which a shell runs with `%h`, `%n` and `%r` in it. So
+  before any of them runs, Meridian refuses a host or a user that could
+  be read as more than a name (`ssh_target_unsafe`), by the rules
+  OpenSSH 9.6 and later checks its own command line with
+  (`valid_hostname`, `valid_ruser`), whichever `ssh` is installed: an
+  older one doesn't check.
 - **The user's ssh_config**, as `ssh -G` resolves it, with `Match`,
   `Include` and its defaults: the host's `HostName`, `Port`, `User`,
   `IdentityFile`, `IdentitiesOnly`, `IdentityAgent`, `ProxyJump` (any
@@ -3403,8 +3412,12 @@ nodes' backends build on:
   `jumpNodeHost` over its `ProxyJump` and `ProxyCommand`. A `remoteHost`
   of the form `host:port` is where to connect, as format 1 takes it,
   without the config's `HostName`, `ProxyJump` or `ProxyCommand`. A
-  config `ssh` can't read is `ssh_config_unreadable`. Without an `ssh`
-  client, OpenSSH's defaults apply, with a note (`ssh_config_not_read`).
+  config `ssh` can't read is `ssh_config_unreadable`; a `ProxyCommand`
+  with another token isn't run (`ssh_proxy_command_token`), and
+  `ProxyJump`s nested more than 8 deep, as those that lead back to
+  themselves are, aren't followed (`ssh_proxy_jump_too_deep`). Without
+  an `ssh` client, OpenSSH's defaults apply, with a note
+  (`ssh_config_not_read`).
 - **Logging in**, with the keys of the user's agent, then the key files
   the config names, then the user's other key pairs in `~/.ssh`, a
   private key beside its `.pub`, as format 1 finds them, unless
@@ -3999,9 +4012,15 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   is `ssh_host_key_changed`, and one it revokes `ssh_host_key_revoked`.
   The host is asked first for a key of a type known_hosts has for it, as
   OpenSSH asks, so a host with keys of several types presents one the
-  user has. A hashed line, whose host is an HMAC-SHA1 of it, is matched
-  by OpenSSH's `ssh-keygen -F`, since FIPS 140-3 doesn't let Meridian
-  compute HMAC-SHA1; without `ssh-keygen`, hashed lines match no host.
+  user has. A host certificate passes only if an authority known_hosts
+  names for the host signed it, neither it nor its authority is revoked,
+  and it is valid for the host now (`ssh_host_certificate_invalid`); its
+  key is checked as a plain key only when no authority known_hosts names
+  signed it, as OpenSSH falls back. A hashed line, whose host is an
+  HMAC-SHA1 of it, is matched by OpenSSH's `ssh-keygen -F`, since FIPS
+  140-3 doesn't let Meridian compute HMAC-SHA1. Without `ssh-keygen`, or
+  when it fails, no key is checked against a file that has hashed lines
+  (`ssh_known_hosts_unmatched`): one of them could revoke it.
 - **Secrets** stay out of the plan and run state. A run's passwords and
   secret variables are in its secret record, encrypted under a data key of
   the run's own, until the run ends, and the record opens only as the

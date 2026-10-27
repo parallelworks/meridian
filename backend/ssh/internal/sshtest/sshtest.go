@@ -56,8 +56,11 @@ type Server struct {
 	stall chan struct{}
 	// refuse is how many more sessions to refuse, or -1 for every one.
 	refuse int
-	logins []string
-	wg     sync.WaitGroup
+	// logins are the users who logged in, in order, each once for its
+	// connection, which loggedIn holds by its session's ID.
+	logins   []string
+	loggedIn map[string]bool
+	wg       sync.WaitGroup
 }
 
 // New starts a server, which stops when the test ends.
@@ -218,6 +221,9 @@ func (s *Server) config() *ssh.ServerConfig {
 			if !authorized[string(key.Marshal())] {
 				return nil, errors.New("sshtest: key not authorized")
 			}
+			// Recorded here, before the server says the login succeeded,
+			// so that a client whose Dial has returned finds it.
+			s.login(meta)
 			return nil, nil
 		},
 	}
@@ -234,9 +240,6 @@ func (s *Server) serve(c net.Conn) {
 		return
 	}
 	defer conn.Close()
-	s.mu.Lock()
-	s.logins = append(s.logins, conn.User())
-	s.mu.Unlock()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	forwards := &forwards{}
@@ -284,6 +287,19 @@ func (s *Server) serve(c net.Conn) {
 		default:
 			_ = nc.Reject(ssh.UnknownChannelType, "sshtest: unknown channel type")
 		}
+	}
+}
+
+// login records a connection's user, once for the connection.
+func (s *Server) login(meta ssh.ConnMetadata) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loggedIn == nil {
+		s.loggedIn = map[string]bool{}
+	}
+	if id := string(meta.SessionID()); !s.loggedIn[id] {
+		s.loggedIn[id] = true
+		s.logins = append(s.logins, meta.User())
 	}
 }
 

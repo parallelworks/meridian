@@ -100,11 +100,16 @@ func publicKeys(files []string) map[string]bool {
 
 // usable returns s as Meridian may sign with it, and false for a key FIPS
 // 140-3 doesn't let it sign with: an RSA key signs only with SHA-2, and
-// only if it has 2048 bits or more.
+// only if it has 2048 bits or more; a DSA key not at all. A certificate is
+// held to the rules for its key.
 func usable(s ssh.Signer) (ssh.Signer, bool) {
-	switch s.PublicKey().Type() {
+	key := s.PublicKey()
+	if cert, ok := key.(*ssh.Certificate); ok {
+		key = cert.Key
+	}
+	switch key.Type() {
 	case ssh.KeyAlgoRSA:
-		pub, ok := s.PublicKey().(ssh.CryptoPublicKey)
+		pub, ok := key.(ssh.CryptoPublicKey)
 		if !ok {
 			return nil, false
 		}

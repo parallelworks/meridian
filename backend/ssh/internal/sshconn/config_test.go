@@ -1,12 +1,17 @@
 package sshconn
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
+	"io"
+	"math/big"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/parallelworks/meridian/problems"
 )
@@ -105,9 +110,10 @@ func TestProxyCommandTokens(t *testing.T) {
 	if want := "x 10.0.0.5 22 alice a tester /home/tester 100%"; err != nil || got != want {
 		t.Errorf("the command is %q, %v; want %q", got, err, want)
 	}
-	c.proxyCommand = "x %C"
-	if _, err := d.proxyCommand(c); !isKind(err, problems.SSHConfigUnreadable) {
-		t.Errorf("a token Meridian doesn't know gives %v", err)
+	c.proxyCommand = "x %C secret %L"
+	_, err = d.proxyCommand(c)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SSHProxyCommandToken.Code() || p.Params["token"] != "%C" || len(p.Params) != 2 {
+		t.Errorf("a token Meridian doesn't know gives %v, which must name the token, and not the command", err)
 	}
 }
 
@@ -124,6 +130,8 @@ func TestHop(t *testing.T) {
 		{"[::1]:2200", "::1", "", "2200", true},
 		{"bob@[::1]", "::1", "bob", "", true},
 		{"bob@", "", "bob", "", false},
+		{"ssh://bob@j:2200", "j", "bob", "2200", true},
+		{"ssh://j", "j", "", "", true},
 	} {
 		host, user, port, ok := hop(tc.spec)
 		if host != tc.host || user != tc.user || port != tc.port || ok != tc.ok {
@@ -145,8 +153,67 @@ func TestCategory(t *testing.T) {
 	}
 }
 
-// isKind reports whether err is a problem of kind k.
-func isKind(err error, k *problems.Kind) bool {
-	var p *problem.Problem
-	return errors.As(err, &p) && p.Code == k.Code()
+// TestValidNames checks which hosts and users are safe to give ssh, as
+// OpenSSH 9.6's valid_hostname and valid_ruser say.
+func TestValidNames(t *testing.T) {
+	for host, want := range map[string]bool{
+		"farm": true, "farm-1.example.org": true, "10.0.0.5:2222": true, "[::1]:22": true, "": true, "h\u00e9te": true,
+		"-oProxyCommand=x": false, "a;b": false, "a b": false, "a\tb": false, "a$b": false, "a`b`": false, "a|b": false,
+		"a&b": false, "a>b": false, "a(b)": false, "a{b}": false, "a'b": false, "a\"b": false, "a\\b": false, "a\x01b": false, "a\x7fb": false,
+	} {
+		if got := validHostname(host); got != want {
+			t.Errorf("validHostname(%q) = %v, want %v", host, got, want)
+		}
+	}
+	for user, want := range map[string]bool{
+		"": true, "alice": true, "a.b-c_d": true, "host$": true, "a b": true, "a\\b": true,
+		"-l": false, "a -b": false, "a;b": false, "a`b": false, "a(b": false, "a'b": false, "a\\": false, "a|b": false,
+	} {
+		if got := validUser(user); got != want {
+			t.Errorf("validUser(%q) = %v, want %v", user, got, want)
+		}
+	}
+}
+
+// fakeSigner is a signer of a key it can't sign with, for what usable
+// says of the key.
+type fakeSigner struct{ key ssh.PublicKey }
+
+func (s fakeSigner) PublicKey() ssh.PublicKey { return s.key }
+func (s fakeSigner) Sign(io.Reader, []byte) (*ssh.Signature, error) {
+	return nil, errors.New("fakeSigner: can't sign")
+}
+
+// TestUsableCertificates checks that a certificate is held to the rules
+// for its key: an RSA key's of fewer than 2048 bits isn't used, and one's
+// of 2048 signs only with SHA-2.
+func TestUsableCertificates(t *testing.T) {
+	small, err := ssh.NewPublicKey(&rsa.PublicKey{N: new(big.Int).Lsh(big.NewInt(1), 1023), E: 65537})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := usable(fakeSigner{&ssh.Certificate{Key: small, CertType: ssh.UserCert}}); ok {
+		t.Error("an RSA certificate of 1024 bits is used")
+	}
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &ssh.Certificate{Key: signer.PublicKey(), CertType: ssh.UserCert, ValidPrincipals: []string{"alice"}, ValidBefore: ssh.CertTimeInfinity}
+	if err := cert.SignCert(rand.Reader, signer); err != nil {
+		t.Fatal(err)
+	}
+	certSigner, err := ssh.NewCertSigner(cert, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := usable(certSigner)
+	ms, isMulti := got.(ssh.MultiAlgorithmSigner)
+	if !ok || !isMulti || !slices.Equal(ms.Algorithms(), []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}) {
+		t.Errorf("an RSA certificate of 2048 bits gives %v, %v; want it to sign with SHA-2 only", got, ok)
+	}
 }

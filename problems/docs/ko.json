@@ -2282,6 +2282,49 @@
       "설정에 호스트에 닿는 방법이 적혀 있다면, OpenSSH 클라이언트를 설치하거나 PATH에 추가하세요."
     ]
   },
+  "ssh_target_unsafe": {
+    "title": "ssh에 넘기기에 안전하지 않은 호스트나 사용자",
+    "why": "형식 1 ssh:의 remoteHost, remoteUser, jumpNodeHost, jumpNodeUser는 흔히 워크플로의 입력에서 옵니다. Meridian은 설정을 읽으려고 이것들을 ssh에 넘기며, 거기서 ProxyCommand에 닿을 수 있는데, ProxyCommand는 셸이 호스트와 사용자를 넣어 실행합니다. 그래서 OpenSSH 9.6 이상이 자기 명령줄을 확인하듯이, 설치된 ssh와 관계없이 Meridian은 -로 시작하거나, 공백, 제어 문자, ' ` \" $ \\ ; & < > | ( ) { } 중 하나가 있는 호스트와, -로 시작하거나, ' ` \" ; & < > | ( ) { } 중 하나가 있거나, 공백 뒤에 -가 있거나, \\로 끝나는 사용자를 거부합니다.",
+    "fix": [
+      "워크플로가 기대하는 대로 입력에 호스트의 이름이나 주소, 또는 사용자의 이름을 주세요."
+    ]
+  },
+  "ssh_known_hosts_unmatched": {
+    "title": "대조할 수 없는 해시된 줄이 있는 known_hosts",
+    "why": "HashKnownHosts가 쓰는 해시된 known_hosts 줄은 호스트를 그 HMAC-SHA1로 가지고 있는데, FIPS 140-3는 Meridian이 이를 계산하지 못하게 하므로 Meridian은 어떤 해시된 줄이 그 호스트의 것인지 ssh-keygen -F에 묻습니다. 그것이 없으면 해시된 줄이 호스트의 키를 폐기하는지 알 수 없으므로, Meridian은 파일의 나머지로 키를 대조하지 않습니다. 그렇게 하면 known_hosts가 폐기한 키를 받아들일 수 있기 때문입니다.",
+    "fix": [
+      "OpenSSH의 ssh-keygen을 설치하거나, ssh와 같은 곳에서 PATH에 추가하세요.",
+      "또는 호스트의 키와 @revoked 줄을, 설정이 지정한, 해시된 줄이 없는 known_hosts 파일에 두세요."
+    ]
+  },
+  "ssh_host_certificate_invalid": {
+    "title": "인증 기관의 서명으로 유효해지지 않는 호스트 인증서",
+    "why": "known_hosts가 그 호스트에 대해 지정한 인증 기관(@cert-authority)이 인증서에 서명했지만, 이 연결에는 유효하지 않습니다. 만료되었거나, 아직 유효하지 않거나, 이 호스트의 이름을 위한 것이 아니거나, 호스트 인증서가 아닙니다. OpenSSH가 아는 인증 기관 중 어느 것도 서명하지 않았을 때만 인증서의 키로 대체하듯이, Meridian은 이때 인증서의 키로 대체하지 않습니다.",
+    "fix": [
+      "호스트 관리자에게 호스트의 인증서를 갱신하거나, 연결에 쓰는 이름으로 서명해 달라고 요청하세요."
+    ]
+  },
+  "ssh_proxy_command_token": {
+    "title": "Meridian이 펼치지 않는 토큰이 있는 ProxyCommand",
+    "why": "Meridian은 ssh처럼 설정의 ProxyCommand를 sh -c로 실행하며, 토큰 %h, %p, %r, %n, %u, %d, %%를 펼칩니다. 다른 토큰이 있는 것은 그대로 명령에 넘기게 되므로 실행하지 않습니다.",
+    "fix": [
+      "Meridian이 펼치는 토큰이나 토큰이 뜻하는 값으로 ProxyCommand를 쓰세요."
+    ]
+  },
+  "ssh_proxy_jump_too_deep": {
+    "title": "너무 깊이 중첩된 ProxyJump",
+    "why": "Meridian은 설정의 ProxyJump가 가리키는 각 호스트와 그 호스트 자신의 ProxyJump를 따라가지만, 이 깊이까지만입니다. 그보다 깊으면 ProxyJump가 자기 자신으로 돌아오는 것입니다. 예를 들어 ProxyJump가 가리키는 호스트의 ProxyJump가 원래 호스트를 가리키는 경우입니다.",
+    "fix": [
+      "ProxyJump가 가리키는 각 호스트에 대해 ssh -G <host>를 실행하고, 설정의 순환을 끊으세요."
+    ]
+  },
+  "ssh_proxy_jump_invalid": {
+    "title": "어떤 호스트도 가리키지 않는 ProxyJump 호스트",
+    "why": "ProxyJump의 각 호스트는 [user@]host[:port]이거나 ssh://[user@]host[:port]입니다. 이것은 어떤 호스트도 가리키지 않습니다.",
+    "fix": [
+      "ssh -G <host>가 보여 주는 대로 설정의 ProxyJump를 고치세요."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "토큰을 받지 않은 워커",
     "why": "다른 호스트의 meridian host처럼 워커를 배치하고 나면 끝나는 프로세스는, 워커가 부트스트랩 토큰을 받을 때까지 기다립니다. 토큰은 워커만 물려받는 소켓으로 건넵니다. 이 워커는 받지 않았습니다. 서비스 관리자에 닿을 수 없거나 같은 이름의 스코프가 아직 있을 때 systemd-run이 시작하지 못한 워커처럼 먼저 끝났거나, 1분 안에 토큰을 요청하지 않았습니다. 토큰이 없는 워커는 작업을 실행할 수 없으므로 Meridian은 그것을 중지했고 아무것도 배치하지 않았습니다.",
