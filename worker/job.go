@@ -446,7 +446,29 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			a.firstStarted = true
 		}
 
-		exit, cause, tryDiags := a.runCommand(logKey{workerapi.LogStep, i, try}, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
+		var (
+			exit     int
+			cause    stopCause
+			tryDiags problems.Diagnostics
+			// failed is why an action's try failed, which, unlike a
+			// command's problems, leaves its retry: and its
+			// ignore-errors: to say what follows, as they do for a
+			// command that exits other than 0.
+			failed problems.Diagnostics
+		)
+		if slices.Contains(platformActions, rs.Uses) {
+			// As in format 1, an action fails as it runs, and the try
+			// with it, as a command that fails does: no platform here
+			// provides this one. Its log says why, as a note is.
+			failed = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, path, problems.Params{"uses": rs.Uses})}
+			logged := failed
+			if note != nil {
+				logged = append(problems.Diagnostics{*note}, failed...)
+			}
+			exit, tryDiags = -1, a.writeLog(logKey{workerapi.LogStep, i, try}, logged)
+		} else {
+			exit, cause, tryDiags = a.runCommand(logKey{workerapi.LogStep, i, try}, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
+		}
 		if a.halted.fired() {
 			end.cut = true
 			return end
@@ -478,7 +500,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		default:
 			retry = !last
 		}
-		a.finished(workerapi.Event{Step: i, Try: try, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: append(diags, tryDiags...)})
+		a.finished(workerapi.Event{Step: i, Try: try, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(diags, failed, tryDiags)})
 		end.result = plan.StepResult{Outcome: outcome, Outputs: outputs}
 		end.cause = cause
 		if !retry {
@@ -608,7 +630,9 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 
 // runnable checks that the worker can run a step, as Step or Cleanup
 // readied it: not one that uses: an action or a workflow, nor one with a
-// shell format 1 doesn't run, which it can't run yet, and where format 1
+// shell format 1 doesn't run, which it can't run yet, but for an action
+// only a platform provides, which fails as it runs (platformActions), and
+// where format 1
 // runs it: where its job runs, unless its ssh: names a host, which this
 // worker can't run a step on yet, but for one whose ssh: names the host
 // and login its job's does, which placed the worker there (sameSSH). A
@@ -622,7 +646,7 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 		d := a.at(k, path, params)
 		return &d
 	}
-	if rs.Uses != "" {
+	if rs.Uses != "" && !slices.Contains(platformActions, rs.Uses) {
 		return nil, diagnostic(problems.UsesNotSupported, problems.Params{"uses": rs.Uses})
 	}
 	if shell, ok := shellOK(rs.Shell); !ok {
@@ -649,6 +673,14 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 	}
 	return nil, nil
 }
+
+// platformActions are the built-in actions only a platform provides: an
+// agent of its own on a cluster's compute node, which scheduler-agent
+// starts and wait-for-agent waits for. A step that uses one fails each
+// try as it runs, as an action that fails does in format 1, and only
+// then: an if: can skip it, or its job; its retry: tries it again; and
+// its ignore-errors: lets its last try succeed.
+var platformActions = []string{"parallelworks/scheduler-agent", "parallelworks/wait-for-agent"}
 
 // sshKeys are the keys of a format 1 ssh: that say which host, and which
 // login on it, a step runs on, by which ACTIVATE keys the connections it
@@ -710,6 +742,24 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 		diags = append(diags, a.at(problems.LogNotKept, path, problems.Params{"size": dropped, "limit": a.spool.limit()}))
 	}
 	return exit, cause, diags
+}
+
+// writeLog writes the messages of ds, a line each, masked, as the whole
+// log key, of a step's try that runs no command, as runCommand writes a
+// note before what its command prints. It returns the problem of a log
+// that wasn't kept whole.
+func (a *attempt) writeLog(key logKey, ds problems.Diagnostics) problems.Diagnostics {
+	stream := a.spool.open(key)
+	w := a.mask.Writer(stream)
+	for _, d := range ds {
+		_, _ = io.WriteString(w, d.Message()+"\n")
+	}
+	w.Close()
+	stream.Close()
+	if dropped := stream.droppedBytes(); dropped > 0 {
+		return problems.Diagnostics{a.at(problems.LogNotKept, a.job.Steps[key.step].Path, problems.Params{"size": dropped, "limit": a.spool.limit()})}
+	}
+	return nil
 }
 
 // jobOutputs is the name of the $OUTPUTS file the job's steps without an

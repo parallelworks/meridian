@@ -1,0 +1,26 @@
+description: >-
+  A step that uses a built-in action only a platform provides, such as
+  parallelworks/scheduler-agent, fails when it runs, as a step whose
+  command fails does, and only then: the run is created and started
+  without a platform, a step or a job whose if: is false and uses one is
+  skipped, as it would be with one, and one with ignore-errors: lets its
+  job go on.
+source: Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      agent:
+        outcome: skipped
+      main:
+        outcome: success
+        logs:
+          - {step: 1, text: "ran\n"}
+      forced:
+        outcome: failure
+        logs:
+          - {step: 1, text: "on failure\n"}
+      ignored:
+        outcome: success
+        logs:
+          - {step: 1, text: "carried on\n"}

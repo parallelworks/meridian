@@ -318,6 +318,7 @@ var (
 	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
 	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
 	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
+	ActionNeedsPlatform   = define(Error, "action_needs_platform", "Built-in action only a platform provides", "uses")
 	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
 	StepOffJobHost        = define(Error, "step_off_job_host", "Step to run off its job's host")
 	SSHHostEmpty          = define(Warning, "ssh_host_empty", "Step's ssh: names no host")

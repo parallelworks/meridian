@@ -1342,6 +1342,102 @@ func TestStepsRefused(t *testing.T) {
 	}
 }
 
+// TestPlatformActions checks that a step that uses a built-in action only a
+// platform provides fails each try as it runs, with a problem that says
+// so, as a step whose command fails does: its retry: tries it again, and
+// its ignore-errors: lets its last try succeed; while the built-in actions
+// Meridian will run itself are still ones this worker can't run yet, and
+// a skipped step that uses one is skipped, with no problem.
+func TestPlatformActions(t *testing.T) {
+	t.Parallel()
+	use := func(action string, with map[string]any) plan.Step {
+		return plan.Step{Uses: action, With: plan.Literal(with), If: cond("always()")}
+	}
+	skipped := use("parallelworks/scheduler-agent", nil)
+	skipped.If = cond("false")
+	retried := use("parallelworks/wait-for-agent", map[string]any{"agentId": "a"})
+	retried.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
+	ignored := use("parallelworks/wait-for-agent", map[string]any{"agentId": "b"})
+	ignored.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
+	ignored.IgnoreErrors = plan.Literal(true)
+	steps := []plan.Step{
+		skipped,
+		use("parallelworks/scheduler-agent", map[string]any{"scheduler": "slurm"}),
+		retried,
+		ignored,
+		use("parallelworks/update-session", map[string]any{"name": "s"}),
+		use("parallelworks/cancel-jobs", map[string]any{"jobs": []any{"other"}}),
+	}
+	f := workerapitest.NewFake(t, newJob(steps...))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"finished 0.0 skipped -1",
+		"started 1.0", "finished 1.0 failure -1",
+		"started 2.0", "finished 2.0 failure -1", "started 2.1", "finished 2.1 failure -1",
+		"started 3.0", "finished 3.0 failure -1", "started 3.1", "finished 3.1 success -1",
+		"finished 4.0 failure -1",
+		"finished 5.0 failure -1",
+	)
+	checkEnd(t, f, plan.OutcomeFailure, "")
+	for _, tc := range []struct {
+		step, try int
+		want      string
+	}{
+		{1, 0, "action_needs_platform"},
+		{2, 0, "action_needs_platform"},
+		{2, 1, "action_needs_platform"},
+		{3, 0, "action_needs_platform"},
+		{3, 1, "action_needs_platform"},
+		{4, 0, "uses_not_supported"},
+		{5, 0, "uses_not_supported"},
+	} {
+		d := finishedEvent(t, f, tc.step, tc.try, false).Diagnostics
+		if got := codes(d); !slices.Equal(got, []string{tc.want}) {
+			t.Errorf("step %d's try %d's diagnostics are %v, want %s", tc.step, tc.try, got, tc.want)
+		} else if d[0].Params["uses"] != steps[tc.step].Uses {
+			t.Errorf("step %d's problem names %v, want %s", tc.step, d[0].Params["uses"], steps[tc.step].Uses)
+		}
+	}
+	if d := finishedEvent(t, f, 0, 0, false).Diagnostics; len(d) != 0 {
+		t.Errorf("the skipped step's diagnostics are %v", codes(d))
+	}
+	// Each try's log says why it failed, and ends.
+	want := problems.ActionNeedsPlatform.Message(problems.Params{"uses": "parallelworks/wait-for-agent"}) + "\n"
+	for try := range 2 {
+		if log, ended := logOf(f, logKey{workerapi.LogStep, 2, try}); log != want || !ended {
+			t.Errorf("the log of step 2's try %d is %q, ended %v; want %q", try, log, ended, want)
+		}
+	}
+}
+
+// TestPlatformActionIgnored checks that a job whose step uses an action
+// only a platform provides, with ignore-errors:, goes on as after a step
+// that succeeded, as after a command that fails with it: the steps after
+// it run, success() is true for them, its cleanup: runs, and the job
+// succeeds.
+func TestPlatformActionIgnored(t *testing.T) {
+	t.Parallel()
+	agent := plan.Step{Uses: "parallelworks/scheduler-agent", With: plan.Literal(map[string]any{}), IgnoreErrors: plan.Literal(true)}
+	agent.Cleanup = plan.Literal("echo cleaned")
+	after := command("echo after")
+	after.If = cond("success()")
+	f := workerapitest.NewFake(t, newJob(agent, after))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f,
+		"started 0.0", "finished 0.0 success -1",
+		"started 1.0", "finished 1.0 success 0",
+		"cleanup started 0.0", "cleanup finished 0.0 success 0",
+	)
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+	if got := codes(finishedEvent(t, f, 0, 0, false).Diagnostics); !slices.Equal(got, []string{"action_needs_platform"}) {
+		t.Errorf("the step's diagnostics are %v", got)
+	}
+}
+
 // TestOutputsLineTooLong checks that, as in format 1, a $OUTPUTS file with
 // a line of 64 KiB or longer is read as having no outputs, and that the
 // step's event warns of it.
