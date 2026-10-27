@@ -70,3 +70,11 @@ func MakeRunDir(path string) error {
 	}
 	return safepath.CheckDir(path, safepath.Private)
 }
+
+// CheckMadeRunDir checks the run's directory at path, which MakeRunDir
+// made, again, as before a run is taken up again: that it is still a
+// directory of the user's that other users can't use, on a way no other
+// user can change. What is wrong is a problem, as one of safepath.CheckDir's.
+func CheckMadeRunDir(path string) error {
+	return safepath.CheckDir(path, safepath.Private)
+}

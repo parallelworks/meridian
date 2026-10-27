@@ -32,7 +32,8 @@ const helloWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo hello\n"
 
 // TestMain runs the test binary as meridian worker when the local backend
 // starts it so, as it starts the binary that placed a job, for a job of a
-// run that a test's meridian run coordinates. Run with
+// run that a test's meridian run coordinates; and as meridian, with its
+// arguments, when a test starts it so (envMain). Run with
 // testtiming.EnvScale, it shortens the timing of the coordinators it opens
 // (testtiming.Scale), as only a test does.
 func TestMain(m *testing.M) {
@@ -44,7 +45,7 @@ func TestMain(m *testing.M) {
 		}
 		testtiming.Scale = s
 	}
-	if len(os.Args) > 1 && os.Args[1] == "worker" {
+	if len(os.Args) > 1 && os.Args[1] == "worker" || os.Getenv(envMain) == "1" {
 		main()
 	}
 	os.Exit(m.Run())
@@ -81,20 +82,83 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// runTest runs meridian run with args in the environment vars, as a
-// test sets c up, and returns what it did.
-func runTest(t *testing.T, vars map[string]string, setUp func(*cli), args ...string) result {
+// A commandRun is the command, run with a test's arguments, as it goes: what
+// it has written so far, and what it did, sent once it has exited.
+type commandRun struct {
+	stdout, stderr lockedBuffer
+	done           chan result
+}
+
+// startCommand runs the command with args in the environment vars, as a
+// test sets c up, and returns it as it goes.
+func startCommand(t *testing.T, vars map[string]string, setUp func(*cli), args ...string) *commandRun {
 	t.Helper()
-	var stdout, stderr lockedBuffer
+	cmd := &commandRun{done: make(chan result, 1)}
 	c := &cli{
-		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
+		stdin: strings.NewReader(""), stdout: &cmd.stdout, stderr: &cmd.stderr,
 		lookupEnv: func(name string) (string, bool) { v, ok := vars[name]; return v, ok },
 	}
 	if setUp != nil {
 		setUp(c)
 	}
-	code := run(t.Context(), c, append([]string{"run"}, args...))
-	return result{stdout.String(), stderr.String(), code}
+	go func() {
+		code := run(t.Context(), c, args)
+		cmd.done <- result{cmd.stdout.String(), cmd.stderr.String(), code}
+	}()
+	return cmd
+}
+
+// commandTest runs the command with args in the environment vars, and
+// returns what it did.
+func commandTest(t *testing.T, vars map[string]string, args ...string) result {
+	t.Helper()
+	return <-startCommand(t, vars, nil, args...).done
+}
+
+// runTest runs meridian run with args in the environment vars, as a
+// test sets c up, and returns what it did.
+func runTest(t *testing.T, vars map[string]string, setUp func(*cli), args ...string) result {
+	t.Helper()
+	return <-startCommand(t, vars, setUp, append([]string{"run"}, args...)...).done
+}
+
+// waitingWorkflow writes a workflow of one job, main, whose one step writes
+// one, then waits until release is called, then writes two; and returns its
+// path and release, which the test's end calls, if it hasn't.
+func waitingWorkflow(t *testing.T) (workflow string, release func()) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "release")
+	workflow = writeFile(t, "w.yaml", fmt.Sprintf(`jobs:
+  main:
+    steps:
+      - run: |
+          echo one
+          while [ ! -e %s ]; do sleep 0.05; done
+          echo two
+`, quoted(t, file)))
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			if err := os.WriteFile(file, nil, 0o600); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	t.Cleanup(release)
+	return workflow, release
+}
+
+// waitUntil waits until ok, which it asks every so often, for as long as a
+// run on a loaded runner can take to get there.
+func waitUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited a minute for %s", what)
+		}
+		<-time.After(20 * time.Millisecond)
+	}
 }
 
 var startedRE = regexp.MustCompile(`^run (\d+) started \(run directory (.+)\)\n`)

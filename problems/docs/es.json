@@ -1778,6 +1778,21 @@
       "Asigna a MERIDIAN_STATE_DIR un directorio con una ruta más corta, en un disco local, que solo tú puedas cambiar y que perdure. Guarda la base de datos y la clave que envuelve los secretos de tus ejecuciones, así que mueve allí también lo que hay en el anterior."
     ]
   },
+  "run_not_found": {
+    "title": "Ejecución que no está guardada",
+    "why": "Una ejecución se nombra por su número, que meridian run imprime cuando la ejecución empieza. Cada directorio de estado tiene un almacén propio, con las ejecuciones numeradas desde 1: este no tiene ninguna ejecución del número indicado, como cuando el número está mal escrito, o la ejecución se hizo con otro directorio de estado, como el que nombra MERIDIAN_STATE_DIR.",
+    "fix": [
+      "Ejecuta meridian status para ver las ejecuciones del almacén, e indica el número de una de ellas.",
+      "Si la ejecución se hizo con otro directorio de estado, define MERIDIAN_STATE_DIR con él."
+    ]
+  },
+  "job_not_found": {
+    "title": "Trabajo que la ejecución no tiene",
+    "why": "Un trabajo se nombra por su nombre en el workflow, o una instancia de un trabajo de matriz por su clave, el nombre, # y su índice, como build#2. La ejecución no tiene ningún trabajo del nombre indicado.",
+    "fix": [
+      "Ejecuta meridian status con el número de la ejecución para ver sus trabajos, e indica el nombre o la clave de uno de ellos."
+    ]
+  },
   "socket_unusable": {
     "title": "Socket del coordinador en el que no se puede escuchar",
     "why": "Los workers de esta máquina llegan al coordinador por un socket Unix en el directorio de estado de Meridian, que un meridian run a la vez tiene, bajo un bloqueo junto a la base de datos. Este tiene el bloqueo, y elimina el socket que dejó uno que terminó, pero el sistema operativo rechazó escuchar allí, por el motivo indicado.",
@@ -1835,6 +1850,14 @@
     "fix": [
       "Ejecuta la versión de Meridian que abrió la base de datos por última vez, o una posterior.",
       "O asigna a MERIDIAN_STATE_DIR otro directorio, lo que deja las ejecuciones de este donde están."
+    ]
+  },
+  "database_too_old": {
+    "title": "Base de datos más antigua de lo que esta versión lee sin cambiarla",
+    "why": "Meridian guarda las ejecuciones en una base de datos de su directorio de estado, cuyo esquema cada versión que ejecuta flujos de trabajo, como hacen meridian run y meridian resume, lleva a la versión que conoce al abrir la base de datos. Un comando que solo muestra ejecuciones, como meridian status y meridian logs, lee la base de datos sin cambiarla, para no cambiar una base de datos que usa una versión anterior que aún ejecuta un flujo de trabajo; y solo puede leer una base de datos cuyo esquema está en la versión que conoce su propia versión. Esta está en una versión anterior.",
+    "fix": [
+      "Ejecuta el comando con la versión de Meridian que ejecutó por última vez un flujo de trabajo con este directorio de estado.",
+      "O, cuando ninguna versión anterior de Meridian ejecute flujos de trabajo con este directorio de estado, ejecuta meridian run o meridian resume con esta versión, que actualiza la base de datos, y vuelve a ejecutar el comando."
     ]
   },
   "member_settings_not_json": {

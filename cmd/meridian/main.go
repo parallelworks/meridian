@@ -125,6 +125,9 @@ type command struct {
 	name    string
 	args    string
 	summary string
+	// about says more of what the command does, as its usage shows it,
+	// after its summary, or is "".
+	about string
 	// run runs the command with its arguments, which it parses with fs,
 	// and returns its exit status. It is nil for a command that isn't built
 	// yet.
@@ -141,10 +144,10 @@ func init() {
 		{name: "run", args: "<workflow>", summary: "Compiles and runs a workflow, coordinating it in the foreground.", run: runRun},
 		{name: "validate", args: "<workflow>", summary: "Compiles without running, and reports every error.", run: runValidate},
 		{name: "migrate", args: "<workflow>", summary: "Rewrites a workflow in the latest format."},
-		{name: "status", args: "[run]", summary: "Shows runs, or one run's jobs."},
-		{name: "logs", args: "<run> [job]", summary: "Shows or follows logs."},
+		{name: "status", args: "[run]", summary: "Shows runs, or one run's jobs.", run: runStatus},
+		{name: "logs", args: "<run> [job]", summary: "Shows or follows logs.", run: runLogs},
 		{name: "cancel", args: "<run>", summary: "Cancels a run."},
-		{name: "resume", args: "<run>", summary: "Picks up a run whose coordinator stopped."},
+		{name: "resume", args: "<run>", summary: "Picks up a run whose coordinator stopped.", about: resumeAbout, run: runResume},
 		{name: "rerun", args: "<run>", summary: "Runs a run again, or only its failed jobs."},
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
 		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},
@@ -308,6 +311,9 @@ func flagError(c *cli, fs *flag.FlagSet, err error) int {
 	}
 	cmd, _ := lookup(name)
 	fmt.Fprintf(c.stdout, "usage: meridian %s [options]\n\n%s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
+	if cmd.about != "" {
+		fmt.Fprintf(c.stdout, "\n%s\n", cmd.about)
+	}
 	var options strings.Builder
 	fs.SetOutput(&options)
 	fs.PrintDefaults()

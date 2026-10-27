@@ -7,6 +7,9 @@ package flock
 
 import "errors"
 
-// ErrUnsupported is what Lock returns on a system without the file locks
-// that package syscall offers.
+// ErrUnsupported is what Lock and TryLock return on a system without the
+// file locks that package syscall offers.
 var ErrUnsupported = errors.New("flock: this system has no file locks")
+
+// ErrHeld is what TryLock returns for a file whose lock another holds.
+var ErrHeld = errors.New("flock: another holds the lock")

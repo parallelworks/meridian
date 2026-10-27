@@ -40,3 +40,46 @@ func Lock(ctx context.Context, path string) (unlock func(), err error) {
 		}
 	}
 }
+
+// TryLock takes an exclusive lock on the file at path, as Lock does, but
+// doesn't wait: a lock another holds is ErrHeld. The function it returns
+// removes the file, and then releases the lock, so that a lock of its own
+// for each of many things leaves no file behind once released. A lock
+// taken on a file that its holder removed meanwhile, which no one else
+// would find, is let go, and taken on the file at path instead.
+func TryLock(path string) (release func(), err error) {
+	for {
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600) //nolint:gosec // a lock file in one of Meridian's own directories
+		if err != nil {
+			return nil, err
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) //nolint:gosec // a file descriptor fits an int
+		switch {
+		case errors.Is(err, syscall.EWOULDBLOCK):
+			f.Close()
+			return nil, ErrHeld
+		case errors.Is(err, syscall.EINTR):
+			f.Close()
+			continue
+		case err != nil:
+			f.Close()
+			return nil, err
+		}
+		held, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		there, err := os.Lstat(path)
+		if err == nil && os.SameFile(held, there) {
+			return func() {
+				_ = os.Remove(path)
+				f.Close()
+			}, nil
+		}
+		f.Close()
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+}

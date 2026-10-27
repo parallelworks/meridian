@@ -20,6 +20,9 @@ import (
 // polls it holds of attempts' controls are answered as soon as the
 // coordinator changes them, rather than at the server's next read of them.
 func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Logs) error {
+	if err := c.writable(); err != nil {
+		return err
+	}
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: logs, Sealer: c.sealer,
 		Readier: &workerapisrv.PlanReadier{Store: c.store, Sealer: c.sealer, Plan: c.plans.get, RunValues: runValues, Readied: readiedWith},

@@ -1,0 +1,101 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/parallelworks/meridian/backend"
+	localbackend "github.com/parallelworks/meridian/backend/local"
+	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/problems"
+)
+
+// startQueue names the hopper queue the Start of the run id goes in: one
+// of the run's own, which the meridian run that created it works, or a
+// meridian resume of it, so that its Start reads its variables from that
+// process's environment, the shell that ran it.
+func startQueue(id string) string { return "meridian.start." + id }
+
+// coordinate opens a coordinator of the store at db, in the state
+// directory dirs names, that works its runs as meridian run and resume do:
+// with the user's variables and groups, cfg, and the local backend, which
+// runs each job's worker as a process of the user's, which reaches the
+// coordinator on its socket. It logs what no answer says to c's standard
+// error.
+func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config, db string) (*coordinator.Coordinator, error) {
+	return coordinator.Open(ctx, coordinator.Options{
+		Database: db, Keys: local.NewKeys(dirs.State),
+		Variables: cfg, Inputs: cfg, Groups: cfg,
+		Drivers:    map[string]backend.Driver{"local": &localbackend.Driver{State: dirs.State}},
+		Endpoint:   backend.Endpoint{Address: dirs.Socket()},
+		StartQueue: startQueue,
+		Log:        slog.New(slog.NewTextHandler(c.stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	})
+}
+
+// errNoStore is what storeOf returns for a state directory without a
+// store, which has no runs.
+var errNoStore = errors.New("no store")
+
+// storeOf returns the database of the store in the state directory dirs
+// names, which a run before made: errNoStore, without making it, if there
+// is none.
+func storeOf(dirs local.Dirs) (string, error) {
+	if _, err := os.Lstat(filepath.Join(dirs.State, local.DatabaseFile)); errors.Is(err, fs.ErrNotExist) {
+		return "", errNoStore
+	}
+	return dirs.Database()
+}
+
+// readStore opens a coordinator of the store in the state directory dirs
+// names only to read it, as status and logs do, which change nothing in it,
+// not even its schema, so as not to change a store that an earlier
+// release, still running a workflow, uses (coordinator.Options.ReadOnly):
+// errNoStore if there is none.
+func readStore(ctx context.Context, c *cli, dirs local.Dirs) (*coordinator.Coordinator, error) {
+	db, err := storeOf(dirs)
+	if err != nil {
+		return nil, err
+	}
+	return coordinator.Open(ctx, coordinator.Options{
+		Database: db, ReadOnly: true,
+		Log: slog.New(slog.NewTextHandler(c.stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	})
+}
+
+// runNotFound returns the problem of the run id, which the store doesn't
+// have, for err, ErrRunNotFound or errNoStore, and otherwise err.
+func runNotFound(id string, err error) error {
+	if errors.Is(err, coordinator.ErrRunNotFound) || errors.Is(err, errNoStore) {
+		return problems.RunNotFound.Problem(problems.Params{"run": id})
+	}
+	return err
+}
+
+// lockWriters has c write its standard output and its standard error under
+// one lock, so that what goroutines write, as a run's progress as it goes,
+// and the command's problems, doesn't break another's line.
+func lockWriters(c *cli) {
+	var mu sync.Mutex
+	c.stdout, c.stderr = &lockedWriter{mu: &mu, w: c.stdout}, &lockedWriter{mu: &mu, w: c.stderr}
+}
+
+// A lockedWriter writes to w under mu, which other lockedWriters share, so
+// that a write to one doesn't break another's line.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}

@@ -14,7 +14,8 @@ import (
 )
 
 // socketEndpoint is the name the store records the coordinator's socket
-// under, which one meridian run of a state directory at a time holds.
+// under, which one meridian run or resume of a state directory at a time
+// holds.
 const socketEndpoint = "socket"
 
 // maxSocketPath is the most bytes a Unix socket's path can have on this
@@ -23,7 +24,7 @@ const socketEndpoint = "socket"
 var maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
 
 // A socket is the coordinator's socket, which workers on this machine
-// connect to, as one meridian run holds it (holdSocket).
+// connect to, as one meridian run or resume holds it (holdSocket).
 type socket struct {
 	// errs has the problem that stopped the socket, if one did, and done
 	// is closed once the socket is closed and released.
@@ -32,10 +33,11 @@ type socket struct {
 }
 
 // holdSocket takes the coordinator's socket at path, for coord's store,
-// once no other process holds it, as every meridian run of the store waits
-// to, and serves the worker API on it (coordinator.ServeWorkers), storing
-// the logs workers upload with logs, until ctx is done: then it closes it,
-// and releases it, so that one that waits takes it over. Only the process
+// once no other process holds it, as every meridian run or resume of the
+// store waits to, and serves the worker API on it
+// (coordinator.ServeWorkers), storing the logs workers upload with logs,
+// until ctx is done: then it closes it, and releases it, so that one that
+// waits takes it over. Only the process
 // that holds the socket's endpoint in the store listens at path, so a
 // socket at path is one that a process that held it before left, which it
 // replaces.
@@ -63,7 +65,7 @@ func serveSocket(ctx context.Context, coord *coordinator.Coordinator, path strin
 	if err := checkSocketPath(path); err != nil {
 		return err
 	}
-	hold, err := coord.HoldEndpoint(ctx, socketEndpoint, "meridian run, process "+strconv.Itoa(os.Getpid()))
+	hold, err := coord.HoldEndpoint(ctx, socketEndpoint, "meridian, process "+strconv.Itoa(os.Getpid()))
 	if err != nil {
 		return err
 	}

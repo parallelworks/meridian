@@ -1528,6 +1528,19 @@
       "Set MERIDIAN_STATE_DIR to a directory with a shorter path, on a local disk, which only you can change, and that lasts. It holds the database and the key that wraps your runs' secrets, so move what is in the old one there too."
     ]
   },
+  "run_not_found": {
+    "why": "A run is named by its number, which meridian run prints as the run starts. Each state directory has a store of its own, with runs numbered from 1: this one has no run of the number given, as when the number is mistyped, or the run was made with another state directory, as MERIDIAN_STATE_DIR names one.",
+    "fix": [
+      "Run meridian status to see the store's runs, and give the number of one of them.",
+      "If the run was made with another state directory, set MERIDIAN_STATE_DIR to it."
+    ]
+  },
+  "job_not_found": {
+    "why": "A job is named by its name in the workflow, or an instance of a matrix job by its key, the name, # and its index, as in build#2. The run has no job of the name given.",
+    "fix": [
+      "Run meridian status with the run's number to see its jobs, and give the name or the key of one of them."
+    ]
+  },
   "socket_unusable": {
     "why": "Workers on this machine reach the coordinator at a Unix socket in Meridian's state directory, which one meridian run at a time holds, under a lock beside the database. This one holds the lock, and removes a socket that one that ended left, but the operating system refused to listen there, for the reason given.",
     "fix": [
@@ -1577,6 +1590,13 @@
     "fix": [
       "Run the release of Meridian that last opened the database, or a later one.",
       "Or set MERIDIAN_STATE_DIR to another directory, which leaves the runs in this one where they are."
+    ]
+  },
+  "database_too_old": {
+    "why": "Meridian keeps runs in a database in its state directory, whose schema each release that runs workflows, as meridian run and meridian resume do, brings up to the version it knows as it opens the database. A command that only shows runs, as meridian status and meridian logs do, reads the database without changing it, so as not to change a database that an earlier release, still running a workflow, uses; and it can only read a database whose schema is at the version its own release knows. This one is at an earlier version.",
+    "fix": [
+      "Run the command with the release of Meridian that last ran a workflow with this state directory.",
+      "Or, once no earlier release of Meridian runs workflows with this state directory, run meridian run or meridian resume with this release, which brings the database up to date, and run the command again."
     ]
   },
   "member_settings_not_json": {

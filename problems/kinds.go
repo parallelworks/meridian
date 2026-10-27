@@ -439,6 +439,7 @@ var (
 // the latest this release knows.
 var (
 	DatabaseTooNew = defineCommand("database_too_new", "Database newer than this release reads", "path", "schema", "version", "latest")
+	DatabaseTooOld = defineCommand("database_too_old", "Database older than this release reads without changing it", "path", "schema", "version", "latest")
 )
 
 // The files the meridian command reads: its config, its key, a variable's
@@ -538,6 +539,14 @@ var (
 	RunDirNotMade     = defineCommand("run_dir_not_made", "Run directory that can't be made", "path", "reason")
 	SocketPathTooLong = defineCommand("socket_path_too_long", "Socket path too long", "path", "limit")
 	SocketUnusable    = defineCommand("socket_unusable", "Coordinator socket that can't be listened on", "path", "reason")
+)
+
+// The problems of the commands that take a run that is stored, as
+// meridian status, logs and resume do: run is the run's ID as it was
+// given, and job a job's name or key.
+var (
+	RunNotFound = defineCommand("run_not_found", "Run that isn't stored", "run")
+	JobNotFound = defineCommand("job_not_found", "Job the run doesn't have", "run", "job")
 )
 
 // meridian worker's own problems, which end it: variable is an environment

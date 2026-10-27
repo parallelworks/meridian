@@ -6,20 +6,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/parallelworks/foundation/problem"
 
-	"github.com/parallelworks/meridian/backend"
-	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/plan"
@@ -53,8 +48,7 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	c.json = *out == "json"
 	// The run's progress is written as the run goes, and the command's
 	// problems as they come: neither breaks the other's line.
-	var mu sync.Mutex
-	c.stdout, c.stderr = &lockedWriter{mu: &mu, w: c.stdout}, &lockedWriter{mu: &mu, w: c.stderr}
+	lockWriters(c)
 
 	w, err := compileWorkflow(ctx, c, inputs, positional[0])
 	if err != nil {
@@ -89,18 +83,7 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	coord, err := coordinator.Open(ctx, coordinator.Options{
-		Database: db, Keys: local.NewKeys(w.dirs.State),
-		Variables: w.cfg, Inputs: w.cfg, Groups: w.cfg,
-		// The local backend runs each job's worker as a process of the
-		// user's, which reaches the coordinator on its socket.
-		Drivers:  map[string]backend.Driver{"local": &localbackend.Driver{State: w.dirs.State}},
-		Endpoint: backend.Endpoint{Address: w.dirs.Socket()},
-		// The run's Start reads its variables from this process's
-		// environment, the shell that ran it.
-		StartQueue: func(id string) string { return "meridian.start." + id },
-		Log:        slog.New(slog.NewTextHandler(c.stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
-	})
+	coord, err := coordinate(ctx, c, w.dirs, w.cfg, db)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -143,19 +126,6 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		follow = logs
 	}
 	return supervise(ctx, c, coord, w, runSupervision{logs: logs, follow: follow, progress: progress}, id, interrupts)
-}
-
-// A lockedWriter writes to w under mu, which other lockedWriters share, so
-// that a write to one doesn't break another's line.
-type lockedWriter struct {
-	mu *sync.Mutex
-	w  io.Writer
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(p)
 }
 
 // A runSupervision is what supervise shows a run with: where its workers'
