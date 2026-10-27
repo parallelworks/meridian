@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)); matrix jobs and needs on any instance of one aren't built yet ([The coordinator](#the-coordinator)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys and logs; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, each run's events in order, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, matrices among them, ends them, and lets whoever shows a run follow its events and logs ([Following a run](#following-a-run)) ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -1925,8 +1925,18 @@ name, `#` and its index from 0, as in `build#2`.
   So a matrix written out and one sized from earlier results run the same
   way.
 - **`fail-fast` and `max-parallel`** belong to the strategy: the coordinator
-  cancels the remaining instances when one fails, and places no more than
-  `max-parallel` at a time. The strategy is evaluated as one value, so they
+  cancels the remaining instances when one whose steps ran fails or is
+  cancelled, as format 1 does, though not when one failed before its first
+  step, as when its setup did; and places no more than `max-parallel` at a
+  time, giving the
+  turns in the order of the instances' indexes, where format 1 gives them
+  in an order that is random. An instance whose worker runs is told to
+  cancel its job, whatever its `if:`, as a run's cancel stops a job. One
+  not yet placed, or whose worker hasn't claimed it, ends cancelled with
+  the reason `fail-fast` without running, as a placement no worker has
+  claimed does when a run is stopped; format 1 starts such an instance with
+  its job already cancelled, and runs its steps that outlive a cancel. The
+  strategy is evaluated as one value, so they
   are as private as the matrix's values: of a matrix whose instances are
   private, the coordinator reads them from the secret record, as run state
   doesn't hold them (`plan.Expansion.Split`).
@@ -1946,7 +1956,10 @@ name, `#` and its index from 0, as in `build#2`.
 - **`needs: <job>:any`** waits for any one instance, and `needs.<job>` is
   then the first instance to succeed, or to be skipped by its own `if:`, or
   else, once every instance has ended, a failed one, as format 1 waits
-  ([On hopper](#on-hopper)).
+  ([On hopper](#on-hopper)). Its outputs are those of every instance that
+  had ended by then, failed ones among them, an output that more than one
+  set the highest index's, as format 1 merges them; its result is the
+  chosen instance's.
 - **Size.** A matrix has at least one instance and at most 256 by default,
   a limit of Meridian's ([Compiling](#compiling)), not the format's. A
   matrix with no instance, or more than the limit, fails where it is

@@ -56,21 +56,34 @@ func (tx *Tx) MarkJobFailed(run string) (bool, error) {
 	return true, nil
 }
 
-// StartControl gives the new attempt id, of a run a job of which has
-// failed, what each of the run's attempts tells its worker from then on
-// (MarkJobFailed), as its first control. NewAttempt calls it, so that no
-// attempt misses it.
+// StartControl gives the new attempt id, as its first control, what every
+// attempt like it tells its worker from then on: that a job of its run
+// failed (MarkJobFailed), and, for an instance of a matrix job whose
+// instances fail-fast: stopped, to cancel its job (MarkFailFast).
+// NewAttempt calls it, so that no attempt misses either, as one made as
+// they are marked.
 func (tx *Tx) StartControl(id string) error {
-	var failed sql.NullInt64
-	err := tx.tx.QueryRowContext(tx.ctx, `SELECT r.any_job_failed_at FROM meridian_attempts a JOIN meridian_runs r ON r.id = a.run_id WHERE a.id = ?`, id).
-		Scan(&failed)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	var failed, failFast sql.NullInt64
+	err := tx.tx.QueryRowContext(tx.ctx, `SELECT r.any_job_failed_at, p.fail_fast_at FROM meridian_attempts a
+JOIN meridian_runs r ON r.id = a.run_id
+JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
+LEFT JOIN meridian_jobs p ON p.run_id = j.run_id AND p.key = j.name AND j.instance IS NOT NULL
+WHERE a.id = ?`, id).Scan(&failed, &failFast)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
-	case err != nil || !failed.Valid:
+	}
+	if err != nil {
 		return err
 	}
-	return tx.tellJobFailed(id)
+	if failed.Valid {
+		if err := tx.tellJobFailed(id); err != nil {
+			return err
+		}
+	}
+	if failFast.Valid {
+		return tx.TellFailFast(id)
+	}
+	return nil
 }
 
 // tellJobFailed adds to what the attempt id's control asks that a job of

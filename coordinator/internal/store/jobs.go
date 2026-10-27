@@ -56,6 +56,14 @@ type Job struct {
 	PlaceTries int
 	// Diagnostics are the job's problems: Ready's, or placement's.
 	Diagnostics problems.Diagnostics
+	// Expansion is a matrix job's instances as run state holds them, once
+	// its supervisor expanded its matrix at Ready (SetExpansion), or nil.
+	// TurnAt is when an instance was given its turn to be placed
+	// (GrantTurns), and FailFastAt when a matrix job's instance's failure
+	// stopped the rest (MarkFailFast): each the zero time before.
+	Expansion  *plan.Expansion
+	TurnAt     time.Time
+	FailFastAt time.Time
 }
 
 // A NewJob is a job, or an instance of a matrix job, to store.
@@ -114,7 +122,8 @@ func instanceOf(name, key string) (int, bool) {
 }
 
 const jobColumns = `run_id, key, name, instance, supervisor_id, fence, attempts, attempts_started, created_at,
-  outcome, reason, result, ended_at, ready_at, readied_stopped, any_choices, wake, place_tries, diagnostics`
+  outcome, reason, result, ended_at, ready_at, readied_stopped, any_choices, wake, place_tries, diagnostics,
+  expansion, turn_at, fail_fast_at`
 
 // Job returns the run's job with the key key.
 func (tx *Tx) Job(run, key string) (*Job, error) {
@@ -160,15 +169,24 @@ func scanJob(row scanner) (*Job, error) {
 		j                              Job
 		run, created                   int64
 		instance, ended, ready, halted sql.NullInt64
+		turn, failFast                 sql.NullInt64
 		outcome, reason                sql.NullString
-		result, choices, diags         []byte
+		result, choices, diags, x      []byte
 	)
 	if err := row.Scan(&run, &j.Key, &j.Name, &instance, &j.SupervisorID, &j.Fence, &j.Attempts, &j.AttemptsStarted, &created,
-		&outcome, &reason, &result, &ended, &ready, &halted, &choices, &j.Wake, &j.PlaceTries, &diags); err != nil {
+		&outcome, &reason, &result, &ended, &ready, &halted, &choices, &j.Wake, &j.PlaceTries, &diags,
+		&x, &turn, &failFast); err != nil {
 		return nil, err
 	}
 	j.Run, j.CreatedAt, j.EndedAt = runID(run), time.UnixMicro(created).UTC(), timeOf(ended)
 	j.ReadyAt, j.ReadiedStopped = timeOf(ready), halted.Int64 != 0
+	j.TurnAt, j.FailFastAt = timeOf(turn), timeOf(failFast)
+	if x != nil {
+		j.Expansion = new(plan.Expansion)
+		if err := workerapi.Unmarshal(x, j.Expansion); err != nil {
+			return nil, fmt.Errorf("%w: the instances of run %s's job %q: %w", ErrMalformed, j.Run, j.Key, err)
+		}
+	}
 	if choices != nil {
 		if err := jsonv2.Unmarshal(choices, &j.AnyChoices, jsonv2.RejectUnknownMembers(true)); err != nil {
 			return nil, fmt.Errorf("%w: the instances that met run %s's job %q's needs: %w", ErrMalformed, j.Run, j.Key, err)

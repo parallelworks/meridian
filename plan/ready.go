@@ -198,6 +198,16 @@ func Combine(instances []JobResult) JobResult {
 	return out
 }
 
+// AnyResult is what a job that needs a matrix job on any instance
+// (Need.Any) reads of it: chosen, the result of the instance chosen, whose
+// outcome it is, with the outputs of ended, the results of the instances
+// that had ended as it was chosen, combined as Combine combines them.
+func AnyResult(chosen JobResult, ended []JobResult) JobResult {
+	out := Combine(ended)
+	out.Outcome, out.NeedsFailed, out.Cancelled = chosen.Outcome, chosen.NeedsFailed, chosen.Cancelled
+	return out
+}
+
 // Reads returns the part of run that the job reads, which is what an
 // attempt of it receives when it is claimed: what the expressions that its
 // worker evaluates read, in its env:, its working-directory:, its steps and
