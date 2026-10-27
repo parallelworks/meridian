@@ -226,6 +226,14 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     `max-parallel` ([Matrices](#matrices));
   - the `uses:` references ACTIVATE reads otherwise
     ([Interfaces](#interfaces));
+  - where checkout's repository is read, with whose credentials, and when,
+    which transports it may use and that it holds no credential, and what
+    its paths mean; cancel-jobs' cancels of each other; and the actions
+    only a platform provides ([Built-in actions](#built-in-actions));
+  - what isn't built yet of the built-in actions, which fails the step
+    that needs it when it runs: a whole checkout of a repository with
+    submodules, and a cancel of another run's jobs
+    ([Built-in actions](#built-in-actions));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
   - how a job's `ssh:` reaches its host, where its run's directory is
@@ -407,6 +415,24 @@ the SHA-256 hash of its content: 218 files.
   isn't a list is. ACTIVATE takes the same fix. None of the 211
   `compute-clusters` inputs of the known workflows is `multi`, the form
   that takes a list.
+- **A `parallelworks/cancel-jobs` of a job that hasn't started yet is
+  kept**: the job ends cancelled and never starts, where ACTIVATE marked
+  it as cancelling, which only a job that runs heeds, and the job's start
+  overwrote the mark, so that it ran. Of the 215 known cancel-jobs steps, 2
+  cancel jobs that can't have started yet, since they wait on a job that
+  still runs, both in one workflow, whose jobs so ran though it meant them
+  not to; in the other 213, the job cancelled waits on no job its
+  canceller doesn't, or the canceller waits, polling, for it to run, so
+  that whether it had started was a race at most, which no workflow can
+  rely on. ACTIVATE takes the same fix by ending a job marked as cancelling
+  as it would start it. It is decided, and built with cancel-jobs
+  ([Built-in actions](#built-in-actions)).
+- **`parallelworks/update-session` updates only the run's own sessions**,
+  one of those the run's `sessions:` made, which `${{ sessions.<name> }}`
+  names, a fix for security that ACTIVATE takes too. All 15 known
+  update-session steps name one of their run's own sessions, as
+  `${{ sessions.<name> }}`. It is decided, and built with update-session
+  ([Built-in actions](#built-in-actions)).
 
 ## Phases
 
@@ -1748,14 +1774,15 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
-| Actions | Built-in actions, which no interface provides yet: the worker refuses a step that `uses:` one (`uses_not_supported`) | `parallelworks/checkout`, and those that need no platform, once built |
-| Sessions | Interactive sessions a workflow serves | None |
+| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
+| Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys and Logs, in
-`coordinator`, and the backends' `Driver` in `backend`. Whoever shows a run
+`coordinator`, and the backends' `Driver` in `backend`. Built-in actions
+have no interface of their own: each goes through the one that owns what
+it acts on ([Built-in actions](#built-in-actions)). Whoever shows a run
 as it happens, as the command's progress display does, follows its events
 and its logs (`Coordinator.Follow`, below), rather than being told of
 them. A resolver may be
@@ -2054,6 +2081,140 @@ any other `uses:` for a built-in action; no known workflow has either.
   compile (`resolver_missing`, [The workflow format](#the-workflow-format)).
   A `uses:` names a workflow when it starts with `github/`, `gitlab/`,
   `marketplace/` or `workflow/`; any other names a built-in action.
+
+### Built-in actions
+
+A step whose `uses:` is `parallelworks/` and one of five names runs one of
+format 1's built-in actions, with its `with:`; the schema refuses any other
+name under `parallelworks/`. The worker evaluates the step as it does a
+`run:` step, its `with:`, `if:`, `retry:`, `timeout:` and `cleanup:` among
+it, and does the action, or asks the coordinator to, in place of a
+command. Each action goes through the interface that owns what it acts
+on, rather than an interface of actions: a repository is Sources', a
+session Sessions', and the run's jobs the coordinator's own.
+
+| Action | Acts on | Done by | Without a platform |
+| --- | --- | --- | --- |
+| `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
+| `parallelworks/cancel-jobs` | Jobs of the step's run | The coordinator, asked by the worker | Works |
+| `parallelworks/update-session` | One of the run's sessions | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
+| `parallelworks/scheduler-agent`, `parallelworks/wait-for-agent` | A platform's agent on a cluster's compute node, which the first starts through the cluster's scheduler with the platform's command-line tool and credentials, and the second waits for | A platform | The step fails (`action_needs_platform`) |
+
+None of them is a no-op where nothing provides it: a step that succeeded
+would say that a session points at the run, or that an agent runs, where
+none does. A step that uses an action nothing provides fails when it
+runs, and only then: one only a platform provides with
+`action_needs_platform`, which names it, and update-session, where
+nothing provides Sessions, with `resolver_missing`. It fails as an action
+that fails does in format 1, as a command that fails does: its `retry:`
+tries it again, its `ignore-errors:` lets its last try succeed, and its
+`cleanup:` runs. An `if:` can skip the step, or its job, as the known
+workflows that hold the agent actions do, each of their 8 steps in a job
+whose `if:` reads an input that defaults to false, which every known call
+of them leaves false. That differs from a feature whose interface is
+missing, which fails to compile ([Interfaces](#interfaces)): every run
+makes its `sessions:`, but a step may never run. The worker fails a step
+that uses scheduler-agent or wait-for-agent with `action_needs_platform`
+already. Until checkout, cancel-jobs and update-session are built, it
+fails one that uses them with `uses_not_supported`; the rest of this
+section is decided, and built next.
+
+- **checkout.**
+  - **Pinned as the run is created.** Create pins each checkout's `repo`
+    and `branch` to a commit through Sources, as it pins the workflows
+    `uses:` names, so that a run and its reruns check out the same tree,
+    and a branch that is gone fails the run before anything runs, even
+    under an `if:` that is false, as a `uses:` that can't be resolved
+    does. Both must be written out (`checkout_not_known`), so that the
+    coordinator, not the worker, chooses what is fetched, with whose
+    credentials. ACTIVATE reads the branch when the step runs. All 148
+    known checkouts write both out.
+  - **Fetched by the coordinator.** Git runs on the coordinator's host,
+    through Sources: with the user's own Git configuration, credential
+    helpers and SSH agent where `meridian` runs, and a platform's linked
+    accounts on a platform; and never prompting. A `repo` is any
+    `https://` or `ssh://` URL, or an scp-like `user@host:path`, on any
+    host, as format 1 takes; a platform's Sources may take fewer. Two are
+    refused as the run is created (`checkout_repo_invalid`), differences
+    from format 1: another transport, as `file://` or `ext::`, so that a
+    workflow can't have the coordinator read its host's files, or run a
+    command there, or `git://` or `http://`, which have no TLS or SSH, so
+    that nothing fetched would be authenticated or protected; and a URL
+    that holds a credential, as
+    `user:token@`, which would put a secret in the plan. Git is the `git`
+    command, not a client in Go
+    ([FIPS 140-3](#fips-140-3)). ACTIVATE runs `git` on the step's host,
+    with that host's credentials, and through the platform, with the run's
+    owner's linked account, where that fails. The worker's host needs no
+    Git, no credentials and no way to the repository's server, which a
+    cluster's login node with an old Git, or without outbound access,
+    hasn't.
+  - **Written by the worker.** The worker asks the coordinator for the
+    step's tree, which it serves from the step's pin, never from what the
+    worker says, as a tar stream of at most 1 GiB (`Options.Limits`), and
+    extracts it through an `os.Root` on the step's working directory
+    joined with `path:`, or on `path:` as it is where it is absolute, as
+    format 1 uses it, so that no member of it, nor a link already there,
+    writes outside it. It merges, replacing files of the same names
+    and keeping the rest, as ACTIVATE's copy does, and writes no `.git`.
+    The coordinator tries a fetch 5 times, 2, 4, 8 and 16 seconds apart, as
+    ACTIVATE does, and the step's `retry:` applies on top.
+  - **Paths.** A `sparse_checkout` entry is a literal path from the
+    repository's root; a glob or a `!`, which ACTIVATE can read as a
+    pattern, is refused (`checkout_path_invalid`). Every known entry, in
+    the 134 known sparse checkouts, means the same either way. An entry
+    that matches nothing warns (`checkout_path_not_found`). A whole
+    checkout of a repository with submodules, which format 1 clones with
+    them, isn't built yet: its step fails when it runs
+    (`checkout_submodules`), and it can come later. A sparse one leaves
+    them empty, as format 1's does. None of the known repositories checked
+    out has submodules.
+- **cancel-jobs.** The coordinator does it, in one transaction for each
+  request, and answers a repeat of it as it answered it:
+  - Each name in `jobs:` names a job of the step's own run. One that names
+    no job, or a matrix job, whose instances format 1 names otherwise,
+    warns (`cancel_jobs_job_unknown`) and does nothing, as in format 1.
+    A cancel of another run's jobs, which format 1 makes with `slug`,
+    `workflow` and `run`, or `run` alone, isn't built yet: its step fails
+    when it runs (`cancel_jobs_other_run`), never as the run is created,
+    since an `if:` may skip it; no known workflow makes one. With no
+    `jobs:`, the step cancels its run.
+  - A job that has ended, or is cancelled already, is left as it is. One
+    that runs stops as a cancel stops it
+    ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)),
+    one placed and not yet claimed is claimed with its cancel, and one that
+    hasn't started ends cancelled and never starts, a
+    [bug fix](#bug-fixes-to-format-1).
+  - **Of two jobs that cancel each other at once, exactly one is
+    cancelled:** a step whose own job is cancelled already, and that
+    doesn't outlive a cancel, cancels nothing. In format 1 it is a race,
+    whose outcome no workflow can rely on. 196 of the 215 known cancels
+    are of jobs that cancel each other.
+  - A step that cancels its own job succeeds, and its job then stops as a
+    cancelled job does. ACTIVATE can fail such a step instead in a job
+    that runs over `ssh:`, as it copies the step's outputs back once the
+    job is cancelled; no workflow can rely on that.
+  - A job cancelled this way doesn't fail the run, as in format 1, but the
+    jobs that need it are skipped, which does, as a job they need that
+    failed does.
+- **update-session** updates one of the run's own sessions, which its
+  `name` names, through Sessions, with the rest of its `with:` as it was
+  evaluated; a name that isn't one of the run's sessions' is refused, a
+  [bug fix](#bug-fixes-to-format-1). Where nothing provides Sessions, as
+  with `meridian run`, the step fails when it runs (`resolver_missing`,
+  with the interface Sessions), as a feature whose interface is missing
+  fails, but when the step runs, not as the run is created; a run with
+  `sessions:` can't start there anyway, and all 15 known update-session
+  steps are in workflows that have them.
+- **scheduler-agent and wait-for-agent** need a platform's agent, its
+  command-line tool and its credentials, which Meridian has none of, so the
+  step fails (`action_needs_platform`). A platform that embeds Meridian can
+  provide them, an addition. Meridian's own way to run on a compute node is
+  a scheduler backend, which places a worker there.
+- **The worker API.** The worker asks the coordinator to do a step's
+  cancel-jobs or update-session, and for its checkout's tree, through
+  paths that are additions to the worker API, which raise the API's own
+  version, not the plan's; a checkout's pin is the plan's.
 
 ### Failures and retries
 
@@ -2927,7 +3088,13 @@ that embeds Meridian serve the same API.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
   ([Workflows a step calls](#workflows-a-step-calls)). It isn't built yet:
-  the worker refuses a `uses:` step (`uses_not_supported`).
+  the worker fails a step that uses a workflow (`uses_not_supported`).
+- **Actions:** ask the coordinator to do a step's cancel-jobs or
+  update-session, or for its checkout's tree
+  ([Built-in actions](#built-in-actions)). They aren't built yet: the
+  worker fails a step that uses checkout, cancel-jobs or update-session
+  (`uses_not_supported`), and one that uses an action only a platform
+  provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
   (`plan.JobResult`).
@@ -3171,11 +3338,14 @@ own runs.
 
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
-rather than run them on the host, and a step that `uses:` an action or a
-workflow, or runs on another host with `ssh:`, fails, as does one whose
-`ssh:` is null, or gives no `remoteHost`, on a worker that a job's `ssh:`
-placed on a host. So a step's `clean-on-retry:`, which cleans a `uses:`
-step's directory, has nothing to clean yet. Its events are kept
+rather than run them on the host, and a step that `uses:` a workflow or a
+built-in action, or runs on another host with `ssh:`, fails, as does one
+whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
+`ssh:` placed on a host; one that uses an action only a platform provides
+fails saying so (`action_needs_platform`,
+[Built-in actions](#built-in-actions)). So a step's `clean-on-retry:`,
+which cleans a `uses:` step's directory, has nothing to clean yet. Its
+events are kept
 in memory while the coordinator is unreachable, since each is small but for
 a step's outputs, which are capped.
 
@@ -3597,8 +3767,22 @@ Meridian's must (`internal/fipsmode`).
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
   digests are SHA-256.
 - **External tools** that Meridian runs (`git`, container runtimes,
-  schedulers) use the host's cryptography, which a FIPS host configures for
-  the whole system.
+  schedulers) run in processes of their own, outside Meridian's module.
+  Their TLS and SSH are the host's cryptography, which a FIPS host
+  configures for the whole system; Git's own hashing is below.
+- **Git** is the `git` command, on the coordinator's host, for the
+  workflows `uses:` names and the repositories `parallelworks/checkout`
+  names, not a Git client in Go. GitHub and GitLab name a repository's
+  objects by their SHA-1 digests, so a client computes SHA-1 to check what
+  it fetches, which `crypto/sha1` refuses to do under `fips140=only`. A
+  client in Go needs a SHA-1 of its own, outside the module, in
+  Meridian's process: go-git's is `sha1cd`, and go-git brings more
+  cryptography from outside the standard library and `golang.org/x/crypto`
+  with it, much of it not FIPS-approved. The command hashes with its own
+  SHA-1 too, but in a process of its own, outside Meridian's module, which
+  is why it is acceptable; its TLS and SSH are the host's, as above.
+  Meridian's own digests, of a pinned workflow's text among them, are
+  SHA-256, in the module.
 
 Every binary is a pure-Go, static build (`CGO_ENABLED=0`). On macOS, Go
 binaries still link `libSystem`, as Apple requires.
@@ -3985,9 +4169,6 @@ Larger features that aren't designed yet are proposed in
   while it does.
 - **The Kubernetes client.** `client-go` is a large dependency for a few API
   calls; plain HTTP against the API may be enough.
-- **Git.** Running the `git` command uses the host's credentials and
-  configuration, but its cryptography is outside Meridian's FIPS module. A
-  pure Go client would be inside it, at the cost of a large dependency.
 - **How long a job may wait in a queue** before Meridian withdraws it and
   places it on another member, and whether the job or the group sets that.
   An interactive session and an overnight batch job in the same group would
