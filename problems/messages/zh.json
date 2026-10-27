@@ -184,6 +184,11 @@
   "placement_unanswered": "无法放置作业 {job}：其组的后端经过 {tries} 次尝试仍未应答。",
   "setup_failed": "作业 {job} 无法开始：它的尝试在任何步骤运行之前失败了 {tries} 次。",
   "coordinator_job_failed": "协调器无法将作业 {job} 运行到结束。",
+  "worker_lost": "作业 {job} 的工作进程在某个步骤开始之后丢失了，而它的 retry: 不会再运行它。",
+  "worker_lost_again": "作业 {job} 的工作进程又丢失了，而它的 retry: 已经再运行了它 {retries} 次，这是它允许的上限。",
+  "worker_ended_early": "作业 {job} 的工作进程在作业的第一个步骤之前就结束了。",
+  "worker_killed": "作业 {job} 的工作进程{reason, select, timeout {在达到时间限制时被其调度器} other {因使用了超出允许的内存而被}}结束了。",
+  "member_gone": "作业 {job} 的尝试被放置在其组中已不存在的成员上，因此无法向其后端询问其工作进程是否还在运行。",
 
   "workflow_too_large": "工作流超过 {limit} 字节，超出了其大小上限。",
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",

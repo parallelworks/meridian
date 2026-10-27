@@ -1097,9 +1097,41 @@
     ]
   },
   "coordinator_job_failed": {
-    "why": "Meridian's coordinator sees each job from the moment it is ready to its end. It couldn't for this job: it failed again and again, as when its store can't be written, or the job's worker was lost, or its placement withdrawn. So it ended the job as failed rather than leave it waiting.",
+    "why": "Meridian's coordinator sees each job from the moment it is ready to its end. It couldn't for this job: it failed again and again, as when its store can't be written, or the job's placement was withdrawn. So it ended the job as failed rather than leave it waiting.",
     "fix": [
       "Check the coordinator's log for what kept it from running the job, then rerun the run."
+    ]
+  },
+  "worker_lost": {
+    "why": "A worker is lost when its backend says it has ended without completing its attempt, or, for a job whose retry: lists worker-lost, once it hasn't renewed its lease for the lease and a margin after it. Once a step has started, the workflow's code may have run, and Meridian runs a job again only when its retry: lists worker-lost, which this job's doesn't.",
+    "fix": [
+      "Find out why the worker ended, as from its node or its scheduler, which the run's log of the attempt names.",
+      "If the job is safe to run again from its first step, give it retry: with reasons: [worker-lost], and rerun the run."
+    ]
+  },
+  "worker_lost_again": {
+    "why": "The job's retry: lists worker-lost, so Meridian ran it again each time its worker was lost after a step had started, up to its max-retries, and its worker was lost once more.",
+    "fix": [
+      "Find out why its workers keep ending, as from their nodes or their scheduler.",
+      "Or raise the job's max-retries, and rerun the run."
+    ]
+  },
+  "worker_ended_early": {
+    "why": "The worker's backend says the worker ended before the job's first step started, so none of the workflow's code ran. That counts as a failure before the first step: Meridian places the job again, and fails it after a few such failures, or after the second for the same reason.",
+    "fix": [
+      "Look at the worker's log on its member, as its backend keeps it, for why it ended."
+    ]
+  },
+  "worker_killed": {
+    "why": "The worker's backend says its scheduler, or the kernel, ended the worker: at the job's time limit, or for using more memory than the job may. Meridian doesn't run the job again for that.",
+    "fix": [
+      "Give the job a longer timeout:, or more memory with resources:, or make it need less, and rerun the run."
+    ]
+  },
+  "member_gone": {
+    "why": "Meridian asks a member's backend whether an attempt's worker still runs once the attempt's lease lapses, or before its worker has claimed it. The member the attempt was placed on is no longer in its group, as after the group was changed in the config, so its backend can't be asked. Once the grace has passed, Meridian takes the worker for lost: if no step had started, that is a failure before the first step, and the job is placed again on a member its group has; otherwise the job fails, or runs again if its retry: lists worker-lost.",
+    "fix": [
+      "Put the member back in the group while it has workers running, or let the job be placed again."
     ]
   },
   "workflow_too_large": {

@@ -103,6 +103,15 @@ func askJobFailed(c *workerapi.Control) bool {
 	return true
 }
 
+// RetriesFor reports whether the retry: of the attempt id's job lists
+// reason (Options.RetriesFor): an end of the attempt for that reason, as
+// its worker lost, or the job past its timeout, may be followed by another
+// attempt, and isn't the job's failure, which marks the run only as the
+// job ends (MarkJobFailed).
+func (tx *Tx) RetriesFor(id string, reason plan.Reason) bool {
+	return tx.s.retriesFor != nil && tx.s.retriesFor(tx, id, reason)
+}
+
 // markFailedStep marks the attempt id's run as one a job of which failed
 // (MarkJobFailed) once fresh, the attempt's events AppendEvents has just
 // stored, show that a step of it failed, as format 1 marks it, as the step
@@ -112,9 +121,11 @@ func askJobFailed(c *workerapi.Control) bool {
 // out, or else as the next event, which isn't its next try, shows. A try
 // that is tried again isn't the step's failure, nor is a step that ignores
 // its errors, which reports success; a failed step with no event after it
-// is marked as its job ends.
+// is marked as its job ends. Neither is a step of a job whose retry: lists
+// timeout, which its job's deadline may have failed, of an attempt that
+// another may follow: its job marks the run as it ends (RetriesFor).
 func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
-	if len(fresh) == 0 {
+	if len(fresh) == 0 || tx.RetriesFor(id, plan.ReasonTimeout) {
 		return nil
 	}
 	events := fresh

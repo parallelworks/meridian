@@ -305,6 +305,27 @@ func (tx *Tx) PinReady(run, key string, stopped bool, anyChoices map[string]stri
 	return tx.Job(run, key)
 }
 
+// ReadiedSupervisors returns the supervisors of the jobs that have been
+// readied, and haven't ended, of the runs that are running: those that
+// wait on hopper's schedule, as for a live attempt.
+func (tx *Tx) ReadiedSupervisors() ([]hopper.JobID, error) {
+	rows, err := tx.tx.QueryContext(tx.ctx, `SELECT j.supervisor_id FROM meridian_jobs j JOIN meridian_runs r ON r.id = j.run_id
+WHERE r.state = ? AND j.outcome IS NULL AND j.ready_at IS NOT NULL ORDER BY j.run_id, j.key`, RunRunning)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []hopper.JobID
+	for rows.Next() {
+		var id hopper.JobID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // Wake records that something the run's job's supervisor waits for has
 // happened, as an attempt's claim or end, and returns the job, whose
 // supervisor the caller wakes once the transaction commits. A supervisor

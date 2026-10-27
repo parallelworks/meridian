@@ -184,6 +184,11 @@
   "placement_unanswered": "작업 {job}을(를) 배치할 수 없었습니다. 그룹의 백엔드가 {tries}번 시도하는 동안 응답하지 않았습니다.",
   "setup_failed": "작업 {job}을(를) 시작할 수 없었습니다. 그 시도가 단계가 실행되기 전에 {tries}번 실패했습니다.",
   "coordinator_job_failed": "코디네이터가 작업 {job}을(를) 끝까지 실행할 수 없었습니다.",
+  "worker_lost": "작업 {job}의 워커를 단계가 시작된 뒤에 잃었으며, 그 retry:는 작업을 다시 실행하지 않습니다.",
+  "worker_lost_again": "작업 {job}의 워커를 또 잃었습니다. 그 retry:가 허용하는 만큼인 {retries}번 작업을 다시 실행한 뒤였습니다.",
+  "worker_ended_early": "작업 {job}의 워커가 작업의 첫 단계 전에 끝났습니다.",
+  "worker_killed": "작업 {job}의 워커가 {reason, select, timeout {시간 제한에 이르러 스케줄러에 의해} other {허용된 것보다 많은 메모리를 써서}} 끝났습니다.",
+  "member_gone": "작업 {job}의 시도가 그 그룹에 더는 없는 멤버에 배치되어, 워커가 실행 중인지 그 백엔드에 물을 수 없습니다.",
 
   "workflow_too_large": "워크플로가 {limit}바이트를 넘어 크기 한도를 초과합니다.",
   "execution_group_unknown": "‘{input}’ 입력이 지정한 실행 그룹 {value}은(는) 그룹 {groups} 중 하나가 아닙니다.",

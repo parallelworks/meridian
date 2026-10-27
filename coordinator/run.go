@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/parallelworks/hopper"
@@ -17,6 +18,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -102,6 +104,10 @@ type Options struct {
 	// Follow do, and does nothing else: each call that would change a
 	// run, or serve, returns ErrReadOnly. It needs no Keys.
 	ReadOnly bool
+
+	// now is the store's clock, as a test's that it moves on itself: nil
+	// for the host's.
+	now func() time.Time
 }
 
 // ErrReadOnly is what a coordinator opened only to read the store
@@ -208,6 +214,9 @@ type Coordinator struct {
 	// controls hears which attempts' controls changed: the worker API's
 	// server while ServeWorkers serves it, or nil.
 	controls controlNotifier
+	// members are the members attempts were placed on, as placedMember
+	// found them, by attempt, for a while.
+	members map[string]memberEntry
 }
 
 // Open opens a coordinator on the store at opts.Database. It works no
@@ -220,22 +229,32 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	// The store asks c, as it stores a step's events (lastTry), which is
-	// filled in once the store is open.
-	c := &Coordinator{}
-	st, err := store.Open(ctx, opts.Database, &store.Options{Log: log, LastTry: c.lastTry, ReadOnly: opts.ReadOnly})
+	timing, err := openTiming()
 	if err != nil {
 		return nil, err
 	}
-	timing, err := openTiming()
+	// The store asks c, as it stores a failed step's events, whether the
+	// try was the step's last (lastTry), and whether the job's retry: lists
+	// a reason (retriesFor), once c is filled in below; and a reset of the
+	// store's clock wakes the supervisors c knows of, once it is open.
+	c := &Coordinator{}
+	var opened atomic.Pointer[Coordinator]
+	st, err := store.Open(ctx, opts.Database, &store.Options{
+		Log: log, LastTry: c.lastTry, RetriesFor: c.retriesFor, ReadOnly: opts.ReadOnly, Now: opts.now, MaxLead: timing.Grace,
+		OnClockReset: func(ctx context.Context) {
+			if c := opened.Load(); c != nil {
+				c.wakeReadied(ctx)
+			}
+		},
+	})
 	if err != nil {
-		return nil, errors.Join(err, st.Close())
+		return nil, err
 	}
 	*c = Coordinator{
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
-		queues: map[string]func(){}, connections: map[string]connection{},
+		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{},
 	}
 	if opts.ReadOnly {
 		// Neither seals nor inserts anything.
@@ -247,7 +266,33 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	if c.inserter, err = hopper.NewClient(st.Driver(), &hopper.Config{Logger: log}); err != nil {
 		return nil, errors.Join(err, st.Close())
 	}
+	opened.Store(c)
 	return c, nil
+}
+
+// retriesFor reports, in tx, whether the retry: of the attempt's job lists
+// reason, as the run's plan says (plan.Job.RetriesFor): what the store
+// asks before it marks the run as one a job of which failed, for an end
+// of an attempt, or a step's failure, that another attempt may follow.
+func (c *Coordinator) retriesFor(tx *store.Tx, attempt string, reason plan.Reason) bool {
+	a, err := tx.Attempt(attempt)
+	if err != nil {
+		return false
+	}
+	run, err := tx.Run(a.Run)
+	if err != nil {
+		return false
+	}
+	job, err := tx.Job(a.Run, a.Job)
+	if err != nil {
+		return false
+	}
+	p, err := c.plans.get(run)
+	if err != nil {
+		return false
+	}
+	pj := planJob(p, job.Name)
+	return pj != nil && pj.RetriesFor(reason)
 }
 
 // lastTry reports, in tx, whether try of the step whose index is step is
@@ -544,8 +589,14 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 	retiring, stopRetiring := context.WithCancel(context.WithoutCancel(ctx))
 	c.served, c.retiring = served, retiring
 	c.mu.Unlock()
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		c.watchWakes(ctx, time.Second)
+	}()
 
 	<-ctx.Done()
+	<-watched
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.stopTimeout)
 	defer cancel()
 	// The queues being retired have stopped changing served's before it

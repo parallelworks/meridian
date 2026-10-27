@@ -1279,9 +1279,46 @@
   },
   "coordinator_job_failed": {
     "title": "Trabajo que el coordinador no pudo ejecutar",
-    "why": "El coordinador de Meridian lleva cada trabajo desde que está listo hasta su fin. Con este trabajo no pudo: falló una y otra vez, como cuando no se puede escribir en su almacén, o se perdió el worker del trabajo, o se retiró su asignación. Así que terminó el trabajo como fallido en lugar de dejarlo esperando.",
+    "why": "El coordinador de Meridian lleva cada trabajo desde que está listo hasta su fin. Con este trabajo no pudo: falló una y otra vez, como cuando no se puede escribir en su almacén, o se retiró la asignación del trabajo. Así que terminó el trabajo como fallido en lugar de dejarlo esperando.",
     "fix": [
       "Mira en el registro del coordinador qué le impidió ejecutar el trabajo, y después repite la ejecución."
+    ]
+  },
+  "worker_lost": {
+    "title": "Trabajo cuyo worker se perdió",
+    "why": "Un worker se pierde cuando su backend dice que terminó sin completar su intento, o, en un trabajo cuyo retry: incluye worker-lost, cuando no ha renovado su concesión durante la concesión y un margen después. Una vez empezado un paso, puede haberse ejecutado código del flujo de trabajo, y Meridian solo vuelve a ejecutar un trabajo cuando su retry: incluye worker-lost, y el de este no lo incluye.",
+    "fix": [
+      "Averigua por qué terminó el worker, por ejemplo por su nodo o su planificador, que el registro del intento en la ejecución nombra.",
+      "Si es seguro volver a ejecutar el trabajo desde su primer paso, dale retry: con reasons: [worker-lost], y repite la ejecución."
+    ]
+  },
+  "worker_lost_again": {
+    "title": "Trabajo cuyo worker se perdió más veces de las que permite su retry",
+    "why": "El retry: del trabajo incluye worker-lost, así que Meridian lo volvió a ejecutar cada vez que su worker se perdió después de empezar un paso, hasta su max-retries, y su worker se perdió una vez más.",
+    "fix": [
+      "Averigua por qué siguen terminando sus workers, por ejemplo por sus nodos o su planificador.",
+      "O aumenta el max-retries del trabajo, y repite la ejecución."
+    ]
+  },
+  "worker_ended_early": {
+    "title": "Worker que terminó antes del primer paso del trabajo",
+    "why": "El backend del worker dice que el worker terminó antes de que empezara el primer paso del trabajo, así que no se ejecutó nada del código del flujo de trabajo. Eso cuenta como un fallo antes del primer paso: Meridian vuelve a asignar el trabajo, y lo hace fallar tras unos cuantos fallos así, o tras el segundo por el mismo motivo.",
+    "fix": [
+      "Mira en el registro del worker en su miembro, tal como lo guarda su backend, por qué terminó."
+    ]
+  },
+  "worker_killed": {
+    "title": "Worker que su planificador terminó",
+    "why": "El backend del worker dice que su planificador, o el kernel, terminó el worker: al llegar al límite de tiempo del trabajo, o por usar más memoria de la que el trabajo puede. Meridian no vuelve a ejecutar el trabajo por eso.",
+    "fix": [
+      "Da al trabajo un timeout: más largo, o más memoria con resources:, o haz que necesite menos, y repite la ejecución."
+    ]
+  },
+  "member_gone": {
+    "title": "Intento cuyo miembro ya no está en su grupo",
+    "why": "Meridian pregunta al backend de un miembro si el worker de un intento sigue en marcha una vez que vence la concesión del intento, o antes de que su worker lo reclame. El miembro al que se asignó el intento ya no está en su grupo, como después de cambiar el grupo en la configuración, así que no se puede preguntar a su backend. Pasado el periodo de gracia, Meridian da el worker por perdido: si no había empezado ningún paso, es un fallo antes del primer paso, y el trabajo se vuelve a asignar a un miembro que su grupo tiene; si no, el trabajo falla, o se vuelve a ejecutar si su retry: incluye worker-lost.",
+    "fix": [
+      "Vuelve a poner el miembro en el grupo mientras tenga workers en marcha, o deja que el trabajo se vuelva a asignar."
     ]
   },
   "workflow_too_large": {

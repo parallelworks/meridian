@@ -200,8 +200,9 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 		return c.resumePlace(ctx, run, job, a)
 	default:
 		// Placed, claimed or running: its worker reports to the worker
-		// API, which wakes the supervisor once the attempt ends.
-		return c.supervision.wait, nil
+		// API, which wakes the supervisor once the attempt ends, and
+		// renews its lease, which the supervisor watches.
+		return c.watch(ctx, run, job, a)
 	}
 }
 
@@ -217,10 +218,11 @@ func (c *Coordinator) attemptEnded(ctx context.Context, run *store.Run, job *sto
 			return 0, err
 		}
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: report.Result, Reason: report.Reason, Diagnostics: report.Diagnostics}, done)
+	case a.End.Kind == store.EndLost:
+		return c.workerLost(ctx, run, job, a, done)
 	default:
-		// A worker lost, or a placement withdrawn: what follows them,
-		// retry: worker-lost among it, isn't built yet, and until it is
-		// the job fails.
+		// A placement withdrawn: what follows it is a cancellation's,
+		// which isn't built yet, and until it is the job fails.
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{
 			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason,
 			Diagnostics: problems.Diagnostics{diagnostic(problems.CoordinatorJobFailed, problems.Params{"job": job.Key})},
@@ -268,8 +270,11 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Diagnostics: diags,
 		}, done)
 	}
+	// A View reads the host's clock without recording a reset of it
+	// (store.Tx.Now), so an end recorded while the clock was ahead can be
+	// ahead of now: the wait is never longer than it is from the end.
 	if wait := a.EndedAt.Add(c.supervision.setup[n-1]).Sub(now); wait > 0 {
-		return wait, nil
+		return min(wait, c.supervision.setup[n-1]), nil
 	}
 	return c.placeJob(ctx, run, job, done)
 }

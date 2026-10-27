@@ -390,6 +390,30 @@ var (
 	CoordinatorJobFailed = define(Error, "coordinator_job_failed", "Job the coordinator couldn't run", "job")
 )
 
+// The problems of a job whose worker was lost (docs/design.md, Leases and
+// fencing): reason is why its scheduler, or the kernel, ended it, timeout
+// or out-of-memory; and retries how many times the job's retry: had run it
+// again.
+var (
+	// WorkerLost is a job whose worker was lost after a step started,
+	// which its retry: doesn't run again.
+	WorkerLost = define(Error, "worker_lost", "Job whose worker was lost", "job")
+	// WorkerLostAgain is a job whose worker was lost again, once its
+	// retry: had run it again as many times as it allows.
+	WorkerLostAgain = define(Error, "worker_lost_again", "Job whose worker was lost more times than its retry allows", "job", "retries")
+	// WorkerEndedEarly is an attempt whose worker ended before its job's
+	// first step, a failure before the first step, which places the job
+	// again.
+	WorkerEndedEarly = define(Error, "worker_ended_early", "Worker that ended before the job's first step", "job")
+	// WorkerKilled is a job whose worker its scheduler, or the kernel,
+	// ended: at its time limit, or for the memory it used.
+	WorkerKilled = define(Error, "worker_killed", "Worker its scheduler ended", "job", "reason")
+	// MemberGone is an attempt placed on a member that its group no longer
+	// has, whose backend can't say whether its worker runs: a failure
+	// before the job's first step, which places the job again.
+	MemberGone = define(Error, "member_gone", "Attempt whose member its group no longer has", "job")
+)
+
 // The meridian command's own problems, in CommandRegistry. A path, an
 // environment variable's name or value, or what the operating system said,
 // reason, is a param as it is.
