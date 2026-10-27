@@ -1917,6 +1917,52 @@
       "Fix what the code's page says, for the binary the message names, or install meridian where only you or root can change it, such as /usr/local/bin."
     ]
   },
+  "ssh_host_key_unknown": {
+    "why": "Meridian checks every host's key against your known_hosts files, those your SSH configuration names (UserKnownHostsFile and GlobalKnownHostsFile), as ssh does, by the host's HostKeyAlias, or else its name and port, and refuses a key it doesn't find there. It never adds one itself, whatever StrictHostKeyChecking says: a key taken on trust the first time is how a first connection is taken over. A key of a type known_hosts has none of for the host is unknown too.",
+    "fix": [
+      "Check the key's fingerprint with the host's administrator, or on the host, with ssh-keygen -lf on its key, then add the key to known_hosts, as ssh <host> offers to, answering yes only if the fingerprint matches.",
+      "If known_hosts has the host's key under another name, set HostKeyAlias for the host in your SSH configuration."
+    ]
+  },
+  "ssh_host_key_changed": {
+    "why": "The key the host presented differs from the key of the same type that your known_hosts has for it. Either the host's key was replaced, as when it was reinstalled, or another machine is answering for it, which is what the check is there to catch.",
+    "fix": [
+      "Ask the host's administrator whether its key changed, and check the new key's fingerprint.",
+      "If it did, remove the old key with ssh-keygen -R <host>, and add the new one, as for a host you connect to the first time."
+    ]
+  },
+  "ssh_host_key_revoked": {
+    "why": "Your known_hosts marks the key @revoked: whoever manages it has said not to trust it, for any host.",
+    "fix": [
+      "Ask the host's administrator for its current key, and add it to known_hosts once you have checked its fingerprint."
+    ]
+  },
+  "ssh_algorithms_unapproved": {
+    "why": "Meridian runs in FIPS 140-3 mode, which lets it use only the algorithms the standard approves. For SSH, those it can run are key exchange with ECDH on the NIST curves P-256, P-384 and P-521, the ciphers aes128-ctr, aes192-ctr and aes256-ctr, the MACs hmac-sha2-256 and hmac-sha2-512, and host keys of ECDSA, Ed25519, or RSA signing with SHA-2. AES-GCM and the hybrid ML-KEM key exchange are approved too, but the SSH library can't run them in this mode yet. A host that offers none of one of these, as one that offers only curve25519 or chacha20-poly1305 does, can't be used.",
+    "fix": [
+      "Ask the host's administrator to add the algorithms Meridian needs to the server's configuration: KexAlgorithms, Ciphers, MACs and HostKeyAlgorithms in sshd_config."
+    ]
+  },
+  "ssh_auth_failed": {
+    "why": "Meridian logs in with the keys of your SSH agent, then the key files your SSH configuration names for the host (IdentityFile), then your other key pairs in ~/.ssh, each a private key beside its .pub, unless IdentitiesOnly is set. It never asks for a passphrase, so a key file that needs one is offered only if your agent holds its key, and it never logs in with a password. It doesn't offer DSA keys, or RSA keys of fewer than 2048 bits, which FIPS 140-3 doesn't let it sign with. The host accepted none of the keys it offered, or it had none to offer.",
+    "fix": [
+      "Check that the key you log in to the host with is in your agent (ssh-add -l), or is a key file without a passphrase that your configuration names for the host.",
+      "Check that the user is the one you mean, remoteUser, or else User in your configuration, or else your own, and that the host has the key's public half in that user's authorized_keys.",
+      "Run ssh -v <host> to see which keys ssh offers, and which the host accepts."
+    ]
+  },
+  "ssh_config_unreadable": {
+    "why": "Meridian reads your SSH configuration for each host as ssh does, by running ssh -G, and connects as it says: its HostName, Port, User, IdentityFile, ProxyJump, ProxyCommand, known_hosts files and HostKeyAlias. ssh couldn't read the configuration, a file it names, such as a known_hosts file, couldn't be read, or what it says can't be used, as a ProxyCommand with a token Meridian doesn't know, or ProxyJumps that lead back to themselves.",
+    "fix": [
+      "Run ssh -G <host> to see what ssh says, and fix your configuration, or the file, where it points."
+    ]
+  },
+  "ssh_config_not_read": {
+    "why": "Meridian reads your SSH configuration through ssh, by running ssh -G. Without an ssh client on PATH, it uses OpenSSH's defaults: the host as it is named, port 22, your own user name, the key files in ~/.ssh with OpenSSH's default names, your agent, and the known_hosts files in ~/.ssh and /etc/ssh. Your configuration's aliases, users, ProxyJump and the rest don't apply.",
+    "fix": [
+      "Install OpenSSH's client, or put it on PATH, if your configuration says how to reach the host."
+    ]
+  },
   "worker_token_not_taken": {
     "why": "Where the process that places a worker ends once it has, as meridian host does on another host, it waits until the worker has taken its bootstrap token, which it hands over on a socket only the worker inherits. This worker didn't: it ended first, as one that systemd-run couldn't start does, where your service manager can't be reached or a scope of the same name is still there, or it didn't ask for its token within a minute. A worker without its token can't run the job, so Meridian stopped it, and placed nothing.",
     "fix": [

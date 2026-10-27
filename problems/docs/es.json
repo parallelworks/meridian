@@ -2229,6 +2229,59 @@
       "Corrige lo que dice la página del código, para el binario que nombra el mensaje, o instala meridian donde solo tú o root puedan cambiarlo, como /usr/local/bin."
     ]
   },
+  "ssh_host_key_unknown": {
+    "title": "Clave de host que known_hosts no tiene",
+    "why": "Meridian comprueba la clave de cada host con tus archivos known_hosts, los que nombra tu configuración de SSH (UserKnownHostsFile y GlobalKnownHostsFile), como hace ssh, por el HostKeyAlias del host, o si no por su nombre y puerto, y rechaza una clave que no encuentra allí. Nunca añade una por su cuenta, diga lo que diga StrictHostKeyChecking: una clave aceptada sin comprobar la primera vez es como se suplanta una primera conexión. Una clave de un tipo del que known_hosts no tiene ninguna para el host también es desconocida.",
+    "fix": [
+      "Comprueba la huella de la clave con quien administra el host, o en el host, con ssh-keygen -lf sobre su clave, y añade la clave a known_hosts, como ofrece ssh <host>, respondiendo que sí solo si la huella coincide.",
+      "Si known_hosts tiene la clave del host con otro nombre, define HostKeyAlias para el host en tu configuración de SSH."
+    ]
+  },
+  "ssh_host_key_changed": {
+    "title": "Clave de host que no es la que tiene known_hosts",
+    "why": "La clave que presentó el host difiere de la clave del mismo tipo que tu known_hosts tiene para él. O se sustituyó la clave del host, como cuando se reinstala, u otra máquina responde por él, que es lo que la comprobación está para detectar.",
+    "fix": [
+      "Pregunta a quien administra el host si su clave cambió, y comprueba la huella de la nueva.",
+      "Si cambió, quita la clave antigua con ssh-keygen -R <host> y añade la nueva, como para un host al que te conectas por primera vez."
+    ]
+  },
+  "ssh_host_key_revoked": {
+    "title": "Clave de host que known_hosts revoca",
+    "why": "Tu known_hosts marca la clave con @revoked: quien lo administra ha dicho que no se confíe en ella, para ningún host.",
+    "fix": [
+      "Pide a quien administra el host su clave actual, y añádela a known_hosts una vez comprobada su huella."
+    ]
+  },
+  "ssh_algorithms_unapproved": {
+    "title": "Host que no ofrece ningún algoritmo que FIPS 140-3 apruebe",
+    "why": "Meridian se ejecuta en modo FIPS 140-3, que solo le deja usar los algoritmos que aprueba la norma. Para SSH, los que puede usar son el intercambio de claves con ECDH en las curvas NIST P-256, P-384 y P-521, los cifrados aes128-ctr, aes192-ctr y aes256-ctr, los MAC hmac-sha2-256 y hmac-sha2-512, y claves de host ECDSA, Ed25519 o RSA que firman con SHA-2. AES-GCM y el intercambio de claves híbrido con ML-KEM también están aprobados, pero la biblioteca de SSH aún no puede usarlos en este modo. Un host que no ofrece ninguno de una de estas listas, como uno que solo ofrece curve25519 o chacha20-poly1305, no se puede usar.",
+    "fix": [
+      "Pide a quien administra el host que añada los algoritmos que Meridian necesita a la configuración del servidor: KexAlgorithms, Ciphers, MACs y HostKeyAlgorithms en sshd_config."
+    ]
+  },
+  "ssh_auth_failed": {
+    "title": "Inicio de sesión rechazado por un host",
+    "why": "Meridian inicia sesión con las claves de tu agente de SSH, luego con los archivos de clave que tu configuración de SSH nombra para el host (IdentityFile), y luego con tus otros pares de claves en ~/.ssh, cada uno una clave privada junto a su .pub, salvo que esté IdentitiesOnly. Nunca pide una frase de contraseña, así que un archivo de clave que la necesita solo se ofrece si tu agente tiene su clave, y nunca inicia sesión con una contraseña. No ofrece claves DSA ni claves RSA de menos de 2048 bits, con las que FIPS 140-3 no le deja firmar. El host no aceptó ninguna de las claves que ofreció, o no tenía ninguna que ofrecer.",
+    "fix": [
+      "Comprueba que la clave con la que entras al host está en tu agente (ssh-add -l), o es un archivo de clave sin frase de contraseña que tu configuración nombra para el host.",
+      "Comprueba que el usuario es el que quieres, remoteUser, o si no User en tu configuración, o si no el tuyo, y que el host tiene la mitad pública de la clave en el authorized_keys de ese usuario.",
+      "Ejecuta ssh -v <host> para ver qué claves ofrece ssh y cuáles acepta el host."
+    ]
+  },
+  "ssh_config_unreadable": {
+    "title": "Configuración de SSH que no se puede leer",
+    "why": "Meridian lee tu configuración de SSH para cada host como lo hace ssh, ejecutando ssh -G, y se conecta como dice: su HostName, Port, User, IdentityFile, ProxyJump, ProxyCommand, archivos known_hosts y HostKeyAlias. ssh no pudo leer la configuración, no se pudo leer un archivo que nombra, como un archivo known_hosts, o lo que dice no se puede usar, como un ProxyCommand con un token que Meridian no conoce, o ProxyJumps que vuelven sobre sí mismos.",
+    "fix": [
+      "Ejecuta ssh -G <host> para ver qué dice ssh, y corrige tu configuración, o el archivo, donde señala."
+    ]
+  },
+  "ssh_config_not_read": {
+    "title": "Configuración de SSH no leída, sin cliente ssh",
+    "why": "Meridian lee tu configuración de SSH a través de ssh, ejecutando ssh -G. Sin un cliente ssh en PATH, usa los valores predeterminados de OpenSSH: el host tal como se nombra, el puerto 22, tu propio nombre de usuario, los archivos de clave de ~/.ssh con los nombres predeterminados de OpenSSH, tu agente, y los archivos known_hosts de ~/.ssh y /etc/ssh. No se aplican los alias, usuarios, ProxyJump ni lo demás de tu configuración.",
+    "fix": [
+      "Instala el cliente de OpenSSH, o ponlo en PATH, si tu configuración dice cómo llegar al host."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "Worker que no tomó su token",
     "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",

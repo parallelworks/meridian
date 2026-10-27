@@ -463,6 +463,24 @@ var (
 	SSHSystemdTooOld       = define(Error, "ssh_systemd_too_old", "Host whose systemd can't start a worker's scope", "host", "version", "minimum")
 )
 
+// Connecting to a host over SSH (backend/ssh): host is the host as it was
+// named, an ssh_config alias, a name or an address, or host:port; type and
+// fingerprint are its key's, as ssh-keygen -l shows them; file and line
+// are where known_hosts has the key it differs from; category is which of
+// its algorithms the host offers none Meridian may use of, key-exchange,
+// host-key, cipher or mac, and offered what it offers; user is who logs
+// in, and keys how many keys were offered; reason is what ssh, or the
+// system, said.
+var (
+	SSHHostKeyUnknown       = define(Error, "ssh_host_key_unknown", "Host key that known_hosts doesn't have", "host", "type", "fingerprint")
+	SSHHostKeyChanged       = define(Error, "ssh_host_key_changed", "Host key that isn't the one known_hosts has", "host", "type", "fingerprint", "file", "line")
+	SSHHostKeyRevoked       = define(Error, "ssh_host_key_revoked", "Host key that known_hosts revokes", "host", "fingerprint")
+	SSHAlgorithmsUnapproved = define(Error, "ssh_algorithms_unapproved", "Host that offers no algorithm FIPS 140-3 approves", "host", "category", "offered")
+	SSHAuthFailed           = define(Error, "ssh_auth_failed", "Login to a host refused", "host", "user", "keys")
+	SSHConfigUnreadable     = define(Error, "ssh_config_unreadable", "SSH configuration that can't be read", "host", "reason")
+	SSHConfigNotRead        = define(Warning, "ssh_config_not_read", "SSH configuration not read, with no ssh client", "host")
+)
+
 // The meridian command's directories. mode is a file's or directory's
 // permissions in octal, as 0755.
 var (
