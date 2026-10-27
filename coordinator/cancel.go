@@ -415,8 +415,9 @@ func (c *Coordinator) tell(ctx context.Context, id string, reason plan.Reason) e
 
 // liveAttempt looks at the job's live attempt a, placed, claimed or
 // running: its worker reports to the worker API, which wakes the
-// supervisor once the attempt ends. Once the run is stopped, and the job
-// doesn't outlive it, the supervisor sees the stop through for it
+// supervisor once the attempt ends, and renews its lease, which the
+// supervisor watches (watch). Once the run is stopped, and the job doesn't
+// outlive it, the supervisor sees the stop through for it
 // (stoppedAttempt); and it enforces the job's timeout:, as a backstop for a
 // worker that doesn't (backstop). It returns how long to wait before it
 // looks again, or 0 once it has ended the job.
@@ -430,10 +431,15 @@ func (c *Coordinator) liveAttempt(ctx context.Context, run *store.Run, job *stor
 			return c.stoppedAttempt(ctx, run, job, a, done)
 		}
 	}
-	if a.State == store.AttemptPlacing {
-		return c.supervision.wait, nil
+	wait, err := c.watch(ctx, run, job, a)
+	if err != nil || a.State == store.AttemptPlacing {
+		return wait, err
 	}
-	return c.backstop(ctx, run, job, a, done)
+	timeout, err := c.backstop(ctx, run, job, a, done)
+	if err != nil || timeout == 0 {
+		return timeout, err
+	}
+	return min(wait, timeout), nil
 }
 
 // stoppedAttempt sees the stop of run through for the job's live attempt
@@ -442,10 +448,13 @@ func (c *Coordinator) liveAttempt(ctx context.Context, run *store.Run, job *stor
 // yet reads that before its first step, so, as format 1 would have started
 // the job, it runs only its cleanups and the steps that outlive a cancel;
 // one that has is waited for while it renews its lease, since its cleanups
-// have no timeout. Once its lease lapses, its placement is withdrawn, and
-// the job ends cancelled, or failed with the reason timeout. A placement no
-// worker has claimed isn't withdrawn: with a backend that queues jobs, a
-// stopped run so ends only once each is claimed and stops.
+// have no timeout. Once its lease lapses, after the grace in which no
+// lapsed lease counts (leaseClock), its placement is withdrawn, and the job
+// ends cancelled, or failed with the reason timeout. A placement no worker
+// has claimed isn't withdrawn: with a backend that queues jobs, a stopped
+// run so ends only once each is claimed and stops. Until either, the
+// attempt is watched as any is (watch): one whose backend says its worker
+// has ended is lost, which ends the job as the stop says (placesNoMore).
 func (c *Coordinator) stoppedAttempt(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	reason := run.StopReason
 	end := stopEnd(reason)
@@ -461,7 +470,7 @@ func (c *Coordinator) stoppedAttempt(ctx context.Context, run *store.Run, job *s
 			return 0, c.withdraw(ctx, run, job, a, end, done)
 		}
 	}
-	return c.supervision.wait, nil
+	return c.watch(ctx, run, job, a)
 }
 
 // backstop enforces the job's timeout:, as a backstop for a worker that
@@ -536,13 +545,14 @@ func (c *Coordinator) storeNow(ctx context.Context) (time.Time, error) {
 }
 
 // leaseLapsed reports whether the lease of the attempt a, claimed, has
-// lapsed, by the store's clock.
+// lapsed, by the store's clock, and the grace in which no lapsed lease
+// counts has passed (leaseClock).
 func (c *Coordinator) leaseLapsed(ctx context.Context, a *store.Attempt) (bool, error) {
 	if a.RenewedAt.IsZero() {
 		return false, nil
 	}
-	now, err := c.storeNow(ctx)
-	return err == nil && !now.Before(a.LeaseLapses()), err
+	now, graceEnds, err := c.leaseClock(ctx)
+	return err == nil && !now.Before(latest(a.LeaseLapses(), graceEnds)), err
 }
 
 // withdraw ends the job's live attempt a, withdrawn, and the job as end

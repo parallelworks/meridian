@@ -504,6 +504,102 @@ func TestStopBetweenAttempts(t *testing.T) {
 	}
 }
 
+// TestStopAfterLost checks that a job whose worker was lost, waiting its
+// retry:'s interval to run again as its run is cancelled, isn't placed
+// again: it ends cancelled at once, after its one attempt.
+func TestStopAfterLost(t *testing.T) {
+	clock := newFakeClock()
+	c, _ := openLease(t, clock, []bool{true, true}, []bool{true, true})
+	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	if wait := look(t, c, id); wait != time.Minute {
+		t.Fatalf("once lost, the supervisor waits %v for the retry:'s interval", wait)
+	}
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if wait := look(t, c, id); wait != 0 {
+		t.Fatalf("after the cancel, the supervisor waits %v", wait)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled || j.Attempts != 1 {
+		t.Errorf("the job is %+v", j)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID {
+		t.Errorf("the job was placed again: %+v", a)
+	}
+}
+
+// TestStopUnclaimedLost checks that after a cancel, a placement no worker
+// has claimed, which isn't withdrawn, is watched as any is: once its backend
+// says its worker has ended, the job ends cancelled, and isn't placed
+// again.
+func TestStopUnclaimedLost(t *testing.T) {
+	clock := newFakeClock()
+	c, d := openLease(t, clock, nil, nil)
+	d.set(func(d *testDriver) {
+		d.worker = func(backend.PlaceRequest) testEnd { return testEnd{never: true} }
+	})
+	id, first := startJob(t, c, oneJob, store.AttemptPlacing)
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if wait := look(t, c, id); wait <= 0 || d.checked() == 0 {
+		t.Fatalf("with the backend unable to decide, the supervisor waits %v, having asked it %d times", wait, d.checked())
+	}
+	d.says(backend.Status{State: backend.Dead}, nil)
+	if wait := look(t, c, id); wait != 0 {
+		t.Fatalf("once the backend says the worker has ended, the supervisor waits %v", wait)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled || j.Attempts != 1 {
+		t.Errorf("the job is %+v", j)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID {
+		t.Errorf("the job was placed again: %+v", a)
+	}
+}
+
+// TestStopLapseGrace checks that after a cancel, the placement of a claimed
+// attempt whose lease has lapsed is withdrawn only once the grace in which
+// no lapsed lease counts has passed, and without asking its backend: the
+// job ends cancelled.
+func TestStopLapseGrace(t *testing.T) {
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	id, _ := startJob(t, c, oneJob, store.AttemptRunning)
+	d.says(backend.Status{State: backend.Dead}, nil)
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(c.timing.Lease - 10*time.Second)
+	h, err := c.store.HoldEndpoint(t.Context(), "socket", "a test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Release(context.WithoutCancel(t.Context())) })
+	// The lease lapsed 10 seconds ago, within the grace.
+	clock.Advance(20 * time.Second)
+	if wait := look(t, c, id); wait <= 0 {
+		t.Fatalf("within the grace, the supervisor waits %v", wait)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.State != store.AttemptRunning {
+		t.Fatalf("within the grace, the attempt is %s", a.State)
+	}
+	clock.Advance(c.timing.Grace)
+	if wait := look(t, c, id); wait != 0 {
+		t.Fatalf("after the grace, the supervisor waits %v", wait)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled {
+		t.Errorf("the job is %+v", j)
+	}
+	// The testDriver's lock, not the leaseDriver's, holds its cancels.
+	d.testDriver.mu.Lock()
+	withdrawn := len(d.cancelled)
+	d.testDriver.mu.Unlock()
+	if withdrawn != 1 || d.checked() != 0 {
+		t.Errorf("the placement was withdrawn %d times, and the backend asked %d times", withdrawn, d.checked())
+	}
+}
+
 // TestStopWhilePlacing checks that a run stopped after its job's supervisor
 // looked, and before it made the job's attempt, has no attempt made: the
 // supervisor looks again, and ends the job, which doesn't outlive the stop.

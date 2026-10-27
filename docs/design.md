@@ -2429,13 +2429,15 @@ for any other only once they have (`plan.Plan.CancelPath`).
   as format 1's do when they start under the passed deadline, failing but
   for those that outlive a cancel and a last try that ignores its errors.
   With a backend that queues jobs, a stopped run so ends only once such a
-  job's worker has claimed it and stopped. A running attempt that is
-  stopped is waited for while it renews its lease, since its cleanups
-  have no timeout, and its placement is withdrawn (`scancel`, `qdel`,
-  deleting the pod, signalling the process) if its lease lapses. A job
-  between attempts when the run stops, readied before the stop, as one
-  waiting to be placed again after a failure before its first step, or
-  for a backend to answer, isn't placed again, unless it outlives the
+  job's worker has claimed it and stopped, or its backend says the worker
+  has ended. A running attempt that is stopped is waited for while it
+  renews its lease, since its cleanups have no timeout, and its placement
+  is withdrawn (`scancel`, `qdel`, deleting the pod, signalling the
+  process) if its lease lapses, once the grace in which no lapsed lease
+  counts has passed. A job between attempts when the run stops, readied
+  before the stop, as one waiting to be placed again after a failure
+  before its first step, or after its worker was lost, or for a backend
+  to answer, isn't placed again, unless it outlives the
   stop: it has no placement, so it ends cancelled after a cancel, and
   failed, with the reason `timeout`, after the run's timeout. Format 1
   would start it under the passed deadline, which would run its steps
