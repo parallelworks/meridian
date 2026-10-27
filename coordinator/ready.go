@@ -71,6 +71,10 @@ func (c *Coordinator) readyEarly(ctx context.Context, run *store.Run, key string
 
 // ready is readyJob, and readyEarly when early is set.
 func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, early bool) (*readied, error) {
+	// Before anything is pinned or failed: readyInput checks it too.
+	if run.StartState == nil {
+		return nil, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
+	}
 	p, err := c.plans.get(run)
 	if err != nil {
 		return nil, err
