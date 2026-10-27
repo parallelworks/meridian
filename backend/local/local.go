@@ -152,6 +152,14 @@ type record struct {
 	// worker runs, as the worker reports its own (workerapi.Worker), which
 	// the coordinator compares with it.
 	Digest string `json:"digest"`
+	// RunDir is the run's directory the worker was placed with, which
+	// Find gives; "" in a placement an earlier release recorded.
+	RunDir string `json:"runDir,omitempty"`
+}
+
+// placement is the placement of attempt that r records.
+func (r *record) placement(attempt string) backend.Placement {
+	return backend.Placement{Attempt: attempt, ID: r.id(), WorkerDigest: r.Digest, RunDir: r.RunDir}
 }
 
 // id is the placement's ID: the process's, and its start time.
@@ -403,7 +411,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 			return backend.Placement{}, err
 		}
 		if alive {
-			return backend.Placement{Attempt: req.Attempt, ID: r.id(), WorkerDigest: r.Digest}, nil
+			return r.placement(req.Attempt), nil
 		}
 		d.remove(req.Attempt)
 	}
@@ -445,7 +453,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		ours.Close()
 		return backend.Placement{}, err
 	}
-	r := &record{PID: cmd.Process.Pid, Resources: req.Resources, Executable: exe, Digest: digest}
+	r := &record{PID: cmd.Process.Pid, Resources: req.Resources, Executable: exe, Digest: digest, RunDir: req.RunDir}
 	r.Start, err = processStart(r.PID)
 	if err == nil {
 		r.Boot, err = bootID()
@@ -510,7 +518,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 			_ = d.writeFile(d.path(req.Attempt, ".exit"), exit)
 		}
 	}()
-	return backend.Placement{Attempt: req.Attempt, ID: r.id(), WorkerDigest: r.Digest}, nil
+	return r.placement(req.Attempt), nil
 }
 
 // tokenWait is how long a worker has to say it is ready for its token.
@@ -692,7 +700,7 @@ func (d *Driver) Find(_ context.Context, _ *backend.Member, attempt string) (bac
 	if err != nil || !ok {
 		return backend.Placement{}, false, err
 	}
-	return backend.Placement{Attempt: attempt, ID: r.id(), WorkerDigest: r.Digest}, true, nil
+	return r.placement(attempt), true, nil
 }
 
 // Check says whether a placement's worker runs: whether a process of its

@@ -525,6 +525,37 @@ func (tx *Tx) LiveAttempts(run string) ([]*Attempt, error) {
 	return out, nil
 }
 
+// MemberAttempts returns the attempts of every run that haven't ended,
+// placed on a member whose workers reach the coordinator through a
+// listener on it (Placement.MemberKey), in the order of their IDs: those
+// whose members' listeners a replica that takes over holds again.
+func (tx *Tx) MemberAttempts() ([]*Attempt, error) {
+	rows, err := tx.query("SELECT id FROM meridian_attempts WHERE member_key IS NOT NULL AND state <> ? ORDER BY id", AttemptEnded)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]*Attempt, len(ids))
+	for i, id := range ids {
+		if out[i], err = tx.Attempt(id); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // runNumberOf returns the number of the run with the ID id, which the store
 // has: ErrNotFound if it hasn't.
 func (tx *Tx) runNumberOf(id string) (int64, error) {

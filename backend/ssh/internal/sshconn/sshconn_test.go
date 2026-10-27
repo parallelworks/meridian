@@ -29,7 +29,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
-	"github.com/parallelworks/meridian/backend/ssh/internal/sshtest"
+	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
 

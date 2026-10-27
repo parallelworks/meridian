@@ -30,6 +30,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/problems"
@@ -87,6 +88,9 @@ type cli struct {
 	// stopped is what a test has meridian cancel do once it has stored
 	// the run's stop, before it reads the run back; nil for nothing.
 	stopped func()
+	// ssh changes how the ssh backend connects to hosts, as a test has it
+	// read a config of its own; nil for nothing.
+	ssh func(*backendssh.Options)
 }
 
 // getenv reads an environment variable, or "" if it isn't set.

@@ -2530,6 +2530,14 @@
       "Ejecuta el coordinador desde una versión publicada de Meridian, compilada con el módulo FIPS 140-3, para que el binario que copia al host también lo esté."
     ]
   },
+  "ssh_forwarding_refused": {
+    "title": "Host que no reenvía un socket al coordinador",
+    "why": "Un worker en un host llega al coordinador por un socket Unix en el host, en el que sshd escucha para el coordinador, y que reenvía por su conexión SSH (streamlocal-forward@openssh.com, como hace ssh -R con la ruta de un socket). Meridian no abre ningún puerto, en ningún lado. sshd se negó: no reenvía sockets Unix, como con AllowStreamLocalForwarding no o DisableForwarding yes en sshd_config, o no pudo escuchar en la ruta.",
+    "fix": [
+      "Pide a los administradores del host que permitan reenviar sockets Unix: AllowStreamLocalForwarding yes, o all, en sshd_config.",
+      "Comprueba que ssh -R <ruta>:/dev/null <host> true puede reenviar un socket allí, desde la misma máquina y como el mismo usuario."
+    ]
+  },
   "ssh_host_release_mismatch": {
     "title": "meridian host de otra versión",
     "why": "Meridian copia su propio binario a un host y maneja allí meridian host, que debe ser de la versión del coordinador, como lo es el binario que copió. meridian host dijo otra versión: el binario de la caché de binarios del host no es el que copió Meridian, o un binario descargado para el sistema del host es de otra versión.",

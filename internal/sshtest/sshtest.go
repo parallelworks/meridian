@@ -45,6 +45,9 @@ type Options struct {
 	// Env is added to the environment the server runs exec requests with,
 	// the test process's, as sshd sets a session's.
 	Env []string
+	// NoForwarding refuses to forward Unix sockets, as sshd's
+	// AllowStreamLocalForwarding no does.
+	NoForwarding bool
 }
 
 // A Server is an SSH server on the loopback interface.
@@ -357,7 +360,7 @@ func (s *Server) global(conn *ssh.ServerConn, req *ssh.Request, f *forwards, wg 
 	switch req.Type {
 	case "streamlocal-forward@openssh.com":
 		var p struct{ Path string }
-		if ssh.Unmarshal(req.Payload, &p) != nil {
+		if s.opts.NoForwarding || ssh.Unmarshal(req.Payload, &p) != nil {
 			_ = req.Reply(false, nil)
 			return
 		}

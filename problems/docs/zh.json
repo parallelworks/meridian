@@ -2530,6 +2530,14 @@
       "用以 FIPS 140-3 模块构建的 Meridian 发布版本运行协调器，这样它复制到主机的二进制文件也是如此。"
     ]
   },
+  "ssh_forwarding_refused": {
+    "title": "不向协调器转发套接字的主机",
+    "why": "主机上的工作进程通过主机上的一个 Unix 套接字连到协调器：sshd 为协调器在该套接字上监听，并通过它的 SSH 连接转发（streamlocal-forward@openssh.com，就像 ssh -R 对套接字路径所做的那样）。Meridian 在任何一端都不开放端口。sshd 拒绝了：它不转发 Unix 套接字，例如 sshd_config 中设置了 AllowStreamLocalForwarding no 或 DisableForwarding yes；或者它无法在该路径上监听。",
+    "fix": [
+      "请主机的管理员允许转发 Unix 套接字：在 sshd_config 中设置 AllowStreamLocalForwarding yes 或 all。",
+      "在同一台机器上以同一用户运行 ssh -R <path>:/dev/null <host> true，确认能把套接字转发到那里。"
+    ]
+  },
   "ssh_host_release_mismatch": {
     "title": "其他版本的 meridian host",
     "why": "Meridian 把自己的二进制文件复制到主机上，并在那里驱动 meridian host，而它必须与所复制的二进制文件一样，是协调器的版本。meridian host 报告的是另一个版本：主机二进制文件缓存中的二进制文件不是 Meridian 复制的那个，或者为主机系统获取的二进制文件是另一个版本。",

@@ -177,6 +177,9 @@ type sealedPlace struct {
 	Member  string `json:"member"`
 	Backend string `json:"backend"`
 	ID      string `json:"id,omitzero"`
+	// RunDir is the run's directory where its member chose it
+	// (backend.Placement.RunDir), or "".
+	RunDir string `json:"runDir,omitzero"`
 }
 
 // placeOf is where the attempt id of the run runID is placed, on chosen:
@@ -254,6 +257,10 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *sto
 		c.placed(run, id, rj)
 	}
 	endpoint, err := c.connect(ctx, chosen.driver, chosen.member)
+	var key string
+	if err == nil {
+		key, err = memberKey(chosen.driver, chosen.member)
+	}
 	var p backend.Placement
 	if err == nil {
 		p, err = chosen.driver.Place(ctx, chosen.member, backend.PlaceRequest{
@@ -268,32 +275,37 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *sto
 	if err != nil {
 		return c.unanswered(ctx, run, job, private, err)
 	}
-	return c.recordPlacement(ctx, run.ID, id, chosen, p, private)
+	return c.recordPlacement(ctx, run.ID, id, chosen, p, key, private)
 }
 
 // recordPlacement records the placement p of the attempt id of the run
-// runID, on chosen, and returns how long to wait for its worker. Of a
-// private placement, the store holds the worker's digest in the clear, and
-// the backend's ID for it sealed, with the rest of its place, as the
-// place's next generation, which the same transaction stores.
-func (c *Coordinator) recordPlacement(ctx context.Context, runID, id string, chosen *candidate, p backend.Placement, private bool) (time.Duration, error) {
+// runID, on chosen, whose key is key where its backend reaches its workers
+// through a listener on it, and returns how long to wait for its worker.
+// Of a private placement, the store holds the worker's digest, and the
+// member's key, in the clear, and the backend's ID for it and the run's
+// directory sealed, with the rest of its place, as the place's next
+// generation, which the same transaction stores.
+func (c *Coordinator) recordPlacement(ctx context.Context, runID, id string, chosen *candidate, p backend.Placement, key string, private bool) (time.Duration, error) {
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if !private {
-			return tx.RecordPlacement(id, store.Placement{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID, WorkerDigest: p.WorkerDigest})
+			return tx.RecordPlacement(id, store.Placement{
+				Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID, WorkerDigest: p.WorkerDigest,
+				MemberKey: key, RunDir: p.RunDir,
+			})
 		}
 		place, _, err := tx.ChosenPlace(id)
 		if err != nil {
 			return err
 		}
 		sealed, err := c.sealPlace(ctx, tx, runID, id, place.Generation+1,
-			sealedPlace{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID})
+			sealedPlace{Group: chosen.group, Member: chosen.member.Name, Backend: chosen.member.Backend, ID: p.ID, RunDir: p.RunDir})
 		if err != nil {
 			return err
 		}
 		if err := tx.ResealPlace(id, place.Generation+1, sealed); err != nil {
 			return err
 		}
-		return tx.RecordPlacement(id, store.Placement{WorkerDigest: p.WorkerDigest})
+		return tx.RecordPlacement(id, store.Placement{WorkerDigest: p.WorkerDigest, MemberKey: key})
 	})
 	if err == nil || errors.Is(err, store.ErrState) {
 		c.remember(id, chosen, p)
@@ -357,7 +369,18 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		return c.unanswered(ctx, run, job, private, err)
 	}
 	if found {
-		return c.recordPlacement(ctx, run.ID, a.ID, cand, p, private)
+		// Its workers reach the coordinator as a new one's would.
+		var key string
+		if _, err = c.connect(ctx, cand.driver, m); err == nil {
+			key, err = memberKey(cand.driver, m)
+		}
+		if prob, ok := errors.AsType[*problem.Problem](err); ok {
+			return 0, c.attemptSetupFailed(ctx, a.ID, prob)
+		}
+		if err != nil {
+			return c.unanswered(ctx, run, job, private, err)
+		}
+		return c.recordPlacement(ctx, run.ID, a.ID, cand, p, key, private)
 	}
 	// Nothing was placed: once the run has stopped, the job is as one
 	// between attempts, which the stop may end (stopEnds). Then the attempt
@@ -720,7 +743,14 @@ type connection struct {
 // gives it, which the coordinator keeps until it closes. The store's lease
 // on a member's connection, which one replica at a time holds, comes with
 // the replicas that serve the worker API.
+//
+// A Forwarder's member's workers reach the coordinator through a listener
+// on the member, which ServeMembers holds (forward), and Connect isn't
+// called.
 func (c *Coordinator) connect(ctx context.Context, d backend.Driver, m *backend.Member) (backend.Endpoint, error) {
+	if fw, ok := d.(backend.Forwarder); ok {
+		return c.forward(ctx, fw, m)
+	}
 	key := m.Backend + "\x00" + m.Name + "\x00" + string(m.Settings)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -733,6 +763,16 @@ func (c *Coordinator) connect(ctx context.Context, d backend.Driver, m *backend.
 	}
 	c.connections[key] = connection{endpoint: endpoint, closer: closer}
 	return endpoint, nil
+}
+
+// memberKey returns the key of m, d's member, where d is a Forwarder,
+// which the store records with the attempts placed on it
+// (store.Placement.MemberKey), or "".
+func memberKey(d backend.Driver, m *backend.Member) (string, error) {
+	if fw, ok := d.(backend.Forwarder); ok {
+		return fw.MemberKey(m)
+	}
+	return "", nil
 }
 
 // maskedIf returns d, with what its params show of a value masked when

@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -181,6 +184,133 @@ func TestPeers(t *testing.T) {
 	}
 	if got := r.attempt(a.ID); !got.ClaimedAt.IsZero() {
 		t.Error("a peer that may not report on the run claimed its attempt")
+	}
+}
+
+// A noDeadlines is a connection that takes no deadlines, as an SSH
+// channel's doesn't, and isn't a Unix socket's, whose peer the system
+// could name.
+type noDeadlines struct{ net.Conn }
+
+func (noDeadlines) SetDeadline(time.Time) error      { return errors.New("no deadlines") }
+func (noDeadlines) SetReadDeadline(time.Time) error  { return errors.New("no deadlines") }
+func (noDeadlines) SetWriteDeadline(time.Time) error { return errors.New("no deadlines") }
+
+// A memberSocket listens on a Unix socket, and gives what it accepts as
+// noDeadlines: as a member's listener forwarded over SSH does.
+type memberSocket struct{ net.Listener }
+
+func (l memberSocket) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return noDeadlines{c}, nil
+}
+
+// serveMember serves srv on a new socket, as the listener of the member
+// whose key is key, until the test ends, and returns the socket's path.
+func serveMember(t *testing.T, srv *workerapisrv.Server, key string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "m.sock")
+	l, err := new(net.ListenConfig).Listen(t.Context(), "unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	done := make(chan error, 1)
+	go func() { done <- srv.ServeMember(ctx, memberSocket{l}, key) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("ServeMember: %v", err)
+		}
+	})
+	return socket
+}
+
+// A member's listener serves the attempts placed on the member, and only
+// those: a claim, or a report, of an attempt placed on another member, or
+// on none, is refused, 401, before the claim can end it; and the server's
+// own socket refuses the attempts placed on a member. A claim gives the
+// run's directory on the member where it chose one. Connections that take
+// no deadlines are served all the same.
+func TestServeMember(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	member := newClient(t, serveMember(t, r.server, "ssh-aaaa"))
+	local := newClient(t, r.socket)
+	run := r.newRun(nil)
+	r.readier.set(run, &workerapisrv.Ready{
+		Job:    &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}},
+		RunDir: "/home/alice/.local/state/meridian/runs/run-store",
+	})
+	claim := func(c *client, token, digest string) (int, []byte, string) {
+		t.Helper()
+		credential := coordtest.Credential(t)
+		status, body, err := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, credential, digest), token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return status, body, credential
+	}
+
+	other, otherToken := r.newAttempt(run, "build", placed{memberKey: "ssh-bbbb"})
+	if status, body, _ := claim(member, otherToken, "sha256:"+strings.Repeat("1", 64)); status != http.StatusUnauthorized {
+		t.Errorf("another member's attempt was answered %d: %s", status, body)
+	}
+	if got := r.attempt(other.ID); got.State != store.AttemptPlacing {
+		t.Errorf("a claim through another member's listener left its attempt %s", got.State)
+	}
+	_, localToken := r.newAttempt(run, "build", placed{})
+	if status, body, _ := claim(member, localToken, conformanceDigest); status != http.StatusUnauthorized {
+		t.Errorf("an attempt placed on no member was answered %d: %s", status, body)
+	}
+
+	a, token := r.newAttempt(run, "build", placed{memberKey: "ssh-aaaa"})
+	if status, body, _ := claim(local, token, conformanceDigest); status != http.StatusUnauthorized {
+		t.Errorf("an attempt on a member, claimed on the server's socket, was answered %d: %s", status, body)
+	}
+	status, body, credential := claim(member, token, conformanceDigest)
+	if status != http.StatusOK {
+		t.Fatalf("the member's attempt was answered %d: %s", status, body)
+	}
+	var c map[string]any
+	if err := jsonv2.Unmarshal(body, &c); err != nil || c["attemptID"] != a.ID || c["runDir"] != "/home/alice/.local/state/meridian/runs/run-store" {
+		t.Errorf("the claim is %v, %v", c, err)
+	}
+	if status, body, _ := member.send(http.MethodPost, workerapi.PathHeartbeat, nil, credential); status != http.StatusNoContent && status != http.StatusOK {
+		t.Errorf("the member's heartbeat was answered %d: %s", status, body)
+	}
+	if status, body, _ := local.send(http.MethodPost, workerapi.PathHeartbeat, nil, credential); status != http.StatusUnauthorized {
+		t.Errorf("the member's heartbeat on the server's socket was answered %d: %s", status, body)
+	}
+}
+
+// A member's connection that takes no deadlines, as an SSH channel's
+// doesn't, is held to the time a request's headers have to arrive in all
+// the same: one that sends them slowly is closed.
+func TestServeMemberDeadlines(t *testing.T) {
+	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetTimes(s, 200*time.Millisecond, time.Second) }})
+	socket := serveMember(t, r.server, "ssh-aaaa")
+	c, err := new(net.Dialer).DialContext(t.Context(), "unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("POST " + workerapi.PathHeartbeat + " HTTP/1.1\r\nHost: coordinator\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(c)
+	if err != nil {
+		t.Errorf("a connection whose headers were slow wasn't closed: %v", err)
 	}
 }
 

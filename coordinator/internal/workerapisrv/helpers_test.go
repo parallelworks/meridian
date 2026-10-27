@@ -486,6 +486,10 @@ type placed struct {
 	// private places the attempt where its job runs is private: its
 	// group, member and backend sealed, as the coordinator records them.
 	private bool
+	// memberKey places it on a member whose workers reach the server
+	// through a listener on it (ServeMember), and runDir is the run's
+	// directory there.
+	memberKey, runDir string
 }
 
 // newAttempt starts an attempt of run's job, placed with p, and returns it
@@ -510,9 +514,11 @@ func (r *rig) newAttempt(run, job string, p placed) (*store.Attempt, string) {
 			if _, err := tx.SQL().ExecContext(r.t.Context(), "UPDATE meridian_attempts SET private_placement = x'01' WHERE id = ?", a.ID); err != nil {
 				return err
 			}
-			return tx.RecordPlacement(a.ID, store.Placement{WorkerDigest: p.digest})
+			return tx.RecordPlacement(a.ID, store.Placement{WorkerDigest: p.digest, MemberKey: p.memberKey})
 		}
-		return tx.RecordPlacement(a.ID, store.Placement{Group: p.group, Member: p.member, Backend: "local", ID: "1:2", WorkerDigest: p.digest})
+		return tx.RecordPlacement(a.ID, store.Placement{
+			Group: p.group, Member: p.member, Backend: "local", ID: "1:2", WorkerDigest: p.digest, MemberKey: p.memberKey, RunDir: p.runDir,
+		})
 	})
 	if err != nil {
 		r.t.Fatal(err)

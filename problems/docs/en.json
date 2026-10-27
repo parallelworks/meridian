@@ -2178,6 +2178,13 @@
       "Run the coordinator from a release of Meridian, built with the FIPS 140-3 module, so that the binary it copies to the host is one too."
     ]
   },
+  "ssh_forwarding_refused": {
+    "why": "A worker on a host reaches the coordinator through a Unix socket on the host, which sshd listens on for the coordinator, and forwards over its SSH connection (streamlocal-forward@openssh.com, as ssh -R does with a socket's path). Meridian opens no port, on either side. sshd refused: it doesn't forward Unix sockets, as with AllowStreamLocalForwarding no or DisableForwarding yes in sshd_config, or it couldn't listen at the path.",
+    "fix": [
+      "Ask the host's administrators to allow forwarding Unix sockets: AllowStreamLocalForwarding yes, or all, in sshd_config.",
+      "Check that ssh -R <path>:/dev/null <host> true can forward a socket there, from the same machine and user."
+    ]
+  },
   "ssh_host_release_mismatch": {
     "why": "Meridian copies its own binary to a host, and drives meridian host there, which must be of the coordinator's release, as the binary it copied is. meridian host said another release: the binary in the host's cache of binaries isn't the one Meridian copied, or a binary fetched for the host's system is of another release.",
     "fix": [

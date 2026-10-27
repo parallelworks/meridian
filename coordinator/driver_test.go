@@ -83,7 +83,10 @@ type testDriver struct {
 	placed     []backend.PlaceRequest
 	members    []string
 	placements map[string]backend.Placement
-	connects   int
+	// runDir is the run's directory its placements say their members
+	// chose (backend.Placement.RunDir), or "".
+	runDir   string
+	connects int
 	// cancelled are the placements Cancel cancelled.
 	cancelled []backend.Placement
 	// forgotten are the placements Forget forgot.
@@ -140,7 +143,7 @@ func (d *testDriver) Place(ctx context.Context, m *backend.Member, req backend.P
 			return backend.Placement{}, err
 		}
 	}
-	p := backend.Placement{Attempt: req.Attempt, ID: "test-" + req.Attempt, WorkerDigest: testDigest}
+	p := backend.Placement{Attempt: req.Attempt, ID: "test-" + req.Attempt, WorkerDigest: testDigest, RunDir: d.runDir}
 	d.mu.Lock()
 	d.placements[req.Attempt] = p
 	d.mu.Unlock()

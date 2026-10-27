@@ -4006,7 +4006,10 @@ it within a minute, is stopped, and isn't placed
   sends work to see it, and so do the cluster's other login nodes, which a
   reconnect to the same host name can reach. The temporary directory, where a run's directory is on the
   coordinator's own host, is each node's own. `place` chooses it, and
-  returns it.
+  returns it, and `find` too, as the local backend records it with the
+  placement; the coordinator records it with the attempt, sealed where
+  the placement is private, and gives it to the worker as it claims the
+  attempt, in place of the run's directory on the coordinator's machine.
 - **A worker starts detached**: in a session of its own, unless logind runs,
   as its directory of seats says, and ends a session's processes as it
   ends (`KillUserProcesses=yes`, as `loginctl` says). Then it starts in a
@@ -4092,10 +4095,9 @@ fall back between. So `ssh:` is deprecated in favor of execution groups:
 ### The `ssh` backend
 
 A format 1 `ssh:` makes a group of one member of the `ssh` backend, and a
-configured group can name hosts too. It isn't built yet: a member of it
-has `backend_not_built`. The coordinator connects to a host as the
-user's `ssh` would ([Connections](#connections)), and runs the local
-backend there through `meridian host`
+configured group can name hosts too. The coordinator connects to a host
+as the user's `ssh` would ([Connections](#connections)), and runs the
+local backend there through `meridian host`
 ([Backends and isolation](#backends-and-isolation)). Besides those:
 
 - **The binary on the host.** A host of the coordinator's system and
@@ -4112,14 +4114,29 @@ backend there through `meridian host`
 - **Reaching the coordinator.** One replica at a time holds a host's
   connection, under a lease in the store named by a keyed hash of the
   host and its login, so the store never holds in the clear a host that
-  came from a variable or a password. It asks the host to listen on a
-  socket in the host's sockets directory, named by the same hash, and
-  serves the worker API on what the host forwards, to the attempts placed
-  on that member only, since a forwarded connection has no user the
-  system can name. It first removes a socket that an earlier holder left
-  at the path, over which sshd's default, `StreamLocalBindUnlink no`,
+  came from a variable or a password; locally, the lease is a lock on a
+  file beside the database, as the coordinator's socket's is, and the
+  hash is keyed by a key derived from the state directory's key file. It
+  asks the host to listen on a socket in the host's sockets directory,
+  named by the same hash, and serves the worker API on what the host
+  forwards, to the attempts placed on that member only, since a forwarded
+  connection has no user the system can name: the store records the hash
+  with each attempt placed on a host, and a request on a member's socket
+  for an attempt of another member, or a request on the coordinator's own
+  socket for an attempt on a host, is refused as one with no credential
+  is. A connection forwarded over SSH takes no deadlines, so each is
+  passed through one that does, and the server's bounds on a request's
+  time hold on it too. It first removes a socket that an earlier holder
+  left at the path, over which sshd's default, `StreamLocalBindUnlink no`,
   won't listen. A host whose sshd forbids forwarding Unix sockets takes
   no workers (`ssh_forwarding_refused`); Meridian opens no port instead.
+  Each `meridian run` or `resume` of a store holds the hosts' sockets
+  that no other holds, as the attempts it places need them, and as the
+  store's attempts that haven't ended do, which it looks for every few
+  seconds; one that another holds, it waits for, and takes over once that
+  one stops. A host's connection is where the holder's last dial
+  reached: where a host's name leads to several nodes, the workers of a
+  node it no longer reaches can't reach the coordinator until it does.
 - **Which host.** A connection made again can reach another host than the
   last did, as a cluster's login nodes behind one name do, each with
   placements of its own. So a placement's ID begins with a keyed hash of
@@ -4144,9 +4161,11 @@ backend there through `meridian host`
   (`ssh_host_helper_failed`), or one of another release
   (`ssh_host_release_mismatch`), is unknown for five minutes at most. A replica that
   takes a host's connection over, as `meridian resume` does once the
-  process that held it has stopped, wakes the supervisors of the attempts
-  placed on it, which connect again; the grace after a takeover keeps
-  their leases from counting as lapsed meanwhile
+  process that held it has stopped, finds the attempts placed on it in
+  the store, by the hash they were recorded with, readies their jobs
+  again for the members' settings, which the store doesn't hold, and
+  forwards their sockets again; the grace after a takeover keeps their
+  leases from counting as lapsed meanwhile
   ([Leases and fencing](#leases-and-fencing)).
 - **A host that can't be reached** as a job is placed is tried four times,
   as format 1 tries it, each try bounded by the host's `ConnectTimeout`,

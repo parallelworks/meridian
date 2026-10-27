@@ -555,6 +555,9 @@ var (
 	// coordinator's.
 	SSHHostReleaseMismatch = define(Error, "ssh_host_release_mismatch", "meridian host of another release", "host", "release", "expected")
 	SSHPlacementElsewhere  = define(Error, "ssh_placement_elsewhere", "Host whose connection reaches another node than a worker's", "host")
+	// path is the socket on the host that the coordinator asked sshd to
+	// listen on for the host's workers.
+	SSHForwardingRefused = define(Error, "ssh_forwarding_refused", "Host that won't forward a socket to the coordinator", "host", "path")
 )
 
 // The meridian command's directories. mode is a file's or directory's
