@@ -167,8 +167,13 @@ func TestHelpCommand(t *testing.T) {
 	if r.code != exitOK || !strings.Contains(r.stdout, "usage: meridian run <workflow>") || !strings.Contains(r.stdout, "-run-dir") {
 		t.Errorf("meridian help run = %+v", r)
 	}
-	r = runCLI(t, nil, "", "help", "cancel")
+	r = runCLI(t, nil, "", "help", "rerun")
 	if r.code != exitOK || !strings.Contains(r.stdout, "It isn't built yet.") {
+		t.Errorf("meridian help rerun = %+v", r)
+	}
+	r = runCLI(t, nil, "", "help", "cancel")
+	if r.code != exitOK || !strings.Contains(r.stdout, "usage: meridian cancel <run>") || !strings.Contains(r.stdout, "coordinates the run itself") || !strings.Contains(r.stdout, "-f") ||
+		!strings.Contains(r.stdout, "meridian resume\n<run> sees it to its end") || !strings.Contains(r.stdout, "It exits 2 for a run the store hasn't") {
 		t.Errorf("meridian help cancel = %+v", r)
 	}
 	r = runCLI(t, nil, "", "help", "resume")
@@ -239,7 +244,10 @@ func TestUsageProblems(t *testing.T) {
 	}{
 		{nil, "command_missing"},
 		{[]string{"frobnicate"}, "command_unknown"},
-		{[]string{"cancel", "1"}, "command_not_built"},
+		{[]string{"rerun", "1"}, "command_not_built"},
+		{[]string{"cancel"}, "arguments_invalid"},
+		{[]string{"cancel", "1", "2"}, "arguments_invalid"},
+		{[]string{"cancel", "--format", "xml", "1"}, "flag_value_invalid"},
 		{[]string{"resume"}, "arguments_invalid"},
 		{[]string{"logs"}, "arguments_invalid"},
 		{[]string{"logs", "1", "build", "more"}, "arguments_invalid"},

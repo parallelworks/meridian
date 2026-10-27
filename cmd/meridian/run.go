@@ -134,6 +134,8 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 type runSupervision struct {
 	logs, follow coordinator.Logs
 	progress     *local.Progress
+	// quiet shows nothing of the run but its end, as meridian cancel does.
+	quiet bool
 }
 
 // runDirs returns where runs' directories are, by the store's ID and the
@@ -250,6 +252,9 @@ func followRun(ctx context.Context, coord *coordinator.Coordinator, id string, r
 		opts := coordinator.FollowOptions{Event: func(e coordinator.Event) error {
 			if e.Kind == coordinator.RunFinished {
 				end.event = e
+				return nil
+			}
+			if rs.quiet {
 				return nil
 			}
 			return rs.progress.Event(e)

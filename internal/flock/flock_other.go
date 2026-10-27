@@ -10,3 +10,6 @@ func Lock(context.Context, string) (func(), error) { return nil, ErrUnsupported 
 
 // TryLock returns ErrUnsupported, as Lock does.
 func TryLock(string) (func(), error) { return nil, ErrUnsupported }
+
+// Held returns ErrUnsupported, as Lock does.
+func Held(string) (bool, error) { return false, ErrUnsupported }

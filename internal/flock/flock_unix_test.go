@@ -89,3 +89,32 @@ func TestTryLock(t *testing.T) {
 	}
 	again()
 }
+
+// Held says whether another holds a lock, without taking it, or making
+// its file.
+func TestHeld(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.lock")
+	if held, err := Held(path); err != nil || held {
+		t.Errorf("Held of a file that isn't there = %v, %v", held, err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Held made the file: %v", err)
+	}
+	unlock, err := Lock(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, err := Held(path); err != nil || !held {
+		t.Errorf("Held while Lock holds = %v, %v", held, err)
+	}
+	unlock()
+	if held, err := Held(path); err != nil || held {
+		t.Errorf("Held once released = %v, %v", held, err)
+	}
+	// Held let go of what it took to ask.
+	again, err := TryLock(path)
+	if err != nil {
+		t.Fatalf("TryLock after Held = %v", err)
+	}
+	again()
+}
