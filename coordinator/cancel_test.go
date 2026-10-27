@@ -169,8 +169,15 @@ func (d *stopDriver) work(req backend.PlaceRequest, way string) {
 // says, by job.
 func openStop(t *testing.T, ways map[string]string) (*Coordinator, *stopDriver) {
 	t.Helper()
+	return openStopWith(t, Options{}, ways)
+}
+
+// openStopWith is openStop, with opts.
+func openStopWith(t *testing.T, opts Options, ways map[string]string) (*Coordinator, *stopDriver) {
+	t.Helper()
 	d := &stopDriver{testDriver: newTestDriver(), ways: ways, release: make(chan struct{})}
-	c := open(t, Options{Drivers: map[string]backend.Driver{testBackend: d}})
+	opts.Drivers = map[string]backend.Driver{testBackend: d}
+	c := open(t, opts)
 	// Its workers run with the test's context, as its testDriver's do,
 	// which open sets only for a testDriver of its own.
 	d.c, d.ctx = c, t.Context()
@@ -215,6 +222,7 @@ func controlOf(t *testing.T, c *Coordinator, id string) workerapi.Control {
 // which tells the attempt's worker to stop, for the reason cancelled; the
 // job ends cancelled, as its worker ended it, and so does the run.
 func TestCancelRunning(t *testing.T) {
+	parallel(t)
 	c, _ := openStop(t, map[string]string{"main": obey})
 	id, _ := create(t, c, oneJob, nil, nil)
 	serve(t, c)
@@ -254,6 +262,7 @@ jobs:
 // through a cancel: its worker isn't told to stop, and the job succeeds,
 // while the run is cancelled.
 func TestCancelOutlives(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"main": outlive})
 	id, _ := create(t, c, alwaysJob, nil, nil)
 	serve(t, c)
@@ -282,6 +291,7 @@ func TestCancelOutlives(t *testing.T) {
 // its control asks its worker to cancel, which it reads as it claims the
 // attempt, as a worker queued by a scheduler would.
 func TestCancelKeepsPlacement(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"main": never})
 	id, _ := create(t, c, oneJob, nil, nil)
 	serve(t, c)
@@ -320,6 +330,7 @@ jobs:
 // the job fails with the reason timeout, as its worker ends it, and the
 // run with it.
 func TestRunTimeout(t *testing.T) {
+	parallel(t)
 	c, _ := openStop(t, map[string]string{"main": obey})
 	id, _ := create(t, c, timedOut, nil, nil)
 	serve(t, c)
@@ -341,6 +352,7 @@ func TestRunTimeout(t *testing.T) {
 // at once that the run's timeout has passed, and the job fails, as format
 // 1's does when it starts under the passed deadline.
 func TestRunTimeoutUnclaimed(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"main": late})
 	id, _ := create(t, c, timedOut, nil, nil)
 	serve(t, c)
@@ -385,6 +397,7 @@ jobs:
 // TestCancelNotReadied checks the three paths of the jobs not yet readied
 // when a run is cancelled.
 func TestCancelNotReadied(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"a": hold})
 	id, _ := create(t, c, needsWorkflow, nil, nil)
 	serve(t, c)
@@ -419,6 +432,7 @@ func TestCancelNotReadied(t *testing.T) {
 // TestCancelCreated checks that a run cancelled before it started ends
 // cancelled, and its Start leaves it so.
 func TestCancelCreated(t *testing.T) {
+	parallel(t)
 	c, _ := openStop(t, nil)
 	id, _ := create(t, c, oneJob, nil, nil)
 	if err := c.Cancel(t.Context(), id); err != nil {
@@ -445,6 +459,7 @@ jobs:
 // worker's time to stop, a heartbeat period and the margin have passed
 // too, as a backstop for a worker that doesn't stop it itself.
 func TestJobTimeoutBackstop(t *testing.T) {
+	parallel(t)
 	c, _ := openStop(t, map[string]string{"main": silent})
 	c.timing.WorkerStop, c.timing.Heartbeat, c.timing.FenceMargin = 0, time.Second, 0
 	id, _ := create(t, c, timedJob, nil, nil)
@@ -470,6 +485,7 @@ func TestJobTimeoutBackstop(t *testing.T) {
 // step, isn't placed again: it ends cancelled after a cancel, and failed,
 // with the reason timeout, after the run's timeout.
 func TestStopBetweenAttempts(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name, workflow string
 		outcome        plan.Outcome
@@ -508,6 +524,7 @@ func TestStopBetweenAttempts(t *testing.T) {
 // retry:'s interval to run again as its run is cancelled, isn't placed
 // again: it ends cancelled at once, after its one attempt.
 func TestStopAfterLost(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, _ := openLease(t, clock, []bool{true, true}, []bool{true, true})
 	id, first := startJob(t, c, retryJob, store.AttemptRunning)
@@ -534,6 +551,7 @@ func TestStopAfterLost(t *testing.T) {
 // says its worker has ended, the job ends cancelled, and isn't placed
 // again.
 func TestStopUnclaimedLost(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, nil, nil)
 	d.set(func(d *testDriver) {
@@ -563,6 +581,7 @@ func TestStopUnclaimedLost(t *testing.T) {
 // no lapsed lease counts has passed, and without asking its backend: the
 // job ends cancelled.
 func TestStopLapseGrace(t *testing.T) {
+	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true}, []bool{true})
 	id, _ := startJob(t, c, oneJob, store.AttemptRunning)
@@ -604,6 +623,7 @@ func TestStopLapseGrace(t *testing.T) {
 // looked, and before it made the job's attempt, has no attempt made: the
 // supervisor looks again, and ends the job, which doesn't outlive the stop.
 func TestStopWhilePlacing(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	id, _ := create(t, c, oneJob, nil, nil)
 	var once sync.Once
@@ -636,6 +656,7 @@ func TestStopWhilePlacing(t *testing.T) {
 // runs on through the cancel: its placement isn't withdrawn, and its
 // worker runs it.
 func TestCancelIfAlways(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	release := make(chan struct{})
 	byJob(c, map[string]testEnd{
@@ -675,6 +696,7 @@ jobs:
 // cancel after the run's timeout, or the run's timeout after a cancel,
 // changes nothing, neither the run's outcome nor what its worker is told.
 func TestStopTwice(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name          string
 		first, second plan.Reason
@@ -710,6 +732,7 @@ func TestStopTwice(t *testing.T) {
 // recorded, and its worker, which claims it once the run is stopped, ends
 // the job cancelled.
 func TestCancelPlacing(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"main": late})
 	id, _ := create(t, c, oneJob, nil, nil)
 	var once sync.Once
@@ -743,6 +766,7 @@ func TestCancelPlacing(t *testing.T) {
 // whether the claim or the withdrawal comes first, the job ends
 // cancelled, and so does the run.
 func TestCancelClaiming(t *testing.T) {
+	parallel(t)
 	c, _ := openStop(t, map[string]string{"main": late})
 	id, _ := create(t, c, oneJob, nil, nil)
 	serve(t, c)
@@ -761,6 +785,7 @@ func TestCancelClaiming(t *testing.T) {
 // TestCancelFollowed checks that following a run that is cancelled reports
 // its stop, with the reason, before its end.
 func TestCancelFollowed(t *testing.T) {
+	parallel(t)
 	c, _ := openStop(t, nil)
 	id, _ := create(t, c, oneJob, nil, nil)
 	if err := c.Cancel(t.Context(), id); err != nil {
@@ -785,6 +810,7 @@ func TestCancelFollowed(t *testing.T) {
 // one waiting for its turn ends at once, cancelled, never placed, as
 // format 1 ends one; and the matrix job ends cancelled once they have.
 func TestCancelMatrix(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"main#0": hold})
 	id, _ := create(t, c, `
 jobs:
@@ -824,6 +850,7 @@ jobs:
 // whose if: isn't, is told to stop: what outlives a stop is decided with
 // each instance's values.
 func TestCancelInstanceAlways(t *testing.T) {
+	parallel(t)
 	c, d := openStop(t, map[string]string{"main#0": hold, "main#1": outlive})
 	id, _ := create(t, c, `
 jobs:

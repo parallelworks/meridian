@@ -49,6 +49,7 @@ var regionSubmitted = map[string]any{"pw": "HUNTER2SECRET"}
 // as Start does in memory, and the finisher ends the run with its outcome
 // and deletes its record.
 func TestRun(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	id, created := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	if id != "1" {
@@ -98,6 +99,7 @@ func TestRun(t *testing.T) {
 // TestStartKeeps checks what startRun stores: the record sealed again,
 // with the next generation, holding the private part of what Start gave.
 func TestStartKeeps(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	if _, err := c.startRun(t.Context(), id, nil); err != nil {
@@ -136,6 +138,7 @@ func (v *failingVariables) Read(ctx context.Context, names []string, secrets boo
 // TestStartFails checks each way Start fails a run: the run ends failed,
 // with a diagnostic that says why, and without its secret record.
 func TestStartFails(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name string
 		opts Options
@@ -255,6 +258,7 @@ func exec(t *testing.T, c *Coordinator, query string) {
 // TestStartTriesAgain checks that a run whose variables can't be read at
 // first starts once they can, after as many tries as it took.
 func TestStartTriesAgain(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: &failingVariables{vars: regionVars, fail: 2}})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	serve(t, c)
@@ -267,6 +271,7 @@ func TestStartTriesAgain(t *testing.T) {
 // TestPlanNewer checks that a run whose plan only a newer release reads is
 // left as it is, as the coordinator says in its log.
 func TestPlanNewer(t *testing.T) {
+	parallel(t)
 	log := &logRecords{}
 	c := open(t, Options{Variables: regionVars, Log: slog.New(log)})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
@@ -285,7 +290,7 @@ func TestPlanNewer(t *testing.T) {
 }
 
 // waitFor waits until ok, for 10 seconds at most.
-func waitFor(t *testing.T, ok func() bool) {
+func waitFor(t testing.TB, ok func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); !ok(); {
 		if time.Now().After(deadline) {
@@ -299,6 +304,7 @@ func waitFor(t *testing.T, ok func() bool) {
 // started only by the coordinator that created it, which works the queue
 // until it has started, and not by another of the store's.
 func TestStartQueue(t *testing.T) {
+	parallel(t)
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	keys := coordtest.NewKeys(t)
 	ownQueue := func(id string) string { return "meridian.start." + id }
@@ -329,6 +335,7 @@ func TestStartQueue(t *testing.T) {
 // each think they hold it, as a Start hopper rescued from a replica still
 // running it, stores what it gave once.
 func TestStartOnce(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	var (
@@ -394,6 +401,7 @@ func storedJob(t *testing.T, c *Coordinator, id, key string) *store.Job {
 // isn't stored at all: neither the run, nor its record, nor its hopper
 // jobs, and its number is given to the next.
 func TestCreateRunRollsBack(t *testing.T) {
+	parallel(t)
 	keys := coordtest.NewKeys(t)
 	c := open(t, Options{Keys: keys, Variables: regionVars})
 	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(regionWorkflow), regionSubmitted,
@@ -451,6 +459,7 @@ func (groups) ComputeTarget(context.Context, plan.ComputeTarget) (*backend.Group
 }
 
 func TestDefaultGroupUnknown(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars, Groups: groups{}})
 	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(regionWorkflow), regionSubmitted,
 		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: regionVars.Contexts()})

@@ -20,6 +20,7 @@ import (
 // and only the part of the run's values and of its needs' results that the
 // job reads; and how many steps it has.
 func TestClaimReadier(t *testing.T) {
+	parallel(t)
 	vars := conformancetest.Variables{"vars.SHOWN": {Value: "yes"}, "vars.OTHER": {Value: "no"}}
 	c := open(t, Options{Variables: vars})
 	driverOf(c).set(func(d *testDriver) {

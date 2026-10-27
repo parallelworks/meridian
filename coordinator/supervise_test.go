@@ -92,6 +92,7 @@ func (groupsOf) ComputeTarget(context.Context, plan.ComputeTarget) (*backend.Gro
 // worker reaches the coordinator, records where, and ends the job as the
 // attempt ended, once its worker wakes it.
 func TestJobPlaced(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	began := time.Now()
 	r := runToEnd(t, c, oneJob, nil)
@@ -128,6 +129,7 @@ func TestJobPlaced(t *testing.T) {
 // TestJobsInOrder checks that a job is placed once the job it needs has
 // ended, and that a member's connection is made once.
 func TestJobsInOrder(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	r := runToEnd(t, c, `
 jobs:
@@ -159,6 +161,7 @@ jobs:
 // it needs, which the worker API stores apart from run state, as the
 // needed job's part of the run's secret record.
 func TestPrivateNeeds(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	driverOf(c).set(func(d *testDriver) {
 		d.worker = func(req backend.PlaceRequest) testEnd {
@@ -192,6 +195,7 @@ jobs:
 
 // TestJobFails checks that a job whose attempt failed fails, and its run.
 func TestJobFails(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	driverOf(c).set(func(d *testDriver) {
 		d.worker = func(backend.PlaceRequest) testEnd {
@@ -207,6 +211,7 @@ func TestJobFails(t *testing.T) {
 // TestJobSkipped checks that a job whose if: is false ends skipped,
 // without an attempt.
 func TestJobSkipped(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	r := runToEnd(t, c, `
 jobs:
@@ -226,6 +231,7 @@ jobs:
 // TestPlacementImpossible checks that a job no member can run fails, with
 // placement_impossible and each member's reason.
 func TestPlacementImpossible(t *testing.T) {
+	parallel(t)
 	g := groupsOf{"local": {Name: "local", Members: []backend.Member{{Name: "m1", Backend: "slurm"}, {Name: "m2", Backend: testBackend}}}}
 	c := open(t, Options{Groups: g})
 	tooSmall := problems.ResourcesExceedMember.Problem(problems.Params{"member": "m2", "resource": "cpu", "asks": 4000, "offers": 2000})
@@ -277,6 +283,7 @@ func failSetup(c *Coordinator, fails ...*problem.Problem) {
 // started is placed again, after a while, until the fourth such failure,
 // or the second for the same reason, which fails it.
 func TestSetupFailures(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name     string
 		fails    []*problem.Problem
@@ -311,6 +318,7 @@ func TestSetupFailures(t *testing.T) {
 // TestPlaceProblem checks that a problem from the driver's Place fails the
 // attempt before its first step, and the job is placed again.
 func TestPlaceProblem(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	driverOf(c).set(func(d *testDriver) {
 		n := 0
@@ -351,6 +359,7 @@ func setupFailures(t *testing.T, c *Coordinator, id, key string) []*store.Attemp
 // started is placed again on a member it hasn't failed on, while there is
 // one, and then on the first again.
 func TestPlacedElsewhere(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	failSetup(c, setupProblems[:3]...)
 	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(oneJob), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}})
@@ -376,6 +385,7 @@ func TestPlacedElsewhere(t *testing.T) {
 // attempt made for the record; so that the second time fails the job, as
 // the same reason twice does; and that the log says why.
 func TestPlacementUnanswered(t *testing.T) {
+	parallel(t)
 	log := &logRecords{}
 	c := open(t, Options{Log: slog.New(log)})
 	driverOf(c).set(func(d *testDriver) {
@@ -400,6 +410,7 @@ func TestPlacementUnanswered(t *testing.T) {
 // placed again, on the same member, after the driver's Find found it
 // wasn't, with a new bootstrap token, so that it is never placed twice.
 func TestPlaceUnanswered(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	finds := 0
 	driverOf(c).set(func(d *testDriver) {
@@ -433,6 +444,7 @@ func TestPlaceUnanswered(t *testing.T) {
 // but ended before it recorded its placement, is found where it was
 // placed, and its placement recorded, without placing it again.
 func TestResumePlace(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	d := driverOf(c)
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
@@ -477,6 +489,7 @@ func TestResumePlace(t *testing.T) {
 // a job between attempts, the job ends cancelled, after its one attempt,
 // which failed before its first step.
 func TestResumeStopped(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	d := driverOf(c)
 	id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
@@ -530,6 +543,7 @@ var hostVars = conformancetest.Variables{"vars.HOST": {Value: "secret-host.examp
 // placed is kept only sealed: its group, member and backend, and the
 // problems its members give.
 func TestPrivatePlacement(t *testing.T) {
+	parallel(t)
 	t.Run("placed", func(t *testing.T) {
 		d := newTestDriver()
 		c := open(t, Options{Variables: hostVars, Drivers: map[string]backend.Driver{testBackend: d, "ssh": d}})
@@ -632,6 +646,7 @@ func TestPrivatePlacement(t *testing.T) {
 // failure of it; and it neither ends an attempt the other placed, nor
 // gives it a new token.
 func TestStaleSupervisor(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	c.supervision.tries = 1
 	started := func() (*store.Run, string) {
@@ -712,6 +727,7 @@ func TestStaleSupervisor(t *testing.T) {
 // ended, and withdraws its attempt, whose worker's reports are refused, and
 // whose placement its driver cancels.
 func TestFinisherWithdraws(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{Variables: regionVars})
 	driverOf(c).set(func(d *testDriver) {
 		d.worker = func(backend.PlaceRequest) testEnd { return testEnd{never: true} }
@@ -744,6 +760,7 @@ func TestFinisherWithdraws(t *testing.T) {
 // TestWakeEnded checks that waking the supervisor of a job that has ended
 // doesn't run it again.
 func TestWakeEnded(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	r := runToEnd(t, c, oneJob, nil)
 	j := storedJob(t, c, r.ID, "main")
@@ -760,6 +777,7 @@ func TestWakeEnded(t *testing.T) {
 // TestSupervisorStops checks that a supervisor whose coordinator stops as
 // it waits on a backend gives hopper its attempt back.
 func TestSupervisorStops(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	c.stopTimeout = 100 * time.Millisecond
 	placing := make(chan struct{}, 1)

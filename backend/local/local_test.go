@@ -119,7 +119,7 @@ func stub(mode string) int {
 // newDriver returns a driver whose workers are stubs of mode, with a
 // MERIDIAN_ variable of the test's own that they mustn't get, and the
 // path their reports go to.
-func newDriver(t *testing.T, mode string) (*Driver, string) {
+func newDriver(t testing.TB, mode string) (*Driver, string) {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "report.json")
 	env := append(os.Environ(), stubEnv+"="+mode, reportEnv+"="+out, "MERIDIAN_LEAK=yes",
@@ -389,6 +389,36 @@ func TestWorkerEnds(t *testing.T) {
 	readReport(t, out)
 	if err := running.Forget(t.Context(), host, p); err == nil {
 		t.Error("forgot a worker that runs")
+	}
+}
+
+// A worker that has ended counts for nothing that a member offers, and an
+// attempt whose worker has ended, placed again, as after a coordinator
+// that placed it died before it recorded the placement, starts a new one,
+// once what the driver kept of the old one is gone.
+func TestPlaceAgainAfterEnd(t *testing.T) {
+	t.Parallel()
+	d, out := newDriver(t, "exit")
+	m := &backend.Member{Name: "box", Backend: "local", Isolation: "host", Resources: backend.Resources{MilliCPU: 2000, Memory: 1 << 30}}
+	req := backend.PlaceRequest{Attempt: "a1", BootstrapToken: "t", Resources: backend.Resources{MilliCPU: 1500}}
+	first := place(t, d, m, req)
+	readReport(t, out)
+	waitFor(t, "the worker to end", func() bool { return check(t, d, first).State == backend.Dead })
+	exitStatus(t, d, first)
+	fit, err := d.Probe(t.Context(), m, backend.Demand{Resources: backend.Resources{MilliCPU: 1000}})
+	if err != nil || fit.Problem != nil || fit.Availability != backend.StartsNow {
+		t.Errorf("1000 thousandths of a CPU of 2000, beside a worker that ended: %+v, %v", fit, err)
+	}
+	second := place(t, d, m, req)
+	if second.ID == first.ID || second.Attempt != req.Attempt {
+		t.Errorf("placed again, the attempt is %+v, as it was %+v", second, first)
+	}
+	waitFor(t, "the second worker to start", func() bool {
+		pids, err := os.ReadFile(out + ".pids")
+		return err == nil && strings.Count(string(pids), "\n") == 2
+	})
+	if found, ok, err := d.Find(t.Context(), m, req.Attempt); err != nil || !ok || found != second {
+		t.Errorf("Find gave %+v, %v, %v; want %+v", found, ok, err, second)
 	}
 }
 
