@@ -328,7 +328,8 @@ func (c *Coordinator) attemptSetupFailed(ctx context.Context, id string, p *prob
 // finds the placement on the member it chose, as the driver's Find says,
 // and records it, or places the attempt there with a new bootstrap token,
 // so that no attempt is placed twice. A member that is no longer in its
-// group fails the attempt before its first step.
+// group fails the attempt before its first step, as does a placement not
+// found once the stop ends the job (stopEnds).
 func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, error) {
 	private := a.Private
 	cand, _, rj, err := c.placedOn(ctx, run, job, a)
@@ -351,6 +352,16 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	}
 	if found {
 		return c.recordPlacement(ctx, run.ID, a.ID, cand, p, private)
+	}
+	// Nothing was placed: once the run has stopped, the job is as one
+	// between attempts, which the stop may end (stopEnds). Then the attempt
+	// fails before its first step, and the job ends as the stop says
+	// (placesNoMore), rather than be placed after the stop.
+	if ends, err := c.stopEnds(ctx, run, job); err != nil || ends {
+		if err != nil {
+			return 0, err
+		}
+		return 0, c.attemptSetupFailed(ctx, a.ID, nil)
 	}
 	if cand.fit, err = cand.driver.Probe(ctx, m, demandOf(rj)); err == nil && cand.fit.Problem != nil {
 		err = cand.fit.Problem
