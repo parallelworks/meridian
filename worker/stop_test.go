@@ -110,7 +110,7 @@ func TestFenceStopsEveryGroup(t *testing.T) {
 	if pid <= 0 {
 		t.Fatalf("no background process: %q", data)
 	}
-	if err := syscall.Kill(pid, 0); err == nil {
+	if !ended(pid) {
 		t.Errorf("step 0's background process %d still runs after the worker fenced itself", pid)
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
@@ -332,13 +332,28 @@ func TestEndFenced(t *testing.T) {
 	if pid <= 0 {
 		t.Fatalf("no background process: %q, %v", data, readErr)
 	}
+	if !ended(pid) {
+		t.Fatalf("the step's background process %d still runs after its end was fenced", pid)
+	}
+}
+
+// ended reports whether the process pid has ended, waiting five seconds at
+// most: whether it is gone, or a zombie, which its parent hasn't reaped
+// yet. A step's background process is an orphan once the step's shell
+// exits, and is reaped by the nearest subreaper, or init, whenever they
+// get to it, which a container's init may do seldom, while the system
+// still answers kill(2) for it. And a worker returns once the process
+// groups it started have no process left but zombies, or once it has sent
+// them SIGKILL, which the system delivers after.
+func ended(pid int) bool {
 	for wait := time.After(5 * time.Second); syscall.Kill(pid, 0) == nil && !zombie(pid); {
 		select {
 		case <-wait:
-			t.Fatalf("the step's background process %d still runs after its end was fenced", pid)
+			return false
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+	return true
 }
 
 // zombie reports whether the process pid has ended, and waits for its
