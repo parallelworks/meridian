@@ -435,6 +435,15 @@ var (
 	WorkerBinaryUnsafe    = define(Error, "worker_binary_unsafe", "Meridian binary that isn't safe to start", "path", "code")
 )
 
+// The ssh backend's problems with a host (meridian host), whose Fit or
+// error the attempt records: host is the host's name, as it says it; path
+// a directory there; and reason what is wrong with it, a problem's code,
+// whose page says why, or the system's error.
+var (
+	SSHWorkerWouldBeKilled = define(Error, "ssh_worker_would_be_killed", "Host that would kill a worker as its session ends", "host")
+	SSHHostDirUnusable     = define(Error, "ssh_host_dir_unusable", "Directory on a host that Meridian can't use", "host", "path", "reason")
+)
+
 // The meridian command's directories. mode is a file's or directory's
 // permissions in octal, as 0755.
 var (

@@ -75,6 +75,9 @@ type cli struct {
 	// before it coordinates runs, which a test gives in place of
 	// harden.Process for nil.
 	harden func() error
+	// host is what meridian host asks of the system, which a test gives in
+	// place of the system's (systemHost) for nil.
+	host *hostSystem
 	// signals and interactive are what a test gives meridian run in place
 	// of the process's: the interrupts it gets, nil for the process's
 	// (notify); and whether a person can answer it, nil for whether its
@@ -132,6 +135,9 @@ type command struct {
 	// about says more of what the command does, as its usage shows it,
 	// after its summary, or is "".
 	about string
+	// hidden keeps the command out of the commands help lists: one that a
+	// backend runs, through a protocol of its own, not a person.
+	hidden bool
 	// run runs the command with its arguments, which it parses with fs,
 	// and returns its exit status. It is nil for a command that isn't built
 	// yet.
@@ -155,6 +161,7 @@ func init() {
 		{name: "rerun", args: "<run>", summary: "Runs a run again, or only its failed jobs."},
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
 		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},
+		{name: "host", args: "<operation>", summary: "Runs the local backend for a coordinator on another host. Started by backends, not by people.", about: hostAbout, hidden: true, run: runHost},
 		{name: "relay", summary: "Forwards workers' connections to a coordinator. Started by backends, not by people."},
 		{name: "version", summary: "Shows Meridian's version.", run: runVersion},
 	}
@@ -242,6 +249,9 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, "Meridian compiles and runs workflows.\n\nusage: meridian <command> [arguments]\n\ncommands:\n")
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, cmd := range commands {
+		if cmd.hidden {
+			continue
+		}
 		state := ""
 		if cmd.run == nil {
 			state = " (not built yet)"

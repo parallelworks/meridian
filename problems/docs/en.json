@@ -1876,5 +1876,19 @@
     "fix": [
       "Fix what the code's page says, for the binary the message names, or install meridian where only you or root can change it, such as /usr/local/bin."
     ]
+  },
+  "ssh_worker_would_be_killed": {
+    "why": "On a host, each worker is started from a session the coordinator opens there, and it must outlive that session, to run the job's steps and report them after the session has ended. This host's logind ends every process of a session as the session ends (KillUserProcesses=yes), and you don't linger there, so your service manager, in which Meridian would start the worker instead, stops after your last session too. A worker started on the host would end as soon as the coordinator's session did, so Meridian doesn't start one.",
+    "fix": [
+      "Run loginctl enable-linger on the host, as yourself, which keeps your service manager running after your last session: Meridian then starts workers in it.",
+      "Or ask the host's administrators to set KillUserProcesses=no in logind.conf, as most systems have it."
+    ]
+  },
+  "ssh_host_dir_unusable": {
+    "why": "On a host, Meridian keeps what it keeps in directories of your own: the local backend's state, the workers' binaries, the sockets the coordinator listens on for the host's workers, and runs' directories. Each must be one that only you can use, on a way no other user can change, since what is in it, or reaches a worker through it, is yours alone. Meridian makes the one that isn't there, and checks each: this one failed, for the reason given, a problem's code, whose page says why, or the system's error.",
+    "fix": [
+      "Fix what the reason says, for the directory the message names, on the host: chmod 700, for a directory other users can use.",
+      "If what holds it can't be yours alone, set XDG_STATE_HOME or XDG_CACHE_HOME on the host to a directory of your own, as for Meridian's state and cache directories anywhere."
+    ]
   }
 }

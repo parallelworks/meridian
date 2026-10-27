@@ -2182,5 +2182,21 @@
     "fix": [
       "Corrige lo que dice la página del código, para el binario que nombra el mensaje, o instala meridian donde solo tú o root puedan cambiarlo, como /usr/local/bin."
     ]
+  },
+  "ssh_worker_would_be_killed": {
+    "title": "Host que terminaría un worker al terminar su sesión",
+    "why": "En un host, cada worker se inicia desde una sesión que el coordinador abre allí, y debe sobrevivir a esa sesión para ejecutar los pasos del trabajo e informar de ellos después de que la sesión termine. El logind de este host termina todos los procesos de una sesión cuando la sesión termina (KillUserProcesses=yes), y allí no tienes lingering, así que tu gestor de servicios, en el que Meridian iniciaría el worker en su lugar, también se detiene tras tu última sesión. Un worker iniciado en el host terminaría en cuanto terminara la sesión del coordinador, así que Meridian no lo inicia.",
+    "fix": [
+      "Ejecuta loginctl enable-linger en el host, con tu usuario, lo que mantiene tu gestor de servicios en marcha tras tu última sesión: Meridian inicia entonces los workers en él.",
+      "O pide a los administradores del host que fijen KillUserProcesses=no en logind.conf, como lo tienen la mayoría de los sistemas."
+    ]
+  },
+  "ssh_host_dir_unusable": {
+    "title": "Directorio de un host que Meridian no puede usar",
+    "why": "En un host, Meridian guarda lo que guarda en directorios tuyos: el estado del backend local, los binarios de los workers, los sockets en los que el coordinador escucha a los workers del host y los directorios de las ejecuciones. Cada uno debe ser un directorio que solo tú puedas usar, en un camino que ningún otro usuario pueda cambiar, ya que lo que contiene, o lo que llega a un worker a través de él, es solo tuyo. Meridian crea el que no existe y comprueba cada uno: este no pasó la comprobación, por el motivo indicado, el código de un problema, cuya página explica por qué, o el error del sistema.",
+    "fix": [
+      "Corrige lo que dice el motivo, para el directorio que nombra el mensaje, en el host: chmod 700, para un directorio que otros usuarios pueden usar.",
+      "Si lo que lo contiene no puede ser solo tuyo, asigna en el host a XDG_STATE_HOME o XDG_CACHE_HOME un directorio propio, como para los directorios de estado y de caché de Meridian en cualquier lugar."
+    ]
   }
 }

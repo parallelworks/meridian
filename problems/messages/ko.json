@@ -309,5 +309,7 @@
   "isolation_not_built": "구성원 ‘{member}’은(는) 작업을 {has_isolation, select, true {‘{isolation}’(으)로} other {컨테이너에서(격리를 지정하지 않은 구성원처럼)}} 격리하는데, 그 백엔드는 아직 이를 할 수 없습니다. 격리가 약해지므로 Meridian은 대신 호스트에서 실행하지도 않습니다.",
   "resources_exceed_member": "작업이 {resource, select, cpu {CPU 코어를 천분의 일 단위로 {asks}} memory {메모리를 {asks}바이트} other {GPU를 {asks}개}} 요청하지만, 구성원 ‘{member}’이(가) 제공하는 것은 {offers}입니다.",
   "backend_not_built": "구성원 ‘{member}’은(는) {backend} 백엔드로 작업을 실행하는데, 이 릴리스의 Meridian에는 아직 그 백엔드가 없습니다.",
-  "worker_binary_unsafe": "{path}은(는) 실행하기에 안전하지 않으므로({code}), Meridian은 그것으로 워커를 시작하지 않습니다."
+  "worker_binary_unsafe": "{path}은(는) 실행하기에 안전하지 않으므로({code}), Meridian은 그것으로 워커를 시작하지 않습니다.",
+  "ssh_worker_would_be_killed": "Meridian은 {host}에서 워커를 시작하지 않습니다. 그 시스템은 사용자의 세션이 끝나면 그 프로세스를 끝내고, 마지막 세션 이후에는 당신의 프로세스를 하나도 남기지 않으므로, 워커는 자신을 시작한 세션과 함께 끝나게 됩니다. 그곳에서 loginctl enable-linger를 실행하세요.",
+  "ssh_host_dir_unusable": "Meridian은 {host}의 디렉터리 {path}을(를) 사용할 수 없습니다: {reason}"
 }

@@ -309,5 +309,7 @@
   "isolation_not_built": "メンバー「{member}」はジョブを{has_isolation, select, true {「{isolation}」で} other {コンテナで（分離を指定しないメンバーと同じく）}}分離しますが、そのバックエンドはまだそれができません。分離が弱くなるため、Meridian は代わりにホストで実行することもしません。",
   "resources_exceed_member": "ジョブは{resource, select, cpu {CPU コアの千分の一単位で {asks}} memory {メモリを {asks} バイト} other {GPU を {asks} 個}}求めていますが、メンバー「{member}」が提供するのは {offers} までです。",
   "backend_not_built": "メンバー「{member}」は {backend} バックエンドでジョブを実行しますが、このリリースの Meridian にはまだそのバックエンドがありません。",
-  "worker_binary_unsafe": "{path} は実行しても安全ではないため（{code}）、Meridian はそこからワーカーを起動しません。"
+  "worker_binary_unsafe": "{path} は実行しても安全ではないため（{code}）、Meridian はそこからワーカーを起動しません。",
+  "ssh_worker_would_be_killed": "{host} ではワーカーを起動しません。そのシステムはユーザーのセッションが終わるとそのプロセスを終了させ、最後のセッションの後にあなたのプロセスを残さないため、ワーカーは起動したセッションとともに終了してしまいます。そこで loginctl enable-linger を実行してください。",
+  "ssh_host_dir_unusable": "Meridian は {host} のディレクトリ {path} を使えません: {reason}"
 }

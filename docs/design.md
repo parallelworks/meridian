@@ -3171,7 +3171,7 @@ a step's outputs, which are capped.
 | Backend | Starts a worker | Default isolation |
 | --- | --- | --- |
 | `local` | As a process detached from the terminal | A rootless container |
-| `ssh` | Over SSH, detached so it outlives the connection (`systemd-run --user` where there is one) | A rootless container |
+| `ssh` | Over SSH, detached so it outlives the connection: in a session of its own, or, where logind ends a session's processes with it and the user lingers, in a scope of their service manager (`systemd-run --user --scope`) | A rootless container |
 | `kubernetes` | As a pod, through the Kubernetes API | A rootless container: the pod, run as a non-root user |
 | `slurm`, `pbs` | As a batch job, submitted on the login node | The host |
 
@@ -3238,6 +3238,42 @@ once its worker ended more than a day before. Which placements' workers
 may still run, and asked for what, the backend reads from `live/`, a file
 for each, not from every placement kept. A member offers what it declares, or else
 the host's CPUs and memory, and no GPU.
+
+On another host, the `ssh` backend runs the same backend through `meridian
+host <operation>`, a hidden command of the same binary that does one of
+the Driver's calls, or `hello`, which says the host's system, its user's
+home, its machine ID, how it starts a worker detached, the binary it runs
+with its digest, and its directories. Its protocol is JSON lines on its
+standard input and output, versioned (`backend/hostproto`): it hardens
+itself, as `meridian run` does, says it is ready, and only then reads the
+request, which for `place` carries the bootstrap token, so the token
+reaches only a hardened process, and never its arguments or environment.
+`place` returns once the worker has taken its token. On the host:
+- **Its state** is the state directory's `hosts/<machine ID>/`, the host's
+  own where a cluster's nodes share a home, so that no node takes another's
+  live workers for dead by their boot.
+- **Its directories**, the state's, the binaries' cache (the cache
+  directory's `bin/`), the sockets' (`/tmp/meridian-<uid>/`, short enough
+  for a socket's path) and the runs', are made the user's own, which only
+  they can use, and checked as Meridian's own are (`ssh_host_dir_unusable`).
+- **A run's directory** is the state directory's `runs/<run>-<store>`,
+  outside `hosts/<machine ID>/`: normally
+  `${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs/<run>-<store>`.
+  On a cluster that is in the home its nodes share, so the compute nodes
+  that a step's `sbatch`, `qsub` or `srun` sends work to see it, and so do
+  the cluster's other login nodes, which a reconnect to the same host name
+  can reach. The temporary directory, where a run's directory is on the
+  coordinator's own host, is each node's own. `place` chooses it, and
+  returns it.
+- **A worker starts detached**: in a session of its own, unless logind ends a
+  session's processes as it ends (`KillUserProcesses=yes`, as `loginctl`
+  says). Then it starts in a scope of the user's service manager
+  (`systemd-run --user --scope`), which keeps the session's environment, as
+  a service of the manager wouldn't, if the user lingers; and otherwise not
+  at all (`ssh_worker_would_be_killed`, whose page says `loginctl
+  enable-linger`), rather than to end with the session.
+- **Its environment** is the session's, without `GODEBUG`, which could turn
+  off what the worker requires of its cryptography.
 
 A worker passes its steps nothing it inherited but its standard input,
 output and error: it marks every other descriptor close-on-exec as it
@@ -3432,7 +3468,7 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian resume <run>` | Picks up a run whose coordinator stopped. |
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
-| `meridian worker`, `meridian relay` | Started by backends, not by people. |
+| `meridian worker`, `meridian host`, `meridian relay` | Started by backends, not by people. |
 
 `meridian init`, `migrate`, `rerun`, `serve` and `relay` aren't built yet,
 and each says so.

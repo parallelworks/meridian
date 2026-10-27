@@ -309,5 +309,7 @@
   "isolation_not_built": "成员“{member}”{has_isolation, select, true {用“{isolation}”} other {在容器中（与未指定隔离方式的成员一样）}}隔离其作业，而其后端尚不能做到。Meridian 也不会改为在主机上运行这些作业，因为那样隔离会更弱。",
   "resources_exceed_member": "作业请求{resource, select, cpu {以千分之一 CPU 核为单位的 {asks}} memory {{asks} 字节内存} other {{asks} 个 GPU}}，超过成员“{member}”提供的 {offers}。",
   "backend_not_built": "成员“{member}”使用 {backend} 后端运行作业，而此版本的 Meridian 尚无该后端。",
-  "worker_binary_unsafe": "{path} 运行起来并不安全（{code}），因此 Meridian 不会用它启动工作进程。"
+  "worker_binary_unsafe": "{path} 运行起来并不安全（{code}），因此 Meridian 不会用它启动工作进程。",
+  "ssh_worker_would_be_killed": "Meridian 不会在 {host} 上启动工作进程：该系统会在用户会话结束时结束其进程，并且在你的最后一个会话之后不保留你的任何进程，因此工作进程会随启动它的会话一起结束。请在那里运行 loginctl enable-linger。",
+  "ssh_host_dir_unusable": "Meridian 无法使用 {host} 上的目录 {path}：{reason}"
 }

@@ -82,6 +82,17 @@ type Driver struct {
 	// KillAfter is how long Cancel waits after SIGTERM before SIGKILL:
 	// DefaultKillAfter for 0.
 	KillAfter time.Duration
+	// Launcher is a command that starts the worker, which it runs as the
+	// process the placement records, as systemd-run --user --scope does:
+	// the worker's arguments follow it. It is empty to start the worker
+	// itself, as on the coordinator's own host.
+	Launcher []string
+	// AwaitToken has Place return only once the worker has taken its
+	// bootstrap token, or ended, or not asked for it in time, rather than
+	// hand it over once it has returned: for a process that ends once it
+	// has placed a worker, as meridian host does on another host, which
+	// would otherwise end before the worker had its token.
+	AwaitToken bool
 
 	// swept is done once the driver has looked through what State holds,
 	// the first time it places a worker or probes a member (sweep).
@@ -389,9 +400,17 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		}
 		d.remove(req.Attempt)
 	}
-	exe, digest, err := executable()
+	path, exe, digest, err := executable()
 	if err != nil {
 		return backend.Placement{}, err
+	}
+	if len(d.Launcher) > 0 {
+		// The launcher runs the worker, as a process of its own, in which
+		// the file this one runs has no name but its path: one that took
+		// its path since was checked as this one was, and the worker's
+		// digest, which the coordinator compares with this one's, tells it
+		// apart.
+		exe = path
 	}
 	worker, ours, err := socketPair()
 	if err != nil {
@@ -405,7 +424,8 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	}
 	// The worker outlives this call, and the process that placed it: it
 	// isn't started with the call's context.
-	cmd := exec.Command(exe, "worker") //nolint:gosec,noctx // the file this process runs, which executable checked, and a worker that outlives the call
+	args := append(slices.Clone(d.Launcher), exe, "worker")
+	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec,noctx // the file this process runs, which Executable checked, behind the driver's launcher, and a worker that outlives the call
 	cmd.Dir = "/"
 	cmd.Env = d.environ(req.Coordinator)
 	cmd.Stderr = stderr
@@ -438,7 +458,11 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		stderr.Close()
 		return backend.Placement{}, err
 	}
-	go giveToken(ours, req.BootstrapToken)
+	if d.AwaitToken {
+		giveToken(ours, req.BootstrapToken)
+	} else {
+		go giveToken(ours, req.BootstrapToken)
+	}
 	// The worker is reaped while this process runs, and its exit status
 	// kept beside its placement; after, the system reaps it.
 	reaped := make(chan struct{})
@@ -498,24 +522,30 @@ func giveToken(ours *os.File, token string) {
 	_, _ = conn.Write([]byte(token))
 }
 
-// executable returns the path to start the worker with, the file this
-// process runs, and its digest, once it has checked that the file is a
-// regular file of the user's or root's that no other user can change, nor
+// Executable returns the path of the file this process runs, a worker the
+// driver places runs, and its digest, once it has checked that the file is
+// a regular file of the user's or root's that no other user can change, nor
 // any directory on the way to it. Otherwise it is worker_binary_unsafe.
-func executable() (string, string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", "", err
+func Executable() (string, string, error) {
+	path, _, digest, err := executable()
+	return path, digest, err
+}
+
+// executable is Executable, with the path to start the worker with, the
+// file this process runs, even if another has taken its path since, where
+// the system names it (runningExecutable).
+func executable() (path, run, digest string, err error) {
+	if path, err = os.Executable(); err != nil {
+		return "", "", "", err
 	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		return "", "", err
+	if path, err = filepath.EvalSymlinks(path); err != nil {
+		return "", "", "", err
 	}
-	run, err := runningExecutable(exe)
-	if err != nil {
-		return "", "", err
+	if run, err = runningExecutable(path); err != nil {
+		return "", "", "", err
 	}
-	digest, err := checkExecutable(exe, run)
-	return run, digest, err
+	digest, err = checkExecutable(path, run)
+	return path, run, digest, err
 }
 
 // A fileIdentity is which file a file is, and what it holds, as far as
