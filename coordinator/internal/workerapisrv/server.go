@@ -1,7 +1,7 @@
 // Package workerapisrv serves the worker API (package workerapi) for the
 // coordinator, from its store: the claims of attempts, their heartbeats,
-// control polls, step events, logs and ends (docs/design.md, The worker
-// API).
+// control polls, step events, logs, ends and actions (docs/design.md, The
+// worker API).
 //
 // The server keeps nothing between requests but the control polls it
 // holds: each request reads the store, acts, and stores what it did, so any
@@ -24,8 +24,9 @@
 // What it needs of the rest of the coordinator comes through narrow
 // interfaces: the store; where logs go (runlog.Logs); the run's secret
 // record, opened and sealed again (Sealer); the job an attempt claims, as
-// Ready gives it again (Readier, which the coordinator gives); and
-// whom to wake once an attempt changes (Options.Wake).
+// Ready gives it again (Readier, which the coordinator gives); the
+// built-in actions steps ask the coordinator for (Actions); and whom to
+// wake once an attempt changes (Options.Wake).
 package workerapisrv
 
 import (
@@ -51,7 +52,8 @@ import (
 )
 
 // The largest bodies the server reads, beside a log upload's, which is
-// workerapi.MaxLogUpload: a claim is small; a worker sends at most 64
+// workerapi.MaxLogUpload, and an action's request's, which is
+// workerapi.MaxActionRequest: a claim is small; a worker sends at most 64
 // events at once, with about 4 MiB of their outputs, but for one larger
 // step's; and an attempt's end holds every output of its job's steps, each
 // up to 1 MiB. A larger body is refused, 413.
@@ -135,6 +137,9 @@ type Options struct {
 	Sealer Sealer
 	// Readier gives the job an attempt claims, as Ready gives it again.
 	Readier Readier
+	// Actions performs the built-in actions that attempts' steps ask the
+	// coordinator for.
+	Actions Actions
 	// Peers says whom the server takes requests from, and for which runs.
 	// Nil means LocalPeers: the process's own user, or root, for every run.
 	Peers Peers
@@ -161,6 +166,7 @@ type Server struct {
 	logs     runlog.Logs
 	sealer   Sealer
 	readier  Readier
+	actions  Actions
 	peers    Peers
 	maxConns int
 	wake     func(ctx context.Context, tx *store.Tx, run, job string) (func(), error)
@@ -212,9 +218,11 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("workerapisrv: no Sealer")
 	case opts.Readier == nil:
 		return nil, errors.New("workerapisrv: no Readier")
+	case opts.Actions == nil:
+		return nil, errors.New("workerapisrv: no Actions")
 	}
 	s := &Server{
-		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers,
+		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, actions: opts.Actions, peers: opts.Peers,
 		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
 		reads: plan.Version, speaks: workerapi.Version, needs: 1, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait, placedRecheck: placedRecheck,
 		maxLogBytes: MaxLogBytes, logReserve: logReserve, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
@@ -537,14 +545,23 @@ func (LocalPeers) Accept(uid int) bool { return peercred.Trusted(uid) }
 // Allows allows every run of the store: they are all the user's.
 func (LocalPeers) Allows(context.Context, int, *store.Run) bool { return true }
 
-// methods are the method of each of the API's paths.
-var methods = map[string]string{
-	workerapi.PathClaim:     http.MethodPost,
-	workerapi.PathHeartbeat: http.MethodPost,
-	workerapi.PathControl:   http.MethodGet,
-	workerapi.PathEvents:    http.MethodPost,
-	workerapi.PathLogs:      http.MethodPost,
-	workerapi.PathComplete:  http.MethodPost,
+// A route is one of the API's paths: its method, and the version of the
+// API that added it.
+type route struct {
+	method string
+	since  int
+}
+
+// routes are the API's paths. A path a later version added is one an
+// attempt of an earlier version doesn't have, 404.
+var routes = map[string]route{
+	workerapi.PathClaim:     {http.MethodPost, 1},
+	workerapi.PathHeartbeat: {http.MethodPost, 1},
+	workerapi.PathControl:   {http.MethodGet, 1},
+	workerapi.PathEvents:    {http.MethodPost, 1},
+	workerapi.PathLogs:      {http.MethodPost, 1},
+	workerapi.PathComplete:  {http.MethodPost, 1},
+	workerapi.PathAction:    {http.MethodPost, workerapi.Version3},
 }
 
 // ServeHTTP serves one request of the worker API, which came on a
@@ -553,9 +570,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The answer is written in time, or not at all: a worker that reads it
 	// slowly holds nothing past it.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.hold + writeTime))
-	method, known := methods[r.URL.Path]
-	if !known || r.Method != method {
-		s.serveUnknown(w, r, method, known)
+	rt, known := routes[r.URL.Path]
+	if !known || r.Method != rt.method {
+		s.serveUnknown(w, r, rt.method, known)
 		return
 	}
 	uid, ok := peerOf(r)
@@ -573,6 +590,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if a.APIVersion < rt.since {
+		writeStatus(w, http.StatusNotFound)
+		return
+	}
 	switch r.URL.Path {
 	case workerapi.PathHeartbeat:
 		s.serveHeartbeat(w, r)
@@ -584,6 +605,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveLogs(w, r, a, run)
 	case workerapi.PathComplete:
 		s.serveComplete(w, r, a, run)
+	case workerapi.PathAction:
+		s.serveAction(w, r, a, run)
 	}
 }
 

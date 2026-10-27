@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,13 @@ func bodies() []any {
 				Errors: []*problem.FieldError{{Type: "/problems/x", Code: "x", Detail: "d", Pointer: "#/a", Parameter: "p", In: "query", Params: map[string]any{"n": 1}}},
 			},
 		},
+		&workerapi.ActionRequest{
+			Step: 1, Try: 2, OutlivesCancel: true,
+			With: plan.DataOf(map[string]any{"jobs": []any{"a", "b"}, "n": int64(big), "none": nil, "map": map[string]any{}}),
+		},
+		&workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: plan.ReasonFailFast},
+		// The last of a type is the one TestUnmarshalRefuses changes.
+		&workerapi.ActionAnswer{Outcome: plan.OutcomeFailure, Diagnostics: problems.Diagnostics{diag}},
 	}
 }
 
@@ -206,6 +214,7 @@ func TestBigNumbersStay(t *testing.T) {
 func TestUnmarshalRefuses(t *testing.T) {
 	good, types := map[string]string{}, map[string]reflect.Type{}
 	var result string
+	version := strconv.Itoa(workerapi.Version)
 	for _, body := range bodies() {
 		data, err := workerapi.Marshal(body)
 		if err != nil {
@@ -237,14 +246,18 @@ func TestUnmarshalRefuses(t *testing.T) {
 		{"a run's values of format 0", "Claim", `"format":1`, `"format":0`},
 		{"a run's empty secret name", "Claim", `"secrets":["vars.token"]`, `"secrets":[""]`},
 		{"a claim of another plan version", "Claim", `"planVersion":2`, `"planVersion":3`},
-		{"a claim without its API version", "Claim", `"apiVersion":2,`, ``},
-		{"a claim request whose API version is text", "ClaimRequest", `"apiVersion":2`, `"apiVersion":"2"`},
+		{"a claim without its API version", "Claim", `"apiVersion":` + version + `,`, ``},
+		{"a claim request whose API version is text", "ClaimRequest", `"apiVersion":` + version, `"apiVersion":"` + version + `"`},
 		{"a sequence number that is null", "EventsAck", `"seq":1`, `"seq":null`},
 		{"a step past 32 bits", "Events", `"step":0`, `"step":2147483648`},
 		{"an event's outcome that isn't one", "Events", `"outcome":"failure"`, `"outcome":"ok"`},
 		{"a diagnostic without its code", "Events", `"code":"expression_failed",`, ``},
 		{"a problem's field's in that isn't one", "Complete", `"in":"query"`, `"in":"body"`},
 		{"a problem without its type", "Complete", `"type":"/problems/worker/image_pull_failed",`, ``},
+		{"an action's with: that is null", "ActionRequest", `"with":{`, `"with":null,"x":{`},
+		{"an action's step that is text", "ActionRequest", `"step":1`, `"step":"1"`},
+		{"an action's outcome that isn't one", "ActionAnswer", `"outcome":"failure"`, `"outcome":"failed"`},
+		{"an unknown member in an action's answer", "ActionAnswer", `"outcome":"failure"`, `"outcome":"failure","outputs":{}`},
 	} {
 		data := strings.Replace(good[tc.body], tc.old, tc.new, 1)
 		if data == good[tc.body] {

@@ -423,7 +423,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		// As format 1 runs a step: one that outlives its job's
 		// cancellation and timeout outlives its own timeout: too, but not
 		// its retry:'s timeout or its early-cancel:.
-		s := stops{cancellable: !first.OutlivesCancel, earlyCancel: rs.EarlyCancel == "any-job-failed"}
+		s := stops{cancellable: !first.OutlivesCancel, earlyCancel: rs.EarlyCancel == plan.EarlyCancelAnyJobFailed}
 		if !first.OutlivesCancel {
 			s.step = seconds(rs.TimeoutSeconds)
 		}
@@ -450,24 +450,31 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			exit     int
 			cause    stopCause
 			tryDiags problems.Diagnostics
-			// failed is why an action's try failed, which, unlike a
-			// command's problems, leaves its retry: and its
-			// ignore-errors: to say what follows, as they do for a
-			// command that exits other than 0.
-			failed problems.Diagnostics
+			// acted are the problems an action reported: why its try
+			// failed, which, unlike a command's problems, leaves its
+			// retry: and its ignore-errors: to say what follows, as they
+			// do for a command that exits other than 0, and its warnings.
+			acted problems.Diagnostics
+			// succeeded is set for a try that succeeded: a command that
+			// exited 0, or an action that did, by itself.
+			succeeded bool
 		)
-		if slices.Contains(platformActions, rs.Uses) {
+		key := logKey{workerapi.LogStep, i, try}
+		switch {
+		case slices.Contains(platformActions, rs.Uses):
 			// As in format 1, an action fails as it runs, and the try
 			// with it, as a command that fails does: no platform here
 			// provides this one. Its log says why, as a note is.
-			failed = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, path, problems.Params{"uses": rs.Uses})}
-			logged := failed
-			if note != nil {
-				logged = append(problems.Diagnostics{*note}, failed...)
-			}
-			exit, tryDiags = -1, a.writeLog(logKey{workerapi.LogStep, i, try}, logged)
-		} else {
-			exit, cause, tryDiags = a.runCommand(logKey{workerapi.LogStep, i, try}, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
+			acted = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, path, problems.Params{"uses": rs.Uses})}
+			exit, tryDiags = -1, a.writeLog(key, noted(note, acted))
+		case rs.Uses != "":
+			// runnable lets through only an action the coordinator
+			// performs.
+			exit = -1
+			succeeded, cause, acted, tryDiags = a.runAction(ctx, key, rs, s, note)
+		default:
+			exit, cause, tryDiags = a.runCommand(key, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
+			succeeded = cause == noStop && exit == 0
 		}
 		if a.halted.fired() {
 			end.cut = true
@@ -482,7 +489,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		case cause == stopCancelled || cause == stopEarlyCancel:
 			outcome = plan.OutcomeCancelled
 		case tryDiags.HasErrors():
-		case cause == noStop && exit == 0:
+		case succeeded:
 			outcome = plan.OutcomeSuccess
 		case rs.IgnoreErrors && last:
 			// As format 1: a step whose last try fails succeeds, even one
@@ -500,7 +507,7 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		default:
 			retry = !last
 		}
-		a.finished(workerapi.Event{Step: i, Try: try, LastTry: outcome == plan.OutcomeFailure && !retry, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(diags, failed, tryDiags)})
+		a.finished(workerapi.Event{Step: i, Try: try, LastTry: outcome == plan.OutcomeFailure && !retry, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(diags, acted, tryDiags)})
 		end.result = plan.StepResult{Outcome: outcome, Outputs: outputs}
 		end.cause = cause
 		if !retry {
@@ -632,8 +639,9 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 // readied it: not one that uses: an action or a workflow, nor one with a
 // shell format 1 doesn't run, which it can't run yet, but for an action
 // only a platform provides, which fails as it runs (platformActions), and
-// where format 1
-// runs it: where its job runs, unless its ssh: names a host, which this
+// one the coordinator performs, in an attempt of a version of the worker
+// API that has it (asksCoordinator); and where format 1 runs it: where its
+// job runs, unless its ssh: names a host, which this
 // worker can't run a step on yet, but for one whose ssh: names the host
 // and login its job's does, which placed the worker there (sameSSH). A
 // step whose ssh: is null, or gives no remoteHost, runs where its job
@@ -646,7 +654,7 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 		d := a.at(k, path, params)
 		return &d
 	}
-	if rs.Uses != "" && !slices.Contains(platformActions, rs.Uses) {
+	if rs.Uses != "" && !slices.Contains(platformActions, rs.Uses) && !a.asksCoordinator(rs.Uses) {
 		return nil, diagnostic(problems.UsesNotSupported, problems.Params{"uses": rs.Uses})
 	}
 	if shell, ok := shellOK(rs.Shell); !ok {
@@ -681,6 +689,134 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 // then: an if: can skip it, or its job; its retry: tries it again; and
 // its ignore-errors: lets its last try succeed.
 var platformActions = []string{"parallelworks/scheduler-agent", "parallelworks/wait-for-agent"}
+
+// coordinatorActions are the built-in actions whose subject is the
+// coordinator's, which it performs when a step asks for one, through the
+// worker API (workerapi.PathAction): cancel-jobs, of the run's jobs, and
+// update-session, of the run's sessions.
+var coordinatorActions = []string{"parallelworks/cancel-jobs", "parallelworks/update-session"}
+
+// asksCoordinator reports whether a step that uses uses asks the
+// coordinator for it: an action the coordinator performs, in an attempt
+// of version 3 of the worker API or later, which has the path. Of an
+// earlier one, the step can't run, as before the API had it.
+func (a *attempt) asksCoordinator(uses string) bool {
+	return slices.Contains(coordinatorActions, uses) && a.claim.APIVersion >= workerapi.Version3
+}
+
+// runAction asks the coordinator for the action that a step's try, readied
+// as rs, uses, whose log is key, as runCommand runs a command: it returns
+// whether the action succeeded, why the try was stopped, if it was, the
+// problems the action reported, which say why it failed and leave the
+// step's retry: and ignore-errors: to say what follows, as a command's
+// exit status does, and the problems of the try itself, which fail the
+// step. The log holds note, if there is one, and the action's problems.
+//
+// The coordinator answers cancelled for a step that doesn't outlive its
+// job's cancellation, of a job it is cancelling, which the worker hasn't
+// heard of yet, and says so too of an action that cancelled the step's
+// own job: the job is cancelled from then on, as though the worker had
+// read the control that says so. It answers cancelled, with no reason,
+// for a step whose early-cancel: is any-job-failed, once a job of the run
+// has failed: the step ends as that stops it.
+//
+// The coordinator performs an action as one change, so the worker waits
+// for its answer, asking again as it does any request, though what s
+// watches asks the try to stop, until SIGKILL would be due for a command:
+// an answer by then says how the try ended, and the stop applies from the
+// step after. Past then, the try is stopped without the answer, though
+// the coordinator may have performed the action, as its own record says.
+// A coordinator that answers that the attempt no longer holds its job
+// halts it.
+func (a *attempt) runAction(ctx context.Context, key logKey, rs *plan.ReadyStep, s stops, note *problems.Diagnostic) (bool, stopCause, problems.Diagnostics, problems.Diagnostics) {
+	path := a.job.Steps[key.step].Path
+	// What stops the try ends the request only once its time is up.
+	reqCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	type result struct {
+		answer *workerapi.ActionAnswer
+		err    error
+	}
+	answered := make(chan result, 1)
+	go func() {
+		answer, err := a.client.action(reqCtx, &workerapi.ActionRequest{Step: key.step, Try: key.try, With: rs.With, OutlivesCancel: rs.OutlivesCancel})
+		answered <- result{answer, err}
+	}()
+	stopping, unwatch := a.watch(s)
+	defer unwatch()
+	var (
+		stop  stopRequest
+		timer = after(0)
+	)
+	defer func() { timer.Stop() }()
+	for {
+		select {
+		case req := <-stopping:
+			stop = req
+			timer.Stop()
+			timer = time.NewTimer(time.Until(req.kill))
+			continue
+		case <-timer.C:
+			cancel()
+			<-answered
+			a.log.Info("a step's action was stopped before the coordinator answered", "step", key.step, "try", key.try)
+			return false, stop.cause, nil, a.writeLog(key, noted(note, nil))
+		case res := <-answered:
+			if errors.Is(res.err, errFenced) || errors.Is(res.err, errUnauthorized) {
+				a.halt(res.err)
+				return false, stopHalted, nil, nil
+			}
+			if res.err != nil {
+				failed := a.at(problems.ActionRequestFailed, path, problems.Params{"uses": rs.Uses, "reason": requestFailure(res.err)})
+				a.log.Error("a step's action couldn't be asked for", "step", key.step, "try", key.try, "error", a.mask.Mask(res.err.Error()))
+				return false, noStop, nil, append(problems.Diagnostics{failed}, a.writeLog(key, noted(note, problems.Diagnostics{failed}))...)
+			}
+			// The event's diagnostics, and the log, are masked as the
+			// worker's own are (finished, writeLog).
+			acted := res.answer.Diagnostics
+			if res.answer.Reason != "" {
+				// The coordinator is cancelling the job, as the control the
+				// worker may not have read yet says: the worker does as it
+				// would have, had it read it, before the next step.
+				a.cancel(&workerapi.Control{Cancel: true, Reason: res.answer.Reason})
+			}
+			cause := noStop
+			switch {
+			case res.answer.Outcome != plan.OutcomeCancelled:
+			case res.answer.Reason != "":
+				cause = stopCancelled
+			default:
+				// The step's early-cancel:, as a job of the run failed,
+				// which the worker heeds from then on, as once its control
+				// says so.
+				a.fire(a.anyJobFailed, nil)
+				cause = stopEarlyCancel
+			}
+			return res.answer.Outcome == plan.OutcomeSuccess, cause, acted, a.writeLog(key, noted(note, acted))
+		}
+	}
+}
+
+// requestFailure returns what made a request fail, err, as a problem's
+// param: the code of the problem the coordinator refused it with, or of
+// the one the worker made of it, or what the system said.
+func requestFailure(err error) string {
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		return string(p.Code)
+	}
+	if _, ok := errors.AsType[*encodeError](err); ok {
+		return string(problems.ReportNotEncoded.Code())
+	}
+	return err.Error()
+}
+
+// noted returns ds, after note, if there is one, as a step's log has them.
+func noted(note *problems.Diagnostic, ds problems.Diagnostics) problems.Diagnostics {
+	if note == nil {
+		return ds
+	}
+	return append(problems.Diagnostics{*note}, ds...)
+}
 
 // sshKeys are the keys of a format 1 ssh: that say which host, and which
 // login on it, a step runs on, by which ACTIVATE keys the connections it

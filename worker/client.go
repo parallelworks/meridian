@@ -496,6 +496,30 @@ func (c *client) complete(ctx context.Context, end *workerapi.Complete) error {
 	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathComplete, body: body, timeout: requestTimeout}, nil)
 }
 
+// action asks the coordinator for the built-in action of a step's try, as
+// req says, and returns its answer, repeating the request until it has
+// one, or ctx is done. It returns an *encodeError for a request it can't
+// encode. An answer an action can't have is one the worker can't read:
+// one for the run's timeout's reason, which stops a job as its own
+// timeout does, rather than cancel it.
+func (c *client) action(ctx context.Context, req *workerapi.ActionRequest) (*workerapi.ActionAnswer, error) {
+	body, err := workerapi.MarshalAt(c.apiVersion, req)
+	if err != nil {
+		return nil, &encodeError{err}
+	}
+	answer := new(workerapi.ActionAnswer)
+	if err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathAction, body: body, timeout: requestTimeout}, answer); err != nil {
+		return nil, err
+	}
+	switch {
+	case answer.Outcome != plan.OutcomeSuccess && answer.Outcome != plan.OutcomeFailure && answer.Outcome != plan.OutcomeCancelled:
+		return nil, answerInvalidAt(workerapi.PathAction, http.StatusOK, "/outcome")
+	case answer.Reason == plan.ReasonTimeout:
+		return nil, answerInvalidAt(workerapi.PathAction, http.StatusOK, "/reason")
+	}
+	return answer, nil
+}
+
 // timing holds how long the worker waits for what it waits for, which
 // tests shorten.
 type timing struct {

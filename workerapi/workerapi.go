@@ -114,7 +114,9 @@
 // (OutOfOrder). A log upload names the byte offset it starts at, and the
 // coordinator stores the bytes it doesn't have yet. Complete stores the
 // attempt's end once: repeating it with the same report changes nothing,
-// and a different one is refused, as Fenced.
+// and a different one is refused, as Fenced. So does an ActionRequest, by
+// its step and try: the coordinator performs the action once, and gives a
+// repeat the same answer.
 //
 // # Errors
 //
@@ -126,10 +128,13 @@
 // Cancelled), that has a Problem but with the outcome failure and the
 // reason setup-failed, or whose Seq is behind the events stored; and so
 // are events with a member the attempt's version doesn't have, as LastTry
-// in an attempt of version 1. A log upload of more than MaxLogUpload bytes
-// is 413 Content Too Large. A path the API doesn't have is 404, and one of
-// its paths with another method 405, with an Allow header. The suite in
-// package workerapitest checks a coordinator against all of this.
+// in an attempt of version 1, and an ActionRequest of a step that uses no
+// action the coordinator performs. A log upload of more than MaxLogUpload
+// bytes, or an ActionRequest of more than MaxActionRequest, is 413 Content
+// Too Large. A path the API doesn't have is 404, as is a path a later
+// version adds, of an attempt of an earlier one; and one of its paths with
+// another method is 405, with an Allow header. The suite in package
+// workerapitest checks a coordinator against all of this.
 //
 // While the coordinator can't be reached, a worker keeps running its
 // steps, spools its logs to disk up to a limit, keeps its events in
@@ -160,13 +165,20 @@ import (
 
 // Version is the newest version of the API this release speaks: it speaks
 // every version from 1 to it.
-const Version = Version2
+const Version = Version3
 
 // Version2 is the version of the API that added Event.LastTry, which says
 // whether a failed try was its step's last, and Claim.Control, the
 // attempt's control as of its claim. Each side sends them only in an
 // attempt of version 2 or later.
 const Version2 = 2
+
+// Version3 is the version of the API that added PathAction, through which
+// a step that uses a built-in action the coordinator performs asks it for
+// that action (ActionRequest, ActionAnswer). A worker asks only in an
+// attempt of version 3 or later, and the coordinator answers the path for
+// another as one the API doesn't have, 404.
+const Version3 = 3
 
 // Marshal encodes a body as the API writes it: encoding/json/v2's
 // defaults, with mappings in the order of their keys. A nil list or
@@ -223,6 +235,10 @@ const (
 	// PathComplete reports the attempt's end: Complete, answered with 204
 	// No Content.
 	PathComplete = "/v1/complete"
+	// PathAction asks the coordinator for the built-in action a step's try
+	// uses, which the coordinator performs: ActionRequest, answered with an
+	// ActionAnswer. It is of version 3 (Version3).
+	PathAction = "/v1/action"
 )
 
 // ControlWaitSeconds is the longest the coordinator holds a control poll
@@ -231,6 +247,11 @@ const ControlWaitSeconds = 30
 
 // MaxLogUpload is the most bytes one log upload holds.
 const MaxLogUpload = 1 << 20
+
+// MaxActionRequest is the most bytes an ActionRequest takes: a step's
+// with:, as Step evaluated it, can hold its job's needs' outputs, each up
+// to 1 MiB.
+const MaxActionRequest = 4 << 20
 
 // The query parameters of PathControl and PathLogs.
 const (
@@ -638,4 +659,63 @@ type Complete struct {
 	// report it couldn't encode. A job whose env: fails has no steps that
 	// ran.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
+}
+
+// An ActionRequest asks the coordinator for the built-in action that a
+// step's try uses, of version 3 (PathAction): an action whose subject is
+// the coordinator's, as cancel-jobs's is the run, which the worker can't
+// perform. The coordinator reads which action it is from the run's plan,
+// at the step, and never from the request, and answers a step that uses
+// no action it performs as a request it can't read, 400.
+//
+// The coordinator performs the action once for a step's try: a repeat of
+// the request is given the same answer, and one with another With is
+// refused, as Fenced, as a different Complete is. It keeps a digest of
+// With, never With itself, which can hold a secret. A request from an
+// attempt that no longer holds its job is refused, as Fenced, before
+// anything is performed.
+//
+// Every member is of version 3, and left out when it is zero, as a member
+// a later version adds is.
+type ActionRequest struct {
+	// Step is the step's index in its job, from 0, and Try its try: 0 for
+	// its first run.
+	Step int `json:"step,omitzero"`
+	Try  int `json:"try,omitzero"`
+	// With is the step's with:, as Step evaluated it for the try: a
+	// mapping, or nothing for a step without one.
+	With plan.Data `json:"with,omitzero"`
+	// OutlivesCancel is set when the step outlives its job's
+	// cancellation, as Step decided it (plan.ReadyStep.OutlivesCancel).
+	// The coordinator answers a step that doesn't, of an attempt whose
+	// control asks to cancel its job, for any reason but the run's
+	// timeout, cancelled, without performing the action, as the worker
+	// would have stopped the step had it read the control first.
+	OutlivesCancel bool `json:"outlivesCancel,omitzero"`
+}
+
+// An ActionAnswer is how the action an ActionRequest asked for ended, as
+// the coordinator performed it, with its problems.
+type ActionAnswer struct {
+	// Outcome is success or failure, as the action ended, and so the try,
+	// as for a command that exits 0 or not; or cancelled, for a step whose
+	// action the coordinator didn't perform, as the worker would have
+	// stopped it: one of a job the coordinator is cancelling that doesn't
+	// outlive that (ActionRequest.OutlivesCancel), with the cancel's
+	// Reason; or one whose early-cancel: is any-job-failed, once a job of
+	// the run has failed (Control.AnyJobFailed), with none.
+	Outcome plan.Outcome `json:"outcome,omitzero"`
+	// Reason is why the attempt's control asks to cancel its job, as the
+	// action is answered (Control.Reason), or "" for no cancel, or the
+	// run's timeout's, which stops a job rather than cancel it: with the
+	// outcome cancelled, why the action wasn't performed; with another, a
+	// cancel that came with the action, as when it cancelled the step's
+	// own job. The worker cancels its job for it at once, as it does once
+	// it reads that control, so that the job's next step heeds it. The
+	// outcome cancelled with no reason is the step's early-cancel:, which
+	// the worker heeds as it does once it reads that a job failed.
+	Reason plan.Reason `json:"reason,omitzero"`
+	// Diagnostics are the action's problems: why it failed, and its
+	// warnings, at the step's path in the workflow and under it.
+	Diagnostics problems.Diagnostics `json:"diagnostics,omitzero"`
 }
