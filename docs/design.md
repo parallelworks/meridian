@@ -1930,13 +1930,14 @@ name, `#` and its index from 0, as in `build#2`.
   step, as when its setup did; and places no more than `max-parallel` at a
   time, giving the
   turns in the order of the instances' indexes, where format 1 gives them
-  in an order that is random. An instance whose worker runs is told to
-  cancel its job, whatever its `if:`, as a run's cancel stops a job. One
-  not yet placed, or whose worker hasn't claimed it, ends cancelled with
-  the reason `fail-fast` without running, as a placement no worker has
-  claimed does when a run is stopped; format 1 starts such an instance with
-  its job already cancelled, and runs its steps that outlive a cancel. The
-  strategy is evaluated as one value, so they
+  in an order that is random. Every instance that hasn't ended is told
+  to cancel its job, with the reason `fail-fast`, whatever its `if:`, as a
+  run's cancel stops a job: one whose worker runs, and one not yet placed,
+  which is placed still, in its turn under `max-parallel`, with the cancel
+  in its first control, which its worker reads before its first step. So
+  as in format 1, which starts such an instance with its job already
+  cancelled, it runs only its steps that outlive a cancel, and its
+  cleanups. The strategy is evaluated as one value, so they
   are as private as the matrix's values: of a matrix whose instances are
   private, the coordinator reads them from the secret record, as run state
   doesn't hold them (`plan.Expansion.Split`).

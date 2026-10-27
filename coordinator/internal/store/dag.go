@@ -75,28 +75,32 @@ WHERE a.id = ?`, id).Scan(&failed, &failFast)
 	if err != nil {
 		return err
 	}
-	if failed.Valid {
-		if err := tx.tellJobFailed(id); err != nil {
-			return err
-		}
+	if !failed.Valid && !failFast.Valid {
+		return nil
 	}
-	if failFast.Valid {
-		return tx.TellFailFast(id)
-	}
-	return nil
+	// Both at one version, the attempt's first control.
+	_, err = tx.UpdateControl(id, func(c *workerapi.Control) bool {
+		changed := failed.Valid && askJobFailed(c)
+		return failFast.Valid && askFailFast(c) || changed
+	})
+	return err
 }
 
 // tellJobFailed adds to what the attempt id's control asks that a job of
 // its run failed.
 func (tx *Tx) tellJobFailed(id string) error {
-	_, err := tx.UpdateControl(id, func(c *workerapi.Control) bool {
-		if c.AnyJobFailed {
-			return false
-		}
-		c.AnyJobFailed = true
-		return true
-	})
+	_, err := tx.UpdateControl(id, askJobFailed)
 	return err
+}
+
+// askJobFailed adds to what c asks that a job of its attempt's run failed,
+// and reports whether that changed it.
+func askJobFailed(c *workerapi.Control) bool {
+	if c.AnyJobFailed {
+		return false
+	}
+	c.AnyJobFailed = true
+	return true
 }
 
 // markFailedStep marks the attempt id's run as one a job of which failed

@@ -254,13 +254,24 @@ func (c *Coordinator) endMatrix(ctx context.Context, run *store.Run, job *store.
 }
 
 // instanceStep is what an instance's supervisor does before it steps as
-// any job's does: an instance whose matrix job stopped its instances, as
-// fail-fast: asks, ends cancelled with the reason fail-fast, its placement
-// withdrawn if its worker hasn't claimed it, while one whose worker has
-// was told to cancel, and is waited on; and one that hasn't had its turn
-// under max-parallel: waits for it. It reports whether it handled the
+// any job's does: an instance that hasn't had its turn under
+// max-parallel: waits for it, as it does still once its matrix job has
+// stopped its instances, as fail-fast: asks; and an attempt of one whose
+// matrix job has is told to cancel, with the reason fail-fast, if it
+// isn't already. An attempt made once the job is marked is told from its
+// first control (store.Tx.StartControl), which its worker reads before
+// its first step: so as format 1 starts an instance with its job already
+// cancelled, it runs only its steps that outlive a cancel, and its
+// cleanups. Telling it here too covers an attempt made by a supervisor
+// that looked just before the mark. It reports whether it handled the
 // step.
-func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, bool, error) {
+func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, bool, error) {
+	if a == nil && job.TurnAt.IsZero() {
+		return c.supervision.wait, true, nil
+	}
+	if a == nil || a.State == store.AttemptEnded {
+		return 0, false, nil
+	}
 	var parent *store.Job
 	if err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
@@ -269,64 +280,21 @@ func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *sto
 	}); err != nil {
 		return 0, true, err
 	}
-	failFast := store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}, Reason: plan.ReasonFailFast}
-	switch {
-	case parent.FailFastAt.IsZero():
-		if a == nil && job.TurnAt.IsZero() {
-			return c.supervision.wait, true, nil
-		}
+	if parent.FailFastAt.IsZero() {
 		return 0, false, nil
-	case a != nil && a.State == store.AttemptEnded && a.End.Kind == store.EndCompleted && a.End.Reason != plan.ReasonSetupFailed:
-		// It ends as its worker said, cancelled or not.
-		return 0, false, nil
-	case a == nil || a.State == store.AttemptEnded:
-		return 0, true, c.endJob(ctx, run.ID, job.Key, failFast, done)
-	case a.State == store.AttemptPlacing:
-		return 0, true, c.withdraw(ctx, run, job, a, failFast, done)
-	default:
-		// Its worker is told to cancel the job, and says how it ended.
-		// The attempt's control has said so since it was made, or since
-		// the job was marked (store.Tx.StartControl, MarkFailFast); one
-		// that doesn't yet is told now.
-		var changed []string
-		if err := c.store.Tx(ctx, func(tx *store.Tx) error {
-			if err := tx.TellFailFast(a.ID); err != nil && !errors.Is(err, store.ErrState) {
-				return err
-			}
-			changed = tx.ControlsChanged()
-			return nil
-		}); err != nil {
-			return 0, true, err
-		}
-		c.controlsChanged(changed)
-		return c.supervision.wait, true, nil
 	}
-}
-
-// withdraw withdraws the attempt a of the run's job, which its worker
-// hasn't claimed, and ends the job as end says, in one transaction: a
-// worker that claims it later is refused, and its driver cancels its
-// placement once that commits, as far as it can (cancelPlacements). One
-// claimed meanwhile is looked at again.
-func (c *Coordinator) withdraw(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
-	ws, err := c.withdrawals(ctx, run, []string{job.Key})
-	if err != nil {
-		return err
-	}
-	err = c.endJobWith(ctx, run.ID, job.Key, end, func(_ context.Context, tx *store.Tx) error {
-		now, err := tx.Attempt(a.ID)
-		switch {
-		case err != nil:
+	var changed []string
+	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		if err := tx.TellFailFast(a.ID); err != nil && !errors.Is(err, store.ErrState) {
 			return err
-		case !now.Holds || now.State != store.AttemptPlacing:
-			return errAgain
 		}
-		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn, Reason: end.Reason})
-	}, done)
-	if err == nil {
-		c.cancelPlacements(ctx, run.ID, ws, []string{a.ID})
+		changed = tx.ControlsChanged()
+		return nil
+	}); err != nil {
+		return 0, true, err
 	}
-	return err
+	c.controlsChanged(changed)
+	return 0, false, nil
 }
 
 // anyWorker works the markers of runs' needs on any instance (anyArgs).

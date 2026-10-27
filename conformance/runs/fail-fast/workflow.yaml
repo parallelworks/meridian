@@ -1,0 +1,11 @@
+jobs:
+  main:
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        n: [0, 1]
+    steps:
+      - run: test ${{ matrix.n }} = 1
+      - if: ${{ always() }}
+        run: echo always ${{ matrix.n }}

@@ -248,8 +248,9 @@ func TestAnyFailure(t *testing.T) {
 }
 
 // TestFailFast checks fail-fast: an instance that fails stops the rest: one
-// whose worker runs is told to cancel, with the reason fail-fast, and one
-// waiting for its turn under max-parallel: ends cancelled, never placed.
+// whose worker runs is told to cancel, with the reason fail-fast; and one
+// waiting for its turn under max-parallel: is placed in its turn, as format
+// 1 starts it, told to cancel from its first control.
 func TestFailFast(t *testing.T) {
 	c := open(t, Options{})
 	running := make(chan struct{})
@@ -272,26 +273,29 @@ jobs:
 		instances := instancesOf(t, c, id, "main")
 		return len(instances) == 3 && instances[2].Outcome != ""
 	})
-	if j := storedJob(t, c, id, "main#2"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonFailFast || j.Attempts != 0 {
-		t.Errorf("the instance waiting for its turn is %+v", j)
-	}
 	if j := storedJob(t, c, id, "main"); j.FailFastAt.IsZero() || j.Outcome != "" {
 		t.Errorf("the matrix job is %+v", j)
 	}
-	a := latestAttempt(t, c, id, "main#1")
-	var ctl workerapi.Control
-	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
-		var err error
-		ctl, err = tx.Control(a.ID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	control := func(key string) workerapi.Control {
+		a := latestAttempt(t, c, id, key)
+		var ctl workerapi.Control
+		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			ctl, err = tx.Control(a.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return ctl
 	}
-	if !ctl.Cancel || ctl.Reason != plan.ReasonFailFast {
+	if ctl := control("main#1"); !ctl.Cancel || ctl.Reason != plan.ReasonFailFast {
 		t.Errorf("the running instance's worker is told %+v", ctl)
 	}
-	if placed := placedJobs(c); slices.Contains(placed, "main#2") {
-		t.Errorf("the jobs placed are %v", placed)
+	if ctl := control("main#2"); !ctl.Cancel || ctl.Reason != plan.ReasonFailFast || ctl.Version != 1 {
+		t.Errorf("the instance placed in its turn is told %+v", ctl)
+	}
+	if j := storedJob(t, c, id, "main#2"); j.Attempts != 1 || j.TurnAt.IsZero() {
+		t.Errorf("the instance that waited for its turn is %+v", j)
 	}
 }
 

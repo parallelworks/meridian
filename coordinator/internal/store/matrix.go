@@ -145,14 +145,19 @@ WHERE a.run_id = ? AND j.name = ? AND j.instance IS NOT NULL AND a.state <> ? OR
 // for the run's timeout, whose reason it keeps; and keeps what else it
 // asked (UpdateControl).
 func (tx *Tx) TellFailFast(id string) error {
-	_, err := tx.UpdateControl(id, func(c *workerapi.Control) bool {
-		if c.Cancel {
-			return false
-		}
-		c.Cancel, c.Reason = true, plan.ReasonFailFast
-		return true
-	})
+	_, err := tx.UpdateControl(id, askFailFast)
 	return err
+}
+
+// askFailFast has c ask its worker to cancel its job, with the reason
+// fail-fast, unless it asks it to cancel already, and reports whether that
+// changed it.
+func askFailFast(c *workerapi.Control) bool {
+	if c.Cancel {
+		return false
+	}
+	c.Cancel, c.Reason = true, plan.ReasonFailFast
+	return true
 }
 
 // An Any is a job other jobs of its run need any instance of (needs:
