@@ -18,8 +18,6 @@ func TestPlanReadier(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	rec := created(t).Record
 	rec.Run = &plan.RunValues{Format: 1, Vars: map[string]string{"TOKEN": "t0k3n"}, Secrets: []string{"vars.TOKEN"}}
-	// What the record itself holds of a job gives way to the job's part.
-	rec.Jobs = map[string]plan.JobRecord{"prep": {Outputs: map[string]string{"x": "record-x"}}}
 	run := r.newRun(&rec)
 	r.inTx(func(tx *store.Tx) error {
 		key, err := tx.WrappedKey(run)

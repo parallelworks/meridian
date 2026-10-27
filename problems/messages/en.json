@@ -185,6 +185,12 @@
   "run_not_started": "Run {run} ended without starting: the coordinator couldn't start it.",
   "run_plan_newer": "Run {run}'s plan, of version {version}, holds what only a newer release of Meridian reads (this one reads version {latest} and earlier), so a release that reads it starts the run.",
   "log_truncated": "The coordinator keeps at most {limit} bytes of an attempt's logs, so it didn't keep the rest of this one.",
+  "placement_impossible": "No member of the group job {job} runs in can run it.",
+  "placement_unanswered": "Job {job} couldn't be placed: its group's backends didn't answer in {tries} tries.",
+  "setup_failed": "Job {job} failed to start: its attempts failed before a step ran, {tries} times.",
+  "coordinator_job_failed": "The coordinator couldn't run job {job} to its end.",
+  "matrix_not_built": "Job {job} has a strategy: matrix, which this release of Meridian doesn't run yet.",
+  "any_not_built": "Job {job} needs any instance of {needed} ({needed}:any), which this release of Meridian doesn't run yet.",
 
   "workflow_too_large": "The workflow is more than {limit} bytes, the limit on its size.",
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",

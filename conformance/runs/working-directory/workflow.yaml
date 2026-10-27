@@ -1,0 +1,7 @@
+jobs:
+  main:
+    working-directory: ${{ env.PW_PARENT_JOB_DIR }}/work
+    steps:
+      - run: test "$PWD" = "$PW_PARENT_JOB_DIR/work" && echo in work
+      - working-directory: ${{ env.PW_PARENT_JOB_DIR }}/other
+        run: basename "$PWD"

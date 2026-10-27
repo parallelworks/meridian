@@ -1,0 +1,14 @@
+description: >-
+  A step that exits other than 0 fails, and its job and the run with it:
+  the job's later steps don't run, nor do the jobs that need it.
+source: Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      main:
+        outcome: failure
+        logs:
+          - {step: 0, text: "before\n"}
+      after:
+        outcome: skipped

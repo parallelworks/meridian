@@ -130,13 +130,9 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 	values := plan.JoinRunValues(private, state)
 	needs := make(map[string]plan.JobResult, len(deps))
 	for name, dep := range deps {
-		// The job's part of the record, which its attempt's end stored, or
-		// else what the record itself holds of the job.
-		private, ok := jobs[dep.Key]
-		if !ok {
-			private = rec.Jobs[dep.Key]
-		}
-		needs[name] = plan.JoinJobResult(private, *dep.Result)
+		// The job's part of the record, which its attempt's end stored, if
+		// it ended with private outputs, as the coordinator joins it.
+		needs[name] = plan.JoinJobResult(jobs[dep.Key], *dep.Result)
 	}
 	instance, err := wholeInstance(readied.Instance, rec, job.Name)
 	if err != nil {

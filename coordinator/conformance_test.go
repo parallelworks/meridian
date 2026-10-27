@@ -65,7 +65,9 @@ func TestStartConformance(t *testing.T) {
 			mine := copyRecord(t, &created.Record)
 
 			c := open(t, Options{Variables: conformancetest.StartVariables(cs), Inputs: inputs})
-			id, err := c.CreateRun(t.Context(), created, runOptions)
+			// Stored as CreateRun stores it, but for the matrices that
+			// the coordinator doesn't run yet: the run is only started.
+			id, err := c.createRun(t.Context(), created, runOptions)
 			if err != nil {
 				t.Fatal(err)
 			}

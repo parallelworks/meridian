@@ -20,13 +20,12 @@ import (
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/compile"
-	"github.com/parallelworks/meridian/coordinator/internal/runlog"
+	"github.com/parallelworks/meridian/coordinator/internal/runlog/runlogtest"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
-	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 func TestMain(m *testing.M) {
@@ -142,63 +141,6 @@ func (k *testKeys) Unwrap(_ context.Context, runID string, wrapped []byte) ([]by
 	return k.aead.Open(nil, nil, wrapped, []byte(runID))
 }
 
-// memLogs keeps logs in memory, as coordinator.Logs says.
-type memLogs struct {
-	mu   sync.Mutex
-	logs map[runlog.Key]*workerapitest.Log
-}
-
-func (l *memLogs) Append(_ context.Context, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.logs == nil {
-		l.logs = map[runlog.Key]*workerapitest.Log{}
-	}
-	log := l.logs[key]
-	if log == nil {
-		log = &workerapitest.Log{}
-		l.logs[key] = log
-	}
-	length := int64(len(log.Data))
-	switch {
-	case offset > length, log.Ended && offset+int64(len(data)) > length:
-		return length, log.Ended, runlog.ErrGap
-	case offset+int64(len(data)) > length:
-		log.Data = append(log.Data, data[length-offset:]...)
-	}
-	if end {
-		log.Ended = true
-	}
-	return int64(len(log.Data)), log.Ended, nil
-}
-
-func (l *memLogs) Read(_ context.Context, key runlog.Key, offset int64, limit int) ([]byte, bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	log := l.logs[key]
-	if log == nil {
-		return nil, false, nil
-	}
-	end := min(int64(len(log.Data)), offset+int64(limit))
-	if offset >= end {
-		return nil, log.Ended, nil
-	}
-	return bytes.Clone(log.Data[offset:end]), log.Ended && end == int64(len(log.Data)), nil
-}
-
-// of returns the logs of the attempt number of run's job.
-func (l *memLogs) of(run, job string, number int) map[workerapitest.LogKey]workerapitest.Log {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := map[workerapitest.LogKey]workerapitest.Log{}
-	for k, v := range l.logs {
-		if k.Run == run && k.Job == job && k.Attempt == number {
-			out[workerapitest.LogKey{Part: k.Part, Step: k.Step, Try: k.Try}] = workerapitest.Log{Data: bytes.Clone(v.Data), Ended: v.Ended}
-		}
-	}
-	return out
-}
-
 // fakeReadier gives each run's attempts the job, the run's values and the
 // needs' results a test set for the run.
 type fakeReadier struct {
@@ -244,7 +186,7 @@ type rig struct {
 	path    string
 	sealer  *seal.Sealer
 	readier *fakeReadier
-	logs    *memLogs
+	logs    *runlogtest.Logs
 	server  *workerapisrv.Server
 	socket  string
 
@@ -271,7 +213,7 @@ func newRig(t *testing.T, opts rigOptions) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: &fakeReadier{}, logs: &memLogs{}}
+	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: &fakeReadier{}, logs: &runlogtest.Logs{}}
 	r.server = r.serve(opts)
 	return r
 }

@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - id: submit
+        run: echo jobid=42 >> $OUTPUTS
+        cleanup: echo cancel ${{ steps.submit.outputs.jobid }}
+      - run: exit 1
+        cleanup: echo failed=${{ failure() }}
+      - run: echo never
+        cleanup: echo never cleaned

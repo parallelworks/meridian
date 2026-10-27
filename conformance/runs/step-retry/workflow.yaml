@@ -1,0 +1,9 @@
+jobs:
+  main:
+    steps:
+      - run: |
+          echo try $PW_WORKFLOW_STEP_CURRENT_RETRY
+          test "$PW_WORKFLOW_STEP_CURRENT_RETRY" = 2
+        retry:
+          max-retries: 2
+          interval: 0s

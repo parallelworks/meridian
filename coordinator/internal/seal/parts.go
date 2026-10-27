@@ -24,6 +24,12 @@ type Purpose string
 // whose key is the part's ID (SealJob).
 const PurposeJobRecord Purpose = "meridian/job-record/1"
 
+// PurposePlacement is where an attempt is placed when where its job runs
+// is private: its group, member and backend, and, once its backend has
+// placed it, the backend's ID for the placement. The attempt's ID is the
+// part's ID.
+const PurposePlacement Purpose = "meridian/placement/1"
+
 // A PartID names a part of a run's secrets sealed apart from its record:
 // what it is for, its ID among the run's parts of that purpose, as a job's
 // key, which is UTF-8, not empty, and holds no NUL, and its generation,

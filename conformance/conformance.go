@@ -1,8 +1,8 @@
 // Package conformance holds the workflow format's conformance suite: cases
 // that pin what workflows mean, for any implementation of the format to run.
 //
-// In the format, inputs, compile, start and contexts areas, each case is
-// a directory, such as format/yaml-alias, with a workflow.yaml and a
+// In the format, inputs, compile, start, contexts and runs areas, each case
+// is a directory, such as format/yaml-alias, with a workflow.yaml and a
 // case.yaml that says what the workflow must produce. A case's directory
 // can hold other files the workflow refers to. In the expressions area,
 // each file holds cases that pin what expressions evaluate to, and in the
@@ -24,7 +24,7 @@ import (
 
 // FS holds the cases.
 //
-//go:embed format expressions inputs compile start matrices contexts
+//go:embed format expressions inputs compile start matrices contexts runs
 var FS embed.FS
 
 // A Case is one conformance case.
@@ -133,6 +133,41 @@ type Expect struct {
 	// an input whose value reads env, or a status function, but can't be
 	// true once the run is cancelled, nor is the word always.
 	Cancelled []string `yaml:"cancelled,omitempty"`
+	// Run is how the run ends, in the runs area, which runs it from its
+	// start to its end, its steps on a host.
+	Run *RunEnd `yaml:"run,omitempty"`
+}
+
+// A RunEnd is how a run ends, once its jobs have run, in the runs area.
+type RunEnd struct {
+	// Outcome is the run's outcome: success, failure or cancelled.
+	Outcome string `yaml:"outcome"`
+	// Jobs are how each of its jobs ends, by name: every one of them.
+	Jobs map[string]JobEnd `yaml:"jobs"`
+}
+
+// A JobEnd is how a job of a run ends.
+type JobEnd struct {
+	// Outcome is its outcome: success, failure, cancelled or skipped.
+	Outcome string `yaml:"outcome"`
+	// Logs are some of its logs, each exactly as the run keeps it, which
+	// is masked: a secret's text, wherever a step prints it, is ***. The
+	// job's other logs aren't checked.
+	Logs []Log `yaml:"logs,omitempty"`
+}
+
+// A Log is the log of a try of a job's step, or of its cleanup:, which is
+// what the step's command writes, its standard output and its standard
+// error together.
+type Log struct {
+	// Step is the step's index, from 0, and Try the try, from 0, as
+	// PW_WORKFLOW_STEP_CURRENT_RETRY counts them.
+	Step int `yaml:"step"`
+	Try  int `yaml:"try,omitempty"`
+	// Cleanup says it is the log of the step's cleanup:.
+	Cleanup bool `yaml:"cleanup,omitempty"`
+	// Text is the log.
+	Text string `yaml:"text"`
 }
 
 // JobState is what is known of a job where the phases after the run

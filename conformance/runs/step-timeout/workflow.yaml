@@ -1,0 +1,6 @@
+jobs:
+  main:
+    steps:
+      - run: echo started; sleep 60
+        timeout: 1s
+      - run: echo never

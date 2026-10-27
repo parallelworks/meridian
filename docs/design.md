@@ -58,7 +58,7 @@ Meridian is a set of Go packages:
 | `expr` | Parses, checks and evaluates `${{ }}` expressions. |
 | `compile` | Create and Start: turns a workflow and its inputs into a plan, and completes a run's values as it starts, through resolver interfaces. |
 | `plan` | The plan's types, encoding and schema, matrix expansion, and the functions of the phases after Start. |
-| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them and ends them; placing their jobs isn't built yet ([The coordinator](#the-coordinator)). |
+| `coordinator` | The interfaces through which the coordinator, which will store runs, schedule and place jobs, and serve the worker API, reaches what differs between a laptop and a platform: keys, logs and events; the timing of its leases; how it encrypts a run's secret record ([The secret record](#the-secret-record)); its store, hopper on SQLite with Meridian's own tables beside it, for runs, their secret records, jobs' results, attempts with their leases, fences, events and controls, and the endpoints workers reach it through; and its server of the worker API ([The worker API](#the-worker-api)). The coordinator creates runs, starts them, places their jobs' attempts on their groups' members, and ends them; matrix jobs and needs on any instance of one aren't built yet ([The coordinator](#the-coordinator)). |
 | `worker` | Runs one attempt of a job and reports on it. |
 | `workerapi` | The worker API's paths, requests, responses and problems, which the coordinator serves and the worker calls. |
 | `backend` | The interfaces of execution groups and their members, and of what starts workers on a member. |
@@ -66,13 +66,15 @@ Meridian is a set of Go packages:
 
 The backends that start workers (`local`, `ssh`, `kubernetes`, `slurm`,
 `pbs`) and the drivers of container runtimes (Podman, Docker, Apptainer,
-Apple's `container`) will be packages of their own; none is built yet
+Apple's `container`) will be packages of their own; only `local`, which
+runs workers on this machine, is built yet
 ([Backends and isolation](#backends-and-isolation)).
 
 The `meridian` command wires the packages together with local resolvers.
-It will run a coordinator in its own process, with a SQLite store; today
-it validates a workflow (`meridian validate`) and runs one attempt of a
-job as a worker (`meridian worker`), and its other commands say they
+It runs a coordinator in its own process, with a SQLite store: today it
+validates a workflow (`meridian validate`), runs one, its jobs on this
+machine with the `local` backend (`meridian run`), and runs one attempt of
+a job as a worker (`meridian worker`), and its other commands say they
 aren't built yet ([The `meridian` command](#the-meridian-command)). A
 platform wires them with its own resolvers, Postgres and as many
 coordinator replicas as it needs. Nothing in the packages knows which of
@@ -1463,7 +1465,10 @@ the secret record whenever the coordinator needs them, as the record holds
 the run's timeout when that reads one, and the placement made from them,
 the member chosen and why each other wasn't, and the backend's own name for
 the placement, which can say where it is, as a pod's name can, is in the
-attempt's row, sealed as the secret record's parts are. Run state holds
+attempt's row, sealed as the secret record's parts are: the member, before
+its backend is asked, so that a coordinator that stops then finds the
+placement again, and then the backend's name too, sealed again as the
+part's next generation once the backend answers. Run state holds
 only the digest of the worker binary the
 placement started, which says the attempt is placed. What such an attempt
 reports that can name the member, the problem it ends with and the
@@ -1841,7 +1846,10 @@ attempt, and jobs that complete in their caller's transaction.
   another kind.
 - **A supervisor's own error**, a store's or a bug of the coordinator's,
   hopper retries, with backoff and a bound. A job whose supervisor hopper
-  gives up on fails, and the run goes on to its end.
+  gives up on fails, with `coordinator_job_failed`, and the run goes on to
+  its end: the first job that needs it fails it as that job is readied, or
+  else the finisher does. Either withdraws its attempt that hadn't ended,
+  and has the attempt's driver cancel its placement.
 
 ### A job's lifecycle
 
@@ -2667,7 +2675,10 @@ When a job is ready, the coordinator places it on one member of its group:
    then whether they have capacity for it, then whether it would queue, and
    in the group's order within each.
 3. **Record.** The attempt records the member chosen and why each other
-   member wasn't.
+   member wasn't. The member is recorded before its backend is asked, so a
+   supervisor that ends before it records the placement finds it there; why
+   each other member wasn't is recorded only for a job no member can run, so
+   far.
 
 A job moves to another member only when none of its code has run, or when
 the workflow asked for it:

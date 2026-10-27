@@ -1,0 +1,12 @@
+description: >-
+  A job of one step runs it, and the run ends as it does: what the step
+  prints is its log.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, text: "hello\n"}

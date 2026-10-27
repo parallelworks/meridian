@@ -1,0 +1,18 @@
+jobs:
+  main:
+    steps:
+      - run: exit 1
+      - run: echo skipped
+      - if: ${{ failure() }}
+        run: echo on failure
+      - if: always
+        run: echo always
+  never:
+    if: false
+    steps:
+      - run: echo never
+  on-failure:
+    needs: [main]
+    if: failure()
+    steps:
+      - run: echo ${{ needs.main.result }}

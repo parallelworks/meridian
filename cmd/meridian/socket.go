@@ -5,11 +5,9 @@ import (
 	"errors"
 	"io/fs"
 	"net"
-	"net/http"
 	"os"
 	"strconv"
 	"syscall"
-	"time"
 
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/problems"
@@ -35,16 +33,17 @@ type socket struct {
 
 // holdSocket takes the coordinator's socket at path, for coord's store,
 // once no other process holds it, as every meridian run of the store waits
-// to, and serves workers on it with handler, until ctx is done: then it
-// closes it, and releases it, so that one that waits takes it over. Only
-// the process that holds the socket's endpoint in the store listens at
-// path, so a socket at path is one that a process that held it before
-// left, which it replaces.
-func holdSocket(ctx context.Context, coord *coordinator.Coordinator, path string, handler http.Handler) *socket {
+// to, and serves the worker API on it (coordinator.ServeWorkers), storing
+// the logs workers upload with logs, until ctx is done: then it closes it,
+// and releases it, so that one that waits takes it over. Only the process
+// that holds the socket's endpoint in the store listens at path, so a
+// socket at path is one that a process that held it before left, which it
+// replaces.
+func holdSocket(ctx context.Context, coord *coordinator.Coordinator, path string, logs coordinator.Logs) *socket {
 	s := &socket{errs: make(chan error, 1), done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
-		if err := serveSocket(ctx, coord, path, handler); err != nil && ctx.Err() == nil {
+		if err := serveSocket(ctx, coord, path, logs); err != nil && ctx.Err() == nil {
 			s.errs <- err
 		}
 	}()
@@ -60,7 +59,7 @@ func checkSocketPath(path string) error {
 	return nil
 }
 
-func serveSocket(ctx context.Context, coord *coordinator.Coordinator, path string, handler http.Handler) error {
+func serveSocket(ctx context.Context, coord *coordinator.Coordinator, path string, logs coordinator.Logs) error {
 	if err := checkSocketPath(path); err != nil {
 		return err
 	}
@@ -75,22 +74,16 @@ func serveSocket(ctx context.Context, coord *coordinator.Coordinator, path strin
 	if err != nil {
 		return err
 	}
-	// The worker API's server takes the listener in this placeholder's
-	// place through its own Serve, which checks each connection's peer
-	// before it reads a request: never as a bare handler, which doesn't.
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
-	select {
-	case <-ctx.Done():
-		// Closing the server closes its listener, which removes the
-		// socket.
-		_ = srv.Close()
-		<-served
+	// Once ctx is done, the server closes its listener, which removes the
+	// socket.
+	err = coord.ServeWorkers(ctx, ln, logs)
+	if ctx.Err() != nil {
 		return nil
-	case err := <-served:
-		return problems.SocketUnusable.Problem(problems.Params{"path": path, "reason": err.Error()})
 	}
+	if err == nil {
+		err = errors.New("the worker API's server stopped")
+	}
+	return problems.SocketUnusable.Problem(problems.Params{"path": path, "reason": err.Error()})
 }
 
 // listenSocket listens on a Unix socket at path, once it has removed a
@@ -117,15 +110,4 @@ func listenSocket(ctx context.Context, path string) (net.Listener, error) {
 		return nil, unusable(err)
 	}
 	return ln, nil
-}
-
-// workerAPIUnavailable answers every request 503 Service Unavailable, to
-// be tried again a second later, as a coordinator does that can't serve it
-// yet: a worker tries again. The worker API's server takes its place once
-// the coordinator has one.
-func workerAPIUnavailable() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Retry-After", "1")
-		w.WriteHeader(http.StatusServiceUnavailable)
-	})
 }

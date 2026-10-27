@@ -1,0 +1,14 @@
+description: >-
+  Once a job's steps have run, each step that ran is cleaned up, its
+  cleanup: running as a step of its own, which reads the steps' outputs
+  and the job's status as it ends; a step that didn't run isn't.
+source: Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      main:
+        outcome: failure
+        logs:
+          - {step: 0, cleanup: true, text: "cancel 42\n"}
+          - {step: 1, cleanup: true, text: "failed=true\n"}
