@@ -107,7 +107,7 @@ func TestMarkFailFast(t *testing.T) {
 		if running, token, err = placedAttempt(tx, n("build#0")); err != nil {
 			return err
 		}
-		if _, err := tx.Claim(token, credential('f'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('f'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		if placing, _, err = tx.NewAttempt(n("build#1")); err != nil {

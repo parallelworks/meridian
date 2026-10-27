@@ -2166,9 +2166,16 @@
   },
   "plan_too_new": {
     "title": "Plan más nuevo de lo que lee el worker",
-    "why": "El plan de una ejecución, y los cuerpos de la API de workers, tienen versión, y un worker dice la versión más nueva que lee al reclamar un intento. El coordinador rechaza uno que no lee la de la ejecución, antes de enviar nada de la ejecución, para que ningún worker ejecute un trabajo con una parte que no entiende. El worker termina, y el intento, que falló antes de su primer paso, se coloca de nuevo.",
+    "why": "El plan de una ejecución tiene versión, y un worker dice la versión de plan más nueva que lee al reclamar un intento. El coordinador rechaza uno que no lee la de la ejecución, antes de enviar nada de la ejecución, para que ningún worker ejecute un trabajo con una parte que no entiende. El worker termina, y el intento, que falló antes de su primer paso, se coloca de nuevo.",
     "fix": [
       "Inicia workers de la misma versión de Meridian que el coordinador."
+    ]
+  },
+  "worker_api_too_old": {
+    "title": "API de workers más antigua de lo que necesita el intento",
+    "why": "La API de workers tiene una versión propia, aparte de la del plan, que sube con cada adición, y un worker dice la versión más nueva que habla al reclamar un intento. El coordinador rechaza un worker cuya versión es más antigua que la primera que tiene todo lo que usa el trabajo del intento, antes de enviar nada de la ejecución, en lugar de ejecutar el trabajo sin esa parte. El worker termina, y el intento, que falló antes de su primer paso, se coloca de nuevo.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador, o de una posterior."
     ]
   },
   "worker_digest_mismatch": {

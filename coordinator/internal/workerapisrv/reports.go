@@ -59,7 +59,7 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 			if err != nil {
 				s.writeError(w, r, err)
 			} else {
-				writeJSON(w, &c)
+				writeBody(w, a.APIVersion, &c)
 			}
 			return
 		}
@@ -68,7 +68,7 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 			done()
 		case <-hold.C:
 			done()
-			writeJSON(w, &c)
+			writeBody(w, a.APIVersion, &c)
 			return
 		case <-ctx.Done():
 			done()
@@ -91,7 +91,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		return
 	}
 	var events workerapi.Events
-	if err := workerapi.Unmarshal(body, &events); err != nil {
+	if err := workerapi.UnmarshalAt(a.APIVersion, body, &events); err != nil {
 		s.badRequest(w, r, "events that aren't")
 		return
 	}
@@ -133,7 +133,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		return
 	}
 	committed(after)
-	writeJSON(w, &workerapi.EventsAck{Seq: last})
+	writeBody(w, a.APIVersion, &workerapi.EventsAck{Seq: last})
 }
 
 // errTooMuch is an attempt's reports past what the server keeps of them.
@@ -196,7 +196,7 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 		return
 	}
 	if key.Try > MaxLogTry {
-		writeJSON(w, &workerapi.LogAck{Length: offset + int64(len(data)), Ended: end})
+		writeBody(w, a.APIVersion, &workerapi.LogAck{Length: offset + int64(len(data)), Ended: end})
 		return
 	}
 	length, ended, err := s.appendLog(ctx, a.ID, key, offset, data, end)
@@ -215,7 +215,7 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, &workerapi.LogAck{Length: length, Ended: ended})
+	writeBody(w, a.APIVersion, &workerapi.LogAck{Length: length, Ended: ended})
 }
 
 // appendLog appends data, the part of the log key of the attempt that
@@ -316,7 +316,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		return
 	}
 	end := new(workerapi.Complete)
-	if err := workerapi.Unmarshal(body, end); err != nil {
+	if err := workerapi.UnmarshalAt(a.APIVersion, body, end); err != nil {
 		s.badRequest(w, r, "an end that isn't one")
 		return
 	}

@@ -27,14 +27,14 @@ func TestWriteBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	if err := workerapi.WriteBody(rec, &v); err != nil {
+	if err := workerapi.WriteBody(rec, workerapi.Version, &v); err != nil {
 		t.Fatal(err)
 	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != string(want) {
 		t.Errorf("WriteBody answered %d, %q: %s", rec.Code, rec.Header().Get("Content-Type"), rec.Body)
 	}
 	rec = httptest.NewRecorder()
-	if err := workerapi.WriteBody(rec, make(chan int)); err == nil || rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
+	if err := workerapi.WriteBody(rec, workerapi.Version, make(chan int)); err == nil || rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
 		t.Errorf("WriteBody of what Marshal can't encode = %v, and wrote %q", err, rec.Body)
 	}
 }
@@ -47,6 +47,7 @@ func TestCodesAreKinds(t *testing.T) {
 		workerapi.Fenced:               problems.Fenced,
 		workerapi.OutOfOrder:           problems.OutOfOrder,
 		workerapi.PlanTooNew:           problems.PlanTooNew,
+		workerapi.WorkerAPITooOld:      problems.WorkerAPITooOld,
 		workerapi.WorkerDigestMismatch: problems.WorkerDigestMismatch,
 	} {
 		if kind.Code() != code {
@@ -61,6 +62,9 @@ func TestCodesAreKinds(t *testing.T) {
 	}
 	if got := problems.WorkerDigestMismatch.Type().Params; !slices.Equal(got, []string{workerapi.ParamPlaced, workerapi.ParamClaimed}) {
 		t.Errorf("worker_digest_mismatch's params are %v, want [%s %s]", got, workerapi.ParamPlaced, workerapi.ParamClaimed)
+	}
+	if got := problems.WorkerAPITooOld.Type().Params; !slices.Equal(got, []string{workerapi.ParamVersion, workerapi.ParamNeeded}) {
+		t.Errorf("worker_api_too_old's params are %v, want [%s %s]", got, workerapi.ParamVersion, workerapi.ParamNeeded)
 	}
 }
 
@@ -78,9 +82,9 @@ func bodies() []any {
 		NeedsFailed: true, Cancelled: true,
 	}
 	return []any{
-		&workerapi.ClaimRequest{Credential: strings.Repeat("ab", 32), PlanVersion: plan.Version, Worker: workerapi.Worker{Version: "v1.0.0", Digest: "sha256:00"}},
+		&workerapi.ClaimRequest{Credential: strings.Repeat("ab", 32), APIVersion: workerapi.Version, PlanVersion: plan.Version, Worker: workerapi.Worker{Version: "v1.0.0", Digest: "sha256:00"}},
 		&workerapi.Claim{
-			RunID: "run", AttemptID: "attempt", PlanVersion: plan.Version, Job: []byte(`{"key":"build#2","name":"build","steps":[],"path":"/jobs/build"}`),
+			RunID: "run", AttemptID: "attempt", APIVersion: workerapi.Version, PlanVersion: plan.Version, Job: []byte(`{"key":"build#2","name":"build","steps":[],"path":"/jobs/build"}`),
 			Attempt: 1, Group: "local", Member: "laptop", LeaseSeconds: 60, HeartbeatSeconds: 15, SelfFencing: true,
 			Run: plan.RunValues{
 				Format: 1, Inputs: plan.DataOf(map[string]any{"n": int64(big), "list": []any{}, "map": map[string]any{}}),
@@ -232,6 +236,8 @@ func TestUnmarshalRefuses(t *testing.T) {
 		{"a run's values of format 0", "Claim", `"format":1`, `"format":0`},
 		{"a run's empty secret name", "Claim", `"secrets":["vars.token"]`, `"secrets":[""]`},
 		{"a claim of another plan version", "Claim", `"planVersion":1`, `"planVersion":2`},
+		{"a claim without its API version", "Claim", `"apiVersion":1,`, ``},
+		{"a claim request whose API version is text", "ClaimRequest", `"apiVersion":1`, `"apiVersion":"1"`},
 		{"a sequence number that is null", "EventsAck", `"seq":1`, `"seq":null`},
 		{"a step past 32 bits", "Events", `"step":0`, `"step":2147483648`},
 		{"an event's outcome that isn't one", "Events", `"outcome":"failure"`, `"outcome":"ok"`},

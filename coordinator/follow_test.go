@@ -277,7 +277,7 @@ func claimedAttempt(t *testing.T, c *Coordinator) (string, string) {
 		if err := tx.RecordPlacement(a.ID, store.Placement{Group: "local", Member: "m1", Backend: testBackend, ID: "p", WorkerDigest: testDigest}); err != nil {
 			return err
 		}
-		_, err = tx.Claim(token, strings.Repeat("c", 64), workerapi.Worker{Version: "test", Digest: testDigest})
+		_, err = tx.Claim(token, strings.Repeat("c", 64), workerapi.Worker{Version: "test", Digest: testDigest}, workerapi.Version)
 		return err
 	}); err != nil {
 		t.Fatal(err)

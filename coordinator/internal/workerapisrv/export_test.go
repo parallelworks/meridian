@@ -8,6 +8,17 @@ import (
 // release reads fewer.
 func SetReads(s *Server, version int) { s.reads = version }
 
+// SetSpeaks sets the newest version of the worker API s speaks, as a
+// replica of another release speaks another; and SetNeeds the oldest an
+// attempt needs its worker to speak, as one of a job that uses what a
+// later version adds does.
+func SetSpeaks(s *Server, version int) { s.speaks = version }
+func SetNeeds(s *Server, version int)  { s.needs = version }
+
+// SetBeforeClaim sets what s calls as it stores a claim, between its
+// refusals and its transaction.
+func SetBeforeClaim(s *Server, f func()) { s.beforeClaim = f }
+
 // SetPlacedWait sets how long a first claim waits for its placement to be
 // recorded, and how often it reads the store again meanwhile.
 func SetPlacedWait(s *Server, wait, recheck time.Duration) {

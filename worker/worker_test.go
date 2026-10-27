@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -1686,6 +1688,46 @@ func TestReportNotEncodedProblem(t *testing.T) {
 	}
 	if !slices.Equal(codes(got.Diagnostics), []string{"report_not_encoded"}) {
 		t.Errorf("the end has the diagnostics %v", codes(got.Diagnostics))
+	}
+}
+
+// TestAPIVersion checks the worker's version of the worker API: it claims
+// as one that speaks workerapi.Version, which the Fake checks; it exits
+// without running anything when the coordinator refuses it as older than
+// the attempt needs, with the coordinator's problem, which says both
+// versions; and when the coordinator serves the attempt at a version the
+// worker doesn't speak, as an answer it can't read.
+func TestAPIVersion(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("true")))
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if end := f.End(); end == nil || end.Result.Outcome != plan.OutcomeSuccess {
+		t.Errorf("the attempt ended %+v", end)
+	}
+
+	f = workerapitest.NewFake(t, newJob(command("true")))
+	f.Speaks, f.Needs = workerapi.Version+1, workerapi.Version+1
+	err := runWorker(t, f, t.Context(), Config{})
+	p, ok := errors.AsType[*problem.Problem](err)
+	if !ok || p.Code != workerapi.WorkerAPITooOld || p.Params[workerapi.ParamVersion] != float64(workerapi.Version) || p.Params[workerapi.ParamNeeded] != float64(workerapi.Version+1) {
+		t.Fatalf("a worker older than the attempt needs got %v", err)
+	}
+	if requests := f.Requests(); len(requests) != 1 {
+		t.Errorf("the worker made the requests %v", requests)
+	}
+
+	for _, served := range []int{-1, workerapi.Version + 1} {
+		f = workerapitest.NewFake(t, newJob(command("true")))
+		f.AnyVersion, f.Claim.APIVersion = true, served
+		err := runWorker(t, f, t.Context(), Config{})
+		if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.CoordinatorAnswerInvalid.Code() || p.Params["at"] != "/apiVersion" {
+			t.Errorf("a claim served at version %d got %v", served, err)
+		}
+		if requests := f.Requests(); len(requests) > 1 {
+			t.Errorf("a claim served at version %d: the worker made the requests %v", served, requests)
+		}
 	}
 }
 

@@ -425,7 +425,14 @@ func (c *client) send(method, path string, body []byte, bearer string) (int, []b
 // plays but with digest.
 func claimRequest(t testing.TB, credential, digest string) []byte {
 	t.Helper()
-	data, err := workerapi.Marshal(workerapi.ClaimRequest{Credential: credential, PlanVersion: plan.Version, Worker: workerapi.Worker{Version: "v0", Digest: digest}})
+	return claimRequestAt(t, credential, digest, workerapi.Version)
+}
+
+// claimRequestAt returns claimRequest's claim, of a worker that speaks
+// apiVersion of the worker API.
+func claimRequestAt(t testing.TB, credential, digest string, apiVersion int) []byte {
+	t.Helper()
+	data, err := workerapi.Marshal(workerapi.ClaimRequest{Credential: credential, APIVersion: apiVersion, PlanVersion: plan.Version, Worker: workerapi.Worker{Version: "v0", Digest: digest}})
 	if err != nil {
 		t.Fatal(err)
 	}

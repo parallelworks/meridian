@@ -16,27 +16,60 @@
 //
 // # Versions
 //
-// The bodies are versioned by the run's plan version (Claim.PlanVersion):
-// a change to a body, as to any type of package plan in one, is a change
-// to the plan's encoding, and raises plan.Version. A member added in a
-// later version is left out when it is empty, and each side sends it only
-// for a run whose version has it, so each reads the other's bodies
-// strictly and never meets a member it doesn't know.
+// The API has a version of its own (Version), apart from the plan's: one
+// number, which every change to the API raises, such as a path, a member
+// of a body, or a kind of event, added. Each side speaks every version up
+// to its own. As it claims, a worker says the newest version it speaks
+// (ClaimRequest.APIVersion); a worker of a release from before the API
+// had a version of its own says none, and speaks version 1. The
+// coordinator serves the attempt at the lower of that and its own, which
+// the claim's answer says (Claim.APIVersion): both sides speak that
+// version until the attempt ends. A member a later version adds is left
+// out when it is empty, and each side sends it only in an attempt whose
+// version has it, so each reads the other's bodies strictly and never
+// meets a member it doesn't know. Every body a side sends or reads of an
+// attempt goes through CheckVersion, through MarshalAt, UnmarshalAt and
+// WriteBody, which refuse a member that is later than the attempt's
+// version. A path a later version adds, a worker calls only in such an
+// attempt, and the coordinator answers it for another as a path the API
+// doesn't have, 404. The paths stay under /v1/: a version is served
+// beside every version before it, not in place of them.
 //
-// Version 1 is frozen, as the plan's is (docs/design.md, Plans across
-// versions): every change to a body from here on is a version. The JSON
-// Schema of the bodies of each version is beside the plan's, in
-// plan.Schemas, as schema/<version>/workerapi.schema.json, and refers to
-// them for what a body carries of a run.
+// A coordinator never serves an attempt at a version that lacks what the
+// attempt needs: it refuses a worker whose version is older than the
+// oldest that has everything the attempt's job uses, with
+// WorkerAPITooOld, before it sends anything of the run, rather than run
+// the job without that part. Every job so far needs version 1.
 //
-// As it claims, a worker says the newest version it reads
-// (ClaimRequest.PlanVersion), and the coordinator refuses one that doesn't
-// read the run's, with PlanTooNew, before it sends anything of the run. A
-// coordinator replica answers a worker only for a run whose version it
-// reads, as it claims only such runs; otherwise it answers 503 Service
-// Unavailable, and the worker tries again, which reaches another replica.
-// A ClaimRequest is sent before the worker knows the run's version, so it
-// never changes: what a later worker has to say comes after the claim.
+// What a body carries of a run, the job Ready evaluated, the run's values
+// and the results of the jobs it needs, is the plan's, encoded at the
+// run's plan version (Claim.PlanVersion): a change to a type of package
+// plan raises plan.Version, and the API's version only if a body gains a
+// member for it. As it claims, a worker says the newest plan version it
+// reads too (ClaimRequest.PlanVersion), and the coordinator refuses one
+// that doesn't read the run's, with PlanTooNew, before it sends anything
+// of the run.
+//
+// A coordinator replica answers a worker only for a run whose plan version
+// it reads, as it claims only such runs, and only for an attempt whose
+// API version it speaks; otherwise it answers 503 Service Unavailable,
+// and the worker tries again, which reaches another replica. So it does
+// for a path, or a method, of the API's that it doesn't have, of an
+// attempt claimed at a later version than its own, which may have it. It
+// answers first what needs neither version: a credential it doesn't take,
+// or that has lapsed, 401, and a write of an attempt that no longer holds
+// its job, Fenced. A ClaimRequest is sent before the worker knows either
+// of the attempt's versions, so it never changes: what a later worker has
+// to say comes after the claim.
+//
+// The JSON Schema of the bodies is beside the plan's, in plan.Schemas, as
+// schema/<plan version>/workerapi.schema.json, which refers to the plan's
+// for what a body carries of a run. It describes the bodies of the newest
+// API version, and says of a member a later version adds which version
+// that is, so a body of an earlier version is one without it. The plan's
+// schemas of a version are frozen with it; this one follows the API's
+// version, so an addition to the API changes each plan version's copy
+// alike.
 //
 // # Credentials
 //
@@ -113,7 +146,6 @@ package workerapi
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
-	"net/http"
 	"reflect"
 	"time"
 
@@ -124,25 +156,16 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
+// Version is the newest version of the API this release speaks: it speaks
+// every version from 1 to it.
+const Version = 1
+
 // Marshal encodes a body as the API writes it: encoding/json/v2's
 // defaults, with mappings in the order of their keys. A nil list or
-// mapping is written as an empty one.
+// mapping is written as an empty one. A body a side sends of an attempt
+// goes through MarshalAt, which checks it against the attempt's version.
 func Marshal(v any) ([]byte, error) {
 	return jsonv2.Marshal(v, jsonv2.Deterministic(true))
-}
-
-// WriteBody answers 200 with v, encoded as the API writes a body
-// (Marshal), as both the coordinator's server and a test's Fake answer. It
-// returns Marshal's error before it writes anything, for the caller to
-// answer otherwise.
-func WriteBody(w http.ResponseWriter, v any) error {
-	data, err := Marshal(v)
-	if err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
-	return nil
 }
 
 // Unmarshal decodes a body as the API reads it, as strictly as its schema
@@ -281,6 +304,14 @@ const (
 	// worker exits; the attempt failed before its first step, and is
 	// placed again.
 	PlanTooNew problem.Code = "plan_too_new"
+	// WorkerAPITooOld (409 Conflict) is a claim from a worker whose
+	// version of the API (ClaimRequest.APIVersion) is older than the
+	// attempt needs: the oldest version that has everything the
+	// attempt's job uses. The coordinator refuses it before it sends
+	// anything of the run, and the worker exits; the attempt failed before
+	// its first step, and is placed again. Its params ParamVersion and
+	// ParamNeeded are the worker's version and the one the attempt needs.
+	WorkerAPITooOld problem.Code = "worker_api_too_old"
 	// WorkerDigestMismatch (409 Conflict) is a claim from a worker whose
 	// binary's digest (ClaimRequest.Worker.Digest) isn't the one the
 	// attempt's placement started, as its backend recorded it: the binary
@@ -302,19 +333,39 @@ const (
 	ParamClaimed = "claimed"
 )
 
+// ParamVersion and ParamNeeded are the params of a WorkerAPITooOld problem.
+const (
+	ParamVersion = "version"
+	ParamNeeded  = "needed"
+)
+
 // A ClaimRequest claims the attempt a bootstrap token is for. Its members
-// never change, since a worker sends it before it knows which version the
-// run's bodies are in.
+// never change, since a worker sends it before it knows which versions,
+// of the API and of the run's plan, the attempt has.
 type ClaimRequest struct {
 	// Credential is the credential the worker makes for the attempt: 32
 	// bytes from crypto/rand, as hex. The coordinator stores only its
 	// SHA-256 digest, and a claim with the same bootstrap token and another
 	// credential is refused, 401 Unauthorized.
 	Credential string `json:"credential"`
+	// APIVersion is the newest version of the API the worker speaks
+	// (Version), which says it speaks every version up to it. A worker of
+	// a release from before the API had a version of its own leaves it
+	// out, and speaks version 1, as the claim's Speaks says.
+	APIVersion int `json:"apiVersion,omitzero"`
 	// PlanVersion is the newest plan version the worker reads (plan.Version).
 	PlanVersion int `json:"planVersion"`
 	// Worker is the worker that claims, for the attempt's record.
 	Worker Worker `json:"worker"`
+}
+
+// Speaks returns the newest version of the API the claiming worker speaks:
+// its APIVersion, or 1 when it leaves that out.
+func (r *ClaimRequest) Speaks() int {
+	if r.APIVersion == 0 {
+		return 1
+	}
+	return r.APIVersion
 }
 
 // A Worker is the meridian binary that runs an attempt.
@@ -331,6 +382,11 @@ type Claim struct {
 	// RunID and AttemptID identify the run and the attempt.
 	RunID     string `json:"runID"`
 	AttemptID string `json:"attemptID"`
+	// APIVersion is the version of the API the coordinator serves the
+	// attempt at, which both sides speak until it ends: the lower of the
+	// worker's (ClaimRequest.APIVersion) and the coordinator's own. A claim
+	// repeated is given the same.
+	APIVersion int `json:"apiVersion"`
 	// PlanVersion is the version of the run's plan, which Job is encoded
 	// in.
 	PlanVersion int `json:"planVersion"`

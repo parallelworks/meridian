@@ -29,7 +29,7 @@ func TestPeerRefused(t *testing.T) {
 		dials.Add(1)
 		return errors.New("served by another user")
 	}
-	_, _, err := c.claim(t.Context(), f.Token, workerapi.ClaimRequest{Credential: strings.Repeat("ab", 32), PlanVersion: plan.Version})
+	_, _, err := c.claim(t.Context(), f.Token, workerapi.ClaimRequest{Credential: strings.Repeat("ab", 32), APIVersion: workerapi.Version, PlanVersion: plan.Version})
 	if _, ok := errors.AsType[*peerError](err); !ok {
 		t.Fatalf("got %v, want a refused peer", err)
 	}

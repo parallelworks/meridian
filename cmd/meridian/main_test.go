@@ -196,7 +196,7 @@ func TestVersion(t *testing.T) {
 		if r.code != exitOK {
 			t.Fatalf("meridian %s = %+v", args, r)
 		}
-		for _, want := range []string{"meridian ", "go:", "fips 140-3 module:", "plan version:"} {
+		for _, want := range []string{"meridian ", "go:", "fips 140-3 module:", "plan version:", "worker API version:"} {
 			if !strings.Contains(r.stdout, want) {
 				t.Errorf("meridian %s doesn't say %q:\n%s", args, want, r.stdout)
 			}

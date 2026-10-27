@@ -41,7 +41,7 @@ jobs:
 		if err := tx.RecordPlacement(a.ID, store.Placement{Backend: testBackend, ID: "test-" + a.ID, WorkerDigest: testDigest}); err != nil {
 			return err
 		}
-		_, err = tx.Claim(token, "1111111111111111111111111111111111111111111111111111111111111111", workerapi.Worker{Version: "test", Digest: testDigest})
+		_, err = tx.Claim(token, "1111111111111111111111111111111111111111111111111111111111111111", workerapi.Worker{Version: "test", Digest: testDigest}, workerapi.Version)
 		return err
 	}); err != nil {
 		t.Fatal(err)

@@ -314,6 +314,7 @@
   "fenced": "Another attempt of the job has superseded this one, or the attempt has completed, so the coordinator refuses this request.",
   "out_of_order": "The report is out of order: the coordinator expects what comes next from {expected}, the number of the next event or the offset of a log's next byte.",
   "plan_too_new": "This worker doesn't read the version of the run's plan, so the coordinator sends it nothing of the run.",
+  "worker_api_too_old": "This worker speaks version {version} of the worker API, and the attempt needs version {needed}, so the coordinator sends it nothing of the run.",
   "worker_digest_mismatch": "The worker that claimed the attempt runs the binary {claimed}, not {placed}, which its placement started, so the coordinator sends it nothing of the run.",
   "fips_not_enforced": "Meridian runs only with its cryptography's FIPS 140-3 mode enforced, and this process's GODEBUG has it {mode, select, on {on, but not enforced} other {off}}.",
   "fips_module_not_validated": "This meridian binary was built with the FIPS 140-3 module {version}, compiled from Go's source rather than the validated one, and Meridian runs only with the validated module.",

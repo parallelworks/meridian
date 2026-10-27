@@ -103,13 +103,20 @@ type Fake struct {
 	// Token is the attempt's bootstrap token.
 	Token string
 	// Claim is what the Fake answers a claim with. Its PlanVersion is the
-	// run's.
+	// run's. Its APIVersion, unless a test sets it, is what the Fake
+	// serves the attempt at, as its first claim decides it: the lower of
+	// the worker's and Speaks.
 	Claim workerapi.Claim
 	// Reads is the newest plan version the Fake reads, as a replica's
 	// release does, or plan.Version for 0. It answers 503 for a run of a
 	// newer one, and refuses a worker that reads only an older one than the
 	// run's with plan_too_new.
 	Reads int
+	// Speaks is the newest version of the API the Fake speaks, as a
+	// coordinator's release does, or workerapi.Version for 0; and Needs
+	// the oldest the attempt needs, or 1 for 0. It refuses a worker whose
+	// version is older than Needs with worker_api_too_old.
+	Speaks, Needs int
 	// Fault, if set, says what to do to each request.
 	Fault func(r *http.Request) Fault
 	// OnEvent, if set, is called with each event stored, before the worker
@@ -119,8 +126,9 @@ type Fake struct {
 	// than hold it until there is something newer.
 	ControlAtOnce bool
 	// AnyVersion makes the Fake answer a claim whatever the versions of the
-	// run's plan and the worker, as a coordinator with that bug would, for
-	// a test of what a worker makes of a job it can't read.
+	// run's plan and the worker, of the plan and of the API, as a
+	// coordinator with that bug would, for a test of what a worker makes of
+	// a job it can't read.
 	AnyVersion bool
 	// Lenient makes the Fake answer a request that no worker sends, as one
 	// it can't read, with its status alone. Otherwise such a request fails
@@ -360,7 +368,7 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusUnprocessableEntity, Refusal, map[string]any{"path": strings.Repeat("x", LargeRefusal)})
 		return
 	case WrongClaim:
-		writeJSON(w, map[string]any{"runID": 1})
+		writeJSON(w, workerapi.Version, map[string]any{"runID": 1})
 		return
 	case BadRequest:
 		w.WriteHeader(http.StatusBadRequest)
@@ -369,7 +377,7 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not json"))
 		return
 	case AckAhead:
-		writeJSON(w, workerapi.EventsAck{Seq: 1 << 20})
+		writeJSON(w, workerapi.Version, workerapi.EventsAck{Seq: 1 << 20})
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -515,13 +523,42 @@ func (f *Fake) handleClaim(w http.ResponseWriter, bearer string, body []byte) {
 		f.unexpected("the credential is %q, not 32 bytes as hex", req.Credential)
 	case req.PlanVersion != plan.Version:
 		f.unexpected("the worker reads plan version %d, not %d", req.PlanVersion, plan.Version)
+	case req.APIVersion != workerapi.Version:
+		f.unexpected("the worker speaks version %d of the API, not %d", req.APIVersion, workerapi.Version)
 	}
-	if req.PlanVersion < f.Claim.PlanVersion && !f.AnyVersion {
-		problem.Write(w, problems.PlanTooNew.Problem(nil))
-		return
+	if !f.claimed && !f.AnyVersion {
+		switch {
+		case req.PlanVersion < f.Claim.PlanVersion:
+			problem.Write(w, problems.PlanTooNew.Problem(nil))
+			return
+		case req.Speaks() < f.needs():
+			problem.Write(w, problems.WorkerAPITooOld.Problem(problems.Params{workerapi.ParamVersion: req.Speaks(), workerapi.ParamNeeded: f.needs()}))
+			return
+		}
+	}
+	if f.Claim.APIVersion == 0 {
+		f.Claim.APIVersion = min(req.Speaks(), f.speaks())
 	}
 	f.claimed, f.credential = true, cred
-	writeJSON(w, &f.Claim)
+	// A claim a test sets to a version that isn't one is written as
+	// version 1's, for the worker to refuse.
+	writeJSON(w, max(f.Claim.APIVersion, 1), &f.Claim)
+}
+
+// speaks returns the newest version of the API f speaks.
+func (f *Fake) speaks() int {
+	if f.Speaks == 0 {
+		return workerapi.Version
+	}
+	return f.Speaks
+}
+
+// needs returns the oldest version of the API f's attempt needs.
+func (f *Fake) needs() int {
+	if f.Needs == 0 {
+		return 1
+	}
+	return f.Needs
 }
 
 func (f *Fake) handleControl(w http.ResponseWriter, r *http.Request) {
@@ -549,12 +586,12 @@ func (f *Fake) handleControl(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeJSON(w, &f.control)
+	writeJSON(w, f.Claim.APIVersion, &f.control)
 }
 
 func (f *Fake) handleEvents(w http.ResponseWriter, body []byte) []workerapi.Event {
 	var events workerapi.Events
-	if err := workerapi.Unmarshal(body, &events); err != nil {
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &events); err != nil {
 		f.unexpected("events the coordinator can't read: %v", err)
 		writeStatus(w, http.StatusBadRequest)
 		return nil
@@ -572,7 +609,7 @@ func (f *Fake) handleEvents(w http.ResponseWriter, body []byte) []workerapi.Even
 		f.events = append(f.events, e)
 		stored = append(stored, e)
 	}
-	writeJSON(w, &workerapi.EventsAck{Seq: int64(len(f.events))})
+	writeJSON(w, f.Claim.APIVersion, &workerapi.EventsAck{Seq: int64(len(f.events))})
 	return stored
 }
 
@@ -621,12 +658,12 @@ func (f *Fake) handleLogs(w http.ResponseWriter, r *http.Request, body []byte) {
 	if q.Get(workerapi.QueryEnd) == "true" {
 		l.Ended = true
 	}
-	writeJSON(w, &workerapi.LogAck{Length: int64(len(l.Data)), Ended: l.Ended})
+	writeJSON(w, f.Claim.APIVersion, &workerapi.LogAck{Length: int64(len(l.Data)), Ended: l.Ended})
 }
 
 func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 	end := new(workerapi.Complete)
-	if err := workerapi.Unmarshal(body, end); err != nil {
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, end); err != nil {
 		f.unexpected("a Complete the coordinator can't read: %v", err)
 		writeStatus(w, http.StatusBadRequest)
 		return
@@ -683,9 +720,10 @@ func writeStatus(w http.ResponseWriter, status int) {
 	problem.Write(w, problem.Status(status, ""))
 }
 
-// writeJSON answers 200 with v, as the API encodes a body.
-func writeJSON(w http.ResponseWriter, v any) {
-	if err := workerapi.WriteBody(w, v); err != nil {
+// writeJSON answers 200 with v, as the API encodes a body of an attempt
+// of version of the API.
+func writeJSON(w http.ResponseWriter, version int, v any) {
+	if err := workerapi.WriteBody(w, version, v); err != nil {
 		writeStatus(w, http.StatusInternalServerError)
 	}
 }

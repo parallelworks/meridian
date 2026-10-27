@@ -55,25 +55,32 @@ func TestAttempt(t *testing.T) {
 		if err := tx.StepStarted(a.ID); !errors.Is(err, ErrState) {
 			t.Errorf("StepStarted before the claim = %v, want ErrState", err)
 		}
-		if _, err := tx.Claim("not a token", credential('a'), testWorker); !errors.Is(err, ErrNotFound) {
+		if _, err := tx.Claim("not a token", credential('a'), testWorker, workerapi.Version); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Claim with another token = %v, want ErrNotFound", err)
 		}
-		if _, err := tx.Claim(token, "short", testWorker); err == nil {
+		if _, err := tx.Claim(token, "short", testWorker, workerapi.Version); err == nil {
 			t.Error("Claim with a short credential succeeded")
 		}
-		claimed, err := tx.Claim(token, credential('a'), testWorker)
+		if _, err := tx.Claim(token, credential('a'), testWorker, 0); err == nil {
+			t.Error("Claim at version 0 of the worker API succeeded")
+		}
+		if a.APIVersion != 0 {
+			t.Errorf("an attempt not claimed is of version %d of the worker API", a.APIVersion)
+		}
+		// The store keeps whatever version the server claims it at.
+		claimed, err := tx.Claim(token, credential('a'), testWorker, 7)
 		if err != nil {
 			return err
 		}
-		if claimed.State != AttemptClaimed || claimed.Worker != testWorker || claimed.ClaimedAt.IsZero() || !claimed.RenewedAt.Equal(claimed.ClaimedAt) ||
+		if claimed.State != AttemptClaimed || claimed.Worker != testWorker || claimed.APIVersion != 7 || claimed.ClaimedAt.IsZero() || !claimed.RenewedAt.Equal(claimed.ClaimedAt) ||
 			!claimed.LeaseLapses().Equal(claimed.RenewedAt.Add(time.Minute)) {
 			t.Errorf("a claimed attempt is %+v", claimed)
 		}
-		again, err := tx.Claim(token, credential('a'), workerapi.Worker{Version: "other"})
-		if err != nil || again.Worker != testWorker || !again.ClaimedAt.Equal(claimed.ClaimedAt) {
+		again, err := tx.Claim(token, credential('a'), workerapi.Worker{Version: "other"}, workerapi.Version)
+		if err != nil || again.Worker != testWorker || again.APIVersion != 7 || !again.ClaimedAt.Equal(claimed.ClaimedAt) {
 			t.Errorf("Claim repeated = %+v, %v", again, err)
 		}
-		if _, err := tx.Claim(token, credential('b'), testWorker); !errors.Is(err, ErrCredential) {
+		if _, err := tx.Claim(token, credential('b'), testWorker, workerapi.Version); !errors.Is(err, ErrCredential) {
 			t.Errorf("Claim with another credential = %v, want ErrCredential", err)
 		}
 		if _, err := tx.NewToken(a.ID); !errors.Is(err, ErrState) {
@@ -138,7 +145,7 @@ func TestAttempt(t *testing.T) {
 		for name, err := range map[string]error{
 			"Authorize":   second(tx.Authorize(credential('a'))),
 			"Renew":       second(tx.Renew(credential('a'))),
-			"Claim":       second(tx.Claim(token, credential('a'), testWorker)),
+			"Claim":       second(tx.Claim(token, credential('a'), testWorker, workerapi.Version)),
 			"StepStarted": tx.StepStarted(a.ID),
 			"EndAttempt":  tx.EndAttempt(a.ID, AttemptEnd{Kind: EndLost}),
 		} {
@@ -183,7 +190,7 @@ func TestFence(t *testing.T) {
 			}
 			cred := credential(byte('a' + i))
 			if i%2 == 0 { // every other attempt is claimed before the next
-				if _, err := tx.Claim(token, cred, testWorker); err != nil {
+				if _, err := tx.Claim(token, cred, testWorker, workerapi.Version); err != nil {
 					return err
 				}
 			}
@@ -214,7 +221,7 @@ func TestFence(t *testing.T) {
 			if last {
 				continue
 			}
-			if _, err := tx.Claim(st.token, st.cred, testWorker); !errors.Is(err, ErrFenced) {
+			if _, err := tx.Claim(st.token, st.cred, testWorker, workerapi.Version); !errors.Is(err, ErrFenced) {
 				t.Errorf("Claim by superseded attempt %d = %v, want ErrFenced", i+1, err)
 			}
 			if i%2 == 0 {
@@ -262,10 +269,10 @@ func TestNewToken(t *testing.T) {
 		if token == old {
 			t.Error("NewToken gave the same token")
 		}
-		if _, err := tx.Claim(old, credential('a'), testWorker); !errors.Is(err, ErrNotFound) {
+		if _, err := tx.Claim(old, credential('a'), testWorker, workerapi.Version); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Claim with the old token = %v, want ErrNotFound", err)
 		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 			t.Errorf("Claim with the new token = %v", err)
 		}
 		if _, err := tx.NewToken("0123"); !errors.Is(err, ErrNotFound) {
@@ -289,7 +296,7 @@ func TestLapse(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Claim(token, creds[self], testWorker); err != nil {
+			if _, err := tx.Claim(token, creds[self], testWorker, workerapi.Version); err != nil {
 				return err
 			}
 		}

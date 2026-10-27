@@ -40,7 +40,7 @@ func claimedAttempt(t *testing.T, s *Store, c byte) *Attempt {
 		if err != nil {
 			return err
 		}
-		a, err = tx.Claim(token, credential(c), testWorker)
+		a, err = tx.Claim(token, credential(c), testWorker, workerapi.Version)
 		return err
 	})
 	return a
@@ -139,7 +139,7 @@ func TestPlacementAndEnd(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); !errors.Is(err, ErrNotPlaced) {
+		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); !errors.Is(err, ErrNotPlaced) {
 			t.Errorf("Claim before the placement is recorded = %v, want ErrNotPlaced", err)
 		}
 		p := testPlacement
@@ -159,7 +159,7 @@ func TestPlacementAndEnd(t *testing.T) {
 		if got, err := tx.AttemptByToken(token); err != nil || got.Placement != p || got.ID != a.ID {
 			t.Errorf("AttemptByToken = %+v, %v", got, err)
 		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		if err := tx.RecordPlacement(a.ID, p); !errors.Is(err, ErrState) {
@@ -214,7 +214,7 @@ func TestLapsed(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			a, err := tx.Claim(token, credential(byte('a'+boolInt(selfFencing))), testWorker)
+			a, err := tx.Claim(token, credential(byte('a'+boolInt(selfFencing))), testWorker, workerapi.Version)
 			if err != nil {
 				return err
 			}
@@ -280,7 +280,7 @@ func TestPrivatePlacement(t *testing.T) {
 		if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET private_placement = x'01' WHERE id = ?", a.ID); err != nil {
 			return err
 		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); !errors.Is(err, ErrNotPlaced) {
+		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); !errors.Is(err, ErrNotPlaced) {
 			t.Errorf("Claim before the placement is recorded = %v, want ErrNotPlaced", err)
 		}
 		for _, bad := range []Placement{
@@ -309,7 +309,7 @@ func TestPrivatePlacement(t *testing.T) {
 		if group.Valid || member.Valid || backend.Valid || placementID.Valid {
 			t.Errorf("a private placement is held in the clear: %v %v %v %v", group, member, backend, placementID)
 		}
-		if _, err := tx.Claim(token, credential('a'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		refusal := problems.MemberInvalid.Problem(problems.Params{"group": "secret-group", "key": "cpu", "value": "secret-member"})

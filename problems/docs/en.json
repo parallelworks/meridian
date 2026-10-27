@@ -1862,9 +1862,15 @@
     ]
   },
   "plan_too_new": {
-    "why": "A run's plan, and the worker API's bodies, are versioned, and a worker says the newest version it reads as it claims an attempt. The coordinator refuses one that doesn't read the run's, before it sends anything of the run, so that no worker runs a job with a part it doesn't understand. The worker exits, and the attempt, which failed before its first step, is placed again.",
+    "why": "A run's plan is versioned, and a worker says the newest plan version it reads as it claims an attempt. The coordinator refuses one that doesn't read the run's, before it sends anything of the run, so that no worker runs a job with a part it doesn't understand. The worker exits, and the attempt, which failed before its first step, is placed again.",
     "fix": [
       "Start workers of the same release of Meridian as the coordinator."
+    ]
+  },
+  "worker_api_too_old": {
+    "why": "The worker API has a version of its own, apart from the plan's, which each addition to it raises, and a worker says the newest version it speaks as it claims an attempt. The coordinator refuses a worker whose version is older than the oldest that has everything the attempt's job uses, before it sends anything of the run, rather than run the job without that part. The worker exits, and the attempt, which failed before its first step, is placed again.",
+    "fix": [
+      "Start workers of the same release of Meridian as the coordinator, or of a later one."
     ]
   },
   "worker_digest_mismatch": {

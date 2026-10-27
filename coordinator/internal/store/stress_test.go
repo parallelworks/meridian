@@ -20,6 +20,7 @@ import (
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // The stress tests run goroutines, and processes, that start, claim,
@@ -117,7 +118,7 @@ func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters 
 				continue
 			}
 			err = s.Tx(ctx, func(tx *Tx) error {
-				a, err := tx.Claim(m.token, m.cred, testWorker)
+				a, err := tx.Claim(m.token, m.cred, testWorker, workerapi.Version)
 				if err != nil {
 					return err
 				}

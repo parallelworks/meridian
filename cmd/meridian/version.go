@@ -11,11 +11,12 @@ import (
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // runVersion shows Meridian's version: its module's, the commit it was
 // built from, the Go release and FIPS 140-3 module it was built with, and
-// the newest plan version it reads.
+// the newest plan version it reads and version of the worker API it speaks.
 func runVersion(_ context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	positional, err := parseFlags(fs, args)
 	if err != nil {
@@ -40,6 +41,7 @@ func runVersion(_ context.Context, c *cli, fs *flag.FlagSet, args []string) int 
 	fmt.Fprintf(tw, "  go:\t%s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(tw, "  fips 140-3 module:\t%s\n", fips)
 	fmt.Fprintf(tw, "  plan version:\t%d\n", plan.Version)
+	fmt.Fprintf(tw, "  worker API version:\t%d\n", workerapi.Version)
 	tw.Flush()
 	return exitOK
 }

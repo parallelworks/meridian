@@ -116,7 +116,7 @@ func (d *stopDriver) work(req backend.PlaceRequest, way string) {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	if err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
-		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(b), workerapi.Worker{Version: "test", Digest: testDigest})
+		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(b), workerapi.Worker{Version: "test", Digest: testDigest}, workerapi.Version)
 		if err != nil {
 			return err
 		}

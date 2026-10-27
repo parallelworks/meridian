@@ -15,9 +15,10 @@ import (
 )
 
 // Version is the version of the plan encoding this package reads and
-// writes: a Plan's, and a ReadyJob's, a Record's, and the worker API's
-// bodies', which are versioned with it. Every change to one raises it, an
-// addition among them, since decoding refuses a member it doesn't know
+// writes: a Plan's, and a ReadyJob's, a Record's, and those of the types
+// the worker API's bodies carry of a run, though the API has a version of
+// its own (workerapi.Version). Every change to one raises it, an addition
+// among them, since decoding refuses a member it doesn't know
 // (docs/design.md, Plans across versions). Version 1 is frozen, as its
 // schemas describe it (Schemas).
 const Version = 1

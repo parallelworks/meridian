@@ -74,7 +74,7 @@ func TestRunEvents(t *testing.T) {
 		if err := tx.RecordPlacement(b.ID, Placement{WorkerDigest: testPlacement.WorkerDigest}); err != nil {
 			return err
 		}
-		if _, err := tx.Claim(token, credential('b'), testWorker); err != nil {
+		if _, err := tx.Claim(token, credential('b'), testWorker, workerapi.Version); err != nil {
 			return err
 		}
 		for range 2 {
