@@ -2,6 +2,7 @@ package workerapisrv_test
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"slices"
 	"testing"
@@ -254,15 +255,16 @@ func TestForeignAttemptFenced(t *testing.T) {
 // The server reads and writes every body of an attempt at the attempt's
 // version of the worker API, through workerapi.CheckVersion, with members
 // made a later version's than this one (versiontest): of an attempt of
-// this version, it refuses events that hold one, 400, and stores none of
-// them, and never sends one, as a control that asks one, which it answers
-// 500 instead; of an attempt of the later version, it takes and sends
-// them. It doesn't run in parallel with others, whose bodies the members
-// it sets would change.
+// this version, it refuses events and an end that hold one, 400, and
+// stores none of them, and never sends one, as a control that asks one,
+// which it answers 500 instead; of an attempt of the later version, it
+// takes and sends them. It doesn't run in parallel with others, whose
+// bodies the members it sets would change.
 func TestGatePinned(t *testing.T) {
 	later := workerapi.Version + 1
 	t.Cleanup(versiontest.Set("Event.cleanup", later))
 	t.Cleanup(versiontest.Set("Control.anyJobFailed", later))
+	t.Cleanup(versiontest.Set("Complete.reason", later))
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetSpeaks(s, later) }})
 	c := newClient(t, r.socket)
 	job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"}}}
@@ -301,6 +303,18 @@ func TestGatePinned(t *testing.T) {
 			t.Errorf("an attempt of version %d was sent a later member, %d: %s", version, status, body)
 		case version == later && (status != http.StatusOK || !bytes.Contains(body, []byte(`"anyJobFailed":true`))):
 			t.Errorf("an attempt of version %d wasn't sent its control, %d: %s", version, status, body)
+		}
+
+		end := fmt.Appendf(nil, `{"seq":%d,"result":{"outcome":"failure"},"reason":"timeout"}`, len(stored))
+		status, body, err = c.send(http.MethodPost, workerapi.PathComplete, end, credential)
+		ended := r.attempt(a.ID).State == store.AttemptEnded
+		switch {
+		case err != nil:
+			t.Fatal(err)
+		case version < later && (status != http.StatusBadRequest || ended):
+			t.Errorf("an attempt of version %d's end with a later member was answered %d, and stored: %v: %s", version, status, ended, body)
+		case version == later && (status != http.StatusNoContent || !ended):
+			t.Errorf("an attempt of version %d's end was answered %d, and stored: %v: %s", version, status, ended, body)
 		}
 	}
 }
