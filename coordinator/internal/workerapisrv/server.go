@@ -208,10 +208,12 @@ func New(opts Options) (*Server, error) {
 }
 
 // Notify wakes the control polls the server holds for the attempts ids, or
-// for every attempt for none, to read the store again: call it once a
-// control stored in this process has committed. The server reads the
-// controls of the attempts it holds polls for again every second besides,
-// for one another process stored.
+// for every attempt for none, to read the store again. Whoever opened the
+// store calls it once a transaction of this process's that changed
+// controls has committed, its own and the server's alike
+// (store.Options.OnControlsChanged). The server reads the controls of the
+// attempts it holds polls for again every second besides, for one another
+// process stored.
 func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
 
 // Serve serves the worker API on l, a Unix socket's listener, until ctx is

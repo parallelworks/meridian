@@ -80,11 +80,10 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 // serveEvents stores the attempt's events it hasn't yet, in order, and
 // answers with the sequence number of the last it has. Of an attempt whose
 // placement is private, the diagnostics of each event, which can name the
-// member, are masked before they are stored, as its end's are. Once the
-// events are stored, the polls held here of the attempts whose controls
-// storing them changed, as a step that failed changes its run's other
-// attempts' (store.Tx.ControlsChanged), are woken; another process's polls
-// read them at their recheck.
+// member, are masked before they are stored, as its end's are. Storing
+// them can change other attempts' controls, as a step that failed changes
+// its run's other attempts', whose polls the store's
+// Options.OnControlsChanged answers once they are stored (Notify).
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.Attempt) {
 	ctx := r.Context()
 	body, ok := s.readBody(w, r, MaxEventsBody)
@@ -101,10 +100,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 			events.Events[i].Diagnostics = problems.MaskDiagnostics(events.Events[i].Diagnostics)
 		}
 	}
-	var (
-		last    int64
-		changed []string
-	)
+	var last int64
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		if _, err := tx.Authorize(bearer(r)); err != nil {
 			return err
@@ -116,11 +112,8 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		if count+int64(len(events.Events)) > s.maxEvents || size+int64(len(body)) > s.maxEventsBytes {
 			return errTooMuch
 		}
-		if last, err = tx.AppendEvents(a.ID, events.Events); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
+		last, err = tx.AppendEvents(a.ID, events.Events)
+		return err
 	})
 	switch {
 	case errors.Is(err, errTooMuch):
@@ -129,10 +122,6 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 	case err != nil:
 		s.writeError(w, r, err)
 		return
-	}
-	// Notify with no IDs wakes every poll.
-	if len(changed) > 0 {
-		s.Notify(changed...)
 	}
 	// A step's first start makes the attempt running, which its job's
 	// supervisor counts.
@@ -365,7 +354,6 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	// any-job-failed, as format 1 tells them as the job fails. The job
 	// marks it as it ends otherwise.
 	jobFailed := result.Outcome == plan.OutcomeFailure && end.Reason != plan.ReasonSetupFailed
-	var changed []string
 	for try := 1; ; try++ {
 		// The part is sealed outside the transaction that stores it, which
 		// holds the database's lock only for its writes, and stores it only
@@ -401,7 +389,6 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 					return err
 				}
 			}
-			changed = tx.ControlsChanged()
 			return nil
 		})
 		if !errors.Is(err, store.ErrRecordChanged) || try == partTries {
@@ -433,9 +420,6 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	case err != nil:
 		s.writeError(w, r, err)
 		return
-	}
-	if len(changed) > 0 {
-		s.Notify(changed...)
 	}
 	s.wakeJob(ctx, a.Run, a.Job)
 	w.WriteHeader(http.StatusNoContent)

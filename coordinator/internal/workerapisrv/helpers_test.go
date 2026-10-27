@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -210,13 +211,28 @@ type rigOptions struct {
 
 func newRig(t *testing.T, opts rigOptions) *rig {
 	t.Helper()
-	s, path := openStore(t, opts.store)
+	// A change to attempts' controls answers the polls the rig's first
+	// server holds of them, as a coordinator has its own server's answered
+	// (store.Options.OnControlsChanged); another replica's read them again
+	// at their recheck, as another process's do.
+	var storeOpts store.Options
+	if opts.store != nil {
+		storeOpts = *opts.store
+	}
+	var first atomic.Pointer[workerapisrv.Server]
+	storeOpts.OnControlsChanged = func(_ context.Context, ids []string) {
+		if srv := first.Load(); srv != nil {
+			srv.Notify(ids...)
+		}
+	}
+	s, path := openStore(t, &storeOpts)
 	sealer, err := seal.New(newKeys(t), s.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: &fakeReadier{}, logs: &runlogtest.Logs{}}
 	r.server = r.serve(opts)
+	first.Store(r.server)
 	return r
 }
 

@@ -255,8 +255,10 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	}
 	// The store asks c, as it stores a failed step's events, whether the
 	// try was the step's last (lastTry), and whether the job's retry: lists
-	// a reason (retriesFor), once c is filled in below; and a reset of the
-	// store's clock wakes the supervisors c knows of, once it is open.
+	// a reason (retriesFor), once c is filled in below; a reset of the
+	// store's clock wakes the supervisors c knows of, once it is open;
+	// and a change to attempts' controls answers the polls c's server of
+	// the worker API holds of them (controlsChanged).
 	c := &Coordinator{}
 	var opened atomic.Pointer[Coordinator]
 	st, err := store.Open(ctx, opts.Database, &store.Options{
@@ -264,6 +266,11 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		OnClockReset: func(ctx context.Context) {
 			if c := opened.Load(); c != nil {
 				c.wakeReadied(ctx)
+			}
+		},
+		OnControlsChanged: func(_ context.Context, ids []string) {
+			if c := opened.Load(); c != nil {
+				c.controlsChanged(ids)
 			}
 		},
 	})

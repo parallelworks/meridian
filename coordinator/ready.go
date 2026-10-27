@@ -90,7 +90,6 @@ func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, ear
 	var (
 		from      *readyFrom
 		withdrawn []string
-		changed   []string
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		job, err := tx.Job(run.ID, key)
@@ -104,18 +103,14 @@ func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, ear
 		if job, withdrawn, err = pinReady(tx, run, pj, job, unended); err != nil {
 			return err
 		}
-		if from, err = readReadyFrom(tx, run, pj, job, early); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
+		from, err = readReadyFrom(tx, run, pj, job, early)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(unended) > 0 {
 		c.log.WarnContext(ctx, "coordinator: jobs a job needs never ended, as when hopper gave up on their supervisors, so they failed as it was readied", "run", run.ID, "job", key, "needs", unended)
-		c.controlsChanged(changed)
 		c.cancelPlacements(ctx, run.ID, ws, withdrawn)
 	}
 	in, err := c.readyInput(ctx, run, from)

@@ -252,7 +252,6 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	private, state := report.Result.Split()
 	outcome := report.Result.Outcome
 	report.Result = state
-	var changed []string
 	err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
 		claimed, err := tx.Claim(req.BootstrapToken, hex.EncodeToString(credential), workerapi.Worker{Version: "test", Digest: p.WorkerDigest})
 		if err != nil {
@@ -284,12 +283,10 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 				return err
 			}
 		}
-		changed = tx.ControlsChanged()
 		return nil
 	})
 	if err != nil {
 		return
 	}
-	d.c.controlsChanged(changed)
 	d.c.wakeJob(ctx, a.Run, a.Job)
 }

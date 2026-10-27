@@ -306,7 +306,6 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 // waits for the job to end: for an instance of a matrix job, the matrix
 // job's supervisor; and the marker of a need on any instance of it.
 func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end store.JobEnd, before, done func(context.Context, *store.Tx) error) error {
-	var changed []string
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		if before != nil {
 			if err := before(ctx, tx); err != nil {
@@ -330,15 +329,8 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 				return err
 			}
 		}
-		if err := done(ctx, tx); err != nil {
-			return err
-		}
-		changed = tx.ControlsChanged()
-		return nil
+		return done(ctx, tx)
 	})
-	if err == nil {
-		c.controlsChanged(changed)
-	}
 	if err == nil {
 		// The hopper job done completed is over, and its context with it.
 		ctx := context.WithoutCancel(ctx)
@@ -358,7 +350,9 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 type controlNotifier interface{ Notify(ids ...string) }
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,
-// that the controls of the attempts ids changed, if any did.
+// that the controls of the attempts ids changed, if any did: the store
+// calls it once each transaction that changed them commits
+// (store.Options.OnControlsChanged).
 func (c *Coordinator) controlsChanged(ids []string) {
 	if len(ids) == 0 {
 		return

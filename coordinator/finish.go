@@ -171,8 +171,8 @@ func failUnended(tx *store.Tx, id string) ([]string, error) {
 // ended is withdrawn, so that its worker's reports are refused, and its ID
 // returned, so that its placement is cancelled once the transaction
 // commits (cancelPlacements). It marks the run as one a job of which
-// failed, whose attempts' controls that changes the caller notifies of
-// once the transaction commits (store.Tx.ControlsChanged).
+// failed, which changes its attempts' controls, whose polls the store
+// has answered once the transaction commits (store.Options.OnControlsChanged).
 func failJob(tx *store.Tx, run, key string) (string, error) {
 	j, err := tx.Job(run, key)
 	if err != nil || j.Outcome != "" {
