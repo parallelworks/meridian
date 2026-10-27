@@ -2,18 +2,16 @@ package coordinator
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"errors"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 
 	"github.com/parallelworks/hopper"
 
@@ -23,65 +21,6 @@ import (
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
 )
-
-// testKeys wraps data keys under a key of its own, with AES-256-GCM, bound
-// to the run's ID, as a key file does; and fails as a test says.
-type testKeys struct {
-	aead cipher.AEAD
-
-	mu                 sync.Mutex
-	wrapErr, unwrapErr error
-}
-
-func newTestKeys(t *testing.T) *testKeys {
-	t.Helper()
-	key := make([]byte, 32)
-	_, _ = rand.Read(key)
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aead, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &testKeys{aead: aead}
-}
-
-func (k *testKeys) Wrap(_ context.Context, runID string, key []byte) ([]byte, error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.wrapErr != nil {
-		return nil, k.wrapErr
-	}
-	return k.aead.Seal(nil, nil, key, []byte(runID)), nil
-}
-
-func (k *testKeys) Unwrap(_ context.Context, runID string, wrapped []byte) ([]byte, error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.unwrapErr != nil {
-		return nil, k.unwrapErr
-	}
-	return k.aead.Open(nil, nil, wrapped, []byte(runID))
-}
-
-func (k *testKeys) fail(wrap, unwrap error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	k.wrapErr, k.unwrapErr = wrap, unwrap
-}
-
-// privateDir returns a directory of the test's that only its user can use,
-// as the store asks of its database's.
-func privateDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
 
 // fastStart is how tests try again to start a run: soon, and few times.
 var fastStart = startRetry{tries: 3, first: 10 * time.Millisecond, most: 40 * time.Millisecond, newer: 50 * time.Millisecond, attempts: 2}
@@ -102,10 +41,10 @@ var fastSupervision = supervision{
 func open(t *testing.T, opts Options) *Coordinator {
 	t.Helper()
 	if opts.Database == "" {
-		opts.Database = filepath.Join(privateDir(t), "meridian.db")
+		opts.Database = filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	}
 	if opts.Keys == nil {
-		opts.Keys = newTestKeys(t)
+		opts.Keys = coordtest.NewKeys(t)
 	}
 	if opts.Groups == nil {
 		opts.Groups = testGroups{}

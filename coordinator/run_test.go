@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/foundation/problem"
 	"github.com/parallelworks/hopper"
 
@@ -141,7 +143,7 @@ func TestStartFails(t *testing.T) {
 		workflow string
 		// before changes the run, or what the coordinator works with,
 		// once the run is stored.
-		before func(t *testing.T, c *Coordinator, id string, keys *testKeys)
+		before func(t *testing.T, c *Coordinator, id string, keys *coordtest.Keys)
 		// change changes what Create gave before the run is stored.
 		change func(*compile.Created)
 		// createVars are the variables Create reads, regionVars unless
@@ -167,18 +169,18 @@ jobs:
 			opts: Options{Variables: conformancetest.Variables{"org.ENV": {Value: "dev"}}}, code: problems.RunShapeChanged.Code(),
 		},
 		{name: "a record of another plan", change: func(cr *compile.Created) { cr.Record.PlanDigest = "sha256:00" }, code: problems.RunRecordMismatch.Code()},
-		{name: "a record changed", before: func(t *testing.T, c *Coordinator, id string, _ *testKeys) {
+		{name: "a record changed", before: func(t *testing.T, c *Coordinator, id string, _ *coordtest.Keys) {
 			exec(t, c, "UPDATE meridian_records SET sealed = x'01000000000000000000000000000000000000000000'")
 		}, code: problems.RecordUnreadable.Code()},
-		{name: "a record older than the run's", before: func(t *testing.T, c *Coordinator, _ string, _ *testKeys) {
+		{name: "a record older than the run's", before: func(t *testing.T, c *Coordinator, _ string, _ *coordtest.Keys) {
 			// The run's generation is the record's next: the record is one
 			// that a later one replaced, put back.
 			exec(t, c, "UPDATE meridian_runs SET record_gen = 2")
 		}, code: problems.RecordUnreadable.Code()},
-		{name: "a problem of Keys'", before: func(_ *testing.T, _ *Coordinator, _ string, keys *testKeys) {
-			keys.fail(nil, problems.KeyFileMissing.Problem(problems.Params{"path": "/keys/secret-record.key"}))
+		{name: "a problem of Keys'", before: func(_ *testing.T, _ *Coordinator, _ string, keys *coordtest.Keys) {
+			keys.Fail(nil, problems.KeyFileMissing.Problem(problems.Params{"path": "/keys/secret-record.key"}))
 		}, code: problems.KeyFileMissing.Code()},
-		{name: "a plan that doesn't decode", before: func(t *testing.T, c *Coordinator, _ string, _ *testKeys) {
+		{name: "a plan that doesn't decode", before: func(t *testing.T, c *Coordinator, _ string, _ *coordtest.Keys) {
 			exec(t, c, "DROP TRIGGER meridian_runs_plan_fixed")
 			exec(t, c, `UPDATE meridian_runs SET plan = CAST('{"version":1}' AS BLOB)`)
 		}, code: problems.RunMalformed.Code()},
@@ -186,12 +188,12 @@ jobs:
 			name: "variables that can't be read", opts: Options{Variables: &failingVariables{vars: regionVars, fail: 1 << 30}},
 			code: problems.RunStartUnanswered.Code(), tries: fastStart.tries,
 		},
-		{name: "a Start the coordinator can't run", before: func(t *testing.T, c *Coordinator, _ string, _ *testKeys) {
+		{name: "a Start the coordinator can't run", before: func(t *testing.T, c *Coordinator, _ string, _ *coordtest.Keys) {
 			exec(t, c, "DELETE FROM meridian_records")
 		}, code: problems.RunNotStarted.Code()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			keys := newTestKeys(t)
+			keys := coordtest.NewKeys(t)
 			opts := tc.opts
 			opts.Keys = keys
 			if opts.Variables == nil {
@@ -297,8 +299,8 @@ func waitFor(t *testing.T, ok func() bool) {
 // started only by the coordinator that created it, which works the queue
 // until it has started, and not by another of the store's.
 func TestStartQueue(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
-	keys := newTestKeys(t)
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	keys := coordtest.NewKeys(t)
 	ownQueue := func(id string) string { return "meridian.start." + id }
 	creator := open(t, Options{Database: path, Keys: keys, Variables: regionVars, StartQueue: ownQueue})
 	other := open(t, Options{Database: path, Keys: keys, Variables: regionVars})
@@ -392,14 +394,14 @@ func storedJob(t *testing.T, c *Coordinator, id, key string) *store.Job {
 // isn't stored at all: neither the run, nor its record, nor its hopper
 // jobs, and its number is given to the next.
 func TestCreateRunRollsBack(t *testing.T) {
-	keys := newTestKeys(t)
+	keys := coordtest.NewKeys(t)
 	c := open(t, Options{Keys: keys, Variables: regionVars})
 	created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(regionWorkflow), regionSubmitted,
 		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: regionVars.Contexts()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys.fail(errors.New("the key service can't be reached"), nil)
+	keys.Fail(errors.New("the key service can't be reached"), nil)
 	if _, err := c.CreateRun(t.Context(), created, runOptions); err == nil {
 		t.Fatal("CreateRun succeeded without Keys")
 	}
@@ -413,7 +415,7 @@ func TestCreateRunRollsBack(t *testing.T) {
 	if jobs != 0 {
 		t.Errorf("a run not created left %d hopper jobs", jobs)
 	}
-	keys.fail(nil, nil)
+	keys.Fail(nil, nil)
 	if id, err := c.CreateRun(t.Context(), created, runOptions); err != nil || id != "1" {
 		t.Errorf("CreateRun = %q, %v; want 1", id, err)
 	}

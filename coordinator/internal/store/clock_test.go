@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/plan"
@@ -74,7 +76,7 @@ func graceOf(t *testing.T, s *Store) time.Time {
 // time a transaction that writes read, and so never takes a lease another
 // renewed for older than it is. A View reads the mark, and leaves it.
 func TestClockMark(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	const step = 30 * time.Second
 	ahead := openClock(t, path, func() time.Time { return base.Add(step) })
@@ -113,7 +115,7 @@ func TestClockMark(t *testing.T) {
 // times of the attempt's run and job come back too, but the run's
 // created_at, which never changes; and OnClockReset is called once.
 func TestClockReset(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	ahead := base.Add(365 * 24 * time.Hour)
 	bad := openClock(t, path, func() time.Time { return ahead })
@@ -188,7 +190,7 @@ func TestClockReset(t *testing.T) {
 // clock's mark, as a View does, and records nothing: neither the mark nor
 // a grace.
 func TestClockReadOnly(t *testing.T) {
-	path := filepath.Join(privateDir(t), "meridian.db")
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	clockOf(t, openClock(t, path, func() time.Time { return base.Add(30 * time.Second) }), false)
 	r := openWith(t, path, &Options{ReadOnly: true, Now: func() time.Time { return base }, MaxLead: time.Minute})
@@ -206,7 +208,7 @@ func TestClockReadOnly(t *testing.T) {
 // store reads the host's itself.
 func TestClockHost(t *testing.T) {
 	resets := 0
-	s := openWith(t, filepath.Join(privateDir(t), "meridian.db"), &Options{
+	s := openWith(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
 		MaxLead: time.Minute, OnClockReset: func(context.Context) { resets++ },
 	})
 	ahead := time.Now().UTC().Truncate(time.Microsecond).Add(365 * 24 * time.Hour)

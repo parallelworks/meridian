@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
@@ -170,7 +172,7 @@ func TestNotPlaced(t *testing.T) {
 	run := r.newRun(nil)
 	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
 	a, token := r.newAttempt(run, "build", placed{unplaced: true})
-	credential := newCredential(t)
+	credential := coordtest.Credential(t)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://coordinator"+workerapi.PathClaim, strings.NewReader(string(claimRequest(t, credential, conformanceDigest))))
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +222,7 @@ func TestConcurrentEnds(t *testing.T) {
 	credentials := make([]string, n)
 	for i := range n {
 		_, token := r.newAttempt(run, fmt.Sprintf("j%02d", i), placed{})
-		credentials[i] = newCredential(t)
+		credentials[i] = coordtest.Credential(t)
 		if status, body, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, credentials[i], conformanceDigest), token); status != http.StatusOK {
 			t.Fatalf("claim %d was answered %d: %s", i, status, body)
 		}

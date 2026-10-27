@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
@@ -132,15 +134,15 @@ func TestErrorsNotLogged(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		vars  compile.Variables
-		keys  func(*testKeys)
+		keys  func(*coordtest.Keys)
 		cause string
 	}{
 		{"variables", erringVariables{errSecret}, nil, causeResolver},
-		{"keys", regionVars, func(k *testKeys) { k.fail(nil, errSecret) }, causeKeys},
+		{"keys", regionVars, func(k *coordtest.Keys) { k.Fail(nil, errSecret) }, causeKeys},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			log := &logRecords{}
-			keys := newTestKeys(t)
+			keys := coordtest.NewKeys(t)
 			c := open(t, Options{Variables: tc.vars, Keys: keys, Log: slog.New(log)})
 			id, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 			if tc.keys != nil {

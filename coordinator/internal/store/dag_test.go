@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
+
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -164,7 +166,7 @@ func TestUpdateControl(t *testing.T) {
 // back, nor one that changed none.
 func TestOnControlsChanged(t *testing.T) {
 	var heard [][]string
-	s := openWith(t, filepath.Join(privateDir(t), "meridian.db"), &Options{
+	s := openWith(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
 		OnControlsChanged: func(_ context.Context, ids []string) { heard = append(heard, ids) },
 	})
 	id := createRun(t, s)
