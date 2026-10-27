@@ -61,6 +61,8 @@ type testEnd struct {
 	running bool
 	started chan<- struct{}
 	wait    <-chan struct{}
+	// delay is how long the worker takes before it claims the attempt.
+	delay time.Duration
 }
 
 // testDriver is a backend.Driver in process, for tests. Its members can run
@@ -222,6 +224,13 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 		case <-end.wait:
 		}
 	}
+	if end.delay > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(end.delay):
+		}
+	}
 	credential := make([]byte, 32)
 	_, _ = rand.Read(credential)
 	if end.running {
@@ -254,10 +263,8 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 				return err
 			}
 		}
-		if len(private.Outputs) > 0 || len(private.Steps) > 0 {
-			if err := d.putJobRecord(ctx, tx, claimed, private); err != nil {
-				return err
-			}
+		if err := d.c.putJobRecord(ctx, tx, claimed.Run, claimed.Job, private); err != nil {
+			return err
 		}
 		if claimed.Private {
 			report.Problem, report.Diagnostics = problems.MaskProblem(report.Problem), problems.MaskDiagnostics(report.Diagnostics)
@@ -285,24 +292,4 @@ func (d *testDriver) work(ctx context.Context, req backend.PlaceRequest, p backe
 	}
 	d.c.controlsChanged(changed)
 	d.c.wakeJob(ctx, a.Run, a.Job)
-}
-
-// putJobRecord stores private, the private part of the result the attempt
-// a completed with, as its job's part of its run's secret record, at the
-// part's next generation.
-func (d *testDriver) putJobRecord(ctx context.Context, tx *store.Tx, a *store.Attempt, private plan.JobRecord) error {
-	wrapped, err := tx.WrappedKey(a.Run)
-	if err != nil {
-		return err
-	}
-	parts, err := tx.JobRecords(a.Run, []string{a.Job})
-	if err != nil {
-		return err
-	}
-	gen := parts[a.Job].Generation + 1
-	sealed, err := d.c.sealer.SealJob(ctx, a.Run, a.Job, gen, wrapped, private)
-	if err != nil {
-		return err
-	}
-	return tx.PutJobRecord(a.Run, a.Job, gen, sealed)
 }

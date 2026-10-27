@@ -1,6 +1,7 @@
 package workerapisrv
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -20,8 +21,12 @@ type Readied struct {
 	// timeout, as the job was readied (plan.ReadyInput.Cancelled).
 	Stopped bool
 	// Any are the keys of the instances the job's needs on any instance of
-	// a matrix job (plan.Need.Any) took, by the needed job's name.
-	Any map[string]string
+	// a matrix job (plan.Need.Any) took, by the needed job's name: "" for
+	// a job read as itself, as one that ended without instances. AnyEnded
+	// are the keys of the instances that had ended as each was chosen,
+	// whose outputs the job reads with the one it took (plan.AnyResult).
+	Any      map[string]string
+	AnyEnded map[string][]string
 	// Instance is the matrix instance the job is, as run state holds it
 	// (plan.Expansion.Split), or nil for a job without a matrix. A private
 	// instance's values are in the run's secret record, in its job's
@@ -65,6 +70,7 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 		readied *Readied
 		stored  *store.Record
 		deps    = map[string]*store.Job{}
+		ended   = map[string][]*store.Job{}
 		parts   map[string]store.JobRecord
 	)
 	err = pr.Store.View(ctx, func(tx *store.Tx) error {
@@ -81,25 +87,40 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 		if stored, err = tx.Record(run.ID); err != nil {
 			return err
 		}
+		var keys []string
+		// read reads the job key, which must have ended.
+		read := func(key string) (*store.Job, error) {
+			dep, err := tx.Job(run.ID, key)
+			switch {
+			case err != nil:
+				return nil, err
+			case dep.Result == nil:
+				return nil, fmt.Errorf("workerapisrv: run %s's job %q needs %q, which hasn't ended", run.ID, a.Job, key)
+			}
+			keys = append(keys, key)
+			return dep, nil
+		}
 		for _, n := range pj.Needs {
 			key := n.Job
 			if n.Any {
-				if key = readied.Any[n.Job]; key == "" {
+				chosen, ok := readied.Any[n.Job]
+				if !ok {
 					return fmt.Errorf("workerapisrv: run %s's job %q was readied without an instance of %q", run.ID, a.Job, n.Job)
 				}
+				key = cmp.Or(chosen, n.Job)
+				for _, k := range readied.AnyEnded[n.Job] {
+					dep, err := read(k)
+					if err != nil {
+						return err
+					}
+					ended[n.Job] = append(ended[n.Job], dep)
+				}
 			}
-			dep, err := tx.Job(run.ID, key)
+			dep, err := read(key)
 			if err != nil {
 				return err
 			}
-			if dep.Result == nil {
-				return fmt.Errorf("workerapisrv: run %s's job %q needs %q, which hasn't ended", run.ID, a.Job, key)
-			}
 			deps[n.Job] = dep
-		}
-		keys := make([]string, 0, len(deps))
-		for _, dep := range deps {
-			keys = append(keys, dep.Key)
 		}
 		parts, err = tx.JobRecords(run.ID, keys)
 		return err
@@ -133,6 +154,13 @@ func (pr *PlanReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *stor
 		// The job's part of the record, which its attempt's end stored, if
 		// it ended with private outputs, as the coordinator joins it.
 		needs[name] = plan.JoinJobResult(jobs[dep.Key], *dep.Result)
+		if len(ended[name]) > 0 {
+			results := make([]plan.JobResult, len(ended[name]))
+			for i, e := range ended[name] {
+				results[i] = plan.JoinJobResult(jobs[e.Key], *e.Result)
+			}
+			needs[name] = plan.AnyResult(needs[name], results)
+		}
 	}
 	instance, err := wholeInstance(readied.Instance, rec, job.Name)
 	if err != nil {

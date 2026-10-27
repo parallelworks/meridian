@@ -142,7 +142,9 @@ type Expect struct {
 type RunEnd struct {
 	// Outcome is the run's outcome: success, failure or cancelled.
 	Outcome string `yaml:"outcome"`
-	// Jobs are how each of its jobs ends, by name: every one of them.
+	// Jobs are how each of its jobs ends, by name: every one of them, and
+	// each instance of a matrix job, as its name, # and its index, from 0,
+	// as in build#1.
 	Jobs map[string]JobEnd `yaml:"jobs"`
 }
 

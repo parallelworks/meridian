@@ -1,0 +1,20 @@
+description: >-
+  An instance whose steps fail stops the matrix job's other instances: one
+  that hadn't started still starts, in its turn under max-parallel, with
+  its job already cancelled, so it runs only its steps that outlive a
+  cancel, and ends cancelled.
+source: ACTIVATE's executor, and Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      main:
+        outcome: failure
+      main#0:
+        outcome: failure
+        logs:
+          - {step: 1, text: "always 0\n"}
+      main#1:
+        outcome: cancelled
+        logs:
+          - {step: 1, text: "always 1\n"}

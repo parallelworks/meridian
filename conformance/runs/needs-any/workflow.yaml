@@ -1,0 +1,11 @@
+jobs:
+  probe:
+    strategy:
+      matrix:
+        n: [0, 1]
+    steps:
+      - run: test ${{ matrix.n }} = 1
+  after:
+    needs: [probe:any]
+    steps:
+      - run: echo probe ${{ needs.probe.result }}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/parallelworks/hopper"
@@ -172,8 +173,23 @@ func (c *Coordinator) newer(ctx context.Context, id string) time.Duration {
 // step takes the next step of the job, whose latest attempt is a, or nil
 // before its first: it places one, waits on it, or ends the job as it
 // ended. It returns how long to wait before the next, or 0 once it has
-// ended the job.
+// ended the job. A matrix job's steps are its instances' (matrixStep), and
+// an instance waits for its turn, or is stopped with the rest, before it
+// steps as any job does (instanceStep).
 func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
+	if job.Instance >= 0 {
+		if wait, handled, err := c.instanceStep(ctx, run, job, a); handled || err != nil {
+			return wait, err
+		}
+	} else {
+		p, err := c.plans.get(run)
+		if err != nil {
+			return 0, err
+		}
+		if pj := planJob(p, job.Name); pj != nil && pj.Strategy != nil {
+			return c.matrixStep(ctx, run, job, done)
+		}
+	}
 	switch {
 	case a == nil:
 		return c.placeJob(ctx, run, job, done)
@@ -267,8 +283,22 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 // job that has ended meanwhile is errSettled, and one that has an attempt
 // that hasn't, as one another supervisor placed, errAgain.
 func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.JobEnd, done func(context.Context, *store.Tx) error) error {
+	return c.endJobWith(ctx, runID, key, end, nil, done)
+}
+
+// endJobWith ends the job as endJob does, once before, unless it is nil,
+// has written to the transaction too, as to keep the private half of the
+// job's result, or to withdraw its attempt. Once it commits, it wakes what
+// waits for the job to end: for an instance of a matrix job, the matrix
+// job's supervisor; and the marker of a need on any instance of it.
+func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end store.JobEnd, before, done func(context.Context, *store.Tx) error) error {
 	var changed []string
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		if before != nil {
+			if err := before(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if err := tx.EndJob(runID, key, end); errors.Is(err, store.ErrState) {
 			j, jerr := tx.Job(runID, key)
 			switch {
@@ -294,6 +324,15 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 	})
 	if err == nil {
 		c.controlsChanged(changed)
+	}
+	if err == nil {
+		// The hopper job done completed is over, and its context with it.
+		ctx := context.WithoutCancel(ctx)
+		name, _, instance := strings.Cut(key, "#")
+		if instance {
+			c.wakeJob(ctx, runID, name)
+		}
+		c.wakeAny(ctx, runID, name)
 	}
 	return err
 }
@@ -338,17 +377,42 @@ func (c *Coordinator) wakeJob(ctx context.Context, run, key string) {
 		// run it again.
 		return
 	}
+	c.wake(ctx, j.SupervisorID, run, key)
+}
+
+// wakeAny wakes the marker of a need on any instance of the run's job
+// name, if a job needs it so and it hasn't chosen, once one of the job's
+// instances, or the job, has ended.
+func (c *Coordinator) wakeAny(ctx context.Context, run, name string) {
+	var a *store.Any
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		a, err = tx.Any(run, name)
+		return err
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		c.log.DebugContext(ctx, "coordinator: wake a need on any instance", "run", run, "job", name, "error", err)
+	case a.ChosenAt.IsZero():
+		c.wake(ctx, a.MarkerID, run, name)
+	}
+}
+
+// wake has hopper run the job id, which waits, as the run's job key's
+// supervisor or marker, at once. A supervisor that is running reads what
+// woke it before it waits, unless it read last just before the wake, and
+// is about to wait: so it is woken again, a few times, briefly, in case it
+// was.
+func (c *Coordinator) wake(ctx context.Context, id hopper.JobID, run, key string) {
 	c.mu.Lock()
 	client := c.served
 	c.mu.Unlock()
 	if client == nil {
 		client = c.inserter
 	}
-	// A supervisor that is running reads the wake before it waits, unless
-	// it read the job last just before the wake, and is about to wait: so
-	// it is woken again, a few times, briefly, in case it was.
 	for try := 0; ; try++ {
-		_, err := client.JobRetry(ctx, j.SupervisorID)
+		_, err := client.JobRetry(ctx, id)
 		switch {
 		case err == nil:
 			return

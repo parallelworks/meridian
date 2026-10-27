@@ -43,6 +43,10 @@ type (
 		Run string `json:"run"`
 		Key string `json:"key"`
 	}
+	anyArgs struct {
+		Run string `json:"run"`
+		Job string `json:"job"`
+	}
 	finishArgs struct {
 		Run string `json:"run"`
 	}
@@ -50,6 +54,7 @@ type (
 
 func (startArgs) Kind() string  { return "meridian.start" }
 func (jobArgs) Kind() string    { return "meridian.job" }
+func (anyArgs) Kind() string    { return "meridian.any" }
 func (finishArgs) Kind() string { return "meridian.run" }
 
 // Options say what a coordinator works with.
@@ -266,13 +271,12 @@ func (c *Coordinator) Close() error {
 // next number in the store. One transaction stores the run with its plan,
 // its secret record, sealed under a data key of its own that Keys wraps,
 // its jobs, and its hopper workflow, so that either all of it is stored or
-// none of it is: Start, which runs once a coordinator works its queue; each
-// job's supervisor, after Start and its needs' supervisors; and the
-// finisher, which ends the run. A default group that Groups doesn't have
-// is a problem of kind group_unknown. A plan with a matrix job, or a need
-// on any instance of a job, which the coordinator doesn't run yet, is a
-// problem of kind matrix_not_built or any_not_built. An error once the run
-// is stored, as one that keeps the
+// none of it is: Start, which runs once a coordinator works its queue; a
+// marker for each job needed on any instance of it (needs: <job>:any),
+// which waits for one; each job's supervisor, after Start and its needs'
+// supervisors, or their markers; and the finisher, which ends the run. A
+// default group that Groups doesn't have is a problem of kind
+// group_unknown. An error once the run is stored, as one that keeps the
 // coordinator from working its start queue, comes with the run's ID.
 func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, opts RunOptions) (string, error) {
 	switch {
@@ -283,15 +287,6 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 	case opts.RunDir == nil:
 		return "", errors.New("coordinator: a run without a directory")
 	}
-	if err := checkRunnable(created.Plan); err != nil {
-		return "", err
-	}
-	return c.createRun(ctx, created, opts)
-}
-
-// createRun is CreateRun once the plan and the options are checked, but
-// for the default group, which it checks.
-func (c *Coordinator) createRun(ctx context.Context, created *compile.Created, opts RunOptions) (string, error) {
 	jobs, err := jobOrder(created.Plan)
 	if err != nil {
 		return "", err
@@ -322,13 +317,27 @@ func (c *Coordinator) createRun(ctx context.Context, created *compile.Created, o
 		queue = c.startQueue(id)
 		wf := hopper.NewWorkflow("meridian run "+id, nil)
 		start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
+		// A job needed on any instance of it has a marker, which waits for
+		// one, and which the jobs that need it so wait for in its place.
+		anys := anyNeeded(jobs)
+		marker := map[string]hopper.Step{}
+		for _, name := range anys {
+			marker[name] = wf.Add(anyArgs{Run: id, Job: name}, &hopper.StepOpts{
+				After: []hopper.Step{start}, OnDependencyFailure: hopper.DependencyIgnore,
+				Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
+			})
+		}
 		// Each job's supervisor runs after Start and its needs' supervisors,
 		// whatever became of them: Ready decides what their outcomes mean.
 		after := map[string]hopper.Step{}
 		for _, j := range jobs {
 			deps := []hopper.Step{start}
 			for _, n := range j.Needs {
-				deps = append(deps, after[n.Job])
+				if n.Any {
+					deps = append(deps, marker[n.Job])
+				} else {
+					deps = append(deps, after[n.Job])
+				}
 			}
 			after[j.Name] = wf.Add(jobArgs{Run: id, Key: j.Name}, &hopper.StepOpts{
 				After: deps, OnDependencyFailure: hopper.DependencyIgnore,
@@ -336,6 +345,9 @@ func (c *Coordinator) createRun(ctx context.Context, created *compile.Created, o
 			})
 		}
 		deps := []hopper.Step{start}
+		for _, name := range anys {
+			deps = append(deps, marker[name])
+		}
 		for _, j := range jobs {
 			deps = append(deps, after[j.Name])
 		}
@@ -350,10 +362,15 @@ func (c *Coordinator) createRun(ctx context.Context, created *compile.Created, o
 		if err := tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: opts.DefaultGroup, RunDir: opts.RunDir(id), WorkflowID: res.ID}); err != nil {
 			return err
 		}
+		// The workflow's jobs are in the order of its steps: Start, the
+		// markers, then the supervisors.
+		for i, name := range anys {
+			if err := tx.InsertAny(id, name, res.Jobs[1+i].Job.ID); err != nil {
+				return err
+			}
+		}
 		for i, j := range jobs {
-			// The workflow's jobs are in the order of its steps: Start,
-			// then the supervisors.
-			if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: res.Jobs[i+1].Job.ID}); err != nil {
+			if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: res.Jobs[1+len(anys)+i].Job.ID}); err != nil {
 				return err
 			}
 		}
@@ -445,6 +462,7 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 	workers := hopper.NewWorkers()
 	hopper.AddWorker(workers, &startWorker{c: c})
 	hopper.AddWorker(workers, &jobWorker{c: c})
+	hopper.AddWorker(workers, &anyWorker{c: c})
 	hopper.AddWorker(workers, &finishWorker{c: c})
 	served, err := hopper.NewClient(c.store.Driver(), &hopper.Config{
 		Queues: queues, Workers: workers, Logger: c.log, PollInterval: c.pollInterval,

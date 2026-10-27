@@ -1,0 +1,7 @@
+jobs:
+  build:
+    strategy:
+      matrix:
+        n: [1, 2]
+    steps:
+      - run: echo n=${{ matrix.n }}

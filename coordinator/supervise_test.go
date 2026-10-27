@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -714,50 +713,6 @@ func TestWakeEnded(t *testing.T) {
 	}
 	if got := storedJob(t, c, r.ID, "main"); got.Wake != j.Wake+1 {
 		t.Errorf("the job's wake is %d, then %d", j.Wake, got.Wake)
-	}
-}
-
-// TestNotRunYet checks that CreateRun refuses a matrix job, and a need on
-// any instance of one, which the coordinator doesn't run yet.
-func TestNotRunYet(t *testing.T) {
-	c := open(t, Options{})
-	for _, tc := range []struct {
-		workflow string
-		kind     *problems.Kind
-		params   problems.Params
-	}{
-		{`
-jobs:
-  main:
-    strategy:
-      matrix:
-        n: [1, 2]
-    steps:
-      - run: echo ${{ matrix.n }}
-  after:
-    needs: [main:any]
-    steps:
-      - run: echo after
-`, problems.MatrixNotBuilt, problems.Params{"job": "main"}},
-		{`
-jobs:
-  main:
-    steps:
-      - run: echo main
-  after:
-    needs: [main:any]
-    steps:
-      - run: echo after
-`, problems.AnyNotBuilt, problems.Params{"job": "after", "needed": "main"}},
-	} {
-		created, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(tc.workflow), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = c.CreateRun(t.Context(), created, runOptions)
-		if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != tc.kind.Code() || !maps.Equal(p.Params, tc.params) {
-			t.Errorf("CreateRun = %v, want %s with %v", err, tc.kind.Code(), tc.params)
-		}
 	}
 }
 
