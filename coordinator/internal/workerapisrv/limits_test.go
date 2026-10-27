@@ -168,7 +168,7 @@ func TestConnectionLimit(t *testing.T) {
 // worker tries again, and claims nothing, whatever binary claims; once the
 // placement is recorded, the binary it started claims it.
 func TestNotPlaced(t *testing.T) {
-	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetPlacedWait(s, 50*time.Millisecond) }})
+	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetPlacedWait(s, 50*time.Millisecond, 10*time.Millisecond) }})
 	c := newClient(t, r.socket)
 	run := r.newRun(nil)
 	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
@@ -201,27 +201,52 @@ func TestNotPlaced(t *testing.T) {
 // A first claim that comes before its placement is recorded, which is
 // recorded while it waits, as the call that placed the worker records it,
 // is answered with the claim, rather than 503 and a wait of a quarter of a
-// second or more before the worker claims again.
+// second or more before the worker claims again: woken by the coordinator
+// that recorded it (Placed), or, for one another process recorded, as it
+// reads the store again.
 func TestPlacedWhileClaiming(t *testing.T) {
-	r := newRig(t, rigOptions{})
-	c := newClient(t, r.socket)
-	run := r.newRun(nil)
-	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
-	a, token := r.newAttempt(run, "build", placed{unplaced: true})
-	answered := make(chan int, 1)
-	go func() {
-		status, _, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
-		answered <- status
-	}()
-	time.Sleep(50 * time.Millisecond) //nolint:forbidigo // the claim is let wait, as a worker's that comes before its placement is recorded does
-	r.inTx(func(tx *store.Tx) error {
-		return tx.RecordPlacement(a.ID, store.Placement{Backend: "local", ID: "1:2", WorkerDigest: conformanceDigest})
-	})
-	if status := <-answered; status != http.StatusOK {
-		t.Errorf("a claim whose placement was recorded as it waited was answered %d", status)
-	}
-	if got := r.attempt(a.ID); got.ClaimedAt.IsZero() {
-		t.Errorf("the attempt is %+v", got)
+	for _, woken := range []bool{true, false} {
+		recheck := 20 * time.Millisecond
+		if woken {
+			// Only Placed answers it before the wait ends.
+			recheck = time.Hour
+		}
+		r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetPlacedWait(s, time.Minute, recheck) }})
+		c := newClient(t, r.socket)
+		run := r.newRun(nil)
+		r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}})
+		a, token := r.newAttempt(run, "build", placed{unplaced: true})
+		answered := make(chan int, 1)
+		go func() {
+			status, _, _ := c.send(http.MethodPost, workerapi.PathClaim, claimRequest(t, newCredential(t), conformanceDigest), token)
+			answered <- status
+		}()
+		for deadline := time.Now().Add(10 * time.Second); workerapisrv.HeldClaims(r.server, a.ID) != 1; {
+			if time.Now().After(deadline) {
+				t.Fatal("the claim was never held")
+			}
+			time.Sleep(5 * time.Millisecond) //nolint:forbidigo // polls what the server holds, which says nothing
+		}
+		r.inTx(func(tx *store.Tx) error {
+			return tx.RecordPlacement(a.ID, store.Placement{Backend: "local", ID: "1:2", WorkerDigest: conformanceDigest})
+		})
+		if woken {
+			r.server.Placed(a.ID)
+		}
+		select {
+		case status := <-answered:
+			if status != http.StatusOK {
+				t.Errorf("woken %t: a claim whose placement was recorded as it waited was answered %d", woken, status)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("woken %t: the claim wasn't answered", woken)
+		}
+		if got := r.attempt(a.ID); got.ClaimedAt.IsZero() {
+			t.Errorf("woken %t: the attempt is %+v", woken, got)
+		}
+		if n := workerapisrv.HeldClaims(r.server, a.ID); n != 0 {
+			t.Errorf("woken %t: %d claims are still held", woken, n)
+		}
 	}
 }
 

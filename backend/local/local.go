@@ -554,18 +554,17 @@ var hashFile = func(r io.Reader) (string, error) {
 // runs, is a regular file of the user's or root's that no other user can
 // change, and returns its digest.
 //
-// The checks run every time; the digest is kept, and given again, while
-// the file open opens has the identity it had when it was hashed: the same
-// device, inode and size, and the same times its data and its status last
-// changed. Writing a file changes both times, and a process can set its
-// data's back (utimes), but not its status's, which any change sets to the
-// time it happens, utimes among them. A digest is kept only once its
-// file's status last changed a second or more before it was hashed, far
-// longer than the clock's tick, so a later change, which the user, or
-// another process of the user's, can make, gives a status time that
-// differs, and the file is hashed again. Another file at path, as an
-// upgrade puts there, is another inode. And on Linux and FreeBSD the file
-// a process runs can't be written while it runs at all.
+// The checks run every time. On Linux, where open is /proc/self/exe, the
+// file this process runs, which nothing can write while it runs, the
+// digest is kept, and given again, while that file has the identity it had
+// when it was hashed: the same device, inode and size, and the same times
+// its data and its status last changed. Writing a file changes both times,
+// and a process can set its data's back (utimes), but not its status's,
+// which any change sets to the time it happens, utimes among them; and a
+// digest is kept only once its file's status last changed a second or more
+// before it was hashed, so a change after it gives a status time that
+// differs. Elsewhere the file at path is hashed at each placement
+// (identity).
 func checkExecutable(path, open string) (string, error) {
 	unsafe := func(code problem.Code) error {
 		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})

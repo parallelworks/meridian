@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/parallelworks/meridian/backend"
@@ -31,18 +32,34 @@ const (
 const forgetGrace = 2 * time.Second
 
 // remember keeps where the attempt id was placed, on cand, as p, until the
-// attempt has ended (forgetLater). It keeps maxMembers at most, and starts
-// over past them: a placement it no longer knows of, as one that another
-// coordinator recorded, or one recorded before this one started, its
-// backend removes itself in time, as the local backend does a day after
-// its worker ended.
+// attempt has ended (forgetLater). It keeps maxMembers at most, and lets
+// the one it has kept longest go to keep another: a placement it doesn't
+// know of, as that one, one that another coordinator recorded, or one
+// recorded before this one started, its backend removes itself in time,
+// as the local backend does a day after its worker ended.
 func (c *Coordinator) remember(id string, cand *candidate, p backend.Placement) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.placed) >= maxMembers {
-		clear(c.placed)
+	if _, ok := c.placed[id]; !ok {
+		if len(c.placed) >= maxMembers {
+			delete(c.placed, c.placedOrder[0])
+			c.placedOrder = c.placedOrder[1:]
+		}
+		c.placedOrder = append(c.placedOrder, id)
 	}
 	c.placed[id] = placed{cand: cand, placement: p}
+}
+
+// unremember lets the coordinator's record of the attempt id's placement
+// go. Its caller holds c.mu.
+func (c *Coordinator) unremember(id string) {
+	if _, ok := c.placed[id]; !ok {
+		return
+	}
+	delete(c.placed, id)
+	if i := slices.Index(c.placedOrder, id); i >= 0 {
+		c.placedOrder = slices.Delete(c.placedOrder, i, i+1)
+	}
 }
 
 // forgetLater has the backend of the attempt id, which has ended, forget
@@ -53,7 +70,7 @@ func (c *Coordinator) remember(id string, cand *candidate, p backend.Placement) 
 func (c *Coordinator) forgetLater(id string) {
 	c.mu.Lock()
 	pl, ok := c.placed[id]
-	delete(c.placed, id)
+	c.unremember(id)
 	c.mu.Unlock()
 	if ok {
 		c.forget(pl.cand, pl.placement)

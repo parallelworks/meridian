@@ -233,9 +233,10 @@ type Coordinator struct {
 	// placements of were placed, by attempt, until they end; forgetting
 	// counts the calls that have their backends forget them, which run
 	// with forgetCtx, while Serve runs (forgetLater).
-	placed     map[string]placed
-	forgetting sync.WaitGroup
-	forgetCtx  context.Context
+	placed      map[string]placed
+	placedOrder []string
+	forgetting  sync.WaitGroup
+	forgetCtx   context.Context
 }
 
 // checkFIPS is fipsmode.CheckProcess, which a test replaces.

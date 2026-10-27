@@ -350,6 +350,8 @@ func (n *countNotifier) heard(id string) bool {
 	return slices.Contains(n.ids, id)
 }
 
+func (n *countNotifier) Placed(string) {}
+
 // TestAnyJobFailed checks early-cancel: any-job-failed's part on the
 // coordinator: the first job of the run to fail marks the run, which the
 // attempt of a job then running tells its worker, and an attempt made after

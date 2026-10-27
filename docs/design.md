@@ -3188,13 +3188,14 @@ need the child made non-dumpable before `exec`, which takes cgo, and
 Meridian builds without it. On Linux the backend starts the file it runs itself, and reports
 that file's digest, which the worker reports too, even if an upgrade has
 taken its path since. It checks the file, and the way to it, at every
-placement, but hashes it again only once it has changed: the digest is
-kept by the file's device, inode, size and the times its data and its
-status last changed, as `fstat` gives them on the file it opened, and only
-once its status last changed a second before. A process can set back the
-time a file's data changed, but not its status's, which any change sets to
-the time it happens, so a change after the digest was kept is seen; and on
-Linux and FreeBSD the file a process runs can't be written while it runs. A placement's file in the state directory says
+placement. On Linux, where that file is the one the process runs, which
+nothing can write while it runs, it hashes it again only once it has
+changed: the digest is kept by the file's device, inode, size and the times
+its data and its status last changed, as `fstat` gives them, and only once
+its status last changed a second before. A process can set back the time a
+file's data changed, but not its status's, which any change sets to the
+time it happens. Elsewhere it hashes the file at every placement, since a
+file system's times can be as coarse as two seconds, as FAT's are. A placement's file in the state directory says
 which process the worker is, by its ID, its start time and the boot it
 started in, which no change to the clock moves (Linux's
 `/proc/<pid>/stat` and `boot_id`, macOS's `p_starttime` and

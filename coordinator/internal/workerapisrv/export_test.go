@@ -9,8 +9,21 @@ import (
 func SetReads(s *Server, version int) { s.reads = version }
 
 // SetPlacedWait sets how long a first claim waits for its placement to be
-// recorded.
-func SetPlacedWait(s *Server, d time.Duration) { s.placedWait = d }
+// recorded, and how often it reads the store again meanwhile.
+func SetPlacedWait(s *Server, wait, recheck time.Duration) {
+	s.placedWait, s.placedRecheck = wait, recheck
+}
+
+// HeldClaims returns how many first claims of the attempt id s holds until
+// its placement is recorded.
+func HeldClaims(s *Server, id string) int {
+	s.placed.Lock()
+	defer s.placed.Unlock()
+	if w := s.placed.waits[id]; w != nil {
+		return w.n
+	}
+	return 0
+}
 
 // SetHold sets how long s holds a control poll.
 func SetHold(s *Server, d time.Duration) { s.hold = d }

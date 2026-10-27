@@ -161,14 +161,20 @@ type Server struct {
 	wake     func(ctx context.Context, run, job string)
 	log      *slog.Logger
 	polls    *polls
+	// placed are the first claims that wait for their placements to be
+	// recorded, by attempt (awaitPlaced).
+	placed struct {
+		sync.Mutex
+		waits map[string]*placedWaits
+	}
 
 	// What tests change: the newest plan version the server reads, how
-	// long it holds a control poll, and how many bytes of a log it keeps.
-	reads int
-	hold  time.Duration
-	// placedWait is how long a first claim waits for its placement to be
-	// recorded before it is answered 503 (awaitPlaced).
+	// long it holds a control poll, how long it holds a first claim for
+	// its placement (awaitPlaced), and how many bytes of a log it keeps.
+	reads          int
+	hold           time.Duration
 	placedWait     time.Duration
+	placedRecheck  time.Duration
 	maxLogBytes    int64
 	maxEvents      int64
 	maxEventsBytes int64
@@ -194,7 +200,7 @@ func New(opts Options) (*Server, error) {
 	s := &Server{
 		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, peers: opts.Peers,
 		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
-		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait,
+		reads: plan.Version, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait, placedRecheck: placedRecheck,
 		maxLogBytes: MaxLogBytes, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
 	}
 	if s.peers == nil {
@@ -218,6 +224,19 @@ func New(opts Options) (*Server, error) {
 // attempts it holds polls for again every second besides, for one another
 // process stored.
 func (s *Server) Notify(ids ...string) { s.polls.wake(ids) }
+
+// Placed answers the first claims of the attempt id that s holds until
+// its placement is recorded, once it has been: the coordinator that
+// recorded it calls it, as the transaction that recorded it has committed
+// (awaitPlaced).
+func (s *Server) Placed(id string) {
+	s.placed.Lock()
+	defer s.placed.Unlock()
+	if w := s.placed.waits[id]; w != nil {
+		close(w.ch)
+		delete(s.placed.waits, id)
+	}
+}
 
 // Serve serves the worker API on l, a Unix socket's listener, until ctx is
 // done, and then closes l, once the requests it is handling have ended,

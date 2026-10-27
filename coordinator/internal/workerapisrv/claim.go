@@ -151,29 +151,40 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 }
 
 // placedWait is how long a first claim waits for its placement to be
-// recorded, and placedPoll how often it looks, before it is answered 503:
-// a worker usually claims while the call that started it records where,
-// and a 503 has it wait a quarter of a second or more before it claims
-// again.
+// recorded before it is answered 503: a worker usually claims while the
+// call that started it records where, and a 503 has it wait a quarter of
+// a second or more before it claims again. placedRecheck is how often it
+// reads the store again meanwhile, for a placement that a coordinator in
+// another process records, which can't tell it (Server.Placed): the
+// server's defaults, which tests change.
 const (
-	placedWait = 2 * time.Second
-	placedPoll = 10 * time.Millisecond
+	placedWait    = 2 * time.Second
+	placedRecheck = 100 * time.Millisecond
 )
+
+// placedWaits are the first claims of an attempt that wait for its
+// placement to be recorded: ch is closed once it has been (Server.Placed),
+// and n counts them.
+type placedWaits struct {
+	ch chan struct{}
+	n  int
+}
 
 // awaitPlaced waits for the placement of a, which the bootstrap token is
 // for, to be recorded, for s.placedWait at most, and returns the attempt
-// as it is then, and whether it has been: a placement that another process
-// records is seen as soon as one placed in this one.
+// as it is then, and whether it has been: woken once the coordinator in
+// this process has recorded it (Server.Placed), and reading the store
+// every placedRecheck otherwise.
 func (s *Server) awaitPlaced(ctx context.Context, token string, a *store.Attempt) (*store.Attempt, bool) {
-	deadline := time.Now().Add(s.placedWait)
-	tick := time.NewTicker(placedPoll)
+	woken, done := s.waitPlaced(a.ID)
+	defer done()
+	deadline := time.NewTimer(s.placedWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(s.placedRecheck)
 	defer tick.Stop()
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return a, false
-		case <-tick.C:
-		}
+	// It reads the store once it waits, so that a placement recorded just
+	// before isn't missed.
+	for {
 		var now *store.Attempt
 		if err := s.store.View(ctx, func(tx *store.Tx) error {
 			var err error
@@ -185,8 +196,40 @@ func (s *Server) awaitPlaced(ctx context.Context, token string, a *store.Attempt
 		if a = now; !a.Holds || a.Placed() {
 			return a, a.Placed()
 		}
+		select {
+		case <-ctx.Done():
+			return a, false
+		case <-deadline.C:
+			return a, false
+		case <-woken:
+			// Woken once: the ticker reads the store after.
+			woken = nil
+		case <-tick.C:
+		}
 	}
-	return a, false
+}
+
+// waitPlaced returns a channel closed once the placement of the attempt id
+// is recorded (Server.Placed), and what to call once it no longer waits.
+func (s *Server) waitPlaced(id string) (<-chan struct{}, func()) {
+	s.placed.Lock()
+	defer s.placed.Unlock()
+	if s.placed.waits == nil {
+		s.placed.waits = map[string]*placedWaits{}
+	}
+	w := s.placed.waits[id]
+	if w == nil {
+		w = &placedWaits{ch: make(chan struct{})}
+		s.placed.waits[id] = w
+	}
+	w.n++
+	return w.ch, func() {
+		s.placed.Lock()
+		defer s.placed.Unlock()
+		if w.n--; w.n == 0 && s.placed.waits[id] == w {
+			delete(s.placed.waits, id)
+		}
+	}
 }
 
 // notPlaced answers a first claim of an attempt whose placement isn't

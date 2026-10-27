@@ -349,9 +349,14 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 
 // A controlNotifier hears which attempts' controls changed, once the
 // change has committed, so that it answers the control polls it holds of
-// them: the worker API's server (workerapisrv.Server.Notify), whose polls
-// in other processes read them again every second.
-type controlNotifier interface{ Notify(ids ...string) }
+// them (workerapisrv.Server.Notify), and which attempts' placements were
+// recorded, so that it answers the first claims it holds of them
+// (workerapisrv.Server.Placed): the worker API's server, whose polls and
+// claims in other processes read the store again every so often.
+type controlNotifier interface {
+	Notify(ids ...string)
+	Placed(id string)
+}
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,
 // that the controls of the attempts ids changed, if any did: the store
@@ -366,6 +371,17 @@ func (c *Coordinator) controlsChanged(ids []string) {
 	c.mu.Unlock()
 	if n != nil {
 		n.Notify(ids...)
+	}
+}
+
+// placementRecorded tells the coordinator's controlNotifier, if it has one,
+// that the placement of the attempt id was recorded.
+func (c *Coordinator) placementRecorded(id string) {
+	c.mu.Lock()
+	n := c.controls
+	c.mu.Unlock()
+	if n != nil {
+		n.Placed(id)
 	}
 }
 

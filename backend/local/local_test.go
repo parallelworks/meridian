@@ -634,6 +634,14 @@ func TestDigestKept(t *testing.T) {
 	}
 	t.Cleanup(func() { hashFile, settled = hash, time.Second })
 	exe := filepath.Join(t.TempDir(), "meridian")
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(exe); err != nil {
+		t.Fatal(err)
+	} else if _, ok := identity(info); !ok {
+		t.Skip("the digest is kept only on Linux")
+	}
 	write := func(content string) string {
 		t.Helper()
 		if err := os.WriteFile(exe, []byte(content), 0o755); err != nil {
