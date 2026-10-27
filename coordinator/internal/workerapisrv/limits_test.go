@@ -509,7 +509,9 @@ func TestLogQuotaPerAttempt(t *testing.T) {
 // which the store counts, and spends it as uploads come: what one reserved
 // is its own to spend, and the other is given only what the limit has left
 // past it. So the attempt's logs keep the limit in all, and no more, beside
-// the line that ends each.
+// the line that ends each. A replica that has reserved none of it, as one
+// that takes over, finds it spent, and answers the uploads of a log the
+// limit ended as stored, as the others do.
 func TestLogLimitAcrossReplicas(t *testing.T) {
 	limits := func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
@@ -517,10 +519,14 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 	}
 	r := newRig(t, rigOptions{configure: limits})
 	first := r.socket
-	r.socket = ""
-	r.serve(rigOptions{configure: limits})
-	one, other := newClient(t, first), newClient(t, r.socket)
+	sockets := make([]string, 2)
+	for i := range sockets {
+		r.socket = ""
+		r.serve(rigOptions{configure: limits})
+		sockets[i] = r.socket
+	}
 	r.socket = first
+	one, other, third := newClient(t, first), newClient(t, sockets[0]), newClient(t, sockets[1])
 	a, _, credential := r.claimed(one, placed{})
 	uploads := []struct {
 		c           *client
@@ -539,6 +545,10 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 		{one, 1, 0, strings.Repeat("d", 30), true},
 		{one, 2, 0, "e", true},
 		{other, 3, 0, "f", true},
+		// More of a log the limit ended, past what it stored, and a
+		// log after it, through a replica that has reserved nothing.
+		{third, 0, 110, strings.Repeat("g", 100), false},
+		{third, 4, 0, "h", true},
 	}
 	for _, u := range uploads {
 		if ack := uploadTry(t, u.c, credential, u.try, u.offset, u.data, u.end); ack.Length != int64(u.offset+len(u.data)) || ack.Ended != u.end {
@@ -550,6 +560,7 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 	want := []string{
 		strings.Repeat("a", 10) + strings.Repeat("b", 50) + strings.Repeat("c", 20) + "\n" + message,
 		strings.Repeat("d", 20) + "\n" + message,
+		message,
 		message,
 		message,
 	}

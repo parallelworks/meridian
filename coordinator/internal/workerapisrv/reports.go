@@ -237,13 +237,22 @@ func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, 
 		return length, ended, err
 	}
 	budget := s.budgets.of(attempt)
-	if budget.spent() {
-		return s.truncateLog(ctx, key, length, ended, offset+int64(len(data)), end)
-	}
+	spent := budget.spent()
 	fresh := offset + int64(len(data)) - length
-	if offset > length || ended || fresh <= 0 {
+	past := offset > length || ended || fresh <= 0
+	if past && !spent {
 		// Past the log's end, after it, or nothing the log hasn't: as
-		// Logs.Append answers it.
+		// Logs.Append answers it, unless the limit has run out, which
+		// a server that has reserved none of it reads from the store,
+		// as one that takes over from the server that spent it does.
+		if spent, err = s.logLimitSpent(ctx, budget, attempt); err != nil {
+			return 0, false, err
+		}
+	}
+	switch {
+	case spent:
+		return s.truncateLog(ctx, key, length, ended, offset+int64(len(data)), end)
+	case past:
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
 	keep, err := s.spendLogBytes(ctx, budget, attempt, fresh)

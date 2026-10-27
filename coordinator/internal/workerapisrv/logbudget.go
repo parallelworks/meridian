@@ -84,6 +84,27 @@ func (lb *logBudget) spent() bool {
 	return lb.drained && lb.left == 0
 }
 
+// logLimitSpent reports whether the attempt's limit on its logs has run
+// out, as its budget, lb, says, or, if lb holds none of it, as the store's
+// count says, which lb then keeps.
+func (s *Server) logLimitSpent(ctx context.Context, lb *logBudget, attempt string) (bool, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	if lb.drained || lb.left > 0 {
+		return lb.drained && lb.left == 0, nil
+	}
+	var counted int64
+	if err := s.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		counted, err = tx.LogBytes(attempt)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	lb.drained = counted >= s.maxLogBytes
+	return lb.drained, nil
+}
+
 // spendLogBytes spends n bytes of the attempt's limit on its logs from its
 // budget, lb, and returns how many of them it may keep: n, or fewer, down
 // to none, once the limit has run out. When lb runs short, it reserves
