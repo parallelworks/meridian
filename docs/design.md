@@ -2908,11 +2908,9 @@ that embeds Meridian serve the same API.
   Every replica answers more of a log the limit ended as stored, since
   the worker was told the bytes before it were. What a replica
   reserved and didn't spend goes unused, so the logs can keep less than
-  the limit: up to 1 MiB less for each replica that holds some of it but
-  serves none of the attempt's later uploads, as one that stopped, after
-  a takeover, or one the uploads moved away from; and for each time the
-  logs went ten minutes without an upload, after which a replica lets go
-  what it holds.
+  the limit: up to 1 MiB less for each replica that still holds some of
+  it when the attempt's uploads stop, and for each time a replica lets go
+  what it holds, after ten minutes without an upload.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
   ([Workflows a step calls](#workflows-a-step-calls)). It isn't built yet:

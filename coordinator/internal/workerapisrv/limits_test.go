@@ -585,6 +585,51 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 	}
 }
 
+// A gap in a log that hasn't ended is answered out of order, so that the
+// worker sends the bytes again, even once the store has given out all of
+// the limit on the attempt's logs, while a replica still holds some of it:
+// only a truncation ends a log at the limit.
+func TestLogGapBeforeLimitSpent(t *testing.T) {
+	limits := func(s *workerapisrv.Server) {
+		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
+		workerapisrv.SetLogReserve(s, 30)
+	}
+	r := newRig(t, rigOptions{configure: limits})
+	first := r.socket
+	sockets := make([]string, 2)
+	for i := range sockets {
+		r.socket = ""
+		r.serve(rigOptions{configure: limits})
+		sockets[i] = r.socket
+	}
+	r.socket = first
+	one, other, third := newClient(t, first), newClient(t, sockets[0]), newClient(t, sockets[1])
+	a, _, credential := r.claimed(one, placed{})
+	// One holds 20 of the 30 it reserved; the other spends the 50 it
+	// reserved; and the third is given 20 of the 30 it asks, and holds 15:
+	// the store has given out 110.
+	uploadTry(t, one, credential, 0, 0, strings.Repeat("a", 10), false)
+	uploadTry(t, other, credential, 0, 10, strings.Repeat("b", 50), false)
+	uploadTry(t, third, credential, 1, 0, strings.Repeat("c", 5), false)
+	status, body, err := one.send(http.MethodPost, tryPath(0, 100, false), []byte(strings.Repeat("x", 10)), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := wantProblem(t, "an upload past a gap", status, body, workerapi.OutOfOrder)
+	if got := fmt.Sprint(p.Params[workerapi.ParamExpected]); got != "60" {
+		t.Errorf("an upload past a gap was answered out of order from %s, want 60", got)
+	}
+	// The worker sends the bytes again, from there, and one keeps the 20
+	// it holds.
+	if ack := uploadTry(t, one, credential, 0, 60, strings.Repeat("d", 20), false); ack.Length != 80 || ack.Ended {
+		t.Errorf("the bytes sent again were acknowledged %+v", ack)
+	}
+	logs := r.logs.Of(a.Run, a.Job, a.Number)
+	if got, want := string(logs[workerapitest.LogKey{Part: workerapi.LogStep}].Data), strings.Repeat("a", 10)+strings.Repeat("b", 50)+strings.Repeat("d", 20); got != want {
+		t.Errorf("try 0's log kept %q, want %q", got, want)
+	}
+}
+
 // A replica reserves the limit on an attempt's logs a part at a time, in
 // one write, and spends it as uploads come, with none: two hundred uploads
 // of 100 bytes, with 4,096 bytes reserved at a time, take five writes.
@@ -631,9 +676,7 @@ func BenchmarkLogUploads(b *testing.B) {
 // returns its acknowledgement.
 func uploadTry(t testing.TB, c *client, credential string, try, offset int, data string, end bool) workerapi.LogAck {
 	t.Helper()
-	path := fmt.Sprintf("%s?%s=%s&%s=0&%s=%d&%s=%d&%s=%v", workerapi.PathLogs, workerapi.QueryPart, workerapi.LogStep, workerapi.QueryStep,
-		workerapi.QueryTry, try, workerapi.QueryOffset, offset, workerapi.QueryEnd, end)
-	status, body, err := c.send(http.MethodPost, path, []byte(data), credential)
+	status, body, err := c.send(http.MethodPost, tryPath(try, offset, end), []byte(data), credential)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("an upload of try %d's log at %d was answered %d, %v: %s", try, offset, status, err, body)
 	}
@@ -642,6 +685,13 @@ func uploadTry(t testing.TB, c *client, credential string, try, offset int, data
 		t.Fatal(err)
 	}
 	return ack
+}
+
+// tryPath is the path of an upload to the log of the try try of the first
+// step, at offset, which ends it if end.
+func tryPath(try, offset int, end bool) string {
+	return fmt.Sprintf("%s?%s=%s&%s=0&%s=%d&%s=%d&%s=%v", workerapi.PathLogs, workerapi.QueryPart, workerapi.LogStep, workerapi.QueryStep,
+		workerapi.QueryTry, try, workerapi.QueryOffset, offset, workerapi.QueryEnd, end)
 }
 
 // uploadAs uploads data to the log part of the attempt whose credential is

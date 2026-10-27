@@ -240,16 +240,17 @@ func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, 
 	budget := s.budgets.of(attempt)
 	spent := budget.spent()
 	upTo := offset + int64(len(data))
-	if !spent && upTo > length && (ended || offset > length) {
-		// Bytes past an ended log's end, or past its length, which
-		// Logs.Append answers out of order, unless the limit has run
-		// out: another server may have run it out, and ended the log
-		// with the line that says so, while this one still holds some
-		// of it, or none. So the store says, whatever this one holds,
-		// once it has given all of the limit out, which errs early by
-		// what servers hold still: such an upload, which a worker
-		// sends only after a log the limit ended, is answered as
-		// stored then.
+	if !spent && ended && upTo > length {
+		// Bytes past an ended log's end, which Logs.Append answers out
+		// of order, unless the limit has run out: another server may
+		// have run it out, and ended the log with the line that says
+		// so, while this one still holds some of it, or none. So the
+		// store says, whatever this one holds. It says so once it has
+		// given all of the limit out, which can be before the servers
+		// have spent what they hold: in between, such an upload is
+		// answered as stored, where it was answered out of order. A
+		// gap in a log that hasn't ended is answered out of order
+		// still, as only a truncation ends a log at the limit.
 		if spent, err = s.logLimitReached(ctx, budget, attempt); err != nil {
 			return 0, false, err
 		}
