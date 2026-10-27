@@ -310,6 +310,9 @@
   "resources_exceed_member": "ジョブは{resource, select, cpu {CPU コアの千分の一単位で {asks}} memory {メモリを {asks} バイト} other {GPU を {asks} 個}}求めていますが、メンバー「{member}」が提供するのは {offers} までです。",
   "backend_not_built": "メンバー「{member}」は {backend} バックエンドでジョブを実行しますが、このリリースの Meridian にはまだそのバックエンドがありません。",
   "worker_binary_unsafe": "{path} は実行しても安全ではないため（{code}）、Meridian はそこからワーカーを起動しません。",
+  "worker_token_not_taken": "Meridian が起動したワーカーはブートストラップトークンを受け取りませんでした。{ended, select, true {先に終了コード {exit} で終了しました} other {1 分以内に要求しなかったため、Meridian が停止しました}}。ワーカーが標準エラー出力に書いた内容は {log} にあります。",
   "ssh_worker_would_be_killed": "{host} ではワーカーを起動しません。そのシステムはユーザーのセッションが終わるとそのプロセスを終了させ、最後のセッションの後にあなたのプロセスを残さないため、ワーカーは起動したセッションとともに終了してしまいます。そこで loginctl enable-linger を実行してください。",
-  "ssh_host_dir_unusable": "Meridian は {host} のディレクトリ {path} を使えません: {reason}"
+  "ssh_host_dir_unusable": "Meridian は {host} のディレクトリ {path} を使えません: {at} で {reason}",
+  "ssh_host_command_unsafe": "Meridian は {host} で、そこの PATH が見つけた {path} を実行しません。実行するのが安全ではないためです（{code}）。",
+  "ssh_host_id_unknown": "Meridian は {host} を、ホームを共有しているかもしれないほかのホストと区別できません。Meridian が読めるマシン ID がないか、名前がありません。"
 }

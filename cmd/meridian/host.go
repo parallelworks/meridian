@@ -2,19 +2,21 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/parallelworks/meridian/backend/hostproto"
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/flock"
 	"github.com/parallelworks/meridian/internal/harden"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
@@ -45,15 +48,20 @@ type hostSystem struct {
 	// harden keeps the user's other processes out of the process's
 	// memory.
 	harden func() error
-	// machineID returns the host's own ID.
+	// machineID returns the host's own ID, or "" for a host without one.
 	machineID func(context.Context) (string, error)
-	// loginctl runs loginctl with args, and returns what it wrote.
+	// hostname returns the host's name.
+	hostname func() (string, error)
+	// logind says whether logind runs.
+	logind func() bool
+	// loginctl runs loginctl with args, and returns what it wrote: an
+	// error that is exec.ErrNotFound where there is none.
 	loginctl func(ctx context.Context, args ...string) (string, error)
-	// scope says whether systemd-run is there to start a worker in a scope
-	// of the user's service manager.
-	scope func() bool
-	// tmp is the directory the sockets' directory is made in: /tmp, whose
-	// short path leaves room in a socket's for its name.
+	// command returns the path of a command, as hostCommand does.
+	command func(name string) (string, error)
+	// tmp is the directory a sockets' directory of a random name is made
+	// in, where the user's runtime directory won't do: /tmp, whose short
+	// path leaves room in a socket's for its name.
 	tmp string
 }
 
@@ -61,21 +69,64 @@ type hostSystem struct {
 var systemHost = hostSystem{
 	harden:    harden.Process,
 	machineID: machineID,
+	hostname:  os.Hostname,
+	// As systemd's own tools tell, logind runs where it has made its
+	// directory of seats; where what is there can't be told, it is
+	// taken to run, and asked.
+	logind: func() bool {
+		_, err := os.Stat("/run/systemd/seats/")
+		return !errors.Is(err, fs.ErrNotExist)
+	},
 	loginctl: func(ctx context.Context, args ...string) (string, error) {
+		path, err := hostCommand("loginctl")
+		if err != nil {
+			return "", err
+		}
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "loginctl", args...).Output() //nolint:gosec // loginctl, with the properties it shows
+		out, err := exec.CommandContext(ctx, path, args...).Output() //nolint:gosec // loginctl, which hostCommand checked, with the properties it shows
 		return string(out), err
 	},
-	scope: func() bool {
-		_, err := exec.LookPath("systemd-run")
-		return err == nil
-	},
-	tmp: "/tmp",
+	command: hostCommand,
+	tmp:     "/tmp",
 }
 
-// machineIDPattern is what a host's ID may be, which names a directory.
-var machineIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
+// hostCommand returns the path of the command name, as the PATH finds it,
+// absolute and without symbolic links, once it has checked it as the
+// worker's binary is checked (localbackend.CheckCommand): a regular file of
+// the user's or root's that no other user can change, nor any directory on
+// the way to it. meridian host runs it with what the user's other
+// processes mustn't have, systemd-run a worker's token's socket, and a
+// directory another user can change can come first on a PATH, as a shared
+// bin/ that a cluster's startup files add. One that isn't safe is
+// ssh_host_command_unsafe; one the PATH doesn't find, an error that is
+// exec.ErrNotFound.
+func hostCommand(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil && !errors.Is(err, exec.ErrDot) {
+		return "", err
+	}
+	// One found in a directory the PATH names relative to the working
+	// directory is checked as any other, at its absolute path.
+	if path, err = filepath.Abs(path); err == nil {
+		path, err = filepath.EvalSymlinks(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	code, err := localbackend.CheckCommand(path)
+	if code != "" {
+		return "", problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": hostName(), "path": path, "code": string(code)})
+	}
+	return path, err
+}
+
+// machineIDPattern is what a host's ID may be.
+var machineIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,127}$`)
+
+// hostKeyName is what of the host's name its key keeps: what a host's name
+// has, but in lower case, which DNS ignores; anything else is a hyphen.
+var hostKeyName = regexp.MustCompile(`[^a-z0-9.-]`)
 
 // runHost is meridian host: it does one operation of the protocol
 // hostproto documents, which a coordinator drives it with over a channel
@@ -88,14 +139,16 @@ func runHost(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		return flagError(c, fs, err)
 	}
 	c.json = true
-	if len(positional) != 1 || !slices.Contains(hostproto.Ops, positional[0]) {
-		return c.failf(problems.ArgumentsInvalid, problems.Params{"command": "host"})
-	}
 	sys := systemHost
 	if c.host != nil {
 		sys = *c.host
 	}
 	h := &hostOp{c: c, sys: sys}
+	// An operation this helper doesn't have, as a newer coordinator's, is
+	// refused in the protocol, of the helper's version, which says why.
+	if len(positional) != 1 || !slices.Contains(hostproto.Ops, positional[0]) {
+		return h.write(hostproto.Message{Problem: problems.ArgumentsInvalid.Problem(problems.Params{"command": "host"})})
+	}
 	// Nothing is read until the process is hardened: a request can carry
 	// a bootstrap token.
 	if err := sys.harden(); err != nil {
@@ -238,7 +291,7 @@ func (h *hostOp) hello(ctx context.Context) (*hostproto.Hello, error) {
 	if err != nil {
 		return nil, err
 	}
-	detach, err := decideDetach(ctx, h.sys)
+	detach, _, err := decideDetach(ctx, h.sys)
 	if err != nil {
 		return nil, err
 	}
@@ -246,10 +299,13 @@ func (h *hostOp) hello(ctx context.Context) (*hostproto.Hello, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, dir := range []string{paths.State, paths.Cache, paths.Sockets, paths.Runs} {
+	for _, dir := range []string{paths.State, paths.Cache, paths.Runs} {
 		if err := ensureHostDir(dir); err != nil {
 			return nil, err
 		}
+	}
+	if paths.Sockets, err = h.sockets(ctx, paths.State); err != nil {
+		return nil, err
 	}
 	version, _ := buildVersion()
 	return &hostproto.Hello{
@@ -258,12 +314,12 @@ func (h *hostOp) hello(ctx context.Context) (*hostproto.Hello, error) {
 	}, nil
 }
 
-// paths returns the directories meridian host keeps what it keeps in, the
-// user's home, and the host's ID: the state directory's hosts/<ID>, which
-// is this host's own where the home is shared, as a cluster's nodes'
-// homes are; the cache directory's bin; the user's own directory under
-// tmp, for the sockets; and the state directory's runs, which the hosts
-// that share it share (hostRunsDir).
+// paths returns the directories meridian host keeps what it keeps in, but
+// the sockets' (sockets), the user's home, and the host's ID: the state
+// directory's hosts/<key>, which is this host's own where the home is
+// shared, as a cluster's nodes' homes are (hostKey); the cache directory's
+// bin; and the state directory's runs, which the hosts that share it share
+// (hostRunsDir).
 func (h *hostOp) paths(ctx context.Context) (hostproto.Paths, string, string, error) {
 	home := h.c.getenv("HOME")
 	if !filepath.IsAbs(home) {
@@ -273,20 +329,108 @@ func (h *hostOp) paths(ctx context.Context) (hostproto.Paths, string, string, er
 	if err != nil {
 		return hostproto.Paths{}, "", "", err
 	}
-	id, err := h.sys.machineID(ctx)
+	id, key, err := h.hostKey(ctx)
 	if err != nil {
 		return hostproto.Paths{}, "", "", err
 	}
-	id = strings.ToLower(strings.TrimSpace(id))
-	if !machineIDPattern.MatchString(id) {
-		return hostproto.Paths{}, "", "", fmt.Errorf("host: the host's ID %q can't name a directory", id)
-	}
 	return hostproto.Paths{
-		State:   filepath.Join(dirs.State, "hosts", id),
-		Cache:   filepath.Join(dirs.Cache, "bin"),
-		Sockets: filepath.Join(h.sys.tmp, "meridian-"+strconv.Itoa(os.Getuid())),
-		Runs:    hostRunsDir(dirs.State),
+		State: filepath.Join(dirs.State, "hosts", key),
+		Cache: filepath.Join(dirs.Cache, "bin"),
+		Runs:  hostRunsDir(dirs.State),
 	}, filepath.Clean(home), id, nil
+}
+
+// hostKey returns the host's machine ID, and its key, which names its own
+// directory under the state directory's hosts/: the ID, a hyphen, and the
+// host's name (hostKeyName), at most 64 bytes of it. The ID alone tells
+// hosts apart but where they were made from one image that held it, as a
+// cluster's stateless or cloned nodes can be, which share a home too; their
+// names tell them apart. A host whose name changes takes a key of its
+// own, in which it doesn't find the workers it placed before. A host
+// without an ID, or a name, is ssh_host_id_unknown.
+func (h *hostOp) hostKey(ctx context.Context) (id, key string, err error) {
+	unknown := problems.SSHHostIDUnknown.Problem(problems.Params{"host": hostName()})
+	if id, err = h.sys.machineID(ctx); err != nil {
+		if _, ok := errors.AsType[*problem.Problem](err); ok {
+			return "", "", err
+		}
+		return "", "", unknown
+	}
+	id = strings.ToLower(strings.TrimSpace(id))
+	name, err := h.sys.hostname()
+	name = strings.Trim(hostKeyName.ReplaceAllString(strings.ToLower(name), "-"), ".-")
+	if err != nil || name == "" || !machineIDPattern.MatchString(id) {
+		return "", "", unknown
+	}
+	return id, id + "-" + name[:min(len(name), 64)], nil
+}
+
+// sockets returns the directory of the sockets a coordinator listens on
+// for the host's workers, which only the user can use, and no other user
+// can take from them: their runtime directory's meridian/, where
+// XDG_RUNTIME_DIR names one that is only theirs, and that is short enough
+// (hostproto.MaxSocketsDir); otherwise a directory of a random name in tmp,
+// which the host's state, under state, records: made afresh where it
+// records none, or one that is gone, or isn't the user's own. A name of
+// tmp's that another user could know, as /tmp/meridian-<uid>, is one they
+// could make first, as a directory of theirs or a link, which would keep
+// the user out of it.
+func (h *hostOp) sockets(ctx context.Context, state string) (string, error) {
+	if runtimeDir := h.c.getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(runtimeDir) {
+		dir := filepath.Join(runtimeDir, "meridian")
+		if len(dir) <= hostproto.MaxSocketsDir && safepath.CheckDir(runtimeDir, safepath.Private) == nil && safepath.EnsureDir(dir, safepath.Private) == nil {
+			return dir, nil
+		}
+	}
+	// One process at a time chooses it, so that two hellos at once give
+	// the same directory.
+	unlock, err := flock.Lock(ctx, filepath.Join(state, "sockets.lock"))
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	record := filepath.Join(state, "sockets")
+	data, err := safepath.ReadFile(record, safepath.Private, 4096)
+	switch {
+	case err == nil:
+		dir := string(data)
+		if filepath.Dir(dir) == h.sys.tmp && strings.HasPrefix(filepath.Base(dir), "meridian-") && safepath.CheckDir(dir, safepath.Private) == nil {
+			return dir, nil
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return "", hostDirUnusable(state, err)
+	}
+	dir, err := os.MkdirTemp(h.sys.tmp, "meridian-")
+	if err != nil {
+		return "", hostDirUnusable(h.sys.tmp, err)
+	}
+	if err := safepath.CheckDir(dir, safepath.Private); err != nil {
+		return "", hostDirUnusable(dir, err)
+	}
+	if err := writeHostFile(record, []byte(dir)); err != nil {
+		return "", hostDirUnusable(state, err)
+	}
+	return dir, nil
+}
+
+// writeHostFile writes the file path whole, readable only by the user: to
+// a new file beside it, then renamed over it.
+func writeHostFile(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".new-*")
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 // hostRunsDir is where runs' directories are on a host whose state
@@ -316,13 +460,28 @@ func hostRunDir(runs, run, store string) string {
 // ssh_host_dir_unusable.
 func ensureHostDir(dir string) error {
 	if err := safepath.EnsureDir(dir, safepath.Private); err != nil {
-		reason := err.Error()
-		if p, ok := errors.AsType[*problem.Problem](err); ok {
-			reason = string(p.Code)
-		}
-		return problems.SSHHostDirUnusable.Problem(problems.Params{"host": hostName(), "path": dir, "reason": reason})
+		return hostDirUnusable(dir, err)
 	}
 	return nil
+}
+
+// hostDirUnusable is the ssh_host_dir_unusable of the directory dir, which
+// failed its check with err: at the directory that err's problem names,
+// dir or one on the way to it, as path_unsafe names the one another user
+// can change, with the problem's code as its reason; or at dir, with the
+// system's error.
+func hostDirUnusable(dir string, err error) error {
+	at, reason := dir, err.Error()
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		reason = string(p.Code)
+		for _, name := range []string{"dir", "path"} {
+			if path, ok := p.Params[name].(string); ok && path != "" {
+				at = path
+				break
+			}
+		}
+	}
+	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": hostName(), "path": dir, "at": at, "reason": reason})
 }
 
 // driver returns the local backend's Driver of the host's own state
@@ -348,7 +507,7 @@ func (h *hostOp) probe(ctx context.Context, req *hostproto.Request) hostproto.Me
 	if req.Demand == nil {
 		return hostproto.Message{Error: "host: a probe without its demand"}
 	}
-	if _, err := decideDetach(ctx, h.sys); err != nil {
+	if _, _, err := decideDetach(ctx, h.sys); err != nil {
 		p, ok := errors.AsType[*problem.Problem](err)
 		if !ok {
 			return failed(err)
@@ -377,7 +536,7 @@ func (h *hostOp) place(ctx context.Context, req *hostproto.Request) hostproto.Me
 	if pl == nil || pl.Run == "" || pl.Store == "" {
 		return hostproto.Message{Error: "host: a place without its attempt, run and store"}
 	}
-	detach, err := decideDetach(ctx, h.sys)
+	detach, systemdRun, err := decideDetach(ctx, h.sys)
 	if err != nil {
 		return failed(err)
 	}
@@ -393,7 +552,13 @@ func (h *hostOp) place(ctx context.Context, req *hostproto.Request) hostproto.Me
 		return failed(err)
 	}
 	if detach == hostproto.DetachScope {
-		d.Launcher = []string{"systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=meridian-worker-" + pl.Attempt}
+		// The scope's name is new each time, so that one an earlier
+		// worker of the attempt still holds doesn't keep this one from
+		// starting.
+		suffix := make([]byte, 4)
+		_, _ = rand.Read(suffix)
+		unit := "--unit=meridian-worker-" + pl.Attempt + "-" + hex.EncodeToString(suffix)
+		d.Launcher = []string{systemdRun, "--user", "--scope", "--collect", "--quiet", unit}
 	}
 	d.AwaitToken = true
 	r := pl.Request()

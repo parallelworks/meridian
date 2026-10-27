@@ -310,6 +310,9 @@
   "resources_exceed_member": "El trabajo pide {asks} {resource, select, cpu {milésimas de núcleo de CPU} memory {bytes de memoria} other {GPU}}, más de lo que ofrece el miembro “{member}”, {offers}.",
   "backend_not_built": "El miembro “{member}” ejecuta trabajos con el backend {backend}, que esta versión de Meridian aún no tiene.",
   "worker_binary_unsafe": "Meridian no inicia un worker desde {path}, que no es seguro ejecutar ({code}).",
+  "worker_token_not_taken": "El worker que inició Meridian no tomó su token de arranque: {ended, select, true {terminó antes, con el estado de salida {exit}} other {no lo pidió en un minuto, así que Meridian lo detuvo}}. Lo que escribió en su salida de error estándar está en {log}.",
   "ssh_worker_would_be_killed": "Meridian no inicia un worker en {host}: su sistema termina los procesos de un usuario al terminar su sesión y no mantiene ninguno de los tuyos tras tu última sesión, así que el worker terminaría con la sesión que lo inició. Ejecuta allí loginctl enable-linger.",
-  "ssh_host_dir_unusable": "Meridian no puede usar el directorio {path} en {host}: {reason}."
+  "ssh_host_dir_unusable": "Meridian no puede usar el directorio {path} en {host}: {reason}, en {at}.",
+  "ssh_host_command_unsafe": "Meridian no ejecutará {path} en {host}, que encuentra el PATH de allí, porque no es seguro ejecutarlo ({code}).",
+  "ssh_host_id_unknown": "Meridian no puede distinguir {host} de otros hosts que pueden compartir su home: no tiene un ID de máquina que Meridian pueda leer, o no tiene nombre."
 }

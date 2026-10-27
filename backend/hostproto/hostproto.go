@@ -13,7 +13,9 @@
 //  1. The helper first keeps the user's other processes out of its memory,
 //     as meridian run does (internal/harden), then writes a Message with
 //     Ready set, and its Protocol. One that can't writes a Message with its
-//     Problem instead, and exits.
+//     Problem instead, and exits, as one asked for an operation it doesn't
+//     have, as a newer coordinator's, does without hardening itself
+//     (arguments_invalid).
 //  2. Only once it has read Ready, and checked that Protocol is the one it
 //     speaks, does the coordinator write the Request: for place, with the
 //     attempt's bootstrap token, which so reaches the helper only once the
@@ -62,6 +64,16 @@ var Ops = []string{OpHello, OpProbe, OpPlace, OpFind, OpCheck, OpCancel, OpForge
 
 // MaxRequest is the most bytes of a Request the helper reads.
 const MaxRequest = 1 << 20
+
+// MaxSocketsDir is the longest Paths.Sockets is, in bytes, and
+// MaxSocketName the longest name of a socket in it, so that a socket's
+// path, the directory, a slash and its name, fits the address of a Unix
+// socket on every system the worker runs on: 104 bytes on macOS and the
+// BSDs, the NUL that ends it among them, and 108 on Linux.
+const (
+	MaxSocketsDir = 64
+	MaxSocketName = 38
+)
 
 // A Request is what the coordinator asks of the helper, once it is ready.
 // Each operation reads its own members, and refuses a Request without
@@ -135,8 +147,9 @@ type Hello struct {
 	Host string `json:"host"`
 	// Home is the user's home directory on the host.
 	Home string `json:"home"`
-	// MachineID is the host's own ID, which tells apart the hosts that
-	// share a home, as a cluster's nodes do.
+	// MachineID is the host's own ID, which, with its name, tells apart
+	// the hosts that share a home, as a cluster's nodes do: Paths.State is
+	// theirs.
 	MachineID string `json:"machineID"`
 	// Detach is how the helper starts a worker so that it outlives the
 	// session it was placed from: DetachSession or DetachScope.
@@ -170,12 +183,16 @@ type Binary struct {
 // each the user's own, which only they can use.
 type Paths struct {
 	// State holds the local backend's placements, which is this host's own
-	// even where the home is shared.
+	// even where the home is shared: the state directory's
+	// hosts/<machine ID>-<host name>.
 	State string `json:"state"`
 	// Cache holds workers' binaries, by their digests.
 	Cache string `json:"cache"`
 	// Sockets holds the sockets a coordinator listens on for the host's
-	// workers, short enough a path for a socket's.
+	// workers, at most MaxSocketsDir bytes: the user's runtime directory's
+	// meridian/, or a directory of a random name in /tmp that the helper
+	// made, which no other user could make first. It is the host's own,
+	// and the same from one hello to the next while it lasts.
 	Sockets string `json:"sockets"`
 	// Runs holds runs' directories, which the hosts that share the
 	// user's home share, as a cluster's login and compute nodes do.

@@ -2183,6 +2183,14 @@
       "Corrige lo que dice la página del código, para el binario que nombra el mensaje, o instala meridian donde solo tú o root puedan cambiarlo, como /usr/local/bin."
     ]
   },
+  "worker_token_not_taken": {
+    "title": "Worker que no tomó su token",
+    "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",
+    "fix": [
+      "Lee el archivo que indica el mensaje, en el host, para ver lo que escribió el worker o lo que lo inició.",
+      "Si systemd-run dice que no puede llegar a tu gestor de servicios, comprueba que systemctl --user status funciona en el host, en una sesión por SSH como la que abre el coordinador."
+    ]
+  },
   "ssh_worker_would_be_killed": {
     "title": "Host que terminaría un worker al terminar su sesión",
     "why": "En un host, cada worker se inicia desde una sesión que el coordinador abre allí, y debe sobrevivir a esa sesión para ejecutar los pasos del trabajo e informar de ellos después de que la sesión termine. El logind de este host termina todos los procesos de una sesión cuando la sesión termina (KillUserProcesses=yes), y allí no tienes lingering, así que tu gestor de servicios, en el que Meridian iniciaría el worker en su lugar, también se detiene tras tu última sesión. Un worker iniciado en el host terminaría en cuanto terminara la sesión del coordinador, así que Meridian no lo inicia.",
@@ -2192,11 +2200,27 @@
     ]
   },
   "ssh_host_dir_unusable": {
-    "title": "Directorio de un host que Meridian no puede usar",
-    "why": "En un host, Meridian guarda lo que guarda en directorios tuyos: el estado del backend local, los binarios de los workers, los sockets en los que el coordinador escucha a los workers del host y los directorios de las ejecuciones. Cada uno debe ser un directorio que solo tú puedas usar, en un camino que ningún otro usuario pueda cambiar, ya que lo que contiene, o lo que llega a un worker a través de él, es solo tuyo. Meridian crea el que no existe y comprueba cada uno: este no pasó la comprobación, por el motivo indicado, el código de un problema, cuya página explica por qué, o el error del sistema.",
+    "title": "Directorio en un host que Meridian no puede usar",
+    "why": "En un host, Meridian guarda lo que guarda en directorios tuyos: el estado del backend local, los binarios de los workers y los directorios de las ejecuciones, en tus directorios de estado y de caché; y los sockets en los que el coordinador escucha a los workers del host, en tu directorio de ejecución (XDG_RUNTIME_DIR) o, si no, en un directorio de nombre aleatorio que Meridian crea en /tmp, para que ningún otro usuario pueda crearlo antes. Cada uno debe ser uno que solo tú puedas usar, en un camino que ningún otro usuario pueda cambiar, ya que lo que contiene, o lo que llega a un worker a través de él, es solo tuyo. Meridian crea el que no existe y comprueba cada uno: este falló en la ruta que indica el mensaje, el directorio mismo o uno en el camino hacia él, por el motivo indicado, el código de un problema, cuya página explica por qué, o el error del sistema.",
     "fix": [
-      "Corrige lo que dice el motivo, para el directorio que nombra el mensaje, en el host: chmod 700, para un directorio que otros usuarios pueden usar.",
-      "Si lo que lo contiene no puede ser solo tuyo, asigna en el host a XDG_STATE_HOME o XDG_CACHE_HOME un directorio propio, como para los directorios de estado y de caché de Meridian en cualquier lugar."
+      "Corrige lo que dice el motivo, para la ruta que indica el mensaje, en el host: chmod 700, para un directorio tuyo que otros usuarios pueden usar.",
+      "Si lo que lo contiene no puede ser solo tuyo, define en el host XDG_STATE_HOME o XDG_CACHE_HOME con un directorio tuyo, como para los directorios de estado y de caché de Meridian en cualquier lugar."
+    ]
+  },
+  "ssh_host_command_unsafe": {
+    "title": "Comando en un host que no es seguro ejecutar",
+    "why": "En un host, meridian host ejecuta comandos del sistema que encuentra en el PATH: loginctl, para preguntar a logind si los procesos de una sesión terminan con ella; systemd-run, que inicia un worker en un scope de tu gestor de servicios y así recibe lo que se da al worker, entre ello el socket por el que llega su token de arranque; y, en macOS, ioreg, para el ID del host. Por eso cada uno debe ser un archivo regular tuyo o de root que ningún otro usuario pueda cambiar, ni ningún directorio en el camino hacia él: de lo contrario, otro usuario podría poner un programa suyo primero en tu PATH, en un directorio que puede cambiar, y quedarse con lo que se le da. El código es el problema que tiene, y su página explica por qué.",
+    "fix": [
+      "Quita de tu PATH en el host el directorio que otros usuarios pueden cambiar, donde lo definen los archivos de inicio de tu shell, o ponlo después de los directorios del sistema, como /usr/bin.",
+      "O corrige lo que dice la página del código, para el comando que indica el mensaje."
+    ]
+  },
+  "ssh_host_id_unknown": {
+    "title": "Host sin un ID propio",
+    "why": "En un host, Meridian guarda el estado del backend local en un directorio propio del host, con el nombre del ID de máquina del host y su nombre, para que los hosts que comparten un home, como los nodos de un clúster, no tomen los workers de otros por suyos. En Linux el ID es el de systemd, en /etc/machine-id, o si no el de D-Bus, en /var/lib/dbus/machine-id; en macOS, el UUID del hardware; en FreeBSD, kern.hostuuid del kernel. Este host no tiene ninguno que Meridian pueda leer, como cuando el archivo no existe, está vacío o dice uninitialized, o contiene lo que no puede tener el nombre de un directorio; o el host no dice ningún nombre.",
+    "fix": [
+      "Pide a los administradores del host que le den un ID de máquina: en Linux, con systemd-machine-id-setup, o dbus-uuidgen --ensure donde no hay systemd.",
+      "Si hostname no dice ningún nombre en el host, pídeles que le den uno."
     ]
   }
 }

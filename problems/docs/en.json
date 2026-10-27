@@ -1877,6 +1877,13 @@
       "Fix what the code's page says, for the binary the message names, or install meridian where only you or root can change it, such as /usr/local/bin."
     ]
   },
+  "worker_token_not_taken": {
+    "why": "Where the process that places a worker ends once it has, as meridian host does on another host, it waits until the worker has taken its bootstrap token, which it hands over on a socket only the worker inherits. This worker didn't: it ended first, as one that systemd-run couldn't start does, where your service manager can't be reached or a scope of the same name is still there, or it didn't ask for its token within a minute. A worker without its token can't run the job, so Meridian stopped it, and placed nothing.",
+    "fix": [
+      "Read the file the message names, on the host, for what the worker, or what started it, wrote.",
+      "If systemd-run says it can't reach your service manager, check that systemctl --user status works on the host, in a session over SSH such as the coordinator opens."
+    ]
+  },
   "ssh_worker_would_be_killed": {
     "why": "On a host, each worker is started from a session the coordinator opens there, and it must outlive that session, to run the job's steps and report them after the session has ended. This host's logind ends every process of a session as the session ends (KillUserProcesses=yes), and you don't linger there, so your service manager, in which Meridian would start the worker instead, stops after your last session too. A worker started on the host would end as soon as the coordinator's session did, so Meridian doesn't start one.",
     "fix": [
@@ -1885,10 +1892,24 @@
     ]
   },
   "ssh_host_dir_unusable": {
-    "why": "On a host, Meridian keeps what it keeps in directories of your own: the local backend's state, the workers' binaries, the sockets the coordinator listens on for the host's workers, and runs' directories. Each must be one that only you can use, on a way no other user can change, since what is in it, or reaches a worker through it, is yours alone. Meridian makes the one that isn't there, and checks each: this one failed, for the reason given, a problem's code, whose page says why, or the system's error.",
+    "why": "On a host, Meridian keeps what it keeps in directories of your own: the local backend's state, the workers' binaries and runs' directories, in your state and cache directories; and the sockets the coordinator listens on for the host's workers, in your runtime directory (XDG_RUNTIME_DIR), or else in a directory of a random name that Meridian makes in /tmp, so that no other user can make it first. Each must be one that only you can use, on a way no other user can change, since what is in it, or reaches a worker through it, is yours alone. Meridian makes the one that isn't there, and checks each: this one failed at the path the message names, the directory itself or one on the way to it, for the reason given, a problem's code, whose page says why, or the system's error.",
     "fix": [
-      "Fix what the reason says, for the directory the message names, on the host: chmod 700, for a directory other users can use.",
+      "Fix what the reason says, for the path the message names, on the host: chmod 700, for a directory of yours that other users can use.",
       "If what holds it can't be yours alone, set XDG_STATE_HOME or XDG_CACHE_HOME on the host to a directory of your own, as for Meridian's state and cache directories anywhere."
+    ]
+  },
+  "ssh_host_command_unsafe": {
+    "why": "On a host, meridian host runs commands of the system's that it finds on the PATH: loginctl, to ask logind whether a session's processes end with it; systemd-run, which starts a worker in a scope of your service manager, and so gets what the worker is given, the socket its bootstrap token comes on among it; and, on macOS, ioreg, for the host's ID. So each must be a regular file of yours or root's that no other user can change, nor any directory on the way to it: otherwise another user could put a program of theirs first on your PATH, in a directory they can change, and take what it is given. The code is the problem with it, and its page says why.",
+    "fix": [
+      "Take the directory that other users can change out of your PATH on the host, where your shell's startup files set it, or put it after the system's directories, such as /usr/bin.",
+      "Or fix what the code's page says, for the command the message names."
+    ]
+  },
+  "ssh_host_id_unknown": {
+    "why": "On a host, Meridian keeps the local backend's state in a directory of the host's own, named by the host's machine ID and its name, so that hosts that share a home, as a cluster's nodes do, don't take each other's workers for their own. On Linux the ID is systemd's, in /etc/machine-id, or else D-Bus's, in /var/lib/dbus/machine-id; on macOS, the hardware's UUID; on FreeBSD, the kernel's kern.hostuuid. This host has none that Meridian can read, as where the file isn't there, is empty or says uninitialized, or holds what a directory's name can't; or the host says no name.",
+    "fix": [
+      "Ask the host's administrators to give it a machine ID: on Linux, with systemd-machine-id-setup, or dbus-uuidgen --ensure where there is no systemd.",
+      "If hostname says no name on the host, ask them to give it one."
     ]
   }
 }

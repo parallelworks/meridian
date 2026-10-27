@@ -468,6 +468,29 @@ func TestAwaitToken(t *testing.T) {
 	}
 }
 
+// With AwaitToken, a worker that ends without taking its token, as one
+// that systemd-run couldn't start does, isn't placed: Place says so, with
+// its exit status and where what it wrote is, which it keeps, and the
+// attempt has no placement left.
+func TestTokenNotTaken(t *testing.T) {
+	t.Parallel()
+	d, out := newDriver(t, "exit")
+	d.AwaitToken = true
+	_, err := d.Place(t.Context(), host, backend.PlaceRequest{Attempt: "a1", BootstrapToken: "t", Coordinator: backend.Endpoint{Address: "/nowhere/c.sock"}})
+	p, _ := errors.AsType[*problem.Problem](err)
+	log := filepath.Join(d.State, workersDir, "a1.log")
+	wantProblem(t, "a worker that ended without its token", p, problems.WorkerTokenNotTaken, problems.Params{"ended": "true", "exit": 0, "log": log})
+	if r := readReport(t, out); r.Token != "" {
+		t.Errorf("the worker reported %+v", r)
+	}
+	if _, found, err := d.Find(t.Context(), host, "a1"); found || err != nil {
+		t.Errorf("Find found the placement of a worker without its token: %v", err)
+	}
+	if _, err := os.Stat(log); err != nil {
+		t.Errorf("what the worker wrote is gone: %v", err)
+	}
+}
+
 // A worker that doesn't stop on SIGTERM gets it, and is killed once
 // KillAfter has passed.
 func TestCancelKills(t *testing.T) {
@@ -662,6 +685,42 @@ func TestExecutable(t *testing.T) {
 	_, err = checkExecutable(inShared, inShared)
 	p, _ = errors.AsType[*problem.Problem](err)
 	wantProblem(t, "a binary in a directory others can change", p, problems.WorkerBinaryUnsafe, problems.Params{"code": string(problems.PathUnsafe.Code())})
+}
+
+// CheckCommand checks a command as the binary a worker runs is checked,
+// and says what is wrong with one by its code.
+func TestCheckCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cmd := filepath.Join(dir, "systemd-run")
+	if err := os.WriteFile(cmd, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, err := CheckCommand(cmd); code != "" || err != nil {
+		t.Errorf("a safe command: %s, %v", code, err)
+	}
+	shared := filepath.Join(dir, "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	inShared := filepath.Join(shared, "systemd-run")
+	if err := os.WriteFile(inShared, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cmd, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]problem.Code{cmd: problems.FileChangeable.Code(), inShared: problems.PathUnsafe.Code(), dir: problems.FileNotRegular.Code()} {
+		if code, err := CheckCommand(path); code != want || err != nil {
+			t.Errorf("CheckCommand(%s) = %s, %v; want %s", path, code, err, want)
+		}
+	}
+	if code, err := CheckCommand(filepath.Join(dir, "missing")); code != "" || !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a command that isn't there: %s, %v", code, err)
+	}
 }
 
 // An attempt's ID names its files, so one that can't is refused, and

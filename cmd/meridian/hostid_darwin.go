@@ -11,9 +11,13 @@ import (
 var platformUUID = regexp.MustCompile(`"IOPlatformUUID" = "([0-9A-Fa-f-]+)"`)
 
 // machineID returns the host's own ID: its hardware's UUID, as ioreg says
-// it.
+// it, which hostCommand checks.
 func machineID(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
+	ioreg, err := hostCommand("ioreg")
+	if err != nil {
+		return "", err
+	}
+	out, err := exec.CommandContext(ctx, ioreg, "-rd1", "-c", "IOPlatformExpertDevice").Output() //nolint:gosec // ioreg, which hostCommand checked
 	if err != nil {
 		return "", err
 	}

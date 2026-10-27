@@ -84,14 +84,17 @@ type Driver struct {
 	KillAfter time.Duration
 	// Launcher is a command that starts the worker, which it runs as the
 	// process the placement records, as systemd-run --user --scope does:
-	// the worker's arguments follow it. It is empty to start the worker
+	// the worker's arguments follow it. Its first is the command's
+	// absolute path, which whoever sets it has checked (CheckCommand): it
+	// gets the worker's token's socket. It is empty to start the worker
 	// itself, as on the coordinator's own host.
 	Launcher []string
 	// AwaitToken has Place return only once the worker has taken its
-	// bootstrap token, or ended, or not asked for it in time, rather than
-	// hand it over once it has returned: for a process that ends once it
-	// has placed a worker, as meridian host does on another host, which
-	// would otherwise end before the worker had its token.
+	// bootstrap token, rather than hand it over once it has returned: for
+	// a process that ends once it has placed a worker, as meridian host
+	// does on another host, which would otherwise end before the worker
+	// had its token. A worker that ends first, or doesn't ask for it in
+	// time, is stopped, and its placement is worker_token_not_taken.
 	AwaitToken bool
 
 	// swept is done once the driver has looked through what State holds,
@@ -458,10 +461,25 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		stderr.Close()
 		return backend.Placement{}, err
 	}
-	if d.AwaitToken {
-		giveToken(ours, req.BootstrapToken)
-	} else {
-		go giveToken(ours, req.BootstrapToken)
+	if !d.AwaitToken {
+		go func() { _ = giveToken(ours, req.BootstrapToken) }()
+	} else if err := giveToken(ours, req.BootstrapToken); err != nil {
+		// A worker that didn't take its token runs no job: one that
+		// hasn't ended is stopped, and the placement goes, but for what
+		// the worker wrote, which says why.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		stderr.Close()
+		for _, path := range []string{d.livePath(req.Attempt), d.path(req.Attempt, ".json")} {
+			_ = os.Remove(path)
+		}
+		exit := -1
+		if cmd.ProcessState != nil {
+			exit = cmd.ProcessState.ExitCode()
+		}
+		return backend.Placement{}, problems.WorkerTokenNotTaken.Problem(problems.Params{
+			"ended": !errors.Is(err, os.ErrDeadlineExceeded), "exit": exit, "log": filepath.Join(d.State, workersDir, req.Attempt+".log"),
+		})
 	}
 	// The worker is reaped while this process runs, and its exit status
 	// kept beside its placement; after, the system reaps it.
@@ -504,22 +522,27 @@ func socketPair() (worker, ours *os.File, err error) {
 
 // giveToken writes token to ours, once the worker has written that it is
 // ready on its end, and closes it. A worker that doesn't say so within
-// tokenWait, or ends first, gets no token.
-func giveToken(ours *os.File, token string) {
+// tokenWait, which is os.ErrDeadlineExceeded, or ends first, gets no
+// token.
+func giveToken(ours *os.File, token string) error {
 	conn, err := net.FileConn(ours)
 	ours.Close()
 	if err != nil {
-		return
+		return err
 	}
 	defer conn.Close()
-	if conn.SetDeadline(time.Now().Add(tokenWait)) != nil {
-		return
+	if err := conn.SetDeadline(time.Now().Add(tokenWait)); err != nil {
+		return err
 	}
 	ready := make([]byte, 1)
-	if _, err := io.ReadFull(conn, ready); err != nil || ready[0] != '1' {
-		return
+	if _, err := io.ReadFull(conn, ready); err != nil {
+		return err
 	}
-	_, _ = conn.Write([]byte(token))
+	if ready[0] != '1' {
+		return errors.New("local: the worker said other than that it was ready")
+	}
+	_, err = conn.Write([]byte(token))
+	return err
 }
 
 // Executable returns the path of the file this process runs, a worker the
@@ -596,35 +619,14 @@ var hashFile = func(r io.Reader) (string, error) {
 // differs. Elsewhere the file at path is hashed at each placement
 // (identity).
 func checkExecutable(path, open string) (string, error) {
-	unsafe := func(code problem.Code) error {
-		return problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
+	f, info, code, err := openRunnable(path, open)
+	if code != "" {
+		return "", problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": path, "code": string(code)})
 	}
-	if err := safepath.Check(path, false); err != nil {
-		if p, ok := errors.AsType[*problem.Problem](err); ok {
-			return "", unsafe(p.Code)
-		}
-		return "", err
-	}
-	f, err := os.Open(open) //nolint:gosec // this binary, whose way safepath checked
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	owner, known := safepath.Owner(info)
-	switch {
-	case !info.Mode().IsRegular():
-		return "", unsafe(problems.FileNotRegular.Code())
-	case !known:
-		return "", unsafe(problems.OwnerUnknown.Code())
-	case owner != os.Getuid() && owner != 0:
-		return "", unsafe(problems.FileNotOwned.Code())
-	case info.Mode().Perm()&0o022 != 0:
-		return "", unsafe(problems.FileChangeable.Code())
-	}
 	id, known := identity(info)
 	if known {
 		digests.Lock()
@@ -645,6 +647,62 @@ func checkExecutable(path, open string) (string, error) {
 		digests.Unlock()
 	}
 	return digest, nil
+}
+
+// openRunnable checks that no other user can change the way to path, and
+// opens open, the file at path or the one the process runs, once it has
+// checked that it is a regular file of the user's or root's that no other
+// user can change, and returns it with what fstat says of it. What is
+// wrong is the code of the problem that says so, whose page says why, and
+// any other error the system's.
+func openRunnable(path, open string) (*os.File, fs.FileInfo, problem.Code, error) {
+	if err := safepath.Check(path, false); err != nil {
+		if p, ok := errors.AsType[*problem.Problem](err); ok {
+			return nil, nil, p.Code, nil
+		}
+		return nil, nil, "", err
+	}
+	f, err := os.Open(open) //nolint:gosec // a file to run, whose way safepath checked
+	if err != nil {
+		return nil, nil, "", err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, "", err
+	}
+	owner, known := safepath.Owner(info)
+	var code problem.Code
+	switch {
+	case !info.Mode().IsRegular():
+		code = problems.FileNotRegular.Code()
+	case !known:
+		code = problems.OwnerUnknown.Code()
+	case owner != os.Getuid() && owner != 0:
+		code = problems.FileNotOwned.Code()
+	case info.Mode().Perm()&0o022 != 0:
+		code = problems.FileChangeable.Code()
+	default:
+		return f, info, "", nil
+	}
+	f.Close()
+	return nil, nil, code, nil
+}
+
+// CheckCommand checks the command at path, an absolute path without
+// symbolic links, as Executable checks the file this process runs: that no
+// other user can change the way to it, and that it is a regular file of
+// the user's or root's that no other user can change. It is for a command
+// a process that holds what other users mustn't have runs, as a Launcher
+// is, which gets what it gives a worker, its token's socket among it.
+// What is wrong is the code of the problem that says so, whose page says
+// why, and any other error the system's.
+func CheckCommand(path string) (problem.Code, error) {
+	f, _, code, err := openRunnable(path, path)
+	if f != nil {
+		f.Close()
+	}
+	return code, err
 }
 
 // environ returns a worker's environment: d's, but its MERIDIAN_
