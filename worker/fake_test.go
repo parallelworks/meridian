@@ -30,7 +30,13 @@ import (
 // Unix socket, as a worker's has once it runs it.
 func claimedClient(t *testing.T, f *workerapitest.Fake) *client {
 	t.Helper()
-	c := newClient(endpoint{address: f.Serve(), token: f.Token}, testTiming, testLogger(t))
+	return claimedClientTimed(t, f, testTiming)
+}
+
+// claimedClientTimed is claimedClient, with the timing tm.
+func claimedClientTimed(t *testing.T, f *workerapitest.Fake, tm timing) *client {
+	t.Helper()
+	c := newClient(endpoint{address: f.Serve(), token: f.Token}, tm, testLogger(t))
 	t.Cleanup(c.close)
 	credential := newCredential()
 	if _, _, err := c.claim(t.Context(), f.Token, workerapi.ClaimRequest{Credential: credential, PlanVersion: plan.Version}); err != nil {
@@ -69,6 +75,7 @@ var testTiming = timing{
 	backoffMax:   50 * time.Millisecond,
 	flush:        time.Second,
 	firstControl: 500 * time.Millisecond,
+	logPace:      5 * time.Millisecond,
 }
 
 // runWorker runs a worker against f, served on a Unix socket unless

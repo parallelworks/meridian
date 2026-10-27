@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,6 +140,55 @@ func TestSpoolLoseRace(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+// TestLogPace checks that a step that prints a line at a time has its lines
+// sent together, an upload at most each logPace, and that the end of its
+// log is sent at once, without waiting for the pace.
+func TestLogPace(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("true")))
+	tm := testTiming
+	tm.logPace = 5 * time.Second
+	c := claimedClientTimed(t, f, tm)
+	s := newTestSpool(t, 1<<30)
+	key := logKey{workerapi.LogStep, 0, 0}
+	l := s.open(key)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.send(ctx, c, func(err error) { t.Errorf("the worker stopped: %v", err) })
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	var want strings.Builder
+	for i := range 20 {
+		line := fmt.Sprintf("line %d\n", i)
+		want.WriteString(line)
+		if _, err := io.WriteString(l, line); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // a step that prints a line at a time
+	}
+	closed := time.Now()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.wait(t.Context().Done()); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(closed); took > 2*time.Second {
+		t.Errorf("the log's end was sent %s after it ended, as if it waited for the pace", took)
+	}
+	if got, ended := logOf(f, key); got != want.String() || !ended {
+		t.Errorf("the log stored is %q, ended %v; want %q", got, ended, want.String())
+	}
+	if n := f.Requests()[workerapi.PathLogs]; n > 3 {
+		t.Errorf("20 lines printed in a pace took %d uploads", n)
+	}
 }
 
 // TestCompactionLostLog checks that a log stays whole, at the right

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -46,10 +48,12 @@ type spool struct {
 	logs    []*logStream
 	made    int
 	changed chan struct{}
+	// closing is closed, and made again, as a log is closed (spool.pace).
+	closing chan struct{}
 }
 
 func newSpool(dir *privateDir, limit int64) *spool {
-	return &spool{dir: dir, given: limit, changed: make(chan struct{})}
+	return &spool{dir: dir, given: limit, changed: make(chan struct{}), closing: make(chan struct{})}
 }
 
 // limit returns how many bytes the spool keeps that the coordinator hasn't
@@ -153,6 +157,8 @@ func (l *logStream) Close() error {
 	if !l.closed {
 		l.closed = true
 		s.notify()
+		close(s.closing)
+		s.closing = make(chan struct{})
 	}
 	return nil
 }
@@ -339,6 +345,7 @@ func (s *spool) send(ctx context.Context, c *client, stop func(error)) {
 				continue
 			}
 		}
+		began := time.Now()
 		ack, err := c.upload(ctx, u.log.key, u.offset, data, u.end)
 		var order *outOfOrderError
 		switch {
@@ -374,7 +381,37 @@ func (s *spool) send(ctx context.Context, c *client, stop func(error)) {
 		if s.stored(u.log, ack.Length, ack.Ended) {
 			s.compact(u.log)
 		}
+		if !u.end && u.n < workerapi.MaxLogUpload && s.pace(ctx, began.Add(c.timing.logPace)) != nil {
+			return
+		}
 	}
+}
+
+// pace waits, after an upload that sent all its log had, until until, so
+// that what a step prints meanwhile goes in one upload: a step that prints
+// a line at a time would otherwise have an upload, and the coordinator's
+// work for it, for nearly each line. It doesn't wait while a log has ended
+// whose end the coordinator doesn't have yet, and stops waiting as soon as
+// one ends, so the end of each step's log, which its job's end waits for,
+// is sent at once.
+func (s *spool) pace(ctx context.Context, until time.Time) error {
+	s.mu.Lock()
+	closing := s.closing
+	ending := slices.ContainsFunc(s.logs, func(l *logStream) bool { return l.closed })
+	s.mu.Unlock()
+	d := time.Until(until)
+	if ending || d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-closing:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 // rewind records that the coordinator has only length bytes of a log, fewer

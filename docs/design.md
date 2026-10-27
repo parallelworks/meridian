@@ -2894,9 +2894,13 @@ that embeds Meridian serve the same API.
   doesn't answer within a few seconds leaves it to the polls after.
 - **Step events:** a step started, or finished with its exit code.
 - **Logs:** each step's output, uploaded as a stream with byte offsets, so
-  an interrupted upload resumes without duplicating or losing lines. An
-  attempt's logs keep 1 GiB at most, all of them together; the log that
-  reaches it keeps a line that says the rest wasn't kept
+  an interrupted upload resumes without duplicating or losing lines. Once
+  an upload has sent all a log had, the worker starts the next no sooner
+  than 100 ms after that one started, but sends a log's end at once: a
+  step that prints a line at a time has its lines sent together, rather
+  than an upload, and the coordinator's work for it, for nearly each
+  line. An attempt's logs keep 1 GiB at most, all of them together; the
+  log that reaches it keeps a line that says the rest wasn't kept
   (`log_truncated`), and each log after it only that line. A replica
   reserves the limit 1 MiB at a time, in one write, and spends it as
   uploads come, so a chatty step doesn't take a write for each upload.
