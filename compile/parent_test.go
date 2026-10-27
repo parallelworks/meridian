@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/plan"
@@ -260,5 +262,54 @@ func TestStartChild(t *testing.T) {
 	selfRead := createWith(t, "env:\n  STAGE: ${{ env.STAGE }}-x\njobs:\n  main:\n    steps:\n      - run: echo\n", nil, compile.Options{Parent: parent})
 	if _, diags := startRun(t, selfRead, nil, compile.StartInput{RunID: "run"}); len(diags.Errors()) != 1 || diags.Errors()[0].Code != problems.ValuesReadEachOther.Code() {
 		t.Errorf("a child's env: value that reads its own name: %v", diags)
+	}
+}
+
+// A child run's Create pins its own steps' workflows as its root pinned
+// them, by the digest of its text and each step's place in it, and asks no
+// Sources; a step whose pin the root doesn't hold is child_not_pinned.
+func TestCreateChildPinsFromRoot(t *testing.T) {
+	const text = "jobs:\n  main:\n    steps:\n      - uses: github/t/a@main\n        with: {$yaml: w.yaml}\n      - uses: github/t/b@main\n        with: {$yaml: w.yaml}\n"
+	pinned := plan.Source{Location: "github/t/a@main:w.yaml", Revision: "0123", Digest: "sha256:aa", Remote: map[string]string{"repo": "r"}}
+	var asked [][2]string
+	parent := &compile.Parent{Run: "7", Job: "j", Root: "3", Depth: 1, Pin: func(caller, step string) (plan.Source, bool) {
+		asked = append(asked, [2]string{caller, step})
+		return pinned, step == "/jobs/main/steps/0"
+	}}
+	sources := &treeSources{}
+	_, diags, err := compile.Create(t.Context(), "w.yaml", []byte(text), nil, compile.Options{Parent: parent, Sources: sources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources.asked) > 0 {
+		t.Errorf("a child's Create asked Sources for %v", sources.asked)
+	}
+	errs := diags.Errors()
+	if len(errs) != 1 || errs[0].Code != problems.ChildNotPinned.Code() || errs[0].Path() != "/jobs/main/steps/1/uses" || errs[0].Params["uses"] != "github/t/b@main" {
+		t.Errorf("a step its root pinned nothing for: %v", diags)
+	}
+	digest := asked[0][0]
+	if want := [][2]string{{digest, "/jobs/main/steps/0"}, {digest, "/jobs/main/steps/1"}}; !slices.Equal(asked, want) || !strings.HasPrefix(digest, "sha256:") {
+		t.Errorf("the root was asked for %q, want %q", asked, want)
+	}
+	// With each step pinned, the plan holds the root's pins, and no calls.
+	parent.Pin = func(_, step string) (plan.Source, bool) { return pinned, true }
+	c, diags, err := compile.Create(t.Context(), "w.yaml", []byte(text), nil, compile.Options{Parent: parent})
+	if err != nil || c == nil {
+		t.Fatal(diags, err)
+	}
+	if s := c.Plan.Jobs[0].Steps[0].Source; s == nil || s.Digest != "sha256:aa" || s.Remote["repo"] != "r" || c.Plan.Calls != nil || c.Texts != nil {
+		t.Errorf("the child's plan pins %+v, with calls %v and texts %v", s, c.Plan.Calls, c.Texts)
+	}
+}
+
+// Create refuses a text that isn't the one its pin names, as a child's
+// whose text the store gave, by its digest (plan.Source.Digest): it runs
+// only the text its root pinned.
+func TestCreateRefusesTextNotItsPin(t *testing.T) {
+	pin := plan.Source{Location: "github/t/a@main:w.yaml", Revision: "0123", Digest: "sha256:00"}
+	_, _, err := compile.Create(t.Context(), "w.yaml", []byte("jobs:\n  j:\n    steps:\n      - run: echo\n"), nil, compile.Options{Source: pin})
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SourceChanged.Code() || p.Params["pinned"] != "sha256:00" {
+		t.Errorf("a text that isn't its pin's: %v", err)
 	}
 }

@@ -25,7 +25,8 @@ import (
 // 2, which child runs add to, is once a release writes it. A plan is
 // written at the lowest version that holds what it uses (MinVersion), so
 // that a release that reads only an earlier one can run it. Version 2 adds
-// what child runs need: Plan.Calls, Run.Parent and Record.Inherited.
+// what child runs need: Plan.Calls, Run.Parent, Run.TreeVariables,
+// Source.Remote and Record.Inherited.
 const Version = 2
 
 // modulePath is Meridian's module.
@@ -98,10 +99,19 @@ type Call struct {
 
 // MinVersion is the lowest version that holds what p uses, which a plan is
 // written at, and the run's secret record and start state with it: 2 for
-// one with Calls, or a child run's, with a Parent, and 1 otherwise.
+// one with Calls, a child run's, with a Parent, one with TreeVariables, and
+// one whose workflow or a step's has a Source with a Remote; and 1
+// otherwise.
 func (p *Plan) MinVersion() int {
-	if len(p.Calls) > 0 || p.Run.Parent != nil {
+	if len(p.Calls) > 0 || p.Run.Parent != nil || len(p.Run.TreeVariables) > 0 || len(p.Run.Source.Remote) > 0 {
 		return 2
+	}
+	for _, j := range p.Jobs {
+		for _, s := range j.Steps {
+			if s.Source != nil && len(s.Source.Remote) > 0 {
+				return 2
+			}
+		}
 	}
 	return 1
 }
@@ -201,6 +211,13 @@ type Run struct {
 	// vars.* does. Their values are never in the plan either: the run reads
 	// them once, as it starts.
 	Variables []string `json:"variables,omitempty"`
+	// TreeVariables names the organization and user variables that the
+	// workflows the run calls read, down its tree, as Variables does, in
+	// order: the run's Start reads them, once, with its own, into the
+	// run's secret record, where each child run of the tree reads its own,
+	// as format 1 reads the variables once for the whole tree. Only a run
+	// no step calls has them. Version 2.
+	TreeVariables []string `json:"treeVariables,omitempty"`
 	// Permissions are the workflow's permissions:.
 	Permissions []string `json:"permissions,omitempty"`
 	// Limits are Meridian's limits on the run's size that the phases after
@@ -278,6 +295,11 @@ type Source struct {
 	// remote context a child run of it reads, as remote.branch, from it.
 	// It is empty for the run's own workflow.
 	Ref SourceRef `json:"ref,omitzero"`
+	// Remote is what the remote context of a run of the workflow holds,
+	// such as remote.repo and remote.branch, as the Sources resolver gave
+	// it when it pinned the workflow, for one a step's uses: names: a child
+	// run of it reads it. Version 2.
+	Remote map[string]string `json:"remote,omitempty"`
 }
 
 // A SourceRef is what a step's uses: names a workflow by, as format 1

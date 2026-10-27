@@ -41,9 +41,20 @@ func (w *finishWorker) Work(ctx context.Context, job *hopper.Job[finishArgs]) er
 	return nil
 }
 
+// treeWait is how long a root run's finisher waits before it looks again
+// whether the runs of its tree have ended, which the end of each wakes it
+// for sooner (wakeRootTx).
+const treeWait = 30 * time.Second
+
 // finishRun ends the run id, once its jobs have, with its outcome, and
 // deletes its secret record, in one transaction, which done writes to as
-// well. A run that has ended, as one whose Start failed, is left as it is;
+// well. A root run, which no step called, waits first for every run of its
+// tree to end, at any depth: their variables are in its secret record,
+// which they read as they are created and started, so it is kept until
+// they have; finishRun notes that it waits (store.Tx.WaitForDescendants),
+// and returns how long to wait before looking again. The end of a child
+// run wakes its root's finisher, if it waits. A run that has ended, as one
+// whose Start failed, is left as it is;
 // one that never started, as one whose Start the coordinator gave up on,
 // ends failed, with run_not_started. A run that has started ends failed if
 // one of its jobs failed, or was skipped because a job it needs failed,
@@ -58,7 +69,11 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 	if err != nil {
 		return 0, err
 	}
-	var withdrawn []string
+	var (
+		withdrawn []string
+		waits     bool
+		woke      *waking
+	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		// A newer run's start state, of a newer version, doesn't decode:
 		// plan.ErrVersion, as its plan's version says.
@@ -68,6 +83,21 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		}
 		if r.PlanVersion > plan.Version {
 			return fmt.Errorf("%w %d of run %s's plan", plan.ErrVersion, r.PlanVersion, id)
+		}
+		if r.State != store.RunEnded && r.Parent == nil {
+			live, err := tx.LiveDescendants(id)
+			if err != nil {
+				return err
+			}
+			if live > 0 {
+				waits = true
+				return tx.WaitForDescendants(id)
+			}
+		}
+		if r.State != store.RunEnded && r.Parent != nil {
+			if woke, err = c.wakeRootTx(ctx, tx, r.Parent.Root, id); err != nil {
+				return err
+			}
 		}
 		switch r.State {
 		case store.RunCreated:
@@ -104,10 +134,37 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		c.log.WarnContext(ctx, "coordinator: a run's plan is newer than this release reads, so a release that reads it ends the run", "run", id, "code", problems.RunPlanNewer.Code())
 		return c.retry.newer, nil
 	}
-	if err == nil {
-		c.cancelPlacements(ctx, id, ws, withdrawn)
+	if err != nil {
+		return 0, err
 	}
-	return 0, err
+	if waits {
+		return treeWait, nil
+	}
+	c.cancelPlacements(ctx, id, ws, withdrawn)
+	c.wakeAgain(ctx, woke)
+	return 0, nil
+}
+
+// wakeRootTx wakes, in tx, the finisher of the root run root, if it waits
+// for the runs of its tree to end (store.Run.WaitedAt), as the run child
+// of the tree ends in tx, as wakeJobTx wakes a supervisor: it returns the
+// finisher if hopper was running it, for the caller to wake again once tx
+// commits (wakeAgain), or nil.
+func (c *Coordinator) wakeRootTx(ctx context.Context, tx *store.Tx, root, child string) (*waking, error) {
+	r, err := tx.Run(root)
+	if err != nil || r.State == store.RunEnded || r.WaitedAt.IsZero() || r.FinisherID.IsZero() {
+		return nil, err
+	}
+	return c.retryTx(ctx, tx, &waking{id: r.FinisherID, run: root, key: "the end of run " + child, waits: rootWaits(root)}), nil
+}
+
+// rootWaits reports, in a transaction, whether the root run root hasn't
+// ended: whether its finisher waits.
+func rootWaits(root string) func(*store.Tx) (bool, error) {
+	return func(tx *store.Tx) (bool, error) {
+		r, err := tx.Run(root)
+		return err == nil && r.State != store.RunEnded, err
+	}
 }
 
 // unendedWithdrawals returns the placements of the attempts that haven't

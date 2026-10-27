@@ -237,6 +237,30 @@ func (t *tree) texts() []PinnedText {
 	return out
 }
 
+// variables returns the names of the variables the workflows the tree
+// pinned read (variableReads), as a plan names them (plan.JoinPath), in
+// order (plan.Run.TreeVariables).
+func (t *tree) variables() []string {
+	names := map[string]bool{}
+	for _, p := range t.pins {
+		if p.doc == nil {
+			continue
+		}
+		for _, name := range variableReads(p.doc) {
+			context, rest, _ := strings.Cut(name, ".")
+			if rest == "" {
+				names[context] = true
+			} else {
+				names[plan.JoinPath(context, rest)] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(names))
+}
+
 // planCalls returns the pins the tree found, in the plan's order: by
 // their caller's digest, and then by the step's JSON Pointer.
 func (t *tree) planCalls() []plan.Call {

@@ -39,6 +39,12 @@ type Parent struct {
 	// Masked are the strings the step's worker masks, as a Masker takes
 	// them, which the run's jobs mask too (plan.Inherited.Masked).
 	Masked []string
+	// Pin returns the pin that the run's root holds of the workflow the
+	// step at the JSON Pointer step of the workflow of the digest caller
+	// names (plan.Plan.FindCall): Create pins the run's own steps'
+	// workflows by it, with no Sources, as the root pinned its whole tree
+	// as it was created. Nil holds none.
+	Pin func(caller, step string) (plan.Source, bool)
 }
 
 // sourceKeys are the keys of a step's with: that say where the workflow

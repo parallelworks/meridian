@@ -23,10 +23,11 @@ var since = map[string]int{
 	"Run.thumbnail": 1, "Run.inputs": 1, "Run.definitions": 1, "Run.withheld": 1, "Run.decisions": 1, "Run.env": 1,
 	"Run.timeout": 1, "Run.remote": 1, "Run.sessions": 1, "Run.sessionNames": 1, "Run.secrets": 1, "Run.derived": 1,
 	"Run.private": 1, "Run.variables": 1, "Run.permissions": 1, "Run.limits": 1, "Run.parent": 2,
-	"ParentRun.run": 2, "ParentRun.job": 2, "ParentRun.step": 2, "ParentRun.try": 2, "ParentRun.root": 2,
+	"Run.treeVariables": 2,
+	"ParentRun.run":     2, "ParentRun.job": 2, "ParentRun.step": 2, "ParentRun.try": 2, "ParentRun.root": 2,
 	"ParentRun.depth": 2, "ParentRun.env": 2, "ParentRun.private": 2, "ParentRun.secrets": 2,
 	"Limits.maxInstances": 1,
-	"Source.location":     1, "Source.revision": 1, "Source.digest": 1, "Source.ref": 1,
+	"Source.location":     1, "Source.revision": 1, "Source.digest": 1, "Source.ref": 1, "Source.remote": 2,
 	"SourceRef.uses": 1, "SourceRef.path": 1, "SourceRef.host": 1,
 
 	"Job.key": 1, "Job.name": 1, "Job.strategy": 1, "Job.needs": 1, "Job.needsExpr": 1, "Job.if": 1,

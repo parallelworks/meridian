@@ -163,6 +163,10 @@ var (
 	WorkflowNestedTooDeep = define(Error, "workflow_nested_too_deep", "Workflows called too deep", "max", "chain")
 	WorkflowsTooMany      = define(Error, "workflows_too_many", "Too many workflows called", "max", "what")
 	WorkflowsTooLarge     = define(Error, "workflows_too_large", "Workflows called too large", "max")
+	// A child run of a step that calls a workflow: uses is the step's uses:,
+	// and dir the child's directory.
+	ChildNotPinned  = define(Error, "child_not_pinned", "Called workflow not pinned with its run's tree", "uses")
+	ChildDirOutside = define(Error, "child_dir_outside", "Called workflow's directory outside its root run's", "dir")
 )
 
 // A workflow's jobs.

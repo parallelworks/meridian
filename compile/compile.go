@@ -75,8 +75,10 @@ type PinnedText struct {
 // reports every problem it finds, and gives nothing if any is an error. It
 // returns an error, and nothing else, when a resolver couldn't answer,
 // which for the Inputs resolver wraps ErrUnanswered, or ctx is done, with
-// ctx.Err(), and for a Parent that names as private what a step can't give,
-// which is its caller's mistake.
+// ctx.Err(); for a Parent that names as private what a step can't give,
+// which is its caller's mistake; and for data that isn't the text
+// opts.Source's digest names, as a child's from the store would be if the
+// store were changed (source_changed).
 func Create(ctx context.Context, name string, data []byte, submitted map[string]any, opts Options) (*Created, problems.Diagnostics, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -136,8 +138,16 @@ func create(r *resolving, name string, data []byte, submitted map[string]any, op
 	if source.Location == "" {
 		source.Location = name
 	}
-	if source.Digest == "" {
-		source.Digest = textDigest(data)
+	switch digest := textDigest(data); source.Digest {
+	case "":
+		source.Digest = digest
+	case digest:
+	default:
+		// A pin that names other text than this, as a child's whose text
+		// the store gave, isn't run.
+		return nil, nil, problems.SourceChanged.Problem(problems.Params{
+			"location": source.Location, "commit": source.Revision, "digest": digest, "pinned": source.Digest,
+		})
 	}
 	if source.Revision == "" {
 		source.Revision = source.Digest

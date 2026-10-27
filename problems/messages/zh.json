@@ -275,6 +275,8 @@
   "workflow_nested_too_deep": "工作流 {chain} 在运行之下超过 {max} 层相互调用，这是工作流能够相互调用的最大深度。",
   "workflows_too_many": "该运行调用了超过 {max} {what, select, calls {次（按从它出发的每条调用路径计数）} other {个不同的工作流}}，这是一个运行所能调用的上限。",
   "workflows_too_large": "该运行调用的工作流的文本合计超过 {max} 字节，这是一个运行的工作流所能包含的上限。",
+  "child_not_pinned": "该步骤调用 {uses}，但它没有随所在运行的树一起被固定和保存：该运行是由不固定运行整棵树的版本创建的。",
+  "child_dir_outside": "该步骤的工作目录使它调用的运行位于 {dir}，而该目录不在其根运行的目录中。",
   "owner_unmapped": "Meridian 无法检查 {path}：通往它的路径上的 {dir} 的所有者被用户命名空间隐藏，因此 Meridian 无法确认其他用户不能更改它。",
   "owner_unknown": "Meridian 无法判断 {path} 的所有者，因此无法确认其他用户不能更改它。",
   "directory_replaced": "目录 {path} 在工作进程创建它时被替换了，因此工作进程不使用它。",

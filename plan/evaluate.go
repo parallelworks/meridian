@@ -547,8 +547,27 @@ func (e *evaluation) decide(v Value, pointer string, gated bool) (d decision, ok
 	if s, isString := out.(string); isString && s == "always" {
 		return decision{run: true, always: true, outlivesCancel: true}, true
 	}
-	used, afterCancel := statusChecks(v)
-	return decision{run: expr.Truthy(out) && (success || used), outlivesCancel: afterCancel}, true
+	used, _ := statusChecks(v)
+	return decision{run: expr.Truthy(out) && (success || used), outlivesCancel: OutlivesCancel(v)}, true
+}
+
+// OutlivesCancel reports whether an if:, cond, can be true once its job is
+// stopping, by its form, as Step decides a step's
+// (ReadyStep.OutlivesCancel), and its later tries take: the word always,
+// or an expression that calls always() or cancelled(), or negates
+// success() or failure() (expr.Expr.StatusChecks). The coordinator asks
+// it of a step's plan, rather than take a worker's word for it, as a
+// step's child is asked for (coordinator.CreateChild). Of an if: whose
+// value is the word always only once it is evaluated, as one that reads
+// an input that holds it, only Step can tell.
+func OutlivesCancel(cond Value) bool {
+	if lit, ok := cond.Literal(); ok {
+		if s, isString := lit.(string); isString && s == "always" {
+			return true
+		}
+	}
+	_, afterCancel := statusChecks(cond)
+	return afterCancel
 }
 
 // statusChecks reports whether one of v's expressions calls a status
