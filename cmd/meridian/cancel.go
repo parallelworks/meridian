@@ -86,13 +86,18 @@ func runCancel(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	if err != nil && !errors.Is(err, coordinator.ErrRunEnded) {
 		return c.fail(runNotFound(id, err))
 	}
+	if c.stopped != nil {
+		c.stopped()
+	}
 	s, serr := coord.Status(ctx, id)
 	if serr != nil {
 		return c.fail(runNotFound(id, serr))
 	}
-	if s.State == coordinator.RunEnded {
+	if s.State == coordinator.RunEnded && (errors.Is(err, coordinator.ErrRunEnded) || s.StartedAt.IsZero()) {
 		// One that had ended already, or one that hadn't started, which
-		// the stop ended at once.
+		// the stop ended at once. One that had started is stopping, as
+		// this says, even if it has ended since, as its jobs can as soon
+		// as their workers hear of the stop.
 		return ended(c, progress, s, errors.Is(err, coordinator.ErrRunEnded))
 	}
 	if err := progress.Event(coordinator.Event{Kind: coordinator.RunStopping, Run: id, Reason: s.StopReason}); err != nil {
@@ -107,6 +112,17 @@ func runCancel(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	}
 	if held && !*follow {
 		return exitOK
+	}
+	if !*follow {
+		// One that saw the run to its end may have let go of the socket
+		// since, which it does only once the run has ended: then there is
+		// nothing left to coordinate.
+		if s, err = coord.Status(ctx, id); err != nil {
+			return c.fail(runNotFound(id, err))
+		}
+		if s.State == coordinator.RunEnded {
+			return exitOK
+		}
 	}
 	// The run's jobs that outlive the stop may yet be placed, in its
 	// directory, which is checked as meridian resume checks it.
