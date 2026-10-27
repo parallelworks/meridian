@@ -356,8 +356,18 @@ jobs:
 	if !slices.Equal(order[:2], []string{"main#0", "main#1"}) && !slices.Equal(order[:2], []string{"main#1", "main#0"}) {
 		t.Errorf("the instances were placed in the order %v", order)
 	}
-	if last := slices.Sorted(slices.Values(order[3:])); !slices.Equal(last, []string{"main#3", "main#4"}) {
-		t.Errorf("the last instances placed are %v, of %v", last, order)
+	// The rest have their turns in the order of their indexes, which the
+	// store's clock gives as it grants them. Two given theirs in one
+	// transaction, as when two instances end together, are woken together,
+	// and placed in either order.
+	instances := instancesOf(t, c, r.ID, "main")
+	for i, j := range instances {
+		switch {
+		case j.TurnAt.IsZero():
+			t.Errorf("%s never had its turn", j.Key)
+		case i > 0 && j.TurnAt.Before(instances[i-1].TurnAt):
+			t.Errorf("%s had its turn at %v, before %s at %v", j.Key, j.TurnAt, instances[i-1].Key, instances[i-1].TurnAt)
+		}
 	}
 }
 
