@@ -45,6 +45,7 @@ func runToEnd(t *testing.T, c *Coordinator, workflow string, vars conformancetes
 // placement of each attempt once it has ended, a failure before the first
 // step among them, which its job is placed again after.
 func TestForgets(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	failSetup(c, setupProblems[0])
 	r := runToEnd(t, c, oneJob, nil)

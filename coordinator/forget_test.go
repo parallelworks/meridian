@@ -12,6 +12,7 @@ import (
 // go to keep another; that keeping one again doesn't count it twice; and
 // that one it forgets leaves no trace.
 func TestRememberEvicts(t *testing.T) {
+	parallel(t)
 	c := open(t, Options{})
 	cand := &candidate{}
 	for i := range maxMembers + 1 {
