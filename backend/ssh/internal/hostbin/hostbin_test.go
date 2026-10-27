@@ -32,7 +32,8 @@ type rig struct {
 }
 
 // newRig starts a host whose environment has env over the test's, and
-// connects to it, with OpenSSH's defaults, there being no ssh client named.
+// connects to it, with OpenSSH's defaults, there being no ssh client named,
+// nor a config.
 func newRig(t *testing.T, env ...string) *rig {
 	t.Helper()
 	r := &rig{t: t, home: t.TempDir()}
@@ -56,7 +57,7 @@ func newRig(t *testing.T, env ...string) *rig {
 	env = append([]string{"HOME=" + r.home, "XDG_CACHE_HOME=", "MERIDIAN_CACHE_DIR="}, env...)
 	r.server = sshtest.New(t, sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: env})
 	write(t, filepath.Join(client, ".ssh", "known_hosts"), []byte(r.server.KnownHosts("")))
-	d := &sshconn.Dialer{SSH: filepath.Join(client, "no-ssh"), Home: client, User: "tester", Getenv: func(string) string { return "" }}
+	d := &sshconn.Dialer{SSH: filepath.Join(client, "no-ssh"), ConfigFile: filepath.Join(client, "no-config"), Home: client, User: "tester", Getenv: func(string) string { return "" }}
 	if r.conn, err = d.Dial(t.Context(), sshconn.Target{Host: r.server.Addr()}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +131,52 @@ func uploads(commands []string) int {
 	return n
 }
 
+// physical is path with its symbolic links resolved, as the host says
+// where things are; its last element needn't be there.
+func physical(t *testing.T, path string) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, filepath.Base(path))
+}
+
+// withHostPath runs the scripts with path as their PATH until the test
+// ends.
+func withHostPath(t *testing.T, path string) {
+	t.Helper()
+	old := hostPath
+	hostPath = path
+	t.Cleanup(func() { hostPath = old })
+}
+
+// tools returns a directory of links to the tools a script runs, but
+// those named in fakes, which are scripts of the content given.
+func tools(t *testing.T, fakes map[string]string, names ...string) string {
+	t.Helper()
+	bin := t.TempDir()
+	for _, tool := range names {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("no %s", tool)
+		}
+		if err := os.Symlink(path, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, script := range fakes {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o700); err != nil { //nolint:gosec // a test's script, which runs
+			t.Fatal(err)
+		}
+	}
+	return bin
+}
+
+// scriptTools are the tools Install's scripts run, but one to compute a
+// digest with.
+var scriptTools = []string{"uname", "id", "od", "find", "mkdir", "cat", "chmod", "mv", "rm"}
+
 // TestInstall checks that the binary is copied into the host's cache, by
 // its digest, in directories only the user can open, once: a second
 // Install finds it there, and copies nothing.
@@ -142,10 +189,10 @@ func TestInstall(t *testing.T) {
 	}
 	hexDigest := strings.TrimPrefix(digestOf("a meridian binary\n"), "sha256:")
 	want := filepath.Join(r.home, ".cache", "meridian", "bin", hexDigest, "meridian")
-	if got.Path != want || got.Digest != digestOf("a meridian binary\n") {
+	if got.Path != physical(t, want) || got.Digest != digestOf("a meridian binary\n") {
 		t.Errorf("Install gave %+v, want %s", got, want)
 	}
-	if goos, goarch := machine(t); host.GOOS != goos || host.GOARCH != goarch || host.Cache != filepath.Join(r.home, ".cache", "meridian", "bin") {
+	if goos, goarch := machine(t); host.GOOS != goos || host.GOARCH != goarch || host.Cache != physical(t, filepath.Join(r.home, ".cache", "meridian", "bin")) {
 		t.Errorf("the host is %+v", host)
 	}
 	data, err := os.ReadFile(want)
@@ -157,8 +204,9 @@ func TestInstall(t *testing.T) {
 			t.Errorf("%s's mode is %v, %v; want %v", path, info.Mode().Perm(), err, mode)
 		}
 	}
-	if _, _, err := Install(t.Context(), r.conn, "farm", b); err != nil {
-		t.Fatal(err)
+	again, _, err := Install(t.Context(), r.conn, "farm", b)
+	if err != nil || again != got {
+		t.Fatalf("a second Install gave %+v, %v", again, err)
 	}
 	if n := uploads(r.server.Commands()); n != 1 {
 		t.Errorf("two Installs copied the binary %d times, want once", n)
@@ -186,8 +234,9 @@ func TestInstallReplaces(t *testing.T) {
 }
 
 // TestInstallUnverified checks that a copy whose digest on the host isn't
-// the binary's is removed, and a problem that says the digest it has; and
-// that a host with no tool to compute one keeps none.
+// the binary's is removed, and a problem that says the digest it has; that
+// a host with no tool to compute one keeps none; and that the tool is the
+// system's, not one the user's PATH finds first.
 func TestInstallUnverified(t *testing.T) {
 	r := newRig(t)
 	b := binary(t, "a meridian binary\n", digestOf("another binary\n"))
@@ -202,33 +251,109 @@ func TestInstallUnverified(t *testing.T) {
 		t.Errorf("a copy that isn't the binary was kept: %v %v", left, left2)
 	}
 
-	// A PATH of the tools Install needs but none that computes a digest.
-	bin := t.TempDir()
-	for _, tool := range []string{"uname", "mkdir", "cat", "chmod", "mv", "rm"} {
-		path, err := exec.LookPath(tool)
-		if err != nil {
-			t.Skipf("no %s", tool)
-		}
-		if err := os.Symlink(path, filepath.Join(bin, tool)); err != nil {
-			t.Fatal(err)
-		}
+	// A sha256sum first on the user's PATH that says what Install wants.
+	liar := tools(t, map[string]string{"sha256sum": "#!/bin/sh\ncat > /dev/null\necho " + strings.TrimPrefix(digestOf("another binary\n"), "sha256:") + "  -\n"})
+	lied := newRig(t, "PATH="+liar+":"+os.Getenv("PATH"))
+	_, _, err = Install(t.Context(), lied.conn, "farm", b)
+	if p := paramsOf(t, err, problems.SSHWorkerBinaryUnverified); p["found"] != digestOf("a meridian binary\n") {
+		t.Errorf("with a sha256sum on the user's PATH, the problem's params are %v", p)
 	}
-	bare := newRig(t, "PATH="+bin)
+
+	withHostPath(t, tools(t, nil, scriptTools...))
+	bare := newRig(t)
 	_, _, err = Install(t.Context(), bare.conn, "farm", binary(t, "a meridian binary\n", ""))
 	if p := paramsOf(t, err, problems.SSHWorkerBinaryUnverified); p["found"] != "none" {
 		t.Errorf("the problem's params are %v", p)
 	}
 }
 
-// fakeUname returns a PATH with a uname, first, that says os and machine.
-func fakeUname(t *testing.T, os_, machine string) string {
-	t.Helper()
-	bin := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in -s) echo " + os_ + ";; -m) echo " + machine + ";; *) echo " + os_ + ";; esac\n"
-	if err := os.WriteFile(filepath.Join(bin, "uname"), []byte(script), 0o700); err != nil { //nolint:gosec // a test's script, which runs
+// TestInstallFails checks that a copy the script stops writing, as one
+// whose chmod fails, is removed.
+func TestInstallFails(t *testing.T) {
+	withHostPath(t, tools(t, map[string]string{"chmod": "#!/bin/sh\nexit 1\n"}, "uname", "id", "od", "find", "mkdir", "cat", "mv", "rm", "sha256sum"))
+	r := newRig(t)
+	if _, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", "")); err == nil {
+		t.Fatal("an Install whose chmod failed succeeded")
+	}
+	left, _ := filepath.Glob(filepath.Join(r.home, ".cache", "meridian", "bin", "*", ".meridian.*"))
+	if len(left) != 0 {
+		t.Errorf("the copy was left: %v", left)
+	}
+}
+
+// TestInstallUnsafeCache checks that a cache another user could change is
+// refused before a binary in it is run or one is written to it: a cache
+// directory others can write; a directory in it others can write; and a
+// binary there that is a link to one elsewhere, or that others can write.
+func TestInstallUnsafeCache(t *testing.T) {
+	b := binary(t, "a meridian binary\n", "")
+	hexDigest := strings.TrimPrefix(digestOf("a meridian binary\n"), "sha256:")
+
+	open := t.TempDir()
+	if err := os.Chmod(open, 0o777); err != nil { //nolint:gosec // a directory others can write, which the test checks isn't used
 		t.Fatal(err)
 	}
-	return "PATH=" + bin + ":" + os.Getenv("PATH")
+	r := newRig(t, "MERIDIAN_CACHE_DIR="+open)
+	_, _, err := Install(t.Context(), r.conn, "farm", b)
+	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "path_unsafe" || p["at"] != physical(t, open) || p["host"] != "farm" {
+		t.Errorf("a cache others can write gives %v", p)
+	}
+	if _, err := os.Stat(filepath.Join(open, "bin")); err == nil {
+		t.Error("Install wrote to a cache others can write")
+	}
+
+	r = newRig(t)
+	bin := filepath.Join(r.home, ".cache", "meridian", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o770); err != nil { //nolint:gosec // a directory its group can write, which the test checks isn't used
+		t.Fatal(err)
+	}
+	_, _, err = Install(t.Context(), r.conn, "farm", b)
+	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "directory_not_private" || p["at"] != physical(t, bin) {
+		t.Errorf("a cache directory its group can write gives %v", p)
+	}
+
+	// A link, at the binary's place, to a file elsewhere that has the
+	// binary's content.
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(bin, hexDigest)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "meridian")
+	write(t, elsewhere, []byte("a meridian binary\n"))
+	if err := os.Symlink(elsewhere, filepath.Join(dir, "meridian")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = Install(t.Context(), r.conn, "farm", b)
+	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "file_not_regular" || p["at"] != filepath.Join(physical(t, dir), "meridian") {
+		t.Errorf("a link at the binary's place gives %v", p)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "meridian")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "meridian"), []byte("a meridian binary\n"))
+	if err := os.Chmod(filepath.Join(dir, "meridian"), 0o722); err != nil { //nolint:gosec // a binary others can write, which the test checks isn't used
+		t.Fatal(err)
+	}
+	_, _, err = Install(t.Context(), r.conn, "farm", b)
+	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "file_changeable" {
+		t.Errorf("a binary others can write gives %v", p)
+	}
+}
+
+// fakeUname returns a directory of the tools Install runs, with a uname
+// that says os and machine.
+func fakeUname(t *testing.T, os_, machine string) string {
+	t.Helper()
+	names := append([]string{"sha256sum"}, scriptTools[1:]...)
+	script := "#!/bin/sh\ncase \"$1\" in -s) echo " + os_ + ";; -m) echo " + machine + ";; *) echo " + os_ + ";; esac\n"
+	return tools(t, map[string]string{"uname": script}, names...)
 }
 
 // TestHostSystems checks a host's system: one the worker doesn't run on
@@ -236,25 +361,28 @@ func fakeUname(t *testing.T, os_, machine string) string {
 // of another system than the coordinator's gets the binary fetched for it,
 // or a problem that says where to put one.
 func TestHostSystems(t *testing.T) {
-	r := newRig(t, fakeUname(t, "OpenBSD", "amd64"))
+	withHostPath(t, fakeUname(t, "OpenBSD", "amd64"))
+	r := newRig(t)
 	_, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
 	if p := paramsOf(t, err, problems.SSHHostUnsupported); p["os"] != "OpenBSD" || p["arch"] != "amd64" {
 		t.Errorf("the problem's params are %v", p)
 	}
 
-	mac := newRig(t, fakeUname(t, "Darwin", "arm64"))
+	withHostPath(t, fakeUname(t, "Darwin", "arm64"))
+	mac := newRig(t)
 	b := binary(t, "a meridian binary\n", "")
 	b.goos, b.goarch = "darwin", "arm64"
 	got, _, err := Install(t.Context(), mac.conn, "mac", b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(got.Path, filepath.Join(mac.home, "Library", "Caches", "Meridian", "bin")+"/") {
+	if !strings.HasPrefix(got.Path, physical(t, filepath.Join(mac.home, "Library", "Caches", "Meridian", "bin"))+"/") {
 		t.Errorf("on macOS the binary is at %s", got.Path)
 	}
 
 	// The coordinator runs elsewhere than linux/arm64, the host's system.
-	arm := newRig(t, fakeUname(t, "Linux", "aarch64"))
+	withHostPath(t, fakeUname(t, "Linux", "aarch64"))
+	arm := newRig(t)
 	b = binary(t, "a meridian binary\n", "")
 	b.goos, b.goarch, b.Dir = "freebsd", "amd64", t.TempDir()
 	_, _, err = Install(t.Context(), arm.conn, "arm", b)
@@ -275,14 +403,69 @@ func TestHostSystems(t *testing.T) {
 	}
 }
 
+// TestForFetched checks the binary fetched for another system: one that
+// is a link, or that others can change, isn't taken, nor one in a
+// directory others can change; and with no directory to look in, there is
+// none.
+func TestForFetched(t *testing.T) {
+	b := binary(t, "a meridian binary\n", "")
+	b.goos, b.goarch, b.Dir = "freebsd", "amd64", t.TempDir()
+	path := filepath.Join(b.Dir, "v1.2.3", "linux-arm64", "meridian")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "meridian")
+	write(t, elsewhere, []byte("an arm64 binary\n"))
+	if err := os.Symlink(elsewhere, path); err != nil {
+		t.Fatal(err)
+	}
+	_, err := b.For("arm", "linux", "arm64")
+	if p := paramsOf(t, err, problems.WorkerBinaryUnsafe); p["path"] != path || p["code"] != string(problems.FileNotRegular.Code()) {
+		t.Errorf("a link gives %v", p)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, []byte("an arm64 binary\n"))
+	if err := os.Chmod(path, 0o722); err != nil { //nolint:gosec // a binary others can write, which the test checks isn't taken
+		t.Fatal(err)
+	}
+	_, err = b.For("arm", "linux", "arm64")
+	if p := paramsOf(t, err, problems.WorkerBinaryUnsafe); p["code"] != string(problems.FileChangeable.Code()) {
+		t.Errorf("a binary others can write gives %v", p)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0o777); err != nil { //nolint:gosec // a directory others can write, which the test checks isn't taken from
+		t.Fatal(err)
+	}
+	_, err = b.For("arm", "linux", "arm64")
+	paramsOf(t, err, problems.WorkerBinaryUnsafe)
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.For("arm", "linux", "arm64"); err != nil || got.Path != path || got.Digest != digestOf("an arm64 binary\n") {
+		t.Errorf("the binary fetched gives %+v, %v", got, err)
+	}
+	b.Dir = ""
+	if _, err := b.For("arm", "linux", "arm64"); err == nil {
+		t.Error("with no directory of binaries, another system's was found")
+	}
+}
+
 // TestCacheVariables checks that the host's cache is where meridian finds
-// its own there: MERIDIAN_CACHE_DIR, then an absolute XDG_CACHE_HOME.
+// its own there: MERIDIAN_CACHE_DIR, then an absolute XDG_CACHE_HOME; that
+// a relative MERIDIAN_CACHE_DIR, or no HOME, is the problem meridian's own
+// would be; and that a HOME that holds a newline is where the binary is,
+// whole.
 func TestCacheVariables(t *testing.T) {
 	for _, tc := range []struct {
 		env  func(dir string) string
 		want func(dir string) string
 	}{
 		{func(dir string) string { return "MERIDIAN_CACHE_DIR=" + dir }, func(dir string) string { return filepath.Join(dir, "bin") }},
+		{func(dir string) string { return "MERIDIAN_CACHE_DIR=" + dir + "//" }, func(dir string) string { return filepath.Join(dir, "bin") }},
 		{func(dir string) string { return "XDG_CACHE_HOME=" + dir }, func(dir string) string { return filepath.Join(dir, "meridian", "bin") }},
 	} {
 		dir := t.TempDir()
@@ -291,9 +474,31 @@ func TestCacheVariables(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if host.Cache != tc.want(dir) {
-			t.Errorf("with %s the cache is %s, want %s", tc.env(dir), host.Cache, tc.want(dir))
+		if want := physical(t, tc.want(dir)); host.Cache != want {
+			t.Errorf("with %s the cache is %s, want %s", tc.env(dir), host.Cache, want)
 		}
+	}
+
+	r := newRig(t, "MERIDIAN_CACHE_DIR=cache")
+	_, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
+	if p := paramsOf(t, err, problems.DirectoryVariableRelative); p["variable"] != "MERIDIAN_CACHE_DIR" || p["value"] != "cache" {
+		t.Errorf("a relative MERIDIAN_CACHE_DIR gives %v", p)
+	}
+	r = newRig(t, "HOME=")
+	_, _, err = Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
+	paramsOf(t, err, problems.HomeUnknown)
+
+	home := filepath.Join(t.TempDir(), "a\nMERIDIAN-INSTALLED 2f")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r = newRig(t, "HOME="+home)
+	got, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(got.Path); err != nil || string(data) != "a meridian binary\n" || !strings.HasPrefix(got.Path, physical(t, home)+"/") {
+		t.Errorf("with a HOME that holds a newline, the binary is at %q: %q, %v", got.Path, data, err)
 	}
 }
 
