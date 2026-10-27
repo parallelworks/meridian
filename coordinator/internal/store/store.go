@@ -705,8 +705,9 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value`, strconv.FormatInt(now.U
 // led by lead, at now: the mark is now; every time a run, a job, an
 // attempt or an endpoint recorded later than now is now; and a grace
 // starts. A run's created_at stays, since a trigger keeps it from ever
-// changing, as do a secret record's updated_at and an event's stored_at,
-// which say when they were written and time nothing.
+// changing, as do a secret record's updated_at, an attempt's event's
+// stored_at and a run's event's at, which say when they were written and
+// time nothing.
 func (tx *Tx) recordReset(now time.Time, lead time.Duration) error {
 	tx.s.log.WarnContext(tx.ctx, "store: the store's clock was ahead of the host's, as after the host's clock was set back, and takes the host's clock from now, with a grace in which no lapsed lease counts",
 		"ahead", lead)
