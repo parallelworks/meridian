@@ -160,6 +160,50 @@ func TestUpdateControl(t *testing.T) {
 	})
 }
 
+// TestOnPlacementsRecorded checks that the store calls
+// Options.OnPlacementsRecorded once a transaction that recorded attempts'
+// placements has committed, with their IDs, in the order it recorded
+// them, and not for one that rolled back.
+func TestOnPlacementsRecorded(t *testing.T) {
+	var heard [][]string
+	s := openWith(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
+		OnPlacementsRecorded: func(_ context.Context, ids []string) { heard = append(heard, slices.Clone(ids)) },
+	})
+	id := createRun(t, s)
+	var a, b *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		if a, _, err = tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10}); err != nil {
+			return err
+		}
+		b, _, err = tx.NewAttempt(NewAttempt{Run: id, Job: "test", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	rolledBack := errors.New("rolled back")
+	if err := s.Tx(t.Context(), func(tx *Tx) error {
+		if err := tx.RecordPlacement(a.ID, testPlacement); err != nil {
+			return err
+		}
+		return rolledBack
+	}); !errors.Is(err, rolledBack) {
+		t.Fatal(err)
+	}
+	if len(heard) != 0 {
+		t.Fatalf("a transaction that rolled back was heard of: %v", heard)
+	}
+	inTx(t, s, func(tx *Tx) error {
+		for _, x := range []*Attempt{b, a} {
+			if err := tx.RecordPlacement(x.ID, testPlacement); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if len(heard) != 1 || !slices.Equal(heard[0], []string{b.ID, a.ID}) {
+		t.Errorf("heard %v, want [[%s %s]]", heard, b.ID, a.ID)
+	}
+}
+
 // TestOnControlsChanged checks that the store calls
 // Options.OnControlsChanged once a transaction that changed attempts'
 // controls commits, with their IDs, in order; and not for one that rolls

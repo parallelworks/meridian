@@ -620,6 +620,145 @@ func TestExecutable(t *testing.T) {
 
 // An attempt's ID names its files, so one that can't is refused, and
 // nothing is made of it.
+// TestDigestKept checks that the digest of the binary a worker runs is
+// kept while the file is as it was hashed, and taken again once it
+// changed, even with the time its data last changed set back; and that a
+// file whose status changed less than a second before isn't kept, so that
+// a change within the clock's tick can't go unseen.
+func TestDigestKept(t *testing.T) {
+	var hashed int
+	hash := hashFile
+	hashFile = func(r io.Reader) (string, error) {
+		hashed++
+		return hash(r)
+	}
+	t.Cleanup(func() { hashFile, settled = hash, time.Second })
+	exe := filepath.Join(t.TempDir(), "meridian")
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(exe); err != nil {
+		t.Fatal(err)
+	} else if _, ok := identity(info); !ok {
+		t.Skip("the digest is kept only on Linux")
+	}
+	write := func(content string) string {
+		t.Helper()
+		if err := os.WriteFile(exe, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(content))
+		return "sha256:" + hex.EncodeToString(sum[:])
+	}
+	check := func(want string, hashes int) {
+		t.Helper()
+		if got, err := checkExecutable(exe, exe); err != nil || got != want || hashed != hashes {
+			t.Errorf("the digest is %s, %v, after %d hashes; want %s after %d", got, err, hashed, want, hashes)
+		}
+	}
+
+	settled = 0
+	one := write("#!/bin/sh\necho 1\n")
+	check(one, 1)
+	check(one, 1)
+	// The same size, with the time its data changed set back: its status
+	// changed, which nothing sets back.
+	info, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := write("#!/bin/sh\necho 2\n")
+	if err := os.Chtimes(exe, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	check(two, 2)
+	check(two, 2)
+
+	settled = time.Hour
+	three := write("#!/bin/sh\necho 3\n")
+	check(three, 3)
+	check(three, 4)
+}
+
+// TestLiveIndex checks what Probe counts of the placements the state
+// directory holds: the workers that run, as live/ names them, a placement
+// a release before live/ made among them, which the driver marks live the
+// first time it probes; not one whose worker ended, which it takes out of
+// live/; and that it removes the placements of workers that ended more
+// than a day before, with their logs, and keeps those of workers that
+// ended since.
+func TestLiveIndex(t *testing.T) {
+	d := &Driver{State: t.TempDir()}
+	for _, dir := range []string{placementsDir, workersDir, liveDir} {
+		if err := os.MkdirAll(filepath.Join(d.State, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	boot, err := bootID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := exec.CommandContext(t.Context(), "sleep", "30")
+	if err := running.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = running.Process.Kill()
+		_ = running.Wait()
+	})
+	pid := running.Process.Pid
+	put := func(attempt string, r *record, live bool, age time.Duration) {
+		t.Helper()
+		if err := d.writeFile(d.path(attempt, ".json"), mustMarshal(r)); err != nil {
+			t.Fatal(err)
+		}
+		log := filepath.Join(d.State, workersDir, attempt+".log")
+		if err := os.WriteFile(log, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if live {
+			if err := d.markLive(attempt); err != nil {
+				t.Fatal(err)
+			}
+		}
+		then := time.Now().Add(-age)
+		if err := os.Chtimes(d.path(attempt, ".json"), then, then); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := backend.Resources{MilliCPU: 1000}
+	put("runs", &record{PID: pid, Start: mustStart(t, pid), Boot: boot, Resources: res}, true, 0)
+	put("older-release", &record{PID: pid, Start: mustStart(t, pid), Boot: boot, Resources: res}, false, 0)
+	put("ended", &record{PID: pid, Start: "1", Boot: boot, Resources: res}, true, 0)
+	put("stale", &record{PID: pid, Start: "1", Boot: boot, Resources: res}, false, 48*time.Hour)
+
+	m := &backend.Member{Name: "box", Backend: "local", Isolation: "host", Resources: backend.Resources{MilliCPU: 2500, Memory: 1 << 30}}
+	for demand, want := range map[int64]backend.Availability{500: backend.StartsNow, 600: backend.HasCapacity} {
+		fit, err := d.Probe(t.Context(), m, backend.Demand{Resources: backend.Resources{MilliCPU: demand}})
+		if err != nil || fit.Problem != nil || fit.Availability != want {
+			t.Errorf("%d thousandths of a CPU beside two workers of 1000 each: %+v, %v; want %v", demand, fit, err, want)
+		}
+	}
+	live, err := os.ReadDir(filepath.Join(d.State, liveDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range live {
+		names = append(names, e.Name())
+	}
+	if !slices.Equal(names, []string{"older-release", "runs"}) {
+		t.Errorf("live/ holds %v", names)
+	}
+	for attempt, kept := range map[string]bool{"runs": true, "older-release": true, "ended": true, "stale": false} {
+		for _, path := range []string{d.path(attempt, ".json"), filepath.Join(d.State, workersDir, attempt+".log")} {
+			if _, err := os.Lstat(path); (err == nil) != kept {
+				t.Errorf("%s is there: %t, want %t", path, err == nil, kept)
+			}
+		}
+	}
+}
+
 func TestAttemptID(t *testing.T) {
 	t.Parallel()
 	d, out := newDriver(t, "run")

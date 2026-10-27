@@ -40,10 +40,10 @@ func processStart(pid int) (string, error) {
 	return fields[19], nil
 }
 
-// bootID returns the boot's ID, which the kernel makes at random each
+// readBootID returns the boot's ID, which the kernel makes at random each
 // boot, so that a start time, counted from the boot, can't be another
 // boot's.
-func bootID() (string, error) {
+func readBootID() (string, error) {
 	data, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	return strings.TrimSpace(string(data)), err
 }

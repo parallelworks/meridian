@@ -218,6 +218,7 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 // attemptEnded ends the job as its latest attempt, a, ended, or places it
 // again after a setup failure.
 func (c *Coordinator) attemptEnded(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
+	c.forgetLater(a.ID)
 	switch {
 	case a.End.Reason == plan.ReasonSetupFailed:
 		return c.setupFailed(ctx, run, job, a, done)
@@ -348,9 +349,14 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 
 // A controlNotifier hears which attempts' controls changed, once the
 // change has committed, so that it answers the control polls it holds of
-// them: the worker API's server (workerapisrv.Server.Notify), whose polls
-// in other processes read them again every second.
-type controlNotifier interface{ Notify(ids ...string) }
+// them (workerapisrv.Server.Notify), and which attempts' placements were
+// recorded, so that it answers the first claims it holds of them
+// (workerapisrv.Server.Placed): the worker API's server, whose polls and
+// claims in other processes read the store again every so often.
+type controlNotifier interface {
+	Notify(ids ...string)
+	Placed(ids ...string)
+}
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,
 // that the controls of the attempts ids changed, if any did: the store
@@ -365,6 +371,18 @@ func (c *Coordinator) controlsChanged(ids []string) {
 	c.mu.Unlock()
 	if n != nil {
 		n.Notify(ids...)
+	}
+}
+
+// placementsRecorded tells the coordinator's controlNotifier, if it has
+// one, that the placements of the attempts ids were recorded
+// (store.Options.OnPlacementsRecorded).
+func (c *Coordinator) placementsRecorded(ids []string) {
+	c.mu.Lock()
+	n := c.controls
+	c.mu.Unlock()
+	if n != nil {
+		n.Placed(ids...)
 	}
 }
 

@@ -137,6 +137,13 @@ type Options struct {
 	// process answers them at once (workerapisrv.Server.Notify); those of
 	// other processes read them again every second. Nil means nothing is.
 	OnControlsChanged func(ctx context.Context, ids []string)
+	// OnPlacementsRecorded is called once a transaction that recorded
+	// attempts' placements (Tx.RecordPlacement) has committed, with the
+	// transaction's context and the attempts' IDs, in order, so that
+	// whoever holds their first claims in this process answers them at
+	// once (workerapisrv.Server.Placed); those of other processes read
+	// them again every so often. Nil means nothing is.
+	OnPlacementsRecorded func(ctx context.Context, ids []string)
 }
 
 // hostClock is the host's clock, which the store reads, unless
@@ -167,10 +174,12 @@ type Store struct {
 	// Options.MaxLead.
 	clock   func() time.Time
 	maxLead time.Duration
-	// onReset is Options.OnClockReset, and onControls
-	// Options.OnControlsChanged, or nil.
+	// onReset is Options.OnClockReset, onControls
+	// Options.OnControlsChanged, and onPlaced Options.OnPlacementsRecorded,
+	// or nil.
 	onReset    func(ctx context.Context)
 	onControls func(ctx context.Context, ids []string)
+	onPlaced   func(ctx context.Context, ids []string)
 	// migrated is set once Meridian's schema, which keeps the clock's
 	// mark, is there: Open sets it before it returns the store.
 	migrated bool
@@ -281,7 +290,7 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 	s.maxLead = DefaultMaxLead
 	if opts != nil {
 		s.lastTry, s.retriesFor, s.clock = opts.LastTry, opts.RetriesFor, opts.Now
-		s.onReset, s.onControls = opts.OnClockReset, opts.OnControlsChanged
+		s.onReset, s.onControls, s.onPlaced = opts.OnClockReset, opts.OnControlsChanged, opts.OnPlacementsRecorded
 		if opts.MaxLead > 0 {
 			s.maxLead = opts.MaxLead
 		}
@@ -524,6 +533,9 @@ type Tx struct {
 	// controls are the attempts whose controls the transaction has
 	// changed (UpdateControl).
 	controls map[string]bool
+	// placed are the attempts whose placements the transaction has
+	// recorded (RecordPlacement), in order.
+	placed []string
 }
 
 // ControlsChanged returns the attempts whose controls the transaction has
@@ -585,6 +597,9 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	}
 	if len(tx.controls) > 0 && s.onControls != nil {
 		s.onControls(context.WithoutCancel(ctx), tx.ControlsChanged())
+	}
+	if len(tx.placed) > 0 && s.onPlaced != nil {
+		s.onPlaced(context.WithoutCancel(ctx), tx.placed)
 	}
 	if tx.erased {
 		s.truncateWAL(context.WithoutCancel(ctx))

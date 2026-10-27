@@ -91,9 +91,9 @@ func processStart(pid int) (string, error) {
 	return "", errors.New("local: kern.boottime kept moving")
 }
 
-// bootID returns the boot's ID, kern.boot_id, which FreeBSD makes at
+// readBootID returns the boot's ID, kern.boot_id, which FreeBSD makes at
 // random each boot, from 13.5 and 14.
-func bootID() (string, error) {
+func readBootID() (string, error) {
 	id, err := unix.SysctlRaw("kern.boot_id")
 	if err == nil && len(id) == 0 {
 		err = errors.New("local: kern.boot_id is empty")

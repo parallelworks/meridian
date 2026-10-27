@@ -295,6 +295,9 @@ func (c *Coordinator) recordPlacement(ctx context.Context, runID, id string, cho
 		}
 		return tx.RecordPlacement(id, store.Placement{WorkerDigest: p.WorkerDigest})
 	})
+	if err == nil || errors.Is(err, store.ErrState) {
+		c.remember(id, chosen, p)
+	}
 	switch {
 	case errors.Is(err, store.ErrFenced):
 		// Superseded meanwhile, as by another attempt of the supervisor:
@@ -543,6 +546,12 @@ func (c *Coordinator) cancelPlacements(ctx context.Context, run string, ws map[s
 		}
 		if err == nil {
 			err = d.Cancel(ctx, m, p)
+		}
+		if err == nil {
+			c.mu.Lock()
+			c.unremember(id)
+			c.mu.Unlock()
+			c.forget(w.cand, p)
 		}
 		if err != nil && !w.private {
 			c.log.WarnContext(ctx, "coordinator: couldn't cancel the placement of an attempt it withdrew; its worker's reports are refused", "run", run, "attempt", id, "error", err)

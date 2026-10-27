@@ -87,6 +87,8 @@ type testDriver struct {
 	connects   int
 	// cancelled are the placements Cancel cancelled.
 	cancelled []backend.Placement
+	// forgotten are the placements Forget forgot.
+	forgotten []backend.Placement
 	workers   sync.WaitGroup
 }
 
@@ -184,7 +186,12 @@ func (d *testDriver) Cancel(_ context.Context, _ *backend.Member, p backend.Plac
 	return nil
 }
 
-func (d *testDriver) Forget(context.Context, *backend.Member, backend.Placement) error { return nil }
+func (d *testDriver) Forget(_ context.Context, _ *backend.Member, p backend.Placement) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.forgotten = append(d.forgotten, p)
+	return nil
+}
 
 // work is the worker of the attempt req is for, placed as p: once the
 // placement is recorded, as the worker API's claim waits for, it claims

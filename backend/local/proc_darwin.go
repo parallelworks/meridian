@@ -34,10 +34,10 @@ func processStart(pid int) (string, error) {
 	return fmt.Sprintf("%d.%06d", tv.Sec, tv.Usec), nil
 }
 
-// bootID returns the boot's ID, kern.bootsessionuuid, which macOS makes
+// readBootID returns the boot's ID, kern.bootsessionuuid, which macOS makes
 // anew each boot, and which, unlike kern.boottime, a change to the clock
 // doesn't move.
-func bootID() (string, error) {
+func readBootID() (string, error) {
 	id, err := unix.Sysctl("kern.bootsessionuuid")
 	if err == nil && id == "" {
 		err = errors.New("local: kern.bootsessionuuid is empty")
