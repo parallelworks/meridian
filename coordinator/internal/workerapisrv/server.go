@@ -68,7 +68,9 @@ const (
 // a job the plan bounds sends them. The log that reaches MaxLogBytes keeps
 // its bytes to there, then a line that says the rest wasn't kept
 // (problems.LogTruncated), and each of the attempt's logs after it keeps
-// only that line; a try past MaxLogTry, which no workflow is likely to
+// only that line, but for what another replica reserved of the limit
+// before it ran out, which that replica still spends (spendLogBytes); a
+// try past MaxLogTry, which no workflow is likely to
 // retry to, keeps no log; and the worker is told the rest is stored, so
 // that it goes on. So the logs an attempt has are bounded too, by its job's
 // steps.

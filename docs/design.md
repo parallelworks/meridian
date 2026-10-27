@@ -2894,22 +2894,25 @@ that embeds Meridian serve the same API.
   doesn't answer within a few seconds leaves it to the polls after.
 - **Step events:** a step started, or finished with its exit code.
 - **Logs:** each step's output, uploaded as a stream with byte offsets, so
-  an interrupted upload resumes without duplicating or losing lines. Once
-  an upload has sent all a log had, the worker starts the next no sooner
-  than 100 ms after that one started, but sends a log's end at once: a
-  step that prints a line at a time has its lines sent together, rather
-  than an upload, and the coordinator's work for it, for nearly each
-  line. An attempt's logs keep 1 GiB at most, all of them together; the
-  log that reaches it keeps a line that says the rest wasn't kept
-  (`log_truncated`), and each log after it only that line. A replica
-  reserves the limit 1 MiB at a time, in one write, and spends it as
-  uploads come, so a chatty step doesn't take a write for each upload.
-  The store counts what every replica reserves, and gives each only what
-  the limit has left, so the logs never keep more than it, whichever
-  replicas serve the uploads. What a replica reserved and didn't spend
-  goes unused, so the logs can keep less: up to 1 MiB less for each
-  replica that stopped serving the attempt, as after a takeover, and for
-  each time its logs went ten minutes without an upload.
+  an interrupted upload resumes without duplicating or losing lines. An
+  attempt's logs keep 1 GiB at most, all of them together; the log that
+  reaches it keeps its bytes to there, then a line that says the rest
+  wasn't kept (`log_truncated`), and ends. A replica reserves the limit
+  1 MiB at a time, in one write, and spends it as uploads come, so a
+  chatty step doesn't take a write for each upload. The store counts what
+  every replica reserves, and gives each only what the limit has left, so
+  the logs never keep more than it, whichever replicas serve the uploads.
+  A replica spends what it reserved even once another has run the limit
+  out, so a log after the one that reached it can still keep bytes, of
+  what a replica that serves it holds; otherwise it keeps only the line.
+  Every replica answers more of a log the limit ended as stored, since
+  the worker was told the bytes before it were. What a replica
+  reserved and didn't spend goes unused, so the logs can keep less than
+  the limit: up to 1 MiB less for each replica that holds some of it but
+  serves none of the attempt's later uploads, as one that stopped, after
+  a takeover, or one the uploads moved away from; and for each time the
+  logs went ten minutes without an upload, after which a replica lets go
+  what it holds.
 - **Child runs:** start the run of a workflow a step calls, with its
   step's `with:`, and wait for its outcome
   ([Workflows a step calls](#workflows-a-step-calls)). It isn't built yet:
@@ -3088,7 +3091,12 @@ own runs.
   output is still the step's. It runs in a process group of its own, which
   is what SIGTERM and SIGKILL stop.
 - **Logs** are masked on the worker, before they leave the host, and so are
-  outputs ([Outputs](#outputs)).
+  outputs ([Outputs](#outputs)). Once an upload has sent all a log had,
+  the worker starts the next no sooner than 100 ms after that one
+  started, but sends a log's end at once, and more of a log at once
+  after an upload as large as one can be: a step that prints a line at a
+  time has its lines sent together, rather than an upload, and the
+  coordinator's work for it, for nearly each line.
 - **While the coordinator is unreachable**, a worker keeps running its steps,
   spools logs to disk up to a limit, keeps events in memory, and delivers
   them in order when it reconnects, unless its job fences itself

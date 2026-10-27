@@ -425,10 +425,13 @@ func TestLogTruncated(t *testing.T) {
 // reaches it keeps its bytes to there, each log after keeps only the line
 // that says the rest wasn't kept, and a try past MaxLogTry keeps no log;
 // each upload is answered as stored. Uploads to a log that ended before
-// the limit was reached are checked as ever.
+// the limit was all given out are checked as ever: the server reserves
+// less of it at a time than it is, as it does of MaxLogBytes, so that the
+// first upload doesn't give it all out.
 func TestLogQuotaPerAttempt(t *testing.T) {
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 1024, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
+		workerapisrv.SetLogReserve(s, 100)
 	}})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{})
@@ -507,11 +510,12 @@ func TestLogQuotaPerAttempt(t *testing.T) {
 // The limit on an attempt's logs holds over every replica that serves its
 // uploads, as after a takeover. Each reserves a part of the limit at a time,
 // which the store counts, and spends it as uploads come: what one reserved
-// is its own to spend, and the other is given only what the limit has left
-// past it. So the attempt's logs keep the limit in all, and no more, beside
-// the line that ends each. A replica that has reserved none of it, as one
-// that takes over, finds it spent, and answers the uploads of a log the
-// limit ended as stored, as the others do.
+// is its own to spend, even once another has run the limit out, and the
+// others are given only what the limit has left past it. So the attempt's
+// logs keep the limit in all, and no more, beside the line that ends each.
+// Each replica answers an upload past the end of a log another ended at
+// the limit as stored, whether it holds some of the limit still or none:
+// the worker was told the bytes before it were stored.
 func TestLogLimitAcrossReplicas(t *testing.T) {
 	limits := func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
@@ -519,14 +523,14 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 	}
 	r := newRig(t, rigOptions{configure: limits})
 	first := r.socket
-	sockets := make([]string, 2)
+	sockets := make([]string, 3)
 	for i := range sockets {
 		r.socket = ""
 		r.serve(rigOptions{configure: limits})
 		sockets[i] = r.socket
 	}
 	r.socket = first
-	one, other, third := newClient(t, first), newClient(t, sockets[0]), newClient(t, sockets[1])
+	one, other, third, fourth := newClient(t, first), newClient(t, sockets[0]), newClient(t, sockets[1]), newClient(t, sockets[2])
 	a, _, credential := r.claimed(one, placed{})
 	uploads := []struct {
 		c           *client
@@ -538,17 +542,26 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 		{one, 0, 0, strings.Repeat("a", 10), false},
 		// The other reserves 50, and spends them; then of the 50 more
 		// it asks, it is given the 20 the limit has left past the 80
-		// reserved.
+		// reserved, and ends the log.
 		{other, 0, 10, strings.Repeat("b", 50), false},
 		{other, 0, 60, strings.Repeat("c", 50), false},
-		// One spends the 20 it has left, and is given no more.
-		{one, 1, 0, strings.Repeat("d", 30), true},
-		{one, 2, 0, "e", true},
-		{other, 3, 0, "f", true},
-		// More of a log the limit ended, past what it stored, and a
-		// log after it, through a replica that has reserved nothing.
-		{third, 0, 110, strings.Repeat("g", 100), false},
-		{third, 4, 0, "h", true},
+		// More of that log, past what it stored, through the replica
+		// that still holds 20.
+		{one, 0, 110, strings.Repeat("g", 200), false},
+		// One spends 10 of its 20 on the next log; the third, which
+		// holds none, is given none, and ends that log; and one is
+		// answered more of it, past what it stored, as stored.
+		{one, 1, 0, strings.Repeat("d", 10), false},
+		{third, 1, 10, strings.Repeat("e", 5), false},
+		{one, 1, 15, strings.Repeat("f", 200), false},
+		// One spends the 10 it has left, and is given no more.
+		{one, 2, 0, strings.Repeat("h", 30), true},
+		{one, 3, 0, "i", true},
+		{other, 4, 0, "j", true},
+		{third, 5, 0, "k", true},
+		// More of the first log, past what it stored, through a replica
+		// that has served none of the attempt's uploads.
+		{fourth, 0, 310, strings.Repeat("l", 10), false},
 	}
 	for _, u := range uploads {
 		if ack := uploadTry(t, u.c, credential, u.try, u.offset, u.data, u.end); ack.Length != int64(u.offset+len(u.data)) || ack.Ended != u.end {
@@ -559,7 +572,8 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 	message := problems.LogTruncated.Message(problems.Params{"limit": int64(100)}) + "\n"
 	want := []string{
 		strings.Repeat("a", 10) + strings.Repeat("b", 50) + strings.Repeat("c", 20) + "\n" + message,
-		strings.Repeat("d", 20) + "\n" + message,
+		strings.Repeat("d", 10) + "\n" + message,
+		strings.Repeat("h", 10) + "\n" + message,
 		message,
 		message,
 		message,

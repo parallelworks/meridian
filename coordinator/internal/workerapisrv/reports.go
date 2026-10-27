@@ -224,12 +224,13 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request, a *store.Atte
 // adds to its log are spent, before they are appended, from what the
 // server has reserved of the attempt's limit (spendLogBytes). The log that
 // reaches the limit keeps its bytes to there, then a line that says the
-// rest wasn't kept, and ends; each of the attempt's logs after it keeps
-// only that line; and the rest of each is answered as stored. An upload
-// spends the bytes past its log's length as it read it, so uploads of the
-// same bytes at once each spend them: what is spent errs only high, and
-// the attempt's logs never keep more than the limit, beside the line that
-// ends each.
+// rest wasn't kept, and ends; each log after it keeps only that line, but
+// for what another server reserved of the limit before it ran out, which
+// that server still spends; and the rest of each is answered as stored.
+// An upload spends the bytes past its log's length as it read it, so
+// uploads of the same bytes at once each spend them: what is spent errs
+// only high, and the attempt's logs never keep more than the limit, beside
+// the line that ends each.
 func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, offset int64, data []byte, end bool) (int64, bool, error) {
 	// The log's length: an append of nothing changes nothing.
 	length, ended, err := s.logs.Append(ctx, key, 0, nil, false)
@@ -238,21 +239,28 @@ func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, 
 	}
 	budget := s.budgets.of(attempt)
 	spent := budget.spent()
-	fresh := offset + int64(len(data)) - length
-	past := offset > length || ended || fresh <= 0
-	if past && !spent {
-		// Past the log's end, after it, or nothing the log hasn't: as
-		// Logs.Append answers it, unless the limit has run out, which
-		// a server that has reserved none of it reads from the store,
-		// as one that takes over from the server that spent it does.
-		if spent, err = s.logLimitSpent(ctx, budget, attempt); err != nil {
+	upTo := offset + int64(len(data))
+	if !spent && upTo > length && (ended || offset > length) {
+		// Bytes past an ended log's end, or past its length, which
+		// Logs.Append answers out of order, unless the limit has run
+		// out: another server may have run it out, and ended the log
+		// with the line that says so, while this one still holds some
+		// of it, or none. So the store says, whatever this one holds,
+		// once it has given all of the limit out, which errs early by
+		// what servers hold still: such an upload, which a worker
+		// sends only after a log the limit ended, is answered as
+		// stored then.
+		if spent, err = s.logLimitReached(ctx, budget, attempt); err != nil {
 			return 0, false, err
 		}
 	}
+	fresh := upTo - length
 	switch {
 	case spent:
-		return s.truncateLog(ctx, key, length, ended, offset+int64(len(data)), end)
-	case past:
+		return s.truncateLog(ctx, key, length, ended, upTo, end)
+	case offset > length || ended || fresh <= 0:
+		// Past the log's end, after it, or nothing the log hasn't: as
+		// Logs.Append answers it.
 		return s.logs.Append(ctx, key, offset, data, end)
 	}
 	keep, err := s.spendLogBytes(ctx, budget, attempt, fresh)
@@ -267,7 +275,7 @@ func (s *Server) appendLog(ctx context.Context, attempt string, key runlog.Key, 
 			return length, ended, err
 		}
 	}
-	return s.truncateLog(ctx, key, length, false, offset+int64(len(data)), end)
+	return s.truncateLog(ctx, key, length, false, upTo, end)
 }
 
 // truncateLog ends the log key, whose length is length, and which has ended
