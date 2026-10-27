@@ -1832,6 +1832,27 @@
       "Después vuelve a ejecutar el workflow."
     ]
   },
+  "socket_server_stopped": {
+    "title": "Socket del coordinador cuyo servidor se detuvo",
+    "why": "Los workers de esta máquina llegan al coordinador por un socket Unix en el directorio de estado de Meridian, que meridian run sirve hasta que termina la ejecución. Su servidor se detuvo mientras la ejecución seguía, sin decir por qué, así que los workers de la ejecución ya no pueden informarle.",
+    "fix": [
+      "Revisa los otros mensajes de meridian run para ver qué falló, y luego retoma la ejecución con meridian resume."
+    ]
+  },
+  "coordinator_harden_failed": {
+    "title": "No se puede proteger la memoria del coordinador",
+    "why": "meridian run y meridian resume guardan en su memoria los registros secretos de las ejecuciones que coordinan: contraseñas, variables secretas y salidas privadas. Antes de abrirlos, impiden que tus otros procesos, entre ellos los pasos de tus ejecuciones, lean su memoria o se les adjunten como hace un depurador: en Linux se hacen no volcables, en macOS rechazan los depuradores (PT_DENY_ATTACH) y ponen a 0 el tamaño de su archivo core, y en FreeBSD desactivan el rastreo de sí mismos (procctl). El sistema operativo lo rechazó o falló.",
+    "fix": [
+      "Corrige lo que indica el motivo, como una política de seguridad que prohíbe la llamada, y vuelve a ejecutar el comando."
+    ]
+  },
+  "coordinator_system_unsupported": {
+    "title": "Sistema en el que el coordinador no puede proteger su memoria",
+    "why": "meridian run y meridian resume guardan en su memoria los registros secretos de las ejecuciones que coordinan, e impiden que tus otros procesos, entre ellos los pasos de tus ejecuciones, los lean allí. Pueden hacerlo en Linux, macOS y FreeBSD. Otros sistemas, como NetBSD y OpenBSD, no dan a un proceso ninguna forma de impedir que los otros procesos del usuario lo rastreen, así que Meridian se niega a coordinar una ejecución en ellos, en lugar de guardar sus secretos con menos protección.",
+    "fix": [
+      "Ejecuta el workflow en una máquina con Linux, macOS o FreeBSD."
+    ]
+  },
   "source_access_denied": {
     "title": "Acceso denegado al repositorio",
     "why": "El repositorio pidió credenciales que git no tiene, o rechazó las que dio, o no se pudo comprobar la clave de su host. Un repositorio que no existe parece lo mismo cuando el servidor pide credenciales en vez de decirlo. Meridian nunca responde a una petición de contraseña o de frase de paso.",

@@ -26,8 +26,6 @@ func liveGroupsOf([]int) map[int]bool { return nil }
 
 const holdsLeaders = false
 
-func harden() error { return errNotUnix }
-
 const (
 	openNoFollow = 0
 	openNonBlock = 0

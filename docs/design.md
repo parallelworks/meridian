@@ -2852,8 +2852,11 @@ lasts until the attempt ends, so that a worker cut off from the coordinator
 can still deliver what it spooled. For a job that fences itself it lasts
 only while heartbeats renew it, and lapses with the lease. It lets its
 holder do one thing: report on its own attempt. A step that reads it gains
-nothing that its job couldn't already do, so on backends where steps and
-their worker run as the same user, no further separation is needed.
+nothing in that attempt that its job couldn't already do. That holds
+where steps and their worker run as the same user only as far as the
+user's own files and processes allow: with the `local` backend, a step
+is the user, and can read everything the user can, other runs' secrets
+among them ([Security](#security)).
 
 The API's bodies are versioned by the run's plan version: a change to a
 body is a change to the plan's encoding, and raises the plan's version, as
@@ -3110,7 +3113,12 @@ The `local` backend starts `meridian worker` from the binary that places
 it, once it has checked that no other user can change that binary, or the
 way to it (`worker_binary_unsafe`). The worker starts in `/`, in a session
 of its own, so that the terminal's Ctrl-C and SIGHUP don't reach it, with
-the user's environment but its `MERIDIAN_` variables. It gets its
+the user's environment but its `MERIDIAN_` variables and those that the
+user's secret variables are read from (`env:`), which the worker gives
+its steps: a job reads a secret only as its run gives it, masked in its
+logs, and a step that printed its environment would show the others in
+the clear. A plain variable's environment variable stays, since its value
+isn't a secret, and steps may read it. It gets its
 bootstrap token on a socket it inherits, once it has said there that it
 is hardened (`workerapi.EnvBootstrapTokenFD`), and the token is in no
 file. One window is known, and left: from `exec` until the worker hardens
@@ -3227,6 +3235,22 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   directory is readable only by its user, sockets live in it, a listening
   coordinator requires TLS and a token, and tokens never appear on command
   lines.
+- **The user's own processes can.** With the `local` backend, a workflow's
+  steps run as the user who started it, so they can read what the user can:
+  the state directory's key file, `secret-record.key`, and its database,
+  with which they can open the secret record of every run that hasn't ended,
+  passwords, secret variables and private outputs of other runs and other
+  jobs among them. That comes with running steps as the user, and
+  per-attempt least privilege, each attempt given only what its job reads,
+  holds against a step only where steps run apart from the state, as in a
+  container, or a group whose members use microVMs. What Meridian does
+  close: `meridian run` and `resume`, which hold runs' secret records in
+  their memory, keep the user's other processes out of it, as the worker
+  does (not dumpable on Linux, `PT_DENY_ATTACH` on macOS, `procctl` on
+  FreeBSD), and refuse to run where they can't
+  (`coordinator_harden_failed`, `coordinator_system_unsupported`); and a
+  worker's environment, and so its steps', leaves out the environment
+  variables that the user's secret variables are read from.
 - **SSH host keys are checked** against the user's `known_hosts`. An unknown
   key is an error until the user accepts it explicitly; Meridian never
   accepts a key on first use by itself.
@@ -3256,9 +3280,9 @@ module from Go's source, as the version `latest`, which isn't the
 validated module in any mode. So no `meridian` command runs, the worker
 above all, unless the process's cryptography runs in FIPS 140-3 mode,
 enforced (`fips_not_enforced`), with a validated module
-(`fips_module_not_validated`); `worker.Run` checks both too, whatever
-program calls it, as every entry point of Meridian's must
-(`internal/fipsmode`).
+(`fips_module_not_validated`); `worker.Run` and `coordinator.Open`
+check both too, whatever program calls them, as every entry point of
+Meridian's must (`internal/fipsmode`).
 
 - **TLS 1.3**, through `crypto/tls`, with the algorithms FIPS mode allows.
   The coordinator's certificate uses an ECDSA P-256 key.

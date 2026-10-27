@@ -18,6 +18,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -227,9 +228,17 @@ type Coordinator struct {
 	outlives map[string]bool
 }
 
+// checkFIPS is fipsmode.CheckProcess, which a test replaces.
+var checkFIPS = fipsmode.CheckProcess
+
 // Open opens a coordinator on the store at opts.Database. It works no
-// run's jobs until Serve.
+// run's jobs until Serve. It refuses to open unless the process's
+// cryptography runs in FIPS 140-3 mode, enforced, with the validated
+// module (fipsmode), whatever program it runs in, as worker.Run does.
 func Open(ctx context.Context, opts Options) (*Coordinator, error) {
+	if err := checkFIPS(); err != nil {
+		return nil, err
+	}
 	if opts.Keys == nil && !opts.ReadOnly {
 		return nil, errors.New("coordinator: no Keys")
 	}
