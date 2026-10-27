@@ -277,28 +277,32 @@ func TestCancelOutlives(t *testing.T) {
 	}
 }
 
-// TestCancelWithdraws checks that after a cancel, a placement no worker has
-// claimed is withdrawn: its attempt ends withdrawn, its backend cancels
-// it, and its job ends cancelled.
-func TestCancelWithdraws(t *testing.T) {
+// TestCancelKeepsPlacement checks that after a cancel, a placement no
+// worker has claimed isn't withdrawn, however often its supervisor looks:
+// its control asks its worker to cancel, which it reads as it claims the
+// attempt, as a worker queued by a scheduler would.
+func TestCancelKeepsPlacement(t *testing.T) {
 	c, d := openStop(t, map[string]string{"main": never})
 	id, _ := create(t, c, oneJob, nil, nil)
 	serve(t, c)
-	a := latestIs(t, c, id, "main", func(a *store.Attempt) bool { return a.Placement.ID != "" })
+	a := latestIs(t, c, id, "main", func(a *store.Attempt) bool { return a.Placed() })
 	if err := c.Cancel(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if r := waitEnded(t, c, id); r.Outcome != plan.OutcomeCancelled {
-		t.Errorf("the run ended %s", r.Outcome)
+	// Looked at again and again, as by its supervisor, the job waits.
+	for range 3 {
+		if wait, err := c.supervise(t.Context(), id, "main", nil); err != nil || wait <= 0 {
+			t.Fatalf("supervise = %v, %v", wait, err)
+		}
 	}
-	if got := latestAttempt(t, c, id, "main"); got.ID != a.ID || got.End.Kind != store.EndWithdrawn {
+	if got := latestAttempt(t, c, id, "main"); got.ID != a.ID || got.State != store.AttemptPlacing {
 		t.Errorf("the attempt is %+v", got)
 	}
-	if w := d.withdrawn(); len(w) != 1 || w[0] != a.ID {
-		t.Errorf("the backend cancelled %v", w)
+	if ctl := controlOf(t, c, a.ID); !ctl.Cancel || ctl.Reason != plan.ReasonCancelled {
+		t.Errorf("the placement's worker is told %+v", ctl)
 	}
-	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled {
-		t.Errorf("the job is %+v", j)
+	if w := d.withdrawn(); len(w) != 0 {
+		t.Errorf("the backend cancelled %v", w)
 	}
 }
 
@@ -606,10 +610,11 @@ func TestStopTwice(t *testing.T) {
 }
 
 // TestCancelPlacing checks a cancel as the job's placement is made, once
-// its attempt is: the attempt is told, its placement is withdrawn once it
-// is recorded, and the job ends cancelled.
+// its attempt is: the attempt is told, its placement is kept once it is
+// recorded, and its worker, which claims it once the run is stopped, ends
+// the job cancelled.
 func TestCancelPlacing(t *testing.T) {
-	c, d := openStop(t, map[string]string{"main": never})
+	c, d := openStop(t, map[string]string{"main": late})
 	id, _ := create(t, c, oneJob, nil, nil)
 	var once sync.Once
 	d.set(func(td *testDriver) {
@@ -627,10 +632,10 @@ func TestCancelPlacing(t *testing.T) {
 		t.Errorf("the run ended %s", r.Outcome)
 	}
 	a := latestAttempt(t, c, id, "main")
-	if a.End.Kind != store.EndWithdrawn {
+	if a.End.Kind != store.EndCompleted || a.Number != 1 {
 		t.Errorf("the attempt is %+v", a)
 	}
-	if w := d.withdrawn(); len(w) != 1 || w[0] != a.ID {
+	if w := d.withdrawn(); len(w) != 0 {
 		t.Errorf("the backend cancelled %v", w)
 	}
 	if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeCancelled || j.Reason != plan.ReasonCancelled {

@@ -2420,22 +2420,24 @@ for any other only once they have (`plan.Plan.CancelPath`).
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
   of a job whose `if:` isn't cancel-aware, through its control poll, and
-  wakes every job's supervisor. After a cancel, a placement of such a job
-  that no worker has claimed yet is withdrawn (`scancel`, `qdel`, deleting
-  the pod, signalling the process), and the job ends cancelled: it was
-  readied, so its needs had all ended, and format 1 would be running it,
-  and would stop it as below. After the run's timeout, such a placement
-  isn't withdrawn: its worker claims it and is told at once that the run's
-  timeout has passed, so that its steps end as format 1's do when they
-  start under the passed deadline, failing but for those that outlive a
-  cancel and a last try that ignores its errors. A running attempt that
-  is stopped is waited for while it renews its lease, since its cleanups
-  have no timeout, and withdrawn as a placement is if its lease lapses.
-  A job between attempts when the run stops, readied before the stop, as
-  one waiting to be placed again after a failure before its first step,
-  or for a backend to answer, isn't placed again, unless it outlives the
-  stop: it ends cancelled after a cancel, as a placement withdrawn does,
-  and failed, with the reason `timeout`, after the run's timeout. Format 1
+  wakes every job's supervisor. A placement of such a job that no worker
+  has claimed yet is told too, and isn't withdrawn: the job was readied,
+  so its needs had all ended, and format 1 would be running it. Its worker
+  reads the stop before its first step, so the job runs only its cleanups
+  and the steps that outlive a cancel, as format 1's would: after a
+  cancel, its other steps end cancelled; after the run's timeout, they end
+  as format 1's do when they start under the passed deadline, failing but
+  for those that outlive a cancel and a last try that ignores its errors.
+  With a backend that queues jobs, a stopped run so ends only once such a
+  job's worker has claimed it and stopped. A running attempt that is
+  stopped is waited for while it renews its lease, since its cleanups
+  have no timeout, and its placement is withdrawn (`scancel`, `qdel`,
+  deleting the pod, signalling the process) if its lease lapses. A job
+  between attempts when the run stops, readied before the stop, as one
+  waiting to be placed again after a failure before its first step, or
+  for a backend to answer, isn't placed again, unless it outlives the
+  stop: it has no placement, so it ends cancelled after a cancel, and
+  failed, with the reason `timeout`, after the run's timeout. Format 1
   would start it under the passed deadline, which would run its steps
   that outlive a cancel; here they don't run. No attempt is made once the
   run has stopped since the job's supervisor looked: it looks again.

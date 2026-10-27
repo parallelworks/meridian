@@ -437,19 +437,18 @@ func (c *Coordinator) liveAttempt(ctx context.Context, run *store.Run, job *stor
 }
 
 // stoppedAttempt sees the stop of run through for the job's live attempt
-// a, which doesn't outlive it: after a cancel, a placement no worker has
-// claimed is withdrawn, and the job ends cancelled; after the run's
-// timeout, it isn't, and its worker is told at once, as it claims it, that
-// the run's timeout has passed. A worker that claimed it is told to stop,
-// and waited for while it renews its lease, since its cleanups have no
-// timeout; once its lease lapses, its placement is withdrawn, and the job
-// ends cancelled, or failed with the reason timeout.
+// a, which doesn't outlive it: its worker is told to stop the job, for the
+// stop's reason, as its control says (tell). One that hasn't claimed it
+// yet reads that before its first step, so, as format 1 would have started
+// the job, it runs only its cleanups and the steps that outlive a cancel;
+// one that has is waited for while it renews its lease, since its cleanups
+// have no timeout. Once its lease lapses, its placement is withdrawn, and
+// the job ends cancelled, or failed with the reason timeout. A placement no
+// worker has claimed isn't withdrawn: with a backend that queues jobs, a
+// stopped run so ends only once each is claimed and stops.
 func (c *Coordinator) stoppedAttempt(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	reason := run.StopReason
 	end := stopEnd(reason)
-	if reason == plan.ReasonCancelled && a.State == store.AttemptPlacing {
-		return 0, c.withdraw(ctx, run, job, a, end, done)
-	}
 	if err := c.tell(ctx, a.ID, reason); err != nil {
 		return 0, err
 	}
