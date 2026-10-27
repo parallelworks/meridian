@@ -200,10 +200,11 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 		return 0, err
 	}
 	var (
-		run int64
-		job string
+		run        int64
+		job        string
+		apiVersion sql.NullInt64
 	)
-	if err := tx.queryRow("SELECT run_id, job_key FROM meridian_attempts WHERE id = ?", id).Scan(&run, &job); err != nil {
+	if err := tx.queryRow("SELECT run_id, job_key, api_version FROM meridian_attempts WHERE id = ?", id).Scan(&run, &job, &apiVersion); err != nil {
 		return 0, err
 	}
 	var size int64
@@ -235,7 +236,7 @@ func (tx *Tx) AppendEvents(id string, events []workerapi.Event) (int64, error) {
 		}
 	}
 	// A step that failed marks the run, for early-cancel: any-job-failed.
-	if err := tx.markFailedStep(id, fresh); err != nil {
+	if err := tx.markFailedStep(id, runID(run), int(apiVersion.Int64), fresh); err != nil {
 		return 0, err
 	}
 	return next, nil

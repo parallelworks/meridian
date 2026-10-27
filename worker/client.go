@@ -406,7 +406,8 @@ const (
 // speaks from then on. A claim served at a version of the API that req
 // doesn't speak, from 1 to its own, is an answer the worker can't read,
 // and so is one with what its version doesn't have
-// (workerapi.CheckVersion).
+// (workerapi.CheckVersion). So is one of version 2 or later without its
+// control, which every such claim has.
 func (c *client) claim(ctx context.Context, token string, req workerapi.ClaimRequest) (*workerapi.Claim, time.Time, error) {
 	var sent time.Time
 	body, err := workerapi.Marshal(&req)
@@ -421,6 +422,8 @@ func (c *client) claim(ctx context.Context, token string, req workerapi.ClaimReq
 	case err != nil:
 	case claim.APIVersion < 1 || claim.APIVersion > req.Speaks():
 		err = answerInvalidAt(workerapi.PathClaim, http.StatusOK, "/apiVersion")
+	case claim.APIVersion >= workerapi.Version2 && claim.Control == nil:
+		err = answerInvalidAt(workerapi.PathClaim, http.StatusOK, "/control")
 	case workerapi.CheckVersion(claim.APIVersion, claim) != nil:
 		err = answerInvalid(workerapi.PathClaim, http.StatusOK, nil)
 	default:

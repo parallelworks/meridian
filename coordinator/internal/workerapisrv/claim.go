@@ -311,9 +311,18 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 	if err != nil {
 		return nil, err
 	}
-	var retry int
+	// An attempt of version 2 or later is given its control as it is now,
+	// which a control stored after this read follows at a later version.
+	var (
+		retry   int
+		control *workerapi.Control
+	)
 	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		retry, err = tx.StartedBefore(a)
+		if retry, err = tx.StartedBefore(a); err != nil || a.APIVersion < workerapi.Version2 {
+			return err
+		}
+		c, err := tx.Control(a.ID)
+		control = &c
 		return err
 	}); err != nil {
 		return nil, err
@@ -323,5 +332,6 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 		Attempt: a.Number, Group: a.Placement.Group, Member: a.Placement.Member,
 		LeaseSeconds: a.LeaseSeconds, HeartbeatSeconds: a.HeartbeatSeconds, SelfFencing: a.SelfFencing,
 		Run: ready.Run, Needs: ready.Needs, RunDir: run.RunDir, Env: ready.Env, Retry: retry, Container: ready.Container,
+		Control: control,
 	}, nil
 }

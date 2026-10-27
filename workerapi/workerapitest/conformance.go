@@ -134,6 +134,9 @@ type worker struct {
 	// given, once it has claimed.
 	credential string
 	claim      workerapi.Claim
+	// apiVersion is the newest version of the API the worker speaks:
+	// workerapi.Version, unless a check sets an earlier one.
+	apiVersion int
 }
 
 func newWorker(t *testing.T, target Target, a Attempt) *worker {
@@ -145,7 +148,7 @@ func newWorker(t *testing.T, target Target, a Attempt) *worker {
 	}}
 	t.Cleanup(tr.CloseIdleConnections)
 	return &worker{
-		t: t, target: target, attempt: a, attemptID: id, token: token, credential: newCredential(t),
+		t: t, target: target, attempt: a, attemptID: id, token: token, credential: newCredential(t), apiVersion: workerapi.Version,
 		http: &http.Client{
 			Transport: tr,
 			Timeout:   (workerapi.ControlWaitSeconds + 15) * time.Second,
@@ -226,9 +229,9 @@ func marshal(t *testing.T, v any) []byte {
 }
 
 // claimRequest returns the worker's claim, as one that reads planVersion,
-// and speaks this version of the API (workerapi.Version).
+// and speaks its version of the API.
 func (w *worker) claimRequest(planVersion int) []byte {
-	return w.claimRequestAt(workerapi.Version, planVersion)
+	return w.claimRequestAt(w.apiVersion, planVersion)
 }
 
 // claimRequestAt returns the worker's claim, as one that speaks apiVersion
@@ -268,8 +271,10 @@ func (w *worker) claimed() *worker {
 		w.t.Errorf("the claim's job is %s, of %d steps, not the attempt's", job.Key, len(job.Steps))
 	case c.PlanVersion != planVersion(w.attempt):
 		w.t.Errorf("the claim's plan version is %d, not the run's %d", c.PlanVersion, planVersion(w.attempt))
-	case c.APIVersion != workerapi.Version:
-		w.t.Errorf("a worker of version %d of the API was served at %d", workerapi.Version, c.APIVersion)
+	case c.APIVersion != w.apiVersion:
+		w.t.Errorf("a worker of version %d of the API was served at %d", w.apiVersion, c.APIVersion)
+	case (c.Control != nil) != (c.APIVersion >= workerapi.Version2):
+		w.t.Errorf("a claim of version %d of the API holds the control %+v", c.APIVersion, c.Control)
 	case c.SelfFencing != w.attempt.SelfFencing || c.LeaseSeconds != w.attempt.LeaseSeconds || c.HeartbeatSeconds != w.attempt.HeartbeatSeconds:
 		w.t.Errorf("the claim's lease is %v, %d s, every %d s; the attempt's is %v, %d s, every %d s",
 			c.SelfFencing, c.LeaseSeconds, c.HeartbeatSeconds, w.attempt.SelfFencing, w.attempt.LeaseSeconds, w.attempt.HeartbeatSeconds)
@@ -508,7 +513,9 @@ func checkPlanVersions(t *testing.T, target Target) {
 // A worker of a later version of the API than the coordinator's is served
 // at the coordinator's, and one of a release from before the API had a
 // version, whose claim says none, at version 1; and so is each one's claim
-// repeated.
+// repeated. A worker of version 1 is served at 1, with no control in its
+// claim, and its events with lastTry, which version 1 doesn't have, are
+// refused; a worker of version 2's are stored with it.
 func checkAPIVersions(t *testing.T, target Target) {
 	for _, tc := range []struct {
 		name          string
@@ -532,6 +539,30 @@ func checkAPIVersions(t *testing.T, target Target) {
 			if c.APIVersion != tc.serve {
 				t.Errorf("%s was served at version %d, not %d", what, c.APIVersion, tc.serve)
 			}
+		}
+	}
+
+	for _, version := range []int{1, workerapi.Version2} {
+		w := newWorker(t, target, newAttempt())
+		w.apiVersion = version
+		w.claimed()
+		w.sendEvents(1, 1, 1)
+		failed := workerapi.Events{Events: []workerapi.Event{{
+			Seq: 2, Time: event(2).Time, Finished: true, LastTry: true, Outcome: plan.OutcomeFailure, ExitCode: 1,
+		}}}
+		a := w.post(workerapi.PathEvents, failed)
+		stored := w.stored().Events
+		if version < workerapi.Version2 {
+			wantStatus(t, "events of version 1 with lastTry", a, http.StatusBadRequest)
+			if len(stored) != 1 {
+				t.Errorf("events of version 1 with lastTry stored %d events", len(stored))
+			}
+			continue
+		}
+		if a.status != http.StatusOK {
+			t.Errorf("events of version %d with lastTry were answered %d: %s", version, a.status, a.body)
+		} else if len(stored) != 2 || !stored[1].LastTry {
+			t.Errorf("events of version %d with lastTry are stored as %+v", version, stored)
 		}
 	}
 }
@@ -678,19 +709,32 @@ func checkControl(t *testing.T, target Target) {
 }
 
 // What the coordinator asked of an attempt before its claim reaches the
-// worker's first poll, for any version, at once: the worker reads it
-// before the job's first step (workerapi.Control).
+// worker before the job's first step (workerapi.Control): in the claim,
+// for a worker of version 2 or later; and for one of version 1, in the
+// answer to its first poll, for any version, at once.
 func checkControlBeforeClaim(t *testing.T, target Target) {
 	hold := target.ControlHold()
-	w := newWorker(t, target, newAttempt())
-	target.Control(t, w.attemptID, workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout})
-	w.claimed()
-	c, took := w.poll(-1)
-	if took > hold/2 {
-		t.Errorf("the first poll took %v", took)
-	}
-	if c.Version <= 0 || !c.Cancel || c.Reason != plan.ReasonTimeout {
-		t.Errorf("the first control is %+v, without what the coordinator asked before the claim", c)
+	for _, version := range []int{1, workerapi.Version2} {
+		w := newWorker(t, target, newAttempt())
+		w.apiVersion = version
+		target.Control(t, w.attemptID, workerapi.Control{Cancel: true, Reason: plan.ReasonTimeout})
+		w.claimed()
+		var c workerapi.Control
+		if version >= workerapi.Version2 {
+			// The claim holds it.
+			if w.claim.Control == nil {
+				continue
+			}
+			c = *w.claim.Control
+		} else {
+			var took time.Duration
+			if c, took = w.poll(-1); took > hold/2 {
+				t.Errorf("the first poll took %v", took)
+			}
+		}
+		if c.Version <= 0 || !c.Cancel || c.Reason != plan.ReasonTimeout {
+			t.Errorf("version %d: the first control is %+v, without what the coordinator asked before the claim", version, c)
+		}
 	}
 }
 

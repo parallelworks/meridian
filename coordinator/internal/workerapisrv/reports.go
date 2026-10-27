@@ -78,7 +78,9 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request, a *store.A
 }
 
 // serveEvents stores the attempt's events it hasn't yet, in order, and
-// answers with the sequence number of the last it has. Of an attempt whose
+// answers with the sequence number of the last it has. It reads them as a
+// body of the attempt's version of the worker API, and refuses, 400, what
+// that version doesn't have, as LastTry of version 1. Of an attempt whose
 // placement is private, the diagnostics of each event, which can name the
 // member, are masked before they are stored, as its end's are. Storing
 // them can change other attempts' controls, as a step that failed changes

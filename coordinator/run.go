@@ -340,7 +340,8 @@ func (c *Coordinator) retriesFor(tx *store.Tx, attempt string, reason plan.Reaso
 // lastTry reports, in tx, whether try of the step whose index is step is
 // surely the last of the attempt's job's step, as the run's plan holds its
 // retry: written out (plan.Step.LastTry): what the store asks as it stores
-// a failed step's events, so that the step marks the run at once.
+// a failed step's events, of an attempt claimed at version 1 of the worker
+// API, whose worker doesn't say, so that the step marks the run at once.
 func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool {
 	a, err := tx.Attempt(attempt)
 	if err != nil {

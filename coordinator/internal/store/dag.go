@@ -112,20 +112,32 @@ func (tx *Tx) RetriesFor(id string, reason plan.Reason) bool {
 	return tx.s.retriesFor != nil && tx.s.retriesFor(tx, id, reason)
 }
 
-// markFailedStep marks the attempt id's run as one a job of which failed
+// markFailedStep marks run, the attempt id's, as one a job of which failed
 // (MarkJobFailed) once fresh, the attempt's events AppendEvents has just
 // stored, show that a step of it failed, as format 1 marks it, as the step
 // fails: a cleanup that finished failed, which is never tried again; or a
-// step's try that finished failed, and that the step doesn't try again,
-// as the store's Options.LastTry says when the step's retry: is written
-// out, or else as the next event, which isn't its next try, shows. A try
-// that is tried again isn't the step's failure, nor is a step that ignores
-// its errors, which reports success; a failed step with no event after it
-// is marked as its job ends. Neither is a step of a job whose retry: lists
-// timeout, which its job's deadline may have failed, of an attempt that
-// another may follow: its job marks the run as it ends (RetriesFor).
-func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
+// step's try that finished failed, and that the step doesn't try again.
+// An attempt claimed at version 2 or later of the worker API, apiVersion,
+// says so of the try (workerapi.Event.LastTry). Of one of version 1, the
+// store's Options.LastTry says so when the step's retry: is written out,
+// or else the next event, which isn't its next try, shows it. A try that
+// is tried again isn't the step's failure, nor is a step that ignores its
+// errors, which reports success; a failed step of version 1 with no event
+// after it is marked as its job ends. Neither is a step of a job whose
+// retry: lists timeout, which its job's deadline may have failed, of an
+// attempt that another may follow: its job marks the run as it ends
+// (RetriesFor).
+func (tx *Tx) markFailedStep(id, run string, apiVersion int, fresh []workerapi.Event) error {
 	if len(fresh) == 0 || tx.RetriesFor(id, plan.ReasonTimeout) {
+		return nil
+	}
+	for _, e := range fresh {
+		if e.Finished && e.Outcome == plan.OutcomeFailure && (e.Cleanup || e.LastTry) {
+			_, err := tx.MarkJobFailed(run)
+			return err
+		}
+	}
+	if apiVersion >= workerapi.Version2 {
 		return nil
 	}
 	events := fresh
@@ -140,20 +152,15 @@ func (tx *Tx) markFailedStep(id string, fresh []workerapi.Event) error {
 		if !e.Finished || e.Outcome != plan.OutcomeFailure {
 			continue
 		}
-		final := e.Cleanup || tx.s.lastTry != nil && tx.s.lastTry(tx, id, e.Step, e.Try)
+		final := tx.s.lastTry != nil && tx.s.lastTry(tx, id, e.Step, e.Try)
 		if !final && k+1 < len(events) {
 			next := events[k+1]
 			final = next.Cleanup || next.Step != e.Step || next.Try != e.Try+1
 		}
-		if !final {
-			continue
-		}
-		var run int64
-		if err := tx.queryRow("SELECT run_id FROM meridian_attempts WHERE id = ?", id).Scan(&run); err != nil {
+		if final {
+			_, err := tx.MarkJobFailed(run)
 			return err
 		}
-		_, err := tx.MarkJobFailed(runID(run))
-		return err
 	}
 	return nil
 }

@@ -34,10 +34,16 @@ func TestGatePinned(t *testing.T) {
 		t.Cleanup(versiontest.Set(member, later))
 	}
 	for _, version := range []int{workerapi.Version, later} {
-		claim, err := workerapi.Marshal(&workerapi.Claim{
+		body := workerapi.Claim{
 			RunID: "run1", AttemptID: "attempt1", APIVersion: version, PlanVersion: plan.Version, Job: []byte(`{}`),
 			Attempt: 1, LeaseSeconds: 60, HeartbeatSeconds: 1, Run: plan.RunValues{Format: 1}, RunDir: "/runs/run1", Retry: 2,
-		})
+		}
+		if version >= workerapi.Version2 {
+			// Every claim of version 2 or later holds the attempt's
+			// control.
+			body.Control = &workerapi.Control{Version: 1}
+		}
+		claim, err := workerapi.Marshal(&body)
 		if err != nil {
 			t.Fatal(err)
 		}

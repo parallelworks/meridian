@@ -489,7 +489,9 @@ func TestWake(t *testing.T) {
 // A step that fails tells the run's other attempts that a job of the run
 // failed, for their steps whose early-cancel: is any-job-failed: once its
 // event is stored, the polls held of them are answered, without waiting
-// for the recheck, which the test puts off; and so does an end that fails
+// for the recheck, which the test puts off, for a failed cleanup, and a
+// failed try its worker says was its step's last, but not one it tries
+// again; and so does an end that fails
 // the job, but not one before its first step, after which the job is
 // placed again, nor one for a reason the job's retry: lists, after which
 // it may be.
@@ -508,6 +510,17 @@ func TestFailureNotifies(t *testing.T) {
 		{name: "failed cleanup", path: workerapi.PathEvents, marked: true, body: workerapi.Events{Events: []workerapi.Event{
 			{Seq: 1, Time: failed, Cleanup: true},
 			{Seq: 2, Time: failed, Cleanup: true, Finished: true, Outcome: plan.OutcomeFailure, ExitCode: 1},
+		}}},
+		// Of a step whose retry: the plan doesn't say, as the rig's store
+		// has no LastTry: its worker, of version 2, says which try is its
+		// last, which marks the run at once, with no event after it.
+		{name: "failed last try", path: workerapi.PathEvents, marked: true, body: workerapi.Events{Events: []workerapi.Event{
+			{Seq: 1, Time: failed},
+			{Seq: 2, Time: failed, Finished: true, LastTry: true, Outcome: plan.OutcomeFailure, ExitCode: 1},
+		}}},
+		{name: "failed try, tried again", path: workerapi.PathEvents, body: workerapi.Events{Events: []workerapi.Event{
+			{Seq: 1, Time: failed},
+			{Seq: 2, Time: failed, Finished: true, Outcome: plan.OutcomeFailure, ExitCode: 1},
 		}}},
 		{name: "failed end", path: workerapi.PathComplete, marked: true, body: workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}}},
 		{name: "setup failed", path: workerapi.PathComplete, body: workerapi.Complete{

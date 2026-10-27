@@ -121,6 +121,13 @@ func (a *attempt) run(ctx context.Context) error {
 	a.stopChanged = make(chan struct{})
 	a.halted, a.cancelled, a.anyJobFailed, a.timedOut = newSignal(), newSignal(), newSignal(), newSignal()
 	a.reaped, a.firstControl = make(chan struct{}), make(chan struct{})
+	if c := a.claim.Control; c != nil {
+		// A claim of version 2 or later holds the attempt's control as it
+		// was then: the worker does as it asks before anything of the job
+		// runs, and its polls go on from it (control).
+		a.obey(c)
+		close(a.firstControl)
+	}
 	a.groups = map[int]*exec.Cmd{}
 	a.renewed, a.renewal = a.claimed, make(chan struct{})
 	// What the worker sends goes on while its job runs and after: until
@@ -573,14 +580,18 @@ func (a *attempt) fence(ctx context.Context) {
 
 // control waits for what the coordinator asks of the worker: to cancel the
 // job, perhaps again with less time, or that another job of the run
-// failed. Its first poll names no version, -1, which the coordinator
-// answers at once with the control as it is, so that what it asked before
-// the claim, as when the run was stopped before the attempt was placed,
-// applies from the job's first step, which waits for it
-// (awaitFirstControl).
+// failed. In an attempt of version 2 or later of the API, the claim held
+// the first control, which run has done as it asks, and the polls go on
+// from its version. In one of version 1, the first poll names no version,
+// -1, which the coordinator answers at once with the control as it is, so
+// that what it asked before the claim, as when the run was stopped before
+// the attempt was placed, applies from the job's first step, which waits
+// for it (awaitFirstControl).
 func (a *attempt) control(ctx context.Context) {
-	version := int64(-1)
-	read := sync.OnceFunc(func() { close(a.firstControl) })
+	version, read := int64(-1), sync.OnceFunc(func() { close(a.firstControl) })
+	if c := a.claim.Control; c != nil {
+		version, read = c.Version, func() {}
+	}
 	defer read()
 	failures, quick := 0, 0
 	for {
@@ -621,13 +632,19 @@ func (a *attempt) control(ctx context.Context) {
 			continue
 		}
 		version, quick = ctl.Version, 0
-		if ctl.Cancel {
-			a.cancel(ctl)
-		}
-		if ctl.AnyJobFailed {
-			a.fire(a.anyJobFailed, nil)
-		}
+		a.obey(ctl)
 		read()
+	}
+}
+
+// obey does as a control asks: cancels the job, or fires that a job of the
+// run failed.
+func (a *attempt) obey(ctl *workerapi.Control) {
+	if ctl.Cancel {
+		a.cancel(ctl)
+	}
+	if ctl.AnyJobFailed {
+		a.fire(a.anyJobFailed, nil)
 	}
 }
 
@@ -636,9 +653,10 @@ func (a *attempt) control(ctx context.Context) {
 // or until the job is halted: so that a job whose run was stopped, or a
 // job of whose run failed, before its attempt was claimed doesn't start
 // its first step as though it hadn't been, as format 1's job starts with
-// its context already ended. A coordinator that doesn't answer in that
-// time leaves what it asked to the polls after, which go on beside the
-// job's steps.
+// its context already ended. A coordinator of version 1 of the API that
+// doesn't answer in that time leaves what it asked to the polls after,
+// which go on beside the job's steps. In an attempt of version 2 or later,
+// the claim held the first control, so nothing waits.
 func (a *attempt) awaitFirstControl() {
 	t := time.NewTimer(a.tm.firstControl)
 	defer t.Stop()
