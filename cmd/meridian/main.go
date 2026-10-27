@@ -27,7 +27,6 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
-	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -72,14 +71,12 @@ type cli struct {
 	// module's version, which a test gives in place of the process's
 	// (fipsmode.Mode and Module) for nil.
 	fips func() (mode, module string)
-	// signals, interactive and poll are what a test gives meridian run in
-	// place of the process's: the interrupts it gets, nil for the
-	// process's (notify); whether a person can answer it, nil for whether
-	// its standard input and error are a terminal; and how often it reads
-	// where its run is, 0 for runPoll.
+	// signals and interactive are what a test gives meridian run in place
+	// of the process's: the interrupts it gets, nil for the process's
+	// (notify); and whether a person can answer it, nil for whether its
+	// standard input and error are a terminal.
 	signals     chan os.Signal
 	interactive *bool
-	poll        time.Duration
 }
 
 // getenv reads an environment variable, or "" if it isn't set.

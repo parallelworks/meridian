@@ -65,6 +65,9 @@ type testEnd struct {
 // attempt and completes it with success.
 type testDriver struct {
 	c *Coordinator
+	// ctx is what its workers run with: the test's, which carries nothing
+	// of the supervisor that placed them, as a worker process's doesn't.
+	ctx context.Context //nolint:containedctx // the test's, which its workers outlive the calls that place them in
 
 	mu         sync.Mutex
 	probe      func(m *backend.Member) (backend.Fit, error)
@@ -138,9 +141,14 @@ func (d *testDriver) Place(ctx context.Context, m *backend.Member, req backend.P
 		end = worker(req)
 	}
 	if !end.never {
-		// The worker outlives the call that placed it.
-		ctx := context.WithoutCancel(ctx)
-		d.workers.Go(func() { d.work(ctx, req, p, end) })
+		// The worker outlives the call that placed it, and is apart from
+		// it, as a process of its own is: its context carries nothing of
+		// the supervisor's, whose hopper job attempt the store's driver
+		// knows a context by, and refuses a write in another transaction
+		// while one of the attempt's is open, so a claim made while the
+		// supervisor recorded the placement was refused, and the attempt
+		// never claimed.
+		d.workers.Go(func() { d.work(d.ctx, req, p, end) })
 	}
 	return p, nil
 }

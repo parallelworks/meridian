@@ -174,9 +174,30 @@ func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, end_kind = ?, ended_at = ? WHERE run_id = ? AND job_key = ? AND state <> ?",
-		AttemptEnded, EndSuperseded, now, run, n.Job, AttemptEnded); err != nil {
+	superseded, err := tx.tx.QueryContext(tx.ctx, "UPDATE meridian_attempts SET state = ?, end_kind = ?, ended_at = ? WHERE run_id = ? AND job_key = ? AND state <> ? RETURNING id",
+		AttemptEnded, EndSuperseded, now, run, n.Job, AttemptEnded)
+	if err != nil {
 		return nil, "", err
+	}
+	var ended []string
+	for superseded.Next() {
+		var id string
+		if err := superseded.Scan(&id); err != nil {
+			superseded.Close()
+			return nil, "", err
+		}
+		ended = append(ended, id)
+	}
+	if err := superseded.Close(); err != nil {
+		return nil, "", err
+	}
+	if err := superseded.Err(); err != nil {
+		return nil, "", err
+	}
+	for _, id := range ended {
+		if err := tx.addEvent(run, EventAttemptEnded, n.Job, id, 0); err != nil {
+			return nil, "", err
+		}
 	}
 	var fence, number int64
 	if err := tx.tx.QueryRowContext(tx.ctx, "UPDATE meridian_jobs SET fence = fence + 1, attempts = attempts + 1 WHERE run_id = ? AND key = ? RETURNING fence, attempts",
@@ -326,6 +347,10 @@ func (tx *Tx) Claim(token, credential string, w workerapi.Worker) (*Attempt, err
   claimed_at = ?, renewed_at = ? WHERE id = ?`, AttemptClaimed, cred, w.Version, w.Digest, now, now, a.ID); err != nil {
 		return nil, err
 	}
+	n, _ := runNumber(a.Run)
+	if err := tx.addEvent(n, EventJobRunning, a.Job, a.ID, 0); err != nil {
+		return nil, err
+	}
 	return tx.Attempt(a.ID)
 }
 
@@ -464,7 +489,11 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
   report = ?, problem = ?, ended_at = ? WHERE id = ?`,
 		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)), end.CompleteDigest,
 		end.Report, prob, now, id)
-	return err
+	if err != nil {
+		return err
+	}
+	n, _ := runNumber(a.Run)
+	return tx.addEvent(n, EventAttemptEnded, a.Job, id, 0)
 }
 
 // digest returns the SHA-256 digest of a secret, as the store keeps a

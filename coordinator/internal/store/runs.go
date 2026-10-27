@@ -278,6 +278,9 @@ func (tx *Tx) StartRun(id string, state *compile.StartState, diags problems.Diag
 	if err := oneRow(res, fmt.Errorf("%w: run %s isn't %s", ErrState, id, RunCreated)); err != nil {
 		return err
 	}
+	if err := tx.addEvent(n, EventRunStarted, "", "", 0); err != nil {
+		return err
+	}
 	return tx.AddDiagnostics(id, diags)
 }
 
@@ -315,6 +318,9 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 		return err
 	}
 	if err := oneRow(res, fmt.Errorf("%w: run %s has ended", ErrState, id)); err != nil {
+		return err
+	}
+	if err := tx.addEvent(n, EventRunFinished, "", "", 0); err != nil {
 		return err
 	}
 	if _, err := tx.tx.ExecContext(tx.ctx, "DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {

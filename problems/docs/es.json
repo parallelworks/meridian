@@ -1242,6 +1242,13 @@
       "Empieza la ejecución con la versión de Meridian que la creó, o con una posterior."
     ]
   },
+  "log_cut": {
+    "title": "Log cortado",
+    "why": "El log de un paso se guarda a medida que su worker lo sube, y el worker lo sube entero antes de informar del fin del intento. Este intento terminó de otra forma: su worker se perdió, como cuando su host desapareció, o un intento más nuevo de su trabajo ocupó su lugar, o se retiró su colocación. Lo que el worker no había subido entonces no está guardado, ni lo estará: el log se muestra hasta donde se guardó.",
+    "fix": [
+      "Mira por qué terminó el intento en los eventos de la ejecución, y en el host en el que se ejecutó el trabajo: allí están el log propio de su worker, y la salida del paso si la escribió en un archivo propio."
+    ]
+  },
   "log_truncated": {
     "title": "Log que el coordinador no guardó entero",
     "why": "El coordinador guarda el log de un paso a medida que el worker lo sube. Para que un trabajo que imprime sin fin no llene el disco del coordinador, este guarda los bytes de los logs de un intento hasta un límite para todos ellos juntos. Un log que lo pasa guarda sus bytes hasta ahí, luego esta línea, y nada más de él, y los logs posteriores del intento guardan solo esta línea. Los pasos siguen, y al worker se le dice que el resto está guardado.",

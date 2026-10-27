@@ -6,13 +6,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
-	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -24,21 +26,19 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// runPoll is how often meridian run reads where its run is, until the run
-// has ended.
-const runPoll = 250 * time.Millisecond
-
 // runRun creates a run of a workflow, stores it, and coordinates it in the
-// foreground, as one of its store's coordinators, until it ends: it exits
-// 0 when the run succeeded, and 1 when the workflow has errors, or the run
-// failed or was cancelled. Interrupted in a terminal, it asks whether to
-// cancel the run, leave it running or keep watching; otherwise an
-// interrupt leaves the run running, and it exits 2, as for any problem of
-// its own.
+// foreground, as one of its store's coordinators, until it ends, showing
+// its progress, and its steps' logs, as they happen: it exits 0 when the
+// run succeeded, and 1 when the workflow has errors, or the run failed or
+// was cancelled. Interrupted in a terminal, it asks whether to cancel the
+// run, leave it running or keep watching; otherwise an interrupt leaves
+// the run running, and it exits 2, as for any problem of its own.
 func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	inputs := inputFlags(fs)
 	group := fs.String("group", local.LocalGroup, "runs the jobs whose runs-on: names no group in the execution `group` named, the built-in one, which runs them on this machine, by default")
 	runDir := fs.String("run-dir", "", "makes the run's `directory`, PW_JOB_DIR, which must not be there yet, here, rather than in a directory of the user's own under the system's temporary directory")
+	out := fs.String("format", "text", "writes the run's progress, its logs and its end as `text`, lines a person reads, or as json, one object a line, whose version member says how to read it; and the command's problems as compilers write them, or as RFC 9457 problem details")
+	withLogs := fs.Bool("logs", true, "writes each step's log as its worker stores it, each line after the job and the step it is of")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return flagError(c, fs, err)
@@ -46,12 +46,28 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	if len(positional) != 1 {
 		return c.failf(problems.ArgumentsInvalid, problems.Params{"command": "run"})
 	}
+	if !slices.Contains(formats, *out) {
+		return c.failf(problems.FlagValueInvalid, problems.Params{"command": "run", "flag": "format", "value": *out})
+	}
+	// From here, the command's own problems are JSON too.
+	c.json = *out == "json"
+	// The run's progress is written as the run goes, and the command's
+	// problems as they come: neither breaks the other's line.
+	var mu sync.Mutex
+	c.stdout, c.stderr = &lockedWriter{mu: &mu, w: c.stdout}, &lockedWriter{mu: &mu, w: c.stderr}
 
 	w, err := compileWorkflow(ctx, c, inputs, positional[0])
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := writeText(c.stderr, w.diags); err != nil {
+	switch {
+	case len(w.diags) == 0:
+	case c.json:
+		err = writeProblemJSON(c.stderr, w.diags)
+	default:
+		err = writeText(c.stderr, w.diags)
+	}
+	if err != nil {
 		return c.fail(err)
 	}
 	if w.diags.HasErrors() || w.created == nil {
@@ -118,8 +134,36 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		}
 		return c.fail(p)
 	}
-	fmt.Fprintf(c.stdout, "run %s started (run directory %s)\n", id, dir)
-	return supervise(ctx, c, coord, w, logs, id, interrupts)
+	progress := local.NewProgress(c.stdout, c.stderr, c.json)
+	if err := progress.Created(id, dir); err != nil {
+		return c.fail(err)
+	}
+	var follow coordinator.Logs
+	if *withLogs {
+		follow = logs
+	}
+	return supervise(ctx, c, coord, w, runSupervision{logs: logs, follow: follow, progress: progress}, id, interrupts)
+}
+
+// A lockedWriter writes to w under mu, which other lockedWriters share, so
+// that a write to one doesn't break another's line.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// A runSupervision is what supervise shows a run with: where its workers'
+// logs are stored, where it reads the logs it shows from, nil to show none,
+// and the progress display it shows the run on.
+type runSupervision struct {
+	logs, follow coordinator.Logs
+	progress     *local.Progress
 }
 
 // runDirs returns where runs' directories are, by the store's ID and the
@@ -150,39 +194,49 @@ func runDirs(c *cli, named string) (func(storeID, id string) string, error) {
 }
 
 // supervise coordinates the run id, as one of its store's coordinators,
-// and holds the coordinator's socket when no other process does, until the
-// run ends or an interrupt leaves it running. It returns the command's
-// exit status.
-func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *compiled, logs coordinator.Logs, id string, interrupts <-chan os.Signal) int {
+// and holds the coordinator's socket when no other process does, showing
+// the run as it goes, until the run ends or an interrupt leaves it
+// running. It returns the command's exit status.
+func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *compiled, rs runSupervision, id string, interrupts <-chan os.Signal) int {
 	// What coordinates the run goes on through an interrupt, which only
 	// asks what to do, until it stops.
 	work, stop := context.WithCancel(context.WithoutCancel(ctx))
 	served := make(chan error, 1)
 	go func() { served <- coord.Serve(work) }()
-	sock := holdSocket(work, coord, w.dirs.Socket(), logs)
+	sock := holdSocket(work, coord, w.dirs.Socket(), rs.logs)
 	defer func() {
 		stop()
 		<-sock.done
 		<-served
 	}()
-	ended := watchRun(work, coord, id, c.pollEvery())
+	following, stopFollowing := context.WithCancel(work)
+	defer stopFollowing()
+	f := followRun(following, coord, id, rs)
+	// quiet stops showing the run, once what it showed last is written.
+	quiet := func() {
+		stopFollowing()
+		<-f.done
+	}
 	in := bufio.NewReader(c.stdin)
 	for {
 		select {
-		case end := <-ended:
+		case end := <-f.ended:
 			if end.err != nil {
 				return c.fail(end.err)
 			}
-			return finished(c, w, end.status)
+			return finished(c, w, rs.progress, end)
 		case err := <-served:
 			// Serve returns before work is done only when it can't serve.
 			served <- err
+			quiet()
 			return c.fail(err)
 		case err := <-sock.errs:
+			quiet()
 			return c.fail(err)
 		case sig := <-interrupts:
 			if sig == syscall.SIGTERM || !c.isInteractive() {
-				return detach(c, id)
+				quiet()
+				return detach(c, rs.progress, id)
 			}
 			switch ask(c, in, id, interrupts) {
 			case "cancel":
@@ -190,59 +244,79 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 				// then, the run goes on, and so does watching it.
 				_ = c.failf(problems.CommandNotBuilt, problems.Params{"command": "cancel"})
 			case "leave":
-				return detach(c, id)
+				quiet()
+				return detach(c, rs.progress, id)
 			}
 		}
 	}
 }
 
-// A runEnd is how a run ended, or why its end can't be told.
+// A runEnd is how a run ended, with the event that says so, or why its end
+// can't be told.
 type runEnd struct {
 	status *coordinator.RunStatus
+	event  coordinator.Event
 	err    error
 }
 
-// watchRun reads where the run id is, every so often, until it has ended
-// or ctx is done, and then sends how it ended on the channel it returns.
-func watchRun(ctx context.Context, coord *coordinator.Coordinator, id string, every time.Duration) <-chan runEnd {
-	ended := make(chan runEnd, 1)
-	go func() {
-		t := time.NewTicker(every)
-		defer t.Stop()
-		for {
-			s, err := coord.Status(ctx, id)
-			switch {
-			case ctx.Err() != nil:
-				return
-			case err != nil:
-				ended <- runEnd{err: err}
-				return
-			case s.State == coordinator.RunEnded:
-				ended <- runEnd{status: s}
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-		}
-	}()
-	return ended
+// A followed run is the run followRun shows: how it ended, sent once it
+// has, and done, closed once nothing more of it is shown.
+type followed struct {
+	ended chan runEnd
+	done  chan struct{}
 }
 
-// finished writes how the run ended, its problems as compilers write them,
-// where the workflow writes what each is about, and returns the command's
-// exit status: 0 for a run that succeeded, and 1 for one that didn't.
-func finished(c *cli, w *compiled, s *coordinator.RunStatus) int {
-	if err := writeText(c.stderr, located(w.name, w.data, s.Diagnostics)); err != nil {
-		return c.fail(err)
+// followRun shows the run id on rs.progress as it goes, its events and,
+// unless rs.follow is nil, its steps' logs, until it has ended or ctx is
+// done: then it sends how it ended, with the event that says so, which it
+// leaves to finished to show.
+func followRun(ctx context.Context, coord *coordinator.Coordinator, id string, rs runSupervision) followed {
+	f := followed{ended: make(chan runEnd, 1), done: make(chan struct{})}
+	go func() {
+		defer close(f.done)
+		var end runEnd
+		opts := coordinator.FollowOptions{Event: func(e coordinator.Event) error {
+			if e.Kind == coordinator.RunFinished {
+				end.event = e
+				return nil
+			}
+			return rs.progress.Event(e)
+		}}
+		if rs.follow != nil {
+			opts.Logs, opts.Log = rs.follow, rs.progress.Log
+		}
+		end.status, end.err = coord.Follow(ctx, id, opts)
+		if ctx.Err() == nil {
+			f.ended <- end
+		}
+	}()
+	return f
+}
+
+// finished shows how the run ended, with its problems, each where the
+// workflow writes what it is about: as text, its problems as compilers
+// write them and a line that says how it ended; as JSON, the event that
+// says so. It returns the command's exit status: 0 for a run that
+// succeeded, and 1 for one that didn't.
+func finished(c *cli, w *compiled, p *local.Progress, end runEnd) int {
+	s := end.status
+	diags := located(w.name, w.data, s.Diagnostics)
+	if c.json {
+		e := end.event
+		e.Diagnostics = diags
+		if err := p.Event(e); err != nil {
+			return c.fail(err)
+		}
+	} else {
+		if err := writeText(c.stderr, diags); err != nil {
+			return c.fail(err)
+		}
+		line := fmt.Sprintf("run %s finished: %s", s.ID, s.Outcome)
+		if s.Reason != "" {
+			line += " (" + string(s.Reason) + ")"
+		}
+		fmt.Fprintln(c.stdout, line)
 	}
-	line := fmt.Sprintf("run %s finished: %s", s.ID, s.Outcome)
-	if s.Reason != "" {
-		line += " (" + string(s.Reason) + ")"
-	}
-	fmt.Fprintln(c.stdout, line)
 	if s.Outcome != plan.OutcomeSuccess {
 		return exitInvalid
 	}
@@ -251,8 +325,10 @@ func finished(c *cli, w *compiled, s *coordinator.RunStatus) int {
 
 // detach leaves the run id running, says how to pick it up, and returns
 // the exit status of a command that didn't see its work through.
-func detach(c *cli, id string) int {
-	fmt.Fprintf(c.stdout, "run %s left running: meridian resume %s picks it up, and meridian cancel %s cancels it\n", id, id, id)
+func detach(c *cli, p *local.Progress, id string) int {
+	if err := p.Left(id); err != nil {
+		return c.fail(err)
+	}
 	return exitError
 }
 
@@ -308,12 +384,4 @@ func (c *cli) isInteractive() bool {
 		return *c.interactive
 	}
 	return isTerminal(c.stdin) && isTerminal(c.stderr)
-}
-
-// pollEvery is how often the command reads where its run is.
-func (c *cli) pollEvery() time.Duration {
-	if c.poll > 0 {
-		return c.poll
-	}
-	return runPoll
 }

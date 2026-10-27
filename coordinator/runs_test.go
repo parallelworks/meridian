@@ -176,6 +176,15 @@ func (r *workerRig) create(t *testing.T, workflow []byte, inputs, contexts map[s
 // run's ID.
 func runCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
 	t.Helper()
+	r, id := startCase(t, cs)
+	waitEnded(t, r.c, id)
+	return r, id
+}
+
+// startCase stores and starts the case's run, as runCase does, and returns
+// the rig that runs it, and the run's ID, as it runs.
+func startCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
+	t.Helper()
 	data, err := cs.Workflow()
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +192,6 @@ func runCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
 	r := newWorkerRig(t, conformancetest.StartVariables(cs))
 	id := r.create(t, data, cs.Inputs, conformancetest.CreateContexts(cs))
 	serve(t, r.c)
-	waitEnded(t, r.c, id)
 	return r, id
 }
 

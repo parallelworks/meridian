@@ -66,8 +66,10 @@ WHERE id = ? AND grp IS NULL AND private_placement IS NULL`,
 		return err
 	}
 	n, _ := runNumber(a.Run)
-	_, err = tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET place_tries = 0 WHERE run_id = ? AND key = ?", n, a.Job)
-	return err
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_jobs SET place_tries = 0 WHERE run_id = ? AND key = ?", n, a.Job); err != nil {
+		return err
+	}
+	return tx.addEvent(n, EventJobPlacing, a.Job, id, 0)
 }
 
 // ChosenPlace returns where the attempt is to be placed, as ChoosePlace

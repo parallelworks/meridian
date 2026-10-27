@@ -130,7 +130,7 @@ func open(t *testing.T, opts Options) *Coordinator {
 		}
 	})
 	for _, d := range drivers {
-		d.c = c
+		d.c, d.ctx = c, t.Context()
 		// Before the store closes, the driver's workers have finished.
 		t.Cleanup(d.workers.Wait)
 	}

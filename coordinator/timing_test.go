@@ -1,8 +1,11 @@
 package coordinator
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/parallelworks/meridian/internal/testtiming"
 )
 
 // TestDefaultTiming checks DefaultTiming against what the worker API asks
@@ -26,5 +29,44 @@ func TestDefaultTiming(t *testing.T) {
 	}
 	if tm.WakeJump <= 0 || tm.WakeJump >= tm.Grace {
 		t.Errorf("WakeJump %v isn't between 0 and Grace %v", tm.WakeJump, tm.Grace)
+	}
+}
+
+// A test of the meridian command can shorten the timing the coordinators
+// it opens run with, each period scaled, the lease and its heartbeat to
+// whole seconds, a fifth at most; and a scale it can't, it is refused.
+func TestTimingScaled(t *testing.T) {
+	t.Cleanup(func() { testtiming.Scale = 0 })
+	for _, s := range []float64{0.1, 0.15, 0.5, 1} {
+		testtiming.Scale = s
+		tm, err := openTiming()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tm.Lease%time.Second != 0 || tm.Heartbeat%time.Second != 0 || tm.Heartbeat < time.Second || 5*tm.Heartbeat > tm.Lease {
+			t.Errorf("scaled by %v, the lease is %v, with a heartbeat every %v", s, tm.Lease, tm.Heartbeat)
+		}
+		if want := time.Duration(float64(DefaultTiming().Grace) * s); tm.Grace != want {
+			t.Errorf("scaled by %v, Grace is %v, want %v", s, tm.Grace, want)
+		}
+	}
+	testtiming.Scale = 0.1
+	c, err := Open(t.Context(), Options{Database: filepath.Join(privateDir(t), "meridian.db"), Keys: newTestKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if c.timing.Lease != 6*time.Second || c.timing.Heartbeat != time.Second {
+		t.Errorf("a coordinator opened with a scale of 0.1 has %+v", c.timing)
+	}
+	for _, s := range []float64{0.05, 2, -1} {
+		testtiming.Scale = s
+		if _, err := Open(t.Context(), Options{Database: filepath.Join(privateDir(t), "meridian.db"), Keys: newTestKeys(t)}); err == nil {
+			t.Errorf("a coordinator opened with a scale of %v", s)
+		}
+	}
+	testtiming.Scale = 0
+	if tm, err := openTiming(); err != nil || tm != DefaultTiming() {
+		t.Errorf("unscaled, the timing is %+v, %v", tm, err)
 	}
 }

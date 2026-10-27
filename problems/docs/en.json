@@ -1066,6 +1066,12 @@
       "Start the run with the release of Meridian that created it, or a later one."
     ]
   },
+  "log_cut": {
+    "why": "A step's log is stored as its worker uploads it, and the worker uploads all of it before it reports the attempt's end. This attempt ended otherwise: its worker was lost, as when its host went away, or a newer attempt of its job took its place, or its placement was withdrawn. What the worker hadn't uploaded by then isn't stored, and never will be: the log is shown as far as it was stored.",
+    "fix": [
+      "See why the attempt ended in the run's events, and on the host the job ran on: its worker's own log, and the step's output if it wrote any to a file of its own, are there."
+    ]
+  },
   "log_truncated": {
     "why": "A step's log is stored by the coordinator as the worker uploads it. So that a job that prints without end can't fill the coordinator's disk, the coordinator keeps the bytes of an attempt's logs up to a limit on all of them together. A log that goes past it keeps its bytes to there, then this line, and nothing more of it, and the attempt's later logs keep only this line. The steps run on, and the worker is told the rest is stored.",
     "fix": [

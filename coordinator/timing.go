@@ -1,6 +1,11 @@
 package coordinator
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/parallelworks/meridian/internal/testtiming"
+)
 
 // Timing is how long an attempt's lease lasts, and the periods the
 // coordinator waits around it (docs/design.md, Leases and fencing). A
@@ -50,4 +55,27 @@ func DefaultTiming() Timing {
 		Grace:       60 * time.Second,
 		WakeJump:    10 * time.Second,
 	}
+}
+
+// openTiming is the timing a coordinator opens with: DefaultTiming's, but
+// in a test of the meridian command that shortens it (testtiming.Scale),
+// each period scaled, the lease and its heartbeat to whole seconds, which
+// is how a worker is told them, and the heartbeat down, so that it stays a
+// fifth of the lease at most.
+func openTiming() (Timing, error) {
+	tm, s := DefaultTiming(), testtiming.Scale
+	switch {
+	case s == 0:
+		return tm, nil
+	case s < 0.1 || s > 1:
+		return Timing{}, fmt.Errorf("coordinator: a test's timing scale %v isn't from 0.1 to 1", s)
+	}
+	scaled := func(d time.Duration) time.Duration { return time.Duration(float64(d) * s) }
+	return Timing{
+		Lease:       scaled(tm.Lease).Truncate(time.Second),
+		Heartbeat:   scaled(tm.Heartbeat).Truncate(time.Second),
+		FenceMargin: scaled(tm.FenceMargin),
+		Grace:       scaled(tm.Grace),
+		WakeJump:    scaled(tm.WakeJump),
+	}, nil
 }

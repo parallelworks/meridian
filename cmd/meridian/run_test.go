@@ -3,12 +3,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +20,7 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/testtiming"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -28,8 +32,18 @@ const helloWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo hello\n"
 
 // TestMain runs the test binary as meridian worker when the local backend
 // starts it so, as it starts the binary that placed a job, for a job of a
-// run that a test's meridian run coordinates.
+// run that a test's meridian run coordinates. Run with
+// testtiming.EnvScale, it shortens the timing of the coordinators it opens
+// (testtiming.Scale), as only a test does.
 func TestMain(m *testing.M) {
+	if v, ok := os.LookupEnv(testtiming.EnvScale); ok {
+		s, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", testtiming.EnvScale, err)
+			os.Exit(exitError)
+		}
+		testtiming.Scale = s
+	}
 	if len(os.Args) > 1 && os.Args[1] == "worker" {
 		main()
 	}
@@ -75,7 +89,6 @@ func runTest(t *testing.T, vars map[string]string, setUp func(*cli), args ...str
 	c := &cli{
 		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
 		lookupEnv: func(name string) (string, bool) { v, ok := vars[name]; return v, ok },
-		poll:      10 * time.Millisecond,
 	}
 	if setUp != nil {
 		setUp(c)
@@ -111,6 +124,61 @@ func stepLog(t *testing.T, env map[string]string, id string) string {
 		t.Fatalf("the step's log is %q, ended %v: %v", data, ended, err)
 	}
 	return string(data)
+}
+
+// timeOfDay is the time a line of meridian run's progress starts with.
+var timeOfDay = regexp.MustCompile(`(?m)^\d\d:\d\d:\d\d `)
+
+// TestRunShows checks what meridian run shows of a run as it goes: a line
+// for each of its events, with the time it happened, each line of a step's
+// log after its job and step, and how the run ended; without -logs, no
+// log; and as -format json, JSON lines, and the command's problems as
+// problem details.
+func TestRunShows(t *testing.T) {
+	env := runEnv(t)
+	workflow := writeFile(t, "w.yaml", helloWorkflow)
+	r := runTest(t, env, nil, workflow)
+	if r.code != exitOK || r.stderr != "" {
+		t.Fatalf("meridian run = %+v", r)
+	}
+	// The step's log line is shown once, after the step's start and before
+	// the run's end. Follow holds the step's end back until the log has
+	// ended, as TestFollowHoldsStepEnd checks, but only so long, which a
+	// loaded runner can outlast, so where it falls among the events after
+	// the step's start isn't checked here.
+	lines := strings.Split(strings.TrimSuffix(timeOfDay.ReplaceAllString(r.stdout, ""), "\n"), "\n")
+	logAt := slices.Index(lines, "main step 0| hello")
+	started := slices.Index(lines, "main step 0 started")
+	if logAt < 0 || logAt < started || logAt == len(lines)-1 {
+		t.Errorf("meridian run showed the step's log out of place\n%s", r.stdout)
+	} else {
+		lines = slices.Delete(lines, logAt, logAt+1)
+	}
+	want := regexp.MustCompile(`^run 1 started \(run directory [^)]+\)
+main ready
+main attempt 1 placing on local/\S+
+main attempt 1 running on local/\S+
+main step 0 started
+main step 0 finished: success \(exit status 0\)
+main finished: success
+run 1 finished: success$`)
+	if !want.MatchString(strings.Join(lines, "\n")) || strings.Count(r.stdout, ":") < 6 {
+		t.Errorf("meridian run showed\n%s", r.stdout)
+	}
+
+	r = runTest(t, env, nil, "--logs=false", workflow)
+	if r.code != exitOK || strings.Contains(r.stdout, "hello") || !strings.Contains(r.stdout, "main step 0 finished") {
+		t.Errorf("meridian run --logs=false = %+v", r)
+	}
+
+	r = runTest(t, env, nil, "--format", "yaml", workflow)
+	if r.code != exitError || !strings.Contains(r.stderr, "(flag_value_invalid)") || r.stdout != "" {
+		t.Errorf("meridian run --format yaml = %+v", r)
+	}
+	r = runTest(t, env, nil, "--format", "json", "--input", "cluster.size=5", writeFile(t, "w.yaml", groupInputs))
+	if r.code != exitInvalid || r.stdout != "" || !strings.HasPrefix(r.stderr, "{") || !strings.Contains(r.stderr, `"code":"input_above_max"`) {
+		t.Errorf("meridian run --format json of a workflow with errors = %+v", r)
+	}
 }
 
 // TestRunEnds checks a run from start to end: meridian run says which it
@@ -258,8 +326,6 @@ func TestRunDetaches(t *testing.T) {
 		c.interactive = &no
 		c.signals = make(chan os.Signal, 1)
 		c.signals <- os.Interrupt
-		// It doesn't see the run end before the interrupt.
-		c.poll = time.Hour
 	}, workflow)
 	if r.code != exitError || !strings.Contains(r.stdout, "run 1 left running: meridian resume 1") {
 		t.Errorf("an interrupted meridian run = %+v", r)
@@ -277,7 +343,6 @@ func TestRunAsks(t *testing.T) {
 		c.stdin = strings.NewReader("l\n")
 		c.signals = make(chan os.Signal, 1)
 		c.signals <- os.Interrupt
-		c.poll = time.Hour
 	}, workflow)
 	if r.code != exitError || !strings.Contains(r.stderr, "Cancel it (c), leave it running (l), or keep watching (w)?") ||
 		!strings.Contains(r.stdout, "run 1 left running") {

@@ -3,9 +3,10 @@
 //
 // What differs between a laptop and a platform reaches the coordinator
 // through interfaces, besides the compiler's resolvers and the backends'
-// drivers: Keys, which wraps the keys of runs' secret records; Logs, which
-// stores step logs; and Events, which hears of runs, jobs and steps as
-// they happen. Each gets the caller's context. An error from Keys that is
+// drivers: Keys, which wraps the keys of runs' secret records; and Logs,
+// which stores step logs. Each gets the caller's context. Whoever shows a
+// run as it happens, as the command's progress display does, follows its
+// events and its logs (Follow). An error from Keys that is
 // a problem (problems.IsProblem), such as a wrapped key that can't be
 // unwrapped for its run, is one trying again can't fix, and fails the run;
 // any other error from Keys or Logs means it couldn't do what it was
@@ -17,7 +18,9 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/coordinator/internal/runlog"
+	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // Keys wraps the data keys of runs' secret records: a platform's key
@@ -56,23 +59,19 @@ type Logs = runlog.Logs
 // a step's or a cleanup's, the step's index and its try.
 type LogKey = runlog.Key
 
-// Events hears of runs, jobs and steps as they happen, such as the
-// command's progress display.
-type Events interface {
-	// Event reports e, once what it reports is stored. A coordinator that
-	// repeats what it did, as one that took over a job does, can report an
-	// event again, so a consumer that counts them keys them on their
-	// fields. Event must not block: it holds up the job it reports on.
-	Event(ctx context.Context, e Event)
-}
-
-// An Event is a change in a run, a job or a step.
+// An Event is a change in a run, a job, an attempt or a step, as the
+// store keeps it, which Follow reports.
 type Event struct {
+	// Seq numbers the run's events, from 1, in the order they happened.
+	Seq int64
+	// Time is when it happened: by the worker's clock for a step's event,
+	// and by the store's for any other.
 	Time time.Time
 	Kind EventKind
 	Run  string
-	// Job is the job instance's key, for a job's or a step's event, and
-	// Attempt the attempt's number, from 1, once the job is placed.
+	// Job is the job instance's key, for a job's, an attempt's or a step's
+	// event, and Attempt the attempt's number, from 1, for an attempt's or
+	// a step's.
 	Job     string
 	Attempt int
 	// Step, Try and Cleanup are a step's event's: the step's index, its
@@ -80,29 +79,58 @@ type Event struct {
 	Step    int
 	Try     int
 	Cleanup bool
-	// Member is where the attempt was placed, for JobPlacing and later.
+	// Member is where the attempt was placed, as its group and its member
+	// joined with a slash, as in local/laptop, for an attempt's event, or
+	// "" where that is private, which only the run's secret record holds.
 	Member string
-	// Outcome is a finished event's, and Reason why an attempt or a job
-	// ended other than as its steps did, such as worker-lost, or "".
+	// End is how an attempt ended, of AttemptEnded.
+	End AttemptEnd
+	// Outcome is a finished event's, and Reason why an attempt, a job or
+	// the run ended other than as its steps did, such as worker-lost, or "".
 	Outcome plan.Outcome
 	Reason  plan.Reason
 	// ExitCode is a finished step's exit status, or -1 if it has none.
 	ExitCode int
+	// Diagnostics are a finished event's problems: a step's, as its worker
+	// reported them; the problem an attempt that failed before its first
+	// step ended with; a job's, as Ready's or placement's; or the run's.
+	// Like the logs, they show no secret: a worker masks what it reports,
+	// and the coordinator masks what an attempt reports when where it runs
+	// is private.
+	Diagnostics problems.Diagnostics
 }
 
 // An EventKind is what an event says happened.
 type EventKind string
 
 // The kinds of event, in the order a run's happen: a job is ready once its
-// dependencies have finished, placing while a backend starts its worker,
-// and running once the worker has claimed it.
+// dependencies have finished, placing once a member is chosen for its
+// attempt, and running once the attempt's worker has claimed it; an
+// attempt ends, completed or otherwise, before its job ends, as one that
+// another supersedes does.
 const (
-	RunStarted   EventKind = "run.started"
-	JobReady     EventKind = "job.ready"
-	JobPlacing   EventKind = "job.placing"
-	JobRunning   EventKind = "job.running"
-	StepStarted  EventKind = "step.started"
-	StepFinished EventKind = "step.finished"
-	JobFinished  EventKind = "job.finished"
-	RunFinished  EventKind = "run.finished"
+	RunStarted   EventKind = store.EventRunStarted
+	JobReady     EventKind = store.EventJobReady
+	JobPlacing   EventKind = store.EventJobPlacing
+	JobRunning   EventKind = store.EventJobRunning
+	StepStarted  EventKind = store.EventStepStarted
+	StepFinished EventKind = store.EventStepFinished
+	AttemptEnded EventKind = store.EventAttemptEnded
+	JobFinished  EventKind = store.EventJobFinished
+	RunFinished  EventKind = store.EventRunFinished
+)
+
+// An AttemptEnd is how an attempt ended.
+type AttemptEnd string
+
+// The ways an attempt ends: its worker completed it, as it does one that
+// failed before its first step too; or the coordinator ended it, as one
+// whose worker was lost, one a newer attempt of its job superseded, or one
+// whose placement was withdrawn.
+const (
+	AttemptCompleted   AttemptEnd = AttemptEnd(store.EndCompleted)
+	AttemptSetupFailed AttemptEnd = AttemptEnd(store.EndSetupFailed)
+	AttemptLost        AttemptEnd = AttemptEnd(store.EndLost)
+	AttemptSuperseded  AttemptEnd = AttemptEnd(store.EndSuperseded)
+	AttemptWithdrawn   AttemptEnd = AttemptEnd(store.EndWithdrawn)
 )

@@ -108,6 +108,11 @@ type Store struct {
 	// would be closed by the garbage collector, which releases the lock.
 	holdsMu sync.Mutex
 	holds   map[*Hold]struct{}
+
+	// changed is closed, and replaced, once a transaction of this process's
+	// that added a run's events commits (Changes).
+	changedMu sync.Mutex
+	changed   chan struct{}
 }
 
 // openSQLite is hoppersqlite.OpenContext, which tests replace.
@@ -390,6 +395,9 @@ type Tx struct {
 	// erased is set once the transaction has deleted a secret record,
 	// which a checkpoint of the write-ahead log then erases from it.
 	erased bool
+	// events is set once the transaction has added a run's event, which
+	// Changes says once it commits.
+	events bool
 }
 
 // Tx runs fn in a transaction, which it commits if fn returns nil and
@@ -441,7 +449,29 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	if tx.erased {
 		s.truncateLog(context.WithoutCancel(ctx))
 	}
+	if tx.events {
+		s.changedMu.Lock()
+		if s.changed != nil {
+			close(s.changed)
+			s.changed = nil
+		}
+		s.changedMu.Unlock()
+	}
 	return nil
+}
+
+// Changes returns a channel that is closed once a transaction of this
+// process's that adds a run's events, as each change to a run does, next
+// commits: one in another process isn't said, and whoever follows a run
+// reads its events again every so often for those. Take the channel
+// before reading the events, so that none added in between is missed.
+func (s *Store) Changes() <-chan struct{} {
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
+	if s.changed == nil {
+		s.changed = make(chan struct{})
+	}
+	return s.changed
 }
 
 // truncateLog checkpoints the write-ahead log into the database and
