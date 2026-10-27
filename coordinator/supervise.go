@@ -186,7 +186,7 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 		if err != nil {
 			return 0, err
 		}
-		if pj := planJob(p, job.Name); pj != nil && pj.Strategy != nil {
+		if pj := p.Job(job.Name); pj != nil && pj.Strategy != nil {
 			return c.matrixStep(ctx, run, job, done)
 		}
 	}

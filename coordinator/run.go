@@ -192,6 +192,9 @@ type Coordinator struct {
 	stopTimeout  time.Duration
 	followEvery  time.Duration
 	followHold   time.Duration
+	// placed, if it is set, hears of each job a supervisor places, as it
+	// readied it, before the attempt's driver places it.
+	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
 
 	mu      sync.Mutex
 	serving bool
@@ -309,7 +312,7 @@ func (c *Coordinator) retriesFor(tx *store.Tx, attempt string, reason plan.Reaso
 	if err != nil {
 		return false
 	}
-	pj := planJob(p, job.Name)
+	pj := p.Job(job.Name)
 	return pj != nil && pj.RetriesFor(reason)
 }
 
@@ -334,7 +337,7 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 	if err != nil {
 		return false
 	}
-	pj := planJob(p, job.Name)
+	pj := p.Job(job.Name)
 	if pj == nil || step < 0 || step >= len(pj.Steps) {
 		return false
 	}

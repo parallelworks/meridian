@@ -17,7 +17,8 @@ import (
 // A Readier gives the job an attempt claims: plan.Plan.Ready run again, as
 // the coordinator runs it whenever it needs a ready job, with what it kept
 // of how it readied the job, so that every claim of an attempt gives the
-// same, byte for byte (PlanReadier).
+// job its supervisor placed, byte for byte. The coordinator gives the
+// one it serves with, from the same code its supervisors ready a job with.
 type Readier interface {
 	// ReadyAttempt returns the job of the attempt a, of run, as Ready gives
 	// it, with the part of the run's values, and of its needs' results,

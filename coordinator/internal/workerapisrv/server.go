@@ -24,7 +24,7 @@
 // What it needs of the rest of the coordinator comes through narrow
 // interfaces: the store; where logs go (runlog.Logs); the run's secret
 // record, opened and sealed again (Sealer); the job an attempt claims, as
-// Ready gives it again (Readier, which PlanReadier is from the plan); and
+// Ready gives it again (Readier, which the coordinator gives); and
 // whom to wake once an attempt changes (Options.Wake).
 package workerapisrv
 

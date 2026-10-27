@@ -220,7 +220,7 @@ func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelP
 		case path == plan.CancelPathOutlive:
 			out.outlives[j.Key] = true
 		case j.ReadyAt.IsZero():
-			if pj := planJob(p, j.Name); path == plan.CancelPathSkip && pj != nil && len(pj.Needs) > 0 {
+			if pj := p.Job(j.Name); path == plan.CancelPathSkip && pj != nil && len(pj.Needs) > 0 {
 				out.skipNow = append(out.skipNow, j.Key)
 			}
 		default:

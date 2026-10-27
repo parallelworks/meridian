@@ -25,7 +25,7 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 	}
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: logs, Sealer: c.sealer,
-		Readier: &workerapisrv.PlanReadier{Store: c.store, Sealer: c.sealer, Plan: c.plans.get, RunValues: runValues, Readied: readiedWith},
+		Readier: claimReadier{c},
 		Wake:    c.wakeJob,
 		Log:     c.log,
 	})
@@ -45,50 +45,75 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 	return srv.Serve(ctx, l)
 }
 
-// runValues is what run state holds of the run's values, which Start kept
-// there.
-func runValues(run *store.Run) (plan.RunValues, error) {
-	if run.StartState == nil {
-		return plan.RunValues{}, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
-	}
-	return run.StartState.Run, nil
-}
+// claimReadier is the coordinator's workerapisrv.Readier: it readies the
+// job of an attempt a worker claims from what its supervisor pinned as it
+// first readied the job, read and opened as the supervisor reads them
+// (readReadyFrom, readyInput), so that every claim gives the job its
+// supervisor placed, byte for byte.
+type claimReadier struct{ c *Coordinator }
 
-// readiedWith is what the job's supervisor readied it with, as it pinned
-// it the first time (store.Tx.PinReady), which readyJob readies it with
-// each time after, read in tx: with, for each need on any instance, the
-// instances that had ended as the instance was chosen; and for a matrix
-// instance, the instance, as run state holds it.
-func readiedWith(_ context.Context, tx *store.Tx, run *store.Run, job *store.Job) (*workerapisrv.Readied, error) {
-	if job.ReadyAt.IsZero() {
-		return nil, fmt.Errorf("coordinator: run %s's job %q hasn't been readied", run.ID, job.Key)
-	}
-	r := &workerapisrv.Readied{Stopped: job.ReadiedStopped, Any: job.AnyChoices}
-	for name := range job.AnyChoices {
-		a, err := tx.Any(run.ID, name)
-		if err != nil {
-			return nil, err
-		}
-		if r.AnyEnded == nil {
-			r.AnyEnded = map[string][]string{}
-		}
-		r.AnyEnded[name] = a.Ended
-	}
-	if job.Instance < 0 {
-		return r, nil
-	}
-	parent, err := tx.Job(run.ID, job.Name)
+var _ workerapisrv.Readier = claimReadier{}
+
+// ReadyAttempt returns the job of the attempt a, as Ready gives it again,
+// with the part of the run's values and of its needs' results it reads.
+func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store.Attempt) (*workerapisrv.Ready, error) {
+	c := r.c
+	p, err := c.plans.get(run)
 	if err != nil {
 		return nil, err
 	}
-	x := run.StartState.Expansions[job.Name]
-	if x == nil {
-		x = parent.Expansion
+	var (
+		from *readyFrom
+		pj   *plan.Job
+	)
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		job, err := tx.Job(run.ID, a.Job)
+		if err != nil {
+			return err
+		}
+		if pj = p.Job(job.Name); pj == nil {
+			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
+		}
+		from, err = readReadyFrom(tx, run, pj, job, false)
+		return err
+	}); err != nil {
+		return nil, err
 	}
-	if x == nil || job.Instance >= len(x.Instances) {
-		return nil, fmt.Errorf("coordinator: run %s's job %q has no instance %d", run.ID, job.Name, job.Instance)
+	in, err := c.readyInput(ctx, run, from)
+	if err != nil {
+		return nil, err
 	}
-	instance := x.Instances[job.Instance]
-	r.Instance = &instance
-	return r, nil
+	res, diags, err := p.Ready(ctx, from.job.Name, in)
+	switch {
+	case err != nil:
+		return nil, err
+	case diags.HasErrors():
+		// Ready gave the job once with the same inputs: this is a bug, and
+		// the diagnostics, which show no private value, are logged with it.
+		return nil, fmt.Errorf("coordinator: run %s's job %q doesn't ready again as it did: %w", run.ID, a.Job, diags)
+	case res.Job == nil:
+		return nil, fmt.Errorf("coordinator: run %s's job %q readies again as no job to run", run.ID, a.Job)
+	}
+	return &workerapisrv.Ready{Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs)}, nil
+}
+
+// Steps returns how many steps the attempt's job has, as the plan says.
+func (r claimReadier) Steps(ctx context.Context, run *store.Run, a *store.Attempt) (int, error) {
+	p, err := r.c.plans.get(run)
+	if err != nil {
+		return 0, err
+	}
+	var job *store.Job
+	if err := r.c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		job, err = tx.Job(run.ID, a.Job)
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	pj := p.Job(job.Name)
+	if pj == nil {
+		return 0, fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
+	}
+	return len(pj.Steps), nil
 }
