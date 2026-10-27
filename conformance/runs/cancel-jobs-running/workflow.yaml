@@ -1,0 +1,14 @@
+jobs:
+  target:
+    steps:
+      - run: touch started; sleep 60
+        cleanup: echo cleaned
+      - run: echo skipped
+      - if: ${{ always() }}
+        run: echo always
+  canceller:
+    steps:
+      - run: until [ -f started ]; do sleep 0.05; done
+      - uses: parallelworks/cancel-jobs
+        with:
+          jobs: [target]

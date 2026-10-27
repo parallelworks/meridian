@@ -361,10 +361,6 @@
           "not": {
             "type": "null"
           }
-        },
-        "outlivesCancel": {
-          "description": "Added in worker API version 3. Set when the step outlives its job's cancellation, as Step decided it.",
-          "type": "boolean"
         }
       },
       "required": [],

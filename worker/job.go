@@ -739,7 +739,7 @@ func (a *attempt) runAction(ctx context.Context, key logKey, rs *plan.ReadyStep,
 	}
 	answered := make(chan result, 1)
 	go func() {
-		answer, err := a.client.action(reqCtx, &workerapi.ActionRequest{Step: key.step, Try: key.try, With: rs.With, OutlivesCancel: rs.OutlivesCancel})
+		answer, err := a.client.action(reqCtx, &workerapi.ActionRequest{Step: key.step, Try: key.try, With: rs.With})
 		answered <- result{answer, err}
 	}()
 	stopping, unwatch := a.watch(s)

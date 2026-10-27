@@ -1,0 +1,17 @@
+description: >-
+  A parallelworks/cancel-jobs step that cancels a job that runs stops it as
+  a cancel does: its step is stopped, its steps that outlive a cancel run,
+  and so does its cleanup:, and it ends cancelled. The step succeeds, and
+  the run, in which no job failed, succeeds, as in format 1.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      target:
+        outcome: cancelled
+        logs:
+          - {step: 2, text: "always\n"}
+          - {step: 0, cleanup: true, text: "cleaned\n"}
+      canceller:
+        outcome: success

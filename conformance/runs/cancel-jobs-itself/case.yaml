@@ -1,0 +1,18 @@
+description: >-
+  A parallelworks/cancel-jobs step that cancels its own job succeeds, and
+  the steps after it run as after a cancel, from the first of them: the
+  first whose if: passes ends cancelled without starting, as cancelled()
+  is still false, and from then on cancelled() is true, so a step whose
+  if: reads cancelled(), !success() or always() runs, and the rest don't.
+  The job ends cancelled, and the run, in which no job failed, succeeds.
+source: Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: cancelled
+        logs:
+          - {step: 3, text: "cancelled\n"}
+          - {step: 4, text: "not success\n"}
+          - {step: 5, text: "always\n"}

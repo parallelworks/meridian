@@ -421,17 +421,22 @@ the SHA-256 hash of its content: 218 files.
   `compute-clusters` inputs of the known workflows is `multi`, the form
   that takes a list.
 - **A `parallelworks/cancel-jobs` of a job that hasn't started yet is
-  kept**: the job ends cancelled and never starts, where ACTIVATE marked
-  it as cancelling, which only a job that runs heeds, and the job's start
-  overwrote the mark, so that it ran. Of the 215 known cancel-jobs steps, 2
-  cancel jobs that can't have started yet, since they wait on a job that
-  still runs, both in one workflow, whose jobs so ran though it meant them
-  not to; in the other 213, the job cancelled waits on no job its
-  canceller doesn't, or the canceller waits, polling, for it to run, so
-  that whether it had started was a race at most, which no workflow can
-  rely on. ACTIVATE takes the same fix by ending a job marked as cancelling
-  as it would start it. It is decided, and built with cancel-jobs
-  ([Built-in actions](#built-in-actions)).
+  kept**: the job ends cancelled where it waits, on the jobs it needs or
+  to be placed, and never starts
+  ([Built-in actions](#built-in-actions)), where ACTIVATE marked it as
+  cancelling, which only a job that runs heeds, and the job's start
+  overwrote the mark, so that it ran once its needs had ended. The jobs
+  that need it read it as cancelled, as they read a running job that is
+  cancelled: one without a cancel-aware `if:` is skipped because its
+  needs failed, and the run fails, where it could succeed before. Of the
+  215 known cancel-jobs steps, 2 cancel jobs that can't have started yet,
+  since they wait on a job that still runs, both in one workflow, whose
+  jobs so ran though it meant them not to; no job needs either of them,
+  so no other job changes. In the other 213, the job cancelled waits on
+  no job its canceller doesn't, or the canceller waits, polling, for it to
+  run, so that whether it had started was a race at most, which no
+  workflow can rely on. ACTIVATE takes the same fix by ending a job marked
+  as cancelling as it would start it, or as it waits for its turn.
 - **`parallelworks/update-session` updates only the run's own sessions**,
   one of those the run's `sessions:` made, which `${{ sessions.<name> }}`
   names, a fix for security that ACTIVATE takes too. All 15 known
@@ -2364,9 +2369,10 @@ of them leaves false. That differs from a feature whose interface is
 missing, which fails to compile ([Interfaces](#interfaces)): every run
 makes its `sessions:`, but a step may never run. The worker fails a step
 that uses scheduler-agent or wait-for-agent with `action_needs_platform`
-already. Until checkout, cancel-jobs and update-session are built, it
-fails one that uses them with `uses_not_supported`; the rest of this
-section is decided, and built next.
+already, and the coordinator does cancel-jobs. Until checkout and
+update-session are built, a step that uses one fails with
+`uses_not_supported`; what this section says of them is decided, and
+built next.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2426,19 +2432,34 @@ section is decided, and built next.
     A cancel of another run's jobs, which format 1 makes with `slug`,
     `workflow` and `run`, or `run` alone, isn't built yet: its step fails
     when it runs (`cancel_jobs_other_run`), never as the run is created,
-    since an `if:` may skip it; no known workflow makes one. With no
-    `jobs:`, the step cancels its run.
+    since an `if:` may skip it; no known workflow makes one. What format
+    1 reads as the step's own run is its own run: a negative `run`, and a
+    `workflow` and `run`, or a `run` alone, that name it; a Meridian run is
+    named by its workflow's `name:` and its ID, and has no slug. A
+    `workflow` without a `run`, or with a negative one, fails the step, as
+    in format 1 (`cancel_jobs_run_missing`). With no `jobs:`, or an empty
+    one, the step cancels its own run, as a person does, and succeeds; in
+    a child run, that is the child, as a subworkflow's in format 1. A
+    `jobs:` that isn't a list of names, a `slug` or `workflow` that isn't
+    a string, or a `run` that isn't a whole number, fails the step
+    (`wrong_type`), as format 1 refuses it too; null, and `""` for a
+    `slug` or `workflow`, are as if not given.
   - A job that has ended, or is cancelled already, is left as it is. One
     that runs stops as a cancel stops it
     ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)),
     one placed and not yet claimed is claimed with its cancel, and one that
     hasn't started ends cancelled and never starts, a
-    [bug fix](#bug-fixes-to-format-1).
+    [bug fix](#bug-fixes-to-format-1). One whose worker is lost once it
+    is cancelled isn't placed again, and ends cancelled; an attempt of it
+    made after the cancel is told it from the start.
   - **Of two jobs that cancel each other at once, exactly one is
     cancelled:** a step whose own job is cancelled already, and that
-    doesn't outlive a cancel, cancels nothing. In format 1 it is a race,
-    whose outcome no workflow can rely on. 196 of the 215 known cancels
-    are of jobs that cancel each other.
+    doesn't outlive a cancel, cancels nothing, and ends cancelled. Each
+    cancel is a transaction of the store's, which run one at a time, so
+    the second sees the first's. In format 1 it is a race, whose outcome
+    no workflow can rely on; exactly one cancelled is one of the outcomes
+    that race can have, made certain. 196 of the 215 known cancels are of
+    jobs that cancel each other.
   - A step that cancels its own job succeeds, and its job then stops as a
     cancelled job does. ACTIVATE can fail such a step instead in a job
     that runs over `ssh:`, as it copies the step's outputs back once the
@@ -3370,8 +3391,10 @@ and a platform that embeds Meridian serve the same API.
   fenced. The answers outlive their attempt in the store, which enforces
   no foreign keys, so nothing deletes them with it: whatever comes to
   delete attempts, as a retention of runs, deletes their answers too. A
-  step that doesn't outlive its job's cancellation, of an attempt whose
-  control asks to cancel the job, is answered cancelled, without the
+  step whose `if:` doesn't outlive its job's cancellation, as the
+  coordinator reads it from the plan (`plan.OutlivesCancel`), never from
+  the worker, of an attempt whose control asks to cancel the job, is
+  answered cancelled, without the
   action, as though the worker had read the control first; so is a step
   whose `early-cancel` is `any-job-failed`, once a job of the run has
   failed, with no reason, as that stops it. Another's answer says the
@@ -3382,8 +3405,8 @@ and a platform that embeds Meridian serve the same API.
   the step after; past it, the step ends as the stop has it, though
   the coordinator may have done the action. In an attempt of an earlier
   version, the step fails as before (`uses_not_supported`). The
-  coordinator doesn't do cancel-jobs or update-session yet: it fails such
-  a step with `uses_not_supported`, as the worker did. The worker fails a
+  coordinator doesn't do update-session yet: it fails such a step with
+  `uses_not_supported`, as the worker did. The worker fails a
   step that uses checkout (`uses_not_supported`), and one that uses an
   action only a platform provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
