@@ -170,22 +170,37 @@ func variableReads(doc *format.Document) []string {
 // each execution group and environment a job's runs-on: names, written
 // out, with Groups, and each workflow a step's uses: names, with Sources,
 // which pins it in the step (plan.Step.Source), and loads and validates
-// it. What needs a resolver that isn't there is resolver_missing. It
-// returns an error, a resolver's that couldn't answer, or ctx's.
+// it; and then the workflows those call, down the tree (walkCalls), whose
+// pins the plan holds (plan.Plan.Calls). What needs a resolver that isn't
+// there is resolver_missing. It returns an error, a resolver's that
+// couldn't answer, or ctx's.
 func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
-	pinned := map[plan.SourceRef]*plan.Source{}
+	t := newTree(c.opts.Calls)
+	root := node{keys: []plan.SourceRef{{}}, chain: []string{p.Run.Source.Location}}
+	if p.Run.Source.Ref.Uses != "" {
+		root.keys[0] = p.Run.Source.Ref.Normal()
+	}
 	asked := map[string]error{}
+	var first []node
 	for i := range p.Jobs {
 		j := &p.Jobs[i]
 		if err := c.checkRunsOn(ctx, j, asked); err != nil {
 			return err
 		}
 		for k := range j.Steps {
-			if err := c.pinSource(ctx, &j.Steps[k], pinned); err != nil {
+			n, err := c.pinSource(ctx, t, root, &j.Steps[k])
+			if err != nil {
 				return err
+			}
+			if n != nil {
+				first = append(first, *n)
 			}
 		}
 	}
+	if err := c.walkCalls(ctx, t, first); err != nil {
+		return err
+	}
+	p.Calls = t.planCalls()
 	return ctx.Err()
 }
 
@@ -248,7 +263,7 @@ func (c *compiler) checkRunsOn(ctx context.Context, j *plan.Job, asked map[strin
 		answer = ask(c.opts.Groups)
 		asked[string(id)] = answer
 	}
-	return c.resolverError(ctx, answer, loc, notFound, params)
+	return resolverError(ctx, &c.reporter, answer, loc, notFound, params)
 }
 
 // workflowUses are what a uses: that names a workflow starts with: a Git
@@ -267,86 +282,115 @@ func refProblemAt(loc []string, k *problems.Kind, params problems.Params) []stri
 	return appendPath(loc, "uses")
 }
 
-// pinSource resolves the workflow step's uses: names, if it names one,
-// through Sources, pins it in the step, and loads and validates its text,
-// whose errors are the run's. A workflow pinned already, as another step's,
-// by a reference that reads the same (plan.SourceRef.Normal), is pinned
-// again from pinned, so that a run reads one workflow at one commit
-// however its steps write its name.
-func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.SourceRef]*plan.Source) error {
-	written := !strings.Contains(s.Uses, "${{")
-	if written && !slices.ContainsFunc(workflowUses, func(prefix string) bool { return strings.HasPrefix(s.Uses, prefix) }) {
-		return nil
-	}
+// pinSource pins, in the step s of the run's own workflow, the workflow
+// its uses: names, if it names one, as pinRef does, and returns the node of
+// that workflow, below root, the run's, from which the walk of the tree
+// goes on, or nil for none.
+func (c *compiler) pinSource(ctx context.Context, t *tree, root node, s *plan.Step) (*node, error) {
 	loc, err := jsonptr.Split(s.Path)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	step, _ := jsonptr.Lookup(c.doc.Value, loc)
+	stepMap, _ := step.(map[string]any)
+	ref, ok := stepRef(&c.reporter, loc, stepMap)
+	if !ok || t.full {
+		return nil, nil
 	}
 	usesLoc := appendPath(loc, "uses")
+	if t.count(&c.reporter, usesLoc) {
+		return nil, nil
+	}
+	p, err := c.pinRef(ctx, t, &c.reporter, loc, usesLoc, ref)
+	if err != nil || p.source == nil {
+		return nil, err
+	}
+	copied := *p.source
+	s.Source = &copied
+	return &node{pin: p, keys: append(slices.Clone(root.keys), ref.Normal()), chain: append(slices.Clone(root.chain), p.source.Location), root: usesLoc}, nil
+}
+
+// stepRef reads the reference that step, at loc in the workflow rep
+// reports in, names a workflow by: its uses:, and its with:'s $yaml and
+// $host, as format 1 writes them. It says whether the step names one,
+// which must be written out, as must where it is: what isn't, and what
+// format 1 refuses of a reference, it reports, and the step names none.
+func stepRef(rep *reporter, loc []string, step map[string]any) (plan.SourceRef, bool) {
+	uses, _ := step["uses"].(string)
+	written := !strings.Contains(uses, "${{")
+	if uses == "" || written && !slices.ContainsFunc(workflowUses, func(prefix string) bool { return strings.HasPrefix(uses, prefix) }) {
+		return plan.SourceRef{}, false
+	}
 	if !written {
 		// ACTIVATE evaluates a uses: with the run's inputs before it reads
 		// it, and so can find a workflow in one; the workflow is pinned as
 		// the run is created, so the reference must be written out
 		// (docs/design.md).
-		c.reportAt(problems.SourceNotKnown, usesLoc, problems.Params{"key": "uses:"})
-		return nil
+		rep.reportAt(problems.SourceNotKnown, appendPath(loc, "uses"), problems.Params{"key": "uses:"})
+		return plan.SourceRef{}, false
 	}
-	ref := plan.SourceRef{Uses: s.Uses}
-	for _, with := range []struct {
+	ref := plan.SourceRef{Uses: uses}
+	with, _ := step["with"].(map[string]any)
+	for _, w := range []struct {
 		key string
 		to  *string
 	}{{"$yaml", &ref.Path}, {"$host", &ref.Host}} {
-		key, to := with.key, with.to
-		raw, ok := jsonptr.Lookup(c.doc.Value, appendPath(loc, "with", key))
-		if !ok {
-			continue
-		}
-		text, isText := raw.(string)
+		// ACTIVATE reads one that isn't text as if it weren't there,
+		// where the schema refuses it.
+		text, isText := with[w.key].(string)
 		if !isText {
-			// ACTIVATE reads one that isn't text as if it weren't there,
-			// where the schema refuses it.
 			continue
 		}
 		if strings.Contains(text, "${{") {
 			// The workflow is pinned as the run is created, so where it is
 			// must be known then.
-			c.reportAt(problems.SourceNotKnown, appendPath(loc, "with", key), problems.Params{"key": key})
-			return nil
+			rep.reportAt(problems.SourceNotKnown, appendPath(loc, "with", w.key), problems.Params{"key": w.key})
+			return plan.SourceRef{}, false
 		}
 		// An empty $yaml means workflow.yaml, as ACTIVATE reads it.
-		*to = text
+		*w.to = text
 	}
 	// What format 1 refuses of a reference is refused wherever the run is
 	// created, whatever Sources resolver there is, or none.
 	if err := ref.Check(); err != nil {
 		k, p, _ := workflowProblem(err)
-		c.reportAt(k, refProblemAt(loc, k, p), p)
-		return nil
+		rep.reportAt(k, refProblemAt(loc, k, p), p)
+		return plan.SourceRef{}, false
 	}
+	return ref, true
+}
+
+// pinRef resolves ref, the reference the step at loc, in the workflow rep
+// reports in, names a workflow by, through Sources, and loads and
+// validates its text, whose errors are the run's, and returns its pin, by
+// ref as the step writes it. A workflow pinned already, by a reference
+// that reads the same (plan.SourceRef.Normal), is pinned again from the
+// tree, so that a run reads one workflow at one commit however its steps
+// write its name. A workflow past the tree's limits on how many workflows
+// it holds, and how much text, is reported at root, the uses: of the run's
+// own step the path to it starts at, and ends the walk.
+func (c *compiler) pinRef(ctx context.Context, t *tree, rep *reporter, loc, root []string, ref plan.SourceRef) (*pin, error) {
+	usesLoc := appendPath(loc, "uses")
 	if c.opts.Sources == nil {
-		c.reportAt(problems.ResolverMissing, usesLoc, problems.Params{"key": "uses", "interface": "Sources"})
-		return nil
+		rep.reportAt(problems.ResolverMissing, usesLoc, problems.Params{"key": "uses", "interface": "Sources"})
+		return &pin{}, nil
 	}
 	key := ref.Normal()
-	if source, ok := pinned[key]; ok {
-		if source != nil {
-			copied := *source
-			copied.Ref = ref
-			s.Source = &copied
-		}
-		return nil
+	if p, ok := t.pins[key]; ok {
+		return p.as(ref), nil
 	}
-	pinned[key] = nil
+	none := &pin{}
+	t.pins[key] = none
 	w, err := c.opts.Sources.Resolve(ctx, ref)
 	if err != nil {
 		at := usesLoc
 		if k, p, ok := workflowProblem(err); ok {
 			at = refProblemAt(loc, k, p)
 		}
-		return c.resolverError(ctx, err, at, problems.SourceNotFound, problems.Params{"ref": s.Uses})
+		return none, resolverError(ctx, rep, err, at, problems.SourceNotFound, problems.Params{"ref": ref.Uses})
 	}
 	if w == nil {
-		return errors.New("compile: Sources.Resolve gave neither a workflow nor an error")
+		return nil, errors.New("compile: Sources.Resolve gave neither a workflow nor an error")
 	}
 	source := w.Source
 	source.Ref = ref
@@ -356,30 +400,53 @@ func (c *compiler) pinSource(ctx context.Context, s *plan.Step, pinned map[plan.
 	case digest:
 	default:
 		// The resolver pinned the workflow to other text than it gave.
-		c.reportAt(problems.SourceChanged, usesLoc, problems.Params{
+		rep.reportAt(problems.SourceChanged, usesLoc, problems.Params{
 			"location": source.Location, "commit": source.Revision, "digest": digest, "pinned": source.Digest,
 		})
-		return nil
+		return none, nil
 	}
 	if source.Revision == "" {
 		// As the run's own workflow's, when nothing else names its text.
 		source.Revision = source.Digest
 	}
-	pinned[key] = &source
-	copied := source
-	s.Source = &copied
+	t.workflows++
+	t.bytes += len(w.Text)
+	switch {
+	case t.workflows > t.limits.MaxWorkflows:
+		c.reportAt(problems.WorkflowsTooMany, root, problems.Params{"max": t.limits.MaxWorkflows, "what": "workflows"})
+		t.full = true
+		return none, nil
+	case t.bytes > t.limits.MaxBytes:
+		c.reportAt(problems.WorkflowsTooLarge, root, problems.Params{"max": t.limits.MaxBytes})
+		t.full = true
+		return none, nil
+	}
 	// The workflow is loaded and validated now, so that a run whose step
 	// would run one that can't be isn't created.
-	_, diags := format.Load(source.Location, w.Text)
+	doc, diags := format.Load(source.Location, w.Text)
 	c.diags = append(c.diags, diags.Errors()...)
-	return nil
+	p := &pin{source: &source, doc: doc}
+	t.pins[key] = p
+	return p.as(ref), nil
 }
 
-// resolverError reports err, from a resolver asked about what is at loc:
-// one that is, or wraps, a problem of a workflow's kind of error, as it
-// is; ErrNotFound, as notFound with params; and returns any other, which
-// means the resolver couldn't answer, or ctx's.
-func (c *compiler) resolverError(ctx context.Context, err error, loc []string, notFound *problems.Kind, params problems.Params) error {
+// as returns the pin p, of a workflow, as the reference ref, which reads
+// the same as the one it was pinned by, names it: its source's Ref is ref.
+func (p *pin) as(ref plan.SourceRef) *pin {
+	if p.source == nil {
+		return p
+	}
+	source := *p.source
+	source.Ref = ref
+	return &pin{source: &source, doc: p.doc}
+}
+
+// resolverError reports err, from a resolver asked about what is at loc in
+// the workflow rep reports in: one that is, or wraps, a problem of a
+// workflow's kind of error, as it is; ErrNotFound, as notFound with params;
+// and returns any other, which means the resolver couldn't answer, or
+// ctx's.
+func resolverError(ctx context.Context, rep *reporter, err error, loc []string, notFound *problems.Kind, params problems.Params) error {
 	if err == nil {
 		return nil
 	}
@@ -387,11 +454,11 @@ func (c *compiler) resolverError(ctx context.Context, err error, loc []string, n
 		return ctxErr
 	}
 	if k, p, ok := workflowProblem(err); ok {
-		c.reportAt(k, loc, p)
+		rep.reportAt(k, loc, p)
 		return nil
 	}
 	if errors.Is(err, ErrNotFound) {
-		c.reportAt(notFound, loc, params)
+		rep.reportAt(notFound, loc, params)
 		return nil
 	}
 	return err

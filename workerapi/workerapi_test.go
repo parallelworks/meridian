@@ -140,7 +140,7 @@ func TestUnmarshalAgreesWithTheSchema(t *testing.T) {
 		}
 		t.Run(typ.Name(), func(t *testing.T) {
 			t.Parallel()
-			schematest.Agree(t, "plan/schema/1/workerapi.schema.json#/$defs/"+typ.Name(), typ.Name(), data, decode, func(string) bool { return false })
+			schematest.Agree(t, "plan/schema/2/workerapi.schema.json#/$defs/"+typ.Name(), typ.Name(), data, decode, func(string) bool { return false })
 		})
 	}
 }
@@ -157,7 +157,7 @@ func TestBodiesRoundTrip(t *testing.T) {
 			t.Fatalf("%T: %v", body, err)
 		}
 		name := reflect.TypeOf(body).Elem().Name()
-		schematest.Validate(t, schematest.Schema(t, "plan/schema/1/workerapi.schema.json#/$defs/"+name), name, data)
+		schematest.Validate(t, schematest.Schema(t, "plan/schema/2/workerapi.schema.json#/$defs/"+name), name, data)
 		back := reflect.New(reflect.TypeOf(body).Elem()).Interface()
 		if err := workerapi.Unmarshal(data, back); err != nil {
 			t.Fatalf("%T: reading %s: %v", body, data, err)
@@ -235,7 +235,7 @@ func TestUnmarshalRefuses(t *testing.T) {
 		{"a need's outcome that isn't one", "Claim", `"outcome":"success"`, `"outcome":"x"`},
 		{"a run's values of format 0", "Claim", `"format":1`, `"format":0`},
 		{"a run's empty secret name", "Claim", `"secrets":["vars.token"]`, `"secrets":[""]`},
-		{"a claim of another plan version", "Claim", `"planVersion":1`, `"planVersion":2`},
+		{"a claim of another plan version", "Claim", `"planVersion":2`, `"planVersion":3`},
 		{"a claim without its API version", "Claim", `"apiVersion":1,`, ``},
 		{"a claim request whose API version is text", "ClaimRequest", `"apiVersion":1`, `"apiVersion":"1"`},
 		{"a sequence number that is null", "EventsAck", `"seq":1`, `"seq":null`},
@@ -263,7 +263,7 @@ func TestUnmarshalRefuses(t *testing.T) {
 		if err := decode(); err == nil {
 			t.Errorf("%s: read %s", tc.name, data)
 		}
-		if err := schematest.Check(schematest.Schema(t, "plan/schema/1/workerapi.schema.json#/$defs/"+tc.body), []byte(data)); err == nil {
+		if err := schematest.Check(schematest.Schema(t, "plan/schema/2/workerapi.schema.json#/$defs/"+tc.body), []byte(data)); err == nil {
 			t.Errorf("%s: fits the schema", tc.name)
 		}
 	}

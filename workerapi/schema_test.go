@@ -23,7 +23,7 @@ import (
 // of foundation's, the schema refers to the plan's schema for, but a
 // problem, which it describes as foundation's problem.Problem writes it.
 func TestSchemaDescribesTheBodies(t *testing.T) {
-	data, err := fs.ReadFile(plan.Schemas, "schema/1/workerapi.schema.json")
+	data, err := fs.ReadFile(plan.Schemas, "schema/2/workerapi.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}

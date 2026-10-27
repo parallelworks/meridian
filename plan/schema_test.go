@@ -2,6 +2,7 @@ package plan_test
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"io/fs"
 	"reflect"
 	"slices"
@@ -18,7 +19,7 @@ import (
 // schemaDefs returns the definitions of the plan's schema of this version.
 func schemaDefs(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := fs.ReadFile(plan.Schemas, "schema/1/plan.schema.json")
+	data, err := fs.ReadFile(plan.Schemas, fmt.Sprintf("schema/%d/plan.schema.json", plan.Version))
 	if err != nil {
 		t.Fatal(err)
 	}

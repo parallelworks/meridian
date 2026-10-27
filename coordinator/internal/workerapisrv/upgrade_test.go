@@ -28,7 +28,9 @@ func TestOlderReplica(t *testing.T) {
 	r.serve(rigOptions{older: true})
 	older := newClient(t, r.socket)
 	r.socket = current
-	run := r.newRun(nil)
+	// A run of this release's newest plan version, which the older
+	// replica doesn't read.
+	run := r.newestRun()
 	r.readier.set(run, &workerapisrv.Ready{Job: &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"}}}, Run: plan.RunValues{Format: 1}})
 	a, token := r.newAttempt(run, "build", placed{})
 	credential := coordtest.Credential(t)
@@ -192,7 +194,9 @@ func TestForeignAttemptFenced(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, selfFencing := range []bool{false, true} {
-				run := r.newRun(nil)
+				// Of the newest plan version, which the older replica
+				// doesn't read.
+				run := r.newestRun()
 				r.readier.set(run, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}})
 				a, token := r.newAttempt(run, "build", placed{selfFencing: selfFencing, lease: 60, heartbeat: 10})
 				credential := coordtest.Credential(t)

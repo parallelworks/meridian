@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"cmp"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -14,14 +15,18 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// Version is the version of the plan encoding this package reads and
-// writes: a Plan's, and a ReadyJob's, a Record's, and those of the types
-// the worker API's bodies carry of a run, though the API has a version of
-// its own (workerapi.Version). Every change to one raises it, an addition
-// among them, since decoding refuses a member it doesn't know
-// (docs/design.md, Plans across versions). Version 1 is frozen, as its
-// schemas describe it (Schemas).
-const Version = 1
+// Version is the newest version of the plan encoding this package reads
+// and writes: a Plan's, and a ReadyJob's, a Record's, and those of the
+// types the worker API's bodies carry of a run, though the API has a
+// version of its own (workerapi.Version). Every change to one raises it,
+// an addition among them, since decoding refuses a member it doesn't know
+// (docs/design.md, Plans across versions). It reads every version from 1,
+// as its schemas describe it (Schemas): version 1 is frozen, and version
+// 2, which child runs add to, is once a release writes it. A plan is
+// written at the lowest version that holds what it uses (MinVersion), so
+// that a release that reads only an earlier one can run it. Version 2 adds
+// Plan.Calls.
+const Version = 2
 
 // modulePath is Meridian's module.
 const modulePath = "github.com/parallelworks/meridian"
@@ -69,6 +74,36 @@ type Plan struct {
 	// Warnings are the compiler's warnings, which are kept with the run so
 	// that they reach whoever runs the workflow.
 	Warnings []problems.Diagnostic `json:"warnings,omitempty"`
+	// Calls are the pins of the workflows that the workflows the run's own
+	// steps call call in turn, and so on down the tree (the run's own
+	// steps' are their Step.Source), so that a child run's Create reads
+	// its steps' pins rather than resolve them: each by the digest of the
+	// text of the workflow whose step names it, and the step's place in
+	// that text, in the order of the two. Version 2.
+	Calls []Call `json:"calls,omitzero"`
+}
+
+// A Call is the pin of the workflow that a step of a workflow the run
+// calls names.
+type Call struct {
+	// Caller is the digest of the text of the workflow whose step it is
+	// (Source.Digest).
+	Caller string `json:"caller"`
+	// Step is the step's JSON Pointer in that text, as /jobs/build/steps/0.
+	Step string `json:"step"`
+	// Source is the workflow the step names, pinned, by its reference as
+	// the step writes it.
+	Source Source `json:"source"`
+}
+
+// MinVersion is the lowest version that holds what p uses, which a plan is
+// written at, and the run's secret record and start state with it: 2 for
+// one with Calls, and 1 otherwise.
+func (p *Plan) MinVersion() int {
+	if len(p.Calls) > 0 {
+		return 2
+	}
+	return 1
 }
 
 // Run is what the plan holds about the run as a whole. Secrets, Derived,
@@ -517,16 +552,56 @@ func Decode(data []byte) (*Plan, error) {
 	if err := p.checkJobOrder(); err != nil {
 		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
 	}
+	if p.MinVersion() > p.Version {
+		// What a later version added isn't its earlier versions', which
+		// their schemas refuse.
+		return nil, fmt.Errorf("%w: the plan of version %d has what version %d adds", ErrMalformed, p.Version, p.MinVersion())
+	}
+	if err := p.checkCalls(); err != nil {
+		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
+	}
 	return p, nil
+}
+
+// checkCalls checks that the plan's calls are in the order of their
+// callers and steps, each once, as Calls is, since a child run's Create
+// finds its steps' pins by them in that order.
+func (p *Plan) checkCalls() error {
+	for i := 1; i < len(p.Calls); i++ {
+		a, b := p.Calls[i-1], p.Calls[i]
+		switch c := cmp.Or(strings.Compare(a.Caller, b.Caller), strings.Compare(a.Step, b.Step)); {
+		case c == 0:
+			return fmt.Errorf("the call of %s's %s is in the plan twice", b.Caller, b.Step)
+		case c > 0:
+			return fmt.Errorf("the call of %s's %s comes after %s's %s", b.Caller, b.Step, a.Caller, a.Step)
+		}
+	}
+	return nil
+}
+
+// FindCall returns the pin of the workflow that the step at the JSON
+// Pointer step of the workflow of the digest caller names, among those the
+// plan's calls hold.
+func (p *Plan) FindCall(caller, step string) (Source, bool) {
+	i, ok := slices.BinarySearchFunc(p.Calls, [2]string{caller, step}, func(c Call, k [2]string) int {
+		return cmp.Or(strings.Compare(c.Caller, k[0]), strings.Compare(c.Step, k[1]))
+	})
+	if !ok {
+		return Source{}, false
+	}
+	return p.Calls[i].Source, true
 }
 
 // decodeVersioned decodes data into v, whose version version reads once
 // it is decoded, as Decode does: it fails with ErrVersion if data is of a
-// version this release doesn't read, and with ErrMalformed if it isn't
-// what of names, of any release's version, or of this release's.
+// version this release doesn't read, a later one, and with ErrMalformed if
+// it isn't what of names, of any release's version, or of one this release
+// reads. A version this release reads decodes into its types, which hold
+// every version's members: what a later version added isn't in an earlier
+// one's, which the caller checks.
 func decodeVersioned(data []byte, v any, version func() int, of string) error {
 	err := jsonv2.Unmarshal(data, v, decoding, jsonv2.RejectUnknownMembers(true))
-	if err == nil && version() == Version {
+	if err == nil && version() >= 1 && version() <= Version {
 		if err := checkShape(data, v); err != nil {
 			return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
 		}
@@ -543,8 +618,8 @@ func decodeVersioned(data []byte, v any, version func() int, of string) error {
 		return fmt.Errorf("%w: %s: %w", ErrMalformed, of, err)
 	case head.Version < 1:
 		return fmt.Errorf("%w: %s names no version", ErrMalformed, of)
-	case head.Version != Version:
-		return fmt.Errorf("%w %d of %s; this release reads version %d", ErrVersion, head.Version, of, Version)
+	case head.Version > Version:
+		return fmt.Errorf("%w %d of %s; this release reads versions up to %d", ErrVersion, head.Version, of, Version)
 	}
 	return decodeError(of, err)
 }

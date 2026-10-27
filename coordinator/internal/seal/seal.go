@@ -315,13 +315,14 @@ func check(runID string, gen uint64) error {
 }
 
 // checkRecord checks the record a caller gives to be sealed, which must be
-// of this release's version, which DecodeRecord reads back.
+// of a version this release reads, its plan's, which DecodeRecord reads
+// back.
 func checkRecord(runID string, rec *plan.Record) error {
 	switch {
 	case rec == nil:
 		return fmt.Errorf("seal: no secret record for run %s", runID)
-	case rec.Version != plan.Version:
-		return fmt.Errorf("seal: run %s's secret record is of version %d, not this release's %d", runID, rec.Version, plan.Version)
+	case rec.Version < 1 || rec.Version > plan.Version:
+		return fmt.Errorf("seal: run %s's secret record is of version %d, which this release doesn't read", runID, rec.Version)
 	}
 	return nil
 }

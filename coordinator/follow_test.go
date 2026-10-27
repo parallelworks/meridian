@@ -260,7 +260,7 @@ func claimedAttempt(t *testing.T, c *Coordinator) (string, string) {
 	id, _ := create(t, c, oneJob, nil, nil)
 	var attempt string
 	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		if err := tx.StartRun(id, &compile.StartState{Run: plan.RunValues{Format: 1}}, nil); err != nil {
+		if err := tx.StartRun(id, &compile.StartState{Version: 1, Run: plan.RunValues{Format: 1}}, nil); err != nil {
 			return err
 		}
 		if _, err := tx.PinReady(id, "main", false, nil); err != nil {

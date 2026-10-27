@@ -34,7 +34,7 @@ func mustValue(t testing.TB, v any) plan.Value {
 func samplePlan(t *testing.T) *plan.Plan {
 	t.Helper()
 	return &plan.Plan{
-		Version: plan.Version,
+		Version: 1,
 		Run: plan.Run{
 			Source:    plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
 			Format:    1,
@@ -86,7 +86,7 @@ func samplePlan(t *testing.T) *plan.Plan {
 func edgePlan(t testing.TB) *plan.Plan {
 	text := "<a href=\"x\">Tom & Jerry</a>\u2028\u2029 \x00\x1f\t\b\f\\ é😀 bad \xff byte"
 	return &plan.Plan{
-		Version: plan.Version,
+		Version: 1,
 		Run: plan.Run{
 			Source:  plan.Source{Location: "workflow.yaml", Revision: "sha256:00"},
 			Format:  1,
@@ -299,7 +299,7 @@ func TestDecodeRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, data := range map[string]string{
-		"another version":                  strings.Replace(string(good), `"version":1`, `"version":2`, 1),
+		"another version":                  strings.Replace(string(good), `"version":1`, `"version":3`, 1),
 		"an unknown key":                   strings.Replace(string(good), `"version":1`, `"version":1,"later":true`, 1),
 		"a bad tree":                       strings.Replace(string(good), `"ref":"inputs"`, `"ref":null`, 1),
 		"a node of two kinds":              strings.Replace(string(good), `"ref":"inputs"`, `"ref":"inputs","word":"x"`, 1),
@@ -340,10 +340,10 @@ func TestDecodeRefuses(t *testing.T) {
 		}
 	}
 	for name, data := range map[string]string{
-		"another version":             strings.Replace(string(good), `"version":1`, `"version":2`, 1),
-		"another version's keys":      strings.Replace(string(good), `"version":1`, `"version":2,"later":true`, 1),
-		"another version, last":       strings.Replace(string(good), `"version":1,`, ``, 1)[:len(good)-len(`"version":1,`)-1] + `,"later":{},"version":2}`,
-		"another version's templates": strings.Replace(strings.Replace(string(good), `"version":1`, `"version":2`, 1), `"ref":"inputs"`, `"ref":"later"`, 1),
+		"another version":             strings.Replace(string(good), `"version":1`, `"version":3`, 1),
+		"another version's keys":      strings.Replace(string(good), `"version":1`, `"version":3,"later":true`, 1),
+		"another version, last":       strings.Replace(string(good), `"version":1,`, ``, 1)[:len(good)-len(`"version":1,`)-1] + `,"later":{},"version":3}`,
+		"another version's templates": strings.Replace(strings.Replace(string(good), `"version":1`, `"version":3`, 1), `"ref":"inputs"`, `"ref":"later"`, 1),
 	} {
 		if _, err := plan.Decode([]byte(data)); !errors.Is(err, plan.ErrVersion) {
 			t.Errorf("%s: %v, want ErrVersion", name, err)
@@ -379,7 +379,7 @@ func TestDecodeJobOrder(t *testing.T) {
 		{[]string{"b", "a", "a"}, false},
 		{[]string{"a", "c", "b"}, false},
 	} {
-		p := &plan.Plan{Version: plan.Version, Run: plan.Run{Format: 1, Source: plan.Source{Location: "w", Revision: "r"}}}
+		p := &plan.Plan{Version: 1, Run: plan.Run{Format: 1, Source: plan.Source{Location: "w", Revision: "r"}}}
 		for _, name := range c.names {
 			p.Jobs = append(p.Jobs, plan.Job{Key: name, Name: name, Path: "/jobs/" + name, Steps: []plan.Step{{Path: "/jobs/" + name + "/steps/0", Run: mustValue(t, "true")}}})
 		}
@@ -1088,5 +1088,64 @@ func TestSourceRefNormal(t *testing.T) {
 		if got := ref.Normal(); got != want {
 			t.Errorf("%+v.Normal() = %+v, want %+v", ref, got, want)
 		}
+	}
+}
+
+// A plan is of the lowest version that holds what it uses: 1 without
+// calls, 2 with. A release reads both: a plan of version 2 without calls
+// too, but not one of version 1 with them, which version 1 doesn't have.
+// Its calls are in the order of their callers and steps, each once, which
+// FindCall finds them by.
+func TestPlanVersions(t *testing.T) {
+	p := samplePlan(t)
+	if p.MinVersion() != 1 {
+		t.Errorf("a plan without calls is of version %d", p.MinVersion())
+	}
+	call := func(caller, step string) plan.Call {
+		return plan.Call{Caller: caller, Step: step, Source: plan.Source{Location: caller + step, Revision: "r"}}
+	}
+	p.Calls = []plan.Call{call("sha256:a", "/jobs/x/steps/0"), call("sha256:a", "/jobs/x/steps/1"), call("sha256:b", "/jobs/x/steps/0")}
+	if p.MinVersion() != 2 {
+		t.Errorf("a plan with calls is of version %d", p.MinVersion())
+	}
+	for version, ok := range map[int]bool{1: false, 2: true} {
+		p.Version = version
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := plan.Decode(data)
+		if (err == nil) != ok || !ok && !errors.Is(err, plan.ErrMalformed) {
+			t.Errorf("a plan of version %d with calls: %v", version, err)
+		}
+		if ok {
+			if s, found := back.FindCall("sha256:a", "/jobs/x/steps/1"); !found || s.Location != "sha256:a/jobs/x/steps/1" {
+				t.Errorf("FindCall = %+v, %v", s, found)
+			}
+			if _, found := back.FindCall("sha256:a", "/jobs/x/steps/2"); found {
+				t.Error("FindCall found a call the plan hasn't")
+			}
+		}
+	}
+	for name, calls := range map[string][]plan.Call{
+		"twice":        {call("sha256:a", "/jobs/x/steps/0"), call("sha256:a", "/jobs/x/steps/0")},
+		"out of order": {call("sha256:b", "/jobs/x/steps/0"), call("sha256:a", "/jobs/x/steps/0")},
+	} {
+		p.Calls = calls
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := plan.Decode(data); !errors.Is(err, plan.ErrMalformed) {
+			t.Errorf("calls %s: %v", name, err)
+		}
+	}
+	p.Calls, p.Version = nil, 2
+	data, err := plan.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back, err := plan.Decode(data); err != nil || back.Version != 2 {
+		t.Errorf("a plan of version 2 without calls: %v", err)
 	}
 }

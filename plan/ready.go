@@ -893,8 +893,11 @@ func EncodeReadyJob(j *ReadyJob) ([]byte, error) {
 // expressions name what this release doesn't know, which a newer release
 // wrote.
 func DecodeReadyJob(version int, data []byte) (*ReadyJob, error) {
-	if version != Version {
-		return nil, fmt.Errorf("%w %d; this release reads version %d", ErrVersion, version, Version)
+	switch {
+	case version > Version:
+		return nil, fmt.Errorf("%w %d; this release reads versions up to %d", ErrVersion, version, Version)
+	case version < 1:
+		return nil, fmt.Errorf("%w: the ready job names no version", ErrMalformed)
 	}
 	j := new(ReadyJob)
 	if err := jsonv2.Unmarshal(data, j, decoding, jsonv2.RejectUnknownMembers(true)); err != nil {
