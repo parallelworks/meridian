@@ -217,6 +217,14 @@ type Coordinator struct {
 	// members are the members attempts were placed on, as placedMember
 	// found them, by attempt, for a while.
 	members map[string]memberEntry
+	// timeouts are the jobs' timeouts by attempt, and private runs'
+	// timeouts by "run" and the run's ID, as the coordinator read them
+	// (jobTimeout, runTimeout).
+	timeouts map[string]time.Duration
+	// outlives says, by the run's ID and the job's key, whether a job of a
+	// stopped run outlives the stop, as the coordinator read it
+	// (jobOutlives).
+	outlives map[string]bool
 }
 
 // Open opens a coordinator on the store at opts.Database. It works no
@@ -254,7 +262,8 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
-		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{},
+		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, timeouts: map[string]time.Duration{},
+		outlives: map[string]bool{},
 	}
 	if opts.ReadOnly {
 		// Neither seals nor inserts anything.
@@ -575,6 +584,7 @@ func (c *Coordinator) Serve(ctx context.Context) error {
 	hopper.AddWorker(workers, &jobWorker{c: c})
 	hopper.AddWorker(workers, &anyWorker{c: c})
 	hopper.AddWorker(workers, &finishWorker{c: c})
+	hopper.AddWorker(workers, &timeoutWorker{c: c})
 	served, err := hopper.NewClient(c.store.Driver(), &hopper.Config{
 		Queues: queues, Workers: workers, Logger: c.log, PollInterval: c.pollInterval,
 	})

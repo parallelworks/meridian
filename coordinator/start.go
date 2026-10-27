@@ -143,6 +143,12 @@ func (c *Coordinator) startRun(ctx context.Context, id string, done func(context
 		if err := tx.StartRun(id, &state, diags); err != nil {
 			return err
 		}
+		// A run with a timeout: has a job of its own that waits for it.
+		if res.TimeoutSeconds > 0 {
+			if _, err := c.inserter.InsertTx(ctx, tx.SQL(), timeoutArgs{Run: id}, &hopper.InsertOpts{Queue: sharedQueue}); err != nil {
+				return err
+			}
+		}
 		if done != nil {
 			return done(ctx, tx)
 		}

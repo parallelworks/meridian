@@ -85,7 +85,16 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 			if err != nil {
 				return err
 			}
-			if err := tx.EndRun(id, outcome, ""); err != nil {
+			// A run cancelled is, whatever its jobs did after; one past its
+			// timeout: ends as they did, and says why it failed.
+			var reason plan.Reason
+			switch {
+			case r.StopReason == plan.ReasonCancelled:
+				outcome, reason = plan.OutcomeCancelled, plan.ReasonCancelled
+			case r.StopReason == plan.ReasonTimeout && outcome == plan.OutcomeFailure:
+				reason = plan.ReasonTimeout
+			}
+			if err := tx.EndRun(id, outcome, reason); err != nil {
 				return err
 			}
 		}

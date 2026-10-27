@@ -1134,6 +1134,13 @@
       "Put the member back in the group while it has workers running, or let the job be placed again."
     ]
   },
+  "job_timeout_enforced": {
+    "why": "The worker enforces a job's timeout: itself. As a backstop for one that doesn't, the coordinator waits the job's timeout, the worker's time to stop its steps, a heartbeat period and a margin after the attempt was claimed; then it tells the worker to stop the job, and once its lease lapses without the job's end, withdraws its placement and fails the job with the reason timeout.",
+    "fix": [
+      "Give the job a timeout: long enough for its steps, or make them finish sooner.",
+      "If the worker didn't stop the job at its timeout, look at its log on its member for why."
+    ]
+  },
   "workflow_too_large": {
     "why": "A workflow file is read whole, so there is a limit on its size. This one came from a stream, such as standard input, which Meridian stopped reading once it passed the limit.",
     "fix": [

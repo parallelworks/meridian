@@ -34,7 +34,8 @@ var progressEvents = []coordinator.Event{
 	{Seq: 11, Time: progressAt, Kind: coordinator.StepFinished, Run: "r1", Job: "build#2", Attempt: 2, Step: 1, Cleanup: true, Outcome: plan.OutcomeCancelled, ExitCode: -1, Reason: plan.ReasonTimeout},
 	{Seq: 12, Time: progressAt, Kind: coordinator.AttemptEnded, Run: "r1", Job: "build#2", Attempt: 2, End: coordinator.AttemptCompleted, Outcome: plan.OutcomeSuccess},
 	{Seq: 13, Time: progressAt, Kind: coordinator.JobFinished, Run: "r1", Job: "build#2", Outcome: plan.OutcomeSuccess},
-	{Seq: 14, Time: progressAt, Kind: coordinator.RunFinished, Run: "r1", Outcome: plan.OutcomeSuccess},
+	{Seq: 14, Time: progressAt, Kind: coordinator.RunStopping, Run: "r1", Reason: plan.ReasonCancelled},
+	{Seq: 15, Time: progressAt, Kind: coordinator.RunFinished, Run: "r1", Outcome: plan.OutcomeCancelled, Reason: plan.ReasonCancelled},
 }
 
 // TestProgressText checks the lines a person reads of a run: an event a
@@ -67,6 +68,7 @@ func TestProgressText(t *testing.T) {
 14:02:07 build#2 attempt 2 step 0 retry 1 finished: success (exit status 0)
 14:02:07 build#2 attempt 2 step 1 cleanup finished: cancelled (timeout)
 14:02:07 build#2 finished: success
+14:02:07 run r1 stopping (cancelled)
 run r1 left running: meridian resume r1 picks it up, and meridian cancel r1 cancels it
 `
 	if out.String() != want {

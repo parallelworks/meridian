@@ -178,7 +178,7 @@ func (c *Coordinator) newer(ctx context.Context, id string) time.Duration {
 // steps as any job does (instanceStep).
 func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	if job.Instance >= 0 {
-		if wait, handled, err := c.instanceStep(ctx, run, job, a); handled || err != nil {
+		if wait, handled, err := c.instanceStep(ctx, run, job, a, done); handled || err != nil {
 			return wait, err
 		}
 	} else {
@@ -189,6 +189,14 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 		if pj := planJob(p, job.Name); pj != nil && pj.Strategy != nil {
 			return c.matrixStep(ctx, run, job, done)
 		}
+	}
+	// A job between attempts as its run stops, which it doesn't outlive,
+	// ends as the stop says: nothing places it again.
+	if stopped, err := c.placesNoMore(ctx, run, job, a); err != nil || stopped {
+		if err != nil {
+			return 0, err
+		}
+		return 0, c.endJob(ctx, run.ID, job.Key, stopEnd(run.StopReason), done)
 	}
 	switch {
 	case a == nil:
@@ -201,8 +209,9 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 	default:
 		// Placed, claimed or running: its worker reports to the worker
 		// API, which wakes the supervisor once the attempt ends, and
-		// renews its lease, which the supervisor watches.
-		return c.watch(ctx, run, job, a)
+		// renews its lease, which the supervisor watches; and once the
+		// run is stopped, the supervisor sees the stop through for it.
+		return c.liveAttempt(ctx, run, job, a, done)
 	}
 }
 

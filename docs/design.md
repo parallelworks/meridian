@@ -2420,20 +2420,31 @@ for any other only once they have (`plan.Plan.CancelPath`).
 - **Stopping a run is stored first**: the stop record, when and why, in
   the run's row, in one transaction that also tells every running attempt
   of a job whose `if:` isn't cancel-aware, through its control poll, and
-  wakes every job's supervisor. After a cancel, a placement of such a job
-  that no worker has claimed yet is withdrawn (`scancel`, `qdel`, deleting
-  the pod, signalling the process), and the job ends cancelled: it was
-  readied, so its needs had all ended, and format 1 would be running it,
-  and would stop it as below. After the run's timeout, such a placement
-  isn't withdrawn: its worker claims it and is told at once that the run's
-  timeout has passed, so that its steps end as format 1's do when they
-  start under the passed deadline, failing but for those that outlive a
-  cancel and a last try that ignores its errors. A running attempt that
-  is stopped is waited for while
-  it renews its lease, since its cleanups have no timeout, and withdrawn
-  as a placement is if its lease lapses. `meridian cancel` stores the
-  record whether or not a coordinator is running, and withdraws
-  placements itself when none is.
+  wakes every job's supervisor. A placement of such a job that no worker
+  has claimed yet is told too, and isn't withdrawn: the job was readied,
+  so its needs had all ended, and format 1 would be running it. Its worker
+  reads the stop before its first step, so the job runs only its cleanups
+  and the steps that outlive a cancel, as format 1's would: after a
+  cancel, its other steps end cancelled; after the run's timeout, they end
+  as format 1's do when they start under the passed deadline, failing but
+  for those that outlive a cancel and a last try that ignores its errors.
+  With a backend that queues jobs, a stopped run so ends only once such a
+  job's worker has claimed it and stopped, or its backend says the worker
+  has ended. A running attempt that is stopped is waited for while it
+  renews its lease, since its cleanups have no timeout, and its placement
+  is withdrawn (`scancel`, `qdel`, deleting the pod, signalling the
+  process) if its lease lapses, once the grace in which no lapsed lease
+  counts has passed. A job between attempts when the run stops, readied
+  before the stop, as one waiting to be placed again after a failure
+  before its first step, or after its worker was lost, or for a backend
+  to answer, isn't placed again, unless it outlives the
+  stop: it has no placement, so it ends cancelled after a cancel, and
+  failed, with the reason `timeout`, after the run's timeout. Format 1
+  would start it under the passed deadline, which would run its steps
+  that outlive a cancel; here they don't run. No attempt is made once the
+  run has stopped since the job's supervisor looked: it looks again.
+  `meridian cancel` stores the record whether or not a coordinator is
+  running, and withdraws placements itself when none is.
 - **A running job, when a person cancels the run**, has the step it is
   running stopped, if its `if:` isn't cancel-aware: SIGTERM, then SIGKILL
   after a grace period. The step and the job end cancelled, and the job's
@@ -2472,8 +2483,8 @@ for any other only once they have (`plan.Plan.CancelPath`).
     needs none was readied when the run started, so it never takes this
     path.
 - **A matrix instance waiting for its turn** under `max-parallel` ends
-  cancelled, whatever its `if:`, as format 1 ends one waiting for its
-  turn.
+  cancelled at once, whatever its `if:`, as format 1 ends one waiting for
+  its turn, after the run's timeout too, with the reason `timeout`.
 - **The run's outcome after a cancel** is cancelled, whatever its jobs did
   after it, an `always()` job that succeeds among them. It comes from the
   stop record, as format 1's comes from its record of an external
@@ -3454,8 +3465,10 @@ value, which can be a password.
 ### Following a run
 
 `meridian run` shows its run as it goes, by following it
-(`Coordinator.Follow`): the run's events, from its first, in order, and
-its steps' logs as their workers store them.
+(`Coordinator.Follow`): the run's events, from its first, in order, among
+them its stop, `run.stopping`, with why, `cancelled` or `timeout`, once a
+person cancels it or it runs past its `timeout:`; and its steps' logs as
+their workers store them.
 
 - **Which logs there are.** A log that isn't there yet can't be told from
   one that never will be, so the events say which logs to read: an

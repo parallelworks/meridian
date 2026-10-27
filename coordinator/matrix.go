@@ -256,7 +256,10 @@ func (c *Coordinator) endMatrix(ctx context.Context, run *store.Run, job *store.
 // instanceStep is what an instance's supervisor does before it steps as
 // any job's does: an instance that hasn't had its turn under
 // max-parallel: waits for it, as it does still once its matrix job has
-// stopped its instances, as fail-fast: asks; and an attempt of one whose
+// stopped its instances, as fail-fast: asks, but ends at once, cancelled,
+// with the reason its run stopped for, once its run is stopped, whatever
+// its if:, as format 1 ends one waiting for its turn once its run is
+// cancelled or past its timeout; and an attempt of one whose
 // matrix job has is told to cancel, with the reason fail-fast, if it
 // isn't already. An attempt made once the job is marked is told from its
 // first control (store.Tx.StartControl), which its worker reads before
@@ -265,8 +268,11 @@ func (c *Coordinator) endMatrix(ctx context.Context, run *store.Run, job *store.
 // cleanups. Telling it here too covers an attempt made by a supervisor
 // that looked just before the mark. It reports whether it handled the
 // step.
-func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, bool, error) {
+func (c *Coordinator) instanceStep(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, bool, error) {
 	if a == nil && job.TurnAt.IsZero() {
+		if !run.StoppedAt.IsZero() {
+			return 0, true, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeCancelled}, Reason: run.StopReason}, done)
+		}
 		return c.supervision.wait, true, nil
 	}
 	if a == nil || a.State == store.AttemptEnded {

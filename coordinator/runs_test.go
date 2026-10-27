@@ -260,8 +260,11 @@ jobs:
 type workerDriver struct {
 	dir string
 	log func(format string, args ...any)
-	// idle, if it is set, says which placements start no worker.
+	// idle, if it is set, says which placements start no worker; and gate,
+	// if it is set, holds each worker back from claiming its attempt until
+	// it is closed.
 	idle    func(req backend.PlaceRequest) bool
+	gate    <-chan struct{}
 	workers sync.WaitGroup
 
 	mu         sync.Mutex
@@ -307,8 +310,16 @@ func (d *workerDriver) Place(ctx context.Context, _ *backend.Member, req backend
 	if d.idle != nil && d.idle(req) {
 		return p, nil
 	}
+	gate := d.gate
 	d.workers.Go(func() {
 		defer cancel()
+		if gate != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-gate:
+			}
+		}
 		err := worker.Run(ctx, worker.Config{Worker: workerapi.Worker{Version: "test", Digest: testDigest}, Environ: environ, Dir: dir})
 		if err != nil {
 			d.log("the worker of attempt %s: %v", req.Attempt, err)
@@ -339,3 +350,61 @@ func (d *workerDriver) Cancel(_ context.Context, _ *backend.Member, p backend.Pl
 }
 
 func (d *workerDriver) Forget(context.Context, *backend.Member, backend.Placement) error { return nil }
+
+// TestCancelUnclaimed checks that a job placed, whose worker hadn't
+// claimed its attempt when its run was cancelled, isn't withdrawn: its
+// worker reads the cancel before its first step, so, as format 1 would
+// have started the job already, its plain step ends cancelled, with its
+// cleanup, and its always() step runs; and the job ends cancelled.
+func TestCancelUnclaimed(t *testing.T) {
+	r := newWorkerRig(t, nil)
+	gate := make(chan struct{})
+	r.d.gate = gate
+	c := r.c
+	id := r.create(t, []byte(`
+jobs:
+  main:
+    steps:
+      - run: echo plain
+        cleanup: echo cleanup
+      - if: ${{ always() }}
+        run: echo always
+`), nil, nil)
+	serve(t, c)
+	a := latestIs(t, c, id, "main", func(a *store.Attempt) bool { return a.Placed() })
+	if err := c.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if ctl := controlOf(t, c, a.ID); !ctl.Cancel || ctl.Reason != plan.ReasonCancelled {
+		t.Errorf("the placement's worker is told %+v", ctl)
+	}
+	close(gate)
+	run := waitEnded(t, c, id)
+	j := storedJob(t, c, id, "main")
+	switch got := latestAttempt(t, c, id, "main"); {
+	case run.Outcome != plan.OutcomeCancelled:
+		t.Errorf("the run ended %s", run.Outcome)
+	case j.Outcome != plan.OutcomeCancelled:
+		t.Errorf("the job is %+v", j)
+	case got.ID != a.ID || got.End.Kind != store.EndCompleted:
+		t.Errorf("the attempt is %+v", got)
+	}
+	logs := r.logs.Of(id, "main", 1)
+	for key, want := range map[workerapitest.LogKey]string{
+		{Part: workerapi.LogCleanup, Step: 0}: "cleanup\n",
+		{Part: workerapi.LogStep, Step: 1}:    "always\n",
+	} {
+		if got := string(logs[key].Data); got != want {
+			t.Errorf("the log %+v is %q, want %q", key, got, want)
+		}
+	}
+	if _, ran := logs[workerapitest.LogKey{Part: workerapi.LogStep, Step: 0}]; ran {
+		t.Error("the plain step ran")
+	}
+	r.d.mu.Lock()
+	cancelled := r.d.cancelled
+	r.d.mu.Unlock()
+	if len(cancelled) != 0 {
+		t.Errorf("the placements cancelled are %v", cancelled)
+	}
+}

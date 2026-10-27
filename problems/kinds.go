@@ -388,6 +388,9 @@ var (
 	// CoordinatorJobFailed is a job the coordinator couldn't see to its
 	// end, as one whose supervisor failed again and again.
 	CoordinatorJobFailed = define(Error, "coordinator_job_failed", "Job the coordinator couldn't run", "job")
+	// JobTimeoutEnforced is a job past its timeout: whose worker didn't
+	// stop it, which the coordinator stopped, as a backstop.
+	JobTimeoutEnforced = define(Error, "job_timeout_enforced", "Job the coordinator stopped at its timeout", "job")
 )
 
 // The problems of a job whose worker was lost (docs/design.md, Leases and

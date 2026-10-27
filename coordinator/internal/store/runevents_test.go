@@ -169,3 +169,35 @@ func inView(t testing.TB, s *Store, fn func(*Tx) error) {
 		t.Fatal(err)
 	}
 }
+
+// A run's stop adds its run.stopping event, with the reason, once: a later
+// stop changes nothing, and adds none.
+func TestRunStoppingEvent(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	inTx(t, s, func(tx *Tx) error { return tx.StartRun(id, testState(), nil) })
+	changes := s.Changes()
+	inTx(t, s, func(tx *Tx) error {
+		for _, reason := range []plan.Reason{plan.ReasonTimeout, plan.ReasonTimeout, plan.ReasonCancelled} {
+			if _, err := tx.StopRun(id, reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	select {
+	case <-changes:
+	default:
+		t.Error("the run's stop didn't say it changed the store")
+	}
+	inTx(t, s, func(tx *Tx) error {
+		events, err := tx.RunEvents(id, 0, 10)
+		if err != nil {
+			return err
+		}
+		if len(events) != 2 || events[0].Kind != EventRunStarted || events[1].Kind != EventRunStopping || events[1].Reason != plan.ReasonTimeout || events[1].Job != "" {
+			t.Errorf("the run's events are %+v", events)
+		}
+		return nil
+	})
+}

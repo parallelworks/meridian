@@ -72,6 +72,11 @@ type Run struct {
 	// AnyJobFailedAt is when the first job of the run to fail ended, or the
 	// zero time before (MarkJobFailed).
 	AnyJobFailedAt time.Time
+	// StoppedAt is when the run was stopped early, and StopReason why,
+	// cancelled or timeout: its stop record (StopRun), or the zero time
+	// and "".
+	StoppedAt  time.Time
+	StopReason plan.Reason
 }
 
 // A NewRun is a run to store.
@@ -148,7 +153,7 @@ WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_
 
 const runColumns = `id, created_at, plan, plan_version, plan_digest, name, location, release,
   default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at,
-  start_state, start_tries, diagnostics, any_job_failed_at`
+  start_state, start_tries, diagnostics, any_job_failed_at, stopped_at, stop_reason`
 
 // Run returns the run with the ID id.
 func (tx *Tx) Run(id string) (*Run, error) {
@@ -163,6 +168,8 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		outcome, reason sql.NullString
 		started, ended  sql.NullInt64
 		jobFailed       sql.NullInt64
+		stopped         sql.NullInt64
+		stopReason      sql.NullString
 		state           string
 		startState      []byte
 		diags           []byte
@@ -170,7 +177,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	err := tx.tx.QueryRowContext(tx.ctx, "SELECT "+runColumns+" FROM meridian_runs WHERE id = ?", n).Scan(
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
 		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
-		&startState, &r.StartTries, &diags, &jobFailed)
+		&startState, &r.StartTries, &diags, &jobFailed, &stopped, &stopReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -180,6 +187,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	r.ID, r.CreatedAt, r.State = runID(number), time.UnixMicro(created).UTC(), RunState(state)
 	r.Outcome, r.Reason = plan.Outcome(outcome.String), plan.Reason(reason.String)
 	r.StartedAt, r.EndedAt, r.AnyJobFailedAt = timeOf(started), timeOf(ended), timeOf(jobFailed)
+	r.StoppedAt, r.StopReason = timeOf(stopped), plan.Reason(stopReason.String)
 	if startState != nil {
 		if r.StartState, err = compile.DecodeStartState(startState); err != nil {
 			// One of a newer version is a newer release's to read, and is
@@ -335,6 +343,69 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	}
 	tx.erased = true
 	return nil
+}
+
+// StopRun stores the run's stop record: that it is stopped early now, for
+// reason, cancelled or timeout, with the run's run.stopping event. The
+// first stop of a run is its record, and a later one changes nothing: it
+// reports whether this one stored it. A run that has ended is ErrState.
+func (tx *Tx) StopRun(id string, reason plan.Reason) (bool, error) {
+	if reason != plan.ReasonCancelled && reason != plan.ReasonTimeout {
+		return false, fmt.Errorf("store: %q isn't why a run stops", reason)
+	}
+	r, err := tx.Run(id)
+	switch {
+	case err != nil:
+		return false, err
+	case r.State == RunEnded:
+		return false, fmt.Errorf("%w: run %s has ended", ErrState, id)
+	case !r.StoppedAt.IsZero():
+		return false, nil
+	}
+	now, err := tx.now()
+	if err != nil {
+		return false, err
+	}
+	n, _ := runNumber(id)
+	if _, err := tx.tx.ExecContext(tx.ctx, "UPDATE meridian_runs SET stopped_at = ?, stop_reason = ? WHERE id = ?", now, reason, n); err != nil {
+		return false, err
+	}
+	return true, tx.addEvent(n, EventRunStopping, "", "", 0)
+}
+
+// LiveAttempts returns the run's attempts that haven't ended, in the order
+// of their IDs.
+func (tx *Tx) LiveAttempts(run string) ([]*Attempt, error) {
+	n, err := tx.runNumberOf(run)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.tx.QueryContext(tx.ctx, "SELECT id FROM meridian_attempts WHERE run_id = ? AND state <> ? ORDER BY id", n, AttemptEnded)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]*Attempt, 0, len(ids))
+	for _, id := range ids {
+		a, err := tx.Attempt(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // runNumberOf returns the number of the run with the ID id, which the store

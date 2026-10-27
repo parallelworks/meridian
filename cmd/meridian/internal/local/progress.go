@@ -307,6 +307,8 @@ func line(e coordinator.Event) string {
 		attempt("ended: " + string(e.End))
 	case coordinator.JobFinished:
 		fmt.Fprintf(&b, "%s finished: %s", e.Job, e.Outcome)
+	case coordinator.RunStopping:
+		fmt.Fprintf(&b, "run %s stopping", e.Run)
 	case coordinator.StepStarted, coordinator.StepFinished:
 		b.WriteString(logName(coordinator.LogKey{Job: e.Job, Attempt: e.Attempt, Part: stepPart(e.Cleanup), Step: e.Step, Try: e.Try}))
 		if e.Kind == coordinator.StepStarted {

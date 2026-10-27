@@ -1321,6 +1321,14 @@
       "Vuelve a poner el miembro en el grupo mientras tenga workers en marcha, o deja que el trabajo se vuelva a asignar."
     ]
   },
+  "job_timeout_enforced": {
+    "title": "Trabajo que el coordinador detuvo en su timeout",
+    "why": "El worker hace cumplir él mismo el timeout: de un trabajo. Como respaldo para uno que no lo hace, el coordinador espera el timeout del trabajo, el tiempo que el worker tarda en detener sus pasos, un periodo de latido y un margen desde que se reclamó el intento; después dice al worker que detenga el trabajo y, si su concesión vence sin el fin del trabajo, retira su asignación y hace fallar el trabajo con el motivo timeout.",
+    "fix": [
+      "Da al trabajo un timeout: suficiente para sus pasos, o haz que terminen antes.",
+      "Si el worker no detuvo el trabajo en su timeout, mira en su registro en su miembro por qué."
+    ]
+  },
   "workflow_too_large": {
     "title": "Flujo de trabajo demasiado grande",
     "why": "Un archivo de flujo de trabajo se lee entero, así que su tamaño tiene un límite. Este llegó por un flujo de datos, como la entrada estándar, que Meridian dejó de leer en cuanto pasó el límite.",
