@@ -284,6 +284,7 @@ func TestReadOnly(t *testing.T) {
 		"FailRun":      r.FailRun(t.Context(), created, problems.RunDirExists.Problem(problems.Params{"path": "/r"})),
 		"HoldEndpoint": func() error { _, err := r.HoldEndpoint(t.Context(), "socket", "test"); return err }(),
 		"CreateRun":    func() error { _, err := r.CreateRun(t.Context(), nil, RunOptions{}); return err }(),
+		"Cancel":       r.Cancel(t.Context(), created),
 	} {
 		if !errors.Is(err, ErrReadOnly) {
 			t.Errorf("%s read-only = %v, want ErrReadOnly", name, err)

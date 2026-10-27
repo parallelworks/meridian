@@ -41,8 +41,12 @@ var ErrRunEnded = errors.New("coordinator: the run has ended")
 // is cancelled, whatever its jobs do. A run that hasn't started ends
 // cancelled at once. Cancelling a run that was stopped already changes
 // nothing; one that has ended is ErrRunEnded, and one the store doesn't
-// have ErrRunNotFound.
+// have ErrRunNotFound. A coordinator opened only to read the store
+// returns ErrReadOnly.
 func (c *Coordinator) Cancel(ctx context.Context, id string) error {
+	if err := c.writable(); err != nil {
+		return err
+	}
 	return c.stop(ctx, id, plan.ReasonCancelled)
 }
 
