@@ -151,7 +151,9 @@ func TestStartConformance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts := compile.Options{Contexts: conformancetest.CreateContexts(c)}
+			// The workflows its steps call are the case's, as the suite
+			// says.
+			opts := compile.Options{Contexts: conformancetest.CreateContexts(c), Sources: conformancetest.Sources(c)}
 			if !c.NoPlatform {
 				opts.Inputs = passThrough{}
 			}

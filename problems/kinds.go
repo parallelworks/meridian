@@ -157,12 +157,14 @@ var (
 	SourceObjectsInvalid = define(Error, "source_objects_invalid", "Malformed Git objects", "location", "reason")
 	// The tree of workflows a run calls, as Create pins it: max is a
 	// limit, chain the locations of the workflows on a path of calls, as
-	// QuoteAll writes them, from the run's own, and what what was counted,
-	// calls or workflows.
+	// QuoteAll writes them, from the run's own, what what was counted,
+	// calls or workflows, and input the last workflow's input, named as
+	// input_required names it.
 	WorkflowCallsItself   = define(Error, "workflow_calls_itself", "Workflow that calls itself", "chain")
 	WorkflowNestedTooDeep = define(Error, "workflow_nested_too_deep", "Workflows called too deep", "max", "chain")
 	WorkflowsTooMany      = define(Error, "workflows_too_many", "Too many workflows called", "max", "what")
 	WorkflowsTooLarge     = define(Error, "workflows_too_large", "Workflows called too large", "max")
+	ChildInputMissing     = define(Error, "child_input_missing", "Called workflow's required input not given", "input", "chain")
 	// A child run of a step that calls a workflow: uses is the step's uses:,
 	// and dir the child's directory.
 	ChildNotPinned  = define(Error, "child_not_pinned", "Called workflow not pinned with its run's tree", "uses")
@@ -272,13 +274,17 @@ var (
 	CheckoutNotFound = define(Error, "checkout_not_found", "No such repository or revision to check out", "repo", "revision")
 	// CheckoutRepoInvalid is a parallelworks/checkout step's with: repo that
 	// Meridian doesn't fetch: repo is it as a problem shows it, with no
-	// credential, and reason why, transport, credential or form
+	// credential, and reason why, transport, credential, form or name
 	// (plan.CheckRepo).
 	CheckoutRepoInvalid = define(Error, "checkout_repo_invalid", "Checkout of a repository Meridian doesn't fetch", "repo", "reason")
 	// CheckoutPathInvalid is an entry of a parallelworks/checkout step's
 	// with: sparse_checkout, path, that isn't a literal path from the
 	// repository's root (plan.CheckCheckoutPath).
 	CheckoutPathInvalid = define(Error, "checkout_path_invalid", "Sparse checkout entry that isn't a path", "path")
+	// CheckoutRevisionInvalid is a parallelworks/checkout step's with:
+	// branch, revision, that a Sources resolver doesn't ask git for: one git
+	// could take for an option, or refuses as a branch's or a tag's name.
+	CheckoutRevisionInvalid = define(Error, "checkout_revision_invalid", "Checkout's revision that isn't a name git takes", "revision")
 )
 
 // Running a workflow: what the phases after Start evaluate, and the
@@ -369,7 +375,7 @@ var (
 	JobVersionUnsupported = define(Error, "job_version_unsupported", "Job of a plan version the worker doesn't read", "version", "supported")
 	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
 	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
-	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
+	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step an earlier version of Meridian can't run", "uses")
 	ActionNeedsPlatform   = define(Error, "action_needs_platform", "Built-in action only a platform provides", "uses")
 	ActionRequestFailed   = define(Error, "action_request_failed", "Request to the coordinator for a built-in action that failed", "uses", "reason")
 	CancelJobsJobUnknown  = define(Warning, "cancel_jobs_job_unknown", "Job a step can't cancel", "job", "suggested", "suggestion")

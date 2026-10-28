@@ -16,6 +16,7 @@ import (
 // The server serves the worker API as package workerapi says, as the suite
 // every coordinator passes checks.
 func TestConformance(t *testing.T) {
+	parallel(t)
 	workerapitest.Conformance(t, newTarget(t))
 }
 

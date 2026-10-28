@@ -32,14 +32,16 @@ const checkoutsDir = "checkouts"
 // scp-like one, on any host, as format 1 takes (plan.CheckRepo): git
 // reaches it with the user's own configuration and credentials, as it
 // does a workflow's repository, and never asks for a password. A revision
-// git refuses as a branch's or a tag's name names no commit
-// (source_revision_not_found), as one that isn't there does.
+// git could take for an option, or refuses as a branch's or a tag's name
+// (validRevision), is never asked for (checkout_revision_invalid), and one
+// the repository doesn't have names no commit (source_revision_not_found):
+// both are the branch's problem (compile.ErrNotFound).
 func (s *Sources) Pin(ctx context.Context, repo, revision string) (string, error) {
 	if err := plan.CheckRepo(repo); err != nil {
 		return "", err
 	}
 	if !validRevision(revision) {
-		return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": repo, "revision": revision, "reason": "not a branch's, a tag's or a commit's name"})
+		return "", notFound(problems.CheckoutRevisionInvalid, problems.Params{"revision": revision})
 	}
 	dir, unlock, err := s.openAt(ctx, s.checkoutCopy(repo))
 	if err != nil {

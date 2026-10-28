@@ -95,6 +95,7 @@ func caseEnv(t *testing.T, c conformance.Case) (map[string]string, string) {
 // which go test -update rewrites. The cases' contexts are in a variables
 // file, and their inputs in a file -inputs reads.
 func TestValidateGolden(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		name   string
 		format string
@@ -199,6 +200,7 @@ jobs:
 `
 
 func TestValidateInputs(t *testing.T) {
+	parallel(t)
 	workflow := writeFile(t, "w.yaml", groupInputs)
 	inputs := writeFile(t, "inputs.json", `{"cluster": {"size": 2, "name": "a"}, "count": 9007199254740993}`)
 	for _, tc := range []struct {
@@ -224,6 +226,7 @@ func TestValidateInputs(t *testing.T) {
 }
 
 func TestValidateInputsRefuses(t *testing.T) {
+	parallel(t)
 	workflow := writeFile(t, "w.yaml", groupInputs)
 	for name, args := range map[string][]string{
 		"no =":           {"--input", "count"},
@@ -276,6 +279,7 @@ jobs:
 // as ACTIVATE's pw workflows run --input converts one, and that what it
 // refuses names the path, never the value.
 func TestSetInputs(t *testing.T) {
+	parallel(t)
 	defs := inputDefinitions("w.yaml", []byte(typedInputs))
 	if defs == nil {
 		t.Fatal("the workflow doesn't load")
@@ -367,6 +371,7 @@ func TestSetInputs(t *testing.T) {
 }
 
 func TestValidateStdin(t *testing.T) {
+	parallel(t)
 	r := runCLI(t, emptyEnv(t), "jobs:\n  a:\n    if: ${{ steps.x }}\n    steps:\n      - run: echo\n", "validate", "-")
 	if r.code != exitInvalid || !strings.HasPrefix(r.stdout, "<stdin>:3:13: error: ") {
 		t.Errorf("meridian validate - = %+v", r)
@@ -376,6 +381,7 @@ func TestValidateStdin(t *testing.T) {
 // TestValidateTooLarge checks that a file larger than the compiler reads
 // is reported as the compiler would report it, without being kept.
 func TestValidateTooLarge(t *testing.T) {
+	parallel(t)
 	text := "# " + strings.Repeat("x", format.DefaultMaxSize) + "\n"
 	path := writeFile(t, "big.yaml", text)
 	r := runCLI(t, emptyEnv(t), "", "validate", path)
@@ -391,6 +397,7 @@ func TestValidateTooLarge(t *testing.T) {
 }
 
 func TestValidateRefuses(t *testing.T) {
+	parallel(t)
 	workflow := writeFile(t, "w.yaml", "jobs:\n  a:\n    steps:\n      - run: echo\n")
 	badConfig := emptyEnv(t)
 	if err := os.MkdirAll(badConfig[local.EnvConfigDir], 0o700); err != nil {
@@ -426,6 +433,7 @@ func TestValidateRefuses(t *testing.T) {
 // value; and that a run with sessions can't start here, where nothing
 // provides them.
 func TestValidateStart(t *testing.T) {
+	parallel(t)
 	env := emptyEnv(t)
 	config := env[local.EnvConfigDir]
 	if err := os.MkdirAll(config, 0o700); err != nil {
@@ -570,6 +578,7 @@ func flowsRepo(t *testing.T, files map[string]string, hosts ...string) {
 }
 
 func TestValidateGroups(t *testing.T) {
+	parallel(t)
 	env := emptyEnv(t)
 	config := env[local.EnvConfigDir]
 	if err := os.MkdirAll(config, 0o700); err != nil {
@@ -601,6 +610,7 @@ jobs:
 // the clusters of the config's clusters.yaml, and that without the file a
 // name is refused, saying there are none.
 func TestValidateClusters(t *testing.T) {
+	parallel(t)
 	env := emptyEnv(t)
 	workflow := writeFile(t, "w.yaml", `on:
   execute:
@@ -636,6 +646,7 @@ jobs:
 // TestValidateDevZero checks that a stream that never ends is read only to
 // the limit.
 func TestValidateDevZero(t *testing.T) {
+	parallel(t)
 	if _, err := os.Stat("/dev/zero"); err != nil {
 		t.Skip("there is no /dev/zero")
 	}
@@ -648,6 +659,7 @@ func TestValidateDevZero(t *testing.T) {
 // TestValidateInterrupted checks that an interrupt, which cancels the
 // command's context, stops it waiting on a pipe that never ends.
 func TestValidateInterrupted(t *testing.T) {
+	parallel(t)
 	stdin, w := io.Pipe()
 	defer w.Close()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -671,6 +683,7 @@ func TestValidateInterrupted(t *testing.T) {
 // reach the terminal escaped: they can't clear it, or start a line that
 // reads as another diagnostic.
 func TestValidateControlCharacters(t *testing.T) {
+	parallel(t)
 	workflow := writeFile(t, "w.yaml", "jobs:\n  a:\n    steps:\n      - run: echo\n        \"x\\e[2J\\nsrc/main.go:1:1: error: injected\": 1\n")
 	r := runCLI(t, emptyEnv(t), "", "validate", workflow)
 	if strings.ContainsAny(r.stdout, "\x1b\a") || strings.Count(r.stdout, "\n") != 1 || !strings.Contains(r.stdout, `x\x1b[2J\nsrc/main.go:1:1: error: injected`) {
@@ -681,6 +694,7 @@ func TestValidateControlCharacters(t *testing.T) {
 // TestValidateProblems checks the problems validate reports besides a
 // workflow's: each a kind, at the file when one is to blame.
 func TestValidateProblems(t *testing.T) {
+	parallel(t)
 	workflow := writeFile(t, "w.yaml", groupInputs)
 	inputs := writeFile(t, "bad.json", `{count: 1}`)
 	for _, tc := range []struct {
@@ -708,6 +722,7 @@ func TestValidateProblems(t *testing.T) {
 // TestValidateProblemsAsJSON checks that with --format json the command's
 // own problems are RFC 9457 problem details too, on standard error.
 func TestValidateProblemsAsJSON(t *testing.T) {
+	parallel(t)
 	r := runCLI(t, emptyEnv(t), "", "validate", "--format", "json", filepath.Join(t.TempDir(), "none.yaml"))
 	if r.code != exitError || r.stdout != "" {
 		t.Fatalf("meridian validate --format json of a missing file = %+v", r)
@@ -724,6 +739,7 @@ func TestValidateProblemsAsJSON(t *testing.T) {
 // TestValidateStdinRegularFile checks that standard input that is a regular
 // file larger than the limit is reported with its size, unread.
 func TestValidateStdinRegularFile(t *testing.T) {
+	parallel(t)
 	text := "# " + strings.Repeat("x", format.DefaultMaxSize) + "\n"
 	f, err := os.Open(writeFile(t, "big.yaml", text))
 	if err != nil {

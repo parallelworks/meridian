@@ -23,6 +23,7 @@ import (
 // its claim, and, once a replica that reads the plan has taken the claim,
 // every request it authorizes with its credential. It stores nothing.
 func TestOlderReplica(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	current := r.socket
 	r.socket = ""
@@ -63,6 +64,7 @@ func TestOlderReplica(t *testing.T) {
 // claim repeated, and every request it authorizes with its credential. It
 // stores nothing.
 func TestAPIVersions(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	current := newClient(t, r.socket)
 	socket := r.socket
@@ -173,6 +175,7 @@ func TestAPIVersions(t *testing.T) {
 // control poll and an end, whose answers depend on the attempt, are
 // another replica's still, 503.
 func TestForeignAttemptFenced(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	socket := r.socket
 	r.socket = ""
@@ -328,6 +331,7 @@ func TestGatePinned(t *testing.T) {
 // version, is another replica's: the current one answers 503, which the
 // worker tries again, rather than a claim of a version it doesn't speak.
 func TestClaimedMeanwhile(t *testing.T) {
+	parallel(t)
 	var (
 		r     *rig
 		claim func()
@@ -360,6 +364,7 @@ func TestClaimedMeanwhile(t *testing.T) {
 // and the attempt ends, failed before its first step, with the problem,
 // which its job's supervisor is woken to place again.
 func TestWorkerAPITooOld(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetSpeaks(s, workerapi.Version+1)
 		workerapisrv.SetNeeds(s, workerapi.Version+1)
@@ -393,6 +398,7 @@ func TestWorkerAPITooOld(t *testing.T) {
 // of it and its transaction, is refused, fenced, and the attempt stays
 // withdrawn.
 func TestEndWithdrawnMeanwhile(t *testing.T) {
+	parallel(t)
 	var r *rig
 	var a *store.Attempt
 	r = newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {

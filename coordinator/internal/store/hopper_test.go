@@ -127,6 +127,7 @@ func hopperJobs(t *testing.T, c *hopper.Client[*sql.Tx]) int {
 // TestCreateRun checks that a run, its hopper workflow and its secret
 // record are stored in one transaction, or none of them is.
 func TestCreateRun(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	c := newClient(t, s, nil)
 	p := testPlan(t)
@@ -217,6 +218,7 @@ func (w *supervisor) NextRetry(*hopper.Job[jobArgs]) time.Time { return time.Now
 // TestCompleteTx checks that a hopper job's completion and what its work
 // stores in Meridian's tables commit together, or neither does.
 func TestCompleteTx(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	workers := hopper.NewWorkers()

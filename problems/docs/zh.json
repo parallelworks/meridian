@@ -680,10 +680,11 @@
   },
   "checkout_repo_invalid": {
     "title": "检出 Meridian 不获取的仓库",
-    "why": "parallelworks/checkout 步骤的 repo 由协调器在创建运行时使用 git 和运行者的凭据获取，因此 Meridian 只接受任意主机上的 https 或 ssh URL，或者 user@host:path 这样的类 scp URL，且其中不能包含凭据。其他传输方式，例如本地路径、file:// 或 ext::，会让协调器读取其主机上的文件或在那里运行命令；git:// 和 http:// 没有 TLS 或 SSH，因此获取的内容都不会经过认证；而 URL 中的用户名和密码或令牌会把秘密放进计划，而能看到该运行的每个人都能读取计划。",
+    "why": "parallelworks/checkout 步骤的 repo 由协调器在创建运行时使用 git 和运行者的凭据获取，因此 Meridian 只接受任意主机上的 https 或 ssh URL，或者 user@host:path 这样的类 scp URL，且其中不能包含凭据。其他传输方式，例如本地路径、file:// 或 ext::，会让协调器读取其主机上的文件或在那里运行命令；git:// 和 http:// 没有 TLS 或 SSH，因此获取的内容都不会经过认证；而 URL 中的用户名和密码或令牌会把秘密放进计划，而能看到该运行的每个人都能读取计划。通过 ssh 获取时，主机和用户只能是名字：git 会把它们交给 ssh，而 ssh 会把它们放进用户 ssh 配置中的命令（例如 ProxyCommand），再由 shell 运行。因此 OpenSSH 10.1 及更高版本会拒绝包含 shell 特殊字符的主机或用户，而无论安装的是哪个 ssh，Meridian 都会拒绝同样的名字。",
     "fix": [
       "用 https:// 或 ssh:// URL，或者 user@host:path 来指定仓库。",
-      "通过 git 自己的配置（例如凭据助手或 ssh 密钥）提供凭据，而不要放在 URL 中。"
+      "通过 git 自己的配置（例如凭据助手或 ssh 密钥）提供凭据，而不要放在 URL 中。",
+      "主机和用户只写名字，不要包含 $、`、;、| 或 & 等字符。"
     ]
   },
   "checkout_path_invalid": {
@@ -691,6 +692,13 @@
     "why": "Meridian 把 parallelworks/checkout 步骤的 sparse_checkout 中的每个条目读作从仓库根开始、指向文件或目录的字面路径，可以以斜杠结尾。为空、以斜杠开头、包含空名称、. 或 ..、包含通配符的 *、? 或 [、以格式 1 可能读作模式的 ! 开头，或包含控制字符的条目，都不是这样的路径。",
     "fix": [
       "按从仓库根开始的路径指定要检出的每个文件或目录，不要使用模式。"
+    ]
+  },
+  "checkout_revision_invalid": {
+    "title": "不是 git 接受的名称的检出修订",
+    "why": "parallelworks/checkout 步骤的 branch 指定一个分支、标签或完整提交，Sources 接口在创建运行时用 git 将其固定。以连字符开头（git 可能把它当作选项）、以点结尾，或包含为空、以点开头或以 .lock 结尾的名称的修订，不是 git 接受的分支或标签名称，因此 Meridian 不会向 git 请求它。",
+    "fix": [
+      "指定一个分支、一个标签，或用完整的 SHA 指定一个提交。"
     ]
   },
   "checkout_path_not_found": {
@@ -1182,10 +1190,11 @@
     ]
   },
   "uses_not_supported": {
-    "title": "工作进程尚不能运行的 uses: 步骤",
-    "why": "通过 uses: 使用操作（例如 parallelworks/checkout）或工作流的步骤会运行它们，而不是运行命令。此版本的 Meridian 工作进程只运行带有 run: 的步骤，因此该步骤失败。",
+    "title": "旧版本 Meridian 无法运行的 uses: 步骤",
+    "why": "通过 uses: 使用协调器执行的操作（例如 parallelworks/checkout）或工作流的步骤，会通过工作进程 API 版本 3 向协调器请求它，而检出或工作流调用所运行的内容在创建运行时被固定。由使用旧版本 API 的旧版本协调器分派该步骤的工作进程无法请求它，而由旧版本 Meridian 创建的运行中的检出或工作流调用没有被固定的内容，因此该步骤失败。",
     "fix": [
-      "改用 run: 命令完成该步骤的工作。"
+      "把协调器升级到与工作进程相同的 Meridian 版本。",
+      "把工作流作为新的运行重新运行，而不是继续由旧版本 Meridian 创建的运行。"
     ]
   },
   "action_needs_platform": {
@@ -2088,6 +2097,14 @@
     "fix": [
       "调用更少或更小的工作流。",
       "或者请运行该工作流的人提高限制。"
+    ]
+  },
+  "child_input_missing": {
+    "title": "被调用工作流缺少必需输入",
+    "why": "uses: 指向工作流的步骤通过 with: 为其提供输入。Meridian 在创建运行时固定整棵树，并像格式 1 一样，拒绝任何调用遗漏了被调用工作流所需输入的运行：所需输入是没有 default:、不是可选、隐藏或忽略的、也不是布尔类型的输入。它检查 with: 中写明的内容；由表达式给出的值，以及 hidden:、ignore: 或 optional: 为表达式的输入，在创建子运行时检查。消息列出从运行自身的工作流开始的调用路径。",
+    "fix": [
+      "在调用该工作流的步骤的 with: 中为该输入提供值。",
+      "或者，如果被调用的工作流归你所有，为该输入设置 default: 或将其设为 optional: true。"
     ]
   },
   "child_not_pinned": {

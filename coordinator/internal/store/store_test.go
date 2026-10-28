@@ -31,11 +31,41 @@ func TestMain(m *testing.M) {
 	if role := os.Getenv(envChild); role != "" {
 		os.Exit(runChild(role))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	storeTemplate.Remove()
+	os.Exit(code)
 }
 
-// open opens a new store in a directory of the test's.
+// storeTemplate is the store that open's new stores are copies of
+// (coordtest.StoreTemplate). A test of what Open does to a new store has
+// Open make it (openNew).
+var storeTemplate = coordtest.StoreTemplate{Make: func(ctx context.Context, path string) error {
+	s, err := Open(ctx, path, nil)
+	if err != nil {
+		return err
+	}
+	return s.Close()
+}}
+
+// open opens a new store in a directory of the test's, a copy of the store
+// template.
 func open(t *testing.T) *Store {
+	t.Helper()
+	return openAt(t, newPath(t))
+}
+
+// newPath returns the path of a new store in a directory of the test's, a
+// copy of the store template, for the test to open as it needs.
+func newPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	storeTemplate.Copy(t, path)
+	return path
+}
+
+// openNew opens a new store in a directory of the test's, which Open makes
+// and migrates.
+func openNew(t *testing.T) *Store {
 	t.Helper()
 	return openAt(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"))
 }
@@ -174,6 +204,7 @@ func checkIntegrity(t *testing.T, s *Store) {
 var hexID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func TestOpen(t *testing.T) {
+	t.Parallel()
 	dir := coordtest.PrivateDir(t)
 	path := filepath.Join(dir, "meridian.db")
 	s, err := Open(t.Context(), path, nil)
@@ -207,7 +238,7 @@ func TestOpen(t *testing.T) {
 	if s.ID() != id {
 		t.Errorf("the store's ID is %q once opened again, was %q", s.ID(), id)
 	}
-	if other := open(t); other.ID() == id {
+	if other := openNew(t); other.ID() == id {
 		t.Error("two stores have one ID")
 	}
 }
@@ -271,6 +302,7 @@ func TestOpenWhileBusy(t *testing.T) {
 // that another user could have put there or could change, before SQLite
 // opens anything: whoever can write the database can claim an attempt.
 func TestOpenRefuses(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows doesn't say who owns a file, so Open refuses every path")
 	}
@@ -380,6 +412,7 @@ func symlink(t *testing.T, target, path string) {
 // TestMigrations checks that Open migrates an empty database, and that
 // opening it again changes nothing.
 func TestMigrations(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	applied := func() map[int]int64 {
 		s := openAt(t, path)
@@ -424,6 +457,7 @@ func TestMigrations(t *testing.T) {
 // migrated past what this one knows: Meridian's schema, or hopper's, which
 // hoppermigrate.Up leaves as it is.
 func TestDatabaseTooNew(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		schema, table   string
 		version, latest int
@@ -510,6 +544,7 @@ func TestNetworkFilesystem(t *testing.T) {
 // TestTxRollsBack checks that a transaction whose function fails, or
 // panics, stores nothing of what it did.
 func TestTxRollsBack(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	boom := errors.New("boom")
 	err := s.Tx(t.Context(), func(tx *Tx) error {
@@ -540,6 +575,7 @@ func TestTxRollsBack(t *testing.T) {
 }
 
 func TestViewDoesNotWrite(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	err := s.View(t.Context(), func(tx *Tx) error {
 		_, err := tx.NewRunID()

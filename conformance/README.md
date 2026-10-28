@@ -152,6 +152,9 @@ expect:
   `secret-variables` names with the values `contexts` gives them.
   `start-contexts` replaces each context it gives as the run starts, as a
   variable can change before a rerun.
+- `repositories` names the repositories whose workflows the case's steps
+  call, as a runs case's does ([Runs](#runs)), which creating the run
+  pins and checks.
 - `expect.diagnostics` are those of creating the run and starting it
   together. A run with errors doesn't start, and has no values to check.
 - `expect.inputs` are the run's input values, complete: those the plan

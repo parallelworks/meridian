@@ -187,6 +187,7 @@ var onHost = &backend.Member{Name: "cluster", Backend: "ssh", Isolation: "host"}
 // state directory's its own under hosts/, by its ID and name, and the
 // sockets' of a random name in tmp, without a runtime directory.
 func TestHostHello(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	h := hostHello(t, env, sys)
 	want := hostproto.Paths{
@@ -229,6 +230,7 @@ func hostHello(t *testing.T, env map[string]string, sys *hostSystem) *hostproto.
 // user's own, and which is made afresh where it is gone, or isn't, as
 // where another user made a directory of that name once it was gone.
 func TestHostSockets(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	// A runtime directory is the user's own, which only they can use.
 	runtimeDir := t.TempDir()
@@ -390,6 +392,7 @@ func hostBinary(t *testing.T) (string, string) {
 // it couldn't answer; a directory that isn't the user's own,
 // ssh_host_dir_unusable; and a home that isn't an absolute path.
 func TestHostRefuses(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	if msgs, code, stderr := hostCLI(t, env, sys, strings.NewReader(""), "launch"); code != exitError || len(msgs) != 1 || msgs[0].Protocol != hostproto.Version ||
 		msgs[0].Problem == nil || msgs[0].Problem.Code != problems.ArgumentsInvalid.Code() || stderr != "" {
@@ -459,6 +462,7 @@ func TestHostRefuses(t *testing.T) {
 // which so reaches only a hardened process; and one that can't harden
 // itself says so, and reads nothing.
 func TestHostHardensFirst(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	var (
 		mu     sync.Mutex
@@ -637,6 +641,7 @@ func TestHostRunsDir(t *testing.T) {
 // session that placed it is refused: hello and place say why, and probe
 // says the member can't run the job.
 func TestHostKilled(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	sys.loginctl = loginctlSays(nil, map[string]string{"KillUserProcesses": "KillUserProcesses=yes\n", "Linger": "Linger=no\n"})
 	for op, r := range map[string]hostproto.Request{
@@ -664,11 +669,51 @@ func waitReport(t *testing.T, path string) hostStubReport {
 	return r
 }
 
+// hostPlacements returns the directory of the host's placements, which
+// meridian host's local backend keeps in its state directory. It and
+// reaped know that backend's private layout, <attempt>.exit beside each
+// placement, and change with it.
+func hostPlacements(env map[string]string) string {
+	return filepath.Join(env[local.EnvStateDir], "hosts", testHostKey, "placements")
+}
+
+// reaped waits until the worker of the attempt, which meridian host place
+// started in the test's own process (hostDo), has been reaped by that
+// process, its parent, which records its exit status beside its
+// placement as it does. meridian host cancel returns once the worker has
+// ended, which can be before that, and forget, a call of its own, can't
+// wait for it: a status written once forget has removed its placement
+// stays in the host's placements, and one written once the test has
+// ended is in the way of its cleanup.
+func reaped(t *testing.T, env map[string]string, attempt string) {
+	t.Helper()
+	exit := filepath.Join(hostPlacements(env), attempt+".exit")
+	waitUntil(t, "the worker of "+attempt+" to be reaped", func() bool {
+		_, err := os.Stat(exit)
+		return err == nil
+	})
+}
+
+// withdraw cancels the worker of the placement p, as the coordinator does,
+// waits for the test's process to have reaped it (reaped), and forgets it.
+func withdraw(t *testing.T, env map[string]string, sys *hostSystem, p *backend.Placement) {
+	t.Helper()
+	if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: p}); code != exitOK || m.Problem != nil || m.Error != "" {
+		t.Fatalf("meridian host cancel of %s = %+v, %d", p.Attempt, m, code)
+	}
+	reaped(t, env, p.Attempt)
+	if m, code := hostDo(t, env, sys, hostproto.OpForget, hostproto.Request{Member: onHost, Placement: p}); code != exitOK || m.Problem != nil || m.Error != "" {
+		t.Errorf("meridian host forget of %s = %+v, %d", p.Attempt, m, code)
+	}
+}
+
 // TestHostPlace checks meridian host's operations on a worker: probe; place,
 // which starts the worker detached with the process's environment but
 // GODEBUG, hands it its token on the socket it inherits before it returns,
 // and returns the run's directory it chose under the user's home; find;
-// check; cancel, which withdraws it; and forget, which forgets it.
+// check; cancel, which withdraws it; and forget, which forgets it. Every
+// worker it places it withdraws, and forgets, before it ends, so that
+// nothing writes in its state directory as the test's cleanup removes it.
 func TestHostPlace(t *testing.T) {
 	env, sys := runEnv(t), testHost(t)
 	report := filepath.Join(t.TempDir(), "report.json")
@@ -713,6 +758,7 @@ func TestHostPlace(t *testing.T) {
 	if m, _ := hostDo(t, env, sys, hostproto.OpCheck, hostproto.Request{Member: onHost, Placement: &p}); m.Status == nil || m.Status.Status() != (backend.Status{State: backend.Dead, End: backend.EndWithdrawn}) {
 		t.Errorf("meridian host check of a worker cancelled = %+v", m)
 	}
+	reaped(t, env, p.Attempt)
 	if m, code := hostDo(t, env, sys, hostproto.OpForget, hostproto.Request{Member: onHost, Placement: &p}); code != exitOK || m.Problem != nil || m.Error != "" {
 		t.Errorf("meridian host forget = %+v, %d", m, code)
 	}
@@ -733,9 +779,7 @@ func TestHostPlace(t *testing.T) {
 	if info, err := os.Stat(rootDir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		t.Errorf("the root's directory: %v, %v", info, err)
 	}
-	if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: m.Placement}); code != exitOK || m.Problem != nil || m.Error != "" {
-		t.Errorf("meridian host cancel of a child = %+v, %d", m, code)
-	}
+	withdraw(t, env, sys, m.Placement)
 	for _, rootPath := range [][2]string{{"9", "../x"}, {"9", "/abs"}, {"9", ""}, {"", "x"}} {
 		bad := child
 		bad.Attempt, bad.Root, bad.Path = "run3-main-1", rootPath[0], rootPath[1]
@@ -770,14 +814,21 @@ func TestHostPlace(t *testing.T) {
 		if root == "8" {
 			if code != exitOK || m.Placement == nil || m.RunDir != filepath.Join(runs, "8-abc", "subworkflows", "build", "step_0") {
 				t.Errorf("meridian host place of a child whose root's directory others may read = %+v, %d", m, code)
-			} else if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: m.Placement}); code != exitOK || m.Problem != nil || m.Error != "" {
-				t.Errorf("meridian host cancel of a child = %+v, %d", m, code)
+			} else {
+				withdraw(t, env, sys, m.Placement)
 			}
 			continue
 		}
 		if code != exitError || m.Problem == nil || m.Problem.Code != problems.SSHHostDirUnusable.Code() || m.Placement != nil {
 			t.Errorf("meridian host place of a child whose root's directory is case %d = %+v, %d", i, m, code)
 		}
+	}
+	if left, err := os.ReadDir(hostPlacements(env)); err != nil || len(left) > 0 {
+		names := make([]string, 0, len(left))
+		for _, e := range left {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the host keeps %q of its placements, %v", names, err)
 	}
 }
 
@@ -787,6 +838,7 @@ func TestHostPlace(t *testing.T) {
 // hands the token to the worker it places on the socket it inherits, and
 // not in its arguments or its environment, as the worker sees them.
 func TestHostProcess(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	report := filepath.Join(t.TempDir(), "report.json")
 	exe, err := os.Executable()

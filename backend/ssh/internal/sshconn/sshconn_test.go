@@ -1003,14 +1003,21 @@ func TestSessionAbandoned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := s.OpenSessions(); n != 1 {
-		t.Errorf("with the next session open, the host has %d open", n)
-	}
+	// The host reads the first session's close before the next's open, but
+	// counts it closed a moment later (sshtest.Server.OpenSessions).
+	waitSessions(t, s, 1, "with the next session open")
 	_ = next.Close()
+	waitSessions(t, s, 0, "once the next session closed")
+}
+
+// waitSessions waits, with a deadline, for s to count n sessions open:
+// nothing says when it has handled what it read of the client.
+func waitSessions(t *testing.T, s *sshtest.Server, n int, when string) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for s.OpenSessions() != 0 {
+	for s.OpenSessions() != n {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d sessions are left open", s.OpenSessions())
+			t.Fatalf("%s, the host has %d sessions open, want %d", when, s.OpenSessions(), n)
 		}
 		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // the server's count, which nothing signals
 	}

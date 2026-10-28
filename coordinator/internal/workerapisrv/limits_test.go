@@ -168,6 +168,7 @@ func TestConnectionLimit(t *testing.T) {
 // worker tries again, and claims nothing, whatever binary claims; once the
 // placement is recorded, the binary it started claims it.
 func TestNotPlaced(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetPlacedWait(s, 50*time.Millisecond, 10*time.Millisecond) }})
 	c := newClient(t, r.socket)
 	run := r.newRun(nil)
@@ -205,6 +206,7 @@ func TestNotPlaced(t *testing.T) {
 // that recorded it (Placed), or, for one another process recorded, as it
 // reads the store again.
 func TestPlacedWhileClaiming(t *testing.T) {
+	parallel(t)
 	for _, woken := range []bool{true, false} {
 		recheck := 20 * time.Millisecond
 		if woken {
@@ -263,6 +265,7 @@ func manyJobs(n int) string {
 // Ends of a run's jobs at once, each with a private output, are each
 // stored, each as its job's part of the run's secret record.
 func TestConcurrentEnds(t *testing.T) {
+	parallel(t)
 	const n = 16
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
@@ -310,6 +313,7 @@ func TestConcurrentEnds(t *testing.T) {
 // of the same worker, is checked again: one behind the events stored is
 // refused, 400, and stores nothing.
 func TestEndRacesEvents(t *testing.T) {
+	parallel(t)
 	var r *rig
 	var credential string
 	var a *store.Attempt
@@ -386,6 +390,7 @@ func TestShutdown(t *testing.T) {
 // rest wasn't kept, and ends there; the worker is told every byte it sends
 // is stored, so it goes on.
 func TestLogTruncated(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 10, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
 	}})
@@ -431,6 +436,7 @@ func TestLogTruncated(t *testing.T) {
 // less of it at a time than it is, as it does of MaxLogBytes, so that the
 // first upload doesn't give it all out.
 func TestLogQuotaPerAttempt(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 1024, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
 		workerapisrv.SetLogReserve(s, 100)
@@ -519,6 +525,7 @@ func TestLogQuotaPerAttempt(t *testing.T) {
 // the limit as stored, whether it holds some of the limit still or none:
 // the worker was told the bytes before it were stored.
 func TestLogLimitAcrossReplicas(t *testing.T) {
+	parallel(t)
 	limits := func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
 		workerapisrv.SetLogReserve(s, 30)
@@ -592,6 +599,7 @@ func TestLogLimitAcrossReplicas(t *testing.T) {
 // the limit on the attempt's logs, while a replica still holds some of it:
 // only a truncation ends a log at the limit.
 func TestLogGapBeforeLimitSpent(t *testing.T) {
+	parallel(t)
 	limits := func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, 100, workerapisrv.MaxEvents, workerapisrv.MaxEventsBytes)
 		workerapisrv.SetLogReserve(s, 30)
@@ -636,6 +644,7 @@ func TestLogGapBeforeLimitSpent(t *testing.T) {
 // one write, and spends it as uploads come, with none: two hundred uploads
 // of 100 bytes, with 4,096 bytes reserved at a time, take five writes.
 func TestLogReservations(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetLogReserve(s, 4096) }})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{})
@@ -711,6 +720,7 @@ func uploadAs(t *testing.T, c *client, credential string, part workerapi.LogPart
 // Events past what the server keeps of an attempt's are refused, 413, and
 // none of them is stored.
 func TestEventsQuota(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetLimits(s, workerapisrv.MaxLogBytes, 2, workerapisrv.MaxEventsBytes)
 	}})

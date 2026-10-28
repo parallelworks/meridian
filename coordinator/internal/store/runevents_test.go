@@ -14,6 +14,7 @@ import (
 // reports as it is now; a commit that adds one says so (Changes), and one
 // rolled back adds none.
 func TestRunEvents(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	changes := s.Changes()
@@ -173,6 +174,7 @@ func inView(t testing.TB, s *Store, fn func(*Tx) error) {
 // A run's stop adds its run.stopping event, with the reason, once: a later
 // stop changes nothing, and adds none.
 func TestRunStoppingEvent(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error { return tx.StartRun(id, testState(), nil) })

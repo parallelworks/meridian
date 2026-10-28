@@ -18,6 +18,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/parallelworks/meridian/internal/sshname"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -237,7 +238,7 @@ func (d *Dialer) through(ctx context.Context, c *hostConfig) (*hostConfig, error
 	}
 	last := c.proxyJump[len(c.proxyJump)-1]
 	host, user, port, ok := hop(last)
-	if !ok || !validHostname(host) || !validUser(user) {
+	if !ok || !sshname.ValidHost(host) || !sshname.ValidUser(user) {
 		return nil, problems.SSHProxyJumpInvalid.Problem(problems.Params{"host": c.alias, "hop": escape(last)})
 	}
 	hc, err := d.resolve(ctx, host, port, user)

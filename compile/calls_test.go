@@ -335,3 +335,109 @@ func TestCreateKeepsTreeVariablesAndRemotes(t *testing.T) {
 		t.Errorf("a tree that reads no variable: %+v, %v", c, err)
 	}
 }
+
+// Create refuses a run any of whose calls, down its tree, leaves out of its
+// with: an input the workflow it calls requires, as format 1 does,
+// whatever the step's if:: at the uses: of the run's own step the path of
+// calls starts at, with the chain of calls from the run, and a call that
+// two paths from that step reach, once. What an expression in a with:
+// gives, the child's Create checks as the step runs.
+func TestCreateChecksCalledInputs(t *testing.T) {
+	needs := "on:\n  execute:\n    inputs:\n      name: {type: string, label: Name}\n      other: {type: string, default: x}\njobs:\n  j:\n    steps:\n      - run: echo\n"
+	callsNeeds := func(withs ...string) string {
+		var b strings.Builder
+		b.WriteString("jobs:\n  j:\n    steps:\n")
+		for _, w := range withs {
+			fmt.Fprintf(&b, "      - uses: github/t/needs@main\n        if: ${{ false }}\n        with: {$yaml: w.yaml%s}\n", w)
+		}
+		return b.String()
+	}
+	s := tree(map[string][]string{"a": {"b", "c"}, "b": {"d"}, "c": {"d"}})
+	s.texts["github/t/needs@main"] = needs
+	s.texts["github/t/mid@main"] = callsNeeds("", ", name: '${{ inputs.x }}'", ", name: n")
+	s.texts["github/t/d@main"] = callsNeeds("")
+	root := callsNeeds("", ", name: n", ", name: '${{ inputs.x }}'") +
+		"      - uses: github/t/mid@main\n        with: {$yaml: w.yaml}\n" +
+		"      - uses: github/t/mid@main\n        with: {$yaml: w.yaml}\n" +
+		"      - uses: github/t/a@main\n        with: {$yaml: w.yaml}\n"
+	_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(root), nil, compile.Options{Sources: s})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type missing struct{ at, input, chain string }
+	var got []missing
+	for _, d := range diags.Errors() {
+		if d.Code != problems.ChildInputMissing.Code() {
+			t.Errorf("unexpected %v", d)
+			continue
+		}
+		got = append(got, missing{d.Path(), d.Params["input"].(string), d.Params["chain"].(string)})
+	}
+	want := []missing{
+		{"/jobs/j/steps/0/uses", "name (Name)", `"workflow.yaml", "github/t/needs@main:w.yaml"`},
+		{"/jobs/j/steps/3/uses", "name (Name)", `"workflow.yaml", "github/t/mid@main:w.yaml", "github/t/needs@main:w.yaml"`},
+		{"/jobs/j/steps/4/uses", "name (Name)", `"workflow.yaml", "github/t/mid@main:w.yaml", "github/t/needs@main:w.yaml"`},
+		{"/jobs/j/steps/5/uses", "name (Name)", `"workflow.yaml", "github/t/a@main:w.yaml", "github/t/b@main:w.yaml", "github/t/d@main:w.yaml", "github/t/needs@main:w.yaml"`},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the inputs left out are %q, want %q", got, want)
+	}
+}
+
+// sameLocation is a treeSources whose workflows' locations leave out their
+// revisions, as a repository's file's do: github/t/m@one and github/t/m@two
+// are both at github/t/m:w.yaml.
+type sameLocation struct{ *treeSources }
+
+func (s sameLocation) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
+	w, err := s.treeSources.Resolve(ctx, ref)
+	if err == nil {
+		name, _, _ := strings.Cut(ref.Uses, "@")
+		w.Source.Location = name + ":" + ref.Path
+	}
+	return w, err
+}
+
+// Two revisions of one file, at one location, are two workflows: a step
+// of each, at the same place in each, is reported for itself, whether it
+// leaves out an input of the workflow it calls or calls one too deep.
+func TestCreateTellsRevisionsApart(t *testing.T) {
+	step := func(uses, with string) string {
+		return fmt.Sprintf("      - uses: %s\n        with: {$yaml: w.yaml%s}\n", uses, with)
+	}
+	s := &treeSources{texts: map[string]string{
+		"github/t/needs@main":  "on:\n  execute:\n    inputs:\n      name: {type: string}\njobs:\n  j:\n    steps:\n      - run: echo\n",
+		"github/t/needs2@main": "on:\n  execute:\n    inputs:\n      count: {type: number}\njobs:\n  j:\n    steps:\n      - run: echo\n",
+		"github/t/m@one":       "jobs:\n  j:\n    steps:\n" + step("github/t/needs@main", "") + step("github/t/m@two", ""),
+		"github/t/m@two":       "jobs:\n  j:\n    steps:\n" + step("github/t/needs2@main", ""),
+		"github/t/a@main":      "jobs:\n  j:\n    steps:\n" + step("github/t/m@one", "") + step("github/t/m@two", ""),
+	}}
+	got := func(root string, limits compile.CallLimits) []string {
+		t.Helper()
+		_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(root), nil, compile.Options{Sources: sameLocation{s}, Calls: limits})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, d := range diags.Errors() {
+			out = append(out, string(d.Code)+" "+d.Params["chain"].(string))
+		}
+		slices.Sort(out)
+		return out
+	}
+	m := `"workflow.yaml", "github/t/m:w.yaml"`
+	if g, want := got("jobs:\n  j:\n    steps:\n"+step("github/t/m@one", ""), compile.CallLimits{}), []string{
+		"child_input_missing " + m + `, "github/t/m:w.yaml", "github/t/needs2:w.yaml"`,
+		"child_input_missing " + m + `, "github/t/needs:w.yaml"`,
+	}; !slices.Equal(g, want) {
+		t.Errorf("the inputs left out are %q, want %q", g, want)
+	}
+	a := `"workflow.yaml", "github/t/a:w.yaml", "github/t/m:w.yaml"`
+	if g, want := got("jobs:\n  j:\n    steps:\n"+step("github/t/a@main", ""), compile.CallLimits{MaxDepth: 2}), []string{
+		"workflow_nested_too_deep " + a + `, "github/t/m@two"`,
+		"workflow_nested_too_deep " + a + `, "github/t/needs2@main"`,
+		"workflow_nested_too_deep " + a + `, "github/t/needs@main"`,
+	}; !slices.Equal(g, want) {
+		t.Errorf("the calls too deep are %q, want %q", g, want)
+	}
+}

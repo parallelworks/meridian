@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
-
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -17,6 +15,7 @@ import (
 // SQLite's secure_delete on, though a connection starts with it off, so
 // that what it deletes is overwritten with zeros.
 func TestSecureDelete(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	// No connection is kept idle, so each transaction runs on a
@@ -52,7 +51,8 @@ func TestSecureDelete(t *testing.T) {
 // are in neither the database's file nor its write-ahead log once the run
 // has ended, as the earlier generations of the record aren't.
 func TestRecordErased(t *testing.T) {
-	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	t.Parallel()
+	path := newPath(t)
 	s := openAt(t, path)
 	p := testPlan(t)
 	// Large enough for SQLite to keep on overflow pages of their own, which
@@ -132,7 +132,8 @@ func holding(t *testing.T, files []string, secret []byte) []string {
 // of the rows that hold one. An action whose digest was plain reads as
 // not keyed, and takes any request for its try as a repeat.
 func TestDigestsErased(t *testing.T) {
-	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	t.Parallel()
+	path := newPath(t)
 	files := []string{path, path + "-wal"}
 	s := openAt(t, path)
 	a := claimedAttempt(t, s, 'a')

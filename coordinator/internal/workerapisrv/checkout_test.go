@@ -37,6 +37,7 @@ func treeNames(t *testing.T, data []byte) []string {
 // answered success, nor for another request for the try, 400; and any
 // once the attempt is superseded is fenced.
 func TestCheckoutTree(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, credential := r.claimedAction(c)
@@ -108,6 +109,7 @@ func TestCheckoutTree(t *testing.T) {
 // after, so that the worker reads the request as one that failed, rather
 // than take what it had for the whole tree.
 func TestCheckoutTreeFails(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	_, credential := r.claimedAction(c)

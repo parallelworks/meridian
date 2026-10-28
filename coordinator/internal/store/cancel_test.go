@@ -14,6 +14,7 @@ import (
 // first control; that another job's attempts aren't told; and that a job
 // that has ended isn't marked.
 func TestCancelJob(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	n := func(job string) NewAttempt {

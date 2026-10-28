@@ -236,6 +236,7 @@ func (h *sshHost) release(t *testing.T) {
 // directory there, with the host's environment, and sends its log, and
 // completes; and meridian forgets the worker's placement there.
 func TestSSHRun(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
 	h.release(t)
@@ -389,6 +390,7 @@ func TestSSHChildOfLocalCaller(t *testing.T) {
 // path, through which the worker, which went on, sends what it held; and
 // the run ends with its step's log whole.
 func TestSSHOutage(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
 	running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow))
@@ -409,6 +411,7 @@ func TestSSHOutage(t *testing.T) {
 // the attempt on the host's member, and forwards it again, and the run
 // ends with its step's log whole.
 func TestSSHTakeover(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
 	no := false
@@ -436,6 +439,7 @@ func TestSSHTakeover(t *testing.T) {
 // Unix sockets: its workers couldn't reach the coordinator, so none is
 // placed, and the job fails, with ssh_forwarding_refused.
 func TestSSHForwardingRefused(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env, func(o *sshtest.Options) { o.NoForwarding = true })
 	h.release(t)
@@ -455,6 +459,7 @@ func TestSSHForwardingRefused(t *testing.T) {
 // sshtest's server, in a process under FIPS 140-only mode, can't offer
 // them.
 func TestSSHAlgorithmsUnapproved(t *testing.T) {
+	parallel(t)
 	if sshdtest.Path() == "" {
 		t.Skipf("%s names no sshd, which can offer what FIPS 140-only mode doesn't run", sshdtest.EnvSSHD)
 	}

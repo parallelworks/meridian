@@ -583,16 +583,23 @@
     ]
   },
   "checkout_repo_invalid": {
-    "why": "The coordinator fetches a parallelworks/checkout step's repo, as the run is created, with git and the credentials of whoever runs it, so Meridian takes only an https or ssh URL, or an scp-like one, as user@host:path, on any host, with no credential in it. Another transport, as a local path, file:// or ext::, would have the coordinator read its host's files, or run a command there; git:// and http:// have no TLS or SSH, so nothing fetched would be authenticated; and a user and a password, or a token, in the URL would put a secret in the plan, which everyone who can see the run reads.",
+    "why": "The coordinator fetches a parallelworks/checkout step's repo, as the run is created, with git and the credentials of whoever runs it, so Meridian takes only an https or ssh URL, or an scp-like one, as user@host:path, on any host, with no credential in it. Another transport, as a local path, file:// or ext::, would have the coordinator read its host's files, or run a command there; git:// and http:// have no TLS or SSH, so nothing fetched would be authenticated; and a user and a password, or a token, in the URL would put a secret in the plan, which everyone who can see the run reads. Over ssh, its host and its user must be names alone: git gives them to ssh, which puts them in the commands of the user's ssh config, as a ProxyCommand, that a shell runs. So OpenSSH 10.1 and later refuses a host or a user that holds a shell's special characters, and Meridian refuses the same, whichever ssh is installed.",
     "fix": [
       "Name the repository by an https:// or ssh:// URL, or as user@host:path.",
-      "Give git its credential through its own configuration, as a credential helper or an ssh key, rather than in the URL."
+      "Give git its credential through its own configuration, as a credential helper or an ssh key, rather than in the URL.",
+      "Write the host and the user as names alone, without characters such as $, `, ;, | or &."
     ]
   },
   "checkout_path_invalid": {
     "why": "Meridian reads each entry of a parallelworks/checkout step's sparse_checkout as a literal path from the repository's root, to a file or a directory, which a slash can end. One that is empty, starts with a slash, holds an empty name, . or .., holds a glob's *, ? or [, starts with !, which format 1 can read as a pattern, or holds a control character, isn't one.",
     "fix": [
       "Name each file or directory to check out by its path from the repository's root, with no pattern."
+    ]
+  },
+  "checkout_revision_invalid": {
+    "why": "A parallelworks/checkout step's branch names a branch, a tag or a full commit, which the Sources interface pins with git as the run is created. One that starts with a hyphen, which git could take for an option, or that ends with a dot, or that has a name in it that is empty, starts with a dot or ends in .lock, isn't a name git takes for a branch or a tag, so Meridian doesn't ask git for it.",
+    "fix": [
+      "Name a branch, a tag, or a commit by its full SHA."
     ]
   },
   "checkout_path_not_found": {
@@ -1015,9 +1022,10 @@
     ]
   },
   "uses_not_supported": {
-    "why": "A step that uses: an action, such as parallelworks/checkout, or a workflow runs it rather than a command. This version of Meridian's worker runs only steps with run:, so the step fails.",
+    "why": "A step that uses: an action the coordinator performs, such as parallelworks/checkout, or a workflow asks the coordinator for it through version 3 of the worker API, and what a checkout or a call of a workflow runs is pinned as its run is created. A worker given the step by a coordinator of an earlier version, which speaks an earlier version of the API, can't ask for it, and a checkout, or a call of a workflow, of a run an earlier version of Meridian created has no pin, so the step fails.",
     "fix": [
-      "Do the step's work with a run: command instead."
+      "Upgrade the coordinator to the worker's version of Meridian.",
+      "Run the workflow again, as a new run, rather than resume a run an earlier version of Meridian created."
     ]
   },
   "action_needs_platform": {
@@ -1797,6 +1805,13 @@
     "fix": [
       "Call fewer, or smaller, workflows.",
       "Or have whoever runs the workflow raise the limit."
+    ]
+  },
+  "child_input_missing": {
+    "why": "A step whose uses: names a workflow gives it its inputs in its with:. Meridian pins the whole tree as the run is created, and, as format 1 does, refuses a run any of whose calls leaves out an input that the called workflow requires: one with no default:, that isn't optional, hidden or ignored, nor a boolean. It checks what with: writes out; a value that an expression gives, and an input whose hidden:, ignore: or optional: is an expression, are checked as the child run is created. The message names the path of calls, from the run's own workflow.",
+    "fix": [
+      "Give the input a value in the with: of the step that calls the workflow.",
+      "Or, if the called workflow is yours, give the input a default: or make it optional: true."
     ]
   },
   "child_not_pinned": {

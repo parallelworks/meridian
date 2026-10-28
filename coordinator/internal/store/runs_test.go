@@ -26,6 +26,7 @@ func testState() *compile.StartState {
 // decoded from: a Start whose transaction rolled back, and the next whose
 // start state differs, has the next decoded.
 func TestStartStateKept(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	read := func() *compile.StartState {
@@ -70,6 +71,7 @@ func TestStartStateKept(t *testing.T) {
 // TestStartsForgotten checks that the store keeps maxStarts runs' start
 // states at most, forgetting the one it decoded first to keep another.
 func TestStartsForgotten(t *testing.T) {
+	t.Parallel()
 	raw, err := compile.EncodeStartState(testState())
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +103,7 @@ func TestStartsForgotten(t *testing.T) {
 // TestStatementsKept checks that a statement the store runs is prepared
 // once, and kept for the transactions after, read-only or not.
 func TestStatementsKept(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	kept := func() int {
@@ -126,6 +129,7 @@ func TestStatementsKept(t *testing.T) {
 }
 
 func TestRun(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	p := testPlan(t)
 	var before time.Time
@@ -196,6 +200,7 @@ func TestRun(t *testing.T) {
 // transaction rolled back gives its number back, and that a number
 // committed is never given again.
 func TestRunIDs(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	p := testPlan(t)
 	err := s.Tx(t.Context(), func(tx *Tx) error {
@@ -235,6 +240,7 @@ func TestRunIDs(t *testing.T) {
 }
 
 func TestRunLifecycle(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	warning := problems.UnknownKey.At("", problems.Position{}, "", problems.Params{"key": "x", "suggested": false, "suggestion": ""})
@@ -331,6 +337,7 @@ func TestRunLifecycle(t *testing.T) {
 // TestRecord checks that a run's secret record and its generation, which
 // the run's row keeps, change together, or neither does.
 func TestRecord(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	check := func(gen uint64, sealed string) {
@@ -413,6 +420,7 @@ func TestRecord(t *testing.T) {
 // TestMalformedRun checks that a run's start state and diagnostics are
 // read only as the store writes them.
 func TestMalformedRun(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	for _, set := range []string{
@@ -453,6 +461,7 @@ func TestMalformedRun(t *testing.T) {
 // record; JobRecords gives the parts of the jobs that have one; and the
 // run's end deletes them.
 func TestJobRecords(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	parts := func() map[string]JobRecord {

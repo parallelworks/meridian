@@ -493,19 +493,23 @@ func (c *client) control(ctx context.Context, version int64) (*workerapi.Control
 }
 
 // events reports events. It returns an *encodeError for events it can't
-// encode.
+// encode. It tries once: a request that fails for a while, as while the
+// coordinator is away, is a *temporaryError, and the queue tries again
+// with what it holds then (eventQueue.send).
 func (c *client) events(ctx context.Context, events []workerapi.Event) (workerapi.EventsAck, error) {
 	var ack workerapi.EventsAck
 	body, err := workerapi.MarshalAt(c.apiVersion, &workerapi.Events{Events: events})
 	if err != nil {
 		return ack, &encodeError{err}
 	}
-	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathEvents, body: body, timeout: requestTimeout}, &ack)
+	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathEvents, body: body, timeout: requestTimeout, once: true}, &ack)
 	return ack, err
 }
 
 // upload uploads data, a log's bytes from offset, ending the log if end is
-// set.
+// set. It tries once: a request that fails for a while, as while the
+// coordinator is away, is a *temporaryError, and the spool tries again
+// with what the log holds then (spool.send).
 func (c *client) upload(ctx context.Context, key logKey, offset int64, data []byte, end bool) (workerapi.LogAck, error) {
 	var ack workerapi.LogAck
 	q := url.Values{
@@ -519,7 +523,7 @@ func (c *client) upload(ctx context.Context, key logKey, offset int64, data []by
 	if end {
 		q.Set(workerapi.QueryEnd, "true")
 	}
-	err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathLogs, query: q, body: data, octets: true, timeout: requestTimeout}, &ack)
+	err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathLogs, query: q, body: data, octets: true, timeout: requestTimeout, once: true}, &ack)
 	return ack, err
 }
 

@@ -211,7 +211,7 @@ func TestChildClaims(t *testing.T) {
 		}) == nil && storedRun(t, c, root).StartState != nil
 	})
 	a := latestAttempt(t, c, root, "build")
-	id, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: a.ID, With: map[string]any{"$yaml": "w.yaml", "region": "east"}, Masked: []string{"s3cr", "t0k3n-0123"}})
+	id, _, err := askChild(t, c, a.ID, workerapi.ChildRequest{With: plan.DataOf(map[string]any{"$yaml": "w.yaml", "region": "east"}), Masked: []string{"s3cr", "t0k3n-0123"}})
 	if err != nil || id == "" {
 		t.Fatal(id, err)
 	}

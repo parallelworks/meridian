@@ -81,8 +81,8 @@ type Options struct {
 	Groups compile.Groups
 	// Sources reads, by its pin, a workflow a step calls whose text the
 	// store doesn't keep with its root, as of a root that a release kept
-	// none for (CreateChild). Nil means there are none: such a step's child
-	// isn't created (child_not_pinned).
+	// none for, as the step asks for its child. Nil means there are none:
+	// such a step's child isn't created (child_not_pinned).
 	Sources compile.Sources
 	// Trees gives the trees of the commits parallelworks/checkout steps
 	// were pinned to, which the coordinator serves their workers. Nil
@@ -211,7 +211,7 @@ type Coordinator struct {
 	// that stopped children woke while hopper ran them, as it has them
 	// woken again once it commits (wakeAgainAfter).
 	rewake func([]*waking)
-	// beforeChildStore, if it is set, is called as CreateChild stores a
+	// beforeChildStore, if it is set, is called as createChild stores a
 	// child, between its Create and its transaction, as when a test races
 	// two asks.
 	beforeChildStore func()

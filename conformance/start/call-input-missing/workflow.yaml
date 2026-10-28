@@ -1,0 +1,18 @@
+jobs:
+  prepare:
+    outputs:
+      cluster: ${{ steps.pick.outputs.cluster }}
+    steps:
+      - id: pick
+        run: echo "cluster=small" >> "$OUTPUTS"
+  main:
+    needs: [prepare]
+    steps:
+      - uses: github/conformance/inputs@main
+        with:
+          $yaml: called.yaml
+          size: 2
+      - uses: github/conformance/inputs@main
+        with:
+          $yaml: called.yaml
+          cluster: ${{ needs.prepare.outputs.cluster }}

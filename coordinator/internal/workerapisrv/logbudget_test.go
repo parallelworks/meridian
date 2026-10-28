@@ -9,6 +9,7 @@ import (
 // budgetIdle has passed since it last did, those no upload has spent from
 // for as long; it keeps the rest.
 func TestLogBudgetsLetGo(t *testing.T) {
+	t.Parallel()
 	var b logBudgets
 	idle, busy, ended := b.of("idle"), b.of("busy"), b.of("ended")
 	b.drop("ended")

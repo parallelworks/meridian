@@ -20,6 +20,7 @@ import (
 // directory is one its member chose, which a claim of version 2, of a job
 // that doesn't need them, isn't, though its run's directory is.
 func TestChildClaimNeeds(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	tree := &workerapi.Tree{JobID: "3", RootDir: "/runs/3", WorkflowName: "github.acme.tools", Masked: []string{"s3cr"}}
@@ -82,6 +83,7 @@ func TestChildClaimNeeds(t *testing.T) {
 // A poll for a child's end that another process ended, which no one tells
 // the server of, is answered once the server reads the store again.
 func TestChildEndRechecked(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{hold: 10 * time.Second, configure: func(s *workerapisrv.Server) {
 		workerapisrv.SetChildRecheck(s, 50*time.Millisecond)
 	}})

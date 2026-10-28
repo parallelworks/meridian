@@ -164,11 +164,22 @@ func (s *Server) Commands() []string {
 }
 
 // OpenSessions is how many sessions are open, of every connection's: those
-// the server accepted, and whose clients haven't closed them.
+// the server accepted, and whose clients haven't closed them. A session
+// counts from before its client hears that it is open, and until the
+// server's handling of it has seen it closed, which can be a moment after
+// the server reads the close: so after a client closes one session and
+// opens another, the count can be one too many for that moment.
 func (s *Server) OpenSessions() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.open
+}
+
+// addOpen adds n to the count of open sessions.
+func (s *Server) addOpen(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.open += n
 }
 
 // SetEnv makes the server run the exec requests it gets from now on with
@@ -306,19 +317,15 @@ func (s *Server) serve(c net.Conn) {
 				_ = nc.Reject(ssh.ResourceShortage, "sshtest: too many sessions")
 				continue
 			}
+			// Counted before Accept tells the client it is open.
+			s.addOpen(1)
 			ch, reqs, err := nc.Accept()
 			if err != nil {
+				s.addOpen(-1)
 				continue
 			}
-			s.mu.Lock()
-			s.open++
-			s.mu.Unlock()
 			wg.Go(func() {
-				defer func() {
-					s.mu.Lock()
-					s.open--
-					s.mu.Unlock()
-				}()
+				defer s.addOpen(-1)
 				s.session(ch, reqs)
 			})
 		case "direct-tcpip":

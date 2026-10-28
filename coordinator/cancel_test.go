@@ -268,9 +268,10 @@ func TestCancelOutlives(t *testing.T) {
 	if err := c.Cancel(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	// Its supervisor has looked at it since the stop. hopper's retry of a
-	// job tells no producer, so the woken supervisor runs at the next poll
-	// of its queue: the test waits for ten.
+	// Its supervisor has looked at it since the stop. The wake's retry
+	// tells the queue's producer as its transaction commits, so the
+	// supervisor runs again within milliseconds; ten polls' time leaves a
+	// loaded runner room.
 	c.wakeJob(t.Context(), id, "main")
 	time.Sleep(10 * testPollInterval) //nolint:forbidigo // nothing says the supervisor has looked
 	if ctl := controlOf(t, c, a.ID); ctl.Cancel {

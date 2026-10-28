@@ -76,6 +76,7 @@ func graceOf(t *testing.T, s *Store) time.Time {
 // time a transaction that writes read, and so never takes a lease another
 // renewed for older than it is. A View reads the mark, and leaves it.
 func TestClockMark(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	const step = 30 * time.Second
@@ -115,6 +116,7 @@ func TestClockMark(t *testing.T) {
 // times of the attempt's run and job come back too, but the run's
 // created_at, which never changes; and OnClockReset is called once.
 func TestClockReset(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	ahead := base.Add(365 * 24 * time.Hour)
@@ -190,6 +192,7 @@ func TestClockReset(t *testing.T) {
 // clock's mark, as a View does, and records nothing: neither the mark nor
 // a grace.
 func TestClockReadOnly(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	clockOf(t, openClock(t, path, func() time.Time { return base.Add(30 * time.Second) }), false)
@@ -233,6 +236,7 @@ func TestClockHost(t *testing.T) {
 // are those of the readied jobs that haven't ended of the runs that are
 // running.
 func TestReadiedJobs(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	readied := func() []hopper.JobID {

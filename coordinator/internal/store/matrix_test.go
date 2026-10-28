@@ -23,6 +23,7 @@ func insertInstances(tx *Tx, run string, indexes ...int) error {
 // TestInstances checks a matrix job's instances, its expansion, and the
 // instances' turns.
 func TestInstances(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	x := &plan.Expansion{Instances: []plan.Instance{{Key: "build#0", Index: 0}, {Key: "build#1", Index: 1}}, MaxParallel: 1}
@@ -82,6 +83,7 @@ func keysOf(jobs []*Job) []string {
 // cancel with the reason fail-fast, keeping what its control asked, and no
 // other job's.
 func TestMarkFailFast(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	n := func(job string) NewAttempt {
@@ -173,6 +175,7 @@ func TestMarkFailFast(t *testing.T) {
 // TestAny checks the jobs needed on any instance, and the instance chosen,
 // once.
 func TestAny(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
