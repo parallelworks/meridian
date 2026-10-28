@@ -195,8 +195,12 @@ func isolationProblem(m *backend.Member) *problem.Problem {
 // Probe says whether m can run a job that asks for demand: what it offers
 // is its Resources, or, for one it doesn't declare, the host's CPUs and
 // memory, and no GPU; and it starts the job now if what the live workers
-// it placed asked for leaves room. The local backend has no walltime of
-// its own: the member's limits are passed on.
+// it placed asked for leaves room, but those of the attempts demand says
+// are parked (backend.Demand.Parked), which wait for a child run that
+// needs the room. It starts a job that doesn't fit at once too, past what
+// the member offers: a member that would start one now ranks first. The
+// local backend has no walltime of its own: the member's limits are
+// passed on.
 func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
 	fit := backend.Fit{MaxWalltimeSeconds: m.MaxWalltimeSeconds, MarginSeconds: m.MarginSeconds, DefaultTimeoutSeconds: m.DefaultTimeoutSeconds}
 	if fit.Problem = unsupported(); fit.Problem == nil {
@@ -230,7 +234,7 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 		}
 	}
 	d.sweep()
-	used, err := d.used(ctx)
+	used, err := d.used(ctx, demand.Parked)
 	if err != nil {
 		return backend.Fit{}, err
 	}
@@ -244,10 +248,11 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 }
 
 // used returns what the live workers the driver placed asked for, together:
-// those live/ names. One that has ended, or whose placement is gone, it
-// takes out of live/, under the attempt's lock, which Place holds as it
+// those live/ names, but those of the attempts parked names, whose worker
+// waits for a child run. One that has ended, or whose placement is gone,
+// it takes out of live/, under the attempt's lock, which Place holds as it
 // places it again.
-func (d *Driver) used(ctx context.Context) (backend.Resources, error) {
+func (d *Driver) used(ctx context.Context, parked []string) (backend.Resources, error) {
 	var used backend.Resources
 	entries, err := os.ReadDir(filepath.Join(d.State, liveDir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -271,6 +276,9 @@ func (d *Driver) used(ctx context.Context) (backend.Resources, error) {
 			if err := d.unlive(ctx, attempt); err != nil {
 				return used, err
 			}
+			continue
+		}
+		if slices.Contains(parked, attempt) {
 			continue
 		}
 		used.MilliCPU += r.Resources.MilliCPU

@@ -246,11 +246,18 @@ func (r *rig) probe() backend.Fit {
 // test ends.
 func (r *rig) place(attempt string) backend.Placement {
 	r.t.Helper()
+	return r.placeAsking(attempt, backend.Resources{})
+}
+
+// placeAsking places an attempt that asks for res on the member, as place
+// does.
+func (r *rig) placeAsking(attempt string, res backend.Resources) backend.Placement {
+	r.t.Helper()
 	r.probe()
 	p, err := r.d.Place(ctx(r.t, time.Minute), r.m, backend.PlaceRequest{
 		Attempt: attempt, Run: "run1", Name: "meridian-run1-job",
 		Coordinator:    backend.Endpoint{Address: filepath.Join(r.home, "coordinator.sock")},
-		BootstrapToken: "token-" + attempt, TimeoutSeconds: 600,
+		BootstrapToken: "token-" + attempt, TimeoutSeconds: 600, Resources: res,
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -414,6 +421,28 @@ func TestPlace(t *testing.T) {
 	}
 	if _, ok, err := r.d.Find(t.Context(), r.m, "attempt-2"); ok || err != nil {
 		t.Errorf("Find of an attempt never placed gives %v, %v", ok, err)
+	}
+}
+
+// TestProbeParked checks that the attempts a Probe says are parked reach
+// the host's local backend, which leaves what they asked for out of what
+// its member runs: a member full only of a parked attempt starts a job
+// now.
+func TestProbeParked(t *testing.T) {
+	r := newRig(t)
+	r.m.Resources = backend.Resources{MilliCPU: 1000}
+	r.placeAsking("attempt-1", backend.Resources{MilliCPU: 1000})
+	for _, tc := range []struct {
+		parked []string
+		want   backend.Availability
+	}{
+		{nil, backend.HasCapacity},
+		{[]string{"attempt-1"}, backend.StartsNow},
+	} {
+		fit, err := r.d.Probe(ctx(t, time.Minute), r.m, backend.Demand{Resources: backend.Resources{MilliCPU: 1000}, Parked: tc.parked})
+		if err != nil || fit.Problem != nil || fit.Availability != tc.want {
+			t.Errorf("a CPU beside a placement of the one there is, parked %v: %+v, %v; want %v", tc.parked, fit, err, tc.want)
+		}
 	}
 }
 

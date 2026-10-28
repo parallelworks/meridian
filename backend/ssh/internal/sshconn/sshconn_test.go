@@ -290,8 +290,10 @@ func TestUnapproved(t *testing.T) {
 		offer    func(a *sshtest.Algorithms)
 		offered  string
 	}{
+		// OpenSSH's markers among its key exchanges, which aren't
+		// algorithms, aren't shown.
 		{"key-exchange", func(a *sshtest.Algorithms) {
-			a.KeyExchanges = []string{ssh.KeyExchangeCurve25519, "sntrup761x25519-sha512"}
+			a.KeyExchanges = []string{ssh.KeyExchangeCurve25519, "sntrup761x25519-sha512", "ext-info-s", "kex-strict-s-v00@openssh.com"}
 			a.Ciphers = []string{ssh.CipherChaCha20Poly1305}
 		}, "curve25519-sha256, sntrup761x25519-sha512"},
 		{"host-key", func(a *sshtest.Algorithms) { a.HostKeys = []string{ssh.KeyAlgoRSA} }, "ssh-rsa"},
