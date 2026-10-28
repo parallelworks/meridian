@@ -4116,10 +4116,14 @@ can serve any job. It closes the connection only when it gives the lease
 up: as it stops, or once no attempt has needed the member for five
 minutes, neither one that hasn't ended nor a placement, so that a
 long-lived coordinator doesn't keep one on every member it ever served,
-while a member between one job and the next keeps it. The next attempt
-on the member takes the lease again, which starts the store's grace
-again too ([Leases and fencing](#leases-and-fencing)). A host's pooled
-SSH connection isn't let go yet. A replica that takes the lease over,
+while a member between one job and the next keeps it, and so does a
+placement on it, however long it takes. The next attempt on the member
+takes the lease again, as idle: no worker of the member's can have waited
+for it, so it starts no grace, unless another process placed an attempt
+on the member meanwhile, and lapsed leases go on counting however often
+members come and go ([Leases and fencing](#leases-and-fencing)). Taking a
+lease at a start or a takeover still starts one. A host's pooled SSH
+connection isn't let go yet. A replica that takes the lease over,
 once its holder has stopped renewing it, sets the connection up again at
 the same address, so the
 member's running workers reconnect to it. Locally, the socket is held

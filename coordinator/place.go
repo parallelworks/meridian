@@ -283,7 +283,8 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *sto
 	if err != nil {
 		return 0, err
 	}
-	endpoint, err := c.connect(ctx, chosen.driver, chosen.member)
+	endpoint, placed, err := c.connect(ctx, chosen.driver, chosen.member)
+	defer placed()
 	var key string
 	if err == nil {
 		key, err = memberKey(chosen.driver, chosen.member)
@@ -397,10 +398,14 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	}
 	if found {
 		// Its workers reach the coordinator as a new one's would.
-		var key string
-		if _, err = c.connect(ctx, cand.driver, m); err == nil {
+		var (
+			key    string
+			placed func()
+		)
+		if _, placed, err = c.connect(ctx, cand.driver, m); err == nil {
 			key, err = memberKey(cand.driver, m)
 		}
+		defer placed()
 		if prob, ok := errors.AsType[*problem.Problem](err); ok {
 			return 0, c.attemptSetupFailed(ctx, a.ID, prob)
 		}
@@ -964,8 +969,10 @@ type connection struct {
 //
 // A Forwarder's member's workers reach the coordinator through a listener
 // on the member, which ServeMembers holds (forward), and Connect isn't
-// called.
-func (c *Coordinator) connect(ctx context.Context, d backend.Driver, m *backend.Member) (backend.Endpoint, error) {
+// called. The placement that asks calls placed once it is recorded, or
+// has failed, whatever connect returns, so that the member's listener
+// isn't let go meanwhile.
+func (c *Coordinator) connect(ctx context.Context, d backend.Driver, m *backend.Member) (_ backend.Endpoint, placed func(), _ error) {
 	if fw, ok := d.(backend.Forwarder); ok {
 		return c.forward(ctx, fw, m)
 	}
@@ -973,14 +980,14 @@ func (c *Coordinator) connect(ctx context.Context, d backend.Driver, m *backend.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if conn, ok := c.connections[key]; ok {
-		return conn.endpoint, nil
+		return conn.endpoint, func() {}, nil
 	}
 	endpoint, closer, err := d.Connect(ctx, m, c.opts.Endpoint)
 	if err != nil {
-		return backend.Endpoint{}, err
+		return backend.Endpoint{}, func() {}, err
 	}
 	c.connections[key] = connection{endpoint: endpoint, closer: closer}
-	return endpoint, nil
+	return endpoint, func() {}, nil
 }
 
 // memberKey returns the key of m, d's member, where d is a Forwarder,

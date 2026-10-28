@@ -111,6 +111,59 @@ func TestHoldEndpoint(t *testing.T) {
 	}
 }
 
+// TestHoldIdleEndpoint checks that an endpoint taken again as idle, as a
+// member's whose listener its process let go of with no attempt on it,
+// starts no grace, which leaves the store's as it was; but one with an
+// attempt on its member that hasn't ended, as another process placed
+// meanwhile, starts one, as HoldEndpoint does.
+func TestHoldIdleEndpoint(t *testing.T) {
+	t.Parallel()
+	skipWithoutFileLocks(t)
+	s := open(t)
+	const key = "ssh-0123abcd"
+	graceFrom := func() time.Time {
+		var from time.Time
+		inTx(t, s, func(tx *Tx) error {
+			var err error
+			from, err = tx.GraceFrom()
+			return err
+		})
+		return from
+	}
+	before := graceFrom()
+	h, err := s.HoldIdleEndpoint(t.Context(), key, "pid 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := h.Endpoint(); e.TakenAt.IsZero() || e.GraceFrom.UnixMicro() != 0 || !graceFrom().Equal(before) {
+		t.Errorf("an idle endpoint taken again is %+v, and the store's grace is from %v, was %v", e, graceFrom(), before)
+	}
+	if err := h.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	id := createRun(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		a, _, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		if err != nil {
+			return err
+		}
+		p := testPlacement
+		p.MemberKey = key
+		return tx.RecordPlacement(a.ID, p)
+	})
+	h, err = s.HoldIdleEndpoint(t.Context(), key, "pid 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := h.Endpoint(); !e.GraceFrom.Equal(e.TakenAt) || !graceFrom().Equal(e.TakenAt) {
+		t.Errorf("an endpoint whose member has an attempt that hasn't ended is %+v, and the store's grace is from %v", e, graceFrom())
+	}
+	if err := h.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestHoldDropped checks that a Hold dropped without Release keeps the
 // endpoint, though nothing but the store reaches it, until the store is
 // closed: the garbage collector would otherwise close its lock's file.

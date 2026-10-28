@@ -192,8 +192,37 @@ func TestServeMembersLetsGo(t *testing.T) {
 		return held
 	}
 
+	graceFrom := func() time.Time {
+		var from time.Time
+		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			from, err = tx.GraceFrom()
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return from
+	}
+	endpoint := func() store.Endpoint {
+		var e *store.Endpoint
+		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			e, err = tx.Endpoint(key)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return *e
+	}
+
 	a := place()
 	waitFor(t, func() bool { return d.forwards.Load() == 1 && held() })
+	// The member's lease, taken for the first time, starts a grace, in
+	// which its workers' leases, which could have lapsed while no process
+	// held it, don't count.
+	if e := endpoint(); !e.GraceFrom.Equal(e.TakenAt) || !graceFrom().Equal(e.TakenAt) {
+		t.Errorf("the lease taken first is %+v, and the store's grace is from %v", e, graceFrom())
+	}
 	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
 		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndLost, Outcome: plan.OutcomeFailure, Reason: plan.ReasonWorkerLost})
 	}); err != nil {
@@ -212,8 +241,18 @@ func TestServeMembersLetsGo(t *testing.T) {
 
 	// A placement on the member holds it again, and an attempt that
 	// hasn't ended keeps it however long.
+	graceBefore := graceFrom()
 	b := place()
 	waitFor(t, func() bool { return d.forwards.Load() == 2 && held() })
+	// It takes the lease again as idle, starting no grace, so that the
+	// leases of the store's other attempts, on any member, lapse as they
+	// would, however often members come and go.
+	if e := endpoint(); e.GraceFrom.UnixMicro() != 0 || !graceFrom().Equal(graceBefore) {
+		t.Errorf("the lease taken again is %+v, and the store's grace is from %v, was %v", e, graceFrom(), graceBefore)
+	}
+	if _, graceEnds, err := c.leaseClock(t.Context()); err != nil || graceEnds.After(time.Now()) {
+		t.Errorf("the lease taken again keeps lapsed leases from counting until %v, %v", graceEnds, err)
+	}
 	later := time.Now().Add(10 * forwardIdle)
 	if err := c.forwardAll(ctx, l, later); err != nil || !c.holding(key) || d.closed.Load() != 1 {
 		t.Fatalf("an attempt that hasn't ended let its member go: held %t, with %d closed, %v", c.holding(key), d.closed.Load(), err)
@@ -229,12 +268,28 @@ func TestServeMembersLetsGo(t *testing.T) {
 		t.Fatalf("within forwardIdle of the last look that found the attempt, held %t, with %d closed, %v", c.holding(key), d.closed.Load(), err)
 	}
 
+	// A placement on the member keeps it however long the placement
+	// takes, which records the attempt's member only as it ends; and
+	// once it has ended, it is let go as before.
+	m := backend.Member{Name: "m1", Backend: testBackend}
+	_, placed := c.hold(d, &m, key, true)
+	if err := c.forwardAll(ctx, l, later.Add(10*forwardIdle)); err != nil || !c.holding(key) || d.closed.Load() != 1 {
+		t.Fatalf("a placement that took long lost its member's listener: held %t, with %d closed, %v", c.holding(key), d.closed.Load(), err)
+	}
+	placed()
+	if err := c.forwardAll(ctx, l, later.Add(11*forwardIdle)); err != nil || c.holding(key) {
+		t.Fatalf("forwardIdle after the placement ended, the listener is still held: %t, %v", c.holding(key), err)
+	}
+	waitFor(t, func() bool { return d.closed.Load() == 2 && !held() })
+
 	// As ServeMembers stops, it lets go of every listener.
+	place()
+	waitFor(t, func() bool { return d.forwards.Load() == 3 && held() })
 	stop()
 	if err := <-served; err != nil {
 		t.Fatal(err)
 	}
-	if n := d.closed.Load(); n != 2 || held() || d.forwards.Load() != 2 {
+	if n := d.closed.Load(); n != 3 || held() || d.forwards.Load() != 3 {
 		t.Errorf("once ServeMembers stopped, %d of %d listeners are closed, and the lease is held: %t", n, d.forwards.Load(), held())
 	}
 }
