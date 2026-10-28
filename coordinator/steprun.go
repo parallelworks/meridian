@@ -325,7 +325,11 @@ func (c *Coordinator) readyStepRun(ctx context.Context, run *store.Run, early bo
 	if err != nil || r.result == nil || r.result.Job == nil {
 		return r, err
 	}
-	if r.result.Job, err = c.stepRunJob(ctx, run, r.result.Job); err != nil {
+	rec, err := c.openRecord(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	if r.result.Job, err = stepRunJob(run, rec, r.result.Job); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -343,16 +347,12 @@ func (c *Coordinator) callerOf(ctx context.Context, run *store.Run) (*store.Run,
 }
 
 // stepRunJob returns rj, the job of the step run run as its caller's
-// readies, as the step run runs it: where its secret record says the
+// readies, as the step run runs it: where rec, its secret record, says the
 // step's ssh: put the try, on the host it names, or, for one that names
 // none, where the job would run without its ssh:, which for a job on a
 // host is the run's default group; and private where evaluating the ssh:
 // read a variable or a password.
-func (c *Coordinator) stepRunJob(ctx context.Context, run *store.Run, rj *plan.ReadyJob) (*plan.ReadyJob, error) {
-	rec, err := c.openRecord(ctx, run.ID)
-	if err != nil {
-		return nil, err
-	}
+func stepRunJob(run *store.Run, rec *plan.Record, rj *plan.ReadyJob) (*plan.ReadyJob, error) {
 	sr := rec.StepRun
 	if sr == nil {
 		return nil, fmt.Errorf("%w: step run %s's secret record says nothing of its step", plan.ErrMalformed, run.ID)

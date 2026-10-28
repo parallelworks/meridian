@@ -92,13 +92,18 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	var stepRun *workerapi.StepRunClaim
 	reads := pj
 	if run.StepRun {
-		if res.Job, err = c.stepRunJob(ctx, run, res.Job); err != nil {
+		// Its job, its claim and its tree are in its own record, rather than
+		// the caller's it was readied from.
+		if rec, err = c.openRecord(ctx, run.ID); err != nil {
+			return nil, err
+		}
+		if res.Job, err = stepRunJob(run, rec, res.Job); err != nil {
 			return nil, err
 		}
 		// Its attempt runs the one step, with its caller's job's state, and
 		// reads of the run's values and the needs' results only what that
 		// step and the job's env: read, never what another step does.
-		if stepRun, res.Job, err = c.stepRunClaim(ctx, run, res.Job); err != nil {
+		if stepRun, res.Job, err = stepRunClaim(run, rec, res.Job); err != nil {
 			return nil, err
 		}
 		trimmed := *pj
@@ -113,13 +118,8 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	if err != nil {
 		return nil, err
 	}
-	// A step run's tree is in its own record; any other run's in the
-	// record its job was readied from, which readyInputOf opened.
-	if run.StepRun {
-		if rec, err = c.openRecord(ctx, run.ID); err != nil {
-			return nil, err
-		}
-	}
+	// rec is the run's own record: a step run's, opened above, or any
+	// other run's, which its job was readied from (readyInputOf).
 	tree := r.tree(run, root, dirs.root, p, rec)
 	return &workerapisrv.Ready{
 		Job: res.Job, Run: reads.Reads(in.Run), Needs: reads.ReadsNeeds(in.Needs), Tree: tree, StepRun: stepRun,
