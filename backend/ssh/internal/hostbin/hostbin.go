@@ -6,9 +6,9 @@
 //
 // It talks to the host through scripts that sh runs there
 // (sshconn.Conn.Script). What a script says is a line of JSON of its own
-// (said), which a login script's own output, as a message of the day,
-// can't be taken for, with each value in hex, so that a path, whatever it
-// holds, passes whole.
+// (said), after the nonce the script prints first, so that nothing a login
+// script prints, as a message of the day, is taken for it, with each
+// value in hex, so that a path, whatever it holds, passes whole.
 package hostbin
 
 import (

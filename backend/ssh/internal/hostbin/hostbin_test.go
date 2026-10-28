@@ -223,15 +223,20 @@ func TestInstall(t *testing.T) {
 }
 
 // readAheadSh writes a sh that reads its script as dash's and BusyBox's
-// do, ahead of the command it runs, and returns its path: once what is
-// written to it promptly has come, it takes what there is of its standard
-// input, up to 64 KiB, with one read, and runs its first line, the
+// do, ahead of the command it runs, and returns its path: after login, a
+// line a login script prints before sh runs, if it isn't "", and once what
+// is written to it promptly has come, it takes what there is of its
+// standard input, up to 64 KiB, with one read, and runs all of it as
 // script, with the system's sh, whose commands read only what comes after.
-func readAheadSh(t *testing.T) string {
+func readAheadSh(t *testing.T, login string) string {
 	t.Helper()
 	dir := t.TempDir()
 	sh := filepath.Join(dir, "sh")
-	write(t, sh, []byte("#!/bin/sh\nsleep 0.2\nb="+dir+"/$$\ndd bs=65536 count=1 of=\"$b\" 2>/dev/null\nhead -n 1 \"$b\" > \"$b.sh\"\nexec /bin/sh \"$b.sh\"\n"))
+	printed := ""
+	if login != "" {
+		printed = "printf '%s\\n' '" + login + "'\n"
+	}
+	write(t, sh, []byte("#!/bin/sh\n"+printed+"sleep 0.2\nb="+dir+"/$$\ndd bs=65536 count=1 of=\"$b\" 2>/dev/null\nexec /bin/sh \"$b\"\n"))
 	if err := os.Chmod(sh, 0o700); err != nil { //nolint:gosec // a test's sh, which runs
 		t.Fatal(err)
 	}
@@ -243,12 +248,32 @@ func readAheadSh(t *testing.T) string {
 // that it is ready for it, and not with the script, which such a sh would
 // take as more of it.
 func TestInstallReadAhead(t *testing.T) {
-	r := newRigWith(t, sshtest.Options{Sh: readAheadSh(t)})
+	r := newRigWith(t, sshtest.Options{Sh: readAheadSh(t, "")})
 	got, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(got.Path); err != nil || string(data) != "a meridian binary\n" {
+		t.Errorf("the host has %q, %v", data, err)
+	}
+}
+
+// TestInstallLoginReady checks that a login script that prints what the
+// copy's script says once it is ready for the binary isn't taken for it,
+// on a host whose sh reads ahead: were the binary copied then, that sh
+// would run it as script.
+func TestInstallLoginReady(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	r := newRigWith(t, sshtest.Options{Sh: readAheadSh(t, `{"said":"ready"}`)})
+	content := "touch " + marker + "\n"
+	got, _, err := Install(t.Context(), r.conn, "farm", binary(t, content, ""))
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the binary ran as script")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(got.Path); err != nil || string(data) != content {
 		t.Errorf("the host has %q, %v", data, err)
 	}
 }

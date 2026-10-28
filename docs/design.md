@@ -4371,8 +4371,9 @@ local backend there through `meridian host`
 - **What runs there.** Every command Meridian runs on a host is
   `/bin/sh -s`, which any login shell, csh's among them, passes to `sh`
   as it is, with its script on its standard input, values in it quoted
-  for `sh`. What a script says is a line of JSON, which what a login
-  script prints can't be taken for, and what it reads after its script,
+  for `sh`. What a script says is a line of JSON, after a random nonce
+  the script prints first, so that nothing a login script prints is
+  taken for it, and what it reads after its script,
   as the binary being copied, or `meridian host`'s request, is sent once
   it has said it is ready for it: a `sh`, as dash's and BusyBox's, can
   read ahead of the command it runs.

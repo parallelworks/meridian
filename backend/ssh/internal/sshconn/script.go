@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
@@ -30,6 +31,10 @@ type Script struct {
 	out    *bufio.Reader
 	stderr limitedBuffer
 	stop   func() bool
+	// nonce is what the script prints first, and started is set once
+	// Next has read it.
+	nonce   string
+	started bool
 
 	// written is the error of writing the script, which Wait returns
 	// where sh's end doesn't say why.
@@ -52,15 +57,16 @@ type Script struct {
 // read ahead of the command it runs, and would run what it read as
 // script. CloseWrite ends it.
 //
-// What a login script prints before the script runs is told from what the
-// script says by Next. The session is closed once ctx is done, or by
-// Close.
+// The script prints first a nonce of its own, a random word that nothing
+// else knows, and Next reads only what follows it: nothing a login script
+// prints before sh runs, by accident or by design, is taken for what the
+// script says. The session is closed once ctx is done, or by Close.
 func (c *Conn) Script(ctx context.Context, script string) (*Script, error) {
 	s, err := c.newSession(ctx)
 	if err != nil {
 		return nil, err
 	}
-	sc := &Script{ctx: ctx, s: s, stderr: limitedBuffer{max: maxSaid}}
+	sc := &Script{ctx: ctx, s: s, stderr: limitedBuffer{max: maxSaid}, nonce: rand.Text()}
 	stdin, err := s.StdinPipe()
 	if err != nil {
 		_ = s.Close()
@@ -79,7 +85,7 @@ func (c *Conn) Script(ctx context.Context, script string) (*Script, error) {
 	sc.stop = context.AfterFunc(ctx, func() { _ = s.Close() })
 	// One that can't be written has ended, which reading what it said,
 	// and Wait, find.
-	_, sc.written = io.WriteString(stdin, script+"\n")
+	_, sc.written = io.WriteString(stdin, "printf '%s\\n' "+sc.nonce+"; "+script+"\n")
 	return sc, nil
 }
 
@@ -136,14 +142,19 @@ func (sc *Script) Close() error {
 }
 
 // Next returns the next of what the script says that ours takes: a line
-// of its output that is a JSON object, which decodes as a T. A line that
-// isn't, as a login script's, is skipped, as is one ours doesn't take. It
-// is io.EOF once the script's output has ended.
+// of its output after its nonce that is a JSON object, which decodes as a
+// T. Any line before the nonce, as a login script's, is skipped, and so is
+// one after it that isn't such an object, or that ours doesn't take. It is
+// io.EOF once the script's output has ended.
 func Next[T any](sc *Script, ours func(*T) bool) (*T, error) {
 	for {
 		line, err := readLine(sc.out)
 		if err != nil {
 			return nil, err
+		}
+		if !sc.started {
+			sc.started = string(line) == sc.nonce
+			continue
 		}
 		if !bytes.HasPrefix(line, []byte("{")) {
 			continue
