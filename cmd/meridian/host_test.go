@@ -664,11 +664,48 @@ func waitReport(t *testing.T, path string) hostStubReport {
 	return r
 }
 
+// hostPlacements returns the directory of the host's placements, which
+// meridian host's local backend keeps in its state directory.
+func hostPlacements(env map[string]string) string {
+	return filepath.Join(env[local.EnvStateDir], "hosts", testHostKey, "placements")
+}
+
+// reaped waits until the worker of the attempt, which meridian host place
+// started in the test's own process (hostDo), has been reaped by that
+// process, its parent, which records its exit status beside its
+// placement as it does. meridian host cancel returns once the worker has
+// ended, which can be before that, and forget, a call of its own, can't
+// wait for it: a status written once the test has ended, or forgotten
+// its placement, is in the way of the test's cleanup.
+func reaped(t *testing.T, env map[string]string, attempt string) {
+	t.Helper()
+	exit := filepath.Join(hostPlacements(env), attempt+".exit")
+	waitUntil(t, "the worker of "+attempt+" to be reaped", func() bool {
+		_, err := os.Stat(exit)
+		return err == nil
+	})
+}
+
+// withdraw cancels the worker of the placement p, as the coordinator does,
+// waits for the test's process to have reaped it (reaped), and forgets it.
+func withdraw(t *testing.T, env map[string]string, sys *hostSystem, p *backend.Placement) {
+	t.Helper()
+	if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: p}); code != exitOK || m.Problem != nil || m.Error != "" {
+		t.Fatalf("meridian host cancel of %s = %+v, %d", p.Attempt, m, code)
+	}
+	reaped(t, env, p.Attempt)
+	if m, code := hostDo(t, env, sys, hostproto.OpForget, hostproto.Request{Member: onHost, Placement: p}); code != exitOK || m.Problem != nil || m.Error != "" {
+		t.Errorf("meridian host forget of %s = %+v, %d", p.Attempt, m, code)
+	}
+}
+
 // TestHostPlace checks meridian host's operations on a worker: probe; place,
 // which starts the worker detached with the process's environment but
 // GODEBUG, hands it its token on the socket it inherits before it returns,
 // and returns the run's directory it chose under the user's home; find;
-// check; cancel, which withdraws it; and forget, which forgets it.
+// check; cancel, which withdraws it; and forget, which forgets it. Every
+// worker it places it withdraws, and forgets, before it ends, so that
+// nothing writes in its state directory as the test's cleanup removes it.
 func TestHostPlace(t *testing.T) {
 	env, sys := runEnv(t), testHost(t)
 	report := filepath.Join(t.TempDir(), "report.json")
@@ -713,6 +750,7 @@ func TestHostPlace(t *testing.T) {
 	if m, _ := hostDo(t, env, sys, hostproto.OpCheck, hostproto.Request{Member: onHost, Placement: &p}); m.Status == nil || m.Status.Status() != (backend.Status{State: backend.Dead, End: backend.EndWithdrawn}) {
 		t.Errorf("meridian host check of a worker cancelled = %+v", m)
 	}
+	reaped(t, env, p.Attempt)
 	if m, code := hostDo(t, env, sys, hostproto.OpForget, hostproto.Request{Member: onHost, Placement: &p}); code != exitOK || m.Problem != nil || m.Error != "" {
 		t.Errorf("meridian host forget = %+v, %d", m, code)
 	}
@@ -733,9 +771,7 @@ func TestHostPlace(t *testing.T) {
 	if info, err := os.Stat(rootDir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		t.Errorf("the root's directory: %v, %v", info, err)
 	}
-	if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: m.Placement}); code != exitOK || m.Problem != nil || m.Error != "" {
-		t.Errorf("meridian host cancel of a child = %+v, %d", m, code)
-	}
+	withdraw(t, env, sys, m.Placement)
 	for _, rootPath := range [][2]string{{"9", "../x"}, {"9", "/abs"}, {"9", ""}, {"", "x"}} {
 		bad := child
 		bad.Attempt, bad.Root, bad.Path = "run3-main-1", rootPath[0], rootPath[1]
@@ -770,14 +806,21 @@ func TestHostPlace(t *testing.T) {
 		if root == "8" {
 			if code != exitOK || m.Placement == nil || m.RunDir != filepath.Join(runs, "8-abc", "subworkflows", "build", "step_0") {
 				t.Errorf("meridian host place of a child whose root's directory others may read = %+v, %d", m, code)
-			} else if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: m.Placement}); code != exitOK || m.Problem != nil || m.Error != "" {
-				t.Errorf("meridian host cancel of a child = %+v, %d", m, code)
+			} else {
+				withdraw(t, env, sys, m.Placement)
 			}
 			continue
 		}
 		if code != exitError || m.Problem == nil || m.Problem.Code != problems.SSHHostDirUnusable.Code() || m.Placement != nil {
 			t.Errorf("meridian host place of a child whose root's directory is case %d = %+v, %d", i, m, code)
 		}
+	}
+	if left, err := os.ReadDir(hostPlacements(env)); err != nil || len(left) > 0 {
+		names := make([]string, 0, len(left))
+		for _, e := range left {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the host keeps %q of its placements, %v", names, err)
 	}
 }
 
