@@ -2,8 +2,6 @@ package coordinator
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"maps"
 	"slices"
@@ -22,35 +20,11 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
-// childSources gives the workflows a test's steps call, by their uses:, at
-// a commit, with a remote context of their own; and reads one again by its
-// pin.
-type childSources map[string]string
-
-func (s childSources) workflow(ref plan.SourceRef) (*compile.Workflow, error) {
-	text, ok := s[ref.Uses]
-	if !ok {
-		return nil, compile.ErrNotFound
-	}
-	sum := sha256.Sum256([]byte(text))
-	return &compile.Workflow{
-		Source: plan.Source{Location: ref.Uses + ":" + ref.Path, Revision: "0123456789abcdef0123456789abcdef01234567", Digest: "sha256:" + hex.EncodeToString(sum[:])},
-		Text:   []byte(text),
-		Remote: map[string]string{"repo": "https://example.com/" + ref.Uses, "yaml": ref.Path},
-	}, nil
-}
-
-func (s childSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
-	return s.workflow(ref)
-}
-
-func (s childSources) Read(_ context.Context, source plan.Source) (*compile.Workflow, error) {
-	return s.workflow(source.Ref)
-}
-
-// Pin pins every checkout to childCommit.
-func (s childSources) Pin(context.Context, string, string) (string, error) {
-	return childCommit, nil
+// childSources give the workflows a test's steps call, by their uses:, at
+// a commit, with a remote context of their own, and read one again by its
+// pin; and pin every checkout to childCommit.
+func childSources(texts map[string]string) *conformancetest.MapSources {
+	return &conformancetest.MapSources{Texts: texts, Remote: true, Commit: childCommit}
 }
 
 // childCommit is the commit childSources pins every checkout to.
@@ -73,7 +47,7 @@ func (v *closingVariables) Read(ctx context.Context, names []string, secrets boo
 // treeSources are the workflows of a tree: a child that reads a variable
 // its root doesn't, in its env: and its step, calls a grandchild, and
 // checks out a repository.
-var treeSources = childSources{
+var treeSources = childSources(map[string]string{
 	"github/t/child@main": `on:
   execute:
     inputs:
@@ -90,7 +64,7 @@ jobs:
         with: {repo: https://example.com/app.git, branch: main}
 `,
 	"github/t/grand@main": "jobs:\n  g:\n    steps:\n      - run: echo grand\n",
-}
+})
 
 // treeRoot is the root of the tree: its job build's first step calls the
 // child, tried again 20 times at most; and its third does too, and

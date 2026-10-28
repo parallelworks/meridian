@@ -1,19 +1,14 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/internal/conformancetest"
-	"github.com/parallelworks/meridian/plan"
 )
 
 // callsCase is the conformance suite's runs/calls case, whose step calls a
@@ -140,35 +135,6 @@ $`).MatchString(r.stdout) {
 	}
 }
 
-// waitSources gives the workflow a test's step calls, github/t/wait, as
-// git would, but from memory: one whose step waits until a file is there.
-type waitSources map[string]string
-
-func (s waitSources) workflow(ref plan.SourceRef) (*compile.Workflow, error) {
-	text, ok := s[ref.Uses]
-	if !ok {
-		return nil, compile.ErrNotFound
-	}
-	sum := sha256.Sum256([]byte(text))
-	digest := "sha256:" + hex.EncodeToString(sum[:])
-	return &compile.Workflow{
-		Source: plan.Source{Location: ref.Uses, Revision: digest, Digest: digest, Ref: ref},
-		Text:   []byte(text),
-	}, nil
-}
-
-func (s waitSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
-	return s.workflow(ref)
-}
-
-func (s waitSources) Read(_ context.Context, source plan.Source) (*compile.Workflow, error) {
-	return s.workflow(source.Ref)
-}
-
-func (waitSources) Pin(context.Context, string, string) (string, error) {
-	return "", compile.ErrNotFound
-}
-
 // TestCancelTree checks that meridian cancel of a run stops the runs its
 // steps called that run, as their steps stop: each ends cancelled, before
 // the run does, as meridian run shows them.
@@ -176,13 +142,15 @@ func TestCancelTree(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
 	file := writeFile(t, "never", "")
-	sources := waitSources{"github/t/wait": fmt.Sprintf(`jobs:
+	// The workflow its step calls, github/t/wait, as git would give it, but
+	// from memory: one whose step waits until a file is gone.
+	sources := &conformancetest.MapSources{Texts: map[string]string{"github/t/wait": fmt.Sprintf(`jobs:
   wait:
     steps:
       - run: |
           echo waiting
           while [ -e %s ]; do sleep 0.05; done
-`, quoted(t, file))}
+`, quoted(t, file))}}
 	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    steps:\n      - uses: github/t/wait\n        with: {$yaml: w.yaml}\n")
 	running := startCommand(t, env, func(c *cli) { c.sources = sources }, "run", workflow)
 	waitUntil(t, "the child's step to start", func() bool {

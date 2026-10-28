@@ -2,9 +2,6 @@ package compile_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,41 +11,17 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/schematest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
-// treeSources gives each workflow it has by its uses:, at a location of
-// the uses: and its $yaml, pinned to a commit, and records what it was
-// asked for.
-type treeSources struct {
-	texts map[string]string
-	asked []plan.SourceRef
-	// pinned are the repositories and revisions it was asked to pin, as
-	// repo@revision, each pinned to a commit of its own.
-	pinned []string
-}
-
-func (s *treeSources) Pin(_ context.Context, repo, revision string) (string, error) {
-	s.pinned = append(s.pinned, repo+"@"+revision)
-	return "89abcdef0123456789abcdef0123456789abcdef", nil
-}
-
-func (s *treeSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
-	s.asked = append(s.asked, ref)
-	text, ok := s.texts[ref.Uses]
-	if !ok {
-		return nil, compile.ErrNotFound
-	}
-	return &compile.Workflow{
-		Source: plan.Source{Location: ref.Uses + ":" + ref.Path, Revision: "0123456789abcdef0123456789abcdef01234567"},
-		Text:   []byte(text),
-	}, nil
-}
-
-func (s *treeSources) Read(context.Context, plan.Source) (*compile.Workflow, error) {
-	return nil, errors.New("not read as the run is created")
+// treeSources are Sources of the workflows texts holds, by their uses:,
+// which pin every checkout to a commit of their own, and which Create
+// never reads.
+func treeSources(texts map[string]string) *conformancetest.MapSources {
+	return &conformancetest.MapSources{Texts: texts, Commit: "89abcdef0123456789abcdef0123456789abcdef", ResolveOnly: true}
 }
 
 // calling is a workflow whose job's steps call the workflows uses names,
@@ -63,20 +36,20 @@ func calling(names ...string) string {
 	return b.String()
 }
 
-// tree is a treeSources of the workflows calls names, each calling the
+// tree is treeSources of the workflows calls names, each calling the
 // workflows it lists.
-func tree(calls map[string][]string) *treeSources {
-	s := &treeSources{texts: map[string]string{}}
+func tree(calls map[string][]string) *conformancetest.MapSources {
+	s := treeSources(map[string]string{})
 	for name, callees := range calls {
-		s.texts["github/t/"+name+"@main"] = calling(callees...)
+		s.Texts["github/t/"+name+"@main"] = calling(callees...)
 	}
 	return s
 }
 
-// digestOf is the digest of a workflow's text, as a plan's Source has it.
-func digestOf(s *treeSources, name string) string {
-	sum := sha256.Sum256([]byte(s.texts["github/t/"+name+"@main"]))
-	return "sha256:" + hex.EncodeToString(sum[:])
+// digestOf is the digest of the workflow github/t/<name>@main's text, as
+// a plan's Source has it.
+func digestOf(s *conformancetest.MapSources, name string) string {
+	return s.Digest("github/t/" + name + "@main")
 }
 
 // Create pins the whole tree of workflows the run calls: each reference
@@ -92,7 +65,7 @@ func TestCreatePinsTheTree(t *testing.T) {
 		t.Fatal(diags, err)
 	}
 	var asked []string
-	for _, r := range s.asked {
+	for _, r := range s.Asked() {
 		asked = append(asked, r.Uses)
 	}
 	if want := []string{"github/t/a@main", "github/t/c@main", "github/t/b@main"}; !slices.Equal(asked, want) {
@@ -139,7 +112,7 @@ func TestCreatePinsTheTree(t *testing.T) {
 	// keep.
 	byDigest := map[string]string{}
 	for _, name := range []string{"a", "b", "c"} {
-		byDigest[digestOf(s, name)] = s.texts["github/t/"+name+"@main"]
+		byDigest[digestOf(s, name)] = s.Texts["github/t/"+name+"@main"]
 	}
 	var digests []string
 	for _, text := range c.Texts {
@@ -267,8 +240,8 @@ func TestCreateReportsACycleOnce(t *testing.T) {
 // workflow, and a file that doesn't load.
 func TestCreateReportsCalledWorkflows(t *testing.T) {
 	s := tree(map[string][]string{"a": nil})
-	s.texts["github/t/a@main"] = "jobs:\n  j:\n    steps:\n      - uses: github/t/x@main\n        with: {$yaml: '${{ inputs.f }}'}\n      - uses: github/t/none@main\n      - uses: github/t/bad@main\n"
-	s.texts["github/t/bad@main"] = "jobs: [\n"
+	s.Texts["github/t/a@main"] = "jobs:\n  j:\n    steps:\n      - uses: github/t/x@main\n        with: {$yaml: '${{ inputs.f }}'}\n      - uses: github/t/none@main\n      - uses: github/t/bad@main\n"
+	s.Texts["github/t/bad@main"] = "jobs: [\n"
 	_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(calling("a")), nil, compile.Options{Sources: s})
 	if err != nil {
 		t.Fatal(err)
@@ -292,18 +265,6 @@ func TestCreateReportsCalledWorkflows(t *testing.T) {
 	}
 }
 
-// remoteSources is a treeSources whose workflows have a remote context of
-// their own, as a repository's have.
-type remoteSources struct{ *treeSources }
-
-func (s remoteSources) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
-	w, err := s.treeSources.Resolve(ctx, ref)
-	if err == nil {
-		w.Remote = map[string]string{"repo": "https://example.com/" + ref.Uses}
-	}
-	return w, err
-}
-
 // Create keeps, in the plan, the variables the workflows the run calls
 // read, down the tree, which the run doesn't, as its Start reads them for
 // the tree: in an expression, read whole, and in an if: written without
@@ -311,9 +272,12 @@ func (s remoteSources) Resolve(ctx context.Context, ref plan.SourceRef) (*compil
 // makes the plan of version 2.
 func TestCreateKeepsTreeVariablesAndRemotes(t *testing.T) {
 	s := tree(map[string][]string{"a": {"b"}, "b": nil})
-	s.texts["github/t/a@main"] = "jobs:\n  j:\n    if: vars.GATE == 'open'\n    steps:\n      - run: echo ${{ vars.A }} ${{ org.B }}\n      - uses: github/t/b@main\n        with: {$yaml: w.yaml}\n"
-	s.texts["github/t/b@main"] = "jobs:\n  j:\n    steps:\n      - run: echo ${{ vars.* }}\n"
-	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(calling("a")), nil, compile.Options{Sources: remoteSources{s}})
+	s.Texts["github/t/a@main"] = "jobs:\n  j:\n    if: vars.GATE == 'open'\n    steps:\n      - run: echo ${{ vars.A }} ${{ org.B }}\n      - uses: github/t/b@main\n        with: {$yaml: w.yaml}\n"
+	s.Texts["github/t/b@main"] = "jobs:\n  j:\n    steps:\n      - run: echo ${{ vars.* }}\n"
+	// Its workflows have a remote context of their own, as a repository's
+	// have.
+	s.Remote = true
+	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(calling("a")), nil, compile.Options{Sources: s})
 	if err != nil || c == nil {
 		t.Fatal(diags, err)
 	}
@@ -353,9 +317,9 @@ func TestCreateChecksCalledInputs(t *testing.T) {
 		return b.String()
 	}
 	s := tree(map[string][]string{"a": {"b", "c"}, "b": {"d"}, "c": {"d"}})
-	s.texts["github/t/needs@main"] = needs
-	s.texts["github/t/mid@main"] = callsNeeds("", ", name: '${{ inputs.x }}'", ", name: n")
-	s.texts["github/t/d@main"] = callsNeeds("")
+	s.Texts["github/t/needs@main"] = needs
+	s.Texts["github/t/mid@main"] = callsNeeds("", ", name: '${{ inputs.x }}'", ", name: n")
+	s.Texts["github/t/d@main"] = callsNeeds("")
 	root := callsNeeds("", ", name: n", ", name: '${{ inputs.x }}'") +
 		"      - uses: github/t/mid@main\n        with: {$yaml: w.yaml}\n" +
 		"      - uses: github/t/mid@main\n        with: {$yaml: w.yaml}\n" +
@@ -384,13 +348,13 @@ func TestCreateChecksCalledInputs(t *testing.T) {
 	}
 }
 
-// sameLocation is a treeSources whose workflows' locations leave out their
+// sameLocation are treeSources whose workflows' locations leave out their
 // revisions, as a repository's file's do: github/t/m@one and github/t/m@two
 // are both at github/t/m:w.yaml.
-type sameLocation struct{ *treeSources }
+type sameLocation struct{ *conformancetest.MapSources }
 
 func (s sameLocation) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
-	w, err := s.treeSources.Resolve(ctx, ref)
+	w, err := s.MapSources.Resolve(ctx, ref)
 	if err == nil {
 		name, _, _ := strings.Cut(ref.Uses, "@")
 		w.Source.Location = name + ":" + ref.Path
@@ -405,13 +369,13 @@ func TestCreateTellsRevisionsApart(t *testing.T) {
 	step := func(uses, with string) string {
 		return fmt.Sprintf("      - uses: %s\n        with: {$yaml: w.yaml%s}\n", uses, with)
 	}
-	s := &treeSources{texts: map[string]string{
+	s := treeSources(map[string]string{
 		"github/t/needs@main":  "on:\n  execute:\n    inputs:\n      name: {type: string}\njobs:\n  j:\n    steps:\n      - run: echo\n",
 		"github/t/needs2@main": "on:\n  execute:\n    inputs:\n      count: {type: number}\njobs:\n  j:\n    steps:\n      - run: echo\n",
 		"github/t/m@one":       "jobs:\n  j:\n    steps:\n" + step("github/t/needs@main", "") + step("github/t/m@two", ""),
 		"github/t/m@two":       "jobs:\n  j:\n    steps:\n" + step("github/t/needs2@main", ""),
 		"github/t/a@main":      "jobs:\n  j:\n    steps:\n" + step("github/t/m@one", "") + step("github/t/m@two", ""),
-	}}
+	})
 	got := func(root string, limits compile.CallLimits) []string {
 		t.Helper()
 		_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(root), nil, compile.Options{Sources: sameLocation{s}, Calls: limits})
