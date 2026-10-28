@@ -612,16 +612,19 @@ jobs:
 }
 
 // TestValidateClusters checks that a compute-clusters input names one of
-// the clusters of the config's clusters.yaml, and that without the file a
-// name is refused, saying there are none.
+// the clusters of the config's clusters.yaml, and so does a
+// compute-resources one, as format 1 gives a cluster either names the same
+// details; and that without the file a name is refused, saying there are
+// none.
 func TestValidateClusters(t *testing.T) {
 	parallel(t)
-	env := emptyEnv(t)
-	workflow := writeFile(t, "w.yaml", `on:
+	for _, typ := range []string{"compute-clusters", "compute-resources"} {
+		env := emptyEnv(t)
+		workflow := writeFile(t, typ+".yaml", `on:
   execute:
     inputs:
       cluster:
-        type: compute-clusters
+        type: `+typ+`
 jobs:
   main:
     ssh:
@@ -629,22 +632,23 @@ jobs:
     steps:
       - run: echo
 `)
-	if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
-		t.Errorf("meridian validate without clusters.yaml = %+v", r)
-	}
-	config := env[local.EnvConfigDir]
-	if err := os.MkdirAll(config, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitOK || r.stdout != "" {
-		t.Errorf("meridian validate with cluster hpc = %+v", r)
-	}
-	r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=cpu", workflow)
-	if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"hpc"`) {
-		t.Errorf("meridian validate with cluster cpu = %+v", r)
+		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
+			t.Errorf("%s: meridian validate without clusters.yaml = %+v", typ, r)
+		}
+		config := env[local.EnvConfigDir]
+		if err := os.MkdirAll(config, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitOK || r.stdout != "" {
+			t.Errorf("%s: meridian validate with cluster hpc = %+v", typ, r)
+		}
+		r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=cpu", workflow)
+		if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"hpc"`) {
+			t.Errorf("%s: meridian validate with cluster cpu = %+v", typ, r)
+		}
 	}
 }
 

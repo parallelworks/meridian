@@ -1874,7 +1874,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; `compute-resources` the same, as format 1 gives a cluster that either names the same details, though its form lists Kubernetes clusters too, which there are none of here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -5097,9 +5097,9 @@ host itself.
   the user's credentials, so a workflow can't name a server of its own,
   and at HTTPS's port, or at another that Git's own `url.<base>.insteadOf`
   rewrites the server's address to.
-- **`clusters.yaml`** holds the clusters a `compute-clusters` input can
-  name, each by its name, with its `host`, and, if it gives one, its
-  `scheduler`, `slurm` or `pbs`
+- **`clusters.yaml`** holds the clusters a `compute-clusters` input, or
+  a `compute-resources` one, can name, each by its name, with its
+  `host`, and, if it gives one, its `scheduler`, `slurm` or `pbs`
   ([`docs/examples/clusters.yaml`](examples/clusters.yaml)). The host is
   an alias that ssh resolves, as `ssh -G` does, or a host name or an
   address, without a port: format 1 gives an existing cluster's `ip` so,

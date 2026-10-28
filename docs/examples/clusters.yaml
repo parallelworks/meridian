@@ -1,6 +1,7 @@
 # clusters.yaml, in Meridian's config directory (~/.config/meridian on
 # Linux, ~/Library/Application Support/Meridian on macOS): the clusters a
-# workflow's compute-clusters input can name when it runs with meridian.
+# workflow's compute-clusters or compute-resources input can name when it
+# runs with meridian.
 # Only you may change it.
 #
 # Each cluster is its name, with:

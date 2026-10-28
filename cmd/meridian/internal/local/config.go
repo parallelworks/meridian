@@ -522,6 +522,12 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 //   - compute-clusters, whose value names one of the clusters of the
 //     clusters file, or the workspace, and gives its details
 //     (resolveClusters).
+//   - compute-resources, which format 1 gives as it gives
+//     compute-clusters: its form lists Kubernetes clusters beside the
+//     clusters, and a cluster it names has the same details. Here it
+//     names a cluster as compute-clusters does. It names no Kubernetes
+//     cluster here, so a name that isn't one of the clusters is the
+//     problem compute-clusters gives.
 //   - Those whose value is a name, which the run reads as it was given,
 //     as format 1 gives it: a scheduler's partitions, accounts, QoS and
 //     queues, Kubernetes clusters, their namespaces and volume claims, and
@@ -536,7 +542,7 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]an
 	}
 	switch typ {
 	case "execution-groups":
-	case "compute-clusters":
+	case "compute-clusters", "compute-resources":
 		return c.resolveClusters(value)
 	case "bucket":
 		return resolveBucket(def, value)

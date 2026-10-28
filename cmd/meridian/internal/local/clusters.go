@@ -113,14 +113,15 @@ func (f configFile) cluster(name string, key, n *yaml.Node) (cluster, error) {
 // order.
 func (c *Config) ClusterNames() []string { return slices.Sorted(maps.Keys(c.clusters)) }
 
-// resolveClusters gives the value of a compute-clusters input as format 1
-// resolves one: the workspace's name, or a cluster's of the clusters file,
-// or each of a list of them, becomes its details, whatever the input's
-// definition says, as its include-workspace, provider and csp only choose
-// what a form lists. "", and any other value, as the details a run passes
-// to a workflow it calls, are kept as they are, in a list too, since only
-// a name is resolved. Another name is problems.ClusterUnknown, which lists
-// the clusters, or problems.ClustersNone when the file has none.
+// resolveClusters gives the value of a compute-clusters input, or a
+// compute-resources one, as format 1 resolves one: the workspace's name,
+// or a cluster's of the clusters file, or each of a list of them, becomes
+// its details, whatever the input's definition says, as its
+// include-workspace, provider and csp only choose what a form lists. "",
+// and any other value, as the details a run passes to a workflow it
+// calls, are kept as they are, in a list too, since only a name is
+// resolved. Another name is problems.ClusterUnknown, which lists the
+// clusters, or problems.ClustersNone when the file has none.
 func (c *Config) resolveClusters(value any) (any, error) {
 	switch v := value.(type) {
 	case string:
