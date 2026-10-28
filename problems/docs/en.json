@@ -683,6 +683,19 @@
       "Nest the value less deeply."
     ]
   },
+  "ssh_disconnect_timeout_ignored": {
+    "why": "Format 1 fails a step on a host once its connection to the host has been lost for disconnect-timeout, 300 seconds by default, and never for a negative one. Meridian runs a worker on the host, which goes on running the job's steps while the connection is lost and reports them once it is back, so every step runs as a negative disconnect-timeout asks.",
+    "fix": [
+      "Remove disconnect-timeout, or make it negative, such as -1.",
+      "Give the step a timeout: to bound how long it runs."
+    ]
+  },
+  "ssh_disconnect_timeout_invalid": {
+    "why": "Format 1 reads a disconnect-timeout as a number of seconds, or a whole number with one of d, h, m or s after it, such as 300, 5m or -1. It can't read any other, such as 1h30m, 1.5h or 300ms, and fails the step on a host that has one. Meridian doesn't honour the key, so it runs the step all the same.",
+    "fix": [
+      "Remove disconnect-timeout, or write it as format 1 reads it, such as -1 for a step that never gives up on its host."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [
@@ -741,6 +754,12 @@
     "why": "A working directory is used as it is, and no shell expands the variables in it, so $HOME or ${PW_JOB_DIR} would be a directory of that name. Format 1 fails the step instead.",
     "fix": [
       "Read the value with an expression, such as env.PW_JOB_DIR, or write the path out."
+    ]
+  },
+  "job_ssh_host_empty": {
+    "why": "A format 1 job's ssh: runs the job's steps on the host its remoteHost names. One that is empty or null names none, and format 1 runs the job where it would run without an ssh:, with a note in each step's log, which is often a mistake, such as an input left empty. Meridian runs it there too, and keeps this warning with the job.",
+    "fix": [
+      "Give the ssh: a remoteHost, or remove it to run the job where it runs without one."
     ]
   },
   "undefined_env": {
@@ -1013,6 +1032,20 @@
     "fix": [
       "Start workers of the coordinator's own release of Meridian.",
       "If they are of the same release, report the bug, with the reason and the worker's log."
+    ]
+  },
+  "child_request_failed": {
+    "why": "A step whose uses: names a workflow asks the coordinator, through the worker API, for the run of it, waits for that run's end, and stops it when the step is stopped. One of those requests failed for good: the coordinator refused it, or answered with what the worker can't read, which the reason names by its code. That is a bug in the worker or in the coordinator, or a worker and a coordinator of releases that don't agree on the worker API, and not the workflow's. The step fails, and isn't tried again. The run it calls may have been created, and may still be running: its own status says.",
+    "fix": [
+      "Start workers of the coordinator's own release of Meridian.",
+      "If they are of the same release, report the bug, with the reason and the worker's log."
+    ]
+  },
+  "child_dir_unusable": {
+    "why": "A run that a step calls has a directory of its own, subworkflows/<job>/step_<n> under the step's working directory, as in format 1, where its steps run. The worker that runs the step makes it before it asks for the run, a directory at a time from its root run's directory, and never follows a symbolic link on the way, which one of the run's own steps could have left there to put the called workflow somewhere else: a link is refused as too many levels of symbolic links, and a file that isn't a directory as not a directory. With clean-on-retry:, which is true unless the workflow says otherwise, the worker removes the directory, with what it holds, before each try after the first, and never follows a link there either. The step fails, and isn't tried again.",
+    "fix": [
+      "Remove the symbolic link, or the file, that the reason names, or have the run's steps not make one there.",
+      "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
     ]
   },
   "cancel_jobs_job_unknown": {

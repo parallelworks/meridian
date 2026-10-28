@@ -149,9 +149,13 @@ func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path str
 	if err := setInputs(submitted, inputDefinitions(name, data), sets); err != nil {
 		return nil, err
 	}
+	var sources compile.Sources = &cacheSources{dirs: dirs, servers: cfg.GitLabServers()}
+	if c.sources != nil {
+		sources = c.sources
+	}
 	w.created, w.diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
 		Source: plan.Source{Location: workflowLocation(path)},
-		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
+		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources,
 	})
 	if err != nil {
 		return nil, err

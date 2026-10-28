@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 func TestJobs(t *testing.T) {
@@ -121,6 +122,56 @@ func TestEndJob(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestNoteJob checks that the warnings Ready gave a job are kept with it,
+// each once however often it is readied, and that its end keeps them,
+// before its own problems.
+func TestNoteJob(t *testing.T) {
+	s := open(t)
+	id := createRun(t, s)
+	empty := problems.JobSSHHostEmpty.At("", problems.Position{}, "/jobs/build/ssh", nil)
+	ended := problems.PlacementImpossible.At("", problems.Position{}, "", problems.Params{"job": "build"})
+	inTx(t, s, func(tx *Tx) error {
+		for range 2 {
+			if err := tx.NoteJob(id, "build", problems.Diagnostics{empty}); err != nil {
+				return err
+			}
+		}
+		if err := tx.NoteJob(id, "deploy", problems.Diagnostics{empty}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("NoteJob of no job = %v, want ErrNotFound", err)
+		}
+		j, err := tx.Job(id, "build")
+		if err != nil {
+			return err
+		}
+		if got := codesOf(j.Diagnostics); !reflect.DeepEqual(got, []string{"job_ssh_host_empty /jobs/build/ssh"}) {
+			t.Errorf("the job's problems are %v", got)
+		}
+		return tx.EndJob(id, "build", JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: problems.Diagnostics{ended}})
+	})
+	inTx(t, s, func(tx *Tx) error {
+		j, err := tx.Job(id, "build")
+		if err != nil {
+			return err
+		}
+		if got, want := codesOf(j.Diagnostics), []string{"job_ssh_host_empty /jobs/build/ssh", "placement_impossible "}; !reflect.DeepEqual(got, want) {
+			t.Errorf("the ended job's problems are %v, want %v", got, want)
+		}
+		if err := tx.NoteJob(id, "build", problems.Diagnostics{empty}); !errors.Is(err, ErrState) {
+			t.Errorf("NoteJob of an ended job = %v, want ErrState", err)
+		}
+		return nil
+	})
+}
+
+// codesOf returns each of diags as its code and path.
+func codesOf(diags problems.Diagnostics) []string {
+	var out []string
+	for _, d := range diags {
+		out = append(out, string(d.Code)+" "+d.Path())
+	}
+	return out
 }
 
 // TestMalformedResult checks that a job's result the store holds is read

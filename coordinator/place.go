@@ -41,7 +41,8 @@ type candidate struct {
 
 // placeJob readies the job, ends it as Ready says when Ready skips it or
 // fails, and otherwise places its next attempt on the member that would
-// start it soonest. A job no member can run fails, with
+// start it soonest, keeping the warnings Ready gave with the job, however
+// it ends (store.Tx.NoteJob). A job no member can run fails, with
 // placement_impossible and each member's reason.
 func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.Job, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	r, err := c.readyJob(ctx, run, job.Key)
@@ -53,6 +54,15 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 	}
 	if r.result.Job == nil {
 		return 0, fmt.Errorf("coordinator: Ready expanded run %s's job %q's matrix", run.ID, job.Key)
+	}
+	if len(r.diags) > 0 {
+		err := c.store.Tx(ctx, func(tx *store.Tx) error { return tx.NoteJob(run.ID, job.Key, r.diags) })
+		switch {
+		case errors.Is(err, store.ErrState):
+			return 0, errAgain
+		case err != nil:
+			return 0, err
+		}
 	}
 	rj := r.result.Job
 	private := placementPrivate(rj)

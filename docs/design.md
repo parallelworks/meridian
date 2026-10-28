@@ -2044,7 +2044,9 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
   expands a matrix that reads `needs`, and evaluates the job's `if:`, so a
   false `if:` skips it here. Otherwise it evaluates the rest of what was left
   for this point, such as a `runs-on:` that uses `needs`, and picks a member
-  of the job's group ([Placement](#placement)). The coordinator runs Ready
+  of the job's group ([Placement](#placement)). Ready's errors fail the
+  job, and its warnings, as `job_ssh_host_empty`, are kept with the job,
+  which runs. The coordinator runs Ready
   again whenever it needs the job, as when it places it and each time a
   worker claims it, with what the job was readied with kept: whether the
   run had been cancelled then, and which instance each `:any` need took. So
@@ -2169,9 +2171,16 @@ a step's try's child, linked to it (`CreateChild`), in its directory, in
 its caller's job's group, but not yet on its member, with its root's
 variables, and the root's finisher, which waits for every run of its tree;
 and the worker API's paths for a child, served, and what a child's
-attempt's claim has of its tree, which its worker reads. The rest isn't
-built yet: the worker doesn't ask for a child, and fails a step that uses
-a workflow (`uses_not_supported`).
+attempt's claim has of its tree, which its worker reads; and the worker's
+run of a calling step: it makes the child's directory, and cleans it as
+`clean-on-retry:` says, never following a symbolic link, asks for the
+child, waits for it, stops it as the step is stopped, and ends the step as
+below. The rest isn't built yet: the attempt isn't parked while it waits;
+an attempt that ends without its worker doesn't stop its steps' children;
+`meridian run`, `status` and `logs` show a root run's own jobs alone; and
+a step whose `ssh:` names a host is refused (`step_ssh_not_supported`), as
+any step's is, where format 1 connects to the host but runs the child
+where its caller runs, as some known calls do.
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2286,7 +2295,12 @@ a workflow (`uses_not_supported`).
   wouldn't be. The step fails when it runs, as its child would be created
   (`child_dir_outside`), never as the root is created, since an `if:` may
   skip it; none of the 270 known calls sets `working-directory:`. A step's
-  `clean-on-retry:` cleans it before the step's next try (below).
+  `clean-on-retry:` cleans it before the step's next try (below). The
+  step's worker makes it, and cleans it, a directory at a time from its
+  root's run directory, and never follows a symbolic link on the way,
+  which a step of the run could leave there to put the child elsewhere:
+  the step fails instead (`child_dir_unusable`), and so does the child's
+  job, as its worker makes it again (`run_dir_unusable`).
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
   Create finds in each pinned workflow's expressions), once, into the
@@ -2339,9 +2353,13 @@ a workflow (`uses_not_supported`).
     stops it with `cancelled`; the step ends cancelled and, as in format 1,
     its job goes on.
   - The step's `timeout:`, and its `retry:`'s timeout for a try, stop it
-    with `timeout`, and, as in format 1, the step ends cancelled, not
-    failed, and its job goes on; a try's ends as a try that ran out of
-    time does, and the step is tried again.
+    with `timeout`. As in format 1, a step without a `retry:` past its
+    `timeout:` ends cancelled, not failed, and its job goes on. A try past
+    its `retry:`'s timeout ends as a command's that ran out of time does:
+    the step is tried again, and its last try fails, or succeeds if its
+    `ignore-errors:` says so. A step with a `retry:`, whose tries have a
+    timeout of their own, past its own `timeout:` fails too, and isn't
+    tried again, as in format 1, which takes that deadline for its tries'.
   - The job's timeout, or the run's, stops it with `timeout`, and, as in
     format 1, the step and its job end cancelled, not failed, with the
     reason `timeout`, without marking the run for
@@ -3487,8 +3505,8 @@ and a platform that embeds Meridian serve the same API.
   root's ID and directory, the call's name, and the strings its caller's
   worker masked, which each of its job's phases counts as secrets' own
   texts. Version 3 adds them. The coordinator serves them, and the worker
-  has the requests, but doesn't make them yet: it fails a step that uses a
-  workflow (`uses_not_supported`).
+  makes them for a step that calls a workflow; one of an attempt of an
+  earlier version fails (`uses_not_supported`).
 - **Actions:** ask the coordinator to do a step's cancel-jobs,
   update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's
@@ -3910,16 +3928,16 @@ own runs.
 
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
-rather than run them on the host, and a step that `uses:` a workflow or a
-built-in action, or runs on another host with `ssh:`, fails, as does one
-whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
-`ssh:` placed on a host; one that uses an action only a platform provides
-fails saying so (`action_needs_platform`,
-[Built-in actions](#built-in-actions)). So a step's `clean-on-retry:`,
-which cleans a `uses:` step's directory, has nothing to clean yet. Its
-events are kept
-in memory while the coordinator is unreachable, since each is small but for
-a step's outputs, which are capped.
+rather than run them on the host, and a step that `uses:` a built-in
+action the worker doesn't run, or runs on another host with `ssh:`, fails,
+as does one whose `ssh:` is null, or gives no `remoteHost`, on a worker
+that a job's `ssh:` placed on a host; one that uses an action only a
+platform provides fails saying so (`action_needs_platform`, [Built-in
+actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
+run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
+directory its `clean-on-retry:` cleans. Its events are kept in memory
+while the coordinator is unreachable, since each is small but for a step's
+outputs, which are capped.
 
 ## Backends and isolation
 
@@ -4206,13 +4224,22 @@ backend there through `meridian host`
   lost before it fails the step, 300 seconds by default, isn't honoured:
   a step keeps running through an outage, which is what a worker on the
   host is for, and a laptop that sleeps through it fails no remote step.
-  The compiler will warn of the key (`ssh_disconnect_timeout_ignored`);
-  none of the known workflows sets it.
+  Every step runs as a negative one asks. Format 1 reads one as a number
+  of seconds, or a whole number with one of `d`, `h`, `m` or `s` after
+  it, so `-1`, `-5m` and `-2d` are negative. The compiler warns, where the
+  workflow writes it, of one that isn't negative, and of one an
+  expression gives, whose value it doesn't know yet
+  (`ssh_disconnect_timeout_ignored`); none of the known workflows sets
+  it.
 - **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
-  would without its `ssh:`, as format 1 runs it, and as a step's does
-  ([Running steps](#running-steps)). Ready doesn't do that yet: it places
-  such a job on a member with no host, which can't run it
-  (`ssh_host_missing`).
+  would without its `ssh:`, where its `runs-on:` says, or on the run's
+  default group, as format 1 runs it, and as a step's does
+  ([Running steps](#running-steps)): Ready gives it no inline group.
+  Format 1 notes it in the log of each step that runs so; Meridian keeps
+  Ready's warning with the job (`job_ssh_host_empty`), once however often
+  the job is readied, which its status and its end show, however it ends.
+  The common case is a `remoteHost` that reads a `compute-clusters`
+  input's `ip`, which is `""` for the workspace, this machine.
 - **A step whose `ssh:` names another host** fails
   (`step_ssh_not_supported`) until the worker can run a step on another
   host itself.
@@ -4241,6 +4268,10 @@ Where format 1, as ACTIVATE runs it, does otherwise:
 - **Outages.** Steps run through one, and their reports arrive after it.
   ACTIVATE fails a step once its connection has been lost for
   `disconnect-timeout`, and leaves its process running.
+- **A `disconnect-timeout` format 1 can't read**, such as `1h30m`, `1.5h`
+  or `300ms`, fails the step in ACTIVATE. Meridian ignores the key,
+  whatever its value, and runs the step, with a warning
+  (`ssh_disconnect_timeout_invalid`).
 - **Cancelling during an outage** reaches the worker once the connection
   is back. ACTIVATE tries for 10 seconds, and leaves the process running.
 - **One worker runs a job's steps**, so they share its session, and a

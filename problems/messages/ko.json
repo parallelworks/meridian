@@ -111,6 +111,8 @@
   "older_always": "always 단어는 always()의 예전 표기입니다. always()를 사용하세요.",
   "replaced_keyword": "{word} 단어는 텍스트 {text} 값이므로 항상 true입니다. 이 단어가 나타내던 if: 키워드는 이제 {replacement}입니다.",
   "value_too_deep": "이 값은 중첩이 너무 깊어서 실행과 함께 저장할 수 없습니다. 실행의 중첩은 최대 {max}단계입니다.",
+  "ssh_disconnect_timeout_ignored": "Meridian은 disconnect-timeout(여기서는 {value})을 따르지 않습니다. 음수 disconnect-timeout일 때처럼, 호스트의 단계는 호스트와의 연결이 끊긴 동안에도 계속 실행됩니다.",
+  "ssh_disconnect_timeout_invalid": "ssh:의 disconnect-timeout은 {value}인데, 형식 1은 이를 읽지 못해 단계를 실패시킵니다. Meridian은 이 키를 무시하고 단계를 실행합니다.",
 
   "runs_on_invalid": "runs-on 값은 {value} 값이 아니라 실행 그룹의 이름이거나, 실행 그룹, 환경 또는 컴퓨팅 대상을 지정하는 매핑이어야 합니다.",
   "resources_invalid": "{key, select, cpu {resources의 CPU는 {value} 값이 아니라 4, 0.5, 500m 같은 코어 수여야 합니다.} memory {resources의 메모리는 {value} 값이 아니라 8Gi, 512Mi 같은 바이트 수여야 합니다.} gpu {resources의 GPU는 {value} 값이 아니라 정수여야 합니다.} other {resources의 ‘{key}’ 값({value})이 올바르지 않습니다.}}",
@@ -122,6 +124,7 @@
   "matrix_too_large": "매트릭스의 조합이 매트릭스에 허용되는 최대 개수인 {limit}개보다 많습니다.",
   "output_not_written": "{of, select, step {‘{owner}’ 단계가 ‘{name}’ 출력을 쓰지 않았으므로} other {‘{owner}’ 작업에 ‘{name}’ 출력이 없으므로}} 이를 읽는 표현식이 실패합니다.",
   "working_directory_variable": "작업 디렉터리에 {variable}이(가) 그대로 남아 있습니다. 셸 변수는 여기서 확장되지 않습니다. 대신 env.PW_JOB_DIR처럼 env를 읽는 표현식을 사용하세요.",
+  "job_ssh_host_empty": "작업의 ssh:가 remoteHost를 지정하지 않으므로, 형식 1과 마찬가지로 작업은 ssh:가 없을 때 실행될 곳에서 실행됩니다.",
   "undefined_env": "여기서 env.{name}은(는) ‘’로 읽힙니다. 워크플로, 작업, 단계의 어느 env:에도 정의되어 있지 않고 형식 1도 여기서는 주지 않습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도했나요?} other {}}",
 
   "expression_empty": "표현식이 비어 있습니다.",
@@ -172,6 +175,8 @@
   "cancel_jobs_job_unknown": "단계가 ‘{job}’을(를) 취소하는데, 이는 단계가 취소할 수 있는 그 실행의 작업이 아니므로 아무것도 취소되지 않습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",
   "cancel_jobs_other_run": "단계가 with:의 ‘{key}’(으)로 다른 실행의 작업을 취소하는데, Meridian은 아직 그렇게 하지 않습니다.",
   "cancel_jobs_run_missing": "단계의 with:가 취소할 실행의 워크플로를 가리키지만, 형식 1이 필요로 하는 그 실행(음수가 아닌 번호)은 가리키지 않습니다.",
+  "child_request_failed": "단계가 ‘{uses}’을(를) 호출하는데, 그 실행을 요청하는 워커의 코디네이터 요청이 실패했습니다: {reason}",
+  "child_dir_unusable": "워커가 이 단계가 호출하는 실행의 디렉터리 ‘{dir}’을(를) 만들 수 없습니다: {reason}",
   "step_ssh_not_supported": "단계의 ssh:가 실행할 다른 호스트를 지정하는데, 이 워커는 아직 다른 호스트에서 단계를 실행할 수 없습니다.",
   "step_off_job_host": "단계의 ssh:가 null이거나 remoteHost를 지정하지 않으므로 형식 1은 작업이 ssh: 없이 실행될 곳에서 단계를 실행하는데, 작업의 ssh:가 지정하는 호스트에 있는 이 워커는 아직 그곳에서 단계를 실행할 수 없습니다.",
   "ssh_host_empty": "단계의 ssh:가 remoteHost를 지정하지 않으므로, 형식 1과 마찬가지로 단계는 작업이 실행되는 곳에서 실행됩니다.",

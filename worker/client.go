@@ -559,25 +559,45 @@ func (c *client) action(ctx context.Context, req *workerapi.ActionRequest) (*wor
 
 // child asks for the child run of a step's try (workerapi.PathChild),
 // which a repeat of the request is answered with again. It returns an
-// *encodeError for a request it can't encode.
+// *encodeError for a request it can't encode, and an answer no child can
+// be is one the worker can't read (childAnswered).
 func (c *client) child(ctx context.Context, req *workerapi.ChildRequest) (*workerapi.Child, error) {
 	body, err := workerapi.MarshalAt(c.apiVersion, req)
 	if err != nil {
 		return nil, &encodeError{err}
 	}
 	child := new(workerapi.Child)
-	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChild, body: body, timeout: requestTimeout}, child)
-	return child, err
+	if err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChild, body: body, timeout: requestTimeout}, child); err != nil {
+		return nil, err
+	}
+	return child, childAnswered(workerapi.PathChild, child)
+}
+
+// childAnswered returns the problem of an answer of path, child, that no
+// child can be: one that has ended with an outcome no run ends with, or
+// one not made that succeeded; and one that hasn't ended that is no run.
+func childAnswered(path string, child *workerapi.Child) error {
+	switch o := child.Outcome; {
+	case child.Ended && o != plan.OutcomeSuccess && o != plan.OutcomeFailure && o != plan.OutcomeCancelled,
+		child.Ended && child.Run == "" && o == plan.OutcomeSuccess:
+		return answerInvalidAt(path, http.StatusOK, "/outcome")
+	case !child.Ended && child.Run == "":
+		return answerInvalidAt(path, http.StatusOK, "/run")
+	}
+	return nil
 }
 
 // childEnd waits for the end of the child run of the step's try
 // (workerapi.PathChildEnd): it answers once the child has ended, or after
-// a while with the child as it is.
+// a while with the child as it is. An answer no child can be is one the
+// worker can't read (childAnswered).
 func (c *client) childEnd(ctx context.Context, step, try int) (*workerapi.Child, error) {
 	q := url.Values{workerapi.QueryStep: {strconv.Itoa(step)}, workerapi.QueryTry: {strconv.Itoa(try)}}
 	child := new(workerapi.Child)
-	err := c.do(ctx, call{method: http.MethodGet, path: workerapi.PathChildEnd, query: q, timeout: controlTimeout}, child)
-	return child, err
+	if err := c.do(ctx, call{method: http.MethodGet, path: workerapi.PathChildEnd, query: q, timeout: controlTimeout}, child); err != nil {
+		return nil, err
+	}
+	return child, childAnswered(workerapi.PathChildEnd, child)
 }
 
 // stopChild stops the child run of a step's try (workerapi.PathChildStop).

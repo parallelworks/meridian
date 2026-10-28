@@ -211,6 +211,17 @@ var (
 	OlderAlways                = define(Warning, "older_always", "Older spelling of always()")
 	ReplacedKeyword            = define(Warning, "replaced_keyword", "Replaced if: keyword", "word", "text", "replacement")
 	ValueTooDeep               = define(Error, "value_too_deep", "Value nests too deeply", "max")
+	// SSHDisconnectTimeoutIgnored is a format 1 ssh:'s disconnect-timeout
+	// that isn't negative, which Meridian doesn't honour: a step keeps
+	// running through a lost connection to its host, as format 1 runs one
+	// with a negative disconnect-timeout. value is the key's value, as the
+	// workflow writes it.
+	SSHDisconnectTimeoutIgnored = define(Warning, "ssh_disconnect_timeout_ignored", "disconnect-timeout not honoured", "value")
+	// SSHDisconnectTimeoutInvalid is a format 1 ssh:'s disconnect-timeout
+	// that format 1 can't read, as 1h30m, for which it fails the step:
+	// Meridian ignores the key, and runs it. value is the key's value, as
+	// the workflow writes it.
+	SSHDisconnectTimeoutInvalid = define(Warning, "ssh_disconnect_timeout_invalid", "disconnect-timeout format 1 can't read", "value")
 )
 
 // Creating and starting a run: what the caller gives the compiler, and
@@ -283,6 +294,10 @@ var (
 	MatrixTooLarge        = define(Error, "matrix_too_large", "Matrix with too many combinations", "limit")
 	OutputNotWritten      = define(Error, "output_not_written", "Output that nothing wrote", "of", "owner", "name")
 	WorkingDirectoryVar   = define(Error, "working_directory_variable", "Shell variable in a working directory", "variable")
+	// JobSSHHostEmpty is a job whose format 1 ssh: gives a remoteHost that
+	// is empty or null, which runs where it would without its ssh:, as
+	// format 1 runs it. Ready reports it, and the job's problems keep it.
+	JobSSHHostEmpty = define(Warning, "job_ssh_host_empty", "Job's ssh: names no host")
 )
 
 // Parsing an expression.
@@ -360,6 +375,8 @@ var (
 	CancelJobsJobUnknown  = define(Warning, "cancel_jobs_job_unknown", "Job a step can't cancel", "job", "suggested", "suggestion")
 	CancelJobsOtherRun    = define(Error, "cancel_jobs_other_run", "Cancel of another run's jobs", "key")
 	CancelJobsRunMissing  = define(Error, "cancel_jobs_run_missing", "Cancel of a workflow's run without its number")
+	ChildRequestFailed    = define(Error, "child_request_failed", "Request to the coordinator for a called workflow's run that failed", "uses", "reason")
+	ChildDirUnusable      = define(Error, "child_dir_unusable", "Called workflow's directory the worker couldn't make", "dir", "reason")
 	// CheckoutPathNotFound is an entry of a parallelworks/checkout step's
 	// with: sparse_checkout, path, that names nothing in the commit the
 	// step was pinned to; CheckoutSubmodules a checkout of all of the

@@ -3,9 +3,11 @@ package compile
 import (
 	"errors"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
@@ -246,6 +248,7 @@ func (c *compiler) job(info *jobInfo) plan.Job {
 	j.RunsOn = c.value(at("runs-on"), plan.PhaseReady, info)
 	j.Resources = c.value(at("resources"), plan.PhaseReady, info)
 	j.SSH = c.value(at("ssh"), plan.PhaseReady, info)
+	c.checkDisconnectTimeout(at("ssh"))
 	j.Timeout = c.value(at("timeout"), plan.PhaseReady, info)
 	j.WorkingDirectory = c.value(at("working-directory"), plan.PhaseReady, info)
 	if retry, ok := def["retry"].(map[string]any); ok {
@@ -284,6 +287,7 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 	s.Env = c.values(at("env"), plan.PhaseStep, info)
 	s.WorkingDirectory = c.value(at("working-directory"), plan.PhaseStep, info)
 	s.SSH = c.value(at("ssh"), plan.PhaseStep, info)
+	c.checkDisconnectTimeout(at("ssh"))
 	s.Timeout = c.value(at("timeout"), plan.PhaseStep, info)
 	s.IgnoreErrors = c.value(at("ignore-errors"), plan.PhaseStep, info)
 	// A cleanup: runs once every step has, so it reads each one's outputs.
@@ -303,4 +307,81 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 		}
 	}
 	return s
+}
+
+// checkDisconnectTimeout warns of the disconnect-timeout of the format 1
+// ssh: at loc, a job's or a step's that the workflow writes as a mapping,
+// unless it is negative: Meridian doesn't honour it, and runs every step
+// on a host as a negative one asks, through a lost connection
+// (problems.SSHDisconnectTimeoutIgnored). One that an expression gives is
+// warned of too, since what it gives isn't known yet. One that format 1
+// can't read, and so fails the step for, is warned of as that
+// (problems.SSHDisconnectTimeoutInvalid): Meridian ignores it, and runs
+// the step.
+func (c *compiler) checkDisconnectTimeout(loc []string) {
+	ssh, _ := lookup(c.doc.Value, loc).(map[string]any)
+	v, ok := ssh["disconnect-timeout"]
+	if !ok {
+		return
+	}
+	k := problems.SSHDisconnectTimeoutIgnored
+	if s, isText := v.(string); !isText || !hasTemplate(s) {
+		negative, valid := disconnectTimeout(v)
+		switch {
+		case !valid:
+			k = problems.SSHDisconnectTimeoutInvalid
+		case negative:
+			return
+		}
+	}
+	c.reportAt(k, appendPath(loc, "disconnect-timeout"), problems.Params{"value": problems.Show(v)})
+}
+
+// disconnectTimeout reads v, a disconnect-timeout as a workflow writes it,
+// as format 1 reads one, as text: a number of seconds, or a whole number
+// with one of d, h, m or s after it, with space around it or not, or
+// nothing, for its default. It reports whether format 1 can read it, and
+// whether it is negative, which never gives up: a number under 0, or a
+// whole number under 0 with a unit, once multiplied out to nanoseconds as
+// format 1 does, as -1, -5m or -2d. 1h30m, 1.5h and 300ms aren't read.
+func disconnectTimeout(v any) (negative, valid bool) {
+	switch v := v.(type) {
+	case nil:
+		return false, true
+	case int64:
+		return v < 0, true
+	case float64:
+		return v < 0, !math.IsNaN(v) && !math.IsInf(v, 0)
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return false, true
+		}
+		if n, err := strconv.ParseFloat(s, 64); err == nil && !math.IsNaN(n) && !math.IsInf(n, 0) {
+			return n < 0, true
+		}
+		if len(s) < 2 {
+			return false, false
+		}
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil {
+			return false, false
+		}
+		// As format 1 multiplies, in int64, which can wrap.
+		const second = int64(time.Second)
+		switch s[len(s)-1] {
+		case 'd':
+			n *= 24 * 60 * 60 * second
+		case 'h':
+			n *= 60 * 60 * second
+		case 'm':
+			n *= 60 * second
+		case 's':
+			n *= second
+		default:
+			return false, false
+		}
+		return n < 0, true
+	}
+	return false, false
 }

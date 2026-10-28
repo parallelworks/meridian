@@ -1,0 +1,4 @@
+jobs:
+  fails:
+    steps:
+      - run: exit 3

@@ -322,6 +322,19 @@ expect:
 - A job's directory, and so what a step prints of a path in it, differs
   from one run to the next: a case prints what it checks of one, such as
   its last name, rather than the path.
+- `repositories` names the repositories whose workflows the case's steps
+  call, each as `github/<owner>/<repository>`. Each holds the files of the
+  case's directory, at a commit of its default branch, `main`, which a
+  step's `uses:` names with no revision, or as `@main`, and its `with:`'s
+  `$yaml` names one of:
+
+  ```yaml
+  repositories: [github/conformance/calls]
+  ```
+
+  A run a step calls is a run of its own, whose jobs aren't among
+  `expect.run.jobs`: a case checks what it does through what its caller's
+  steps read of it, such as a file it leaves in its directory.
 
 ## Expressions
 
