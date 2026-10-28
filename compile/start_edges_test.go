@@ -549,7 +549,7 @@ type badInputs struct{}
 
 func (badInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
 	refused := func(s string) error {
-		return problems.InputRejected.Problem(problems.Params{"reason": fmt.Sprintf("no resource named %q", s)})
+		return problems.InputRejected.InputProblem(problems.Params{"reason": fmt.Sprintf("no resource named %q", s)})
 	}
 	switch v := v.(type) {
 	case string:
@@ -575,7 +575,7 @@ type goneInputs struct{}
 
 func (goneInputs) ResolveInput(ctx context.Context, typ string, def map[string]any, v any) (any, error) {
 	if strings.Contains(fmt.Sprint(v), "old") {
-		return nil, problems.InputRejected.Problem(problems.Params{"reason": "gone"})
+		return nil, problems.InputRejected.InputProblem(problems.Params{"reason": "gone"})
 	}
 	return badInputs{}.ResolveInput(ctx, typ, def, v)
 }

@@ -20,7 +20,11 @@ func TestWorkflowProblem(t *testing.T) {
 		{problems.Fenced, false},
 		{problems.OutOfOrder, false},
 	} {
-		err := fmt.Errorf("resolving: %w", c.kind.Problem(nil))
+		params := problems.Params{}
+		for _, name := range c.kind.Type().Params {
+			params[name] = "x"
+		}
+		err := fmt.Errorf("resolving: %w", c.kind.Problem(params))
 		if k, _, ok := workflowProblem(err); ok != c.ok || ok && k != c.kind {
 			t.Errorf("%s: workflowProblem gives %v, %t, want %t", c.kind.Code(), k, ok, c.ok)
 		}

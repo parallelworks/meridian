@@ -61,7 +61,7 @@ func (platform) ResolveInput(_ context.Context, typ string, _ map[string]any, v 
 		return nil, compile.ErrInputType
 	}
 	if v == "missing" {
-		return nil, problems.InputRejected.Problem(problems.Params{"reason": "there is no cluster named missing"})
+		return nil, problems.InputRejected.InputProblem(problems.Params{"reason": "there is no cluster named missing"})
 	}
 	return map[string]any{"name": v, "ip": "10.0.0.1"}, nil
 }
@@ -94,7 +94,7 @@ func TestPlatformInputs(t *testing.T) {
 func TestPlatformInputRejectedInPrivateContainer(t *testing.T) {
 	vars := testVariables{"org.V": {Value: "v"}}
 	quoting := resolverFunc(func(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
-		return nil, problems.InputRejected.Problem(problems.Params{"reason": fmt.Sprintf("no cluster named %v", v)})
+		return nil, problems.InputRejected.InputProblem(problems.Params{"reason": fmt.Sprintf("no cluster named %v", v)})
 	})
 	for name, tc := range map[string]struct {
 		defs      string
@@ -158,7 +158,7 @@ func (r rejects) ResolveInput(context.Context, string, map[string]any, any) (any
 // that one of a kind Meridian doesn't have is the platform's reason.
 func TestPlatformInputProblem(t *testing.T) {
 	doc := load(t, clusterWorkflow)
-	p := problems.ExecutionGroupUnknown.Problem(problems.Params{"value": problems.Show("gpu"), "groups": problems.QuoteAll([]string{"local"})})
+	p := problems.ExecutionGroupUnknown.InputProblem(problems.Params{"value": problems.Show("gpu"), "groups": problems.QuoteAll([]string{"local"})})
 	_, diags := resolveInputs(t, doc, map[string]any{"cluster": "gpu"}, compile.Options{Inputs: rejects{fmt.Errorf("resolving: %w", p)}})
 	if len(diags) != 1 || diags[0].Code != problems.ExecutionGroupUnknown.Code() {
 		t.Fatalf("a resolver's problem: %v", diags)

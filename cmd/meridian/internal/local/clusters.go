@@ -154,9 +154,9 @@ func (c *Config) resolveCluster(name string) (any, error) {
 	case ok:
 		return cl.value(name), nil
 	case len(c.clusters) == 0:
-		return nil, problems.ClustersNone.Problem(problems.Params{"value": problems.Show(name)})
+		return nil, problems.ClustersNone.InputProblem(problems.Params{"value": problems.Show(name)})
 	}
-	return nil, problems.ClusterUnknown.Problem(problems.Params{"value": problems.Show(name), "clusters": problems.QuoteAll(c.ClusterNames())})
+	return nil, problems.ClusterUnknown.InputProblem(problems.Params{"value": problems.Show(name), "clusters": problems.QuoteAll(c.ClusterNames())})
 }
 
 // value returns the details of the cluster named name, as format 1 gives
