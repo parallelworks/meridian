@@ -18,10 +18,10 @@ import (
 )
 
 // treeSources are Sources of the workflows texts holds, by their uses:,
-// which pin every checkout to a commit of their own, and which Create
-// never reads.
+// which pin every checkout to a commit of their own, and whose Read fails,
+// as Create never reads.
 func treeSources(texts map[string]string) *conformancetest.MapSources {
-	return &conformancetest.MapSources{Texts: texts, Commit: "89abcdef0123456789abcdef0123456789abcdef", ResolveOnly: true}
+	return &conformancetest.MapSources{Texts: texts, Commit: "89abcdef0123456789abcdef0123456789abcdef"}
 }
 
 // calling is a workflow whose job's steps call the workflows uses names,

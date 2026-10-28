@@ -24,7 +24,7 @@ import (
 // a commit, with a remote context of their own, and read one again by its
 // pin; and pin every checkout to childCommit.
 func childSources(texts map[string]string) *conformancetest.MapSources {
-	return &conformancetest.MapSources{Texts: texts, Remote: true, Commit: childCommit}
+	return &conformancetest.MapSources{Texts: texts, Remote: true, Commit: childCommit, Reads: true}
 }
 
 // childCommit is the commit childSources pins every checkout to.

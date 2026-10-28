@@ -144,7 +144,7 @@ func TestCancelTree(t *testing.T) {
 	file := writeFile(t, "never", "")
 	// The workflow its step calls, github/t/wait, as git would give it, but
 	// from memory: one whose step waits until a file is gone.
-	sources := &conformancetest.MapSources{Texts: map[string]string{"github/t/wait": fmt.Sprintf(`jobs:
+	sources := &conformancetest.MapSources{Reads: true, Texts: map[string]string{"github/t/wait": fmt.Sprintf(`jobs:
   wait:
     steps:
       - run: |

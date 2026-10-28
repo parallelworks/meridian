@@ -28,9 +28,11 @@ type MapSources struct {
 	Commits map[string]string
 	Commit  string
 	Err     error
-	// ResolveOnly has Read fail, for a test that a run's Create, which
-	// only resolves, never reads.
-	ResolveOnly bool
+	// Reads has Read give the workflow a pin names, as a coordinator reads
+	// one that a run's root didn't keep. Without it, Read fails, so that a
+	// test of a run's Create, which only resolves, catches a Create that
+	// reads.
+	Reads bool
 
 	mu     sync.Mutex
 	asked  []plan.SourceRef
@@ -47,10 +49,10 @@ func (s *MapSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Wo
 	return s.workflow(ref)
 }
 
-// Read gives the workflow source pins, as Resolve gave it, or fails for
-// one whose text isn't the digest's, or with ResolveOnly.
+// Read gives the workflow source pins, as Resolve gave it, with Reads, and
+// fails for one whose text isn't the digest's; or, without Reads, fails.
 func (s *MapSources) Read(_ context.Context, source plan.Source) (*compile.Workflow, error) {
-	if s.ResolveOnly {
+	if !s.Reads {
 		return nil, errors.New("conformancetest: not read as the run is created")
 	}
 	w, err := s.workflow(source.Ref)

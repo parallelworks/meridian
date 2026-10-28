@@ -62,7 +62,8 @@ func (g *testGroups) ComputeTarget(_ context.Context, c plan.ComputeTarget) (*ba
 
 // testSources give the workflows they have by their uses:, and pin the
 // repositories' revisions they have, as repo@revision, to their commits;
-// and give Err for the rest, ErrNotFound by default.
+// and give Err for the rest, ErrNotFound by default. Their Read fails, as
+// Create never reads.
 type testSources = conformancetest.MapSources
 
 // anyGroups has every execution group and environment.
