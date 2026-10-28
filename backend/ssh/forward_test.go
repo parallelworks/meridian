@@ -93,6 +93,16 @@ func TestForward(t *testing.T) {
 		t.Fatal("the listener outlived its connection")
 	}
 
+	// The host's listener ends with the connection too, and removes its
+	// socket, which a file put there before then could go with.
+	deadline := time.Now().Add(10 * time.Second)
+	for _, err := os.Lstat(e.Address); !errors.Is(err, os.ErrNotExist); _, err = os.Lstat(e.Address) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the host's socket outlived its connection: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // the host's listener, which nothing signals
+	}
+
 	// A file there that isn't a socket isn't removed.
 	if err := os.WriteFile(e.Address, []byte("not a socket"), 0o600); err != nil {
 		t.Fatal(err)

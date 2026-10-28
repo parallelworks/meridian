@@ -3,6 +3,7 @@ package sshconn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -37,11 +38,19 @@ var ErrClosed = errors.New("sshconn: the connection is closed")
 // keepalive in time.
 var ErrNotAlive = errors.New("sshconn: the host stopped answering keepalives")
 
+// ErrForwardingRefused is the error of a host that answered no when asked
+// to listen on a Unix socket for the connection, as sshd does where
+// AllowStreamLocalForwarding or DisableForwarding forbids it, or where it
+// can't listen at the path.
+var ErrForwardingRefused = errors.New("sshconn: the host refused to forward a Unix socket")
+
 // A Conn is a connection to a host.
 type Conn struct {
 	client  *ssh.Client
 	closers []func()
 	notes   []*problem.Problem
+	// timeout is how long the host has to answer a keepalive.
+	timeout time.Duration
 	// sessions has a value for each session open.
 	sessions chan struct{}
 	// done is closed once the connection is, and err says why.
@@ -51,7 +60,10 @@ type Conn struct {
 }
 
 func newConn(client *ssh.Client, closers []func(), notes []*problem.Problem, interval, timeout time.Duration, sessions int) *Conn {
-	c := &Conn{client: client, closers: closers, notes: notes, sessions: make(chan struct{}, sessions), done: make(chan struct{})}
+	c := &Conn{
+		client: client, closers: closers, notes: notes, timeout: timeout,
+		sessions: make(chan struct{}, sessions), done: make(chan struct{}),
+	}
 	go func() {
 		err := client.Wait()
 		if err == nil {
@@ -59,7 +71,7 @@ func newConn(client *ssh.Client, closers []func(), notes []*problem.Problem, int
 		}
 		c.end(err)
 	}()
-	go c.keepAlive(interval, timeout)
+	go c.keepAlive(interval)
 	return c
 }
 
@@ -74,9 +86,8 @@ func (c *Conn) end(err error) {
 }
 
 // keepAlive asks the host whether it is alive every interval, and closes
-// the connection when it doesn't answer within timeout. Any answer will
-// do: OpenSSH refuses the request, and so answers it.
-func (c *Conn) keepAlive(interval, timeout time.Duration) {
+// the connection when it doesn't answer in time (ping).
+func (c *Conn) keepAlive(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -85,26 +96,33 @@ func (c *Conn) keepAlive(interval, timeout time.Duration) {
 			return
 		case <-ticker.C:
 		}
-		answered := make(chan error, 1)
-		go func() {
-			_, _, err := c.client.SendRequest("keepalive@openssh.com", true, nil)
-			answered <- err
-		}()
-		wait := time.NewTimer(timeout)
-		select {
-		case err := <-answered:
-			wait.Stop()
-			if err != nil {
-				c.end(err)
-				return
-			}
-		case <-wait.C:
-			c.end(ErrNotAlive)
-			return
-		case <-c.done:
-			wait.Stop()
+		if err := c.ping(); err != nil {
+			c.end(err)
 			return
 		}
+	}
+}
+
+// ping asks the host whether it is alive, and returns nil once it answers
+// within the connection's timeout. Any answer will do: OpenSSH refuses the
+// request, and so answers it. Otherwise it returns the request's error,
+// ErrNotAlive when the host doesn't answer in time, or why the connection
+// closed meanwhile.
+func (c *Conn) ping() error {
+	answered := make(chan error, 1)
+	go func() {
+		_, _, err := c.client.SendRequest("keepalive@openssh.com", true, nil)
+		answered <- err
+	}()
+	wait := time.NewTimer(c.timeout)
+	defer wait.Stop()
+	select {
+	case err := <-answered:
+		return err
+	case <-wait.C:
+		return ErrNotAlive
+	case <-c.done:
+		return c.err
 	}
 }
 
@@ -253,9 +271,17 @@ func (c *Conn) open(ctx context.Context, release func()) (*ssh.Session, error) {
 
 // ListenUnix asks the host to listen on a Unix socket at path, and to
 // forward each connection to it over this connection
-// (streamlocal-forward@openssh.com).
+// (streamlocal-forward@openssh.com). A host that answers no is
+// ErrForwardingRefused. x/crypto fails the request in words of its own
+// when the host answers no, and with the transport's error when the
+// connection is lost, so which it was is told by the connection, not the
+// words: a host that answers a keepalive after is up, and refused.
 func (c *Conn) ListenUnix(path string) (net.Listener, error) {
-	return c.client.ListenUnix(path)
+	l, err := c.client.ListenUnix(path)
+	if err == nil || c.ping() != nil {
+		return l, err
+	}
+	return nil, fmt.Errorf("%w: %w", ErrForwardingRefused, err)
 }
 
 // A Pool keeps one connection to each target, which its users share.

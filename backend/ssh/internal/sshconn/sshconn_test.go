@@ -919,6 +919,28 @@ func TestListenUnix(t *testing.T) {
 	}
 }
 
+// TestListenUnixRefused checks that a host that won't forward a Unix
+// socket is ErrForwardingRefused, told by the connection being up rather
+// than by x/crypto's words, and that a connection that is closed is not:
+// it is an outage, which passes.
+func TestListenUnixRefused(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{NoForwarding: true})
+	h.knownHosts(s.KnownHosts(""))
+	c := dial(t, h.dialer(), sshconn.Target{Host: s.Addr()})
+	path := filepath.Join(t.TempDir(), "c.sock")
+	if _, err := c.ListenUnix(path); !errors.Is(err, sshconn.ErrForwardingRefused) {
+		t.Errorf("a host that won't forward gave %v, want ErrForwardingRefused", err)
+	}
+	if err := c.Err(); err != nil {
+		t.Errorf("a refusal closed the connection: %v", err)
+	}
+	_ = c.Close()
+	if _, err := c.ListenUnix(path); err == nil || errors.Is(err, sshconn.ErrForwardingRefused) {
+		t.Errorf("a closed connection gave %v, want its own error", err)
+	}
+}
+
 // fakeSSH writes an ssh client to dir that answers -G as OpenSSH before
 // 10.1 can: with the host it is given, and the user -l gives, as they are,
 // a newline among them, and then extra, lines of its own. It appends its

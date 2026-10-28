@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"strconv"
@@ -17,8 +18,14 @@ import (
 
 // How often ServeMembers looks for the members of attempts that haven't
 // ended, whose listeners it doesn't hold, as those of a coordinator that
-// has stopped, which it takes over (forwardAll).
-const forwardLook = 5 * time.Second
+// has stopped, which it takes over (forwardAll); and, for an attempt whose
+// member it couldn't find, as when its group can't be read, how long it
+// waits at most before it looks for it again: twice forwardLook after the
+// first time, doubling each time after (lookups).
+const (
+	forwardLook     = 5 * time.Second
+	forwardLookMost = 5 * time.Minute
+)
 
 // How long a member's holder waits before it forwards again, after its
 // listener failed or ended, as with the connection it was made over: from
@@ -37,7 +44,42 @@ type forwarding struct {
 	// holders are the members whose listeners this process holds, or
 	// waits to, by their keys.
 	holders map[string]*holder
+	// lookups are when to look again for the members of the attempts
+	// whose members forwardAll couldn't find, which only ServeMembers
+	// touches.
+	lookups lookups
 	wg      sync.WaitGroup
+}
+
+// lookups are when forwardAll is to look again for the member of each
+// attempt whose member it couldn't find, by the attempt's ID, so that one
+// whose member it keeps failing to find, as one of a group it can't read,
+// isn't readied and logged at every look.
+type lookups map[string]lookup
+
+// A lookup is when to look again for an attempt's member, after how long
+// a wait.
+type lookup struct {
+	at   time.Time
+	wait time.Duration
+}
+
+// due reports whether to look for the member of the attempt id at now.
+func (l lookups) due(id string, now time.Time) bool {
+	return !now.Before(l[id].at)
+}
+
+// failed records that the member of the attempt id wasn't found at now,
+// and is looked for again after twice the wait before, from twice
+// forwardLook, up to forwardLookMost.
+func (l lookups) failed(id string, now time.Time) {
+	wait := min(max(2*l[id].wait, 2*forwardLook), forwardLookMost)
+	l[id] = lookup{at: now.Add(wait), wait: wait}
+}
+
+// keep forgets the attempts that live doesn't hold.
+func (l lookups) keep(live map[string]bool) {
+	maps.DeleteFunc(l, func(id string, _ lookup) bool { return !live[id] })
 }
 
 // A holder holds a member's listener for the process: it takes the
@@ -95,7 +137,7 @@ func (c *Coordinator) ServeMembers(ctx context.Context, logs Logs) error {
 		return err
 	}
 	defer release()
-	f := &forwarding{ctx: ctx, srv: srv, holders: map[string]*holder{}}
+	f := &forwarding{ctx: ctx, srv: srv, holders: map[string]*holder{}, lookups: lookups{}}
 	c.mu.Lock()
 	if c.forwarding != nil {
 		c.mu.Unlock()
@@ -112,7 +154,7 @@ func (c *Coordinator) ServeMembers(ctx context.Context, logs Logs) error {
 	tick := time.NewTicker(forwardLook)
 	defer tick.Stop()
 	for {
-		if err := c.forwardAll(ctx); err != nil && ctx.Err() == nil {
+		if err := c.forwardAll(ctx, f.lookups, time.Now()); err != nil && ctx.Err() == nil {
 			c.log.WarnContext(ctx, "coordinator: couldn't look for the members whose listeners to hold", "error", err)
 		}
 		select {
@@ -128,8 +170,9 @@ func (c *Coordinator) ServeMembers(ctx context.Context, logs Logs) error {
 // reaches it through one (store.Tx.MemberAttempts), unless this process
 // holds it, or waits to, already. The member is the one the attempt's
 // group has, as its job readies again, never the store's: a member's host
-// can come from a variable or a password.
-func (c *Coordinator) forwardAll(ctx context.Context) error {
+// can come from a variable or a password. Of an attempt whose member it
+// couldn't find, it looks again only once l says to, at now.
+func (c *Coordinator) forwardAll(ctx context.Context, l lookups, now time.Time) error {
 	type found struct {
 		run *store.Run
 		job *store.Job
@@ -141,8 +184,13 @@ func (c *Coordinator) forwardAll(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		live := make(map[string]bool, len(as))
 		for _, a := range as {
-			if c.holding(a.Placement.MemberKey) {
+			live[a.ID] = true
+		}
+		l.keep(live)
+		for _, a := range as {
+			if c.holding(a.Placement.MemberKey) || !l.due(a.ID, now) {
 				continue
 			}
 			run, err := tx.Run(a.Run)
@@ -167,11 +215,13 @@ func (c *Coordinator) forwardAll(ctx context.Context) error {
 		}
 		cand, _, err := c.placedMember(ctx, f.run, f.job, f.a)
 		if err != nil {
+			l.failed(f.a.ID, now)
 			if !errors.Is(err, errMemberGone) {
 				errs = append(errs, err)
 			}
 			continue
 		}
+		delete(l, f.a.ID)
 		fw, ok := cand.driver.(backend.Forwarder)
 		if !ok {
 			continue

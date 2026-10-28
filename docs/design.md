@@ -4134,7 +4134,13 @@ local backend there through `meridian host`
   that no other holds, as the attempts it places need them, and as the
   store's attempts that haven't ended do, which it looks for every few
   seconds; one that another holds, it waits for, and takes over once that
-  one stops. A host's connection is where the holder's last dial
+  one stops. An attempt whose member it can't find, as when its group
+  can't be read, it looks for again after a wait that doubles, from 10
+  seconds to 5 minutes. A process holds a host's socket, its lease and
+  its connection until it stops, which `run` and `resume` do once their
+  runs have ended; a coordinator that outlives its runs, as a platform's
+  does, would let a host's go once no attempt placed there is left, which
+  isn't built yet. A host's connection is where the holder's last dial
   reached: where a host's name leads to several nodes, the workers of a
   node it no longer reaches can't reach the coordinator until it does.
 - **Which host.** A connection made again can reach another host than the
@@ -4374,6 +4380,12 @@ Meridian's must (`internal/fipsmode`).
   bound by its associated data to its store, its run and its generation.
   A platform's Keys interface wraps the data keys with its own key
   management, and the local one with AES-256-GCM under a key in a file.
+  The local key file's key is HKDF-SHA256's input too, for the keys
+  derived from it (`local.Keys.Derive`), as the one that keys the hash
+  naming a host's lease and socket: one key used both to wrap and to
+  derive, each derived key under a label of its own. A later version of
+  the key file could wrap with a key derived from it as well, keeping the
+  file's own key for deriving alone.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
   digests are SHA-256, and a digest of what can hold a secret, as an
   action's request, is an HMAC-SHA256 under a key that HKDF-SHA256

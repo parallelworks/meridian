@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -78,7 +79,7 @@ func (d *Driver) Forward(ctx context.Context, m *backend.Member) (net.Listener, 
 	switch {
 	case err == nil:
 		return l, nil
-	case conn.Err() == nil && strings.Contains(err.Error(), "request denied"):
+	case errors.Is(err, sshconn.ErrForwardingRefused):
 		return nil, problems.SSHForwardingRefused.Problem(problems.Params{"host": t.Host, "path": p})
 	}
 	return nil, err
