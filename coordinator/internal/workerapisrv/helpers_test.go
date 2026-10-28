@@ -1,15 +1,18 @@
 package workerapisrv_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -246,6 +249,54 @@ type fakeActions struct {
 	answer      func(tx *store.Tx, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error)
 	acted       int
 	uncommitted bool
+	// treeFault is how Tree fails: before it writes, after its first
+	// file, or not at all, for "".
+	treeFault string
+}
+
+// The ways fakeActions.Tree fails.
+const (
+	treeFailsFirst = "first"
+	treeFailsAfter = "after"
+)
+
+// errTree is what fakeActions.Tree fails with.
+var errTree = errors.New("the tree couldn't be read")
+
+// Tree writes a tar stream of one file, README, that holds the step's
+// index, and of a directory, docs, as treeFault says.
+func (f *fakeActions) Tree(_ context.Context, call *workerapisrv.ActionCall, w io.Writer) error {
+	f.mu.Lock()
+	fault := f.treeFault
+	f.mu.Unlock()
+	if fault == treeFailsFirst {
+		return errTree
+	}
+	tw := tar.NewWriter(w)
+	content := strconv.Itoa(call.Request.Step)
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "README", Mode: 0o644, Size: int64(len(content))}); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(tw, content); err != nil {
+		return err
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if fault == treeFailsAfter {
+		return errTree
+	}
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: "docs/", Mode: 0o755}); err != nil {
+		return err
+	}
+	return tw.Close()
+}
+
+// setTreeFault makes f's Tree fail as fault says.
+func (f *fakeActions) setTreeFault(fault string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.treeFault = fault
 }
 
 func (f *fakeActions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {

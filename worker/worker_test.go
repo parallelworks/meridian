@@ -1347,7 +1347,7 @@ func TestSetupFails(t *testing.T) {
 // doesn't run.
 func TestStepsRefused(t *testing.T) {
 	t.Parallel()
-	uses := plan.Step{Uses: "parallelworks/checkout", With: plan.Literal(map[string]any{"repo": "x", "branch": "main"})}
+	uses := plan.Step{Uses: "github/acme/flows@main", With: plan.Literal(map[string]any{"$yaml": "w.yaml"})}
 	onHost := command("hostname")
 	onHost.SSH = plan.Literal(map[string]any{"remoteHost": "elsewhere"})
 	noShell := command("true")

@@ -703,9 +703,10 @@ var platformActions = []string{"parallelworks/scheduler-agent", "parallelworks/w
 
 // coordinatorActions are the built-in actions whose subject is the
 // coordinator's, which it performs when a step asks for one, through the
-// worker API (workerapi.PathAction): cancel-jobs, of the run's jobs, and
-// update-session, of the run's sessions.
-var coordinatorActions = []string{"parallelworks/cancel-jobs", "parallelworks/update-session"}
+// worker API (workerapi.PathAction): cancel-jobs, of the run's jobs,
+// update-session, of the run's sessions, and checkout, whose tree the
+// coordinator then serves (checkout).
+var coordinatorActions = []string{"parallelworks/cancel-jobs", "parallelworks/update-session", plan.CheckoutUses}
 
 // asksCoordinator reports whether a step that uses uses asks the
 // coordinator for it: an action the coordinator performs, in an attempt
@@ -748,9 +749,12 @@ func (a *attempt) runAction(ctx context.Context, key logKey, rs *plan.ReadyStep,
 		answer *workerapi.ActionAnswer
 		err    error
 	}
+	// One request, which a checkout's tree is asked for with too, unchanged:
+	// the coordinator serves the tree only for the request it answered.
+	req := &workerapi.ActionRequest{Step: key.step, Try: key.try, With: rs.With}
 	answered := make(chan result, 1)
 	go func() {
-		answer, err := a.client.action(reqCtx, &workerapi.ActionRequest{Step: key.step, Try: key.try, With: rs.With})
+		answer, err := a.client.action(reqCtx, req)
 		answered <- result{answer, err}
 	}()
 	stopping, unwatch := a.watch(s)
@@ -803,7 +807,21 @@ func (a *attempt) runAction(ctx context.Context, key logKey, rs *plan.ReadyStep,
 				a.fire(a.anyJobFailed, nil)
 				cause = stopEarlyCancel
 			}
-			return res.answer.Outcome == plan.OutcomeSuccess, cause, acted, a.writeLog(key, noted(note, acted))
+			succeeded := res.answer.Outcome == plan.OutcomeSuccess
+			if succeeded && cause == noStop && rs.Uses == plan.CheckoutUses {
+				// The checkout's tree, once its action succeeded: but not
+				// once a stop came, which applies to it as to a command.
+				var wrote problems.Diagnostics
+				if cause, wrote = stop.cause, nil; cause == noStop {
+					cause, wrote = a.checkout(ctx, key, rs, req, stopping)
+				}
+				if cause == stopHalted {
+					return false, stopHalted, nil, nil
+				}
+				acted = append(slices.Clone(acted), wrote...)
+				succeeded = cause == noStop && !wrote.HasErrors()
+			}
+			return succeeded, cause, acted, a.writeLog(key, noted(note, acted))
 		}
 	}
 }

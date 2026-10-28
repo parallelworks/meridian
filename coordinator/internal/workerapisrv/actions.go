@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -36,12 +38,25 @@ type Actions interface {
 	// as for a platform that doesn't answer, which the server answers 500,
 	// having stored nothing, and the worker asks again.
 	Act(ctx context.Context, call *ActionCall) (workerapi.ActionAnswer, error)
+
+	// Tree writes the tree of the parallelworks/checkout step call names,
+	// as the plan of call's run pins it, to w, as a tar stream
+	// (workerapi.PathCheckout). The server calls it only for a request
+	// that Act answered success, as a repeat of it. An error it returns
+	// before it writes is answered as Act's are; one after cuts the stream
+	// short, which the worker reads as a request that failed, and asks
+	// again.
+	Tree(ctx context.Context, call *ActionCall, w io.Writer) error
 }
 
 // ErrNotAction is what Actions.Act returns, wrapped, for a step that uses
 // no action the coordinator performs, as one the worker never asks for,
 // which the server answers 400.
 var ErrNotAction = errors.New("workerapisrv: the step uses no action the coordinator performs")
+
+// errOtherRequest is what answered gives, as store.ErrFenced, for a
+// request of a try that was answered for another request.
+var errOtherRequest = errors.New("workerapisrv: another request for the try")
 
 // An ActionCall is a request for the action a step's try uses, from the
 // attempt Attempt of the run Run, which Actions.Act answers.
@@ -140,7 +155,7 @@ func (c *ActionCall) answered(tx *store.Tx) (*workerapi.ActionAnswer, error) {
 	case err != nil:
 		return nil, err
 	case !stored.SameRequest(c.digest):
-		return nil, &checkError{store.ErrFenced}
+		return nil, &checkError{fmt.Errorf("%w: %w", store.ErrFenced, errOtherRequest)}
 	}
 	return &stored.Answer, nil
 }
@@ -162,48 +177,8 @@ func cancelOf(ctl workerapi.Control) plan.Reason {
 // reads the request as a body of the attempt's version of the worker API.
 func (s *Server) serveAction(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
 	ctx := r.Context()
-	body, ok := s.readBody(w, r, workerapi.MaxActionRequest)
+	call, stored, ok := s.readAction(w, r, a, run, false)
 	if !ok {
-		return
-	}
-	call := &ActionCall{Run: run, Attempt: a, s: s, credential: bearer(r)}
-	if err := workerapi.UnmarshalAt(a.APIVersion, body, &call.Request); err != nil {
-		s.badRequest(w, r, "an action's request that isn't")
-		return
-	}
-	if call.Request.Step < 0 || call.Request.Try < 0 {
-		s.badRequest(w, r, "an action of a step or a try that is no step's or try's")
-		return
-	}
-	// The digest of the request as the API writes it, which a repeat
-	// matches, however its JSON was written: keyed, since its with: can
-	// hold a secret (Server.digest).
-	canonical, err := workerapi.Marshal(&call.Request)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	id := fmt.Sprintf("%s/%d/%d", a.ID, call.Request.Step, call.Request.Try)
-	digest, err := s.digest(ctx, run.ID, seal.PurposeActionDigest, id, canonical)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		// The run has ended, and so has the attempt.
-		problem.Write(w, fenced())
-		return
-	case err != nil:
-		s.writeError(w, r, err)
-		return
-	}
-	copy(call.digest[:], digest)
-	// A repeat is answered from what is stored, without asking Actions
-	// again, which might ask a platform again.
-	var stored *workerapi.ActionAnswer
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		stored, err = call.answered(tx)
-		return err
-	}); err != nil {
-		s.writeActionError(w, r, err)
 		return
 	}
 	if stored != nil {
@@ -220,6 +195,119 @@ func (s *Server) serveAction(w http.ResponseWriter, r *http.Request, a *store.At
 	default:
 		writeBody(w, a.APIVersion, &answer)
 	}
+}
+
+// readAction reads the request of a step's try for its action, or for its
+// tree, as a body of the attempt's version of the worker API, and returns
+// it, as an ActionCall, with the answer stored for it, if it has one, once
+// it has answered a request it refuses: 400 for one that isn't an
+// ActionRequest, or is of a step or a try that is none, or, for a tree, of
+// a try answered for another request; and what writeActionError answers
+// for what answered checks.
+func (s *Server) readAction(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run, tree bool) (*ActionCall, *workerapi.ActionAnswer, bool) {
+	body, ok := s.readBody(w, r, workerapi.MaxActionRequest)
+	if !ok {
+		return nil, nil, false
+	}
+	call := &ActionCall{Run: run, Attempt: a, s: s, credential: bearer(r)}
+	if err := workerapi.UnmarshalAt(a.APIVersion, body, &call.Request); err != nil {
+		s.badRequest(w, r, "an action's request that isn't")
+		return nil, nil, false
+	}
+	if call.Request.Step < 0 || call.Request.Try < 0 {
+		s.badRequest(w, r, "an action of a step or a try that is no step's or try's")
+		return nil, nil, false
+	}
+	// The digest of the request as the API writes it, which a repeat
+	// matches, however its JSON was written: keyed, since its with: can
+	// hold a secret (Server.digest).
+	canonical, err := workerapi.Marshal(&call.Request)
+	if err != nil {
+		s.writeError(w, r, err)
+		return nil, nil, false
+	}
+	id := fmt.Sprintf("%s/%d/%d", a.ID, call.Request.Step, call.Request.Try)
+	digest, err := s.digest(r.Context(), run.ID, seal.PurposeActionDigest, id, canonical)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// The run has ended, and so has the attempt.
+		problem.Write(w, fenced())
+		return nil, nil, false
+	case err != nil:
+		s.writeError(w, r, err)
+		return nil, nil, false
+	}
+	copy(call.digest[:], digest)
+	// A repeat is answered from what is stored, without asking Actions
+	// again, which might ask a platform again.
+	var stored *workerapi.ActionAnswer
+	if err := s.store.View(r.Context(), func(tx *store.Tx) error {
+		var err error
+		stored, err = call.answered(tx)
+		return err
+	}); err != nil {
+		if tree && errors.Is(err, errOtherRequest) {
+			// The worker's bug, which fails the step, rather than halt
+			// the attempt, as a fenced answer would.
+			s.badRequest(w, r, "a checkout's tree of another request than its action's")
+		} else {
+			s.writeActionError(w, r, err)
+		}
+		return nil, nil, false
+	}
+	return call, stored, true
+}
+
+// serveCheckout answers the request of a parallelworks/checkout step's try
+// for its tree (workerapi.PathCheckout), the same request as its action's,
+// once Actions has answered that success: with the tree Actions writes, as
+// a tar stream, in the time the most a tree holds takes at minRate. Any
+// of an attempt that no longer holds its job is fenced, and one of a try
+// whose action wasn't answered success, or another request for the try,
+// is 400. A stream Actions fails to finish is cut short, without the end of
+// its chunked body, so that the worker reads it as a request that failed.
+func (s *Server) serveCheckout(w http.ResponseWriter, r *http.Request, a *store.Attempt, run *store.Run) {
+	ctx := r.Context()
+	call, stored, ok := s.readAction(w, r, a, run, true)
+	if !ok {
+		return
+	}
+	if stored == nil || stored.Outcome != plan.OutcomeSuccess {
+		s.badRequest(w, r, "a checkout of a try whose action wasn't answered success")
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(writeTime + time.Duration(workerapi.MaxCheckoutBytes/minRate)*time.Second))
+	tw := &treeWriter{w: w}
+	err := s.actions.Tree(ctx, call, tw)
+	switch {
+	case err != nil && !tw.started:
+		s.writeActionError(w, r, err)
+	case err != nil:
+		s.log.ErrorContext(ctx, "workerapisrv: a checkout's tree was cut short", "run", run.ID, "attempt", a.ID, "step", call.Request.Step, "error", err)
+		panic(http.ErrAbortHandler) //nolint:forbidigo // net/http's way to end an answer cut short, which it recovers
+	case !tw.started:
+		tw.start()
+	}
+}
+
+// A treeWriter writes a checkout's tree as the answer to its request, once
+// it has written the answer's header, as it does before its first write.
+type treeWriter struct {
+	w       http.ResponseWriter
+	started bool
+}
+
+func (t *treeWriter) start() {
+	t.started = true
+	t.w.Header().Set("Content-Type", workerapi.CheckoutMediaType)
+	t.w.WriteHeader(http.StatusOK)
+}
+
+func (t *treeWriter) Write(p []byte) (int, error) {
+	if !t.started {
+		t.start()
+	}
+	return t.w.Write(p)
 }
 
 // writeActionError answers with what err, of an action's request, says of

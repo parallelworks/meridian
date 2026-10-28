@@ -603,6 +603,23 @@ var noMaintenance = []string{
 }
 
 func (s *Sources) runOnce(ctx context.Context, repo, stdin string, args ...string) ([]byte, error) {
+	cmd := s.command(ctx, repo, args...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &limitedWriter{w: &stderr, n: 4 << 10}
+	if err := cmd.Run(); err != nil {
+		return nil, s.commandError(ctx, args, stderr.String(), err)
+	}
+	return stdout.Bytes(), nil
+}
+
+// command returns the git command that runs args in the copy repo, or
+// outside any for "", with the user's configuration and credentials, and
+// the ssh command sshFor gives, as one that ends with ctx, and its process
+// group with it.
+func (s *Sources) command(ctx context.Context, repo string, args ...string) *exec.Cmd {
 	ssh := s.sshFor(ctx)
 	base := append([]string{"-c", "core.hooksPath=" + filepath.Join(s.dir, hooksDir)}, noMaintenance...)
 	if repo != "" {
@@ -612,23 +629,22 @@ func (s *Sources) runOnce(ctx context.Context, repo, stdin string, args ...strin
 	// git reads none of it as an option.
 	cmd := exec.CommandContext(ctx, s.git, append(base, args...)...) //nolint:gosec // as above
 	cmd.Env = gitEnv(os.Environ(), ssh)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &limitedWriter{w: &stderr, n: 4 << 10}
 	cmd.WaitDelay = waitDelay
 	killGroup(cmd)
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
-			return nil, problems.GitUnavailable.Problem(problems.Params{"reason": err.Error()})
-		}
-		return nil, &gitError{args: args, stderr: stderr.String(), err: err}
+	return cmd
+}
+
+// commandError returns the error of the git command args that failed with
+// err, having written stderr: ctx's, once it is done; git_unavailable for
+// a git that couldn't be run; or a *gitError.
+func (s *Sources) commandError(ctx context.Context, args []string, stderr string, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
-	return stdout.Bytes(), nil
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
+		return problems.GitUnavailable.Problem(problems.Params{"reason": err.Error()})
+	}
+	return &gitError{args: args, stderr: stderr, err: err}
 }
 
 // batchSSH is the ssh command git runs when the user names none: one that

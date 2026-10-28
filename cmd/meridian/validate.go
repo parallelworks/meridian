@@ -13,11 +13,13 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"sync"
 
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
 	"github.com/parallelworks/meridian/plan"
@@ -164,12 +166,20 @@ type cacheSources struct {
 	dirs local.Dirs
 	// servers are the GitLab servers the user registered.
 	servers []string
+	// mu guards sources, which the coordinator's requests for checkouts'
+	// trees open at once.
+	mu      sync.Mutex
 	sources *local.Sources
 }
 
-var _ compile.Sources = (*cacheSources)(nil)
+var (
+	_ compile.Sources   = (*cacheSources)(nil)
+	_ coordinator.Trees = (*cacheSources)(nil)
+)
 
 func (s *cacheSources) open() (*local.Sources, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.sources == nil {
 		if err := s.dirs.EnsureCache(); err != nil {
 			return nil, err
@@ -201,6 +211,23 @@ func (s *cacheSources) Pin(ctx context.Context, repo, revision string) (string, 
 		return "", err
 	}
 	return sources.Pin(ctx, repo, revision)
+}
+
+func (s *cacheSources) SurveyTree(ctx context.Context, repo, commit string, paths []string) (coordinator.TreeSurvey, error) {
+	sources, err := s.open()
+	if err != nil {
+		return coordinator.TreeSurvey{}, err
+	}
+	survey, err := sources.SurveyTree(ctx, repo, commit, paths)
+	return coordinator.TreeSurvey(survey), err
+}
+
+func (s *cacheSources) WriteTree(ctx context.Context, repo, commit string, paths []string, w io.Writer) error {
+	sources, err := s.open()
+	if err != nil {
+		return err
+	}
+	return sources.WriteTree(ctx, repo, commit, paths, w)
 }
 
 // located returns diags, the run's problems as it starts, which have no
