@@ -20,6 +20,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
+	"github.com/parallelworks/meridian/internal/backoff"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -173,14 +174,7 @@ var defaultStartRetry = startRetry{tries: 8, first: 2 * time.Second, most: 2 * t
 
 // backoff returns how long to wait after the run's tries-th try.
 func (r startRetry) backoff(tries int) time.Duration {
-	d := r.first
-	for range tries - 1 {
-		if d >= r.most {
-			return r.most
-		}
-		d *= 2
-	}
-	return min(d, r.most)
+	return backoff.Exponential(r.first, r.most, tries-1)
 }
 
 // A Coordinator stores runs, and works their hopper jobs as one of the

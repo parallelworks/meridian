@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/backoff"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -667,11 +667,7 @@ var defaultTiming = timing{
 // quarter at random, so that workers cut off together don't all come back
 // at once.
 func (t timing) backoff(tries int) time.Duration {
-	d := t.backoffMax
-	if tries < 30 {
-		d = min(t.backoffMin<<tries, t.backoffMax)
-	}
-	return d - rand.N(d/4+1) //nolint:gosec // jitter, not a secret
+	return backoff.Jitter(backoff.Exponential(t.backoffMin, t.backoffMax, tries))
 }
 
 // sleep waits for d, or until ctx is done.
