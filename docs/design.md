@@ -314,8 +314,8 @@ the SHA-256 hash of its content: 218 files.
   and Meridian refused it as the wrong type. None of the 329 `if:`s is
   written empty. All 7 that are a bare reference read a boolean input, and
   none of those inputs is hidden or ignored, so none is null: each has a
-  default but sl_core's `push_to_gh`, which ACTIVATE fills with `false`
-  when it is left out, as Meridian does.
+  default but one known workflow's boolean input, which ACTIVATE fills
+  with `false` when it is left out, as Meridian does.
 - **A duration or a count that isn't one is a problem**, where format 1
   ignored a timeout it couldn't read and fell back to a retry's defaults:
   an expression's value for a job's or a step's `timeout:`, a retry's

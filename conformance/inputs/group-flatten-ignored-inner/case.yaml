@@ -6,7 +6,7 @@ description: >-
   so the inner group's inputs, which its form sends, their defaults when
   untouched, reached the run. ACTIVATE takes the same fix. None of the 221
   known workflows has a group with flatten.
-source: Meridian, after the review of ACTIVATE's fillDefaultValues and its form's filterIgnoredFieldsInternal
+source: Meridian, after ACTIVATE's filling of defaults and its form
 inputs:
   flag: true
   a: ad
