@@ -843,8 +843,11 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	if len(tx.placed) > 0 && s.onPlaced != nil {
 		s.onPlaced(context.WithoutCancel(ctx), tx.placed)
 	}
-	if len(tx.ended) > 0 && s.onEnded != nil {
-		s.onEnded(context.WithoutCancel(ctx), tx.ended)
+	if len(tx.ended) > 0 {
+		s.starts.forget(tx.ended)
+		if s.onEnded != nil {
+			s.onEnded(context.WithoutCancel(ctx), tx.ended)
+		}
 	}
 	if tx.erased {
 		s.eraseWAL(context.WithoutCancel(ctx))

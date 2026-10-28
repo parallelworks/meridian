@@ -104,3 +104,36 @@ func Sorted[V any](m map[string]V) iter.Seq2[string, V] {
 		}
 	}
 }
+
+// Memory estimates, from above, how many bytes of memory what the JSON
+// text data decodes to holds: as Go holds JSON values, or as the structs
+// of a type, with the text's strings. A flat factor on the text's length
+// would not do, since a small object costs many times its text: a list of
+// one-member objects holds 45 times as many bytes as its text, and one
+// nested in another as deeply as it goes 55 times. So it is 16 bytes for
+// each of the text's, as maps of many members cost, 384 more for each
+// object, as a small map costs, and 64 more for each array. What a plan,
+// or a run's start state with its text, decodes to was measured at 13% to
+// 71% of it, of workflows of many shapes: those lists and nests, maps of a
+// few hundred to thousands of short members, lists of short values and of
+// empty ones, a matrix job of many instances and plans of many jobs and
+// steps. data is valid JSON: a brace or a bracket in a string isn't
+// counted.
+func Memory(data []byte) int64 {
+	var objects, arrays int64
+	in := false // in a string
+	for i := 0; i < len(data); i++ {
+		switch c := data[i]; {
+		case in && c == '\\':
+			i++ // what is escaped, which may be a quote, is in the string
+		case c == '"':
+			in = !in
+		case in:
+		case c == '{':
+			objects++
+		case c == '[':
+			arrays++
+		}
+	}
+	return 16*int64(len(data)) + 384*objects + 64*arrays
+}

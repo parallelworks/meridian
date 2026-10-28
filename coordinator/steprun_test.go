@@ -293,7 +293,8 @@ func TestStepRun(t *testing.T) {
 }
 
 // TestPlanCacheStepRun checks that a step run shares its caller's decoded
-// plan, which the cache keeps once.
+// plan, which the cache keeps once, until its caller, not the step run,
+// has ended.
 func TestPlanCacheStepRun(t *testing.T) {
 	created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(oneJob), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}})
 	if err != nil || diags.HasErrors() {
@@ -316,6 +317,18 @@ func TestPlanCacheStepRun(t *testing.T) {
 	}
 	if q, err := cache.get(stepRun); err != nil || q != p || cache.runs.Len() != 1 {
 		t.Errorf("the step run's plan is %p, %v, its caller's %p, of %d kept", q, err, p, cache.runs.Len())
+	}
+	stepRun.State = store.RunEnded
+	if q, err := cache.get(stepRun); err != nil || q != p {
+		t.Errorf("the ended step run's plan is %p, %v, its caller's %p", q, err, p)
+	}
+	cache.forget("2")
+	if _, ok := cache.runs.Peek("1"); !ok {
+		t.Error("the step run's end let go of its caller's plan")
+	}
+	cache.forget("1")
+	if cache.runs.Len() != 0 {
+		t.Error("the caller's end kept its plan")
 	}
 }
 
