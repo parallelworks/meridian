@@ -180,6 +180,7 @@
   "child_dir_unusable": "工作进程无法创建该步骤调用的运行的目录“{dir}”：{reason}",
   "step_run_request_failed": "该步骤在另一台主机上运行，而工作进程为其在那里的运行向协调器发出的请求失败了：{reason}",
   "step_run_outputs_unwritten": "工作进程无法将该步骤在另一台主机上写入 $OUTPUTS 的内容添加到它本应在此写入的文件中：{reason}",
+  "step_run_output_line_too_long": "该步骤在另一台主机上写入了输出“{name}”，其在此处 $OUTPUTS 中的行经转义后会超过 {limit} 字节，因此它的输出均未被添加。",
   "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而对于调用工作流的步骤，或在工作进程 API 版本低于 3 的尝试中，此工作进程无法这样做。",
   "step_ssh_reads_worker": "该步骤的 ssh: 根据只有其作业的工作进程才知道的 {ref} 指定主机，因此无法在作业所在主机以外的主机上运行。",
   "step_off_job_host": "该步骤的 ssh: 为 null 或没有给出 remoteHost，因此格式 1 会在其作业没有 ssh: 时运行的地方运行它，而位于作业的 ssh: 指定的主机上的此工作进程，对于调用工作流的步骤，或在工作进程 API 版本低于 3 的尝试中，无法这样做。",

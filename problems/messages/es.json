@@ -180,6 +180,7 @@
   "child_dir_unusable": "El worker no pudo crear el directorio “{dir}” de la ejecución a la que llama este paso: {reason}.",
   "step_run_request_failed": "El paso se ejecuta en otro host, y la solicitud del worker al coordinador para su ejecución allí falló: {reason}.",
   "step_run_outputs_unwritten": "El worker no pudo añadir lo que el paso escribió en $OUTPUTS en el otro host al archivo que habría escrito aquí: {reason}.",
+  "step_run_output_line_too_long": "El paso escribió en el otro host la salida “{name}”, cuya línea en $OUTPUTS aquí, escapada, tendría más de {limit} bytes, así que no se añadió ninguna de sus salidas.",
   "step_ssh_not_supported": "El ssh: del paso indica otro host donde ejecutarlo, lo que este worker no puede hacer con un paso que llama a un flujo de trabajo, ni en un intento de una versión de la API de workers anterior a la 3.",
   "step_ssh_reads_worker": "El ssh: del paso indica su host a partir de {ref}, que solo conoce el worker de su trabajo, así que no puede ejecutarse en otro host que el de su trabajo.",
   "step_off_job_host": "El ssh: del paso es nulo o no da ningún remoteHost, así que el formato 1 lo ejecuta donde se ejecutaría su trabajo sin su ssh:, lo que este worker, en el host que indica el ssh: del trabajo, no puede hacer con un paso que llama a un flujo de trabajo, ni en un intento de una versión de la API de workers anterior a la 3.",

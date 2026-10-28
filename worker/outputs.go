@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -111,6 +112,14 @@ func openOutputsAs(d *privateDir, name string, flag int) (*os.File, error) {
 
 var escapeOutput = strings.NewReplacer("\n", `\n`, "\t", `\t`, "\r", `\r`)
 
+// An outputLineTooLongError is what appendOutputs returns for an output,
+// name, whose line would be longer than readOutputs reads.
+type outputLineTooLongError struct{ name string }
+
+func (e *outputLineTooLongError) Error() string {
+	return "worker: the line of the output " + strconv.Quote(e.name) + " would be too long"
+}
+
 // appendOutputs appends outputs to the $OUTPUTS file name in d, as
 // openOutputs opens it, a name=value line each, in the order of their
 // names, with each newline, tab and carriage return in a value written as
@@ -119,10 +128,21 @@ var escapeOutput = strings.NewReplacer("\n", `\n`, "\t", `\t`, "\r", `\r`)
 // would have written (docs/design.md, Steps on another host). A file that
 // doesn't end with a newline has one first, so that its last line is
 // read as it was. It returns errOutputsNotFile for a path that isn't a
-// regular file, which readOutputs reports as it reads it.
+// regular file, which readOutputs reports as it reads it; and, appending
+// none of them, an *outputLineTooLongError for an output whose line, so
+// escaped, would be longer than maxOutputsLine, which would keep the
+// whole file from being read (readOutputs).
 func appendOutputs(d *privateDir, name string, outputs map[string]string) (err error) {
 	if len(outputs) == 0 {
 		return nil
+	}
+	var lines strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(outputs)) {
+		line := name + "=" + escapeOutput.Replace(outputs[name])
+		if len(line) > maxOutputsLine {
+			return &outputLineTooLongError{name}
+		}
+		lines.WriteString(line + "\n")
 	}
 	f, err := openOutputsAs(d, name, os.O_RDWR|os.O_APPEND)
 	if err != nil {
@@ -146,9 +166,7 @@ func appendOutputs(d *privateDir, name string, outputs map[string]string) (err e
 			b.WriteByte('\n')
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(outputs)) {
-		b.WriteString(name + "=" + escapeOutput.Replace(outputs[name]) + "\n")
-	}
+	b.WriteString(lines.String())
 	_, err = f.WriteString(b.String())
 	return err
 }

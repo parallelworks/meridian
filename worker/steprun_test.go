@@ -72,9 +72,9 @@ func TestStepRunCaller(t *testing.T) {
 	job.Outputs = map[string]plan.Value{"y": cond("needs.build.outputs.y"), "z": cond("steps.own.outputs.z"), "s": cond("needs.build.outputs.s")}
 	f := workerapitest.NewFake(t, job)
 	f.Claim.Retry, f.Claim.Attempt = 1, 2
-	written := map[string]string{"x": "here", "y": "two\nlines\tand a\rreturn", "s": "s3cr3t-of-the-host"}
+	written := map[string]string{"x": "here", "y": "two\nlines\tand a\rreturn", "s": "s3cr3t-of-the-host", "e": "e"}
 	f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{
-		"1.0": {Outcome: plan.OutcomeSuccess, Outputs: written, Private: []string{"s"}, Secrets: []string{"s"}},
+		"1.0": {Outcome: plan.OutcomeSuccess, Outputs: written, Private: []string{"e", "s"}, Secrets: []string{"e", "s"}},
 		"2.0": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"z": "3"}},
 		"3.0": {Outcome: plan.OutcomeFailure, ExitCode: 2},
 		"4.0": {Outcome: plan.OutcomeFailure, ExitCode: 1},
@@ -91,15 +91,15 @@ func TestStepRunCaller(t *testing.T) {
 		"started 4.0", "finished 4.0 failure 1", "started 4.1", "finished 4.1 success 0",
 	)
 	end := checkEnd(t, f, plan.OutcomeSuccess, "")
-	if want := map[string]string{"x": "here", "y": written["y"], "z": "3", "s": written["s"]}; !maps.Equal(end.Result.Outputs, want) {
+	if want := map[string]string{"x": "here", "y": written["y"], "z": "3", "s": written["s"], "e": "e"}; !maps.Equal(end.Result.Outputs, want) {
 		t.Errorf("the job's outputs are %q, want %q", end.Result.Outputs, want)
 	}
 	if !slices.Contains(end.Result.Secrets, "s") {
 		t.Errorf("the job's output that holds the step run's secret isn't one: %v", end.Result.Secrets)
 	}
 	// The step's outputs are what it changed of the job's file, its secret
-	// masked.
-	if got := finishedEvent(t, f, 1, 0, false).Outputs; len(got) != 2 || got["y"] != written["y"] || got["s"] == written["s"] {
+	// masked, but one too short to mask, which would mask common text.
+	if got := finishedEvent(t, f, 1, 0, false).Outputs; len(got) != 3 || got["y"] != written["y"] || got["s"] == written["s"] || got["e"] != "e" {
 		t.Errorf("the step run's step's outputs are %q", got)
 	}
 	checkLog(t, f, logKey{workerapi.LogStep, 1, 0}, "")
@@ -268,7 +268,15 @@ func TestStepRunCallerWhich(t *testing.T) {
 			job.Target = plan.Target{Inline: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "home"})}}
 			f := workerapitest.NewFake(t, job)
 			f.Speaks = tc.version
-			f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{"0.0": {Outcome: plan.OutcomeSuccess}, "1.0": {Outcome: plan.OutcomeSuccess}})
+			// Every step run, and every child, ends at once, so that one asked
+			// for that shouldn't be fails the test, rather than wait for its
+			// end.
+			f.StepRun = func(req workerapi.StepRunRequest) *workerapi.StepRun {
+				return &workerapi.StepRun{Run: "steprun-" + stepRunKey(req.Step, req.Try, req.Cleanup), Ended: true, Outcome: plan.OutcomeSuccess}
+			}
+			f.Child = func(req workerapi.ChildRequest) *workerapi.Child {
+				return &workerapi.Child{Run: "child-" + stepRunKey(req.Step, req.Try, false), Ended: true, Outcome: plan.OutcomeSuccess}
+			}
 			if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 				t.Fatal(err)
 			}
@@ -472,6 +480,15 @@ func TestAppendOutputs(t *testing.T) {
 	if err != nil || !maps.Equal(got, want) {
 		t.Errorf("the outputs read back are %q, %v; want %q", got, err, want)
 	}
+	// One whose line would be too long to read, escaped, has none of them
+	// appended.
+	long := map[string]string{"fits": "1", "long": strings.Repeat("\r", maxOutputsLine/2+1)}
+	if err := appendOutputs(d, jobOutputs, long); err == nil {
+		t.Error("an output whose line would be too long to read was appended")
+	}
+	if again, _, _, err := readOutputs(d, jobOutputs); err != nil || !maps.Equal(again, want) {
+		t.Errorf("after an output too long, the outputs read back are %q, %v", again, err)
+	}
 }
 
 // TestStepRunAnswered checks the answers of the step run paths that no
@@ -562,4 +579,64 @@ func TestStepRunWorkerCheckout(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(f.Claim.RunDir, "src", "README")); err != nil || string(data) != "hello\n" {
 		t.Errorf("the tree's README holds %q, %v", data, err)
 	}
+}
+
+// TestStepRunCallerLineTooLong checks that what a step run's step wrote,
+// one of whose lines, escaped, would be longer than $OUTPUTS is read
+// with, fails the step, and none of it is appended, which would keep the
+// whole file from being read: the job's earlier step's outputs are read.
+func TestStepRunCallerLineTooLong(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, newJob(command("echo 'x=here' >> $OUTPUTS"), remote("true")))
+	long := strings.Repeat("\t", maxOutputsLine/2+1)
+	f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{"1.0": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"long": long, "short": "1"}}})
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 0.0", "finished 0.0 success 0", "started 1.0", "finished 1.0 failure 0")
+	end := checkEnd(t, f, plan.OutcomeFailure, "")
+	if got := codes(finishedEvent(t, f, 1, 0, false).Diagnostics); !slices.Equal(got, []string{"step_run_output_line_too_long"}) {
+		t.Errorf("the step's diagnostics are %v", got)
+	}
+	if !maps.Equal(end.Result.Outputs, map[string]string{"x": "here"}) {
+		t.Errorf("the job's outputs are %q", end.Result.Outputs)
+	}
+}
+
+// TestStepRunWorkerCleanupIf checks that a step run of a step's cleanup:
+// runs it, without evaluating its step's if: again, which its caller
+// decided: false as the state has it here.
+func TestStepRunWorkerCleanupIf(t *testing.T) {
+	t.Parallel()
+	step := command("true")
+	step.If = cond("failure()")
+	step.Cleanup = plan.Literal("echo tidied=yes >> $OUTPUTS")
+	f := workerapitest.NewFake(t, stepRunJob(step))
+	steps := []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSuccess}}
+	f.Claim.StepRun = &workerapi.StepRunClaim{Step: 2, Cleanup: true, State: workerapi.StepRunState{Steps: steps}}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "cleanup started 2.0", "cleanup finished 2.0 success 0")
+	if end := checkEnd(t, f, plan.OutcomeSuccess, ""); end.Result.Outputs["tidied"] != "yes" {
+		t.Errorf("the cleanup's outputs are %v", end.Result.Outputs)
+	}
+}
+
+// TestStepRunWorkerCleanupSkipped checks that a step run of the cleanup:
+// of a step its state says was skipped, which its caller would have asked
+// none for, fails, rather than say that a cleanup that never ran
+// succeeded.
+func TestStepRunWorkerCleanupSkipped(t *testing.T) {
+	t.Parallel()
+	step := command("true")
+	step.Cleanup = plan.Literal("echo tidy")
+	f := workerapitest.NewFake(t, stepRunJob(step))
+	steps := []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSkipped}}
+	f.Claim.StepRun = &workerapi.StepRunClaim{Step: 2, Cleanup: true, State: workerapi.StepRunState{Steps: steps}}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "cleanup finished 2.0 failure -1")
+	checkEnd(t, f, plan.OutcomeFailure, "")
 }

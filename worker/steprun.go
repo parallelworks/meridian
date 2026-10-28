@@ -184,18 +184,25 @@ func (a *attempt) endedElsewhere(e elsewhere, f outputsFile, path string) (int, 
 // step's here: it masks each that its step run says is private or holds a
 // secret as a secret of the job's, at least, so that the job's logs never
 // show it, and an output that holds it is a secret (plan.JobState.Secrets),
-// whatever else it holds; and it appends them all to f, the file the step,
-// at path, would have written (appendOutputs), whose problem, if it had
-// one, it returns. A file that isn't one, readOutputs reports as it reads
-// it.
+// whatever else it holds, but one shorter than the phases mask of what is
+// made from a secret (plan.MinDerived), which would mask common text, as
+// its step run's only says it holds what the worker masks already; and it
+// appends them all to f, the file the step, at path, would have written
+// (appendOutputs), whose problem, if it had one, it returns: none of them
+// for one whose line would be too long to read. A file that isn't one,
+// readOutputs reports as it reads it.
 func (a *attempt) takeOutputs(f outputsFile, path string, end *workerapi.StepRun) problems.Diagnostics {
 	for _, name := range slices.Concat(end.Private, end.Secrets) {
-		if v := end.Outputs[name]; v != "" && !slices.Contains(a.secrets, v) {
+		if v := end.Outputs[name]; len(v) >= plan.MinDerived && !slices.Contains(a.secrets, v) {
 			a.secrets = append(a.secrets, v)
 			a.mask.Add(v)
 		}
 	}
-	if err := appendOutputs(a.files, f.name, end.Outputs); err != nil && !errors.Is(err, errOutputsNotFile) {
+	err := appendOutputs(a.files, f.name, end.Outputs)
+	if long, ok := errors.AsType[*outputLineTooLongError](err); ok {
+		return problems.Diagnostics{a.at(problems.StepRunOutputLineTooLong, path, problems.Params{"name": long.name, "limit": maxOutputsLine})}
+	}
+	if err != nil && !errors.Is(err, errOutputsNotFile) {
 		a.log.Error("a step run's outputs couldn't be appended to the step's $OUTPUTS", "path", path, "error", a.mask.Mask(err.Error()))
 		return problems.Diagnostics{a.at(problems.StepRunOutputsUnwritten, path, problems.Params{"reason": err.Error()})}
 	}
@@ -241,7 +248,8 @@ func (a *attempt) jobCounters() (retry, attempt int) {
 // the state of its caller's job that the claim gives, which the job's
 // other steps, there by their id alone, never run. It evaluates the step
 // with its own variables, as format 1 does once it has connected to the
-// host, but not its if:, which its caller decided (plan.JobState.FirstTry),
+// host, but not its if:, nor its cleanup's, which its caller decided
+// (plan.JobState.FirstTry),
 // and runs it, with an $OUTPUTS of its own, empty, in its run's directory,
 // as any step; but one told to stop, as its caller's stop of it, or the
 // end of its caller's attempt, tells it, never runs, or is stopped,
@@ -314,10 +322,14 @@ func (a *attempt) runAsStepRun(ctx context.Context, jobDiags problems.Diagnostic
 		diags problems.Diagnostics
 		err   error
 	)
+	// Its if: is its caller's to decide, as format 1 decides it before it
+	// connects: the step's, which carries over the word always, or its
+	// cleanup's, which its caller's Cleanup decided runs.
+	state.FirstTry = &plan.ReadyStep{IfAlways: sr.State.IfAlways}
 	if sr.Cleanup {
 		rs, diags, err = a.job.Cleanup(ctx, i, state)
 	} else {
-		state.Try, state.FirstTry = try, &plan.ReadyStep{IfAlways: sr.State.IfAlways}
+		state.Try = try
 		rs, diags, err = a.job.Step(ctx, i, state)
 	}
 	if a.halted.fired() {
@@ -330,9 +342,10 @@ func (a *attempt) runAsStepRun(ctx context.Context, jobDiags problems.Diagnostic
 	case diags.HasErrors() || rs == nil:
 		return ended(plan.OutcomeFailure, -1, nil, diags)
 	case rs.Skipped:
-		// The cleanup's if:, evaluated again with the state its caller
-		// evaluated it with, which ran it: nothing runs.
-		return ended(plan.OutcomeSuccess, -1, nil, diags)
+		// A cleanup of a step the state says was skipped, which its caller
+		// would have asked none for.
+		a.log.Error("a step run's claim is of the cleanup of a step that was skipped", "step", i)
+		return ended(plan.OutcomeFailure, -1, nil, append(diags, a.at(problems.EvaluationFailed, path, nil)))
 	}
 	a.addMasked(rs.Masked...)
 	// Its job is where the coordinator put its step, as it evaluated its

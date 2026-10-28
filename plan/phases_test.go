@@ -1399,6 +1399,33 @@ jobs:
 	}
 }
 
+// A cleanup given what its caller decided, as a step run's is, isn't
+// evaluated by its step's if: again: one false as the job's status is
+// here, which a cleanup otherwise is skipped by, runs.
+func TestCleanupFirstTryGiven(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - run: echo step
+        if: ${{ failure() }}
+        cleanup: echo tidy
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: run, Steps: []plan.StepResult{{Outcome: plan.OutcomeSuccess}}}
+	if s, _, err := ready.Job.Cleanup(t.Context(), 0, state); err != nil || !s.Skipped {
+		t.Errorf("a cleanup whose if: is false: %+v, %v", s, err)
+	}
+	state.FirstTry = &plan.ReadyStep{}
+	if s, diags, err := ready.Job.Cleanup(t.Context(), 0, state); err != nil || len(diags) > 0 || s.Skipped || s.Run != "echo tidy" || !s.OutlivesCancel {
+		t.Errorf("a cleanup given its caller's decision: %+v, %v, %v", s, diags, err)
+	}
+}
+
 // The job's env: and working-directory: read only the variables format 1
 // defines as a job starts, the same for each step, and a step reads each
 // that format 1 defines, but none that it doesn't, such as a credential.

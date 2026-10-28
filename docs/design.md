@@ -2621,10 +2621,9 @@ does, whatever the version, a step that calls a workflow.
   a calling step's private values are. It evaluates the job's `env:`
   again, with its own paths, as format 1 gives the step the job's
   environment with its paths made the host's. It doesn't evaluate the
-  step's `if:` again, nor heed its `ssh:`, which the caller's worker did,
-  as format 1 does before it connects; a cleanup's `if:` it evaluates
-  again, as any cleanup's, with the state its caller's worker evaluated
-  it with. It runs that one step, never the job's others, and none once
+  step's `if:` again, nor its cleanup's, nor heed its `ssh:`, which the
+  caller's worker did, as format 1 does before it connects. It runs that
+  one step, never the job's others, and none once
   it is told to stop, whatever its `if:` says, nor whether its caller's
   job is being cancelled, which is only the step's `cancelled()`. It
   reports the step's exit status and its outcome as it ran, which its
@@ -2640,7 +2639,10 @@ does, whatever the version, a step that calls a workflow.
   reads it as it does a step's of its own, under the job's cap: as it
   reads that file, a line it can't parse is ignored, and a name written
   twice has one value, so the values are what the step's lines would
-  give. A try that fails gives none, as in format 1. Of the caller's job,
+  give. A value's escaping can make its line longer than format 1 reads
+  one, which would keep the whole file from being read: then none of them
+  is appended, and the step fails (`step_run_output_line_too_long`). A
+  try that fails gives none, as in format 1. Of the caller's job,
   its worker gives only what format 1 passes between steps, the earlier
   steps' outcomes and outputs, whether the job is being cancelled, the
   step's retry counter, and whether its `if:` gave the word `always`,
@@ -2668,8 +2670,10 @@ does, whatever the version, a step that calls a workflow.
   run, as these, its step's own, its step's timeout or a person's
   cancel, reaches its worker in the same transaction, whatever its
   step's `if:` says, and a step run stopped before it was placed is
-  never placed. Its paths are version 3's of the worker API; an attempt
-  of an older version fails such a step, as now.
+  never placed. A try that its timeout stops, whose step run's host can't
+  be reached, ends only once the step run's lease lapses, as a workflow a
+  step calls does. Its paths are version 3's of the worker API; an
+  attempt of an older version fails such a step, as now.
 
 Where format 1 does otherwise, none of it in the known workflows:
 

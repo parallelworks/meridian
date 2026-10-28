@@ -41,7 +41,9 @@ type JobState struct {
 	// step as Step gave it at its first try, for a later one, which carries
 	// over what the first decided; and, for any try of a step run's step
 	// (docs/design.md, Steps on another host), what its caller's first try
-	// decided, which Step doesn't decide again either.
+	// decided, which Step doesn't decide again either. For Cleanup, it is
+	// set for a step run's cleanup, which its caller's Cleanup decided runs,
+	// as any value: Cleanup doesn't evaluate the step's if: again.
 	Try      int
 	FirstTry *ReadyStep
 	// Env holds the variables the worker defines for the step, or for the
@@ -342,7 +344,8 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 // or Step and its index when the name isn't text. It is skipped if the
 // step didn't run, and if the step's if:, evaluated again with the job's
 // status as it ends, is false, without success(): a step with no if: is
-// cleaned up whatever happened to the job. The worker runs the job's
+// cleaned up whatever happened to the job. A step run's cleanup, given
+// state.FirstTry, runs as its caller's Cleanup decided, without its if:. The worker runs the job's
 // cleanups in the reverse order of their steps, and what a cleanup writes
 // to $OUTPUTS is the job's (StepResult.CleanupOutputs), as format 1 has
 // them. It reads its job's contexts as Step does, with every step's
@@ -390,6 +393,9 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	rs := &ReadyStep{Index: index}
 	var d decision
 	switch {
+	case cleanup && state.FirstTry != nil:
+		// A step run's cleanup, which its caller's Cleanup decided runs.
+		d = decision{run: true, outlivesCancel: true}
 	case cleanup:
 		// A cleanup evaluates its step's if: again, with the job's status as
 		// it ends, as format 1 runs a copy of the step.

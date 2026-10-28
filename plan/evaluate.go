@@ -464,6 +464,12 @@ const (
 	minField   = 4
 )
 
+// MinDerived is how long a string made from a secret must be for the
+// phases to give it to mask (minDerived): a worker that masks what another
+// says is made from one masks no shorter one, but one of its own secrets'
+// texts.
+const MinDerived = minDerived
+
 // mask notes s, text made from a secret, if it is at least minDerived
 // bytes long, or a credential field of a structured secret
 // (credentialFields).

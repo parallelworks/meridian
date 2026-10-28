@@ -180,6 +180,7 @@
   "child_dir_unusable": "워커가 이 단계가 호출하는 실행의 디렉터리 ‘{dir}’을(를) 만들 수 없습니다: {reason}",
   "step_run_request_failed": "단계가 다른 호스트에서 실행되는데, 그곳에서의 실행을 요청하는 워커의 코디네이터 요청이 실패했습니다: {reason}",
   "step_run_outputs_unwritten": "워커가 단계가 다른 호스트에서 $OUTPUTS에 쓴 내용을 여기서 썼을 파일에 추가할 수 없습니다: {reason}",
+  "step_run_output_line_too_long": "단계가 다른 호스트에서 출력 ‘{name}’을(를) 썼는데, 여기서 $OUTPUTS에 쓸 그 줄은 이스케이프하면 {limit}바이트보다 길어지므로, 출력은 하나도 추가되지 않았습니다.",
   "step_ssh_not_supported": "단계의 ssh:가 실행할 다른 호스트를 지정하는데, 이 워커는 워크플로를 호출하는 단계나 버전 3 이전의 워커 API 시도에서는 그렇게 할 수 없습니다.",
   "step_ssh_reads_worker": "단계의 ssh:가 작업의 워커만 아는 {ref}에서 호스트를 정하므로, 작업과 다른 호스트에서 실행할 수 없습니다.",
   "step_off_job_host": "단계의 ssh:가 null이거나 remoteHost를 지정하지 않으므로 형식 1은 작업이 ssh: 없이 실행될 곳에서 단계를 실행하는데, 작업의 ssh:가 지정하는 호스트에 있는 이 워커는 워크플로를 호출하는 단계나 버전 3 이전의 워커 API 시도에서는 그렇게 할 수 없습니다.",

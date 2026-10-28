@@ -1244,6 +1244,13 @@
       "Libera espacio en el disco que contiene el directorio del worker, o corrige lo que indica la razón."
     ]
   },
+  "step_run_output_line_too_long": {
+    "title": "Salida de un paso en otro host demasiado larga para añadirla",
+    "why": "Un paso que se ejecuta en otro host escribe sus salidas en un archivo $OUTPUTS propio allí, que vuelven al worker de su trabajo cuando su intento tiene éxito, y el worker las añade al archivo que el paso habría escrito aquí, una línea cada una, con cada salto de línea, tabulación y retorno de carro de un valor escritos como \\n, \\t y \\r, como el formato 1 los lee. Una de ellas haría una línea más larga de lo que el formato 1 lee, lo que impediría leer el archivo entero, con las salidas de los pasos anteriores del trabajo, así que el worker no añade ninguna, y el paso falla.",
+    "fix": [
+      "Haz que el paso escriba un valor más corto, o con menos saltos de línea, tabulaciones y retornos de carro, o escribe el valor en un archivo del directorio de la ejecución, y la ruta del archivo en $OUTPUTS."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "title": "Trabajo que un paso no puede cancelar",
     "why": "El jobs: de un paso parallelworks/cancel-jobs nombra los trabajos de su ejecución que hay que cancelar. Este nombre no es el de ningún trabajo de la ejecución, o es el de un trabajo con matriz, cuyas instancias el formato 1 conoce por otros nombres, así que no cancela ninguna. Como en el formato 1, el paso no hace nada por ese nombre y tiene éxito.",
