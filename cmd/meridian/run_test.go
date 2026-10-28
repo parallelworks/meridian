@@ -53,7 +53,10 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "worker" || os.Getenv(envMain) == "1" {
 		main()
 	}
-	os.Exit(m.Run())
+	// A race that a worker the tests' runs start reports, or any other
+	// process they start, fails them (racetest.Main): a worker's log goes
+	// once its placement is forgotten.
+	os.Exit(racetest.Main(m))
 }
 
 // parallelTests bounds how many of the package's tests that run in
@@ -81,9 +84,10 @@ func parallel(t *testing.T) {
 
 // runEnv is an environment with directories of a test's own: an empty
 // config directory, a state directory and a temporary directory. A race
-// that a worker the test's runs start reports, in its log in the state
-// directory, fails the test (racetest.Watch), as does one that a process
-// the test starts with racetest.Env of HOME reports.
+// that a process the test starts with racetest.Env of HOME reports fails
+// the test (racetest.Watch), as does one in the log of a worker of its
+// runs that is there as it ends; the workers of runs in this process
+// write theirs where racetest.Main reads them.
 func runEnv(t *testing.T) map[string]string {
 	t.Helper()
 	dir := t.TempDir()

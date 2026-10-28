@@ -20,7 +20,18 @@ func TestMain(m *testing.M) {
 		race()
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	os.Exit(racetest.Main(m))
+}
+
+// TestMainGORACE checks that Main gives the processes the tests start a
+// log_path of its own.
+func TestMainGORACE(t *testing.T) {
+	if !racetest.Enabled {
+		t.Skip("the race detector is off")
+	}
+	if !strings.Contains(os.Getenv("GORACE"), "log_path="+os.TempDir()) {
+		t.Errorf("GORACE is %q, without a log_path of Main's", os.Getenv("GORACE"))
+	}
 }
 
 // race writes a variable from two goroutines at once, which the race
@@ -50,8 +61,8 @@ func (r *recorder) Errorf(format string, args ...any) {
 }
 
 // TestCheck checks that Check reports the race of a process the test
-// started with Env, and one in a worker's log, and nothing in other files,
-// as a binary, which holds the words of a report.
+// started with Env, and one in a worker's log, and nothing in other files:
+// a binary, which holds the words of a report, or a step's log.
 func TestCheck(t *testing.T) {
 	if !racetest.Enabled {
 		t.Skip("the race detector is off")
@@ -71,6 +82,7 @@ func TestCheck(t *testing.T) {
 		"workers/a.log": "starting\nWARNING: DATA RACE\nWrite at 0x00c000012345 by goroutine 7:\n",
 		"workers/b.log": "nothing went wrong\n",
 		"bin/meridian":  "WARNING: DATA RACE",
+		"logs/step.log": "a step that prints\nWARNING: DATA RACE\n",
 	} {
 		path := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
