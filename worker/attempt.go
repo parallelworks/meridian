@@ -306,6 +306,9 @@ func (a *attempt) startedGroup(group int) {
 	a.groupsMu.Lock()
 	defer a.groupsMu.Unlock()
 	a.groups[group] = nil
+	// A new leader may reuse the number of a group signalled before,
+	// where the worker doesn't hold its leaders: it hasn't been signalled.
+	delete(a.termed, group)
 }
 
 // endedGroup records that the leader of a process group the attempt
