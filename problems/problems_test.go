@@ -269,12 +269,12 @@ func TestMessages(t *testing.T) {
 		{NotExpression, Params{"value": `"x"`}, `Must be a ${{ }} expression, not "x".`},
 		{
 			WrongType,
-			Params{"count": 2, "type1": "object", "type2": "array", "type3": "", "has_got": "true", "got": "string"},
+			WrongTypeParams("string", "object", "array"),
 			"Must be a mapping or a list, not a string.",
 		},
 		{
 			WrongType,
-			Params{"count": 1, "type1": "boolean", "type2": "", "type3": "", "has_got": "false", "got": ""},
+			WrongTypeParams("", "boolean"),
 			"Must be true or false.",
 		},
 		{
@@ -398,6 +398,25 @@ func TestLocalize(t *testing.T) {
 				t.Errorf("%s in %s: got %q, want %q", tc.kind.Code(), lang, got, want)
 			}
 		}
+	}
+}
+
+// TestWrongTypeParams checks that WrongTypeParams gives each param
+// wrong_type's message reads, "" for each type it isn't given, so that a
+// diagnostic of one type keeps its code as it is sent, rather than being
+// sent as foundation's invalid, as one that lacks a param is.
+func TestWrongTypeParams(t *testing.T) {
+	want := Params{"count": 1, "type1": "string", "type2": "", "type3": "", "has_got": "true", "got": "number"}
+	if got := WrongTypeParams("number", "string"); !maps.Equal(got, want) {
+		t.Errorf("WrongTypeParams = %v, want %v", got, want)
+	}
+	data, err := jsonv2.Marshal(WrongType.At("", Position{}, "/with/jobs/1", WrongTypeParams("number", "string")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Diagnostic
+	if err := jsonv2.Unmarshal(data, &back); err != nil || back.Code != WrongType.Code() || back.Message() != "Must be a string, not a number." {
+		t.Errorf("sent as %s: %v", data, err)
 	}
 }
 

@@ -634,16 +634,14 @@ func (e *evaluation) reportInvalid(k *problems.Kind, pointer, key string, v any,
 // reportType reports a value, v, at pointer that isn't of one of the types
 // the format takes there, by their names in the schema, such as string.
 func (e *evaluation) reportType(pointer string, v any, read expr.Read, types ...string) {
-	params := problems.Params{"count": len(types), "has_got": true, "got": typeName(v)}
-	for i, t := range types {
-		params["type"+strconv.Itoa(i+1)] = t
-	}
 	// The type of a value says nothing of it, so it isn't masked.
-	e.report(problems.WrongType, pointer, params, expr.Read{})
+	e.report(problems.WrongType, pointer, problems.WrongTypeParams(TypeName(v), types...), expr.Read{})
 }
 
-// typeName returns the name in a schema of v's type.
-func typeName(v any) string {
+// TypeName returns the name in a schema of the type of v, a value as a
+// workflow's or an evaluation's: null, boolean, string, number, array or
+// object.
+func TypeName(v any) string {
 	switch v.(type) {
 	case nil:
 		return "null"

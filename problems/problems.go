@@ -123,6 +123,20 @@ func WithSuggestion(params Params, name string, ok bool) Params {
 	return params
 }
 
+// WrongTypeParams returns the params of a WrongType problem: of a value
+// that must have one of the types want, at most three, and has the type
+// got, each by its name in a schema, such as string; or got "" for a value
+// whose type the problem doesn't say. A type1, type2 or type3 that want
+// doesn't fill is "", and has_got says, as "true" or "false", whether got
+// does.
+func WrongTypeParams(got string, want ...string) Params {
+	params := Params{"count": len(want), "type1": "", "type2": "", "type3": "", "has_got": strconv.FormatBool(got != ""), "got": got}
+	for i, t := range want {
+		params["type"+strconv.Itoa(i+1)] = t
+	}
+	return params
+}
+
 // List joins items a message shows with ", ". The items are data, such as
 // names and values, so the list reads the same in every language.
 func List(items []string) string { return strings.Join(items, ", ") }

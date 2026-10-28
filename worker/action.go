@@ -69,19 +69,13 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 // its ignore-errors: lets its last try succeed.
 var platformActions = []string{"parallelworks/scheduler-agent", "parallelworks/wait-for-agent"}
 
-// coordinatorActions are the built-in actions whose subject is the
-// coordinator's, which it performs when a step asks for one, through the
-// worker API (workerapi.PathAction): cancel-jobs, of the run's jobs,
-// update-session, of the run's sessions, and checkout, whose tree the
-// coordinator then serves (checkout).
-var coordinatorActions = []string{"parallelworks/cancel-jobs", "parallelworks/update-session", plan.CheckoutUses}
-
 // asksCoordinator reports whether a step that uses uses asks the
-// coordinator for it: an action the coordinator performs, in an attempt
-// of version 3 of the worker API or later, which has the path. Of an
-// earlier one, the step can't run, as before the API had it.
+// coordinator for it: an action the coordinator performs
+// (plan.CoordinatorAction), in an attempt of version 3 of the worker API
+// or later, which has the path. Of an earlier one, the step can't run, as
+// before the API had it.
 func (a *attempt) asksCoordinator(uses string) bool {
-	return slices.Contains(coordinatorActions, uses) && a.claim.APIVersion >= workerapi.Version3
+	return plan.CoordinatorAction(uses) && a.claim.APIVersion >= workerapi.Version3
 }
 
 // runAction asks the coordinator for the action that a step's try, readied
