@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 
@@ -176,12 +177,20 @@ func TestActionOfACancelledJob(t *testing.T) {
 	if n := r.actions.times(); n != 3 {
 		t.Errorf("the action was performed %d times, not 3", n)
 	}
+	// Cancelled said, before each Commit, what Commit did, so that an
+	// action that asks a platform first, as update-session does, asks it
+	// nothing for a step its job's cancel stops: as the plan's if: says,
+	// whatever the request.
+	if got := r.actions.sawCancelled(); !slices.Equal(got, []bool{false, false, true, false, true}) {
+		t.Errorf("Cancelled said %v", got)
+	}
 }
 
 // A step whose early-cancel: is any-job-failed, as the run's plan has it,
 // is answered cancelled, with no reason, without performing its action,
 // once a job of the run has failed, as its attempt's control says, though
 // it outlives its job's cancellation; and a step without one is performed.
+// Cancelled, asked before each Commit, says what Commit then did.
 func TestActionEarlyCancelled(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
@@ -205,5 +214,8 @@ func TestActionEarlyCancelled(t *testing.T) {
 	}
 	if n := r.actions.times(); n != 1 {
 		t.Errorf("the action was performed %d times, not once", n)
+	}
+	if got := r.actions.sawCancelled(); !slices.Equal(got, []bool{true, false}) {
+		t.Errorf("Cancelled said %v", got)
 	}
 }

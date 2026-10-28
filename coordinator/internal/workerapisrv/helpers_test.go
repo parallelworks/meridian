@@ -249,6 +249,8 @@ type fakeActions struct {
 	answer      func(tx *store.Tx, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error)
 	acted       int
 	uncommitted bool
+	// cancelled are what each call's Cancelled said, before its Commit.
+	cancelled []bool
 	// treeFault is how Tree fails: before it writes, after its first
 	// file, or not at all, for "".
 	treeFault string
@@ -308,8 +310,13 @@ func (f *fakeActions) Act(ctx context.Context, call *workerapisrv.ActionCall) (w
 	if call.Request.Step >= len(steps) || !strings.HasPrefix(steps[call.Request.Step].Uses, "parallelworks/") {
 		return workerapi.ActionAnswer{}, fmt.Errorf("%w: step %d", workerapisrv.ErrNotAction, call.Request.Step)
 	}
+	cancelled, err := call.Cancelled(ctx, &steps[call.Request.Step])
+	if err != nil {
+		return workerapi.ActionAnswer{}, err
+	}
 	f.mu.Lock()
 	answer, uncommitted := f.answer, f.uncommitted
+	f.cancelled = append(f.cancelled, cancelled)
 	f.mu.Unlock()
 	if uncommitted {
 		return workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}, nil
@@ -337,6 +344,13 @@ func (f *fakeActions) setUncommitted(uncommitted bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.uncommitted = uncommitted
+}
+
+// sawCancelled returns what each call's Cancelled said, in order.
+func (f *fakeActions) sawCancelled() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.cancelled)
 }
 
 // times returns how many times f has performed an action.
