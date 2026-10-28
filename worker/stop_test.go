@@ -446,7 +446,7 @@ func TestHeartbeatStalls(t *testing.T) {
 //     step 1 has run, are sent with it.
 func TestFenceKeepsSending(t *testing.T) {
 	t.Parallel()
-	f := workerapitest.NewFake(t, newJob(command("sleep 0.3"), command("sleep 0.3"), command("echo hello; sleep 30")))
+	f := workerapitest.NewFake(t, newJob(command("sleep 0.1"), command("sleep 0.1"), command("echo hello; sleep 30")))
 	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, 3, 1
 	f.Fault = func(r *http.Request) workerapitest.Fault {
 		switch {
