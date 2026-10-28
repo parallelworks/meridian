@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/hopper"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/conformance"
 	"github.com/parallelworks/meridian/coordinator/internal/runlog/runlogtest"
@@ -558,5 +560,61 @@ func TestFollowStored(t *testing.T) {
 	}
 	if got := f.logs(); got[logName(key)] != "first\npart" || got[logName(key)+" end"] != "" {
 		t.Errorf("the logs are %q", got)
+	}
+}
+
+// BenchmarkFollowTree polls, as Follow does on each wake and each tick, a
+// root whose steps called 200 children, none of which has anything new:
+// the round's reads of the store, once the tree is followed.
+func BenchmarkFollowTree(b *testing.B) {
+	const children = 200
+	c := open(b, Options{})
+	root, created := create(b, c, "jobs:\n  main:\n    steps:\n      - run: echo\n", nil, nil)
+	if _, err := c.startRun(b.Context(), root, nil); err != nil {
+		b.Fatal(err)
+	}
+	var attempt *store.Attempt
+	if err := c.store.Tx(b.Context(), func(tx *store.Tx) error {
+		var err error
+		attempt, _, err = tx.NewAttempt(store.NewAttempt{Run: root, Job: "main", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	}); err != nil {
+		b.Fatal(err)
+	}
+	for i := range children {
+		if err := c.store.Tx(b.Context(), func(tx *store.Tx) error {
+			id, err := tx.NewRunID()
+			if err != nil {
+				return err
+			}
+			var workflow hopper.JobID
+			workflow[13], workflow[14], workflow[15] = 0xfd, byte(i>>8), byte(i)
+			link := store.Link{Run: root, Job: "main", Attempt: attempt.ID, Step: 0, Try: i, Root: root, Depth: 1}
+			return tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: workflow, Parent: &link})
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	f := c.newFollower(root, nil, FollowOptions{Tree: true, Stored: true, Event: func(Event) error { return nil }})
+	round := func() bool {
+		heads, err := f.heads(b.Context())
+		if err != nil {
+			b.Fatal(err)
+		}
+		read, err := f.poll(b.Context(), true, heads)
+		if err != nil {
+			b.Fatal(err)
+		}
+		return read
+	}
+	// The first rounds read the events, and follow the children.
+	for round() {
+	}
+	if len(f.children) != children {
+		b.Fatalf("the root's follower follows %d children", len(f.children))
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		round()
 	}
 }

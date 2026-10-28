@@ -104,6 +104,45 @@ func (tx *Tx) addEventOf(n int64, kind, job, attempt string, step, child int64) 
 	return nil
 }
 
+// A RunHead is what TreeHeads gives of a run: the number of its last
+// event, 0 for a run that has none, and whether it has ended.
+type RunHead struct {
+	LastEvent int64
+	Ended     bool
+}
+
+// TreeHeads returns the head of each run of the tree the run run is of,
+// its root's and those of every run below the root, by their IDs, in one
+// query: what a follower of many runs of a tree reads first, to read the
+// events of only those with new ones, or that have ended. It returns none
+// for a run the store hasn't.
+func (tx *Tx) TreeHeads(run string) (map[string]RunHead, error) {
+	n, ok := runNumber(run)
+	if !ok {
+		return nil, nil
+	}
+	rows, err := tx.query(`WITH t AS (SELECT coalesce(root_run, id) AS root FROM meridian_runs WHERE id = ?)
+SELECT r.id, r.events_seq, r.state FROM meridian_runs r, t WHERE r.id = t.root OR r.root_run = t.root`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	heads := map[string]RunHead{}
+	for rows.Next() {
+		var (
+			id    int64
+			h     RunHead
+			state string
+		)
+		if err := rows.Scan(&id, &h.LastEvent, &state); err != nil {
+			return nil, err
+		}
+		h.Ended = RunState(state) == RunEnded
+		heads[runID(id)] = h
+	}
+	return heads, rows.Err()
+}
+
 // RunEvents returns the run's events after the one numbered after, at most
 // limit of them, in order, each with what it reports as it is now:
 // ErrNotFound for a run the store hasn't. Read in one View, a run that has
