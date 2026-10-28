@@ -58,31 +58,45 @@ func (d *Driver) Connect(ctx context.Context, m *backend.Member, _ backend.Endpo
 // workers', and it ends with the connection. A host whose sshd won't
 // listen there, as one that doesn't forward Unix sockets
 // (AllowStreamLocalForwarding, DisableForwarding), is
-// problems.SSHForwardingRefused.
+// problems.SSHForwardingRefused. A connection the pool kept can have
+// closed before it noticed, as one a host dropped as the listener before
+// this one ended: what fails on it for that is tried once more, over the
+// connection made again, as the driver's other calls are (closed).
 func (d *Driver) Forward(ctx context.Context, m *backend.Member) (net.Listener, error) {
 	t, err := targetOf(m)
 	if err != nil {
 		return nil, err
 	}
+	for try := 1; ; try++ {
+		l, conn, err := d.forward(ctx, m, t)
+		if err == nil || try > 1 || conn == nil || ctx.Err() != nil || asProblem(err) != nil || !closed(conn, err) {
+			return l, err
+		}
+	}
+}
+
+// forward is Forward, once, of m, whose target is t, over the pool's
+// connection to it, which it returns too, once it has it.
+func (d *Driver) forward(ctx context.Context, m *backend.Member, t sshconn.Target) (net.Listener, *sshconn.Conn, error) {
 	conn, h, err := d.learned(ctx, t)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	p, err := d.socket(m, h)
 	if err != nil {
-		return nil, err
+		return nil, conn, err
 	}
 	if err := unlinkSocket(ctx, conn, p); err != nil {
-		return nil, err
+		return nil, conn, err
 	}
 	l, err := conn.ListenUnix(p)
 	switch {
 	case err == nil:
-		return l, nil
+		return l, conn, nil
 	case errors.Is(err, sshconn.ErrForwardingRefused):
-		return nil, problems.SSHForwardingRefused.Problem(problems.Params{"host": t.Host, "path": p})
+		return nil, conn, problems.SSHForwardingRefused.Problem(problems.Params{"host": t.Host, "path": p})
 	}
-	return nil, err
+	return nil, conn, err
 }
 
 // socket returns the path of m's socket on the host h: its sockets
