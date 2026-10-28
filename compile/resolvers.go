@@ -139,12 +139,13 @@ type Sessions interface {
 	// u.Run that uses parallelworks/update-session asks. Meridian doesn't
 	// restrict which session a step names: Update decides whether the run
 	// may update it, as format 1's platform decides whether the run's
-	// token may, from who runs it and its workflow's permissions:
+	// token may, from who runs it and its tree's permissions:
 	// (u.Permissions).
 	//
 	//   - A run whose permissions: hold '*' acts as the person who runs it,
-	//     and may update any session they may: one of theirs, or one
-	//     shared with them.
+	//     and may update any session of their own, as they could
+	//     themself. One only shared with them it may not: sharing gives a
+	//     session's use, never its administration.
 	//   - Any other may update only a session of its own tree, one that a
 	//     run of the tree whose root is u.Root made (Make), as format 1
 	//     makes a tree's sessions with its root's run, and only one of the
@@ -167,9 +168,12 @@ type SessionUpdate struct {
 	// at the top of its tree, which no step called: Run's own for a run no
 	// step called.
 	Run, Root string
-	// Permissions are the run's workflow's permissions:
-	// (plan.Run.Permissions), which say what its token may do: '*' all
-	// that the person who runs it may.
+	// Permissions are the permissions: of the workflow of the run's tree's
+	// root (plan.Run.Permissions), which say what the run's token may do:
+	// '*' all that the person who runs it may. Format 1 gates the top
+	// workflow's alone, and a child runs with its root's token, so a
+	// workflow a step calls that asks for more than its root did is given
+	// none of it: its own permissions: count for nothing.
 	Permissions []string
 	// Name is the session's name, as the step's with: gives it, read as
 	// text: as sessions.<key> reads one of a run's sessions (Check), or

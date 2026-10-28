@@ -2292,9 +2292,10 @@ a workflow (`uses_not_supported`).
   the root's finisher waits for them, and the end of each wakes it.
 - **Its sessions.** A child's `sessions:` makes its own sessions, as its
   run's. Its `parallelworks/update-session` asks the provider as any
-  run's does, which is told the child's tree's root, so that it can
-  authorize the step as format 1 does a tree's, whose sessions it makes
-  with the root's run ([Built-in actions](#built-in-actions)).
+  run's does, which is told the child's tree's root and the root's
+  `permissions:`, never the child's own, so that it authorizes the step
+  as format 1 does a tree's, whose sessions it makes with the root's run,
+  and whose token is the root's ([Built-in actions](#built-in-actions)).
 - **Its groups.** A job of a child, and a job that calls one, may name
   groups with `runs-on:`, which format 1 refuses in both as not supported
   yet, so no workflow format 1 runs has either: a difference that takes
@@ -2545,12 +2546,15 @@ pins, which are built.
   session's: `${{ sessions.<key> }}` gives one of the run's own, as format
   1's does, but Meridian doesn't hold a step to those. The provider
   decides whether the run may update the session, as format 1's platform
-  decides whether the run's token may, and is told the run, its tree's
-  root and its `permissions:` to decide by:
-  - a run whose `permissions:` hold `'*'` acts as the person who runs it,
-    and may update any session they may, theirs or one shared with them,
-    as they could themself through the platform's API;
-  - any other may update only a session of its own tree, which a run of
+  decides whether the run's token may. It is told the run, its tree's
+  root, and the root's `permissions:` to decide by: format 1 gates the top
+  workflow's alone, and a child runs with its root's token, so a workflow
+  a step calls that asks for more than its root did is given none of it.
+  - A run whose tree's `permissions:` hold `'*'` acts as the person who
+    runs it, and may update any session of their own, as they could
+    themself through the platform's API. One only shared with them it may
+    not: sharing gives a session's use, never its administration.
+  - Any other may update only a session of its own tree, which a run of
     the tree made, as format 1 makes a tree's sessions with its root's
     run, and only one of the person who runs it.
 

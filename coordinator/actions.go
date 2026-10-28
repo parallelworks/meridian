@@ -60,18 +60,12 @@ func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.Acti
 		return workerapi.ActionAnswer{}, err
 	}
 	if !cancelled {
-		p, err := c.plans.get(call.Run)
+		u, err := c.sessionRun(ctx, call.Run)
 		if err != nil {
 			return workerapi.ActionAnswer{}, err
 		}
+		u.Read = expr.Read{Private: call.Request.Private, Marked: call.Request.Secret}
 		with, _ := call.Request.With.Get().(map[string]any)
-		u := compile.SessionUpdate{
-			Run: call.Run.ID, Root: call.Run.ID, Permissions: p.Run.Permissions,
-			Read: expr.Read{Private: call.Request.Private, Marked: call.Request.Secret},
-		}
-		if call.Run.Parent != nil {
-			u.Root = call.Run.Parent.Root
-		}
 		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, u, step.Path, with)
 		if err != nil {
 			return workerapi.ActionAnswer{}, err
@@ -82,6 +76,30 @@ func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.Acti
 		}
 	}
 	return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) { return answer, nil })
+}
+
+// sessionRun returns what update-session tells the session provider of
+// run, which it authorizes the step by (compile.Sessions.Update): its ID,
+// its tree's root's, and the permissions: of the root's workflow. Format 1
+// gates the top workflow's alone, and a child runs with its root's token,
+// so a workflow a step calls that asks for more than its root did is given
+// none of it.
+func (c *Coordinator) sessionRun(ctx context.Context, run *store.Run) (compile.SessionUpdate, error) {
+	root := run
+	if run.Parent != nil {
+		if err := c.store.View(ctx, func(tx *store.Tx) error {
+			var err error
+			root, err = tx.Run(run.Parent.Root)
+			return err
+		}); err != nil {
+			return compile.SessionUpdate{}, err
+		}
+	}
+	p, err := c.plans.get(root)
+	if err != nil {
+		return compile.SessionUpdate{}, err
+	}
+	return compile.SessionUpdate{Run: run.ID, Root: root.ID, Permissions: p.Run.Permissions}, nil
 }
 
 // actionStep returns the step of call's attempt's job that call names, as

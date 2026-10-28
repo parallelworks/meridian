@@ -20,8 +20,9 @@ import (
 
 // testSessions is a session provider of a test's. It makes every session,
 // and records each update. It authorizes one as format 1's platform does:
-// a run whose permissions: hold '*' may update any of the person's
-// sessions, whose names here end in -session, and any other only one its
+// a run whose permissions: hold '*' may update any session of the
+// person's own, whose names here end in -session, but not one only shared
+// with them, whose names here end in -shared; and any other only one its
 // tree's root made. It refuses one whose with: status is refuse, the first
 // time it is asked to, as a platform refuses a session it can't reach.
 type testSessions struct {
@@ -108,9 +109,10 @@ func stepEventsOf(t *testing.T, c *Coordinator, id, key string) []string {
 // with:'s name names, whichever that is, with the rest of its with:, the
 // run, its root and its permissions:, and the provider decides. A run
 // without '*' updates one of its own sessions, as sessions.<name> names
-// it, and the provider refuses it another run's, which fails the step and
-// ignore-errors: lets survive; one with '*' updates another of the
-// person's, and the provider refuses it one that isn't theirs. A refusal
+// it, and the provider refuses it one of the person's that its tree
+// didn't make, which fails the step and ignore-errors: lets survive; one
+// with '*' updates that one, and the provider refuses it one only shared
+// with the person, and one that isn't theirs. A refusal
 // of the provider's fails a try, which its retry: tries again; and a
 // with: that read a secret is given the provider as what it must mask, and
 // keep private. Without a provider, as with meridian run, the step fails
@@ -138,7 +140,7 @@ jobs:
           url: http://localhost:8080
       - uses: parallelworks/update-session
         with:
-          name: another-runs-session
+          name: persons-other-session
         ignore-errors: true
       - uses: parallelworks/update-session
         with:
@@ -191,8 +193,12 @@ jobs:
     steps:
       - uses: parallelworks/update-session
         with:
-          name: another-runs-session
+          name: persons-other-session
           url: http://localhost:8080
+      - uses: parallelworks/update-session
+        with:
+          name: team-shared
+        ignore-errors: true
       - uses: parallelworks/update-session
         with:
           name: another-persons
@@ -202,13 +208,13 @@ jobs:
 		if run := waitEnded(t, r.c, id); run.Outcome != plan.OutcomeSuccess {
 			t.Errorf("the run ended %s", run.Outcome)
 		}
-		want := []string{"0.0 success ", "1.0 success input_rejected"}
+		want := []string{"0.0 success ", "1.0 success input_rejected", "2.0 success input_rejected"}
 		if got := stepEventsOf(t, r.c, id, "main"); !slices.Equal(got, want) {
 			t.Errorf("the steps' events are\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		updated := []string{id + " " + id + ` [*] another-runs-session {"url":"http://localhost:8080"} {Marked:false Private:false}`}
+		updated := []string{id + " " + id + ` [*] persons-other-session {"url":"http://localhost:8080"} {Marked:false Private:false}`}
 		if !slices.Equal(s.updates, updated) {
 			t.Errorf("the provider updated\n%s\nwant\n%s", strings.Join(s.updates, "\n"), strings.Join(updated, "\n"))
 		}
@@ -249,4 +255,70 @@ jobs:
 			t.Errorf("the steps' events are\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
 	})
+}
+
+// TestSessionRun checks what update-session tells the session provider of
+// a run to authorize the step by: a root's own ID, as its root, and its
+// workflow's permissions:; and a child's ID, its root's, and its root's
+// permissions:, not its own, as format 1 gates only the top workflow's,
+// so a workflow a step calls that asks for '*' under a root that doesn't
+// is given none of it; and one under a root that does, all of it.
+func TestSessionRun(t *testing.T) {
+	parallel(t)
+	const child = `permissions: ['*']
+jobs:
+  main:
+    steps:
+      - run: echo child
+`
+	for _, tc := range []struct {
+		name, root string
+		want       []string
+	}{
+		{"a root without '*'", "jobs:\n  build:\n    steps:\n      - uses: github/t/child@main\n        with: {$yaml: w.yaml}\n", nil},
+		{"a root with '*'", "permissions: ['*']\njobs:\n  build:\n    steps:\n      - uses: github/t/child@main\n        with: {$yaml: w.yaml}\n", []string{"*"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parallel(t)
+			c := open(t, Options{})
+			hold := make(chan struct{})
+			t.Cleanup(func() { close(hold) })
+			byJob(c, map[string]testEnd{"build": {wait: hold}, "main": {wait: hold}})
+			sources := childSources{"github/t/child@main": child}
+			created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(tc.root), nil,
+				compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Sources: sources})
+			if err != nil || diags.HasErrors() {
+				t.Fatal(diags, err)
+			}
+			root, err := c.CreateRun(t.Context(), created, runOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			serve(t, c)
+			var attempt *store.Attempt
+			waitFor(t, func() bool {
+				return c.store.View(t.Context(), func(tx *store.Tx) error {
+					var err error
+					attempt, err = tx.LatestAttempt(root, "build")
+					return err
+				}) == nil
+			})
+			id, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 0, With: map[string]any{"$yaml": "w.yaml"}})
+			if err != nil || diags.HasErrors() {
+				t.Fatal(id, diags, err)
+			}
+			for _, r := range []struct {
+				run  string
+				want compile.SessionUpdate
+			}{
+				{root, compile.SessionUpdate{Run: root, Root: root, Permissions: tc.want}},
+				{id, compile.SessionUpdate{Run: id, Root: root, Permissions: tc.want}},
+			} {
+				got, err := c.sessionRun(t.Context(), storedRun(t, c, r.run))
+				if err != nil || got.Run != r.want.Run || got.Root != r.want.Root || !slices.Equal(got.Permissions, r.want.Permissions) {
+					t.Errorf("run %s is told the provider as %+v, %v; want %+v", r.run, got, err, r.want)
+				}
+			}
+		})
+	}
 }
