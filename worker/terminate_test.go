@@ -59,8 +59,11 @@ func TestTerminateOnce(t *testing.T) {
 	waitFor(t, "the step's trap", func() bool { return strings.Contains(out.String(), "term 1\n") })
 	// The reap of the attempt's groups, as a halt makes it, which ends
 	// once the step's group has.
+	// A second SIGTERM would be sent as the reap starts, and run the trap
+	// within its loop's next 20 ms; nothing says the reap has passed that
+	// point, so the test gives it a second, room for a loaded runner.
 	go a.reap()
-	time.Sleep(200 * time.Millisecond) //nolint:forbidigo // the time a second SIGTERM would take to run the trap again
+	time.Sleep(time.Second) //nolint:forbidigo // the time a second SIGTERM would take to run the trap again
 	if err := os.WriteFile(done, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

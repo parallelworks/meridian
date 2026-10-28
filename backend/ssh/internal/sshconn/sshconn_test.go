@@ -722,15 +722,19 @@ func TestPool(t *testing.T) {
 	s.SetHostKeys(sshtest.NewKey(t))
 	s.Drop()
 	waitDone(t, c2)
+	// The pool's clock stops, so that the next Get comes within the
+	// backoff, however long the runner takes to get there.
+	now := time.Now()
+	sshconn.SetClock(p, func() time.Time { return now })
 	_, err = p.Get(t.Context(), target)
 	paramsOf(t, err, problems.SSHHostKeyChanged)
 
-	// A failure is followed by a backoff, within which a Get answers at
-	// once, without dialing, with the last dial's error.
-	start := time.Now()
+	// A failure is followed by a backoff, of a second less up to a quarter
+	// for the first, within which a Get answers at once, without dialing,
+	// with the last dial's error.
 	_, err = p.Get(t.Context(), target)
-	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 1 || time.Since(start) > time.Second {
-		t.Errorf("a Get within the backoff gave %v after %v", err, time.Since(start))
+	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 1 || de.RetryAt.Before(now.Add(750*time.Millisecond)) || de.RetryAt.After(now.Add(time.Second)) {
+		t.Errorf("a Get within the backoff gave %v", err)
 	}
 	paramsOf(t, err, problems.SSHHostKeyChanged)
 }
@@ -749,6 +753,10 @@ func TestPoolAnswersAtOnce(t *testing.T) {
 	d.ConnectTimeout = time.Second
 	p := &sshconn.Pool{Dialer: d}
 	t.Cleanup(func() { _ = p.Close() })
+	// The pool's clock stops, so that the Gets after the dial fails come
+	// within its backoff, however long the runner takes to get there.
+	now := time.Now()
+	sshconn.SetClock(p, func() time.Time { return now })
 	target := sshconn.Target{Host: s.Addr()}
 	s.Stall()
 	defer s.Resume()
@@ -804,6 +812,10 @@ func hangingSSH(t *testing.T) *sshconn.Dialer {
 func TestPoolDialTimeout(t *testing.T) {
 	p := &sshconn.Pool{Dialer: hangingSSH(t)}
 	t.Cleanup(func() { _ = p.Close() })
+	// As in TestPoolAnswersAtOnce, the Gets after the dial fails come
+	// within its backoff.
+	now := time.Now()
+	sshconn.SetClock(p, func() time.Time { return now })
 	target := sshconn.Target{Host: "farm"}
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
@@ -1433,7 +1445,14 @@ func TestPoolClosedWhileDialing(t *testing.T) {
 		}
 		got <- err
 	}()
-	time.Sleep(200 * time.Millisecond) //nolint:forbidigo // the dial is held meanwhile
+	// The pool closes while its dial is held.
+	deadline := time.Now().Add(10 * time.Second)
+	for !sshconn.Dialing(p, sshconn.Target{Host: s.Addr()}) {
+		if time.Now().After(deadline) {
+			t.Fatal("the pool never dialed")
+		}
+		time.Sleep(time.Millisecond) //nolint:forbidigo // the dial in the background, which nothing signals
+	}
 	_ = p.Close()
 	s.Resume()
 	if err := <-got; !errors.Is(err, sshconn.ErrClosed) {
