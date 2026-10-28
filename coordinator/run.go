@@ -205,6 +205,13 @@ type Coordinator struct {
 	// transaction woke while hopper ran them, once it has committed, as
 	// they are woken again (wakeAgainAfter).
 	rewake func([]*waking)
+	// wakers counts the goroutines that wake supervisors and markers
+	// again in the background (wakeLaterGo), which run with wakersCtx
+	// until Close cancels it, under wakersMu, and waits for them.
+	wakersMu   sync.Mutex
+	wakers     sync.WaitGroup
+	wakersCtx  context.Context //nolint:containedctx // the coordinator's own, which Close cancels
+	stopWakers context.CancelFunc
 	// beforeChildStore, if it is set, is called as createChild stores a
 	// child, between its Create and its transaction, as when a test races
 	// two asks.
@@ -334,6 +341,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
 		outlives: map[string]bool{}, checkoutWaits: checkoutWaits,
 	}
+	c.wakersCtx, c.stopWakers = context.WithCancel(context.WithoutCancel(ctx))
 	if opts.ReadOnly {
 		// Neither seals nor inserts anything.
 		return c, nil
@@ -403,11 +411,17 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 	return known && last
 }
 
-// Close closes what members' drivers set up for their workers to reach the
-// coordinator, and the drivers that are io.Closers, releases its holds on
-// runs' Starts, and closes the coordinator's store. Serve, ServeWorkers
-// and ServeMembers must have returned.
+// Close ends the wakes of supervisors and markers it is making in the
+// background, and waits for them (wakeLaterGo); closes what members'
+// drivers set up for their workers to reach the coordinator, and the
+// drivers that are io.Closers; releases its holds on runs' Starts; and
+// closes the coordinator's store. Serve, ServeWorkers and ServeMembers
+// must have returned.
 func (c *Coordinator) Close() error {
+	c.wakersMu.Lock()
+	c.stopWakers()
+	c.wakersMu.Unlock()
+	c.wakers.Wait()
 	c.mu.Lock()
 	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(c.connections)) {
