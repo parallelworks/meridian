@@ -719,6 +719,30 @@ func TestHostPlace(t *testing.T) {
 	if m, _ := hostDo(t, env, sys, hostproto.OpFind, hostproto.Request{Member: onHost, Attempt: place.Attempt}); m.Found {
 		t.Errorf("meridian host find of a placement forgotten = %+v", m)
 	}
+
+	// A child run's directory is its root's, with the child's path in it:
+	// the root's is made, private, if none of its jobs ran on the host,
+	// and a path outside it is refused.
+	child := place
+	child.Attempt, child.BootstrapToken, child.Run, child.Root, child.Path = "run2-main-1", token+"-child", "2", "9", "subworkflows/build/step_0"
+	m, code = hostDo(t, env, sys, hostproto.OpPlace, hostproto.Request{Member: onHost, Place: &child})
+	rootDir := filepath.Join(env[local.EnvStateDir], "runs", "9-abc")
+	if code != exitOK || m.Placement == nil || m.RunDir != filepath.Join(rootDir, "subworkflows", "build", "step_0") {
+		t.Fatalf("meridian host place of a child = %+v, %d", m, code)
+	}
+	if info, err := os.Stat(rootDir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Errorf("the root's directory: %v, %v", info, err)
+	}
+	if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: m.Placement}); code != exitOK || m.Problem != nil || m.Error != "" {
+		t.Errorf("meridian host cancel of a child = %+v, %d", m, code)
+	}
+	for _, rootPath := range [][2]string{{"9", "../x"}, {"9", "/abs"}, {"9", ""}, {"", "x"}} {
+		bad := child
+		bad.Attempt, bad.Root, bad.Path = "run3-main-1", rootPath[0], rootPath[1]
+		if m, code := hostDo(t, env, sys, hostproto.OpPlace, hostproto.Request{Member: onHost, Place: &bad}); code != exitError || m.Error == "" || m.Placement != nil {
+			t.Errorf("meridian host place of a child with the root %q and the path %q = %+v, %d", bad.Root, bad.Path, m, code)
+		}
+	}
 }
 
 // TestHostProcess checks meridian host as the ssh backend runs it: a

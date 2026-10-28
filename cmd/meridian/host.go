@@ -540,11 +540,17 @@ func (h *hostOp) probe(ctx context.Context, req *hostproto.Request) hostproto.Me
 
 // place starts the attempt's worker, detached as the host requires, in the
 // run's directory on the host, which it chooses (hostRunDir) and returns,
-// and hands the worker its bootstrap token before it returns.
+// and hands the worker its bootstrap token before it returns. A child
+// run's is its root's, with the child's path in it, as format 1 lays a
+// tree out the same on each host: the root's is made here, if none of its
+// jobs ran on the host, and the worker makes the child's in it.
 func (h *hostOp) place(ctx context.Context, req *hostproto.Request) hostproto.Message {
 	pl := req.Place
 	if pl == nil || pl.Run == "" || pl.Store == "" {
 		return hostproto.Message{Error: "host: a place without its attempt, run and store"}
+	}
+	if (pl.Root == "") != (pl.Path == "") || pl.Path != "" && !filepath.IsLocal(pl.Path) {
+		return hostproto.Message{Error: "host: a place of a child run without its root, or with a path outside the root's directory"}
 	}
 	detach, systemdRun, err := decideDetach(ctx, h.sys)
 	if err != nil {
@@ -573,6 +579,13 @@ func (h *hostOp) place(ctx context.Context, req *hostproto.Request) hostproto.Me
 	d.AwaitToken = true
 	r := pl.Request()
 	r.RunDir = hostRunDir(paths.Runs, pl.Run, pl.Store)
+	if pl.Root != "" {
+		root := hostRunDir(paths.Runs, pl.Root, pl.Store)
+		if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return failed(hostDirUnusable(root, err))
+		}
+		r.RunDir = filepath.Join(root, pl.Path)
+	}
 	p, err := d.Place(ctx, req.Member, r)
 	if err != nil {
 		return failed(err)

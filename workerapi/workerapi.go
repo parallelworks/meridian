@@ -192,11 +192,12 @@ const Version2 = 2
 // step's try reads its tree once the coordinator has answered its action;
 // and child runs: PathChild, PathChildEnd and PathChildStop, through which
 // a step whose uses: names a workflow asks for the run of it, waits for it
-// and stops it (ChildRequest, Child, ChildStop), and Claim.Tree, what a
-// child run's attempt has of its tree. A worker asks only in an attempt of
-// version 3 or later, and the coordinator answers the paths for another as
-// ones the API doesn't have, 404. An attempt whose job has a step whose
-// uses: names a workflow, or of a child run, needs version 3
+// and stops it (ChildRequest, Child, ChildStop), Claim.Tree, what a child
+// run's attempt has of its tree, and Claim.RunDirOnMember, which says
+// where the worker cleans a child's directory. A worker asks only in an
+// attempt of version 3 or later, and the coordinator answers the paths
+// for another as ones the API doesn't have, 404. An attempt whose job has
+// a step whose uses: names a workflow, or of a child run, needs version 3
 // (WorkerAPITooOld). No release has written it yet, so what is added
 // before one does joins it, as for a plan version.
 const Version3 = 3
@@ -533,6 +534,13 @@ type Claim struct {
 	// RunDir is the run's directory on the worker's host (PW_JOB_DIR),
 	// where steps run by default.
 	RunDir string `json:"runDir"`
+	// RunDirOnMember is set, in an attempt of version 3 or later, when the
+	// member chose RunDir itself, as a host the ssh backend reaches does
+	// (backend.Placement.RunDir), apart from the run's directory where
+	// the run started: format 1's copy of it on a host, where format 1
+	// never cleans the directory of a run a step calls, as its
+	// clean-on-retry: cleans it only where the run started.
+	RunDirOnMember bool `json:"runDirOnMember,omitzero"`
 	// Env are the variables a platform gives the job's steps, by name,
 	// such as format 1's PW_JOB_NUMBER, PW_USER and PW_PLATFORM_HOST: the
 	// worker sets them over the environment the workflow gives each step,
@@ -569,7 +577,9 @@ type Claim struct {
 // of version 3.
 type Tree struct {
 	// JobID is the root run's ID, which the job's steps read as
-	// PW_JOB_ID; RootDir the root's run directory, PW_PARENT_JOB_DIR; and
+	// PW_JOB_ID; RootDir the root's run directory on the worker's host,
+	// PW_PARENT_JOB_DIR, in which RunDir is, as format 1 lays a tree out
+	// the same on each host as where the run started; and
 	// WorkflowName format 1's name for the call, PW_WORKFLOW_NAME
 	// (plan.SourceRef.CallName). The worker sets them as it sets its own,
 	// over the platform's (Env) for none of them, and PW_JOB_DIR is the
@@ -863,10 +873,11 @@ type ChildRequest struct {
 	// secrets', and what its job and step made from one, which the child's
 	// jobs mask too (Tree.Masked).
 	Masked []string `json:"masked,omitzero"`
-	// WorkingDirectory is the step's working directory, as Step gave it
-	// (plan.ReadyStep.WorkingDirectory): "" for its run's directory, or a
-	// path relative to it, or absolute. The child's directory is
-	// subworkflows/<job>/step_<n> in it.
+	// WorkingDirectory is the step's own working-directory:, as Step gave
+	// it (plan.ReadyStep.WorkingDirectory): a path relative to its run's
+	// directory, or absolute, which is the child's directory; or "" for
+	// none, and then the child's is subworkflows/<job>/step_<n> in its
+	// run's (plan.ChildDir).
 	WorkingDirectory string `json:"workingDirectory,omitzero"`
 }
 

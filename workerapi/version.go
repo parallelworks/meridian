@@ -26,7 +26,7 @@ var since = map[string]int{
 	"Claim.attempt": 1, "Claim.group": 1, "Claim.member": 1,
 	"Claim.leaseSeconds": 1, "Claim.heartbeatSeconds": 1, "Claim.selfFencing": 1,
 	"Claim.run": 1, "Claim.needs": 1, "Claim.runDir": 1, "Claim.env": 1, "Claim.retry": 1,
-	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2, "Claim.tree": 3,
+	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2, "Claim.tree": 3, "Claim.runDirOnMember": 3,
 	"Tree.jobID": 3, "Tree.rootDir": 3, "Tree.workflowName": 3, "Tree.masked": 3,
 	"EnvVar.value": 1, "EnvVar.secret": 1,
 	"Container.runtime": 1, "Container.image": 1,

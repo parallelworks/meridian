@@ -258,6 +258,78 @@ func TestSSHRun(t *testing.T) {
 	})
 }
 
+// sshChild is a workflow a step calls whose job runs on the host its input
+// names: each try of its step records itself in a file of its directory,
+// fails while it is the first, and writes where it ran, and how many
+// tries the directory has seen.
+const sshChild = `on:
+  execute:
+    inputs:
+      host: {type: string}
+jobs:
+  work:
+    ssh:
+      remoteHost: ${{ inputs.host }}
+    steps:
+      - run: |
+          echo try >> tries
+          tries=$(grep -c . tries)
+          printf 'CHILD_DIR=%s\nCHILD_JOB_DIR=%s\nCHILD_PARENT=%s\nTRIES=%s\n' "$PWD" "$PW_JOB_DIR" "$PW_PARENT_JOB_DIR" "$tries" > made.env
+          [ "$tries" -ge 2 ]
+`
+
+// sshCaller is a workflow of one job, main, on the cluster its input
+// names, whose step calls sshChild, its child's job on the same host,
+// tried again once, and whose next step reads, on the host, what the
+// child wrote in its directory, subworkflows/main/step_0 in the root's,
+// as format 1's workflows do.
+const sshCaller = `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+jobs:
+  main:
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    steps:
+      - uses: github/acme/flows@main
+        with: {$yaml: flows/child.yaml, host: "${{ inputs.cluster.ip }}"}
+        retry: {max-retries: 1, interval: 1s}
+      - run: |
+          dir="${PW_PARENT_JOB_DIR}/subworkflows/main/step_0"
+          . "$dir/made.env"
+          echo "root $PW_PARENT_JOB_DIR"
+          echo "tries $TRIES"
+          if [ "$CHILD_DIR" = "$dir" ] && [ "$CHILD_JOB_DIR" = "$dir" ] && [ "$CHILD_PARENT" = "$PW_PARENT_JOB_DIR" ]; then
+            echo "the child ran in its directory"
+          fi
+`
+
+// TestSSHChild checks a step on a host that calls a workflow whose job runs
+// on the same host: the child's job runs in the same place in its root's
+// run directory there as on the coordinator's machine,
+// subworkflows/main/step_0, with the host's PW_JOB_DIR and
+// PW_PARENT_JOB_DIR, where the step's next try finds what its last left,
+// as no try cleans a host's copy of the directory, and where the caller's
+// next step, on the host, reads what the child wrote.
+func TestSSHChild(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/child.yaml": sshChild})
+	env := runEnv(t)
+	h := newSSHHost(t, env)
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshCaller)))
+	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
+		t.Fatalf("meridian run of a call on a host = %+v", r)
+	}
+	runs := filepath.Join(h.home, ".local", "state", "meridian", "runs")
+	log := stepLogAt(t, env, "1", 1)
+	for _, want := range []string{"root " + runs + "/1-", "tries 2\n", "the child ran in its directory\n"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the caller's next step's log has no %q:\n%s", want, log)
+		}
+	}
+}
+
 // TestSSHOutage checks a job on a host whose connection drops as its step
 // runs: meridian connects again, and forwards the socket again, at the same
 // path, through which the worker, which went on, sends what it held; and

@@ -403,25 +403,26 @@ func (r SourceRef) CallName() string {
 
 // ChildDir returns the directory of the run that the step at index step,
 // from 0, of the job job calls, in a run whose directory is runDir, as
-// format 1 makes it: subworkflows/<job>/step_<step> in the step's working
-// directory, workingDirectory (ReadyStep.WorkingDirectory), relative to
-// runDir, or absolute, or runDir for "". <job> is the job's name, or, for
-// an instance of a matrix job, whose key is its name, # and its index, as
-// in build#2, its name, a hyphen and its index (build-2). The coordinator
-// makes the child there, and the step's worker makes the directory, so
-// that each puts it in the same place.
+// format 1 makes it: the step's own working-directory:, workingDirectory
+// (ReadyStep.WorkingDirectory), relative to runDir, or absolute; or, for
+// "", subworkflows/<job>/step_<step> in runDir. <job> is the job's name,
+// or, for an instance of a matrix job, whose key is its name, # and its
+// index, as in build#2, its name, a hyphen and its index (build-2). The
+// coordinator makes the child there, and the step's worker makes the
+// directory, so that each puts it in the same place, each with the run's
+// directory where it is: format 1 lays a tree out the same on the machine
+// the run started on and on each host.
 func ChildDir(runDir, workingDirectory, job string, step int) string {
-	base := runDir
 	switch {
 	case filepath.IsAbs(workingDirectory):
-		base = workingDirectory
+		return filepath.Clean(workingDirectory)
 	case workingDirectory != "":
-		base = filepath.Join(runDir, workingDirectory)
+		return filepath.Join(runDir, workingDirectory)
 	}
 	if name, instance, ok := strings.Cut(job, "#"); ok {
 		job = name + "-" + instance
 	}
-	return filepath.Join(base, "subworkflows", job, "step_"+strconv.Itoa(step))
+	return filepath.Join(runDir, "subworkflows", job, "step_"+strconv.Itoa(step))
 }
 
 // A Job is one of the workflow's jobs. A matrix job is one Job, whose

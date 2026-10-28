@@ -96,7 +96,8 @@ type Demand struct {
 }
 
 // A Place is a backend.PlaceRequest, with the run's and the store's IDs,
-// which name the run's directory on the host.
+// which name the run's directory on the host: for a child run, its root's,
+// Root, with the child's Path in it (backend.PlaceRequest.Root and Path).
 type Place struct {
 	Attempt string `json:"attempt"`
 	Name    string `json:"name,omitempty"`
@@ -109,6 +110,8 @@ type Place struct {
 	TraceParent    string            `json:"traceParent,omitempty"`
 	Run            string            `json:"run"`
 	Store          string            `json:"store"`
+	Root           string            `json:"root,omitempty"`
+	Path           string            `json:"path,omitempty"`
 }
 
 // An Endpoint is a backend.Endpoint.

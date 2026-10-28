@@ -549,9 +549,11 @@ func TestMakeDirInSwapped(t *testing.T) {
 }
 
 // TestMakeChildDir checks that a child's directory outside its root run's
-// is left for the coordinator, and nothing made; and that one that is the
+// is left for the coordinator, and nothing made; that one that is the
 // attempt's run directory, or holds it, isn't cleaned, as format 1 never
-// cleans one.
+// cleans its root's; and that one in a run directory the member chose,
+// a host's copy of it, is made but never cleaned, as format 1 cleans one
+// only where the run started.
 func TestMakeChildDir(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -576,6 +578,22 @@ func TestMakeChildDir(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(runDir, "kept")); err != nil {
 			t.Errorf("making %s, which holds the run's directory, cleaned it: %v", dir, err)
+		}
+	}
+	child := filepath.Join(runDir, "subworkflows", "main", "step_1")
+	for _, onMember := range []bool{true, false} {
+		a.claim.RunDirOnMember = onMember
+		if err := os.MkdirAll(child, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(child, "left"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.makeChildDir(child, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(child, "left")); (err == nil) != onMember {
+			t.Errorf("a child's directory in a run directory its member chose: %t, what the last try left: %v", onMember, err)
 		}
 	}
 }

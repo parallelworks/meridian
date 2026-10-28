@@ -271,6 +271,15 @@ type PlaceRequest struct {
 	// RunDir is the run's directory on the member, where steps run by
 	// default.
 	RunDir string
+	// Root is, for an attempt of a child run, the ID of its tree's root,
+	// and Path the child's directory relative to the root's, as clean
+	// as filepath.Rel gives it: "." for a child whose directory is its
+	// root's. A member that chooses a run's directory itself, as a host
+	// the ssh backend reaches does, places a child's at its root's there
+	// joined with Path, as format 1 lays a tree's directories out the
+	// same on each host as where the run started. Both are "" for a root,
+	// and a member that takes RunDir as it is ignores them.
+	Root, Path string
 	// SchedulerParams are the scheduler's parameters a format 1 runs-on:
 	// gives, as JSON, or nothing.
 	SchedulerParams jsontext.Value
@@ -300,7 +309,8 @@ type Placement struct {
 	// RunDir is the run's directory on the member, where the worker runs
 	// the job's steps by default: the PlaceRequest's, or one the member
 	// chose, as a host the ssh backend reaches does, under its user's
-	// home, which the coordinator records with the attempt, and gives the
+	// home, and for a child run in its root's there (PlaceRequest.Path),
+	// which the coordinator records with the attempt, and gives the
 	// worker as it claims it. Find gives it too, but "" where the driver
 	// doesn't know it, for the PlaceRequest's.
 	RunDir string `json:"runDir,omitempty"`

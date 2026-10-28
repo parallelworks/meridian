@@ -188,7 +188,10 @@ type ReadyStep struct {
 	Env map[string]string `json:"env,omitempty"`
 	// WorkingDirectory is where the step runs: its working-directory:, or
 	// its job's when it has none, or "" for the run directory, as a step's
-	// working-directory: null asks.
+	// working-directory: null asks. A step whose uses: names a workflow
+	// runs nothing itself: its WorkingDirectory is its own
+	// working-directory: alone, or "" without one, which format 1 makes
+	// the directory of the run it calls of (ChildDir), whatever its job's.
 	WorkingDirectory string `json:"workingDirectory,omitempty"`
 	// SSH is the host a format 1 step's ssh: runs it on, outside any
 	// container, as a job's is (Target.Inline), or nil without one. An
@@ -450,12 +453,18 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 		}
 	}
 	dir := jobDir
-	if stepDir := e.directory(s.WorkingDirectory, at(s.Path, "working-directory")); stepDir.null {
+	stepDir := e.directory(s.WorkingDirectory, at(s.Path, "working-directory"))
+	if stepDir.null {
 		dir = workingDirectory{}
 	} else if stepDir.dir != "" {
 		dir = stepDir
 	}
 	rs.WorkingDirectory = dir.dir
+	if s.Source != nil {
+		// Format 1 makes the called run's directory of the step's own
+		// working-directory: alone (ChildDir).
+		rs.WorkingDirectory = stepDir.dir
+	}
 	e.checkDirectory(dir)
 	if !s.SSH.IsZero() {
 		pointer := at(s.Path, "ssh")

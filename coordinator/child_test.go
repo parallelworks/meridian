@@ -241,10 +241,15 @@ func TestCreateChild(t *testing.T) {
 // TestCreateChildOnHost checks the child of a step whose job runs on the
 // host its format 1 ssh: names: it is prepared on the coordinator's
 // machine, under its caller's run directory there, as format 1 prepares a
-// subworkflow, so a working directory the worker on the host gives in its
-// run's directory there is the same place in the run's directory here,
-// and one elsewhere is outside it; and the child runs in its run's default
-// group, not in the group of the ssh: host, which no name finds.
+// subworkflow, in the step's own working directory, or else in
+// subworkflows/<job>/step_<n>, so a working directory the worker on the
+// host gives in its root's run directory there is the same place in the
+// root's run directory here, and one elsewhere is outside it; the child
+// runs in its run's default group, not in the group of the ssh: host,
+// which no name finds; and a member that chooses run directories itself
+// is asked to place the child's job in the same place in its root's
+// there, which the claim gives as the run's and its root's directories,
+// as the member's own.
 func TestCreateChildOnHost(t *testing.T) {
 	parallel(t)
 	vars := conformancetest.Variables{"vars.CHILD_VAR": {Value: "v"}}
@@ -285,12 +290,13 @@ func TestCreateChildOnHost(t *testing.T) {
 		t.Fatalf("the job was placed at %+v", attempt.Placement)
 	}
 	with := map[string]any{"$yaml": "w.yaml", "region": "east"}
+	var children []string
 	for try, tc := range []struct{ wd, dir string }{
 		{"", "/runs/" + root + "/subworkflows/build/step_0"},
-		{"work", "/runs/" + root + "/work/subworkflows/build/step_0"},
-		// As PW_JOB_DIR gives it on the host.
-		{d.runDir, "/runs/" + root + "/subworkflows/build/step_0"},
-		{d.runDir + "/work", "/runs/" + root + "/work/subworkflows/build/step_0"},
+		{"work", "/runs/" + root + "/work"},
+		// As PW_JOB_DIR gives them on the host.
+		{d.runDir, "/runs/" + root},
+		{d.runDir + "/work", "/runs/" + root + "/work"},
 	} {
 		child, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: try, With: with, WorkingDirectory: tc.wd})
 		if err != nil || diags.HasErrors() {
@@ -299,10 +305,91 @@ func TestCreateChildOnHost(t *testing.T) {
 		if r := storedRun(t, c, child); r.RunDir != tc.dir || r.DefaultGroup != "local" {
 			t.Errorf("working directory %q: the child runs in %s, in %s, want %s, in local", tc.wd, r.RunDir, r.DefaultGroup, tc.dir)
 		}
+		children = append(children, child)
 	}
 	_, _, err = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 4, With: with, WorkingDirectory: "/scratch/work"})
-	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/scratch/work/subworkflows/build/step_0" {
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/scratch/work" {
 		t.Errorf("a working directory outside the run's on the host: %v", err)
+	}
+
+	// The child's job is placed in the same place in its root's directory
+	// on the member, and its claim says so.
+	child := children[0]
+	var childAttempt *store.Attempt
+	waitFor(t, func() bool {
+		return c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			childAttempt, err = tx.LatestAttempt(child, "main")
+			return err
+		}) == nil && childAttempt.Placed() && storedRun(t, c, child).StartState != nil
+	})
+	reqs, _ := d.requests()
+	for _, req := range reqs {
+		switch req.Attempt {
+		case attempt.ID:
+			if req.Root != "" || req.Path != "" {
+				t.Errorf("the root's job was placed in %q of %q", req.Path, req.Root)
+			}
+		case childAttempt.ID:
+			if req.Root != root || req.Path != "subworkflows/build/step_0" {
+				t.Errorf("the child's job was placed in %q of %q", req.Path, req.Root)
+			}
+		}
+	}
+	ready, err := claimReadier{c}.ReadyAttempt(t.Context(), storedRun(t, c, child), childAttempt)
+	if err != nil || ready.RunDir != d.runDir+"/subworkflows/build/step_0" || !ready.RunDirOnMember || ready.Tree == nil || ready.Tree.RootDir != d.runDir {
+		t.Errorf("the child's claim gives %+v, %v", ready, err)
+	}
+	ready, err = claimReadier{c}.ReadyAttempt(t.Context(), storedRun(t, c, root), attempt)
+	if err != nil || ready.RunDir != d.runDir || !ready.RunDirOnMember || ready.Tree != nil {
+		t.Errorf("the root's claim gives %+v, %v", ready, err)
+	}
+
+	// A step of the child on the host whose working directory is in its
+	// root's directory there, as PW_PARENT_JOB_DIR gives it, but not in
+	// its own run's, calls a run in the same place in its root's here.
+	grand, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: childAttempt.ID, Step: 1, With: map[string]any{"$yaml": "w.yaml"}, WorkingDirectory: d.runDir + "/shared"})
+	if err != nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	if r := storedRun(t, c, grand); r.RunDir != "/runs/"+root+"/shared" {
+		t.Errorf("the child's child runs in %s", r.RunDir)
+	}
+}
+
+// TestMemberDirs checks where an attempt's run, and its root, have their
+// directories on its member: the run's and the root's own where the
+// member took the run's directory as it was, or gave none; and where it
+// chose them, the member's, the root's being the run's without the run's
+// path in it, which is an error where the member put the run's
+// elsewhere.
+func TestMemberDirs(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	root := &store.Run{ID: "1", RunDir: "/runs/1"}
+	child := &store.Run{ID: "2", RunDir: "/runs/1/subworkflows/build/step_0", Parent: &store.Link{Root: "1"}}
+	same := &store.Run{ID: "3", RunDir: "/runs/1", Parent: &store.Link{Root: "1"}}
+	host := "/home/alice/runs/1-store"
+	for _, tc := range []struct {
+		name      string
+		run       *store.Run
+		dir       string
+		want      memberDirs
+		wantError bool
+	}{
+		{"a root where the run started", root, "/runs/1", memberDirs{run: "/runs/1", root: "/runs/1"}, false},
+		{"a root without a directory", root, "", memberDirs{run: "/runs/1", root: "/runs/1"}, false},
+		{"a root on a host", root, host, memberDirs{run: host, root: host, own: true}, false},
+		{"a child where the run started", child, child.RunDir, memberDirs{run: child.RunDir, root: "/runs/1"}, false},
+		{"a child on a host", child, host + "/subworkflows/build/step_0", memberDirs{run: host + "/subworkflows/build/step_0", root: host, own: true}, false},
+		{"a child in its root's directory on a host", same, host, memberDirs{run: host, root: host, own: true}, false},
+		{"a child elsewhere on a host", child, "/home/alice/runs/2-store", memberDirs{}, true},
+	} {
+		a := &store.Attempt{ID: "a", Placement: store.Placement{RunDir: tc.dir}}
+		got, err := c.memberDirs(t.Context(), tc.run, root, a)
+		if (err != nil) != tc.wantError || got != tc.want {
+			t.Errorf("%s: %+v, %v, want %+v", tc.name, got, err, tc.want)
+		}
 	}
 }
 
@@ -340,7 +427,7 @@ func TestCreateChildRefuses(t *testing.T) {
 	before := runs()
 
 	_, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, With: with, WorkingDirectory: "/elsewhere"})
-	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/elsewhere/subworkflows/build/step_0" {
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/elsewhere" {
 		t.Errorf("a child outside its root's directory: %v", err)
 	}
 	if _, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 1, With: map[string]any{"$yaml": "w.yaml"}}); err != nil || !diags.HasErrors() || diags.Errors()[0].Code != problems.InputRequired.Code() {
