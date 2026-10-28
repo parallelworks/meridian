@@ -58,13 +58,12 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// Tries is how many times in a row the driver fails to connect to a host
-// before Probe says the member can't run the job
-// (problems.SSHUnreachable), as format 1 tries four times. The pool waits
-// between them, as it does before it dials any host again that it failed
-// to reach: about a second, then two, then four. Each Probe makes one try
-// at most, so that the tries are spread over the looks of the supervisor
-// that probes, which asks again later (reach).
+// Tries is how many of a job's own tries to connect to a host fail, in a
+// row, before Probe says the member can't run the job
+// (problems.SSHUnreachable), as format 1 gives each step four. Each Probe
+// makes one try at most, so that the tries are spread over the looks of
+// the job's supervisor, which waits longer before each (reach), as the
+// pool does before it dials a host again that it failed to reach.
 const Tries = 4
 
 // connectBudget is how long a call of the driver's waits for a connection
@@ -237,23 +236,36 @@ func (d *Driver) connect(ctx context.Context, t sshconn.Target) (*sshconn.Conn, 
 	return d.Pool.Get(ctx, t)
 }
 
-// reach connects to t for Probe, with one try at most: a problem, as a
-// host key known_hosts doesn't have, is the member's; a host that has
-// failed to answer Tries times in a row is problems.SSHUnreachable; and a
-// host that hasn't answered yet, as one being dialed, or that the pool
-// waits to dial again, is an error that isn't a problem, which the
-// coordinator asks about again later, as it does any backend that
-// couldn't answer, so that it makes the next try then.
-func (d *Driver) reach(ctx context.Context, t sshconn.Target) (*sshconn.Conn, error) {
+// reach connects to t for Probe of a job that has failed to reach a
+// member tries times in a row (backend.Demand.Tries), with one try at
+// most: a problem, as a host key known_hosts doesn't have, is the
+// member's. A host the pool is dialing for another, or waits to dial again
+// after failing to, the job hasn't tried: that is backend.ErrNotYet,
+// which the coordinator asks about again soon, without counting it. A try
+// of the job's that fails, or hasn't answered within connectBudget, is
+// the job's: the Tries-th in a row is problems.SSHUnreachable; one before
+// is an error that isn't a problem, which the coordinator counts, and
+// asks about again, later each time.
+func (d *Driver) reach(ctx context.Context, t sshconn.Target, tries int) (*sshconn.Conn, error) {
 	conn, err := d.connect(ctx, t)
 	if err == nil || asProblem(err) != nil || ctx.Err() != nil {
 		return conn, err
 	}
-	if de, ok := errors.AsType[*sshconn.DialError](err); ok && de.Failures >= Tries {
-		return nil, problems.SSHUnreachable.Problem(problems.Params{"host": t.Host, "reason": de.Err.Error()})
+	if de, ok := errors.AsType[*sshconn.DialError](err); ok && de.Waiting {
+		return nil, fmt.Errorf("%w: %w", backend.ErrNotYet, err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = fmt.Errorf("ssh: %s: %w", t.Host, errNoAnswer)
+	}
+	if tries+1 >= Tries {
+		return nil, problems.SSHUnreachable.Problem(problems.Params{"host": t.Host, "reason": err.Error()})
 	}
 	return nil, err
 }
+
+// errNoAnswer is a try to connect to a host that hasn't answered within
+// connectBudget, which goes on, for the pool's next Get.
+var errNoAnswer = fmt.Errorf("no answer within %v", connectBudget)
 
 // run runs meridian host op on the host t names, over conn, or else the
 // pool's connection to it, with the request req makes for the host, and
@@ -336,7 +348,7 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 	if err != nil {
 		return fit(err)
 	}
-	conn, err := d.reach(ctx, t)
+	conn, err := d.reach(ctx, t, demand.Tries)
 	if err != nil {
 		return fit(err)
 	}

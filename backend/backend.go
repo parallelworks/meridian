@@ -20,6 +20,7 @@ package backend
 import (
 	"context"
 	"encoding/json/jsontext"
+	"errors"
 	"io"
 	"net"
 
@@ -190,7 +191,21 @@ type Demand struct {
 	// can't release what a placement holds, as a batch scheduler's
 	// allocation, ignores them all.
 	Parked []string
+	// Tries is how many of the coordinator's looks to place the job, in a
+	// row, since it was last placed, found that a member's backend
+	// couldn't answer: a driver that tries to reach a member as it probes
+	// it, as the ssh backend does, counts the job's own tries by it, so
+	// that a job gives up on a member only after tries of its own. A look
+	// whose Probe answered ErrNotYet isn't counted.
+	Tries int
 }
+
+// ErrNotYet is what a driver's Probe returns, or wraps, for a member it
+// hasn't tried for the job yet, but will, as one another job is reaching
+// now, or one the driver waits to try again after failing to: the
+// coordinator asks again soon, and doesn't count the look as one the
+// backend couldn't answer (Demand.Tries).
+var ErrNotYet = errors.New("backend: the member hasn't been tried for the job yet")
 
 // A Fit is what a member says of a job: whether it can run it, and how
 // soon.

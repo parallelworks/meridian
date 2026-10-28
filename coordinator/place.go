@@ -77,10 +77,14 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 	if err != nil {
 		return 0, err
 	}
-	fits, reasons, unanswered := c.rank(ctx, g, demand, private)
+	demand.Tries = job.PlaceTries
+	fits, reasons, unanswered, notYet := c.rank(ctx, g, demand, private)
 	if len(fits) == 0 {
-		if unanswered {
+		switch {
+		case unanswered:
 			return c.unanswered(ctx, run, job, private, errors.New("a member's backend couldn't say whether it can run the job"))
+		case notYet:
+			return c.supervision.first, nil
 		}
 		diags := append(problems.Diagnostics{diagnostic(problems.PlacementImpossible, problems.Params{"job": job.Key})}, reasons...)
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: diags}, done)
@@ -416,11 +420,15 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	if err != nil {
 		return 0, err
 	}
+	demand.Tries = job.PlaceTries
 	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil && cand.fit.Problem != nil {
 		err = cand.fit.Problem
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
 		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
+	}
+	if errors.Is(err, backend.ErrNotYet) {
+		return c.supervision.first, nil
 	}
 	if err != nil {
 		return c.unanswered(ctx, run, job, private, err)
@@ -575,35 +583,89 @@ func (c *Coordinator) withdrawals(ctx context.Context, run *store.Run, keys []st
 // cancelPlacements has the drivers of ws, placements by attempt, cancel
 // those of the attempts withdrawn, as far as they can: a placement that
 // wasn't recorded is found by its attempt first. One a driver couldn't
-// cancel is in the log, unless where it runs is private; its worker's
+// cancel now, as one on a host it can't reach for a while, it has the
+// driver cancel again in the background (cancelLater); its worker's
 // reports are refused all the same.
 func (c *Coordinator) cancelPlacements(ctx context.Context, run string, ws map[string]*withdrawal, withdrawn []string) {
 	for _, id := range withdrawn {
-		w := ws[id]
-		if w == nil {
-			continue
-		}
-		m, d, p := w.cand.member, w.cand.driver, w.placement
-		var err error
-		if p.ID == "" {
-			var found bool
-			if p, found, err = d.Find(ctx, m, id); err == nil && !found {
-				continue
+		if w := ws[id]; w != nil {
+			if err := c.cancelPlacement(ctx, id, w); err != nil {
+				c.cancelLater(ctx, run, id, w, err)
 			}
 		}
-		if err == nil {
-			err = d.Cancel(ctx, m, p)
+	}
+}
+
+// cancelPlacement has w's driver cancel the placement of the attempt id,
+// which it finds first if it wasn't recorded, and then forget it.
+func (c *Coordinator) cancelPlacement(ctx context.Context, id string, w *withdrawal) error {
+	m, d, p := w.cand.member, w.cand.driver, w.placement
+	if p.ID == "" {
+		var (
+			found bool
+			err   error
+		)
+		if p, found, err = d.Find(ctx, m, id); err != nil || !found {
+			return err
 		}
-		if err == nil {
-			c.mu.Lock()
-			c.unremember(id)
-			c.mu.Unlock()
-			c.forget(w.cand, p)
-		}
-		if err != nil && !w.private {
+	}
+	if err := d.Cancel(ctx, m, p); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.unremember(id)
+	c.mu.Unlock()
+	c.forget(w.cand, p)
+	return nil
+}
+
+// How a placement a driver couldn't cancel is cancelled again
+// (cancelLater): after cancelFirst, twice as long each time after, up to
+// cancelMost, for cancelFor in all.
+const (
+	cancelFirst = time.Second
+	cancelMost  = 30 * time.Second
+	cancelFor   = 5 * time.Minute
+)
+
+// cancelLater has w's driver cancel the placement of the attempt id of the
+// run again, in the background, while Serve runs, as forget has a driver
+// forget one: a driver that couldn't, as it answered err, as one whose
+// host is being reached again, can a moment later. Once it has tried for
+// cancelFor, the log says it couldn't, unless where the attempt runs is
+// private.
+func (c *Coordinator) cancelLater(ctx context.Context, run, id string, w *withdrawal, err error) {
+	failed := func(ctx context.Context, err error) {
+		if !w.private {
 			c.log.WarnContext(ctx, "coordinator: couldn't cancel the placement of an attempt it withdrew; its worker's reports are refused", "run", run, "attempt", id, "error", err)
 		}
 	}
+	c.mu.Lock()
+	later := c.forgetCtx
+	if later != nil {
+		c.forgetting.Add(1)
+	}
+	c.mu.Unlock()
+	if later == nil {
+		failed(ctx, err)
+		return
+	}
+	ctx = later
+	go func() {
+		defer c.forgetting.Done()
+		deadline := time.Now().Add(cancelFor)
+		for wait := cancelFirst; time.Now().Add(wait).Before(deadline); wait = min(2*wait, cancelMost) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if err = c.cancelPlacement(ctx, id, w); err == nil {
+				return
+			}
+		}
+		failed(ctx, err)
+	}()
 }
 
 // unanswered handles cause, a backend's, or Groups', that couldn't answer
@@ -745,8 +807,11 @@ func (c *Coordinator) demandOf(ctx context.Context, run *store.Run, rj *plan.Rea
 // group's order among those as soon; and, for each member that can't, the
 // problem its Probe gave, masked when where the job runs is private.
 // unanswered reports that a Probe couldn't answer, so that a job no member
-// can run now may be placed later.
-func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend.Demand, private bool) (fits []candidate, reasons problems.Diagnostics, unanswered bool) {
+// can run now may be placed later; and notYet that a Probe hasn't tried
+// its member for the job yet, but will (backend.ErrNotYet), which the
+// supervisor asks again about soon, without counting it as one that
+// couldn't answer.
+func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend.Demand, private bool) (fits []candidate, reasons problems.Diagnostics, unanswered, notYet bool) {
 	for i := range g.Members {
 		m := &g.Members[i]
 		d := c.driver(m)
@@ -756,6 +821,10 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 		}
 		if p, ok := errors.AsType[*problem.Problem](err); ok {
 			reasons = append(reasons, maskedIf(private, problemDiagnostic(p)))
+			continue
+		}
+		if errors.Is(err, backend.ErrNotYet) {
+			notYet = true
 			continue
 		}
 		if err != nil {
@@ -768,7 +837,7 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 		fits = append(fits, candidate{group: g.Name, member: m, driver: d, fit: fit})
 	}
 	slices.SortStableFunc(fits, func(a, b candidate) int { return cmp.Compare(a.fit.Availability, b.fit.Availability) })
-	return fits, reasons, unanswered
+	return fits, reasons, unanswered, notYet
 }
 
 // driver returns the driver of m's backend: the coordinator's, or
