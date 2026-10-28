@@ -239,7 +239,8 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     that an expression in its caller's `with:` leaves without a value, or
     whose `optional:`, `hidden:` or `ignore:` is an expression, fails the
     step that calls it when it runs, where ACTIVATE refuses the run as it
-    is created; and what isn't built yet of one, which fails the step
+    is created, if the expression reads only what is known then; and what
+    isn't built yet of one, which fails the step
     that calls it when it runs: a directory outside its root's run
     directory, and a value of its `env:` that reads its own name
     ([Workflows a step calls](#workflows-a-step-calls));
@@ -2216,15 +2217,18 @@ the host but runs the child where its caller runs, as some known calls do.
   workflow that its caller's `with:` leaves out (`child_input_missing`),
   whatever the step's `if:`: one with no `default:`, that isn't a
   boolean, and that isn't optional, nor hidden or ignored, nor in a group
-  or a wizard step that is, to which `with:` gives no value, or `""`
-  where no option is `""`. That is as far as the text says: what an
-  expression in `with:` gives, and an input whose `optional:`, `hidden:`
-  or `ignore:` is an expression, the child's Create checks as the step
-  runs (`input_required`), where ACTIVATE evaluates them as the root is
-  created. Of the known workflows' 270 calls, the 263 whose workflow is
-  known too, none leaves out an input that is required whatever the
-  run's values, and 27 or 28 leave out one that such an expression
-  decides. Each is reported at the `uses:` of the root's own step that
+  that is, to which `with:` gives no value, or `""` where no option is
+  `""`. That is as far as the text says: what an expression in `with:`
+  gives, and an input whose `optional:`, `hidden:` or `ignore:` is an
+  expression, the child's Create checks as the step runs
+  (`input_required`), where ACTIVATE evaluates, as the root is created,
+  each that reads only what is known then, as the run's inputs, and takes
+  one that reads what a job makes, as `needs`, for a value. Of the known
+  workflows' 270 calls, none of the 262 whose workflow is one known file
+  leaves out an input that is required whatever the run's values; 27 of
+  them leave out one that such an expression decides, and so may one
+  more, whose workflow is a marketplace workflow that 4 known files could
+  be. Each is reported at the `uses:` of the root's own step that
   the path of calls starts at, in the root's file, since whoever runs the
   root may not own the workflows it calls; a cycle, once whatever paths
   reach it, a workflow too deep, and an input left out, once for each

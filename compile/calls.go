@@ -192,7 +192,10 @@ func (c *compiler) callsOf(ctx context.Context, t *tree, n node) ([]node, error)
 				continue
 			}
 			if n.depth() >= t.limits.MaxDepth {
-				if t.once("depth " + jsonptr.Format(n.root) + "\x00" + n.pin.doc.File + "\x00" + jsonptr.Format(loc)) {
+				// Once for each step, by its workflow's text, which two
+				// revisions of one file don't share, that more than one
+				// path reaches.
+				if t.once("depth " + jsonptr.Format(n.root) + "\x00" + n.pin.source.Digest + "\x00" + jsonptr.Format(loc)) {
 					chain := append(slices.Clone(n.chain), ref.Uses)
 					c.reportAt(problems.WorkflowNestedTooDeep, n.root, problems.Params{"max": t.limits.MaxDepth, "chain": problems.QuoteAll(chain)})
 				}
@@ -207,7 +210,7 @@ func (c *compiler) callsOf(ctx context.Context, t *tree, n node) ([]node, error)
 			}
 			t.found[callKey{n.pin.source.Digest, jsonptr.Format(loc)}] = *p.source
 			chain := append(slices.Clone(n.chain), p.source.Location)
-			c.checkCallInputs(t, n.root, chain, n.pin.doc, loc, step, p.doc)
+			c.checkCallInputs(t, n.root, chain, n.pin.source.Digest, loc, step, p.doc)
 			next = append(next, node{pin: p, keys: append(slices.Clone(n.keys), key), chain: chain, root: n.root})
 		}
 	}

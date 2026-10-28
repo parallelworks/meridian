@@ -11,14 +11,16 @@ import (
 )
 
 // checkCallInputs reports each required input of the workflow called that
-// the step at loc, in the workflow doc, leaves out of its with:
-// (child_input_missing), as format 1 refuses to create a run any of whose
-// calls, down its tree, does. It reports them at root, the uses: of the
-// run's own step that the path of calls starts at, with chain, the
-// locations of the workflows on that path, from the run's own to called;
-// and a step that more than one path reaches, once.
-func (c *compiler) checkCallInputs(t *tree, root, chain []string, doc *format.Document, loc []string, step map[string]any, called *format.Document) {
-	if called == nil || !t.once("inputs "+jsonptr.Format(root)+"\x00"+doc.File+"\x00"+jsonptr.Format(loc)) {
+// the step at loc, in the workflow whose text's digest is caller, leaves
+// out of its with: (child_input_missing), as format 1 refuses to create a
+// run any of whose calls, down its tree, does. It reports them at root,
+// the uses: of the run's own step that the path of calls starts at, with
+// chain, the locations of the workflows on that path, from the run's own
+// to called; and a step that more than one path reaches, once. The step is
+// told by its workflow's text, which two revisions of one file, at one
+// location, don't share.
+func (c *compiler) checkCallInputs(t *tree, root, chain []string, caller string, loc []string, step map[string]any, called *format.Document) {
+	if called == nil || !t.once("inputs "+jsonptr.Format(root)+"\x00"+caller+"\x00"+jsonptr.Format(loc)) {
 		return
 	}
 	defs, _ := jsonptr.Lookup(called.Value, definitionsPath)
@@ -34,12 +36,12 @@ func (c *compiler) checkCallInputs(t *tree, root, chain []string, doc *format.Do
 // is written, leaves out: that it holds no value for, or "" for one none
 // of whose options: is "", as the child's Create would find them
 // (applyConditions). An input is required that has no default:, isn't a
-// boolean, which is false without one, and that neither it nor a group or
-// a wizard step around it makes hidden or ignored, and that isn't
-// optional. What is known only as the step runs is the child's Create's
-// to check, then: a value of with: that an expression gives, or a with:
-// that is one, and an input whose hidden:, ignore: or optional:, or a
-// group's or a step's hidden: or ignore:, is an expression.
+// boolean, which is false without one, and that neither it nor a group
+// around it makes hidden or ignored, and that isn't optional. What is
+// known only as the step runs is the child's Create's to check, then: a
+// value of with: that an expression gives, or a with: that is one, and an
+// input whose hidden:, ignore: or optional:, or a group's hidden: or
+// ignore:, is an expression.
 func requiredLeftOut(defs map[string]any, with any) []string {
 	if s, ok := with.(string); ok && strings.Contains(s, "${{") {
 		return nil

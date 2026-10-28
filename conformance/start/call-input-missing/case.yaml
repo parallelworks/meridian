@@ -2,8 +2,9 @@ description: >-
   A run any of whose calls leaves out of its with: an input that the
   workflow it calls requires, one with no default: that isn't optional nor
   a boolean, isn't created, as format 1 refuses it. The problem is at the
-  uses: of the run's own step that the path of calls starts at. What an
-  expression in a with: gives is checked as the step runs.
+  uses: of the run's own step that the path of calls starts at. A value
+  that reads what a job makes, as needs, is known only as the step runs,
+  and is taken for one then.
 source: ACTIVATE's filling of a called workflow's defaults
 repositories: [github/conformance/inputs]
 expect:
@@ -11,7 +12,7 @@ expect:
     - severity: error
       code: child_input_missing
       path: /jobs/main/steps/0/uses
-      line: 10
+      line: 11
       column: 15
       params:
         input: cluster (Cluster)
