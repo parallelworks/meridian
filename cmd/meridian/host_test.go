@@ -27,6 +27,7 @@ import (
 	"github.com/parallelworks/meridian/backend/hostproto"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/internal/harden"
+	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -846,7 +847,7 @@ func TestHostProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.CommandContext(t.Context(), exe, "host", hostproto.OpPlace)
-	cmd.Env = []string{envMain + "=1", "PATH=" + os.Getenv("PATH"), hostStubEnv + "=" + report}
+	cmd.Env = []string{envMain + "=1", "PATH=" + os.Getenv("PATH"), hostStubEnv + "=" + report, racetest.Env(env["HOME"])}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

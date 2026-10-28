@@ -21,6 +21,7 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/testtiming"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -79,10 +80,14 @@ func parallel(t *testing.T) {
 }
 
 // runEnv is an environment with directories of a test's own: an empty
-// config directory, a state directory and a temporary directory.
+// config directory, a state directory and a temporary directory. A race
+// that a worker the test's runs start reports, in its log in the state
+// directory, fails the test (racetest.Watch), as does one that a process
+// the test starts with racetest.Env of HOME reports.
 func runEnv(t *testing.T) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
+	racetest.Watch(t, dir)
 	return map[string]string{
 		"HOME": dir, local.EnvConfigDir: filepath.Join(dir, "config"), local.EnvStateDir: filepath.Join(dir, "state"),
 		local.EnvCacheDir: filepath.Join(dir, "cache"), "TMPDIR": filepath.Join(dir, "tmp"),

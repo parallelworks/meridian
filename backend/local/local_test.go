@@ -27,6 +27,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -137,7 +138,11 @@ func newDriver(t testing.TB, mode string) (*Driver, string) {
 	out := filepath.Join(t.TempDir(), "report.json")
 	env := append(os.Environ(), stubEnv+"="+mode, reportEnv+"="+out, "MERIDIAN_LEAK=yes",
 		workerapi.EnvBootstrapToken+"=not-this-one", workerapi.EnvBootstrapTokenFile+"=/not/this/one")
-	return &Driver{State: filepath.Join(t.TempDir(), "state"), Environ: env}, out
+	// A race that a worker reports, in its log in the state directory,
+	// fails the test.
+	dir := t.TempDir()
+	racetest.Watch(t, dir)
+	return &Driver{State: filepath.Join(dir, "state"), Environ: env}, out
 }
 
 // TestEnviron checks a worker's environment: its driver's, but the
