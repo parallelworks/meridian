@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -199,6 +200,48 @@ func TestRunStoppingEvent(t *testing.T) {
 		}
 		if len(events) != 2 || events[0].Kind != EventRunStarted || events[1].Kind != EventRunStopping || events[1].Reason != plan.ReasonTimeout || events[1].Job != "" {
 			t.Errorf("the run's events are %+v", events)
+		}
+		return nil
+	})
+}
+
+// A transaction's callers share one value for a key (Shared), which the
+// next transaction makes anew; and what it has done once it commits
+// (AfterCommit) is done last of all the commit does: after Changes says it
+// has changed the store.
+func TestTxSharedAndAfterCommit(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	id := createRun(t, s)
+	type key struct{}
+	var first any
+	changes := s.Changes()
+	saidFirst := false
+	inTx(t, s, func(tx *Tx) error {
+		made := 0
+		newValue := func() any {
+			made++
+			return new(int)
+		}
+		first = tx.Shared(key{}, newValue)
+		if again := tx.Shared(key{}, newValue); again != first || made != 1 {
+			t.Errorf("a transaction's callers share %p and %p, made %d times", first, again, made)
+		}
+		tx.AfterCommit(func(context.Context) {
+			select {
+			case <-changes:
+				saidFirst = true
+			default:
+			}
+		})
+		return tx.StartRun(id, testState(), nil)
+	})
+	if !saidFirst {
+		t.Error("what the transaction did once it committed was done before Changes said it changed the store")
+	}
+	inTx(t, s, func(tx *Tx) error {
+		if next := tx.Shared(key{}, func() any { return new(int) }); next == first {
+			t.Error("the next transaction shares the last one's value")
 		}
 		return nil
 	})

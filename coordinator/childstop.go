@@ -67,20 +67,37 @@ func unreadable(err error) bool {
 	return errors.Is(err, plan.ErrVersion) || errors.Is(err, store.ErrMalformed)
 }
 
-// wakeAgainAfter wakes again the supervisors and markers woken, once tx
-// commits, as wakeAgain does, if there are any: every transaction that
-// wakes one that hopper may be running has it woken again so, and only if
-// it commits.
+// wakeAgainAfter has the supervisors and markers woken, those of them
+// that hopper was running (waking), woken again once tx commits, as
+// wakeAgain does, and only if it commits. All that a transaction gives it,
+// in as many calls as it makes, are woken again in one wakeAgain, so that
+// they are tried together, each time wakeAgainAfter apart, rather than
+// each after the last has had its tries.
 func (c *Coordinator) wakeAgainAfter(tx *store.Tx, woken []*waking) {
 	woken = slices.DeleteFunc(slices.Clone(woken), func(w *waking) bool { return w == nil })
 	if len(woken) == 0 {
 		return
 	}
-	if c.rewake != nil {
-		c.rewake(woken)
-	}
-	tx.AfterCommit(func(ctx context.Context) { c.wakeAgain(ctx, woken...) })
+	p, _ := tx.Shared(wakesAfterKey{}, func() any {
+		p := &wakesAfter{}
+		tx.AfterCommit(func(ctx context.Context) {
+			if c.rewake != nil {
+				c.rewake(p.woken)
+			}
+			c.wakeAgain(ctx, p.woken...)
+		})
+		return p
+	}).(*wakesAfter)
+	p.woken = append(p.woken, woken...)
 }
+
+// wakesAfterKey is the key of a transaction's wakesAfter
+// (store.Tx.Shared).
+type wakesAfterKey struct{}
+
+// wakesAfter are what a transaction has woken again once it commits
+// (wakeAgainAfter).
+type wakesAfter struct{ woken []*waking }
 
 // stopStepChildrenTx stops, in tx, for reason, the children of the steps'
 // tries of the attempt a, of run, that a stop of its job stops, as its

@@ -608,15 +608,37 @@ type Tx struct {
 	// after are what is called once the transaction commits (AfterCommit),
 	// in order.
 	after []func(context.Context)
+	// shared are the values the transaction's callers share (Shared), by
+	// key.
+	shared map[any]any
 }
 
 // AfterCommit has f called once the transaction has committed, with its
-// context, after the hooks of Options, in the order AfterCommit was called:
+// context, uncancelled, last of all that the commit does, after the hooks
+// of Options, the erasing of a secret record from the write-ahead log, and
+// the closing of what Changes gave, in the order AfterCommit was called:
 // never for a transaction that doesn't commit. A hook of Options that runs
 // in the transaction, as OnAttemptsEnded, so has what it does once the
 // transaction commits done then.
 func (tx *Tx) AfterCommit(f func(ctx context.Context)) {
 	tx.after = append(tx.after, f)
+}
+
+// Shared returns the transaction's value for key, which newValue makes the
+// first time one of its callers asks for it: a value they share for as
+// long as the transaction lasts, as what each gathers for one thing to be
+// done once it commits (AfterCommit). key is compared as a map's is, and
+// is best a type of the caller's own, as context.WithValue's is.
+func (tx *Tx) Shared(key any, newValue func() any) any {
+	if v, ok := tx.shared[key]; ok {
+		return v
+	}
+	if tx.shared == nil {
+		tx.shared = map[any]any{}
+	}
+	v := newValue()
+	tx.shared[key] = v
+	return v
 }
 
 // stmt returns the statement of query for the transaction: the store's,
@@ -762,9 +784,6 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	if len(tx.ended) > 0 && s.onEnded != nil {
 		s.onEnded(context.WithoutCancel(ctx), tx.ended)
 	}
-	for _, f := range tx.after {
-		f(context.WithoutCancel(ctx))
-	}
 	if tx.erased {
 		s.truncateWAL(context.WithoutCancel(ctx))
 	}
@@ -775,6 +794,9 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 			s.changed = nil
 		}
 		s.changedMu.Unlock()
+	}
+	for _, f := range tx.after {
+		f(context.WithoutCancel(ctx))
 	}
 	return nil
 }
