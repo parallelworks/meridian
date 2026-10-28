@@ -407,6 +407,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		if err != nil {
 			return c.unanswered(ctx, run, job, private, err)
 		}
+		c.forgetSeen(run.ID, job.Key)
 		return c.recordPlacement(ctx, run.ID, a.ID, cand, p, key, private)
 	}
 	// Nothing was placed: once the run has stopped, the job is as one
@@ -428,6 +429,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		err = cand.fit.Problem
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
+		c.forgetSeen(run.ID, job.Key)
 		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
 	}
 	if err != nil {
@@ -458,6 +460,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	if err != nil {
 		return 0, err
 	}
+	c.forgetSeen(run.ID, job.Key)
 	return c.placeAttempt(ctx, run, job, a.ID, token, rj, cand, private)
 }
 
@@ -689,9 +692,18 @@ func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, job *store
 
 // unansweredBy is unanswered, which counts the look as by of the times a
 // backend couldn't answer, as it does each failure a driver saw to reach a
-// member since the job's previous look (backend.FailedError).
+// member since the job's previous look (backend.FailedError). A look that
+// counts more than one, as one after its supervisor stalled, takes the job
+// no further than the try before its last: the driver, given the job's
+// tries (backend.Demand.Tries), says at the job's next look that it can't
+// reach the member, as only it can, before the job fails with
+// placement_unanswered, as long as it allows fewer tries than the
+// supervision does.
 func (c *Coordinator) unansweredBy(ctx context.Context, run *store.Run, job *store.Job, private bool, by int, cause error) (time.Duration, error) {
 	key := job.Key
+	if by > 1 {
+		by = max(1, min(by, c.supervision.tries-1-job.PlaceTries))
+	}
 	if private {
 		c.log.WarnContext(ctx, "coordinator: a backend couldn't answer as a job was placed, and is asked again later", "run", run.ID, "job", key)
 	} else {
@@ -716,6 +728,7 @@ func (c *Coordinator) unansweredBy(ctx context.Context, run *store.Run, job *sto
 		_, err := tx.PlaceFailed(c.newAttempt(run.ID, key, false), job.Fence, p)
 		return err
 	})
+	c.forgetSeen(run.ID, key)
 	switch {
 	case errors.Is(err, store.ErrState) || errors.Is(err, store.ErrFenced):
 		// Claimed, or ended, meanwhile.
@@ -911,7 +924,8 @@ func (c *Coordinator) probeCounted(key string, err error) (counted int, notYet b
 }
 
 // forgetSeen forgets what the coordinator saw of failures to reach members
-// as it placed the run's job key (probeCounted), once it has placed it.
+// as it placed the run's job key (probeCounted), once it has placed it, or
+// placing it has failed, or the job, or its run, has ended.
 func (c *Coordinator) forgetSeen(run, key string) {
 	prefix := seenKey(run, key)
 	c.mu.Lock()

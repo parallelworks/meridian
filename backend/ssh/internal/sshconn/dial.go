@@ -51,6 +51,9 @@ type Dialer struct {
 	// ConnectTimeout bounds connecting, and the handshake, where a host's
 	// config's ConnectTimeout doesn't: DefaultConnectTimeout for 0.
 	ConnectTimeout time.Duration
+	// DialTimeout bounds a dial in all, or, for 0, what the host's config
+	// gives (dialTimeout).
+	DialTimeout time.Duration
 	// KeepAlive is how often a connection is asked whether it is alive,
 	// and KeepAliveTimeout how long it has to answer before it is closed,
 	// where the host's config has no ServerAliveInterval:
@@ -251,11 +254,14 @@ func (d *Dialer) through(ctx context.Context, c *hostConfig) (*hostConfig, error
 // (dialTimeout).
 const DefaultDialTimeout = 5 * time.Minute
 
-// dialTimeout bounds a dial of the host whose config is c in all: twice
-// the host's connect timeout, for connecting and the handshake, for the
-// host and each hop on the way to it there can be (maxHops), or
-// DefaultDialTimeout, whichever is longer.
+// dialTimeout bounds a dial of the host whose config is c in all: the
+// Dialer's DialTimeout, or else twice the host's connect timeout, for
+// connecting and the handshake, for the host and each hop on the way to
+// it there can be (maxHops), or DefaultDialTimeout, whichever is longer.
 func (d *Dialer) dialTimeout(c *hostConfig) time.Duration {
+	if d.DialTimeout > 0 {
+		return d.DialTimeout
+	}
 	return max(DefaultDialTimeout, 2*d.connectTimeout(c)*(maxHops+1))
 }
 

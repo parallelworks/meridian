@@ -253,7 +253,8 @@ type Coordinator struct {
 	members map[string]memberEntry
 	// seenFailed are the failures to reach a member, in all, that a job's
 	// latest look saw its driver count, by the job and the member
-	// (probeCounted), until the job is placed.
+	// (probeCounted), until the job is placed, placing it fails, or it
+	// ends (forgetSeen).
 	seenFailed map[string]int
 	// timeouts are the jobs' timeouts by attempt, and private runs'
 	// timeouts by "run" and the run's ID, as the coordinator read them

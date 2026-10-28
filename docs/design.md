@@ -4394,12 +4394,16 @@ local backend there through `meridian host`
   (`backend.Demand.Tries`). A job's first look counts none but its own, so
   a job that comes to a host just after other jobs' tries gave up on it
   tries it again, and runs there if it is back. The coordinator keeps
-  what each job's latest look saw in memory; one that restarts counts from
-  the next look. A dial is bounded in all: `ssh -G` by twice the connect
-  timeout, and the whole by twice the host's connect timeout for it and
-  each hop there can be, 5 minutes at least; one that reaches it has
-  failed. A cancel the driver can't make for now is made again in the
-  background.
+  what each job's latest look saw in memory, until the job is placed,
+  placing it fails, or it ends; one that restarts counts from the next
+  look. A look that counts many failures at once, as one whose supervisor
+  stalled, takes the job no further than one short of the coordinator's
+  limit on looks that couldn't answer, which is more than four, so that
+  the job fails with `ssh_unreachable`, not `placement_unanswered`. A
+  dial is bounded in all: `ssh -G` by twice the connect timeout, and the
+  whole by twice the host's connect timeout for it and each hop there can
+  be, 5 minutes at least; one that reaches it has failed. A cancel the
+  driver can't make for now is made again in the background.
 - **Format 1's keys.** `remoteUser` and `jumpNodeUser` are the user's
   config's `User` for the host where they're empty, or else the local
   user; format 1's "your pw username" is the local user here. A

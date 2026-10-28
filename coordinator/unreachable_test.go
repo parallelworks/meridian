@@ -182,6 +182,101 @@ func TestNotYetUncounted(t *testing.T) {
 	}
 }
 
+// probeTries runs a job whose member's backend gives answers, in order,
+// before it answers as testDriver does, and checks that the run succeeds,
+// and that the job's looks gave Probe the tries want
+// (backend.Demand.Tries).
+func probeTries(t *testing.T, answers []error, want []int) {
+	t.Helper()
+	d := &triesDriver{testDriver: newTestDriver(), answers: answers}
+	c := open(t, Options{Drivers: map[string]backend.Driver{testBackend: d}})
+	d.c, d.ctx = c, t.Context()
+	t.Cleanup(d.workers.Wait)
+	if r := runToEnd(t, c, oneJob, nil); r.Outcome != plan.OutcomeSuccess {
+		t.Fatalf("the run ended %s", r.Outcome)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !slices.Equal(d.tries, want) {
+		t.Errorf("Probe was given the tries %v, want %v", d.tries, want)
+	}
+}
+
+// TestManyFailuresAtOnce checks that a look that counts many failures to
+// reach a member at once, as one after its supervisor stalled, takes the
+// job's tries no further than the one before its last, which the driver,
+// given them, can say it gave up at: not past the supervision's, which
+// would fail the job with placement_unanswered first.
+func TestManyFailuresAtOnce(t *testing.T) {
+	parallel(t)
+	refused := errors.New("test: refused")
+	notYet := fmt.Errorf("test: %w", backend.ErrNotYet)
+	probeTries(t, []error{
+		&backend.FailedError{Failed: 1, Err: refused},
+		&backend.FailedError{Failed: 100, Err: notYet},
+	}, []int{0, 1, fastSupervision.tries - 1})
+}
+
+// TestGiveUpForgets checks that a job that gave up on its member, with
+// placement_unanswered, counts none of the failures to reach it it saw
+// before at the first look of its next placement, as any job's first.
+func TestGiveUpForgets(t *testing.T) {
+	parallel(t)
+	refused := errors.New("test: refused")
+	notYet := fmt.Errorf("test: %w", backend.ErrNotYet)
+	var answers []error
+	want := make([]int, 0, fastSupervision.tries+2)
+	for i := range fastSupervision.tries {
+		answers = append(answers, &backend.FailedError{Failed: i + 1, Err: refused})
+		want = append(want, i)
+	}
+	answers = append(answers, &backend.FailedError{Failed: 100, Err: notYet})
+	probeTries(t, answers, append(want, 0, 0))
+}
+
+// retryAtDriver is a testDriver whose Probe answers, until retryAt, that
+// it is reaching the member again then, as a driver waiting out its
+// backoff after a failure does, and counts the looks it answered so.
+type retryAtDriver struct {
+	*testDriver
+	retryAt time.Time
+	waiting atomic.Int32
+}
+
+func (d *retryAtDriver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
+	if time.Now().Before(d.retryAt) {
+		d.waiting.Add(1)
+		return backend.Fit{}, &backend.FailedError{RetryAt: d.retryAt, Err: fmt.Errorf("test: %w", backend.ErrNotYet)}
+	}
+	return d.testDriver.Probe(ctx, m, demand)
+}
+
+// TestNotYetUntilRetry checks that a job whose member's backend will try
+// the member at a time it says (backend.FailedError.RetryAt) is looked at
+// again about then: not at each of the supervision's shortest waits
+// meanwhile, nor much later.
+func TestNotYetUntilRetry(t *testing.T) {
+	parallel(t)
+	d := &retryAtDriver{testDriver: newTestDriver()}
+	c := open(t, Options{Drivers: map[string]backend.Driver{testBackend: d}})
+	d.c, d.ctx = c, t.Context()
+	t.Cleanup(d.workers.Wait)
+	c.supervision.most = time.Minute
+	d.retryAt = time.Now().Add(time.Second)
+	r := runToEnd(t, c, oneJob, nil)
+	if r.Outcome != plan.OutcomeSuccess {
+		t.Fatalf("the run ended %s", r.Outcome)
+	}
+	// The first look, and one more at most, as one that comes before
+	// RetryAt by less than the clock tells.
+	if n := d.waiting.Load(); n > 2 {
+		t.Errorf("the job was looked at %d times before its member was to be tried", n)
+	}
+	if late := r.EndedAt.Sub(d.retryAt); late > 5*time.Second {
+		t.Errorf("the run ended %v after its member was to be tried", late)
+	}
+}
+
 // cancelLaterDriver is a testDriver that can't cancel a placement the
 // first fails times it is asked, as one whose host it is reaching again,
 // and records the placements it cancelled.
@@ -281,12 +376,30 @@ func TestJobsGiveUpTogether(t *testing.T) {
 			t.Errorf("job j%d ended %s, with %v", i, j.Outcome, j.Diagnostics)
 		}
 	}
-	// Four for each job's first look, which counts one try of its own,
-	// and those after, which each job sees.
-	if n := tries.Load(); n > 4+jobs {
+	// As many as the driver's, and one more, as one that failed before a
+	// job's first look, which counts none it didn't try itself: none of
+	// the jobs that waited tried the host, after the first look, itself.
+	if n := tries.Load(); n > backendssh.Tries+1 {
 		t.Errorf("the jobs gave up after %d tries of the host, in all", n)
 	}
 	t.Logf("%d jobs gave up after %d tries of the host, in %v", jobs, tries.Load(), time.Since(began))
+	// Nothing places them again: the coordinator forgets what it saw of
+	// the host as it placed them.
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.seenFailed) == 0
+	})
+}
+
+// TestSupervisionOutlastsSSH checks that the coordinator asks a backend
+// that couldn't answer more times than the ssh backend tries a host for a
+// job, so that a job whose host doesn't answer fails with
+// ssh_unreachable, which says why, rather than with placement_unanswered.
+func TestSupervisionOutlastsSSH(t *testing.T) {
+	if defaultSupervision.tries <= backendssh.Tries {
+		t.Errorf("the coordinator asks a backend that couldn't answer %d times, the ssh backend tries a host %d", defaultSupervision.tries, backendssh.Tries)
+	}
 }
 
 // TestProbeCounted checks how a job's look counts a member's failures to

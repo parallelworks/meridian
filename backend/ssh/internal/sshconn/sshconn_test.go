@@ -829,6 +829,26 @@ func TestPoolDialTimeout(t *testing.T) {
 	}
 }
 
+// TestDialTimeout checks that a dial whose jump host stalls once its own
+// handshake is done, never answering the request to forward a connection
+// to the host, which nothing else bounds, ends at the Dialer's
+// DialTimeout.
+func TestDialTimeout(t *testing.T) {
+	requireSSH(t)
+	h := newHome(t)
+	j, s := h.server(sshtest.Options{HoldForwards: true}), h.server(sshtest.Options{})
+	h.knownHosts(j.KnownHosts(""), s.KnownHosts(""))
+	d := h.dialer()
+	d.DialTimeout = 500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := d.Dial(ctx, sshconn.Target{Host: s.Addr(), JumpHost: j.Addr()})
+	if took := time.Since(start); err == nil || took > 3*time.Second || ctx.Err() != nil {
+		t.Errorf("a dial through a jump host that stalls gave %v after %v", err, took)
+	}
+}
+
 // TestPoolCloseWaits checks that a pool's Close ends the dials going on,
 // as one whose ssh -G hangs, and returns once they have ended.
 func TestPoolCloseWaits(t *testing.T) {
