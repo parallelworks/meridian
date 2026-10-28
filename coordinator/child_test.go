@@ -91,7 +91,8 @@ jobs:
 
 // treeRoot is the root of the tree: its job build's first step calls the
 // child, tried again 20 times at most; and its third does too, and
-// outlives its run's stop.
+// outlives its run's stop; and its fourth does too, and stops once a job
+// of its run has failed.
 const treeRoot = `jobs:
   build:
     steps:
@@ -103,6 +104,9 @@ const treeRoot = `jobs:
         if: always()
         with: {$yaml: w.yaml, region: east}
         retry: {max-retries: 20}
+      - uses: github/t/child@main
+        early-cancel: any-job-failed
+        with: {$yaml: w.yaml, region: east}
 `
 
 // createTree creates a run of treeRoot, as the meridian command does, with
@@ -263,7 +267,7 @@ func TestCreateChildRefuses(t *testing.T) {
 	}
 	for name, req := range map[string]ChildRequest{
 		"a step that calls no workflow": {Attempt: attempt.ID, Step: 1},
-		"a step the job hasn't":         {Attempt: attempt.ID, Step: 3},
+		"a step the job hasn't":         {Attempt: attempt.ID, Step: 4},
 		"a try past the step's retry:":  {Attempt: attempt.ID, Step: 0, Try: 21, With: with},
 		"no attempt":                    {Attempt: "0123", Step: 0},
 	} {

@@ -296,6 +296,11 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 				c.placementsRecorded(ids)
 			}
 		},
+		OnRunsEnded: func(_ context.Context, ids []string) {
+			if c := opened.Load(); c != nil {
+				c.runsEnded(ids)
+			}
+		},
 	})
 	if err != nil {
 		return nil, err

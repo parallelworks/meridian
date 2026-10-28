@@ -448,6 +448,7 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err := tx.addEvent(n, EventRunFinished, "", "", 0); err != nil {
 		return err
 	}
+	tx.ended = append(tx.ended, id)
 	if _, err := tx.exec("DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
 		return err
 	}

@@ -70,3 +70,7 @@ func HeldPolls(s *Server, id string) int {
 // SetRecheck sets how often s reads again the controls of the attempts it
 // holds polls for.
 func SetRecheck(s *Server, d time.Duration) { s.polls.every = d }
+
+// SetChildRecheck sets how often a poll for a child's end reads the store
+// again.
+func SetChildRecheck(s *Server, d time.Duration) { s.childRecheck = d }

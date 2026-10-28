@@ -520,6 +520,39 @@ func (c *client) action(ctx context.Context, req *workerapi.ActionRequest) (*wor
 	return answer, nil
 }
 
+// child asks for the child run of a step's try (workerapi.PathChild),
+// which a repeat of the request is answered with again. It returns an
+// *encodeError for a request it can't encode.
+func (c *client) child(ctx context.Context, req *workerapi.ChildRequest) (*workerapi.Child, error) {
+	body, err := workerapi.MarshalAt(c.apiVersion, req)
+	if err != nil {
+		return nil, &encodeError{err}
+	}
+	child := new(workerapi.Child)
+	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChild, body: body, timeout: requestTimeout}, child)
+	return child, err
+}
+
+// childEnd waits for the end of the child run of the step's try
+// (workerapi.PathChildEnd): it answers once the child has ended, or after
+// a while with the child as it is.
+func (c *client) childEnd(ctx context.Context, step, try int) (*workerapi.Child, error) {
+	q := url.Values{workerapi.QueryStep: {strconv.Itoa(step)}, workerapi.QueryTry: {strconv.Itoa(try)}}
+	child := new(workerapi.Child)
+	err := c.do(ctx, call{method: http.MethodGet, path: workerapi.PathChildEnd, query: q, timeout: controlTimeout}, child)
+	return child, err
+}
+
+// stopChild stops the child run of a step's try (workerapi.PathChildStop).
+// It returns an *encodeError for a stop it can't encode.
+func (c *client) stopChild(ctx context.Context, stop *workerapi.ChildStop) error {
+	body, err := workerapi.MarshalAt(c.apiVersion, stop)
+	if err != nil {
+		return &encodeError{err}
+	}
+	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChildStop, body: body, timeout: requestTimeout}, nil)
+}
+
 // timing holds how long the worker waits for what it waits for, which
 // tests shorten.
 type timing struct {
