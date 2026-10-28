@@ -73,7 +73,7 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 		}
 		readyRun, key = caller, run.Parent.Job
 	}
-	p, from, in, err := c.readyInputOf(ctx, readyRun, key)
+	p, from, in, rec, err := c.readyInputOf(ctx, readyRun, key)
 	if err != nil {
 		return nil, err
 	}
@@ -113,10 +113,14 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	if err != nil {
 		return nil, err
 	}
-	tree, err := r.tree(ctx, run, root, dirs.root, p)
-	if err != nil {
-		return nil, err
+	// A step run's tree is in its own record; any other run's in the
+	// record its job was readied from, which readyInputOf opened.
+	if run.StepRun {
+		if rec, err = c.openRecord(ctx, run.ID); err != nil {
+			return nil, err
+		}
 	}
+	tree := r.tree(run, root, dirs.root, p, rec)
 	return &workerapisrv.Ready{
 		Job: res.Job, Run: reads.Reads(in.Run), Needs: reads.ReadsNeeds(in.Needs), Tree: tree, StepRun: stepRun,
 		RunDir: dirs.run, RunDirOnMember: dirs.own,
@@ -127,11 +131,11 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 // with, as its supervisor pinned it and a claim reads it: so that what is
 // evaluated again with it, as a claim's Ready, or the coordinator's
 // evaluation of a step's ssh: (stepTarget), reads what the job was
-// readied with.
-func (c *Coordinator) readyInputOf(ctx context.Context, run *store.Run, key string) (*plan.Plan, *readyFrom, plan.ReadyInput, error) {
+// readied with. It returns the run's secret record too, as it opened it.
+func (c *Coordinator) readyInputOf(ctx context.Context, run *store.Run, key string) (*plan.Plan, *readyFrom, plan.ReadyInput, *plan.Record, error) {
 	p, err := c.plans.get(run)
 	if err != nil {
-		return nil, nil, plan.ReadyInput{}, err
+		return nil, nil, plan.ReadyInput{}, nil, err
 	}
 	var from *readyFrom
 	if err := c.store.View(ctx, func(tx *store.Tx) error {
@@ -146,25 +150,21 @@ func (c *Coordinator) readyInputOf(ctx context.Context, run *store.Run, key stri
 		from, err = readReadyFrom(tx, run, pj, job, false)
 		return err
 	}); err != nil {
-		return nil, nil, plan.ReadyInput{}, err
+		return nil, nil, plan.ReadyInput{}, nil, err
 	}
-	in, err := c.readyInput(ctx, run, from)
-	return p, from, in, err
+	in, rec, err := c.readyInput(ctx, run, from)
+	return p, from, in, rec, err
 }
 
 // tree returns what an attempt of the child run run, of the plan p, has of
 // its tree (workerapi.Tree): its root's identity, and its root's
 // directory, rootDir, where the attempt runs (memberDirs), format 1's name
 // for the call, and the strings the worker of the step that called it
-// masked, from its secret record (plan.Inherited.Masked); or nil for a run
-// no step called.
-func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir string, p *plan.Plan) (*workerapi.Tree, error) {
+// masked, from rec, its secret record (plan.Inherited.Masked); or nil for
+// a run no step called.
+func (r claimReadier) tree(run, root *store.Run, rootDir string, p *plan.Plan, rec *plan.Record) *workerapi.Tree {
 	if run.Parent == nil {
-		return nil, nil
-	}
-	rec, err := r.c.openRecord(ctx, run.ID)
-	if err != nil {
-		return nil, err
+		return nil
 	}
 	tree := &workerapi.Tree{JobID: root.ID, RootDir: rootDir, WorkflowName: p.Run.Source.Ref.CallName()}
 	if rec.Inherited != nil {
@@ -174,7 +174,7 @@ func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir st
 		// A step run's worker masks what its caller's did at the try.
 		tree.Masked = append(slices.Clone(tree.Masked), rec.StepRun.Masked...)
 	}
-	return tree, nil
+	return tree
 }
 
 // Needs returns the oldest version of the worker API that has all the

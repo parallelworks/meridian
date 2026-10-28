@@ -200,7 +200,7 @@ func (c *Coordinator) triedBefore(ctx context.Context, run *store.Run, key, atte
 // the job with, as a claim of it reads it (readyInputOf). It gives the
 // host the job, as Ready readies it, runs on too, or nil for none.
 func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, *plan.Inline, bool, problems.Diagnostics, error) {
-	p, from, in, err := c.readyInputOf(ctx, run, key)
+	p, from, in, _, err := c.readyInputOf(ctx, run, key)
 	if err != nil {
 		return nil, nil, false, nil, err
 	}
