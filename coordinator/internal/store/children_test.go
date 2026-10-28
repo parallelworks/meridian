@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -299,8 +300,9 @@ func TestChildEvents(t *testing.T) {
 	}
 	var have []got
 	for _, e := range events {
-		if e.Called == nil || e.Attempt != attempt.Number {
-			t.Errorf("the event %+v has no link, or another attempt", e)
+		if c := e.Called; c == nil || e.Attempt != attempt.Number ||
+			c.Run != root || c.Job != "build" || c.Attempt != attempt.ID || c.Root != root || c.Depth != 1 {
+			t.Errorf("the event %+v has no link, or another than the try's, or another attempt: %+v", e, e.Called)
 			continue
 		}
 		have = append(have, got{e.Kind, e.Child, e.Job, e.Called.Step, e.Called.Try, e.Outcome, e.Reason})
@@ -352,5 +354,50 @@ func TestChildEvents(t *testing.T) {
 	inTx(t, s, func(tx *Tx) error { return tx.EndRun(b, plan.OutcomeCancelled, plan.ReasonCancelled) })
 	if n := len(childEvents(root)); n != len(want) {
 		t.Errorf("the ended run has %d children's events, want %d", n, len(want))
+	}
+}
+
+// BenchmarkChildEvents reads the events of a root whose steps called 200
+// children, half of which have ended: a child.created event of each, and
+// a child.ended of each that has, as following the tree reads them.
+func BenchmarkChildEvents(b *testing.B) {
+	const children = 200
+	s := open(b)
+	root := createRun(b, s)
+	var attempt *Attempt
+	inTx(b, s, func(tx *Tx) error {
+		if err := tx.StartRun(root, testState(), nil); err != nil {
+			return err
+		}
+		var err error
+		attempt, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	p := testPlan(b)
+	for i := range children {
+		var id string
+		inTx(b, s, func(tx *Tx) error {
+			var err error
+			if id, err = tx.NewRunID(); err != nil {
+				return err
+			}
+			link := Link{Run: root, Job: "build", Attempt: attempt.ID, Step: 1, Try: i, Root: root, Depth: 1}
+			return tx.InsertRun(NewRun{ID: id, Plan: p, DefaultGroup: "local", RunDir: "/runs/x", WorkflowID: fakeJobID(100 + i), Parent: &link})
+		})
+		if i%2 == 0 {
+			inTx(b, s, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
+		}
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		if err := s.View(b.Context(), func(tx *Tx) error {
+			events, err := tx.RunEvents(root, 0, 1000)
+			if err == nil && len(events) < children {
+				err = fmt.Errorf("%d events", len(events))
+			}
+			return err
+		}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
