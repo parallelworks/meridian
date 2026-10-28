@@ -290,7 +290,7 @@ jobs:
 	}
 	for step, want := range map[int]struct{ code, pointer string }{
 		// Step finds it on the worker, before it asks.
-		1: {"invalid", "#/jobs/main/steps/1/with/jobs/1"},
+		1: {string(problems.WrongType.Code()), "#/jobs/main/steps/1/with/jobs/1"},
 		2: {string(problems.CancelJobsOtherRun.Code()), "#/jobs/main/steps/2/with/run"},
 	} {
 		e := finishedStep(t, r.c, id, "main", step, 0)

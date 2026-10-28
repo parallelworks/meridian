@@ -141,8 +141,8 @@ func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir st
 // the coordinator performs, for a job of a child run, whose claim says
 // what it has of its tree, for one with a step whose uses: names a
 // workflow, which asks for its child, and for one with a step that uses
-// an action the coordinator performs (asksCoordinator), which asks for it;
-// and 1 for any other.
+// an action the coordinator performs (plan.CoordinatorAction), which asks
+// for it; and 1 for any other.
 func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attempt) (int, error) {
 	if run.Parent != nil {
 		return workerapi.Version3, nil
@@ -153,7 +153,7 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 	}
 	if j != nil {
 		for _, s := range j.Steps {
-			if s.Source != nil || asksCoordinator(s.Uses) {
+			if s.Source != nil || plan.CoordinatorAction(s.Uses) {
 				return workerapi.Version3, nil
 			}
 		}
