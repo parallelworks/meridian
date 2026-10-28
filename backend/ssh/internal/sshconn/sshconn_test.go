@@ -875,8 +875,8 @@ func TestSessionAbandoned(t *testing.T) {
 	waitSessions(t, s, 0, "once the next session closed")
 }
 
-// waitSessions waits for s to have n sessions open, which it says nothing
-// of, as it reaches it once what it read of the client has been handled.
+// waitSessions waits, with a deadline, for s to count n sessions open:
+// nothing says when it has handled what it read of the client.
 func waitSessions(t *testing.T, s *sshtest.Server, n int, when string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
