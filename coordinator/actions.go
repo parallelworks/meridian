@@ -22,6 +22,13 @@ const (
 	actionUpdateSession = "parallelworks/update-session"
 )
 
+// asksCoordinator reports whether a step whose uses: is uses asks the
+// coordinator for the action it uses, through version 3 of the worker API
+// (workerapi.PathAction): checkout, cancel-jobs or update-session.
+func asksCoordinator(uses string) bool {
+	return uses == plan.CheckoutUses || uses == actionCancelJobs || uses == actionUpdateSession
+}
+
 // actions is the coordinator's workerapisrv.Actions: it performs the
 // built-in action a step asks for, which it reads from the step in its
 // run's plan, never from the request.

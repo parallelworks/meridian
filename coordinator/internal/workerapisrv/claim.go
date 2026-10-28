@@ -34,8 +34,8 @@ type Readier interface {
 	// Needs returns the oldest version of the worker API that has all
 	// that the attempt's job uses, which the server refuses a worker of an
 	// older one for (workerapi.WorkerAPITooOld): workerapi.Version3 for a
-	// job with a step whose uses: names a workflow, or of a child run, and
-	// 1 otherwise.
+	// job with a step whose uses: names a workflow, or an action the
+	// coordinator performs, or of a child run, and 1 otherwise.
 	Needs(ctx context.Context, run *store.Run, a *store.Attempt) (int, error)
 }
 
