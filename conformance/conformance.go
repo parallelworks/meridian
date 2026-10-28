@@ -58,7 +58,8 @@ type Case struct {
 	// the run starts evaluate it, in the contexts area.
 	Jobs map[string]JobState `yaml:"jobs,omitempty"`
 	// Repositories name the repositories whose workflows a case's steps
-	// call, in the runs area, each as github/<owner>/<repository>: each
+	// call, in the start and runs areas, each as
+	// github/<owner>/<repository>: each
 	// holds the files of the case's directory, at a commit of its default
 	// branch, main, which a step's uses: names with no revision, or as
 	// @main, and its with:'s $yaml names one of.

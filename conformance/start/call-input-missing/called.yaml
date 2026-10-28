@@ -1,0 +1,18 @@
+on:
+  execute:
+    inputs:
+      cluster:
+        type: string
+        label: Cluster
+      size:
+        type: number
+        default: 1
+      debug:
+        type: boolean
+      notes:
+        type: string
+        optional: true
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.cluster }} ${{ inputs.size }}

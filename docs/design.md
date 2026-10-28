@@ -243,10 +243,15 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     a short commit or `HEAD~1`, which none of the 148 known checkouts
     names ([Built-in actions](#built-in-actions));
   - a workflow a step calls, which is a run of its own, can name groups
-    with `runs-on:`, and its caller's job too; and what isn't built yet of
-    one, which fails the step that calls it when it runs: a directory
-    outside its root's run directory, and a value of its `env:` that
-    reads its own name ([Workflows a step calls](#workflows-a-step-calls));
+    with `runs-on:`, and its caller's job too; a required input of one
+    that an expression in its caller's `with:` leaves without a value, or
+    whose `optional:`, `hidden:` or `ignore:` is an expression, fails the
+    step that calls it when it runs, where ACTIVATE refuses the run as it
+    is created, if the expression reads only what is known then; and what
+    isn't built yet of one, which fails the step
+    that calls it when it runs: a directory outside its root's run
+    directory, and a value of its `env:` that reads its own name
+    ([Workflows a step calls](#workflows-a-step-calls));
   - a step's `clean-on-retry:`, which never cleans its own run's
     directory, nor one that holds it, where format 1 spares only the
     root's ([Failures and retries](#failures-and-retries)), and, for a
@@ -2172,7 +2177,7 @@ below their root.
 Of this, what is built is the whole tree's pinning as the root is created,
 with its limits, its pins in the plan (`Plan.Calls`), each with its remote
 context (`Source.Remote`), its texts in the store, beside the run, and the
-variables the tree reads (`Run.TreeVariables`), but for the check of the
+variables the tree reads (`Run.TreeVariables`), and the check of the
 called workflows' required inputs; what a child's Create and Start take
 from its step (`compile.Options.Parent`): its inputs, its environment, and
 its link to its step and to its root (`Run.Parent`), with what of them is
@@ -2220,20 +2225,32 @@ the host but runs the child where its caller runs, as some known calls do.
   1,000 calls, in the tree (`workflows_too_many`), or more than 1 MiB of
   their text (`workflows_too_large`); and a required input of a called
   workflow that its caller's `with:` leaves out (`child_input_missing`),
-  as far as `with:` is written out: what an expression in it gives is
-  checked as the child is created, when the step runs. Each is reported
-  at the `uses:` of the root's own step that the path of calls starts at,
-  in the root's file, since whoever runs the root may not own the
-  workflows it calls, and a cycle, once whatever paths reach it, and a
-  workflow too deep name the chain of calls from the root; what is wrong
-  with a called workflow's own step, as a reference that names no
-  workflow, is reported in that workflow's file, at the step. As in
-  format 1, a workflow called on two paths is walked on each, its calls
-  counted on each, and its text once, the root's own not counted. These
-  limits are format 1's, and Meridian's own (`Options.Calls`), as its
-  other limits are, so whoever runs a workflow can raise them; a child's
-  Create, which reads its pins from its root's plan, checks them no more,
-  so the plan doesn't record them.
+  whatever the step's `if:`: one with no `default:`, that isn't a
+  boolean, and that isn't optional, nor hidden or ignored, nor in a group
+  that is, to which `with:` gives no value, or `""` where no option is
+  `""`. That is as far as the text says: what an expression in `with:`
+  gives, and an input whose `optional:`, `hidden:` or `ignore:` is an
+  expression, the child's Create checks as the step runs
+  (`input_required`), where ACTIVATE evaluates, as the root is created,
+  each that reads only what is known then, as the run's inputs, and takes
+  one that reads what is known only as jobs run, as `needs` or `env`, for
+  a value. Of the known workflows' 270 calls, none of the 262 whose
+  workflow is one known file leaves out an input that is required
+  whatever the run's values; 27 of them leave out one that such an
+  expression decides, and so may one more, whose workflow is a
+  marketplace workflow that 4 known files could be. Each is reported at
+  the `uses:` of the root's own step that the path of calls starts at, in
+  the root's file, since whoever runs the root may not own the workflows
+  it calls; a cycle, once whatever paths reach it, a workflow too deep,
+  and an input left out, once for each step that leaves it out, name the
+  chain of calls from the root; what is wrong with a called workflow's
+  own step, as a reference that names no workflow, is reported in that
+  workflow's file, at the step. As in format 1, a workflow called on two
+  paths is walked on each, its calls counted on each, and its text once,
+  the root's own not counted. These limits are format 1's, and Meridian's
+  own (`Options.Calls`), as its other limits are, so whoever runs a
+  workflow can raise them; a child's Create, which reads its pins from
+  its root's plan, checks them no more, so the plan doesn't record them.
 - **The worker runs the step, and waits for the child.** As for any step,
   Step evaluates the step's `with:` on the worker, in the caller's scope,
   on each try, as format 1 does; the worker asks the coordinator for the
@@ -2587,15 +2604,23 @@ checkout.
     platform's Sources may take fewer. Whatever URL Git ends up at,
     through a redirect or the user's `insteadOf`, it fetches only over
     https and ssh (`protocol.allow`), for `uses:` workflows too, unless
-    the user's own configuration allows another transport by name. Two are
-    refused as the run is created (`checkout_repo_invalid`), differences
-    from format 1: another transport, as `file://` or `ext::`, so that a
-    workflow can't have the coordinator read its host's files, or run a
-    command there, or `git://` or `http://`, which have no TLS or SSH, so
-    that nothing fetched would be authenticated or protected; and a URL
-    that holds a credential, as
-    `user:token@`, which would put a secret in the plan. Git is the `git`
-    command, not a client in Go
+    the user's own configuration allows another transport by name. Three
+    are refused as the run is created (`checkout_repo_invalid`),
+    differences from format 1: another transport, as `file://` or `ext::`,
+    so that a workflow can't have the coordinator read its host's files, or
+    run a command there, or `git://` or `http://`, which have no TLS or
+    SSH, so that nothing fetched would be authenticated or protected; a
+    URL that holds a credential, as `user:token@`, which would put a
+    secret in the plan; and, over ssh, a host or a user that holds what
+    ssh would read as more than a name, by the rules OpenSSH 10.1 and
+    later checks its own command line with, as Meridian checks an `ssh:`'s
+    ([Connections](#connections)). They are checked as Git gives them
+    to ssh, with a URL's percent-escapes decoded, and an address's
+    brackets and a port taken out, and as ssh splits the user from the
+    host, at the last `@`. ssh puts them in the commands of the user's ssh
+    config, as a `ProxyCommand`, that a shell runs, and an older ssh takes
+    them. None of the known workflows' checkouts names one. Git is the
+    `git` command, not a client in Go
     ([FIPS 140-3](#fips-140-3)). ACTIVATE runs `git` on the step's host,
     with that host's credentials, and through the platform, with the run's
     owner's linked account, where that fails. The worker's host needs no
