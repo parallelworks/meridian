@@ -31,6 +31,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/problems"
@@ -91,6 +92,10 @@ type cli struct {
 	// ssh changes how the ssh backend connects to hosts, as a test has it
 	// read a config of its own; nil for nothing.
 	ssh func(*backendssh.Options)
+	// sources is what a test gives in place of the user's Git
+	// repositories (cacheSources) for the workflows a workflow's steps
+	// call, nil for theirs.
+	sources compile.Sources
 }
 
 // getenv reads an environment variable, or "" if it isn't set.

@@ -1,0 +1,36 @@
+description: >-
+  A format 1 ssh:'s disconnect-timeout that isn't negative, as format 1
+  reads one, is a warning where the workflow writes it: Meridian keeps a
+  step on a host running through a lost connection, as format 1 does for a
+  negative one, such as -1, -5m or -2d. One that an expression gives is a
+  warning too, since its value isn't known yet. One that format 1 can't
+  read, such as -1h30m or 300ms, for which format 1 fails the step, is a
+  warning of its own: Meridian ignores it, and runs the step.
+source: ACTIVATE's executor, and Meridian
+expect:
+  diagnostics:
+    - severity: warning
+      code: ssh_disconnect_timeout_ignored
+      path: /jobs/main/ssh/disconnect-timeout
+      line: 11
+      params: {value: "300"}
+    - severity: warning
+      code: ssh_disconnect_timeout_ignored
+      path: /jobs/main/steps/3/ssh/disconnect-timeout
+      line: 28
+      params: {value: '"5m"'}
+    - severity: warning
+      code: ssh_disconnect_timeout_ignored
+      path: /jobs/main/steps/4/ssh/disconnect-timeout
+      line: 32
+      params: {value: '"${{ inputs.timeout }}"'}
+    - severity: warning
+      code: ssh_disconnect_timeout_invalid
+      path: /jobs/main/steps/5/ssh/disconnect-timeout
+      line: 36
+      params: {value: '"-1h30m"'}
+    - severity: warning
+      code: ssh_disconnect_timeout_invalid
+      path: /jobs/main/steps/6/ssh/disconnect-timeout
+      line: 40
+      params: {value: '"300ms"'}

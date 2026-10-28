@@ -104,6 +104,8 @@
   "older_always": "単語 always は always() の古い書き方です。always() を使用してください。",
   "replaced_keyword": "単語 {word} はテキスト {text} で、常に true になります。この単語が表していた if: のキーワードは、現在は {replacement} です。",
   "value_too_deep": "この値は入れ子が深すぎるため、実行とともに保存できません。実行の入れ子は最大 {max} 段階です。",
+  "ssh_disconnect_timeout_ignored": "Meridian は disconnect-timeout (ここでは {value}) に従いません。負の disconnect-timeout の場合と同じく、ホスト上のステップはホストとの接続が失われている間も実行を続けます。",
+  "ssh_disconnect_timeout_invalid": "ssh: の disconnect-timeout は {value} ですが、形式 1 はこれを読めないため、ステップを失敗させます。Meridian はこのキーを無視し、ステップを実行します。",
 
   "runs_on_invalid": "runs-on の値には、{value} ではなく、実行グループの名前か、実行グループ、環境、コンピュートターゲットのいずれかを指定するマッピングを指定してください。",
   "resources_invalid": "{key, select, cpu {resources の CPU には、{value} ではなく、4、0.5、500m のようなコア数を指定してください。} memory {resources のメモリには、{value} ではなく、8Gi や 512Mi のようなバイト数を指定してください。} gpu {resources の GPU には、{value} ではなく整数を指定してください。} other {resources の「{key}」の値 {value} は有効ではありません。}}",
@@ -115,6 +117,7 @@
   "matrix_too_large": "マトリックスの組み合わせが、マトリックスに許される最大数の {limit} を超えています。",
   "output_not_written": "{of, select, step {ステップ「{owner}」は出力「{name}」を書き込んでいない} other {ジョブ「{owner}」には出力「{name}」がない}}ため、それを読み取る式は失敗します。",
   "working_directory_variable": "作業ディレクトリに {variable} がそのまま残っています。シェル変数はここでは展開されません。代わりに env.PW_JOB_DIR のように env を読み取る式を使ってください。",
+  "job_ssh_host_empty": "ジョブの ssh: が remoteHost を指定していないため、形式 1 と同じく、ジョブは ssh: がない場合に実行される場所で実行されます。",
   "undefined_env": "ここでは env.{name} は「」として読み取られます。ワークフロー、ジョブ、ステップのどの env: にも定義されておらず、形式 1 もここでは与えません。{suggested, select, true {「{suggestion}」のことですか?} other {}}",
 
   "expression_empty": "式が空です。",
@@ -165,6 +168,8 @@
   "cancel_jobs_job_unknown": "ステップは「{job}」をキャンセルしますが、これはステップがキャンセルできる、その実行のジョブではないため、何もキャンセルされません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "cancel_jobs_other_run": "ステップは with: の「{key}」で別の実行のジョブをキャンセルしますが、Meridian はまだそれを行いません。",
   "cancel_jobs_run_missing": "ステップの with: はキャンセルする実行のワークフローを指定していますが、形式 1 が必要とするその実行（負でない番号）を指定していません。",
+  "child_request_failed": "ステップは「{uses}」を呼び出していますが、その実行を求めるワーカーからコーディネーターへの要求が失敗しました: {reason}",
+  "child_dir_unusable": "ワーカーは、このステップが呼び出す実行のディレクトリ「{dir}」を作成できませんでした: {reason}",
   "step_ssh_not_supported": "ステップの ssh: が実行先として別のホストを指定していますが、このワーカーはまだ別のホストでステップを実行できません。",
   "step_off_job_host": "ステップの ssh: が null であるか remoteHost を指定していないため、形式 1 はジョブが ssh: なしで実行される場所でステップを実行しますが、ジョブの ssh: が指定するホスト上にあるこのワーカーは、まだそこでステップを実行できません。",
   "ssh_host_empty": "ステップの ssh: が remoteHost を指定していないため、形式 1 と同じく、ステップはそのジョブが実行される場所で実行されます。",

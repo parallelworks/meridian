@@ -12,6 +12,7 @@ import (
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/conformance"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 )
 
 // A runLine is one of the JSON lines meridian run --format json writes, as
@@ -82,7 +83,13 @@ func TestRunsConformance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := runTest(t, env, nil, append(args, writeFile(t, "workflow.yaml", string(workflow)))...)
+			// The workflows its steps call are the case's, as the suite
+			// says, rather than those of a Git repository of the user's.
+			var setUp func(*cli)
+			if sources := conformancetest.Sources(cs); sources != nil {
+				setUp = func(c *cli) { c.sources = sources }
+			}
+			r := runTest(t, env, setUp, append(args, writeFile(t, "workflow.yaml", string(workflow)))...)
 			wantCode := exitOK
 			if want.Outcome != "success" {
 				wantCode = exitInvalid

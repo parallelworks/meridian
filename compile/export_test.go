@@ -75,3 +75,6 @@ func asText(defs any) {
 		}
 	}
 }
+
+// DisconnectTimeout is disconnectTimeout, for TestDisconnectTimeout.
+var DisconnectTimeout = disconnectTimeout

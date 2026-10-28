@@ -742,6 +742,21 @@
       "Anida menos el valor."
     ]
   },
+  "ssh_disconnect_timeout_ignored": {
+    "title": "disconnect-timeout no respetado",
+    "why": "El formato 1 hace fallar un paso en un host una vez que su conexión con el host lleva perdida el tiempo de disconnect-timeout, 300 segundos por omisión, y nunca con uno negativo. Meridian ejecuta un worker en el host, que sigue ejecutando los pasos del trabajo mientras la conexión está perdida y los informa cuando vuelve, así que cada paso se ejecuta como pide un disconnect-timeout negativo.",
+    "fix": [
+      "Quita disconnect-timeout, o hazlo negativo, como -1.",
+      "Da al paso un timeout: para limitar cuánto tiempo se ejecuta."
+    ]
+  },
+  "ssh_disconnect_timeout_invalid": {
+    "title": "disconnect-timeout que el formato 1 no puede leer",
+    "why": "El formato 1 lee un disconnect-timeout como un número de segundos, o un número entero seguido de una de d, h, m o s, como 300, 5m o -1. No puede leer ningún otro, como 1h30m, 1.5h o 300ms, y hace fallar el paso en un host que tenga uno. Meridian no respeta la clave, así que ejecuta el paso de todos modos.",
+    "fix": [
+      "Quita disconnect-timeout, o escríbelo como lo lee el formato 1, como -1 para un paso que nunca se rinde con su host."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
@@ -810,6 +825,13 @@
     "why": "Un directorio de trabajo se usa tal cual, y ningún shell expande las variables que contiene, así que $HOME o ${PW_JOB_DIR} serían un directorio con ese nombre. El formato 1 hace fallar el paso en su lugar.",
     "fix": [
       "Lee el valor con una expresión, como env.PW_JOB_DIR, o escribe la ruta completa."
+    ]
+  },
+  "job_ssh_host_empty": {
+    "title": "ssh: del trabajo sin host",
+    "why": "El ssh: de un trabajo del formato 1 ejecuta los pasos del trabajo en el host que indica su remoteHost. Uno vacío o nulo no indica ninguno, y el formato 1 ejecuta el trabajo donde se ejecutaría sin ssh:, con una nota en el registro de cada paso, lo que a menudo es un error, como una entrada que se dejó vacía. Meridian también lo ejecuta ahí, y guarda esta advertencia con el trabajo.",
+    "fix": [
+      "Da al ssh: un remoteHost, o quítalo para ejecutar el trabajo donde se ejecuta sin él."
     ]
   },
   "undefined_env": {
@@ -1127,6 +1149,22 @@
     "fix": [
       "Inicia workers de la misma versión de Meridian que el coordinador.",
       "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
+  "child_request_failed": {
+    "title": "Solicitud al coordinador de la ejecución de un flujo de trabajo llamado que falló",
+    "why": "Un paso cuyo uses: nombra un flujo de trabajo le pide al coordinador, a través de la API de workers, su ejecución, espera a que termine y la detiene cuando el paso se detiene. Una de esas solicitudes falló de forma definitiva: el coordinador la rechazó, o respondió con algo que el worker no puede leer, que la razón nombra por su código. Es un error del worker o del coordinador, o un worker y un coordinador de versiones que no coinciden en la API de workers, y no del flujo de trabajo. El paso falla y no se vuelve a intentar. Puede que la ejecución a la que llama se haya creado y siga en curso: su propio estado lo dice.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador.",
+      "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
+  "child_dir_unusable": {
+    "title": "Directorio de un flujo de trabajo llamado que el worker no pudo crear",
+    "why": "Una ejecución a la que llama un paso tiene un directorio propio, subworkflows/<job>/step_<n> bajo el directorio de trabajo del paso, como en el formato 1, donde se ejecutan sus pasos. El worker que ejecuta el paso lo crea antes de pedir la ejecución, un directorio cada vez desde el directorio de su ejecución raíz, y nunca sigue un enlace simbólico por el camino, que uno de los pasos de la propia ejecución podría haber dejado allí para poner el flujo de trabajo llamado en otro sitio: un enlace se rechaza como demasiados niveles de enlaces simbólicos, y un archivo que no es un directorio como que no es un directorio. Con clean-on-retry:, que es true salvo que el flujo de trabajo diga otra cosa, el worker elimina el directorio, con lo que contiene, antes de cada intento después del primero, y tampoco sigue allí ningún enlace. El paso falla y no se vuelve a intentar.",
+    "fix": [
+      "Elimina el enlace simbólico, o el archivo, que nombra la razón, o haz que los pasos de la ejecución no creen uno allí.",
+      "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
     ]
   },
   "cancel_jobs_job_unknown": {

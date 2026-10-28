@@ -1,0 +1,17 @@
+on:
+  execute:
+    inputs:
+      ip:
+        type: string
+        default: ""
+jobs:
+  main:
+    ssh:
+      remoteHost: ${{ inputs.ip }}
+    steps:
+      - run: echo here
+      - run: echo own
+        ssh:
+          remoteHost: ${{ inputs.ip }}
+      - run: echo none
+        ssh: null

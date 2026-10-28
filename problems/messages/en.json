@@ -107,6 +107,8 @@
   "older_always": "The word always is the older spelling of always(). Use always().",
   "replaced_keyword": "The word {word} is the text {text}, which is always true. The if: keyword it was is now {replacement}.",
   "value_too_deep": "The value nests too deeply to be kept with the run, which can nest at most {max} levels.",
+  "ssh_disconnect_timeout_ignored": "Meridian doesn't honour disconnect-timeout, {value} here: a step on a host keeps running while the connection to the host is lost, as with a negative disconnect-timeout.",
+  "ssh_disconnect_timeout_invalid": "Format 1 can't read the ssh:'s disconnect-timeout, {value}, and would fail the step for it. Meridian ignores the key, and runs the step.",
 
   "runs_on_invalid": "The value of runs-on must be an execution group's name, or a mapping that names an execution group, an environment or a compute target, not {value}.",
   "resources_invalid": "{key, select, cpu {The CPUs in resources must be a number of cores, such as 4, 0.5 or 500m} memory {The memory in resources must be a number of bytes, such as 8Gi or 512Mi} gpu {The GPUs in resources must be a whole number} other {The value of \"{key}\" in resources isn't valid}}, not {value}.",
@@ -118,6 +120,7 @@
   "matrix_too_large": "The matrix has more than {limit} combinations, the most a matrix may have.",
   "output_not_written": "{of, select, step {The step \"{owner}\" wrote no output \"{name}\"} other {The job \"{owner}\" has no output \"{name}\"}}, so what reads it fails.",
   "working_directory_variable": "The working directory keeps {variable} as it is: shell variables aren't expanded there. Use an expression that reads env, such as env.PW_JOB_DIR, instead.",
+  "job_ssh_host_empty": "The job's ssh: gives no remoteHost, so the job runs where it would run without its ssh:, as format 1 runs it.",
   "undefined_env": "Reading env.{name} gives \"\" here: no env: of the workflow, the job or the step defines it, and format 1 doesn't give it here.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
 
   "expression_empty": "The expression is empty.",
@@ -171,6 +174,8 @@
   "cancel_jobs_job_unknown": "The step cancels \"{job}\", which is no job of its run that a step can cancel, so nothing is cancelled for it.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "cancel_jobs_other_run": "The step cancels jobs of another run, which its with: names with \"{key}\", and Meridian doesn't do that yet.",
   "cancel_jobs_run_missing": "The step's with: names a workflow whose run to cancel, but no run of it, which format 1 needs: a number that isn't negative.",
+  "child_request_failed": "The step calls \"{uses}\", and the worker's request to the coordinator for its run failed: {reason}.",
+  "child_dir_unusable": "The worker couldn't make the directory \"{dir}\" of the run this step calls: {reason}.",
   "step_ssh_not_supported": "The step's ssh: names another host to run it on, and this worker can't run a step on another host yet.",
   "step_off_job_host": "The step's ssh: is null or gives no remoteHost, so format 1 runs it where its job would run without its ssh:, and this worker, on the host the job's ssh: names, can't run it there yet.",
   "ssh_host_empty": "The step's ssh: gives no remoteHost, so the step runs where its job runs, as format 1 runs it.",
