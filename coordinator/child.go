@@ -89,7 +89,7 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	if err := c.writable(); err != nil {
 		return "", nil, err
 	}
-	caller, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try)
+	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try)
 	switch {
 	case err != nil:
 		return "", nil, err
@@ -98,32 +98,32 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	}
 	// Whether the step outlives its run's stop, or its job's, is the plan's
 	// to say, from its if:, as Step decides it, never the worker's.
-	if err := stepLives(caller.attempt, caller.run, step, caller.control); err != nil {
+	if err := stepLives(cl.attempt, cl.run, step, cl.control); err != nil {
 		return "", nil, err
 	}
 	rootPlan := p
-	if caller.root != caller.run {
-		if rootPlan, err = c.plans.get(caller.root); err != nil {
+	if cl.root != cl.run {
+		if rootPlan, err = c.plans.get(cl.root); err != nil {
 			return "", nil, err
 		}
 	}
-	text, err := c.childText(ctx, caller.root.ID, step.Source)
+	text, err := c.childText(ctx, cl.root.ID, step.Source)
 	if err != nil {
 		return "", nil, err
 	}
-	wd, group, err := c.childPlace(ctx, caller.run, caller.root, caller.attempt, req.WorkingDirectory)
+	wd, group, err := c.childPlace(ctx, cl.run, cl.root, cl.attempt, req.WorkingDirectory)
 	if err != nil {
 		return "", nil, err
 	}
-	dir := plan.ChildDir(caller.run.RunDir, wd, caller.attempt.Job, req.Step)
-	if !within(caller.root.RunDir, dir) {
+	dir := plan.ChildDir(cl.run.RunDir, wd, cl.attempt.Job, req.Step)
+	if !within(cl.root.RunDir, dir) {
 		return "", nil, problems.ChildDirOutside.Problem(problems.Params{"dir": dir})
 	}
 	depth := 1
 	if p.Run.Parent != nil {
 		depth = p.Run.Parent.Depth + 1
 	}
-	link := store.Link{Run: caller.run.ID, Job: caller.attempt.Job, Attempt: caller.attempt.ID, Step: req.Step, Try: req.Try, Root: caller.root.ID, Depth: depth}
+	link := store.Link{Run: cl.run.ID, Job: cl.attempt.Job, Attempt: cl.attempt.ID, Step: req.Step, Try: req.Try, Root: cl.root.ID, Depth: depth}
 	created, diags, err := c.compileChild(ctx, p, rootPlan, step.Source, text, req, &link)
 	if err != nil || created == nil {
 		return "", diags, err
