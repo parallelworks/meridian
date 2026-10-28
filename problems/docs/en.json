@@ -595,6 +595,52 @@
       "Name each file or directory to check out by its path from the repository's root, with no pattern."
     ]
   },
+  "checkout_path_not_found": {
+    "why": "An entry of a parallelworks/checkout step's sparse_checkout names no file and no directory in the commit the step was pinned to as the run was created. Nothing is written for it, as in format 1, and the step goes on.",
+    "fix": [
+      "Check the entry against the repository, at the branch the step names.",
+      "Remove an entry the repository no longer has."
+    ]
+  },
+  "checkout_submodules": {
+    "why": "Format 1 clones a whole repository with its submodules. Meridian doesn't fetch submodules yet, so a parallelworks/checkout of a whole repository that has one fails, rather than leave it empty. A sparse checkout leaves submodules empty, as format 1's does.",
+    "fix": [
+      "Check out only the paths the job needs, with sparse_checkout.",
+      "Check out a submodule's repository with a step of its own."
+    ]
+  },
+  "checkout_too_large": {
+    "why": "A parallelworks/checkout step's tree reaches the worker from the coordinator, which reads it from the commit the step was pinned to. Meridian bounds the files' sizes, together, in each checkout.",
+    "fix": [
+      "Check out only the paths the job needs, with sparse_checkout."
+    ]
+  },
+  "checkout_too_many": {
+    "why": "A parallelworks/checkout step's tree reaches the worker from the coordinator, which reads it from the commit the step was pinned to. Meridian bounds how many directories, files and links a checkout writes, so that no tree uses up a host's inodes.",
+    "fix": [
+      "Check out only the paths the job needs, with sparse_checkout."
+    ]
+  },
+  "checkout_unavailable": {
+    "why": "The coordinator reads the commit a parallelworks/checkout step was pinned to as the run was created from its copy of the repository, and fetches it again if the copy doesn't have it, 5 times, 2, 4, 8 and 16 seconds apart, as format 1 tries a clone. The repository couldn't be reached, or no longer has the commit, as after a branch was rewritten. The step's retry: can try it again.",
+    "fix": [
+      "Check that the repository can be reached from where Meridian runs, with your credentials.",
+      "If the branch was rewritten, run the workflow again, which pins it anew."
+    ]
+  },
+  "checkout_unsafe": {
+    "why": "The worker writes a parallelworks/checkout step's tree only inside the directory the step names, and only what a Git commit holds: directories, files and symbolic links, and no .git, nor a link to one. A member of the tree that is anything else, or whose name leaves that directory, isn't one a commit made, and the step fails before the worker writes it.",
+    "fix": [
+      "Report the bug, with the repository and the commit the step checks out."
+    ]
+  },
+  "checkout_write_failed": {
+    "why": "The worker writes a parallelworks/checkout step's tree into the directory the step names, its path: in its working directory, merging it with what is there, as format 1 copies it: a file of the same name is replaced, and the rest is kept. The system refused one of the writes. The step's retry: can try it again.",
+    "fix": [
+      "Check that the job's user can write to the directory.",
+      "Check that the directory has no directory where the tree has a file, and no file where it has a directory."
+    ]
+  },
   "expression_failed": {
     "why": "An expression failed in a way Meridian doesn't describe. This is a problem in Meridian.",
     "fix": [

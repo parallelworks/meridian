@@ -82,6 +82,11 @@ type Options struct {
 	// none for (CreateChild). Nil means there are none: such a step's child
 	// isn't created (child_not_pinned).
 	Sources compile.Sources
+	// Trees gives the trees of the commits parallelworks/checkout steps
+	// were pinned to, which the coordinator serves their workers. Nil
+	// means there are none: such a step fails as it runs, with
+	// resolver_missing.
+	Trees Trees
 	// Drivers are the drivers of the backends jobs' workers are placed
 	// with, by the backend's name (backend.Member.Backend). A member of a
 	// backend without one is one that placement leaves out, with
@@ -208,6 +213,9 @@ type Coordinator struct {
 	// child, between its Create and its transaction, as when a test races
 	// two asks.
 	beforeChildStore func()
+	// checkoutWaits are how long a checkout's tree waits before each read
+	// of its commit again (checkout).
+	checkoutWaits []time.Duration
 
 	mu      sync.Mutex
 	serving bool
@@ -316,7 +324,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
-		outlives: map[string]bool{},
+		outlives: map[string]bool{}, checkoutWaits: checkoutWaits,
 	}
 	if opts.ReadOnly {
 		// Neither seals nor inserts anything.
