@@ -666,6 +666,22 @@ func TestResources(t *testing.T) {
 			t.Errorf("%d thousandths of a CPU beside 1500 of 2000: %+v, %v; want %v", demand, fit, err, want)
 		}
 	}
+	// A parked attempt, whose worker waits for a child run, holds none of
+	// what it asked for; an attempt the driver didn't place, parked, frees
+	// nothing.
+	for _, tc := range []struct {
+		parked []string
+		want   backend.Availability
+	}{
+		{[]string{"a1"}, backend.StartsNow},
+		{[]string{"elsewhere"}, backend.HasCapacity},
+		{nil, backend.HasCapacity},
+	} {
+		fit, err := d.Probe(t.Context(), m, backend.Demand{Resources: backend.Resources{MilliCPU: 1000}, Parked: tc.parked})
+		if err != nil || fit.Problem != nil || fit.Availability != tc.want {
+			t.Errorf("1000 thousandths of a CPU beside 1500 of 2000, parked %v: %+v, %v; want %v", tc.parked, fit, err, tc.want)
+		}
+	}
 }
 
 // The driver starts only a binary of the user's or root's that no other

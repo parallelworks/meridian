@@ -2,6 +2,7 @@ package hostproto
 
 import (
 	jsonv2 "encoding/json/v2"
+	"slices"
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
@@ -17,6 +18,7 @@ func TestWire(t *testing.T) {
 	}{
 		{Message{Protocol: Version, Ready: true}, `{"protocol":1,"ready":true}`},
 		{Request{Member: &backend.Member{Name: "m", Backend: "ssh"}, Demand: &Demand{}}, `{"member":{"name":"m","backend":"ssh"},"demand":{}}`},
+		{Request{Member: &backend.Member{Name: "m", Backend: "ssh"}, Demand: &Demand{Parked: []string{"a1"}}}, `{"member":{"name":"m","backend":"ssh"},"demand":{"parked":["a1"]}}`},
 		{Message{Protocol: Version, Status: StatusOf(backend.Status{State: backend.Dead, End: backend.EndWithdrawn})}, `{"protocol":1,"status":{"state":"dead","end":"withdrawn"}}`},
 		{Message{Protocol: Version, Error: "busy"}, `{"protocol":1,"error":"busy"}`},
 	} {
@@ -60,7 +62,7 @@ func TestRoundTrip(t *testing.T) {
 		req.TimeoutSeconds != 5 || req.Resources.GPU != 1 || req.TraceParent != "tp" || req.RunDir != "" {
 		t.Errorf("the place request is %+v", req)
 	}
-	if d := (&Demand{Resources: backend.Resources{Memory: 1}, TimeoutSeconds: 2}).Demand(); d.Resources.Memory != 1 || d.TimeoutSeconds != 2 {
+	if d := (&Demand{Resources: backend.Resources{Memory: 1}, TimeoutSeconds: 2, Parked: []string{"a1"}}).Demand(); d.Resources.Memory != 1 || d.TimeoutSeconds != 2 || !slices.Equal(d.Parked, []string{"a1"}) {
 		t.Errorf("the demand is %+v", d)
 	}
 }

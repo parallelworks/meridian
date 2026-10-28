@@ -73,7 +73,11 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 	case d != nil:
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: problems.Diagnostics{*d}}, done)
 	}
-	fits, reasons, unanswered := c.rank(ctx, g, demandOf(rj), private)
+	demand, err := c.demandOf(ctx, run, rj)
+	if err != nil {
+		return 0, err
+	}
+	fits, reasons, unanswered := c.rank(ctx, g, demand, private)
 	if len(fits) == 0 {
 		if unanswered {
 			return c.unanswered(ctx, run, job, private, errors.New("a member's backend couldn't say whether it can run the job"))
@@ -402,7 +406,11 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		}
 		return 0, c.attemptSetupFailed(ctx, a.ID, nil)
 	}
-	if cand.fit, err = cand.driver.Probe(ctx, m, demandOf(rj)); err == nil && cand.fit.Problem != nil {
+	demand, err := c.demandOf(ctx, run, rj)
+	if err != nil {
+		return 0, err
+	}
+	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil && cand.fit.Problem != nil {
 		err = cand.fit.Problem
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
@@ -697,9 +705,33 @@ func (c *Coordinator) group(ctx context.Context, run *store.Run, rj *plan.ReadyJ
 	return g, nil, nil
 }
 
-// demandOf is what rj asks of a member.
-func demandOf(rj *plan.ReadyJob) backend.Demand {
-	return backend.Demand{Resources: backend.Resources(rj.Resources), TimeoutSeconds: rj.TimeoutSeconds}
+// demandOf is what rj, a job of run, asks of a member, with the attempts
+// that are parked for it (backend.Demand.Parked): its run's caller chain,
+// the attempt whose step called the run, and that attempt's run's caller,
+// up to the root, each waiting for the child run below it, which can't end
+// before rj's run does. A driver that counts what its member runs, as
+// local does, leaves what they asked for out, so that a caller's room goes
+// to its own descendants alone, which end before it goes on, and never to
+// another job, which would still hold it when the caller did. A run has
+// as many callers as it is deep, a few at most (compile.CallLimits),
+// each read by its ID; a chain longer than its link's depth says is an
+// error, rather than a walk that never ends.
+func (c *Coordinator) demandOf(ctx context.Context, run *store.Run, rj *plan.ReadyJob) (backend.Demand, error) {
+	var parked []string
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		for r := run; r.Parent != nil; {
+			if len(parked) == run.Parent.Depth {
+				return fmt.Errorf("coordinator: run %s's callers go deeper than its depth, %d", run.ID, run.Parent.Depth)
+			}
+			parked = append(parked, r.Parent.Attempt)
+			var err error
+			if r, err = tx.Run(r.Parent.Run); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return backend.Demand{Resources: backend.Resources(rj.Resources), TimeoutSeconds: rj.TimeoutSeconds, Parked: parked}, err
 }
 
 // rank returns the members of g that can run a job that asks for demand,

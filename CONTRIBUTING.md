@@ -32,8 +32,14 @@ make fmt    # format Go code
 ```sh
 make test                      # all tests
 make test-race                 # all tests, with the race detector
+make test-openssh              # the ssh backend's tests, against OpenSSH's sshd
 GOFIPS140=certified go test -run TestName ./...    # one test
 ```
+
+The ssh backend's tests run against an SSH server in the test's process.
+`make test-openssh` runs them against OpenSSH's sshd too, as CI does: each
+test starts the sshd that `SSHD` names, `/usr/sbin/sshd` by default, as you,
+on a port of the loopback interface, with keys and a config of its own.
 
 Tests run in FIPS 140-3 mode: `GODEBUG=fips140=only` comes from `go.mod`, and
 `make` builds against the certified module (`GOFIPS140=certified`), as releases
