@@ -4337,14 +4337,15 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   machine holds (`ssh_worker_binary_missing`), and its sshd must forward
   Unix sockets to the coordinator (`ssh_forwarding_refused`). ACTIVATE
   runs each step's script through the host's shell, over its connection,
-  and needs neither.
+  and needs none of them.
 - **What a host keeps.** Meridian's binary, in the host's cache by its
   digest, and Meridian's state, under `~/.local/state/meridian`: its
   workers' placements, and the runs' directories. ACTIVATE keeps the
   job's directory alone.
 - **A step on another host than its job's**, as a step's `ssh:` that
   names one, fails (`step_ssh_not_supported`) until the worker can run a
-  step on another host itself. ACTIVATE runs it there.
+  step on another host itself. ACTIVATE runs it there, but for a step
+  that calls a workflow, whose child it runs where its caller runs.
 - **A step off its job's host.** In a job on a host, a step whose `ssh:`
   is null, or gives no `remoteHost`, would run where its job runs without
   its `ssh:`, the machine the run started on, which a worker on the host
@@ -4352,7 +4353,6 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   that machine. None of the known workflows has one.
 - **An unreachable host** is tried again after about 1, 2 and 4 seconds,
   where ACTIVATE waits 2, 4 and 8.
-
 - **Host keys.** Meridian checks every host's key against known_hosts,
   `localhost`'s too, and an unknown key fails: it never trusts one on
   first use. So `remoteHost: localhost` needs this machine's key in

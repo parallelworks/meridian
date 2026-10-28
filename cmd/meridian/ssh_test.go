@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -16,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	localbackend "github.com/parallelworks/meridian/backend/local"
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/internal/sshdtest"
@@ -55,6 +57,7 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 		t.Skip("no ssh client to read the SSH config with")
 	}
 	h := &sshHost{home: t.TempDir()}
+	t.Cleanup(func() { h.stopWorkers(t) })
 	// The user's runtime directory on the host, short enough for its
 	// sockets.
 	runtimeDir, err := os.MkdirTemp("", "msh")
@@ -125,6 +128,27 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 		t.Fatal(err)
 	}
 	return h
+}
+
+// stopWorkers stops the workers meridian placed on h that are still
+// running, as those of a test that failed before its run ended: each
+// placement the host's state records, through the local backend that
+// meridian host runs there, which stops the worker only if it is still
+// the process the placement started. A worker meridian host starts runs
+// in a session of its own, so the SSH server's end doesn't stop it.
+func (h *sshHost) stopWorkers(t *testing.T) {
+	ctx := context.WithoutCancel(t.Context())
+	hosts, _ := filepath.Glob(filepath.Join(h.home, ".local", "state", "meridian", "hosts", "*"))
+	for _, state := range hosts {
+		d := &localbackend.Driver{State: state, KillAfter: time.Second}
+		placements, _ := filepath.Glob(filepath.Join(state, "placements", "*.json"))
+		for _, file := range placements {
+			attempt := strings.TrimSuffix(filepath.Base(file), ".json")
+			if p, ok, err := d.Find(ctx, nil, attempt); err == nil && ok {
+				_ = d.Cancel(ctx, nil, p)
+			}
+		}
+	}
 }
 
 // hostBinaries returns a directory of binaries for systems other than the

@@ -4,8 +4,14 @@
 // real OpenSSH as well as against sshtest's server in process.
 //
 // It runs the sshd that MERIDIAN_TEST_SSHD names, by its absolute path, as
-// CI's ssh job sets it. Without it, a test that needs one is skipped; with
-// it, an sshd that won't start fails the test.
+// CI's openssh job sets it, on Linux only, since it finds sshd's processes
+// in /proc. Without it, or on another system, a test that needs one is
+// skipped; with it, an sshd that won't start fails the test.
+//
+// It runs sshd as the test's user, so without PAM (UsePAM no): its
+// sessions have no PAM session, so neither pam_systemd's /run/user and
+// user manager, nor logind's KillUserProcesses, which how a worker on a
+// host outlives its session depends on. Those it doesn't check.
 package sshdtest
 
 import (
@@ -72,6 +78,8 @@ func New(t testing.TB, opts Options) *Server {
 	switch {
 	case sshd == "":
 		t.Skipf("%s names no sshd", EnvSSHD)
+	case runtime.GOOS != "linux":
+		t.Skipf("%s is for Linux, where sshdtest finds sshd's processes in /proc", EnvSSHD)
 	case !filepath.IsAbs(sshd):
 		t.Fatalf("%s is %q, not an absolute path, which sshd needs to run itself again", EnvSSHD, sshd)
 	}
