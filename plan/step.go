@@ -345,13 +345,13 @@ func (j *ReadyJob) Step(ctx context.Context, index int, state JobState) (*ReadyS
 // step didn't run, and if the step's if:, evaluated again with the job's
 // status as it ends, is false, without success(): a step with no if: is
 // cleaned up whatever happened to the job. A step run's cleanup, given
-// state.FirstTry, runs as its caller's Cleanup decided, without its if:. The worker runs the job's
-// cleanups in the reverse order of their steps, and what a cleanup writes
-// to $OUTPUTS is the job's (StepResult.CleanupOutputs), as format 1 has
-// them. It reads its job's contexts as Step does, with every step's
-// outputs and those of the cleanups that ran before it, its own step's
-// among them, and reads an output that nothing wrote as "", as format 1
-// reads a cleanup:'s.
+// state.FirstTry, runs as its caller's Cleanup decided, without its if:.
+// The worker runs the job's cleanups in the reverse order of their steps,
+// and what a cleanup writes to $OUTPUTS is the job's
+// (StepResult.CleanupOutputs), as format 1 has them. It reads its job's
+// contexts as Step does, with every step's outputs and those of the
+// cleanups that ran before it, its own step's among them, and reads an
+// output that nothing wrote as "", as format 1 reads a cleanup:'s.
 //
 // Cleanup reaches nothing, and gives the same result for the same job,
 // index and state, byte for byte. Its diagnostics are as Step's, and an

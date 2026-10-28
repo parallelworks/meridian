@@ -243,17 +243,17 @@ func (a *attempt) jobCounters() (retry, attempt int) {
 	return a.claim.Retry, a.claim.Attempt
 }
 
-// runAsStepRun runs the attempt's job as a step run's (workerapi.Claim.StepRun):
-// its one step, or its cleanup:, as the step at its index in the job, over
-// the state of its caller's job that the claim gives, which the job's
-// other steps, there by their id alone, never run. It evaluates the step
-// with its own variables, as format 1 does once it has connected to the
-// host, but not its if:, nor its cleanup's, which its caller decided
-// (plan.JobState.FirstTry),
-// and runs it, with an $OUTPUTS of its own, empty, in its run's directory,
-// as any step; but one told to stop, as its caller's stop of it, or the
-// end of its caller's attempt, tells it, never runs, or is stopped,
-// whatever its if: says. It returns the attempt's end: how its step ended,
+// runAsStepRun runs the attempt's job as a step run's
+// (workerapi.Claim.StepRun): its one step, or its cleanup:, as the step at
+// its index in the job, over the state of its caller's job that the claim
+// gives, which the job's other steps, there by their id alone, never run.
+// It evaluates the step with its own variables, as format 1 does once it
+// has connected to the host, but not its if:, nor its cleanup's, which
+// its caller decided (plan.JobState.FirstTry), and runs it, with an
+// $OUTPUTS of its own, empty, in its run's directory, as any step; but
+// one told to stop, as its caller's stop of it, or the end of its
+// caller's attempt, tells it, never runs, or is stopped, whatever its if:
+// says. It returns the attempt's end: how its step ended,
 // as it ran, never as its ignore-errors: or retry: would make it, which
 // its caller applies; what its step wrote to $OUTPUTS, never the job's
 // outputs:, which are its caller's, with those that hold what the worker
