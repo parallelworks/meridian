@@ -21,31 +21,17 @@ import (
 // supervisor acts on, as its claim or its end, wakes the supervisor. The
 // polls it holds of attempts' controls are answered as soon as the
 // coordinator changes them, rather than at the server's next read of them.
+// Its server is ServeMembers' too, while both run, which stores the logs
+// with the first's logs.
 func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Logs) error {
 	if err := c.writable(); err != nil {
 		return err
 	}
-	srv, err := workerapisrv.New(workerapisrv.Options{
-		Store: c.store, Logs: logs, Sealer: c.sealer,
-		Readier:  claimReadier{c},
-		Actions:  actions{c},
-		Children: childAPI{c},
-		Wake:     c.wakeWorkerJob,
-		Log:      c.log,
-	})
+	srv, release, err := c.useServer(logs)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	c.controls = srv
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		if c.controls == srv {
-			c.controls = nil
-		}
-		c.mu.Unlock()
-	}()
+	defer release()
 	return srv.Serve(ctx, l)
 }
 
@@ -114,7 +100,11 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	if err != nil {
 		return nil, err
 	}
-	return &workerapisrv.Ready{Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree}, nil
+	runDir, err := c.attemptRunDir(ctx, run, a)
+	if err != nil {
+		return nil, err
+	}
+	return &workerapisrv.Ready{Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree, RunDir: runDir}, nil
 }
 
 // tree returns what an attempt of the child run run, of the plan p, has of
@@ -168,6 +158,36 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 		}
 	}
 	return 1, nil
+}
+
+// attemptRunDir returns the run's directory where the attempt a runs,
+// where its member chose it (backend.Placement.RunDir): as the store
+// holds it, or, for a private placement, as its place holds it sealed; or
+// "" for the run's.
+func (c *Coordinator) attemptRunDir(ctx context.Context, run *store.Run, a *store.Attempt) (string, error) {
+	if !a.Private {
+		return a.Placement.RunDir, nil
+	}
+	var (
+		place   store.Place
+		chosen  bool
+		wrapped []byte
+	)
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		if place, chosen, err = tx.ChosenPlace(a.ID); err != nil || !chosen {
+			return err
+		}
+		wrapped, err = tx.WrappedKey(run.ID)
+		return err
+	}); err != nil || !chosen {
+		return "", err
+	}
+	opened, err := c.openPlaces(ctx, run.ID, wrapped, map[string]store.Place{a.ID: place})
+	if err != nil {
+		return "", err
+	}
+	return opened[a.ID].RunDir, nil
 }
 
 // Steps returns how many steps the attempt's job has, as the plan says.

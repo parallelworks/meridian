@@ -174,3 +174,33 @@ func TestKeysCreateOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestKeysDerive checks the keys derived from the key file: one for a
+// purpose is the same each time, and from another Keys of the directory,
+// which creates the key file if it isn't there; and one for another
+// purpose, or of another key file, is another.
+func TestKeysDerive(t *testing.T) {
+	dir := t.TempDir()
+	a, err := NewKeys(dir).Derive("ssh member names", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, KeyFile)); err != nil {
+		t.Errorf("Derive made no key file: %v", err)
+	}
+	again, err := NewKeys(dir).Derive("ssh member names", 32)
+	if err != nil || !bytes.Equal(a, again) || len(a) != 32 {
+		t.Errorf("the key for one purpose is %x, then %x, %v", a, again, err)
+	}
+	other, err := NewKeys(dir).Derive("another purpose", 32)
+	if err != nil || bytes.Equal(a, other) {
+		t.Errorf("the keys of two purposes are %x and %x, %v", a, other, err)
+	}
+	elsewhere, err := NewKeys(t.TempDir()).Derive("ssh member names", 32)
+	if err != nil || bytes.Equal(a, elsewhere) {
+		t.Errorf("the keys of two key files are %x and %x, %v", a, elsewhere, err)
+	}
+	if wrapped, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t)); err != nil || len(wrapped) == 0 {
+		t.Errorf("the key file Derive made doesn't wrap: %v", err)
+	}
+}

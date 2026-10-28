@@ -2291,13 +2291,25 @@ where its caller runs, as some known calls do.
   private, as a root's is, since what holds it is, which one elsewhere
   wouldn't be. The step fails when it runs, as its child would be created
   (`child_dir_outside`), never as the root is created, since an `if:` may
-  skip it; none of the 270 known calls sets `working-directory:`. A step's
+  skip it; none of the 270 known calls sets `working-directory:`. A
+  child's directory is on the coordinator's machine, under its caller's
+  run directory there, even where the step runs on a host, as format 1
+  prepares a subworkflow on the machine the run started on, resolving
+  the step's `working-directory:` there before it maps the run's
+  directory to the host's: a working directory a worker on a host gives
+  inside its run's directory there, as one `PW_JOB_DIR` gives, is the same
+  place in the run's directory on the coordinator's machine. A step's
   `clean-on-retry:` cleans it before the step's next try (below). The
   step's worker makes it, and cleans it, a directory at a time from its
   root's run directory, and never follows a symbolic link on the way,
   which a step of the run could leave there to put the child elsewhere:
   the step fails instead (`child_dir_unusable`), and so does the child's
-  job, as its worker makes it again (`run_dir_unusable`).
+  job, as its worker makes it again (`run_dir_unusable`). A worker on a
+  host makes and cleans the same place under its run's directory there,
+  which the child doesn't use, and the child's job, where it runs on the
+  coordinator's machine, makes the child's directory there: which side
+  makes and cleans a child's directory, for a caller on a host, isn't
+  settled yet.
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
   Create finds in each pinned workflow's expressions), once, into the
@@ -2321,7 +2333,12 @@ where its caller runs, as some known calls do.
   group is built: the child runs in the group its caller's attempt was
   placed in, or its caller's run's default group where that placement is
   private, which no caller format 1 runs has; its caller's member isn't
-  built yet, and its jobs are placed on any member of the group.
+  built yet, and its jobs are placed on any member of the group. A caller
+  on the host its format 1 `ssh:` names is in no group a name finds, so
+  its child runs in its run's default group: format 1 runs a
+  subworkflow's jobs where their own `ssh:` says, or else on the machine
+  the run started on, never on its caller's host because the caller ran
+  there.
 - **Its end is its step's**, as format 1 maps it, from the child's jobs
   and its stop, rather than from its outcome:
   - a child that was cancelled, or whose caller's step stopped it, ends
@@ -4093,7 +4110,10 @@ it within a minute, is stopped, and isn't placed
   sends work to see it, and so do the cluster's other login nodes, which a
   reconnect to the same host name can reach. The temporary directory, where a run's directory is on the
   coordinator's own host, is each node's own. `place` chooses it, and
-  returns it.
+  returns it, and `find` too, as the local backend records it with the
+  placement; the coordinator records it with the attempt, sealed where
+  the placement is private, and gives it to the worker as it claims the
+  attempt, in place of the run's directory on the coordinator's machine.
 - **A worker starts detached**: in a session of its own, unless logind runs,
   as its directory of seats says, and ends a session's processes as it
   ends (`KillUserProcesses=yes`, as `loginctl` says). Then it starts in a
@@ -4179,10 +4199,9 @@ fall back between. So `ssh:` is deprecated in favor of execution groups:
 ### The `ssh` backend
 
 A format 1 `ssh:` makes a group of one member of the `ssh` backend, and a
-configured group can name hosts too. It isn't built yet: a member of it
-has `backend_not_built`. The coordinator connects to a host as the
-user's `ssh` would ([Connections](#connections)), and runs the local
-backend there through `meridian host`
+configured group can name hosts too. The coordinator connects to a host
+as the user's `ssh` would ([Connections](#connections)), and runs the
+local backend there through `meridian host`
 ([Backends and isolation](#backends-and-isolation)). Besides those:
 
 - **The binary on the host.** A host of the coordinator's system and
@@ -4199,14 +4218,35 @@ backend there through `meridian host`
 - **Reaching the coordinator.** One replica at a time holds a host's
   connection, under a lease in the store named by a keyed hash of the
   host and its login, so the store never holds in the clear a host that
-  came from a variable or a password. It asks the host to listen on a
-  socket in the host's sockets directory, named by the same hash, and
-  serves the worker API on what the host forwards, to the attempts placed
-  on that member only, since a forwarded connection has no user the
-  system can name. It first removes a socket that an earlier holder left
-  at the path, over which sshd's default, `StreamLocalBindUnlink no`,
+  came from a variable or a password; locally, the lease is a lock on a
+  file beside the database, as the coordinator's socket's is, and the
+  hash is keyed by a key derived from the state directory's key file. It
+  asks the host to listen on a socket in the host's sockets directory,
+  named by the same hash, and serves the worker API on what the host
+  forwards, to the attempts placed on that member only, since a forwarded
+  connection has no user the system can name: the store records the hash
+  with each attempt placed on a host, and a request on a member's socket
+  for an attempt of another member, or a request on the coordinator's own
+  socket for an attempt on a host, is refused as one with no credential
+  is. A connection forwarded over SSH takes no deadlines, so each is
+  passed through one that does, and the server's bounds on a request's
+  time hold on it too. It first removes a socket that an earlier holder
+  left at the path, over which sshd's default, `StreamLocalBindUnlink no`,
   won't listen. A host whose sshd forbids forwarding Unix sockets takes
   no workers (`ssh_forwarding_refused`); Meridian opens no port instead.
+  Each `meridian run` or `resume` of a store holds the hosts' sockets
+  that no other holds, as the attempts it places need them, and as the
+  store's attempts that haven't ended do, which it looks for every few
+  seconds; one that another holds, it waits for, and takes over once that
+  one stops. An attempt whose member it can't find, as when its group
+  can't be read, it looks for again after a wait that doubles, from 10
+  seconds to 5 minutes. A process holds a host's socket, its lease and
+  its connection until it stops, which `run` and `resume` do once their
+  runs have ended; a coordinator that outlives its runs, as a platform's
+  does, would let a host's go once no attempt placed there is left, which
+  isn't built yet. A host's connection is where the holder's last dial
+  reached: where a host's name leads to several nodes, the workers of a
+  node it no longer reaches can't reach the coordinator until it does.
 - **Which host.** A connection made again can reach another host than the
   last did, as a cluster's login nodes behind one name do, each with
   placements of its own. So a placement's ID begins with a keyed hash of
@@ -4231,9 +4271,11 @@ backend there through `meridian host`
   (`ssh_host_helper_failed`), or one of another release
   (`ssh_host_release_mismatch`), is unknown for five minutes at most. A replica that
   takes a host's connection over, as `meridian resume` does once the
-  process that held it has stopped, wakes the supervisors of the attempts
-  placed on it, which connect again; the grace after a takeover keeps
-  their leases from counting as lapsed meanwhile
+  process that held it has stopped, finds the attempts placed on it in
+  the store, by the hash they were recorded with, readies their jobs
+  again for the members' settings, which the store doesn't hold, and
+  forwards their sockets again; the grace after a takeover keeps their
+  leases from counting as lapsed meanwhile
   ([Leases and fencing](#leases-and-fencing)).
 - **A host that can't be reached** as a job is placed is tried four times,
   as format 1 tries it, each try bounded by the host's `ConnectTimeout`,
@@ -4455,6 +4497,12 @@ Meridian's must (`internal/fipsmode`).
   bound by its associated data to its store, its run and its generation.
   A platform's Keys interface wraps the data keys with its own key
   management, and the local one with AES-256-GCM under a key in a file.
+  The local key file's key is HKDF-SHA256's input too, for the keys
+  derived from it (`local.Keys.Derive`), as the one that keys the hash
+  naming a host's lease and socket: one key used both to wrap and to
+  derive, each derived key under a label of its own. A later version of
+  the key file could wrap with a key derived from it as well, keeping the
+  file's own key for deriving alone.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
   digests are SHA-256, and a digest of what can hold a secret, as an
   action's request, is an HMAC-SHA256 under a key that HKDF-SHA256

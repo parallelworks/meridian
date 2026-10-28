@@ -28,7 +28,21 @@ type Placement struct {
 	// give (workerapi.Worker.Digest): every placement recorded has it, so
 	// it says the placement is (Attempt.Placed).
 	WorkerDigest string
+	// MemberKey is the key of the member, where its backend's workers
+	// reach the coordinator through a listener on it
+	// (backend.Forwarder.MemberKey), a keyed hash, which the worker API
+	// holds the attempt's requests to; or "" for any other.
+	MemberKey string
+	// RunDir is the run's directory on the member where its driver chose
+	// it (backend.Placement.RunDir), which the attempt's claim gives in
+	// place of the run's; or "", for the run's, or where the attempt's
+	// placement is private, whose coordinator holds it only sealed.
+	RunDir string
 }
+
+// memberKey is what a member's key is (backend.Forwarder.MemberKey): an
+// endpoint's name, as the lease on its listener is named.
+var memberKey = endpointName
 
 // workerDigest is what a worker binary's digest is: sha256: and 64 hex
 // digits.
@@ -39,13 +53,17 @@ var workerDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // worker binary it started is refused: every backend says which binary it
 // started, so that no claim is taken from another. So is one without its
 // backend or the backend's ID for it, unless the attempt's placement is
-// private, and one of those with its group, member, backend or ID, which
-// are held only sealed: of a private placement, the store holds only the
-// digest in the clear. An attempt that no longer holds its job is
-// ErrFenced, and one that has been claimed ErrState.
+// private, and one of those with its group, member, backend, ID or run's
+// directory, which are held only sealed: of a private placement, the store
+// holds only the digest, and the member's key, a keyed hash, in the clear.
+// An attempt that no longer holds its job is ErrFenced, and one that has
+// been claimed ErrState.
 func (tx *Tx) RecordPlacement(id string, p Placement) error {
 	if !workerDigest.MatchString(p.WorkerDigest) {
 		return fmt.Errorf("store: attempt %s placed without the digest of the worker binary it started", id)
+	}
+	if p.MemberKey != "" && !memberKey.MatchString(p.MemberKey) {
+		return fmt.Errorf("store: attempt %s placed on a member whose key %q isn't one", id, p.MemberKey)
 	}
 	a, err := tx.Attempt(id)
 	if err != nil {
@@ -56,13 +74,14 @@ func (tx *Tx) RecordPlacement(id string, p Placement) error {
 		return ErrFenced
 	case a.State != AttemptPlacing:
 		return fmt.Errorf("%w: attempt %s has been claimed", ErrState, id)
-	case a.Private && (p.Group != "" || p.Member != "" || p.Backend != "" || p.ID != ""):
-		return fmt.Errorf("store: attempt %s's placement is private, and its group, member, backend and the backend's ID for it are held only sealed", id)
+	case a.Private && (p.Group != "" || p.Member != "" || p.Backend != "" || p.ID != "" || p.RunDir != ""):
+		return fmt.Errorf("store: attempt %s's placement is private, and its group, member, backend, the backend's ID for it and the run's directory are held only sealed", id)
 	case !a.Private && (p.Backend == "" || p.ID == ""):
 		return fmt.Errorf("store: attempt %s placed without its backend or the backend's ID for it", id)
 	}
-	if _, err := tx.exec("UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ? WHERE id = ?",
-		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest), id); err != nil {
+	if _, err := tx.exec("UPDATE meridian_attempts SET grp = ?, member = ?, backend = ?, placement_id = ?, placed_digest = ?, member_key = ?, run_dir = ? WHERE id = ?",
+		nullString(p.Group), nullString(p.Member), nullString(p.Backend), nullString(p.ID), nullString(p.WorkerDigest),
+		nullString(p.MemberKey), nullString(p.RunDir), id); err != nil {
 		return err
 	}
 	tx.placed = append(tx.placed, id)

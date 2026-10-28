@@ -166,7 +166,9 @@ func runDirs(c *cli, named string) (func(storeID, id string) string, error) {
 }
 
 // supervise coordinates the run id, as one of its store's coordinators,
-// and holds the coordinator's socket when no other process does, showing
+// and holds the coordinator's socket when no other process does, and the
+// sockets forwarded to the hosts its store's workers run on, each when
+// no other process does (coordinator.ServeMembers), showing
 // the run as it goes, until the run ends or an interrupt leaves it
 // running. It returns the command's exit status.
 func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *compiled, rs runSupervision, id string, interrupts <-chan os.Signal) int {
@@ -176,9 +178,14 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 	served := make(chan error, 1)
 	go func() { served <- coord.Serve(work) }()
 	sock := holdSocket(work, coord, w.dirs.Socket(), rs.logs)
+	// The workers on hosts reach it through sockets forwarded there, of
+	// whichever process of the store's holds each.
+	members := make(chan error, 1)
+	go func() { members <- coord.ServeMembers(work, rs.logs) }()
 	defer func() {
 		stop()
 		<-sock.done
+		<-members
 		<-served
 	}()
 	following, stopFollowing := context.WithCancel(work)

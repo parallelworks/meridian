@@ -596,6 +596,51 @@ jobs:
       - run: hostname
 `
 
+// TestPlacementRunDir checks the run's directory a placement says its
+// member chose: the store holds it with the attempt, in the clear, but
+// sealed with the rest of a private placement's place, and a claim of the
+// attempt gives it either way.
+func TestPlacementRunDir(t *testing.T) {
+	parallel(t)
+	for _, private := range []bool{false, true} {
+		d := newTestDriver()
+		d.runDir = "/home/alice/.local/state/meridian/runs/1-store"
+		d.worker = func(backend.PlaceRequest) testEnd { return testEnd{never: true} }
+		workflow, vars := oneJob, conformancetest.Variables(nil)
+		drivers := map[string]backend.Driver{testBackend: d}
+		if private {
+			workflow, vars, drivers = privateTarget, hostVars, map[string]backend.Driver{"ssh": d}
+		}
+		c := open(t, Options{Variables: vars, Drivers: drivers})
+		id, _ := create(t, c, workflow, nil, vars)
+		if _, err := c.startRun(t.Context(), id, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.supervise(t.Context(), id, "main", nil); err != nil {
+			t.Fatal(err)
+		}
+		a := latestAttempt(t, c, id, "main")
+		inClear := d.runDir
+		if private {
+			inClear = ""
+		}
+		if a.Placement.RunDir != inClear {
+			t.Errorf("private %v: the store holds the run's directory %q in the clear", private, a.Placement.RunDir)
+		}
+		var run *store.Run
+		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			run, err = tx.Run(id)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := c.attemptRunDir(t.Context(), run, a); err != nil || got != d.runDir {
+			t.Errorf("private %v: a claim gives the run's directory %q, %v", private, got, err)
+		}
+	}
+}
+
 // hostVars has the variable privateTarget reads.
 var hostVars = conformancetest.Variables{"vars.HOST": {Value: "secret-host.example.org"}}
 

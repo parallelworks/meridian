@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -232,6 +234,13 @@ type Coordinator struct {
 	// connections are where members' workers reach the coordinator, as
 	// their drivers' Connect gave it, by member.
 	connections map[string]connection
+	// server is the worker API's server while ServeWorkers or ServeMembers
+	// serves it, and serverUsers how many of them do (useServer).
+	server      *workerapisrv.Server
+	serverUsers int
+	// forwarding is what ServeMembers serves members' listeners with
+	// while it runs, or nil.
+	forwarding *forwarding
 	// controls hears which attempts' controls changed: the worker API's
 	// server while ServeWorkers serves it, or nil.
 	controls controlNotifier
@@ -390,8 +399,9 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 }
 
 // Close closes what members' drivers set up for their workers to reach the
-// coordinator, releases its holds on runs' Starts, and closes the
-// coordinator's store. Serve must have returned.
+// coordinator, and the drivers that are io.Closers, releases its holds on
+// runs' Starts, and closes the coordinator's store. Serve, ServeWorkers
+// and ServeMembers must have returned.
 func (c *Coordinator) Close() error {
 	c.mu.Lock()
 	var errs []error
@@ -401,6 +411,11 @@ func (c *Coordinator) Close() error {
 		}
 	}
 	clear(c.connections)
+	for _, name := range slices.Sorted(maps.Keys(c.opts.Drivers)) {
+		if closer, ok := c.opts.Drivers[name].(io.Closer); ok {
+			errs = append(errs, closer.Close())
+		}
+	}
 	for _, release := range c.queues {
 		if release != nil {
 			release()

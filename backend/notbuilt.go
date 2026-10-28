@@ -10,7 +10,7 @@ import (
 )
 
 // NotBuilt is the Driver of a backend that a member can name but this
-// release doesn't have yet: ssh, kubernetes, slurm and pbs today. Its
+// release doesn't have yet: kubernetes, slurm and pbs today. Its
 // Probe gives every member backend_not_built, so placement leaves it out,
 // and every other call fails with the same problem.
 type NotBuilt struct{}
