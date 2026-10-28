@@ -3,7 +3,10 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -55,14 +58,95 @@ var fastSupervision = supervision{
 	wait: 20 * time.Second, timeout: 30 * time.Second,
 }
 
-// open opens a coordinator on a new store in a directory of the test's,
-// with opts, Keys of the test's own unless opts has some, testGroups and a
-// testDriver of testBackend unless it has Groups and Drivers, and the
-// timing of a test.
+// testPollInterval is how often a test's idle hopper producers look for
+// work that no wake told them of, as what the coordinator's inserter adds,
+// or a wake that comes due: soon enough for a test not to wait long on
+// one, and seldom enough that the polls of the tests that run at once,
+// each a statement that the race detector makes costly, don't take much
+// of the CPU they share. At 10ms they took a tenth of the package's.
+const testPollInterval = 50 * time.Millisecond
+
+// storeTemplate is a store that store.Open made, and migrated, once a test
+// binary, in a directory of its own (dir), which each test's new store is
+// a copy of (copyStoreTemplate). Opening a copy finds its schema this
+// release's, where a new store would be migrated: under the race detector
+// that takes most of a second, which every test that opens a coordinator
+// paid, most of what many of them cost. The store package's own tests
+// migrate their stores.
+var storeTemplate struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+// TestMain runs the package's tests, and removes the store template, if a
+// test made it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if storeTemplate.dir != "" {
+		_ = os.RemoveAll(storeTemplate.dir)
+	}
+	os.Exit(code)
+}
+
+// copyStoreTemplate copies the store template to path, a new file readable
+// only by its user, as store.Open makes one, making the template first if
+// no test has.
+func copyStoreTemplate(t testing.TB, path string) {
+	t.Helper()
+	storeTemplate.once.Do(func() {
+		dir, err := os.MkdirTemp("", "meridian-store-")
+		if err != nil {
+			storeTemplate.err = err
+			return
+		}
+		storeTemplate.dir = dir
+		s, err := store.Open(t.Context(), filepath.Join(dir, "meridian.db"), nil)
+		if err == nil {
+			err = s.Close()
+		}
+		if err == nil {
+			// Closing it checkpoints its write-ahead log into it, so the
+			// file holds all of it.
+			if info, statErr := os.Stat(filepath.Join(dir, "meridian.db-wal")); statErr == nil && info.Size() > 0 {
+				err = errors.New("the store template's write-ahead log holds what its file doesn't")
+			}
+		}
+		storeTemplate.err = err
+	})
+	if storeTemplate.err != nil {
+		t.Fatal(storeTemplate.err)
+	}
+	in, err := os.Open(filepath.Join(storeTemplate.dir, "meridian.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// open opens a coordinator, with opts, on the store opts.Database names, or
+// on a new one in a directory of the test's: a new store is a copy of the
+// store template. It has Keys of the test's own unless opts has some,
+// testGroups and a testDriver of testBackend unless it has Groups and
+// Drivers, and the timing of a test.
 func open(t testing.TB, opts Options) *Coordinator {
 	t.Helper()
 	if opts.Database == "" {
 		opts.Database = filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	}
+	if _, err := os.Lstat(opts.Database); errors.Is(err, fs.ErrNotExist) {
+		copyStoreTemplate(t, opts.Database)
 	}
 	if opts.Keys == nil {
 		opts.Keys = coordtest.NewKeys(t)
@@ -84,7 +168,7 @@ func open(t testing.TB, opts Options) *Coordinator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.retry, c.supervision, c.pollInterval = fastStart, fastSupervision, 10*time.Millisecond
+	c.retry, c.supervision, c.pollInterval = fastStart, fastSupervision, testPollInterval
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
 			t.Error(err)
