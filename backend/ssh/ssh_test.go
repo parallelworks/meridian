@@ -961,7 +961,7 @@ func TestNames(t *testing.T) {
 		}
 	}
 	pa.forget("a1")
-	if _, ok := pa.tag("a1"); ok || pa.order.Len() != 1 {
+	if _, ok := pa.tag("a1"); ok || pa.tags.Len() != 1 {
 		t.Error("a forgotten attempt is still kept")
 	}
 

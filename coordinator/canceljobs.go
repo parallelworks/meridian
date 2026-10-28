@@ -333,18 +333,5 @@ func jobNames(v any, pointer string) ([]string, *problems.Diagnostic) {
 // wrongType is the problem of a value, v, at pointer, of a type other than
 // want, by its name in a schema.
 func wrongType(pointer string, v any, want string) problems.Diagnostic {
-	got := "object"
-	switch v.(type) {
-	case nil:
-		got = "null"
-	case bool:
-		got = "boolean"
-	case string:
-		got = "string"
-	case int64, float64:
-		got = "number"
-	case []any:
-		got = "array"
-	}
-	return problems.WrongType.At("", problems.Position{}, pointer, problems.Params{"count": 1, "type1": want, "has_got": true, "got": got})
+	return problems.WrongType.At("", problems.Position{}, pointer, problems.WrongTypeParams(plan.TypeName(v), want))
 }

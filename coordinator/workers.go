@@ -141,8 +141,8 @@ func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir st
 // the coordinator performs, for a job of a child run, whose claim says
 // what it has of its tree, for one with a step whose uses: names a
 // workflow, which asks for its child, and for one with a step that uses
-// an action the coordinator performs (asksCoordinator), which asks for it;
-// and 1 for any other.
+// an action the coordinator performs (plan.CoordinatorAction), which asks
+// for it; and 1 for any other.
 func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attempt) (int, error) {
 	if run.Parent != nil {
 		return workerapi.Version3, nil
@@ -153,7 +153,7 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 	}
 	if j != nil {
 		for _, s := range j.Steps {
-			if s.Source != nil || asksCoordinator(s.Uses) {
+			if s.Source != nil || plan.CoordinatorAction(s.Uses) {
 				return workerapi.Version3, nil
 			}
 		}
@@ -205,12 +205,12 @@ func (c *Coordinator) rootOf(ctx context.Context, run *store.Run) (*store.Run, e
 }
 
 // treePath returns the path of the directory of run, of the tree whose
-// root is root, relative to the root's, as filepath.Rel gives it: "." for
+// root is root, relative to the root's, as plan.InDir gives it: "." for
 // a root, or a child whose directory is its root's. A child's is always
 // in its root's, as createChild makes it (child_dir_outside).
 func treePath(root, run *store.Run) (string, error) {
-	path, err := filepath.Rel(root.RunDir, run.RunDir)
-	if err != nil || !filepath.IsLocal(path) {
+	path, ok := plan.InDir(root.RunDir, run.RunDir)
+	if !ok {
 		return "", fmt.Errorf("coordinator: run %s's directory isn't in its root's, run %s's", run.ID, root.ID)
 	}
 	return path, nil

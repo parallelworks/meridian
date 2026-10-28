@@ -1,14 +1,17 @@
-// Package versiontest lets a test of a side of the worker API make a member
-// of the API's bodies one that a later version added than the one the
-// API's table gives it (workerapi.CheckVersion), so that the test can check
-// that the side sends and reads it only in an attempt of that version,
-// before any version has such a member.
+// Package apiversion is a hook into the worker API's table of the version
+// that added each member of its bodies (workerapi.CheckVersion): through
+// it, a test of a side of the API makes a member one that a later version
+// added than the one the table gives it, so that the test can check that
+// the side sends and reads it only in an attempt of that version, before
+// any version has such a member. workerapi reads it, so every binary that
+// speaks the API links it; in a release it holds nothing, and its
+// generation stays 0, which workerapi's cache of the table is keyed by.
 //
 // A release never sets one: no package outside this module can import
-// this one, and no code of the module's but a _test.go file calls Set. A
-// test that does doesn't run in parallel with others that send or read
-// the API's bodies, which the member it sets would change.
-package versiontest
+// this one, and no code of the module's but a _test.go file calls
+// SetSince. A test that does doesn't run in parallel with others that send
+// or read the API's bodies, which the member it sets would change.
+package apiversion
 
 import (
 	"sync"
@@ -24,9 +27,9 @@ var (
 	generation atomic.Int64
 )
 
-// Set makes member, a type of package workerapi's and a JSON name, as
+// SetSince makes member, a type of package workerapi's and a JSON name, as
 // Event.cleanup, one of version until restore is called.
-func Set(member string, version int) (restore func()) {
+func SetSince(member string, version int) (restore func()) {
 	mu.Lock()
 	defer mu.Unlock()
 	old, had := since[member]
@@ -57,5 +60,5 @@ func Since(member string) (version int, ok bool) {
 }
 
 // Generation returns the generation of what tests have set, which each
-// Set, and each restore, changes: 0 while none has set anything.
+// SetSince, and each restore, changes: 0 while none has set anything.
 func Generation() int64 { return generation.Load() }

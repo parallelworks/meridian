@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math/rand/v2"
 	"os"
 	"strconv"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
+	"github.com/parallelworks/meridian/internal/backoff"
 )
 
 // How often ServeMembers looks for the members of attempts that haven't
@@ -322,7 +322,7 @@ func (c *Coordinator) serveMember(f *forwarding, h *holder, fw backend.Forwarder
 				wait = forwardFirst
 			}
 		}
-		timer := time.NewTimer(wait - rand.N(wait/4+1)) //nolint:gosec // jitter, not a secret
+		timer := time.NewTimer(backoff.Jitter(wait))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

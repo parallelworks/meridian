@@ -222,8 +222,7 @@ func (s *cacheSources) SurveyTree(ctx context.Context, repo, commit string, path
 	if err != nil {
 		return coordinator.TreeSurvey{}, err
 	}
-	survey, err := sources.SurveyTree(ctx, repo, commit, paths)
-	return coordinator.TreeSurvey(survey), err
+	return sources.SurveyTree(ctx, repo, commit, paths)
 }
 
 func (s *cacheSources) WriteTree(ctx context.Context, repo, commit string, paths []string, w io.Writer) error {

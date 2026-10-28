@@ -7,14 +7,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/parallelworks/meridian/internal/versiontest"
+	"github.com/parallelworks/meridian/internal/apiversion"
 )
 
 // since is the version of the API that gave each member of its bodies,
 // and of the package's types in them, by its type and JSON name. What a
-// body carries of a run, of package plan's types, the plan versions, in
-// its own since table; foundation's problems and Meridian's diagnostics
-// are kept as they are. A member added later is in the newest version no
+// body carries of a run, of package plan's types, isn't in it: the plan's
+// own version says what of a plan a side reads (plan.Plan.MinVersion,
+// which plan.Decode's schema check guards). Foundation's problems and
+// Meridian's diagnostics are kept as they are. A member added later is in the newest version no
 // release has written, which is Version, or which raises Version if a
 // release has written it, and is left out when it is empty
 // (TestBodiesAreVersioned).
@@ -65,7 +66,7 @@ var since = map[string]int{
 // body when it is zero (omitzero, TestBodiesAreVersioned), so one that is
 // zero is taken, as it is of every earlier version's body.
 func CheckVersion(version int, v any) error {
-	return checkVersion(versiontest.Generation(), version, reflect.ValueOf(v))
+	return checkVersion(apiversion.Generation(), version, reflect.ValueOf(v))
 }
 
 // MarshalAt encodes v as Marshal does, as a body of an attempt of version
@@ -102,7 +103,7 @@ func WriteBody(w http.ResponseWriter, version int, v any) error {
 }
 
 // checkVersion is CheckVersion of the value v, with what is cached of the
-// table at the generation gen of what tests have set (versiontest).
+// table at the generation gen of what tests have set (apiversion).
 func checkVersion(gen int64, version int, v reflect.Value) error {
 	if !v.IsValid() || newest(gen, v.Type()) <= version {
 		return nil
@@ -151,7 +152,7 @@ type field struct {
 }
 
 // A cacheKey is a type, and the generation of what tests have set of the
-// table (versiontest.Generation), which is 0 in a release.
+// table (apiversion.Generation), which is 0 in a release.
 type cacheKey struct {
 	gen int64
 	typ reflect.Type
@@ -163,10 +164,10 @@ type cacheKey struct {
 var fields, newests sync.Map
 
 // sinceOf returns the version that added member, as the table has it, or
-// as a test set it (versiontest).
+// as a test set it (apiversion).
 func sinceOf(gen int64, member string) int {
 	if gen != 0 {
-		if v, ok := versiontest.Since(member); ok {
+		if v, ok := apiversion.Since(member); ok {
 			return v
 		}
 	}

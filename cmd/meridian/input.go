@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -191,7 +192,7 @@ func (s inputSet) convert(def map[string]any, options any, i int) (any, error) {
 	}
 	if !isShape(v, shape) {
 		params := s.params(i, def)
-		params["shape"], params["kind"] = shape, kindOf(v)
+		params["shape"], params["kind"] = shape, plan.TypeName(v)
 		return nil, problems.InputFlagWrongShape.Problem(params)
 	}
 	return v, nil
@@ -232,23 +233,6 @@ func isShape(v any, shape string) bool {
 		return shape == shapeObject
 	}
 	return false
-}
-
-// kindOf names the JSON type of a value parseJSON read.
-func kindOf(v any) string {
-	switch v.(type) {
-	case bool:
-		return "boolean"
-	case int64, float64:
-		return "number"
-	case string:
-		return "string"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	}
-	return "null"
 }
 
 func parseBoolean(s string) (bool, bool) {

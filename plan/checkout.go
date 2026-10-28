@@ -1,8 +1,6 @@
 package plan
 
 import (
-	"cmp"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,33 +38,12 @@ type CheckoutPin struct {
 	Checkout Checkout `json:"checkout"`
 }
 
-// checkCheckouts checks that the plan's checkouts are in the order of
-// their callers and steps, each once, as Checkouts is, since a child run's
-// Create finds its steps' pins by them in that order.
-func (p *Plan) checkCheckouts() error {
-	for i := 1; i < len(p.Checkouts); i++ {
-		a, b := p.Checkouts[i-1], p.Checkouts[i]
-		switch c := cmp.Or(strings.Compare(a.Caller, b.Caller), strings.Compare(a.Step, b.Step)); {
-		case c == 0:
-			return fmt.Errorf("the checkout of %s's %s is in the plan twice", b.Caller, b.Step)
-		case c > 0:
-			return fmt.Errorf("the checkout of %s's %s comes after %s's %s", b.Caller, b.Step, a.Caller, a.Step)
-		}
-	}
-	return nil
-}
-
 // FindCheckout returns the pin of the checkout step at the JSON Pointer
 // step of the workflow of the digest caller, among those the plan's
 // checkouts hold, as a child run's Create pins its own checkouts by.
 func (p *Plan) FindCheckout(caller, step string) (Checkout, bool) {
-	i, ok := slices.BinarySearchFunc(p.Checkouts, [2]string{caller, step}, func(c CheckoutPin, k [2]string) int {
-		return cmp.Or(strings.Compare(c.Caller, k[0]), strings.Compare(c.Step, k[1]))
-	})
-	if !ok {
-		return Checkout{}, false
-	}
-	return p.Checkouts[i].Checkout, true
+	c, ok := findPin(p.Checkouts, caller, step)
+	return c.Checkout, ok
 }
 
 // The reasons CheckRepo gives for a repository Meridian doesn't fetch, as

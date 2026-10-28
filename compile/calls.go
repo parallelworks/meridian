@@ -284,15 +284,24 @@ func (t *tree) variables() []string {
 	return slices.Sorted(maps.Keys(names))
 }
 
-// planCalls returns the pins the tree found, in the plan's order: by
-// their caller's digest, and then by the step's JSON Pointer.
+// planCalls returns the pins the tree found, in the plan's order
+// (planPins).
 func (t *tree) planCalls() []plan.Call {
-	keys := slices.SortedFunc(maps.Keys(t.found), func(a, b callKey) int {
+	return planPins(t.found, func(k callKey, s plan.Source) plan.Call {
+		return plan.Call{Caller: k.caller, Step: k.step, Source: s}
+	})
+}
+
+// planPins returns the pins in found, by where their steps are, each made
+// into what the plan holds by pin, in the plan's order: by their caller's
+// digest, and then by the step's JSON Pointer.
+func planPins[V, P any](found map[callKey]V, pin func(callKey, V) P) []P {
+	keys := slices.SortedFunc(maps.Keys(found), func(a, b callKey) int {
 		return cmp.Or(strings.Compare(a.caller, b.caller), strings.Compare(a.step, b.step))
 	})
-	var out []plan.Call
+	var out []P
 	for _, k := range keys {
-		out = append(out, plan.Call{Caller: k.caller, Step: k.step, Source: t.found[k]})
+		out = append(out, pin(k, found[k]))
 	}
 	return out
 }

@@ -1,11 +1,8 @@
 package compile
 
 import (
-	"cmp"
 	"context"
 	"errors"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -115,15 +112,9 @@ func isCheckout(step map[string]any) bool {
 }
 
 // planCheckouts returns the pins of the checkout steps of the workflows the
-// run calls that the tree found, in the plan's order: by their caller's
-// digest, and then by the step's JSON Pointer.
+// run calls that the tree found, in the plan's order (planPins).
 func (t *tree) planCheckouts() []plan.CheckoutPin {
-	keys := slices.SortedFunc(maps.Keys(t.checkouts), func(a, b callKey) int {
-		return cmp.Or(strings.Compare(a.caller, b.caller), strings.Compare(a.step, b.step))
+	return planPins(t.checkouts, func(k callKey, co plan.Checkout) plan.CheckoutPin {
+		return plan.CheckoutPin{Caller: k.caller, Step: k.step, Checkout: co}
 	})
-	var out []plan.CheckoutPin
-	for _, k := range keys {
-		out = append(out, plan.CheckoutPin{Caller: k.caller, Step: k.step, Checkout: t.checkouts[k]})
-	}
-	return out
 }

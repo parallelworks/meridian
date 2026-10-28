@@ -467,7 +467,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		r.Boot, err = bootID()
 	}
 	if err == nil {
-		err = d.writeFile(d.path(req.Attempt, ".json"), mustMarshal(r))
+		err = safepath.WriteFile(d.path(req.Attempt, ".json"), mustMarshal(r))
 	}
 	if err == nil {
 		err = d.markLive(req.Attempt)
@@ -523,7 +523,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		stderr.Close()
 		if cmd.ProcessState != nil {
 			exit := []byte(strconv.Itoa(cmd.ProcessState.ExitCode()) + "\n")
-			_ = d.writeFile(d.path(req.Attempt, ".exit"), exit)
+			_ = safepath.WriteFile(d.path(req.Attempt, ".exit"), exit)
 		}
 	}()
 	return r.placement(req.Attempt), nil
@@ -804,7 +804,7 @@ func (d *Driver) terminate(attempt string, r *record) (time.Time, error) {
 		return time.Time{}, err
 	}
 	now := time.Now()
-	if err := d.writeFile(path, []byte(now.Format(time.RFC3339Nano)+"\n")); err != nil {
+	if err := safepath.WriteFile(path, []byte(now.Format(time.RFC3339Nano)+"\n")); err != nil {
 		return time.Time{}, err
 	}
 	if err := signalWorker(r, sigTerm); err != nil && !errors.Is(err, errNoProcess) {
@@ -890,42 +890,6 @@ func mustMarshal(r *record) []byte {
 		panic(err) //nolint:forbidigo // a record of strings and numbers always encodes
 	}
 	return data
-}
-
-// writeFile writes a file in placements/ whole or not at all, readable
-// only by the user: to a new file beside it, synced, then renamed over it,
-// and the directory synced.
-func (d *Driver) writeFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".new-*")
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	if err != nil {
-		os.Remove(f.Name())
-		return err
-	}
-	return syncDir(dir)
-}
-
-// syncDir syncs the directory dir, so that what was renamed in it lasts.
-func syncDir(dir string) error {
-	f, err := os.Open(dir) //nolint:gosec // placements/, in the state directory
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
 }
 
 // remove removes an attempt's files, but its lock.
