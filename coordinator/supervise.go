@@ -403,10 +403,12 @@ type controlNotifier interface {
 	Ended(ids ...string)
 }
 
-// runsEnded tells the coordinator's controlNotifier, if it has one, that
-// the runs ids ended, which answers the polls for their ends as children
-// that it holds (store.Options.OnRunsEnded).
+// runsEnded lets go of the plans of the runs ids, which ended, and tells
+// the coordinator's controlNotifier, if it has one, which answers the
+// polls for their ends as children that it holds
+// (store.Options.OnRunsEnded).
 func (c *Coordinator) runsEnded(ids []string) {
+	c.plans.forget(ids...)
 	c.mu.Lock()
 	n := c.controls
 	c.mu.Unlock()

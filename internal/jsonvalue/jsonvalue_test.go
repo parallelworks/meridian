@@ -143,3 +143,21 @@ func TestSorted(t *testing.T) {
 		t.Errorf("got %v, %v", keys, values)
 	}
 }
+
+func TestMemory(t *testing.T) {
+	for _, tt := range []struct {
+		data            string
+		objects, arrays int64
+	}{
+		{`"text"`, 0, 0},
+		{`{"a":[1,{"b":[]}]}`, 2, 2},
+		// What is in a string isn't counted, an escaped quote and
+		// backslash among it.
+		{`{"{[":"]}[{","q\"{":"\\","x":["\"[\\"]}`, 1, 1},
+	} {
+		want := 16*int64(len(tt.data)) + 384*tt.objects + 64*tt.arrays
+		if got := jsonvalue.Memory([]byte(tt.data)); got != want {
+			t.Errorf("Memory(%s) = %d, want %d", tt.data, got, want)
+		}
+	}
+}
