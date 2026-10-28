@@ -2,11 +2,17 @@ package store
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/plan"
 )
@@ -246,4 +252,169 @@ ON CONFLICT (attempt_id, step, try) DO UPDATE SET digest = excluded.digest`, a.I
 		}
 		return nil
 	})
+}
+
+// erasureRig is a store whose warnings a test reads, with a run whose
+// secret record holds unit, which a reader can hold a snapshot of as the
+// run ends.
+type erasureRig struct {
+	t     *testing.T
+	s     *Store
+	path  string
+	id    string
+	unit  []byte
+	logMu sync.Mutex
+	log   bytes.Buffer
+}
+
+func newErasureRig(t *testing.T) *erasureRig {
+	t.Helper()
+	r := &erasureRig{t: t, path: newPath(t), unit: []byte("a-sealed-record-held.")}
+	s, err := Open(t.Context(), r.path, &Options{Log: slog.New(slog.NewTextHandler(lockedWriter{&r.logMu, &r.log}, &slog.HandlerOptions{Level: slog.LevelWarn}))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.s = s
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		if r.id, err = tx.NewRunID(); err != nil {
+			return err
+		}
+		if err := tx.InsertRun(NewRun{ID: r.id, Plan: testPlan(t), DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(0)}); err != nil {
+			return err
+		}
+		return tx.InsertRecord(r.id, 1, []byte("the-wrapped-data-key"), bytes.Repeat(r.unit, 600))
+	})
+	return r
+}
+
+// hold has a reader hold a snapshot of the store from before the run
+// ends, as a follower's transaction does while it ends, until release is
+// called, which returns the reader's error.
+func (r *erasureRig) hold() (release func() error) {
+	reading, done := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- r.s.View(context.WithoutCancel(r.t.Context()), func(tx *Tx) error {
+			if _, err := tx.Run(r.id); err != nil {
+				return err
+			}
+			close(reading)
+			<-done
+			return nil
+		})
+	}()
+	<-reading
+	return sync.OnceValue(func() error {
+		close(done)
+		return <-result
+	})
+}
+
+// erased reports whether the write-ahead log is truncated, and neither
+// file holds the record.
+func (r *erasureRig) erased() bool {
+	info, err := os.Stat(r.path + "-wal")
+	return err == nil && info.Size() == 0 && len(holding(r.t, []string{r.path, r.path + "-wal"}, r.unit)) == 0
+}
+
+func (r *erasureRig) warnings() string {
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
+	return r.log.String()
+}
+
+// TestRecordErasedPastReader checks that a run's secret record is erased
+// from the write-ahead log, though a reader, as a follower's transaction,
+// kept the log from being truncated as the run ended, and for a while
+// after: the store tries again until it is, with no other transaction of
+// its own to prompt it, within about a second of the reader being done,
+// and says nothing of a reader it waited out. Before, one try was all,
+// and the log held the record until the next run ended, or the store
+// opened again, and the store warned of it, which meridian run printed.
+func TestRecordErasedPastReader(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	t.Cleanup(func() {
+		if err := r.s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	release := r.hold()
+	inTx(t, r.s, func(tx *Tx) error { return tx.EndRun(r.id, plan.OutcomeSuccess, "") })
+	// Held past a few tries, whose waits double up to a second.
+	time.Sleep(1500 * time.Millisecond) //nolint:forbidigo // the reader holds the log past the store's first tries
+	if r.erased() {
+		t.Fatal("the log was truncated though a reader held it, so the test can't tell")
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	released := time.Now()
+	for !r.erased() {
+		if time.Since(released) > 3*time.Second {
+			t.Fatalf("%v after the reader was done, the log isn't truncated, or holds the record", time.Since(released))
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the files
+	}
+	if w := r.warnings(); w != "" {
+		t.Errorf("the store warned of a reader it waited out:\n%s", w)
+	}
+}
+
+// TestCloseEndsEraser checks that a store closing while a reader still
+// keeps the log from being truncated ends the goroutine that tries again,
+// and waits for it, before it returns; tries once more; and warns that
+// the log may hold the record until the next Open, which truncates it.
+func TestCloseEndsEraser(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	var ended atomic.Bool
+	r.s.erased = func() { ended.Store(true) }
+	release := r.hold()
+	defer func() { _ = release() }()
+	inTx(t, r.s, func(tx *Tx) error { return tx.EndRun(r.id, plan.OutcomeSuccess, "") })
+	closed := make(chan error, 1)
+	go func() { closed <- r.s.Close() }()
+	// Close tries once more, which the reader holds up, and warns, before
+	// it closes the database, which waits for the reader.
+	deadline := time.Now().Add(30 * time.Second)
+	for !strings.Contains(r.warnings(), "the next Open truncates it") {
+		if time.Now().After(deadline) {
+			t.Fatalf("Close didn't warn that the log may hold the record; it logged:\n%s", r.warnings())
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the log
+	}
+	if !ended.Load() {
+		t.Error("Close tried the truncation again before the goroutine that tries it had ended")
+	}
+	if err := release(); err != nil && !strings.Contains(err.Error(), "closed") {
+		t.Error(err)
+	}
+	if err := <-closed; err != nil {
+		t.Error(err)
+	}
+	// The next Open truncates it.
+	s, err := Open(t.Context(), r.path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.erased() {
+		t.Error("the next Open didn't truncate the log")
+	}
+	if err := s.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
+// A lockedWriter writes to w under mu, for a log that goroutines write.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
