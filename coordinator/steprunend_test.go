@@ -549,6 +549,17 @@ func TestStepRunAPI(t *testing.T) {
 	if rs, diags, err := cleanup.Job.Cleanup(ctx, 2, stepRunJobState(cleanup)); err != nil || len(diags) > 0 || rs.Run != "echo tidy 3 2" {
 		t.Errorf("the cleanup evaluated from its step run's claim: %+v, %v, %v", rs, diags, err)
 	}
+	// The cleanup of a step with a retry:, a timeout: and an early-cancel:
+	// has none of them but whether it has a retry:, which gives it its
+	// retry counters.
+	sr, err = api.StepRun(ctx, root, r.build, &workerapi.StepRunRequest{Step: 11, Cleanup: true, SSH: farm, State: workerapi.StepRunState{Steps: all}})
+	if err != nil || sr.Run == "" {
+		t.Fatalf("the ask for the cleanup's of step 11 gave %+v, %v", sr, err)
+	}
+	again := r.readyStepRun(t, sr.Run).Job.Steps[11]
+	if again.Retry == nil || !reflect.DeepEqual(*again.Retry, plan.StepRetry{}) || !again.Timeout.IsZero() || again.EarlyCancel != "" || again.Cleanup.IsZero() {
+		t.Errorf("the cleanup's step run of step 11 has the step %+v, with the retry %+v", again, again.Retry)
+	}
 
 	var end *workerapi.StepRun
 	waitFor(t, func() bool {

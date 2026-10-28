@@ -990,7 +990,8 @@ func TestCleanupFails(t *testing.T) {
 // TestCleanupNotStarted checks that a cleanup: that can't run fails its
 // job, with what kept it from running and no exit code, as a step that
 // can't run does: one whose expression fails, one of a step whose ssh:
-// names another host, and one whose working directory can't be made.
+// names another host, in an attempt of version 2 of the worker API, which
+// has no step runs, and one whose working directory can't be made.
 func TestCleanupNotStarted(t *testing.T) {
 	t.Parallel()
 	failing := command("true")
@@ -1004,6 +1005,7 @@ func TestCleanupNotStarted(t *testing.T) {
 	noDir.WorkingDirectory = plan.Literal("/dev/null/x")
 	noDir.Cleanup = plan.Literal("true")
 	f := workerapitest.NewFake(t, newJob(failing, elsewhere, noDir))
+	f.Speaks = workerapi.Version2
 	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
@@ -1342,7 +1344,8 @@ func TestSetupFails(t *testing.T) {
 }
 
 // TestStepsRefused checks the steps this worker can't run, which fail
-// with a problem that says why: a uses: step, a step on another host, a
+// with a problem that says why: a uses: step, a step on another host, in
+// an attempt of version 2 of the worker API, which has no step runs, a
 // shell that isn't there, outputs too large to keep, and a shell format 1
 // doesn't run.
 func TestStepsRefused(t *testing.T) {
@@ -1360,6 +1363,7 @@ func TestStepsRefused(t *testing.T) {
 		steps[i].If = cond("always()")
 	}
 	f := workerapitest.NewFake(t, newJob(steps...))
+	f.Speaks = workerapi.Version2
 	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}

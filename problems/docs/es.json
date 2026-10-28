@@ -1229,6 +1229,28 @@
       "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
     ]
   },
+  "step_run_request_failed": {
+    "title": "Solicitud al coordinador de la ejecución de un paso en otro host que falló",
+    "why": "Un paso cuyo ssh: indica otro host distinto del de su trabajo le pide al coordinador, a través de la API de workers, una ejecución propia en ese host, espera a que termine y la detiene cuando el paso se detiene. Una de esas solicitudes falló de forma definitiva: el coordinador la rechazó, o respondió con algo que el worker no puede leer, que la razón nombra por su código. Es un error del worker o del coordinador, o un worker y un coordinador de versiones que no coinciden en la API de workers, y no del flujo de trabajo. El paso falla y no se vuelve a intentar. Puede que su ejecución en el otro host se haya creado y siga en curso: su propio estado lo dice.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador.",
+      "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
+  "step_run_outputs_unwritten": {
+    "title": "Salidas de un paso en otro host que el worker no pudo añadir",
+    "why": "Un paso que se ejecuta en otro host escribe sus salidas en un archivo $OUTPUTS propio allí, que vuelven al worker de su trabajo cuando su intento tiene éxito, y el worker las añade al archivo que el paso habría escrito aquí, como el formato 1 copia el archivo de vuelta. Añadirlas falló, como cuando el disco está lleno, así que el paso falla, sin ellas.",
+    "fix": [
+      "Libera espacio en el disco que contiene el directorio del worker, o corrige lo que indica la razón."
+    ]
+  },
+  "step_run_output_line_too_long": {
+    "title": "Salida de un paso en otro host demasiado larga para añadirla",
+    "why": "Un paso que se ejecuta en otro host escribe sus salidas en un archivo $OUTPUTS propio allí, que vuelven al worker de su trabajo cuando su intento tiene éxito, y el worker las añade al archivo que el paso habría escrito aquí, una línea cada una, con cada salto de línea, tabulación y retorno de carro de un valor escritos como \\n, \\t y \\r, como el formato 1 los lee. Una de ellas haría una línea más larga de lo que el formato 1 lee, lo que impediría leer el archivo entero, con las salidas de los pasos anteriores del trabajo, así que el worker no añade ninguna, y el paso falla.",
+    "fix": [
+      "Haz que el paso escriba un valor más corto, o con menos saltos de línea, tabulaciones y retornos de carro, o escribe el valor en un archivo del directorio de la ejecución, y la ruta del archivo en $OUTPUTS."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "title": "Trabajo que un paso no puede cancelar",
     "why": "El jobs: de un paso parallelworks/cancel-jobs nombra los trabajos de su ejecución que hay que cancelar. Este nombre no es el de ningún trabajo de la ejecución, o es el de un trabajo con matriz, cuyas instancias el formato 1 conoce por otros nombres, así que no cancela ninguna. Como en el formato 1, el paso no hace nada por ese nombre y tiene éxito.",
@@ -1254,9 +1276,10 @@
   },
   "step_ssh_not_supported": {
     "title": "Paso en otro host",
-    "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Esta versión del worker de Meridian solo ejecuta pasos en el host donde se ejecuta, así que el paso falla en lugar de ejecutarse en el host equivocado.",
+    "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Meridian ejecuta ese paso como una ejecución propia en ese host, mediante la versión 3 de la API de workers, pero no un paso cuyo uses: nombra un flujo de trabajo, que el formato 1 ejecuta donde se ejecuta quien lo llama. Así que, para ese paso, o en un intento de una versión anterior de la API de workers, como la que sirve un worker o un coordinador de una versión más antigua, el paso falla en lugar de ejecutarse en el host equivocado.",
     "fix": [
-      "Mueve el paso a un trabajo que se ejecute en ese host, mediante el ssh: del trabajo o un grupo de ejecución."
+      "Inicia workers y un coordinador de una versión que hable la versión 3 de la API de workers.",
+      "Para un paso que llama a un flujo de trabajo, da el ssh: a los trabajos del flujo de trabajo al que llama."
     ]
   },
   "step_ssh_reads_worker": {
@@ -1268,9 +1291,9 @@
   },
   "step_off_job_host": {
     "title": "Paso que se ejecuta fuera del host de su trabajo",
-    "why": "El ssh: de un trabajo del formato 1 ejecuta sus pasos en el host que indica, y el ssh: de un paso que es nulo, o que no da ningún remoteHost, ejecuta el paso donde se ejecutaría el trabajo sin su ssh:. Esta versión del worker de Meridian se ejecuta en el host del trabajo y solo ejecuta pasos ahí, así que el paso falla en lugar de ejecutarse en el host equivocado.",
+    "why": "El ssh: de un trabajo del formato 1 ejecuta sus pasos en el host que indica, y el ssh: de un paso que es nulo, o que no da ningún remoteHost, ejecuta el paso donde se ejecutaría el trabajo sin su ssh:. Meridian ejecuta ese paso como una ejecución propia ahí, mediante la versión 3 de la API de workers, pero no un paso cuyo uses: nombra un flujo de trabajo. Así que, para ese paso, o en un intento de una versión anterior de la API de workers, el paso falla en lugar de ejecutarse en el host equivocado.",
     "fix": [
-      "Mueve el paso a un trabajo que se ejecute donde debe ejecutarse el paso, como uno sin ssh:.",
+      "Inicia workers y un coordinador de una versión que hable la versión 3 de la API de workers.",
       "Quita el ssh: del paso para ejecutarlo en el host del trabajo."
     ]
   },

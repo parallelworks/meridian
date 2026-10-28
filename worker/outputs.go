@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -78,9 +81,14 @@ func readOutputs(d *privateDir, name string) (outputs map[string]string, notUTF8
 	return outputs, notUTF8, size, err
 }
 
-// openOutputs opens $OUTPUTS without waiting for a FIFO's writer: the
-// file name in d, or what a symbolic link there names.
+// openOutputs opens $OUTPUTS to read it without waiting for a FIFO's
+// writer: the file name in d, or what a symbolic link there names.
 func openOutputs(d *privateDir, name string) (*os.File, error) {
+	return openOutputsAs(d, name, os.O_RDONLY)
+}
+
+// openOutputsAs opens $OUTPUTS, as openOutputs does, with flag.
+func openOutputsAs(d *privateDir, name string, flag int) (*os.File, error) {
 	dir, root, _, err := d.current()
 	if err != nil {
 		return nil, err
@@ -90,7 +98,7 @@ func openOutputs(d *privateDir, name string) (*os.File, error) {
 		return nil, err
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return root.OpenFile(name, os.O_RDONLY|openNoFollow|openNonBlock, 0)
+		return root.OpenFile(name, flag|openNoFollow|openNonBlock, 0)
 	}
 	target, err := root.Readlink(name)
 	if err != nil {
@@ -99,7 +107,68 @@ func openOutputs(d *privateDir, name string) (*os.File, error) {
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(dir, target)
 	}
-	return os.OpenFile(target, os.O_RDONLY|openNonBlock, 0) //nolint:gosec // what a step's link names, which its user can read
+	return os.OpenFile(target, flag|openNonBlock, 0) //nolint:gosec // what a step's link names, which its user can read
+}
+
+var escapeOutput = strings.NewReplacer("\n", `\n`, "\t", `\t`, "\r", `\r`)
+
+// An outputLineTooLongError is what appendOutputs returns for an output,
+// name, whose line would be longer than readOutputs reads.
+type outputLineTooLongError struct{ name string }
+
+func (e *outputLineTooLongError) Error() string {
+	return "worker: the line of the output " + strconv.Quote(e.name) + " would be too long"
+}
+
+// appendOutputs appends outputs to the $OUTPUTS file name in d, as
+// openOutputs opens it, a name=value line each, in the order of their
+// names, with each newline, tab and carriage return in a value written as
+// \n, \t and \r, which readOutputs reads back as they were: what a step
+// run's step wrote, as its caller's worker gives it the file the step
+// would have written (docs/design.md, Steps on another host). A file that
+// doesn't end with a newline has one first, so that its last line is
+// read as it was. It returns errOutputsNotFile for a path that isn't a
+// regular file, which readOutputs reports as it reads it; and, appending
+// none of them, an *outputLineTooLongError for an output whose line, so
+// escaped, would be longer than maxOutputsLine, which would keep the
+// whole file from being read (readOutputs).
+func appendOutputs(d *privateDir, name string, outputs map[string]string) (err error) {
+	if len(outputs) == 0 {
+		return nil
+	}
+	var lines strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(outputs)) {
+		line := name + "=" + escapeOutput.Replace(outputs[name])
+		if len(line) > maxOutputsLine {
+			return &outputLineTooLongError{name}
+		}
+		lines.WriteString(line + "\n")
+	}
+	f, err := openOutputsAs(d, name, os.O_RDWR|os.O_APPEND)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errOutputsNotFile
+	}
+	var b strings.Builder
+	if size := info.Size(); size > 0 {
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, size-1); err != nil {
+			return err
+		}
+		if last[0] != '\n' {
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString(lines.String())
+	_, err = f.WriteString(b.String())
+	return err
 }
 
 var unescapeOutput = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")

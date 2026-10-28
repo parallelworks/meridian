@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -612,6 +613,73 @@ func (c *client) stopChild(ctx context.Context, stop *workerapi.ChildStop) error
 		return &encodeError{err}
 	}
 	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChildStop, body: body, timeout: requestTimeout}, nil)
+}
+
+// stepRun asks for the step run of a step's try, or of its cleanup:
+// (workerapi.PathStepRun), which a repeat of the request is answered with
+// again. It returns an *encodeError for a request it can't encode, and an
+// answer no step run can be is one the worker can't read
+// (stepRunAnswered).
+func (c *client) stepRun(ctx context.Context, req *workerapi.StepRunRequest) (*workerapi.StepRun, error) {
+	body, err := workerapi.MarshalAt(c.apiVersion, req)
+	if err != nil {
+		return nil, &encodeError{err}
+	}
+	sr := new(workerapi.StepRun)
+	if err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathStepRun, body: body, timeout: requestTimeout}, sr); err != nil {
+		return nil, err
+	}
+	return sr, stepRunAnswered(workerapi.PathStepRun, sr)
+}
+
+// stepRunAnswered returns the problem of an answer of path, sr, that no
+// step run can be: one that has ended with an outcome no run ends with,
+// or one not made that succeeded; one that hasn't ended that is no run;
+// and one that gives outputs but for a success, or one whose name no
+// line of $OUTPUTS can hold, with an = or a newline in it.
+func stepRunAnswered(path string, sr *workerapi.StepRun) error {
+	switch o := sr.Outcome; {
+	case sr.Ended && o != plan.OutcomeSuccess && o != plan.OutcomeFailure && o != plan.OutcomeCancelled,
+		sr.Ended && sr.Run == "" && o == plan.OutcomeSuccess:
+		return answerInvalidAt(path, http.StatusOK, "/outcome")
+	case !sr.Ended && sr.Run == "":
+		return answerInvalidAt(path, http.StatusOK, "/run")
+	case len(sr.Outputs) > 0 && o != plan.OutcomeSuccess:
+		return answerInvalidAt(path, http.StatusOK, "/outputs")
+	}
+	for name := range sr.Outputs {
+		if strings.ContainsAny(name, "=\n") {
+			return answerInvalidAt(path, http.StatusOK, "/outputs")
+		}
+	}
+	return nil
+}
+
+// stepRunEnd waits for the end of the step run of a step's try, or of its
+// cleanup: (workerapi.PathStepRunEnd): it answers once the step run has
+// ended, or after a while with it as it is. An answer no step run can be
+// is one the worker can't read (stepRunAnswered).
+func (c *client) stepRunEnd(ctx context.Context, step, try int, cleanup bool) (*workerapi.StepRun, error) {
+	q := url.Values{workerapi.QueryStep: {strconv.Itoa(step)}, workerapi.QueryTry: {strconv.Itoa(try)}}
+	if cleanup {
+		q.Set(workerapi.QueryCleanup, "true")
+	}
+	sr := new(workerapi.StepRun)
+	if err := c.do(ctx, call{method: http.MethodGet, path: workerapi.PathStepRunEnd, query: q, timeout: controlTimeout}, sr); err != nil {
+		return nil, err
+	}
+	return sr, stepRunAnswered(workerapi.PathStepRunEnd, sr)
+}
+
+// stopStepRun stops the step run of a step's try, or of its cleanup:
+// (workerapi.PathStepRunStop). It returns an *encodeError for a stop it
+// can't encode.
+func (c *client) stopStepRun(ctx context.Context, stop *workerapi.StepRunStop) error {
+	body, err := workerapi.MarshalAt(c.apiVersion, stop)
+	if err != nil {
+		return &encodeError{err}
+	}
+	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathStepRunStop, body: body, timeout: requestTimeout}, nil)
 }
 
 // tree asks the coordinator for the tree of a checkout step's try, with

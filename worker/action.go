@@ -20,25 +20,32 @@ import (
 // only a platform provides, which fails as it runs (platformActions), one
 // the coordinator performs, in an attempt of a version of the worker API
 // that has it (asksCoordinator), and a workflow, in such an attempt
-// (callsWorkflow); and where format 1 runs it: where its
-// job runs, unless its ssh: names a host, which this
-// worker can't run a step on yet, but for one whose ssh: names the host
-// and login its job's does, which placed the worker there (sameSSH). A
-// step whose ssh: is null, or gives no remoteHost, runs where its job
-// would run without its ssh:, which is here, unless the job's own ssh:
-// placed it on that host; one that gives no remoteHost has a note in its
-// log, as format 1 writes. It returns the note, and the problem that
-// refuses the step.
-func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *problems.Diagnostic) {
+// (callsWorkflow); and where format 1 runs it: where its job runs, unless
+// its ssh: names another host than its job's (sameSSH), or is null, or
+// gives no remoteHost, in a job on a host, which runs it where the job
+// would run without its ssh:. Such a step runs elsewhere, as a step run
+// (elsewhere), in an attempt of version 3 of the worker API or later, but
+// for one that calls a workflow, which this worker can't run on another
+// host, and one that uses an action the coordinator performs, but
+// checkout, whose ssh: places nothing (plan.Job.StepElsewhere). A step
+// whose ssh: gives no remoteHost, in a job on no host, runs here, with a
+// note in its log, as format 1 writes. It returns the note, the problem
+// that refuses the step, and whether it runs elsewhere, which a step
+// run's worker, whose job is where the coordinator put the step, as it
+// evaluated its ssh:, never heeds.
+func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *problems.Diagnostic, elsewhere bool) {
 	diagnostic := func(k *problems.Kind, params problems.Params) *problems.Diagnostic {
 		d := a.at(k, path, params)
 		return &d
 	}
 	if rs.Uses != "" && !slices.Contains(platformActions, rs.Uses) && !a.asksCoordinator(rs.Uses) && !a.callsWorkflow(rs.Index) {
-		return nil, diagnostic(problems.UsesNotSupported, problems.Params{"uses": rs.Uses})
+		return nil, diagnostic(problems.UsesNotSupported, problems.Params{"uses": rs.Uses}), false
 	}
 	if shell, ok := shellOK(rs.Shell); !ok {
-		return nil, diagnostic(problems.ShellNotSupported, problems.Params{"shell": shell})
+		return nil, diagnostic(problems.ShellNotSupported, problems.Params{"shell": shell}), false
+	}
+	if plan.CoordinatorAction(rs.Uses) && rs.Uses != plan.CheckoutUses {
+		return nil, nil, false
 	}
 	named := false
 	if rs.SSH != nil {
@@ -46,19 +53,24 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 		named = !plan.NoRemoteHost(ssh)
 	}
 	job := a.job.Target.Inline
+	canElsewhere := a.claim.APIVersion >= workerapi.Version3 && a.job.Steps[rs.Index].Source == nil
 	switch {
 	case named && job != nil && sameSSH(rs.SSH.SSH, job.SSH):
 		// A step whose ssh: names its job's host and login runs where its
 		// job runs: here.
-		return nil, nil
+		return nil, nil, false
+	case named && canElsewhere:
+		return nil, nil, true
 	case named:
-		return nil, diagnostic(problems.StepSSHNotSupported, nil)
+		return nil, diagnostic(problems.StepSSHNotSupported, nil), false
+	case (rs.NoSSH || rs.SSH != nil) && job != nil && canElsewhere:
+		return nil, nil, true
 	case (rs.NoSSH || rs.SSH != nil) && job != nil:
-		return nil, diagnostic(problems.StepOffJobHost, nil)
+		return nil, diagnostic(problems.StepOffJobHost, nil), false
 	case rs.SSH != nil:
-		return diagnostic(problems.SSHHostEmpty, nil), nil
+		return diagnostic(problems.SSHHostEmpty, nil), nil, false
 	}
-	return nil, nil
+	return nil, nil, false
 }
 
 // platformActions are the built-in actions only a platform provides: an

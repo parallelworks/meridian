@@ -139,17 +139,7 @@ func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, 
 		// stopped the step had it read the attempt's control first: the
 		// try ends as that stop ends it, and the worker does as the control
 		// asks from now on, as though it had read it.
-		switch child.Reason {
-		case "":
-			a.fire(a.anyJobFailed, nil)
-			cause = stopEarlyCancel
-		case plan.ReasonTimeout:
-			a.obey(&workerapi.Control{Cancel: true, Reason: child.Reason})
-			cause = stopJobTimeout
-		default:
-			a.obey(&workerapi.Control{Cancel: true, Reason: child.Reason})
-			cause = stopCancelled
-		}
+		cause = a.heedNotMade(child.Reason)
 	}
 	acted := child.Diagnostics
 	return called{
@@ -162,46 +152,61 @@ func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, 
 }
 
 // awaitChild waits for the end of the child of the step's try, key's, and
-// returns it, and why the worker stopped it, if it did: on the first of
-// the requests stopping sends, the try's stops, it asks the coordinator to
-// stop the child, for its reason, once, and waits on. A poll for its end
-// that fails for good stops it first, cancelled, if nothing has, so that
-// the child doesn't outlive the step that waits for it; one whose stop
-// fails too runs on until its attempt ends (docs/design.md, Stopping
-// it). It returns stopHalted once the attempt has ended without the
-// worker, or the worker is stopping, and the error of a request that
-// failed.
+// returns it, and why the worker stopped it, if it did, as awaitRun says.
 func (a *attempt) awaitChild(ctx context.Context, key logKey, stopping <-chan stopRequest) (stopCause, *workerapi.Child, error) {
+	return awaitRun(ctx, a, key, "child", stopping,
+		func(ctx context.Context) (*workerapi.Child, bool, error) {
+			child, err := a.client.childEnd(ctx, key.step, key.try)
+			return child, err == nil && child.Ended, err
+		},
+		func(ctx context.Context, reason plan.Reason) error {
+			return a.client.stopChild(ctx, &workerapi.ChildStop{Step: key.step, Try: key.try, Reason: reason})
+		})
+}
+
+// awaitRun waits for the end of a run that a step's try, key's, asked for,
+// its child or its step run, what names which, as poll gives it, polled
+// until it says it has ended, and returns it, and why the worker stopped
+// it, if it did: on the first of the requests stopping sends, the try's
+// stops, it stops it (stop), for its reason, once, and waits on. A poll
+// for its end that fails for good stops it first, cancelled, if nothing
+// has, so that the run doesn't outlive the step that waits for it; one
+// whose stop fails too runs on until its attempt ends (docs/design.md,
+// Stopping it). It returns stopHalted once the attempt has ended without
+// the worker, or the worker is stopping, and the error of a request that
+// failed.
+func awaitRun[T any](ctx context.Context, a *attempt, key logKey, what string, stopping <-chan stopRequest, poll func(context.Context) (T, bool, error), stop func(context.Context, plan.Reason) error) (stopCause, T, error) {
+	var zero T
 	pollCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type polled struct {
-		child *workerapi.Child
-		err   error
+		run T
+		err error
 	}
 	ended := make(chan polled, 1)
 	go func() {
 		for {
-			child, err := a.client.childEnd(pollCtx, key.step, key.try)
-			if err != nil || child.Ended {
-				ended <- polled{child, err}
+			run, done, err := poll(pollCtx)
+			if err != nil || done {
+				ended <- polled{run, err}
 				return
 			}
 		}
 	}()
 	cause := noStop
-	stop := func(reason plan.Reason) error {
-		a.log.Info("stopping a step's child", "step", key.step, "try", key.try, "reason", reason)
-		return a.client.stopChild(ctx, &workerapi.ChildStop{Step: key.step, Try: key.try, Reason: reason})
+	stopRun := func(reason plan.Reason) error {
+		a.log.Info("stopping a step's "+what, "step", key.step, "try", key.try, "reason", reason)
+		return stop(ctx, reason)
 	}
 	for {
 		select {
 		case req := <-stopping:
 			if req.cause == stopHalted {
-				return stopHalted, nil, nil
+				return stopHalted, zero, nil
 			}
 			if cause != noStop {
 				// A stop that comes sooner, as a deadline after a cancel,
-				// stops the child no more: it was asked to stop once.
+				// stops the run no more: it was asked to stop once.
 				continue
 			}
 			cause = req.cause
@@ -209,22 +214,22 @@ func (a *attempt) awaitChild(ctx context.Context, key logKey, stopping <-chan st
 			if cause == stopJobTimeout || cause == stopStepTimeout || cause == stopTryTimeout {
 				reason = plan.ReasonTimeout
 			}
-			if err := stop(reason); err != nil {
+			if err := stopRun(reason); err != nil {
 				if a.halted.fired() {
-					return stopHalted, nil, nil
+					return stopHalted, zero, nil
 				}
-				return cause, nil, err
+				return cause, zero, err
 			}
 		case p := <-ended:
 			if a.halted.fired() {
-				return stopHalted, nil, nil
+				return stopHalted, zero, nil
 			}
 			if p.err != nil && cause == noStop && !errors.Is(p.err, errFenced) && !errors.Is(p.err, errUnauthorized) {
-				if err := stop(plan.ReasonCancelled); err != nil {
-					a.log.Error("a step's child couldn't be stopped, so it runs on until its attempt ends", "step", key.step, "try", key.try, "error", a.mask.Mask(err.Error()))
+				if err := stopRun(plan.ReasonCancelled); err != nil {
+					a.log.Error("a step's "+what+" couldn't be stopped, so it runs on until its attempt ends", "step", key.step, "try", key.try, "error", a.mask.Mask(err.Error()))
 				}
 			}
-			return cause, p.child, p.err
+			return cause, p.run, p.err
 		}
 	}
 }
