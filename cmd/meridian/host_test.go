@@ -665,7 +665,9 @@ func waitReport(t *testing.T, path string) hostStubReport {
 }
 
 // hostPlacements returns the directory of the host's placements, which
-// meridian host's local backend keeps in its state directory.
+// meridian host's local backend keeps in its state directory. It and
+// reaped know that backend's private layout, <attempt>.exit beside each
+// placement, and change with it.
 func hostPlacements(env map[string]string) string {
 	return filepath.Join(env[local.EnvStateDir], "hosts", testHostKey, "placements")
 }
@@ -675,8 +677,9 @@ func hostPlacements(env map[string]string) string {
 // process, its parent, which records its exit status beside its
 // placement as it does. meridian host cancel returns once the worker has
 // ended, which can be before that, and forget, a call of its own, can't
-// wait for it: a status written once the test has ended, or forgotten
-// its placement, is in the way of the test's cleanup.
+// wait for it: a status written once forget has removed its placement
+// stays in the host's placements, and one written once the test has
+// ended is in the way of its cleanup.
 func reaped(t *testing.T, env map[string]string, attempt string) {
 	t.Helper()
 	exit := filepath.Join(hostPlacements(env), attempt+".exit")
