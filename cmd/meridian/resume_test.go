@@ -9,6 +9,7 @@ import (
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -143,7 +144,7 @@ func meridianProcess(t *testing.T, env map[string]string, args ...string) *proce
 		t.Fatal(err)
 	}
 	p := &process{cmd: exec.CommandContext(t.Context(), exe, args...)}
-	p.cmd.Env = []string{envMain + "=1", "PATH=" + os.Getenv("PATH")}
+	p.cmd.Env = []string{envMain + "=1", "PATH=" + os.Getenv("PATH"), racetest.Env(env["HOME"])}
 	for k, v := range env {
 		p.cmd.Env = append(p.cmd.Env, k+"="+v)
 	}

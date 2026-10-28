@@ -20,6 +20,7 @@ import (
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/sshdtest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 )
@@ -57,6 +58,9 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 		t.Skip("no ssh client to read the SSH config with")
 	}
 	h := &sshHost{home: t.TempDir()}
+	// A race that meridian host, or a worker it starts, reports there
+	// fails the test, once its workers are stopped.
+	racetest.Watch(t, h.home)
 	t.Cleanup(func() { h.stopWorkers(t) })
 	// The user's runtime directory on the host, short enough for its
 	// sockets.
@@ -86,6 +90,7 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 		"HOME=" + h.home, "XDG_RUNTIME_DIR=" + runtimeDir, envMain + "=1",
 		"XDG_CACHE_HOME=", "XDG_STATE_HOME=", "XDG_CONFIG_HOME=",
 		local.EnvCacheDir + "=", local.EnvStateDir + "=", local.EnvConfigDir + "=", "TMPDIR=",
+		racetest.Env(h.home),
 	}}
 	for _, f := range with {
 		f(&opts)

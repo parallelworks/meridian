@@ -27,6 +27,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -45,7 +46,9 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv(stubEnv); mode != "" {
 		os.Exit(stub(mode))
 	}
-	os.Exit(m.Run())
+	// A race that a stub worker reports fails the tests (racetest.Main): a
+	// worker's log goes once the driver forgets it.
+	os.Exit(racetest.Main(m))
 }
 
 // A report is what a stub worker was started with.
@@ -135,9 +138,14 @@ func stub(mode string) int {
 func newDriver(t testing.TB, mode string) (*Driver, string) {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "report.json")
+	// A race that a worker reports fails the test: it writes it to a file
+	// of the test's (racetest.Env), as its log goes once the driver forgets
+	// it.
+	dir := t.TempDir()
+	racetest.Watch(t, dir)
 	env := append(os.Environ(), stubEnv+"="+mode, reportEnv+"="+out, "MERIDIAN_LEAK=yes",
-		workerapi.EnvBootstrapToken+"=not-this-one", workerapi.EnvBootstrapTokenFile+"=/not/this/one")
-	return &Driver{State: filepath.Join(t.TempDir(), "state"), Environ: env}, out
+		workerapi.EnvBootstrapToken+"=not-this-one", workerapi.EnvBootstrapTokenFile+"=/not/this/one", racetest.Env(dir))
+	return &Driver{State: filepath.Join(dir, "state"), Environ: env}, out
 }
 
 // TestEnviron checks a worker's environment: its driver's, but the
