@@ -55,6 +55,29 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// parallelTests bounds how many of the package's tests that run in
+// parallel run at once, beside go test's -parallel: each runs meridian in
+// this process, with a coordinator, a store and the workers it starts, so
+// that a few at a time fill a runner's CPUs, and more only make each one's
+// waits longer.
+var parallelTests = make(chan struct{}, 4)
+
+// parallel has the test t run in parallel with the package's other tests
+// that do, as many at a time as parallelTests allows. A test whose subtests
+// run in parallel calls t.Parallel itself, and has its subtests call this:
+// a test that held a place while its subtests waited for theirs would hold
+// one they need.
+//
+// A test that sets the process's environment or working directory, which
+// meridian's processes and Git read, can't run in parallel, and doesn't
+// call it.
+func parallel(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	parallelTests <- struct{}{}
+	t.Cleanup(func() { <-parallelTests })
+}
+
 // runEnv is an environment with directories of a test's own: an empty
 // config directory, a state directory and a temporary directory.
 func runEnv(t *testing.T) map[string]string {
@@ -210,6 +233,7 @@ var timeOfDay = regexp.MustCompile(`(?m)^\d\d:\d\d:\d\d `)
 // log; and as -format json, JSON lines, and the command's problems as
 // problem details.
 func TestRunShows(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	r := runTest(t, env, nil, workflow)
@@ -263,6 +287,7 @@ run 1 finished: success$`)
 // and exits 0 once the run has ended, having let the coordinator's socket
 // go.
 func TestRunEnds(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	for _, want := range []string{"1", "2"} {
@@ -296,6 +321,7 @@ func TestRunEnds(t *testing.T) {
 // TestRunNamedDir checks -run-dir: a directory not there yet is made, and
 // one that is there is refused before the run is stored.
 func TestRunNamedDir(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	there := t.TempDir()
@@ -318,6 +344,7 @@ func TestRunNamedDir(t *testing.T) {
 // it is stored, as when something is at its path, ends failed with the
 // problem, so that nothing starts in what is there, and exits 2.
 func TestRunDirNotMade(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	dirs := local.Dirs{State: env[local.EnvStateDir]}
 	db, err := dirs.Database()
@@ -354,6 +381,7 @@ func TestRunDirNotMade(t *testing.T) {
 // input value that its input refuses through -input, as validate takes
 // one, exits 1, with its errors, and stores no run.
 func TestRunWorkflowErrors(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	r := runTest(t, env, nil, "--input", "cluster.size=5", writeFile(t, "w.yaml", groupInputs))
 	if r.code != exitInvalid || r.stdout != "" || !strings.Contains(r.stderr, "error:") || !strings.Contains(r.stderr, "(input_above_max)") {
@@ -368,6 +396,7 @@ func TestRunWorkflowErrors(t *testing.T) {
 // run at once, each a coordinator of the store, one of which at a time
 // holds the socket, and that each ends.
 func TestRunConcurrent(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	const runs = 3
@@ -394,6 +423,7 @@ func TestRunConcurrent(t *testing.T) {
 // when a script runs meridian run, leaves the run running, and exits 2,
 // saying how to pick it up.
 func TestRunDetaches(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	no := false
@@ -427,6 +457,7 @@ func TestRunServeMembersFails(t *testing.T) {
 // TestRunAsks checks that an interrupt in a terminal asks what to do: an
 // answer to leave the run running detaches, as another interrupt does.
 func TestRunAsks(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	yes := true
@@ -446,6 +477,7 @@ func TestRunAsks(t *testing.T) {
 // its step runs, cancels it: the step stops, and meridian run watches the
 // run to its end, cancelled, and exits 1.
 func TestRunAsksCancel(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    steps:\n      - run: sleep 60\n")
 	yes := true
@@ -476,6 +508,7 @@ func TestRunAsksCancel(t *testing.T) {
 
 // TestAsk checks the answers to what to do about an interrupted run.
 func TestAsk(t *testing.T) {
+	parallel(t)
 	for in, want := range map[string]string{
 		"c\n": "cancel", "cancel\n": "cancel", "L\n": "leave", "w\n": "watch", "\n": "watch", "what?\n": "watch",
 		"": "leave", "c": "cancel",
@@ -500,6 +533,7 @@ func TestAsk(t *testing.T) {
 // its socket, which it replaces when one that held it left it, and that
 // another takes it over once the first lets it go.
 func TestHoldSocket(t *testing.T) {
+	parallel(t)
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -586,6 +620,7 @@ func waitServed(t *testing.T, path string) {
 // TestSocketPathTooLong checks that a socket's path the system can't hold
 // is refused before a run is stored.
 func TestSocketPathTooLong(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	env[local.EnvStateDir] = filepath.Join(env[local.EnvStateDir], strings.Repeat("s", maxSocketPath))
 	r := runTest(t, env, nil, writeFile(t, "w.yaml", helloWorkflow))

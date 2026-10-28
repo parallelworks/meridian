@@ -22,6 +22,7 @@ const twoJobs = `jobs:
 // steps' logs, each line after its job and step, or one job's, or as JSON
 // lines; and a run, or a job, the store hasn't.
 func TestLogs(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	if r := commandTest(t, env, "logs", "1"); r.code != exitError || !strings.Contains(r.stderr, "(run_not_found)") || r.stdout != "" {
 		t.Errorf("meridian logs without a store = %+v", r)
@@ -66,6 +67,7 @@ func TestLogs(t *testing.T) {
 // as they are stored, at once; and with -f, as they are stored, until the
 // run ends.
 func TestLogsFollow(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow, release := waitingWorkflow(t)
 	running := startCommand(t, env, nil, "run", workflow)

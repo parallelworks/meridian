@@ -24,6 +24,7 @@ func credential(c byte) string {
 var testWorker = workerapi.Worker{Version: "v1.2.3", Digest: "sha256:00"}
 
 func TestAttempt(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	var a *Attempt
@@ -173,6 +174,7 @@ func second[T any](_ T, err error) error { return err }
 // one before's, which becomes its job's, and that an attempt a newer one
 // superseded can do nothing more.
 func TestFence(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	type started struct {
@@ -254,6 +256,7 @@ func TestFence(t *testing.T) {
 // TestNewToken checks that an attempt given a new token can't be claimed
 // with its old one.
 func TestNewToken(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -285,6 +288,7 @@ func TestNewToken(t *testing.T) {
 // itself lapses with its lease, by the store's clock, and that another's
 // doesn't.
 func TestLapse(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	creds := map[bool]string{true: credential('s'), false: credential('n')}
@@ -346,6 +350,7 @@ func TestLapse(t *testing.T) {
 // decision, a renewal, and a claim forget; and that a check a renewal
 // overtook records nothing.
 func TestCheckProblem(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	s := openClock(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), func() time.Time { return now })
 	id := createRun(t, s)

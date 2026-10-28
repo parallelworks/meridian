@@ -102,6 +102,7 @@ func wantProblem(t *testing.T, what string, status int, body []byte, code proble
 // stores a newer control, which no Notify of this one's says: the poll
 // reads the store again each second.
 func TestControlAcrossProcesses(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{hold: 20 * time.Second})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{})
@@ -159,6 +160,7 @@ func (p refusingPeers) Allows(context.Context, int, *store.Run) bool { return fa
 // and root's; and a peer that may not report on a run's attempts is
 // refused, 401, as one with no credential is.
 func TestPeers(t *testing.T) {
+	parallel(t)
 	if !(workerapisrv.LocalPeers{}).Accept(os.Getuid()) || !(workerapisrv.LocalPeers{}).Accept(0) {
 		t.Error("the local server doesn't take its own user's or root's requests")
 	}
@@ -241,6 +243,7 @@ func serveMember(t *testing.T, srv *workerapisrv.Server, key string) string {
 // run's directory on the member where it chose one. Connections that take
 // no deadlines are served all the same.
 func TestServeMember(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	member := newClient(t, serveMember(t, r.server, "ssh-aaaa"))
 	local := newClient(t, r.socket)
@@ -296,6 +299,7 @@ func TestServeMember(t *testing.T) {
 // the answer for a run of a plan the server doesn't read, which the
 // attempt's own member gets, and before its body is read.
 func TestServeMemberFirst(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetReads(s, 0) }})
 	member := newClient(t, serveMember(t, r.server, "ssh-aaaa"))
 	_, otherToken := r.newAttempt(r.newRun(nil), "build", placed{memberKey: "ssh-bbbb"})
@@ -319,6 +323,7 @@ func TestServeMemberFirst(t *testing.T) {
 // doesn't, is held to the time a request's headers have to arrive in all
 // the same: one that sends them slowly is closed.
 func TestServeMemberDeadlines(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetTimes(s, 200*time.Millisecond, time.Second) }})
 	socket := serveMember(t, r.server, "ssh-aaaa")
 	c, err := new(net.Dialer).DialContext(t.Context(), "unix", socket)
@@ -341,6 +346,7 @@ func TestServeMemberDeadlines(t *testing.T) {
 // A body larger than the API allows is refused, 413, and nothing of it is
 // stored.
 func TestBodyLimits(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	_, token := r.newAttempt(r.newRun(nil), "build", placed{})
@@ -367,6 +373,7 @@ func TestBodyLimits(t *testing.T) {
 // before its first step, with the problem, which its job's supervisor is
 // woken to place again.
 func TestDigestMismatch(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	run := r.newRun(nil)
@@ -411,6 +418,7 @@ func TestDigestMismatch(t *testing.T) {
 // attempt's is fenced, and stores nothing; the newer attempt's claim and
 // reports are stored.
 func TestSuperseded(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, run, credential := r.claimed(c, placed{})
@@ -452,6 +460,7 @@ func TestSuperseded(t *testing.T) {
 // run's secret record, sealed under the run's data key, and the rest with
 // the attempt: the run's record itself isn't sealed again.
 func TestCompletePrivate(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, run, credential := r.claimed(c, placed{})
@@ -533,6 +542,7 @@ func (r *rig) part(run, job string) (plan.JobRecord, uint64) {
 // in its report too, and so is a refusal of its claim; what the worker is
 // answered isn't.
 func TestPrivatePlacementMasked(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{private: true})
@@ -620,6 +630,7 @@ func TestPrivatePlacementMasked(t *testing.T) {
 // The server wakes a job's supervisor once its attempt is claimed, once a
 // step of it starts, and once it ends.
 func TestWake(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	_, run, credential := r.claimed(c, placed{})
@@ -650,6 +661,7 @@ func TestWake(t *testing.T) {
 // placed again, nor one for a reason the job's retry: lists, after which
 // it may be.
 func TestFailureNotifies(t *testing.T) {
+	parallel(t)
 	retriesTimeout := &store.Options{RetriesFor: func(_ *store.Tx, _ string, reason plan.Reason) bool { return reason == plan.ReasonTimeout }}
 	failed := time.Unix(1, 0).UTC()
 	for _, tc := range []struct {
@@ -736,6 +748,7 @@ func waitHeld(t *testing.T, s *workerapisrv.Server, id string, n int) {
 // A request that didn't come through Serve, whose listener says who a
 // connection is from, is refused.
 func TestNotThroughServe(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	rec := &recorder{header: http.Header{}}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, workerapi.PathHeartbeat, nil)

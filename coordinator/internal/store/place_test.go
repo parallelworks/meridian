@@ -13,6 +13,7 @@ import (
 // TestPinReady checks that what a job is first readied with is pinned:
 // later calls give it again, whatever they are given.
 func TestPinReady(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -48,6 +49,7 @@ func TestPinReady(t *testing.T) {
 
 // TestWake checks that waking a job counts, and gives its supervisor.
 func TestWake(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -74,6 +76,7 @@ var testPlace = Place{Group: "g", Member: "m", Backend: "local"}
 // backend is asked, once, in the clear or sealed, and that it starts its
 // job's tries at placing again.
 func TestChoosePlace(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -214,6 +217,7 @@ func TestChoosePlace(t *testing.T) {
 // TestSetupFailures checks that a job's setup failures are given in the
 // order of its attempts, with their problems, and its latest attempt.
 func TestSetupFailures(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	kinds := []*problems.Kind{problems.IsolationNotBuilt, problems.RunDirUnusable}
@@ -260,6 +264,7 @@ func TestSetupFailures(t *testing.T) {
 // failure before a step started: of its attempt that hasn't ended, or of
 // one made for the record; and starts its tries at placing again.
 func TestPlaceFailed(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	p := problems.PlacementUnanswered.Problem(problems.Params{"job": "build", "tries": 10})
@@ -318,6 +323,7 @@ func TestPlaceFailed(t *testing.T) {
 // running, isn't superseded; and that Unplaced tells an attempt whose
 // placement isn't recorded from one whose is.
 func TestNewAttemptAfter(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	n := NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10}
@@ -365,6 +371,7 @@ func TestNewAttemptAfter(t *testing.T) {
 // TestJobDiagnostics checks that a job's problems are kept with how it
 // ended, and read only as the store writes them.
 func TestJobDiagnostics(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	d := problems.GroupUnknown.At("", problems.Position{}, "/jobs/build", problems.Params{"group": "gpu"})

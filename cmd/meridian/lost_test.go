@@ -37,6 +37,8 @@ const killedStep = `      - run: |
 // The coordinator's timing is scaled only in a process of its own, so the
 // test runs itself again with testtiming.EnvScale.
 func TestWorkerKilled(t *testing.T) {
+	// Its subtests run in a process of their own, as t.Parallel has them.
+	parallel(t)
 	if testtiming.Scale == 0 {
 		exe, err := os.Executable()
 		if err != nil {

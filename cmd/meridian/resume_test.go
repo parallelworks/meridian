@@ -59,6 +59,7 @@ func createdRun(t *testing.T, env map[string]string, workflow string) (string, s
 // and coordinates it to its end, as meridian run does; and takes up a run
 // that has ended, showing it, from its first event, to its end.
 func TestResume(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	id, dir := createdRun(t, env, writeFile(t, "w.yaml", helloWorkflow))
 	r := commandTest(t, env, "resume", id)
@@ -98,6 +99,7 @@ func TestResume(t *testing.T) {
 // private directory any more isn't taken up, and that one that hasn't
 // started, which nothing has run in, ends failed with what is wrong.
 func TestResumeRunDir(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	id, dir := createdRun(t, env, writeFile(t, "w.yaml", helloWorkflow))
 	if err := os.Chmod(dir, 0o755); err != nil {
@@ -163,6 +165,7 @@ func meridianProcess(t *testing.T, env map[string]string, args ...string) *proce
 // keeps what its step writes until a coordinator holds the socket again,
 // and the run ends, its step's log whole.
 func TestResumeKilled(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow, release := waitingWorkflow(t)
 	killed := meridianProcess(t, env, "run", "--format", "json", workflow)

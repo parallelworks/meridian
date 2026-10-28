@@ -18,6 +18,7 @@ import (
 // and end cancelled, and exits 1; and meridian cancel -f of a run another
 // process coordinates shows it to its end, and exits 0.
 func TestCancelFollowed(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	for _, follow := range []bool{false, true} {
 		workflow, _ := waitingWorkflow(t)
@@ -61,6 +62,7 @@ func TestCancelFollowed(t *testing.T) {
 // stop ended it, and with -f shows the run to its end, rather than only
 // the end.
 func TestCancelRunEndingAtOnce(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	for _, follow := range []bool{false, true} {
 		workflow, _ := waitingWorkflow(t)
@@ -98,6 +100,7 @@ func TestCancelRunEndingAtOnce(t *testing.T) {
 // of the stop, and exits 0, having said so; and meridian status shows the
 // run stopping before then.
 func TestCancelUncoordinated(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow, _ := waitingWorkflow(t)
 	no := false
@@ -154,6 +157,7 @@ func TestCancelUncoordinated(t *testing.T) {
 // whose directory is no longer private, stores the stop, but doesn't
 // coordinate the run, as meridian resume doesn't take it up.
 func TestCancelRunDir(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow, _ := waitingWorkflow(t)
 	no := false
@@ -190,6 +194,7 @@ func TestCancelRunDir(t *testing.T) {
 // the run to its end, which the timeout has failed, and exits 1, as
 // meridian run would.
 func TestCancelAfterTimeout(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	release := filepath.Join(t.TempDir(), "release")
 	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
@@ -229,6 +234,7 @@ jobs:
 // says, and exits 0; of one that hasn't started, which ends cancelled at
 // once; and of one the store hasn't.
 func TestCancelEnded(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	if r := commandTest(t, env, "cancel", "1"); r.code != exitError || !strings.Contains(r.stderr, "(run_not_found)") || r.stdout != "" {
 		t.Errorf("meridian cancel without a store = %+v", r)

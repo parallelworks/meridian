@@ -63,6 +63,7 @@ func TestRunWithholdsSecrets(t *testing.T) {
 // when it can't keep the user's other processes out of its memory, where
 // runs' secret records are, or on a system where it can't.
 func TestRunHardens(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		err  error
 		code string

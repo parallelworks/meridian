@@ -34,6 +34,7 @@ func jsonLines(t *testing.T, out string) []map[string]any {
 // ended; one run, and its jobs, in each of those states, with how it ended;
 // each as text, and as JSON lines; and a run the store hasn't.
 func TestStatus(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	if r := commandTest(t, env, "status"); r.code != exitOK || r.stdout != "no runs\n" || r.stderr != "" {
 		t.Errorf("meridian status without a store = %+v", r)
@@ -148,6 +149,7 @@ $`)
 // still be running a workflow with it, left at an earlier version, and
 // leave it as it is, rather than bring it up to date.
 func TestStatusOlderStore(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	if r := runTest(t, env, nil, writeFile(t, "w.yaml", helloWorkflow)); r.code != exitOK {
 		t.Fatalf("meridian run = %+v", r)

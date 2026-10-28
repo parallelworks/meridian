@@ -10,6 +10,7 @@ import (
 // TestRecentRuns checks the store's last runs, the newest first, each with
 // what a list of them shows, and a run's summary on its own.
 func TestRecentRuns(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	p := testPlan(t)
 	for range 3 {

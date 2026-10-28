@@ -39,6 +39,7 @@ func runCLI(t *testing.T, vars map[string]string, stdin string, args ...string) 
 // (GOFIPS140=certified, as make sets it) for the commands of the other
 // tests to run.
 func TestFIPSRequired(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct{ mode, module, code string }{
 		{"off", "v1.0.0", "fips_not_enforced"},
 		{"on", "v1.0.0", "fips_not_enforced"},
@@ -63,6 +64,7 @@ func TestFIPSRequired(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
+	parallel(t)
 	r := runCLI(t, nil, "")
 	if r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "usage: meridian <command>") {
 		t.Errorf("meridian with no command = %+v", r)
@@ -83,6 +85,7 @@ func TestUsage(t *testing.T) {
 // TestCommandsAreTheDesigns checks that the command has the commands
 // docs/design.md's table names, in its order.
 func TestCommandsAreTheDesigns(t *testing.T) {
+	parallel(t)
 	var names []string
 	for _, cmd := range commands {
 		names = append(names, cmd.name)
@@ -94,6 +97,7 @@ func TestCommandsAreTheDesigns(t *testing.T) {
 }
 
 func TestNotBuilt(t *testing.T) {
+	parallel(t)
 	for _, cmd := range commands {
 		if cmd.run != nil {
 			continue
@@ -110,6 +114,7 @@ func TestNotBuilt(t *testing.T) {
 // any other is unexpected_error, with its text as the reason, as text and
 // as problem details.
 func TestFail(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		err  error
 		json bool
@@ -136,6 +141,7 @@ func TestFail(t *testing.T) {
 }
 
 func TestUnknownCommand(t *testing.T) {
+	parallel(t)
 	r := runCLI(t, nil, "", "valdate", "w.yaml")
 	if want := "meridian: error: There is no command \"valdate\". Did you mean \"validate\"? (command_unknown)\n"; r.code != exitError || r.stderr != want {
 		t.Errorf("meridian valdate = %+v, want %q", r, want)
@@ -147,6 +153,7 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestHelpCommand(t *testing.T) {
+	parallel(t)
 	r := runCLI(t, nil, "", "help", "validate")
 	if r.code != exitOK || !strings.Contains(r.stdout, "usage: meridian validate <workflow> [options]") || !strings.Contains(r.stdout, "-inputs file") {
 		t.Errorf("meridian help validate = %+v", r)
@@ -191,6 +198,7 @@ func TestHelpCommand(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
+	parallel(t)
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		r := runCLI(t, nil, "", args...)
 		if r.code != exitOK {
@@ -208,6 +216,7 @@ func TestVersion(t *testing.T) {
 }
 
 func TestParseFlags(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		args       []string
 		positional []string
@@ -238,6 +247,7 @@ func TestParseFlags(t *testing.T) {
 // TestUsageProblems checks that each problem with the command's arguments
 // is a kind, with its code, on standard error.
 func TestUsageProblems(t *testing.T) {
+	parallel(t)
 	for _, tc := range []struct {
 		args []string
 		code string
