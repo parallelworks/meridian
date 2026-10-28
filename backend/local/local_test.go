@@ -27,6 +27,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -569,7 +570,7 @@ func TestRecycledPID(t *testing.T) {
 		{"rebooted", mustStart(t, pid), boot + "-before", backend.Dead},
 	} {
 		r := &record{PID: pid, Start: tc.start, Boot: tc.boot}
-		if err := d.writeFile(d.path(tc.attempt, ".json"), mustMarshal(r)); err != nil {
+		if err := safepath.WriteFile(d.path(tc.attempt, ".json"), mustMarshal(r)); err != nil {
 			t.Fatal(err)
 		}
 		p := backend.Placement{Attempt: tc.attempt, ID: r.id()}
@@ -814,7 +815,7 @@ func TestLiveIndex(t *testing.T) {
 	pid := running.Process.Pid
 	put := func(attempt string, r *record, live bool, age time.Duration) {
 		t.Helper()
-		if err := d.writeFile(d.path(attempt, ".json"), mustMarshal(r)); err != nil {
+		if err := safepath.WriteFile(d.path(attempt, ".json"), mustMarshal(r)); err != nil {
 			t.Fatal(err)
 		}
 		log := filepath.Join(d.State, workersDir, attempt+".log")

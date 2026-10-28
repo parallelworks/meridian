@@ -36,7 +36,6 @@
 package ssh
 
 import (
-	"container/list"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -55,6 +54,7 @@ import (
 	"github.com/parallelworks/meridian/backend/ssh/internal/hostbin"
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/lru"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -116,46 +116,27 @@ const maxPlaced = 4096
 // placedAttempts are attempts, each with the tag of the host it is on,
 // in the order they were last kept.
 type placedAttempts struct {
-	order *list.List
-	by    map[string]*list.Element
+	tags lru.Cache[string, string]
 }
-
-// A placedAttempt is one of placedAttempts.
-type placedAttempt struct{ attempt, tag string }
 
 // keep keeps the attempt on the host tagged tag, as the last kept, and
 // forgets the one kept longest ago if there are more than most.
 func (pa *placedAttempts) keep(attempt, tag string, most int) {
-	if pa.by == nil {
-		pa.order, pa.by = list.New(), map[string]*list.Element{}
-	}
-	if e, ok := pa.by[attempt]; ok {
-		e.Value = placedAttempt{attempt, tag}
-		pa.order.MoveToBack(e)
-		return
-	}
-	pa.by[attempt] = pa.order.PushBack(placedAttempt{attempt, tag})
-	for pa.order.Len() > most {
-		oldest := pa.order.Front()
-		delete(pa.by, pa.order.Remove(oldest).(placedAttempt).attempt) //nolint:forcetypeassert // the list holds only placedAttempts
+	pa.tags.Put(attempt, tag)
+	for pa.tags.Len() > most {
+		pa.tags.RemoveOldest()
 	}
 }
 
 // tag returns the tag of the host the attempt is on, and false for one it
 // doesn't keep.
 func (pa *placedAttempts) tag(attempt string) (string, bool) {
-	if e, ok := pa.by[attempt]; ok {
-		return e.Value.(placedAttempt).tag, true //nolint:forcetypeassert // the list holds only placedAttempts
-	}
-	return "", false
+	return pa.tags.Peek(attempt)
 }
 
 // forget forgets the attempt.
 func (pa *placedAttempts) forget(attempt string) {
-	if e, ok := pa.by[attempt]; ok {
-		pa.order.Remove(e)
-		delete(pa.by, attempt)
-	}
+	pa.tags.Remove(attempt)
 }
 
 // targetOf returns the host a member's settings, format 1's ssh: keys,

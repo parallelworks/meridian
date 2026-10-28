@@ -51,8 +51,8 @@ func TestPlanCache(t *testing.T) {
 	}
 	_, _ = c.get(runs[1])
 	_, _ = c.get(runs[2])
-	if c.order.Len() != 2 || c.runs["1"] != nil {
-		t.Errorf("the cache holds %d plans, of %v, want the 2 last used", c.order.Len(), c.runs)
+	if _, ok := c.runs.Peek("1"); c.runs.Len() != 2 || ok {
+		t.Errorf("the cache holds %d plans, run 1's among them %v, want the 2 last used", c.runs.Len(), ok)
 	}
 	if c.bytes != int64(len(runs[1].Plan)+len(runs[2].Plan)) {
 		t.Errorf("the cache counts %d bytes", c.bytes)
@@ -71,12 +71,12 @@ func TestPlanCache(t *testing.T) {
 	c = newPlanCache(10, int64(len(runs[0].Plan)))
 	_, _ = c.get(runs[0])
 	_, _ = c.get(runs[2])
-	if c.order.Len() != 1 || c.runs["3"] == nil {
-		t.Errorf("the cache holds %v", c.runs)
+	if _, ok := c.runs.Peek("3"); c.runs.Len() != 1 || !ok {
+		t.Errorf("the cache holds %d plans, run 3's among them %v", c.runs.Len(), ok)
 	}
 	small := newPlanCache(10, 1)
-	if p, err := small.get(runs[0]); err != nil || p == nil || small.order.Len() != 0 {
-		t.Errorf("a plan larger than the cache: %v, %v, %d kept", p, err, small.order.Len())
+	if p, err := small.get(runs[0]); err != nil || p == nil || small.runs.Len() != 0 {
+		t.Errorf("a plan larger than the cache: %v, %v, %d kept", p, err, small.runs.Len())
 	}
 
 	// A plan of another version is told without decoding it, and one
@@ -86,7 +86,8 @@ func TestPlanCache(t *testing.T) {
 		t.Errorf("get of a newer plan = %v, want plan.ErrVersion", err)
 	}
 	bad := &store.Run{ID: "5", Plan: []byte(`{"version":1}`), PlanVersion: plan.Version}
-	if _, err := c.get(bad); !errors.Is(err, plan.ErrMalformed) || c.runs["5"] != nil {
+	_, err = c.get(bad)
+	if _, kept := c.runs.Peek("5"); !errors.Is(err, plan.ErrMalformed) || kept {
 		t.Errorf("get of a plan that doesn't decode = %v", err)
 	}
 }

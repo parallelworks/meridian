@@ -11,7 +11,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
-	"github.com/parallelworks/meridian/internal/versiontest"
+	"github.com/parallelworks/meridian/internal/apiversion"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -261,7 +261,7 @@ func TestForeignAttemptFenced(t *testing.T) {
 
 // The server reads and writes every body of an attempt at the attempt's
 // version of the worker API, through workerapi.CheckVersion, with members
-// made a later version's than this one (versiontest): of an attempt of
+// made a later version's than this one (apiversion): of an attempt of
 // this version, it refuses events and an end that hold one, 400, and
 // stores none of them, and never sends one, as a control that asks one,
 // which it answers 500 instead; of an attempt of the later version, it
@@ -269,9 +269,9 @@ func TestForeignAttemptFenced(t *testing.T) {
 // bodies the members it sets would change.
 func TestGatePinned(t *testing.T) {
 	later := workerapi.Version + 1
-	t.Cleanup(versiontest.Set("Event.cleanup", later))
-	t.Cleanup(versiontest.Set("Control.anyJobFailed", later))
-	t.Cleanup(versiontest.Set("Complete.reason", later))
+	t.Cleanup(apiversion.SetSince("Event.cleanup", later))
+	t.Cleanup(apiversion.SetSince("Control.anyJobFailed", later))
+	t.Cleanup(apiversion.SetSince("Complete.reason", later))
 	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetSpeaks(s, later) }})
 	c := newClient(t, r.socket)
 	job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"}}}

@@ -14,7 +14,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
-	"github.com/parallelworks/meridian/internal/versiontest"
+	"github.com/parallelworks/meridian/internal/apiversion"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -22,7 +22,7 @@ import (
 
 // TestGatePinned checks that the worker sends and reads every body of an
 // attempt at the attempt's version of the API (workerapi.CheckVersion),
-// with members made a later version's than this one (versiontest). In an
+// with members made a later version's than this one (apiversion). In an
 // attempt of this version, events and an end that hold one are never
 // sent, but are reports it can't encode, and a claim or a control that
 // holds one is an answer it can't read; in an attempt of the later
@@ -31,7 +31,7 @@ import (
 func TestGatePinned(t *testing.T) {
 	later := workerapi.Version + 1
 	for _, member := range []string{"Event.cleanup", "Complete.reason", "Control.anyJobFailed", "Claim.retry"} {
-		t.Cleanup(versiontest.Set(member, later))
+		t.Cleanup(apiversion.SetSince(member, later))
 	}
 	for _, version := range []int{workerapi.Version, later} {
 		body := workerapi.Claim{

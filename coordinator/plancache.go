@@ -1,11 +1,11 @@
 package coordinator
 
 import (
-	"container/list"
 	"fmt"
 	"sync"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/internal/lru"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -28,19 +28,18 @@ type planCache struct {
 	maxBytes int64
 
 	mu    sync.Mutex
-	order *list.List // of *planEntry, the most recently used first
-	runs  map[string]*list.Element
+	runs  lru.Cache[string, planEntry] // by run ID
 	bytes int64
 }
 
 type planEntry struct {
-	run, digest string
-	plan        *plan.Plan
-	size        int64
+	digest string
+	plan   *plan.Plan
+	size   int64
 }
 
 func newPlanCache(maxCount int, maxBytes int64) *planCache {
-	return &planCache{maxCount: maxCount, maxBytes: maxBytes, order: list.New(), runs: map[string]*list.Element{}}
+	return &planCache{maxCount: maxCount, maxBytes: maxBytes}
 }
 
 // get returns run's plan, decoded: from the cache, or by decoding it, which
@@ -53,13 +52,12 @@ func (c *planCache) get(run *store.Run) (*plan.Plan, error) {
 		return nil, fmt.Errorf("%w %d of run %s's plan; this release reads versions up to %d", plan.ErrVersion, run.PlanVersion, run.ID, plan.Version)
 	}
 	c.mu.Lock()
-	if e, ok := c.runs[run.ID]; ok {
-		if entry := e.Value.(*planEntry); entry.digest == run.PlanDigest {
-			c.order.MoveToFront(e)
+	if entry, ok := c.runs.Get(run.ID); ok {
+		if entry.digest == run.PlanDigest {
 			c.mu.Unlock()
 			return entry.plan, nil
 		}
-		c.remove(e)
+		c.remove(run.ID)
 	}
 	c.mu.Unlock()
 
@@ -73,21 +71,21 @@ func (c *planCache) get(run *store.Run) (*plan.Plan, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e, ok := c.runs[run.ID]; ok {
-		// Another call decoded it meanwhile.
-		c.remove(e)
-	}
-	c.runs[run.ID] = c.order.PushFront(&planEntry{run: run.ID, digest: run.PlanDigest, plan: p, size: size})
+	// Another call may have decoded it meanwhile.
+	c.remove(run.ID)
+	c.runs.Put(run.ID, planEntry{digest: run.PlanDigest, plan: p, size: size})
 	c.bytes += size
-	for c.order.Len() > c.maxCount || c.bytes > c.maxBytes {
-		c.remove(c.order.Back())
+	for c.runs.Len() > c.maxCount || c.bytes > c.maxBytes {
+		_, entry, _ := c.runs.RemoveOldest()
+		c.bytes -= entry.size
 	}
 	return p, nil
 }
 
-// remove removes the entry e. The cache's lock is held.
-func (c *planCache) remove(e *list.Element) {
-	entry := c.order.Remove(e).(*planEntry)
-	delete(c.runs, entry.run)
-	c.bytes -= entry.size
+// remove removes the entry of the run ID run, if there is one. The cache's
+// lock is held.
+func (c *planCache) remove(run string) {
+	if entry, ok := c.runs.Remove(run); ok {
+		c.bytes -= entry.size
+	}
 }

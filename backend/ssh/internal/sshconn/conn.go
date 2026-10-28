@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/parallelworks/meridian/internal/backoff"
 )
 
 // What a connection does by default: how often it asks its host whether
@@ -453,11 +454,7 @@ func (p *Pool) dial(ctx context.Context, e *entry, t Target) {
 // redialAfter is how long to wait before dialing again after failures
 // failures in a row.
 func redialAfter(failures int) time.Duration {
-	d := redialMost
-	if failures < 6 {
-		d = min(redialFirst<<(failures-1), redialMost)
-	}
-	return d - rand.N(d/4+1) //nolint:gosec // jitter, not a secret
+	return backoff.Jitter(backoff.Exponential(redialFirst, redialMost, failures-1))
 }
 
 // Close closes every connection of the pool's, ends the dials going on,
