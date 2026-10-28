@@ -1,0 +1,40 @@
+on:
+  execute:
+    inputs:
+      timeout:
+        type: string
+        default: "-1"
+jobs:
+  main:
+    ssh:
+      remoteHost: login.example.org
+      disconnect-timeout: 300
+    steps:
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: -1
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: -5m
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: -2d
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: 5m
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: ${{ inputs.timeout }}
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: -1h30m
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: 300ms

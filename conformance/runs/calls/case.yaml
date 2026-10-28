@@ -1,0 +1,18 @@
+description: >-
+  A step whose uses: names a workflow runs it as a run of its own, with the
+  step's with: as its inputs and the step's environment under its own, in
+  subworkflows/<job>/step_<n> under the step's run's directory, where the
+  step's job reads what it left. A step whose run fails fails, as a step
+  that fails does, and the job's steps after it don't run, but one whose
+  if: says so.
+source: Meridian
+repositories: [github/conformance/calls]
+expect:
+  run:
+    outcome: failure
+    jobs:
+      main:
+        outcome: failure
+        logs:
+          - {step: 1, text: "hello from the caller, as github.conformance.calls, where its caller looks\n"}
+          - {step: 4, text: "the call failed\n"}

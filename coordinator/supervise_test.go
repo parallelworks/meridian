@@ -255,6 +255,39 @@ jobs:
 	}
 }
 
+// TestJobSSHNoHost checks that a job whose format 1 ssh: gives an empty
+// remoteHost, as a workspace's empty address does, runs where it would
+// without its ssh:, on the run's default group, as format 1 runs it, and
+// keeps Ready's warning that says so, once, however it ends.
+func TestJobSSHNoHost(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	r := runToEnd(t, c, `
+on:
+  execute:
+    inputs:
+      ip:
+        type: string
+        default: ""
+jobs:
+  main:
+    ssh:
+      remoteHost: ${{ inputs.ip }}
+    steps:
+      - run: hostname
+`, nil)
+	j := storedJob(t, c, r.ID, "main")
+	if r.Outcome != plan.OutcomeSuccess || j.Outcome != plan.OutcomeSuccess {
+		t.Fatalf("the run ended with %s, and its job with %s, %v", r.Outcome, j.Outcome, j.Diagnostics)
+	}
+	if len(j.Diagnostics) != 1 || j.Diagnostics[0].Code != problems.JobSSHHostEmpty.Code() || j.Diagnostics[0].Path() != "/jobs/main/ssh" {
+		t.Errorf("the job's problems are %v", j.Diagnostics)
+	}
+	if _, members := driverOf(c).requests(); !slices.Equal(members, []string{"m1"}) {
+		t.Errorf("the job was placed on %v, want the default group's m1", members)
+	}
+}
+
 // TestPlacementImpossible checks that a job no member can run fails, with
 // placement_impossible and each member's reason.
 func TestPlacementImpossible(t *testing.T) {

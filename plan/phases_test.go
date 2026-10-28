@@ -732,6 +732,64 @@ jobs:
 	}
 }
 
+// A job whose ssh: gives a remoteHost that is empty or null runs where it
+// would without its ssh:, as format 1 runs it: where its runs-on: says, or
+// the run's default group, with a warning (job_ssh_host_empty). One whose
+// ssh: names a host runs on it.
+func TestReadyNoRemoteHost(t *testing.T) {
+	p := compiled(t, `
+on:
+  execute:
+    inputs:
+      ip:
+        type: string
+        default: ""
+jobs:
+  empty:
+    ssh:
+      remoteHost: ${{ inputs.ip }}
+      remoteUser: alice
+    steps: [{run: "true"}]
+  null:
+    runs-on: ${{ 'gpus' }}
+    ssh:
+      remoteHost: ${{ fromJSON('null') }}
+    steps: [{run: "true"}]
+  named:
+    ssh:
+      remoteHost: ${{ inputs.ip || 'login' }}
+    steps: [{run: "true"}]
+`, nil)
+	run := runValues(t, p, nil)
+	for name, want := range map[string]struct {
+		target string
+		warned bool
+	}{
+		"empty": {`{}`, true},
+		"null":  {`{"group":"gpus"}`, true},
+		"named": {`{"inline":{"name":"ssh","backend":"ssh","isolation":"host","ssh":{"remoteHost":"login"}}}`, false},
+	} {
+		r, diags, err := p.Ready(t.Context(), name, plan.ReadyInput{Run: run})
+		if err != nil || diags.HasErrors() || r.Job == nil {
+			t.Fatalf("%s: %+v, %v, %v", name, r, diags, err)
+		}
+		data, err := json.Marshal(r.Job.Target, json.Deterministic(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want.target {
+			t.Errorf("%s runs on %s, want %s", name, data, want.target)
+		}
+		var warned []string
+		for _, d := range diags {
+			warned = append(warned, string(d.Code)+" "+d.Path())
+		}
+		if w := []string{"job_ssh_host_empty /jobs/" + name + "/ssh"}; want.warned != slices.Equal(warned, w) || !want.warned && len(warned) > 0 {
+			t.Errorf("%s warns %v", name, warned)
+		}
+	}
+}
+
 // A value that doesn't fit its key is a problem with the job, which shows
 // the value unless it was made from a variable or a password.
 func TestReadyProblems(t *testing.T) {

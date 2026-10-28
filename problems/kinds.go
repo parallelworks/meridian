@@ -211,6 +211,17 @@ var (
 	OlderAlways                = define(Warning, "older_always", "Older spelling of always()")
 	ReplacedKeyword            = define(Warning, "replaced_keyword", "Replaced if: keyword", "word", "text", "replacement")
 	ValueTooDeep               = define(Error, "value_too_deep", "Value nests too deeply", "max")
+	// SSHDisconnectTimeoutIgnored is a format 1 ssh:'s disconnect-timeout
+	// that isn't negative, which Meridian doesn't honour: a step keeps
+	// running through a lost connection to its host, as format 1 runs one
+	// with a negative disconnect-timeout. value is the key's value, as the
+	// workflow writes it.
+	SSHDisconnectTimeoutIgnored = define(Warning, "ssh_disconnect_timeout_ignored", "disconnect-timeout not honoured", "value")
+	// SSHDisconnectTimeoutInvalid is a format 1 ssh:'s disconnect-timeout
+	// that format 1 can't read, as 1h30m, for which it fails the step:
+	// Meridian ignores the key, and runs it. value is the key's value, as
+	// the workflow writes it.
+	SSHDisconnectTimeoutInvalid = define(Warning, "ssh_disconnect_timeout_invalid", "disconnect-timeout format 1 can't read", "value")
 )
 
 // Creating and starting a run: what the caller gives the compiler, and
@@ -283,6 +294,10 @@ var (
 	MatrixTooLarge        = define(Error, "matrix_too_large", "Matrix with too many combinations", "limit")
 	OutputNotWritten      = define(Error, "output_not_written", "Output that nothing wrote", "of", "owner", "name")
 	WorkingDirectoryVar   = define(Error, "working_directory_variable", "Shell variable in a working directory", "variable")
+	// JobSSHHostEmpty is a job whose format 1 ssh: gives a remoteHost that
+	// is empty or null, which runs where it would without its ssh:, as
+	// format 1 runs it. Ready reports it, and the job's problems keep it.
+	JobSSHHostEmpty = define(Warning, "job_ssh_host_empty", "Job's ssh: names no host")
 )
 
 // Parsing an expression.
@@ -360,21 +375,45 @@ var (
 	CancelJobsJobUnknown  = define(Warning, "cancel_jobs_job_unknown", "Job a step can't cancel", "job", "suggested", "suggestion")
 	CancelJobsOtherRun    = define(Error, "cancel_jobs_other_run", "Cancel of another run's jobs", "key")
 	CancelJobsRunMissing  = define(Error, "cancel_jobs_run_missing", "Cancel of a workflow's run without its number")
-	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
-	StepOffJobHost        = define(Error, "step_off_job_host", "Step to run off its job's host")
-	SSHHostEmpty          = define(Warning, "ssh_host_empty", "Step's ssh: names no host")
-	StepNotStarted        = define(Error, "step_not_started", "Step's command not started", "reason")
-	EvaluationFailed      = define(Error, "evaluation_failed", "Step or job the worker couldn't evaluate")
-	WorkerDirUnusable     = define(Error, "worker_dir_unusable", "No directory of the worker's own for a step's files", "path", "code")
-	ShellNotSupported     = define(Error, "shell_not_supported", "Shell format 1 doesn't run", "shell")
-	StepTimedOut          = define(Error, "step_timed_out", "Step ran past its timeout", "limit")
-	OutputsTooLarge       = define(Error, "outputs_too_large", "Step's outputs too large", "size", "limit")
-	OutputsLineTooLong    = define(Warning, "outputs_line_too_long", "Line of $OUTPUTS too long", "limit")
-	OutputsNotUTF8        = define(Warning, "outputs_not_utf8", "Outputs that aren't UTF-8", "name", "count")
-	OutputsNotFile        = define(Error, "outputs_not_file", "$OUTPUTS isn't a file")
-	OutputsRemoved        = define(Warning, "outputs_removed", "$OUTPUTS removed as the step ran")
-	LogNotKept            = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")
-	ReportNotEncoded      = define(Error, "report_not_encoded", "Report the worker couldn't encode")
+	ChildRequestFailed    = define(Error, "child_request_failed", "Request to the coordinator for a called workflow's run that failed", "uses", "reason")
+	ChildDirUnusable      = define(Error, "child_dir_unusable", "Called workflow's directory the worker couldn't make", "dir", "reason")
+	// CheckoutPathNotFound is an entry of a parallelworks/checkout step's
+	// with: sparse_checkout, path, that names nothing in the commit the
+	// step was pinned to; CheckoutSubmodules a checkout of all of the
+	// repository repo, as the step writes it, which has submodules;
+	// CheckoutTooLarge one whose files come to size bytes, more than
+	// limit, and CheckoutTooMany one with count entries, more than limit;
+	// and CheckoutUnavailable one whose commit, of repo, the coordinator
+	// couldn't read, for reason. The coordinator answers them as the step
+	// asks for its action, and the worker for a tree that says otherwise.
+	CheckoutPathNotFound = define(Warning, "checkout_path_not_found", "Sparse checkout entry that names nothing", "path")
+	CheckoutSubmodules   = define(Error, "checkout_submodules", "Whole checkout of a repository with submodules", "repo")
+	CheckoutTooLarge     = define(Error, "checkout_too_large", "Checkout too large", "size", "limit")
+	CheckoutTooMany      = define(Error, "checkout_too_many", "Checkout with too many entries", "count", "limit")
+	CheckoutUnavailable  = define(Error, "checkout_unavailable", "Checkout's commit that couldn't be read", "repo", "commit", "reason")
+	// CheckoutUnsafe is a member of a checkout's tree, path, that the
+	// worker doesn't write, for reason: name, for one whose name leaves
+	// the step's directory, or is .git, link, for a symbolic link to .git,
+	// and type, for one that is neither a file, a directory nor a symbolic
+	// link; and CheckoutWriteFailed one
+	// the system refused to write, for reason.
+	CheckoutUnsafe      = define(Error, "checkout_unsafe", "Checkout's tree member the worker doesn't write", "path", "reason")
+	CheckoutWriteFailed = define(Error, "checkout_write_failed", "Checkout's tree member the worker couldn't write", "path", "reason")
+	StepSSHNotSupported = define(Error, "step_ssh_not_supported", "Step on another host")
+	StepOffJobHost      = define(Error, "step_off_job_host", "Step to run off its job's host")
+	SSHHostEmpty        = define(Warning, "ssh_host_empty", "Step's ssh: names no host")
+	StepNotStarted      = define(Error, "step_not_started", "Step's command not started", "reason")
+	EvaluationFailed    = define(Error, "evaluation_failed", "Step or job the worker couldn't evaluate")
+	WorkerDirUnusable   = define(Error, "worker_dir_unusable", "No directory of the worker's own for a step's files", "path", "code")
+	ShellNotSupported   = define(Error, "shell_not_supported", "Shell format 1 doesn't run", "shell")
+	StepTimedOut        = define(Error, "step_timed_out", "Step ran past its timeout", "limit")
+	OutputsTooLarge     = define(Error, "outputs_too_large", "Step's outputs too large", "size", "limit")
+	OutputsLineTooLong  = define(Warning, "outputs_line_too_long", "Line of $OUTPUTS too long", "limit")
+	OutputsNotUTF8      = define(Warning, "outputs_not_utf8", "Outputs that aren't UTF-8", "name", "count")
+	OutputsNotFile      = define(Error, "outputs_not_file", "$OUTPUTS isn't a file")
+	OutputsRemoved      = define(Warning, "outputs_removed", "$OUTPUTS removed as the step ran")
+	LogNotKept          = define(Warning, "log_not_kept", "Log not kept whole", "size", "limit")
+	ReportNotEncoded    = define(Error, "report_not_encoded", "Report the worker couldn't encode")
 )
 
 // The coordinator's problems with a run, which fail it: run is the run's

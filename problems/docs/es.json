@@ -693,6 +693,59 @@
       "Nombra cada archivo o directorio que descargar por su ruta desde la raíz del repositorio, sin patrones."
     ]
   },
+  "checkout_path_not_found": {
+    "title": "Entrada de sparse checkout que no nombra nada",
+    "why": "Una entrada del sparse_checkout de un paso parallelworks/checkout no nombra ningún archivo ni directorio en el commit al que se fijó el paso al crear la ejecución. No se escribe nada para ella, como en el formato 1, y el paso continúa.",
+    "fix": [
+      "Comprueba la entrada contra el repositorio, en la branch que nombra el paso.",
+      "Quita una entrada que el repositorio ya no tiene."
+    ]
+  },
+  "checkout_submodules": {
+    "title": "Checkout completo de un repositorio con submódulos",
+    "why": "El formato 1 clona un repositorio completo con sus submódulos. Meridian aún no descarga submódulos, así que un parallelworks/checkout de un repositorio completo que tiene alguno falla, en vez de dejarlo vacío. Un sparse checkout deja vacíos los submódulos, como el del formato 1.",
+    "fix": [
+      "Descarga solo las rutas que necesita el job, con sparse_checkout.",
+      "Descarga el repositorio de un submódulo con un paso propio."
+    ]
+  },
+  "checkout_too_large": {
+    "title": "Checkout demasiado grande",
+    "why": "El árbol de un paso parallelworks/checkout llega al worker desde el coordinador, que lo lee del commit al que se fijó el paso. Meridian limita el tamaño de los archivos, en conjunto, de cada checkout.",
+    "fix": [
+      "Descarga solo las rutas que necesita el job, con sparse_checkout."
+    ]
+  },
+  "checkout_too_many": {
+    "title": "Checkout con demasiadas entradas",
+    "why": "El árbol de un paso parallelworks/checkout llega al worker desde el coordinador, que lo lee del commit al que se fijó el paso. Meridian limita cuántos directorios, archivos y enlaces escribe un checkout, para que ningún árbol agote los inodos de un host.",
+    "fix": [
+      "Descarga solo las rutas que necesita el job, con sparse_checkout."
+    ]
+  },
+  "checkout_unavailable": {
+    "title": "Commit del checkout que no se pudo leer",
+    "why": "El coordinador lee el commit al que se fijó un paso parallelworks/checkout al crear la ejecución desde su copia del repositorio, y lo vuelve a descargar si la copia no lo tiene, 5 veces, con 2, 4, 8 y 16 segundos entre ellas, como el formato 1 intenta un clon. No se pudo acceder al repositorio, o ya no tiene el commit, como después de reescribir una branch. El retry: del paso puede volver a intentarlo.",
+    "fix": [
+      "Comprueba que se puede acceder al repositorio desde donde se ejecuta Meridian, con tus credenciales.",
+      "Si se reescribió la branch, vuelve a ejecutar el flujo de trabajo, que la fija de nuevo."
+    ]
+  },
+  "checkout_unsafe": {
+    "title": "Miembro del árbol del checkout que el worker no escribe",
+    "why": "El worker escribe el árbol de un paso parallelworks/checkout solo dentro del directorio que nombra el paso, y solo lo que contiene un commit de Git: directorios, archivos y enlaces simbólicos, y ningún .git, ni un enlace a uno. Un miembro del árbol que sea otra cosa, o cuyo nombre salga de ese directorio, no lo hizo un commit, y el paso falla antes de que el worker lo escriba.",
+    "fix": [
+      "Informa del error, con el repositorio y el commit que descarga el paso."
+    ]
+  },
+  "checkout_write_failed": {
+    "title": "Escritura del árbol del checkout que falló",
+    "why": "El worker escribe el árbol de un paso parallelworks/checkout en el directorio que nombra el paso, su path: en su directorio de trabajo, fusionándolo con lo que hay allí, como lo copia el formato 1: un archivo del mismo nombre se reemplaza, y el resto se conserva. El sistema rechazó una de las escrituras. El retry: del paso puede volver a intentarlo.",
+    "fix": [
+      "Comprueba que el usuario del job puede escribir en el directorio.",
+      "Comprueba que el directorio no tiene un directorio donde el árbol tiene un archivo, ni un archivo donde tiene un directorio."
+    ]
+  },
   "expression_failed": {
     "title": "La expresión falló",
     "why": "Una expresión falló de una forma que Meridian no describe. Es un problema de Meridian.",
@@ -740,6 +793,21 @@
     "why": "Una ejecución se guarda como JSON, que se anida como máximo 10 000 niveles. Un valor cuenta los niveles que lo rodean en la ejecución, más o menos tantos como los que lo rodean en el flujo de trabajo. Un mapa cuya única clave empieza por $ cuenta como dos niveles, y una expresión cuenta los niveles de su forma analizada, como uno por cada operador y uno por cada lista o mapa que escribe. El límite es propio de Meridian y no forma parte del formato del flujo de trabajo.",
     "fix": [
       "Anida menos el valor."
+    ]
+  },
+  "ssh_disconnect_timeout_ignored": {
+    "title": "disconnect-timeout no respetado",
+    "why": "El formato 1 hace fallar un paso en un host una vez que su conexión con el host lleva perdida el tiempo de disconnect-timeout, 300 segundos por omisión, y nunca con uno negativo. Meridian ejecuta un worker en el host, que sigue ejecutando los pasos del trabajo mientras la conexión está perdida y los informa cuando vuelve, así que cada paso se ejecuta como pide un disconnect-timeout negativo.",
+    "fix": [
+      "Quita disconnect-timeout, o hazlo negativo, como -1.",
+      "Da al paso un timeout: para limitar cuánto tiempo se ejecuta."
+    ]
+  },
+  "ssh_disconnect_timeout_invalid": {
+    "title": "disconnect-timeout que el formato 1 no puede leer",
+    "why": "El formato 1 lee un disconnect-timeout como un número de segundos, o un número entero seguido de una de d, h, m o s, como 300, 5m o -1. No puede leer ningún otro, como 1h30m, 1.5h o 300ms, y hace fallar el paso en un host que tenga uno. Meridian no respeta la clave, así que ejecuta el paso de todos modos.",
+    "fix": [
+      "Quita disconnect-timeout, o escríbelo como lo lee el formato 1, como -1 para un paso que nunca se rinde con su host."
     ]
   },
   "runs_on_invalid": {
@@ -810,6 +878,13 @@
     "why": "Un directorio de trabajo se usa tal cual, y ningún shell expande las variables que contiene, así que $HOME o ${PW_JOB_DIR} serían un directorio con ese nombre. El formato 1 hace fallar el paso en su lugar.",
     "fix": [
       "Lee el valor con una expresión, como env.PW_JOB_DIR, o escribe la ruta completa."
+    ]
+  },
+  "job_ssh_host_empty": {
+    "title": "ssh: del trabajo sin host",
+    "why": "El ssh: de un trabajo del formato 1 ejecuta los pasos del trabajo en el host que indica su remoteHost. Uno vacío o nulo no indica ninguno, y el formato 1 ejecuta el trabajo donde se ejecutaría sin ssh:, con una nota en el registro de cada paso, lo que a menudo es un error, como una entrada que se dejó vacía. Meridian también lo ejecuta ahí, y guarda esta advertencia con el trabajo.",
+    "fix": [
+      "Da al ssh: un remoteHost, o quítalo para ejecutar el trabajo donde se ejecuta sin él."
     ]
   },
   "undefined_env": {
@@ -1127,6 +1202,22 @@
     "fix": [
       "Inicia workers de la misma versión de Meridian que el coordinador.",
       "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
+  "child_request_failed": {
+    "title": "Solicitud al coordinador de la ejecución de un flujo de trabajo llamado que falló",
+    "why": "Un paso cuyo uses: nombra un flujo de trabajo le pide al coordinador, a través de la API de workers, su ejecución, espera a que termine y la detiene cuando el paso se detiene. Una de esas solicitudes falló de forma definitiva: el coordinador la rechazó, o respondió con algo que el worker no puede leer, que la razón nombra por su código. Es un error del worker o del coordinador, o un worker y un coordinador de versiones que no coinciden en la API de workers, y no del flujo de trabajo. El paso falla y no se vuelve a intentar. Puede que la ejecución a la que llama se haya creado y siga en curso: su propio estado lo dice.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador.",
+      "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
+  "child_dir_unusable": {
+    "title": "Directorio de un flujo de trabajo llamado que el worker no pudo crear",
+    "why": "Una ejecución a la que llama un paso tiene un directorio propio, subworkflows/<job>/step_<n> bajo el directorio de trabajo del paso, como en el formato 1, donde se ejecutan sus pasos. El worker que ejecuta el paso lo crea antes de pedir la ejecución, un directorio cada vez desde el directorio de su ejecución raíz, y nunca sigue un enlace simbólico por el camino, que uno de los pasos de la propia ejecución podría haber dejado allí para poner el flujo de trabajo llamado en otro sitio: un enlace se rechaza como demasiados niveles de enlaces simbólicos, y un archivo que no es un directorio como que no es un directorio. Con clean-on-retry:, que es true salvo que el flujo de trabajo diga otra cosa, el worker elimina el directorio, con lo que contiene, antes de cada intento después del primero, y tampoco sigue allí ningún enlace. El paso falla y no se vuelve a intentar.",
+    "fix": [
+      "Elimina el enlace simbólico, o el archivo, que nombra la razón, o haz que los pasos de la ejecución no creen uno allí.",
+      "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
     ]
   },
   "cancel_jobs_job_unknown": {

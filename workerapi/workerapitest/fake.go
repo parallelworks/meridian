@@ -6,6 +6,7 @@
 package workerapitest
 
 import (
+	"archive/tar"
 	"bytes"
 	"crypto/sha256"
 	"fmt"
@@ -78,6 +79,10 @@ const (
 	// AckAhead answers events with an acknowledgement of events past
 	// those the worker sent.
 	AckAhead
+	// Cut handles the request, and answers with the first half of its
+	// answer's body, and closes the connection without the rest, as a
+	// coordinator whose tree's stream fails does.
+	Cut
 )
 
 // Refusal is the code of the problem a Fake refuses a request with for
@@ -141,6 +146,21 @@ type Fake struct {
 	// a repeat of the request as it answered the first. An answer's Reason
 	// stands for a cancel of the step's job the action made.
 	Act func(req workerapi.ActionRequest) workerapi.ActionAnswer
+	// Tree, if set, gives the tar stream the Fake answers a checkout's
+	// request for its tree with (workerapi.PathCheckout), once its action
+	// was answered success; without it, a tree with nothing in it.
+	Tree func(req workerapi.ActionRequest) []byte
+	// Child, if set, is called with each ask for a step's try's child that
+	// has none yet, with the Fake's lock held. It returns nil for the Fake
+	// to make it, child-1 and on, which runs until EndChild ends it; or the
+	// answer: a child the coordinator didn't make, which has ended, or, one
+	// with a Run, made, which has ended if it says so.
+	Child func(req workerapi.ChildRequest) *workerapi.Child
+	// OnChildStop, if set, is called with each stop of a child the Fake
+	// stores, with its lock held, and the child ends with the outcome it
+	// returns, as its run's stop ends it, unless that is "": then it runs
+	// on until EndChild ends it.
+	OnChildStop func(stop workerapi.ChildStop) plan.Outcome
 
 	t          testing.TB
 	mu         sync.Mutex
@@ -440,6 +460,16 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hangUp(w)
 		return
 	}
+	if flt == Cut {
+		maps.Copy(w.Header(), rec.Header())
+		w.Header().Del("Content-Length")
+		w.WriteHeader(rec.Code)
+		data := rec.Body.Bytes()
+		_, _ = w.Write(data[:len(data)/2])
+		_ = http.NewResponseController(w).Flush()
+		// Ends the answer without the end of its chunked body.
+		panic(http.ErrAbortHandler) //nolint:forbidigo // net/http's way to end an answer cut short, which it recovers
+	}
 	maps.Copy(w.Header(), rec.Header())
 	w.WriteHeader(rec.Code)
 	_, _ = w.Write(rec.Body.Bytes())
@@ -478,6 +508,7 @@ var routes = map[string]route{
 	workerapi.PathChild:     {http.MethodPost, workerapi.Version3},
 	workerapi.PathChildEnd:  {http.MethodGet, workerapi.Version3},
 	workerapi.PathChildStop: {http.MethodPost, workerapi.Version3},
+	workerapi.PathCheckout:  {http.MethodPost, workerapi.Version3},
 }
 
 // handle handles a request, and returns the events it stored.
@@ -539,6 +570,8 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		f.handleChildEnd(w, r)
 	case workerapi.PathChildStop:
 		f.handleChildStop(w, body)
+	case workerapi.PathCheckout:
+		f.handleCheckout(w, body)
 	}
 	return nil
 }
@@ -564,6 +597,18 @@ func (f *Fake) handleChild(w http.ResponseWriter, body []byte) {
 		f.children, f.ended = map[[2]int]string{}, map[string]workerapi.Child{}
 	}
 	id, ok := f.children[key]
+	if !ok && f.Child != nil {
+		if answer := f.Child(req); answer != nil {
+			if answer.Run != "" {
+				f.children[key] = answer.Run
+				if answer.Ended {
+					f.ended[answer.Run] = *answer
+				}
+			}
+			writeJSON(w, f.Claim.APIVersion, answer)
+			return
+		}
+	}
 	if !ok {
 		id = "child-" + strconv.Itoa(len(f.children)+1)
 		f.children[key] = id
@@ -624,11 +669,19 @@ func (f *Fake) handleChildStop(w http.ResponseWriter, body []byte) {
 		writeStatus(w, http.StatusBadRequest)
 		return
 	}
-	if _, ok := f.children[[2]int{stop.Step, stop.Try}]; !ok {
+	id, ok := f.children[[2]int{stop.Step, stop.Try}]
+	if !ok {
 		writeStatus(w, http.StatusNotFound)
 		return
 	}
 	f.childStops = append(f.childStops, stop)
+	if f.OnChildStop != nil {
+		if _, ended := f.ended[id]; !ended {
+			if outcome := f.OnChildStop(stop); outcome != "" {
+				f.ended[id] = workerapi.Child{Run: id, Ended: true, Outcome: outcome, Reason: stop.Reason}
+			}
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -931,6 +984,48 @@ func (f *Fake) handleAction(w http.ResponseWriter, body []byte) {
 	}
 	f.actions = append(f.actions, Action{Request: req, Answer: answer, body: canonical})
 	writeJSON(w, f.Claim.APIVersion, &answer)
+}
+
+// handleCheckout answers a checkout's request for its tree, the request
+// its action was answered success for, with Tree's, or a tree with nothing
+// in it: another request for the try, and one of a try whose action
+// wasn't answered success, is one it can't read, which no worker sends.
+func (f *Fake) handleCheckout(w http.ResponseWriter, body []byte) {
+	var req workerapi.ActionRequest
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &req); err != nil {
+		f.unexpected("a checkout's request for its tree the coordinator can't read: %v", err)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	canonical, err := workerapi.Marshal(&req)
+	if err != nil {
+		writeStatus(w, http.StatusInternalServerError)
+		return
+	}
+	i := slices.IndexFunc(f.actions, func(a Action) bool { return a.Request.Step == req.Step && a.Request.Try == req.Try })
+	switch {
+	case i >= 0 && !bytes.Equal(f.actions[i].body, canonical):
+		f.unexpected("a request for the tree of step %d's try %d that isn't its action's: %s, not %s", req.Step, req.Try, canonical, f.actions[i].body)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	case i < 0 || f.actions[i].Answer.Outcome != plan.OutcomeSuccess:
+		f.unexpected("a request for the tree of step %d's try %d, whose action wasn't answered success", req.Step, req.Try)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	tree := emptyTree()
+	if f.Tree != nil {
+		tree = f.Tree(req)
+	}
+	w.Header().Set("Content-Type", workerapi.CheckoutMediaType)
+	_, _ = w.Write(tree)
+}
+
+// emptyTree is a tar stream of nothing.
+func emptyTree() []byte {
+	var b bytes.Buffer
+	_ = tar.NewWriter(&b).Close()
+	return b.Bytes()
 }
 
 // hangUp closes the request's connection without answering it.

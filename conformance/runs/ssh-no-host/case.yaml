@@ -1,0 +1,15 @@
+description: >-
+  A job whose ssh: gives an empty remoteHost, as a workspace's empty
+  address does, runs where it would without its ssh:, as format 1 runs it,
+  and so do its steps: one whose own ssh: gives no remoteHost, whose log
+  notes so first, and one whose ssh: is null.
+source: ACTIVATE's executor, and Meridian
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, text: "here\n"}
+          - {step: 2, text: "none\n"}

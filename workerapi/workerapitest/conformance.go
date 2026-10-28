@@ -1,11 +1,13 @@
 package workerapitest
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -126,6 +128,7 @@ func Conformance(t *testing.T, target Target) {
 	t.Run("paths and methods", func(t *testing.T) { checkPaths(t, target) })
 	t.Run("actions", func(t *testing.T) { checkActions(t, target) })
 	t.Run("child runs", func(t *testing.T) { checkChildren(t, target) })
+	t.Run("checkouts", func(t *testing.T) { checkCheckout(t, target) })
 }
 
 // A worker is the suite's worker, for one attempt.
@@ -941,6 +944,7 @@ func checkPaths(t *testing.T, target Target) {
 		{http.MethodGet, workerapi.PathChild},
 		{http.MethodPost, workerapi.PathChildEnd},
 		{http.MethodGet, workerapi.PathChildStop},
+		{http.MethodGet, workerapi.PathCheckout},
 	} {
 		wantStatus(t, fmt.Sprintf("%s %s", r.method, r.path), w.send(r.method, r.path, nil, nil, w.credential), http.StatusMethodNotAllowed)
 	}
@@ -1156,6 +1160,70 @@ func checkChildren(t *testing.T, target Target) {
 	superseded := newWorker(t, target, newAttempt()).claimed()
 	target.Supersede(t, superseded.attemptID)
 	wantProblem(t, "an ask for a child once superseded", superseded.post(workerapi.PathChild, workerapi.ChildRequest{}), workerapi.Fenced)
+}
+
+// checkoutAttempt returns an attempt of a job whose step actionStep checks
+// out a repository, which has with: checkoutWith.
+func checkoutAttempt() Attempt {
+	a := newAttempt()
+	job := *a.Job
+	job.Steps = slices.Clone(job.Steps)
+	job.Steps[actionStep] = plan.Step{
+		Uses:     plan.CheckoutUses,
+		With:     plan.Literal(map[string]any{"repo": "https://example.com/" + marker + ".git", "branch": "main"}),
+		Checkout: &plan.Checkout{Repo: "https://example.com/" + marker + ".git", Revision: "main", Commit: "0123456789abcdef0123456789abcdef01234567"},
+		Path:     job.Steps[actionStep].Path,
+	}
+	a.Job = &job
+	return a
+}
+
+// checkoutWith is the with: of checkoutAttempt's checkout, as Step
+// evaluates it.
+func checkoutWith() plan.Data {
+	return plan.DataOf(map[string]any{"repo": "https://example.com/" + marker + ".git", "branch": "main"})
+}
+
+// A checkout step's try reads its tree at version 3 of the API, once its
+// action was answered success, with the same request: answered with a tar
+// stream, and so is a repeat of it. One of a try whose action wasn't asked
+// for, and another request for the try, is 400; any once the attempt is
+// superseded is fenced; and the path is one an attempt of version 2
+// doesn't have, 404.
+func checkCheckout(t *testing.T, target Target) {
+	old := newWorker(t, target, checkoutAttempt())
+	old.apiVersion = workerapi.Version2
+	old.claimed()
+	wantStatus(t, "a checkout's tree of an attempt of version 2", old.post(workerapi.PathCheckout, workerapi.ActionRequest{Step: actionStep, With: checkoutWith()}), http.StatusNotFound)
+
+	w := newWorker(t, target, checkoutAttempt()).claimed()
+	req := workerapi.ActionRequest{Step: actionStep, With: checkoutWith()}
+	wantStatus(t, "a checkout's tree before its action", w.post(workerapi.PathCheckout, req), http.StatusBadRequest)
+	if a := w.post(workerapi.PathAction, req); a.status != http.StatusOK || !bytes.Contains(a.body, []byte(`"success"`)) {
+		t.Fatalf("a checkout's action was answered %d: %s", a.status, a.body)
+	}
+	first := w.post(workerapi.PathCheckout, req)
+	if first.status != http.StatusOK || first.header.Get("Content-Type") != workerapi.CheckoutMediaType {
+		t.Fatalf("a checkout's tree was answered %d, %s: %s", first.status, first.header.Get("Content-Type"), first.body)
+	}
+	tr := tar.NewReader(bytes.NewReader(first.body))
+	for {
+		if _, err := tr.Next(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Errorf("a checkout's tree isn't a tar stream: %v", err)
+			}
+			break
+		}
+	}
+	if again := w.post(workerapi.PathCheckout, req); again.status != http.StatusOK || !bytes.Equal(again.body, first.body) {
+		t.Errorf("a checkout's tree asked for again was answered %d, not as it was first", again.status)
+	}
+	other := req
+	other.With = plan.DataOf(map[string]any{"repo": "https://example.com/other.git", "branch": "main"})
+	wantStatus(t, "another request for a checkout's tree", w.post(workerapi.PathCheckout, other), http.StatusBadRequest)
+
+	target.Supersede(t, w.attemptID)
+	wantProblem(t, "a checkout's tree once superseded", w.post(workerapi.PathCheckout, req), workerapi.Fenced)
 }
 
 // A FakeTarget is a Target whose attempts are each a Fake, Lenient, served

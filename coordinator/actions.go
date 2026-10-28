@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -14,7 +15,8 @@ import (
 )
 
 // The built-in actions the coordinator performs, as their steps' uses:
-// names them, which a worker asks it for (workerapi.PathAction).
+// names them, which a worker asks it for (workerapi.PathAction), besides
+// checkout's (plan.CheckoutUses), whose tree it serves (checkout).
 const (
 	actionCancelJobs    = "parallelworks/cancel-jobs"
 	actionUpdateSession = "parallelworks/update-session"
@@ -27,14 +29,16 @@ type actions struct{ c *Coordinator }
 
 var _ workerapisrv.Actions = actions{}
 
-// Act performs the action the step of call's attempt uses: cancel-jobs
-// (cancelJobs) or update-session (updateSession).
+// Act performs the action the step of call's attempt uses: checkout
+// (checkout), cancel-jobs (cancelJobs) or update-session (updateSession).
 func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {
 	step, err := r.c.actionStep(ctx, call)
 	if err != nil {
 		return workerapi.ActionAnswer{}, err
 	}
 	switch step.Uses {
+	case plan.CheckoutUses:
+		return r.c.checkout(ctx, call, step)
 	case actionCancelJobs:
 		return r.c.cancelJobs(ctx, call, step)
 	case actionUpdateSession:
@@ -100,6 +104,19 @@ func (c *Coordinator) sessionRun(ctx context.Context, run *store.Run) (compile.S
 		return compile.SessionUpdate{}, err
 	}
 	return compile.SessionUpdate{Run: run.ID, Root: root.ID, Permissions: p.Run.Permissions}, nil
+}
+
+// Tree writes the tree of the parallelworks/checkout step of call's
+// attempt, as the run's plan pins it.
+func (r actions) Tree(ctx context.Context, call *workerapisrv.ActionCall, w io.Writer) error {
+	step, err := r.c.actionStep(ctx, call)
+	if err != nil {
+		return err
+	}
+	if step.Uses != plan.CheckoutUses {
+		return fmt.Errorf("%w: %q has no tree", workerapisrv.ErrNotAction, step.Uses)
+	}
+	return r.c.tree(ctx, call, step, w)
 }
 
 // actionStep returns the step of call's attempt's job that call names, as

@@ -2038,7 +2038,9 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
   expands a matrix that reads `needs`, and evaluates the job's `if:`, so a
   false `if:` skips it here. Otherwise it evaluates the rest of what was left
   for this point, such as a `runs-on:` that uses `needs`, and picks a member
-  of the job's group ([Placement](#placement)). The coordinator runs Ready
+  of the job's group ([Placement](#placement)). Ready's errors fail the
+  job, and its warnings, as `job_ssh_host_empty`, are kept with the job,
+  which runs. The coordinator runs Ready
   again whenever it needs the job, as when it places it and each time a
   worker claims it, with what the job was readied with kept: whether the
   run had been cancelled then, and which instance each `:any` need took. So
@@ -2163,9 +2165,16 @@ a step's try's child, linked to it (`CreateChild`), in its directory, in
 its caller's job's group, but not yet on its member, with its root's
 variables, and the root's finisher, which waits for every run of its tree;
 and the worker API's paths for a child, served, and what a child's
-attempt's claim has of its tree, which its worker reads. The rest isn't
-built yet: the worker doesn't ask for a child, and fails a step that uses
-a workflow (`uses_not_supported`).
+attempt's claim has of its tree, which its worker reads; and the worker's
+run of a calling step: it makes the child's directory, and cleans it as
+`clean-on-retry:` says, never following a symbolic link, asks for the
+child, waits for it, stops it as the step is stopped, and ends the step as
+below. The rest isn't built yet: the attempt isn't parked while it waits;
+an attempt that ends without its worker doesn't stop its steps' children;
+`meridian run`, `status` and `logs` show a root run's own jobs alone; and
+a step whose `ssh:` names a host is refused (`step_ssh_not_supported`), as
+any step's is, where format 1 connects to the host but runs the child
+where its caller runs, as some known calls do.
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2280,7 +2289,12 @@ a workflow (`uses_not_supported`).
   wouldn't be. The step fails when it runs, as its child would be created
   (`child_dir_outside`), never as the root is created, since an `if:` may
   skip it; none of the 270 known calls sets `working-directory:`. A step's
-  `clean-on-retry:` cleans it before the step's next try (below).
+  `clean-on-retry:` cleans it before the step's next try (below). The
+  step's worker makes it, and cleans it, a directory at a time from its
+  root's run directory, and never follows a symbolic link on the way,
+  which a step of the run could leave there to put the child elsewhere:
+  the step fails instead (`child_dir_unusable`), and so does the child's
+  job, as its worker makes it again (`run_dir_unusable`).
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
   Create finds in each pinned workflow's expressions), once, into the
@@ -2339,9 +2353,13 @@ a workflow (`uses_not_supported`).
     stops it with `cancelled`; the step ends cancelled and, as in format 1,
     its job goes on.
   - The step's `timeout:`, and its `retry:`'s timeout for a try, stop it
-    with `timeout`, and, as in format 1, the step ends cancelled, not
-    failed, and its job goes on; a try's ends as a try that ran out of
-    time does, and the step is tried again.
+    with `timeout`. As in format 1, a step without a `retry:` past its
+    `timeout:` ends cancelled, not failed, and its job goes on. A try past
+    its `retry:`'s timeout ends as a command's that ran out of time does:
+    the step is tried again, and its last try fails, or succeeds if its
+    `ignore-errors:` says so. A step with a `retry:`, whose tries have a
+    timeout of their own, past its own `timeout:` fails too, and isn't
+    tried again, as in format 1, which takes that deadline for its tries'.
   - The job's timeout, or the run's, stops it with `timeout`, and, as in
     format 1, the step and its job end cancelled, not failed, with the
     reason `timeout`, without marking the run for
@@ -2419,10 +2437,8 @@ of them leaves false. That differs from a feature whose interface is
 missing, which fails to compile ([Interfaces](#interfaces)): every run
 makes its `sessions:`, but a step may never run. The worker fails a step
 that uses scheduler-agent or wait-for-agent with `action_needs_platform`
-already, and the coordinator does cancel-jobs and update-session. Until
-checkout is built, a step that uses it fails with `uses_not_supported`;
-what this section says of it is decided, and built next, but for its
-pins, which are built.
+already, and the coordinator does cancel-jobs, update-session and
+checkout.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2477,15 +2493,44 @@ pins, which are built.
     cluster's login node with an old Git, or without outbound access,
     hasn't.
   - **Written by the worker.** The worker asks the coordinator for the
-    step's tree, which it serves from the step's pin, never from what the
-    worker says, as a tar stream of at most 1 GiB (`Options.Limits`), and
-    extracts it through an `os.Root` on the step's working directory
-    joined with `path:`, or on `path:` as it is where it is absolute, as
-    format 1 uses it, so that no member of it, nor a link already there,
-    writes outside it. It merges, replacing files of the same names
-    and keeping the rest, as ACTIVATE's copy does, and writes no `.git`.
-    The coordinator tries a fetch 5 times, 2, 4, 8 and 16 seconds apart, as
-    ACTIVATE does, and the step's `retry:` applies on top.
+    step's action, as for cancel-jobs, and the coordinator answers from
+    the step's pin, never from what the worker says: it fails the step for
+    a tree it can't serve, and warns of a path that names nothing. Once it
+    succeeds, the worker asks for the tree with the same request
+    ([The worker API](#the-worker-api)), which the coordinator streams as a
+    tar of the commit's files, links and directories, whose files come to
+    1 GiB at most (`workerapi.MaxCheckoutBytes`, `checkout_too_large`),
+    in a million entries at most (`workerapi.MaxCheckoutEntries`,
+    `checkout_too_many`), so that no tree uses up a host's inodes. The
+    tree request is the action's own, unchanged; another is refused as
+    the worker's bug, which fails the step rather than halt the attempt.
+    The worker writes the tree through an `os.Root` on the step's working
+    directory joined with `path:`, or on `path:` as it is where it is
+    absolute, as format 1 uses it, so that no member of it, nor a link
+    already there, writes outside it. It merges, as ACTIVATE's copy does:
+    a file or a link replaces a file or a link of the same name, written
+    under a name of its own and renamed over it, so that it never writes
+    through a link, or into a file another name links to, and the rest is
+    kept; a directory where the tree has a file fails the step
+    (`checkout_write_failed`). A link where the tree has a directory, as
+    one in a member's leading directories, is replaced by a directory, as
+    git checks out over one: no write follows a link, one an earlier step
+    left, into `.git` or elsewhere, or one the tree holds, as a system
+    whose names ignore case reads a link `A` and a directory `a/` of one
+    tree as one. It writes only directories, files and symbolic links, by
+    names that stay inside the directory, none of them `.git`, nor a link
+    to one, in any case (`checkout_unsafe`).
+    The coordinator reads the commit from its copy of the repository, and
+    fetches it by itself if the copy hasn't it, trying 5 times, 2, 4, 8
+    and 16 seconds apart, as ACTIVATE tries a clone
+    (`checkout_unavailable`); the step's `retry:` applies on top, and the
+    worker asks again for a stream cut short. A step whose `repo` or
+    `branch` is `""` checks out nothing, and succeeds, as in format 1.
+    The files are the blobs as committed, with no `.gitattributes`
+    applied: no line ending converted, and no filter, such as Git LFS's
+    smudge, run, as a clone on the step's host could. The tree is built
+    from the commit's own list of files, not by `git archive`, which
+    applies `export-ignore` and `export-subst`, as a clone doesn't.
   - **Paths.** A `sparse_checkout` entry is a literal path from the
     repository's root; a glob or a `!`, which ACTIVATE can read as a
     pattern, is refused (`checkout_path_invalid`). Every known entry, in
@@ -2494,7 +2539,8 @@ pins, which are built.
     checkout of a repository with submodules, which format 1 clones with
     them, isn't built yet: its step fails when it runs
     (`checkout_submodules`), and it can come later. A sparse one leaves
-    them empty, as format 1's does. None of the known repositories checked
+    them empty, as format 1's does, and a submodule a sparse entry names
+    is an empty directory. None of the known repositories checked
     out has submodules.
 - **cancel-jobs.** The coordinator does it, in one transaction for each
   request, and answers a repeat of it as it answered it:
@@ -3478,10 +3524,10 @@ and a platform that embeds Meridian serve the same API.
   root's ID and directory, the call's name, and the strings its caller's
   worker masked, which each of its job's phases counts as secrets' own
   texts. Version 3 adds them. The coordinator serves them, and the worker
-  has the requests, but doesn't make them yet: it fails a step that uses a
-  workflow (`uses_not_supported`).
-- **Actions:** ask the coordinator to do a step's cancel-jobs or
-  update-session, from version 3, or for its checkout's tree
+  makes them for a step that calls a workflow; one of an attempt of an
+  earlier version fails (`uses_not_supported`).
+- **Actions:** ask the coordinator to do a step's cancel-jobs,
+  update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's
   `with:` as Step evaluated it, and its answer says how the action ended:
   success or failure, with its problems. The coordinator reads which
@@ -3508,9 +3554,18 @@ and a platform that embeds Meridian serve the same API.
   the coordinator may have done the action. In an attempt of an earlier
   version, the step fails as before (`uses_not_supported`). The request
   also says what evaluating `with:` read, which update-session's provider
-  is given. The worker fails a step that uses checkout
-  (`uses_not_supported`), and one that uses an action only a platform
+  is given. The worker fails a step that uses an action only a platform
   provides (`action_needs_platform`).
+- **Checkout's tree:** once a checkout's action succeeded, the same
+  request reads its tree (`/v1/checkout`, of version 3), which the
+  coordinator serves only for that request, as a tar stream of the
+  commit the step was pinned to, read from the plan: another request for
+  the try, and one of a try whose action wasn't answered success, is
+  refused as the worker's bug, 400, which fails the step rather than
+  halt the attempt. A stream cut short ends without the end of its
+  chunked body, and the worker asks again, writing the tree whole again
+  over what it wrote of it. The answer may take as long as its most bytes
+  take at the server's slowest rate, 1 MiB a second.
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
   (`plan.JobResult`). The same end again, as a worker sends after a
@@ -3896,16 +3951,16 @@ own runs.
 
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
-rather than run them on the host, and a step that `uses:` a workflow or a
-built-in action, or runs on another host with `ssh:`, fails, as does one
-whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
-`ssh:` placed on a host; one that uses an action only a platform provides
-fails saying so (`action_needs_platform`,
-[Built-in actions](#built-in-actions)). So a step's `clean-on-retry:`,
-which cleans a `uses:` step's directory, has nothing to clean yet. Its
-events are kept
-in memory while the coordinator is unreachable, since each is small but for
-a step's outputs, which are capped.
+rather than run them on the host, and a step that `uses:` a built-in
+action the worker doesn't run, or runs on another host with `ssh:`, fails,
+as does one whose `ssh:` is null, or gives no `remoteHost`, on a worker
+that a job's `ssh:` placed on a host; one that uses an action only a
+platform provides fails saying so (`action_needs_platform`, [Built-in
+actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
+run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
+directory its `clean-on-retry:` cleans. Its events are kept in memory
+while the coordinator is unreachable, since each is small but for a step's
+outputs, which are capped.
 
 ## Backends and isolation
 
@@ -4192,13 +4247,22 @@ backend there through `meridian host`
   lost before it fails the step, 300 seconds by default, isn't honoured:
   a step keeps running through an outage, which is what a worker on the
   host is for, and a laptop that sleeps through it fails no remote step.
-  The compiler will warn of the key (`ssh_disconnect_timeout_ignored`);
-  none of the known workflows sets it.
+  Every step runs as a negative one asks. Format 1 reads one as a number
+  of seconds, or a whole number with one of `d`, `h`, `m` or `s` after
+  it, so `-1`, `-5m` and `-2d` are negative. The compiler warns, where the
+  workflow writes it, of one that isn't negative, and of one an
+  expression gives, whose value it doesn't know yet
+  (`ssh_disconnect_timeout_ignored`); none of the known workflows sets
+  it.
 - **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
-  would without its `ssh:`, as format 1 runs it, and as a step's does
-  ([Running steps](#running-steps)). Ready doesn't do that yet: it places
-  such a job on a member with no host, which can't run it
-  (`ssh_host_missing`).
+  would without its `ssh:`, where its `runs-on:` says, or on the run's
+  default group, as format 1 runs it, and as a step's does
+  ([Running steps](#running-steps)): Ready gives it no inline group.
+  Format 1 notes it in the log of each step that runs so; Meridian keeps
+  Ready's warning with the job (`job_ssh_host_empty`), once however often
+  the job is readied, which its status and its end show, however it ends.
+  The common case is a `remoteHost` that reads a `compute-clusters`
+  input's `ip`, which is `""` for the workspace, this machine.
 - **A step whose `ssh:` names another host** fails
   (`step_ssh_not_supported`) until the worker can run a step on another
   host itself.
@@ -4227,6 +4291,10 @@ Where format 1, as ACTIVATE runs it, does otherwise:
 - **Outages.** Steps run through one, and their reports arrive after it.
   ACTIVATE fails a step once its connection has been lost for
   `disconnect-timeout`, and leaves its process running.
+- **A `disconnect-timeout` format 1 can't read**, such as `1h30m`, `1.5h`
+  or `300ms`, fails the step in ACTIVATE. Meridian ignores the key,
+  whatever its value, and runs the step, with a warning
+  (`ssh_disconnect_timeout_invalid`).
 - **Cancelling during an outage** reaches the worker once the connection
   is back. ACTIVATE tries for 10 seconds, and leaves the process running.
 - **One worker runs a job's steps**, so they share its session, and a

@@ -57,6 +57,12 @@ type Case struct {
 	// Jobs are what is known of each job, by name, where the phases after
 	// the run starts evaluate it, in the contexts area.
 	Jobs map[string]JobState `yaml:"jobs,omitempty"`
+	// Repositories name the repositories whose workflows a case's steps
+	// call, in the runs area, each as github/<owner>/<repository>: each
+	// holds the files of the case's directory, at a commit of its default
+	// branch, main, which a step's uses: names with no revision, or as
+	// @main, and its with:'s $yaml names one of.
+	Repositories []string `yaml:"repositories,omitempty"`
 	// Expect is what the workflow must produce.
 	Expect Expect `yaml:"expect"`
 }
@@ -243,7 +249,32 @@ type Diagnostic struct {
 
 // Workflow returns the case's workflow file.
 func (c *Case) Workflow() ([]byte, error) {
-	return fs.ReadFile(FS, path.Join(c.Name, "workflow.yaml"))
+	return c.File("workflow.yaml")
+}
+
+// File returns the file name in the case's directory, as a workflow it
+// calls, which must be a path in it.
+func (c *Case) File(name string) ([]byte, error) {
+	if !fs.ValidPath(name) {
+		return nil, fmt.Errorf("conformance: %q isn't a path in a case's directory", name)
+	}
+	return fs.ReadFile(FS, path.Join(c.Name, name))
+}
+
+// Files returns the names of the files in the case's directory, but for
+// case.yaml, in order: what a repository it names holds (Repositories).
+func (c *Case) Files() ([]string, error) {
+	var names []string
+	err := fs.WalkDir(FS, c.Name, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if name := strings.TrimPrefix(p, c.Name+"/"); name != "case.yaml" {
+			names = append(names, name)
+		}
+		return nil
+	})
+	return names, err
 }
 
 // Cases returns the cases in an area, such as "format", in name order.

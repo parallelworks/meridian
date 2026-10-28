@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -187,6 +188,9 @@ type call struct {
 	// sent, if it isn't nil, is set to when the try the coordinator
 	// answered was sent.
 	sent *time.Time
+	// stream, if it isn't nil, reads an answer that succeeded, a stream
+	// of workerapi.CheckoutMediaType, rather than one decoded (readStream).
+	stream func(io.Reader) error
 }
 
 // do makes a call, and decodes its answer into out, if out isn't nil. It
@@ -233,7 +237,11 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		bearer = c.credential
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
-	req.Header.Set("Accept", "application/json, "+problem.MediaType)
+	if cl.stream != nil {
+		req.Header.Set("Accept", workerapi.CheckoutMediaType+", "+problem.MediaType)
+	} else {
+		req.Header.Set("Accept", "application/json, "+problem.MediaType)
+	}
 	if cl.body != nil {
 		if cl.octets {
 			req.Header.Set("Content-Type", "application/octet-stream")
@@ -259,6 +267,9 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 	}
 	defer resp.Body.Close()
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if success && cl.stream != nil {
+		return readStream(ctx, cl, resp)
+	}
 	limit := int64(maxRefusal)
 	if success {
 		limit = maxAnswer
@@ -320,6 +331,30 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 	p.Code = p.Key()
 	p.Title, p.Detail = problems.EscapeControl(p.Title), problems.EscapeControl(p.Detail)
 	return &p
+}
+
+// readStream has cl.stream read the answer to cl that succeeded, resp, a
+// stream of workerapi.CheckoutMediaType, as it comes, and returns its
+// error: one reading it, as of a stream cut short, is one to try the
+// request again for, unless it isn't a tar stream, which the worker can't
+// read; and one of its own, as a member it doesn't write, is the request's.
+func readStream(ctx context.Context, cl call, resp *http.Response) error {
+	if resp.Header.Get("Content-Type") != workerapi.CheckoutMediaType {
+		return answerInvalid(cl.path, resp.StatusCode, nil)
+	}
+	err := cl.stream(resp.Body)
+	_, read := errors.AsType[*treeReadError](err)
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case read && (errors.Is(err, tar.ErrHeader) || errors.Is(err, tar.ErrFieldTooLong)):
+		return answerInvalid(cl.path, resp.StatusCode, nil)
+	case read:
+		return &temporaryError{err}
+	}
+	return err
 }
 
 // isCode reports whether code is one a problem can have, as Meridian's and
@@ -394,10 +429,12 @@ func intParam(v any) (int64, bool) {
 }
 
 // The time each request may take: long enough for a claim's large answer,
-// and for a control poll the coordinator holds.
+// and for a control poll the coordinator holds; and for a checkout's tree,
+// the most a tree holds at a megabyte a second.
 const (
 	requestTimeout = time.Minute
 	controlTimeout = workerapi.ControlWaitSeconds*time.Second + requestTimeout
+	treeTimeout    = requestTimeout + workerapi.MaxCheckoutBytes/(1<<20)*time.Second
 )
 
 // claim claims the attempt token is for, as req, and returns the claim and
@@ -522,25 +559,45 @@ func (c *client) action(ctx context.Context, req *workerapi.ActionRequest) (*wor
 
 // child asks for the child run of a step's try (workerapi.PathChild),
 // which a repeat of the request is answered with again. It returns an
-// *encodeError for a request it can't encode.
+// *encodeError for a request it can't encode, and an answer no child can
+// be is one the worker can't read (childAnswered).
 func (c *client) child(ctx context.Context, req *workerapi.ChildRequest) (*workerapi.Child, error) {
 	body, err := workerapi.MarshalAt(c.apiVersion, req)
 	if err != nil {
 		return nil, &encodeError{err}
 	}
 	child := new(workerapi.Child)
-	err = c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChild, body: body, timeout: requestTimeout}, child)
-	return child, err
+	if err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChild, body: body, timeout: requestTimeout}, child); err != nil {
+		return nil, err
+	}
+	return child, childAnswered(workerapi.PathChild, child)
+}
+
+// childAnswered returns the problem of an answer of path, child, that no
+// child can be: one that has ended with an outcome no run ends with, or
+// one not made that succeeded; and one that hasn't ended that is no run.
+func childAnswered(path string, child *workerapi.Child) error {
+	switch o := child.Outcome; {
+	case child.Ended && o != plan.OutcomeSuccess && o != plan.OutcomeFailure && o != plan.OutcomeCancelled,
+		child.Ended && child.Run == "" && o == plan.OutcomeSuccess:
+		return answerInvalidAt(path, http.StatusOK, "/outcome")
+	case !child.Ended && child.Run == "":
+		return answerInvalidAt(path, http.StatusOK, "/run")
+	}
+	return nil
 }
 
 // childEnd waits for the end of the child run of the step's try
 // (workerapi.PathChildEnd): it answers once the child has ended, or after
-// a while with the child as it is.
+// a while with the child as it is. An answer no child can be is one the
+// worker can't read (childAnswered).
 func (c *client) childEnd(ctx context.Context, step, try int) (*workerapi.Child, error) {
 	q := url.Values{workerapi.QueryStep: {strconv.Itoa(step)}, workerapi.QueryTry: {strconv.Itoa(try)}}
 	child := new(workerapi.Child)
-	err := c.do(ctx, call{method: http.MethodGet, path: workerapi.PathChildEnd, query: q, timeout: controlTimeout}, child)
-	return child, err
+	if err := c.do(ctx, call{method: http.MethodGet, path: workerapi.PathChildEnd, query: q, timeout: controlTimeout}, child); err != nil {
+		return nil, err
+	}
+	return child, childAnswered(workerapi.PathChildEnd, child)
 }
 
 // stopChild stops the child run of a step's try (workerapi.PathChildStop).
@@ -551,6 +608,20 @@ func (c *client) stopChild(ctx context.Context, stop *workerapi.ChildStop) error
 		return &encodeError{err}
 	}
 	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathChildStop, body: body, timeout: requestTimeout}, nil)
+}
+
+// tree asks the coordinator for the tree of a checkout step's try, with
+// req, the request its action was answered success for
+// (workerapi.PathCheckout), and has write write it as it reads it. It asks
+// again, as for any request, for a stream cut short, which write writes
+// whole again, over what it wrote of it. It returns write's own error, as
+// a member of the tree it doesn't write.
+func (c *client) tree(ctx context.Context, req *workerapi.ActionRequest, write func(io.Reader) error) error {
+	body, err := workerapi.MarshalAt(c.apiVersion, req)
+	if err != nil {
+		return &encodeError{err}
+	}
+	return c.do(ctx, call{method: http.MethodPost, path: workerapi.PathCheckout, body: body, timeout: treeTimeout, stream: write}, nil)
 }
 
 // timing holds how long the worker waits for what it waits for, which

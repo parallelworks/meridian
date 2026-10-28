@@ -124,7 +124,7 @@ func TestUpdateSession(t *testing.T) {
 	t.Run("with a provider", func(t *testing.T) {
 		s := &testSessions{}
 		vars := conformancetest.Variables{"vars.KEY": {Value: "s3cret-api-key", Secret: true}}
-		r := newWorkerRigWith(t, Options{Sessions: s, Variables: vars})
+		r := newWorkerRigOf(t, Options{Sessions: s, Variables: vars})
 		contexts := vars.Contexts()
 		contexts["sessions"] = map[string]any{"desktop": "desktop-session"}
 		id := r.create(t, []byte(`
@@ -185,7 +185,7 @@ jobs:
 	})
 	t.Run("with permissions: '*'", func(t *testing.T) {
 		s := &testSessions{}
-		r := newWorkerRigWith(t, Options{Sessions: s})
+		r := newWorkerRigOf(t, Options{Sessions: s})
 		id := r.create(t, []byte(`
 permissions: ['*']
 jobs:
