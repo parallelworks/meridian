@@ -187,3 +187,62 @@ func TestStepNamesWhatItGivesThatIsPrivate(t *testing.T) {
 		t.Errorf("a with: made whole from a variable: %q, want %q", rs.WithPrivate, want)
 	}
 }
+
+// A root whose tree reads variables, or whose workflow or a step's is
+// pinned with a remote context, is of version 2, which a plan of version
+// 1 can't hold.
+func TestTreePlanVersions(t *testing.T) {
+	for name, change := range map[string]func(p *plan.Plan){
+		"tree variables": func(p *plan.Plan) { p.Run.TreeVariables = []string{"vars.A"} },
+		"a step's remote": func(p *plan.Plan) {
+			p.Jobs[0].Steps[0].Source = &plan.Source{Location: "l", Revision: "r", Remote: map[string]string{"repo": "x"}}
+		},
+		"the workflow's remote": func(p *plan.Plan) { p.Run.Source.Remote = map[string]string{"repo": "x"} },
+	} {
+		p := samplePlan(t)
+		if p.MinVersion() != 1 {
+			t.Fatalf("the sample plan is of version %d", p.MinVersion())
+		}
+		change(p)
+		if p.MinVersion() != 2 {
+			t.Errorf("a plan with %s is of version %d", name, p.MinVersion())
+		}
+		p.Version = 1
+		data, err := plan.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := plan.Decode(data); !errors.Is(err, plan.ErrMalformed) {
+			t.Errorf("a plan of version 1 with %s: %v", name, err)
+		}
+	}
+}
+
+// OutlivesCancel tells, from an if:'s form, whether it can be true once
+// its job is stopping, as Step decides it: the word always, always(),
+// cancelled() and a negated success() or failure() can; success(), a
+// plain failure(), an if: without status functions and none can't. One
+// whose value is the word always only once it is evaluated, only Step
+// can tell, and OutlivesCancel says it can't, so the coordinator refuses
+// such a step's child in a run that was stopped.
+func TestOutlivesCancel(t *testing.T) {
+	for cond, want := range map[string]bool{
+		"always":                        true,
+		"${{ always() }}":               true,
+		"${{ cancelled() }}":            true,
+		"${{ !success() }}":             true,
+		"${{ !failure() && inputs.x }}": true,
+		"${{ success() }}":              false,
+		"${{ failure() }}":              false,
+		"${{ inputs.x == 'a' }}":        false,
+		"${{ 'always' }}":               false,
+	} {
+		v := mustValue(t, cond)
+		if got := plan.OutlivesCancel(v); got != want {
+			t.Errorf("%s outlives a cancel: %v, want %v", cond, got, want)
+		}
+	}
+	if plan.OutlivesCancel(plan.Value{}) {
+		t.Error("an unset if: outlives a cancel")
+	}
+}

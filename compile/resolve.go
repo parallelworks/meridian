@@ -171,24 +171,31 @@ func variableReads(doc *format.Document) []string {
 // out, with Groups, and each workflow a step's uses: names, with Sources,
 // which pins it in the step (plan.Step.Source), and loads and validates
 // it; and then the workflows those call, down the tree (walkCalls), whose
-// pins the plan holds (plan.Plan.Calls). What needs a resolver that isn't
-// there is resolver_missing. It returns an error, a resolver's that
-// couldn't answer, or ctx's.
+// pins the plan holds (plan.Plan.Calls), with the variables they read
+// (plan.Run.TreeVariables). A child run's steps' workflows are those its
+// root pinned (pinFromRoot). What needs a resolver that isn't there is
+// resolver_missing. It returns an error, a resolver's that couldn't
+// answer, or ctx's.
 func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
+	asked := map[string]error{}
+	for i := range p.Jobs {
+		if err := c.checkRunsOn(ctx, &p.Jobs[i], asked); err != nil {
+			return err
+		}
+	}
+	if c.opts.Parent != nil {
+		c.pinFromRoot(p)
+		return ctx.Err()
+	}
 	t := newTree(c.opts.Calls)
 	root := node{keys: []plan.SourceRef{{}}, chain: []string{p.Run.Source.Location}}
 	if p.Run.Source.Ref.Uses != "" {
 		root.keys[0] = p.Run.Source.Ref.Normal()
 	}
-	asked := map[string]error{}
 	var first []node
 	for i := range p.Jobs {
-		j := &p.Jobs[i]
-		if err := c.checkRunsOn(ctx, j, asked); err != nil {
-			return err
-		}
-		for k := range j.Steps {
-			n, err := c.pinSource(ctx, t, root, &j.Steps[k])
+		for k := range p.Jobs[i].Steps {
+			n, err := c.pinSource(ctx, t, root, &p.Jobs[i].Steps[k])
 			if err != nil {
 				return err
 			}
@@ -201,8 +208,44 @@ func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
 		return err
 	}
 	p.Calls = t.planCalls()
+	p.Run.TreeVariables = t.variables()
 	c.texts = t.texts()
 	return ctx.Err()
+}
+
+// pinFromRoot pins, in each step of a child run's workflow whose uses:
+// names one, the workflow its root pinned for that step as the root was
+// created (Parent.Pin), by the digest of the run's text and the step's
+// JSON Pointer in it, with no resolver: the root's Create checked the
+// whole tree, so a child's checks none of it again. A step whose pin the
+// root doesn't hold, as one of a root a release created that didn't pin
+// its whole tree, is child_not_pinned.
+func (c *compiler) pinFromRoot(p *plan.Plan) {
+	for i := range p.Jobs {
+		for k := range p.Jobs[i].Steps {
+			s := &p.Jobs[i].Steps[k]
+			loc, err := jsonptr.Split(s.Path)
+			if err != nil {
+				continue
+			}
+			step, _ := jsonptr.Lookup(c.doc.Value, loc)
+			stepMap, _ := step.(map[string]any)
+			ref, ok := stepRef(&c.reporter, loc, stepMap)
+			if !ok {
+				continue
+			}
+			var source plan.Source
+			found := false
+			if pin := c.opts.Parent.Pin; pin != nil {
+				source, found = pin(p.Run.Source.Digest, s.Path)
+			}
+			if !found {
+				c.reportAt(problems.ChildNotPinned, appendPath(loc, "uses"), problems.Params{"uses": ref.Uses})
+				continue
+			}
+			s.Source = &source
+		}
+	}
 }
 
 // checkRunsOn checks where job's runs-on: runs it, when the workflow
@@ -395,6 +438,10 @@ func (c *compiler) pinRef(ctx context.Context, t *tree, rep *reporter, loc, root
 	}
 	source := w.Source
 	source.Ref = ref
+	// A child run of the workflow reads the remote context Sources gives
+	// for it now, as format 1 stamps a called workflow's as its root is
+	// created.
+	source.Remote = maps.Clone(w.Remote)
 	switch digest := textDigest(w.Text); source.Digest {
 	case "":
 		source.Digest = digest

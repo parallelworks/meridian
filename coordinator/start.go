@@ -115,8 +115,18 @@ func (c *Coordinator) startRun(ctx context.Context, id string, done func(context
 	if err != nil {
 		return c.startFailed(ctx, run, causeKeys, err, done)
 	}
+	// A child run's variables are those its root's Start read for the
+	// tree, from the root's secret record (rootVariables).
+	vars := c.opts.Variables
+	if p.Run.Parent != nil {
+		tree, err := c.rootVariables(ctx, p.Run.Parent.Root)
+		if err != nil {
+			return c.startFailed(ctx, run, causeKeys, err, done)
+		}
+		vars = tree
+	}
 	res, diags, err := compile.Start(ctx, p, compile.StartInput{
-		RunID: id, Variables: c.opts.Variables, Record: *record, Inputs: c.opts.Inputs, Sessions: c.opts.Sessions,
+		RunID: id, Variables: vars, Record: *record, Inputs: c.opts.Inputs, Sessions: c.opts.Sessions,
 	})
 	if err != nil {
 		return c.startFailed(ctx, run, causeResolver, err, done)

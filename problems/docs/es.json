@@ -1946,6 +1946,20 @@
       "O pide a quien ejecuta el flujo de trabajo que suba el límite."
     ]
   },
+  "child_not_pinned": {
+    "title": "Flujo de trabajo llamado no fijado con el árbol de su ejecución",
+    "why": "Meridian fija cada flujo de trabajo al que llama una ejecución, por todo su árbol, al crear la ejecución, y guarda su texto con la ejecución, para que cada ejecución hija ejecute el texto con el que se creó su raíz. Esta ejecución se creó antes de que Meridian lo hiciera, así que el flujo de trabajo al que llama este paso no está entre ellos.",
+    "fix": [
+      "Vuelve a iniciar la ejecución: una ejecución creada ahora fija su árbol entero."
+    ]
+  },
+  "child_dir_outside": {
+    "title": "Directorio de un flujo de trabajo llamado fuera del de su ejecución raíz",
+    "why": "Una ejecución a la que llama un paso tiene un directorio propio, subworkflows/<job>/step_<n> bajo el directorio de trabajo del paso, como en el formato 1. Meridian hace privado el directorio de una ejecución raíz, y el directorio de una hija dentro de él es privado con él; uno en otro sitio no lo sería, y Meridian aún no crea uno allí.",
+    "fix": [
+      "Da al paso un working-directory: dentro del directorio de la ejecución, o ninguno."
+    ]
+  },
   "owner_unmapped": {
     "title": "Propietario oculto por un espacio de nombres de usuario",
     "why": "Meridian comprueba que cada directorio en el camino hacia los suyos es tuyo o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. En un espacio de nombres de usuario que no asocia root, como los que crean unshare --user, Apptainer, bubblewrap y algunos entornos de CI, un directorio cuyo propietario no está asociado aparece como propiedad de nobody, así que Meridian no puede saber quién podría cambiarlo, y lo rechaza en lugar de suponerlo.",

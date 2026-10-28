@@ -147,7 +147,7 @@ func TestSourcesResolve(t *testing.T) {
 		// The remote context names the file, as ACTIVATE's does.
 		tc.remote["yaml"] = tc.ref.Normal().Path
 		want := plan.Source{Location: tc.location, Revision: tc.commit, Digest: digest([]byte(tc.text)), Ref: tc.ref}
-		if w.Source != want || string(w.Text) != tc.text || !reflect.DeepEqual(w.Remote, tc.remote) {
+		if !reflect.DeepEqual(w.Source, want) || string(w.Text) != tc.text || !reflect.DeepEqual(w.Remote, tc.remote) {
 			t.Errorf("Resolve(%+v) = %+v, %q, %v, want %+v, %q, %v", tc.ref, w.Source, w.Text, w.Remote, want, tc.text, tc.remote)
 		}
 		// It reads again by its pin, from its Ref, with the same remote.
@@ -257,7 +257,7 @@ func TestSourcesReadByPin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read from %s: %v", name, err)
 		}
-		if string(w.Text) != "pinned\n" || w.Source != pinned.Source || !reflect.DeepEqual(w.Remote, pinned.Remote) {
+		if string(w.Text) != "pinned\n" || !reflect.DeepEqual(w.Source, pinned.Source) || !reflect.DeepEqual(w.Remote, pinned.Remote) {
 			t.Errorf("Read from %s = %+v, %q, %v", name, w.Source, w.Text, w.Remote)
 		}
 	}

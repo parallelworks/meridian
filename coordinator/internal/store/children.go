@@ -1,0 +1,80 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
+
+// A Link is a child run's link to the try of the step that called it, a
+// step whose uses: names a workflow (plan.ParentRun), which the store
+// keeps beside the run, so that a step's try finds its child again, and a
+// root the runs of its tree.
+type Link struct {
+	// Run is the ID of the run whose step called it, Job the key of the
+	// step's job, an instance's for a matrix job, and Attempt the ID of the
+	// attempt that ran the step; Step is the step's index in its job, and
+	// Try its try, from 0.
+	Run, Job, Attempt string
+	Step, Try         int
+	// Root is the ID of the run at the top of the tree, which no step
+	// called, and Depth how far below it the run is, from 1.
+	Root  string
+	Depth int
+}
+
+// check returns an error for a link that names no step's try.
+func (l *Link) check() error {
+	switch {
+	case l.Job == "" || l.Attempt == "":
+		return errors.New("store: a child run's link without its step's job or attempt")
+	case l.Step < 0 || l.Try < 0 || l.Depth < 1:
+		return fmt.Errorf("store: a child run's link to step %d, try %d, at depth %d", l.Step, l.Try, l.Depth)
+	}
+	return nil
+}
+
+// Child returns the ID of the child run of the try try of the step step
+// that the attempt attempt ran: ErrNotFound if it has none.
+func (tx *Tx) Child(attempt string, step, try int) (string, error) {
+	var n int64
+	err := tx.queryRow(`SELECT id FROM meridian_runs WHERE parent_attempt = ? AND parent_step = ? AND parent_try = ?`,
+		attempt, step, try).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return runID(n), nil
+}
+
+// LiveDescendants returns how many runs of the tree whose root is the run
+// root haven't ended, at any depth.
+func (tx *Tx) LiveDescendants(root string) (int, error) {
+	n, ok := runNumber(root)
+	if !ok {
+		return 0, ErrNotFound
+	}
+	var count int
+	err := tx.queryRow(`SELECT count(*) FROM meridian_runs WHERE root_run = ? AND state <> ?`, n, RunEnded).Scan(&count)
+	return count, err
+}
+
+// WaitForDescendants notes that the finisher of the run root waits for the
+// runs of its tree to end, which the end of each wakes (Run.WaitedAt).
+func (tx *Tx) WaitForDescendants(root string) error {
+	n, ok := runNumber(root)
+	if !ok {
+		return ErrNotFound
+	}
+	now, err := tx.now()
+	if err != nil {
+		return err
+	}
+	res, err := tx.exec(`UPDATE meridian_runs SET waited_at = coalesce(waited_at, ?) WHERE id = ? AND state <> ?`, now, n, RunEnded)
+	if err != nil {
+		return err
+	}
+	return oneRow(res, fmt.Errorf("%w: run %s has ended, or isn't there", ErrState, root))
+}

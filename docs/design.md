@@ -1579,17 +1579,18 @@ sees one version.
   evaluated, and the results of the jobs it needs. The API's own bodies
   have a version of their own ([The worker API](#the-worker-api)).
 - **A plan is of the lowest version that holds it.** Create writes a plan
-  at the lowest version that has what it uses (`Plan.MinVersion`), and
-  the run's secret record and start state at its plan's, so that a
-  release that reads only an earlier version runs every run that version
-  holds, and only a run that uses an addition needs a newer release, and
-  newer workers. Version 2 adds the pins of a run's called workflows'
-  steps (`Plan.Calls`), and a child run's link to its step
-  (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`), so a run no step calls whose called workflows
-  call none is of version 1. A release reads every version up to its own, each by its
-  own schemas, under `plan/schema/<version>/`, and refuses what a later
-  version added in an earlier one's plan (`plan.ErrMalformed`).
+  at the lowest version that has what it uses (`Plan.MinVersion`), and the
+  run's secret record and start state at its plan's, so that a release
+  that reads only an earlier version runs every run that version holds,
+  and only a run that uses an addition needs a newer release, and newer
+  workers. Version 2 adds the pins of a run's called workflows' steps
+  (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
+  pin's remote context (`Source.Remote`), and a child run's link to its
+  step (`Run.Parent`), with what its secret record holds of the step
+  (`Record.Inherited`), so a run that calls no workflow is of version 1. A
+  release reads every version up to its own, each by its own schemas,
+  under `plan/schema/<version>/`, and refuses what a later version added
+  in an earlier one's plan (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -1932,9 +1933,10 @@ transaction.
   stored before anything executes, and either all of it is stored or none
   of it is. The workflow's first job is Start
   ([Starting a run](#starting-a-run)), which every other job waits for, and
-  its last the run's finisher, which waits for every job, decides the
-  run's outcome, and deletes the secret record in the transaction that
-  ends the run.
+  its last the run's finisher, which waits for every job, and for a root
+  every run of its tree ([Workflows a step calls](#workflows-a-step-calls)),
+  decides the run's outcome, and deletes the secret record in the
+  transaction that ends the run.
 - **A pinned text is kept by its digest alone.** The store keeps each text
   once, whatever runs pin it, and which runs pin it; where a run found it
   is its plan's, so a run that pins the same bytes from elsewhere, as a
@@ -2102,15 +2104,21 @@ known workflows make 270 calls, in 146 files, nested at most 3 levels
 below their root.
 
 Of this, what is built is the whole tree's pinning as the root is created,
-with its limits, its pins in the plan (`Plan.Calls`) and its texts in the
-store, beside the run, but for the check of the called workflows' required
-inputs; and what a child's Create and Start take from its step
-(`compile.Options.Parent`): its inputs, its environment, and its link to
-its step and to its root (`Run.Parent`), with what of them is private kept
-in its secret record (`Record.Inherited`), and what Step says of a calling
-step's `with:` and environment that is private (`ReadyStep.WithPrivate`
-and the rest). The rest isn't built yet: the worker fails a step that uses
-a workflow (`uses_not_supported`).
+with its limits, its pins in the plan (`Plan.Calls`), each with its remote
+context (`Source.Remote`), its texts in the store, beside the run, and the
+variables the tree reads (`Run.TreeVariables`), but for the check of the
+called workflows' required inputs; what a child's Create and Start take
+from its step (`compile.Options.Parent`): its inputs, its environment, and
+its link to its step and to its root (`Run.Parent`), with what of them is
+private kept in its secret record (`Record.Inherited`), and what Step says
+of a calling step's `with:` and environment that is private
+(`ReadyStep.WithPrivate` and the rest); and the coordinator's creation of
+a step's try's child, linked to it (`CreateChild`), in its directory, in
+its caller's job's group, but not yet on its member, with its root's
+variables, and the root's finisher, which waits for every run of its tree.
+The rest isn't built yet: nothing asks for a child, as the worker API has
+no path for it, and the worker fails a step that uses a workflow
+(`uses_not_supported`).
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2225,16 +2233,23 @@ a workflow (`uses_not_supported`).
   skip it; none of the 270 known calls sets `working-directory:`. A step's
   `clean-on-retry:` cleans it before the step's next try (below).
 - **Its variables** are its root's: the root's Start reads the variables
-  every workflow in the tree reads, once, into the root's secret record,
-  and a child's Start reads them from there, never from Variables, as
-  format 1 reads them once for the whole tree. So a child sees what its
-  root saw, and any replica can start it, `resume` among them. The root's
-  record is kept until every run in its tree has ended.
+  every workflow in the tree reads (`Run.TreeVariables`, which the root's
+  Create finds in each pinned workflow's expressions), once, into the
+  root's secret record, and a child's Create and Start read them from
+  there, never from Variables, as format 1 reads them once for the whole
+  tree. So a child sees what its root saw, and any replica creates and
+  starts it, `resume` among them, its Start in the queue every coordinator
+  works. The root's record is kept until every run in its tree has ended:
+  the root's finisher waits for them, and the end of each wakes it.
 - **Its groups.** A job of a child, and a job that calls one, may name
   groups with `runs-on:`, which format 1 refuses in both as not supported
   yet, so no workflow format 1 runs has either: a difference that takes
   more. A child's job that names none runs in its caller's job's group,
-  on its member where it can, where its caller's files are.
+  on its member where it can, where its caller's files are. Of this, the
+  group is built: the child runs in the group its caller's attempt was
+  placed in, or its caller's run's default group where that placement is
+  private, which no caller format 1 runs has; its caller's member isn't
+  built yet, and its jobs are placed on any member of the group.
 - **Its end is its step's**, as format 1 maps it, from the child's jobs
   and its stop, rather than from its outcome:
   - a child that was cancelled, or whose caller's step stopped it, ends

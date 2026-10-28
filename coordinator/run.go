@@ -77,6 +77,11 @@ type Options struct {
 	// run's default group with it. Nil means it isn't checked, and that no
 	// job can be placed.
 	Groups compile.Groups
+	// Sources reads, by its pin, a workflow a step calls whose text the
+	// store doesn't keep with its root, as of a root that a release kept
+	// none for (CreateChild). Nil means there are none: such a step's child
+	// isn't created (child_not_pinned).
+	Sources compile.Sources
 	// Drivers are the drivers of the backends jobs' workers are placed
 	// with, by the backend's name (backend.Member.Backend). A member of a
 	// backend without one is one that placement leaves out, with
@@ -195,6 +200,10 @@ type Coordinator struct {
 	// placed, if it is set, hears of each job a supervisor places, as it
 	// readied it, before the attempt's driver places it.
 	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
+	// beforeChildStore, if it is set, is called as CreateChild stores a
+	// child, between its Create and its transaction, as when a test races
+	// two asks.
+	beforeChildStore func()
 
 	mu      sync.Mutex
 	serving bool
@@ -412,8 +421,7 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 	case opts.RunDir == nil:
 		return "", errors.New("coordinator: a run without a directory")
 	}
-	jobs, err := jobOrder(created.Plan)
-	if err != nil {
+	if _, err := jobOrder(created.Plan); err != nil {
 		return "", err
 	}
 	if c.opts.Groups != nil {
@@ -429,7 +437,7 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		id, queue string
 		release   func()
 	)
-	err = c.store.Tx(ctx, func(tx *store.Tx) error {
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		if id, err = tx.NewRunID(); err != nil {
 			return err
@@ -446,79 +454,7 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 				return fmt.Errorf("coordinator: hold run %s's Start: %w", id, err)
 			}
 		}
-		// Keys wraps the record's data key while the transaction holds
-		// the store's write lock, so every other write waits for it,
-		// workers' heartbeats among them: a local key file is quick to
-		// read, and a key service slow to answer holds them all up.
-		sealed, gen, err := c.sealer.Seal(ctx, id, &created.Record)
-		if err != nil {
-			return err
-		}
-		wf := hopper.NewWorkflow("meridian run "+id, nil)
-		start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
-		// A job needed on any instance of it has a marker, which waits for
-		// one, and which the jobs that need it so wait for in its place.
-		anys := anyNeeded(jobs)
-		marker := map[string]hopper.Step{}
-		for _, name := range anys {
-			marker[name] = wf.Add(anyArgs{Run: id, Job: name}, &hopper.StepOpts{
-				After: []hopper.Step{start}, OnDependencyFailure: hopper.DependencyIgnore,
-				Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
-			})
-		}
-		// Each job's supervisor runs after Start and its needs' supervisors,
-		// whatever became of them: Ready decides what their outcomes mean.
-		after := map[string]hopper.Step{}
-		for _, j := range jobs {
-			deps := []hopper.Step{start}
-			for _, n := range j.Needs {
-				if n.Any {
-					deps = append(deps, marker[n.Job])
-				} else {
-					deps = append(deps, after[n.Job])
-				}
-			}
-			after[j.Name] = wf.Add(jobArgs{Run: id, Key: j.Name}, &hopper.StepOpts{
-				After: deps, OnDependencyFailure: hopper.DependencyIgnore,
-				Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
-			})
-		}
-		deps := []hopper.Step{start}
-		for _, name := range anys {
-			deps = append(deps, marker[name])
-		}
-		for _, j := range jobs {
-			deps = append(deps, after[j.Name])
-		}
-		wf.Add(finishArgs{Run: id}, &hopper.StepOpts{
-			After: deps, OnDependencyFailure: hopper.DependencyIgnore,
-			Insert: &hopper.InsertOpts{Queue: sharedQueue, Await: true},
-		})
-		res, err := c.inserter.InsertWorkflowTx(ctx, tx.SQL(), wf)
-		if err != nil {
-			return err
-		}
-		if err := tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: opts.DefaultGroup, RunDir: opts.RunDir(id), WorkflowID: res.ID}); err != nil {
-			return err
-		}
-		// The texts of the workflows the run's tree pins are kept with
-		// it, which its child runs are created from.
-		if err := tx.KeepTexts(id, created.Texts); err != nil {
-			return err
-		}
-		// The workflow's jobs are in the order of its steps: Start, the
-		// markers, then the supervisors.
-		for i, name := range anys {
-			if err := tx.InsertAny(id, name, res.Jobs[1+i].Job.ID); err != nil {
-				return err
-			}
-		}
-		for i, j := range jobs {
-			if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: res.Jobs[1+len(anys)+i].Job.ID}); err != nil {
-				return err
-			}
-		}
-		return tx.InsertRecord(id, gen, sealed.Key, sealed.Record)
+		return c.insertRun(ctx, tx, id, created, queue, opts.DefaultGroup, opts.RunDir(id), nil)
 	})
 	if err != nil {
 		if release != nil {
@@ -530,6 +466,97 @@ func (c *Coordinator) CreateRun(ctx context.Context, created *compile.Created, o
 		return id, fmt.Errorf("coordinator: work run %s's start queue: %w", id, err)
 	}
 	return id, nil
+}
+
+// insertRun stores, in tx, the run id of what Create gave, as CreateRun
+// says: with its plan, its secret record, sealed under a data key of its
+// own that Keys wraps, the texts of the workflows its tree pins, its jobs,
+// and its hopper workflow, whose Start goes in queue; with group, its
+// default group, and dir, its directory; and for a child run, link, its
+// link to the try of the step that called it.
+func (c *Coordinator) insertRun(ctx context.Context, tx *store.Tx, id string, created *compile.Created, queue, group, dir string, link *store.Link) error {
+	jobs, err := jobOrder(created.Plan)
+	if err != nil {
+		return err
+	}
+	// Keys wraps the record's data key while the transaction holds the
+	// store's write lock, so every other write waits for it, workers'
+	// heartbeats among them: a local key file is quick to read, and a key
+	// service slow to answer holds them all up.
+	sealed, gen, err := c.sealer.Seal(ctx, id, &created.Record)
+	if err != nil {
+		return err
+	}
+	wf := hopper.NewWorkflow("meridian run "+id, nil)
+	start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
+	// A job needed on any instance of it has a marker, which waits for
+	// one, and which the jobs that need it so wait for in its place.
+	anys := anyNeeded(jobs)
+	marker := map[string]hopper.Step{}
+	for _, name := range anys {
+		marker[name] = wf.Add(anyArgs{Run: id, Job: name}, &hopper.StepOpts{
+			After: []hopper.Step{start}, OnDependencyFailure: hopper.DependencyIgnore,
+			Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
+		})
+	}
+	// Each job's supervisor runs after Start and its needs' supervisors,
+	// whatever became of them: Ready decides what their outcomes mean.
+	after := map[string]hopper.Step{}
+	for _, j := range jobs {
+		deps := []hopper.Step{start}
+		for _, n := range j.Needs {
+			if n.Any {
+				deps = append(deps, marker[n.Job])
+			} else {
+				deps = append(deps, after[n.Job])
+			}
+		}
+		after[j.Name] = wf.Add(jobArgs{Run: id, Key: j.Name}, &hopper.StepOpts{
+			After: deps, OnDependencyFailure: hopper.DependencyIgnore,
+			Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
+		})
+	}
+	deps := []hopper.Step{start}
+	for _, name := range anys {
+		deps = append(deps, marker[name])
+	}
+	for _, j := range jobs {
+		deps = append(deps, after[j.Name])
+	}
+	wf.Add(finishArgs{Run: id}, &hopper.StepOpts{
+		After: deps, OnDependencyFailure: hopper.DependencyIgnore,
+		Insert: &hopper.InsertOpts{Queue: sharedQueue, Await: true},
+	})
+	res, err := c.inserter.InsertWorkflowTx(ctx, tx.SQL(), wf)
+	if err != nil {
+		return err
+	}
+	// The finisher is the workflow's last job, which the end of a run of a
+	// root's tree wakes once the root's waits for them.
+	if err := tx.InsertRun(store.NewRun{
+		ID: id, Plan: created.Plan, DefaultGroup: group, RunDir: dir, WorkflowID: res.ID,
+		FinisherID: res.Jobs[len(res.Jobs)-1].Job.ID, Parent: link,
+	}); err != nil {
+		return err
+	}
+	// The texts of the workflows the run's tree pins are kept with it,
+	// which its child runs are created from.
+	if err := tx.KeepTexts(id, created.Texts); err != nil {
+		return err
+	}
+	// The workflow's jobs are in the order of its steps: Start, the
+	// markers, then the supervisors.
+	for i, name := range anys {
+		if err := tx.InsertAny(id, name, res.Jobs[1+i].Job.ID); err != nil {
+			return err
+		}
+	}
+	for i, j := range jobs {
+		if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: res.Jobs[1+len(anys)+i].Job.ID}); err != nil {
+			return err
+		}
+	}
+	return tx.InsertRecord(id, gen, sealed.Key, sealed.Record)
 }
 
 // startQueue is the hopper queue the Start of the run id goes in.

@@ -143,6 +143,10 @@
           "description": "The organization and user variables the run reads that aren't secrets, by name, in order: org or vars alone is all of the context.",
           "$ref": "#/$defs/Names"
         },
+        "treeVariables": {
+          "description": "The organization and user variables the workflows the run calls read, down its tree, by name, in order, which its Start reads once for the tree. Version 2.",
+          "$ref": "#/$defs/Names"
+        },
         "permissions": {
           "description": "The workflow's permissions:.",
           "type": "array",
@@ -245,6 +249,10 @@
         },
         "ref": {
           "$ref": "#/$defs/SourceRef"
+        },
+        "remote": {
+          "description": "What the remote context of a run of the workflow holds, as the Sources resolver gave it when it pinned it, for one a step's uses: names. Version 2.",
+          "$ref": "#/$defs/Strings"
         }
       },
       "required": ["location", "revision"],

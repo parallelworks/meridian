@@ -283,3 +283,47 @@ func TestCreateReportsCalledWorkflows(t *testing.T) {
 		}
 	}
 }
+
+// remoteSources is a treeSources whose workflows have a remote context of
+// their own, as a repository's have.
+type remoteSources struct{ *treeSources }
+
+func (s remoteSources) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
+	w, err := s.treeSources.Resolve(ctx, ref)
+	if err == nil {
+		w.Remote = map[string]string{"repo": "https://example.com/" + ref.Uses}
+	}
+	return w, err
+}
+
+// Create keeps, in the plan, the variables the workflows the run calls
+// read, down the tree, which the run doesn't, as its Start reads them for
+// the tree: in an expression, read whole, and in an if: written without
+// ${{ }}; and the remote context each pin has, as Sources gave it, which
+// makes the plan of version 2.
+func TestCreateKeepsTreeVariablesAndRemotes(t *testing.T) {
+	s := tree(map[string][]string{"a": {"b"}, "b": nil})
+	s.texts["github/t/a@main"] = "jobs:\n  j:\n    if: vars.GATE == 'open'\n    steps:\n      - run: echo ${{ vars.A }} ${{ org.B }}\n      - uses: github/t/b@main\n        with: {$yaml: w.yaml}\n"
+	s.texts["github/t/b@main"] = "jobs:\n  j:\n    steps:\n      - run: echo ${{ vars.* }}\n"
+	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(calling("a")), nil, compile.Options{Sources: remoteSources{s}})
+	if err != nil || c == nil {
+		t.Fatal(diags, err)
+	}
+	if want := []string{"org.B", "vars", "vars.A", "vars.GATE"}; !slices.Equal(c.Plan.Run.TreeVariables, want) {
+		t.Errorf("the tree's variables are %q, want %q", c.Plan.Run.TreeVariables, want)
+	}
+	if src := c.Plan.Jobs[0].Steps[0].Source; src == nil || src.Remote["repo"] != "https://example.com/github/t/a@main" {
+		t.Errorf("the step's pin is %+v", src)
+	}
+	if len(c.Plan.Calls) != 1 || c.Plan.Calls[0].Source.Remote["repo"] != "https://example.com/github/t/b@main" {
+		t.Errorf("the plan's calls are %+v", c.Plan.Calls)
+	}
+	if c.Plan.Version != 2 {
+		t.Errorf("the plan is of version %d", c.Plan.Version)
+	}
+	// A tree whose workflows read no variable has none.
+	c, _, err = compile.Create(t.Context(), "workflow.yaml", []byte(calling("b")), nil, compile.Options{Sources: tree(map[string][]string{"b": nil})})
+	if err != nil || c == nil || c.Plan.Run.TreeVariables != nil {
+		t.Errorf("a tree that reads no variable: %+v, %v", c, err)
+	}
+}

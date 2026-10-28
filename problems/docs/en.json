@@ -1674,6 +1674,18 @@
       "Or have whoever runs the workflow raise the limit."
     ]
   },
+  "child_not_pinned": {
+    "why": "Meridian pins every workflow a run calls, down its tree, as the run is created, and keeps their text with the run, so that each child run runs the text its root was created with. This run was created before Meridian did, so the workflow this step calls isn't among them.",
+    "fix": [
+      "Start the run again: a run created now pins its whole tree."
+    ]
+  },
+  "child_dir_outside": {
+    "why": "A run that a step calls has a directory of its own, subworkflows/<job>/step_<n> under the step's working directory, as in format 1. Meridian makes a root run's directory private, and a child's directory under it is private with it; one elsewhere wouldn't be, and Meridian doesn't make one there yet.",
+    "fix": [
+      "Give the step a working-directory: inside the run's directory, or none."
+    ]
+  },
   "owner_unmapped": {
     "why": "Meridian checks that every directory on the way to its own belongs to you or to root, as OpenSSH checks the way to a user's keys. In a user namespace that doesn't map root, as unshare --user, Apptainer, bubblewrap and some CI sandboxes make, a directory whose owner isn't mapped shows as owned by nobody, so Meridian can't tell who could change it, and refuses it rather than assume.",
     "fix": [

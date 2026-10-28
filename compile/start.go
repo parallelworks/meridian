@@ -430,7 +430,7 @@ func (st *starter) readVariables() error {
 	st.secretVariables = map[string]bool{}
 	whole, one := map[string]bool{}, map[string]bool{}
 	var first string
-	for _, names := range [][]string{p.Run.Variables, p.Run.Secrets} {
+	for _, names := range [][]string{p.Run.Variables, p.Run.Secrets, p.Run.TreeVariables} {
 		for _, name := range names {
 			path := plan.SplitPath(name)
 			if path[0] != "org" && path[0] != "vars" {

@@ -79,6 +79,15 @@ type Run struct {
 	// and "".
 	StoppedAt  time.Time
 	StopReason plan.Reason
+	// Parent is a child run's link to the try of the step that called it,
+	// or nil for a run no step called.
+	Parent *Link
+	// FinisherID is the run's finisher, a hopper job, or zero for a run
+	// stored before the store kept it; and WaitedAt is when it began to
+	// wait for the runs of the run's tree to end (WaitForDescendants), or
+	// the zero time.
+	FinisherID hopper.JobID
+	WaitedAt   time.Time
 }
 
 // A NewRun is a run to store.
@@ -91,8 +100,12 @@ type NewRun struct {
 	DefaultGroup string
 	RunDir       string
 	// WorkflowID is the run's hopper workflow, inserted in the same
-	// transaction.
+	// transaction, and FinisherID its finisher.
 	WorkflowID hopper.JobID
+	FinisherID hopper.JobID
+	// Parent is a child run's link to the try of the step that called it,
+	// whose attempt and runs are the store's, or nil.
+	Parent *Link
 }
 
 // NewRunID gives the next run's ID: one more than the last the store gave,
@@ -129,6 +142,31 @@ func (tx *Tx) InsertRun(r NewRun) error {
 	case r.WorkflowID.IsZero():
 		return errors.New("store: a run without a hopper workflow")
 	}
+	// A run stored without its finisher, as a test's, has none to wake.
+	var finisher any
+	if !r.FinisherID.IsZero() {
+		finisher = r.FinisherID
+	}
+	var link struct {
+		run, root   sql.NullInt64
+		job, attmpt sql.NullString
+		step, try   sql.NullInt64
+		depth       int
+	}
+	if l := r.Parent; l != nil {
+		if err := l.check(); err != nil {
+			return err
+		}
+		parent, ok := runNumber(l.Run)
+		rootN, rootOK := runNumber(l.Root)
+		if !ok || !rootOK {
+			return fmt.Errorf("store: a child run's link to run %q, of the tree of %q", l.Run, l.Root)
+		}
+		link.run, link.root = sql.NullInt64{Int64: parent, Valid: true}, sql.NullInt64{Int64: rootN, Valid: true}
+		link.job, link.attmpt = sql.NullString{String: l.Job, Valid: true}, sql.NullString{String: l.Attempt, Valid: true}
+		link.step, link.try = sql.NullInt64{Int64: int64(l.Step), Valid: true}, sql.NullInt64{Int64: int64(l.Try), Valid: true}
+		link.depth = l.Depth
+	}
 	encoded, err := plan.Encode(r.Plan)
 	if err != nil {
 		return err
@@ -142,11 +180,13 @@ func (tx *Tx) InsertRun(r NewRun) error {
 		return err
 	}
 	res, err := tx.exec(`INSERT INTO meridian_runs (id, created_at, plan_version, plan_digest, plan,
-  name, location, release, default_group, run_dir, workflow_id, state)
-SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  name, location, release, default_group, run_dir, workflow_id, state, finisher_id,
+  parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_run')`,
 		n, now, r.Plan.Version, digest, encoded,
-		r.Plan.Run.Name, r.Plan.Run.Source.Location, r.Plan.Run.Release, r.DefaultGroup, r.RunDir, r.WorkflowID, RunCreated, n)
+		r.Plan.Run.Name, r.Plan.Run.Source.Location, r.Plan.Run.Release, r.DefaultGroup, r.RunDir, r.WorkflowID, RunCreated, finisher,
+		link.run, link.job, link.attmpt, link.step, link.try, link.root, link.depth, n)
 	if err != nil {
 		return err
 	}
@@ -155,7 +195,8 @@ WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_
 
 const runColumns = `id, created_at, plan, plan_version, plan_digest, name, location, release,
   default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at,
-  start_state, start_tries, diagnostics, any_job_failed_at, stopped_at, stop_reason`
+  start_state, start_tries, diagnostics, any_job_failed_at, stopped_at, stop_reason,
+  finisher_id, waited_at, parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth`
 
 // Run returns the run with the ID id.
 func (tx *Tx) Run(id string) (*Run, error) {
@@ -175,11 +216,17 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		state           string
 		startState      []byte
 		diags           []byte
+		waited          sql.NullInt64
+		parentRun, root sql.NullInt64
+		job, attempt    sql.NullString
+		step, try       sql.NullInt64
+		depth           int
 	)
 	err := tx.queryRow("SELECT "+runColumns+" FROM meridian_runs WHERE id = ?", n).Scan(
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
 		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
-		&startState, &r.StartTries, &diags, &jobFailed, &stopped, &stopReason)
+		&startState, &r.StartTries, &diags, &jobFailed, &stopped, &stopReason,
+		&r.FinisherID, &waited, &parentRun, &job, &attempt, &step, &try, &root, &depth)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -190,6 +237,13 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	r.Outcome, r.Reason = plan.Outcome(outcome.String), plan.Reason(reason.String)
 	r.StartedAt, r.EndedAt, r.AnyJobFailedAt = timeOf(started), timeOf(ended), timeOf(jobFailed)
 	r.StoppedAt, r.StopReason = timeOf(stopped), plan.Reason(stopReason.String)
+	r.WaitedAt = timeOf(waited)
+	if parentRun.Valid {
+		r.Parent = &Link{
+			Run: runID(parentRun.Int64), Job: job.String, Attempt: attempt.String,
+			Step: int(step.Int64), Try: int(try.Int64), Root: runID(root.Int64), Depth: depth,
+		}
+	}
 	if startState != nil {
 		if r.StartState, err = tx.s.starts.decode(number, startState); err != nil {
 			// One of a newer version is a newer release's to read, and is
