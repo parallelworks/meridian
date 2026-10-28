@@ -595,6 +595,12 @@
       "Name each file or directory to check out by its path from the repository's root, with no pattern."
     ]
   },
+  "checkout_revision_invalid": {
+    "why": "A parallelworks/checkout step's branch names a branch, a tag or a full commit, which the Sources interface pins with git as the run is created. One that starts with a hyphen, which git could take for an option, or that ends with a dot, or that has a name in it that is empty, starts with a dot or ends in .lock, isn't a name git takes for a branch or a tag, so Meridian doesn't ask git for it.",
+    "fix": [
+      "Name a branch, a tag, or a commit by its full SHA."
+    ]
+  },
   "checkout_path_not_found": {
     "why": "An entry of a parallelworks/checkout step's sparse_checkout names no file and no directory in the commit the step was pinned to as the run was created. Nothing is written for it, as in format 1, and the step goes on.",
     "fix": [
@@ -1015,9 +1021,10 @@
     ]
   },
   "uses_not_supported": {
-    "why": "A step that uses: an action, such as parallelworks/checkout, or a workflow runs it rather than a command. This version of Meridian's worker runs only steps with run:, so the step fails.",
+    "why": "A step that uses: an action the coordinator performs, such as parallelworks/checkout, or a workflow asks the coordinator for it through version 3 of the worker API, and what a checkout or a call of a workflow runs is pinned as its run is created. A worker given the step by a coordinator of an earlier version, which speaks an earlier version of the API, can't ask for it, and a checkout, or a call of a workflow, of a run an earlier version of Meridian created has no pin, so the step fails.",
     "fix": [
-      "Do the step's work with a run: command instead."
+      "Upgrade the coordinator to the worker's version of Meridian.",
+      "Run the workflow again, as a new run, rather than resume a run an earlier version of Meridian created."
     ]
   },
   "action_needs_platform": {
