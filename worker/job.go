@@ -489,7 +489,8 @@ type startedTry struct {
 	// one that doesn't runs.
 	calls bool
 	dir   string
-	// s says what stops the try, and last whether it is its step's last.
+	// s says what stops the try, and last whether it is its step's last:
+	// beginTry sets both, and until it has, they are zero.
 	s    stops
 	last bool
 	key  logKey
