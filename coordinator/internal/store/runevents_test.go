@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -242,6 +243,67 @@ func TestTxSharedAndAfterCommit(t *testing.T) {
 	inTx(t, s, func(tx *Tx) error {
 		if next := tx.Shared(key{}, func() any { return new(int) }); next == first {
 			t.Error("the next transaction shares the last one's value")
+		}
+		return nil
+	})
+}
+
+// TestTreeHeads checks the heads of a tree, of its root or of a run below
+// it: each run's last event, as its events say, and whether it has ended;
+// and none for a run the store hasn't.
+func TestTreeHeads(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	root := createRun(t, s)
+	var attempt *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.StartRun(root, testState(), nil); err != nil {
+			return err
+		}
+		var err error
+		attempt, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	p := testPlan(t)
+	children := make([]string, 2)
+	for i := range children {
+		inTx(t, s, func(tx *Tx) error {
+			var err error
+			if children[i], err = tx.NewRunID(); err != nil {
+				return err
+			}
+			link := Link{Run: root, Job: "build", Attempt: attempt.ID, Step: 1, Try: i, Root: root, Depth: 1}
+			return tx.InsertRun(NewRun{ID: children[i], Plan: p, DefaultGroup: "local", RunDir: "/runs/x", WorkflowID: fakeJobID(40 + i), Parent: &link})
+		})
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.EndRun(children[0], plan.OutcomeSuccess, "") })
+	inTx(t, s, func(tx *Tx) error {
+		want := map[string]RunHead{}
+		for _, run := range append([]string{root}, children...) {
+			events, err := tx.RunEvents(run, 0, 100)
+			if err != nil {
+				return err
+			}
+			r, err := tx.Run(run)
+			if err != nil {
+				return err
+			}
+			h := RunHead{Ended: r.State == RunEnded}
+			if len(events) > 0 {
+				h.LastEvent = events[len(events)-1].Seq
+			}
+			want[run] = h
+		}
+		if !want[children[0]].Ended || want[root].LastEvent == 0 {
+			t.Errorf("the tree's heads to want are %v", want)
+		}
+		for _, of := range []string{root, children[1]} {
+			if heads, err := tx.TreeHeads(of); err != nil || !maps.Equal(heads, want) {
+				t.Errorf("the heads of %s's tree are %v, %v; want %v", of, heads, err, want)
+			}
+		}
+		if heads, err := tx.TreeHeads("999"); err != nil || len(heads) != 0 {
+			t.Errorf("the heads of a run the store hasn't are %v, %v", heads, err)
 		}
 		return nil
 	})

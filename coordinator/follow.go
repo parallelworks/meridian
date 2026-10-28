@@ -120,7 +120,11 @@ func (c *Coordinator) Follow(ctx context.Context, id string, opts FollowOptions)
 		// Taken before the events are read, so that one added after the
 		// read wakes the wait below.
 		changed := c.store.Changes()
-		read, err := f.poll(ctx, true)
+		heads, err := f.heads(ctx)
+		if err != nil {
+			return nil, err
+		}
+		read, err := f.poll(ctx, true, heads)
 		if err != nil {
 			return nil, err
 		}
@@ -152,36 +156,43 @@ func (c *Coordinator) newFollower(id string, callers []Caller, opts FollowOption
 // of the runs its steps called that it follows (FollowOptions.Tree). It
 // reports whether it read any, and has done with the run once it has
 // reported its end (done). top is set for the run Follow follows, whose
-// end it reports after the ends of the runs of its tree.
-func (f *follower) poll(ctx context.Context, top bool) (bool, error) {
+// end it reports after the ends of the runs of its tree. It reads the
+// store only for the runs that heads say have something new there, that
+// heads say nothing of (follower.heads), or that it has yet to read
+// (follower.news).
+func (f *follower) poll(ctx context.Context, top bool, heads map[string]store.RunHead) (bool, error) {
 	read := false
 	if !f.done {
 		var (
 			events []store.RunEvent
 			run    *store.Run
 			now    time.Time
+			readAt time.Time
 		)
-		err := f.c.store.View(ctx, func(tx *store.Tx) error {
-			var err error
-			if events, err = tx.RunEvents(f.run, f.after, followEvents); err != nil {
+		if f.news(heads) {
+			err := f.c.store.View(ctx, func(tx *store.Tx) error {
+				var err error
+				if events, err = tx.RunEvents(f.run, f.after, followEvents); err != nil {
+					return err
+				}
+				if len(events) > 0 {
+					now, err = tx.Now()
+					return err
+				}
+				run, err = tx.Run(f.run)
 				return err
+			})
+			readAt = time.Now()
+			switch {
+			case top && errors.Is(err, store.ErrNotFound):
+				return false, ErrRunNotFound
+			case err != nil && !top:
+				// The run a step called, not the one Follow follows.
+				return false, fmt.Errorf("coordinator: run %s, which a step of run %s called: %w", f.run, f.callers[len(f.callers)-1].Run, err)
+			case err != nil:
+				return false, err
 			}
-			if len(events) > 0 {
-				now, err = tx.Now()
-				return err
-			}
-			run, err = tx.Run(f.run)
-			return err
-		})
-		readAt := time.Now()
-		switch {
-		case top && errors.Is(err, store.ErrNotFound):
-			return false, ErrRunNotFound
-		case err != nil && !top:
-			// The run a step called, not the one Follow follows.
-			return false, fmt.Errorf("coordinator: run %s, which a step of run %s called: %w", f.run, f.callers[len(f.callers)-1].Run, err)
-		case err != nil:
-			return false, err
+			f.read = true
 		}
 		for _, e := range events {
 			f.after = e.Seq
@@ -205,7 +216,7 @@ func (f *follower) poll(ctx context.Context, top bool) (bool, error) {
 				f.children = append(f.children, f.c.newFollower(ev.Child, callers, f.opts))
 			}
 		}
-		if len(events) == 0 && run.State == store.RunEnded {
+		if len(events) == 0 && run != nil && run.State == store.RunEnded {
 			// A run that ended before its events were kept.
 			return true, f.end(ctx, Event{
 				Kind: RunFinished, Run: f.run, Callers: f.callers, Time: run.EndedAt, Outcome: run.Outcome, Reason: run.Reason, Diagnostics: run.Diagnostics,
@@ -217,18 +228,50 @@ func (f *follower) poll(ctx context.Context, top bool) (bool, error) {
 		}
 		read = len(events) > 0 || logs
 	}
-	children, err := f.pollChildren(ctx)
+	children, err := f.pollChildren(ctx, heads)
 	return read || children, err
 }
 
+// heads reads, in one query, what the store says of the runs of the
+// follower's run's tree (store.Tx.TreeHeads), when it follows more than its
+// own: so that a poll reads only those runs with something new, rather
+// than each in a transaction of its own. It returns nil, which says
+// nothing of any run, while it follows one, which a poll reads anyway. A
+// run the store hasn't isn't in it, and a poll reads it, and says so.
+func (f *follower) heads(ctx context.Context) (map[string]store.RunHead, error) {
+	if len(f.children) == 0 {
+		return nil, nil
+	}
+	var heads map[string]store.RunHead
+	err := f.c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		heads, err = tx.TreeHeads(f.run)
+		return err
+	})
+	return heads, err
+}
+
+// news reports whether heads say that the store may have something new of
+// the follower's run, past what it reported: an event, or its end, which
+// a run that ended before its events were kept has none of; or whether
+// they say nothing of it; or whether the follower has yet to read the run.
+// A run that can't be read, as one whose start state doesn't decode, may
+// never start, nor have an event, nor end: its first poll reads it, and
+// fails, rather than wait for it.
+func (f *follower) news(heads map[string]store.RunHead) bool {
+	h, ok := heads[f.run]
+	return !f.read || !ok || h.LastEvent > f.after || h.Ended
+}
+
 // pollChildren polls the followers of the runs the follower's run's steps
-// called, and stops following those that have done with their run, and
+// called, reading the store only for those heads say may have something
+// new (poll), and stops following those that have done with their run, and
 // with the runs its steps called (finished). It reports whether any read.
-func (f *follower) pollChildren(ctx context.Context) (bool, error) {
+func (f *follower) pollChildren(ctx context.Context, heads map[string]store.RunHead) (bool, error) {
 	read := false
 	kept := f.children[:0]
 	for _, child := range f.children {
-		r, err := child.poll(ctx, false)
+		r, err := child.poll(ctx, false, heads)
 		if err != nil {
 			return read, err
 		}
@@ -249,15 +292,17 @@ func (f *follower) finished() bool {
 }
 
 // A follower is what Follow keeps of a run as it follows it: the steps'
-// tries that called it, from the run Follow follows down; the last of its
-// events it reported, and whether it has reported its end; the logs it
-// follows, in the order it began to; the attempts that have ended; and
-// the followers of the runs its steps called (FollowOptions.Tree).
+// tries that called it, from the run Follow follows down; whether it has
+// read the run, the last of its events it reported, and whether it has
+// reported its end; the logs it follows, in the order it began to; the
+// attempts that have ended; and the followers of the runs its steps called
+// (FollowOptions.Tree).
 type follower struct {
 	c        *Coordinator
 	run      string
 	callers  []Caller
 	opts     FollowOptions
+	read     bool
 	after    int64
 	done     bool
 	logs     []*followedLog
@@ -362,7 +407,7 @@ func (f *follower) end(ctx context.Context, e Event, top bool) error {
 	switch {
 	case top && f.opts.Stored:
 		for {
-			read, err := f.pollChildren(ctx)
+			read, err := f.pollChildren(ctx, nil)
 			if err != nil {
 				return err
 			}
@@ -402,7 +447,11 @@ func (f *follower) drain(ctx context.Context) error {
 	tick := time.NewTicker(f.c.followEvery)
 	defer tick.Stop()
 	for len(f.children) > 0 {
-		read, err := f.pollChildren(ctx)
+		heads, err := f.heads(ctx)
+		if err != nil {
+			return err
+		}
+		read, err := f.pollChildren(ctx, heads)
 		if err != nil || read {
 			if err != nil {
 				return err
