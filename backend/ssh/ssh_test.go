@@ -3,13 +3,10 @@ package ssh
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -154,19 +151,8 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	if err := os.Mkdir(filepath.Join(client, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := ssh.MarshalPrivateKey(k, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(client, ".ssh", "id_ecdsa"), pem.EncodeToMemory(block))
-	signer, err := ssh.NewSignerFromKey(k)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyFile, signer := sshtest.NewKeyFile(t)
+	write(t, filepath.Join(client, ".ssh", "id_ecdsa"), keyFile)
 	opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
 		"HOME=" + r.home, "XDG_RUNTIME_DIR=" + runtimeDir,
 		"XDG_CACHE_HOME=", "XDG_STATE_HOME=", "XDG_CONFIG_HOME=", "MERIDIAN_CACHE_DIR=", "MERIDIAN_STATE_DIR=", "MERIDIAN_CONFIG_DIR=",

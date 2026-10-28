@@ -1,4 +1,4 @@
-// Package sshdtest runs OpenSSH's sshd for tests: as the test's user, on a
+// Package opensshtest runs OpenSSH's sshd for tests: as the test's user, on a
 // port of the loopback interface, with a host key, a config and the keys
 // it accepts made for the test, so that a test can check Meridian against
 // real OpenSSH as well as against sshtest's server in process.
@@ -12,14 +12,10 @@
 // sessions have no PAM session, so neither pam_systemd's /run/user and
 // user manager, nor logind's KillUserProcesses, which how a worker on a
 // host outlives its session depends on. Those it doesn't check.
-package sshdtest
+package opensshtest
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -34,7 +30,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/parallelworks/meridian/internal/sshtest"
 )
 
 // EnvSSHD names the sshd to run, by its absolute path, which OpenSSH needs
@@ -79,7 +76,7 @@ func New(t testing.TB, opts Options) *Server {
 	case sshd == "":
 		t.Skipf("%s names no sshd", EnvSSHD)
 	case runtime.GOOS != "linux":
-		t.Skipf("%s is for Linux, where sshdtest finds sshd's processes in /proc", EnvSSHD)
+		t.Skipf("%s is for Linux, where opensshtest finds sshd's processes in /proc", EnvSSHD)
 	case !filepath.IsAbs(sshd):
 		t.Fatalf("%s is %q, not an absolute path, which sshd needs to run itself again", EnvSSHD, sshd)
 	}
@@ -90,7 +87,7 @@ func New(t testing.TB, opts Options) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	key, hostKey := hostKey(t)
+	key, hostKey := sshtest.NewKeyFile(t)
 	file := func(name string, data []byte) string {
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, data, 0o600); err != nil {
@@ -193,25 +190,6 @@ func configOf(opts Options, addr, hostKey, authorized, pidFile string) []byte {
 	return b.Bytes()
 }
 
-// hostKey returns a new ECDSA P-256 host key, in OpenSSH's format, and its
-// signer.
-func hostKey(t testing.TB) ([]byte, ssh.Signer) {
-	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := ssh.MarshalPrivateKey(k, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.NewSignerFromKey(k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pem.EncodeToMemory(block), signer
-}
-
 // freeAddr returns an address of the loopback interface whose port no
 // one listens on now, for sshd to.
 func freeAddr(t testing.TB) string {
@@ -242,7 +220,7 @@ func (s *Server) KnownHosts(name string) string {
 	if name == "" {
 		name = s.addr
 	}
-	return knownhosts.Line([]string{knownhosts.Normalize(name)}, s.hostKey.PublicKey()) + "\n"
+	return sshtest.KnownHostsLine(name, s.hostKey.PublicKey())
 }
 
 // Drop ends every connection sshd has, as a network that drops them does:
@@ -283,7 +261,7 @@ func killPid(pid int) {
 // says, which only Linux has.
 func descendants(pid int) ([]int, error) {
 	if runtime.GOOS != "linux" {
-		return nil, errors.New("sshdtest: finding sshd's processes needs Linux's /proc")
+		return nil, errors.New("opensshtest: finding sshd's processes needs Linux's /proc")
 	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {

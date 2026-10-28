@@ -11,21 +11,21 @@ import (
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
 	"github.com/parallelworks/meridian/internal/kindtest"
-	"github.com/parallelworks/meridian/internal/sshdtest"
+	"github.com/parallelworks/meridian/internal/opensshtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
-// These tests run OpenSSH's sshd, where sshdtest.EnvSSHD names one, as
+// These tests run OpenSSH's sshd, where opensshtest.EnvSSHD names one, as
 // CI's ssh job does, and are skipped otherwise: what sshtest's server
 // checks, real OpenSSH checks again.
 
 // openSSH starts an sshd that h's key logs in to, with opts, and returns
 // it, with the target that reaches it as the test's user, whom sshd, run
 // as that user, logs in as only.
-func (h *home) openSSH(opts sshdtest.Options) (*sshdtest.Server, sshconn.Target) {
+func (h *home) openSSH(opts opensshtest.Options) (*opensshtest.Server, sshconn.Target) {
 	h.t.Helper()
 	opts.Authorized = append(opts.Authorized, h.key.PublicKey())
-	s := sshdtest.New(h.t, opts)
+	s := opensshtest.New(h.t, opts)
 	u, err := user.Current()
 	if err != nil {
 		h.t.Fatal(err)
@@ -40,7 +40,7 @@ func (h *home) openSSH(opts sshdtest.Options) (*sshdtest.Server, sshconn.Target)
 func TestOpenSSH(t *testing.T) {
 	requireSSH(t)
 	h := newHome(t)
-	s, target := h.openSSH(sshdtest.Options{})
+	s, target := h.openSSH(opensshtest.Options{})
 	h.knownHosts(s.KnownHosts(""))
 	c := dial(t, h.dialer(), target)
 	if out := run(t, c, "echo hello"); out != "hello\n" {
@@ -88,7 +88,7 @@ func TestOpenSSH(t *testing.T) {
 func TestOpenSSHForwardingRefused(t *testing.T) {
 	requireSSH(t)
 	h := newHome(t)
-	s, target := h.openSSH(sshdtest.Options{NoForwarding: true})
+	s, target := h.openSSH(opensshtest.Options{NoForwarding: true})
 	h.knownHosts(s.KnownHosts(""))
 	c := dial(t, h.dialer(), target)
 	dir, err := os.MkdirTemp("", "fwd")
@@ -110,7 +110,7 @@ func TestOpenSSHForwardingRefused(t *testing.T) {
 func TestOpenSSHUnapproved(t *testing.T) {
 	requireSSH(t)
 	h := newHome(t)
-	s, target := h.openSSH(sshdtest.Options{
+	s, target := h.openSSH(opensshtest.Options{
 		KeyExchanges: []string{"curve25519-sha256", "curve25519-sha256@libssh.org"},
 		Ciphers:      []string{"chacha20-poly1305@openssh.com"},
 	})

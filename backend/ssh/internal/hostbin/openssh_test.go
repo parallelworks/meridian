@@ -10,18 +10,18 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
-	"github.com/parallelworks/meridian/internal/sshdtest"
+	"github.com/parallelworks/meridian/internal/opensshtest"
 )
 
 // TestOpenSSHInstall checks Install against OpenSSH's sshd, where
-// sshdtest.EnvSSHD names one, as CI's ssh job does, and the system's sh,
+// opensshtest.EnvSSHD names one, as CI's ssh job does, and the system's sh,
 // which runs its scripts: the binary is copied into the cache its
 // MERIDIAN_CACHE_DIR names, checked against its digest, and found there
 // the next time, without being copied again.
 func TestOpenSSHInstall(t *testing.T) {
 	c := newClient(t)
 	cache := t.TempDir()
-	s := sshdtest.New(t, sshdtest.Options{Authorized: []ssh.PublicKey{c.key.PublicKey()}, Env: []string{"MERIDIAN_CACHE_DIR=" + cache}})
+	s := opensshtest.New(t, opensshtest.Options{Authorized: []ssh.PublicKey{c.key.PublicKey()}, Env: []string{"MERIDIAN_CACHE_DIR=" + cache}})
 	u, err := user.Current()
 	if err != nil {
 		t.Fatal(err)

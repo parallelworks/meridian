@@ -1,9 +1,6 @@
-package sshdtest_test
+package opensshtest_test
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"errors"
 	"io"
 	"os"
@@ -15,7 +12,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/parallelworks/meridian/internal/sshdtest"
+	"github.com/parallelworks/meridian/internal/opensshtest"
+	"github.com/parallelworks/meridian/internal/sshtest"
 )
 
 // TestServer checks the sshd a test runs: a client with a key it accepts
@@ -23,16 +21,9 @@ import (
 // session has the environment it sets, HOME over sshd's own; and Drop
 // ends the connection, while sshd goes on taking others.
 func TestServer(t *testing.T) {
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.NewSignerFromKey(k)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := sshtest.NewKey(t)
 	home := t.TempDir()
-	s := sshdtest.New(t, sshdtest.Options{
+	s := opensshtest.New(t, opensshtest.Options{
 		Authorized: []ssh.PublicKey{signer.PublicKey()},
 		Env:        []string{"HOME=" + home, "MERIDIAN_TEST_VALUE=a value"},
 	})
@@ -55,7 +46,7 @@ func TestServer(t *testing.T) {
 }
 
 // config is a client's config for s, logging in with signer.
-func config(t *testing.T, s *sshdtest.Server, signer ssh.Signer) *ssh.ClientConfig {
+func config(t *testing.T, s *opensshtest.Server, signer ssh.Signer) *ssh.ClientConfig {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "known_hosts")
 	if err := os.WriteFile(file, []byte(s.KnownHosts("")), 0o600); err != nil {
@@ -84,7 +75,7 @@ func config(t *testing.T, s *sshdtest.Server, signer ssh.Signer) *ssh.ClientConf
 }
 
 // dial connects to s, logging in with signer.
-func dial(t *testing.T, s *sshdtest.Server, signer ssh.Signer) *ssh.Client {
+func dial(t *testing.T, s *opensshtest.Server, signer ssh.Signer) *ssh.Client {
 	t.Helper()
 	c, err := ssh.Dial("tcp", s.Addr(), config(t, s, signer))
 	if err != nil {

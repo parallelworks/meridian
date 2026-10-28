@@ -1,13 +1,9 @@
 package hostbin
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
-	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,18 +63,9 @@ func newClient(t *testing.T) *client {
 	if err := os.Mkdir(filepath.Join(c.dir, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := ssh.MarshalPrivateKey(k, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(c.dir, ".ssh", "id_ecdsa"), pem.EncodeToMemory(block))
-	if c.key, err = ssh.NewSignerFromKey(k); err != nil {
-		t.Fatal(err)
-	}
+	var key []byte
+	key, c.key = sshtest.NewKeyFile(t)
+	write(t, filepath.Join(c.dir, ".ssh", "id_ecdsa"), key)
 	return c
 }
 
