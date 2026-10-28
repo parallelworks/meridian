@@ -111,10 +111,12 @@ bench: ## Run each benchmark once, to check that it still runs
 # A process built with the race detector sleeps a second before it exits
 # (GORACE's atexit_sleep_ms), and the tests start many: a worker for each
 # job, meridian host, and the command itself. Without the sleep, the
-# meridian command's tests take a third less time. A race the process
-# reports in its last second may be cut short, as it would be at any
-# moment it is killed. The caller's GORACE comes after, so it can set the
-# sleep again.
+# meridian command's tests take a third less time. A race found before the
+# process exits is reported in full, and fails it, either way; what the
+# sleep adds is a second for goroutines still running as it exits, such as
+# those a test left running, to race. That is lost, as such races in the
+# processes the tests start were anyway: nothing checks how a worker
+# exits. The caller's GORACE comes after, so it can set the sleep again.
 .PHONY: test-race
 test-race: ## Run tests with the race detector (needs cgo and a C compiler on Linux)
 	$(FIPS) CGO_ENABLED=1 GORACE="atexit_sleep_ms=0 $${GORACE:-}" go test -race -shuffle=on -timeout=15m ./...
