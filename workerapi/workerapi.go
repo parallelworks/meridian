@@ -4,7 +4,8 @@
 // (docs/design.md, The worker API).
 //
 // The API's paths are under /v1/. Bodies are JSON, but a log upload's,
-// which is the log's bytes, and both sides encode and decode them with
+// which is the log's bytes, and a checkout's tree, which is a tar stream
+// (PathCheckout), and both sides encode and decode them with
 // Marshal and Unmarshal, which refuse a member the type doesn't have: a
 // worker never runs a job without a part it doesn't understand, such as
 // the container its steps run in. Unmarshal refuses what the bodies'
@@ -117,7 +118,10 @@
 // and a different one is refused, as Fenced. So does an ActionRequest, by
 // its step and try: the coordinator performs the action once, and gives a
 // repeat the same answer. A ChildRequest makes a step's try's child run
-// once: repeating it is answered with the same child.
+// once: repeating it is answered with the same child. A checkout's tree is
+// read from the commit its step was pinned to, so a repeat of the request
+// is given the same tree, which the worker writes again over what it wrote
+// of it.
 //
 // # Errors
 //
@@ -130,13 +134,14 @@
 // reason setup-failed, or whose Seq is behind the events stored; and so
 // are events with a member the attempt's version doesn't have, as LastTry
 // in an attempt of version 1, and an ActionRequest of a step that uses no
-// action the coordinator performs. A log upload of more than MaxLogUpload
-// bytes, an ActionRequest of more than MaxActionRequest, or a ChildRequest
-// of more than MaxChildRequest, is 413 Content Too Large. A path the API
-// doesn't have is 404, as is a path a later version adds, of an attempt of
-// an earlier one; and one of its paths with another method is 405, with an
-// Allow header. The suite in package workerapitest checks a coordinator
-// against all of this.
+// action the coordinator performs, or a checkout's of a try whose action
+// wasn't answered success, or of another request than its action's. A log
+// upload of more than MaxLogUpload bytes, an ActionRequest of more than
+// MaxActionRequest, or a ChildRequest of more than MaxChildRequest, is 413
+// Content Too Large. A path the API doesn't have is 404, as is a path a
+// later version adds, of an attempt of an earlier one; and one of its paths
+// with another method is 405, with an Allow header. The suite in package
+// workerapitest checks a coordinator against all of this.
 //
 // While the coordinator can't be reached, a worker keeps running its
 // steps, spools its logs to disk up to a limit, keeps its events in
@@ -182,7 +187,9 @@ const Version2 = 2
 
 // Version3 is the version of the API that added PathAction, through which
 // a step that uses a built-in action the coordinator performs asks it for
-// that action (ActionRequest, ActionAnswer); and child runs: PathChild,
+// that action (ActionRequest, ActionAnswer), and PathCheckout, through
+// which a parallelworks/checkout step's try reads its tree once the
+// coordinator has answered its action; and child runs: PathChild,
 // PathChildEnd and PathChildStop, through which a step whose uses: names a
 // workflow asks for the run of it, waits for it and stops it (ChildRequest,
 // Child, ChildStop), and Claim.Tree, what a child run's attempt has of its
@@ -263,6 +270,35 @@ const (
 	// answered with 204 No Content once the child's stop is stored. It is
 	// of version 3.
 	PathChildStop = "/v1/child/stop"
+	// PathCheckout reads the tree of a parallelworks/checkout step's try,
+	// once the coordinator has answered the try's action with success
+	// (PathAction): the same ActionRequest, answered with the tree of the
+	// commit the step was pinned to, or of its sparse_checkout's paths in
+	// it, as a tar stream (CheckoutMediaType) whose files come to at most
+	// MaxCheckoutBytes, in MaxCheckoutEntries entries at most. The
+	// coordinator reads which tree from the run's plan, never from the
+	// request, and serves it only for the request its action answered
+	// success, as a repeat of it: any of an attempt that no longer holds
+	// its job is fenced, and one of a try whose action wasn't answered
+	// success, or another request for the try, is 400, the worker's bug,
+	// which fails the step rather than halt the attempt. The tar holds
+	// directories, files and symbolic links, with paths from the
+	// repository's root, and no .git. A stream cut short ends without the
+	// end of its chunked body, an error, and the worker asks again. It is
+	// of version 3 (Version3).
+	PathCheckout = "/v1/checkout"
+)
+
+// CheckoutMediaType is the media type of a tree's tar stream (PathCheckout).
+const CheckoutMediaType = "application/x-tar"
+
+// MaxCheckoutBytes is the most bytes the files of a checkout's tree come
+// to, together, and MaxCheckoutEntries the most entries it has, its
+// directories, files and links, so that no tree exhausts a host's inodes
+// (PathCheckout).
+const (
+	MaxCheckoutBytes   = 1 << 30
+	MaxCheckoutEntries = 1_000_000
 )
 
 // ControlWaitSeconds is the longest the coordinator holds a control poll

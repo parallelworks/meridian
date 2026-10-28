@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
@@ -12,7 +13,8 @@ import (
 )
 
 // The built-in actions the coordinator performs, as their steps' uses:
-// names them, which a worker asks it for (workerapi.PathAction).
+// names them, which a worker asks it for (workerapi.PathAction), besides
+// checkout's (plan.CheckoutUses), whose tree it serves (checkout).
 const (
 	actionCancelJobs    = "parallelworks/cancel-jobs"
 	actionUpdateSession = "parallelworks/update-session"
@@ -35,6 +37,8 @@ func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (worker
 		return workerapi.ActionAnswer{}, err
 	}
 	switch step.Uses {
+	case plan.CheckoutUses:
+		return r.c.checkout(ctx, call, step)
 	case actionCancelJobs:
 		return r.c.cancelJobs(ctx, call, step)
 	case actionUpdateSession:
@@ -43,6 +47,19 @@ func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (worker
 		})
 	}
 	return workerapi.ActionAnswer{}, fmt.Errorf("%w: %q", workerapisrv.ErrNotAction, step.Uses)
+}
+
+// Tree writes the tree of the parallelworks/checkout step of call's
+// attempt, as the run's plan pins it.
+func (r actions) Tree(ctx context.Context, call *workerapisrv.ActionCall, w io.Writer) error {
+	step, err := r.c.actionStep(ctx, call)
+	if err != nil {
+		return err
+	}
+	if step.Uses != plan.CheckoutUses {
+		return fmt.Errorf("%w: %q has no tree", workerapisrv.ErrNotAction, step.Uses)
+	}
+	return r.c.tree(ctx, call, step, w)
 }
 
 // actionStep returns the step of call's attempt's job that call names, as

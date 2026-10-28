@@ -693,6 +693,59 @@
       "Nombra cada archivo o directorio que descargar por su ruta desde la raíz del repositorio, sin patrones."
     ]
   },
+  "checkout_path_not_found": {
+    "title": "Entrada de sparse checkout que no nombra nada",
+    "why": "Una entrada del sparse_checkout de un paso parallelworks/checkout no nombra ningún archivo ni directorio en el commit al que se fijó el paso al crear la ejecución. No se escribe nada para ella, como en el formato 1, y el paso continúa.",
+    "fix": [
+      "Comprueba la entrada contra el repositorio, en la branch que nombra el paso.",
+      "Quita una entrada que el repositorio ya no tiene."
+    ]
+  },
+  "checkout_submodules": {
+    "title": "Checkout completo de un repositorio con submódulos",
+    "why": "El formato 1 clona un repositorio completo con sus submódulos. Meridian aún no descarga submódulos, así que un parallelworks/checkout de un repositorio completo que tiene alguno falla, en vez de dejarlo vacío. Un sparse checkout deja vacíos los submódulos, como el del formato 1.",
+    "fix": [
+      "Descarga solo las rutas que necesita el job, con sparse_checkout.",
+      "Descarga el repositorio de un submódulo con un paso propio."
+    ]
+  },
+  "checkout_too_large": {
+    "title": "Checkout demasiado grande",
+    "why": "El árbol de un paso parallelworks/checkout llega al worker desde el coordinador, que lo lee del commit al que se fijó el paso. Meridian limita el tamaño de los archivos, en conjunto, de cada checkout.",
+    "fix": [
+      "Descarga solo las rutas que necesita el job, con sparse_checkout."
+    ]
+  },
+  "checkout_too_many": {
+    "title": "Checkout con demasiadas entradas",
+    "why": "El árbol de un paso parallelworks/checkout llega al worker desde el coordinador, que lo lee del commit al que se fijó el paso. Meridian limita cuántos directorios, archivos y enlaces escribe un checkout, para que ningún árbol agote los inodos de un host.",
+    "fix": [
+      "Descarga solo las rutas que necesita el job, con sparse_checkout."
+    ]
+  },
+  "checkout_unavailable": {
+    "title": "Commit del checkout que no se pudo leer",
+    "why": "El coordinador lee el commit al que se fijó un paso parallelworks/checkout al crear la ejecución desde su copia del repositorio, y lo vuelve a descargar si la copia no lo tiene, 5 veces, con 2, 4, 8 y 16 segundos entre ellas, como el formato 1 intenta un clon. No se pudo acceder al repositorio, o ya no tiene el commit, como después de reescribir una branch. El retry: del paso puede volver a intentarlo.",
+    "fix": [
+      "Comprueba que se puede acceder al repositorio desde donde se ejecuta Meridian, con tus credenciales.",
+      "Si se reescribió la branch, vuelve a ejecutar el flujo de trabajo, que la fija de nuevo."
+    ]
+  },
+  "checkout_unsafe": {
+    "title": "Miembro del árbol del checkout que el worker no escribe",
+    "why": "El worker escribe el árbol de un paso parallelworks/checkout solo dentro del directorio que nombra el paso, y solo lo que contiene un commit de Git: directorios, archivos y enlaces simbólicos, y ningún .git, ni un enlace a uno. Un miembro del árbol que sea otra cosa, o cuyo nombre salga de ese directorio, no lo hizo un commit, y el paso falla antes de que el worker lo escriba.",
+    "fix": [
+      "Informa del error, con el repositorio y el commit que descarga el paso."
+    ]
+  },
+  "checkout_write_failed": {
+    "title": "Escritura del árbol del checkout que falló",
+    "why": "El worker escribe el árbol de un paso parallelworks/checkout en el directorio que nombra el paso, su path: en su directorio de trabajo, fusionándolo con lo que hay allí, como lo copia el formato 1: un archivo del mismo nombre se reemplaza, y el resto se conserva. El sistema rechazó una de las escrituras. El retry: del paso puede volver a intentarlo.",
+    "fix": [
+      "Comprueba que el usuario del job puede escribir en el directorio.",
+      "Comprueba que el directorio no tiene un directorio donde el árbol tiene un archivo, ni un archivo donde tiene un directorio."
+    ]
+  },
   "expression_failed": {
     "title": "La expresión falló",
     "why": "Una expresión falló de una forma que Meridian no describe. Es un problema de Meridian.",
