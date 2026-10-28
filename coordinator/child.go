@@ -116,7 +116,7 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 		return "", nil, err
 	}
 	dir := plan.ChildDir(cl.run.RunDir, wd, cl.attempt.Job, req.Step)
-	if !within(cl.root.RunDir, dir) {
+	if _, ok := plan.InDir(cl.root.RunDir, dir); !ok {
 		return "", nil, problems.ChildDirOutside.Problem(problems.Params{"dir": dir})
 	}
 	depth := 1
@@ -357,11 +357,7 @@ func (c *Coordinator) childPlace(ctx context.Context, run, root *store.Run, a *s
 		if err != nil {
 			return "", "", err
 		}
-		if dirs.own && within(dirs.root, wd) {
-			rel, err := filepath.Rel(dirs.root, wd)
-			if err != nil {
-				return "", "", err
-			}
+		if rel, ok := plan.InDir(dirs.root, wd); dirs.own && ok {
 			wd = filepath.Join(root.RunDir, rel)
 		}
 	}
@@ -377,12 +373,6 @@ func (c *Coordinator) childPlace(ctx context.Context, run, root *store.Run, a *s
 		group = run.DefaultGroup
 	}
 	return wd, group, nil
-}
-
-// within reports whether path is dir, or inside it.
-func within(dir, path string) bool {
-	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
 }
 
 // treeVariables are a child run's organization and user variables: those

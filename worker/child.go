@@ -304,27 +304,12 @@ func (a *attempt) makeChildDir(dir string, clean bool) error {
 	if tree := a.claim.Tree; tree != nil {
 		root = tree.RootDir
 	}
-	rel, ok := inDir(root, dir)
+	rel, ok := plan.InDir(root, dir)
 	if !ok {
 		return nil
 	}
-	return makeDirIn(root, rel, clean && !a.claim.RunDirOnMember && !inside(dir, a.claim.RunDir))
-}
-
-// inDir returns the path of dir relative to root, and whether dir is in
-// root, or is root, as their names say.
-func inDir(root, dir string) (string, bool) {
-	rel, err := filepath.Rel(root, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return rel, true
-}
-
-// inside reports whether path is dir or in it, as their names say.
-func inside(dir, path string) bool {
-	_, ok := inDir(dir, path)
-	return ok
+	_, holdsRunDir := plan.InDir(dir, a.claim.RunDir)
+	return makeDirIn(root, rel, clean && !a.claim.RunDirOnMember && !holdsRunDir)
 }
 
 // beforeOpen, if a test sets it, is called by makeDirIn with the path of

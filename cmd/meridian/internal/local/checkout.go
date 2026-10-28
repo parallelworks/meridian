@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -63,19 +64,8 @@ func (s *Sources) checkoutCopy(repo string) string {
 	return filepath.Join(s.dir, checkoutsDir, hex.EncodeToString(sum[:])+".git")
 }
 
-// A TreeSurvey is what the tree of a commit holds of a checkout's paths
-// (SurveyTree).
-type TreeSurvey struct {
-	// Size is how many bytes its files hold, together, its symbolic links'
-	// targets among them, and Entries how many entries WriteTree writes of
-	// it: its directories, files, links and submodules.
-	Size    int64
-	Entries int
-	// Missing are the indexes of the paths that name nothing in it.
-	Missing []int
-	// Submodules is set when what it holds of the paths has a submodule.
-	Submodules bool
-}
+// The coordinator reads the trees of checkouts' commits through Sources.
+var _ coordinator.Trees = (*Sources)(nil)
 
 // A treeEntry is a file, a symbolic link or a submodule of a commit's
 // tree, as ls-tree lists it: its mode, its object, its size, for a blob,
@@ -103,12 +93,12 @@ const maxLinkTarget = 4096
 // root, which a slash can end (plan.CheckCheckoutPath), or of all of it,
 // for none. It reads the commit from the copy of repo that pinned it
 // (Pin), and fetches it from repo again, by itself, if the copy hasn't it.
-func (s *Sources) SurveyTree(ctx context.Context, repo, commit string, paths []string) (TreeSurvey, error) {
+func (s *Sources) SurveyTree(ctx context.Context, repo, commit string, paths []string) (coordinator.TreeSurvey, error) {
 	_, entries, missing, err := s.treeOf(ctx, repo, commit, paths)
 	if err != nil {
-		return TreeSurvey{}, err
+		return coordinator.TreeSurvey{}, err
 	}
-	survey := TreeSurvey{Missing: missing, Entries: len(entries)}
+	survey := coordinator.TreeSurvey{Missing: missing, Entries: len(entries)}
 	dirs := map[string]bool{}
 	for _, e := range entries {
 		survey.Size += e.size
