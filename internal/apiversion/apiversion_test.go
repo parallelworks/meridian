@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// TestOnlyTestsSet checks what the package doc promises: no code of the
+// TestOnlyTestsSetSince checks what the package doc promises: no code of the
 // module's but a _test.go file calls SetSince, so that a release never makes a
 // member of the worker API's bodies another version's than its table says.
 func TestOnlyTestsSetSince(t *testing.T) {
