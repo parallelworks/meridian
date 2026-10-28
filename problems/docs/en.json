@@ -1056,6 +1056,19 @@
       "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
     ]
   },
+  "step_run_request_failed": {
+    "why": "A step whose ssh: names another host than its job's asks the coordinator, through the worker API, for a run of its own on that host, waits for that run's end, and stops it when the step is stopped. One of those requests failed for good: the coordinator refused it, or answered with what the worker can't read, which the reason names by its code. That is a bug in the worker or in the coordinator, or a worker and a coordinator of releases that don't agree on the worker API, and not the workflow's. The step fails, and isn't tried again. Its run on the other host may have been created, and may still be running: its own status says.",
+    "fix": [
+      "Start workers of the coordinator's own release of Meridian.",
+      "If they are of the same release, report the bug, with the reason and the worker's log."
+    ]
+  },
+  "step_run_outputs_unwritten": {
+    "why": "A step that runs on another host writes its outputs to an $OUTPUTS file of its own there, which come back to its job's worker once its try succeeds, and the worker appends them to the file the step would have written here, as format 1 copies the file back. Appending them failed, as when the disk is full, so the step fails, without them.",
+    "fix": [
+      "Free space on the disk that holds the worker's directory, or fix what the reason names."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "why": "A parallelworks/cancel-jobs step's jobs: names the jobs of its run to cancel. This name is no job of the run, or is a matrix job's, whose instances format 1 knows by other names, so that it cancels none of them. As in format 1, the step does nothing for the name, and succeeds.",
     "fix": [
@@ -1077,9 +1090,10 @@
     ]
   },
   "step_ssh_not_supported": {
-    "why": "A format 1 step's ssh: runs the step on another host over SSH. This version of Meridian's worker runs steps only on the host it runs on, so the step fails rather than run on the wrong host.",
+    "why": "A format 1 step's ssh: runs the step on another host over SSH. Meridian runs such a step as a run of its own on that host, through version 3 of the worker API, but not a step whose uses: names a workflow, which format 1 runs where its caller runs. So for such a step, or in an attempt of an earlier version of the worker API, as a worker or a coordinator of an older release serves, the step fails rather than run on the wrong host.",
     "fix": [
-      "Move the step to a job that runs on that host, through the job's ssh: or an execution group."
+      "Start workers and a coordinator of a release that speaks version 3 of the worker API.",
+      "For a step that calls a workflow, give the ssh: to the jobs of the workflow it calls instead."
     ]
   },
   "step_ssh_reads_worker": {
@@ -1089,9 +1103,9 @@
     ]
   },
   "step_off_job_host": {
-    "why": "A format 1 job's ssh: runs its steps on the host it names, and a step's ssh: that is null, or gives no remoteHost, runs the step where the job would run without its ssh:. This version of Meridian's worker runs on the job's host, and runs steps only there, so the step fails rather than run on the wrong host.",
+    "why": "A format 1 job's ssh: runs its steps on the host it names, and a step's ssh: that is null, or gives no remoteHost, runs the step where the job would run without its ssh:. Meridian runs such a step as a run of its own there, through version 3 of the worker API, but not a step whose uses: names a workflow. So for such a step, or in an attempt of an earlier version of the worker API, the step fails rather than run on the wrong host.",
     "fix": [
-      "Move the step to a job that runs where the step should, such as one without an ssh:.",
+      "Start workers and a coordinator of a release that speaks version 3 of the worker API.",
       "Remove the step's ssh: to run it on the job's host."
     ]
   },

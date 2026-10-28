@@ -48,6 +48,10 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	// What the coordinator asked before the claim applies from the first
 	// step: a cancel, the run's timeout, or a job of the run failing.
 	a.awaitFirstControl()
+	if a.claim.StepRun != nil {
+		// A step run's job runs its one step, and nothing else.
+		return a.runAsStepRun(ctx, jobDiags)
+	}
 
 	// A job halted before a step's turn, or a cleanup's, hasn't ended, and
 	// neither has one halted as a step, or a cleanup, ran, which it cut
@@ -394,11 +398,12 @@ func decodeFailure(version int, err error) (*problems.Kind, problems.Params) {
 // results of the steps that have had their turn, whether its steps have
 // seen it cancelled, and the variables the worker defines (variables).
 func (a *attempt) state(results []plan.StepResult, cancelled bool, env map[string]string) plan.JobState {
+	_, attempt := a.jobCounters()
 	return plan.JobState{
 		Run:   a.claim.Run,
 		Needs: a.claim.Needs,
 		Job: plan.JobContext{
-			Name: a.job.Name, Key: a.job.Key, Attempt: a.claim.Attempt, Group: a.claim.Group, Member: a.claim.Member,
+			Name: a.job.Name, Key: a.job.Key, Attempt: attempt, Group: a.claim.Group, Member: a.claim.Member,
 		},
 		Steps:     slices.Clip(results),
 		Cancelled: cancelled,
@@ -458,9 +463,12 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			return ended
 		}
 		retry := false
-		if t.calls {
+		switch {
+		case t.calls:
 			end, retry = a.runCallTry(ctx, t, end)
-		} else {
+		case t.elsewhere:
+			end, retry = a.runStepRunTry(ctx, t, state, end)
+		default:
 			end, retry = a.runOwnTry(ctx, t, end)
 		}
 		if end.cut || !retry {
@@ -485,10 +493,11 @@ type startedTry struct {
 	// it, if it made one, which note is too.
 	diags problems.Diagnostics
 	note  *problems.Diagnostic
-	// calls is set for a step whose uses: names a workflow, and dir is where
-	// one that doesn't runs.
-	calls bool
-	dir   string
+	// calls is set for a step whose uses: names a workflow, elsewhere for
+	// one whose ssh: puts it on another host, as a step run, and dir is
+	// where one that does neither runs.
+	calls, elsewhere bool
+	dir              string
 	// s says what stops the try, and last whether it is its step's last:
 	// beginTry sets both, and until it has, they are zero.
 	s    stops
@@ -542,7 +551,7 @@ func (a *attempt) prepareTry(ctx context.Context, i, try int, state plan.JobStat
 			return nil, a.notRun(i, try, end, why, diags, rs.IgnoreErrors && (rs.Retry == nil || rs.Retry.MaxRetries == 0))
 		}
 	}
-	note, refused := a.runnable(rs, path)
+	note, refused, elsewhere := a.runnable(rs, path)
 	if refused != nil {
 		return fail(*refused)
 	}
@@ -551,10 +560,10 @@ func (a *attempt) prepareTry(ctx context.Context, i, try int, state plan.JobStat
 	}
 	// A step that calls a workflow runs none of its own: its child's
 	// directory is made in the root's, a directory at a time
-	// (runChild).
+	// (runChild). One that runs elsewhere runs in its step run's.
 	calls := a.callsWorkflow(i)
 	dir := a.workingDirectory(rs)
-	if !calls {
+	if !calls && !elsewhere {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail(a.notStarted(err, path))
 		}
@@ -564,7 +573,7 @@ func (a *attempt) prepareTry(ctx context.Context, i, try int, state plan.JobStat
 	}
 	return &startedTry{
 		i: i, try: try, path: path, rs: rs, first: first, vars: vars, out: out, diags: diags, note: note,
-		calls: calls, dir: dir, key: logKey{workerapi.LogStep, i, try},
+		calls: calls, elsewhere: elsewhere, dir: dir, key: logKey{workerapi.LogStep, i, try},
 	}, end
 }
 
@@ -665,6 +674,19 @@ func (a *attempt) runOwnTry(ctx context.Context, t *startedTry, end stepEnd) (st
 		end.cut = true
 		return end, false
 	}
+	return a.endOwnTry(t, end, exit, cause, succeeded, acted, tryDiags)
+}
+
+// endOwnTry ends t, a try of a step that ran a command, used an action or
+// ran as a step run, which exited with exit, or -1 for none, was stopped
+// for cause, if it was, and succeeded, if it did, with acted, the problems
+// an action, or a step run, reported, which leave the step's retry: and
+// ignore-errors: to say what follows, and tryDiags, those of the try
+// itself, which fail it. It reports its end, with what it wrote to
+// $OUTPUTS, and returns how the step ended, from end, and whether to try
+// it again.
+func (a *attempt) endOwnTry(t *startedTry, end stepEnd, exit int, cause stopCause, succeeded bool, acted, tryDiags problems.Diagnostics) (stepEnd, bool) {
+	rs := t.rs
 	// What a try wrote is its step's, however it ended, as in format 1.
 	outputs, outputsDiags := a.outputsWritten(t.out, t.path)
 	tryDiags = append(tryDiags, outputsDiags...)
@@ -788,12 +810,15 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 		return plan.OutcomeSkipped, nil
 	}
 	a.addMasked(rs.Masked...)
-	note, refused := a.runnable(rs, path)
+	note, refused, elsewhere := a.runnable(rs, path)
 	if refused != nil {
 		return fail(*refused)
 	}
 	if out.err != nil {
 		return fail(a.notStarted(out.err, path))
+	}
+	if elsewhere {
+		return a.runCleanupElsewhere(ctx, i, path, rs, state, out, diags)
 	}
 	dir := a.workingDirectory(rs)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1079,7 +1104,8 @@ func (a *attempt) variables(outputs string, try *stepTry) map[string]string {
 		env["PW_MATRIX_INDEX"] = a.job.Key[k+1:]
 	}
 	if a.job.Retry != nil {
-		env["PW_WORKFLOW_JOB_CURRENT_RETRY"] = strconv.Itoa(a.claim.Retry)
+		retry, _ := a.jobCounters()
+		env["PW_WORKFLOW_JOB_CURRENT_RETRY"] = strconv.Itoa(retry)
 		env["PW_WORKFLOW_JOB_MAX_RETRIES"] = strconv.Itoa(a.job.Retry.MaxRetries)
 	}
 	if outputs != "" {

@@ -2559,14 +2559,16 @@ actions](#built-in-actions)). Every one of the 28 reads its host from
 the run's inputs. None calls a workflow, or has a `retry:`, an
 `ignore-errors:` or a `working-directory:` of its own.
 
-Meridian is to run such a step as a run of its own, which a worker on the
+Meridian runs such a step as a run of its own, which a worker on the
 step's host runs, as a job's is, rather than over a connection of the
 job's worker's, which would leave a process on the host that no
 placement records, that nothing could check or stop once the worker had
-gone, and that a checkout couldn't be written safely by. None of it is
-built yet: such a step fails (`step_ssh_not_supported`), as one whose
-`ssh:` is null, or gives no `remoteHost`, in a job on a host does
-(`step_off_job_host`).
+gone, and that a checkout couldn't be written safely by. Version 3 of the
+worker API brings it: in an attempt of an earlier version, as a worker
+or a coordinator of an older release serves, such a step fails
+(`step_ssh_not_supported`), as one whose `ssh:` is null, or gives no
+`remoteHost`, in a job on a host does (`step_off_job_host`), and so
+does, whatever the version, a step that calls a workflow.
 
 - **A step run.** A step's try whose `ssh:` names a host other than its
   job's, compared as text by its `remoteHost`, `remoteUser`,
@@ -2619,10 +2621,19 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   a calling step's private values are. It evaluates the job's `env:`
   again, with its own paths, as format 1 gives the step the job's
   environment with its paths made the host's. It doesn't evaluate the
-  step's `if:` or `ssh:` again, which the caller's worker did, as format
-  1 does before it connects. It masks what the caller's worker masked at
-  the try, as a workflow a step calls masks its caller's secrets. Its
-  `OUTPUTS` starts empty, and what the step
+  step's `if:` again, nor heed its `ssh:`, which the caller's worker did,
+  as format 1 does before it connects; a cleanup's `if:` it evaluates
+  again, as any cleanup's, with the state its caller's worker evaluated
+  it with. It runs that one step, never the job's others, and none once
+  it is told to stop, whatever its `if:` says, nor whether its caller's
+  job is being cancelled, which is only the step's `cancelled()`. It
+  reports the step's exit status and its outcome as it ran, which its
+  caller's `retry:` and `ignore-errors:` then apply to. It masks what the
+  caller's worker masked at the try, as a workflow a step calls masks its
+  caller's secrets, and names an output that holds what it masks a
+  secret; the caller's worker masks each output named private or secret
+  as a secret of its job's, at least. Its `OUTPUTS` starts empty, and
+  what the step
   writes there comes back to the caller's worker, as the values it
   reads, which appends them to the file the step would have written, the
   job's for a step without an `id`, as escaped `name=value` lines, and

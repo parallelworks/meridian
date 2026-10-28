@@ -383,6 +383,13 @@ var (
 	CancelJobsRunMissing  = define(Error, "cancel_jobs_run_missing", "Cancel of a workflow's run without its number")
 	ChildRequestFailed    = define(Error, "child_request_failed", "Request to the coordinator for a called workflow's run that failed", "uses", "reason")
 	ChildDirUnusable      = define(Error, "child_dir_unusable", "Called workflow's directory the worker couldn't make", "dir", "reason")
+	// StepRunRequestFailed is a request to the coordinator, of a step's
+	// try, or its cleanup's, that runs on another host, for its run there,
+	// that failed for good, for reason; and StepRunOutputsUnwritten what
+	// such a step wrote to $OUTPUTS there, which the worker couldn't add to
+	// the file the step would have written, for reason.
+	StepRunRequestFailed    = define(Error, "step_run_request_failed", "Request to the coordinator for a step's run on another host that failed", "reason")
+	StepRunOutputsUnwritten = define(Error, "step_run_outputs_unwritten", "Outputs of a step on another host the worker couldn't add", "reason")
 	// CheckoutPathNotFound is an entry of a parallelworks/checkout step's
 	// with: sparse_checkout, path, that names nothing in the commit the
 	// step was pinned to; CheckoutSubmodules a checkout of all of the

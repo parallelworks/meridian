@@ -8,6 +8,7 @@ package workerapitest
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -161,6 +162,15 @@ type Fake struct {
 	// returns, as its run's stop ends it, unless that is "": then it runs
 	// on until EndChild ends it.
 	OnChildStop func(stop workerapi.ChildStop) plan.Outcome
+	// StepRun, if set, is called with each ask for the step run of a step's
+	// try, or of its cleanup:, that has none yet, with the Fake's lock
+	// held, as Child is: it returns nil for the Fake to make it,
+	// steprun-1 and on, which runs until EndStepRun ends it; or the
+	// answer.
+	StepRun func(req workerapi.StepRunRequest) *workerapi.StepRun
+	// OnStepRunStop, if set, is called with each stop of a step run the
+	// Fake stores, with its lock held, as OnChildStop is.
+	OnStepRunStop func(stop workerapi.StepRunStop) plan.Outcome
 
 	t          testing.TB
 	mu         sync.Mutex
@@ -183,6 +193,14 @@ type Fake struct {
 	ended      map[string]workerapi.Child
 	childAsks  []workerapi.ChildRequest
 	childStops []workerapi.ChildStop
+	// stepRuns are the step runs of steps' tries and cleanups, by step, try
+	// and whether a cleanup's, and stepRunEnds how each that has ended
+	// did, by its ID; stepRunAsks are the requests for them, and
+	// stepRunStops their stops, in order.
+	stepRuns     map[stepRunKey]string
+	stepRunEnds  map[string]workerapi.StepRun
+	stepRunAsks  []workerapi.StepRunRequest
+	stepRunStops []workerapi.StepRunStop
 	// changed is closed, and replaced, on each change.
 	changed chan struct{}
 }
@@ -217,8 +235,9 @@ type Stored struct {
 	Logs     map[LogKey]Log
 	Complete *workerapi.Complete
 	// ChildStops are the stops of the attempt's steps' child runs, in
-	// order.
-	ChildStops []workerapi.ChildStop
+	// order, and StepRunStops those of their step runs.
+	ChildStops   []workerapi.ChildStop
+	StepRunStops []workerapi.StepRunStop
 }
 
 // NewFake returns a Fake that serves an attempt of job, as attempt1 of
@@ -315,7 +334,7 @@ func (f *Fake) Stored() Stored {
 		end := *f.end
 		s.Complete = &end
 	}
-	s.ChildStops = slices.Clone(f.childStops)
+	s.ChildStops, s.StepRunStops = slices.Clone(f.childStops), slices.Clone(f.stepRunStops)
 	return s
 }
 
@@ -509,6 +528,10 @@ var routes = map[string]route{
 	workerapi.PathChildEnd:  {http.MethodGet, workerapi.Version3},
 	workerapi.PathChildStop: {http.MethodPost, workerapi.Version3},
 	workerapi.PathCheckout:  {http.MethodPost, workerapi.Version3},
+
+	workerapi.PathStepRun:     {http.MethodPost, workerapi.Version3},
+	workerapi.PathStepRunEnd:  {http.MethodGet, workerapi.Version3},
+	workerapi.PathStepRunStop: {http.MethodPost, workerapi.Version3},
 }
 
 // handle handles a request, and returns the events it stored.
@@ -572,6 +595,12 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		f.handleChildStop(w, body)
 	case workerapi.PathCheckout:
 		f.handleCheckout(w, body)
+	case workerapi.PathStepRun:
+		f.handleStepRun(w, body)
+	case workerapi.PathStepRunEnd:
+		f.handleStepRunEnd(w, r)
+	case workerapi.PathStepRunStop:
+		f.handleStepRunStop(w, body)
 	}
 	return nil
 }
@@ -706,6 +735,144 @@ func (f *Fake) ChildAsks() []workerapi.ChildRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.childAsks)
+}
+
+// A stepRunKey names a step run: the step's index, the try, and whether it
+// runs the step's cleanup:.
+type stepRunKey struct {
+	step, try int
+	cleanup   bool
+}
+
+// handleStepRun answers the ask for the step run of a step's try, or of
+// its cleanup: the one it has, or one made now, steprun-1 and on.
+func (f *Fake) handleStepRun(w http.ResponseWriter, body []byte) {
+	var req workerapi.StepRunRequest
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &req); err != nil {
+		f.unexpected("a step run's request the coordinator can't read: %v", err)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	n, ok := f.steps()
+	want := req.Step
+	if req.Cleanup {
+		want = n
+	}
+	if !ok || req.Step < 0 || req.Try < 0 || req.Step >= n || req.Cleanup && req.Try != 0 || len(req.State.Steps) != want {
+		f.unexpected("a request for the step run of step %d's try %d, cleanup %v, with %d steps' results, which its job can't have", req.Step, req.Try, req.Cleanup, len(req.State.Steps))
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	f.stepRunAsks = append(f.stepRunAsks, req)
+	key := stepRunKey{req.Step, req.Try, req.Cleanup}
+	if f.stepRuns == nil {
+		f.stepRuns, f.stepRunEnds = map[stepRunKey]string{}, map[string]workerapi.StepRun{}
+	}
+	id, ok := f.stepRuns[key]
+	if !ok && f.StepRun != nil {
+		if answer := f.StepRun(req); answer != nil {
+			if answer.Run != "" {
+				f.stepRuns[key] = answer.Run
+				if answer.Ended {
+					f.stepRunEnds[answer.Run] = *answer
+				}
+			}
+			writeJSON(w, f.Claim.APIVersion, answer)
+			return
+		}
+	}
+	if !ok {
+		id = "steprun-" + strconv.Itoa(len(f.stepRuns)+1)
+		f.stepRuns[key] = id
+	}
+	writeJSON(w, f.Claim.APIVersion, &workerapi.StepRun{Run: id})
+}
+
+// handleStepRunEnd answers a poll for a step run's end: once it has ended
+// (EndStepRun), or after ControlHold, as it is.
+func (f *Fake) handleStepRunEnd(w http.ResponseWriter, r *http.Request) {
+	step, try, ok := stepTry(r)
+	cleanup, err := strconv.ParseBool(cmp.Or(r.URL.Query().Get(workerapi.QueryCleanup), "false"))
+	if !ok || err != nil {
+		f.unexpected("a poll for a step run's end without its step and try: %s", r.URL.RawQuery)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	id, ok := f.stepRuns[stepRunKey{step, try, cleanup}]
+	if !ok {
+		writeStatus(w, http.StatusNotFound)
+		return
+	}
+	timeout := time.After(ControlHold)
+	for {
+		if end, ended := f.stepRunEnds[id]; ended {
+			writeJSON(w, f.Claim.APIVersion, &end)
+			return
+		}
+		changed := f.changed
+		f.mu.Unlock()
+		done := false
+		select {
+		case <-changed:
+		case <-timeout:
+			done = true
+		case <-r.Context().Done():
+			done = true
+		}
+		f.mu.Lock()
+		if done {
+			writeJSON(w, f.Claim.APIVersion, &workerapi.StepRun{Run: id})
+			return
+		}
+	}
+}
+
+// handleStepRunStop stores the stop of a step run.
+func (f *Fake) handleStepRunStop(w http.ResponseWriter, body []byte) {
+	var stop workerapi.StepRunStop
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &stop); err != nil || stop.Reason != plan.ReasonCancelled && stop.Reason != plan.ReasonTimeout {
+		f.unexpected("a step run's stop the coordinator can't read: %v", err)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	id, ok := f.stepRuns[stepRunKey{stop.Step, stop.Try, stop.Cleanup}]
+	if !ok {
+		writeStatus(w, http.StatusNotFound)
+		return
+	}
+	f.stepRunStops = append(f.stepRunStops, stop)
+	if f.OnStepRunStop != nil {
+		if _, ended := f.stepRunEnds[id]; !ended {
+			if outcome := f.OnStepRunStop(stop); outcome != "" {
+				f.stepRunEnds[id] = workerapi.StepRun{Run: id, Ended: true, Outcome: outcome, Reason: stop.Reason, ExitCode: -1}
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// EndStepRun ends the step run of the step's try, or of its cleanup:, as
+// end says, as its run ends: its end's poll is answered with it, as that
+// step run's. One it has none of fails the test.
+func (f *Fake) EndStepRun(step, try int, cleanup bool, end workerapi.StepRun) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.notify()
+	id, ok := f.stepRuns[stepRunKey{step, try, cleanup}]
+	if !ok {
+		f.t.Errorf("the attempt has no step run of step %d's try %d, cleanup %v", step, try, cleanup)
+		return
+	}
+	end.Run, end.Ended = id, true
+	f.stepRunEnds[id] = end
+}
+
+// StepRunAsks returns the requests for step runs the Fake was sent, in
+// order.
+func (f *Fake) StepRunAsks() []workerapi.StepRunRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.stepRunAsks)
 }
 
 // steps returns how many steps the attempt's job has, and false if the

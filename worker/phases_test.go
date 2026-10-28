@@ -199,10 +199,11 @@ func TestStepsSkipped(t *testing.T) {
 // TestStepHosts checks where a step whose ssh: is null, or gives no
 // remoteHost, runs, as format 1 runs it: where its job would run without
 // its ssh:, which is the worker's host, with a note in the log of one that
-// gives no remoteHost; and that one whose job's ssh: placed the worker on
-// a host of its own fails, rather than run on that host, while one whose
+// gives no remoteHost; and that, in an attempt of version 2 of the worker
+// API, which has no step runs, one whose job's ssh: placed the worker on a
+// host of its own fails, rather than run on that host, while one whose
 // ssh: says what the job's does runs there, and one that names another
-// host fails.
+// host fails (TestStepRunCaller has them run elsewhere).
 func TestStepHosts(t *testing.T) {
 	t.Parallel()
 	steps := func() []plan.Step {
@@ -239,6 +240,7 @@ func TestStepHosts(t *testing.T) {
 		j := newJob(append(steps(), same, other)...)
 		j.Target = plan.Target{Inline: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "elsewhere", "port": 22.0})}}
 		f := workerapitest.NewFake(t, j)
+		f.Speaks = workerapi.Version2
 		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 			t.Fatal(err)
 		}

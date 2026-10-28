@@ -25,7 +25,8 @@ import (
 // coordinator performs, whose ssh: places nothing, a command whose host
 // only the job's worker knows, commands whose host their retry counter
 // names, a command on farm that outlives its job's cancel, one on farm
-// with a retry: and a cleanup:, and outputs: of its own; whose job hosted
+// with a retry:, a timeout:, an early-cancel: and a cleanup:, and outputs:
+// of its own; whose job hosted
 // runs on farm, with a step whose ssh: is null; whose job failover, on
 // farm, runs again once its worker is lost, and has a step whose host its
 // retry counter names; and whose matrix job fan has a step on farm.
@@ -64,6 +65,8 @@ const stepRunRoot = `jobs:
         ssh: {remoteHost: farm}
       - run: echo again
         retry: {max-retries: 1}
+        timeout: 1m
+        early-cancel: any-job-failed
         ssh: {remoteHost: farm}
         cleanup: echo tidy again
     outputs:
