@@ -2623,10 +2623,17 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   1 does before it connects. It masks what the caller's worker masked at
   the try, as a workflow a step calls masks its caller's secrets. Its
   `OUTPUTS` starts empty, and what the step
-  writes there comes back to the caller's worker, which appends it to
-  the file the step would have written, the job's for a step without an
-  `id`, and reads it as it does a step's of its own, under the job's
-  cap. A try that fails gives none, as in format 1.
+  writes there comes back to the caller's worker, as the values it
+  reads, which appends them to the file the step would have written, the
+  job's for a step without an `id`, as escaped `name=value` lines, and
+  reads it as it does a step's of its own, under the job's cap: as it
+  reads that file, a line it can't parse is ignored, and a name written
+  twice has one value, so the values are what the step's lines would
+  give. A try that fails gives none, as in format 1. Of the caller's job,
+  its worker gives only what format 1 passes between steps, the earlier
+  steps' outcomes and outputs, whether the job is being cancelled, and
+  the retry counters, never a variable of the environment or a path, and
+  the step run's claim has the one step it runs.
 - **The caller waits for it**, parked, as for a workflow a step calls;
   stops it when the step's try is stopped; and ends the try as it ended,
   its `retry:` and `ignore-errors:` applying as to any try. Two jobs,
@@ -3824,6 +3831,21 @@ and a platform that embeds Meridian serve the same API.
   the coordinator refuses it to an earlier worker, and a later worker, in
   an attempt an earlier coordinator serves, fails the step
   (`uses_not_supported`) (Never a silent downgrade, below).
+- **Step runs:** ask for the step run of a step's try, or of its
+  `cleanup:` (`/v1/steprun`), with the step's `ssh:` as the try
+  evaluated it, the state of its job at the try, and the strings the
+  worker masks for the step, 1 MiB of them at most, which a repeat
+  answers with the same step run, and one that wasn't made ended, with
+  why; wait for its end (`/v1/steprun/end`), as for a child's, with how
+  it ended, its step's exit status and, once it succeeded, what its step
+  wrote to `OUTPUTS`, 1 MiB of it at most, as a worker reads, or else
+  failed (`outputs_too_large`); and stop it (`/v1/steprun/stop`). Each
+  names the step run by the step, the try and whether it is the
+  cleanup's, of the attempt that asks, so an attempt reaches only its
+  own ([Steps on another host](#steps-on-another-host)). A step run's
+  attempt's claim has the try of the step it runs and that state, and its
+  job has the one step, without the job's `outputs:`. Version 3 adds
+  them, and such a job needs it, as one that calls a workflow does.
 - **Actions:** ask the coordinator to do a step's cancel-jobs,
   update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's

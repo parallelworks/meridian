@@ -193,11 +193,21 @@ func (k *rigChildren) Child(ctx context.Context, run *store.Run, a *store.Attemp
 	if req.Step >= len(ready.Job.Steps) {
 		return nil, fmt.Errorf("%w: step %d", workerapisrv.ErrNotChild, req.Step)
 	}
+	id, err := k.child(ctx, run, a, &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Root: run.ID, Depth: 1})
+	if err != nil {
+		return nil, err
+	}
+	return &workerapi.Child{Run: id}, nil
+}
+
+// child makes the child of the step's try, or of its cleanup, that link
+// names, of the attempt a, of run, or returns the one it has.
+func (k *rigChildren) child(ctx context.Context, run *store.Run, a *store.Attempt, link *store.Link) (string, error) {
 	c := created(k.r.t)
 	var id string
-	err = k.r.store.Tx(ctx, func(tx *store.Tx) error {
+	err := k.r.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		if id, err = tx.Child(a.ID, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
+		if id, err = tx.ChildOf(a.ID, link.Step, link.Try, link.Cleanup); err == nil || !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
 		now, err := tx.Attempt(a.ID)
@@ -211,14 +221,30 @@ func (k *rigChildren) Child(ctx context.Context, run *store.Run, a *store.Attemp
 			return err
 		}
 		return tx.InsertRun(store.NewRun{
-			ID: id, Plan: c.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: fakeJobID(),
-			Parent: &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Root: run.ID, Depth: 1},
+			ID: id, Plan: c.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: fakeJobID(), Parent: link,
 		})
 	})
+	return id, err
+}
+
+// StepRun makes a child of the try of step 0, the rig's job's first, or
+// of its cleanup, as the coordinator makes a step run, and refuses one of
+// any other step, as the coordinator does a step that can't have one.
+func (k *rigChildren) StepRun(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.StepRunRequest) (*workerapi.StepRun, error) {
+	if req.Step != 0 {
+		return nil, fmt.Errorf("%w: step %d", workerapisrv.ErrNotStepRun, req.Step)
+	}
+	id, err := k.child(ctx, run, a, &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Cleanup: req.Cleanup, Root: run.ID, Depth: 1})
 	if err != nil {
 		return nil, err
 	}
-	return &workerapi.Child{Run: id}, nil
+	return &workerapi.StepRun{Run: id}, nil
+}
+
+// StepRunEnd answers the step run id as one that succeeded, with an
+// output.
+func (k *rigChildren) StepRunEnd(_ context.Context, id string) (*workerapi.StepRun, error) {
+	return &workerapi.StepRun{Run: id, Ended: true, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1"}}, nil
 }
 
 // StopChild keeps the stop, by the attempt whose step's child id is.

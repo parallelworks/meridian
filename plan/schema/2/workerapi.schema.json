@@ -38,6 +38,15 @@
     },
     {
       "$ref": "#/$defs/ChildStop"
+    },
+    {
+      "$ref": "#/$defs/StepRunRequest"
+    },
+    {
+      "$ref": "#/$defs/StepRun"
+    },
+    {
+      "$ref": "#/$defs/StepRunStop"
     }
   ],
   "$defs": {
@@ -174,6 +183,10 @@
         "tree": {
           "description": "Added in worker API version 3. What an attempt of a child run has of its tree. A claim of a run no step called, or of an earlier version, has none.",
           "$ref": "#/$defs/Tree"
+        },
+        "stepRun": {
+          "description": "Added in worker API version 3. What an attempt of a step run has of the try of the step it runs. A claim of any other run, or of an earlier version, has none.",
+          "$ref": "#/$defs/StepRunClaim"
         }
       },
       "required": ["runID", "attemptID", "apiVersion", "planVersion", "job", "attempt", "leaseSeconds", "heartbeatSeconds", "run", "runDir"],
@@ -540,6 +553,197 @@
           "type": "integer",
           "minimum": -2147483648,
           "maximum": 2147483647
+        },
+        "reason": {
+          "description": "Added in worker API version 3. Why the step is stopped: cancelled, or timeout.",
+          "$ref": "plan.schema.json#/$defs/Reason"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "StepRunClaim": {
+      "description": "Added in worker API version 3. What an attempt of a step run has of the try of the step it runs.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "description": "Added in worker API version 3. The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "Added in worker API version 3. The step's try, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cleanup": {
+          "description": "Added in worker API version 3. Whether it runs the step's cleanup:.",
+          "type": "boolean"
+        },
+        "state": {
+          "description": "Added in worker API version 3. The state of the step's job at the try.",
+          "$ref": "#/$defs/StepRunState"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "StepRunState": {
+      "description": "Added in worker API version 3. The state of a job at a try of one of its steps that a step run of it reads: what format 1 passes between a job's steps, never an environment's variable or a path.",
+      "type": "object",
+      "properties": {
+        "steps": {
+          "description": "Added in worker API version 3. The results of the job's steps that have had their turn, by index.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/StepRunResult"}
+        },
+        "cancelled": {
+          "description": "Added in worker API version 3. Whether the job is being cancelled.",
+          "type": "boolean"
+        },
+        "maxRetries": {
+          "description": "Added in worker API version 3. The step's retry:'s, as its first try evaluated it, or 0 for a step without one.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "StepRunResult": {
+      "description": "Added in worker API version 3. How a step of a job ended, as a later step of it reads it.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "description": "Added in worker API version 3. The step's outcome.",
+          "$ref": "plan.schema.json#/$defs/Outcome"
+        },
+        "outputs": {
+          "description": "Added in worker API version 3. What the step wrote to $OUTPUTS, by name.",
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "cleanupOutcome": {
+          "description": "Added in worker API version 3. How the step's cleanup: ended, once it has run.",
+          "$ref": "plan.schema.json#/$defs/Outcome"
+        },
+        "cleanupOutputs": {
+          "description": "Added in worker API version 3. What the step's cleanup: wrote to $OUTPUTS, by name.",
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "StepRunRequest": {
+      "description": "Added in worker API version 3. Asks for the step run of a step's try, or of its cleanup:, whose ssh: names another host than its job's.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "description": "Added in worker API version 3. The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "Added in worker API version 3. The step's try, from 0, which is 0 for a cleanup.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cleanup": {
+          "description": "Added in worker API version 3. Whether it asks for the step's cleanup:'s.",
+          "type": "boolean"
+        },
+        "ssh": {
+          "description": "Added in worker API version 3. The step's ssh:, as the try evaluated it, which the coordinator evaluates itself; none for one that is null or names no host.",
+          "$ref": "plan.schema.json#/$defs/Inline"
+        },
+        "state": {
+          "description": "Added in worker API version 3. The state of the step's job at the try.",
+          "$ref": "#/$defs/StepRunState"
+        },
+        "masked": {
+          "description": "Added in worker API version 3. The strings the worker masks at the try, which the step run's worker masks too.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "StepRun": {
+      "description": "Added in worker API version 3. The step run of a step's try, or of its cleanup:, as it is.",
+      "type": "object",
+      "properties": {
+        "run": {
+          "description": "Added in worker API version 3. The step run's ID, or none for one that wasn't made.",
+          "type": "string"
+        },
+        "ended": {
+          "description": "Added in worker API version 3. Whether the step run has ended.",
+          "type": "boolean"
+        },
+        "outcome": {
+          "description": "Added in worker API version 3. How the step run ended, once it has.",
+          "$ref": "plan.schema.json#/$defs/Outcome"
+        },
+        "reason": {
+          "description": "Added in worker API version 3. Why it ended other than as its job did.",
+          "$ref": "plan.schema.json#/$defs/Reason"
+        },
+        "exitCode": {
+          "description": "Added in worker API version 3. Its step's exit status, or -1 for none.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "outputs": {
+          "description": "Added in worker API version 3. What its step wrote to $OUTPUTS, for one that succeeded, by name.",
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "private": {
+          "description": "Added in worker API version 3. Which of the outputs are private.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "secrets": {
+          "description": "Added in worker API version 3. Which of the outputs hold a secret.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "diagnostics": {
+          "description": "Added in worker API version 3. Why one that wasn't made wasn't, and its job's problems.",
+          "$ref": "#/$defs/Diagnostics"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "StepRunStop": {
+      "description": "Added in worker API version 3. Stops the step run of a step's try, or of its cleanup:.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "description": "Added in worker API version 3. The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "Added in worker API version 3. The step's try, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cleanup": {
+          "description": "Added in worker API version 3. Whether it stops the step's cleanup:'s.",
+          "type": "boolean"
         },
         "reason": {
           "description": "Added in worker API version 3. Why the step is stopped: cancelled, or timeout.",

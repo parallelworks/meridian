@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -449,5 +451,126 @@ func TestStepRunOneTry(t *testing.T) {
 	})
 	if second, err := r.ask(t, r.build, stepRunRequest{Step: 8, Try: 1, SSH: hostOf("farm1")}); err != nil || second == first {
 		t.Errorf("the second try's step run, once the first failed: %q, %v", second, err)
+	}
+}
+
+// TestStepRunAPI checks the worker API's side of a step run: an ask makes
+// it, with the job's state and masks; its claim gives the one step it
+// runs, without its cleanup: or the job's outputs:, and the state, and a
+// cleanup's step run's the step with its cleanup:; its end gives what its
+// step wrote; an ask for a step that can't have one is refused, and one
+// whose host the coordinator can't evaluate ends failed, with why; and
+// one of a run that was stopped ends cancelled.
+func TestStepRunAPI(t *testing.T) {
+	parallel(t)
+	r := newStepRunRigWith(t, func(backend.PlaceRequest) testEnd {
+		return testEnd{result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"RUNDIR": "/w"}}}
+	})
+	api := childAPI{r.c}
+	root := storedRun(t, r.c, r.root)
+	state := workerapi.StepRunState{Steps: []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1"}}, {Outcome: plan.OutcomeSuccess}}}
+	sr, err := api.StepRun(t.Context(), root, r.build, &workerapi.StepRunRequest{Step: 2, SSH: farm, State: state, Masked: []string{"t0k3n-masked"}})
+	if err != nil || sr.Run == "" {
+		t.Fatalf("the ask gave %+v, %v", sr, err)
+	}
+	run := storedRun(t, r.c, sr.Run)
+	a := r.placedOrEnded(t, sr.Run, "build")
+	ready, err := claimReadier{r.c}.ReadyAttempt(t.Context(), run, a)
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case ready.StepRun == nil || ready.StepRun.Step != 2 || ready.StepRun.Try != 0 || ready.StepRun.Cleanup || len(ready.StepRun.State.Steps) != 2 || ready.StepRun.State.Steps[0].Outputs["x"] != "1":
+		t.Errorf("the step run's claim gives %+v", ready.StepRun)
+	case len(ready.Job.Steps) != 1 || !ready.Job.Steps[0].Cleanup.IsZero() || ready.Job.Outputs != nil || ready.Job.Steps[0].Path != "/jobs/build/steps/2":
+		t.Errorf("the step run's claim's job is %+v", ready.Job)
+	case ready.Tree == nil || !slices.Contains(ready.Tree.Masked, "t0k3n-masked"):
+		t.Errorf("the step run's claim masks %+v", ready.Tree)
+	}
+	sr, err = api.StepRun(t.Context(), root, r.build, &workerapi.StepRunRequest{Step: 2, Cleanup: true, SSH: farm, State: state})
+	if err != nil || sr.Run == "" {
+		t.Fatalf("the ask for the cleanup's gave %+v, %v", sr, err)
+	}
+	cleanup, err := claimReadier{r.c}.ReadyAttempt(t.Context(), storedRun(t, r.c, sr.Run), r.placedOrEnded(t, sr.Run, "build"))
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case cleanup.StepRun == nil || cleanup.StepRun.Step != 2 || !cleanup.StepRun.Cleanup:
+		t.Errorf("the cleanup's step run's claim gives %+v", cleanup.StepRun)
+	case len(cleanup.Job.Steps) != 1 || cleanup.Job.Steps[0].Cleanup.IsZero():
+		t.Errorf("the cleanup's step run's claim's job is %+v", cleanup.Job)
+	}
+	if callers, err := (claimReadier{r.c}).ReadyAttempt(t.Context(), root, r.build); err != nil || callers.StepRun != nil {
+		t.Errorf("the caller's claim gives a step run: %+v, %v", callers, err)
+	}
+	var end *workerapi.StepRun
+	waitFor(t, func() bool {
+		end, err = api.StepRunEnd(t.Context(), sr.Run)
+		return err != nil || end.Ended
+	})
+	if err != nil || end.Outcome != plan.OutcomeSuccess || end.Outputs["RUNDIR"] != "/w" {
+		t.Errorf("the step run's end is %+v, %v", end, err)
+	}
+
+	if _, err := api.StepRun(t.Context(), root, r.build, &workerapi.StepRunRequest{Step: 0, SSH: farm}); !errors.Is(err, workerapisrv.ErrNotStepRun) {
+		t.Errorf("a step without ssh: gave %v", err)
+	}
+	if sr, err := api.StepRun(t.Context(), root, r.build, &workerapi.StepRunRequest{Step: 7}); err != nil || !sr.Ended || sr.Outcome != plan.OutcomeFailure || len(sr.Diagnostics) != 1 || sr.Diagnostics[0].Code != problems.StepSSHReadsWorker.Code() {
+		t.Errorf("a step whose host only its worker knows gave %+v, %v", sr, err)
+	}
+	// A step of a run that was stopped gets none, cancelled, with its
+	// stop's reason.
+	if err := r.c.Cancel(t.Context(), r.root); err != nil {
+		t.Fatal(err)
+	}
+	if sr, err := api.StepRun(t.Context(), root, r.build, &workerapi.StepRunRequest{Step: 1, SSH: farm}); err != nil || sr.Run != "" || !sr.Ended || sr.Outcome != plan.OutcomeCancelled || sr.Reason != plan.ReasonCancelled || sr.ExitCode != -1 {
+		t.Errorf("a step of a stopped run gave %+v, %v", sr, err)
+	}
+}
+
+// placedOrEnded waits for the latest attempt of the run's job key to be
+// placed, and returns it, however it has ended since.
+func (r *stepRunRig) placedOrEnded(t *testing.T, run, key string) *store.Attempt {
+	t.Helper()
+	var a *store.Attempt
+	waitFor(t, func() bool {
+		return r.c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			a, err = tx.LatestAttempt(run, key)
+			return err
+		}) == nil && a.Placed()
+	})
+	return a
+}
+
+// TestStepRunOutputsBound checks that a step run whose step wrote more to
+// $OUTPUTS than a worker reads, as a step run's worker that doesn't keep
+// to it reports, ends failed, with outputs_too_large at its step, and
+// gives none of them.
+func TestStepRunOutputsBound(t *testing.T) {
+	parallel(t)
+	large := map[string]string{"x": strings.Repeat("y", workerapi.MaxOutputs)}
+	r := newStepRunRigWith(t, func(backend.PlaceRequest) testEnd {
+		return testEnd{result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: large}}
+	})
+	api := childAPI{r.c}
+	sr, err := api.StepRun(t.Context(), storedRun(t, r.c, r.root), r.build, &workerapi.StepRunRequest{Step: 2, SSH: farm})
+	if err != nil || sr.Run == "" {
+		t.Fatalf("the ask gave %+v, %v", sr, err)
+	}
+	var end *workerapi.StepRun
+	waitFor(t, func() bool {
+		end, err = api.StepRunEnd(t.Context(), sr.Run)
+		return err != nil || end.Ended
+	})
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case end.Outcome != plan.OutcomeFailure || end.Outputs != nil || len(end.Diagnostics) == 0:
+		t.Errorf("the step run whose step wrote too much ended %+v", end)
+	default:
+		d := end.Diagnostics[len(end.Diagnostics)-1]
+		if d.Code != problems.OutputsTooLarge.Code() || d.Path() != "/jobs/build/steps/2" || d.Params["size"] != workerapi.MaxOutputs+3 {
+			t.Errorf("its problem is %+v", d)
+		}
 	}
 }

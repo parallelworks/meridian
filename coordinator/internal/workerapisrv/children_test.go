@@ -16,20 +16,22 @@ import (
 // An attempt whose job needs version 3 of the worker API, as the Readier
 // says one that calls a workflow, or of a child run, does, refuses a
 // worker of version 2 at its claim (worker_api_too_old); one of version 3
-// is given what the attempt has of its tree, and whether its run's
-// directory is one its member chose, which a claim of version 2, of a job
-// that doesn't need them, isn't, though its run's directory is.
+// is given what the attempt has of its tree, of the step's try a step run
+// runs, and whether its run's directory is one its member chose, which a
+// claim of version 2, of a job that doesn't need them, isn't, though its
+// run's directory is.
 func TestChildClaimNeeds(t *testing.T) {
 	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	tree := &workerapi.Tree{JobID: "3", RootDir: "/runs/3", WorkflowName: "github.acme.tools", Masked: []string{"s3cr"}}
 	job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{{Run: plan.Literal("true")}}}
+	stepRun := &workerapi.StepRunClaim{Step: 2, Try: 1, State: workerapi.StepRunState{Steps: []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess}}, MaxRetries: 3}}
 
 	const hostDir = "/home/alice/.local/state/meridian/runs/3-store/subworkflows/main/step_0"
 	r.readier.needs = workerapi.Version3
 	run := r.newRun(nil)
-	r.readier.set(run, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}, Tree: tree, RunDir: hostDir, RunDirOnMember: true})
+	r.readier.set(run, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}, Tree: tree, StepRun: stepRun, RunDir: hostDir, RunDirOnMember: true})
 	_, token := r.newAttempt(run, "build", placed{})
 	status, body, err := c.send(http.MethodPost, workerapi.PathClaim, claimRequestAt(t, coordtest.Credential(t), conformanceDigest, workerapi.Version2), token)
 	if err != nil || status != http.StatusConflict {
@@ -48,6 +50,9 @@ func TestChildClaimNeeds(t *testing.T) {
 	var claim workerapi.Claim
 	if err := workerapi.Unmarshal(body, &claim); err != nil || claim.Tree == nil || claim.Tree.JobID != "3" || claim.Tree.Masked[0] != "s3cr" {
 		t.Errorf("a child's claim has of its tree %+v, %v", claim.Tree, err)
+	}
+	if s := claim.StepRun; s == nil || s.Step != 2 || s.Try != 1 || s.State.MaxRetries != 3 || len(s.State.Steps) != 1 {
+		t.Errorf("a step run's claim has of its step's try %+v", s)
 	}
 	if claim.RunDir != hostDir || !claim.RunDirOnMember {
 		t.Errorf("a child's claim on a member that chose its directory gives %q, chosen %v", claim.RunDir, claim.RunDirOnMember)
@@ -68,15 +73,15 @@ func TestChildClaimNeeds(t *testing.T) {
 
 	r.readier.needs = 1
 	other := r.newRun(nil)
-	r.readier.set(other, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}, Tree: tree, RunDir: hostDir, RunDirOnMember: true})
+	r.readier.set(other, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}, Tree: tree, StepRun: stepRun, RunDir: hostDir, RunDirOnMember: true})
 	_, token = r.newAttempt(other, "build", placed{})
 	status, body, err = c.send(http.MethodPost, workerapi.PathClaim, claimRequestAt(t, coordtest.Credential(t), conformanceDigest, workerapi.Version2), token)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("the claim of version 2 was answered %d, %v: %s", status, err, body)
 	}
 	claim = workerapi.Claim{}
-	if err := workerapi.Unmarshal(body, &claim); err != nil || claim.Tree != nil || claim.RunDirOnMember || claim.RunDir != hostDir {
-		t.Errorf("a claim of version 2 has of its tree %+v, and gives %q, chosen %v, %v", claim.Tree, claim.RunDir, claim.RunDirOnMember, err)
+	if err := workerapi.Unmarshal(body, &claim); err != nil || claim.Tree != nil || claim.StepRun != nil || claim.RunDirOnMember || claim.RunDir != hostDir {
+		t.Errorf("a claim of version 2 has of its tree %+v, of a step's try %+v, and gives %q, chosen %v, %v", claim.Tree, claim.StepRun, claim.RunDir, claim.RunDirOnMember, err)
 	}
 }
 

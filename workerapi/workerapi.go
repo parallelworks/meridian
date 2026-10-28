@@ -274,6 +274,20 @@ const (
 	// answered with 204 No Content once the child's stop is stored. It is
 	// of version 3.
 	PathChildStop = "/v1/child/stop"
+	// PathStepRun asks for the step run of a step's try, or of its
+	// cleanup:, whose ssh: names another host than its job's
+	// (docs/design.md, Steps on another host): StepRunRequest, answered
+	// with a StepRun. It is of version 3.
+	PathStepRun = "/v1/steprun"
+	// PathStepRunEnd is a long poll for the end of the step run of a
+	// step's try, or of its cleanup:, named in its query (QueryStep,
+	// QueryTry, QueryCleanup): answered with the StepRun as it is once it
+	// has ended, or after a while, as PathChildEnd is. It is of version 3.
+	PathStepRunEnd = "/v1/steprun/end"
+	// PathStepRunStop stops the step run of a step's try, or of its
+	// cleanup:, as the step is stopped: StepRunStop, answered with no
+	// body. It is of version 3.
+	PathStepRunStop = "/v1/steprun/stop"
 	// PathCheckout reads the tree of a parallelworks/checkout step's try,
 	// once the coordinator has answered the try's action with success
 	// (PathAction): the same ActionRequest, answered with the tree of the
@@ -321,6 +335,21 @@ const MaxActionRequest = 4 << 20
 // reason as MaxActionRequest.
 const MaxChildRequest = 4 << 20
 
+// MaxStepRunRequest is the most bytes a StepRunRequest takes, its job's
+// state and the strings it masks among them, for the same reason as
+// MaxActionRequest.
+const MaxStepRunRequest = 4 << 20
+
+// MaxStepRunMasked is the most bytes a StepRunRequest's Masked hold in
+// all, which the step run's secret record keeps.
+const MaxStepRunMasked = 1 << 20
+
+// MaxOutputs is the most bytes of a step's $OUTPUTS that a worker reads
+// (docs/design.md, Outputs), and so the most of what a step run's step
+// wrote there that its end gives (StepRun.Outputs), each output counted
+// as its name=value line.
+const MaxOutputs = 1 << 20
+
 // The query parameters of PathControl and PathLogs.
 const (
 	QueryVersion = "version"
@@ -329,6 +358,9 @@ const (
 	QueryPart = "part"
 	QueryStep = "step"
 	QueryTry  = "try"
+	// QueryCleanup, true, names a step's cleanup:'s step run, rather than
+	// its try's (PathStepRunEnd).
+	QueryCleanup = "cleanup"
 	// QueryOffset is the byte offset the upload starts at, and QueryEnd,
 	// true, says that its bytes end the log: the log's length is final.
 	QueryOffset = "offset"
@@ -570,6 +602,48 @@ type Claim struct {
 	// attempt of version 3 or later, which such an attempt needs; nil for
 	// a run no step called.
 	Tree *Tree `json:"tree,omitzero"`
+	// StepRun is what an attempt of a step run has of the step's try it
+	// runs, in an attempt of version 3 or later, which such an attempt
+	// needs; nil for any other run. Job, then, has the one step it runs,
+	// and no outputs:, which the step's own job has.
+	StepRun *StepRunClaim `json:"stepRun,omitzero"`
+}
+
+// A StepRunClaim is what an attempt of a step run has of the try of the
+// step it runs: the step's index in its job, and its try; whether it runs
+// the step's cleanup:; and the state of the step's job at the try, which
+// it evaluates the step with. Every member is of version 3.
+type StepRunClaim struct {
+	Step    int          `json:"step,omitzero"`
+	Try     int          `json:"try,omitzero"`
+	Cleanup bool         `json:"cleanup,omitzero"`
+	State   StepRunState `json:"state,omitzero"`
+}
+
+// A StepRunState is the state of a job at a try of one of its steps that
+// a step run of it reads: what format 1 passes between a job's steps, and
+// nothing else, never an environment's variable or a path, which the
+// step run's worker gives its step itself, as format 1 gives a step on a
+// host the host's. Every member is of version 3.
+type StepRunState struct {
+	// Steps are the results of the job's steps that have had their turn,
+	// by index: each step before the one the try is of, or every step,
+	// for a cleanup.
+	Steps []StepRunResult `json:"steps,omitzero"`
+	// Cancelled is set once the job is being cancelled.
+	Cancelled bool `json:"cancelled,omitzero"`
+	// MaxRetries is the step's retry:'s, as its first try evaluated it,
+	// for the retry counters, or 0 for a step without one.
+	MaxRetries int `json:"maxRetries,omitzero"`
+}
+
+// A StepRunResult is how a step of a job ended, as a later step of it
+// reads it (plan.StepResult). Every member is of version 3.
+type StepRunResult struct {
+	Outcome        plan.Outcome      `json:"outcome,omitzero"`
+	Outputs        map[string]string `json:"outputs,omitzero"`
+	CleanupOutcome plan.Outcome      `json:"cleanupOutcome,omitzero"`
+	CleanupOutputs map[string]string `json:"cleanupOutputs,omitzero"`
 }
 
 // A Tree is what an attempt of a child run has of its tree (Claim.Tree):
@@ -904,6 +978,54 @@ type Child struct {
 	// step's uses:, which the worker reports as the step's, masked as the
 	// step's are.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitzero"`
+}
+
+// A StepRunRequest asks for the step run of a step's try, or of its
+// cleanup:, whose ssh: names another host than its job's (PathStepRun):
+// the step's index in its job, and the try, from 0, which is 0 for a
+// cleanup; the step's ssh: as the try evaluated it, or nil for one that
+// is null or names no host, which the coordinator evaluates itself and
+// refuses the request where they differ; the state of the job at the try
+// (StepRunState); and the strings the worker masks at the try, which the
+// step run's worker masks too, of MaxStepRunMasked bytes at most. Every
+// member is of version 3.
+type StepRunRequest struct {
+	Step    int          `json:"step,omitzero"`
+	Try     int          `json:"try,omitzero"`
+	Cleanup bool         `json:"cleanup,omitzero"`
+	SSH     *plan.Inline `json:"ssh,omitzero"`
+	State   StepRunState `json:"state,omitzero"`
+	Masked  []string     `json:"masked,omitzero"`
+}
+
+// A StepRun is the step run of a step's try, or of its cleanup:, as it is
+// (PathStepRun, PathStepRunEnd): its ID, or "" for one that wasn't made,
+// with why in Diagnostics; once it has ended, Ended, with its outcome and
+// why, its step's exit status, or -1 for none, and, for one that
+// succeeded, what its step wrote to $OUTPUTS, which the step's worker
+// appends to the file the step would have written, as escaped name=value
+// lines, with which of them are private and which hold a secret; and its
+// problems. Every member is of version 3.
+type StepRun struct {
+	Run         string               `json:"run,omitzero"`
+	Ended       bool                 `json:"ended,omitzero"`
+	Outcome     plan.Outcome         `json:"outcome,omitzero"`
+	Reason      plan.Reason          `json:"reason,omitzero"`
+	ExitCode    int                  `json:"exitCode,omitzero"`
+	Outputs     map[string]string    `json:"outputs,omitzero"`
+	Private     []string             `json:"private,omitzero"`
+	Secrets     []string             `json:"secrets,omitzero"`
+	Diagnostics problems.Diagnostics `json:"diagnostics,omitzero"`
+}
+
+// A StepRunStop stops the step run of a step's try, or of its cleanup:
+// (PathStepRunStop), as the step is stopped, as ChildStop stops a child.
+// Every member is of version 3.
+type StepRunStop struct {
+	Step    int         `json:"step,omitzero"`
+	Try     int         `json:"try,omitzero"`
+	Cleanup bool        `json:"cleanup,omitzero"`
+	Reason  plan.Reason `json:"reason,omitzero"`
 }
 
 // A ChildStop stops the child run of a step's try (PathChildStop), as the

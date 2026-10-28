@@ -89,8 +89,13 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	case res.Job == nil:
 		return nil, fmt.Errorf("coordinator: run %s's job %q readies again as no job to run", readyRun.ID, key)
 	}
+	var stepRun *workerapi.StepRunClaim
 	if run.StepRun {
 		if res.Job, err = c.stepRunJob(ctx, run, res.Job); err != nil {
+			return nil, err
+		}
+		// Its attempt runs the one step, with its caller's job's state.
+		if stepRun, res.Job, err = c.stepRunClaim(ctx, run, res.Job); err != nil {
 			return nil, err
 		}
 	}
@@ -107,7 +112,7 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 		return nil, err
 	}
 	return &workerapisrv.Ready{
-		Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree,
+		Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree, StepRun: stepRun,
 		RunDir: dirs.run, RunDirOnMember: dirs.own,
 	}, nil
 }

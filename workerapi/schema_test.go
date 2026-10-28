@@ -112,6 +112,9 @@ func TestSchemaDescribesTheBodies(t *testing.T) {
 		workerapi.ChildRequest{},
 		workerapi.Child{},
 		workerapi.ChildStop{},
+		workerapi.StepRunRequest{},
+		workerapi.StepRun{},
+		workerapi.StepRunStop{},
 	}
 	for _, body := range bodies {
 		walk(reflect.TypeOf(body))

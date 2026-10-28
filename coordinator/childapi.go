@@ -58,20 +58,10 @@ func (k childAPI) Child(ctx context.Context, run *store.Run, a *store.Attempt, r
 	if errors.Is(err, errStepGone) {
 		return nil, fmt.Errorf("%w: %w", store.ErrFenced, err)
 	}
-	if stopped, ok := errors.AsType[*stepStoppedError](err); ok {
-		return &workerapi.Child{Ended: true, Outcome: plan.OutcomeCancelled, Reason: stopped.reason}, nil
-	}
-	if errors.Is(err, errRunStopped) {
-		reason := plan.ReasonCancelled
-		if err := c.store.View(ctx, func(tx *store.Tx) error {
-			r, err := tx.Run(run.ID)
-			if err == nil && r.StopReason != "" {
-				reason = r.StopReason
-			}
-			return err
-		}); err != nil {
-			return nil, err
-		}
+	switch reason, stopped, serr := c.stopReason(ctx, run, err); {
+	case serr != nil:
+		return nil, serr
+	case stopped:
 		return &workerapi.Child{Ended: true, Outcome: plan.OutcomeCancelled, Reason: reason}, nil
 	}
 	uses := step.Path + "/uses"
@@ -90,6 +80,28 @@ func (k childAPI) Child(ctx context.Context, run *store.Run, a *store.Attempt, r
 		return &workerapi.Child{Ended: true, Outcome: plan.OutcomeFailure, Diagnostics: append(failed, diags...)}, nil
 	}
 	return &workerapi.Child{Run: id}, nil
+}
+
+// stopReason returns why a step of run, which createChild or createStepRun
+// refused with err, was stopped, and true: the reason a step's stop gives
+// (stepStoppedError), or the run's stop's, or cancelled for a run stopped
+// without one (errRunStopped); and false for any other err.
+func (c *Coordinator) stopReason(ctx context.Context, run *store.Run, err error) (plan.Reason, bool, error) {
+	if stopped, ok := errors.AsType[*stepStoppedError](err); ok {
+		return stopped.reason, true, nil
+	}
+	if !errors.Is(err, errRunStopped) {
+		return "", false, nil
+	}
+	reason := plan.ReasonCancelled
+	err = c.store.View(ctx, func(tx *store.Tx) error {
+		r, err := tx.Run(run.ID)
+		if err == nil && r.StopReason != "" {
+			reason = r.StopReason
+		}
+		return err
+	})
+	return reason, true, err
 }
 
 // stepOf returns run's plan, and the step at index in the job of the

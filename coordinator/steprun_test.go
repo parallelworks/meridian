@@ -21,11 +21,11 @@ import (
 // command whose ssh: is null, which runs in its job, an action the
 // coordinator performs, whose ssh: places nothing, a command whose host
 // only the job's worker knows, commands whose host their retry counter
-// names, a command on farm that outlives its job's cancel, and one on
-// farm with a retry: and a cleanup:; whose job hosted runs on farm, with
-// a step whose ssh: is null; whose job failover, on farm, runs again once
-// its worker is lost, and has a step whose host its retry counter names;
-// and whose matrix job fan has a step on farm.
+// names, a command on farm that outlives its job's cancel, one on farm
+// with a retry: and a cleanup:, and outputs: of its own; whose job hosted
+// runs on farm, with a step whose ssh: is null; whose job failover, on
+// farm, runs again once its worker is lost, and has a step whose host its
+// retry counter names; and whose matrix job fan has a step on farm.
 const stepRunRoot = `jobs:
   build:
     steps:
@@ -33,7 +33,8 @@ const stepRunRoot = `jobs:
       - uses: parallelworks/checkout
         ssh: {remoteHost: farm}
         with: {repo: https://example.com/app.git, branch: main}
-      - run: echo there
+      - id: there
+        run: echo there
         ssh: {remoteHost: farm}
         cleanup: echo tidy
       - uses: github/t/grand@main
@@ -60,6 +61,8 @@ const stepRunRoot = `jobs:
         retry: {max-retries: 1}
         ssh: {remoteHost: farm}
         cleanup: echo tidy again
+    outputs:
+      there: ${{ steps.there.outputs.x }}
   blank:
     ssh: {remoteHost: ""}
     steps:
@@ -421,7 +424,10 @@ func TestStepRunRefuses(t *testing.T) {
 func TestStepRunPrivate(t *testing.T) {
 	parallel(t)
 	r := newStepRunRig(t)
-	state := plan.DataOf(map[string]any{"token": "t0k3n-of-the-job"})
+	state, err := stepRunStateData(workerapi.StepRunState{Steps: []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"token": "t0k3n-of-the-job"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	id, err := r.ask(t, r.build, stepRunRequest{Step: 4, SSH: farm, State: state, Masked: []string{"t0k3n-of-the-job"}})
 	if err != nil {
 		t.Fatal(err)
@@ -435,9 +441,16 @@ func TestStepRunPrivate(t *testing.T) {
 	if !a.Private || a.Placement.Group != "" || a.Placement.Member != "" {
 		t.Errorf("the private step run's placement is %+v in the clear", a.Placement)
 	}
-	// Its worker masks what the caller's did.
-	if ready, err := (claimReadier{r.c}).ReadyAttempt(t.Context(), run, a); err != nil || ready.Tree == nil || !slices.Contains(ready.Tree.Masked, "t0k3n-of-the-job") {
-		t.Errorf("the step run's claim masks %+v, %v", ready, err)
+	// Its worker masks what the caller's did, and reads the job's state
+	// from the record.
+	ready, err := claimReadier{r.c}.ReadyAttempt(t.Context(), run, a)
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case ready.Tree == nil || !slices.Contains(ready.Tree.Masked, "t0k3n-of-the-job"):
+		t.Errorf("the step run's claim masks %+v", ready.Tree)
+	case ready.StepRun == nil || len(ready.StepRun.State.Steps) != 1 || ready.StepRun.State.Steps[0].Outputs["token"] != "t0k3n-of-the-job":
+		t.Errorf("the step run's claim has of the job's state %+v", ready.StepRun)
 	}
 	var sealed *store.Record
 	if err := r.c.store.View(t.Context(), func(tx *store.Tx) error {
@@ -451,7 +464,7 @@ func TestStepRunPrivate(t *testing.T) {
 		t.Error("the step run's secret record holds the try's values in the clear")
 	}
 	rec, err := r.c.openRecord(t.Context(), id)
-	if err != nil || rec.StepRun == nil || !rec.StepRun.Private || rec.StepRun.State.Get().(map[string]any)["token"] != "t0k3n-of-the-job" {
+	if err != nil || rec.StepRun == nil || !rec.StepRun.Private || rec.StepRun.State.IsZero() {
 		t.Errorf("the step run's record is %+v, %v", rec, err)
 	}
 }
