@@ -102,6 +102,12 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		// after it, but for a step that ignores its errors on its last
 		// try, which succeeds.
 		deadlineFailed bool
+		// cancelReason is why the step that cancelled the job did, when it
+		// says: a step that calls a workflow that the job's timeout, or the
+		// run's, stopped cancels the job, for the reason timeout, as format
+		// 1 ends it, rather than fail it. Otherwise the job is cancelled for
+		// the coordinator's reason.
+		cancelReason plan.Reason
 	)
 	// A job halted before a step's turn, or a cleanup's, hasn't ended, and
 	// neither has one halted as a step, or a cleanup, ran, which it cut
@@ -140,8 +146,8 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		if end.cause == stopJobTimeout && end.result.Outcome == plan.OutcomeFailure {
 			deadlineFailed = true
 		}
-		if end.cause == stopCancelled {
-			cancelled = true
+		if end.cause == stopCancelled && !cancelled {
+			cancelled, cancelReason = true, end.reason
 		}
 		if !stopped && (end.cause == stopCancelled || end.cause == stopEarlyCancel || end.cause == stopJobTimeout) {
 			stopped, why = true, end.cause
@@ -205,7 +211,10 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	case stepCancelled:
 		outcome = plan.OutcomeCancelled
 		if cancelled {
-			end.Reason = a.cancelReason
+			end.Reason = cancelReason
+			if end.Reason == "" {
+				end.Reason = a.cancelReason
+			}
 		}
 	case skipped:
 		// As in format 1, a job whose steps were all skipped is.
@@ -303,11 +312,25 @@ func (a *attempt) setUp() *problem.Problem {
 		// the host instead.
 		return fail(problems.ContainerNotSupported, problems.Params{"runtime": c.Runtime, "image": c.Image})
 	}
-	if err := os.MkdirAll(a.claim.RunDir, 0o700); err != nil {
+	if err := a.makeRunDir(); err != nil {
 		return fail(problems.RunDirUnusable, problems.Params{"path": a.claim.RunDir, "reason": err.Error()})
 	}
 	info("running the job's steps on the host", "dir", a.claim.RunDir)
 	return nil
+}
+
+// makeRunDir makes the run's directory, as the job's steps run in it: a
+// child run's, in its root's directory, where its caller's worker made it
+// (makeChildDir), as that worker makes it, never following a symbolic
+// link, which a step of its tree could have left in the way since; and any
+// other's as it is, as the meridian command makes a root's private.
+func (a *attempt) makeRunDir() error {
+	if tree := a.claim.Tree; tree != nil {
+		if rel, ok := inDir(tree.RootDir, a.claim.RunDir); ok {
+			return makeDirIn(tree.RootDir, rel, false)
+		}
+	}
+	return os.MkdirAll(a.claim.RunDir, 0o700)
 }
 
 // decodeFailure says why a job of plan version version didn't decode,
@@ -344,12 +367,15 @@ func (a *attempt) state(results []plan.StepResult, cancelled bool, env map[strin
 }
 
 // A stepEnd is how a step that the worker readied ended: its result, why
-// its last try was stopped, if it was, and whether its if: failed to
-// evaluate; or that the job was halted before it ended, cut short, when
-// how it ended isn't known, and nothing reports it.
+// its last try was stopped, if it was, as its job heeds it, and the reason
+// the job is cancelled for, for a step that cancels it with a reason of
+// its own; and whether its if: failed to evaluate; or that the job was
+// halted before it ended, cut short, when how it ended isn't known, and
+// nothing reports it.
 type stepEnd struct {
 	result   plan.StepResult
 	cause    stopCause
+	reason   plan.Reason
 	ifFailed bool
 	cut      bool
 }
@@ -423,9 +449,15 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 		if out.err != nil {
 			return fail(a.notStarted(out.err, path))
 		}
+		// A step that calls a workflow runs none of its own: its child's
+		// directory is made in the root's, a directory at a time
+		// (runChild).
+		calls := a.callsWorkflow(i)
 		dir := a.workingDirectory(rs)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fail(a.notStarted(err, path))
+		if !calls {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return fail(a.notStarted(err, path))
+			}
 		}
 		if note != nil {
 			diags = append(diags, *note)
@@ -471,6 +503,27 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 			succeeded bool
 		)
 		key := logKey{workerapi.LogStep, i, try}
+		if calls {
+			// The step's child is a run of its own, whose end is the try's,
+			// as format 1 maps it (called.end). Format 1 cleans its directory
+			// before each try after the first, as its clean-on-retry: says.
+			c := a.runChild(ctx, key, rs, s, note, vars, try > 0 && first.Retry != nil && first.Retry.CleanOnRetry)
+			if a.halted.fired() || c.cause == stopHalted {
+				end.cut = true
+				return end
+			}
+			timedOut := func(limit int64) problems.Diagnostic {
+				return a.at(problems.StepTimedOut, path, problems.Params{"limit": limit})
+			}
+			event, result, cause, reason, retry, tryDiags := c.end(rs, first, last, timedOut)
+			a.finished(workerapi.Event{Step: i, Try: try, LastTry: event == plan.OutcomeFailure && !retry, Outcome: event, ExitCode: -1, Diagnostics: slices.Concat(diags, tryDiags)})
+			end.result = plan.StepResult{Outcome: result}
+			end.cause, end.reason = cause, reason
+			if !retry {
+				return end
+			}
+			continue
+		}
 		switch {
 		case slices.Contains(platformActions, rs.Uses):
 			// As in format 1, an action fails as it runs, and the try
@@ -649,9 +702,10 @@ func (a *attempt) runCleanup(ctx context.Context, i int, state plan.JobState) (p
 // runnable checks that the worker can run a step, as Step or Cleanup
 // readied it: not one that uses: an action or a workflow, nor one with a
 // shell format 1 doesn't run, which it can't run yet, but for an action
-// only a platform provides, which fails as it runs (platformActions), and
-// one the coordinator performs, in an attempt of a version of the worker
-// API that has it (asksCoordinator); and where format 1 runs it: where its
+// only a platform provides, which fails as it runs (platformActions), one
+// the coordinator performs, in an attempt of a version of the worker API
+// that has it (asksCoordinator), and a workflow, in such an attempt
+// (callsWorkflow); and where format 1 runs it: where its
 // job runs, unless its ssh: names a host, which this
 // worker can't run a step on yet, but for one whose ssh: names the host
 // and login its job's does, which placed the worker there (sameSSH). A
@@ -665,7 +719,7 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 		d := a.at(k, path, params)
 		return &d
 	}
-	if rs.Uses != "" && !slices.Contains(platformActions, rs.Uses) && !a.asksCoordinator(rs.Uses) {
+	if rs.Uses != "" && !slices.Contains(platformActions, rs.Uses) && !a.asksCoordinator(rs.Uses) && !a.callsWorkflow(rs.Index) {
 		return nil, diagnostic(problems.UsesNotSupported, problems.Params{"uses": rs.Uses})
 	}
 	if shell, ok := shellOK(rs.Shell); !ok {

@@ -943,6 +943,20 @@
       "If they are of the same release, report the bug, with the reason and the worker's log."
     ]
   },
+  "child_request_failed": {
+    "why": "A step whose uses: names a workflow asks the coordinator, through the worker API, for the run of it, waits for that run's end, and stops it when the step is stopped. One of those requests failed for good: the coordinator refused it, or answered with what the worker can't read, which the reason names by its code. That is a bug in the worker or in the coordinator, or a worker and a coordinator of releases that don't agree on the worker API, and not the workflow's. The step fails, and isn't tried again. The run it calls may have been created, and may still be running: its own status says.",
+    "fix": [
+      "Start workers of the coordinator's own release of Meridian.",
+      "If they are of the same release, report the bug, with the reason and the worker's log."
+    ]
+  },
+  "child_dir_unusable": {
+    "why": "A run that a step calls has a directory of its own, subworkflows/<job>/step_<n> under the step's working directory, as in format 1, where its steps run. The worker that runs the step makes it before it asks for the run, a directory at a time from its root run's directory, and never follows a symbolic link on the way, which one of the run's own steps could have left there to put the called workflow somewhere else: a link is refused as too many levels of symbolic links, and a file that isn't a directory as not a directory. With clean-on-retry:, which is true unless the workflow says otherwise, the worker removes the directory, with what it holds, before each try after the first, and never follows a link there either. The step fails, and isn't tried again.",
+    "fix": [
+      "Remove the symbolic link, or the file, that the reason names, or have the run's steps not make one there.",
+      "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "why": "A parallelworks/cancel-jobs step's jobs: names the jobs of its run to cancel. This name is no job of the run, or is a matrix job's, whose instances format 1 knows by other names, so that it cancels none of them. As in format 1, the step does nothing for the name, and succeeds.",
     "fix": [

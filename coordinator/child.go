@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/parallelworks/meridian/compile"
@@ -150,7 +149,7 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	if err != nil {
 		return "", nil, err
 	}
-	name, instance, isInstance := strings.Cut(attempt.Job, "#")
+	name, _, _ := strings.Cut(attempt.Job, "#")
 	job := p.Job(name)
 	if job == nil || req.Step < 0 || req.Step >= len(job.Steps) || req.Try < 0 {
 		return "", nil, fmt.Errorf("coordinator: run %s's job %s has no step %d", parent.ID, attempt.Job, req.Step)
@@ -201,7 +200,7 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 		}
 		text = w.Text
 	}
-	dir := childDir(parent.RunDir, req.WorkingDirectory, name, instance, isInstance, req.Step)
+	dir := plan.ChildDir(parent.RunDir, req.WorkingDirectory, attempt.Job, req.Step)
 	if rel, err := filepath.Rel(root.RunDir, dir); err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return "", nil, problems.ChildDirOutside.Problem(problems.Params{"dir": dir})
 	}
@@ -307,26 +306,6 @@ func privateNames(with, env []string) []string {
 		out = append(out, plan.JoinPath("env", name))
 	}
 	return out
-}
-
-// childDir is the directory of the child run of the step at index of the
-// job name, of the instance instance of it if isInstance, of a run whose
-// directory is runDir: subworkflows/<job>/step_<index> in the step's
-// working directory, wd, or the run's directory for none, as format 1
-// makes it, where <job> is name, or for an instance of a matrix job, its
-// name, a hyphen and its index.
-func childDir(runDir, wd, name, instance string, isInstance bool, index int) string {
-	base := runDir
-	switch {
-	case filepath.IsAbs(wd):
-		base = wd
-	case wd != "":
-		base = filepath.Join(runDir, wd)
-	}
-	if isInstance {
-		name += "-" + instance
-	}
-	return filepath.Join(base, "subworkflows", name, "step_"+strconv.Itoa(index))
 }
 
 // treeVariables are a child run's organization and user variables: those

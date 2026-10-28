@@ -117,6 +117,8 @@ type workerRig struct {
 	// runs is where runs' directories are.
 	runs   string
 	claims atomic.Int64
+	// sources give the workflows the runs' steps call, if they call any.
+	sources compile.Sources
 }
 
 // newWorkerRig returns a workerRig whose runs read vars as they start.
@@ -207,7 +209,7 @@ func checkClaimed(t *testing.T, c *Coordinator, run *store.Run, attempt string, 
 func (r *workerRig) create(t *testing.T, workflow []byte, inputs, contexts map[string]any) string {
 	t.Helper()
 	created, diags, err := compile.Create(t.Context(), "workflow.yaml", workflow, inputs,
-		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: contexts})
+		compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Contexts: contexts, Sources: r.sources})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,6 +242,7 @@ func startCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
 		t.Fatal(err)
 	}
 	r := newWorkerRig(t, conformancetest.StartVariables(cs))
+	r.sources = conformancetest.Sources(cs)
 	id := r.create(t, data, cs.Inputs, conformancetest.CreateContexts(cs))
 	serve(t, r.c)
 	return r, id

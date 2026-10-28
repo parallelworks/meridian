@@ -30,6 +30,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/problems"
@@ -87,6 +88,10 @@ type cli struct {
 	// stopped is what a test has meridian cancel do once it has stored
 	// the run's stop, before it reads the run back; nil for nothing.
 	stopped func()
+	// sources is what a test gives in place of the user's Git
+	// repositories (cacheSources) for the workflows a workflow's steps
+	// call, nil for theirs.
+	sources compile.Sources
 }
 
 // getenv reads an environment variable, or "" if it isn't set.

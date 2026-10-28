@@ -167,6 +167,8 @@
   "cancel_jobs_job_unknown": "The step cancels \"{job}\", which is no job of its run that a step can cancel, so nothing is cancelled for it.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "cancel_jobs_other_run": "The step cancels jobs of another run, which its with: names with \"{key}\", and Meridian doesn't do that yet.",
   "cancel_jobs_run_missing": "The step's with: names a workflow whose run to cancel, but no run of it, which format 1 needs: a number that isn't negative.",
+  "child_request_failed": "The step calls \"{uses}\", and the worker's request to the coordinator for its run failed: {reason}.",
+  "child_dir_unusable": "The worker couldn't make the directory \"{dir}\" of the run this step calls: {reason}.",
   "step_ssh_not_supported": "The step's ssh: names another host to run it on, and this worker can't run a step on another host yet.",
   "step_off_job_host": "The step's ssh: is null or gives no remoteHost, so format 1 runs it where its job would run without its ssh:, and this worker, on the host the job's ssh: names, can't run it there yet.",
   "ssh_host_empty": "The step's ssh: gives no remoteHost, so the step runs where its job runs, as format 1 runs it.",
