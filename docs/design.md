@@ -2632,14 +2632,18 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   give. A try that fails gives none, as in format 1. Of the caller's job,
   its worker gives only what format 1 passes between steps, the earlier
   steps' outcomes and outputs, whether the job is being cancelled, the
-  retry counters and the job's attempt, and whether the step's `if:` gave
-  the word `always`, which reads an output nothing wrote as empty, never
-  a variable of the environment or a path. The step run's claim has the
-  step it runs whole, at its own index, the steps before it by their `id`
-  alone, which its expressions read as `steps.<id>`, and none after it,
-  or, for a cleanup's, every step so but that one; and of the run's
-  values and its needs' outputs only what that step and the job's `env:`
-  read, never what another step reads.
+  step's retry counter, and whether its `if:` gave the word `always`,
+  which reads an output nothing wrote as empty, never a variable of the
+  environment or a path; and the coordinator keeps of the outputs only
+  those the step reads, as the plan says, since one can hold what was
+  made from a secret, and gives the job's retry counter and attempt as the
+  caller's claim has them. The step run's claim has the step it runs
+  whole, at its own index, the steps before it by their `id` alone, which
+  its expressions read as `steps.<id>`, and none after it, or, for a
+  cleanup's, every step so but that one, of which it has what its
+  `cleanup:` reads; and of the run's values and its needs' outputs only
+  what that step and the job's `env:` read, never what another step
+  reads.
 - **The caller waits for it**, parked, as for a workflow a step calls;
   stops it when the step's try is stopped; and ends the try as it ended,
   its `retry:` and `ignore-errors:` applying as to any try. Two jobs,

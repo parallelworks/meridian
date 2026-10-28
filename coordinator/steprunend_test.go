@@ -459,7 +459,9 @@ func TestStepRunOneTry(t *testing.T) {
 // TestStepRunAPI checks the worker API's side of a step run:
 //   - an ask makes it, with the job's state and masks, and is refused for a
 //     state without a result for each step before the try's, or for every
-//     step, for a cleanup's;
+//     step, for a cleanup's; the state keeps of the steps' outputs only
+//     those the step reads, and has the job's retry counter and attempt
+//     as the caller's claim gives them, whatever the ask says;
 //   - its claim gives the step's try and the state, and the job with the
 //     step at its own index, the steps before it by their id and path
 //     alone, and none after it, without the step's cleanup: or the job's
@@ -481,9 +483,9 @@ func TestStepRunAPI(t *testing.T) {
 	ctx := t.Context()
 	root := storedRun(t, r.c, r.root)
 	state := workerapi.StepRunState{Steps: []workerapi.StepRunResult{
-		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1"}},
-		{Outcome: plan.OutcomeFailure, Outputs: map[string]string{"y": "2"}},
-	}}
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1", "unread": "u"}},
+		{Outcome: plan.OutcomeFailure, Outputs: map[string]string{"y": "2", "other": "o"}},
+	}, JobRetry: 7, JobAttempt: 9}
 	for name, st := range map[string]workerapi.StepRunState{
 		"too few":  {Steps: state.Steps[:1]},
 		"too many": {Steps: append(slices.Clone(state.Steps), workerapi.StepRunResult{Outcome: plan.OutcomeSuccess})},
@@ -498,8 +500,13 @@ func TestStepRunAPI(t *testing.T) {
 	}
 	ready := r.readyStepRun(t, sr.Run)
 	switch {
-	case ready.StepRun == nil || ready.StepRun.Step != 2 || ready.StepRun.Try != 0 || ready.StepRun.Cleanup || len(ready.StepRun.State.Steps) != 2 || ready.StepRun.State.Steps[0].Outputs["x"] != "1":
+	case ready.StepRun == nil || ready.StepRun.Step != 2 || ready.StepRun.Try != 0 || ready.StepRun.Cleanup || len(ready.StepRun.State.Steps) != 2:
 		t.Errorf("the step run's claim gives %+v", ready.StepRun)
+	case !maps.Equal(ready.StepRun.State.Steps[0].Outputs, map[string]string{"x": "1"}) || !maps.Equal(ready.StepRun.State.Steps[1].Outputs, map[string]string{"y": "2"}) ||
+		ready.StepRun.State.Steps[1].Outcome != plan.OutcomeFailure:
+		t.Errorf("the step run's claim gives of the steps before it %+v", ready.StepRun.State.Steps)
+	case ready.StepRun.State.JobRetry != 0 || ready.StepRun.State.JobAttempt != r.build.Number:
+		t.Errorf("the step run's claim gives the job's retry %d and attempt %d", ready.StepRun.State.JobRetry, ready.StepRun.State.JobAttempt)
 	case ready.Tree == nil || !slices.Contains(ready.Tree.Masked, "t0k3n-masked"):
 		t.Errorf("the step run's claim masks %+v", ready.Tree)
 	case !maps.Equal(ready.Run.Vars, map[string]string{"MINE": "mine", "JOBV": "jobv"}):
@@ -523,7 +530,7 @@ func TestStepRunAPI(t *testing.T) {
 		all[i] = workerapi.StepRunResult{Outcome: plan.OutcomeSuccess}
 	}
 	copy(all, state.Steps)
-	all[2].Outputs = map[string]string{"z": "3"}
+	all[2].Outputs = map[string]string{"z": "3", "w": "w"}
 	if _, err := api.StepRun(ctx, root, r.build, &workerapi.StepRunRequest{Step: 2, Cleanup: true, SSH: farm, State: state}); !errors.Is(err, workerapisrv.ErrNotStepRun) {
 		t.Errorf("a cleanup's state without every step's result: %v", err)
 	}
@@ -533,7 +540,10 @@ func TestStepRunAPI(t *testing.T) {
 	}
 	cleanup := r.readyStepRun(t, sr.Run)
 	if cleanup.StepRun == nil || cleanup.StepRun.Step != 2 || !cleanup.StepRun.Cleanup {
-		t.Errorf("the cleanup's step run's claim gives %+v", cleanup.StepRun)
+		t.Fatalf("the cleanup's step run's claim gives %+v", cleanup.StepRun)
+	}
+	if got := cleanup.StepRun.State.Steps; got[0].Outputs != nil || !maps.Equal(got[1].Outputs, map[string]string{"y": "2"}) || !maps.Equal(got[2].Outputs, map[string]string{"z": "3"}) {
+		t.Errorf("the cleanup's step run's claim gives of the steps %+v", got)
 	}
 	checkStepRunJob(t, cleanup.Job, 2, n, true)
 	if rs, diags, err := cleanup.Job.Cleanup(ctx, 2, stepRunJobState(cleanup)); err != nil || len(diags) > 0 || rs.Run != "echo tidy 3 2" {
@@ -593,8 +603,9 @@ func stepRunJobState(ready *workerapisrv.Ready) plan.JobState {
 }
 
 // checkStepRunJob checks the job of a step run's claim, j: that it has n
-// steps, without the job's outputs:, the one at index whole, with its
-// cleanup: only for a cleanup's, and the rest by their id and path alone.
+// steps, without the job's outputs:, the one at index whole, without its
+// cleanup:, or, for a cleanup's, with its cleanup: and not its run:, and
+// the rest by their id and path alone.
 func checkStepRunJob(t *testing.T, j *plan.ReadyJob, index, n int, cleanup bool) {
 	t.Helper()
 	if len(j.Steps) != n || j.Outputs != nil {
@@ -603,7 +614,7 @@ func checkStepRunJob(t *testing.T, j *plan.ReadyJob, index, n int, cleanup bool)
 	}
 	for i, s := range j.Steps {
 		switch {
-		case i == index && (s.Run.IsZero() || s.Cleanup.IsZero() == cleanup):
+		case i == index && (s.Run.IsZero() == !cleanup || s.Cleanup.IsZero() == cleanup):
 			t.Errorf("the step run's claim's step %d is %+v", i, s)
 		case i != index && !reflect.DeepEqual(s, plan.Step{ID: s.ID, Path: s.Path}):
 			t.Errorf("the step run's claim's step %d carries more than its id and path: %+v", i, s)
