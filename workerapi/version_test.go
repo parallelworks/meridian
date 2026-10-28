@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/parallelworks/meridian/internal/versiontest"
+	"github.com/parallelworks/meridian/internal/apiversion"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -83,7 +83,7 @@ func TestBodiesAreVersioned(t *testing.T) {
 func TestCheckVersion(t *testing.T) {
 	// As though version 2 had added these.
 	for _, member := range []string{"Event.cleanup", "EnvVar.secret", "Container.image", "EventsAck.seq"} {
-		t.Cleanup(versiontest.Set(member, 2))
+		t.Cleanup(apiversion.SetSince(member, 2))
 	}
 	claim := func(change func(*workerapi.Claim)) *workerapi.Claim {
 		c := &workerapi.Claim{RunID: "run", Env: map[string]workerapi.EnvVar{"A": {Value: "a"}}, Container: &workerapi.Container{Runtime: "podman"}}

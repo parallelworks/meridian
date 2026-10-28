@@ -52,7 +52,7 @@ var parallelTests = make(chan struct{}, 4)
 // parallel has the test t run in parallel with the package's other tests
 // that do, as many at a time as parallelTests allows. A test that bounds
 // how long the server takes, or that changes what the worker API's
-// versions have (versiontest), doesn't call it.
+// versions have (apiversion), doesn't call it.
 func parallel(t *testing.T) {
 	t.Helper()
 	t.Parallel()

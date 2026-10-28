@@ -1,4 +1,4 @@
-package versiontest
+package apiversion
 
 import (
 	"go/ast"
@@ -12,9 +12,9 @@ import (
 )
 
 // TestOnlyTestsSet checks what the package doc promises: no code of the
-// module's but a _test.go file calls Set, so that a release never makes a
+// module's but a _test.go file calls SetSince, so that a release never makes a
 // member of the worker API's bodies another version's than its table says.
-func TestOnlyTestsSet(t *testing.T) {
+func TestOnlyTestsSetSince(t *testing.T) {
 	fset := token.NewFileSet()
 	root := filepath.Join("..", "..")
 	calls := 0
@@ -46,13 +46,13 @@ func TestOnlyTestsSet(t *testing.T) {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Set" {
+			if !ok || sel.Sel.Name != "SetSince" {
 				return true
 			}
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "versiontest" {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "apiversion" {
 				calls++
 				if !strings.HasSuffix(path, "_test.go") {
-					t.Errorf("%s calls versiontest.Set, which only a test may", fset.Position(call.Pos()))
+					t.Errorf("%s calls apiversion.SetSince, which only a test may", fset.Position(call.Pos()))
 				}
 			}
 			return true
@@ -65,6 +65,6 @@ func TestOnlyTestsSet(t *testing.T) {
 	// The check finds the tests' own calls, so that it can't pass by
 	// finding nothing.
 	if calls == 0 {
-		t.Error("no file calls versiontest.Set")
+		t.Error("no file calls apiversion.SetSince")
 	}
 }
