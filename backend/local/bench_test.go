@@ -55,7 +55,7 @@ func BenchmarkProbe(b *testing.B) {
 			}
 			ended := endedRecord(b)
 			for i := range stale {
-				if err := d.writeFile(d.path("stale"+strconv.Itoa(i), ".json"), mustMarshal(ended)); err != nil {
+				if err := safepath.WriteFile(d.path("stale"+strconv.Itoa(i), ".json"), mustMarshal(ended)); err != nil {
 					b.Fatal(err)
 				}
 			}

@@ -405,30 +405,10 @@ func (h *hostOp) sockets(ctx context.Context, state string) (string, error) {
 	if err := safepath.CheckDir(dir, safepath.Private); err != nil {
 		return "", hostDirUnusable(dir, err)
 	}
-	if err := writeHostFile(record, []byte(dir)); err != nil {
+	if err := safepath.WriteFile(record, []byte(dir)); err != nil {
 		return "", hostDirUnusable(state, err)
 	}
 	return dir, nil
-}
-
-// writeHostFile writes the file path whole, readable only by the user: to
-// a new file beside it, then renamed over it.
-func writeHostFile(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".new-*")
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	if err != nil {
-		os.Remove(f.Name())
-	}
-	return err
 }
 
 // hostRunsDir is where runs' directories are on a host whose environment
