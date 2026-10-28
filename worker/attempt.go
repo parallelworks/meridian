@@ -99,9 +99,11 @@ type attempt struct {
 	// groupsMu guards groups, the process groups the attempt started that
 	// may have a process left, by number, with the leader's command, once
 	// its step has ended, where the worker holds it unreaped
-	// (holdsLeaders).
+	// (holdsLeaders); and termed, those of them that were sent SIGTERM
+	// (terminate).
 	groupsMu sync.Mutex
 	groups   map[int]*exec.Cmd
+	termed   map[int]bool
 
 	// leaseMu guards renewed, when the worker sent the last heartbeat that
 	// succeeded, and renewal, closed and replaced when it changes.
@@ -128,7 +130,7 @@ func (a *attempt) run(ctx context.Context) error {
 		a.obey(c)
 		close(a.firstControl)
 	}
-	a.groups = map[int]*exec.Cmd{}
+	a.groups, a.termed = map[int]*exec.Cmd{}, map[int]bool{}
 	a.renewed, a.renewal = a.claimed, make(chan struct{})
 	// What the worker sends goes on while its job runs and after: until
 	// the coordinator has the attempt's end; or the attempt has ended
@@ -283,11 +285,30 @@ func (a *attempt) timeOutLocked(kill time.Time, says string) {
 	}
 }
 
+// terminate sends group, a process group the attempt started, SIGTERM,
+// unless it was sent it already. A halt stops a step's group twice, as its
+// step's stop and as the reap of every group the attempt started, and
+// the step has its grace period from the first SIGTERM, as in format 1: a
+// second would stop what its trap of SIGTERM runs, as a sleep in it, and
+// cut its last words short.
+func (a *attempt) terminate(group int) {
+	a.groupsMu.Lock()
+	sent := a.termed[group]
+	a.termed[group] = true
+	a.groupsMu.Unlock()
+	if !sent {
+		signalGroup(group, syscall.SIGTERM)
+	}
+}
+
 // startedGroup records a process group the attempt started.
 func (a *attempt) startedGroup(group int) {
 	a.groupsMu.Lock()
 	defer a.groupsMu.Unlock()
 	a.groups[group] = nil
+	// A new leader may reuse the number of a group signalled before,
+	// where the worker doesn't hold its leaders: it hasn't been signalled.
+	delete(a.termed, group)
 }
 
 // endedGroup records that the leader of a process group the attempt
@@ -319,8 +340,10 @@ func (a *attempt) liveGroups() []int {
 		case cmd != nil:
 			_ = cmd.Wait()
 			delete(a.groups, group)
+			delete(a.termed, group)
 		case !holdsLeaders:
 			delete(a.groups, group)
+			delete(a.termed, group)
 		}
 	}
 	return live
@@ -336,6 +359,7 @@ func (a *attempt) reapLeaders() {
 			_ = cmd.Wait()
 		}
 		delete(a.groups, group)
+		delete(a.termed, group)
 	}
 }
 
@@ -347,7 +371,7 @@ func (a *attempt) reapLeaders() {
 func (a *attempt) reap() {
 	defer close(a.reaped)
 	for _, group := range a.liveGroups() {
-		signalGroup(group, syscall.SIGTERM)
+		a.terminate(group)
 	}
 	for {
 		changed := a.changes()
