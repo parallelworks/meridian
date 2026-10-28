@@ -120,7 +120,7 @@ func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, ear
 		c.log.WarnContext(ctx, "coordinator: jobs a job needs never ended, as when hopper gave up on their supervisors, so they failed as it was readied", "run", run.ID, "job", key, "needs", unended)
 		c.cancelPlacements(ctx, run.ID, ws, withdrawn)
 	}
-	in, err := c.readyInput(ctx, run, from)
+	in, _, err := c.readyInput(ctx, run, from)
 	if err != nil {
 		return nil, err
 	}
@@ -255,18 +255,18 @@ func readReadyFrom(tx *store.Tx, run *store.Run, pj *plan.Job, job *store.Job, e
 // each joined from run state and the run's secret record, which it opens,
 // a need's from its job's part of the record; for a matrix instance, its
 // matrix values (expansionOf); and whether the run had been stopped as it
-// was first readied.
-func (c *Coordinator) readyInput(ctx context.Context, run *store.Run, from *readyFrom) (plan.ReadyInput, error) {
+// was first readied. It returns the record it opened too.
+func (c *Coordinator) readyInput(ctx context.Context, run *store.Run, from *readyFrom) (plan.ReadyInput, *plan.Record, error) {
 	if run.StartState == nil {
-		return plan.ReadyInput{}, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
+		return plan.ReadyInput{}, nil, fmt.Errorf("coordinator: run %s hasn't started", run.ID)
 	}
 	rec, err := c.sealer.Open(ctx, run.ID, from.stored.Generation, sealedOf(from.stored))
 	if err != nil {
-		return plan.ReadyInput{}, err
+		return plan.ReadyInput{}, nil, err
 	}
 	jobs, err := c.openJobRecords(ctx, run.ID, from.stored.WrappedKey, from.parts)
 	if err != nil {
-		return plan.ReadyInput{}, err
+		return plan.ReadyInput{}, nil, err
 	}
 	in := plan.ReadyInput{Run: run.StartState.Run, Needs: map[string]plan.JobResult{}, Cancelled: from.job.ReadiedStopped}
 	if rec.Run != nil {
@@ -286,12 +286,12 @@ func (c *Coordinator) readyInput(ctx context.Context, run *store.Run, from *read
 		job := from.job
 		x := expansionOf(run, from.parent, rec)
 		if x == nil || job.Instance >= len(x.Instances) {
-			return plan.ReadyInput{}, fmt.Errorf("coordinator: run %s's job %q has no instance %d", run.ID, job.Name, job.Instance)
+			return plan.ReadyInput{}, nil, fmt.Errorf("coordinator: run %s's job %q has no instance %d", run.ID, job.Name, job.Instance)
 		}
 		instance := x.Instances[job.Instance]
 		in.Instance = &instance
 	}
-	return in, nil
+	return in, rec, nil
 }
 
 // unendedNeeds returns the keys of the jobs the run's job key needs, but

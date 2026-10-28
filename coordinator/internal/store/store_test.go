@@ -49,14 +49,14 @@ var storeTemplate = coordtest.StoreTemplate{Make: func(ctx context.Context, path
 
 // open opens a new store in a directory of the test's, a copy of the store
 // template.
-func open(t *testing.T) *Store {
+func open(t testing.TB) *Store {
 	t.Helper()
 	return openAt(t, newPath(t))
 }
 
 // newPath returns the path of a new store in a directory of the test's, a
 // copy of the store template, for the test to open as it needs.
-func newPath(t *testing.T) string {
+func newPath(t testing.TB) string {
 	t.Helper()
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	storeTemplate.Copy(t, path)
@@ -71,7 +71,7 @@ func openNew(t *testing.T) *Store {
 }
 
 // openAt opens the store at path, which the test closes.
-func openAt(t *testing.T, path string) *Store {
+func openAt(t testing.TB, path string) *Store {
 	t.Helper()
 	s, err := Open(t.Context(), path, nil)
 	if err != nil {

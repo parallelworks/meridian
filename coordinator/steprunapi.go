@@ -202,7 +202,7 @@ func stepRunStateData(state workerapi.StepRunState) (plan.Data, error) {
 }
 
 // stepRunClaim returns what an attempt of the step run run has of the try
-// of the step it runs (workerapi.Claim.StepRun), from its link and its
+// of the step it runs (workerapi.Claim.StepRun), from its link and rec, its
 // secret record, and rj, the job it runs, with that step alone of its
 // steps whole, at its own index, and no outputs:, which the step's own job
 // has. The steps before it are there by their id alone, which evaluating
@@ -210,11 +210,7 @@ func stepRunStateData(state workerapi.StepRunState) (plan.Data, error) {
 // is cleared, which a step run of its own runs. A cleanup's step run has
 // every step so, but that one, whose cleanup: it runs, which reads the
 // job's steps and cleanups as they ended.
-func (c *Coordinator) stepRunClaim(ctx context.Context, run *store.Run, rj *plan.ReadyJob) (*workerapi.StepRunClaim, *plan.ReadyJob, error) {
-	rec, err := c.openRecord(ctx, run.ID)
-	if err != nil {
-		return nil, nil, err
-	}
+func stepRunClaim(run *store.Run, rec *plan.Record, rj *plan.ReadyJob) (*workerapi.StepRunClaim, *plan.ReadyJob, error) {
 	if rec.StepRun == nil {
 		return nil, nil, fmt.Errorf("%w: step run %s's secret record says nothing of its step", plan.ErrMalformed, run.ID)
 	}
