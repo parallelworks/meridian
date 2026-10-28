@@ -15,9 +15,11 @@ import (
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // childSources gives the workflows a test's steps call, by their uses:, at
@@ -126,6 +128,32 @@ func createTree(t *testing.T, c *Coordinator, vars compile.Variables) (string, *
 	return id, created
 }
 
+// askChild asks c for the child of the try of a step that req names, of
+// the attempt id, as childAPI.Child does before it answers: the step as
+// the run's plan has it (childAPI.stepOf), then createChild.
+func askChild(t *testing.T, c *Coordinator, id string, req workerapi.ChildRequest) (string, problems.Diagnostics, error) {
+	t.Helper()
+	var (
+		a   *store.Attempt
+		run *store.Run
+	)
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		if a, err = tx.Attempt(id); err != nil {
+			return err
+		}
+		run, err = tx.Run(a.Run)
+		return err
+	}); err != nil {
+		return "", nil, err
+	}
+	p, step, err := childAPI{c}.stepOf(run, a, req.Step, req.Try)
+	if err != nil {
+		return "", nil, err
+	}
+	return c.createChild(t.Context(), a, p, step, &req)
+}
+
 // TestCreateChild checks that a step's try gets a child run, created from
 // the text its root pinned, kept in the store, linked to the try, in its
 // directory under the step's, which a repeated ask finds again; that the
@@ -162,16 +190,16 @@ func TestCreateChild(t *testing.T) {
 	}
 	vars.closed.Store(true)
 
-	req := ChildRequest{
-		Attempt: attempt.ID, Step: 0, Try: 0,
-		With: map[string]any{"$yaml": "w.yaml", "region": "east"},
+	req := workerapi.ChildRequest{
+		Step: 0, Try: 0,
+		With: plan.DataOf(map[string]any{"$yaml": "w.yaml", "region": "east"}),
 		Env:  map[string]string{"STAGE": "prod"},
 	}
-	child, diags, err := c.CreateChild(t.Context(), req)
+	child, diags, err := askChild(t, c, attempt.ID, req)
 	if err != nil || diags.HasErrors() || child == "" {
 		t.Fatal(child, diags, err)
 	}
-	if again, _, err := c.CreateChild(t.Context(), req); err != nil || again != child {
+	if again, _, err := askChild(t, c, attempt.ID, req); err != nil || again != child {
 		t.Errorf("the try's child asked again is %q, %v, want %s", again, err, child)
 	}
 	r := storedRun(t, c, child)
@@ -223,7 +251,7 @@ func TestCreateChild(t *testing.T) {
 		t.Errorf("the child of the ended attempt's step is %s, stopped for %q", r.State, r.StopReason)
 	}
 	// A step of an attempt that has ended gets no child.
-	if _, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 1, With: req.With}); !errors.Is(err, ErrStepGone) {
+	if _, _, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Step: 0, Try: 1, With: req.With}); !errors.Is(err, errStepGone) {
 		t.Errorf("an ended attempt's step got a child: %v", err)
 	}
 	// The child's end wakes the root's finisher, well before it would look
@@ -298,7 +326,7 @@ func TestCreateChildOnHost(t *testing.T) {
 		{d.runDir, "/runs/" + root},
 		{d.runDir + "/work", "/runs/" + root + "/work"},
 	} {
-		child, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: try, With: with, WorkingDirectory: tc.wd})
+		child, diags, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Step: 0, Try: try, With: plan.DataOf(with), WorkingDirectory: tc.wd})
 		if err != nil || diags.HasErrors() {
 			t.Fatalf("working directory %q: %v, %v", tc.wd, diags, err)
 		}
@@ -307,7 +335,7 @@ func TestCreateChildOnHost(t *testing.T) {
 		}
 		children = append(children, child)
 	}
-	_, _, err = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 4, With: with, WorkingDirectory: "/scratch/work"})
+	_, _, err = askChild(t, c, attempt.ID, workerapi.ChildRequest{Step: 0, Try: 4, With: plan.DataOf(with), WorkingDirectory: "/scratch/work"})
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/scratch/work" {
 		t.Errorf("a working directory outside the run's on the host: %v", err)
 	}
@@ -348,7 +376,7 @@ func TestCreateChildOnHost(t *testing.T) {
 	// A step of the child on the host whose working directory is in its
 	// root's directory there, as PW_PARENT_JOB_DIR gives it, but not in
 	// its own run's, calls a run in the same place in its root's here.
-	grand, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: childAttempt.ID, Step: 1, With: map[string]any{"$yaml": "w.yaml"}, WorkingDirectory: d.runDir + "/shared"})
+	grand, diags, err := askChild(t, c, childAttempt.ID, workerapi.ChildRequest{Step: 1, With: plan.DataOf(map[string]any{"$yaml": "w.yaml"}), WorkingDirectory: d.runDir + "/shared"})
 	if err != nil || diags.HasErrors() {
 		t.Fatal(diags, err)
 	}
@@ -426,21 +454,25 @@ func TestCreateChildRefuses(t *testing.T) {
 	}
 	before := runs()
 
-	_, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, With: with, WorkingDirectory: "/elsewhere"})
+	_, _, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{With: plan.DataOf(with), WorkingDirectory: "/elsewhere"})
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/elsewhere" {
 		t.Errorf("a child outside its root's directory: %v", err)
 	}
-	if _, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 1, With: map[string]any{"$yaml": "w.yaml"}}); err != nil || !diags.HasErrors() || diags.Errors()[0].Code != problems.InputRequired.Code() {
+	if _, diags, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 1, With: plan.DataOf(map[string]any{"$yaml": "w.yaml"})}); err != nil || !diags.HasErrors() || diags.Errors()[0].Code != problems.InputRequired.Code() {
 		t.Errorf("a child without its required input: %v, %v", diags, err)
 	}
-	for name, req := range map[string]ChildRequest{
-		"a step that calls no workflow": {Attempt: attempt.ID, Step: 1},
-		"a step the job hasn't":         {Attempt: attempt.ID, Step: 4},
-		"a try past the step's retry:":  {Attempt: attempt.ID, Step: 0, Try: 21, With: with},
-		"no attempt":                    {Attempt: "0123", Step: 0},
+	for name, tc := range map[string]struct {
+		attempt string
+		req     workerapi.ChildRequest
+		want    error
+	}{
+		"a step that calls no workflow": {attempt.ID, workerapi.ChildRequest{Step: 1}, workerapisrv.ErrNotChild},
+		"a step the job hasn't":         {attempt.ID, workerapi.ChildRequest{Step: 4}, workerapisrv.ErrNotChild},
+		"a try past the step's retry:":  {attempt.ID, workerapi.ChildRequest{Step: 0, Try: 21, With: plan.DataOf(with)}, workerapisrv.ErrNotChild},
+		"no attempt":                    {"0123", workerapi.ChildRequest{Step: 0}, store.ErrNotFound},
 	} {
-		if _, _, err := c.CreateChild(t.Context(), req); err == nil {
-			t.Errorf("%s got a child", name)
+		if _, _, err := askChild(t, c, tc.attempt, tc.req); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", name, err, tc.want)
 		}
 	}
 	if n := runs(); n != before {
@@ -455,12 +487,12 @@ func TestCreateChildRefuses(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 2, With: with})
+	_, _, err = askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 2, With: plan.DataOf(with)})
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildNotPinned.Code() || p.Params["uses"] != "github/t/child@main" {
 		t.Errorf("a child whose text the store doesn't keep: %v", err)
 	}
 	c.opts.Sources = treeSources
-	if id, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 3, With: with}); err != nil || diags.HasErrors() || id == "" {
+	if id, diags, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 3, With: plan.DataOf(with)}); err != nil || diags.HasErrors() || id == "" {
 		t.Errorf("a child read by its pin: %q, %v, %v", id, diags, err)
 	}
 
@@ -473,10 +505,10 @@ func TestCreateChildRefuses(t *testing.T) {
 	)
 	c.beforeChildStore = func() {
 		if raced.CompareAndSwap(false, true) {
-			otherID, _, other = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 4, With: with})
+			otherID, _, other = askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 4, With: plan.DataOf(with)})
 		}
 	}
-	id, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 4, With: with})
+	id, _, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 4, With: plan.DataOf(with)})
 	c.beforeChildStore = nil
 	if err != nil || other != nil || id == "" || id != otherID {
 		t.Errorf("two asks that raced got %q, %v and %q, %v", id, err, otherID, other)
@@ -495,9 +527,9 @@ func TestCreateChildRefuses(t *testing.T) {
 	}
 	before = runs()
 	c.beforeChildStore = supersede
-	_, _, err = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 5, With: with})
+	_, _, err = askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 5, With: plan.DataOf(with)})
 	c.beforeChildStore = nil
-	if !errors.Is(err, ErrStepGone) || runs() != before {
+	if !errors.Is(err, errStepGone) || runs() != before {
 		t.Errorf("an attempt superseded as its child was stored: %v, with %d runs, %d before", err, runs(), before)
 	}
 	attempt = latestAttempt(t, c, root, "build")
@@ -506,9 +538,9 @@ func TestCreateChildRefuses(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	_, _, err = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 6, With: with})
+	_, _, err = askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 6, With: plan.DataOf(with)})
 	c.beforeChildStore = nil
-	if !errors.Is(err, ErrRunStopped) || runs() != before {
+	if !errors.Is(err, errRunStopped) || runs() != before {
 		t.Errorf("a run stopped as its child was stored: %v, with %d runs, %d before", err, runs(), before)
 	}
 
@@ -516,14 +548,14 @@ func TestCreateChildRefuses(t *testing.T) {
 	// that, as the plan says, whatever the worker would; and neither does
 	// a step of an attempt that another superseded, which no longer holds
 	// its job, though it hasn't ended.
-	if _, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Try: 7, With: with}); !errors.Is(err, ErrRunStopped) {
+	if _, _, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Try: 7, With: plan.DataOf(with)}); !errors.Is(err, errRunStopped) {
 		t.Errorf("a step of a stopped run got a child: %v", err)
 	}
-	if id, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 2, Try: 8, With: with}); err != nil || id == "" {
+	if id, _, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Step: 2, Try: 8, With: plan.DataOf(with)}); err != nil || id == "" {
 		t.Errorf("a step whose if: outlives its run's stop: %q, %v", id, err)
 	}
 	supersede()
-	if _, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 2, Try: 9, With: with}); !errors.Is(err, ErrStepGone) {
+	if _, _, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Step: 2, Try: 9, With: plan.DataOf(with)}); !errors.Is(err, errStepGone) {
 		t.Errorf("a superseded attempt's step got a child: %v", err)
 	}
 }

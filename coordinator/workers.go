@@ -147,12 +147,11 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 	if run.Parent != nil {
 		return workerapi.Version3, nil
 	}
-	p, err := r.c.plans.get(run)
+	_, j, err := r.c.planJob(run, a)
 	if err != nil {
 		return 0, err
 	}
-	name, _, _ := strings.Cut(a.Job, "#")
-	if j := p.Job(name); j != nil {
+	if j != nil {
 		for _, s := range j.Steps {
 			if s.Source != nil || asksCoordinator(s.Uses) {
 				return workerapi.Version3, nil
@@ -160,6 +159,34 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 		}
 	}
 	return 1, nil
+}
+
+// planJob returns run's plan, and the job of it that the attempt a, of
+// run, runs: the job a matrix instance is of, for an instance's attempt;
+// or nil if the plan has no job of that name.
+func (c *Coordinator) planJob(run *store.Run, a *store.Attempt) (*plan.Plan, *plan.Job, error) {
+	p, err := c.plans.get(run)
+	if err != nil {
+		return nil, nil, err
+	}
+	name, _, _ := strings.Cut(a.Job, "#")
+	return p, p.Job(name), nil
+}
+
+// planStep returns run's plan, and the step at index of the job of it
+// that the attempt a, of run, runs (planJob): nil if the job has no such
+// step, and an error if the plan has no such job.
+func (c *Coordinator) planStep(run *store.Run, a *store.Attempt, index int) (*plan.Plan, *plan.Step, error) {
+	p, job, err := c.planJob(run, a)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case job == nil:
+		return nil, nil, fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, a.Job)
+	case index < 0 || index >= len(job.Steps):
+		return p, nil, nil
+	}
+	return p, &job.Steps[index], nil
 }
 
 // rootOf returns the root of run's tree: run itself, for a run no step
@@ -180,7 +207,7 @@ func (c *Coordinator) rootOf(ctx context.Context, run *store.Run) (*store.Run, e
 // treePath returns the path of the directory of run, of the tree whose
 // root is root, relative to the root's, as filepath.Rel gives it: "." for
 // a root, or a child whose directory is its root's. A child's is always
-// in its root's, as CreateChild makes it (child_dir_outside).
+// in its root's, as createChild makes it (child_dir_outside).
 func treePath(root, run *store.Run) (string, error) {
 	path, err := filepath.Rel(root.RunDir, run.RunDir)
 	if err != nil || !filepath.IsLocal(path) {
