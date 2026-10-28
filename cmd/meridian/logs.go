@@ -14,7 +14,10 @@ import (
 // runLogs shows the logs of a run's steps, or of one of its jobs, as far as
 // they are stored, or, with -f, as they are stored, until the run ends, as
 // meridian run shows them: each line after the job and the step it is of,
-// or as JSON lines. The run's events say which logs there are.
+// or as JSON lines. The run's events say which logs there are. The logs of
+// the runs its steps call, or the job's, at any depth, it shows under the
+// step that called each; a run a step called it shows the logs of alone,
+// with those of the runs its own steps call.
 func runLogs(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	follow := fs.Bool("f", false, "follows the logs as their workers store them, until the run ends")
 	out := fs.String("format", "text", "writes each line of a log as `text`, after the job and the step it is of, or as json, one object a line, whose version member says how to read it")
@@ -53,6 +56,14 @@ func runLogs(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		}
 		of = func(key string) bool { return key == job || strings.HasPrefix(key, job+"#") }
 	}
+	// A log of a run a step called is of the job whose step called the
+	// first of them.
+	ofPart := func(part coordinator.LogPart) bool {
+		if len(part.Callers) > 0 {
+			return of(part.Callers[0].Job)
+		}
+		return of(part.Key.Job)
+	}
 	logs, err := local.NewLogs(dirs.State, coord.StoreID())
 	if err != nil {
 		return c.fail(err)
@@ -63,12 +74,13 @@ func runLogs(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		Event: func(coordinator.Event) error { return nil },
 		Logs:  logs,
 		Log: func(part coordinator.LogPart) error {
-			if !of(part.Key.Job) {
+			if !ofPart(part) {
 				return nil
 			}
 			return p.Log(part)
 		},
 		Stored: !*follow,
+		Tree:   true,
 	}); err != nil {
 		return c.fail(err)
 	}

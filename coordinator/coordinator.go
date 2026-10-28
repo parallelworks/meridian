@@ -75,10 +75,18 @@ type Event struct {
 	Job     string
 	Attempt int
 	// Step, Try and Cleanup are a step's event's: the step's index, its
-	// try, and whether it is the step's cleanup: command.
+	// try, and whether it is the step's cleanup: command; and Step and Try
+	// a child's event's too, of the step's try that called it.
 	Step    int
 	Try     int
 	Cleanup bool
+	// Child is the child run a child.created or child.ended event is
+	// about, which a try of a step of the run's called.
+	Child string
+	// Callers are the tries of the steps that called the run, from the run
+	// Follow follows down, for an event of one its steps called, at any
+	// depth (FollowOptions.Tree), or none for the run's own.
+	Callers []Caller
 	// Member is where the attempt was placed, as its group and its member
 	// joined with a slash, as in local/laptop, for an attempt's event, or
 	// "" where that is private, which only the run's secret record holds.
@@ -105,11 +113,13 @@ type EventKind string
 
 // The kinds of event, in the order a run's happen: a job is ready once its
 // dependencies have finished, placing once a member is chosen for its
-// attempt, and running once the attempt's worker has claimed it; an
-// attempt ends, completed or otherwise, before its job ends, as one that
-// another supersedes does; and the run is stopping, with the reason
-// cancelled or timeout, once a person cancels it or it runs past its
-// timeout:, while what doesn't outlive the stop stops.
+// attempt, and running once the attempt's worker has claimed it; a step
+// whose uses: names a workflow has a child run created, which ends, with
+// its outcome; an attempt ends, completed or otherwise, before its job
+// ends, as one that another supersedes does; and the run is stopping, with
+// the reason cancelled or timeout, once a person cancels it or it runs
+// past its timeout:, while what doesn't outlive the stop stops. A child's
+// end is its caller's event only while its caller hasn't ended.
 const (
 	RunStarted   EventKind = store.EventRunStarted
 	JobReady     EventKind = store.EventJobReady
@@ -117,6 +127,8 @@ const (
 	JobRunning   EventKind = store.EventJobRunning
 	StepStarted  EventKind = store.EventStepStarted
 	StepFinished EventKind = store.EventStepFinished
+	ChildCreated EventKind = store.EventChildCreated
+	ChildEnded   EventKind = store.EventChildEnded
 	AttemptEnded EventKind = store.EventAttemptEnded
 	JobFinished  EventKind = store.EventJobFinished
 	RunStopping  EventKind = store.EventRunStopping

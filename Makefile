@@ -105,8 +105,8 @@ test-openssh: ## Run the ssh backend's tests against OpenSSH's sshd, which SSHD 
 bench: ## Run each benchmark once, to check that it still runs
 	$(FIPS) go test -run='^$$' -bench=. -benchtime=1x ./...
 
-# Under the race detector on a hosted runner, the coordinator package's tests
-# take close to go test's default 10 minutes, so the limit is 15.
+# On a slow hosted runner, the slowest packages under the race detector take
+# over half of go test's default 10 minutes, so the limit is 15.
 .PHONY: test-race
 test-race: ## Run tests with the race detector (needs cgo and a C compiler on Linux)
 	$(FIPS) CGO_ENABLED=1 go test -race -shuffle=on -timeout=15m ./...

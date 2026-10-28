@@ -241,3 +241,115 @@ func TestAttemptsEnded(t *testing.T) {
 		t.Errorf("ending told %v, committed %v", told, committed)
 	}
 }
+
+// TestChildEvents checks that a run's events say when a try of its step
+// called a child run, and when the child ended, with how, unless the run
+// ended first; and that a list of runs gives the runs no step called,
+// with how many runs their trees have below them, or every run, a child
+// with its link, and a run's children.
+func TestChildEvents(t *testing.T) {
+	s := open(t)
+	root := createRun(t, s)
+	var attempt *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.StartRun(root, testState(), nil); err != nil {
+			return err
+		}
+		var err error
+		attempt, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	p := testPlan(t)
+	child := func(link Link) string {
+		var id string
+		inTx(t, s, func(tx *Tx) error {
+			var err error
+			if id, err = tx.NewRunID(); err != nil {
+				return err
+			}
+			return tx.InsertRun(NewRun{ID: id, Plan: p, DefaultGroup: "local", RunDir: "/runs/x", WorkflowID: fakeJobID(30 + link.Try), Parent: &link})
+		})
+		return id
+	}
+	link := Link{Run: root, Job: "build", Attempt: attempt.ID, Step: 1, Try: 0, Root: root, Depth: 1}
+	a := child(link)
+	link.Try = 1
+	b := child(link)
+	inTx(t, s, func(tx *Tx) error { return tx.EndRun(a, plan.OutcomeFailure, plan.ReasonTimeout) })
+	childEvents := func(run string) []RunEvent {
+		var out []RunEvent
+		inTx(t, s, func(tx *Tx) error {
+			events, err := tx.RunEvents(run, 0, 100)
+			for _, e := range events {
+				if e.Kind == EventChildCreated || e.Kind == EventChildEnded {
+					out = append(out, e)
+				}
+			}
+			return err
+		})
+		return out
+	}
+	events := childEvents(root)
+	type got struct {
+		kind, child, job string
+		step, try        int
+		outcome          plan.Outcome
+		reason           plan.Reason
+	}
+	var have []got
+	for _, e := range events {
+		if e.Called == nil || e.Attempt != attempt.Number {
+			t.Errorf("the event %+v has no link, or another attempt", e)
+			continue
+		}
+		have = append(have, got{e.Kind, e.Child, e.Job, e.Called.Step, e.Called.Try, e.Outcome, e.Reason})
+	}
+	want := []got{
+		{EventChildCreated, a, "build", 1, 0, "", ""},
+		{EventChildCreated, b, "build", 1, 1, "", ""},
+		{EventChildEnded, a, "build", 1, 0, plan.OutcomeFailure, plan.ReasonTimeout},
+	}
+	if !slices.Equal(have, want) {
+		t.Errorf("the run's children's events are\n%v\nwant\n%v", have, want)
+	}
+
+	inTx(t, s, func(tx *Tx) error {
+		runs, err := tx.RecentRuns(10, false)
+		if err != nil {
+			return err
+		}
+		if len(runs) != 1 || runs[0].ID != root || runs[0].Descendants != 2 || runs[0].Parent != nil {
+			t.Errorf("the runs no step called are %+v", runs)
+		}
+		if runs, err = tx.RecentRuns(10, true); err != nil {
+			return err
+		}
+		if len(runs) != 3 || runs[0].ID != b || runs[0].Parent == nil || runs[0].Parent.Try != 1 || runs[0].Parent.Root != root || runs[0].ParentAttempt != attempt.Number {
+			t.Errorf("every run is %+v", runs)
+		}
+		children, err := tx.Children(root)
+		if err != nil {
+			return err
+		}
+		if len(children) != 2 || children[0].ID != a || children[1].ID != b || children[0].Outcome != plan.OutcomeFailure {
+			t.Errorf("the run's children are %+v", children)
+		}
+		if _, err := tx.Children("99"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("the children of a run the store hasn't: %v", err)
+		}
+		return nil
+	})
+
+	// A child that ends once its caller has ended says so in no event of
+	// its caller's.
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.EndAttempt(attempt.ID, AttemptEnd{Kind: EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
+			return err
+		}
+		return tx.EndRun(root, plan.OutcomeFailure, "")
+	})
+	inTx(t, s, func(tx *Tx) error { return tx.EndRun(b, plan.OutcomeCancelled, plan.ReasonCancelled) })
+	if n := len(childEvents(root)); n != len(want) {
+		t.Errorf("the ended run has %d children's events, want %d", n, len(want))
+	}
+}

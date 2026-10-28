@@ -13,9 +13,10 @@ import (
 // The kinds of a run's events (RunEvent.Kind), in the order a run's
 // happen: it starts; a job is ready once its dependencies have finished,
 // placing once a member is chosen for its attempt, and running once the
-// attempt's worker has claimed it; its steps start and finish; the attempt
-// ends, and the job; the run is stopping, once a person cancels it or it
-// runs past its timeout:, if it does; and the run ends.
+// attempt's worker has claimed it; its steps start and finish, and a step
+// whose uses: names a workflow has a child run, created, which ends; the
+// attempt ends, and the job; the run is stopping, once a person cancels it
+// or it runs past its timeout:, if it does; and the run ends.
 const (
 	EventRunStarted   = "run.started"
 	EventJobReady     = "job.ready"
@@ -23,6 +24,8 @@ const (
 	EventJobRunning   = "job.running"
 	EventStepStarted  = "step.started"
 	EventStepFinished = "step.finished"
+	EventChildCreated = "child.created"
+	EventChildEnded   = "child.ended"
 	EventAttemptEnded = "attempt.ended"
 	EventJobFinished  = "job.finished"
 	EventRunStopping  = "run.stopping"
@@ -54,10 +57,15 @@ type RunEvent struct {
 	Step *workerapi.Event
 	// End is how the attempt ended, of attempt.ended.
 	End *AttemptEnd
-	// Outcome and Reason are how the job ended, of job.finished, or the
-	// run, of run.finished, and Diagnostics their problems: the job's, as
-	// Ready's or placement's, or the run's. Reason is why the run stopped,
-	// of run.stopping: cancelled or timeout.
+	// Child is the child run a child.created or child.ended event is
+	// about, and Called the try of the step that called it, the child's
+	// link (Run.Parent).
+	Child  string
+	Called *Link
+	// Outcome and Reason are how the job ended, of job.finished, the run,
+	// of run.finished, or the child, of child.ended, and Diagnostics their
+	// problems: the job's, as Ready's or placement's, or the run's. Reason
+	// is why the run stopped, of run.stopping: cancelled or timeout.
 	Outcome     plan.Outcome
 	Reason      plan.Reason
 	Diagnostics problems.Diagnostics
@@ -67,6 +75,19 @@ type RunEvent struct {
 // about its job job, or "", its attempt attempt, or "", and that attempt's
 // event numbered step, or 0.
 func (tx *Tx) addEvent(n int64, kind, job, attempt string, step int64) error {
+	return tx.addEventOf(n, kind, job, attempt, step, 0)
+}
+
+// addChildEvent adds an event of kind, child.created or child.ended, to
+// the run numbered n, after its last, about its child run numbered child,
+// which its attempt attempt's step of its job job called.
+func (tx *Tx) addChildEvent(n int64, kind, job, attempt string, child int64) error {
+	return tx.addEventOf(n, kind, job, attempt, 0, child)
+}
+
+// addEventOf is addEvent, and addChildEvent of a child run numbered child,
+// or 0.
+func (tx *Tx) addEventOf(n int64, kind, job, attempt string, step, child int64) error {
 	now, err := tx.now()
 	if err != nil {
 		return err
@@ -75,8 +96,8 @@ func (tx *Tx) addEvent(n int64, kind, job, attempt string, step int64) error {
 	if err := tx.queryRow("UPDATE meridian_runs SET events_seq = events_seq + 1 WHERE id = ? RETURNING events_seq", n).Scan(&seq); err != nil {
 		return err
 	}
-	if _, err := tx.exec("INSERT INTO meridian_run_events (run_id, seq, kind, job_key, attempt_id, step_seq, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		n, seq, kind, nullString(job), nullString(attempt), sql.NullInt64{Int64: step, Valid: step > 0}, now); err != nil {
+	if _, err := tx.exec("INSERT INTO meridian_run_events (run_id, seq, kind, job_key, attempt_id, step_seq, child_run, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		n, seq, kind, nullString(job), nullString(attempt), sql.NullInt64{Int64: step, Valid: step > 0}, sql.NullInt64{Int64: child, Valid: child > 0}, now); err != nil {
 		return err
 	}
 	tx.events = true
@@ -95,7 +116,7 @@ func (tx *Tx) RunEvents(run string, after int64, limit int) ([]RunEvent, error) 
 	if limit <= 0 {
 		return nil, fmt.Errorf("store: %d of a run's events", limit)
 	}
-	rows, err := tx.query(`SELECT e.seq, e.kind, e.job_key, e.attempt_id, e.at, s.body
+	rows, err := tx.query(`SELECT e.seq, e.kind, e.job_key, e.attempt_id, e.child_run, e.at, s.body
 FROM meridian_run_events e LEFT JOIN meridian_events s ON s.attempt_id = e.attempt_id AND s.seq = e.step_seq
 WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 	if err != nil {
@@ -110,14 +131,18 @@ WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 		var (
 			r            row
 			job, attempt sql.NullString
+			child        sql.NullInt64
 			at           int64
 			body         []byte
 		)
-		if err := rows.Scan(&r.event.Seq, &r.event.Kind, &job, &attempt, &at, &body); err != nil {
+		if err := rows.Scan(&r.event.Seq, &r.event.Kind, &job, &attempt, &child, &at, &body); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.event.Job, r.attempt, r.event.At = job.String, attempt.String, time.UnixMicro(at).UTC()
+		if child.Valid {
+			r.event.Child = runID(child.Int64)
+		}
 		if body != nil {
 			r.event.Step = new(workerapi.Event)
 			if err := workerapi.Unmarshal(body, r.event.Step); err != nil {
@@ -170,6 +195,15 @@ WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 				return nil, err
 			}
 			e.Outcome, e.Reason, e.Diagnostics = r.Outcome, r.Reason, r.Diagnostics
+		case EventChildCreated, EventChildEnded:
+			c, err := tx.RunSummary(e.Child)
+			if err != nil {
+				return nil, err
+			}
+			e.Called = c.Parent
+			if e.Kind == EventChildEnded {
+				e.Outcome, e.Reason = c.Outcome, c.Reason
+			}
 		}
 		out[i] = e
 	}

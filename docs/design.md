@@ -2180,12 +2180,11 @@ host, never following a symbolic link, asks for the child, waits for it,
 stops it as the step is stopped, and ends the step as below; the
 coordinator's stop of a step's children, in the transaction
 that ends its attempt, however it ends, and in the one that stops its run,
-or its job, as the plan says of its `if:`; and the caller's attempt parked
-while it waits. The rest isn't built yet: `meridian run`, `status` and
-`logs` show a root run's own jobs alone; and a step whose `ssh:` names a
-host is refused (`step_ssh_not_supported`), as any step's is, where format 1
-connects to the host but runs the child where its caller runs, as some
-known calls do.
+or its job, as the plan says of its `if:`; the caller's attempt parked
+while it waits; and what people see of a tree, below. The rest isn't built
+yet: a step whose `ssh:` names a host is refused
+(`step_ssh_not_supported`), as any step's is, where format 1 connects to
+the host but runs the child where its caller runs, as some known calls do.
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2469,18 +2468,25 @@ known calls do.
   children from the plan's pins.
 - **What people see.** A child is a run, with its own number, shown under
   the step that called it:
-  - `meridian run` follows the whole tree, a child's events and logs
-    under its caller's step, as `build step 0 › wait step 1| …`, and as
-    JSON lines with the child's `run`; the parent's events say when its
-    step's child was created and how it ended;
-  - `meridian status` lists root runs, each with how many children it
-    has, and `--all` every run; `meridian status <run>` shows the child
-    of each step that called one, and a child shows its parent, job, step
-    and try;
-  - `meridian logs <run>` shows a child's logs under its step, and those
-    of the child alone when it names the child;
-  - `meridian cancel <child>` stops that child only: its step ends
-    cancelled, and its job goes on.
+  - `meridian run`, `resume` and `cancel -f`, and `meridian logs`, follow
+    the whole tree: a child's events and logs, from its caller's
+    `child.created` on, each after the step's try that called it and a
+    `›`, as `14:02:08 build step 1 › run 7 created` and `build step 1 ›
+    main step 0| testing`, and the child's end, before the root's; and as
+    JSON lines with the child's `run` and `callers`, the steps' tries that
+    called it from the root down, each with its `run`, `job`, `step` and
+    `try`. The parent's events say when its step's try's child was created
+    and how it ended (`child.created`, `child.ended`, with the `child`'s
+    ID), the latter while the parent hasn't ended;
+  - `meridian status` lists root runs, each with how many runs its tree
+    has below it, and `--all` every run, a child with what called it;
+    `meridian status <run>` shows the child of each step's try that called
+    one, and a child shows its parent, job, step and try, and its root;
+  - `meridian logs <run> [job]` shows a child's logs under its step, a
+    job's name its children's too, and the child's own, as a root's, when
+    it names the child;
+  - `meridian cancel <run>` of a root stops its tree with it; of a child,
+    that child only: its step ends cancelled, and its job goes on.
 - **Without a Sources resolver**, a `uses:` that names a workflow fails to
   compile (`resolver_missing`, [The workflow format](#the-workflow-format)).
   A `uses:` names a workflow when it starts with `github/`, `gitlab/`,
@@ -4906,14 +4912,17 @@ their workers store them.
   another process adds, and for the logs, which aren't in the store.
 - **As text or JSON.** `--format text`, the default, writes a line a
   person reads for each event, with its time, and each line of a step's
-  log after the job and step it is of, as `build step 0| compiling`; the
-  run's problems, and the command's, go to standard error as compilers
-  write them. `--format json` writes a JSON object a line, each with
-  `version`, now 1, which a later release can add members and kinds of
-  line to, but never changes the meaning of: one for the run's creation,
-  one for each event, one for each line of a log, setup logs too, its last
-  with `ended` or `cut`, and one for a run left running; and the command's
-  problems as RFC 9457 problem details. `--logs=false` shows no logs.
+  log after the job and step it is of, as `build step 0| compiling`, and
+  those of the runs its steps call after the step that called each, as
+  `build step 0 › main step 1| testing`; the run's problems, and the
+  command's, go to standard error as compilers write them. `--format json`
+  writes a JSON object a line, each with `version`, now 1, which a later
+  release can add members and kinds of line to, but never changes the
+  meaning of: one for the run's creation, one for each event, one for each
+  line of a log, setup logs too, its last with `ended` or `cut`, and one
+  for a run left running, each of a run a step called with its `run` and
+  its `callers`; and the command's problems as RFC 9457 problem details.
+  `--logs=false` shows no logs.
 - **Nothing secret.** Logs and a step's problems are shown as the worker
   masked them, and an attempt's problems as the coordinator stored them,
   masked where it ran is private; a private placement's member is never
@@ -4924,21 +4933,25 @@ their workers store them.
 - **`meridian status`** lists the store's last runs, the newest first, 20
   unless `-n` says: each one's state, created, running or ended, how it
   ended, when it was created and its workflow's location. Children of a
-  run, the runs of the workflows its steps call, are to be listed under
-  their root, as a count, and with `--all` as runs of their own
-  ([Workflows a step calls](#workflows-a-step-calls)). `meridian status
-  <run>` shows one run, its directory and its times, a line for each of
+  run, the runs of the workflows its steps call, are listed under their
+  root, as a count of the runs below it, and with `--all` as runs of their
+  own, each with what called it ([Workflows a step
+  calls](#workflows-a-step-calls)). `meridian status <run>` shows one run,
+  its directory and its times, and what called a child, a line for each of
   its jobs, waiting, ready, placing, running or ended, with how it ended,
   how many attempts it had and the member its last ran on, none for a
-  private placement, and then the run's problems and its jobs'.
-  `--format json` writes a JSON object a line, of the same `version` as
-  `meridian run`'s: one for each run, or one for the run and one for each
-  job. A state directory without a store has no runs.
+  private placement, a line for each run its steps called, and then the
+  run's problems and its jobs'. `--format json` writes a JSON object a
+  line, of the same `version` as `meridian run`'s: one for each run, or
+  one for the run, one for each job, and one for each run its steps
+  called, a `child`, with its `parent`. A state directory without a store
+  has no runs.
 - **`meridian logs <run> [job]`** shows the run's steps' logs as `meridian
-  run` does, the run's events saying which logs there are: as far as they
-  are stored, and with `-f` as they are stored, until the run ends. A
-  job's name shows each of its instances' logs, and an instance's key that
-  one's.
+  run` does, the run's events saying which logs there are, and those of
+  the runs its steps called under the steps: as far as they are stored,
+  and with `-f` as they are stored, until the run ends. A job's name shows
+  each of its instances' logs, and an instance's key that one's, with
+  the runs their steps called.
 - **Reading changes nothing.** `status` and `logs` read the store without
   changing it, not even its schema, which every other command brings up to
   its release's as it opens the store, so that a newer release's `status`

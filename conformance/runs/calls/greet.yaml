@@ -3,10 +3,13 @@ on:
     inputs:
       greeting:
         type: string
+      token:
+        type: string
 jobs:
   greet:
     steps:
       - run: |
+          echo "greeting ${{ inputs.greeting }}, token ${{ inputs.token }}"
           printf '%s from %s, as %s' "${{ inputs.greeting }}" "$FROM_CALLER" "$PW_WORKFLOW_NAME" > said
           if [ -e "$PW_PARENT_JOB_DIR/subworkflows/main/step_0/said" ]; then
             echo ", where its caller looks" >> said

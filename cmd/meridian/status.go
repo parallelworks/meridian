@@ -20,11 +20,15 @@ import (
 // statusRuns is how many runs meridian status lists unless -n says.
 const statusRuns = 20
 
-// runStatus shows the store's last runs, or one run and its jobs, as text
-// a person reads, or as JSON lines, as meridian run writes them.
+// runStatus shows the store's last runs, or one run and its jobs, and the
+// runs its steps called, as text a person reads, or as JSON lines, as
+// meridian run writes them. The list holds the runs no step called, each
+// with how many runs of its tree are below it, unless -all says to list
+// every run.
 func runStatus(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	out := fs.String("format", "text", "writes the runs, or the run and its jobs, as `text`, a table a person reads, or as json, one object a line, whose version member says how to read it")
 	n := fs.Int("n", statusRuns, "lists the last `number` runs")
+	all := fs.Bool("all", false, "lists the runs steps called too, not only those no step did")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return flagError(c, fs, err)
@@ -56,7 +60,7 @@ func runStatus(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	}
 	defer func() { _ = coord.Close() }()
 	if len(positional) == 0 {
-		runs, err := coord.Runs(ctx, *n)
+		runs, err := coord.Runs(ctx, *n, *all)
 		if err != nil {
 			return c.fail(err)
 		}
@@ -71,15 +75,26 @@ func runStatus(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	if err != nil {
 		return c.fail(runNotFound(id, err))
 	}
-	return writeRun(c, s, jobs)
+	children, err := coord.Children(ctx, id)
+	if err != nil {
+		return c.fail(runNotFound(id, err))
+	}
+	return writeRun(c, s, jobs, children)
 }
 
-// A statusLine is one of the JSON lines meridian status writes: a run, or
-// one of its jobs, of local.ProgressVersion, as meridian run's are.
+// A statusLine is one of the JSON lines meridian status writes: a run, one
+// of its jobs, or a run one of its steps called, of
+// local.ProgressVersion, as meridian run's are.
 type statusLine struct {
-	Version     int                  `json:"version"`
-	Kind        string               `json:"kind"`
-	Run         string               `json:"run"`
+	Version int    `json:"version"`
+	Kind    string `json:"kind"`
+	Run     string `json:"run"`
+	// Parent is the try of the step that called the run, of a run a step
+	// called, and Root the run at the top of its tree; Descendants is how
+	// many runs of a root's tree are below it.
+	Parent      *statusCaller        `json:"parent,omitempty"`
+	Root        string               `json:"root,omitempty"`
+	Descendants int                  `json:"descendants,omitzero"`
 	Job         string               `json:"job,omitempty"`
 	Name        string               `json:"name,omitempty"`
 	Location    string               `json:"location,omitempty"`
@@ -97,12 +112,62 @@ type statusLine struct {
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
 }
 
+// A statusCaller is the try of a step that called a run, in a JSON line of
+// meridian status's, as in meridian run's.
+type statusCaller struct {
+	Run     string `json:"run"`
+	Job     string `json:"job"`
+	Attempt int    `json:"attempt"`
+	Step    int    `json:"step"`
+	Try     int    `json:"try,omitzero"`
+}
+
 func runStatusLine(s *coordinator.RunStatus) statusLine {
-	return statusLine{
+	l := statusLine{
 		Kind: "run", Run: s.ID, Name: s.Name, Location: s.Location, RunDir: s.RunDir, State: string(s.State),
 		Outcome: string(s.Outcome), Reason: string(s.Reason), Created: s.CreatedAt, Started: s.StartedAt, Ended: s.EndedAt,
-		Stopped: s.StoppedAt, StopReason: string(s.StopReason), Diagnostics: s.Diagnostics,
+		Stopped: s.StoppedAt, StopReason: string(s.StopReason), Diagnostics: s.Diagnostics, Root: s.Root, Descendants: s.Descendants,
 	}
+	if p := s.Parent; p != nil {
+		l.Parent = &statusCaller{Run: p.Run, Job: p.Job, Attempt: p.Attempt, Step: p.Step, Try: p.Try}
+	}
+	return l
+}
+
+// calledAt names the try of the step that called a run, as a person reads
+// it: the run, and the step's try (stepOf), as in run 3 build step 1
+// retry 2.
+func calledAt(p *coordinator.Caller) string {
+	return "run " + p.Run + " " + stepOf(p)
+}
+
+// stepOf names the try of the step that called a run, as a person reads
+// it: its job, its attempt after the first, the step, and its try after
+// the first, as in build attempt 2 step 1 retry 2.
+func stepOf(p *coordinator.Caller) string {
+	s := p.Job
+	if p.Attempt > 1 {
+		s += fmt.Sprintf(" attempt %d", p.Attempt)
+	}
+	s += fmt.Sprintf(" step %d", p.Step)
+	if p.Try > 0 {
+		s += fmt.Sprintf(" retry %d", p.Try)
+	}
+	return s
+}
+
+// treeOf says, in the list of runs, where a run is in its tree: what
+// called a run a step called, or how many runs are below a root, or "".
+func treeOf(s *coordinator.RunStatus) string {
+	switch {
+	case s.Parent != nil:
+		return "called by " + calledAt(s.Parent)
+	case s.Descendants == 1:
+		return "1 run below"
+	case s.Descendants > 1:
+		return fmt.Sprintf("%d runs below", s.Descendants)
+	}
+	return ""
 }
 
 // stateOf is the run's state as a person reads it: stopping for one that
@@ -140,10 +205,20 @@ func writeRuns(c *cli, runs []coordinator.RunStatus) int {
 		fmt.Fprintln(c.stdout, "no runs")
 		return exitOK
 	}
+	// Where each run is in its tree, if one of them is in one.
+	tree := slices.ContainsFunc(runs, func(r coordinator.RunStatus) bool { return treeOf(&r) != "" })
 	tw := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN\tSTATE\tOUTCOME\tCREATED\tWORKFLOW")
+	header := "RUN\tSTATE\tOUTCOME\tCREATED\tWORKFLOW"
+	if tree {
+		header += "\tTREE"
+	}
+	fmt.Fprintln(tw, header)
 	for _, r := range runs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), timeOf(r.CreatedAt), r.Location)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), timeOf(r.CreatedAt), r.Location)
+		if tree {
+			row += "\t" + treeOf(&r)
+		}
+		fmt.Fprintln(tw, row)
 	}
 	if err := tw.Flush(); err != nil {
 		return c.fail(err)
@@ -151,10 +226,12 @@ func writeRuns(c *cli, runs []coordinator.RunStatus) int {
 	return exitOK
 }
 
-// writeRun writes the run s and its jobs: as text, the run, then a table,
-// a job a line, then the run's problems and the jobs', as compilers write
-// them; or a JSON line for the run, and one for each job.
-func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus) int {
+// writeRun writes the run s, its jobs, and the runs its steps called,
+// children: as text, the run, and what called it, then a table, a job a
+// line, then one of the runs its steps called, a run a line, then the
+// run's problems and the jobs', as compilers write them; or a JSON line
+// for the run, one for each job, and one for each run its steps called.
+func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus, children []coordinator.RunStatus) int {
 	if c.json {
 		if err := writeStatusJSON(c.stdout, runStatusLine(s)); err != nil {
 			return c.fail(err)
@@ -164,6 +241,13 @@ func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus) in
 				Kind: "job", Run: s.ID, Job: j.Key, Name: j.Name, State: string(j.State), Outcome: string(j.Outcome), Reason: string(j.Reason),
 				Attempts: j.Attempts, Member: j.Member, Diagnostics: j.Diagnostics,
 			}
+			if err := writeStatusJSON(c.stdout, l); err != nil {
+				return c.fail(err)
+			}
+		}
+		for i := range children {
+			l := runStatusLine(&children[i])
+			l.Kind = "child"
 			if err := writeStatusJSON(c.stdout, l); err != nil {
 				return c.fail(err)
 			}
@@ -178,6 +262,9 @@ func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus) in
 		line += " (" + string(s.StopReason) + ")"
 	}
 	fmt.Fprintln(c.stdout, line)
+	if s.Parent != nil {
+		fmt.Fprintf(c.stdout, "called by: %s, of the tree of run %s\n", calledAt(s.Parent), s.Root)
+	}
 	fmt.Fprintf(c.stdout, "workflow: %s\n", s.Location)
 	fmt.Fprintf(c.stdout, "run directory: %s\n", s.RunDir)
 	times := "created " + timeOf(s.CreatedAt)
@@ -194,6 +281,17 @@ func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus) in
 		fmt.Fprintln(tw, "JOB\tSTATE\tOUTCOME\tATTEMPTS\tWHERE")
 		for _, j := range jobs {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", j.Key, j.State, outcomeOf(j.Outcome, j.Reason), j.Attempts, j.Member)
+		}
+		if err := tw.Flush(); err != nil {
+			return c.fail(err)
+		}
+	}
+	if len(children) > 0 {
+		fmt.Fprintln(c.stdout)
+		tw := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "CALLED BY\tRUN\tSTATE\tOUTCOME\tWORKFLOW")
+		for _, r := range children {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", stepOf(r.Parent), r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), r.Location)
 		}
 		if err := tw.Flush(); err != nil {
 			return c.fail(err)

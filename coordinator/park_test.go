@@ -98,6 +98,7 @@ jobs:
         with:
           $yaml: greet.yaml
           greeting: hi
+          token: none
       - run: cat subworkflows/main/step_0/said
 `)
 	for _, group := range []string{"local", "pair"} {

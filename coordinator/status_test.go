@@ -129,7 +129,7 @@ func TestRunsAndJobs(t *testing.T) {
 	c := open(t, Options{Variables: regionVars})
 	first, _ := create(t, c, regionWorkflow, regionSubmitted, regionVars)
 	second, _ := create(t, c, oneJob, nil, nil)
-	runs, err := c.Runs(t.Context(), 10)
+	runs, err := c.Runs(t.Context(), 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestRunsAndJobs(t *testing.T) {
 			t.Errorf("a run listed is %+v", r)
 		}
 	}
-	if runs, err := c.Runs(t.Context(), 1); err != nil || len(runs) != 1 || runs[0].ID != second {
+	if runs, err := c.Runs(t.Context(), 1, false); err != nil || len(runs) != 1 || runs[0].ID != second {
 		t.Errorf("the last run is %+v, %v", runs, err)
 	}
 	jobs, err := c.Jobs(t.Context(), second)
@@ -277,7 +277,7 @@ func TestReadOnly(t *testing.T) {
 	if s, err := r.Status(t.Context(), ended.ID); err != nil || s.Outcome != plan.OutcomeSuccess {
 		t.Errorf("Status read-only = %+v, %v", s, err)
 	}
-	if runs, err := r.Runs(t.Context(), 5); err != nil || len(runs) != 2 {
+	if runs, err := r.Runs(t.Context(), 5, false); err != nil || len(runs) != 2 {
 		t.Errorf("Runs read-only = %+v, %v", runs, err)
 	}
 	if jobs, err := r.Jobs(t.Context(), ended.ID); err != nil || len(jobs) != 1 || jobs[0].State != JobEnded {
